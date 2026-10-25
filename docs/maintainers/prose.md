@@ -64,8 +64,8 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   `tool` (in every fingerprint), a `tools_run` / `missing_tools` entry, a scan type, `meta.sub_scan_ids`.
   `audit_executive` answers both: `sub_scans.<member>.call`.
 - **Annotations are exact per member** (`annotations.ts`): a member that only reads files and the history is
-  never open-world, and anything that runs WP-CLI is — WP-CLI boots the site (its PHP, its database, the
-  update check of `wp plugin list`).
+  never open-world, and anything that runs WP-CLI is — WP-CLI boots the site (its PHP but its plugins and
+  theme, `wordpress/wpCli.ts`; its database; the update check of `wp plugin list`).
 - The MCP `instructions` say which family serves which job, that a scanner that did not run is a gap, the safety
   rules and the dev-spec-driven routing; the rules template says the same at length.
 

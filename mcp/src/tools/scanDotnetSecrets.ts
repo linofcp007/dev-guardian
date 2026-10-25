@@ -29,49 +29,106 @@ import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { toolProjectPath } from './projectArg.js';
 import { computeCoverage } from './scanCoverage.js';
 
+/** A piece of a line cut at `;`, `"` and `'` — what a connection-string value cannot hold — and what ended it. */
+interface Piece {
+  text: string;
+  /** `;`, a quote, or `''` at the end of the line. */
+  end: string;
+}
+
 interface PatternRule {
   id: string;
-  regex: RegExp;
   description: string;
   severity: 'critical' | 'high' | 'medium';
+  /** Whether the line holds it; `pieces` is the line cut once (see {@link linePieces}). */
+  matches: (line: string, pieces: readonly Piece[]) => boolean;
 }
+
+/** A pattern tried on the whole line — each one linear in it (measured on 2 MB lines of the shapes that backtrack most). */
+const onLine =
+  (regex: RegExp): PatternRule['matches'] =>
+  (line) =>
+    regex.test(line);
+
+/**
+ * `<key>=<value>;…<then>` as the connection-string patterns used to say it —
+ * `(Server|Data\s*Source)=[^;"']+;.*?(Password|Pwd)=[^;"']+` — read in linear
+ * time (review 3.6.1, finding 6). Tried from every `Server=` of a line, the
+ * `.*?` (and, with no `;`, the `[^;"']+` too) scanned the rest of the line
+ * each time: quadratic, on the event loop — 25 s for a 300 kB line of
+ * `Server=`, a quarter of an hour for a 2 MB one. Now a piece of the line
+ * that holds `key` with at least one character of value, ended by `;`, opens
+ * it, and any LATER piece that holds `then` completes it: the same lines
+ * match, the old patterns kept in the test as the oracle.
+ */
+function connectionString(key: RegExp, then: RegExp): PatternRule['matches'] {
+  return (_line, pieces) => {
+    let opened = false;
+    for (const p of pieces) {
+      if (opened && then.test(p.text)) return true;
+      if (!opened && p.end === ';' && key.test(p.text)) opened = true;
+    }
+    return false;
+  };
+}
+
+/** The line cut at every `;`, `"` and `'`, once, for every connection-string rule. */
+function linePieces(line: string): Piece[] {
+  const out: Piece[] = [];
+  let start = 0;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i];
+    if (c === ';' || c === '"' || c === "'") {
+      out.push({ text: line.slice(start, i), end: c });
+      start = i + 1;
+    }
+  }
+  out.push({ text: line.slice(start), end: '' });
+  return out;
+}
+
+// Inside one piece: the key, `=`, and one character of value (any — a piece holds no delimiter).
+const SERVER_KEY = /(?:Server|Data\s*Source)=[\s\S]/i;
+const HOST_KEY = /Host=[\s\S]/i;
+const PASSWORD_KEY = /(?:Password|Pwd)=[\s\S]/i;
+const INTEGRATED_SECURITY = /Integrated\s*Security=(?:SSPI|true)/i;
 
 const PATTERNS: PatternRule[] = [
   {
     id: 'dotnet-sql-server-conn',
     description: 'SQL Server connection string with password',
     severity: 'critical',
-    regex: /(Server|Data\s*Source)=[^;"']+;.*?(Password|Pwd)=[^;"']+/i,
+    matches: connectionString(SERVER_KEY, PASSWORD_KEY),
   },
   {
     id: 'dotnet-trusted-conn',
     description: 'SQL Server connection string with Integrated Security and dev credentials',
     severity: 'medium',
-    regex: /(Server|Data\s*Source)=[^;"']+;.*?Integrated\s*Security=(SSPI|true)/i,
+    matches: connectionString(SERVER_KEY, INTEGRATED_SECURITY),
   },
   {
     id: 'dotnet-postgres-conn',
     description: 'PostgreSQL connection string with password',
     severity: 'critical',
-    regex: /Host=[^;"']+;.*?(Password|Pwd)=[^;"']+/i,
+    matches: connectionString(HOST_KEY, PASSWORD_KEY),
   },
   {
     id: 'dotnet-azure-storage-key',
     description: 'Azure Storage account key in connection string',
     severity: 'critical',
-    regex: /AccountKey=[A-Za-z0-9+/=]{60,}/,
+    matches: onLine(/AccountKey=[A-Za-z0-9+/=]{60,}/),
   },
   {
     id: 'dotnet-azure-servicebus',
     description: 'Azure Service Bus shared access key',
     severity: 'critical',
-    regex: /SharedAccessKey=[A-Za-z0-9+/=]{40,}/,
+    matches: onLine(/SharedAccessKey=[A-Za-z0-9+/=]{40,}/),
   },
   {
     id: 'dotnet-aws-key-config',
     description: 'AWS access key in appsettings/config',
     severity: 'critical',
-    regex: /AKIA[0-9A-Z]{16}/,
+    matches: onLine(/AKIA[0-9A-Z]{16}/),
   },
   {
     id: 'dotnet-jwt-secret',
@@ -80,25 +137,25 @@ const PATTERNS: PatternRule[] = [
     // The key may be quoted itself: appsettings.json writes `"JwtSecret": "…"`,
     // with a quote between the key and the colon, which the pattern used to
     // refuse — every JSON signing key went unreported (review M4).
-    regex: /(JwtSecret|JWT_SECRET|SigningKey)["']?\s*[:=]\s*["'][^"']{16,}["']/i,
+    matches: onLine(/(JwtSecret|JWT_SECRET|SigningKey)["']?\s*[:=]\s*["'][^"']{16,}["']/i),
   },
   {
     id: 'dotnet-nuget-feed-cred',
     description: 'NuGet feed credentials in nuget.config (plaintext clear password)',
     severity: 'critical',
-    regex: /<add\s+key="ClearTextPassword"\s+value="[^"]+"/i,
+    matches: onLine(/<add\s+key="ClearTextPassword"\s+value="[^"]+"/i),
   },
   {
     id: 'dotnet-appinsights-key',
     description: 'Application Insights instrumentation key',
     severity: 'medium',
-    regex: /InstrumentationKey=[a-f0-9-]{36}/i,
+    matches: onLine(/InstrumentationKey=[a-f0-9-]{36}/i),
   },
   {
     id: 'dotnet-sendgrid-key',
     description: 'SendGrid API key (SG. prefix)',
     severity: 'critical',
-    regex: /SG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{40,}/,
+    matches: onLine(/SG\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{40,}/),
   },
 ];
 
@@ -177,8 +234,9 @@ async function handler(
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i];
       if (line === undefined) continue;
+      const pieces = linePieces(line);
       for (const rule of PATTERNS) {
-        if (rule.regex.test(line)) {
+        if (rule.matches(line, pieces)) {
           findings.push(
             makeFinding({
               tool: 'scan_dotnet_secrets',

@@ -76,3 +76,18 @@ func rlockNoEarlyReturn(mu *sync.RWMutex, m map[string]int, key string) int {
 	mu.RUnlock()
 	return v
 }
+
+// The early-unlock idiom: every early return releases the lock first. The
+// rule matched it while it was `Lock() ... return ... Unlock()` — the `...`
+// reaches into the `if`, and nothing excluded an Unlock before the return
+// (review 3.6.1, measured on Semgrep 1.182.0).
+func earlyUnlock(mu *sync.Mutex, m map[string]int, key string) error {
+	mu.Lock()
+	if key == "" {
+		mu.Unlock()
+		return nil
+	}
+	m[key] = 1
+	mu.Unlock()
+	return nil
+}

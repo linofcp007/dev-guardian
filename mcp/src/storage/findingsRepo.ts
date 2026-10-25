@@ -7,9 +7,11 @@
  *   - the fingerprint dedupes inside a scan;
  *   - diffs across scans match on the identity first, the fingerprint as the
  *     fallback for rows that have no identity;
- *   - a suppression hides a finding that matches it on EITHER key
- *     (`SUPPRESSION_MATCHES_F`), so one written before identities existed
- *     still works, and one written after survives a line shift. Since
+ *   - a suppression hides a finding of its identity, or of its fingerprint
+ *     where either side has no identity (`SUPPRESSION_MATCHES_F`), so one
+ *     written before identities existed still works, one written after
+ *     survives a line shift, and neither hides a different finding that
+ *     shares its fingerprint. Since
  *     migration 011 the match is also scoped to the finding's own project
  *     (or to no project at all, for a suppression written before that
  *     column existed) — see that constant's own comment.
@@ -66,8 +68,10 @@ import { notInFutureSql } from './scanClock.js';
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 
 /**
- * Suppression `s` names finding `f`: same fingerprint, or — when both sides
- * have one — the same identity, AND `s` belongs to the finding's own project
+ * Suppression `s` names finding `f`: the same identity when both sides have
+ * one, the same fingerprint when either has none (`indexFindings`' rule: two
+ * identities that differ are two findings, however their fingerprints agree)
+ * — AND `s` belongs to the finding's own project
  * (`l.project_path`, from the `latest` CTE every caller of this constant
  * joins in) or to no project at all (migration 011: NULL means "every
  * project" — every row written before that column existed). SQL's
@@ -86,7 +90,8 @@ const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
  * only for callers that have not moved to it).
  */
 const SUPPRESSION_MATCHES_F =
-  '(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) ' +
+  '(s.finding_identity = f.identity OR (s.finding_fingerprint = f.fingerprint ' +
+  'AND (s.finding_identity IS NULL OR f.identity IS NULL))) ' +
   'AND (s.project_path IS NULL OR s.project_path = l.project_path)';
 
 interface FindingRow {
@@ -158,7 +163,6 @@ export class FindingsRepo {
     string | null, 0 | 1, 0 | 1, string | null, string | null, string | null,
     string | null, string | null, string | null,
   ]>;
-  private readonly identityForFingerprintStmt: Statement<[string], { identity: string }>;
   private readonly listByScanStmt: Statement<[string], FindingRow>;
   private readonly listOpenLatestScanStmt: Statement<[], FindingRow>;
   private readonly listOpenForProjectStmt: Statement<[string], FindingRow>;
@@ -175,18 +179,6 @@ export class FindingsRepo {
         cwe, owasp, vuln_aliases
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    // The identity of the most recent scan's row for this fingerprint. Rows
-    // of older scans can share a fingerprint with a DIFFERENT identity (same
-    // rule and line under a redacted snippet, other code), so the newest one
-    // — the scan the caller just read the fingerprint from — wins.
-    this.identityForFingerprintStmt = db.prepare<[string], { identity: string }>(`
-      SELECT f.identity AS identity FROM findings f
-      JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND f.identity IS NOT NULL AND ${notInFutureSql('s')}
-      ORDER BY s.started_at DESC, s.rowid DESC
-      LIMIT 1
     `);
 
     this.listByScanStmt = db.prepare<[string], FindingRow>(`
@@ -350,11 +342,6 @@ export class FindingsRepo {
       return inserted;
     });
     return tx(chunk);
-  }
-
-  /** The identity stored with `fingerprint` by the newest scan that has one, or null. */
-  identityForFingerprint(fingerprint: string): string | null {
-    return this.identityForFingerprintStmt.get(fingerprint)?.identity ?? null;
   }
 
   listByScan(scanId: string): Finding[] {

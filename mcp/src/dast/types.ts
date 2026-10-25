@@ -69,6 +69,7 @@ export type ProbeVariant =
   | 'anonymous'
   | 'authenticated'
   | 'cors'
+  | 'redirect'
   | 'options'
   | 'rate_limit';
 

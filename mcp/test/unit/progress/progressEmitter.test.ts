@@ -53,7 +53,27 @@ describe('makeProgressEmitter', () => {
     expect(sent).toHaveLength(2);
     expect(sent[0]?.progressToken).toBe('tok-1');
     expect(sent[0]?.message).toBe('a');
-    expect(sent[1]?.progress).toBeCloseTo(60); // 3/5*100
+    // Progress and total in the same unit, steps: 3 of 5. It was sent as a
+    // percentage beside the step count — `{ progress: 60, total: 5 }`, which
+    // a host reads as 1200 % (review of 3.6, finding 11).
+    expect(sent[1]).toMatchObject({ progress: 3, total: 5 });
+  });
+
+  it('never sends a progress past its total — not even for a token several emitters share', () => {
+    const { notifier, sent } = recordingNotifier();
+    const a = makeProgressEmitter({ token: 'shared-total', notifier });
+    const b = makeProgressEmitter({ token: 'shared-total', notifier });
+    a.emit({ step: 7, total: 5 });
+    a.emit({ step: 5, total: 5 });
+    b.emit({ step: 1, total: 3 }); // must still increase: above 5, so past 3
+    a.dispose();
+    b.dispose();
+    for (const p of sent) {
+      if (p.total !== undefined) expect(p.progress, JSON.stringify(p)).toBeLessThanOrEqual(p.total);
+    }
+    expect(sent[0]).toMatchObject({ progress: 5, total: 5 });
+    expect(sent[2]?.total).toBeUndefined();
+    expect(sent[2]?.progress).toBeGreaterThan(sent[1]?.progress ?? 0);
   });
 
   it('heartbeats with the last payload at the configured interval', () => {

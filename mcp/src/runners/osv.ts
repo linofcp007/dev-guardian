@@ -14,6 +14,7 @@
  * Uses the global `fetch` (Node ≥ 18). No third-party HTTP dependency.
  */
 
+import { mebibytes, readJsonCapped } from '../platform/httpBody.js';
 import type { Severity } from '../types.js';
 
 export interface OsvPackageQuery {
@@ -33,6 +34,11 @@ interface OsvVulnGroup {
 export interface OsvResult {
   online: boolean;
   queried: number;
+  /**
+   * Named packages past {@link MAX_QUERIES}, not looked up: unknown, never
+   * clean. A caller that reports coverage names them as a gap.
+   */
+  unqueried: number;
   vulnerable_packages: OsvVulnGroup[];
   error?: string;
 }
@@ -46,63 +52,83 @@ interface OsvQueryOptions {
 
 const OSV_BATCH_URL = 'https://api.osv.dev/v1/querybatch';
 const DEFAULT_TIMEOUT_MS = 6000;
-const MAX_QUERIES = 200;
+/**
+ * Packages looked up per call; the rest are `unqueried`. It was 200, and the
+ * rest were dropped unsaid: a skill that declared 200 harmless dependencies
+ * and then the vulnerable one read `osv.dev: ok`, clean (review of 3.6.0).
+ */
+const MAX_QUERIES = 1000;
+/** Queries per request (OSV's querybatch takes up to 1000; a smaller batch keeps each answer small). */
 const CHUNK = 100;
+/** Requests in flight at once: 1000 packages are ten batches, not ten timeouts end to end. */
+const IN_FLIGHT = 4;
+/** An answer larger than this is not read: a batch of 100 answers in a few KB. */
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 export async function queryOsv(
   packages: OsvPackageQuery[],
   opts: OsvQueryOptions = {},
 ): Promise<OsvResult> {
-  const queryable = packages.filter((p) => p.name).slice(0, MAX_QUERIES);
+  const named = packages.filter((p) => p.name);
+  const queryable = named.slice(0, MAX_QUERIES);
+  const unqueried = named.length - queryable.length;
   if (queryable.length === 0) {
-    return { online: true, queried: 0, vulnerable_packages: [] };
+    return { online: true, queried: 0, unqueried, vulnerable_packages: [] };
   }
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === 'function' ? fetch : undefined);
   if (fetchImpl === undefined) {
-    return { online: false, queried: 0, vulnerable_packages: [], error: 'no_fetch' };
+    return { online: false, queried: 0, unqueried, vulnerable_packages: [], error: 'no_fetch' };
   }
 
-  const vulnerable: OsvVulnGroup[] = [];
+  const chunks: OsvPackageQuery[][] = [];
+  for (let i = 0; i < queryable.length; i += CHUNK) chunks.push(queryable.slice(i, i + CHUNK));
+  const perChunk: OsvVulnGroup[][] = chunks.map(() => []);
   try {
-    for (let i = 0; i < queryable.length; i += CHUNK) {
-      const chunk = queryable.slice(i, i + CHUNK);
-      const body = {
-        queries: chunk.map((p) => ({
-          package: { name: p.name, ecosystem: p.ecosystem },
-          ...(p.version ? { version: p.version } : {}),
-        })),
-      };
-      const json = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
-      const results = Array.isArray((json as { results?: unknown }).results)
-        ? ((json as { results: unknown[] }).results)
-        : [];
-      results.forEach((res, idx) => {
-        const pkg = chunk[idx];
-        if (!pkg) return;
-        const vulns = (res as { vulns?: Array<{ id?: string }> })?.vulns;
-        if (Array.isArray(vulns) && vulns.length > 0) {
-          const ids = vulns.map((v) => v.id).filter((x): x is string => typeof x === 'string');
-          const group: OsvVulnGroup = {
-            ecosystem: pkg.ecosystem,
-            name: pkg.name,
-            vuln_ids: ids,
-            severity: 'high',
-          };
-          if (pkg.version) group.version = pkg.version;
-          vulnerable.push(group);
-        }
-      });
-    }
+    let next = 0;
+    const work = async (): Promise<void> => {
+      for (let c = next++; c < chunks.length; c = next++) {
+        const chunk = chunks[c] ?? [];
+        const groups = perChunk[c] ?? [];
+        const body = {
+          queries: chunk.map((p) => ({
+            package: { name: p.name, ecosystem: p.ecosystem },
+            ...(p.version ? { version: p.version } : {}),
+          })),
+        };
+        const json = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
+        const results = Array.isArray((json as { results?: unknown }).results)
+          ? ((json as { results: unknown[] }).results)
+          : [];
+        results.forEach((res, idx) => {
+          const pkg = chunk[idx];
+          if (!pkg) return;
+          const vulns = (res as { vulns?: Array<{ id?: string }> })?.vulns;
+          if (Array.isArray(vulns) && vulns.length > 0) {
+            const ids = vulns.map((v) => v.id).filter((x): x is string => typeof x === 'string');
+            const group: OsvVulnGroup = {
+              ecosystem: pkg.ecosystem,
+              name: pkg.name,
+              vuln_ids: ids,
+              severity: 'high',
+            };
+            if (pkg.version) group.version = pkg.version;
+            groups.push(group);
+          }
+        });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(IN_FLIGHT, chunks.length) }, work));
   } catch (e) {
     return {
       online: false,
       queried: queryable.length,
+      unqueried,
       vulnerable_packages: [],
       error: e instanceof Error ? e.message : 'osv_request_failed',
     };
   }
 
-  return { online: true, queried: queryable.length, vulnerable_packages: vulnerable };
+  return { online: true, queried: queryable.length, unqueried, vulnerable_packages: perChunk.flat() };
 }
 
 async function postJson(
@@ -125,7 +151,9 @@ async function postJson(
       signal: controller.signal,
     });
     if (!res.ok) throw new Error(`osv http ${res.status}`);
-    return await res.json();
+    const read = await readJsonCapped(res, MAX_RESPONSE_BYTES);
+    if (read === null) throw new Error(`osv answer over ${mebibytes(MAX_RESPONSE_BYTES)}`);
+    return read.json;
   } finally {
     clearTimeout(timeout);
   }

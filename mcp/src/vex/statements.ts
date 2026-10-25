@@ -423,9 +423,10 @@ function whyNot(assessment: DependencyAssessment | null): string {
   return assessment.coverage_gaps[0] ?? 'nothing showed the package in use';
 }
 
-/** The same fingerprint-or-identity rule every open-set reader applies. */
+/** The rule every open-set reader applies: the identity, the fingerprint only where a side has none. */
 function matches(s: Suppression, f: Finding): boolean {
-  return s.finding_fingerprint === f.fingerprint || (f.identity !== undefined && s.finding_identity === f.identity);
+  if (f.identity !== undefined && s.finding_identity !== undefined) return s.finding_identity === f.identity;
+  return s.finding_fingerprint === f.fingerprint;
 }
 
 function uniqueFindings(findings: readonly Finding[]): Finding[] {

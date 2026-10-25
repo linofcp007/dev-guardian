@@ -13,8 +13,15 @@
  * "unknown", never as "not in KEV" for every CVE in the batch.
  */
 
+import { mebibytes, readJsonCapped } from '../platform/httpBody.js';
+
 const KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
 const DEFAULT_TIMEOUT_MS = 8000;
+/**
+ * The feed is a few hundred KB to ~1.5 MB; past this it is not read. It was
+ * `res.json()`, bounded by the timeout alone (review of 3.6.0).
+ */
+const MAX_FEED_BYTES = 32 * 1024 * 1024;
 
 export type KevCatalogResult =
   | { ok: true; entries: Map<string, string> }
@@ -40,7 +47,9 @@ export async function fetchKevCatalog(opts: KevCatalogOptions = {}): Promise<Kev
   try {
     const res = await fetchImpl(KEV_URL, { signal: controller.signal });
     if (!res.ok) return { ok: false, reason: `CISA KEV feed returned http ${res.status}` };
-    const json = (await res.json()) as { vulnerabilities?: unknown };
+    const read = await readJsonCapped(res, MAX_FEED_BYTES);
+    if (read === null) return { ok: false, reason: `CISA KEV feed is over ${mebibytes(MAX_FEED_BYTES)}, not read` };
+    const json = (read.json ?? {}) as { vulnerabilities?: unknown };
     if (!Array.isArray(json.vulnerabilities)) {
       return { ok: false, reason: 'CISA KEV feed response had no `vulnerabilities` array' };
     }

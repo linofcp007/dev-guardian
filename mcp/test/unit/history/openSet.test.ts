@@ -200,6 +200,31 @@ describe('openSetForProject', () => {
     expect(openSetForProject(s.storage, P, { now: before }).findings).toHaveLength(0);
   });
 
+  // A Semgrep without `semgrep login` stores "requires login" as every
+  // snippet, so its fingerprint is tool + rule + path + lines: a real eval
+  // that later lands on the lines of a suppressed false positive shares its
+  // fingerprint and differs only in identity. Two identities are two findings
+  // (`indexFindings`); the fingerprint decides only where a side has none.
+  it('never lets a suppression hide a finding whose identity differs, on a shared fingerprint', () => {
+    const s = freshPlugin();
+    const shared = '4'.repeat(64);
+    seedScan(s, { id: 'sast', type: 'sast', project: P, findings: [{ fp: shared, identity: 'ID-REAL' }] });
+    s.storage.suppressions.insert({ finding_fingerprint: shared, finding_identity: 'ID-FALSE-POSITIVE', reason: 'fp', project_path: P });
+    expect(openSetForProject(s.storage, P).findings.map((f) => f.identity)).toEqual(['ID-REAL']);
+  });
+
+  it('still matches on the fingerprint when either side has no identity', () => {
+    const s = freshPlugin();
+    seedScan(s, { id: 'sast', type: 'sast', project: P, findings: [
+      { fp: '5'.repeat(64), identity: 'ID-5' },
+      { fp: '6'.repeat(64) },
+    ] });
+    // A 2.0.x suppression (no identity), and one naming a finding stored without one.
+    s.storage.suppressions.insert({ finding_fingerprint: '5'.repeat(64), reason: 'legacy', project_path: P });
+    s.storage.suppressions.insert({ finding_fingerprint: '6'.repeat(64), finding_identity: 'ID-6', reason: 'fp', project_path: P });
+    expect(openSetForProject(s.storage, P).findings).toEqual([]);
+  });
+
   it('names the source scan of every finding', () => {
     const s = freshPlugin();
     seedScan(s, { id: 'sast', type: 'sast', project: P, findings: [{ tool: 'semgrep' }] });

@@ -111,6 +111,7 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 - `<project>/.gitignore` — the two `.guardian` lines above, once.
 - Files you asked for: `init_project` and `observability_setup` with `apply: true`, `precommit_install` (git hooks, through `pre-commit install`), and `scan_sast` / `bug_hunt` / `scan_wordpress` / `security_scan_full` with `auto_fix: true` — which refuses unless git confirms a clean tree or `allow_dirty: true` is passed.
 - `create_fix_pr` works in disposable git worktrees and removes them; only `apply: true` commits, pushes and opens pull requests.
+- `install_toolchain` (not a dry run): the scanners it installs, in `~/.local/bin` and `~/.local/lib/dev-guardian/` or through the system's package manager.
 - `wp_vuln_check` with `mode: "source"` caches the Wordfence feed in the user cache directory, never in the project.
 - `wp_vuln_check` writes its WPScan report under the install's `.guardian/reports/` when the install is on this machine, else under `wp-vuln-check/<site>-<hash>/` in that user cache directory — never the server's working directory. Each site there keeps its newest N reports, N being the scan retention (`GUARDIAN_RETENTION_SCANS`, default 50, `0` keeps all).
 - Temporary directories under the OS temp dir (review checkouts, verification reports), removed afterwards — and a scan's report directory, `guardian-reports-<tool>-…`, when `.guardian` or `.guardian/reports` in the project is a link (a junction included) or not a directory: reports are never written through one.
@@ -123,4 +124,4 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 3. Import it in `src/registerAll.ts` and add it to `test/integration/toolSurface.test.ts`: the surface is snapshotted on purpose.
 4. Place every bookkeeping name it writes to `tools_run` / `missing_tools` in `src/history/runNames.ts`; the exhaustiveness test fails otherwise.
    Spawn Trivy only through `src/runners/trivyRun.ts` (never in the project, never its `trivy.yaml`) and Semgrep only through `src/runners/semgrepRun.ts` (Python's UTF-8 mode); a test fails on any other spawn of either.
-5. Keep the description under 1500 characters, add an integration test, run `npm run build`, and commit `dist/` and the regenerated `docs/` with the change.
+5. Keep the description within 600 characters (`docs/maintainers/prose.md`), add an integration test, run `npm run build`, and commit `dist/` and the regenerated `docs/` with the change.

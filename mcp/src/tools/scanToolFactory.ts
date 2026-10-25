@@ -29,9 +29,10 @@
  * A scan is served from the cache only under exactly the same key
  * (`treeHash/cacheKey.ts#scanCacheKey`): the canonical project path, the tool
  * name and scan type, the tree hash, the plugin version, the content of every
- * rule pack the tool declares in `rulePacks`, and a hash of the NORMALISED
- * input. The rule for the input is deliberately blunt, because every
- * exception to it was a reproduced wrong answer (see cacheKey.ts): EVERY
+ * rule pack the tool declares in `rulePacks`, the content of the root
+ * `.guardian/` settings a scan reads (`guardianSettingsState`), and a hash of
+ * the NORMALISED input. The rule for the input is deliberately blunt, because
+ * every exception to it was a reproduced wrong answer (see cacheKey.ts): EVERY
  * input field takes part, after the tool's own zod schema has applied its
  * defaults, EXCEPT
  *
@@ -89,11 +90,15 @@ import {
   resolveScope,
   ScanScopeInput,
   ScopeError,
+  STAGED_CONTENT_GAP,
   suggestScopeForFile,
   type ResolvedScope,
   type ScanScope,
 } from '../platform/scope.js';
 import { resolveVersion } from '../platform/version.js';
+import { hashProjectFile } from '../platform/projectFs.js';
+import { SCAN_SETTINGS_RELATIVE_PATH } from '../platform/scanSettings.js';
+import { BUDGETS_RELATIVE_PATH } from '../budgets/budgets.js';
 import { makeProgressEmitter, type ProgressEmitter } from '../progress/progressEmitter.js';
 import {
   type ParserContext,
@@ -124,6 +129,7 @@ import {
   resolveProjectPath,
 } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
+import { holdReportDirs } from './scanHelpers.js';
 import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import type { ToolCallMeta, ToolInput, ToolModule } from './index.js';
@@ -166,6 +172,12 @@ export interface ScannerInvocation {
    * structured data (e.g. `deps_audit` returning `bot_configured`).
    */
   extras?: Record<string, unknown>;
+  /**
+   * Where the identities read the findings' lines from, when the scanned
+   * files were not the project's working tree (review_pr's head checkout);
+   * the working tree otherwise.
+   */
+  readSource?: (filePath: string) => string | null;
 }
 
 export interface InvokeContext extends ToolContext {
@@ -456,6 +468,8 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   // exactly what it was before either existed.
   if (scope !== null) cacheState = { ...cacheState, scope: scope.cacheState['scope'] ?? '' };
   if (exclusions !== null) cacheState = { ...cacheState, guardianignore: exclusions.hash };
+  const settings = await guardianSettingsState(projectPath, configRoot);
+  if (settings !== null) cacheState = { ...cacheState, guardian_settings: settings };
   const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
   if (config.configWarnings) {
     try {
@@ -472,7 +486,10 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   // after `install_toolchain` had already made the scanner visible.
   const ttl = config.cacheTtlMs ?? FIVE_MINUTES_MS;
   const fresh = new Date(Date.now() - ttl).toISOString();
-  if (input.force !== true) {
+  // Nor is an auto_fix call ever answered from the cache: it asks for files
+  // to be rewritten, and a tree autofixed, restored (`git checkout .`) and
+  // autofixed again inside the window got the first run back, nothing rewritten.
+  if (input.force !== true && input.auto_fix !== true) {
     const cached = plugin.storage.scans.findCacheHit({
       cache_key: cacheKey,
       freshThreshold: fresh,
@@ -536,6 +553,8 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     token: callMeta?.progressToken,
     notifier: plugin.progressNotifier,
   });
+  // Its report directories are never pruned while it runs (scanHelpers.ts#holdReportDirs).
+  const releaseReports = holdReportDirs(scanId);
   try {
     return await runScanBody({
       config,
@@ -562,6 +581,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
       ...(parentScanId !== undefined ? { parentScanId } : {}),
     });
   } finally {
+    releaseReports();
     progress.dispose();
   }
 }
@@ -604,8 +624,10 @@ function scopeWarnings(scopeMeta: unknown): string[] {
   const outside = typeof block['findings_outside_scope'] === 'number' ? block['findings_outside_scope'] : 0;
   const ignored =
     typeof block['files_excluded_by_guardianignore'] === 'number' ? block['files_excluded_by_guardianignore'] : 0;
+  // A history window (scan_secrets' `log_opts`) narrows commits, not files: no file count to give.
+  const what = block['kind'] === 'log_opts' ? describeScope(block) : `${describeScope(block)}, ${files} file(s)`;
   const warnings = [
-    `Scoped scan (${describeScope(block)}, ${files} file(s)): findings outside the scope are not reported` +
+    `Scoped scan (${what}): findings outside the scope are not reported` +
       `${outside > 0 ? ` (${outside} dropped)` : ''}. It is recorded as scoped — never a baseline, and never ` +
       "counted as the project's current findings.",
   ];
@@ -622,6 +644,20 @@ function scopeWarnings(scopeMeta: unknown): string[] {
   return warnings;
 }
 
+/** The named gap of a staged scope's files that changed again since `git add` (`ResolvedScope.notAsStaged`), or null. */
+function stagedContentGap(notAsStaged: readonly string[]): ToolRun | null {
+  if (notAsStaged.length === 0) return null;
+  const named = `${notAsStaged.slice(0, 5).join(', ')}${notAsStaged.length > 5 ? ', …' : ''}`;
+  return {
+    name: STAGED_CONTENT_GAP,
+    status: 'failed',
+    reason:
+      `${notAsStaged.length} staged file(s) changed again in the working tree since git add (${named}): the scanners ` +
+      'read the working tree, not the staged content the commit carries — stage or stash the rest ' +
+      '(git stash --keep-index) and re-scan',
+  };
+}
+
 function describeScope(block: Record<string, unknown>): string {
   const diff = block['diff'];
   if (block['kind'] === 'diff' && typeof diff === 'object' && diff !== null) {
@@ -630,6 +666,7 @@ function describeScope(block: Record<string, unknown>): string {
     return d['staged'] === true ? 'staged changes' : 'uncommitted changes';
   }
   if (block['kind'] === 'since' && typeof block['since'] === 'string') return `since ${block['since']}`;
+  if (block['kind'] === 'log_opts' && typeof block['log_opts'] === 'string') return `history ${block['log_opts']}`;
   return 'paths';
 }
 
@@ -758,7 +795,15 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   const limiter = config.orchestrator === true ? null : getScanLimiter();
   if (limiter) {
     report('waiting for a scanner slot');
-    await limiter.acquire();
+    try {
+      // A host that cancels while this scan waits for a slot gets it back at
+      // once, and takes none (runners/concurrencyLimiter.ts).
+      await limiter.acquire(ctx.signal);
+    } catch (e) {
+      if (!(e instanceof Error && e.name === 'AbortError')) throw e;
+      plugin.storage.scans.finalize({ scan_id: scanId, status: 'cancelled', tools_run: [], missing_tools: [] });
+      return failDomain('cancelled', 'Scan was cancelled by the host.');
+    }
   }
   let invocation: ScannerInvocation;
   try {
@@ -791,6 +836,17 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     invocation = {
       ...invocation,
       tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),
+    };
+  }
+  // A staged scope with unstaged changes on top of its files: every scanner
+  // read the working tree, so those files were not scanned as the commit
+  // carries them — a key staged and then deleted unstaged read clean.
+  const stagedGap = args.scope !== null ? stagedContentGap(args.scope.notAsStaged) : null;
+  if (stagedGap !== null) {
+    invocation = {
+      ...invocation,
+      tools_run: [...invocation.tools_run, stagedGap],
+      missing_tools: [...invocation.missing_tools, STAGED_CONTENT_GAP],
     };
   }
 
@@ -849,7 +905,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // returned, which is what keeps a secret finding's line out of the database.
   findings = assignIdentities(findings, {
     projectPath,
-    readSource: makeSourceReader(projectPath),
+    readSource: invocation.readSource ?? makeSourceReader(projectPath),
   });
 
   // Every finding that flags a credential (subcategory 'secret', Bandit's
@@ -1049,6 +1105,22 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     ...(exclusionReport !== null ? { exclusions: exclusionReport } : {}),
   };
   return { ok: true, ...payload };
+}
+
+/**
+ * The root `.guardian/` files a scan reads, by content — the tree hash leaves
+ * that whole directory out (its reports change on every scan,
+ * `treeHash/computeTreeHash.ts`), so an edited budget or Semgrep timeout was
+ * answered with the run made under the old one: `.guardian/scan.yml` from
+ * `configRoot` (every Semgrep run's timeouts, `runners/semgrepRun.ts`) and
+ * `.guardian/budgets.yml` from the project (quality_check). Null when
+ * neither exists, which leaves the key exactly as it was before.
+ */
+async function guardianSettingsState(projectPath: string, configRoot: string): Promise<string | null> {
+  const scan = await hashProjectFile(configRoot, SCAN_SETTINGS_RELATIVE_PATH);
+  const budgets = await hashProjectFile(projectPath, BUDGETS_RELATIVE_PATH);
+  if (scan === 'missing' && budgets === 'missing') return null;
+  return `scan.yml:${scan};budgets.yml:${budgets}`;
 }
 
 /**

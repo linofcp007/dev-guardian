@@ -141,7 +141,16 @@ rules:
       - pattern-not: yaml.load(..., Loader=yaml.CSafeLoader)
       - pattern-not: yaml.load($X, yaml.SafeLoader)
       - pattern-not: yaml.load($X, yaml.CSafeLoader)
-    message: yaml.load() com um Loader inseguro (ou sem Loader) permite RCE. Usa yaml.safe_load().
+      # O BaseLoader só constrói strings, listas e dicionários: tão seguro como
+      # o SafeLoader (revisão 3.6.1).
+      - pattern-not: yaml.load(..., Loader=yaml.BaseLoader)
+      - pattern-not: yaml.load(..., Loader=yaml.CBaseLoader)
+      - pattern-not: yaml.load($X, yaml.BaseLoader)
+      - pattern-not: yaml.load($X, yaml.CBaseLoader)
+    message: >-
+      yaml.load() com um Loader inseguro (ou sem Loader) e yaml.unsafe_load()
+      permitem RCE; yaml.full_load() também, no PyYAML anterior a 5.4
+      (CVE-2020-14343). Usa yaml.safe_load().
     severity: ERROR
     languages: [python]
 
@@ -234,7 +243,7 @@ rules:
   #    `echo $f ? (int) $_GET['a'] : $_GET['b'];` são XSS real e ficavam
   #    silenciosas. De nove linhas de XSS real com um cast algures na mesma
   #    instrução, disparavam DUAS.
-  #  - era um VETOR DE '^\$_(GET|POST|REQUEST|SERVER|COOKIE)$'SSÃO. `pattern-not-regex` lê texto-fonte, pelo que
+  #  - era um VETOR DE SUPRESSÃO. `pattern-not-regex` lê texto-fonte, pelo que
   #    `echo 'usa (int)$_GET para números: ' . $_GET['x'];` desligava a regra
   #    sem que nenhum cast fosse executado — a grafia dentro de um literal de
   #    string bastava. Num pack de segurança isso não é uma troca documentada,

@@ -8,6 +8,126 @@ version bump.
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-10-25
+
+A full review of 3.6.0 — every area read against the code by its own reviewer, each finding reproduced (by a
+failing test, or with the real scanner) before it was fixed. The theme: the scanned repository is hostile input,
+and an unread file, an unanswered query or a skipped pass is a named gap, never a clean result.
+
+### Upgrading from 3.6.0
+
+- **`scan_skill` is stricter.** What it could not read or look up — a build directory past its walk, a UTF-16 or
+  binary file, native code, a truncated walk, OSV packages past its query budget, OSV offline — is now a named gap
+  (`guardian-scanskill:walk`, `:unread`, `osv.dev` in `missing_tools`), and a partial audit is never `SAFE`: at
+  least `REVIEW`, `CAUTION` when nothing was read, `passed: false` under any `fail_on`. One download-and-execute
+  (`curl … | bash`, a download then run) or one credential sent out, in a script, a hook, an MCP command or a code
+  block, is `DO_NOT_INSTALL` on its own — legitimate installer lines (rustup, uv) included: read them, then decide.
+- **`deps_update_plan` no longer runs repository code.** Ruby gems are not planned (Bundler evaluates the Gemfile,
+  which is Ruby: the result says `gemfile_is_code` and how to get the data); npm plans from a copy of the manifest
+  and locks, never reading the repository's `.npmrc`; Composer runs with `--no-plugins` (a project that resolves
+  through a plugin such as merge-plugin may resolve differently); Cargo is not run under a project
+  `.cargo/config.toml` or a rust-toolchain `path`.
+- **Some finding identities change once.** A file holding two or more credential secrets of one rule (outside git
+  history) now keys its identities by that count, so a real key added above a suppressed one no longer takes the
+  suppression; those suppressions lapse once. A credential finding's fingerprint is no longer a hash of the
+  plaintext secret: a `baseline.json` entry without an identity (a 2.0.x baseline never regenerated) shows that
+  finding once as new — `baseline update` on the base branch re-accepts it.
+- **A .NET pull request's gate exits 2 by default.** Under `--baseline-ref` / `--rules-ref` (the `ci-init` pipelines
+  pass both on a pull request) the gate no longer builds the tree: a .NET restore and build ran the pull request's
+  own MSBuild inside the gate job, where it could replace a scanner or rewrite a report. The .NET analyzers are a
+  named gap instead (`not built: the tree is a pull request's …`). For a pull request you trust — one from your own
+  repository — add `--build-pr` to the scan command in the pipeline (argv only; a `.guardian/ci.json` declaring it is
+  refused). Push runs on the base branch take no ref and build as before.
+- **The shell guard asks more.** A command a cap or the time budget cut short (past 512 KB, a statement past
+  16 KB, nesting deeper than 3) is now a question, not a warning; `gci .\build -Recurse | ri -Force` warns like
+  `Remove-Item .\build -Recurse`.
+- **Fewer and better-placed findings.** Ruff's `SIM`, `SLF` and `SLOT` codes are no longer high security findings,
+  nor `FBT`, `FURB`, `ERA` and `BLE` medium ones (a prefix match read them as `S` and `F`, `E`, `B`); a Spring or ASP.NET route under a class-level prefix is `path_partial` instead of a
+  resolved URL without the prefix; a lockless manifest inside a `build/`, `dist/` or `.guardian/` below the root is
+  now a named Trivy gap.
+- **CI templates**: regenerate with `ci-init` to drop the `npm ci` step (the bundle needs no `node_modules`) and
+  get the corrected pinning notes; the old pipelines keep working.
+
+### Security
+
+- **The CI gate never runs a pull request's build**: under a ref, the .NET restore and build are refused (a named
+  gap) unless `--build-pr` trusts the pull request.
+- **The CI gate**: a pull request could hide a one-line committed secret from the history pass with a
+  `.gitattributes` (`config.js binary`), a NUL byte, or an evil merge; the history pass now runs with the
+  repository's attributes neutralised, and the full-content pass keeps a one-line match whose line came from a
+  merge or a binary diff. `configDifferences` names every `.gitattributes`. `--sarif` never writes through a link
+  the checkout holds.
+- **No repository code with the server's credentials**: the project's ESLint (`quality_check`), the k6 script
+  (`perf_check`) and WP-CLI get the test command's allowlisted environment; WP-CLI boots the site with
+  `--skip-plugins --skip-themes`, from a directory of its own with an empty `wp-cli.yml` (what WP-CLI cannot skip —
+  `wp-config.php`, core, must-use plugins, drop-ins — still runs, and SECURITY.md says so).
+- **The shell guard** reads what bypassed it: rm's long-option prefixes and long flag clusters, PowerShell's
+  `-Recurse` prefixes, cmd's stacked `/s/q`, substitutions inside double quotes, `|&`, `| (sh)`, `eval $(…)`,
+  the single-paren `iex` cradle and a backtick in a cmdlet name, `trap` / `flock` / `script` / `runuser` /
+  `busybox` / `coproc` / `parallel` / `ionice` / `unbuffer`, `$'…'` / `$"…"` and `${VAR:?}`, and `find | xargs rm`.
+  A secret-allowlist entry under 4 characters is ignored (SessionStart says so); an MCP tool deleting Claude Code's
+  settings file asks.
+- **`verify_live`** sends a value only when it has its provider's token shape (a hostile `.gitleaks.toml` could
+  name any regex `github-pat`).
+- **A hostile `.guardianignore` or `.semgrepignore`** could hang the server through catastrophic regex
+  backtracking (7 s per path at 12 directories deep, 300 s on one name): patterns are matched segment by segment.
+  Windows' long-path walk has a read budget and runs only when it can act.
+- **No pipe-to-shell installers**: WP-CLI's Linux installer took a branch head with no checksum (now the pinned
+  2.12.0 release PHAR, sha256-checked), actionlint's `go install` took `@latest` (now its pinned tag), and
+  `install-macos.sh` piped Homebrew's installer into bash (it now points to brew.sh).
+- **`create_fix_pr`** stages only the paths its fix touched (anything else refuses, named), and neither it nor
+  `review_pr` runs a global `git worktree prune`, which dropped the registration of a user's worktree whose
+  directory was momentarily missing.
+- **Bounded input everywhere it was not**: `scan_skill`'s downloads (64 MiB) and zip extraction, KEV/EPSS bodies,
+  OSV answers, `validate_finding`'s lockfile (iterative, depth-capped), `scan_dotnet_secrets`' connection strings
+  (linear time), a deeply nested manifest in `scan_skill`, and a tool call's lists (over 10 000 items refused before
+  zod walks them: zod 3 keeps one issue per failing element, GHSA-mrhx-c7xc-m3w5).
+- **No secret where it should not be**: `audit_agent_config`'s findings mask URLs, arguments, headers and hook
+  commands; `suggest_fix` withholds every quoted line that holds a secret; DAST evidence redacts cookies and
+  `Authorization`; the Markdown report prints every untrusted field inert.
+- body-parser 2.4.0 (CVE-2026-111181, a dev-time dependency through the MCP SDK).
+
+### Fixed
+
+- **History and identity**: a suppression or an LLM verdict matches on identity before the fingerprint; a
+  `scan_secrets` run narrowed by `log_opts` is scoped, so it no longer hides older secrets from the open set;
+  dashboard and `status` deltas match by identity; an imported SARIF never shadows a native finding;
+  `create_github_issues` tags by identity (old tags still recognised); `risk_score` and the dashboard leave out a
+  suppressed finding's CVE; `set_baseline` with an explicit `scan_id` is held to the default's rules;
+  `guardian://surface/{id}` answers for the server's project only; `sbom_diff` finds its default pair among SBOM
+  scans and refuses an unreadable SBOM; `review_pr` reads identities from its head checkout; retention reaps
+  `create_fix_pr`'s re-scan rows.
+- **Scans and caches**: `audit_executive` counts a finding two children report once; a cache key includes what a
+  scan reads outside the tree hash (`.guardian/scan.yml`, `budgets.yml`, scoped gitignored files, SpotBugs'
+  classes); an `auto_fix` call is never answered from the cache; a staged file changed again since `git add` is a
+  named gap; the Docker fallback runs the registered rules and honours `.guardianignore`; `scan_wordpress`'s
+  autofix honours it and runs Semgrep alone first; `compliance_check` judges its Trivy licence pass like
+  `scan_deps`; `deps_audit` drops an npm advisory only when it is the one Trivy reported; a running scan's report
+  directory is never pruned; a subdirectory project's gitleaks history holds only its own secrets.
+- **Runners and parsers**: a failed Trivy run says Trivy's own error, and `generate_sbom` tells a failure from a
+  missing scanner; Bandit's exclusion list (`CVS`, `.tox`, `.eggs`, … tested as substrings) no longer drops a
+  handed file — `scan_sast`'s neutral ini replaces it with one no path holds, and a file still left out is named;
+  the long-path Semgrep runs keep their taint timeouts and judge every file Semgrep reads; a git query that could
+  not answer is a named gap; the scan limiter admits no more than its limit, and a scan cancelled while it waits
+  for a slot returns at once; Python manifests are judged per file; a file Ruff, PHPCS or cppcheck
+  did not process is `partially_parsed`; Syft leaves out the root `.guardian`'s output; shellcheck gets a copy of
+  the root `.shellcheckrc` without `external-sources`; the `go version` probe reads; a header-only C/C++ tree is
+  named.
+- **Validation and tools**: `validate_finding` never says `unreachable` from a route list known to be incomplete;
+  an unprepared test tree is `unattributed`, never "already failing"; nuclei stays on the target
+  (`-disable-redirects -type http`); `open_redirect` needs the probe's own host in `Location`; progress is sent in
+  one unit; `install_toolchain`'s dry run changes nothing and survives hostile tool names; `perf_check` judges k6's
+  exit; `bulk_audit_wordpress_sites` keeps each site's coverage gaps; `init_project`'s first-pass status names its
+  gaps and never runs under WSL; Codex TOML headings are read by their keys and user configs replaced in one step;
+  an empty `--project` is a usage error; an accepted partial parse no longer clears a missing plugin pack.
+- **Rule packs** (measured on Semgrep 1.182.0): the Go lock rule no longer fires on the early-unlock idiom; the JS
+  floating-mutation receiver regex was anchored and reached nothing it described; chi routes need a leading `/`;
+  the mobile hostname-verifier rule catches the lambda handed to `setHostnameVerifier`; the Django N+1 rule skips a
+  field value's attributes; `yaml.load` with `BaseLoader` is safe.
+- **Docs**: SECURITY.md names every place the project's own code runs and what the server writes outside the
+  project; the READMEs, `docs/`, the skills and the commands were checked against the code (counts, exit codes,
+  variables, paths).
+
 ## [3.6.0] - 2026-10-25
 
 `scan_sast` runs its scanners side by side and adds SpotBugs with FindSecBugs over compiled Java and Kotlin;

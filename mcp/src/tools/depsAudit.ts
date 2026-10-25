@@ -11,9 +11,9 @@
  *   - `npm audit --json` (npm 7+/6 both supported) parsed into Findings via
  *     `npmAuditParser` — npm's GitHub-advisory coverage is complementary to
  *     Trivy's, so its vulnerabilities are counted rather than merely
- *     captured. To avoid double-counting, an npm finding for a package Trivy
- *     already reported as a CVE is dropped (Trivy is canonical); npm findings
- *     for packages Trivy missed are kept;
+ *     captured. To avoid double-counting, an npm finding that is an advisory
+ *     Trivy already reported for that package and manifest is dropped (Trivy
+ *     is canonical); every other npm finding is kept;
  *   - `pip-audit --format json`, run per `requirements*.txt` file (`-r`) when
  *     any exist, else against the project directory for a `pyproject.toml`
  *     project — NEVER bare, which audits whatever Python is on PATH (the MCP
@@ -59,6 +59,7 @@ import { dotnetScaParser } from '../runners/scannerParsers/dotnetSca.js';
 import { govulncheckParser } from '../runners/scannerParsers/govulncheck.js';
 import { govulncheckModules } from '../runners/govulncheckRun.js';
 import { listScannedFiles } from '../platform/guardianIgnore.js';
+import { findingVulnIds, vulnIdKey } from '../intel/vulnIds.js';
 import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/npmAudit.js';
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -101,26 +102,42 @@ function packageFromSnippet(snippet: string | undefined): string | null {
 
 /**
  * Trivy is the canonical CVE source across stacks; npm audit is here for the
- * GitHub advisories Trivy misses. When both flag the SAME package they are
- * (almost always) the same vulnerability seen twice — Trivy by CVE, npm by
- * GHSA — and npm's finding would otherwise inflate the counts. So we drop each
- * npm-audit finding whose package Trivy already reported as a CVE. npm findings
- * for packages Trivy did NOT flag (its complementary value) are kept.
+ * GitHub advisories Trivy misses. An npm-audit finding is dropped only when
+ * it IS a Trivy finding seen twice — Trivy by CVE, npm by GHSA: an advisory
+ * id in common (Trivy's CVE and its VendorIDs, npm's GHSA and CVE ids —
+ * `intel/vulnIds.ts#findingVulnIds`), the same package, in the same
+ * manifest's directory (npm audit reads the root's). No version is compared:
+ * npm's finding carries the advisory's vulnerable RANGE, one per advisory and
+ * package whatever versions are installed, and Trivy reports that advisory
+ * only for an installed version inside it — the shared id already pins it.
+ * It used to drop every npm finding of any package Trivy flagged at all: a
+ * second advisory of that package, which Trivy's database did not carry, and
+ * the root's advisory of a package Trivy flagged in another lock, were lost.
  */
 function dropNpmDuplicatesOfTrivy(findings: Finding[]): Finding[] {
-  const trivyPackages = new Set<string>();
-  for (const f of findings) {
-    if (f.tool === TRIVY_TOOL_NAME && f.subcategory === 'cve') {
-      const pkg = packageFromSnippet(f.snippet);
-      if (pkg) trivyPackages.add(pkg);
-    }
-  }
-  if (trivyPackages.size === 0) return findings;
+  const trivy = findings
+    .filter((f) => f.tool === TRIVY_TOOL_NAME && f.subcategory === 'cve')
+    .map((f) => ({
+      pkg: packageFromSnippet(f.snippet),
+      dir: manifestDir(f.file_path),
+      ids: new Set(findingVulnIds(f).map(vulnIdKey)),
+    }));
+  if (trivy.length === 0) return findings;
   return findings.filter((f) => {
     if (f.tool !== NPM_AUDIT_TOOL_NAME) return true;
     const pkg = packageFromSnippet(f.snippet);
-    return !(pkg !== null && trivyPackages.has(pkg));
+    if (pkg === null) return true;
+    const ids = findingVulnIds(f).map(vulnIdKey);
+    const dir = manifestDir(f.file_path);
+    return !trivy.some((t) => t.pkg === pkg && t.dir === dir && ids.some((id) => t.ids.has(id)));
   });
+}
+
+/** The directory of a finding's manifest, project-relative (`''` at the root). */
+function manifestDir(path: string | undefined): string {
+  const p = (path ?? '').replace(/\\/g, '/');
+  const slash = p.lastIndexOf('/');
+  return slash < 0 ? '' : p.slice(0, slash);
 }
 
 /**

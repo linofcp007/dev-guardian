@@ -119,7 +119,7 @@ async function judge(
   change: (dir: string) => void,
   /** Files the base commits next, from the first base commit's sha (a `.gitleaksignore` naming it). */
   then?: (first: string) => Record<string, string[]>,
-): Promise<{ fresh: Finding[]; failed: string[] }> {
+): Promise<{ fresh: Finding[]; failed: string[]; baselined: string[] }> {
   const dir = resolveProjectPath(makeTempDir('secret-full-content-')).path;
   mkdirSync(dir, { recursive: true });
   git(dir, 'init', '-q');
@@ -138,7 +138,7 @@ async function judge(
   commitPr(dir);
   const result = await gate(dir, { ref: 'BASE', commit, prefix: '' });
   const failed = result.steps.filter((s) => !s.ran || s.tools_run.some((t) => t.status === 'failed')).map((s) => `${s.tool}: ${s.reason ?? JSON.stringify(s.tools_run)}`);
-  return { fresh: newFindings(result.findings, baseline, await renamesSince(dir, commit)), failed };
+  return { fresh: newFindings(result.findings, baseline, await renamesSince(dir, commit)), failed, baselined: baseline.entries.map((e) => e.file_path ?? '') };
 }
 
 const where = (fresh: readonly Finding[]): unknown[] => fresh.map((f) => [f.rule_id, f.file_path, f.line_start, f.snippet]);
@@ -199,5 +199,79 @@ describe.skipIf(!GITLEAKS)('a renamed file with an edit is read where gitleaks r
       write(dir, 'settings.js', CONFIG.map((l) => l.replace(K1, NEW)));
     });
     expect(fresh.map((f) => [f.rule_id, f.file_path, f.line_start])).toContainEqual(['aws-access-token', 'settings.js', 2]);
+  });
+});
+
+// `git log -p` — the history pass — reads a file as the working tree's
+// `.gitattributes` says, in EVERY commit: a pull request's `config.js binary`
+// (or `* -diff`) made each commit's change "Binary files differ", and its
+// one-line key was in no hunk. The full-content pass read the file whole and
+// found it, but kept only matches over several lines. A file git calls binary
+// by its content (a NUL byte), and a merge commit's own change (`git log -p`
+// prints no diff for a merge), hid a one-line key the same way.
+describe.skipIf(!GITLEAKS)('a one-line secret the history pass read in no hunk is new', () => {
+  const BASE = { 'a.js': ['console.log(1)'], 'key.pem': pem('b1') };
+
+  it('a .gitattributes the commit adds no longer hides its key from the history pass (a push: no ref, no full-content pass)', async () => {
+    for (const attributes of [['config.js binary'], ['* -diff', 'README.md diff']]) {
+      const dir = resolveProjectPath(makeTempDir('secret-attributes-')).path;
+      git(dir, 'init', '-q');
+      write(dir, 'a.js', ['console.log(1)']);
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'base');
+      write(dir, '.gitattributes', attributes);
+      write(dir, 'README.md', ['x']);
+      write(dir, 'config.js', [`const AWS_KEY = "${NEW}";`]);
+      commitPr(dir);
+      const result = await gate(dir);
+      expect(where(result.findings), attributes.join(' / ')).toEqual([['aws-access-token', 'config.js', 1, expect.stringContaining(';commit=')]]);
+    }
+  });
+
+  it('a pull request marking its file binary in .gitattributes: its key is new', async () => {
+    const { fresh, failed } = await judge(BASE, (dir) => {
+      write(dir, '.gitattributes', ['config.js binary']);
+      write(dir, 'config.js', [`const AWS_KEY = "${NEW}";`]);
+    });
+    expect(failed).toEqual([]);
+    expect(where(fresh)).toEqual([['aws-access-token', 'config.js', 1, expect.any(String)]]);
+  });
+
+  it('a key in a file git reads as binary by its content (a NUL byte): new', async () => {
+    const { fresh, failed } = await judge(BASE, (dir) => writeFileSync(join(dir, 'blob.js'), `// \0\nconst AWS_KEY = "${NEW}";\n`));
+    expect(failed).toEqual([]);
+    expect(where(fresh)).toEqual([['aws-access-token', 'blob.js', 2, expect.not.stringContaining(';commit=')]]);
+  });
+
+  it("a key only the merge commit adds (an evil merge — git log -p prints no merge's diff): new", async () => {
+    const { fresh, failed } = await judge(BASE, (dir) => {
+      git(dir, 'checkout', '-q', '-b', 'side');
+      write(dir, 'b.txt', ['b']);
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'side');
+      git(dir, 'checkout', '-q', '-');
+      write(dir, 'c.txt', ['c']);
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'main');
+      git(dir, 'merge', '-q', '--no-ff', '--no-commit', 'side');
+      // Committed by `commitPr`: the merge commit itself.
+      write(dir, 'evil.js', [`const AWS_KEY = "${NEW}";`]);
+    });
+    expect(failed).toEqual([]);
+    expect(where(fresh)).toEqual([['aws-access-token', 'evil.js', 1, expect.not.stringContaining(';commit=')]]);
+  });
+
+  // The control: a one-line key the history pass DID read in a hunk was
+  // judged there, with what applies only to history — here a commit
+  // allowlist — and is not new because a pull request touched its file.
+  it('a key a .gitleaks.toml allowlists by its commit: an edit of its file is not new', async () => {
+    const { fresh, failed, baselined } = await judge(
+      { 'a.js': ['console.log(1)'], 'config.js': CONFIG },
+      (dir) => write(dir, 'config.js', [...CONFIG, '// d']),
+      (first) => ({ '.gitleaks.toml': ['[extend]', 'useDefault = true', '[[allowlists]]', `commits = ["${first}"]`], 'key.pem': pem('b1') }),
+    );
+    expect(baselined, 'the history pass honoured the allowlist').not.toContain('config.js');
+    expect(failed).toEqual([]);
+    expect(where(fresh)).toEqual([]);
   });
 });

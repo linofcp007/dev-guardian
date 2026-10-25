@@ -9,25 +9,44 @@
 
 const DEFAULT_LIMIT = 2;
 
+/**
+ * A release HANDS its slot to the first waiter — `active` unchanged — as
+ * `scannerPasses.ts` does (review 3.6.1, finding 7): giving it back first and
+ * letting the woken waiter take it again left a gap, a microtask long, in
+ * which a new `acquire()` got in too, one over the limit. A waiter whose
+ * `signal` aborts leaves the queue, takes no slot, and is rejected.
+ */
 class Semaphore {
   private active = 0;
   private waiting: Array<() => void> = [];
 
   constructor(private readonly limit: number) {}
 
-  async acquire(): Promise<void> {
+  async acquire(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted === true) throw cancelledWaiting();
     if (this.active < this.limit) {
       this.active += 1;
       return;
     }
-    await new Promise<void>((resolve) => this.waiting.push(resolve));
-    this.active += 1;
+    await new Promise<void>((resolve, reject) => {
+      const take = (): void => {
+        signal?.removeEventListener('abort', leave);
+        resolve();
+      };
+      const leave = (): void => {
+        const at = this.waiting.indexOf(take);
+        if (at >= 0) this.waiting.splice(at, 1);
+        reject(cancelledWaiting());
+      };
+      this.waiting.push(take);
+      signal?.addEventListener('abort', leave, { once: true });
+    });
   }
 
   release(): void {
-    this.active -= 1;
     const next = this.waiting.shift();
-    if (next) next();
+    if (next !== undefined) next();
+    else this.active -= 1;
   }
 
   get inFlight(): number {
@@ -36,6 +55,12 @@ class Semaphore {
   get queued(): number {
     return this.waiting.length;
   }
+}
+
+function cancelledWaiting(): Error {
+  const e = new Error('cancelled while waiting for a scanner slot');
+  e.name = 'AbortError';
+  return e;
 }
 
 let limiter: Semaphore | null = null;

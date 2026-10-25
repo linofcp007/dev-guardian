@@ -460,3 +460,81 @@ describe('wp_audit — checksum rows it cannot classify, and must-use plugins', 
     expect(out.tools_run[0]?.reason).toBe('2 plugin(s) not verified: loader.php, mu-tools');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Review 3.6.1, finding 2: `bulk_audit_wordpress_sites` kept only each site's
+// checksum mismatches. A site whose checksum calls failed is an `ok: true`
+// wp_audit with `missing_tools: ['wp-cli']` and coverage partial — and the
+// summary showed it as `flagged_count: 0`, counted it as successful and left
+// it out of `sites_with_issues`: an unverified site read as a clean one.
+// ---------------------------------------------------------------------------
+
+describe('bulk_audit_wordpress_sites carries each site’s coverage gaps', () => {
+  beforeAll(async () => {
+    await import('../../src/tools/bulkAuditWordpressSites.js');
+  });
+
+  async function bulk(paths: string[]): Promise<Record<string, unknown>> {
+    const tool = TOOLS.find((t) => t.name === 'bulk_audit_wordpress_sites');
+    if (!tool) throw new Error('bulk_audit_wordpress_sites not registered');
+    const pending = tool.handler({ wp_install_paths: paths }, plugin());
+    await vi.runAllTimersAsync();
+    const r = await pending;
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    return r as unknown as Record<string, unknown>;
+  }
+
+  interface Site {
+    wp_install_path: string;
+    ok: boolean;
+    flagged_count?: number;
+    coverage?: string;
+    missing_tools?: string[];
+    not_checked?: string;
+  }
+
+  it('a site whose checksums were not verified is partial, named, and an issue — never a clean success', async () => {
+    const clean = install();
+    const unverified = install();
+    vi.mocked(runProcess).mockImplementation(async (o) => {
+      const unverifiedSite = (o.args ?? []).includes(`--path=${unverified}`);
+      return wpCliWith(
+        unverifiedSite
+          ? {
+              'core verify-checksums': run(1, '', "Error: Couldn't get checksums from WordPress.org.\n"),
+              'plugin verify-checksums': run(1, '', "Error: Couldn't get checksums from WordPress.org.\n"),
+            }
+          : {},
+      )(o);
+    });
+    const out = await bulk([clean, unverified]);
+    const sites = out['sites'] as Site[];
+    const bad = sites.find((s) => s.wp_install_path === unverified);
+    const good = sites.find((s) => s.wp_install_path === clean);
+    expect(bad).toMatchObject({ ok: true, flagged_count: 0, coverage: 'partial', missing_tools: ['wp-cli'] });
+    expect(bad?.not_checked).toMatch(/core checksums not verified.*plugin checksums not verified/);
+    expect(good).toMatchObject({ ok: true, coverage: 'full', missing_tools: [] });
+    expect(good?.not_checked).toBeUndefined();
+    expect(out).toMatchObject({
+      total_sites: 2,
+      successful: 1,
+      partial: 1,
+      failed: 0,
+      sites_with_issues: 1,
+      coverage: 'partial',
+      missing_tools: ['wp-cli'],
+    });
+  }, 30_000);
+
+  it('every site fully audited: coverage full, nothing missing', async () => {
+    vi.mocked(runProcess).mockImplementation(async (o) => wpCliWith({})(o));
+    const out = await bulk([install(), install()]);
+    expect(out).toMatchObject({ successful: 2, partial: 0, failed: 0, sites_with_issues: 0, coverage: 'full', missing_tools: [] });
+  });
+
+  it('no site audited at all: coverage none', async () => {
+    vi.mocked(scannerAvailable).mockResolvedValue(null);
+    const out = await bulk([install()]);
+    expect(out).toMatchObject({ successful: 0, partial: 0, failed: 1, sites_with_issues: 1, coverage: 'none' });
+  });
+});

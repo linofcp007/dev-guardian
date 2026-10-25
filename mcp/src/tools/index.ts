@@ -292,8 +292,44 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
 export function strictInputSchema(tool: Pick<ToolModule, 'inputSchema'>): z.ZodObject<ZodRawShape, 'strict'> {
   const schema = z.object(tool.inputSchema).strict();
   const parse = schema.safeParseAsync.bind(schema);
-  schema.safeParseAsync = (data, params) => parse(data ?? {}, params);
+  schema.safeParseAsync = async (data, params) => {
+    const oversized = oversizedArrayIn(data);
+    if (oversized !== null) {
+      const message = `at most ${MAX_INPUT_ARRAY} items per list (${oversized.length} given)`;
+      return { success: false, error: new z.ZodError([{ code: 'custom', path: oversized.path, message }]) };
+    }
+    return parse(data ?? {}, params);
+  };
   return schema;
+}
+
+/**
+ * The longest list a tool call may carry — ten times the largest any schema
+ * accepts (1 000). Checked before zod sees the input: zod 3 parses EVERY
+ * element of an array even past its `.max()`, keeping one issue per failing
+ * element with no cap (GHSA-mrhx-c7xc-m3w5, fixed only in zod 4.6.6), so a
+ * call of millions of wrong items would hold millions of issues in memory.
+ */
+export const MAX_INPUT_ARRAY = 10_000;
+/** How deep {@link oversizedArrayIn} looks; tool inputs nest two or three levels. */
+const MAX_INPUT_DEPTH = 32;
+
+/** The first array in `data` longer than {@link MAX_INPUT_ARRAY}, with its path; null when none. */
+function oversizedArrayIn(data: unknown): { path: Array<string | number>; length: number } | null {
+  const stack: Array<{ value: unknown; path: Array<string | number> }> = [{ value: data, path: [] }];
+  while (stack.length > 0) {
+    const next = stack.pop();
+    if (next === undefined) break;
+    const { value, path } = next;
+    if (value === null || typeof value !== 'object' || path.length > MAX_INPUT_DEPTH) continue;
+    if (Array.isArray(value)) {
+      if (value.length > MAX_INPUT_ARRAY) return { path, length: value.length };
+      value.forEach((v: unknown, i) => stack.push({ value: v, path: [...path, i] }));
+    } else {
+      for (const [k, v] of Object.entries(value)) stack.push({ value: v, path: [...path, k] });
+    }
+  }
+  return null;
 }
 
 /**

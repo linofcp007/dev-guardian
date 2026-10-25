@@ -7,10 +7,10 @@ The engine is the MCP server, so any host that speaks MCP over stdio can use dev
 The server and the CLI are committed pre-built and bundled (`mcp/dist/server.js` starts the server from `mcp/dist/engine.js`, which the CLI runs too, and neither needs a runtime `node_modules`), so there is nothing to install or build — only Node.js ≥ 22.13 and git.
 
 ```text
-git clone --depth 1 --branch v3.6.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.6.1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 ```
 
-The clone above pins 3.6.0; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
+The clone above pins 3.6.1; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
 
 ## 2. Wire a host into a project
 
@@ -38,7 +38,7 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | Flag | Meaning |
 | --- | --- |
 | `--write` | write or merge instead of printing |
-| `--project <path>` | the project to configure (default: current directory) |
+| `--project <path>` | the project to configure (default: current directory). With `--write` it is judged like every command's `--project`: a filesystem root, your home directory or a path that is not a directory is a usage error, so `all --write` run from `~` writes nothing there. An empty value is a usage error |
 | `--scope project\|global`, `--global` | which config to write. `all --write` skips the two global-only hosts (Windsurf, Claude Desktop) unless `--global` is given, so it never touches a global config by surprise; naming either host directly writes its global config. |
 | `--update-mcp` | refresh an entry or rules block that is already there but out of date (`--force` is a deprecated alias) |
 
@@ -48,7 +48,8 @@ Exit codes: 0 done, 1 the MCP server is not built (`mcp/dist/server.js` missing)
 
 - `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.clinerules` are files you may already have. dev-guardian manages only a delimited block inside them (`<!-- dev-guardian:begin -->` … `<!-- dev-guardian:end -->`); everything outside it is never touched. A stale block is reported as `needs_update` until you pass `--update-mcp`. A file that mentions dev-guardian without the markers and is not byte-for-byte a template an earlier release installed is reported as `manual_merge_required` and left alone.
 - `.cursor/rules/dev-guardian.mdc` and `.windsurf/rules/dev-guardian.md` belong to dev-guardian alone and are written whole, because both hosts only honour a rules file whose YAML frontmatter is its very first bytes. Both are agent-requested (Cursor: a description, `alwaysApply: false`; Windsurf: `trigger: model_decision`): the host loads them when the task matches their description — security, dependencies, bugs, quality, compliance, or installing a package, an AI skill or an MCP server — instead of on every request.
-- Codex's TOML entry is compared by content; `--update-mcp` replaces every `[mcp_servers.dev-guardian]` table and sub-table in the file, wherever they are.
+- Codex's TOML entry is compared by content; `--update-mcp` replaces every `[mcp_servers.dev-guardian]` table and sub-table in the file, wherever they are, however the heading is spelt (`[ mcp_servers."dev-guardian" ]` is the same table), and keeps the comments that lead into the next table. An entry written with dotted keys or as an inline table (`mcp_servers.dev-guardian.command = …`) is left untouched and reported `failed`: make it a table, or edit it by hand.
+- A JSON config that starts with a byte-order mark is read and written back with it; one with comments (VS Code's `mcp.json` allows them) is reported `failed` and left untouched. A global config (Claude Desktop's, Windsurf's, `~/.codex/config.toml`) is replaced in one step — a temp file renamed over it — so an interrupted write never leaves it truncated; a link there (a dotfiles checkout) stays a link.
 
 ## Manual configuration
 
@@ -93,7 +94,7 @@ For a project-scoped config, prefer the host's own workspace variable or `cwd` s
 
 ## Auditing the MCP servers a project declares
 
-`audit_agent_config` reads every host config above without running anything: the project's `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json` and a plugin's `.claude-plugin/plugin.json`, and with `include_user_config` the user-level ones — `~/.claude.json`, Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json`, Windsurf's `~/.codeium/windsurf/mcp_config.json` and `~/.gemini/settings.json`, at the same paths `mcp-config --write` uses.
+`audit_agent_config` reads these host configs without running anything (Codex's `config.toml` is not read): the project's `.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json` and a plugin's `.claude-plugin/plugin.json`, and with `include_user_config` the user-level ones — `~/.claude.json`, Claude Desktop's `claude_desktop_config.json`, `~/.cursor/mcp.json`, Windsurf's `~/.codeium/windsurf/mcp_config.json` and `~/.gemini/settings.json`, at the same paths `mcp-config --write` uses.
 
 `audit_mcp_tools` goes one step further for the servers you name in `servers`: it starts each one as the host would, lists the tools, prompts, resources and templates it serves, and checks those definitions for tool poisoning, hidden Unicode and look-alike letters, instructions to read secrets or hide actions from the user, exfiltration (a URL, an address, an image, a parameter), and cross-server shadowing. Each tool is pinned (sha256 of its name, title, description, input and output schema and annotations), and so are each prompt, resource and template and the server's instructions, so a definition that changes under the same name — a "rug pull" — is reported on the next audit, even after the tool vanished for an audit in between. A name is an entry name, or `<source>::<name>` (as the response prints it) to pick one entry when several declare the same name with different commands. It **executes those servers' code**: only the names you list, with a minimal environment plus the entry's own `env`, never `tools/call`, remote servers (a URL entry; a network-path command; a URL in the command line or an `env` value, unless its host is exactly `localhost`, `127.x.x.x` or `[::1]`; `ssh`, `kubectl` and the like anywhere in the command line; `docker`/`podman`/`nerdctl` against another engine) only with `allow_remote: true`, and the process tree killed afterwards. A loopback URL may still be a tunnel (`ssh -L`, a local proxy) that the configuration does not show. A server can recognise the audit, so a clean result covers only what it chose to show this client — see [SECURITY.md](../SECURITY.md).
 

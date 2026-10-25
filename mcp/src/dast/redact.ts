@@ -72,6 +72,41 @@ export function makeRedactor(secrets: readonly string[]): Redactor {
   };
 }
 
+/** Headers whose whole value is a credential, in a request or echoed in a response. */
+const CREDENTIAL_HEADERS: ReadonlySet<string> = new Set(['authorization', 'proxy-authorization', 'cookie']);
+
+/** The attributes of a `Set-Cookie`, which say how the cookie is protected — kept. */
+const COOKIE_ATTRIBUTES: ReadonlySet<string> = new Set([
+  'expires', 'max-age', 'domain', 'path', 'samesite', 'priority', 'partitioned', 'secure', 'httponly',
+]);
+
+/**
+ * `headers` with the credentials the TARGET sent removed: the value of every
+ * cookie a `Set-Cookie` issues (its name and attributes kept — `HttpOnly`,
+ * `Secure` and `SameSite` are what a reader checks), and the whole value of
+ * an `Authorization`, `Proxy-Authorization` or `Cookie` header. The
+ * credential the caller supplied is {@link makeRedactor}'s; these are the
+ * ones a live scan collects on its own — a session the target handed out
+ * was written to the evidence files verbatim (review of 3.6, finding 10).
+ * Header names are lower-case (`probe.ts`).
+ */
+export function redactHeaderCredentials(headers: Readonly<Record<string, string>>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(headers)) {
+    if (CREDENTIAL_HEADERS.has(name)) out[name] = REDACTED;
+    else if (name === 'set-cookie') out[name] = redactCookieValues(value);
+    else out[name] = value;
+  }
+  return out;
+}
+
+/** Every `name=value` of a `Set-Cookie` line but an attribute's becomes `name=«redacted»`. */
+function redactCookieValues(value: string): string {
+  return value.replace(/([!#$%&'*+\-.^_`|~0-9A-Za-z]+)=([^;,]*)/g, (whole, name: string) =>
+    COOKIE_ATTRIBUTES.has(name.toLowerCase()) ? whole : `${name}=${REDACTED}`,
+  );
+}
+
 /**
  * Redact every string anywhere inside `value` by round-tripping it through
  * JSON. Non-serialisable input (`undefined`, a bare function) is returned

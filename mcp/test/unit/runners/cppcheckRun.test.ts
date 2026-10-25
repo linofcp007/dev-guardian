@@ -95,6 +95,26 @@ describe('judgeCppcheck', () => {
     expect(r.notes.join(' | ')).toMatch(/1 file\(s\) include a project header cppcheck did not find/);
   });
 
+  // 3.6.1: `information` is enabled for coverage only, but the parser kept
+  // every id off a fixed list — so an unlisted one (ConfigurationNotChecked:
+  // a configuration skipped) was a low "security" finding. Hand-made in the
+  // shape of the real report (cppcheck is not installed here); the message is
+  // cppcheck's own for that id.
+  it('ConfigurationNotChecked is a file checked less deeply; another information id is noted, never a finding', () => {
+    const xml =
+      '<?xml version="1.0" encoding="UTF-8"?>\n<results version="2">\n    <cppcheck version="2.22.0"/>\n    <errors>\n' +
+      '        <error id="ConfigurationNotChecked" severity="information" msg="Skipping configuration &apos;HAVE_SSL&apos; since the value of &apos;HAVE_SSL&apos; is unknown. Use -D if you want to check it. You can use -U to skip it explicitly." verbose="Skipping configuration &apos;HAVE_SSL&apos; since the value of &apos;HAVE_SSL&apos; is unknown. Use -D if you want to check it. You can use -U to skip it explicitly.">\n' +
+      '            <location file="src/net.c" line="12" column="0"/>\n        </error>\n' +
+      '        <error id="someNewInformation" severity="information" msg="m" verbose="v">\n            <location file="src/b.c" line="1" column="0"/>\n        </error>\n' +
+      '    </errors>\n</results>\n';
+    const r = judgeCppcheck({ run: done, xml, filesTxt: null, requested: null, projectPath: '/p' });
+    expect(r.ok).toBe(true);
+    expect(r.partial).toEqual([]);
+    expect(r.shallower).toEqual(['src/net.c']);
+    expect(r.information).toEqual(['someNewInformation (src/b.c)']);
+    expect(cppcheckParser.parse(xml, { project_path: '/p' }).findings).toEqual([]);
+  });
+
   it('exit 1 names what cppcheck printed; no report, an incomplete one or an unfinished run fail', () => {
     expect(
       judgeCppcheck({ run: { ...done, exitCode: 1, stdout: 'cppcheck: error: could not find or open any of the paths given.\n' }, xml: null, filesTxt: null, requested: null, projectPath: '/p' }).reason,

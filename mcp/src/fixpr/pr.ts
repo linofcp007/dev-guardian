@@ -79,10 +79,13 @@
  * whatever the fix actually touched, and `git commit` would then happily
  * commit it: a tree that contains dev-guardian's own scan output is never
  * empty, even when the fix was a no-op. Measured: a commit titled "automated
- * Semgrep fix" whose entire diff was `sast.json`. Both `git add` and the
- * real-change check below use an exclude pathspec for `.guardian` at any depth
- * (`EXCLUDE_GUARDIAN_DIR`), so neither
- * ever sees that directory.
+ * Semgrep fix" whose entire diff was `sast.json`. The real-change check
+ * below uses an exclude pathspec for `.guardian` at any depth
+ * (`EXCLUDE_GUARDIAN_DIR`), so it never sees that directory — and `git add`
+ * no longer stages "everything": it stages exactly the changed paths the
+ * group's `CommitScope` allows (`commitScope.ts`), and refuses, naming them,
+ * when anything else changed (review of 3.6, finding 4: an install, a
+ * restore's `obj/` or a test run's artifacts became part of the PR).
  *
  * **An empty diff is an explicit outcome (`no_changes`), not inferred from
  * `git commit` refusing an empty tree.** Checked directly — `git status
@@ -102,7 +105,30 @@ import { fileURLToPath } from 'node:url';
 import { withTextFile } from '../runners/argFile.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { GIT_COMMAND, gitSafetyFor, isRepositoryScope, localReceivePackCommand, parseConfigListing } from '../platform/gitSafety.js';
+import type { CommitScope } from './commitScope.js';
 import type { FixSource } from './types.js';
+
+/**
+ * The paths `git status --porcelain=v1 -z` names, repository-relative: each
+ * record is `XY <path>`, and a rename or copy (`R`, `C`) carries its source
+ * path in the next record — both are changes the commit would hold.
+ */
+function changedPaths(stdout: string): string[] {
+  const records = stdout.split('\0');
+  const out: string[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i] ?? '';
+    if (record.length < 4) continue;
+    out.push(record.slice(3));
+    const x = record[0];
+    if (x === 'R' || x === 'C') {
+      const source = records[i + 1];
+      if (source !== undefined && source.length > 0) out.push(source);
+      i += 1;
+    }
+  }
+  return [...new Set(out)];
+}
 
 /** Excludes dev-guardian's own scan-report artifacts from both staging and
  *  the "did anything real change" check — see the module comment (C1). At
@@ -214,10 +240,12 @@ export async function openPr(opts: {
   branch: string;
   title: string;
   body: string;
+  /** What the commit may hold (`commitScope.ts`): exactly these paths are staged. */
+  scope: CommitScope;
   run?: typeof runProcess;
 }): Promise<PrOutcome> {
   const run = opts.run ?? runProcess;
-  const { projectPath, worktreePath, branch, title, body } = opts;
+  const { projectPath, worktreePath, branch, title, body, scope } = opts;
 
   // Gated FIRST, before this function does anything else — see the module
   // comment on order of operations. Nothing below this point runs unless the
@@ -244,8 +272,9 @@ export async function openPr(opts: {
   const status = await run({
     command: GIT_COMMAND,
     // No submodule is initialised in the worktree; `dirty` keeps git out of
-    // one all the same (platform/gitSafety.ts).
-    args: ['status', '--porcelain', '--ignore-submodules=dirty', '--', EXCLUDE_GUARDIAN_DIR],
+    // one all the same (platform/gitSafety.ts). `-z`: a path is printed as
+    // it is, never quoted or escaped.
+    args: ['status', '--porcelain=v1', '-z', '--ignore-submodules=dirty', '--', EXCLUDE_GUARDIAN_DIR],
     cwd: worktreePath,
   });
   if (hasFailed(status)) {
@@ -257,7 +286,8 @@ export async function openPr(opts: {
         `${describeFailure(status, 'git status')}`,
     };
   }
-  if (status.stdout.trim().length === 0) {
+  const changed = changedPaths(status.stdout);
+  if (changed.length === 0) {
     return {
       status: 'no_changes',
       url: null,
@@ -266,10 +296,26 @@ export async function openPr(opts: {
         `report is excluded from this check, so it cannot mask a no-op fix). No pull request was opened.`,
     };
   }
+  // The commit is the fix and nothing else (`commitScope.ts`): anything else
+  // the install, the re-scan or the project's tests left in the worktree is
+  // named, and nothing is committed.
+  const extra = changed.filter((path) => !scope.allows(path));
+  if (extra.length > 0) {
+    const named = extra.slice(0, 5).join(', ') + (extra.length > 5 ? `, and ${extra.length - 5} more` : '');
+    return {
+      status: 'refused',
+      url: null,
+      detail:
+        `The worktree changed beyond the fix's own files (${named}) — left by the install, the re-scan or ` +
+        `the project's tests, and not git-ignored. Nothing was committed or pushed for branch '${branch}'; ` +
+        'git-ignore what they are, or open the pull request by hand.',
+    };
+  }
 
   const add = await run({
     command: GIT_COMMAND,
-    args: ['add', '-A', '--', EXCLUDE_GUARDIAN_DIR],
+    // Exactly the paths checked above, each literal (no glob, no magic).
+    args: ['add', '--', ...changed.map((path) => `:(literal)${path}`)],
     cwd: worktreePath,
   });
   if (hasFailed(add)) {

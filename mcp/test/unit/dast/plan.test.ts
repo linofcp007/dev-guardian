@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { planProbes, substituteParams, DEFAULT_MAX_REQUESTS } from '../../../src/dast/plan.js';
+import { planProbes, substituteParams, DEFAULT_MAX_REQUESTS, REDIRECT_PROBE_TARGET } from '../../../src/dast/plan.js';
 import type { RouteRecord } from '../../../src/types.js';
 
 function route(over: Partial<RouteRecord> = {}): RouteRecord {
@@ -138,14 +138,31 @@ describe('planProbes — safety envelope', () => {
     const routes = Array.from({ length: 20 }, (_, i) =>
       route({ path_resolved: `/r${i}` }),
     );
-    // 20 routes × (1 anonymous GET + 1 cors GET) = 40 planned requests, of
-    // which 5 survive the cap and 35 are reported as cap skips. The count is
-    // spelled out rather than derived so a change in probes-per-route shows
-    // up here as a failure instead of quietly passing.
+    // 20 routes × (1 anonymous GET + 1 cors GET + 1 redirect GET) = 60
+    // planned requests, of which 5 survive the cap and 55 are reported as cap
+    // skips. The count is spelled out rather than derived so a change in
+    // probes-per-route shows up here as a failure instead of quietly passing.
     const out = planProbes(routes, { ...OPTS, maxRequests: 5 });
     expect(out.requests).toHaveLength(5);
     expect(out.truncated).toBe(true);
-    expect(out.skipped.filter((s) => s.reason === 'cap')).toHaveLength(35);
+    expect(out.skipped.filter((s) => s.reason === 'cap')).toHaveLength(55);
+  });
+
+  it('plans one redirect variant per path, offering the probe destination in the usual redirect parameters', () => {
+    const out = planProbes([route(), route({ method: 'HEAD' }), route({ path_resolved: '/login?x=1' })], OPTS);
+    const probes = out.requests.filter((r) => r.variant === 'redirect');
+    expect(probes.map((r) => r.path)).toEqual(['/users', '/login?x=1']);
+    for (const probe of probes) {
+      expect(probe.method).toBe('GET');
+      const url = new URL(probe.url);
+      // Still the target: only the query grows.
+      expect(url.origin).toBe(OPTS.origin);
+      for (const name of ['next', 'url', 'redirect', 'redirect_uri', 'returnUrl', 'return_to']) {
+        expect(url.searchParams.get(name), name).toBe(REDIRECT_PROBE_TARGET);
+      }
+    }
+    expect(new URL(probes[1]?.url ?? '').searchParams.get('x')).toBe('1');
+    expect(REDIRECT_PROBE_TARGET).toMatch(/^https:\/\/[^/]+\.invalid\/$/);
   });
 
   it('does not report truncated when the plan fits', () => {

@@ -117,6 +117,7 @@ const HOOK_STARTED = Date.now();
  *   invalidSettings: string[],
  *   unreadConfigFiles?: string[],
  *   ignoresEverything?: string,
+ *   shortAllowlistEntries?: string[],
  * }} HookConfig
  * @typedef {{ old_string?: unknown, new_string?: unknown, replace_all?: boolean }} SettingsEdit
  * @typedef {{ old_string: string, new_string: string, replace_all?: boolean }} TextEdit
@@ -131,10 +132,12 @@ const HOOK_STARTED = Date.now();
  *   config: string[],
  *   registry: string[],
  *   settings: Array<{ path: string, change: SettingsChange | null }>,
+ *   takesAway?: string[],
  *   unread?: string,
  *   fileTool?: boolean,
  *   maybe?: { paths: string[], change: SettingsChange, removes: boolean },
  * }} WriteDescription
+ *   `takesAway`: the paths an MCP tool deletes or moves away — Claude Code's settings among them are asked about;
  *   `unread`: why part of an MCP tool's arguments was not read; `fileTool`: its name names a file;
  *   `maybe`: a non-file tool's strings that may name a guarded file — asked about, never denied.
  * @typedef {Record<string, unknown>} ToolInput
@@ -617,14 +620,37 @@ function loadConfig(root, unread) {
 }
 
 /**
+ * The fewest non-blank characters an allowlist entry may have. An entry
+ * silences a secret warning on any line that contains it, case-insensitively,
+ * so a one- to three-character entry (`"="`, `"e"`, `" a "`) holds in nearly
+ * every line and silences every warning — and the file comes from the project,
+ * which anyone who controls it writes (review of 3.6.0, finding 11). Four keeps
+ * a real marker (`"AKIA"`, `"EXAMPLE"`, `"fake_"`).
+ */
+const MIN_ALLOWLIST_ENTRY = 4;
+
+/**
+ * The project's secret allowlist, without the entries too short to be one
+ * ({@link MIN_ALLOWLIST_ENTRY}) — those go to `dropped`, for SessionStart to name.
+ *
  * @param {string} root
  * @param {string[]} unread
+ * @param {string[]} [dropped]
  * @returns {string[]}
  */
-function loadAllowlist(root, unread) {
+function loadAllowlist(root, unread, dropped = []) {
   const data = readJsonFile(join(root, '.guardian', 'hooks-allowlist.json'), '.guardian/hooks-allowlist.json', unread, root);
   /** @param {unknown[]} list */
-  const strings = (list) => list.filter((x) => typeof x === 'string');
+  const strings = (list) => {
+    /** @type {string[]} */
+    const out = [];
+    for (const x of list) {
+      if (typeof x !== 'string') continue;
+      if (x.trim().length >= MIN_ALLOWLIST_ENTRY) out.push(x);
+      else dropped.push(x);
+    }
+    return out;
+  };
   if (Array.isArray(data)) return strings(data);
   if (isPlainObject(data) && Array.isArray(data['secrets'])) return strings(data['secrets']);
   return [];
@@ -1063,6 +1089,14 @@ function ignoredSettingsNotice(cfg) {
         'to such a file is not warned about in this session.',
     );
   }
+  const short = cfg.shortAllowlistEntries ?? [];
+  if (short.length > 0) {
+    const shown = short.slice(0, 5).map((e) => JSON.stringify(e.slice(0, 16)));
+    lines.push(
+      `⚠️ dev-guardian: .guardian/hooks-allowlist.json holds ${shown.join(', ')}${short.length > 5 ? ` and ${short.length - 5} more` : ''} — ` +
+        `shorter than ${MIN_ALLOWLIST_ENTRY} characters, nearly every line would match, so ignored: secret warnings still apply.`,
+    );
+  }
   return lines.length > 0 ? lines.join('\n') : null;
 }
 
@@ -1377,8 +1411,11 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   if (vet?.context) notes.push(vet.context);
   const context = notes.length > 0 ? { additionalContext: notes.join('\n') } : {};
   // The user's decision, not a hazard (review 8, C2: an agent-run `baseline
-  // update`): Claude Code asks the user, showing them why. With the block
-  // switched off it is only the warning above, as a block would be.
+  // update`; review of 3.6.0, finding 9: a command a cap or the time budget
+  // cut short, which padding could otherwise push a denied command past):
+  // Claude Code asks the user, showing them why. With the block switched off
+  // it is only the warning above, as a block would be. An internal error of
+  // the guard is no question — it fails open, as every hook does.
   if (a.ask && cfg.bash.block) {
     return respond('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: `dev-guardian: ${a.ask}.`, ...context });
   }
@@ -1752,6 +1789,9 @@ function describeMcpWrite(toolName, input) {
     // Removing a registry entry only un-trusts a database; writing one is the user's decision.
     registry: removes ? [] : written,
     settings: removes ? [] : [...dests.map((d) => ({ path: d.path, change: changeOf(d.parent) })), ...others.map((path) => ({ path, change }))],
+    // Deleting Claude Code's settings, or moving them away, drops every
+    // permissions.deny rule they hold — the user's question (review of 3.6.0, finding 12).
+    ...(removes || sources.length > 0 ? { takesAway: [...(removes ? written : []), ...sources] } : {}),
     ...(maybe.length === 0 ? {} : { maybe: { paths: maybe, change, removes } }),
     ...(unread === undefined ? {} : { unread }),
     fileTool,
@@ -2066,6 +2106,7 @@ async function handlePreToolUseWrite(write, toolName, cwd, root, cfg, allowlist)
   /** @type {string | undefined} */
   let ask;
   for (const { path, change } of write.settings) ask ??= await claudeSettingsWriteGuard(path, change, cwd, root, toolName); // likewise
+  for (const p of write.takesAway ?? []) ask ??= await claudeSettingsRemoveAsk(p, cwd, toolName);
   const maybe = write.maybe;
   if (write.registry.length > 0 || maybe !== undefined) await loadRegistryGuard();
   for (const p of write.registry) guardianRegistryWriteGuard(p, cwd); // likewise
@@ -2108,12 +2149,43 @@ async function maybeGuardedAsk(maybe, toolName, cwd, root) {
       /* fail-open */
     }
     if (registry) return named(p, "dev-guardian's registry of trusted databases");
-    if (!maybe.removes) {
-      const settings = await claudeSettingsWriteGuard(p, maybe.change, cwd, root, toolName, true);
-      if (settings !== undefined) return settings;
-    }
+    const settings = maybe.removes
+      ? await claudeSettingsRemoveAsk(p, cwd, toolName)
+      : await claudeSettingsWriteGuard(p, maybe.change, cwd, root, toolName, true);
+    if (settings !== undefined) return settings;
   }
   return undefined;
+}
+
+/**
+ * The question for an MCP tool that deletes Claude Code's settings or moves
+ * them away (review of 3.6.0, finding 12): `settings` was `[]` for a delete,
+ * so `delete_file {path: ".claude/settings.json"}` went through, and every
+ * `permissions.deny` rule the file held went with it. Asked, never denied —
+ * removing a settings file is sometimes the user's intent. The path is judged
+ * as written (a stream or an 8.3 name of it too); a failure lets the call
+ * through (fail-open), as every guard does.
+ *
+ * @param {string} rawPath
+ * @param {string} cwd
+ * @param {string} toolName
+ * @returns {Promise<string | undefined>}
+ */
+async function claudeSettingsRemoveAsk(rawPath, cwd, toolName) {
+  if (!rawPath) return undefined;
+  try {
+    const abs = guardedPath(resolve(cwd, rawPath));
+    if (!/settings(?:\.local)?\.json$/i.test(abs)) return undefined;
+    const guard = await detector('loadSettingsGuard');
+    const configDir = process.env.CLAUDE_CONFIG_DIR ? guardedPath(resolve(process.env.CLAUDE_CONFIG_DIR)) : undefined;
+    if (!guard.isClaudeSettingsPath(abs, configDir)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return (
+    `dev-guardian: ${toolName} deletes or moves away Claude Code's settings (${normalizePath(rawPath)}), and with ` +
+    'them every permissions.deny rule and hook setting they hold. Confirm it only if you expected this.'
+  );
 }
 
 // ─────────────────────────────────── main ──────────────────────────────────
@@ -2136,8 +2208,11 @@ async function main() {
   const root = projectRootOf(cwd);
   const cfg = loadConfig(root, unread);
   if (!cfg.enabled) noop();
-  const allowlist = loadAllowlist(root, unread);
+  /** @type {string[]} */
+  const shortEntries = [];
+  const allowlist = loadAllowlist(root, unread, shortEntries);
   cfg.unreadConfigFiles = unread;
+  cfg.shortAllowlistEntries = shortEntries;
 
   debug(`event=${event} tool=${toolName} cwd=${cwd} root=${root}`);
 

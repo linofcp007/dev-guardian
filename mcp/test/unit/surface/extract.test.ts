@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  CLASS_PREFIX_ALWAYS,
+  CLASS_PREFIX_KEY,
+  CLASS_PREFIX_UNLESS_ROOTED,
   extractParams,
   extractSurface,
   INHERITED_PATH,
@@ -397,6 +400,44 @@ describe('extractSurface — an annotation with no path of its own', () => {
   it('does not treat an unknown guardian_path value as inherited', () => {
     const { routes } = extractSurface(bareMatch({ [INHERITED_PATH_KEY]: 'whatever' }));
     expect(routes).toEqual([]);
+  });
+});
+
+describe('extractSurface — a path a class-level prefix completes', () => {
+  /** One focused route match: its path is the span's text, recovered as `$PATH`. */
+  function match(path: string, metadata: Record<string, unknown>): unknown {
+    return {
+      results: [
+        {
+          check_id: 'guardian-route-x',
+          path: 'src/main/java/OrderController.java',
+          start: { line: 9 },
+          extra: {
+            metadata: { guardian_kind: 'route', framework: 'spring', confidence: 'medium', method: 'GET', ...metadata },
+            metavars: { $PATH: { abstract_content: `"${path}"` } },
+          },
+        },
+      ],
+    };
+  }
+  const route = (path: string, metadata: Record<string, unknown>) => extractSurface(match(path, metadata)).routes[0];
+
+  it('always: the path is kept, never resolved — Spring joins the class @RequestMapping to it', () => {
+    expect(route('/list', { [CLASS_PREFIX_KEY]: CLASS_PREFIX_ALWAYS })).toMatchObject({
+      path_raw: '/list',
+      path_resolved: '/list',
+      path_partial: true,
+      confidence: 'medium',
+    });
+  });
+
+  it('unless-rooted: a path starting with / or ~/ ignores the class [Route] and stays resolved (ASP.NET)', () => {
+    expect(route('{id}/status', { [CLASS_PREFIX_KEY]: CLASS_PREFIX_UNLESS_ROOTED })?.path_partial).toBe(true);
+    expect(route('/aspnet/orders', { [CLASS_PREFIX_KEY]: CLASS_PREFIX_UNLESS_ROOTED })?.path_partial).toBe(false);
+  });
+
+  it('without the key, a literal path is resolved as before', () => {
+    expect(route('/list', {})?.path_partial).toBe(false);
   });
 });
 

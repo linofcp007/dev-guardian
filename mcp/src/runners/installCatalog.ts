@@ -188,6 +188,30 @@ const FINDSECBUGS_JAR_SHA256 = '6fa340344fa433ff46c2985dab1010e8bc739f9395c98359
 /** RuboCop, the version quality_check's Ruby pass was measured on (2026-10-22's 1.92.1, the latest). */
 const RUBOCOP_VERSION = '1.92.1';
 
+/**
+ * WP-CLI's release PHAR on Linux. The entry used to be wp-cli.org's
+ * one-liner — `curl -O` of `wp-cli/builds`' `gh-pages` branch head, no sum,
+ * no `-f` (an HTML error page would have been installed as `wp`) — until
+ * 3.6.1. 2.12.0 (2025-05-07) is the latest release; checked on 2026-10-25:
+ * the PHAR hashed independently matches the release's own `.sha256` and
+ * `.sha512` assets and the digest GitHub records for the asset, and
+ * `wp-cli-2.12.0.phar.asc` verifies with the WP-CLI Releases key
+ * 63AF 7AA1 5067 C056 16FD DD88 A3A2 E8F2 26F0 BC06 (`wp-cli.pgp` in the
+ * builds repository). Not an immutable release: its asset could be replaced,
+ * which the pinned sum catches. Bump the version and the sum together,
+ * deliberately.
+ */
+export const WP_CLI_VERSION = '2.12.0';
+export const WP_CLI_PHAR_SHA256 = 'ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c';
+
+/**
+ * The actionlint release `configs/ci/pinned.json` pins for the CI templates —
+ * the tag `go install` asks for on Linux, which until 3.6.1 was `@latest`
+ * (`pinnedCiData.test.ts` holds the two equal). Go's checksum database
+ * verifies the module.
+ */
+export const ACTIONLINT_VERSION = '1.7.12';
+
 /** One pinned file a tool is: where it comes from, its sha256, and the name it takes in the per-user tools directory. */
 interface PinnedFile {
   /** For the description: `Psalm 6.20.1 release PHAR`. */
@@ -206,6 +230,19 @@ const PSALM_PHAR: PinnedFile = {
   url: PSALM_PHAR_URL,
   sha256: PSALM_PHAR_SHA256,
   file: 'psalm.phar',
+  runBy: 'php',
+};
+
+/**
+ * WP-CLI's release PHAR ({@link WP_CLI_VERSION}), installed as `wp` — the
+ * name its probe and the WordPress tools run. The PHAR starts with
+ * `#!/usr/bin/env php`, so the executable bit is enough.
+ */
+const WP_CLI_PHAR: PinnedFile = {
+  label: `WP-CLI ${WP_CLI_VERSION} release PHAR`,
+  url: `https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar`,
+  sha256: WP_CLI_PHAR_SHA256,
+  file: 'wp',
   runBy: 'php',
 };
 
@@ -842,9 +879,10 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       // choco/scoop/winget package ids are all literally `actionlint`; the
       // Homebrew formula is official (`brew install actionlint`, no tap);
       // no apt/pacman package, so linux falls back to `go install`, the
-      // README's own primary install path.
+      // README's own primary install path — at the tag the CI templates pin
+      // (ACTIONLINT_VERSION), into the per-user tools directory.
       win32: { scoop: scoopInstall('actionlint'), choco: chocoInstall('actionlint') },
-      linux: { go: goInstall('github.com/rhysd/actionlint/cmd/actionlint@latest') },
+      linux: { go: goInstallToUserBin(`github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}`, 'posix') },
       darwin: { brew: brewInstall('actionlint') },
     },
     default: false, // only when .github/workflows exists
@@ -886,7 +924,8 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     required_by: ['wp_audit', 'wp_vuln_check'],
     install: {
       win32: { scoop: scoopInstall('wp-cli'), choco: chocoInstall('wp-cli') },
-      linux: { curl: wpCliCurlInstaller() },
+      // The pinned release PHAR, sha256-checked (WP_CLI_VERSION).
+      linux: { curl: pinnedFileInstaller('linux', WP_CLI_PHAR) },
       darwin: { brew: brewInstall('wp-cli') },
     },
     default: false,
@@ -1400,20 +1439,6 @@ function gemInstall(pkg: string): InstallSpec {
     args: ['install', pkg],
     needs_elevation: false,
     description: `gem install ${pkg}`,
-  };
-}
-
-function wpCliCurlInstaller(): InstallSpec {
-  // Official one-liner from https://wp-cli.org/.
-  return {
-    command: 'bash',
-    args: [
-      '-c',
-      'curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar && ' +
-        'chmod +x wp-cli.phar && mv wp-cli.phar "$HOME/.local/bin/wp"',
-    ],
-    needs_elevation: false,
-    description: 'curl wp-cli.phar → ~/.local/bin/wp',
   };
 }
 

@@ -524,10 +524,14 @@ rules:
           metavariable: $M
           regex: ^(save|update|delete|create|insert|commit|send)$
       # Receiver half of the naming heuristic — see point 4(a). Unanchored on
-      # purpose: it must reach `db.users` and `this.userRepository`.
+      # purpose: it must reach `db.users` and `this.userRepository`. Semgrep
+      # anchors a metavariable-regex at the START (bugfix-cs.yml measured it),
+      # so the leading `.*` is what makes it a substring search: without it
+      # `this.userRepository.save(x)`, `this.db.insert(x)` and
+      # `orderRepo.save(x)` never fired (review 3.6.1, Semgrep 1.182.0).
       - metavariable-regex:
           metavariable: $O
-          regex: (?i)(repo|repositor|\bdb\b|database|dao|store|model|orm|prisma|knex|sequelize|mongo|collection|conn|session|\btx\b|\btrx\b|entitymanager|client|queue|producer|publisher|mailer)
+          regex: (?i).*(repo|repositor|\bdb\b|database|dao|store|model|orm|prisma|knex|sequelize|mongo|collection|conn|session|\btx\b|\btrx\b|entitymanager|client|queue|producer|publisher|mailer)
       - pattern-not-inside: await $O.$M(...)
       - pattern-not-inside: return $O.$M(...)
       # Deliberately-handled shapes — see point 4(b). One per near-miss

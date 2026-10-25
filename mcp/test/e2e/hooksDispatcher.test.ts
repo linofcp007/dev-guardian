@@ -717,6 +717,36 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       projectAllowlist(['AKIA']);
       expect(decision(tokenWriteTo('src/k.ts'))).toBeUndefined();
     });
+
+    // Review of 3.6.0, finding 11: an allowlist entry matches any line holding
+    // it, so `"="` or `"e"` silenced every secret warning, and SessionStart said
+    // nothing. Entries under four non-blank characters are ignored, and named.
+    const postWrite = (): HookResult =>
+      runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: `const k = "${FAKE_AWS_KEY}";` },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir },
+      );
+    it.each([[['=']], [['k']], [[' " ']], [['AK', 'AKIA']], [{ secrets: ['"'] }]])('a too-short allowlist entry is ignored (%j)', (entries) => {
+      projectAllowlist(entries);
+      const short = Array.isArray(entries) ? entries.filter((e) => e.trim().length < 4) : entries.secrets;
+      if (Array.isArray(entries) && entries.includes('AKIA')) {
+        expect(postWrite().stdout).toBeUndefined();
+      } else {
+        expect(context(postWrite())).toMatch(/AWS/);
+      }
+      expect(context(sessionStart())).toMatch(/hooks-allowlist\.json holds .*shorter than 4 characters.*ignored: secret warnings still apply/);
+      expect(short.length).toBeGreaterThan(0);
+    });
+
+    it('an allowlist of real markers is not named at SessionStart', () => {
+      projectAllowlist(['AKIA', 'EXAMPLE']);
+      expect(context(sessionStart())).not.toMatch(/hooks-allowlist\.json holds/);
+    });
   });
 
   // Task 23 fix round 2, N1: the config reader did existsSync + readFileSync
@@ -1985,6 +2015,14 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       const r = hook(preToolUse('Bash', { command: 'node .specs/guardian.cjs scan --project . --format json' }, projectDir));
       expect(r.stdout).toBeUndefined();
     });
+
+    // Review of 3.6.0, finding 9: a denied command padded past a cap ran with a note.
+    it('a command cut short by the 512 KB cap asks the user, naming the cap', () => {
+      const r = hook(preToolUse('Bash', { command: `${'echo x; '.repeat(70_000)}rm -rf /` }, projectDir));
+      expect(out(r).permissionDecision).toBe('ask');
+      // Under load the hook's real 2.5 s budget may be named too: the cap leads.
+      expect(out(r).permissionDecisionReason).toMatch(/too large or too deeply nested to assess in full \(over 512 KB/);
+    }, 30_000);
   });
 
   describe('third-party MCP write tools are guarded like Write (item 18)', () => {
@@ -2010,6 +2048,24 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       const settings = join(projectDir, '.claude', 'settings.local.json');
       expect(out(mcp('write_file', { path: settings, content: '{"disableAllHooks": true}' })).permissionDecision).toBe('deny');
       expect(mcp('write_file', { path: settings, content: '{"permissions": {"allow": []}}' }).stdout).toBeUndefined();
+    });
+
+    // Review of 3.6.0, finding 12: a delete of the settings file was never
+    // judged (`settings: removes ? [] : …`), and took every permissions.deny
+    // rule with it. Asked, never denied.
+    it("deleting or moving away Claude Code's settings asks the user; another delete or a copy does not", () => {
+      const settings = join(projectDir, '.claude', 'settings.json');
+      for (const [tool, input] of [
+        ['delete_file', { path: settings }],
+        ['remove_file', { path: join(projectDir, '.claude', 'settings.local.json') }],
+        ['move_file', { source: settings, destination: join(projectDir, 'old-settings.json') }],
+      ] as const) {
+        const r = mcp(tool, { ...input });
+        expect(out(r).permissionDecision).toBe('ask');
+        expect(out(r).permissionDecisionReason).toMatch(/deletes or moves away Claude Code's settings.*permissions\.deny/);
+      }
+      expect(mcp('delete_file', { path: join(projectDir, 'src', 'old.ts') }).stdout).toBeUndefined();
+      expect(mcp('copy_file', { source: settings, destination: join(projectDir, 'backup.json') }).stdout).toBeUndefined();
     });
 
     it("a write into dev-guardian's registry is denied", () => {

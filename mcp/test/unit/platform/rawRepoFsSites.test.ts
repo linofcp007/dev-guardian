@@ -43,7 +43,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { countSites, findFsCallSites } from '../../helpers/fsCallSites.js';
+import { countSites, findFsCallSites, fsCallSitesIn } from '../../helpers/fsCallSites.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -66,6 +66,13 @@ const ALLOWED: Record<string, Allowed> = {
       "one write copies the base ref's config into the run's own temp directory; the other is " +
       '--reset-exclusions-from (CI only, clean checkout) restoring an exclusion file after lstat-checking ' +
       'every path segment and unlinking the old one, written with flag wx; every read goes through projectFs',
+  },
+  'src/deps/npmPlanningCopy.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason:
+      "the manifest and lock files, read through projectFs, written (flag wx) into the run's own mkdtemp " +
+      'directory, where npm outdated runs without the repository .npmrc',
   },
   'src/dast/evidence.ts': {
     apis: { writeFileSync: 1 },
@@ -107,11 +114,12 @@ const ALLOWED: Record<string, Allowed> = {
       'network path; a stat opens nothing',
   },
   'src/hostsetup/setup.ts': {
-    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2 },
+    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2, realpathSync: 1 },
     kind: 'own',
     reason:
       "the plugin's own legacy templates and host-rules/ template, and a user-scope MCP config in the user's " +
-      'home (the user\'s own file); every project-scope file goes through projectFs',
+      "home (the user's own file: a temp file beside it renamed over it, a dotfiles link followed to the file it " +
+      'names); every project-scope file goes through projectFs',
   },
   'src/mcpaudit/launch.ts': {
     apis: { stat: 1 },
@@ -212,12 +220,24 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "Psalm's configuration into the temp directory mkdtemp just made, and its JSON report back from the verified report directory",
   },
+  'src/runners/semgrepLongDirs.ts': {
+    apis: { stat: 1, readdir: 1 },
+    kind: 'repo-safe',
+    reason:
+      "the search for Windows' long paths outside git: a listing typed from each directory's Dirents that never " +
+      'descends a link (a junction included), and a stat of the scan target itself, which opens nothing',
+  },
   'src/runners/semgrepRun.ts': {
     apis: { readFileSync: 1, writeFileSync: 1 },
     kind: 'own',
     reason:
       "a Semgrep run's --output report, read for its error messages and its scanned paths and written back with the " +
       "findings of the files too long for Windows read on their own: the caller's own report directory",
+  },
+  'src/runners/shellcheckRun.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "the filtered copy of the project's root .shellcheckrc (read through projectFs), into a temp directory it created",
   },
   'src/runners/syftRun.ts': { apis: { writeFileSync: 1 }, kind: 'own', reason: 'its neutral config, into its own temp directory' },
   'src/runners/trivyRun.ts': {
@@ -231,13 +251,14 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'sweeps its own guardian-verify-* directories in the OS temp directory (lstat-checked)',
   },
   'src/skillaudit/ingest.ts': {
-    apis: { statSync: 1, writeFileSync: 1, readdirSync: 1, existsSync: 1, realpathSync: 2 },
+    apis: { statSync: 1, writeFileSync: 1, readdirSync: 2, existsSync: 1, realpathSync: 2 },
     kind: 'repo-safe',
     reason:
       'the skill under review is untrusted by design: its walk lists names and lstat-checks every entry before ' +
       'use, and each file is read through readProjectBytes against the ingestion root; the stat, the existsSync ' +
       'and the root realpath are of the target the user named, the write a download into its own temp directory; ' +
-      'the other realpath guards an lstat-plain directory only after entryKindAnywhere found no network path',
+      'the other realpath guards an lstat-plain directory only after entryKindAnywhere found no network path; ' +
+      'the second readdirSync measures its own zip-extraction temp directory, lstat only',
   },
   'src/storage/db.ts': {
     apis: { writeFileSync: 1, statSync: 1, existsSync: 3 },
@@ -289,9 +310,9 @@ const ALLOWED: Record<string, Allowed> = {
   },
   'src/tools/healthStatus.ts': { apis: { statSync: 1, existsSync: 1 }, kind: 'own', reason: 'the presence and size of the database this server opened' },
   'src/tools/perfCheck.ts': {
-    apis: { readFileSync: 2, writeFileSync: 1, existsSync: 3 },
+    apis: { readFileSync: 2, writeFileSync: 1, existsSync: 2 },
     kind: 'own',
-    reason: 'Lighthouse / k6 output in a verified report directory, and the k6_script_path the user named',
+    reason: 'Lighthouse / k6 output in a verified report directory (the k6 script is judged through projectFs)',
   },
   'src/tools/registerCustomRules.ts': {
     apis: { statSync: 3 },
@@ -344,6 +365,11 @@ const ALLOWED: Record<string, Allowed> = {
     apis: { readFile: 1, writeFileSync: 1 },
     kind: 'own',
     reason: "the vulnerability feed cache in dev-guardian's own data directory",
+  },
+  'src/wordpress/wpCli.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "the empty wp-cli.yml in WP-CLI's own mkdtemp working directory (flag wx)",
   },
   'src/fingerprint/findingIdentity.ts': {
     apis: { realpathSync: 1 },
@@ -431,6 +457,26 @@ const ALLOWED: Record<string, Allowed> = {
   },
 };
 
+/**
+ * The CLI too: it writes into the scanned project and the CI checkout — the
+ * baseline, the dashboard, ci-init's pipeline, `scan --sarif` — and a
+ * checkout is the pull request's. `--sarif` was a plain `writeFileSync`, and a
+ * pull request committing `dev-guardian-results.sarif` as a link had the
+ * report overwrite whatever the link named.
+ */
+const ALLOWED_CLI: Record<string, Allowed> = {
+  '../cli/dev-guardian.mjs': {
+    apis: { existsSync: 5, readFileSync: 3, realpathSync: 5, writeFileSync: 3 },
+    kind: 'user',
+    reason:
+      "the temp directory of Node's compile cache, the plugin's own server, plugin.json, pinned.json and CI templates, " +
+      'and its own entry point (own); the file `check --file` names and a dashboard `--out` outside the project (the ' +
+      "operator's); ci-init's ancestor walk and its temp file beside the pipeline, published by link() or rename — a link " +
+      'at the name is replaced, never written through. The baseline, a dashboard inside the project and the SARIF ' +
+      'report go through writeProjectFile',
+  },
+};
+
 describe('raw fs calls in mcp/src', () => {
   const sites = findFsCallSites(MCP, join(MCP, 'src'));
   const actual = countSites(sites);
@@ -499,5 +545,19 @@ describe('raw fs calls in mcp/src', () => {
     );
     const found = findFsCallSites(root, join(root, 'src')).map((x) => `${x.api}@${x.line}`);
     expect(found).toEqual(['readFileSync@5', 'readFile@6', 'statSync@7', 'existsSync@12', 'realpathSync@13', 'realpathSync@14']);
+  });
+});
+
+describe('raw fs calls in cli/dev-guardian.mjs', () => {
+  const sites = fsCallSitesIn(MCP, [join(MCP, '..', 'cli', 'dev-guardian.mjs')]);
+
+  it('every raw read or write of a file is on the list, in the number the list says — no more, no fewer', () => {
+    const counted = Object.fromEntries([...countSites(sites)].map(([file, perApi]) => [file, Object.fromEntries([...perApi].sort())]));
+    const listed = Object.fromEntries(Object.entries(ALLOWED_CLI).map(([file, allowed]) => [file, allowed.apis]));
+    expect(
+      counted,
+      'A raw fs write of the scanned project or the checkout goes through writeProjectFile (engine.js exports it); ' +
+        `a site that is not: add it to ALLOWED_CLI with the reason.\n${sites.map((s) => `    ${s.file}:${s.line}  ${s.text}`).join('\n')}`,
+    ).toEqual(listed);
   });
 });

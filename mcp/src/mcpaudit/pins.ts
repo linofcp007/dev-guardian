@@ -75,7 +75,7 @@ import {
   type ServerListing,
   type ToolDefinition,
 } from './analyze.js';
-import { escapeInvisible } from './rules.js';
+import { escapeInvisible } from '../platform/hiddenText.js';
 
 /** The scheme every pin is written with. */
 const PIN_SCHEME = 1;

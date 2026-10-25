@@ -159,6 +159,13 @@ var RUNNERS = /* @__PURE__ */ new Set([
   "stdbuf",
   "xargs",
   "watch",
+  // More wrappers that run the command after their own options (review of
+  // 3.6.0, finding 7): BusyBox's applet, `ionice -c3 CMD`, `unbuffer CMD`,
+  // GNU `parallel CMD ::: args`.
+  "busybox",
+  "ionice",
+  "unbuffer",
+  "parallel",
   // cmd's `start [/b] ["title"] PROGRAM` (fix round 2).
   "start"
 ]);
@@ -179,7 +186,11 @@ var RUNNER_VALUED = {
     short: "adEIJLnPs",
     long: /* @__PURE__ */ new Set(["arg-file", "delimiter", "max-args", "max-procs", "max-chars", "process-slot-var"])
   },
-  watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) }
+  watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) },
+  // `ionice -c class -n num -p pid CMD` (review of 3.6.0, finding 7).
+  ionice: { short: "cnp", long: /* @__PURE__ */ new Set(["class", "classdata", "pid"]) },
+  // GNU `parallel`'s commonest valued options; its command template follows them.
+  parallel: { short: "jPNnLSX", long: /* @__PURE__ */ new Set(["jobs", "max-args", "max-replace-args", "max-lines", "sshlogin", "results", "colsep", "retries"]) }
 };
 function runnerOptionWords(runner, option) {
   const valued = RUNNER_VALUED[runner];
@@ -309,6 +320,33 @@ function withoutRedirectWords(words) {
 
 // src/hooks/shell/split.ts
 var MASK = " ";
+var ANSI_C_SIMPLE = {
+  a: "\x07",
+  b: "\b",
+  e: "\x1B",
+  E: "\x1B",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "	",
+  v: "\v",
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  "?": "?"
+};
+function decodeAnsiC(body) {
+  if (!body.includes("\\")) return body;
+  return body.replace(/\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|.)/g, (all, seq) => {
+    const head = seq.charAt(0);
+    if (head === "x" || head === "u" || head === "U") return codePoint(parseInt(seq.slice(1), 16), all);
+    if (head >= "0" && head <= "7") return codePoint(parseInt(seq, 8), all);
+    return ANSI_C_SIMPLE[seq] ?? all;
+  });
+}
+function codePoint(code, fallback) {
+  return Number.isFinite(code) && code >= 0 && code <= 1114111 ? String.fromCodePoint(code) : fallback;
+}
 function scanQuote(source, start) {
   const quote = source.charAt(start);
   let inner = "";
@@ -420,7 +458,7 @@ function skipHeredocBodies(source, from, pending) {
   }
   return pos;
 }
-var COMPOUND_RESERVED = /* @__PURE__ */ new Set(["if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!"]);
+var COMPOUND_RESERVED = /* @__PURE__ */ new Set(["if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!", "coproc"]);
 function splitShell(command) {
   const statements = [];
   let maskedCommand = "";
@@ -532,6 +570,20 @@ function splitShell(command) {
       while (i < command.length && command.charAt(i) !== "\n" && command.charAt(i) !== "\r") i += 1;
       continue;
     }
+    if (ch === "$" && (command.charAt(i + 1) === "'" || command.charAt(i + 1) === '"') && !/[\w}]/.test(command.charAt(i - 1))) {
+      const q = command.charAt(i + 1);
+      const scanned = scanQuote(command, i + 1);
+      buf += q === "'" ? decodeAnsiC(scanned.inner) : scanned.inner;
+      bufQuoted = true;
+      hasWord = true;
+      masked += MASK;
+      maskedCommand += MASK;
+      const vars = q === '"' ? interpolatedVariables(scanned.inner) : [];
+      if (vars.length > 0) interpolations.push({ at: maskedCommand.length, vars: vars.join(" ") });
+      lastCode = MASK;
+      i = scanned.next;
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       const scanned = scanQuote(command, i);
       buf += scanned.inner;
@@ -618,6 +670,14 @@ function splitShell(command) {
       if (next === "|") {
         endStatement("||");
         maskedCommand += "||";
+        i += 2;
+        continue;
+      }
+      if (next === "&") {
+        endCommand();
+        masked += "|";
+        maskedCommand += "|";
+        lastCode = "|";
         i += 2;
         continue;
       }
@@ -896,7 +956,7 @@ function powershellAsPosix(text) {
       if (next === "\n") i += 2;
       else if (next === "\r" && text.charAt(i + 2) === "\n") i += 3;
       else {
-        if (next !== "") out += posixSingle(next);
+        if (next !== "") out += /[A-Za-z0-9_]/.test(next) ? next : posixSingle(next);
         i += 2;
         continue;
       }
@@ -3161,58 +3221,102 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
   return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
 
+// src/platform/httpBody.ts
+async function readBodyCapped(res, maxBytes) {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => void 0);
+    return null;
+  }
+  if (res.body === null) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => void 0);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+async function readJsonCapped(res, maxBytes) {
+  const body = await readBodyCapped(res, maxBytes);
+  if (body === null) return null;
+  return { json: JSON.parse(body.toString("utf8")) };
+}
+function mebibytes(n) {
+  return `${Math.round(n / (1024 * 1024))} MiB`;
+}
+
 // src/runners/osv.ts
 var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
 var DEFAULT_TIMEOUT_MS = 6e3;
-var MAX_QUERIES = 200;
+var MAX_QUERIES = 1e3;
 var CHUNK = 100;
+var IN_FLIGHT = 4;
+var MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 async function queryOsv(packages, opts = {}) {
-  const queryable = packages.filter((p) => p.name).slice(0, MAX_QUERIES);
+  const named = packages.filter((p) => p.name);
+  const queryable = named.slice(0, MAX_QUERIES);
+  const unqueried = named.length - queryable.length;
   if (queryable.length === 0) {
-    return { online: true, queried: 0, vulnerable_packages: [] };
+    return { online: true, queried: 0, unqueried, vulnerable_packages: [] };
   }
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
   if (fetchImpl === void 0) {
-    return { online: false, queried: 0, vulnerable_packages: [], error: "no_fetch" };
+    return { online: false, queried: 0, unqueried, vulnerable_packages: [], error: "no_fetch" };
   }
-  const vulnerable = [];
+  const chunks = [];
+  for (let i = 0; i < queryable.length; i += CHUNK) chunks.push(queryable.slice(i, i + CHUNK));
+  const perChunk = chunks.map(() => []);
   try {
-    for (let i = 0; i < queryable.length; i += CHUNK) {
-      const chunk = queryable.slice(i, i + CHUNK);
-      const body = {
-        queries: chunk.map((p) => ({
-          package: { name: p.name, ecosystem: p.ecosystem },
-          ...p.version ? { version: p.version } : {}
-        }))
-      };
-      const json = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
-      const results = Array.isArray(json.results) ? json.results : [];
-      results.forEach((res, idx) => {
-        const pkg = chunk[idx];
-        if (!pkg) return;
-        const vulns = res?.vulns;
-        if (Array.isArray(vulns) && vulns.length > 0) {
-          const ids = vulns.map((v) => v.id).filter((x) => typeof x === "string");
-          const group = {
-            ecosystem: pkg.ecosystem,
-            name: pkg.name,
-            vuln_ids: ids,
-            severity: "high"
-          };
-          if (pkg.version) group.version = pkg.version;
-          vulnerable.push(group);
-        }
-      });
-    }
+    let next = 0;
+    const work = async () => {
+      for (let c = next++; c < chunks.length; c = next++) {
+        const chunk = chunks[c] ?? [];
+        const groups = perChunk[c] ?? [];
+        const body = {
+          queries: chunk.map((p) => ({
+            package: { name: p.name, ecosystem: p.ecosystem },
+            ...p.version ? { version: p.version } : {}
+          }))
+        };
+        const json = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
+        const results = Array.isArray(json.results) ? json.results : [];
+        results.forEach((res, idx) => {
+          const pkg = chunk[idx];
+          if (!pkg) return;
+          const vulns = res?.vulns;
+          if (Array.isArray(vulns) && vulns.length > 0) {
+            const ids = vulns.map((v) => v.id).filter((x) => typeof x === "string");
+            const group = {
+              ecosystem: pkg.ecosystem,
+              name: pkg.name,
+              vuln_ids: ids,
+              severity: "high"
+            };
+            if (pkg.version) group.version = pkg.version;
+            groups.push(group);
+          }
+        });
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(IN_FLIGHT, chunks.length) }, work));
   } catch (e) {
     return {
       online: false,
       queried: queryable.length,
+      unqueried,
       vulnerable_packages: [],
       error: e instanceof Error ? e.message : "osv_request_failed"
     };
   }
-  return { online: true, queried: queryable.length, vulnerable_packages: vulnerable };
+  return { online: true, queried: queryable.length, unqueried, vulnerable_packages: perChunk.flat() };
 }
 async function postJson(url, body, opts, fetchImpl) {
   const controller = new AbortController();
@@ -3229,7 +3333,9 @@ async function postJson(url, body, opts, fetchImpl) {
       signal: controller.signal
     });
     if (!res.ok) throw new Error(`osv http ${res.status}`);
-    return await res.json();
+    const read2 = await readJsonCapped(res, MAX_RESPONSE_BYTES);
+    if (read2 === null) throw new Error(`osv answer over ${mebibytes(MAX_RESPONSE_BYTES)}`);
+    return read2.json;
   } finally {
     clearTimeout(timeout);
   }
@@ -4005,7 +4111,7 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
     return queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
   })().catch((e) => {
     osvError = e instanceof Error ? e.message : String(e);
-    return { online: false, queried: 0, vulnerable_packages: [] };
+    return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
   });
   const extras = work.map(
     (w) => w.lookup?.kind === "found" ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()

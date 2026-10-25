@@ -56,13 +56,13 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { canonicalPath } from '../platform/projectPath.js';
 import { serverProjectPath } from '../resources/paging.js';
-import { runProcess } from '../runners/processRunner.js';
 import { httpUrlField, ProjectPath } from '../schemas.js';
 import { WP_PLUGIN_SLUG } from '../platform/toolArgs.js';
 import { scannerAvailable } from './scanHelpers.js';
 import { CVE_SOURCE_SCAN_TYPES, type Cve, type DomainError, type ScanRecord, type ToolResult, type ToolRun } from '../types.js';
 import { computeCoverage } from './scanCoverage.js';
 import { latestUnderKeys, wpInstallKeys, wpInstallPathProblem, wpSiteKeys } from '../wordpress/siteKeys.js';
+import { withWpCli } from '../wordpress/wpCli.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { toolProjectPath } from './projectArg.js';
 
@@ -97,7 +97,8 @@ const tool = defineTool({
     "project's newest dependency scan, newest wp_vuln_check (live) and newest wp_vuln_check (source). It makes no " +
     'network call — no WPScan query, no latest-version lookup; for fresh data run wp_vuln_check (live site) ' +
     'or wp_vuln_check {mode: "source"} (plugin sources) first. With a local wp_install_path, WP-CLI reports the ' +
-    'installed version and whether the plugin is active; WP-CLI missing, failing or printing nothing is a ' +
+    'installed version and whether the plugin is active (it boots the site with its plugins and theme skipped; ' +
+    'wp-config.php, core files and must-use plugins still run); WP-CLI missing, failing or printing nothing is a ' +
     'warning and coverage "partial" (installed: null), never a silent null. target_url sends nothing to the ' +
     'site: it adds the wp_vuln_check recorded under that URL. Writes one scoped scan row, no findings.',
   inputSchema,
@@ -243,12 +244,11 @@ async function probeInstalled(probePath: string, slug: string): Promise<InstallP
       'WP-CLI (`wp`) is not installed, so the install was not probed (install_toolchain with tools=["wp-cli"]).',
     );
   }
-  const r = await runProcess({
-    command: 'wp',
-    args: ['plugin', 'list', `--path=${probePath}`, `--name=${slug}`, '--fields=name,status,version', '--format=json'],
-    cwd: probePath,
-    timeoutMs: 30_000,
-  });
+  // The site's plugins and theme skipped (`wordpress/wpCli.ts`): the status
+  // and version are read from the database and the plugin's header.
+  const r = await withWpCli(probePath, (wp) =>
+    wp(['plugin', 'list', `--name=${slug}`, '--fields=name,status,version', '--format=json'], 30_000),
+  );
   // WP-CLI's own messages end in a full stop; the sentence gets one only when it has none.
   const failed = (reason: string): InstallProbe =>
     unknown(

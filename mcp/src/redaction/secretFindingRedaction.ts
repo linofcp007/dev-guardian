@@ -30,6 +30,7 @@
  * generic placeholder and was never the secret to begin with.
  */
 
+import { computeFingerprint } from '../fingerprint/findingFingerprint.js';
 import {
   isCredentialFinding,
   REDACTED_SNIPPET,
@@ -57,6 +58,30 @@ export function redactCredentialSnippet<T extends RedactableFinding>(f: T): T {
   if (f.snippet.toLowerCase() === REDACTED_SNIPPET) return f;
   if (!isCredentialFinding(f)) return f;
   return { ...f, snippet: REDACTED_SECRET_SNIPPET };
+}
+
+/**
+ * The fingerprint `makeFinding` gives `f` now: for a finding whose snippet
+ * this module redacts, the fingerprint over {@link REDACTED_SECRET_SNIPPET};
+ * else `f.fingerprint` unchanged.
+ *
+ * The fingerprint is committed (`.guardian/baseline.json`) and exported (a
+ * SARIF log's `partialFingerprints`). Hashed over the plaintext snippet, as
+ * every credential row stored before `makeFinding` redacted first was, it is
+ * the offline oracle the identity is built never to be: guess the value,
+ * hash, compare. The writers of those files pass every finding through this,
+ * so a stored row of before never puts that hash in one.
+ */
+export function credentialSafeFingerprint(f: RedactableFinding & { fingerprint: string }): string {
+  if (f.snippet === undefined || redactCredentialSnippet(f).snippet !== REDACTED_SECRET_SNIPPET) return f.fingerprint;
+  return computeFingerprint({
+    tool: f.tool,
+    ...(f.rule_id !== undefined ? { rule_id: f.rule_id } : {}),
+    ...(f.file_path !== undefined ? { file_path: f.file_path } : {}),
+    ...(f.line_start !== undefined ? { line_start: f.line_start } : {}),
+    ...(f.line_end !== undefined ? { line_end: f.line_end } : {}),
+    snippet: REDACTED_SECRET_SNIPPET,
+  });
 }
 
 /**

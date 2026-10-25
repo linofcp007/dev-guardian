@@ -1,5 +1,5 @@
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
-import { writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -10,6 +10,8 @@ import {
   type InvokeContext,
   type ScannerInvocation,
 } from '../../../src/tools/scanToolFactory.js';
+import { DEFAULT_KEPT_REPORTS, ensureReportDir } from '../../../src/tools/scanHelpers.js';
+import { getScanLimiter } from '../../../src/runners/concurrencyLimiter.js';
 import type { ShellChoice } from '../../../src/platform/shellProbe.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { Storage } from '../../../src/storage/index.js';
@@ -326,6 +328,45 @@ describe('makeScanTool', () => {
     expect(history[0]?.status).toBe('cancelled');
   });
 
+  it('a host that cancels while the scan waits for a slot gets cancelled back at once, and no scanner runs', async () => {
+    let invoked = 0;
+    const tool = makeScanTool({
+      name: 'queued_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => {
+        invoked += 1;
+        return { outcome: 'completed', tools_run: [], missing_tools: [], parser_inputs: [], report_paths: [] };
+      },
+    });
+    // Take every slot; the one acquire that has to wait is cancelled, so it never takes one later.
+    const limiter = getScanLimiter();
+    const fill = new AbortController();
+    let held = 0;
+    for (;;) {
+      const got = limiter.acquire(fill.signal).then(() => true, () => false);
+      if (!(await Promise.race([got, new Promise<boolean>((r) => setTimeout(() => r(false), 20))]))) break;
+      held += 1;
+    }
+    fill.abort();
+    expect(limiter.queued).toBe(0);
+    try {
+      const controller = new AbortController();
+      const pending = tool.handler({ project_path: projectPath, force: true }, plugin, { signal: controller.signal });
+      await new Promise((r) => setTimeout(r, 30));
+      controller.abort();
+      const r = (await pending) as { ok: false; error: { code: string } };
+      expect(r.ok).toBe(false);
+      expect(r.error.code).toBe('cancelled');
+      expect(invoked).toBe(0);
+      expect(plugin.storage.scans.listHistory(10)[0]?.status).toBe('cancelled');
+    } finally {
+      for (let i = 0; i < held; i += 1) limiter.release();
+    }
+  });
+
   it('scans on a host with no bash shell — no factory tool runs a shell script any more', async () => {
     plugin.shell = null;
     const tool = makeScanTool({
@@ -604,6 +645,40 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
     expect(invokes).toBe(2);
   });
 
+  // The tree hash leaves the root `.guardian/` out (its reports change on
+  // every scan), but the scans read two of its files: quality_check's
+  // budgets, and the Semgrep timeouts of every Semgrep run. An edited budget
+  // was answered with the run made under the old one.
+  it.each(['budgets.yml', 'scan.yml'])('misses when .guardian/%s changes', async (file) => {
+    const { tool, calls } = countingTool(`key_settings_${file.replace('.', '_')}`);
+    mkdirSync(join(projectPath, '.guardian'), { recursive: true });
+    const settings = join(projectPath, '.guardian', file);
+    writeFileSync(settings, file === 'scan.yml' ? 'semgrep:\n  timeout: 30\n' : 'quality:\n  complexity: 20\n');
+    await tool.handler({ project_path: projectPath }, plugin);
+    const hit = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(hit.cached).toBe(true);
+
+    writeFileSync(settings, file === 'scan.yml' ? 'semgrep:\n  timeout: 1\n' : 'quality:\n  complexity: 2\n');
+    const miss = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(miss.cached).toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
+  // An auto_fix call asks for files to be rewritten: autofix tree T, `git
+  // checkout .` back to T, re-run inside the window — the cache answered
+  // with the first run, and nothing was rewritten.
+  it('never answers an auto_fix call from the cache', async () => {
+    const { tool, calls } = countingTool('key_autofix_scan', {
+      auto_fix: z.boolean().optional(),
+      allow_dirty: z.boolean().optional(),
+    });
+    const input = { project_path: projectPath, auto_fix: true, allow_dirty: true };
+    await tool.handler(input, plugin);
+    const again = okResult<CachePayload>(await tool.handler(input, plugin));
+    expect(again.cached).toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
   it('never serves a run whose scanner was missing or failed — install, re-run, and the re-run scans', async () => {
     // A run with the scanner not installed is `completed` with coverage
     // `none`, and its own warning says "install … and re-run". The re-run,
@@ -687,6 +762,59 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
     const again = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
     expect(again.cached).toBeUndefined();
     expect(calls).toHaveLength(2);
+  });
+});
+
+// A new report directory prunes its kind down to the newest three by mtime.
+// A long scan whose directory three quicker scans of the same kind overtook
+// lost it mid-run (POSIX removes it under the scanner writing into it).
+describe('makeScanTool: report pruning spares the scans still running', () => {
+  it('never removes the report directory of a scan that has not finished', async () => {
+    const projectPath = tempProject();
+    const plugin = buildPlugin(projectPath);
+    let release: () => void = () => {};
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    let started: () => void = () => {};
+    const dirMade = new Promise<void>((r) => {
+      started = r;
+    });
+    let stillThere: boolean | null = null;
+    const slow = makeScanTool({
+      name: 'prune_slow_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async (_input, ctx) => {
+        const dir = ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
+        // Made an hour ago: the oldest of its kind once the quick ones ran.
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        utimesSync(dir, hourAgo, hourAgo);
+        started();
+        await released;
+        stillThere = existsSync(dir);
+        return emptyRun();
+      },
+    });
+    const quick = makeScanTool({
+      name: 'prune_quick_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async (_input, ctx) => {
+        ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
+        return emptyRun();
+      },
+    });
+    const running = slow.handler({ project_path: projectPath }, plugin);
+    await dirMade;
+    for (let i = 0; i < DEFAULT_KEPT_REPORTS; i++) await quick.handler({ project_path: projectPath, force: true }, plugin);
+    release();
+    await running;
+    expect(stillThere).toBe(true);
   });
 });
 

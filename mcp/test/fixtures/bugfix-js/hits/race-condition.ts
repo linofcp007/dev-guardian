@@ -14,3 +14,25 @@ export const arrowHandler = async (repo: { save(v: unknown): Promise<void> }): P
 app.post('/users', async (repo: { save(v: unknown): Promise<void> }) => {
   repo.save({ id: 3 });
 });
+
+// The receiver as a field and as a compound name — the usual NestJS / TypeORM
+// shapes. The receiver regex was anchored at the start, so none fired
+// (review 3.6.1, measured on Semgrep 1.182.0).
+export class UserService {
+  constructor(
+    private userRepository: { save(v: unknown): Promise<void> },
+    private db: { insert(v: unknown): Promise<void> },
+  ) {}
+
+  async create(x: unknown): Promise<void> {
+    this.userRepository.save(x);
+  }
+
+  async add(x: unknown): Promise<void> {
+    this.db.insert(x);
+  }
+}
+
+export async function compoundName(orderRepo: { save(v: unknown): Promise<void> }): Promise<void> {
+  orderRepo.save({ id: 4 });
+}

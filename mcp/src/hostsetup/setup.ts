@@ -10,8 +10,20 @@
  * per-host shape table lives in `hostSpecs.ts`. This module only wires I/O.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   describeReadRefusal,
@@ -511,10 +523,39 @@ function registerMcpOne(
     return { status: merged.status, config_path: configPath, key: m.serverKey, scope };
   }
   try {
-    mkdirSync(dirname(configPath), { recursive: true });
-    writeFileSync(configPath, content, 'utf8');
+    replaceUserFile(configPath, content);
     return { status: merged.status, config_path: configPath, key: m.serverKey, scope };
   } catch (e) {
     return { status: 'failed', config_path: configPath, key: m.serverKey, scope, reason: (e as Error).message };
+  }
+}
+
+/**
+ * Writes a user-scope config (`claude_desktop_config.json`, `~/.codex/config.toml`, …)
+ * in one step: a temp file beside it, renamed over it. Written in place, a
+ * crash, a full disk or a killed process mid-write left the file truncated —
+ * every MCP server the user had configured gone with it. A link at the path
+ * (a dotfiles checkout) is the user's: the file it names is replaced, and
+ * the link stays. The file keeps its permissions (one holding tokens may be
+ * 0600).
+ */
+function replaceUserFile(path: string, content: string): void {
+  let target = path;
+  let mode: number | undefined;
+  try {
+    if (lstatSync(path).isSymbolicLink()) target = realpathSync(path);
+    mode = lstatSync(target).mode & 0o777;
+  } catch {
+    /* not there yet: created with the default permissions */
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  const tmp = join(dirname(target), `.${basename(target)}.${randomBytes(6).toString('hex')}.tmp`);
+  writeFileSync(tmp, content, { encoding: 'utf8', flag: 'wx', ...(mode !== undefined ? { mode } : {}) });
+  try {
+    if (mode !== undefined) chmodSync(tmp, mode);
+    renameSync(tmp, target);
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
   }
 }

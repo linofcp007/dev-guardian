@@ -243,10 +243,11 @@ async function runWorkflowScanner(
       processOutcome: 'completed',
     };
   }
-  const toolRun: ToolRun =
-    result.outcome === 'completed'
-      ? { name: spec.name, status: 'failed' }
-      : { name: spec.name, status: 'failed', reason: result.outcome };
+  // What the scanner said goes in the reason: a failure never reads as a bare "failed".
+  const said = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim().slice(0, 300) ?? '';
+  const exit = result.exitCode !== null ? `exit ${String(result.exitCode)}` : result.outcome;
+  const how = result.outcome === 'completed' || result.outcome === 'failed' ? exit : result.outcome;
+  const toolRun: ToolRun = { name: spec.name, status: 'failed', reason: said.length > 0 ? `${how}: ${said}` : how };
   return { toolRun: await named(toolRun), missing: false, processOutcome: result.outcome };
 }
 

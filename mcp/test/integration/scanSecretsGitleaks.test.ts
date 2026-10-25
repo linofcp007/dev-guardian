@@ -148,6 +148,27 @@ describe.skipIf(!GITLEAKS)('scan_secrets with real gitleaks', () => {
     expect(res.tools_run.find((t) => t.name === 'gitleaks')?.reason).toMatch(/history: [1-9]\d* commit/);
   });
 
+  // History is the whole repository's (`git log --all`, no pathspec). For a
+  // project below the repository's root, a secret committed in a sibling
+  // directory was reported as this project's — `api/creds.txt` of `repo/`
+  // stored for project `repo/web` as its own `api/creds.txt`.
+  it("a project below its repository's root: its own history secrets, never a sibling directory's", async () => {
+    const repo = await repoWithCleanCommit('secrets-subdir-');
+    mkdirSync(join(repo, 'api'));
+    mkdirSync(join(repo, 'web'));
+    writeFileSync(join(repo, 'api', 'creds.txt'), SECRET_LINE);
+    writeFileSync(join(repo, 'web', 'creds.txt'), SECRET_LINE);
+    writeFileSync(join(repo, 'web', 'index.js'), 'module.exports = 1;\n');
+    await git(repo, 'add', '-A');
+    await git(repo, 'commit', '-q', '-m', 'oops');
+    await git(repo, 'rm', '-q', 'api/creds.txt', 'web/creds.txt');
+    await git(repo, 'commit', '-q', '-m', 'remove');
+
+    const { r, p } = await scan(join(repo, 'web'));
+    const res = r as unknown as SecretsResult;
+    expect(findings(p, res.scan_id).map((f) => f.file_path)).toEqual(['creds.txt']);
+  });
+
   it('scans a directory that is NOT a git repository, skipping node_modules and .git-less build output', async () => {
     const dir = makeTempDir('secrets-nogit-');
     writeFileSync(join(dir, 'settings.ini'), SECRET_LINE);

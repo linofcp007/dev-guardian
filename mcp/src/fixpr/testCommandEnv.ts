@@ -98,9 +98,25 @@ export function testEnvAllows(name: string): boolean {
  * their own spelling (`Path` on Windows).
  */
 export function testCommandEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return allowlistedEnv(() => false, source);
+}
+
+/**
+ * {@link testCommandEnv}, plus the names `extra` admits (given upper-cased)
+ * — for another program that runs code dev-guardian did not write (`perf_check`'s
+ * k6 script) and needs a family of its own. A credential-shaped,
+ * `GUARDIAN_*` or `npm_config_*` name is dropped whatever `extra` says.
+ */
+export function allowlistedEnv(
+  extra: (upperName: string) => boolean,
+  source: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
-    if (value !== undefined && testEnvAllows(name)) out[name] = value;
+    if (value === undefined) continue;
+    const upper = name.toUpperCase();
+    const vetoed = upper.startsWith('GUARDIAN_') || upper.startsWith('NPM_CONFIG_') || CREDENTIAL.test(upper);
+    if (testEnvAllows(name) || (!vetoed && extra(upper))) out[name] = value;
   }
   return out;
 }

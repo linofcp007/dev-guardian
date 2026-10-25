@@ -5,11 +5,12 @@
  * and never applies the gaps fails it.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
-import { longPathsOf } from '../../../src/frameworks/projectLanguages.js';
+import { afterAll, describe, expect, it } from 'vitest';
+import { longPathsOf, oversizedSourceFilesAsync } from '../../../src/frameworks/projectLanguages.js';
+import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import {
   applySemgrepCoverageGaps,
   markMissing,
@@ -19,6 +20,8 @@ import {
   semgrepGapNotes,
   type SemgrepCoverageGaps,
 } from '../../../src/runners/semgrepCoverageGaps.js';
+
+afterAll(cleanupTempDirs);
 
 const BIG: SemgrepCoverageGaps = { oversized: [{ path: 'src/big.py', bytes: 1_160_008 }], submodules: [] };
 const SUB: SemgrepCoverageGaps = { oversized: [], submodules: ['vendor/lib'] };
@@ -125,6 +128,21 @@ describe('applySemgrepCoverageGaps', () => {
       const at = (n: number): string => 'a'.repeat(n - root.length - 1);
       expect(longPathsOf(root, [at(259), at(260), at(300)], 'win32')).toEqual([at(260), at(300)].sort());
       expect(longPathsOf(root, [at(300)], 'linux')).toEqual([]);
+    });
+
+    // Review 3.6.1, finding 3: the candidates were the source files alone, so
+    // a Kubernetes manifest, a Dockerfile, a Terraform file or an
+    // AndroidManifest.xml Semgrep never opened was no gap, and coverage read full.
+    it('the gap covers every file Semgrep reads — markup, configuration and shell too — never an image', async () => {
+      const root = makeTempDir('gaps-longpaths-kinds-');
+      let rel = 'deep';
+      while (`${root}/${rel}/AndroidManifest.xml`.length < 304) rel = `${rel}/dddddddddd`;
+      mkdirSync(join(root, ...rel.split('/')), { recursive: true });
+      const names = ['app.js', 'k8s.yaml', 'Dockerfile', 'main.tf', 'run.sh', 'index.html', 'App.vue', 'AndroidManifest.xml', 'Info.plist', 'logo.png'];
+      for (const n of names) writeFileSync(join(root, ...rel.split('/'), n), 'x');
+      const sized = await oversizedSourceFilesAsync(root, { platform: 'win32' });
+      expect(sized.longPaths).toEqual(names.filter((n) => n !== 'logo.png').map((n) => `${rel}/${n}`).sort());
+      expect((await oversizedSourceFilesAsync(root, { platform: 'win32', only: [`${rel}/main.tf`] })).longPaths).toEqual([`${rel}/main.tf`]);
     });
   });
 

@@ -21,14 +21,14 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { historyState } from '../runners/git.js';
 import { runGitleaksScan } from '../runners/gitleaksScan.js';
-import { phpcsParser } from '../runners/scannerParsers/phpcs.js';
+import { phpcsParser, phpcsUnprocessed } from '../runners/scannerParsers/phpcs.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { longDirsNote, metricsEnvProblem, runSemgrep, semgrepErrorLine, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
-import { listScannedFiles, trivySkipArgs } from '../platform/guardianIgnore.js';
+import { listScannedFiles, semgrepExcludeArgs, trivySkipArgs } from '../platform/guardianIgnore.js';
 import { PSALM, psalmTaint } from '../runners/psalmRun.js';
 import { psalmParser } from '../runners/scannerParsers/psalm.js';
 import { hasFileWithExtension } from '../runners/projectFiles.js';
@@ -110,52 +110,56 @@ registerToolModule(
       let manifestGaps: TrivyFsJudgement['gaps'] = [];
 
       if (semgrepBin) {
-        tasks.push(
-          (async () => {
-            const outFile = join(reportDir, 'sast.json');
-            const args = [
-              '--config=p/php',
-              '--config=p/wordpress',
-              // The plugin's own: an esc_sql value outside quotes (configs/semgrep/wordpress.yml).
-              `--config=${pluginPackPath(WORDPRESS_RULES_FILE)}`,
-              ...semgrepScanFlags(ctx.configRoot).args,
-              '--json',
-              '--quiet',
-              '--output',
-              outFile,
-            ];
-            if (inp.auto_fix === true) args.push('--autofix');
-            args.push(ctx.projectPath);
-            // UTF-8 mode (runners/semgrepRun.ts, review M3).
-            const r = await runSemgrep({
-              args,
-              cwd: ctx.projectPath,
-              env: ctx.scriptEnv,
-              signal: ctx.signal,
-              onLog: ctx.onLog,
+        const semgrepPass = async (): Promise<void> => {
+          const outFile = join(reportDir, 'sast.json');
+          const args = [
+            '--config=p/php',
+            '--config=p/wordpress',
+            // The plugin's own: an esc_sql value outside quotes (configs/semgrep/wordpress.yml).
+            `--config=${pluginPackPath(WORDPRESS_RULES_FILE)}`,
+            ...semgrepScanFlags(ctx.configRoot).args,
+            // `.guardianignore` — with auto_fix, what keeps `--autofix` out of the directories it leaves out.
+            ...semgrepExcludeArgs(ctx.exclusions),
+            '--json',
+            '--quiet',
+            '--output',
+            outFile,
+          ];
+          if (inp.auto_fix === true) args.push('--autofix');
+          args.push(ctx.projectPath);
+          // UTF-8 mode (runners/semgrepRun.ts, review M3).
+          const r = await runSemgrep({
+            args,
+            cwd: ctx.projectPath,
+            env: ctx.scriptEnv,
+            signal: ctx.signal,
+            onLog: ctx.onLog,
+          });
+          const raw = readJsonSafe(outFile);
+          // The plugin pack's rule ids come out bare, as on scan_sast (runners/semgrepRuleIds.ts).
+          if (raw) parser_inputs.push({ parser: semgrepParserFor([pluginPackPath(WORDPRESS_RULES_FILE)]), input: raw });
+          recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
+          // The shared gaps: files over Semgrep's size limit, initialised
+          // submodules (runners/semgrepCoverageGaps.ts).
+          const at = tools_run.findIndex((t) => t.name === 'semgrep-wp');
+          const entry = tools_run[at];
+          if (entry !== undefined) {
+            const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
+              scannedNothing: entry.status === 'skipped',
+              reports: raw !== null ? [raw] : [],
             });
-            const raw = readJsonSafe(outFile);
-            // The plugin pack's rule ids come out bare, as on scan_sast (runners/semgrepRuleIds.ts).
-            if (raw) parser_inputs.push({ parser: semgrepParserFor([pluginPackPath(WORDPRESS_RULES_FILE)]), input: raw });
-            recordSemgrepWp({ raw, run: r, projectPath: ctx.projectPath, tools_run, missing_tools });
-            // The shared gaps: files over Semgrep's size limit, initialised
-            // submodules (runners/semgrepCoverageGaps.ts).
-            const at = tools_run.findIndex((t) => t.name === 'semgrep-wp');
-            const entry = tools_run[at];
-            if (entry !== undefined) {
-              const applied = applySemgrepCoverageGaps(entry, await semgrepCoverageGaps(ctx.projectPath), {
-                scannedNothing: entry.status === 'skipped',
-                reports: raw !== null ? [raw] : [],
-              });
-              tools_run[at] = applied.toolRun;
-              // Windows: directories its walk could not list, left out on a second run (runners/semgrepLongDirs.ts).
-              const longDirs = longDirsNote(r);
-              const named = tools_run[at];
-              if (longDirs !== null && named !== undefined) named.reason = [named.reason, longDirs].filter(Boolean).join('; ');
-              if (applied.missing) markMissing(missing_tools, 'semgrep-wp');
-            }
-          })(),
-        );
+            tools_run[at] = applied.toolRun;
+            // Windows: directories its walk could not list, left out on a second run (runners/semgrepLongDirs.ts).
+            const longDirs = longDirsNote(r);
+            const named = tools_run[at];
+            if (longDirs !== null && named !== undefined) named.reason = [named.reason, longDirs].filter(Boolean).join('; ');
+            if (applied.missing) markMissing(missing_tools, 'semgrep-wp');
+          }
+        };
+        // `--autofix` rewrites the files every other scanner here reads: it
+        // runs alone, first, as scan_sast runs its other passes `after: ['semgrep']`.
+        if (inp.auto_fix === true) await semgrepPass();
+        else tasks.push(semgrepPass());
       } else {
         tools_run.push({ name: 'semgrep-wp', status: 'skipped', reason: 'not_installed' });
         missing_tools.push('semgrep');
@@ -262,11 +266,20 @@ registerToolModule(
             const raw = readJsonSafe(outFile);
             if (raw) parser_inputs.push({ parser: phpcsParser, input: raw });
             const ok = r.outcome === 'completed' || r.exitCode === 1 || r.exitCode === 2;
+            // A file PHPCS did not process (a sniff threw, the tokenizer refused it, no PHP code):
+            // named, and the pass missing too — never findings of an `ok` pass (3.6.1).
+            const partial = ok && raw ? phpcsUnprocessed(raw, ctx.projectPath) : [];
             tools_run.push({
               name: 'phpcs-wpcs',
               status: ok ? 'ok' : 'failed',
-              reason: ok ? undefined : `phpcs exit ${r.exitCode}`,
+              reason: ok
+                ? partial.length > 0
+                  ? describePartialParse(partial, 'their WordPress coding-standard findings may be missing')
+                  : undefined
+                : `phpcs exit ${r.exitCode}`,
+              ...(partial.length > 0 ? { partially_parsed: partial } : {}),
             } as ToolRun);
+            if (partial.length > 0) missing_tools.push('phpcs-wpcs');
           })(),
         );
       } else {

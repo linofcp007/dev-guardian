@@ -174,8 +174,12 @@ describe('a gap no acceptance clears', () => {
     expect(remedyFor('other', 'semgrep', `security_scan_full: semgrep ran with reduced coverage (${reason})`)).toMatch(/git rm --cached/);
   });
 
-  it('a run that also missed files over the size limit (unscanned), or rules that did not load: never cleared by naming files', () => {
-    for (const run of [{ unscanned: { oversized: 1 } }, { failed_rules: [{ rule_id: 'r', message: 'bad' }] }] as Array<Partial<ToolRun>>) {
+  // The plugin's own packs not on disk (a damaged install) make a run partial
+  // too: an --accept-partial-parse covering every partly parsed file cleared
+  // that gap with it, and the gate passed with the packs' rules never run.
+  it('a run that also missed files over the size limit (unscanned), rules that did not load, or the plugin pack: never cleared by naming files', () => {
+    const runs: Array<Partial<ToolRun>> = [{ unscanned: { oversized: 1 } }, { failed_rules: [{ rule_id: 'r', message: 'bad' }] }, { plugin_pack_missing: true }];
+    for (const run of runs) {
       const v = evaluateGate(input({ steps: [semgrepStep([{ file: F, type: 'PartialParsing' }], run)], acceptedPartialParses: [F] }));
       expect(v.exitCode, JSON.stringify(run)).toBe(CI_EXIT.INCOMPLETE_SCAN);
       expect(v.acceptedGaps).toEqual([]);
@@ -211,6 +215,22 @@ describe('every gap as data', () => {
       'security_scan_full: gosec ran with reduced coverage (…) — not accepted: Type error on broken/b.go (--accept-partial-parse accepts parse errors only: PartialParsing, Syntax error, Lexical error)';
     expect(remedyFor('other', 'gosec', detail)).toMatch(/go mod download/);
     expect(remedyFor('other', 'gosec', 'scan: gosec … Package not loaded on pkg')).toMatch(/go mod download/);
+  });
+
+  it("a pull request's .NET build refused: the analyzers gate as incomplete, and the remedy names --build-pr and its trust", () => {
+    const reason = "not built: the tree is a pull request's, judged against origin/main: building it would run its MSBuild in this job — pass --build-pr only for a pull request you trust";
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: [{ name: 'dotnet-analyzers', status: 'skipped', reason }],
+      missing_tools: ['dotnet-analyzers'],
+    };
+    const v = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps: [step], droppedBaselineEntries: 0 });
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    const gap = v.coverageGapDetails.find((d) => d.tool.startsWith('dotnet-analyzers') || d.detail.includes('dotnet-analyzers'));
+    expect(gap?.gating).toBe(true);
+    expect(gap?.remedy).toMatch(/--build-pr/);
+    expect(gap?.remedy).toMatch(/never from a repository file/);
   });
 
   it('a gosec step: a type error gates as `other`, a syntax error is accepted by --accept-partial-parse', () => {

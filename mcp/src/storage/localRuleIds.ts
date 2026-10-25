@@ -17,9 +17,9 @@
  * (`pluginPackIdMatcher`: the plugin's root or a sibling version directory,
  * and a rule id its packs declare) gets:
  *   - the pack rule's own id;
- *   - the fingerprint a fresh scan computes for it — except for a credential
- *     finding, whose stored snippet is the redaction placeholder (its
- *     identity, which never used the snippet, still matches);
+ *   - the fingerprint a fresh scan computes for it (a credential finding's
+ *     stored snippet is the redaction placeholder, which is what a fresh
+ *     scan hashes too since `makeFinding` redacts before it fingerprints);
  *   - the identity a fresh scan computes (`rekeyStoredIdentities`: the stored
  *     content key, the occurrence recounted within the scan);
  * and every suppression and cached validation naming the old fingerprint or

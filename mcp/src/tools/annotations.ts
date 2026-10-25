@@ -36,9 +36,12 @@
  *     Semgrep's registry rules, Trivy's vulnerability database, OSV, EPSS /
  *     CISA KEV, package registries, NuGet feeds (a .NET build), WordPress.org,
  *     GitHub, or a URL under test — and WP-CLI, which boots the WordPress
- *     site it is pointed at: its wp-config.php and plugins run, it connects
- *     to the site's database (`DB_HOST` may be another machine) and `wp
- *     plugin list` asks api.wordpress.org for updates. `local_only` /
+ *     site it is pointed at: with its plugins and theme skipped and no
+ *     `wp-cli.yml` of the site's read (`wordpress/wpCli.ts`), but its
+ *     wp-config.php, core files, must-use plugins and drop-ins still run —
+ *     WP-CLI cannot skip them — it connects to the site's database
+ *     (`DB_HOST` may be another machine) and `wp plugin list` asks
+ *     api.wordpress.org for updates. `local_only` /
  *     `GUARDIAN_OFFLINE=1` narrow some of these; the hint describes the
  *     default. A tool that only reads files and the history is never
  *     open-world (review 10: `dotnet_check` claimed it for four local checks).

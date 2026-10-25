@@ -242,9 +242,9 @@ describe("create_fix_pr — a lockfile's resolved URLs never carry the user's re
           dependencies: { 'dg-leftpad': '1.0.0', 'dg-other': '1.0.0' },
         }),
         'package-lock.json': JSON.stringify(lock, null, 2),
-        // Without the trailing slash: `git check-ignore node_modules` must say yes before anything
-        // exists there, or the test environment is not prepared (fixpr/testEnv.ts).
-        '.gitignore': 'node_modules\n',
+        // The commonest form, a directory pattern: fixpr/testEnv.ts asks git about `node_modules/`,
+        // which it matches before anything exists there.
+        '.gitignore': 'node_modules/\n',
       });
       const c = ctx();
       seedCve(c, 'dg-leftpad', 'package-lock.json', '1.0.0', '1.0.1');

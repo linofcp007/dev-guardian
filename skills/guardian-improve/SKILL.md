@@ -69,8 +69,9 @@ once the spec exists) to understand the branches before moving them.
 ```
 
 The **Current → Target block is the spec's success criterion**: the same measurement that found the
-problem re-measures at the end and proves the fix — the same tool (`quality_check`, `bug_hunt`,
-`perf_check`, …) compared with `diff_scans`, or the same count taken the same way. Don't write
+problem re-measures at the end and proves the fix — the same tool (`quality_check`, `bug_hunt`, …)
+compared with `diff_scans`, or the same count taken the same way (`perf_check` records no history, so its
+numbers are compared by hand, run against run). Don't write
 improvement specs whose "done" can't be re-measured — vague cleanup isn't a spec.
 
 ### Where the targets come from (per project, per stack — never fixed)

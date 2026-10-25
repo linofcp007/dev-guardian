@@ -3,10 +3,12 @@
  *
  * A suppression names a finding by its fingerprint and, since schema 7, by
  * its line-independent identity too (`fingerprint/findingIdentity.ts`). While
- * active (NULL expires_at, or expires_at > now), a finding that matches it on
- * EITHER key is hidden from the `findings/open` and `findings/by-severity/*`
- * resources. The fingerprint alone lapsed the moment a line was inserted above
- * the finding; the identity does not. The findings table itself remains
+ * active (NULL expires_at, or expires_at > now), a finding of its identity —
+ * or of its fingerprint, where either side has no identity — is hidden from
+ * the `findings/open` and `findings/by-severity/*` resources. The fingerprint
+ * alone lapsed the moment a line was inserted above the finding; the identity
+ * does not; and two identities on one fingerprint are two findings
+ * (`indexFindings`), so a suppression never hides the other one. The findings table itself remains
  * untouched so historical scans stay intact and the suppression can be lifted
  * later by deleting (or letting expire) the row.
  *
@@ -83,7 +85,7 @@ export class SuppressionsRepo {
   >;
   private readonly listActiveStmt: Statement<[string], SuppressionRow>;
   private readonly listAllStmt: Statement<[], SuppressionRow>;
-  private readonly isSuppressedStmt: Statement<[string, string | null, string], { n: number }>;
+  private readonly isSuppressedStmt: Statement<[string | null, string, string | null, string], { n: number }>;
   private readonly listForFingerprintStmt: Statement<[string], SuppressionRow>;
   private readonly adoptIdentitiesStmt: Statement<[string, string, string]>;
   private readonly listActiveForRuleStmt: Statement<[string, string, string, string, number], SuppressionRow>;
@@ -114,11 +116,15 @@ export class SuppressionsRepo {
       ORDER BY created_at DESC
     `);
 
-    // Either key, like findingsRepo's SUPPRESSION_MATCHES_F. A NULL identity
-    // argument compares unequal to everything, so it matches by fingerprint only.
-    this.isSuppressedStmt = db.prepare<[string, string | null, string], { n: number }>(`
+    // findingsRepo's SUPPRESSION_MATCHES_F: the identity where both sides
+    // have one, the fingerprint where either has none. Plain `?`s, the
+    // identity passed twice: node:sqlite on Node 22.13 (the engines floor)
+    // reads a numbered `?2` as a NAMED parameter and binds no positional
+    // value to it — "column index out of range", measured in the floor's
+    // container; Node 24 binds it.
+    this.isSuppressedStmt = db.prepare<[string | null, string, string | null, string], { n: number }>(`
       SELECT COUNT(*) AS n FROM suppressions
-      WHERE (finding_fingerprint = ? OR finding_identity = ?)
+      WHERE (finding_identity = ? OR (finding_fingerprint = ? AND (finding_identity IS NULL OR ? IS NULL)))
         AND (expires_at IS NULL OR expires_at > ?)
     `);
 
@@ -133,7 +139,8 @@ export class SuppressionsRepo {
         AND (s.project_path IS NULL OR s.project_path = ?)
         AND EXISTS (
           SELECT 1 FROM findings f
-          WHERE (f.fingerprint = s.finding_fingerprint OR f.identity = s.finding_identity)
+          WHERE (f.identity = s.finding_identity OR (f.fingerprint = s.finding_fingerprint
+                 AND (f.identity IS NULL OR s.finding_identity IS NULL)))
             AND f.tool = ? AND f.rule_id = ?
         )
       ORDER BY s.created_at DESC, s.id DESC
@@ -191,7 +198,7 @@ export class SuppressionsRepo {
 
   /** Whether an active suppression names this finding by fingerprint or identity. */
   isSuppressed(fingerprint: string, identity?: string): boolean {
-    const row = this.isSuppressedStmt.get(fingerprint, identity ?? null, nowIso());
+    const row = this.isSuppressedStmt.get(identity ?? null, fingerprint, identity ?? null, nowIso());
     return (row?.n ?? 0) > 0;
   }
 

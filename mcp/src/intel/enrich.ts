@@ -43,6 +43,9 @@ import type { CveIntelRepo, CveIntelRow, UpsertCveIntelInput } from '../storage/
 /** How long a cached row is served without attempting a refresh. */
 export const INTEL_TTL_MS = 24 * 60 * 60 * 1000;
 
+/** Stale CVEs one call refreshes over the network (see `enrichCveIntel`). */
+const MAX_REFRESH_PER_CALL = 1000;
+
 interface EnrichStorage extends KevCatalogStorage {
   cveIntel: Pick<CveIntelRepo, 'getMany' | 'upsertMany'>;
 }
@@ -92,6 +95,15 @@ export async function enrichCveIntel(
     }
     return result;
   }
+
+  // At most MAX_REFRESH_PER_CALL ids reach the network: ten EPSS batches,
+  // three rounds of four (`epss.ts`), inside the host's 60 s. The rest keep
+  // their stale value, or are unavailable — never a measured "not in KEV" —
+  // and the next call refreshes them from the cache this one fills.
+  for (const id of staleIds.slice(MAX_REFRESH_PER_CALL)) {
+    result.set(id, fallbackResult(id, cached.get(id), `not refreshed in this call: over ${MAX_REFRESH_PER_CALL} stale CVEs at once`));
+  }
+  staleIds.splice(MAX_REFRESH_PER_CALL);
 
   const netOpts = { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, signal: opts.signal };
   const queryEpssImpl = opts.queryEpssImpl ?? queryEpss;

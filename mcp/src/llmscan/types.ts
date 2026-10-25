@@ -73,6 +73,12 @@ export interface LlmScanPlan {
 
 export interface TaskTarget {
   fingerprint?: string;
+  /**
+   * The verified finding's identity, when it has one: the verdict is about
+   * that finding, not every finding of its fingerprint (absent on a task
+   * planned before it was recorded).
+   */
+  identity?: string;
   entry_points?: string[];
   /** Project-relative POSIX paths. */
   files: string[];

@@ -340,6 +340,40 @@ export async function runTrivy(inv: TrivyInvocation): Promise<TrivyRunResult> {
   return { ...run, honoured, suppressed: repoSuppressionFrom(raw, inv.ignoreFrom) };
 }
 
+/** How much of Trivy's error line a reason carries. */
+const ERROR_LINE_MAX = 300;
+
+/**
+ * Trivy's own error, from its log: the message of the first `FATAL` line, else
+ * of the first `ERROR` line, with the indented lines that continue it (the
+ * `* Get "https://…"` of a failed DB download); null when it logged none.
+ * Trivy 0.74.0 writes `<time>\tFATAL\tFatal error\trun error: …` (measured
+ * 2026-10-25).
+ */
+export function trivyErrorLine(stderr: string): string | null {
+  const lines = stderr.split(/\r?\n/);
+  const at = (level: string): number => lines.findIndex((l) => l.includes(`\t${level}\t`));
+  const i = at('FATAL') >= 0 ? at('FATAL') : at('ERROR');
+  if (i < 0) return null;
+  const fields = (lines[i] ?? '').split('\t').slice(2);
+  if (fields[0] === 'Fatal error') fields.shift();
+  const continued: string[] = [];
+  for (const l of lines.slice(i + 1)) {
+    if (!/^\s/.test(l) || l.trim().length === 0) break;
+    continued.push(l.trim());
+  }
+  const text = [fields.join(' ').trim(), ...continued].filter((s) => s.length > 0).join(' ');
+  if (text.length === 0) return null;
+  return text.length > ERROR_LINE_MAX ? `${text.slice(0, ERROR_LINE_MAX - 1)}…` : text;
+}
+
+/** The reason of a Trivy run that did not complete: its outcome, and Trivy's own error when it logged one. */
+export function trivyFailureReason(run: Pick<ProcessRunResult, 'outcome' | 'exitCode' | 'stderr'>): string {
+  const said = trivyErrorLine(run.stderr);
+  const exit = run.exitCode !== null ? ` (exit ${String(run.exitCode)})` : '';
+  return said === null ? `${run.outcome}${exit}` : `${run.outcome}${exit}: ${said}`;
+}
+
 /** Trivy's honoured files with what each decides, from the one table (`repoConfig.ts#REPO_CONFIG`). */
 function trivyFiles(honoured: readonly string[]): HonouredFile[] {
   return honoured.map((path) => ({
@@ -424,7 +458,7 @@ export function judgeTrivyFs(args: {
   const { projectPath, raw, run, exclusions } = args;
   if (run.outcome !== 'completed') {
     return {
-      toolRun: withHonoured({ name: 'trivy', status: 'failed', reason: run.outcome }, run),
+      toolRun: withHonoured({ name: 'trivy', status: 'failed', reason: trivyFailureReason(run) }, run),
       missing: [],
       gaps: [],
     };

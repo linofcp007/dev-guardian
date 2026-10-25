@@ -207,6 +207,28 @@ describe('baselines are per project, and record the scan type', () => {
     expect(r.project_path).toBe(a);
   });
 
+  // The default path never picks one of these; a named scan_id was held to
+  // "completed and not scoped" only, so an SBOM, a stack detection or a run
+  // that measured nothing became the untyped baseline — which risk_score's
+  // freshness check and guardian://baseline then read.
+  it.each([
+    ['an SBOM', { type: 'sbom' as const }],
+    ['a stack detection', { type: 'detect_stack' as const }],
+    ['a scan that measured nothing', {
+      type: 'sast' as const,
+      tools_run: [{ name: 'semgrep', status: 'skipped' as const, reason: 'not_installed' }],
+      missing_tools: ['semgrep'],
+    }],
+  ])('set_baseline refuses a named scan_id that is %s', async (_label, spec) => {
+    const s = freshPlugin();
+    const a = projectDir('hist-a-');
+    const id = '00000000-0000-4000-8000-000000000001';
+    seedScan(s, { id, project: a, ...spec });
+    const r = await tool('set_baseline').handler({ project_path: a, scan_id: id }, s.plugin);
+    expect(r.ok).toBe(false);
+    expect(s.storage.baselines.getActiveForProject(a)).toBeNull();
+  });
+
   it('regression_alert compares same-type scans of this project only', async () => {
     const s = freshPlugin();
     const a = projectDir('hist-a-');
@@ -292,6 +314,44 @@ describe('risk_score reports its real coverage', () => {
     expect(r.coverage.sources.map((x) => x.scan_id)).toEqual([good]);
     expect(r.coverage.skipped.count).toBe(1);
     expect(r.coverage.skipped.newest).toEqual([expect.objectContaining({ scan_id: empty, reason: 'coverage_none' })]);
+  });
+});
+
+describe('risk_score leaves out the CVEs a suppression takes out', () => {
+  // A VEX not_affected suppression hid the CVE's finding, while its
+  // `scan_cves` row still added up to 12 points and "Address active CVEs".
+  function seedCve(s: Seeded, project: string): void {
+    seedScan(s, {
+      id: 'deps', type: 'deps', project,
+      tools_run: [{ name: 'trivy', status: 'ok' }],
+      findings: [{
+        fp: 'f'.repeat(64), tool: 'trivy', rule_id: 'CVE-2024-0001', severity: 'high', subcategory: 'cve',
+        file: 'package-lock.json', snippet: 'lodash@4.17.15->4.17.21',
+      }],
+    });
+    // A dependency finding has no line: clear the one the seeder gives every finding.
+    s.db.prepare('UPDATE findings SET line_start = NULL, line_end = NULL WHERE scan_id = ?').run('deps');
+    s.storage.cves.upsert({
+      cve_id: 'CVE-2024-0001', package_name: 'lodash', installed_version: '4.17.15', fixed_version: '4.17.21',
+      severity: 'high', scan_id: 'deps',
+    });
+  }
+  type Risk = { components: { cves: { active_cves: number; score: number } }; recommended_next_action: string };
+
+  it('counts an active CVE, and none once its finding is suppressed', async () => {
+    const s = freshPlugin();
+    const a = projectDir();
+    seedCve(s, a);
+    const before = okResult<Risk>(await tool('risk_score').handler({ project_path: a }, s.plugin));
+    expect(before.components.cves.active_cves).toBe(1);
+
+    s.storage.suppressions.insert({
+      finding_fingerprint: 'f'.repeat(64), reason: 'not reachable', project_path: a,
+      vex_status: 'not_affected', vex_justification: 'vulnerable_code_not_in_execute_path',
+    });
+    const after = okResult<Risk>(await tool('risk_score').handler({ project_path: a }, s.plugin));
+    expect(after.components.cves).toEqual({ score: 0, active_cves: 0 });
+    expect(after.recommended_next_action).not.toContain('active CVEs');
   });
 });
 

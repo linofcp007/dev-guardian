@@ -465,6 +465,40 @@ describe('audit_executive', () => {
     expect(vi.mocked(runShellScript)).not.toHaveBeenCalled();
   }, 30_000); // Measured in full-suite runs (review 3.0, R7): a whole audit, 4.3-6.4 s, past 10 s under load.
 
+  // The same Trivy finding reaches the audit through more than one child:
+  // security_scan_full (its scan_deps) and deps_audit (and compliance_check's
+  // licences). Counted once each, or the executive numbers double and the
+  // audit row (one row per fingerprint) disagrees with the response.
+  it('counts a finding two children report once', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}\n', 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      name === 'docker' || name === 'dotnet' ? null : `/fake/bin/${name}`,
+    );
+    vi.mocked(runProcess).mockImplementation(fakeScanners(() => JSON.stringify({ results: [] })));
+
+    const r = (await getTool('audit_executive').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      scan_id: string;
+      sub_scans: Record<string, { ok: boolean; scan_id?: string }>;
+      aggregate_counts: Record<string, number>;
+      top_findings: Array<{ fingerprint: string }>;
+    };
+    expect(r.ok).toBe(true);
+    const [full, deps] = ['security_scan_full', 'deps_audit'].map(
+      (n) => new Set(plugin.storage.findings.listByScan(r.sub_scans[n]?.scan_id ?? '').map((f) => f.fingerprint)),
+    );
+    // The precondition: the two children share findings.
+    expect([...(deps ?? [])].filter((fp) => full?.has(fp)).length).toBeGreaterThan(0);
+
+    const stored = plugin.storage.findings.listByScan(r.scan_id);
+    const total = Object.values(r.aggregate_counts).reduce((a, b) => a + b, 0);
+    expect(total).toBe(stored.length);
+    const fps = r.top_findings.map((f) => f.fingerprint);
+    expect(new Set(fps).size).toBe(fps.length);
+  }, 30_000);
+
   it('emits deltas on the second consecutive audit', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);

@@ -82,6 +82,27 @@ describe('makeNpmResolver — lockfile v1, the installed tree, nothing', () => {
     });
   });
 
+  it('answers null, never a RangeError, for a hostile v1 lockfile nested 20 000 levels deep', () => {
+    // ~400 KB: far under the byte cap. The recursive walk threw a RangeError
+    // (call stack) out of validate_finding; an iterative one with no depth
+    // cap would build keys of quadratic total size.
+    const hostile = makeTempDir('guardian-npm-resolve-deep-');
+    const depth = 20_000;
+    write(hostile, 'package-lock.json',
+      `{"lockfileVersion":1,"dependencies":${'{"a":{"version":"1.0.0","dependencies":'.repeat(depth)}{}${'}}'.repeat(depth)}}`);
+    const answer = makeNpmResolver(hostile)('src', '', 'lodash');
+    expect(answer?.version).toBeNull();
+    expect(answer && 'reason' in answer ? answer.reason : '').toContain('deeper than 128 levels');
+  });
+
+  it('refuses a lockfile with more JSON values than the bounded parser reads', () => {
+    const wide = makeTempDir('guardian-npm-resolve-wide-');
+    write(wide, 'package-lock.json', `{"lockfileVersion":1,"dependencies":{},"x":[${'0,'.repeat(2_000_001)}0]}`);
+    const answer = makeNpmResolver(wide)('src', '', 'lodash');
+    expect(answer?.version).toBeNull();
+    expect(answer && 'reason' in answer ? answer.reason : '').toContain('JSON values');
+  });
+
   it('never falls back to node_modules past a lockfile that is not JSON — its own contract (review M-f)', () => {
     const broken = makeTempDir('guardian-npm-resolve-broken-');
     write(broken, 'package-lock.json', '{ not json');

@@ -29,7 +29,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { owaspCoverage, type CoverageRun, type OwaspCoverage } from '../frameworks/coverage.js';
 import { languagesOfRunsAsync, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
-import { latestStateScan, llmMarkersOf, splitHuntCandidates } from '../history/openSet.js';
+import { latestStateScan, llmMarkersOf, splitHuntCandidates, type LlmMarkers } from '../history/openSet.js';
 import type { LlmMarker } from '../llmscan/types.js';
 import { isOrchestratedFullScan, TARGET_SCAN_TYPES } from '../history/scanRoles.js';
 import { redactCredentialSnippets } from '../redaction/secretFindingRedaction.js';
@@ -41,6 +41,7 @@ import {
   severityBar,
   severityChip,
 } from '../report/htmlTheme.js';
+import { mdCell, mdCode, mdCodeCell, mdInline } from '../report/markdownText.js';
 import { owaspCoverageHtml, owaspCoverageMarkdown, taxonomyCell } from '../report/owaspCoverage.js';
 import { toSarif } from '../report/sarif.js';
 import { ProjectPath } from '../schemas.js';
@@ -334,12 +335,12 @@ function renderReport(
 
 /** What the report knows of the host model's verdicts: every marker, and the `llm-hunt` findings not counted. */
 interface LlmReportData {
-  markers: Map<string, LlmMarker>;
+  markers: LlmMarkers;
   unconfirmed: Finding[];
 }
 
-function withVerdict(f: Finding, markers: Map<string, LlmMarker>): Finding & { llm?: LlmMarker } {
-  const marker = markers.get(f.fingerprint);
+function withVerdict(f: Finding, markers: LlmMarkers): Finding & { llm?: LlmMarker } {
+  const marker = markers.get(f);
   return marker === undefined ? f : { ...f, llm: marker };
 }
 
@@ -360,9 +361,9 @@ interface LlmEntry {
   reasoning: string;
 }
 
-function entriesOf(findings: readonly Finding[], markers: Map<string, LlmMarker>): LlmEntry[] {
+function entriesOf(findings: readonly Finding[], markers: LlmMarkers): LlmEntry[] {
   return findings.flatMap((f) => {
-    const m = markers.get(f.fingerprint);
+    const m = markers.get(f);
     return m === undefined
       ? []
       : [{ where: locationOf(f), title: f.title, stance: stanceOf(m), decisive: m.decisive_line, reasoning: m.reasoning }];
@@ -373,30 +374,11 @@ function entriesOf(findings: readonly Finding[], markers: Map<string, LlmMarker>
 function splitByIndependence(llm: LlmReportData, findings: readonly Finding[]): string {
   const n = { subagent: 0, sampling: 0, same_context: 0 };
   for (const f of [...findings, ...llm.unconfirmed]) {
-    const m = llm.markers.get(f.fingerprint);
+    const m = llm.markers.get(f);
     if (m !== undefined) n[m.independence] += 1;
   }
   return `subagent ${n.subagent} · sampling ${n.sampling} · same_context ${n.same_context}`;
 }
-
-/** Longest model-written text one report line carries. */
-const MD_INLINE_MAX = 2_000;
-
-/**
- * Model-written text (a verdict's decisive line and reasoning, a hunt
- * finding's title) as inline markdown: one line, and no markup a viewer
- * would act on. The repository under scan can steer the model's words, so a
- * newline must not open a heading or a list item, and an image, a link, raw
- * HTML or emphasis must print as the characters they are.
- */
-export function mdInline(s: string): string {
-  const one = s.replace(/\s+/g, ' ').trim();
-  const cut = one.length > MD_INLINE_MAX ? `${one.slice(0, MD_INLINE_MAX)}…` : one;
-  return cut.replace(/[\\`*_[\]<>|!~#&]/g, (c) => `\\${c}`);
-}
-
-/** A location as an inline code span: one line, and no backtick to close the span early. */
-const mdCode = (s: string): string => `\`${s.replace(/\s+/g, ' ').replace(/`/g, "'")}\``;
 
 function llmMarkdown(findings: readonly Finding[], llm: LlmReportData): string[] {
   const judged = entriesOf(findings, llm.markers);
@@ -416,7 +398,7 @@ function llmMarkdown(findings: readonly Finding[], llm: LlmReportData): string[]
     lines.push('', `## LLM hunt candidates, not counted (${llm.unconfirmed.length})`, '');
     lines.push('_Unverified, or judged not exploitable: these are not in the findings above, the totals or the release gates._', '');
     for (const f of llm.unconfirmed) {
-      const m = llm.markers.get(f.fingerprint);
+      const m = llm.markers.get(f);
       lines.push(`- ${mdCode(locationOf(f))} ${mdInline(f.title)} — ${m === undefined ? 'unverified' : stanceOf(m)}`);
       if (m !== undefined) lines.push(...verdictLines(m.decisive_line, m.reasoning));
     }
@@ -439,7 +421,7 @@ function llmHtml(findings: readonly Finding[], llm: LlmReportData): string {
   if (llm.unconfirmed.length > 0) {
     const judgedHunt = entriesOf(llm.unconfirmed, llm.markers).map(item);
     const unverified = llm.unconfirmed
-      .filter((f) => !llm.markers.has(f.fingerprint))
+      .filter((f) => llm.markers.get(f) === undefined)
       .map((f) => `<li><code>${escapeHtml(locationOf(f))}</code> ${escapeHtml(f.title)} — unverified</li>`);
     html +=
       `\n<h2>LLM hunt candidates, not counted (${llm.unconfirmed.length})</h2>\n` +
@@ -459,7 +441,7 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
   lines.push(`- **Type:** ${scan.scan_type}`);
   lines.push(`- **Status:** ${scan.status}`);
   lines.push(`- **Started:** ${scan.started_at}`);
-  lines.push(`- **Project:** \`${scan.project_path}\``);
+  lines.push(`- **Project:** ${mdCode(scan.project_path)}`);
   lines.push('');
   lines.push(
     `**Severity:** critical ${counts.critical} · high ${counts.high} · medium ${counts.medium} · low ${counts.low} · info ${counts.info}`,
@@ -472,10 +454,11 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
   } else {
     lines.push('| Sev | Tool | Rule | Title | Location | CWE / OWASP 2025 |');
     lines.push('| --- | --- | --- | --- | --- | --- |');
+    // Every cell but the severity is the repository's text (report/markdownText.ts).
     for (const f of [...findings].sort((a, b) => severityOrder(b.severity) - severityOrder(a.severity))) {
-      const loc = f.file_path ? `\`${f.file_path}${f.line_start ? `:${f.line_start}` : ''}\`` : '';
       lines.push(
-        `| ${f.severity} | ${f.tool} | \`${f.rule_id ?? ''}\` | ${mdEscape(f.title)} | ${loc} | ${taxonomyCell(f)} |`,
+        `| ${f.severity} | ${mdCell(f.tool)} | ${mdCodeCell(f.rule_id ?? '')} | ${mdCell(f.title)} | ` +
+          `${mdCodeCell(locationOf(f))} | ${mdCell(taxonomyCell(f))} |`,
       );
     }
   }
@@ -490,7 +473,8 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
     lines.push('| --- | --- | --- | --- | --- |');
     for (const c of cves) {
       lines.push(
-        `| ${c.cve_id} | ${c.severity} | ${c.package_name} | ${c.installed_version ?? ''} | ${c.fixed_version ?? ''} |`,
+        `| ${mdCell(c.cve_id)} | ${c.severity} | ${mdCell(c.package_name)} | ${mdCell(c.installed_version ?? '')} | ` +
+          `${mdCell(c.fixed_version ?? '')} |`,
       );
     }
   }
@@ -500,10 +484,6 @@ function renderMarkdown(scan: ScanRecordT, findings: Finding[], cves: Cve[], owa
       "Semgrep's registry mode sends metrics — pass `local_only: true` to avoid it._",
   );
   return lines.join('\n');
-}
-
-function mdEscape(s: string): string {
-  return s.replace(/\|/g, '\\|');
 }
 
 const SCAN_TITLE: Record<Lang, string> = {
@@ -551,7 +531,7 @@ function renderHtml(scan: ScanRecordT, findings: Finding[], cves: Cve[], lang: L
   const cveRows = cves
     .map(
       (c) => `<tr>
-  <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(c.cve_id)}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
+  <td><a href="https://nvd.nist.gov/vuln/detail/${escapeHtml(encodeURIComponent(c.cve_id))}" target="_blank" rel="noopener">${escapeHtml(c.cve_id)}</a></td>
   <td>${severityChip(c.severity)}</td>
   <td>${escapeHtml(c.package_name)}</td>
   <td><code>${escapeHtml(c.installed_version ?? '')}</code></td>

@@ -84,10 +84,16 @@ function fsImports(sf: ts.SourceFile): Map<string, string> {
 export function findFsCallSites(mcpDir: string, srcDir: string): FsCallSite[] {
   const files: string[] = [];
   walk(srcDir, files);
+  return fsCallSitesIn(mcpDir, files.sort());
+}
+
+/** Every tracked `node:fs` call in `files` (`.ts`, or JavaScript such as the CLI's `.mjs`), relative to `mcpDir`. */
+export function fsCallSitesIn(mcpDir: string, files: readonly string[]): FsCallSite[] {
   const sites: FsCallSite[] = [];
-  for (const abs of files.sort()) {
+  for (const abs of files) {
     const text = readFileSync(abs, 'utf8');
-    const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const kind = abs.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+    const sf = ts.createSourceFile(abs, text, ts.ScriptTarget.Latest, true, kind);
     const imports = fsImports(sf);
     if (imports.size === 0) continue;
     const file = relative(mcpDir, abs).split(sep).join('/');

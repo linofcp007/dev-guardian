@@ -126,6 +126,40 @@ describe('create_github_issues', () => {
     expect(repo.calls.some((c) => c[0] === 'issue' && c[1] === 'create')).toBe(false);
   });
 
+  // The fingerprint hashes the line range: tagged with it, a finding whose
+  // code moved down a line was filed again on the next run.
+  it('does not refile a finding whose code moved: the tag is its identity', async () => {
+    const s = freshPlugin();
+    const p = projectDir('gh-');
+    const identity = 'b'.repeat(64);
+    seedScan(s, { id: 's1', type: 'sast', project: p, findings: [{ fp: '1'.repeat(64), identity, severity: 'high' }] });
+    const repo: FakeRepo = { issues: [], labels: ['dev-guardian', 'security'], calls: [] };
+    fakeGh(repo);
+    const first = okResult<{ plans: Array<{ status: string; title: string }> }>(await tool().handler({ project_path: p }, s.plugin));
+    expect(first.plans.map((x) => x.status)).toEqual(['created']);
+    expect(first.plans[0]?.title).toContain(`[guardian:${identity.slice(0, 12)}]`);
+
+    // The same finding one line lower: a new fingerprint, the same identity.
+    seedScan(s, { id: 's2', type: 'sast', project: p, findings: [{ fp: '2'.repeat(64), identity, severity: 'high', line: 2 }] });
+    const again = okResult<{ plans: Array<{ status: string }> }>(await tool().handler({ project_path: p }, s.plugin));
+    expect(again.plans.map((x) => x.status)).toEqual(['skipped_existing']);
+  });
+
+  it('still recognises an issue filed under the fingerprint tag, before the tag was the identity', async () => {
+    const s = freshPlugin();
+    const p = projectDir('gh-');
+    const fp = '3'.repeat(64);
+    seedScan(s, { id: 's1', type: 'sast', project: p, findings: [{ fp, identity: 'c'.repeat(64), severity: 'high' }] });
+    const repo: FakeRepo = {
+      issues: [{ number: 3, title: `[HIGH] old [guardian:${fp.slice(0, 12)}]`, state: 'OPEN' }],
+      labels: ['dev-guardian', 'security'],
+      calls: [],
+    };
+    fakeGh(repo);
+    const r = okResult<{ plans: Array<{ status: string }> }>(await tool().handler({ project_path: p }, s.plugin));
+    expect(r.plans.map((x) => x.status)).toEqual(['skipped_existing']);
+  });
+
   it('creates a missing label, and omits one it cannot create instead of failing the issue', async () => {
     const fp = 'e'.repeat(64);
     const { s, p } = seedOne(fp);

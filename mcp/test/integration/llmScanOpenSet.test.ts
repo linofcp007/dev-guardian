@@ -181,6 +181,33 @@ describe('T-06 an independent not_real with a decisive line demotes the finding,
   });
 });
 
+describe('a verdict is about the finding it was given on, not every finding of its fingerprint', () => {
+  // Semgrep without login stores "requires login" as the snippet, so a real
+  // finding that later lands on a judged false positive's lines shares its
+  // fingerprint; only the identity tells them apart.
+  it('demotes the judged finding, and not a later one of another identity on the same fingerprint', async () => {
+    const h = harness();
+    const s = seedStandard(h);
+    h.db.prepare('UPDATE findings SET identity = ? WHERE fingerprint = ?').run('a'.repeat(64), s.insert.fingerprint);
+    const out = await start(h, { modes: ['verify'] });
+    const t = await leaseWhere(h, out.plan_id, (x) => h.repo.getTask(out.plan_id, x.task_id)?.target.fingerprint === s.insert.fingerprint);
+    expect(okResult<SubmitOut>(await submit(h, out.plan_id, t, verdictAt(PARAM_INSERT, 'not_real'))).accepted).toBe(true);
+    const judged = openSetForProject(h.storage, h.project).findings.find((f) => f.fingerprint === s.insert.fingerprint);
+    expect(judged === undefined ? undefined : llmOf(judged)?.verdict).toBe('not_exploitable');
+
+    // A newer SAST scan: the same rule on the same lines, other code under them.
+    const later = seedScan(h.storage, h.db, h.project, 'sast', [
+      { tool: 'semgrep', rule_id: s.insert.rule_id ?? '', loc: PARAM_INSERT, message: s.insert.message ?? '' },
+    ]);
+    h.db.prepare('UPDATE findings SET identity = ? WHERE scan_id = ?').run('b'.repeat(64), later.scanId);
+    const other = openSetForProject(h.storage, h.project).findings.find((f) => f.identity === 'b'.repeat(64));
+    expect(other?.fingerprint).toBe(s.insert.fingerprint);
+    expect(other === undefined ? 'missing' : llmOf(other)).toBeUndefined();
+    const t2 = await triage(h.plugin, h.project);
+    expect(t2.likely_false_positive.map((b) => b.fingerprint)).not.toContain(s.insert.fingerprint);
+  });
+});
+
 const VERDICTS = ['exploitable', 'not_exploitable', 'undetermined'] as const;
 const INDEPENDENCE: Independence[] = ['subagent', 'sampling', 'same_context'];
 const TO_VERIFY: Record<LlmVerdict, VerifyVerdict['verdict']> = { exploitable: 'real', not_exploitable: 'not_real', undetermined: 'undetermined' };

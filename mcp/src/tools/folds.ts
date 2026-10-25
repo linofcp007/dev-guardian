@@ -51,7 +51,8 @@ registerFold({
     'checksums (themes: not checked), administrators with risky logins, DISALLOW_FILE_EDIT / WP_DEBUG / ' +
     'FORCE_SSL_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking ' +
     'arguments or an inactive plugin — where backdoors persist. mode bulk: the install audit of up to 50 ' +
-    'installs. Needs WP-CLI; checksums come from api.wordpress.org.',
+    'installs. Needs WP-CLI; checksums come from api.wordpress.org. WP-CLI boots the site with its plugins ' +
+    'and theme skipped; wp-config.php, core files and must-use plugins still run.',
   modeKey: 'mode',
   modeDescription: 'install (default), cron or bulk.',
   defaultMode: 'install',
@@ -94,7 +95,7 @@ registerFold({
     'setup: the latest install, cron and REST audits (target_url for those keyed by URL), open WordPress findings, ' +
     "CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's " +
     'recorded CVEs and, with a local wp_install_path, its version and state from WP-CLI, which boots the site ' +
-    '(its PHP, its database). Run wp_audit or wp_vuln_check first for fresh data.',
+    '(its database; its PHP minus plugins and theme). Run wp_audit or wp_vuln_check first for fresh data.',
   modeKey: 'kind',
   modeDescription: 'setup, hardening or plugin.',
   modes: { setup: 'wp_describe_setup', hardening: 'wp_recommend_hardening', plugin: 'wp_plugin_check' },

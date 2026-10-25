@@ -242,6 +242,29 @@ export function extractSurface(semgrepJson: unknown): {
 export const INHERITED_PATH_KEY = 'guardian_path';
 export const INHERITED_PATH = 'inherited';
 
+/**
+ * The metadata key a route rule sets when the path it captures is joined to a
+ * CLASS-level prefix the pack cannot see: Spring concatenates a class's
+ * `@RequestMapping` with every method mapping (`always`); ASP.NET does the
+ * same with a class `[Route]`, except that a method path starting with `/` or
+ * `~/` ignores it (`unless-rooted`). Such a route keeps its path but is never
+ * presented as resolved — `GET /list` under `@RequestMapping("/api/orders")`
+ * is served at `/api/orders/list`, and reporting `/list` as resolved was a
+ * confidently wrong URL for the probes downstream (review of 3.6.0).
+ * Resolving the prefix needs the class's own annotation, which a rule
+ * focused on the method's path does not bind.
+ */
+export const CLASS_PREFIX_KEY = 'guardian_class_prefix';
+export const CLASS_PREFIX_ALWAYS = 'always';
+export const CLASS_PREFIX_UNLESS_ROOTED = 'unless-rooted';
+
+/** Whether a class-level prefix may complete `path` (see {@link CLASS_PREFIX_KEY}). */
+function classPrefixApplies(metadata: unknown, path: string): boolean {
+  const rule = str(metadata, CLASS_PREFIX_KEY);
+  if (rule === CLASS_PREFIX_ALWAYS) return true;
+  return rule === CLASS_PREFIX_UNLESS_ROOTED && !/^~?\//.test(path);
+}
+
 function toRoute(
   metadata: unknown,
   metavars: unknown,
@@ -281,7 +304,7 @@ function toRoute(
     provenance: 'code',
     path_raw: path,
     path_resolved: path,
-    path_partial: !usable,
+    path_partial: !usable || classPrefixApplies(metadata, path),
     file,
     line,
     framework: str(metadata, 'framework') ?? 'unknown',

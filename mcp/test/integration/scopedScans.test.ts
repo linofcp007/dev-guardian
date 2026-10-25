@@ -102,7 +102,9 @@ async function fake(opts: ProcessRunOptions): Promise<ProcessRunResult> {
     return done(1);
   }
   if (opts.command === 'bandit') {
-    writeFileSync(after(a, '-o'), JSON.stringify({ results: [], errors: [], metrics: {} }));
+    // As Bandit writes it: one `metrics` entry per file it analysed.
+    const metrics = Object.fromEntries(a.slice(a.indexOf('--') + 1).map((f) => [f, { loc: 1 }]));
+    writeFileSync(after(a, '-o'), JSON.stringify({ results: [], errors: [], metrics }));
     return done(0);
   }
   if (opts.command === 'gitleaks') {
@@ -256,6 +258,27 @@ describe('scan_sast — scope', () => {
     expect(scopedRun?.honoured_config).toEqual(['.bandit']);
     expect(scopedRun?.honoured_config).toEqual(wholeRun?.honoured_config);
     expect(scopedRun?.reason).toMatch(/honoured the project's \.bandit \(its skips and tests decide what is reported\)/);
+  });
+
+  // The CI gate's --rules-ref reads the project's configuration from a ref's
+  // copy: the whole-project Bandit took the ref's .bandit, a scoped one the
+  // scanned tree's — on a pull request, the pull request's own.
+  it("a scoped Bandit under --rules-ref reads the ref's .bandit, as the whole-project run does", async () => {
+    const dir = project();
+    write(dir, 'src/a.py');
+    write(dir, '.bandit', '[bandit]\nskips: B101,B602,B404\n');
+    const ref = project('scoped-ref-');
+    write(ref, '.bandit', '[bandit]\nskips: B101\n');
+    const tool = TOOLS.find((t) => t.name === 'scan_sast');
+    if (!tool) throw new Error('scan_sast not registered');
+    const p: PluginContext = { ...plugin(dir), repoConfigFromRef: { root: ref, ref: 'origin/main', commit: 'a'.repeat(40) } };
+    for (const scope of [undefined, { paths: ['src'] }]) {
+      const r = await tool.handler({ project_path: dir, force: true, ...(scope !== undefined ? { scope } : {}) }, p);
+      if (!r.ok) throw new Error(JSON.stringify(r.error));
+    }
+    const [wholeCall, scopedCall] = byCommand('bandit');
+    expect(after(wholeCall?.args ?? [], '--ini')).toBe(join(ref, '.bandit'));
+    expect(after(scopedCall?.args ?? [], '--ini')).toBe(join(ref, '.bandit'));
   });
 
   it('without a root .bandit, a scoped Bandit gets the neutral --ini too, and names nothing', async () => {
@@ -424,6 +447,40 @@ describe('scan_secrets — scope', () => {
     await ok('scan_secrets', dir, { scope: { diff: {} } });
     expect(byCommand('gitleaks')).toHaveLength(1);
     expect(gitleaksSaw[0]).toEqual(['b.env', 'new.env']);
+  });
+
+  // The scanners read the working tree, and `staged` took only the file list
+  // from the index: a key staged with `git add`, then deleted unstaged, read
+  // clean while the commit carried it. The files whose working-tree content
+  // is not what is staged are a named gap, never a clean `full`.
+  it('scope.diff.staged: a staged file with unstaged changes on top is a named gap', async () => {
+    const dir = await repo({ 'a.env': 'k=1\n', 'b.env': 'k=2\n' });
+    write(dir, 'a.env', 'k=1\nGITHUB_TOKEN=ghp_000000000000000000000000000000000000\n');
+    write(dir, 'c.env', 'k=3\n');
+    write(dir, 'd.env', 'GITHUB_TOKEN=ghp_000000000000000000000000000000000000\n');
+    await git(dir, 'add', 'a.env', 'c.env', 'd.env');
+    write(dir, 'a.env', 'k=1\n');
+    rmSync(join(dir, 'd.env'));
+    const r = await ok('scan_secrets', dir, { scope: { diff: { staged: true } } });
+    expect(gitleaksSaw[0]).toEqual(['a.env', 'c.env']);
+    expect(r.coverage).toBe('partial');
+    const gap = r.tools_run.find((t) => t.name === 'staged-content');
+    expect(gap).toMatchObject({ status: 'failed' });
+    // Changed since `git add`, or deleted (nothing on disk was read at all).
+    expect(gap?.reason).toContain('(a.env, d.env)');
+    expect(gap?.reason).not.toContain('c.env');
+    expect(r.missing_tools).toContain('staged-content');
+  });
+
+  it('scope.diff.staged: nothing unstaged on top of the staged files, no gap', async () => {
+    const dir = await repo({ 'a.env': 'k=1\n', 'b.env': 'k=2\n' });
+    write(dir, 'a.env', 'k=11\n');
+    await git(dir, 'add', 'a.env');
+    write(dir, 'b.env', 'k=22\n');
+    const r = await ok('scan_secrets', dir, { scope: { diff: { staged: true } } });
+    expect(gitleaksSaw[0]).toEqual(['a.env']);
+    expect(r.coverage).toBe('full');
+    expect(r.tools_run.some((t) => t.name === 'staged-content')).toBe(false);
   });
 
   it('scope and log_opts together are refused', async () => {
@@ -622,6 +679,52 @@ describe('review_pr — a diff that edits .guardianignore', () => {
     await commitAll(dir);
     const r = await ok('review_pr', dir, { base_ref: 'main' });
     expect(r.warnings.some((w) => w.includes('This diff'))).toBe(false);
+  });
+});
+
+describe('the cache key covers what a scan reads outside the tree hash', () => {
+  /** Two calls of `name` on one database, the cache in play (no `force`). */
+  async function twice(name: string, dir: string, input: Record<string, unknown>, between: () => void) {
+    const tool = TOOLS.find((t) => t.name === name);
+    if (!tool) throw new Error(`${name} not registered`);
+    const p = plugin(dir);
+    const call = async (): Promise<ScanPayload> => {
+      const r = await tool.handler({ project_path: dir, ...input }, p);
+      if (!r.ok) throw new Error(JSON.stringify(r.error));
+      return r as unknown as ScanPayload;
+    };
+    const first = await call();
+    between();
+    return { first, second: await call(), third: await call() };
+  }
+
+  // The tree hash lists what git does: a git-ignored `.env` is not in it, and
+  // `scope.paths` takes it as named. A token pasted into it was answered from
+  // the clean scan of the file before.
+  it('a git-ignored file named in scope.paths: an edit of it misses the cache', async () => {
+    const dir = await repo({ '.gitignore': '.env\n', 'a.py': 'x = 1\n' });
+    write(dir, '.env', 'k=1\n');
+    const { first, second, third } = await twice('scan_secrets', dir, { scope: { paths: ['.env'] } }, () =>
+      write(dir, '.env', 'k=1\nGITHUB_TOKEN=ghp_000000000000000000000000000000000000\n'),
+    );
+    expect(first.cached).toBeUndefined();
+    expect(second.cached).toBeUndefined();
+    expect(third.cached).toBe(true);
+    expect(byCommand('gitleaks')).toHaveLength(2);
+  });
+
+  // SpotBugs reads `target/classes`, which the tree hash leaves out: the skip
+  // of an unbuilt project ("no compiled classes", no gap) was served again
+  // after the build, inside the cache window.
+  it('a build that leaves classes misses the cache of the run that found none', async () => {
+    const dir = await repo({ 'src/main/java/A.java': 'class A {}\n' });
+    const { first, second } = await twice('scan_sast', dir, {}, () =>
+      write(dir, 'target/classes/A.class', 'cafebabe'),
+    );
+    const spotbugs = (r: ScanPayload) => r.tools_run.find((t) => t.name === 'spotbugs');
+    expect(spotbugs(first)?.reason).toMatch(/no compiled classes/);
+    expect(second.cached).toBeUndefined();
+    expect(spotbugs(second)?.reason ?? '').not.toMatch(/no compiled classes/);
   });
 });
 

@@ -24,11 +24,12 @@
  *         then its `follow_up_command` when it has one (an npm `overrides`
  *         step only edits package.json; `npm install` re-resolves the lock).
  *     Every npm command that installs runs with `--ignore-scripts`, and every
- *     composer command that installs with `--no-scripts`, added here when the
- *     plan's command lacks it: a dependency's lifecycle script is arbitrary
- *     code, and a dry run must never execute it (Task 11 items 1 and 5).
- *     Bundler runs only as `bundle lock` — `bundle update` would install
- *     gems into the host's GEM_HOME (see `harden`).
+ *     composer command that installs with `--no-scripts` (every one with
+ *     `--no-plugins`), added here when the plan's command lacks it: a
+ *     dependency's lifecycle script, or a plugin a committed vendor/ holds,
+ *     is arbitrary code, and a dry run must never execute it (Task 11 items 1
+ *     and 5). Bundler never runs — every command of it evaluates the Gemfile
+ *     (see `harden`).
  *   - `semgrep`: ONE `--autofix` pass for the whole group, with ONLY the
  *     target rules (`./semgrepFix.ts` — filtered copies of local rule files,
  *     `r/<rule-id>` for registry rules), `--metrics=off`, over the targets'
@@ -257,15 +258,21 @@ async function runCommand(
 const NPM_INSTALLING = new Set(['install', 'i', 'add', 'ci', 'update', 'up', 'upgrade', 'install-clean']);
 /** composer subcommands that install packages — and so run package scripts. */
 const COMPOSER_INSTALLING = new Set(['require', 'install', 'update', 'upgrade']);
+/** composer subcommands that take `--no-install`: the lock file is re-resolved, vendor/ left alone. */
+const COMPOSER_RELOCKING = new Set(['require', 'update', 'upgrade']);
 
 /**
  * `--ignore-scripts` on every installing npm command and `--no-scripts` on
  * every installing composer command (see the module comment), and
- * `--package-lock-only` on `npm install` when `lockfileOnly`. Bundler runs
- * only as `bundle lock` (re-resolving Gemfile.lock): `bundle update <gem>` is
- * rewritten to `bundle lock --update <gem>`, and any other subcommand is
- * refused — they install gems into the host's GEM_HOME and compile native
- * extensions. Returns why the command was refused, or null.
+ * `--package-lock-only` on `npm install` when `lockfileOnly`. Every composer
+ * command also gets `--no-plugins` — Composer activates the plugins a
+ * committed vendor/ holds, which the repository's own `allow-plugins` lets
+ * run, on any command — and `require` / `update` get `--no-install`: the fix
+ * is composer.json and composer.lock, what the re-scan reads, and no
+ * package's code is downloaded into the tree. Bundler is refused outright:
+ * every Bundler command (`bundle lock` too) evaluates the Gemfile, which is
+ * Ruby code the repository wrote, and `bundle update` would also install
+ * gems into the host's GEM_HOME. Returns why the command was refused, or null.
  *
  * A token with a `"` or a `%` is refused as well: the step's package
  * identifier and version come from the scanned project's manifests, no real
@@ -280,10 +287,10 @@ function harden(argv: { command: string; args: string[] }, lockfileOnly: boolean
   }
   const sub = argv.args[0] ?? '';
   if (argv.command === 'bundle') {
-    if (sub === 'update') argv.args.splice(0, 1, 'lock', '--update');
-    else if (sub !== 'lock') {
-      return `refused: 'bundle ${sub}' would install gems into the host (only 'bundle lock' runs)`;
-    }
+    return (
+      `refused: 'bundle ${sub}' evaluates the Gemfile, which is Ruby code the repository wrote — a gem ` +
+      'upgrade is not applied here; run it yourself where you trust the Gemfile'
+    );
   }
   if (argv.command === 'npm' && NPM_INSTALLING.has(sub)) {
     if (!argv.args.includes('--ignore-scripts')) argv.args.push('--ignore-scripts');
@@ -291,8 +298,10 @@ function harden(argv: { command: string; args: string[] }, lockfileOnly: boolean
       argv.args.push('--package-lock-only');
     }
   }
-  if (argv.command === 'composer' && COMPOSER_INSTALLING.has(sub) && !argv.args.includes('--no-scripts')) {
-    argv.args.push('--no-scripts');
+  if (argv.command === 'composer') {
+    if (!argv.args.includes('--no-plugins')) argv.args.push('--no-plugins');
+    if (COMPOSER_INSTALLING.has(sub) && !argv.args.includes('--no-scripts')) argv.args.push('--no-scripts');
+    if (COMPOSER_RELOCKING.has(sub) && !argv.args.includes('--no-install')) argv.args.push('--no-install');
   }
   return null;
 }

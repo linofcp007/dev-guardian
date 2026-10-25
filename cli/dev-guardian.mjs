@@ -565,6 +565,15 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          cannot add its own findings to the baseline it is gated
                          against. None at <ref> is no baseline; a <ref> that names
                          no commit (not fetched) is exit 3.
+  --build-pr            With --baseline-ref or --rules-ref only. Under a ref
+                         the tree is a pull request's, and the .NET analyzers'
+                         restore and build would run ITS MSBuild in this job —
+                         so by default the tree is not built and they are a
+                         named gap (exit 2). --build-pr builds it all the same:
+                         only for a pull request you trust (from this
+                         repository, never a fork's). CLI ARGV ONLY, like
+                         --start-command: a repository file declaring it is
+                         refused.
   --rules-ref <ref>     Read the project's Semgrep rules (.semgrep.yml/.yaml and
                          those .dev-guardian/configs.json records), .guardianignore,
                          .trivyignore, .bandit and .guardian/scan.yml from <ref>
@@ -781,13 +790,12 @@ function parseArgs(argv) {
       out.scope = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--scope=')) out.scope = a.slice('--scope='.length);
-    else if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    else if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return { error: r.error };
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else out._.push(a);
+    } else out._.push(a);
   }
   const scope = out.scope;
   if (scope !== 'project' && scope !== 'global') return { error: `--scope must be project or global (got '${scope}')` };
@@ -837,7 +845,11 @@ function cmdMcpConfig(argv) {
     process.exit(1);
   }
 
-  const projectPath = resolve(args.project);
+  // A write puts the rules files (AGENTS.md, GEMINI.md, …) and the
+  // project-scope configs in the project — judged like every command's: run
+  // from the home directory, `mcp-config all --write` wrote them all there.
+  // A preview writes nothing and runs anywhere.
+  const projectPath = args.write ? resolveProjectOrExit(args.project) : resolve(args.project);
   const env = { os: detectOs(), home: homedir(), appData: process.env.APPDATA, projectPath };
   const hosts = hostArg === 'all' ? [...ALL_HOSTS] : [hostArg];
 
@@ -958,13 +970,21 @@ function readRepoJson(projectPath, relPath) {
 }
 
 /**
+ * The project's secret allowlist. An entry under four non-blank characters is
+ * ignored, as the hooks ignore it: it would hold in nearly every line and
+ * silence every finding (review of 3.6.0, finding 11).
+ *
  * @param {string} projectDir
  * @returns {string[]}
  */
 function loadAllowlist(projectDir) {
   const data = readRepoJson(projectDir, join('.guardian', 'hooks-allowlist.json'));
   /** @param {unknown[]} list */
-  const strings = (list) => list.filter((x) => typeof x === 'string');
+  const strings = (list) =>
+    list.filter(
+      /** @returns {x is string} */
+      (x) => typeof x === 'string' && x.trim().length >= 4,
+    );
   if (Array.isArray(data)) return strings(data);
   const secrets = data !== null && typeof data === 'object' ? /** @type {{ secrets?: unknown }} */ (data).secrets : undefined;
   return Array.isArray(secrets) ? strings(secrets) : [];
@@ -1207,6 +1227,47 @@ function acceptPartialParseRefusalMessage(configPath) {
 }
 
 /**
+ * `--build-pr` is argv-only by the same rule: it lets a pull request's own
+ * MSBuild run in the gate job, and a repository file the pull request can edit
+ * must never grant that. A `.guardian/ci.json` declaring `build_pr` is refused.
+ *
+ * @param {string} projectPath
+ * @returns {string | null}
+ */
+function findBuildPrInRepoConfig(projectPath) {
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
+  return isRecord(data) && data['build_pr'] !== undefined ? resolve(projectPath, CI_CONFIG_RELATIVE_PATH) : null;
+}
+
+/** @param {string} configPath */
+function buildPrRefusalMessage(configPath) {
+  return (
+    `refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "build_pr" (found at ${configPath}). ` +
+    "--build-pr may only be supplied on the command line, never from a file inside the repository — a pull " +
+    "request could otherwise edit this file and have its own build run in the gate job. Remove build_pr from " +
+    `${CI_CONFIG_RELATIVE_PATH} and pass --build-pr in the pipeline definition, for pull requests you trust.`
+  );
+}
+
+/**
+ * Why the gate does not build the tree it scans, or undefined: under a ref the
+ * tree is a pull request's, and its .NET restore and build would run its own
+ * MSBuild in this job (`PluginContext.buildRefused`) — unless `--build-pr`
+ * says the pull request is trusted.
+ *
+ * @param {{ ref: string } | null} judgedAgainst
+ * @param {boolean} buildPr
+ * @returns {string | undefined}
+ */
+function buildRefusedFor(judgedAgainst, buildPr) {
+  if (judgedAgainst === null || buildPr) return undefined;
+  return (
+    `the tree is a pull request's, judged against ${judgedAgainst.ref}: building it would run its MSBuild in ` +
+    'this job — pass --build-pr only for a pull request you trust'
+  );
+}
+
+/**
  * Why a `--accept-partial-parse` value cannot name a project file, or null.
  * The gate matches it exactly against project-relative paths, so an absolute
  * path or one climbing out with `..` could never match anything — refused as
@@ -1327,6 +1388,24 @@ function takeOperand(argv, i, flagName, requireNonEmpty = false) {
 }
 
 /**
+ * `--project <path>` or `--project=<path>` at `argv[i]` (`a`, one of the
+ * two), for every command that takes it. An empty value is refused in both
+ * spellings: `resolve('')` is the working directory, so `--project "$DIR"`
+ * with `DIR` unset scanned — and `baseline update` rewrote the baseline of —
+ * wherever the command happened to run.
+ *
+ * @param {string[]} argv
+ * @param {number} i
+ * @param {string} a
+ * @returns {Operand}
+ */
+function takeProject(argv, i, a) {
+  if (a === '--project') return takeOperand(argv, i, a, true);
+  const value = a.slice('--project='.length);
+  return isMissingOperand(value, true) ? { error: '--project requires a value' } : { value, nextIndex: i };
+}
+
+/**
  * @typedef {{
  *   project: string,
  *   failOn: string,
@@ -1337,6 +1416,7 @@ function takeOperand(argv, i, flagName, requireNonEmpty = false) {
  *   localOnly: boolean,
  *   startCommand: string[] | undefined,
  *   acceptPartialParse: string[],
+ *   buildPr: boolean,
  *   baselineRef: string | undefined,
  *   rulesRef: string | undefined,
  *   resetExclusionsFrom: string | undefined,
@@ -1368,6 +1448,7 @@ function parseScanArgs(argv) {
     localOnly: false,
     startCommand: undefined,
     acceptPartialParse: [],
+    buildPr: false,
     baselineRef: undefined,
     rulesRef: undefined,
     resetExclusionsFrom: undefined,
@@ -1390,13 +1471,12 @@ function parseScanArgs(argv) {
         if (isMissingOperand(value, true)) return { error: `${ref.flag} requires a value` };
       }
       out[ref.key] = value;
-    } else if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    } else if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
+    } else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
       const r = takeAcceptPartialParse(argv, i, a);
       if (r.error !== undefined) return r;
       out.acceptPartialParse.push(r.value);
@@ -1435,6 +1515,7 @@ function parseScanArgs(argv) {
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
     else if (a === '--local-only') out.localOnly = true;
+    else if (a === '--build-pr') out.buildPr = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
@@ -1512,13 +1593,12 @@ function parseBaselineUpdateArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
+    } else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
       const r = takeAcceptPartialParse(argv, i, a);
       if (r.error !== undefined) return r;
       out.acceptPartialParse.push(r.value);
@@ -1701,6 +1781,34 @@ function armInterruptTeardown(getApp, getStartingApp) {
   };
 }
 
+/**
+ * Writes `scan --sarif`'s report at `sarifPath` (absolute) — why it was not
+ * written, or undefined. The generated pipelines write it in the checkout,
+ * which is the pull request's: one committing `dev-guardian-results.sarif` as
+ * a link to any file the CI user can write had the report overwrite that
+ * file. So inside the repository (the project, outside one) it is written
+ * through `writeProjectFile` — a temp file renamed into place; a link at the
+ * name, or a directory on the way leading out, refused. Elsewhere the path is
+ * the operator's own and its directories are made as given, but a link at the
+ * name is refused there too.
+ *
+ * @param {string} sarifPath
+ * @param {string} text
+ * @param {{ projectPath: string, repoPrefix: string }} where `repoPrefix`: the project's place in its repository (`showPrefix`)
+ * @returns {string | undefined}
+ */
+export function writeSarif(sarifPath, text, { projectPath, repoPrefix }) {
+  const depth = repoPrefix.split('/').filter((s) => s !== '').length;
+  const repoRoot = resolve(projectPath, ...Array.from({ length: depth }, () => '..'));
+  let root = repoRoot;
+  if (!isWithinDir(repoRoot, sarifPath)) {
+    root = dirname(sarifPath);
+    mkdirSync(root, { recursive: true });
+  }
+  const written = writeProjectFile(root, sarifPath, text, { mode: 'replace' });
+  return written.ok ? undefined : describeWriteRefusal(written.reason, written.detail);
+}
+
 /** @param {string[]} argv */
 async function cmdScan(argv) {
   const parsed = parseScanArgs(argv);
@@ -1742,12 +1850,18 @@ async function cmdScan(argv) {
     return usageError('--compact applies to --format json (it cuts new_findings to the blocking ones)');
   }
 
+  if (opts.buildPr && opts.baselineRef === undefined && opts.rulesRef === undefined) {
+    return usageError('--build-pr applies with --baseline-ref or --rules-ref: without a ref the tree is built as it is');
+  }
+
   const projectPath = resolveProjectOrExit(opts.project);
   const start = enforceStartCommandRules(projectPath, opts);
   // The same argv-only rule for --accept-partial-parse, checked whatever argv
   // says (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
   if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
+  const buildConfig = findBuildPrInRepoConfig(projectPath);
+  if (buildConfig) return usageError(buildPrRefusalMessage(buildConfig));
   // `.guardian/scan.yml`, before the scan: the tree's (a --rules-ref run reads
   // the ref's, checked once the scan copied it).
   if (opts.rulesRef === undefined) refuseInvalidScanSettings(loadScanSettings(projectPath), SCAN_SETTINGS_RELATIVE_PATH);
@@ -1832,6 +1946,7 @@ async function cmdScan(argv) {
       });
       app = await startingApp;
     }
+    const buildRefused = buildRefusedFor(baselineRef ?? rulesRef, opts.buildPr);
     result = await runScans({
       projectPath,
       baseUrl: opts.baseUrl,
@@ -1842,6 +1957,8 @@ async function cmdScan(argv) {
       // (a private key's BEGIN / END lines fall outside gitleaks' -U0 hunks;
       // review 12, finding 11).
       ...(baselineRef !== null ? { changedSince: baselineRef } : rulesRef !== null ? { changedSince: rulesRef } : {}),
+      // Nor is a pull request's own build run here, unless --build-pr trusts it.
+      ...(buildRefused !== undefined ? { buildRefused } : {}),
     });
   } catch (e) {
     pipelineFailure = { error: e };
@@ -1941,13 +2058,13 @@ async function cmdScan(argv) {
     } catch {
       /* not a git work tree: the project is the root */
     }
+    let refused;
     try {
-      const sarifPath = resolve(opts.sarif);
-      mkdirSync(dirname(sarifPath), { recursive: true });
-      writeFileSync(sarifPath, renderSarif(verdict, projectPath, { repoPrefix }));
+      refused = writeSarif(resolve(opts.sarif), renderSarif(verdict, projectPath, { repoPrefix }), { projectPath, repoPrefix });
     } catch (e) {
-      sarifError = `error: --sarif ${opts.sarif} was not written: ${e instanceof Error ? e.message : String(e)}\n`;
+      refused = e instanceof Error ? e.message : String(e);
     }
+    if (refused !== undefined) sarifError = `error: --sarif ${opts.sarif} was not written: ${refused}\n`;
   }
 
   // A gate verdict (1, 2) stays the exit code; a pass is not one without the
@@ -2238,13 +2355,12 @@ function parseCiInitArgs(argv) {
     if (a === '--write') out.write = true;
     else if (a === '--force') out.force = true;
     else if (a === '--attest') out.attest = true;
-    else if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    else if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return { error: r.error };
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--branch') {
+    } else if (a === '--branch') {
       const r = takeOperand(argv, i, a, true); // requireNonEmpty — an empty branch name is never meaningful
       if (r.error !== undefined) return { error: r.error };
       out.branch = r.value;
@@ -3188,13 +3304,12 @@ function parseStatusArgs(argv) {
   const out = { project: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else return { error: `Unknown flag: ${a}` };
+    } else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
 }
@@ -3208,13 +3323,12 @@ function parseDashboardArgs(argv) {
   const out = { project: process.cwd(), out: undefined, noOpen: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--out') {
+    } else if (a === '--out') {
       // requireNonEmpty: true — fix-round-2 correction, mirroring --sarif's
       // OWN existing treatment in parseScanArgs exactly (both call sites,
       // not just this one). An empty --out is never a real destination
@@ -3287,15 +3401,11 @@ function parseImportSarifArgs(argv) {
   const out = { file: undefined, project: process.cwd(), allowOutside: false, maxResults: undefined };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a, true);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) {
-      const value = a.slice('--project='.length);
-      if (isMissingOperand(value, true)) return { error: '--project requires a value' };
-      out.project = value;
     } else if (a === '--allow-outside-project') out.allowOutside = true;
     else if (a === '--max-results' || a.startsWith('--max-results=')) {
       let raw = a.slice('--max-results='.length);
@@ -3629,15 +3739,11 @@ function parseDbAdoptArgs(argv) {
   const out = { project: process.cwd(), yes: false, rehome: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a, true);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) {
-      const value = a.slice('--project='.length);
-      if (isMissingOperand(value, true)) return { error: '--project requires a value' };
-      out.project = value;
     } else if (a === '--yes') out.yes = true;
     else if (a === '--rehome') out.rehome = true;
     else return { error: `Unknown flag: ${a}` };

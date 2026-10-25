@@ -30,7 +30,7 @@ import {
 } from '../../platform/projectFs.js';
 import { textLines } from '../../platform/textLines.js';
 import type { Category, Finding, Severity } from '../../types.js';
-import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from '../projectFiles.js';
+import { trivyWalkSkipsDir } from '../projectFiles.js';
 import {
   asArray,
   dependencyTaxonomy,
@@ -289,9 +289,18 @@ interface EcosystemManifest {
   /** Trivy `Results[].Type` values that count as this ecosystem being
    *  covered by whatever Trivy actually scanned (its lockfile, not
    *  necessarily the manifest file itself — Trivy reports the LOCKFILE as
-   *  `Target`, so the Target's file name is never compared: only its
-   *  DIRECTORY, with the manifest's, beside the Type). */
+   *  `Target`, so the Target's file name is not compared unless
+   *  {@link EcosystemManifest.readBy} says which: only its DIRECTORY, with
+   *  the manifest's, beside the Type). */
   trivyTypes: readonly string[];
+  /**
+   * For an ecosystem with several kinds of manifest in one directory, only
+   * some of which Trivy reads: the `Target` base names (in the manifest's
+   * directory, or a workspace root declaring it) that stand for the manifest
+   * `name`. Empty: nothing Trivy reads does. Absent: any Result of
+   * `trivyTypes` in the directory covers it.
+   */
+  readBy?: (name: string) => readonly string[];
   /** The file names Trivy reads for those Types — the `Target` of their
    *  Results, and so the `file_path` of every CVE / license finding they
    *  produce. `history/runNames.ts` keys those findings by ecosystem with
@@ -311,6 +320,28 @@ interface EcosystemManifest {
   declaresOnlyDev?: (r: CoverageReader, path: string) => boolean;
   /** How to give Trivy something to read: the lock file to generate, and how. */
   fix: string;
+}
+
+/**
+ * The Results that stand for one Python manifest (3.6.1). The coverage
+ * check judged Python per directory, so a pinned `requirements.txt`'s pip
+ * Result covered every Python manifest beside it — measured on Trivy 0.74.0
+ * (2026-10-25), a `requirements.txt`, `requirements-dev.txt`, `Pipfile` and
+ * PEP 621 `pyproject.toml` in one directory gave one Result,
+ * `requirements.txt`: Trivy reads that exact name only, and a Pipfile only
+ * through its Pipfile.lock. A `pyproject.toml`, `setup.py` or `setup.cfg`
+ * is a package's own declaration, locked by poetry.lock, uv.lock or — what
+ * pip-compile writes for it by default — a pinned `requirements.txt` (the
+ * e2e pins that last case).
+ */
+function pythonManifestReadBy(name: string): readonly string[] {
+  if (name === 'requirements.txt') return ['requirements.txt'];
+  if (name === 'Pipfile') return ['Pipfile.lock'];
+  if (name === 'pyproject.toml' || name === 'setup.py' || name === 'setup.cfg') {
+    return ['poetry.lock', 'uv.lock', 'requirements.txt'];
+  }
+  // `requirements-dev.txt`, `Requirements.txt`, …: never read by Trivy.
+  return [];
 }
 
 const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
@@ -375,6 +406,7 @@ const ECOSYSTEM_MANIFESTS: readonly EcosystemManifest[] = [
       /^requirements.*\.txt$/i.test(n),
     trivyTypes: ['pip', 'pipenv', 'poetry', 'uv'],
     lockfiles: ['requirements.txt', 'Pipfile.lock', 'poetry.lock', 'uv.lock'],
+    readBy: pythonManifestReadBy,
     declaresNothing: pythonManifestDeclaresNothing,
     fix:
       'commit poetry.lock, uv.lock or Pipfile.lock (poetry lock, uv lock, pipenv lock), ' +
@@ -688,6 +720,12 @@ interface ManifestWalkOptions {
 /** The ceiling detect_stack's manifest walk and the project-languages walk use. */
 const MAX_MANIFEST_WALK_DIRS = 20_000;
 
+/** One ecosystem's Result Targets (`/`-separated), and their directories. */
+interface EcoResults {
+  targets: Set<string>;
+  dirs: Set<string>;
+}
+
 interface FoundManifest {
   /** Project-relative, `/`-separated. */
   rel: string;
@@ -697,21 +735,25 @@ interface FoundManifest {
   eco: EcosystemManifest;
 }
 
+/** A `/`- or `\`-separated path, `/`-separated, without a leading `./`. */
+function posixPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
 /** The directory part of a `/`- or `\`-separated path, `/`-separated (`''` at the top). */
 function dirOf(path: string): string {
-  const posix = path.replace(/\\/g, '/').replace(/^\.\//, '');
+  const posix = posixPath(path);
   const i = posix.lastIndexOf('/');
   return i < 0 ? '' : posix.slice(0, i);
 }
 
 /**
  * Every manifest of a {@link ECOSYSTEM_MANIFESTS} ecosystem under the
- * project, bounded: the directories no scan of the project's own files
- * reads (`node_modules`, `vendor`, build output, virtualenvs, caches — the
- * `PROJECT_WALK_EXCLUDE` every other walk uses), `SCANNER_WALK_EXCLUDE`
- * (version control, package-manager caches, bower's and jspm's dependency
- * directories) and `.guardianignore` entries are not entered, and at most
- * `maxDirs` directories are read.
+ * project, bounded: installed dependencies, virtualenvs, version control and
+ * caches at any depth, generated output at the root alone
+ * (`projectFiles.ts#trivyWalkSkipsDir` — a `build/` or `dist/` below the
+ * root is walked, since Trivy reads it), and `.guardianignore` entries are
+ * not entered, and at most `maxDirs` directories are read.
  *
  * Every other hidden directory IS walked (round 4, item 4): Trivy reads
  * them, and a GitHub composite action's `.github/actions/notify/
@@ -755,7 +797,7 @@ function walkManifests(
     for (const e of entries) {
       const child = rel === '' ? e.name : `${rel}/${e.name}`;
       if (e.kind === 'directory' || e.kind === 'link') {
-        if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name)) continue;
+        if (trivyWalkSkipsDir(rel, e.name)) continue;
         if (ignores !== null && ignores(child, true)) continue;
       }
       if (e.kind === 'directory') {
@@ -970,31 +1012,39 @@ export function assessManifestCoverage(
 
   const root = parseInputAsJson(rawTrivyOutput);
   const results = asArray(getProp(root, 'Results'));
-  /** Type → the directories its Results name. */
-  const dirsByType = new Map<string, Set<string>>();
+  /** Type → the Targets its Results name, `/`-separated. */
+  const targetsByType = new Map<string, Set<string>>();
   for (const result of results) {
     const type = getString(result, 'Type');
     const target = getString(result, 'Target');
     if (type === undefined || target === undefined) continue;
-    const set = dirsByType.get(type) ?? new Set<string>();
-    set.add(dirOf(target));
-    dirsByType.set(type, set);
+    const set = targetsByType.get(type) ?? new Set<string>();
+    set.add(posixPath(target));
+    targetsByType.set(type, set);
   }
-  const resultDirs = (eco: EcosystemManifest): Set<string> => {
-    const out = new Set<string>();
-    for (const t of eco.trivyTypes) for (const d of dirsByType.get(t) ?? []) out.add(d);
+  const resultsOf = (eco: EcosystemManifest): EcoResults => {
+    const out: EcoResults = { targets: new Set(), dirs: new Set() };
+    for (const t of eco.trivyTypes) {
+      for (const target of targetsByType.get(t) ?? []) {
+        out.targets.add(target);
+        out.dirs.add(dirOf(target));
+      }
+    }
     return out;
   };
   const abs = (rel: string): string => (rel === '' ? projectPath : join(projectPath, ...rel.split('/')));
 
-  const covered = (eco: EcosystemManifest, dir: string, dirs: Set<string>): boolean => {
-    if (dirs.has(dir)) return true;
+  const covered = (m: FoundManifest, found: EcoResults): boolean => {
+    const readBy = m.eco.readBy?.(m.rel.slice(m.rel.lastIndexOf('/') + 1));
+    const resultIn = (dir: string): boolean =>
+      readBy === undefined ? found.dirs.has(dir) : readBy.some((name) => found.targets.has(dir === '' ? name : `${dir}/${name}`));
+    if (resultIn(m.dir)) return true;
     // Ancestors, nearest first: a workspace root with a Result that declares this directory.
-    const segments = dir === '' ? [] : dir.split('/');
+    const segments = m.dir === '' ? [] : m.dir.split('/');
     for (let n = segments.length - 1; n >= 0; n--) {
       const ancestor = segments.slice(0, n).join('/');
-      if (!dirs.has(ancestor)) continue;
-      const decl = workspaceOf(reader, abs(ancestor), eco.ecosystem);
+      if (!resultIn(ancestor)) continue;
+      const decl = workspaceOf(reader, abs(ancestor), m.eco.ecosystem);
       if (decl !== null && declaredMember(decl, segments.slice(n).join('/'))) return true;
     }
     return false;
@@ -1015,7 +1065,7 @@ export function assessManifestCoverage(
 
   const gapFiles = new Map<string, string[]>();
   const devOnlyFiles = new Map<string, string[]>();
-  const dirsOf = new Map<string, Set<string>>();
+  const resultsByEcosystem = new Map<string, EcoResults>();
   const push = (m: Map<string, string[]>, k: string, v: string): void => {
     const list = m.get(k);
     if (list === undefined) m.set(k, [v]);
@@ -1023,12 +1073,12 @@ export function assessManifestCoverage(
   };
   for (const m of walked.found) {
     if (m.eco.declaresNothing?.(reader, m.abs) ?? false) continue;
-    let dirs = dirsOf.get(m.eco.ecosystem);
-    if (dirs === undefined) {
-      dirs = resultDirs(m.eco);
-      dirsOf.set(m.eco.ecosystem, dirs);
+    let found = resultsByEcosystem.get(m.eco.ecosystem);
+    if (found === undefined) {
+      found = resultsOf(m.eco);
+      resultsByEcosystem.set(m.eco.ecosystem, found);
     }
-    if (covered(m.eco, m.dir, dirs)) continue;
+    if (covered(m, found)) continue;
     push(gapFiles, m.eco.ecosystem, m.rel);
     if ((m.eco.declaresOnlyDev?.(reader, m.abs) ?? false) && hasLockFile(m.eco, m.dir)) push(devOnlyFiles, m.eco.ecosystem, m.rel);
   }

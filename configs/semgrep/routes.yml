@@ -952,6 +952,12 @@ rules:
   # gin's `r.Group("/api/v1")` has behaved this way for as long as that rule has
   # existed. It is recorded here rather than fixed because the fix is a Go mount
   # resolver, not a rule.
+  #
+  # The path must START with `/`: chi panics on a pattern that does not
+  # ("routing pattern must begin with '/'"), so the guard costs no real route,
+  # and a bare quote let the standard library's client in —
+  # `http.Post("https://api.x/v1", "application/json", body)` was reported as
+  # a chi POST route at medium confidence (review 3.6.1, Semgrep 1.182.0).
   - id: guardian-route-go-chi
     languages: [go]
     severity: INFO
@@ -967,7 +973,7 @@ rules:
           regex: ^(Get|Post|Put|Patch|Delete|Options|Head)$
       - metavariable-regex:
           metavariable: $PATH
-          regex: ^["`]
+          regex: ^["`]/
       - pattern-not: $R.$METHOD($PATH)
       - pattern-not: $R.$METHOD($PATH, nil)
 
@@ -1264,6 +1270,16 @@ rules:
   # literal it bound by name, so recovery is "the span is the value" and both
   # versions agree. Measured across all four forms of all six annotations,
   # reordered case included.
+  #
+  # `guardian_class_prefix: always` on the six path rules (review of 3.6.0):
+  # Spring joins a class-level @RequestMapping to every method mapping, so
+  # `@GetMapping("/list")` under `@RequestMapping("/api/orders")` is served at
+  # `/api/orders/list`. A rule focused on the method's path cannot bind the
+  # class's, so the route keeps the path it names and is flagged partial
+  # (extract.ts CLASS_PREFIX_KEY) instead of being presented as a resolved URL
+  # the probes downstream would then send requests to. The ASP.NET attribute
+  # rules carry `unless-rooted`: there a method path starting with `/` or `~/`
+  # ignores the class's [Route].
   - id: guardian-route-spring-get
     languages: [java]
     severity: INFO
@@ -1274,6 +1290,7 @@ rules:
       confidence: medium
       method: GET
       guardian_focus: path
+      guardian_class_prefix: always
     patterns:
       - pattern-either:
           - pattern: "@GetMapping($PATH)"
@@ -1291,6 +1308,7 @@ rules:
       confidence: medium
       method: POST
       guardian_focus: path
+      guardian_class_prefix: always
     patterns:
       - pattern-either:
           - pattern: "@PostMapping($PATH)"
@@ -1308,6 +1326,7 @@ rules:
       confidence: medium
       method: PUT
       guardian_focus: path
+      guardian_class_prefix: always
     patterns:
       - pattern-either:
           - pattern: "@PutMapping($PATH)"
@@ -1325,6 +1344,7 @@ rules:
       confidence: medium
       method: PATCH
       guardian_focus: path
+      guardian_class_prefix: always
     patterns:
       - pattern-either:
           - pattern: "@PatchMapping($PATH)"
@@ -1342,6 +1362,7 @@ rules:
       confidence: medium
       method: DELETE
       guardian_focus: path
+      guardian_class_prefix: always
     patterns:
       - pattern-either:
           - pattern: "@DeleteMapping($PATH)"
@@ -1358,6 +1379,7 @@ rules:
       framework: spring
       confidence: medium
       guardian_focus: path
+      guardian_class_prefix: always
     patterns:
       - pattern-either:
           - pattern: "@RequestMapping($PATH)"
@@ -1541,6 +1563,7 @@ rules:
       confidence: medium
       method: GET
       guardian_focus: path
+      guardian_class_prefix: unless-rooted
     patterns:
       - pattern-either:
           - pattern: |
@@ -1562,6 +1585,7 @@ rules:
       confidence: medium
       method: POST
       guardian_focus: path
+      guardian_class_prefix: unless-rooted
     patterns:
       - pattern-either:
           - pattern: |
@@ -1583,6 +1607,7 @@ rules:
       confidence: medium
       method: PUT
       guardian_focus: path
+      guardian_class_prefix: unless-rooted
     patterns:
       - pattern-either:
           - pattern: |
@@ -1604,6 +1629,7 @@ rules:
       confidence: medium
       method: PATCH
       guardian_focus: path
+      guardian_class_prefix: unless-rooted
     patterns:
       - pattern-either:
           - pattern: |
@@ -1625,6 +1651,7 @@ rules:
       confidence: medium
       method: DELETE
       guardian_focus: path
+      guardian_class_prefix: unless-rooted
     patterns:
       - pattern-either:
           - pattern: |

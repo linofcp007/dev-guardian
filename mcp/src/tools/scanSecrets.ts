@@ -24,7 +24,9 @@
  * when?"). It is restricted to `--all`, `<ref>..<ref>` and `--since=<date>`
  * and every ref is resolved to its commit id before gitleaks sees it — the
  * resolved form is also what the cache key holds, so a moved branch is a new
- * scan rather than a stale hit.
+ * scan rather than a stale hit. A log_opts that narrows the walk (a range, a
+ * `--since=`) records the run as scoped (`meta.scope.kind: 'log_opts'`), so
+ * it never answers for the secrets outside its window.
  *
  * `scope` (`platform/scope.ts`) is the general form of the same question —
  * `/guardian-prepush`, `-branch`, `-since`, `-diff`: the history pass reads
@@ -125,6 +127,21 @@ const scanSecrets = makeScanTool({
         h === null ? null : 'base' in h ? h : { logOpts: (await resolveLogOpts(ctx.projectPath, h.logOpts)) ?? h.logOpts };
       scope = { kind: 'scoped', history, files: ctx.scope.contentFiles };
     }
+    // A log_opts that narrows the history (anything but `--all`, which is the
+    // whole walk) is a scoped run, recorded as `scope.since` is: its silence
+    // about the commits outside its window is not evidence. Recorded as a
+    // whole-project scan it became the secrets slot's source at coverage
+    // full, and every secret found before the window left the open set.
+    const narrowed = logOpts !== undefined && ctx.scope === null && logOpts.split(' ').some((t) => t !== '--all');
+    const scoped: Pick<ScannerInvocation, 'extras' | 'warnings'> = narrowed
+      ? {
+          extras: { scope: { kind: 'log_opts', log_opts: logOpts } },
+          warnings: [
+            `log_opts "${logOpts}" narrowed the history pass: the secrets an earlier full scan found outside it stay ` +
+              'open, and this run is never a baseline.',
+          ],
+        }
+      : {};
     const verify = input.verify_live === true;
     // Offline, nothing is captured: a raw value that cannot be sent is not read.
     const offline = verify && networkDisabled();
@@ -145,6 +162,7 @@ const scanSecrets = makeScanTool({
       missing_tools: scan.missing_tools,
       parser_inputs: scan.parser_inputs,
       report_paths: [reportDir],
+      ...scoped,
     };
     if (!verify) return invocation;
     if (scan.cancelled) {
@@ -164,8 +182,8 @@ const scanSecrets = makeScanTool({
     return {
       ...invocation,
       parser_inputs: verified.parser_inputs,
-      warnings: verified.warnings,
-      extras: { secret_verification: verified.summary },
+      warnings: [...(scoped.warnings ?? []), ...verified.warnings],
+      extras: { ...scoped.extras, secret_verification: verified.summary },
     };
   },
 });

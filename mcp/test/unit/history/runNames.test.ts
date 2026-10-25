@@ -106,6 +106,8 @@ function bookkeepingNames(): string[] {
     // gosec's, govulncheck's, shellcheck's, cppcheck's, Psalm's, detekt's, RuboCop's and SpotBugs' passes, and the
     // Go, PHP, Java and Ruby runtimes' gaps.
     ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK|PSALM|PHP_RUNTIME|DETEKT|RUBOCOP|SPOTBUGS|JAVA_RUNTIME|RUBY_RUNTIME)\s*=\s*'([^']+)'/g),
+    // A staged scope's files changed again since `git add`: `export const STAGED_CONTENT_GAP = 'staged-content'`.
+    ...collect(/export const STAGED_CONTENT_GAP\s*=\s*'([^']+)'/g),
     // judgeTrivyFs' walk gap: `export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk'`.
     ...collect(/export const TRIVY_[A-Z_]+_GAP\s*=\s*'([^']+)'/g),
     // audit_executive: one entry per sub-tool.
@@ -195,6 +197,9 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
   'tools/reviewPr.ts:...scoped.missing':
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
+  'tools/complianceCheck.ts:...judged.missing':
+    "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
+  'tools/scanToolFactory.ts:STAGED_CONTENT_GAP': 'the STAGED_CONTENT_GAP constant (platform/scope.ts)',
   'tools/scanWordpress.ts:...judged.missing':
     "runners/trivyRun.ts#judgeTrivyFs' `missing`: 'trivy', or `trivy:${g.ecosystem}` per MANIFEST_ECOSYSTEMS entry",
   'runners/trivyConfig.ts:name': "judgeTrivyConfig's `name: '…'` ('trivy-config', 'trivy-dockerfile')",

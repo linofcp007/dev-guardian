@@ -13,7 +13,7 @@
 
 import { computeFingerprint } from '../fingerprint/findingFingerprint.js';
 import type { Finding, RouteRecord, Severity } from '../types.js';
-import { CORS_PROBE_ORIGIN, substituteParams } from './plan.js';
+import { CORS_PROBE_ORIGIN, REDIRECT_PROBE_PARAMS, REDIRECT_PROBE_TARGET, substituteParams } from './plan.js';
 import type { DastCheck, PlanOutcome, ProbeRequest, ProbeResult } from './types.js';
 
 export interface AnalyzeInput {
@@ -403,15 +403,21 @@ function checkCors(input: AnalyzeInput, findings: DastFinding[]): void {
 }
 
 /**
- * `Location` is resolved against the request URL before comparison — a
- * relative value is same-origin by construction and must not fire. An
- * unparseable `Location` is not a finding either; it is not evidence of
- * anything. Manual redirects (`probe.ts` never follows one) are what makes
- * this observable at all.
+ * Only the redirect probe can show an OPEN redirect: it offers
+ * `REDIRECT_PROBE_TARGET` in the usual redirect parameters (`plan.ts`), and
+ * a `Location` on that host proves the destination is taken from the
+ * request. Any other off-origin `Location` — an http→https upgrade, a www
+ * canonicalisation, an SSO login — is a fixed redirect no attacker chose,
+ * and read as "open redirect" every one of them was a medium finding
+ * (review of 3.6, finding 6). `Location` is resolved against the request
+ * URL first (a protocol-relative `//host/x` included); an unparseable one is
+ * evidence of nothing. Manual redirects (`probe.ts` never follows one) are
+ * what makes this observable at all.
  */
 function checkOpenRedirect(input: AnalyzeInput, findings: DastFinding[]): void {
+  const probeHost = new URL(REDIRECT_PROBE_TARGET).hostname;
   for (const r of input.results) {
-    if (r.request.variant !== 'anonymous' || r.outcome !== 'completed' || r.status === null) continue;
+    if (r.request.variant !== 'redirect' || r.outcome !== 'completed' || r.status === null) continue;
     if (r.status < 300 || r.status >= 400) continue;
     const location = r.headers['location'];
     if (location === undefined || location.trim() === '') continue;
@@ -422,16 +428,17 @@ function checkOpenRedirect(input: AnalyzeInput, findings: DastFinding[]): void {
     } catch {
       continue;
     }
-    if (resolved.origin === input.origin) continue;
+    if (resolved.hostname !== probeHost) continue;
 
     const route = routeFor(input.plan.routes, r.request.route_index);
     findings.push(buildFinding({
       check: 'open_redirect',
       severity: 'medium',
-      title: 'Redirect leaves the target origin',
+      title: 'Redirect destination is taken from the request',
       message:
-        `${r.status} on ${r.request.path} redirects to ${resolved.origin}, outside the ` +
-        `target origin.`,
+        `${r.status} on ${r.request.path} redirects to ${resolved.origin}, the destination the probe ` +
+        `offered in a redirect parameter (${REDIRECT_PROBE_PARAMS.slice(0, 4).join(', ')}, …) — taken from ` +
+        'the request, so a link to this route can send its visitor anywhere.',
       route,
       request: r.request,
     }));

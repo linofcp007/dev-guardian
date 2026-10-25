@@ -42,6 +42,7 @@ import {
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
+import { makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
 import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
@@ -65,6 +66,7 @@ import {
   PROJECT_TRIVYIGNORE,
   runTrivy as spawnTrivy,
   TRIVY_MANIFEST_WALK_GAP,
+  trivyFailureReason,
   withHonoured,
   type TrivyFsJudgement,
 } from '../runners/trivyRun.js';
@@ -154,6 +156,8 @@ const reviewPr = makeScanTool({
     let tree: MaterialisedTree | null = null;
     let cleanupNote: string | null = null;
     let projectLanguages: ProjectLanguages | null = null;
+    // The lines the findings' identities hash, from the tree the scanners read.
+    let readSource: ScannerInvocation['readSource'];
     try {
       let scanRoot = ctx.projectPath;
       let unavailable: string | null = null;
@@ -187,6 +191,10 @@ const reviewPr = makeScanTool({
         if (touched.some(isManifest)) out.tools_run.push({ name: 'trivy', status: 'failed', reason: unavailable });
       } else {
         const present = changed.filter((f) => isFileOnDisk(join(scanRoot, f)));
+        // Read before the checkout is removed below: the identities are
+        // computed after this returns, and from the working tree they hashed
+        // another version of each file, or none.
+        if (tree !== null) readSource = snapshotSources(scanRoot, present);
         const submodules = await gitlinksAmong(ctx.projectPath, head, changed);
         await runSemgrep(ctx, input, out, { scanRoot, reportDir, changed, present, where, submodules });
         if (!out.cancelled) await runBandit(ctx, out, { scanRoot, reportDir, files: present.filter(isPython) });
@@ -247,6 +255,7 @@ const reviewPr = makeScanTool({
       missing_tools: [...new Set(out.missing_tools)],
       parser_inputs: out.parser_inputs,
       report_paths: [reportDir],
+      ...(readSource !== undefined ? { readSource } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
       extras: {
         base_sha: base,
@@ -277,6 +286,28 @@ interface Collected {
   manifestGaps?: TrivyFsJudgement['gaps'];
   /** Trivy's manifest gaps the diff did not touch: the project's, noted, never the review's. */
   preexistingGaps?: TrivyFsJudgement['gaps'];
+}
+
+/** The most a head checkout's snapshot holds; a file past it reads as unreadable (the snippet stands in). */
+const SOURCE_SNAPSHOT_MAX_CHARS = 64 * 1024 * 1024;
+
+/**
+ * The text of `files` (project-relative) under `root`, held in memory for
+ * the identities the factory computes once `root` — a head checkout — is
+ * gone: a reader over them, null for a file it does not hold.
+ */
+function snapshotSources(root: string, files: readonly string[]): (filePath: string) => string | null {
+  const read = makeSourceReader(root);
+  const texts = new Map<string, string>();
+  let total = 0;
+  for (const file of files) {
+    const text = read(file);
+    if (text === null) continue;
+    if (total + text.length > SOURCE_SNAPSHOT_MAX_CHARS) break;
+    total += text.length;
+    texts.set(file, text);
+  }
+  return (filePath) => texts.get(filePath.replace(/\\/g, '/')) ?? null;
 }
 
 const isPython = (f: string): boolean => f.toLowerCase().endsWith('.py');
@@ -499,7 +530,7 @@ async function runTrivy(
         {
           name: 'trivy',
           status: 'failed',
-          reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
+          reason: raw === null ? `no report: ${trivyFailureReason(run)}` : trivyFailureReason(run),
         },
         run,
       ),

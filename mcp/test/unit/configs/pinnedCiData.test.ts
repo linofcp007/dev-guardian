@@ -28,7 +28,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { PINNED_RELEASES, PSALM_PHAR_SHA256, PSALM_VERSION, TRIVY_INSTALL_TAG } from '../../../src/runners/installCatalog.js';
+import { ACTIONLINT_VERSION, PINNED_RELEASES, PSALM_PHAR_SHA256, PSALM_VERSION, TRIVY_INSTALL_TAG } from '../../../src/runners/installCatalog.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 /** configs -> unit -> test -> mcp -> repo root. */
@@ -124,6 +124,11 @@ describe('configs/ci/pinned.json: scanners with a downloaded binary', () => {
       linux_amd64_sha256: PSALM_PHAR_SHA256,
     });
     expect(pinned.scanners['psalm']?.archive_member).toBeUndefined();
+  });
+
+  it("actionlint is the tag installCatalog.ts's Linux go install names", () => {
+    expect(pinned.scanners['actionlint']?.version).toBe(ACTIONLINT_VERSION);
+    expect(pinned.scanners['actionlint']?.linux_amd64_url).toContain(`/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz`);
   });
 
   it("trivy's version matches installCatalog.ts's TRIVY_INSTALL_TAG (single source of truth, enforced)", () => {

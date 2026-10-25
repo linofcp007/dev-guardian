@@ -93,12 +93,14 @@ import {
   describeSubmodules,
   git,
   gitlinksAmong,
+  gitUnanswered,
   initialisedSubmodules,
   repoState,
   resolveCommit,
   shallowBoundary,
   SHALLOW_UNDETERMINED,
   uncommittedFiles,
+  withoutTreeAttributes,
 } from './git.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
@@ -310,13 +312,11 @@ async function noteSubmodules(
   if (range === undefined) {
     submodules = await initialisedSubmodules(projectPath);
   } else {
-    let changed: string[];
-    try {
-      changed = await changedFiles(projectPath, range.base, range.head);
-    } catch {
-      changed = [];
-    }
-    submodules = await gitlinksAmong(projectPath, range.head, changed);
+    // A diff git could not give says nothing about the submodules it bumped: named, never none.
+    submodules = await changedFiles(projectPath, range.base, range.head).then(
+      (changed) => gitlinksAmong(projectPath, range.head, changed),
+      (e: unknown) => [gitUnanswered(e instanceof Error ? e.message : String(e))],
+    );
   }
   // One the project's .guardianignore excludes is not its to scan (round 4, item 6).
   submodules = submodulesNotIgnored(projectPath, submodules, guardianIgnoreFrom);
@@ -414,7 +414,11 @@ async function historyPass(
     command: 'gitleaks',
     args,
     cwd: opts.projectPath,
-    env: opts.env,
+    // `git log -p` shows every commit's change as the WORKING TREE's
+    // `.gitattributes` says: a pull request adding `config.js binary` (or
+    // `* -diff`) beside a key had its key read in no commit (measured,
+    // gitleaks 8.30.1) — so none of the tree's are applied.
+    env: await withoutTreeAttributes(opts.projectPath, opts.env),
     signal: opts.signal,
     onLog: opts.onLog,
   });
@@ -893,13 +897,25 @@ function short(sha: string): string {
  * gitleaks' parser, with where the secret was found written into each
  * finding, and history paths (relative to the REPOSITORY root) re-expressed
  * relative to the project when the project is a subdirectory of it.
+ *
+ * A history finding outside that subdirectory is left out: the history pass
+ * reads the whole repository (`git log --all`, no pathspec), and a secret a
+ * commit put in a sibling directory — `api/creds.txt` for project `web/` —
+ * was stored, prefix and all, as this project's own `api/creds.txt`. The
+ * working-tree pass is the project's alone already (`git.ts`, `--relative`).
  */
 function locatedParser(location: SecretLocation, projectPrefix: string): ScannerParser {
+  const inProject = (f: Finding): boolean =>
+    location !== 'history' ||
+    projectPrefix === '' ||
+    f.file_path === undefined ||
+    f.file_path === '' ||
+    f.file_path.replace(/\\/g, '/').startsWith(`${projectPrefix}/`);
   return {
     name: gitleaksParser.name,
     parse(input, ctx) {
       const out = gitleaksParser.parse(input, ctx);
-      return { findings: out.findings.map((f) => locate(f, location, projectPrefix)), cves: out.cves };
+      return { findings: out.findings.filter(inProject).map((f) => locate(f, location, projectPrefix)), cves: out.cves };
     },
   };
 }

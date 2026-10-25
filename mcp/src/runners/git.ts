@@ -54,10 +54,11 @@ export interface GitResult {
 /**
  * `git -C cwd …args`, never throwing; a missing git reads as exit 127. A
  * repository whose git configuration could not be read safely is not run at
- * all: exit 126, with the reason in stderr.
+ * all: exit 126, with the reason in stderr. `env`: the environment git runs
+ * with (this process's by default).
  */
-export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<GitResult> {
-  const r = await execGit(cwd, args, { timeoutMs });
+export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS, env?: NodeJS.ProcessEnv): Promise<GitResult> {
+  const r = await execGit(cwd, args, { timeoutMs, ...(env !== undefined ? { env } : {}) });
   const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
   if (r.failure?.code === 'refused') return { exitCode: 126, stdout: '', stderr: r.stderr, ...notApplied };
   // No exit code. 127 — the shell's "command not found" — only when git is not
@@ -157,13 +158,43 @@ export async function shallowBoundary(cwd: string): Promise<string[] | null> {
 /** A shallow file lists one commit per line: 16 MiB is some 250 000 boundary commits. */
 const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 
+const UNANSWERED_PREFIX = '(git could not answer: ';
+
+/**
+ * The answer of a coverage query git could not give (review 3.6.1, finding
+ * 6): {@link initialisedSubmodules}, {@link gitlinksAmong} and
+ * {@link trackedGuardianOutput} answered `[]` on any failure — a timeout
+ * (124) or an index listing past the output cap included — and `[]` reads as
+ * "none": no submodule gap, no `.guardian/` gap. They answer this one entry
+ * instead, which every reader names as a gap (`describeSubmodules`, the
+ * Semgrep and gitleaks coverage gaps) and `.guardianignore` never excludes.
+ * Only "not a git repository" and a missing git are none: outside a
+ * repository git hides nothing from a scanner.
+ */
+function unanswered(r: GitResult): string[] | null {
+  if (r.exitCode === 0) return null;
+  if (r.exitCode === 127 || /not a git repository/i.test(r.stderr)) return [];
+  return [gitUnanswered(firstLine(r.stderr) || `exit ${String(r.exitCode)}`)];
+}
+
+/** The {@link isGitUnanswered} entry for a query that failed with `why`. */
+export function gitUnanswered(why: string): string {
+  return `${UNANSWERED_PREFIX}${why})`;
+}
+
+/** Whether an entry of those answers is {@link unanswered}'s, not a path. */
+export function isGitUnanswered(entry: string): boolean {
+  return entry.startsWith(UNANSWERED_PREFIX);
+}
+
 /**
  * The submodules under `cwd` that are initialised and hold content — the
  * index's gitlinks (mode 160000, one per `.gitmodules` entry that was
  * added) whose checkout directory is not empty (an uninitialised submodule
  * is an empty directory) — as `/`-separated paths relative to `cwd`,
  * sorted. Their files are in no listing a scanner of the superproject uses
- * (review M2). Empty outside a repository.
+ * (review M2). Empty outside a repository; one {@link isGitUnanswered} entry
+ * when git could not list the index.
  *
  * Read from `git ls-files --stage` (~30 ms) rather than `git submodule
  * status`, which spawns a shell and took ~770 ms per call on Windows
@@ -171,7 +202,8 @@ const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
  */
 export async function initialisedSubmodules(cwd: string): Promise<string[]> {
   const r = await git(cwd, ['ls-files', '-z', '--stage', '--', '.']);
-  if (r.exitCode !== 0) return [];
+  const failed = unanswered(r);
+  if (failed !== null) return failed;
   const out = new Set<string>();
   for (const entry of splitNul(r.stdout)) {
     // `<mode> <object> <stage>\t<path>`.
@@ -189,12 +221,13 @@ export async function initialisedSubmodules(cwd: string): Promise<string[]> {
  * The submodules (gitlinks, mode 160000) among `paths` in the tree of `rev`,
  * relative to `cwd` — what a review's diff bumped: those commits' files are
  * in no range of the superproject, whether or not anything is checked out.
- * Empty when git cannot answer.
+ * One {@link isGitUnanswered} entry when git cannot answer.
  */
 export async function gitlinksAmong(cwd: string, rev: string, paths: readonly string[]): Promise<string[]> {
   if (paths.length === 0) return [];
   const r = await git(cwd, ['ls-tree', '-r', '-z', rev, '--', '.']);
-  if (r.exitCode !== 0) return [];
+  const failed = unanswered(r);
+  if (failed !== null) return failed;
   const wanted = new Set(paths.map((p) => p.split('\\').join('/')));
   const out: string[] = [];
   for (const entry of splitNul(r.stdout)) {
@@ -212,18 +245,30 @@ export async function gitlinksAmong(cwd: string, rev: string, paths: readonly st
  * (`platform/guardianOutput.ts`) of `cwd` — relative to it, sorted. None is
  * ever written there by dev-guardian alone (that output is git-ignored), and
  * a scan of the project's directory leaves those paths out (review 10,
- * finding 1). Empty outside a repository, or when git cannot answer.
+ * finding 1). Empty outside a repository; one {@link isGitUnanswered} entry
+ * when git cannot answer.
  */
 export async function trackedGuardianOutput(cwd: string): Promise<string[]> {
   const r = await git(cwd, ['ls-files', '-z', '--cached', '--', ...ROOT_OUTPUT_PATHS.map((p) => `:(literal)${p}`)]);
-  if (r.exitCode !== 0) return [];
+  const failed = unanswered(r);
+  if (failed !== null) return failed;
   return [...new Set(splitNul(r.stdout).map((p) => p.split('\\').join('/')))].sort();
 }
 
-/** `submodule contents not scanned: a, b` — the first few, then "and N more". */
+/**
+ * `submodule contents not scanned: a, b` — the first few, then "and N more";
+ * an {@link isGitUnanswered} entry as what it is.
+ */
 export function describeSubmodules(paths: readonly string[]): string {
-  const shown = paths.slice(0, 5).join(', ');
-  return `submodule contents not scanned: ${shown}${paths.length > 5 ? ` and ${paths.length - 5} more` : ''}`;
+  const unknown = paths.find(isGitUnanswered);
+  const named = paths.filter((p) => !isGitUnanswered(p));
+  const parts: string[] = [];
+  if (unknown !== undefined) parts.push(`git could not say which submodules hold content ${unknown} — their files would not have been scanned`);
+  if (named.length > 0) {
+    const shown = named.slice(0, 5).join(', ');
+    parts.push(`submodule contents not scanned: ${shown}${named.length > 5 ? ` and ${named.length - 5} more` : ''}`);
+  }
+  return parts.join('; ');
 }
 
 /** The full commit id `ref` names, or null when it names no commit. */
@@ -312,6 +357,26 @@ export async function historyState(cwd: string): Promise<Record<string, string>>
   return { head, refs: createHash('sha256').update(refs.stdout).digest('hex') };
 }
 
+/**
+ * `env`, with `GIT_ATTR_SOURCE` at the empty tree (git 2.40 and later; an
+ * older git ignores it): a git started with it reads the history as
+ * committed — no `.gitattributes` of the working tree, which git otherwise
+ * applies to every commit's diff, only the user's own and
+ * `$GIT_DIR/info/attributes` (measured, git 2.56; the object need not be
+ * stored). A commit adding `config.js binary` made its own change "Binary
+ * files differ" to `git log -p`. The empty tree is SHA-1's when git cannot
+ * name the object format: a wrong id is no silent fallback — the git it
+ * reaches refuses to run ("bad --attr-source or GIT_ATTR_SOURCE").
+ */
+export async function withoutTreeAttributes(cwd: string, env: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+  const r = await git(cwd, ['rev-parse', '--show-object-format']);
+  const emptyTree =
+    r.exitCode === 0 && r.stdout.trim() === 'sha256'
+      ? '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321'
+      : '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+  return { ...env, GIT_ATTR_SOURCE: emptyTree };
+}
+
 /** The project's path inside its repository, `/`-separated with a trailing `/` ('' at the root). */
 export async function showPrefix(cwd: string): Promise<string> {
   const r = await git(cwd, ['rev-parse', '--show-prefix']);
@@ -370,7 +435,12 @@ export async function materialiseCommit(cwd: string, sha: string): Promise<Mater
     } catch (e) {
       problems.push(e instanceof Error ? e.message : String(e));
     }
-    await git(cwd, ['worktree', 'prune']);
+    // Its own registration only, never `git worktree prune`: with no
+    // --expire it drops the admin entry of EVERY unlocked worktree whose
+    // directory is missing at that moment — the user's own, on a removable
+    // drive or a share that dropped (review of 3.6.0, measured). `remove
+    // --force` deletes this one's entry even once its directory is gone.
+    if (rm.exitCode !== 0) await git(cwd, ['worktree', 'remove', '--force', root]);
     return problems.length > 0 ? `temporary checkout ${root} not fully removed: ${problems.join('; ')}` : null;
   };
   if (r.exitCode !== 0) {

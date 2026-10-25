@@ -54,7 +54,8 @@
  * `secret` + its rule id, plus gitleaks' commit locator when it has one —
  * nothing derived from the value, so rotating the secret in place keeps the
  * identity, and the occurrence alone keeps two secrets of one rule in one
- * file apart. For every other finding, the text read from disk is hashed and
+ * file apart — with their count, so a secret added above another never takes
+ * its identity, and a suppression with it ({@link sharedSecretCount}). For every other finding, the text read from disk is hashed and
  * dropped: never written to the finding, the database or a response.
  *
  * `fingerprint` is untouched and stays each row's per-scan key. Everything
@@ -194,13 +195,14 @@ function identitiesOf<T extends IdentitySubject & { fingerprint: string }>(
         a.index - b.index,
     );
     const byFingerprint = new Map<string, string>();
+    const together = sharedSecretCount(members.map((m) => m.finding));
     let occurrence = 0;
     for (const m of members) {
       let identity = byFingerprint.get(m.finding.fingerprint);
       if (identity === undefined) {
-        identity = sha256(
-          JSON.stringify([IDENTITY_VERSION, m.tool, m.rule, m.path, m.contentKey, occurrence]),
-        );
+        const recipe: unknown[] = [IDENTITY_VERSION, m.tool, m.rule, m.path, m.contentKey, occurrence];
+        if (together !== null) recipe.push({ secrets: together });
+        identity = sha256(JSON.stringify(recipe));
         occurrence += 1;
         byFingerprint.set(m.finding.fingerprint, identity);
       }
@@ -208,6 +210,31 @@ function identitiesOf<T extends IdentitySubject & { fingerprint: string }>(
     }
   }
   return identities;
+}
+
+/**
+ * How many secrets one (tool, rule, path) credential group holds, when that
+ * is more than one and the group can still grow; else null, and the identity
+ * is the plain recipe.
+ *
+ * A credential's identity holds nothing of its value (the module comment),
+ * so its occurrence — its place by line — is all that tells two secrets of
+ * one rule in one file apart. Counted by line alone, a real key added ABOVE
+ * a suppressed fixture key took occurrence 0, the identity the suppression
+ * named, and was hidden in its place. With the count in the recipe, adding
+ * or removing a secret of the group re-keys every secret in it: a
+ * suppression of one of them lapses and it is shown again — the safe
+ * direction — and none moves onto the newcomer. A lone secret keeps the plain
+ * recipe, and so its identity through a line shift or a rotation in place.
+ * A group whose secrets one commit holds (gitleaks' history locator) is
+ * fixed for good, nothing can join it, and it keeps the plain recipe too.
+ */
+function sharedSecretCount(group: ReadonlyArray<IdentitySubject & { fingerprint: string }>): number | null {
+  const first = group[0];
+  if (first === undefined || !isCredentialFinding(first) || isHistoryLocator(first)) return null;
+  // A repeated fingerprint is one finding (see `assignIdentities`).
+  const secrets = new Set(group.map((f) => f.fingerprint)).size;
+  return secrets > 1 ? secrets : null;
 }
 
 /** A stored finding row, as {@link rekeyStoredIdentities} re-keys it. */

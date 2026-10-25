@@ -110,6 +110,16 @@ beforeAll(async () => {
       res.end('{"ok":true}');
       return;
     }
+    // A session the target hands out: its cookie must never reach the evidence.
+    if (url === '/session') {
+      res.writeHead(200, {
+        'content-type': 'application/json',
+        'set-cookie': ['sid=sess-9c41-never-stored; Path=/; HttpOnly; Expires=Wed, 21 Oct 2037 07:28:00 GMT', 'csrf=csrf-77ab-never-stored; Path=/'],
+        'authorization': 'Bearer echoed-4e2d-never-stored',
+      });
+      res.end('{"ok":true}');
+      return;
+    }
     if (url === '/login' && req.method === 'POST') {
       loginHits += 1;
       const hit = loginHits;
@@ -715,6 +725,21 @@ describe('scan_dast credentials', () => {
     // implementation that simply never wrote request headers would pass every
     // `not.toContain` above while proving nothing.
     expect(evidence).toContain('«redacted»');
+  });
+
+  it("never stores the target's session cookies, or an Authorization it echoes, in the evidence", async () => {
+    // Review of 3.6, finding 10: response headers were written verbatim.
+    seedSnapshot([route('/session', { auth_hint: 'required' })]);
+    const r = expectOk(await run({ base_url: origin }));
+    const evidence = evidenceFiles(r.evidence_dir).map((f) => readFileSync(join(r.evidence_dir, f), 'utf8')).join('\n');
+    expect(evidence).toContain('set-cookie');
+    for (const value of ['sess-9c41-never-stored', 'csrf-77ab-never-stored', 'echoed-4e2d-never-stored']) {
+      expect(evidence, value).not.toContain(value);
+    }
+    // The cookie's name and attributes stay: they are what a reader checks.
+    // (The probe keeps the last Set-Cookie of a response — fetch's Headers
+    // yields each one separately.)
+    expect(evidence).toContain('csrf=«redacted»; Path=/');
   });
 
   it('reads auth_header_env from the environment and still redacts it', async () => {

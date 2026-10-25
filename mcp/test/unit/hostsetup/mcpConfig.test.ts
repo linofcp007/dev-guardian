@@ -186,6 +186,16 @@ describe('mergeJsonConfig', () => {
     expect(JSON.parse(contentOrThrow(r)).servers[SERVER_ID].type).toBe('stdio');
   });
 
+  // Windows PowerShell's `Set-Content -Encoding UTF8` and Notepad's "UTF-8
+  // with BOM" write one; JSON.parse refused the file and nothing was written.
+  it('reads a config that starts with a byte-order mark, and keeps the mark', () => {
+    const r = mergeJsonConfig('﻿{"mcpServers":{"other":{"command":"x"}}}', 'mcpServers', buildServerEntry(SRV, false), false);
+    expect(r.status).toBe('merged');
+    const content = contentOrThrow(r);
+    expect(content.startsWith('﻿{')).toBe(true);
+    expect(JSON.parse(content.slice(1))).toMatchObject({ mcpServers: { other: { command: 'x' }, [SERVER_ID]: {} } });
+  });
+
   it('throws on malformed JSON instead of clobbering', () => {
     expect(() => mergeJsonConfig('{ not json', 'mcpServers', entry, false)).toThrow();
   });
@@ -359,6 +369,64 @@ describe('mergeTomlConfig', () => {
   // strips exactly the same characters (ECMAScript defines `\s` and
   // `String.prototype.trim` over the same WhiteSpace + LineTerminator set)
   // in one pass from the end.
+  // A heading is found by its KEYS, not its spelling: each of these is
+  // `[mcp_servers.dev-guardian]` to TOML (and to Codex), and each used to be
+  // missed — a fresh table appended beside it, "Cannot declare
+  // ('mcp_servers', 'dev-guardian') twice", and Codex could not load its
+  // configuration.
+  it.each([
+    ['spaces inside the brackets', '[ mcp_servers.dev-guardian ]'],
+    ['spaces around the dot', '[mcp_servers . dev-guardian]'],
+    ['a quoted key', '[mcp_servers."dev-guardian"]'],
+    ['a literal-quoted key', "[mcp_servers.'dev-guardian']"],
+    ['an indented heading', '  [mcp_servers.dev-guardian]'],
+    ['a heading with a comment after it', '[mcp_servers.dev-guardian] # ours'],
+  ])('%s is our table: needs_update, and force leaves one valid table', (_label, heading) => {
+    const existing = `[other]\nx = 1\n\n${heading}\ncommand = 'node'\nargs = ['/old.js']\n`;
+    expect(mergeTomlConfig(existing, entry, false).status).toBe('needs_update');
+    const content = contentOrThrow(mergeTomlConfig(existing, entry, true));
+    expect(content).not.toContain('/old.js');
+    expect(content).toContain('[other]\nx = 1');
+    assertParsesAsToml(content);
+  });
+
+  it('a file that starts with a byte-order mark: its first heading is still read', () => {
+    const existing = `﻿[mcp_servers.dev-guardian]\ncommand = 'node'\nargs = ['/old.js']\n`;
+    expect(mergeTomlConfig(existing, entry, false).status).toBe('needs_update');
+    const content = contentOrThrow(mergeTomlConfig(existing, entry, true));
+    expect(content).not.toContain('/old.js');
+    expect((content.match(/\[mcp_servers\.dev-guardian\]/g) ?? [])).toHaveLength(1);
+  });
+
+  // Dotted keys and inline tables define the same table without a heading of
+  // ours: appending one beside them is a second definition. Left untouched
+  // instead (the caller reports `failed`, as for JSON it cannot parse).
+  it.each([
+    ['a root dotted key', `mcp_servers.dev-guardian.command = 'node'\n`],
+    ['a dotted key under [mcp_servers]', `[mcp_servers]\ndev-guardian.command = 'node'\n`],
+    ['an inline table under [mcp_servers]', `[mcp_servers]\n"dev-guardian" = { command = 'node' }\n`],
+    ['a root inline table', `mcp_servers = { dev-guardian = { command = 'node' } }\n`],
+  ])('%s: never appended to — refused, whatever force says', (_label, existing) => {
+    for (const force of [false, true]) {
+      expect(() => mergeTomlConfig(existing, entry, force)).toThrow(/dotted keys or an inline table/);
+    }
+  });
+
+  it('a table that only mentions dev-guardian in a value or a comment is not ours', () => {
+    const existing = `[mcp_servers.other]\n# replaces dev-guardian\nargs = ["mcp_servers.dev-guardian"]\nnote = """\n[mcp_servers.dev-guardian]\n"""\n`;
+    const r = mergeTomlConfig(existing, entry, false);
+    expect(r.status).toBe('merged');
+    assertParsesAsToml(contentOrThrow(r));
+  });
+
+  it("the comments just above the next table are that table's: force keeps them", () => {
+    const existing = `[mcp_servers.dev-guardian]\ncommand = 'node'\nargs = ['/old.js']\n\n# my own server, keep it\n[mcp_servers.other]\ncommand = 'x'\n`;
+    const content = contentOrThrow(mergeTomlConfig(existing, entry, true));
+    expect(content).toContain('# my own server, keep it\n[mcp_servers.other]');
+    expect(content).not.toContain('/old.js');
+    assertParsesAsToml(content);
+  });
+
   it('stays linear on a long whitespace run in the user\'s own config when force strips our entry (no ReDoS)', () => {
     const withRun = (n: number): string => `[other]\nx = 1\n${' '.repeat(n)}\n# user comment\n\n[mcp_servers.dev-guardian]\ncommand = "node"\n`;
     const run = ' '.repeat(100_000);

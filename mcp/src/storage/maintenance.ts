@@ -24,7 +24,9 @@
  * `wp_vuln_check`) are counted apart from whole-project ones, and scans that
  * measured nothing (failed, cancelled, coverage `none`) apart from usable
  * ones: N of each, so neither pre-commit runs nor a run of broken scans can
- * push out the scan the open set reads. What
+ * push out the scan the open set reads. A `create_fix_pr` worktree re-scan
+ * its run did not get to delete goes once a day old, whatever its rank
+ * (`STRAY_WORKTREE_RESCAN_SQL`). What
  * refers to a scan, per the schema (migrations 001–005), and what happens to
  * it:
  *
@@ -237,6 +239,17 @@ const PROTECTED_SQL = `(
   OR id IN (${BASELINED_RUN_MEMBERS_SQL})
 )`;
 
+// A `create_fix_pr` re-scan left behind: the tool re-scans inside a
+// disposable worktree (`fixpr/worktree.ts`'s `WORKTREE_DIR_PREFIX`, wrapped
+// in `%` as `findingsRepo.ts` and `scansRepo.ts` inline it) and deletes the
+// row itself once read (`deleteScans`); a run that dies first leaves it.
+// Every worktree is a project_path of its own, so ranked per project such a
+// row was the newest of its partition for ever. Prunable whatever its rank
+// once a day old — a row that young may still be read by its own run, in
+// this process or another sharing the file. ISO strings compare as times.
+const STRAY_WORKTREE_RESCAN_SQL = `(project_path LIKE '%guardian-fixpr-wt-%'
+    AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day'))`;
+
 /**
  * Ranked newest-first within each (project, scan type, scoped?) — the same
  * `started_at DESC, rowid DESC` order every history query in scansRepo uses —
@@ -273,7 +286,7 @@ function prunableSql(candidates: number): string {
       : { partitions: '', ids: '' };
   return `
     SELECT id FROM (
-      SELECT id, status, meta, started_at, rowid AS rid,
+      SELECT id, status, meta, started_at, project_path, rowid AS rid,
              ROW_NUMBER() OVER (
                PARTITION BY project_path, scan_type, ${SCOPED_SQL}, ${USABLE_SQL}
                ORDER BY started_at DESC, rowid DESC
@@ -281,7 +294,7 @@ function prunableSql(candidates: number): string {
       FROM scans
       ${only.partitions}
     )
-    WHERE rn > ?
+    WHERE (rn > ? OR ${STRAY_WORKTREE_RESCAN_SQL})
       ${only.ids}
       AND NOT ${PROTECTED_SQL}
     ORDER BY started_at ASC, rid ASC

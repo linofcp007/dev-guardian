@@ -281,12 +281,23 @@ export const RUN_NAMES = {
   // compliance_check: its policy-document walk, and the RGPD Semgrep pack
   // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
   'policy-docs': scanner(),
+
+  // A `diff.staged` scope whose files changed again since `git add`
+  // (`platform/scope.ts#STAGED_CONTENT_GAP`): the scanners read those files'
+  // working-tree content, so what they report was measured — only not on the
+  // content the commit carries. A coverage gap, no finding of its own; the
+  // scan is scoped, so it never feeds the open set.
+  'staged-content': scanner(),
   'semgrep-rgpd': scanner('semgrep'),
 
   // scan_skill.
   'guardian-scanskill:patterns': scanner(SKILL_TOOL),
   'guardian-scanskill:yara': scanner(SKILL_TOOL),
   'guardian-scanskill:taint': scanner(SKILL_TOOL),
+  // The package past the walk's caps, and the files and directories it did
+  // not read: a finding in them is not re-measured.
+  'guardian-scanskill:walk': scanner(SKILL_TOOL),
+  'guardian-scanskill:unread': scanner(SKILL_TOOL),
   'osv.dev': scanner(SKILL_OSV),
 
   // audit_agent_config: its own static checks of the agent workspace config.

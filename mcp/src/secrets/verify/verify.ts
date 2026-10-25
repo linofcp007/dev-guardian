@@ -8,7 +8,9 @@
  *   - at most {@link DEFAULT_MAX_SECRETS} distinct secrets per scan — beyond
  *     that, `unknown` "not verified: per-scan limit", and nothing is sent;
  *   - {@link DEFAULT_TIMEOUT_MS} per request, body included;
- *   - `GUARDIAN_OFFLINE=1` sends nothing at all.
+ *   - `GUARDIAN_OFFLINE=1` sends nothing at all;
+ *   - a value that is not of its provider's token shape is skipped, never
+ *     sent (`SecretProvider.shape`): the rule id may be a project rule's.
  *
  * **The secret goes into one request's headers and nowhere else.** No reason
  * string is built from anything but constants, status numbers and a
@@ -83,6 +85,17 @@ export async function verifySecrets(
     const provider = providerForRule(c.rule);
     if (provider === undefined) {
       results[i] = skipped(null, `no verifier for rule ${c.rule}`);
+      return;
+    }
+    // The shape first: the rule id is the project's to name (its own
+    // .gitleaks.toml), so what it matched is sent only when it IS this
+    // provider's kind of token.
+    if (!provider.shape.test(c.secret)) {
+      results[i] = skipped(
+        provider,
+        `${provider.name}: the value does not have the shape of a ${provider.name} token (a project rule under the id ` +
+          `${c.rule}?) — not sent`,
+      );
       return;
     }
     if (c.secret.length === 0 || (provider.accepts !== undefined && !provider.accepts(c.secret))) {

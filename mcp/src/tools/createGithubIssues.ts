@@ -4,7 +4,7 @@
  *
  * Uses the developer's existing `gh` auth (`gh auth status`) — no API
  * keys handled by the server, no GitHub Actions involved, no cloud
- * spend. Idempotent: each issue's title carries the fingerprint, so
+ * spend. Idempotent: each issue's title carries the finding's identity, so
  * re-runs won't dupe (we skip if `gh issue list --search` returns a
  * match).
  *
@@ -45,6 +45,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
+import { credentialSafeFingerprint } from '../redaction/secretFindingRedaction.js';
 import { withTextFile } from '../runners/argFile.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
@@ -96,7 +97,7 @@ const tool = defineTool({
   title: 'File GitHub issues for top findings',
   description:
     'Open one GitHub issue per top open finding of project_path with the local gh CLI and its existing ' +
-    'login (never a suppressed finding). A finding with an issue in any state is skipped (its fingerprint ' +
+    'login (never a suppressed finding). A finding with an issue in any state is skipped (its identity ' +
     'is in the title). severity_min (default high) and max_issues (default 10) cap the run; `filtered` ' +
     'and `filtered_reason` count what they dropped. Missing labels are created, or left off ' +
     '(`labels_omitted`). It files real issues unless dry_run: preview first.',
@@ -179,7 +180,7 @@ async function handler(
       if (!existing.ok) {
         plan.status = 'failed';
         plan.error = `could not list existing issues to avoid duplicates: ${existing.error}`;
-      } else if (existing.tags.has(tagOf(f))) {
+      } else if (hasIssue(existing.tags, f)) {
         plan.status = 'skipped_existing';
       } else {
         labelPlan ??= await ensureLabels(projectPath, labels);
@@ -279,8 +280,24 @@ function describeFiltered(
   );
 }
 
+/**
+ * The `[guardian:<12 hex>]` tag a finding is filed under: its identity's
+ * prefix, the fingerprint's for a finding stored without one (a credential's
+ * over its redacted snippet: `credentialSafeFingerprint`). The fingerprint
+ * hashes the line range, so tagged with it a finding whose code moved down a
+ * line was filed again on the next run.
+ */
 function tagOf(f: Finding): string {
-  return f.fingerprint.slice(0, 12);
+  return (f.identity ?? credentialSafeFingerprint(f)).slice(0, 12);
+}
+
+/**
+ * Whether the repository already holds an issue for `f`: under its tag, or
+ * under its fingerprint's — every issue filed before the tag was the
+ * identity, which must not be filed a second time.
+ */
+function hasIssue(tags: ReadonlySet<string>, f: Finding): boolean {
+  return tags.has(tagOf(f)) || tags.has(f.fingerprint.slice(0, 12));
 }
 
 function buildTitle(f: Finding): string {
@@ -310,7 +327,9 @@ function buildBody(f: Finding, scanId: string): string {
         "file — dev-guardian withholds the matched value from this issue._\n"
       : '',
     `\n---`,
-    `Fingerprint: \`${f.fingerprint}\``,
+    // A credential's over its redacted snippet: a row stored before that
+    // holds one hashed over the plaintext, an oracle in a public issue.
+    `Fingerprint: \`${credentialSafeFingerprint(f)}\``,
     `Scan id: \`${scanId}\``,
     `\n_Filed automatically by dev-guardian. Use \`suppress_finding\` to mark as false positive._`,
   ]

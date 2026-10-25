@@ -48,7 +48,7 @@ import {
 import { submodulesNotIgnored } from '../platform/guardianIgnore.js';
 import { honouredFiles, withProjectConfig, type HonouredFile } from './repoConfig.js';
 import type { PartialParse, ToolRun } from '../types.js';
-import { describeSubmodules, initialisedSubmodules, trackedGuardianOutput } from './git.js';
+import { describeSubmodules, initialisedSubmodules, isGitUnanswered, trackedGuardianOutput } from './git.js';
 import { asArray, getProp, parseInputAsJson } from './scannerParsers/index.js';
 import { nameAFew } from './semgrepReport.js';
 import { WINDOWS_DIR_MAX } from './semgrepLongDirs.js';
@@ -122,10 +122,11 @@ export async function semgrepCoverageGaps(
   }
   const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath), from);
   const among = opts.among ?? opts.files;
+  // git's "could not answer" reaches whatever the run read: it stays.
   const submodules =
     among === undefined
       ? all
-      : all.filter((sub) => among.some((p) => {
+      : all.filter((sub) => isGitUnanswered(sub) || among.some((p) => {
           const posix = p.split('\\').join('/');
           return posix === sub || posix.startsWith(`${sub}/`);
         }));
@@ -151,10 +152,22 @@ export function semgrepGapNotes(gaps: SemgrepCoverageGaps): string[] {
  * — the CI gate's remedy for it keys on "generated output" (`ci/gate.ts`).
  */
 function describeTrackedOutput(files: readonly string[]): string {
-  return (
-    `${files.length} file(s) git tracks in .guardian/'s generated output were not scanned: ${nameAFew(files)} — ` +
-    'dev-guardian never commits its reports, database or dashboard, and every scan leaves those paths out'
-  );
+  const unknown = files.find(isGitUnanswered);
+  const named = files.filter((f) => !isGitUnanswered(f));
+  const parts: string[] = [];
+  if (unknown !== undefined) {
+    parts.push(
+      `git could not say which files it tracks in .guardian/'s generated output ${unknown} — one there would not ` +
+        'have been scanned',
+    );
+  }
+  if (named.length > 0) {
+    parts.push(
+      `${named.length} file(s) git tracks in .guardian/'s generated output were not scanned: ${nameAFew(named)} — ` +
+        'dev-guardian never commits its reports, database or dashboard, and every scan leaves those paths out',
+    );
+  }
+  return parts.join('; ');
 }
 
 /**

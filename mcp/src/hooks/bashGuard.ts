@@ -77,12 +77,14 @@
  * be modelled that way, so it is refused when one of its string literals
  * names a hook configuration path at all (`judgeCode`).
  *
- * What this is NOT: a shell parser, nor an interpreter. Command substitution
- * inside double quotes (`echo "$(rm -rf /)"`) stays invisible, exactly as it
- * was before this file grew a scanner, and so does anything decided at run
- * time — a path in a variable, a script run from a file. Fail-open is the
- * design; a missed warning is the failure mode we accept, and no block rule
- * was narrowed to get here.
+ * What this is NOT: a shell parser, nor an interpreter. A command substitution
+ * inside double quotes (`echo "$(rm -rf /)"`) is masked like any quoted span,
+ * so its body is pulled out and re-entered as a nested script
+ * (`quotedSubstitutions`, review of 3.6.0, finding 4). Anything decided at run
+ * time — a path in a variable, a script run from a file — stays invisible.
+ * Fail-open is the design for the guard's own faults; a limit an input can
+ * reach on purpose (the caps, the budget, the nesting depth) asks the user
+ * instead (finding 9), and no block rule was narrowed to get here.
  *
  * ## ReDoS
  *
@@ -102,7 +104,7 @@ import { userDataDir } from './dataRegistry.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 import { pushAll } from './shell/arrays.js';
 import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
-import { ASSIGNMENT, basename, cmdSwitch, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
 import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
 import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
 import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
@@ -160,7 +162,9 @@ export interface BashAssessment {
   denyMessage?: string;
   /**
    * Set when the command is the user's decision to take rather than a hazard —
-   * `dev-guardian baseline update` (review 8, C2) — and nothing blocks it: the
+   * `dev-guardian baseline update` (review 8, C2), or a command a cap or the
+   * time budget cut short (review of 3.6.0, finding 9: past 512 KB, 16 KB of a
+   * statement, the budget, the nesting depth) — and nothing blocks it: the
    * hook asks the user, with this as the reason, instead of letting it run.
    * The level stays `warn`, which is what `check --bash` and a hook whose
    * block is switched off report.
@@ -482,8 +486,21 @@ const WINDOWS_DIR_NAMES = ['windows', 'users', 'program files', 'program files (
  * `C:\Windows\.`, `\\?\C:\Windows`, `\\host\c$\`, `FileSystem::C:\`,
  * `$WINDIR`, `~/..` (review of 3.3.0).
  */
+/**
+ * A leading `${VAR:?…}` / `${VAR:-…}` / `${VAR:=…}` / `${VAR?…}` / `${VAR=…}`
+ * reduced to `${VAR}` (review of 3.6.0, finding 8): these yield the variable's
+ * value, so `"${HOME:?}"` and `${HOME:-x}` name the home directory — a common
+ * idiom that only warned. `:+`/`+` (the alternate, not the value) and `#`/`%`/
+ * `/` (which change the value) are left as written, so they do not match.
+ */
+function normalizeParamModifier(t: string): string {
+  const m = /^\$\{((?:env:)?[A-Za-z_]\w*)(?::?[-=?])[^{}]*\}/.exec(t);
+  return m === null ? t : `\${${m[1] ?? ''}}${t.slice(m[0].length)}`;
+}
+
 function catastrophicKind(raw: string, tildeUsers = true): TargetKind | null {
-  return spelledKind(stripQuotes(raw), tildeUsers) ?? plainKind(raw, tildeUsers);
+  const stripped = normalizeParamModifier(stripQuotes(raw));
+  return spelledKind(stripped, tildeUsers) ?? plainKind(raw, tildeUsers);
 }
 
 /** {@link catastrophicKind} of a target as written — the spellings it names outright. */
@@ -743,6 +760,8 @@ interface DeleteContext {
   bareDriveRoot?: boolean | undefined;
   /** What the pipe hands a PowerShell delete with no path of its own. */
   piped?: string | undefined;
+  /** The listing that hands it over walked the whole tree (`gci ~ -Recurse`): the delete needs no `-Recurse` of its own. */
+  pipedRecursive?: boolean | undefined;
 }
 
 /** `$PWD`, `${PWD}`, `$env:PWD`, `$(pwd)`, `` `pwd` `` at the start of a target. */
@@ -757,7 +776,7 @@ const PWD_PREFIX = /^(?:\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{?PWD\}?|\$env:PWD)(?=[\\
  * when there is nothing to read it against.
  */
 function resolvedTarget(raw: string, ctx: DeleteContext): string | undefined {
-  const t = stripQuotes(raw.trim());
+  const t = normalizeParamModifier(stripQuotes(raw.trim()));
   if (t === '' || t.length > MAX_PLAIN_TARGET || t.includes('::')) return undefined;
   const pwd = PWD_PREFIX.exec(t);
   if (pwd !== null) return ctx.dir === undefined ? undefined : `${ctx.dir}${t.slice(pwd[0].length)}`;
@@ -791,6 +810,32 @@ const DASH_DELETE_HEADS = new Set(['rm', 'ri', 'remove-item']);
 /** cmd.exe-style delete commands, also reachable from PowerShell — slash flags. */
 const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
 
+/** GNU `rm`'s long options, which getopt_long also takes by any prefix that names one of them alone. */
+const RM_LONG_OPTIONS = ['force', 'interactive', 'one-file-system', 'no-preserve-root', 'preserve-root', 'recursive', 'dir', 'verbose', 'help', 'version'];
+
+/**
+ * The GNU `rm` long option a `--` word names (review of 3.6.0, finding 1):
+ * itself, or the one option it is an unambiguous prefix of — `--rec` and
+ * `--r` are `--recursive`, `--no-p` is `--no-preserve-root` — read without
+ * its `=value` and case. `undefined` for none, or an ambiguous prefix
+ * (`--v`: `--verbose` or `--version`).
+ */
+function rmLongOption(token: string): string | undefined {
+  const name = (token.slice(2).split('=')[0] ?? '').toLowerCase();
+  if (name === '') return undefined;
+  if (RM_LONG_OPTIONS.includes(name)) return name;
+  const named = RM_LONG_OPTIONS.filter((o) => o.startsWith(name));
+  return named.length === 1 ? named[0] : undefined;
+}
+
+/**
+ * A cluster of `rm`'s short options — GNU's `-d -f -i -I -r -R -v` and BSD's
+ * `-P -W -x` — of any length: `-rfvd` is four flags, recursive among them.
+ * A PowerShell parameter name (`-Force`, `-Recurse`) has a letter no `rm`
+ * takes, so it is never read as one.
+ */
+const RM_SHORT_CLUSTER = /^[dfiIPrRvWx]+$/;
+
 /**
  * Tokenised assessment of one simple command. The *target* — not just the
  * flags — decides severity: `rm -rf /` is catastrophic, `rm -rf node_modules`
@@ -817,25 +862,36 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
     // PowerShell takes an en or em dash for a parameter's `-` (fix round 4).
     const token = (rest[k]?.value ?? '').replace(/^[\u2013\u2014\u2015]/, '-');
     // `/q` (quiet) asks nothing \u2014 but neither does a tool with no terminal, so
-    // `/s` alone decides. Git Bash's `//s` reaches cmd as `/s` (review 8, item 2).
+    // `/s` alone decides. Git Bash's `//s` reaches cmd as `/s` (review 8, item 2),
+    // and `/s/q` is `/s` and `/q` (review of 3.6.0, finding 3).
     if (slashStyle && token.startsWith('/')) {
-      if (cmdSwitch(token).toLowerCase() === '/s') recursive = true;
+      if (cmdSwitches(token)?.includes('s') === true) recursive = true;
       continue;
     }
     // Dash flags: `rm`'s and `Remove-Item`'s — and, since `rd`, `rmdir`, `del`
     // and `erase` are Remove-Item aliases in PowerShell, theirs too:
     // `rmdir C:\Users -Recurse -Force` was ok (fix round 4).
-    if (token === '--no-preserve-root') noPreserve = true;
-    else if (token === '--recursive') recursive = true;
-    else if (token.startsWith('--')) continue;
-    else if (token.startsWith('-') && token.length > 1) {
+    // GNU getopt takes a long option by any prefix that names it alone, so
+    // `--rec` recurses as `--recursive` does (review of 3.6.0, finding 1).
+    if (token.startsWith('--')) {
+      const option = rmLongOption(token);
+      if (option === 'no-preserve-root') noPreserve = true;
+      else if (option === 'recursive') recursive = true;
+      continue;
+    }
+    if (token.startsWith('-') && token.length > 1) {
       // A PowerShell parameter may be given its value after a colon, split at
       // the FIRST colon only (`-Path:C:\Users` is `C:\Users` — fix round 6).
       const colon = token.indexOf(':');
       const flags = colon < 0 ? token.slice(1) : token.slice(1, colon);
       let value = colon < 0 ? undefined : token.slice(colon + 1);
       const lower = flags.toLowerCase();
-      const isSwitch = lower === 'recurse' || lower === 'rec' || lower === 'force' || lower === 'fo';
+      // PowerShell binds a parameter by any prefix that names it alone: of
+      // Remove-Item's, only `-Recurse` begins with `r` (`-Recu`, `-Recur` —
+      // review of 3.6.0, finding 2), and `-fo` is the shortest `-Force`
+      // (`-f` is `-Filter` too).
+      const recurseParam = lower !== '' && 'recurse'.startsWith(lower);
+      const isSwitch = recurseParam || (lower.length >= 2 && 'force'.startsWith(lower));
       // A switch's value may also be the next word (`-Recurse: $false`); any
       // other parameter's next word stays where it is — `-Path: C:\Users`
       // names the target (fix round 6).
@@ -847,24 +903,31 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
       // `-Recurse:$true` is on, `-Recurse:$false` off.
       const on = value === undefined || !/^\$?(?:false|0)$/i.test(value);
       // PowerShell's whole-word parameter names first — `-Recurse` and its
-      // abbreviation. Checked before the GNU-cluster heuristic below because
-      // that heuristic (does the flag text contain the letter r anywhere?) is
-      // right for a *cluster* of single-letter flags like `-rf`, where every
-      // character really is its own flag, and wrong for a whole parameter
-      // name. `-Force` / `-fo` decide nothing any more (review 8, item 1);
-      // they are read only so that their value is not taken for a target.
-      if (lower === 'recurse' || lower === 'rec') recursive ||= on;
-      else if (!isSwitch && value === undefined && flags.length <= 3 && /r/i.test(flags)) recursive = true;
+      // abbreviations. Checked before the cluster readings below because
+      // those (does the flag text contain the letter r?) are right for a
+      // *cluster* of single-letter flags like `-rf`, where every character
+      // really is its own flag, and wrong for a whole parameter name.
+      // `-Force` / `-fo` decide nothing any more (review 8, item 1); they are
+      // read only so that their value is not taken for a target. A cluster of
+      // `rm`'s own letters recurses at any length (`-rfvd` was ok: only three
+      // letters were read — finding 1); a short word with an `r` still does,
+      // as before.
+      if (recurseParam) recursive ||= on;
+      else if (!isSwitch && value === undefined && /r/i.test(flags) && (RM_SHORT_CLUSTER.test(flags) || flags.length <= 3)) recursive = true;
     } else targets.push(token);
   }
 
   // Recursion decides, not force (review 8, item 1): the Bash and PowerShell
   // tools have no terminal to ask on, so `rm -r ~` and `Remove-Item ~ -Recurse`
   // delete as much as their forced forms — measured: both removed a whole tree.
-  if (!(recursive || noPreserve)) return null;
+  // A delete handed every item of a recursive listing (`gci ~ -Recurse -File |
+  // ri -Force`) deletes the tree item by item, with no `-Recurse` of its own
+  // (review of 3.6.0, finding 10).
+  const fromPipe = targets.length === 0 && ctx.piped !== undefined;
+  if (!(recursive || noPreserve || (fromPipe && ctx.pipedRecursive === true))) return null;
 
   // A PowerShell delete with no path of its own deletes what the pipe hands it.
-  if (targets.length === 0 && ctx.piped !== undefined) targets.push(ctx.piped);
+  if (fromPipe && ctx.piped !== undefined) targets.push(ctx.piped);
   if (
     noPreserve ||
     (ctx.bareDriveRoot === true && targets.some(isBareDrive)) ||
@@ -904,6 +967,25 @@ function pipedItems(words: readonly ShellWord[]): string | undefined {
   }
   if (name === 'get-item' || name === 'gi') return path ?? '.';
   return `${(path ?? '.').replace(/[\\/]+$/, '')}/*`;
+}
+
+/**
+ * Whether a `Get-ChildItem` (`gci`, `ls`, `dir`) walks the whole tree: `-Recurse`
+ * by any prefix PowerShell binds to it alone (`-rec` on — `-r` and `-re` are
+ * `-ReadOnly` too), not `:$false`, or a `-Depth`. What it lists is then every
+ * item below its path, and a delete it pipes them to deletes them all.
+ */
+function listsRecursively(words: readonly ShellWord[]): boolean {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? '');
+  if (!LISTERS.has(name) || name === 'get-item' || name === 'gi') return false;
+  return withoutRedirections(words.slice(at + 1)).some((a) => {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+    if (m === null) return false;
+    const p = (m[1] ?? '').toLowerCase();
+    const off = m[2] !== undefined && /^\$?(?:false|0)$/i.test(m[2]);
+    return !off && ((p.length >= 3 && 'recurse'.startsWith(p)) || (p.length >= 2 && 'depth'.startsWith(p)));
+  });
 }
 
 const RULE_RM_ROOT: MatchedRule = {
@@ -993,6 +1075,30 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
     return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
+  return null;
+}
+
+/**
+ * `find … | xargs rm` (review of 3.6.0, finding 10): xargs hands the deleter
+ * every path find lists, exactly as `find … -exec rm` does, so the pipeline is
+ * judged as that — by find's start paths and its tests ({@link assessFind}).
+ * The deleter needs no recursive flag of its own: find already walked the
+ * tree (`find ~ -type f | xargs rm -f` was ok while `-exec rm` blocked).
+ * Member `c` is xargs running a deleter; the nearest `find` before it lists.
+ */
+function findPipedIntoDeleter(commands: readonly ShellWord[][], c: number, home: HomeDir | undefined, tildeUsers: boolean, ctx: DeleteContext): MatchedRule | null {
+  const words = commands[c];
+  if (words === undefined || c === 0) return null;
+  const at = resolveCommand(words).index;
+  if (!words.slice(0, at).some((w) => commandName(w.value) === 'xargs')) return null;
+  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ''))) return null;
+  for (let p = c - 1; p >= 0; p -= 1) {
+    const prev = commands[p] ?? [];
+    const f = resolveCommand(prev).index;
+    if (commandName(prev[f]?.value ?? '') === 'find') {
+      return assessFind([...prev, { value: '-delete', quoted: false }], f, home, tildeUsers, { ...ctx, piped: undefined, pipedRecursive: undefined });
+    }
+  }
   return null;
 }
 
@@ -2222,6 +2328,68 @@ function shellScript(text: string): NestedScript {
 }
 const DASH_C = /^-[A-Za-z]*c$/;
 
+/** flock's options that take the next word as their value (`-w SECS`, `-E CODE`). */
+const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
+
+/**
+ * The script a nested-script carrier runs (review of 3.6.0, finding 7), or
+ * `null` when `name` is not one. The carriers run their payload through a
+ * shell, so each is assessed as a shell script — a catastrophic delete wrapped
+ * in one used to be invisible:
+ *
+ *   - `trap 'SCRIPT' SIGSPEC` — the first operand, run on the signal (a lone
+ *     operand with no sigspec is `trap SCRIPT` querying/printing, not running);
+ *   - `flock FILE -c 'SCRIPT'`, or `flock [opts] FILE CMD …` run directly;
+ *   - `script [-q] -c 'SCRIPT' FILE` (also `-qc`, `--command`);
+ *   - `runuser … -c 'SCRIPT'`, or `runuser … -- CMD …` run as the user.
+ */
+function carrierScript(name: string, words: readonly ShellWord[], start: number): string | undefined | null {
+  const rest = words.slice(start + 1);
+  /** A `-c`/`--command`/`--command=` script at `rest[i]`, or `undefined` when there is none. */
+  const dashC = (w: ShellWord | undefined, nextWord: ShellWord | undefined): string | undefined => {
+    if (w === undefined) return undefined;
+    if (w.value.startsWith('--command=')) return w.value.slice('--command='.length);
+    return !w.quoted && (DASH_C.test(w.value) || w.value === '--command') ? (nextWord?.value ?? '') : undefined;
+  };
+  const argv = (from: number): string | undefined => rest.slice(from).map((x) => x.value).join(' ') || undefined;
+  if (name === 'trap') {
+    let i = 0;
+    while (i < rest.length && (rest[i]?.value ?? '').startsWith('-') && rest[i]?.value !== '--') i += 1;
+    if (rest[i]?.value === '--') i += 1;
+    const arg = rest[i]?.value;
+    // A command to run needs a signal after it; `-`/`` reset it.
+    return arg !== undefined && arg !== '-' && arg !== '' && rest.length > i + 1 ? arg : undefined;
+  }
+  if (name === 'script') {
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== undefined) return c;
+    }
+    return undefined;
+  }
+  if (name === 'runuser') {
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== undefined) return c;
+      if (rest[i]?.value === '--') return argv(i + 1);
+    }
+    return undefined;
+  }
+  if (name === 'flock') {
+    // flock's own options precede the lock FILE; `-c` may follow it (`flock
+    // FILE -c '…'`), else the command runs directly (`flock FILE CMD …`).
+    let i = 0;
+    while (i < rest.length && (rest[i]?.value ?? '').startsWith('-')) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== undefined) return c;
+      i += FLOCK_VALUED.test(rest[i]?.value ?? '') ? 2 : 1;
+    }
+    const c = dashC(rest[i + 1], rest[i + 2]);
+    return c !== undefined ? c : argv(i + 1);
+  }
+  return null;
+}
+
 /**
  * Scripts this command hands to a shell — `sh -c '…'`, `bash -lc '…'`,
  * `docker exec box bash -c '…'`, `su -s /bin/sh www-data -c '…'`, `eval …`,
@@ -2234,6 +2402,13 @@ const DASH_C = /^-[A-Za-z]*c$/;
  */
 function nestedScripts(words: ShellWord[], start: number): NestedScript[] {
   const head = words[start];
+  const name = head === undefined ? '' : basename(head.value).toLowerCase();
+  // Carriers that run a script they are handed (review of 3.6.0, finding 7):
+  // `trap 'SCRIPT' SIGSPEC`, `flock FILE -c 'SCRIPT'` / `flock FILE CMD …`,
+  // `script [-q] -c 'SCRIPT' FILE`, `runuser … -c 'SCRIPT'` / `runuser … --
+  // CMD …`. Each runs its payload through a shell, so it is assessed as one.
+  const carried = carrierScript(name, words, start);
+  if (carried !== null) return carried === undefined ? [] : [shellScript(carried)];
   // `npx -c "…"` / `npm exec -c "…"` runs its argument in a shell (fix round 2).
   const launcher = head === undefined ? '' : commandName(head.value);
   if (launcher === 'npx' || launcher === 'pnpx' || (launcher === 'npm' && words[firstNonFlag(words, start + 1)]?.value === 'exec')) {
@@ -2757,6 +2932,90 @@ function processSubstitutionScripts(statements: readonly ShellStatement[]): Arra
   return out;
 }
 
+/**
+ * The body of a `$( … )` command substitution starting just after its `$(` at
+ * `from`, and the index after its `)`. Parens are balanced, and a `)` inside a
+ * quoted span or escaped does not close it (`$(echo ")")`).
+ */
+function scanSubstitutionBody(command: string, from: number): { body: string; next: number } {
+  let depth = 1;
+  let quote = '';
+  for (let i = from; i < command.length; i += 1) {
+    const ch = command.charAt(i);
+    if (quote !== '') {
+      if (quote === '"' && ch === '\\') i += 1;
+      else if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '\\') i += 1;
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) return { body: command.slice(from, i), next: i + 1 };
+    }
+  }
+  return { body: command.slice(from), next: command.length };
+}
+
+/**
+ * Collects the command substitutions inside the double-quoted string that
+ * begins just after the `"` at `from` — `$( … )` and `` `…` `` — appending
+ * each body to `out`, and returns the index after the closing `"`. A `\$`,
+ * `` \` `` or `\\` is a literal, and `$((` is arithmetic (no command runs).
+ */
+function scanDoubleQuotedSubstitutions(command: string, from: number, out: string[]): number {
+  let i = from;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '"') return i + 1;
+    if (ch === '`') {
+      let end = i + 1;
+      while (end < command.length && !(command.charAt(end) === '`' && command.charAt(end - 1) !== '\\')) end += 1;
+      out.push(command.slice(i + 1, end));
+      i = end + 1;
+      continue;
+    }
+    if (ch === '$' && command.charAt(i + 1) === '(' && command.charAt(i + 2) !== '(') {
+      const sub = scanSubstitutionBody(command, i + 2);
+      out.push(sub.body);
+      i = sub.next;
+      continue;
+    }
+    i += 1;
+  }
+  return command.length;
+}
+
+/**
+ * The command substitutions a command runs from INSIDE a double-quoted string
+ * (review of 3.6.0, finding 4): `echo "$(rm -rf /)"`, `: "$(…)"`, `` x="`…`"
+ * ``. `splitShell` masks a double-quoted span to one space, so a `$( … )` or
+ * backtick in it was never a statement and the body — which the shell runs
+ * regardless of the quotes — went unassessed, defeating every block rule. An
+ * UNQUOTED substitution is already a statement of its own (`(` / backtick is a
+ * boundary), and a single-quoted one never runs, so only the double-quoted
+ * ones are collected here; nested ones are reached by recursing on each body.
+ */
+function quotedSubstitutions(command: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === '\\') i += 2;
+    else if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      i = end < 0 ? command.length : end + 1;
+    } else if (ch === '"') i = scanDoubleQuotedSubstitutions(command, i + 1, out);
+    else i += 1;
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────── download, then run it
 
 /** Commands that fetch a URL: `curl`, `wget` and PowerShell's web cmdlets and their aliases. */
@@ -3004,6 +3263,73 @@ function pipesDownloadIntoShell(statement: ShellStatement): MatchedRule | null {
   return null;
 }
 
+/**
+ * A download piped into a subshell that runs a shell (review of 3.6.0, finding
+ * 5): `curl … | (sh)`, `wget … | (bash -s)` — the `(` ends the piping
+ * statement, so the shell inside it is not a member of that pipeline and
+ * `pipesDownloadIntoShell` never saw it. Statement `k` pipes (its masked text
+ * ends with `|`) into a group it opens (`end === '('`), and a downloader runs
+ * somewhere in it; a command in the subshell, up to its matching `)`, reads
+ * its stdin as a script.
+ */
+function pipesDownloadIntoSubshell(statements: readonly ShellStatement[]): MatchedRule | null {
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined || statement.end !== '(' || !statement.masked.endsWith('|')) continue;
+    if (!statement.commands.some((words) => DOWNLOADERS.has(commandName(words[resolveCommand(words, PIPE_RUNNERS).index]?.value ?? '')))) continue;
+    let depth = 1;
+    for (let j = k + 1; j < statements.length && depth > 0; j += 1) {
+      const body = statements[j];
+      if (body === undefined) break;
+      const first = body.commands[0];
+      if (first !== undefined && readsStdinAsScript(first, resolveCommand(first, PIPE_RUNNERS).index)) return RULE_PIPE_TO_SHELL;
+      if (body.end === '(') depth += 1;
+      else if (body.end === ')') depth -= 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * The command substitution `eval` runs across the `(` or backtick that split
+ * it from `eval` (review of 3.6.0, finding 5): `eval $(curl …)`, `` eval
+ * `curl …` `` — the quoted `eval "$(curl …)"` already blocks (the quote keeps
+ * it one word), these did not. Statement `k`'s last command is `eval` ending
+ * with `$(` (its last word the `$`, `end === '('`) or with a backtick; the
+ * body is the statements up to the matching close. `eval` runs that body's
+ * OUTPUT, so a download there is the downloaded script it runs
+ * ({@link isBareRemoteFetch}'s hazard), and anything else is read as the text
+ * it writes ({@link substitutionOutput}).
+ */
+function evalSubstitutionBodies(statements: readonly ShellStatement[]): ShellStatement[][] {
+  const out: ShellStatement[][] = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined) continue;
+    const words = statement.commands[statement.commands.length - 1];
+    if (words === undefined || basename(words[resolveCommand(words).index]?.value ?? '') !== 'eval') continue;
+    const backtick = statement.end === '`';
+    const dollarParen = statement.end === '(' && words[words.length - 1]?.value === '$';
+    if (!backtick && !dollarParen) continue;
+    const body: ShellStatement[] = [];
+    let depth = 1;
+    for (let j = k + 1; j < statements.length; j += 1) {
+      const b = statements[j];
+      if (b === undefined) break;
+      body.push(b);
+      if (backtick) {
+        if (b.end === '`') break;
+      } else if (b.end === '(') depth += 1;
+      else if (b.end === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    if (body.length > 0) out.push(body);
+  }
+  return out;
+}
+
 /** A download written into xargs's program through its replacement string — and how to hand it over as data. */
 const RULE_XARGS_REPLACED: MatchedRule = {
   id: 'xargs-download-program',
@@ -3159,6 +3485,8 @@ function powershellDownloadExecution(text: string): boolean {
   const tainted = new Set<string>();
   /** In a `Tee-Object` command, whose `-Variable` receives what it is piped. */
   let inTee = false;
+  /** The `)` just read closed iex's parenthesised argument: a `.DownloadString(…)` chained onto it is still iex's. */
+  let afterIexParen = false;
   let names = 0;
   /** `*`, a variable whose name could not be read, holds whatever any name may. */
   const holdsDownload = (v: string): boolean => tainted.has(v) || tainted.has('*') || (v === '*' && tainted.size > 0);
@@ -3179,11 +3507,19 @@ function powershellDownloadExecution(text: string): boolean {
   for (const m of text.matchAll(PS_EXEC_TOKENS)) {
     const t = m[0].toLowerCase();
     const g = m.groups ?? {};
+    // Cleared every token; set again only by a `)` that closed iex's argument.
+    const afterParen = afterIexParen;
+    afterIexParen = false;
     if (g['run'] !== undefined) {
       if (piped) return true;
       pendingIex = true;
     } else if (g['dl'] !== undefined) {
       if (download()) return true;
+      // `iex (New-Object Net.WebClient).DownloadString(url)`: the `.Download…`
+      // method is chained onto the `)` that closed iex's argument, so its
+      // result is still what iex runs (review of 3.6.0, finding 6). The
+      // method-call form of `dl` begins with a `.`.
+      if (afterParen && t.startsWith('.')) return true;
     } else if (g['ref'] !== undefined) {
       const v = psVariable(g['ref']);
       if (g['assign'] !== undefined) assigning = [v];
@@ -3203,7 +3539,10 @@ function powershellDownloadExecution(text: string): boolean {
       if (pendingIex) inIex += 1;
       pendingIex = false;
     } else if (t === ')') {
-      if (opens.pop() === true) inIex -= 1;
+      if (opens.pop() === true) {
+        inIex -= 1;
+        afterIexParen = true;
+      }
       pendingIex = false;
     } else if (t === '|') {
       if (downloaded) piped = true;
@@ -4186,6 +4525,35 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   }
   // `bash <(echo 'rm -rf /')`: what the substitution writes is the script (review 8, item 8).
   if (commandText.includes('<(')) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  // `curl … | (sh)`: a subshell runs the download the pipe hands it — the `(`
+  // separated the shell from the pipeline (review of 3.6.0, finding 5).
+  const subshell = pipesDownloadIntoSubshell(statements);
+  if (subshell !== null) out.push(subshell);
+  // `eval $(curl …)` / `` eval `curl …` ``: the substitution eval runs, split
+  // off by the `(` / backtick — the quoted form already blocks (finding 5).
+  for (const body of evalSubstitutionBodies(statements)) {
+    if (body.some((b) => b.commands.some((words) => DOWNLOADERS.has(commandName(words[resolveCommand(words, PIPE_RUNNERS).index]?.value ?? ''))))) {
+      out.push({ ...RULE_FETCH_EXEC });
+    } else {
+      collectGenerated(body.map((b) => textOutputOf(b.commands.map(expandWords), { heredocs: b.heredocBodies })), depth, out, scope);
+    }
+  }
+  // A `$( … )` or backtick inside a double-quoted string runs regardless of
+  // the quotes (review of 3.6.0, finding 4): `echo "$(rm -rf /)"`, `: "$(…)"`.
+  // splitShell masked it away; it is re-entered here as a nested script,
+  // within the same nesting cap and budget. An unquoted one is already a
+  // statement of its own, so it is not collected twice.
+  if (cmd.includes('$(') || cmd.includes('`')) {
+    for (const body of quotedSubstitutions(cmd)) {
+      if (body.trim() === '') continue;
+      if (depth >= MAX_NESTING) {
+        scope.notes.depth = true;
+        continue;
+      }
+      noteScript(scope, body, scope.powershell === true);
+      collect(body, depth + 1, out, { ...scope, cmdLine: false });
+    }
+  }
   // Where each command runs, as the `cd`s before it moved it (review of
   // 3.4.0, finding 9): a relative delete target is read against it.
   const dirs = workdirs(statements);
@@ -4263,11 +4631,15 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
         vars: scope.vars,
         bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true,
         piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : undefined,
+        pipedRecursive: scope.powershell === true && c > 0 ? listsRecursively(statement.commands[c - 1] ?? []) : undefined,
       };
       const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (del !== null) out.push(del);
       const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (find !== null) out.push(find);
+      // `find ~ -type f | xargs rm -f`: judged as `find … -exec rm` (finding 10).
+      const findXargs = findPipedIntoDeleter(statement.commands, c, scope.home, scope.tildeUsers !== false, deleting);
+      if (findXargs !== null) out.push(findXargs);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       // `bash <<< 'rm -rf /'`, `sh <<< "$(echo … | base64 -d)"`: the here-string is the script (review 8, item 8).
       const hereText = hereStringText(words);
@@ -4489,6 +4861,30 @@ function partialRule(notes: Notes): MatchedRule | null {
     : { id: 'partially-assessed', level: 'warn', reason: `part of this command was not assessed (${causes.join('; ')})` };
 }
 
+/**
+ * The question for a command a cap or the budget cut short (review of 3.6.0,
+ * finding 9): past 512 KB, 16 KB of one statement, the time budget or the
+ * nesting depth, what follows was never judged — and padding a command that
+ * would be denied past one of them made it run with only a note. Those caps
+ * are deliberate limits an input can reach on purpose, so the user decides
+ * ({@link BashAssessment.ask}). An internal error (`failed`) stays a warning:
+ * the hooks fail open on their own faults (docs/maintainers/architecture.md),
+ * and so do the path-resolution limits (`calls`, `links`), whose ordinary
+ * triggers — a long file body written inline, a command touching many
+ * directories — are everyday work.
+ */
+function capQuestion(notes: Notes): string | undefined {
+  const causes = [
+    ...(notes.command ? ['over 512 KB'] : []),
+    ...(notes.statement ? ['a statement over 16 KB'] : []),
+    ...(notes.budget ? ['the assessment time budget ran out'] : []),
+    ...(notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : []),
+  ];
+  return causes.length === 0
+    ? undefined
+    : `this command is too large or too deeply nested to assess in full (${causes.join('; ')}), so what it runs past that point was not checked — the user decides whether to run it`;
+}
+
 /** Runs of spaces and tabs as one space: no rule pattern tells them apart, and padding stops counting. */
 function collapseBlanks(text: string): string {
   return text.replace(/[ \t]{2,}/g, ' ');
@@ -4673,7 +5069,10 @@ function assessReadings(
   const blocks = effective.filter((r) => r.level === 'block');
   const only = blocks.length === 1 ? blocks[0] : undefined;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
-  const ask = blocks.length === 0 ? byId.get(RULE_BASELINE_UPDATE.id)?.reason : undefined;
+  // Nothing blocks: the user decides an agent-run `baseline update`, and a
+  // command a cap cut short (finding 9) — a block always wins over a question.
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q): q is string => q !== undefined);
+  const ask = blocks.length === 0 && questions.length > 0 ? questions.join('; and ') : undefined;
 
   return {
     level: effective[0]?.level ?? 'ok',

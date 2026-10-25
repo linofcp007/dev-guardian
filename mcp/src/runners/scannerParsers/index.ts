@@ -19,6 +19,7 @@
 
 import { computeFingerprint } from '../../fingerprint/findingFingerprint.js';
 import { classifyTaxonomy } from '../../frameworks/taxonomy.js';
+import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
 import type { Category, Finding, Severity } from '../../types.js';
 
 export interface ParserContext {
@@ -133,7 +134,21 @@ export function makeFinding(input: {
    */
   vuln_aliases?: readonly unknown[];
 }): Finding {
-  const snippet = clampSnippet(input.snippet);
+  // A credential's snippet is redacted BEFORE it is hashed into the
+  // fingerprint, which is committed (`.guardian/baseline.json`) and exported
+  // (SARIF): hashed over Bandit's B105 `code`, gosec's G101 line or a
+  // logged-in Semgrep secret's match, it was an offline oracle for the value.
+  // Every other finding's fingerprint is exactly what it always was.
+  const clamped = clampSnippet(input.snippet);
+  const snippet =
+    clamped === undefined
+      ? undefined
+      : redactCredentialSnippet({
+          tool: input.tool,
+          snippet: clamped,
+          ...(input.rule_id !== undefined ? { rule_id: input.rule_id } : {}),
+          ...(input.subcategory !== undefined ? { subcategory: input.subcategory } : {}),
+        }).snippet;
   const fingerprintInput: Parameters<typeof computeFingerprint>[0] = {
     tool: input.tool,
   };

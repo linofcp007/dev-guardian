@@ -126,7 +126,7 @@ import { hasPhpSource, PSALM, psalmTaint } from '../runners/psalmRun.js';
 import { maxParallelScanners, runScannerPasses, type ScannerPass } from '../runners/scannerPasses.js';
 import { psalmParser } from '../runners/scannerParsers/psalm.js';
 import { spotbugsParserFor } from '../runners/scannerParsers/spotbugs.js';
-import { hasJvmSource, SPOTBUGS, spotbugsClasses } from '../runners/spotbugsRun.js';
+import { classDirsState, hasJvmSource, SPOTBUGS, spotbugsClasses } from '../runners/spotbugsRun.js';
 import { isWordPressProject } from '../runners/stackDetect.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
@@ -177,7 +177,7 @@ import {
 } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
-import { listProjectDir, presentInProject, readProjectTextOrUndefined } from '../platform/projectFs.js';
+import { listProjectDir, presentInProject, readProjectTextOrUndefined, realpathInProject } from '../platform/projectFs.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import {
   applySemgrepCoverageGaps,
@@ -225,10 +225,13 @@ registerToolModule(
     // re-scans a worktree and needs the original project's rules.
     rulePacks: (input, { rulesProjectPath, plugin, projectPath }) =>
       planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
-    // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds.
+    // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds (the
+    // factory keys that file for every tool); the class directories SpotBugs
+    // reads are under `target/` and `build/`, which the tree hash leaves out.
     cacheState: async (_input, { plugin, projectPath }) => {
       const flags = semgrepScanFlags(plugin.repoConfigFromRef?.root ?? projectPath);
-      return { semgrep_flags: flags.args.join(' ') };
+      const classes = classDirsState(projectPath);
+      return { semgrep_flags: flags.args.join(' '), ...(classes !== null ? { class_dirs: classes } : {}) };
     },
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
@@ -401,10 +404,10 @@ async function runSemgrep(args: Collect & {
 
   // Semgrep not on PATH — fall back to the official Docker image when a
   // daemon is reachable. The container cannot see host paths, so a project
-  // config is named by where it sits inside the /src mount; registered
-  // custom rules (which may live anywhere on the host) are not passed. The
-  // plugin's pack directory is mounted READ-ONLY at CONTAINER_PACKS_ROOT and
-  // the LLM pack run from there.
+  // config is named by where it sits inside the /src mount, and so is a
+  // registered custom rule inside the project; one elsewhere on the host is
+  // not passed, and is a named gap. The plugin's pack directory is mounted
+  // READ-ONLY at CONTAINER_PACKS_ROOT and the LLM pack run from there.
   const dockerBin = await scannerAvailable('docker');
   if (!dockerBin) {
     tools_run.push({ name: 'semgrep', status: 'skipped', reason: 'not_installed (no docker fallback available)' });
@@ -431,6 +434,23 @@ async function runSemgrep(args: Collect & {
   for (const cfg of inspectProjectSemgrepConfigs(ctx.projectPath).usable) {
     dockerConfigs.push(toContainerPath(ctx.projectPath, cfg.path));
   }
+  // The rules register_custom_rules registered — in the plan and the cache
+  // key — used to be left out here without a word, at coverage full.
+  const unseen: string[] = [];
+  for (const cfg of plan.ruleConfigs.filter((c) => !plan.registry.includes(c) && !plan.projectConfigs.includes(c))) {
+    // Through the mount only when it resolves inside the project: a link out
+    // of it dangles in the container, and one --config that does not load
+    // aborts the whole scan.
+    const inMount = realpathInProject(ctx.projectPath, cfg) !== null ? toContainerPath(ctx.projectPath, cfg) : null;
+    if (inMount === null) unseen.push(cfg);
+    else if (!dockerConfigs.includes(inMount)) dockerConfigs.push(inMount);
+  }
+  if (unseen.length > 0) {
+    notes.push(
+      `${unseen.length} registered rule file(s) outside the project did not run — the Docker fallback sees the ` +
+        `project only (${unseen.join(', ')}): install semgrep to run them`,
+    );
+  }
   if (dockerConfigs.length === 0) {
     tools_run.push({
       name: 'semgrep',
@@ -454,7 +474,13 @@ async function runSemgrep(args: Collect & {
       image,
       configs: [...dockerConfigs, ...packConfigs],
       metricsOff: localOnly,
-      extraArgs: flags.args,
+      // `.guardianignore`'s excludes too — without them `--autofix` rewrote
+      // files in the directories the project leaves out. Anchored at the
+      // mount: /src is the container's git root, or no work tree at all.
+      extraArgs: [
+        ...flags.args,
+        ...semgrepExcludeArgs(ctx.exclusions !== null ? { ...ctx.exclusions, semgrepAnchor: '' } : null),
+      ],
       ...(packConfigs.length > 0 ? { readOnlyMounts: [{ source: plan.pluginPacksDir, target: CONTAINER_PACKS_ROOT }] } : {}),
       git: await gitSafetyFor([ctx.projectPath]),
     }),
@@ -472,6 +498,7 @@ async function runSemgrep(args: Collect & {
     gaps: await semgrepCoverageGaps(ctx.projectPath),
     tools_run, missing_tools, parser_inputs,
   });
+  if (unseen.length > 0) markMissing(missing_tools, 'semgrep');
 }
 
 /**
@@ -514,8 +541,10 @@ function recordSemgrepRun(args: SemgrepRunRecord): void {
   }
   // A damaged install ran without the pack: the note is on the run, and an
   // otherwise-complete run is partial (review of the LLM pack, M-3).
-  if (args.packMissing && args.tools_run.at(-1)?.status === 'ok' && !args.missing_tools.includes('semgrep')) {
-    args.missing_tools.push('semgrep');
+  const judged = args.tools_run.at(-1);
+  if (args.packMissing && judged?.status === 'ok') {
+    judged.plugin_pack_missing = true;
+    if (!args.missing_tools.includes('semgrep')) args.missing_tools.push('semgrep');
   }
 }
 
@@ -826,8 +855,18 @@ function ignoreFrom(ctx: InvokeContext): { guardianIgnoreFrom?: string } {
   return ctx.configRoot !== ctx.projectPath ? { guardianIgnoreFrom: ctx.configRoot } : {};
 }
 
-/** An empty `[bandit]` section: Bandit reads it and nothing else. */
+/** A `[bandit]` section with only an exclusion no path holds: Bandit reads it and nothing else. */
 export const NEUTRAL_BANDIT_INI = 'bandit-neutral.ini';
+
+/**
+ * The neutral ini's text. Its `exclude` replaces Bandit's built-in list
+ * (`.svn,CVS,.bzr,.hg,.git,__pycache__,.tox,.eggs,*.egg`, tested as a
+ * substring of every path, a file handed by name included) with one no path
+ * holds — the same as fileBatchScan's `-x` when there is no ini. Measured on
+ * Bandit 1.9.4 (review of 3.6.0): with an empty `[bandit]`, `src/CVSImport.py`
+ * and `src/x.tox_util.py` were left out, 1 file of 3 analysed; with this, 3.
+ */
+export const NEUTRAL_BANDIT_INI_TEXT = '[bandit]\nexclude = //guardian-no-exclusion//\n';
 
 /**
  * The `--ini` of every Bandit run scan_sast makes, whole-project and scoped
@@ -849,7 +888,7 @@ function banditIni(projectPath: string, reportDir: string): { path: string; hono
   }
   const neutral = join(reportDir, NEUTRAL_BANDIT_INI);
   try {
-    writeFileSync(neutral, '[bandit]\n', 'utf8');
+    writeFileSync(neutral, NEUTRAL_BANDIT_INI_TEXT, 'utf8');
   } catch (e) {
     return { error: `could not write the neutral Bandit configuration ${neutral}: ${e instanceof Error ? e.message : String(e)}` };
   }
@@ -928,6 +967,7 @@ async function runSemgrepOnScope(args: Collect & {
   if (entry.status === 'failed' && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
     entry.plugin_pack_only = true;
   }
+  if (entry.status === 'ok' && plan.packMissing) entry.plugin_pack_missing = true;
   tools_run.push(entry);
   // No rule applied to any file in scope: a gap, not a clean result. Files
   // only partly parsed, rules that did not load, the plugin's pack missing
@@ -960,7 +1000,8 @@ async function runBanditOnScope(args: Collect & { ctx: InvokeContext; reportDir:
     missing_tools.push('bandit');
     return;
   }
-  const ini = banditIni(ctx.projectPath, reportDir);
+  // The CI gate's --rules-ref copy of it when set, as the whole-project run (`ci/refConfig.ts`).
+  const ini = banditIni(ctx.configRoot, reportDir);
   if ('error' in ini) {
     tools_run.push({ name: 'bandit', status: 'failed', reason: ini.error });
     return;
@@ -975,7 +1016,7 @@ async function runBanditOnScope(args: Collect & { ctx: InvokeContext; reportDir:
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
   });
   for (const raw of run.reports) parser_inputs.push({ parser: banditParser, input: raw });
-  tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.projectPath, 'bandit') : run.toolRun);
+  tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.configRoot, 'bandit') : run.toolRun);
 }
 
 /**
@@ -1131,6 +1172,21 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
   const { ctx, tools_run, missing_tools, parser_inputs } = args;
   if (!hasRootDotnetSignal(ctx.projectPath)) return;
   const referencesScs = projectReferencesScs(ctx.projectPath);
+
+  // The CI gate on a pull request's tree (`PluginContext.buildRefused`): its
+  // MSBuild is the pull request's code, never run here. A named gap, so the
+  // gate reads the run as incomplete, never as a clean .NET pass.
+  const refused = ctx.plugin.buildRefused;
+  if (refused !== undefined) {
+    const reason = `not built: ${refused}`;
+    tools_run.push({ name: 'dotnet-analyzers', status: 'skipped', reason });
+    missing_tools.push('dotnet-analyzers');
+    if (referencesScs) {
+      tools_run.push({ name: 'security-code-scan', status: 'skipped', reason });
+      missing_tools.push('security-code-scan');
+    }
+    return;
+  }
 
   const dotnetBin = await scannerAvailable('dotnet');
   if (!dotnetBin) {

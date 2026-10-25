@@ -96,6 +96,31 @@ interface PendingHeredoc {
   statement: ShellStatement;
 }
 
+/** The single-character ANSI-C escapes (`$'…'`), each decoded to the byte it stands for. */
+const ANSI_C_SIMPLE: Readonly<Record<string, string>> = {
+  a: '\x07', b: '\b', e: '\x1b', E: '\x1b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v', '\\': '\\', "'": "'", '"': '"', '?': '?',
+};
+
+/**
+ * An ANSI-C quoted string's body (`$'…'`) with its escapes decoded — the
+ * letter escapes above, `\xHH`, `\uHHHH`, `\UHHHHHHHH`, and octal `\0NN` — so a
+ * delete target spelled `$'/'` or `$'\x2f'` is read as `/` (review of 3.6.0,
+ * finding 8). Capped like the rest of this file: nothing here needs more.
+ */
+function decodeAnsiC(body: string): string {
+  if (!body.includes('\\')) return body;
+  return body.replace(/\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|.)/g, (all, seq: string) => {
+    const head = seq.charAt(0);
+    if (head === 'x' || head === 'u' || head === 'U') return codePoint(parseInt(seq.slice(1), 16), all);
+    if (head >= '0' && head <= '7') return codePoint(parseInt(seq, 8), all);
+    return ANSI_C_SIMPLE[seq] ?? all;
+  });
+}
+
+function codePoint(code: number, fallback: string): string {
+  return Number.isFinite(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : fallback;
+}
+
 /** Reads a quoted span starting at `start`, returning its content and the index after it. */
 function scanQuote(source: string, start: number): { inner: string; next: number } {
   const quote = source.charAt(start);
@@ -297,7 +322,7 @@ function skipHeredocBodies(source: string, from: number, pending: PendingHeredoc
  * one the rules see. Never `for`/`case`/`select`: the words after those are a
  * variable name and a word list, not a command.
  */
-const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'esac', '{', '}', '!']);
+const COMPOUND_RESERVED = new Set(['if', 'then', 'elif', 'else', 'fi', 'while', 'until', 'do', 'done', 'esac', '{', '}', '!', 'coproc']);
 
 /**
  * Segments a command into statements and their pipeline members. Quote-,
@@ -465,6 +490,26 @@ export function splitShell(command: string): ShellSplit {
       continue;
     }
 
+    // ANSI-C quoting `$'…'` (escapes decoded) and locale quoting `$"…"` (the
+    // string, translation a no-op). The `$` is consumed, so `rm -rf $'/'` is
+    // `rm -rf /` and `$'\x2f'` likewise — read as a plain `'…'` / `"…"` would
+    // leave a `$` glued to the word and the target went unrecognised (review
+    // of 3.6.0, finding 8). Not after a word character: `x$'…'` concatenates.
+    if (ch === '$' && (command.charAt(i + 1) === "'" || command.charAt(i + 1) === '"') && !/[\w}]/.test(command.charAt(i - 1))) {
+      const q = command.charAt(i + 1);
+      const scanned = scanQuote(command, i + 1);
+      buf += q === "'" ? decodeAnsiC(scanned.inner) : scanned.inner;
+      bufQuoted = true;
+      hasWord = true;
+      masked += MASK;
+      maskedCommand += MASK;
+      const vars = q === '"' ? interpolatedVariables(scanned.inner) : [];
+      if (vars.length > 0) interpolations.push({ at: maskedCommand.length, vars: vars.join(' ') });
+      lastCode = MASK;
+      i = scanned.next;
+      continue;
+    }
+
     if (ch === "'" || ch === '"') {
       const scanned = scanQuote(command, i);
       buf += scanned.inner;
@@ -576,6 +621,17 @@ export function splitShell(command: string): ShellSplit {
       if (next === '|') {
         endStatement('||');
         maskedCommand += '||';
+        i += 2;
+        continue;
+      }
+      // `|&` is `2>&1 |`: a pipe that also carries stderr, not a pipe then a
+      // background `&` (which left `curl x |& sh` reading `& sh` as a word, so
+      // `curl … |& sh` was ok). The `&` is consumed with the pipe.
+      if (next === '&') {
+        endCommand();
+        masked += '|';
+        maskedCommand += '|';
+        lastCode = '|';
         i += 2;
         continue;
       }

@@ -75,30 +75,28 @@ describe('applyGroup — deps', () => {
     expect(b.calls[0]?.args).toContain('--ignore-scripts');
   });
 
-  it('adds --no-scripts to an installing composer command', async () => {
+  it('runs composer without plugins and scripts, and re-locks without installing vendor/', async () => {
+    // A plugin a committed vendor/ holds activates on any composer command the
+    // repository's allow-plugins lets it (test/e2e/depsUpdatePlanHostile.test.ts).
     const g = group({ key: 'composer', candidates: [candidate([npmStep({
       ecosystem: 'composer', package_name: 'guzzlehttp/guzzle', upgrade_command: 'composer require guzzlehttp/guzzle:^7.9.2',
     })])] });
     const { run, calls } = fakeRun([{ outcome: 'completed', exitCode: 0 }]);
     await applyGroup({ group: g, worktreePath: '/w', run, lockfileOnly: false });
-    expect(calls[0]?.args).toEqual(['require', 'guzzlehttp/guzzle:^7.9.2', '--no-scripts']);
+    expect(calls[0]?.args).toEqual(['require', 'guzzlehttp/guzzle:^7.9.2', '--no-plugins', '--no-scripts', '--no-install']);
   });
 
-  it('a Ruby step only re-locks: `bundle update` becomes `bundle lock --update` — never a gem install into the host', async () => {
+  it('never runs Bundler: every command of it evaluates the Gemfile, Ruby code the repository wrote', async () => {
     const ruby = (cmd: string): FixGroup => group({ key: 'rubygems', candidates: [candidate([npmStep({
       ecosystem: 'rubygems', package_name: 'rack', upgrade_command: cmd,
     })])] });
-    const a = fakeRun([{ outcome: 'completed', exitCode: 0 }]);
-    const r = await applyGroup({ group: ruby('bundle update rack'), worktreePath: '/w', run: a.run, lockfileOnly: false });
-    expect(r.applied).toBe(true);
-    expect(a.calls.map((c) => [c.command, ...c.args].join(' '))).toEqual(['bundle lock --update rack']);
-
-    // Any other bundle subcommand installs or executes: refused, nothing runs.
-    const b = fakeRun([]);
-    const refused = await applyGroup({ group: ruby('bundle install'), worktreePath: '/w', run: b.run, lockfileOnly: false });
-    expect(refused.applied).toBe(false);
-    expect(refused.failure?.stderr_head).toMatch(/host/);
-    expect(b.calls).toEqual([]);
+    for (const cmd of ['bundle lock --update rack', 'bundle update rack', 'bundle install']) {
+      const b = fakeRun([]);
+      const refused = await applyGroup({ group: ruby(cmd), worktreePath: '/w', run: b.run, lockfileOnly: false });
+      expect(refused.applied, cmd).toBe(false);
+      expect(refused.failure?.stderr_head, cmd).toMatch(/evaluates the Gemfile/);
+      expect(b.calls, cmd).toEqual([]);
+    }
   });
 
   it('a package identifier with a " or a % from the scanned manifests is refused — npm is npm.cmd on Windows (review 10, finding 3)', async () => {

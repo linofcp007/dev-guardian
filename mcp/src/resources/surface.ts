@@ -2,7 +2,7 @@
  * Attack-surface resources:
  *   - guardian://surface/latest → the server's project's most recent
  *                                 snapshot, bounded
- *   - guardian://surface/{id}   → a specific snapshot, whole
+ *   - guardian://surface/{id}   → a specific snapshot of that project, whole
  *
  * The full route list lives here rather than in the tool result: a project
  * with hundreds of routes would exhaust the agent's context window if every
@@ -58,15 +58,19 @@ registerResourceModule({
   uri: 'guardian://surface/{id}',
   isTemplate: true,
   description:
-    'A specific attack-surface snapshot by id, as returned in `snapshot_id` by ' +
-    '`map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id.',
+    'A specific attack-surface snapshot of the server\'s working-directory project by id, as returned in ' +
+    '`snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id or ' +
+    "another project's snapshot.",
   handler: async (_uri, params, ctx) => {
     const rawId = Array.isArray(params['id']) ? params['id'][0] : params['id'];
     const id = Number.parseInt(String(rawId ?? ''), 10);
     if (Number.isNaN(id)) return { json: { snapshot: null } };
 
+    // The server's own project only, as `latest` and every history resource
+    // answer: ids are sequential, so unscoped any project's snapshots in a
+    // shared or per-user fallback database could be read one id at a time.
     const found = ctx.storage.surface.getById(id);
-    if (!found) return { json: { snapshot: null } };
+    if (!found || found.project_path !== serverProjectPath()) return { json: { snapshot: null } };
     return {
       json: {
         snapshot_id: found.id,

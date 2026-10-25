@@ -711,6 +711,15 @@ rules:
               ...
       - pattern: $O.$REL.$FIELD
       - pattern-not-inside: $O.$REL.$FIELD(...)
+      # Um atributo do VALOR de um campo, não de uma relação: as partes de um
+      # DateTimeField (`ev.created_at.year`) e o `.url` / `.path` / `.size` /
+      # `.width` / `.height` de um FileField ou ImageField não leem outra
+      # linha. Cada um disparava (revisão 3.6.1, Semgrep 1.182.0). O `.name`
+      # fica de fora de propósito: `book.author.name` é o N+1 canónico, e o
+      # `doc.file.name` que se perde é o preço.
+      - metavariable-regex:
+          metavariable: $FIELD
+          regex: ^(?!(year|month|day|hour|minute|second|microsecond|tzinfo|url|path|size|width|height)$)
       - pattern-not-inside: |
           for $O in <... $Q.select_related(...) ...>:
               ...

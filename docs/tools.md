@@ -63,7 +63,7 @@ The dev-guardian MCP server lists **50 tools** and **18 resources**. This page i
 
 ### `audit_agent_config`
 
-Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, plugin.json; user-level ones with include\_user\_config): unpinned npx/uvx servers, plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach the network, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. Reads only; audit\_mcp\_tools inspects what servers serve.
+Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, plugin.json, hooks/hooks.json; user-level ones with include\_user\_config): unpinned npx/uvx servers, plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach the network or run what scan\_skill flags, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. Reads only; audit\_mcp\_tools inspects what servers serve.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -153,7 +153,7 @@ Apply scanner-made fixes — deps\_update\_plan upgrades, the rules' own Semgrep
 
 ### `create_github_issues`
 
-Open one GitHub issue per top open finding of project\_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its fingerprint is in the title). severity\_min (default high) and max\_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry\_run: preview first.
+Open one GitHub issue per top open finding of project\_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its identity is in the title). severity\_min (default high) and max\_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry\_run: preview first.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -175,7 +175,7 @@ Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virt
 
 ### `deps_update_plan`
 
-Ordered upgrades from each stack's own outdated command (npm, composer, cargo, go, rubygems; dotnet after a locked restore, which runs MSBuild) and pip's own pins. Each entry: security (an active CVE in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest available), patch, minor or major, with its upgrade\_command; pnpm and yarn get overrides to apply by hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.
+Ordered upgrades from each stack's own outdated command (npm on a copy of the manifests, never the repo's .npmrc; composer without plugins; cargo, go; dotnet after a locked restore, which runs MSBuild) and pip's own pins, with no token in their environment. Bundler is not run: the Gemfile is Ruby code. Each entry: security (an active CVE in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest available), patch, minor or major, with its upgrade\_command; pnpm and yarn get overrides to apply by hand. `unplanned`: CVEs with no step; `runner_failures`: why.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -528,7 +528,7 @@ gitleaks over git history and uncommitted files (the whole directory outside git
 
 ### `scan_skill`
 
-Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, .zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, tool poisoning, dangerous code, taint flows — the commands in instruction files and hook / plugin / MCP configs scored like scripts — and OSV CVEs of its dependencies. Returns a 0-100 risk score and SAFE, REVIEW, CAUTION or DO\_NOT\_INSTALL.
+Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, .zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, tool poisoning, dangerous code, taint flows — the commands in instruction files and hook / plugin / MCP configs scored like scripts — and OSV CVEs of its dependencies. Returns a 0-100 risk score and SAFE, REVIEW, CAUTION or DO\_NOT\_INSTALL. What it could not read or look up is named in missing\_tools (coverage partial), and the verdict is then never SAFE.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -578,7 +578,7 @@ Mark a scan as its project's baseline for its type — by default the newest usa
 
 ### `suggest_fix`
 
-Gather a finding's context — the source around it, rule metadata, earlier suppressions of the same rule — from project\_path's newest scan that reported it, so you can write the patch. Calls no LLM.
+Gather a finding's context — the source around it, rule metadata, earlier suppressions of the same rule — from project\_path's newest scan that reported it, so you can write the patch. Calls no LLM. A line that holds a secret (a credential finding, or the secret detector) is withheld and named in redacted\_lines.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -623,7 +623,7 @@ Check packages before installing them, against the registry and OSV: the name ex
 
 ### `wp_audit`
 
-Audit a WordPress install with WP-CLI, changing nothing. mode install (default): core and plugin checksums (themes: not checked), administrators with risky logins, DISALLOW\_FILE\_EDIT / WP\_DEBUG / FORCE\_SSL\_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin — where backdoors persist. mode bulk: the install audit of up to 50 installs. Needs WP-CLI; checksums come from api.wordpress.org.
+Audit a WordPress install with WP-CLI, changing nothing. mode install (default): core and plugin checksums (themes: not checked), administrators with risky logins, DISALLOW\_FILE\_EDIT / WP\_DEBUG / FORCE\_SSL\_ADMIN, auto-updating plugins. mode cron: scheduled events with unknown hooks, base64-looking arguments or an inactive plugin — where backdoors persist. mode bulk: the install audit of up to 50 installs. Needs WP-CLI; checksums come from api.wordpress.org. WP-CLI boots the site with its plugins and theme skipped; wp-config.php, core files and must-use plugins still run.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -637,7 +637,7 @@ Audit a WordPress install with WP-CLI, changing nothing. mode install (default):
 
 ### `wp_report`
 
-What dev-guardian recorded about one WordPress install (project\_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target\_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp\_install\_path, its version and state from WP-CLI, which boots the site (its PHP, its database). Run wp\_audit or wp\_vuln\_check first for fresh data.
+What dev-guardian recorded about one WordPress install (project\_path = its root); no service queried. kind setup: the latest install, cron and REST audits (target\_url for those keyed by URL), open WordPress findings, CVEs. kind hardening: a prioritised checklist from the latest install audit. kind plugin: one slug's recorded CVEs and, with a local wp\_install\_path, its version and state from WP-CLI, which boots the site (its database; its PHP minus plugins and theme). Run wp\_audit or wp\_vuln\_check first for fresh data.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -706,7 +706,7 @@ Every resource returns compact JSON and answers for the project the server was s
 | `guardian://scans/history` | `guardian-scans-history` | Up to 50 most-recent scans of the server's working-directory project, across every type, ordered by start time descending. Records are sparse — call `guardian://scans/{scan_id}` for the full ScanResult. |
 | `guardian://scans/latest` | `guardian-scans-latest` | Latest completed scan of any type of the server's working-directory project, with severity counts and the top-10 findings inlined. Returns `{ last_run: null }` when no scan has run yet. For what is open across every scan type, read guardian://findings/open. |
 | `guardian://stack` | `guardian-stack` | Latest stack snapshot of the server's working-directory project, produced by `detect_stack`. Returns `{ snapshot: null }` when no snapshot exists yet. |
-| `guardian://surface/{id}` | `guardian-surface-by-id` | A specific attack-surface snapshot by id, as returned in `snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id. |
+| `guardian://surface/{id}` | `guardian-surface-by-id` | A specific attack-surface snapshot of the server's working-directory project by id, as returned in `snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id or another project's snapshot. |
 | `guardian://surface/latest` | `guardian-surface-latest` | Latest attack-surface snapshot of the server's working-directory project, from `map_attack_surface`: routes (code- and spec-provenance) with resolved path, method, params and auth hint, env vars, declared ports, per-language coverage, spec\_files and the spec\_diff (matched, code\_only, spec\_only, unmatchable). Each list is capped at 200 entries — `totals` has the true counts, `truncated` names what was cut, and guardian://surface/{snapshot\_id} returns the whole snapshot. Import edges and third-party imports are counted, not inlined. Returns `{ snapshot: null }` when none exists yet. |
 | `guardian://wp/audit/{scan_id}` | `guardian-wp-audit-by-id` | wp\_audit result for a specific scan\_id. Errors -32602 when the id is unknown or is not a wp\_audit scan. |
 | `guardian://wp/audit/latest` | `guardian-wp-audit-latest` | Most recent wp\_audit result: WP version, file checksum mismatches, config flags, admin users, plugins with auto\_update. Returns `{ last_run: null }` when no audit exists. |

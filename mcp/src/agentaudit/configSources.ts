@@ -80,6 +80,9 @@ export interface ConfigSource {
   nestedProjects?: true;
 }
 
+/** A plugin's own hooks file, at its root. */
+export const PLUGIN_HOOKS_LABEL = 'hooks/hooks.json';
+
 const PROJECT_DESCRIPTORS: ConfigSourceDescriptor[] = [
   { label: '.mcp.json', kind: 'project', mcpServersField: 'mcpServers', resolve: (p) => join(p, '.mcp.json') },
   {
@@ -120,6 +123,9 @@ const PROJECT_DESCRIPTORS: ConfigSourceDescriptor[] = [
     mcpServersField: 'mcpServers',
     resolve: (p) => join(p, '.claude-plugin', 'plugin.json'),
   },
+  // The hooks a plugin ships: Claude Code loads this file from the plugin's
+  // root by itself. It was never read (review of 3.6.0).
+  { label: PLUGIN_HOOKS_LABEL, kind: 'project', mcpServersField: null, resolve: (p) => join(p, 'hooks', 'hooks.json') },
 ];
 
 /**

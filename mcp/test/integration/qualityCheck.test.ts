@@ -55,7 +55,7 @@ type Call = ProcessRunOptions & { args: string[] };
 let calls: Call[] = [];
 let ruffExit = 0;
 /** Overrides of what an analyser writes, for the clean and the broken cases. */
-let reports: { eslint?: string; radon?: string; staticcheck?: ProcessRunResult } = {};
+let reports: { eslint?: string; radon?: string; staticcheck?: ProcessRunResult; ruff?: (cwd: string) => string } = {};
 
 function result(exitCode: number, stdout = ''): ProcessRunResult {
   return { outcome: exitCode === 0 ? 'completed' : 'failed', exitCode, stdout, stderr: '', truncated: false };
@@ -76,7 +76,7 @@ async function fakeScanner(opts: ProcessRunOptions): Promise<ProcessRunResult> {
     return result(0);
   }
   if (opts.command === 'ruff') {
-    if (ruffExit === 0) writeFileSync(after(a, '--output-file'), fixture('ruff.json'));
+    if (ruffExit === 0) writeFileSync(after(a, '--output-file'), reports.ruff?.(opts.cwd ?? '') ?? fixture('ruff.json'));
     return result(ruffExit);
   }
   if (opts.command === 'radon') {
@@ -229,6 +229,24 @@ describe('quality_check', () => {
     expect(calls.some((c) => c.command === 'npx')).toBe(false);
   });
 
+  it("the project's ESLint (its code) gets a test command's environment: no credential, no GUARDIAN_*", async () => {
+    const saved = { token: process.env['GITHUB_TOKEN'], guardian: process.env['GUARDIAN_OFFLINE'] };
+    process.env['GITHUB_TOKEN'] = 'ghp_fake_for_the_test';
+    try {
+      await quality(polyglot());
+    } finally {
+      if (saved.token === undefined) delete process.env['GITHUB_TOKEN'];
+      else process.env['GITHUB_TOKEN'] = saved.token;
+    }
+    const eslint = calls.find((c) => c.args[0]?.endsWith('eslint.js'));
+    expect(eslint?.extendEnv).toBe(false);
+    const names = Object.keys(eslint?.env ?? {});
+    expect(names.some((n) => n.toUpperCase() === 'PATH')).toBe(true);
+    expect(names).not.toContain('GITHUB_TOKEN');
+    expect(names.filter((n) => n.toUpperCase().startsWith('GUARDIAN_'))).toEqual([]);
+    expect(saved.guardian).toBe(process.env['GUARDIAN_OFFLINE']);
+  });
+
   it('honours categories in the response, and still records every finding', async () => {
     const { r, p } = await quality(polyglot(), { categories: ['duplicate'] });
     expect(total(r.findings_count_by_severity)).toBe(2);
@@ -242,6 +260,41 @@ describe('quality_check', () => {
     const complexity = await quality(polyglot(), { categories: ['complexity'] });
     // radon x3 + eslint complexity.
     expect(total(complexity.r.findings_count_by_severity)).toBe(4);
+  });
+
+  // 3.6.1: Ruff 0.5 – 0.12 report a syntax error with `code: null`, which
+  // was dropped — run ok, coverage full, the file never linted. Hand-made
+  // from Ruff's JSON renderer snapshot at 0.12.0 (ruff is not installed here).
+  it.each([
+    ['the whole project', {}],
+    ['a scope', { scope: { paths: ['broken.py', 'ok.py'] } }],
+  ])('a Python file Ruff could not parse is partially_parsed and ruff is missing (%s)', async (_label, input) => {
+    reports.ruff = (dir) =>
+      JSON.stringify([
+        {
+          cell: null,
+          code: null,
+          end_location: { column: 1, row: 2 },
+          filename: join(dir, 'broken.py'),
+          fix: null,
+          location: { column: 15, row: 1 },
+          message: 'SyntaxError: Expected one or more symbol names after import',
+          noqa_row: null,
+          url: null,
+        },
+      ]);
+    const dir = makeTempDir('quality-ruff-syntax-');
+    writeFileSync(join(dir, 'broken.py'), 'from x import\n');
+    writeFileSync(join(dir, 'ok.py'), 'x = 1\n');
+    const { r } = await quality(dir, input);
+    const ruff = r.tools_run.find((t) => t.name === 'ruff');
+    expect(ruff?.status).toBe('ok');
+    expect(ruff?.partially_parsed).toEqual([
+      { file: 'broken.py', type: 'Syntax error', message: 'SyntaxError: Expected one or more symbol names after import' },
+    ]);
+    expect(ruff?.reason).toMatch(/broken\.py/);
+    expect(r.missing_tools.filter((m) => m === 'ruff')).toEqual(['ruff']);
+    expect(r.coverage).toBe('partial');
   });
 
   it('a scanner that errors is failed and coverage is partial, not "0 findings"', async () => {

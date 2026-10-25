@@ -74,14 +74,15 @@
  * rows it skips; nothing here searches a fixed window of recent scans.
  */
 
-import { indexFindings } from '../fingerprint/findingIdentity.js';
+import { dependencyCoordinates, indexFindings } from '../fingerprint/findingIdentity.js';
 import type { LlmMarker } from '../llmscan/types.js';
-import { llmMarkerOf } from '../llmscan/submission.js';
+import { llmMarkerOf, llmVerdictIdentityOf } from '../llmscan/submission.js';
 import type { Storage } from '../storage/index.js';
 import { futureDatedNote } from '../storage/scanClock.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import {
   SEVERITY_ORDER,
+  type Cve,
   type Finding,
   type ScanCoverage,
   type ScanRecord,
@@ -457,9 +458,13 @@ export function summarizeSkipped(hits: readonly SkipHit[]): SkippedSummary {
 
 /**
  * "Is this finding suppressed?" against `now` and `projectPath` — by
- * fingerprint, or by identity where both sides have one: the same
- * either-key rule as `findingsRepo.ts#SUPPRESSION_MATCHES_F`, decided on an
- * injected clock. `suppressions` is typically the WHOLE database's list
+ * identity where both sides have one, by fingerprint only where one of them
+ * has none: `indexFindings`' rule, and `findingsRepo.ts#SUPPRESSION_MATCHES_F`'s,
+ * decided on an injected clock. Two identities that differ are two findings
+ * even on one fingerprint — a Semgrep without login stores "requires login"
+ * as the snippet, so a real eval landing on a suppressed false positive's
+ * lines shares its fingerprint, and matching on it hid the real one.
+ * `suppressions` is typically the WHOLE database's list
  * (`storage.suppressions.listAll()`, never project-scoped by the query
  * itself), so this is also where cross-project isolation happens: a
  * suppression whose `project_path` (migration 011) names a different
@@ -473,6 +478,9 @@ export function suppressionMatcher(
   now: number,
   projectPath: string,
 ): (f: Pick<Finding, 'fingerprint' | 'identity'>) => boolean {
+  // Fingerprints of the suppressions that have no identity (they match any
+  // finding on it), and of every suppression (for a finding that has none).
+  const bareFingerprints = new Set<string>();
   const fingerprints = new Set<string>();
   const identities = new Set<string>();
   for (const s of suppressions) {
@@ -480,8 +488,12 @@ export function suppressionMatcher(
     if (s.project_path !== undefined && s.project_path !== projectPath) continue;
     fingerprints.add(s.finding_fingerprint);
     if (s.finding_identity !== undefined) identities.add(s.finding_identity);
+    else bareFingerprints.add(s.finding_fingerprint);
   }
-  return (f) => fingerprints.has(f.fingerprint) || (f.identity !== undefined && identities.has(f.identity));
+  return (f) =>
+    f.identity === undefined
+      ? fingerprints.has(f.fingerprint)
+      : identities.has(f.identity) || bareFingerprints.has(f.fingerprint);
 }
 
 /**
@@ -504,6 +516,35 @@ export function partitionSuppressed<F extends Pick<Finding, 'fingerprint' | 'ide
   const suppressed: F[] = [];
   for (const f of findings) (isSuppressed(f) ? suppressed : visible).push(f);
   return { visible, suppressed };
+}
+
+/**
+ * The CVEs scan `scanId` saw (`scan_cves`) minus those a suppression of
+ * `projectPath` active at `now` takes out: a CVE row a suppressed finding of
+ * that scan names (its id and package, `dependencyCoordinates`) and no
+ * visible one does — the rule `scanToolFactory.ts#cvesStillFound` applies to
+ * `.guardianignore`. A row no finding names is kept. `risk_score` and the
+ * dashboard counted a VEX `not_affected` CVE's row while the open set had
+ * hidden its finding: up to 12 points and "Address active CVEs".
+ */
+export function unsuppressedCves(storage: Storage, projectPath: string, scanId: string, now: number = Date.now()): Cve[] {
+  const cves = storage.cves.listActive(scanId);
+  if (cves.length === 0) return cves;
+  const { visible, suppressed } = partitionSuppressed(storage, projectPath, storage.findings.listByScan(scanId), now);
+  const keys = (list: readonly Finding[]): Set<string> => {
+    const out = new Set<string>();
+    for (const f of list) {
+      const coords = dependencyCoordinates(f);
+      if (coords !== null && f.rule_id !== undefined) out.add(`${f.rule_id}\0${coords.name}`);
+    }
+    return out;
+  };
+  const shown = keys(visible);
+  const hidden = keys(suppressed);
+  return cves.filter((c) => {
+    const key = `${c.cve_id}\0${c.package_name}`;
+    return shown.has(key) || !hidden.has(key);
+  });
 }
 
 /**
@@ -776,14 +817,33 @@ function openSetSlots(storage: Storage, projectPath: string): OpenSetSlot[] {
   return [...slots, ...imports.sort()];
 }
 
-/** The host model's verdicts on a project's findings, by fingerprint (provider `llm` only, read as such). */
-export function llmMarkersOf(storage: Storage, projectPath: string): Map<string, LlmMarker> {
-  const markers = new Map<string, LlmMarker>();
+/** The host model's verdicts on a project's findings (provider `llm` only, read as such). */
+export interface LlmMarkers {
+  /** The verdict given on `f`, if any. */
+  get(f: Pick<Finding, 'fingerprint' | 'identity'>): LlmMarker | undefined;
+}
+
+/**
+ * {@link LlmMarkers} for `projectPath`. A verdict is stored by fingerprint,
+ * with the identity of the finding it judged when that had one, and applies
+ * to a finding by `indexFindings`' rule: the identity where both have one,
+ * the fingerprint only where either has none. On the fingerprint alone, a
+ * `not_exploitable` demoted a later, different finding on the same lines
+ * under a redacted snippet (Semgrep's "requires login").
+ */
+export function llmMarkersOf(storage: Storage, projectPath: string): LlmMarkers {
+  const byFingerprint = new Map<string, { marker: LlmMarker; identity: string | undefined }>();
   for (const v of storage.validations.listByProvider(projectPath, 'llm')) {
     const marker = llmMarkerOf(v);
-    if (marker !== null) markers.set(v.fingerprint, marker);
+    if (marker !== null) byFingerprint.set(v.fingerprint, { marker, identity: llmVerdictIdentityOf(v) });
   }
-  return markers;
+  return {
+    get: (f) => {
+      const hit = byFingerprint.get(f.fingerprint);
+      if (hit === undefined) return undefined;
+      return hit.identity !== undefined && f.identity !== undefined && hit.identity !== f.identity ? undefined : hit.marker;
+    },
+  };
 }
 
 /** An INDEPENDENT `not_exploitable` verdict: the only one that demotes a finding (US-1.AC-6, US-1.AC-7). */
@@ -809,7 +869,7 @@ export function isHuntFinding(f: Pick<Finding, 'tool'>): boolean {
  * regression check, the report, a scan resource — so a hunt candidate never
  * moves a total, a gate or a score there either.
  */
-export function splitHuntCandidates<T extends Pick<Finding, 'tool' | 'fingerprint'>>(
+export function splitHuntCandidates<T extends Pick<Finding, 'tool' | 'fingerprint' | 'identity'>>(
   storage: Storage,
   projectPath: string,
   rows: readonly T[],
@@ -818,12 +878,12 @@ export function splitHuntCandidates<T extends Pick<Finding, 'tool' | 'fingerprin
   const markers = llmMarkersOf(storage, projectPath);
   const counted: T[] = [];
   const unconfirmed: T[] = [];
-  for (const f of rows) (isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)) ? unconfirmed : counted).push(f);
+  for (const f of rows) (isHuntFinding(f) && !isConfirming(markers.get(f)) ? unconfirmed : counted).push(f);
   return { counted, unconfirmed };
 }
 
 /** {@link splitHuntCandidates}' `counted` half: the rows of a scan that count. */
-export function countableFindings<T extends Pick<Finding, 'tool' | 'fingerprint'>>(
+export function countableFindings<T extends Pick<Finding, 'tool' | 'fingerprint' | 'identity'>>(
   storage: Storage,
   projectPath: string,
   rows: readonly T[],
@@ -891,7 +951,7 @@ export function openSetForProject(
   // verdict confirms it; unverified, `not_exploitable` and `same_context` ones
   // never count (US-2.AC-5). Others are marked, never filtered.
   const admitted = (f: Finding): { marker: LlmMarker | undefined; show: boolean } => {
-    const marker = llmVerdicts.get(f.fingerprint);
+    const marker = llmVerdicts.get(f);
     return { marker, show: !isHuntFinding(f) || isConfirming(marker) };
   };
 
@@ -912,7 +972,7 @@ export function openSetForProject(
   // a reader can say how much a suppression (a mass one included) takes out.
   const suppressedSeen = indexFindings<Finding>([]);
   let suppressedCount = 0;
-  for (const { slot, scan, coverage } of picked) {
+  const admitSource = ({ slot, scan, coverage }: (typeof picked)[number]): void => {
     const batch: OpenFinding[] = [];
     for (const f of rowsOf(scan)) {
       if (!findingInSlot(scan, f, slot) || seen.has(f)) continue;
@@ -938,7 +998,14 @@ export function openSetForProject(
       coverage,
       findings: contributed,
     });
-  }
+  };
+  // An imported log's sources come after every native one, carried findings
+  // included: the log is whatever file the caller named (one in the
+  // repository under scan, say), and its `devGuardianIdentity` any 64-hex
+  // string, so newest first across slots a log carrying a Semgrep critical's
+  // identity at severity info hid the critical until the next native scan.
+  // Among the native sources, and among the imported ones, the newer copy wins.
+  for (const p of picked) if (!isSarifSlot(p.slot)) admitSource(p);
 
   // After every source: a newer copy of the same identity always wins.
   for (const { slot, scan, coverage, findings: rows } of carried) {
@@ -965,6 +1032,7 @@ export function openSetForProject(
       carried_for: [...gaps],
     });
   }
+  for (const p of picked) if (isSarifSlot(p.slot)) admitSource(p);
 
   findings.sort(
     (a, b) =>

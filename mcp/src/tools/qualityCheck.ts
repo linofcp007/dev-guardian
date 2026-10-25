@@ -56,17 +56,19 @@ import { eslintFatalErrors, eslintParser } from '../runners/scannerParsers/eslin
 import { asArray, getNumber, getProp, parseInputAsJson, type ScannerParser } from '../runners/scannerParsers/index.js';
 import { jscpdParser } from '../runners/scannerParsers/jscpd.js';
 import { radonErrors, radonParser } from '../runners/scannerParsers/radon.js';
-import { ruffParser } from '../runners/scannerParsers/ruff.js';
+import { ruffParser, ruffSyntaxErrors } from '../runners/scannerParsers/ruff.js';
+import { describePartialParse } from '../runners/semgrepReport.js';
 import { shellcheckParser } from '../runners/scannerParsers/shellcheck.js';
 import { detektParser } from '../runners/scannerParsers/detekt.js';
 import { rubocopParser } from '../runners/scannerParsers/rubocop.js';
 import { detektFiles } from '../runners/detektRun.js';
+import { testCommandEnv } from '../fixpr/testCommandEnv.js';
 import { rubocopFiles } from '../runners/rubocopRun.js';
 import { staticcheckErrors, staticcheckParser } from '../runners/scannerParsers/staticcheck.js';
 import { SHELLCHECK, shellcheckScripts, shellScripts } from '../runners/shellcheckRun.js';
 import { listScannedFiles } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath } from '../schemas.js';
-import type { Finding, ToolRun } from '../types.js';
+import type { Finding, PartialParse, ToolRun } from '../types.js';
 import { registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
 import {
@@ -303,6 +305,8 @@ function record(
    * because those files were not checked.
    */
   gaps: readonly string[] = [],
+  /** Files it could not parse (Ruff's syntax errors): `partially_parsed`, and missing too. */
+  partial: readonly PartialParse[] = [],
 ): void {
   if (run.outcome === 'cancelled') out.cancelled = true;
   const problems: string[] = [];
@@ -320,12 +324,17 @@ function record(
   }
   out.parser_inputs.push({ parser, input: report });
   const entry: ToolRun = { name, status: 'ok' };
-  if (gaps.length > 0) {
-    entry.reason = gaps.join('; ');
+  const reasons = [...gaps, ...(partial.length > 0 ? [describePartialParse(partial, UNPARSED)] : [])];
+  if (reasons.length > 0) {
+    entry.reason = reasons.join('; ');
     out.missing_tools.push(name);
   }
+  if (partial.length > 0) entry.partially_parsed = [...partial];
   out.tools_run.push(entry);
 }
+
+/** What a file Ruff could not parse costs: it was not linted. */
+const UNPARSED = 'findings in those files may be missing';
 
 async function runJscpd(ctx: InvokeContext, reportDir: string, out: Collected): Promise<void> {
   if (!(await scannerAvailable('jscpd'))) return notInstalled(out, 'jscpd');
@@ -363,7 +372,9 @@ async function runRuff(ctx: InvokeContext, reportDir: string, out: Collected): P
     signal: ctx.signal,
     onLog: ctx.onLog,
   });
-  record(out, 'ruff', run, [0], readJsonSafe(file), Array.isArray, ruffParser);
+  const report = readJsonSafe(file);
+  const partial = report === null ? [] : ruffSyntaxErrors(report, ctx.projectPath);
+  record(out, 'ruff', run, [0], report, Array.isArray, ruffParser, [], partial);
 }
 
 async function runRadon(ctx: InvokeContext, reportDir: string, out: Collected): Promise<void> {
@@ -393,11 +404,16 @@ async function runEslint(ctx: InvokeContext, reportDir: string, out: Collected):
     );
   }
   const file = join(reportDir, 'eslint.json');
+  // The project's ESLint and its eslint.config.js are the project's code: they
+  // get the environment create_fix_pr gives a test command (a toolchain's
+  // locations, no credential, no GUARDIAN_*), never the server's own, which
+  // can hold a GITHUB_TOKEN or cloud keys (review of 3.6.0).
   const run = await runProcess({
     command: process.execPath,
     args: [eslint, '--format', 'json', '--output-file', file, '.'],
     cwd: ctx.projectPath,
-    env: ctx.scriptEnv,
+    env: testCommandEnv(ctx.scriptEnv),
+    extendEnv: false,
     signal: ctx.signal,
     onLog: ctx.onLog,
   });
@@ -518,6 +534,7 @@ async function runOnScope(ctx: InvokeContext, reportDir: string, out: Collected,
       okExitCodes: [0],
       reportOk: Array.isArray,
       parser: ruffParser,
+      partial: ruffSyntaxErrors,
     });
     if (!out.cancelled) {
       await runOnFileBatches(ctx, out, {
@@ -637,6 +654,8 @@ async function runOnFileBatches(
     reportOk: (parsed: unknown) => boolean;
     parser: ScannerParser;
     errors?: (report: string) => string[];
+    /** Files a batch's report says were not parsed (Ruff's syntax errors): `partially_parsed`, and missing. */
+    partial?: (report: string) => PartialParse[];
     env?: NodeJS.ProcessEnv;
   },
 ): Promise<void> {
@@ -659,7 +678,7 @@ async function runOnFileBatches(
       }
       if (exitCode === null || !opts.okExitCodes.includes(exitCode)) return { ok: false, reason: `exit ${String(exitCode)}` };
       if (raw === null || !opts.reportOk(parseInputAsJson(raw))) return { ok: false, reason: 'no readable report was written' };
-      return { ok: true };
+      return { ok: true, ...(opts.partial !== undefined ? { partial: opts.partial(raw) } : {}) };
     },
   });
   if (run.cancelled) out.cancelled = true;
@@ -669,8 +688,9 @@ async function runOnFileBatches(
   const gaps = couldNotAnalyse(errors);
   if (entry.status === 'ok' && gaps.length > 0) {
     entry.reason = [entry.reason, ...gaps].filter((s) => s !== undefined).join('; ');
-    out.missing_tools.push(opts.name);
   }
+  // scanFileBatches names the partly parsed files (`partially_parsed`, the reason); the gap is the caller's.
+  if (entry.status === 'ok' && (gaps.length > 0 || run.partial.length > 0)) out.missing_tools.push(opts.name);
   out.tools_run.push(entry);
 }
 

@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIONLINT_VERSION,
   COSIGN_RELEASE_SHA256,
   COSIGN_VERSION,
   PINNED_RELEASES,
@@ -14,6 +15,8 @@ import {
   PSALM_VERSION,
   TOOL_CATALOG,
   TRIVY_INSTALL_TAG,
+  WP_CLI_PHAR_SHA256,
+  WP_CLI_VERSION,
   knownCompromise,
   pickInstallSpec,
   suggestedInstallCommandString,
@@ -120,7 +123,47 @@ describe('actionlint catalog entry', () => {
     expect(meta?.install.win32.scoop?.args).toEqual(['install', 'actionlint']);
     expect(meta?.install.win32.choco?.args).toEqual(['install', '-y', 'actionlint']);
     expect(meta?.install.darwin.brew?.args).toEqual(['install', 'actionlint']);
-    expect(meta?.install.linux.go?.args).toEqual(['install', 'github.com/rhysd/actionlint/cmd/actionlint@latest']);
+  });
+
+  it('Linux: go install of the tag the CI templates pin, into the per-user tools directory — never @latest', () => {
+    const spec = TOOL_CATALOG['actionlint']?.install.linux.go;
+    expect(spec?.command).toBe('bash');
+    expect(spec?.args[1]).toContain(`GOBIN="$HOME/.local/bin" go install 'github.com/rhysd/actionlint/cmd/actionlint@v${ACTIONLINT_VERSION}'`);
+    expect(spec?.args[1]).not.toMatch(/@latest/);
+    expect(spec?.user_bin).toBe('actionlint');
+  });
+});
+
+describe('WP-CLI on Linux: the release PHAR, sha256-checked, never the builds branch', () => {
+  it('curl -f of the pinned release, its sum checked before it is installed to ~/.local/bin/wp', () => {
+    const spec = TOOL_CATALOG['wp-cli']?.install.linux.curl;
+    const script = spec?.args[1] ?? '';
+    expect(spec?.command).toBe('bash');
+    expect(script).toContain('set -eu');
+    expect(script).toContain(`curl -sSfL -o "$tmp" "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar"`);
+    expect(script).toContain(`echo "${WP_CLI_PHAR_SHA256}  $tmp" | sha256sum -c -`);
+    expect(script.indexOf('sha256sum -c -')).toBeLessThan(script.indexOf('install -m 0755'));
+    expect(script).toContain('mkdir -p "$HOME/.local/bin"');
+    expect(script).toContain('install -m 0755 "$tmp" "$HOME/.local/bin/wp"');
+    expect(script).not.toMatch(/gh-pages|raw\.githubusercontent|latest/);
+    expect(spec?.user_bin).toBe('wp');
+    expect(WP_CLI_PHAR_SHA256).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('no installer follows upstream', () => {
+  // A branch head (`gh-pages`, `main`), a `releases/latest` redirect or `@latest`
+  // installs whatever upstream published last: the route the malicious Trivy
+  // v0.69.4 took (TRIVY_INSTALL_TAG). wp-cli's Linux entry fetched the builds
+  // branch's phar, and actionlint's `go install …@latest`, until 3.6.1.
+  it.each(Object.keys(TOOL_CATALOG))('%s', (tool) => {
+    const meta = TOOL_CATALOG[tool];
+    for (const os of ['win32', 'linux', 'darwin'] as const) {
+      for (const [manager, spec] of Object.entries(meta?.install[os] ?? {})) {
+        const text = [spec.command, ...spec.args].join(' ');
+        expect(text, `${tool} ${os} ${manager}`).not.toMatch(/@latest|releases\/latest|\/gh-pages\/|\/main\/|raw\.githubusercontent\.com/);
+      }
+    }
   });
 });
 

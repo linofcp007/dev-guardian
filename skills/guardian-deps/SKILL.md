@@ -1,6 +1,6 @@
 ---
 name: guardian-deps
-description: "Dependencies — CVE audit, an ordered upgrade plan and upgrade PRs, vetting a package before or right after an install, supply-chain checks, Dependabot / Renovate PRs and setup. Not for licences or an SBOM (guardian-compliance)."
+description: "Dependencies — CVE audit, an ordered upgrade plan and upgrade PRs, vetting a package before or right after an install, supply-chain checks, Dependabot / Renovate PRs and setup, a VEX document. Not for licences or an SBOM (guardian-compliance)."
 ---
 
 # Guardian Deps
@@ -93,20 +93,11 @@ Vulnerabilidades conhecidas não são o único risco — packages maliciosos tam
 2. Tipo de update: **patch** (quase sempre seguro — CI verde, merge), **minor** (lê as release notes à procura de "breaking" / "deprecated"), **major** (lê o CHANGELOG, procura no código os usos das APIs alteradas).
 3. Veredito: "pode fazer merge" / "atenção: usas X em N sítios, vais ter de mudar" (com diffs) / "não fazer merge ainda — incompatível com Y".
 
-## 8. Licenças
+## 8. Licenças e SBOM
 
-`compliance_check { project_path: "<project>" }` (scan de licenças do Trivy) e depois `license_compatibility { project_path: "<project>" }`, que cruza a licença do projeto (sem licença declarada ou "proprietary" conta como proprietário) com as das dependências:
+São da `guardian-compliance` (`compliance_check`, `license_compatibility`, `generate_sbom`, `sbom_diff`): segue essa skill. O `generate_sbom` também é o primeiro passo do VEX, abaixo.
 
-- 🔴 GPL / AGPL num projeto não-GPL
-- 🟡 LGPL (OK em dynamic linking, cuidado com static linking)
-- 🟢 MIT / Apache / BSD
-- `undetermined` (expressões SPDX OR/AND, licenças não reconhecidas) nunca conta como compatível
-
-## 9. SBOM
-
-`generate_sbom { project_path: "<project>", format: "cyclonedx-json" }` (Syft; Trivy como fallback) — o ficheiro fica em `.guardian/reports/sbom-<scan>/` (`file_path`). Entre releases, `sbom_diff { project_path: "<project>" }` compara os dois SBOMs mais recentes. Útil para responder depressa a um CVE novo ("usamos a lib X?").
-
-### VEX
+## 9. VEX
 
 `export_vex { project_path: "<project>" }` escreve um documento OpenVEX (ou CycloneDX com `format: "cyclonedx"`) em `.guardian/reports/vex-*/`, uma declaração por vulnerabilidade (CVE, ou o id GHSA/PYSEC próprio, com os aliases que o scanner deu) e versão do package, do scan de dependências mais recente. Nunca inventa um estado:
 
@@ -131,6 +122,5 @@ Só quando as tools não estão disponíveis — diz ao utilizador que assim nã
 trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
 npm audit --json
 pip-audit -r requirements.txt
-npx license-checker --json --production
 syft . -o cyclonedx-json > sbom.json
 ```

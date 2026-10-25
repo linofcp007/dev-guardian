@@ -189,19 +189,25 @@ const BASE_ROUTES = [
   // (a named annotation argument, see routes.yml's Java section), not the
   // declaration-spanning one FOCUSED_ROUTES below is about — so their rows
   // stay here rather than moving.
-  'spring ANY /legacy',
-  'spring ANY /spring/orders',
-  'spring DELETE /{id}',
-  'spring GET /list',
+  //
+  // Every one is [partial] (review of 3.6.0): Spring joins the class-level
+  // `@RequestMapping("/spring/orders")` to each method mapping, so `GET /list`
+  // is served at `/spring/orders/list`, and the rules cannot bind the class's
+  // path (extract.ts CLASS_PREFIX_KEY). Partial rows are left out of the spec
+  // diff, which is why EXPECTED_SHADOW no longer lists them.
+  'spring ANY /legacy [partial]',
+  'spring ANY /spring/orders [partial]',
+  'spring DELETE /{id} [partial]',
+  'spring GET /list [partial]',
   // `@GetMapping(value = "/named", produces = "application/json")`. This one
   // was pinned in java-spring/OrderController.java as a KNOWN LIMITATION —
   // "the named-argument form is not matched" — on the strength of
   // `@GetMapping($PATH, ...)` being an invalid Java pattern. The ellipsis is
   // rejected only after a bare metavariable; `(value = $PATH, ...)` parses.
-  'spring GET /named',
-  'spring PATCH /{id}/status',
-  'spring POST /create',
-  'spring PUT /{id}',
+  'spring GET /named [partial]',
+  'spring PATCH /{id}/status [partial]',
+  'spring POST /create [partial]',
+  'spring PUT /{id} [partial]',
   // ---- WordPress. The literal namespace resolves to the served /wp-json
   // path; the `self::NAMESPACE` one cannot, and is flagged rather than
   // concatenated into a URL that exists nowhere.
@@ -353,8 +359,6 @@ const EXPECTED_SHADOW = [
   'ANY /flask/items/{}',
   'ANY /go/health',
   'ANY /go/orders',
-  'ANY /legacy',
-  'ANY /spring/orders',
   'ANY /wp-json/guardian/v1/items',
   'DELETE /api/users/{}',
   'DELETE /aspnet/orders/{}',
@@ -364,7 +368,6 @@ const EXPECTED_SHADOW = [
   'DELETE /minimal/orders/{}',
   'DELETE /rails/orders/{}',
   'DELETE /rust/items/{}',
-  'DELETE /{}',
   'GET /admin/reports',
   'GET /api/users/list',
   'GET /aspnet/orders',
@@ -372,11 +375,9 @@ const EXPECTED_SHADOW = [
   'GET /aspnet/orders/{}',
   'GET /fastapi/items',
   'GET /laravel/orders',
-  'GET /list',
   'GET /minimal/health',
   // Newly extracted (the Spring named-argument form) and undocumented in
   // openapi.yaml, so it is a shadow endpoint like every other route here.
-  'GET /named',
   'GET /rails/orders',
   'GET /rails/orders/{}',
   'GET /rust/documented',
@@ -386,10 +387,8 @@ const EXPECTED_SHADOW = [
   'PATCH /aspnet/orders/{}/status',
   'PATCH /laravel/orders/{}/status',
   'PATCH /rust/items/{}/status',
-  'PATCH /{}/status',
   'POST /api/users/create',
   'POST /aspnet/orders',
-  'POST /create',
   'POST /fastapi/items',
   'POST /gin/items',
   'POST /laravel/orders',
@@ -399,7 +398,6 @@ const EXPECTED_SHADOW = [
   'PUT /aspnet/orders/{}',
   'PUT /laravel/orders/{}',
   'PUT /rust/items/{}',
-  'PUT /{}',
 ].sort();
 
 const EXPECTED_DEAD = ['GET /deprecated/v0/orders'];
@@ -957,20 +955,20 @@ const EXPECTED_ANNOTATION_ROUTES = [
   // where the focused span is. `all`, `submit`, `get-named` and friends are
   // bare relative segments, which isLiteralPath accepts (lower-case, no code
   // punctuation); `{id}` is not, while `{id}/status` is (it has a slash).
-  'aspnet/OrdersController.cs:31 aspnet GET all',
-  'aspnet/OrdersController.cs:35 aspnet GET get-named',
+  'aspnet/OrdersController.cs:31 aspnet GET all [partial]',
+  'aspnet/OrdersController.cs:35 aspnet GET get-named [partial]',
   'aspnet/OrdersController.cs:39 aspnet GET <inherited> [partial]',
-  'aspnet/OrdersController.cs:43 aspnet POST post-attr',
-  'aspnet/OrdersController.cs:47 aspnet POST submit',
+  'aspnet/OrdersController.cs:43 aspnet POST post-attr [partial]',
+  'aspnet/OrdersController.cs:47 aspnet POST submit [partial]',
   'aspnet/OrdersController.cs:51 aspnet POST <inherited> [partial]',
-  'aspnet/OrdersController.cs:55 aspnet PUT put-attr',
-  'aspnet/OrdersController.cs:60 aspnet PUT before',
+  'aspnet/OrdersController.cs:55 aspnet PUT put-attr [partial]',
+  'aspnet/OrdersController.cs:60 aspnet PUT before [partial]',
   'aspnet/OrdersController.cs:64 aspnet PUT <inherited> [partial]',
-  'aspnet/OrdersController.cs:68 aspnet PATCH {id}/status',
-  'aspnet/OrdersController.cs:72 aspnet PATCH patch-named',
+  'aspnet/OrdersController.cs:68 aspnet PATCH {id}/status [partial]',
+  'aspnet/OrdersController.cs:72 aspnet PATCH patch-named [partial]',
   'aspnet/OrdersController.cs:76 aspnet PATCH <inherited> [partial]',
   'aspnet/OrdersController.cs:81 aspnet DELETE {id} [partial]',
-  'aspnet/OrdersController.cs:85 aspnet DELETE delete-named',
+  'aspnet/OrdersController.cs:85 aspnet DELETE delete-named [partial]',
   'aspnet/OrdersController.cs:89 aspnet DELETE <inherited> [partial]',
   // ---- Spring: every annotation in all four forms. The class-level
   // @RequestMapping is itself reported, as it always was. `/reordered` is the
@@ -978,31 +976,31 @@ const EXPECTED_ANNOTATION_ROUTES = [
   // reading the first one. Every @RequestMapping row is ANY, `/request-value`
   // included: its `method = RequestMethod.GET` is an attribute this pack does
   // not read, and ANY is the truth rather than a guess.
-  'spring/OrderController.java:50 spring ANY /api/orders',
-  'spring/OrderController.java:54 spring GET /get-positional',
-  'spring/OrderController.java:57 spring GET /get-value',
-  'spring/OrderController.java:60 spring GET /get-path',
+  'spring/OrderController.java:50 spring ANY /api/orders [partial]',
+  'spring/OrderController.java:54 spring GET /get-positional [partial]',
+  'spring/OrderController.java:57 spring GET /get-value [partial]',
+  'spring/OrderController.java:60 spring GET /get-path [partial]',
   'spring/OrderController.java:63 spring GET <inherited> [partial]',
-  'spring/OrderController.java:67 spring POST /post-positional',
-  'spring/OrderController.java:70 spring POST /post-value',
-  'spring/OrderController.java:73 spring POST /post-path',
+  'spring/OrderController.java:67 spring POST /post-positional [partial]',
+  'spring/OrderController.java:70 spring POST /post-value [partial]',
+  'spring/OrderController.java:73 spring POST /post-path [partial]',
   // Line 77 is `@Deprecated`, not the `@PostMapping` below it.
   'spring/OrderController.java:77 spring POST <inherited> [partial]',
-  'spring/OrderController.java:82 spring PUT /put-positional',
-  'spring/OrderController.java:87 spring PUT /reordered',
-  'spring/OrderController.java:90 spring PUT /put-path',
+  'spring/OrderController.java:82 spring PUT /put-positional [partial]',
+  'spring/OrderController.java:87 spring PUT /reordered [partial]',
+  'spring/OrderController.java:90 spring PUT /put-path [partial]',
   'spring/OrderController.java:93 spring PUT <inherited> [partial]',
-  'spring/OrderController.java:97 spring PATCH /{id}/status',
-  'spring/OrderController.java:100 spring PATCH /patch-value',
-  'spring/OrderController.java:103 spring PATCH /patch-path',
+  'spring/OrderController.java:97 spring PATCH /{id}/status [partial]',
+  'spring/OrderController.java:100 spring PATCH /patch-value [partial]',
+  'spring/OrderController.java:103 spring PATCH /patch-path [partial]',
   'spring/OrderController.java:106 spring PATCH <inherited> [partial]',
-  'spring/OrderController.java:110 spring DELETE /delete-positional',
+  'spring/OrderController.java:110 spring DELETE /delete-positional [partial]',
   'spring/OrderController.java:115 spring DELETE {"/a", "/b"} [partial]',
-  'spring/OrderController.java:118 spring DELETE /delete-path',
+  'spring/OrderController.java:118 spring DELETE /delete-path [partial]',
   'spring/OrderController.java:122 spring DELETE <inherited> [partial]',
-  'spring/OrderController.java:126 spring ANY /request-positional',
-  'spring/OrderController.java:131 spring ANY /request-value',
-  'spring/OrderController.java:134 spring ANY /request-path',
+  'spring/OrderController.java:126 spring ANY /request-positional [partial]',
+  'spring/OrderController.java:131 spring ANY /request-value [partial]',
+  'spring/OrderController.java:134 spring ANY /request-path [partial]',
   'spring/OrderController.java:137 spring ANY <inherited> [partial]',
 ].sort();
 
@@ -1178,13 +1176,13 @@ describe('E2E — annotation route rules against the auditor fixture', () => {
 const EXPECTED_FRAMEWORK_ROUTES = [
   // ---- C#: attribute + minimal API. Unchanged by this work, and here as the
   // regression guard for the `using static` import fix in the same file.
-  'cs/OrdersController.cs:14 aspnet GET all',
+  'cs/OrdersController.cs:14 aspnet GET all [partial]',
   'cs/OrdersController.cs:18 aspnet GET <inherited> [partial]',
-  'cs/OrdersController.cs:23 aspnet POST submit',
-  'cs/OrdersController.cs:27 aspnet GET quick',
+  'cs/OrdersController.cs:23 aspnet POST submit [partial]',
+  'cs/OrdersController.cs:27 aspnet GET quick [partial]',
   'cs/OrdersController.cs:31 aspnet PUT {id:int} [partial]',
   'cs/OrdersController.cs:35 aspnet DELETE {id} [partial]',
-  'cs/OrdersController.cs:39 aspnet PATCH {id}/status',
+  'cs/OrdersController.cs:39 aspnet PATCH {id}/status [partial]',
   'cs/Program.cs:7 aspnet-minimal GET /minimal/health',
   'cs/Program.cs:10 aspnet-minimal POST /minimal/orders',
   'cs/Program.cs:14 aspnet-minimal GET /stats',
@@ -1207,15 +1205,15 @@ const EXPECTED_FRAMEWORK_ROUTES = [
   'go/routes.go:35 chi GET /x',
   'go/routes.go:39 gin GET /echo/items',
   // ---- Spring. Unchanged here; the annotations tree pins it in depth.
-  'java/OrderController.java:9 spring ANY /api/orders',
-  'java/OrderController.java:13 spring GET /list',
-  'java/OrderController.java:17 spring GET /detail',
+  'java/OrderController.java:9 spring ANY /api/orders [partial]',
+  'java/OrderController.java:13 spring GET /list [partial]',
+  'java/OrderController.java:17 spring GET /detail [partial]',
   'java/OrderController.java:21 spring GET <inherited> [partial]',
-  'java/OrderController.java:25 spring POST /create',
+  'java/OrderController.java:25 spring POST /create [partial]',
   'java/OrderController.java:29 spring DELETE {"/a", "/b"} [partial]',
-  'java/OrderController.java:33 spring ANY /legacy',
-  'java/OrderController.java:37 spring PUT /{id}',
-  'java/OrderController.java:40 spring PATCH /{id}/status',
+  'java/OrderController.java:33 spring ANY /legacy [partial]',
+  'java/OrderController.java:37 spring PUT /{id} [partial]',
+  'java/OrderController.java:40 spring PATCH /{id}/status [partial]',
   // ---- Express/Fastify/Koa/Hono. Line 21 carries BOTH chain routes, and
   // koa-hono.js:10 carries both halves of the multi-line Hono chain.
   'js/express5.js:10 express GET /health',
@@ -1343,6 +1341,7 @@ const FRAMEWORK_DECOYS = [
   '/cache/one-arg', // a one-argument TitleCase `Get`
   'cacheKey', // a TitleCase `Get` on a computed key — the identifier as written
   '/site/title', // a one-argument read on a receiver the $APP denylist misses
+  'https://api.example.com/v1/items', // F34: net/http's client, a TitleCase verb with three arguments
 ];
 
 /**

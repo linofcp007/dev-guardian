@@ -75,8 +75,14 @@
  *                    purely because npm did not resolve them) — a
  *                    genuinely transitive pip dependency with no manifest
  *                    mention now surfaces through the catch-all below;
- *        composer / cargo / go / rubygems / dotnet → each stack's own
- *                    "outdated" command. dotnet runs one explicit
+ *        composer / cargo / go / dotnet → each stack's own "outdated"
+ *                    command — Composer with `--no-plugins`, cargo not
+ *                    where the repository has its own Cargo configuration
+ *                    or toolchain path (`cargoConfigRefusal`); rubygems is
+ *                    never run (`bundlerNotRun`: Bundler evaluates the
+ *                    Gemfile, Ruby code). Every package manager runs in
+ *                    `pmEnv()`, never this server's environment, and npm on
+ *                    a copy of the manifests (`npmOutdated`). dotnet runs one explicit
  *                    `dotnet restore <target> --locked-mode` per root
  *                    solution/project FIRST (a stale-but-present `obj/`
  *                    otherwise makes `dotnet list --no-restore` report the
@@ -116,6 +122,9 @@ import { parseYamlBounded } from '../platform/boundedParse.js';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { checkNpmSources, npmSourcesRefusal } from '../fixpr/repoPackageConfig.js';
+import { packageManagerEnv } from '../fixpr/testCommandEnv.js';
+import { NPM_PROJECT_CONFIG, npmPlanningCopy } from '../deps/npmPlanningCopy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { exactPin, findRequirementFiles, parseRequirementSpec, requirementMentions, type RequirementSpec } from '../deps/pipRequirements.js';
 import { matchesAny } from '../platform/glob.js';
@@ -126,6 +135,7 @@ import {
   projectEntryKind,
   projectPathKind,
   readProjectJson,
+  readProjectText,
   readProjectTextOrUndefined,
 } from '../platform/projectFs.js';
 import { compareSemver } from '../platform/semverCompare.js';
@@ -286,11 +296,12 @@ const tool = defineTool({
   name: 'deps_update_plan',
   title: 'Dependency upgrade plan',
   description:
-    "Ordered upgrades from each stack's own outdated command (npm, composer, cargo, go, rubygems; dotnet " +
-    "after a locked restore, which runs MSBuild) and pip's own pins. Each entry: security (an active CVE " +
-    'in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest ' +
-    'available), patch, minor or major, with its upgrade_command; pnpm and yarn get overrides to apply by ' +
-    'hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.',
+    "Ordered upgrades from each stack's own outdated command (npm on a copy of the manifests, never the " +
+    "repo's .npmrc; composer without plugins; cargo, go; dotnet after a locked restore, which runs " +
+    "MSBuild) and pip's own pins, with no token in their environment. Bundler is not run: the Gemfile is " +
+    'Ruby code. Each entry: security (an active CVE in the latest deps scan; npm/pip target the minimum ' +
+    'fixed version, other stacks the latest available), patch, minor or major, with its upgrade_command; ' +
+    'pnpm and yarn get overrides to apply by hand. `unplanned`: CVEs with no step; `runner_failures`: why.',
   inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 });
@@ -323,7 +334,7 @@ async function handler(
         case 'go':
           return runGoOutdated(projectPath, cves);
         case 'rubygems':
-          return runBundlerOutdated(projectPath, cves);
+          return bundlerNotRun();
         case 'dotnet':
           return runDotnetOutdated(projectPath, cves);
         default:
@@ -338,6 +349,7 @@ async function handler(
   appendCatchAllUnplanned({ projectPath, cves, steps: flat, unplanned, runnerFailures });
   const ordered = orderPlan(flat, inp.prefer ?? 'security');
   const summary = summarize(ordered);
+  const configNotRead = ecosystems.includes('npm') ? npmConfigNotRead(projectPath) : [];
 
   return {
     ok: true,
@@ -345,6 +357,8 @@ async function handler(
     summary,
     unplanned,
     runner_failures: runnerFailures,
+    // npm planned against the user's own configuration, not these (`npmOutdated`).
+    ...(configNotRead.length > 0 ? { package_config_not_read: configNotRead } : {}),
     stack_detected: ecosystems,
     unsupported_ecosystems_present: [
       ...detectUnsupportedEcosystems(projectPath),
@@ -720,6 +734,46 @@ function listActiveCves(ctx: PluginContext, projectPath: string): Map<string, Cv
 // ---------------------------------------------------------------------- runners
 
 /**
+ * `npm outdated --json`, run on a copy of the project's manifest and lock
+ * files (`deps/npmPlanningCopy.ts`), never in the project: a repository
+ * `.npmrc` would choose npm's registry, the credentials it sends there and
+ * the program it starts for a git dependency. Not run at all when a
+ * dependency points at a network path, or a file npm reads could not be
+ * checked for one (`fixpr/repoPackageConfig.ts#checkNpmSources`): opening it
+ * on Windows authenticates to the host — create_fix_pr's rule, for its
+ * planning tree and the direct call alike.
+ */
+async function npmOutdated(projectPath: string): Promise<PmResult> {
+  const refused = npmSourcesRefusal(checkNpmSources(projectPath, gitRootAbove(projectPath) ?? projectPath));
+  if (refused !== null) return { code: 'network_path_chosen_by_project', shortMessage: refused, stdout: '' };
+  const copy = npmPlanningCopy(projectPath);
+  if (!copy.ok) return { code: 'not_copied', shortMessage: copy.reason, stdout: '' };
+  try {
+    return await execPackageManager('npm', ['outdated', '--json'], { cwd: copy.dir, timeout: 60_000 });
+  } finally {
+    copy.dispose();
+  }
+}
+
+/**
+ * The repository's own npm configuration files the copy left behind, relative
+ * to the project — the project's directory and each above it up to the
+ * repository root (a workspace root's applies to its members). Named in the
+ * result so a plan made against the user's registry instead of the one a
+ * committed `.npmrc` names says so.
+ */
+function npmConfigNotRead(projectPath: string): string[] {
+  const top = gitRootAbove(projectPath) ?? projectPath;
+  const out: string[] = [];
+  for (let dir = projectPath; ; dir = dirname(dir)) {
+    for (const name of NPM_PROJECT_CONFIG) {
+      if (presentInProject(dir, join(dir, name))) out.push(toPosix(relative(projectPath, join(dir, name))));
+    }
+    if (dir === top || dirname(dir) === dir) return out;
+  }
+}
+
+/**
  * npm branch (item 4, fix round 1 items 1 and 2):
  *   - a package with an active CVE upgrades to the MINIMUM fixed version
  *     (`cves.fixed_version`) rather than `npm outdated`'s own `latest` —
@@ -766,7 +820,7 @@ async function runNpmOutdated(
   const manager = detectNpmPackageManager(projectPath);
   if (manager.name !== 'npm') return planForNonNpmManager(projectPath, cves, manager);
 
-  const result = await execPackageManager('npm', ['outdated', '--json'], { cwd: projectPath, timeout: 60_000 });
+  const result = await npmOutdated(projectPath);
   const steps: UpgradeStep[] = [];
   const unplanned: UnplannedEntry[] = [];
   const failures: RunnerFailure[] = [];
@@ -1258,7 +1312,7 @@ async function pnpmVersionOf(root: string): Promise<PnpmVersion> {
     const r = await execPackageManager('pnpm', ['--version'], {
       cwd: root,
       timeout: 15_000,
-      env: { ...process.env, COREPACK_ENABLE_NETWORK: '0', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' },
+      env: { ...pmEnv(), COREPACK_ENABLE_NETWORK: '0', COREPACK_ENABLE_DOWNLOAD_PROMPT: '0' },
     });
     const out = typeof r?.stdout === 'string' ? r.stdout.trim() : '';
     const v = r?.exitCode === 0 ? /^(\d+\.\d+\.\d+)/.exec(out)?.[1] : undefined;
@@ -1543,6 +1597,21 @@ interface PmResult {
   shortMessage?: unknown;
 }
 
+/**
+ * The environment of every package manager this tool starts: create_fix_pr's
+ * when it is the caller (`fixpr/childEnv.ts`), else the same allowlist built
+ * here (`fixpr/testCommandEnv.ts#packageManagerEnv`) — never this server's
+ * whole environment. A repository's own configuration can make a package
+ * manager expand a variable into a request (an `.npmrc`'s `${GITHUB_TOKEN}`)
+ * and a .NET restore runs the project's MSBuild code, so no token or cloud
+ * credential the server was started with reaches either; the variables the
+ * user's own `~/.npmrc` names, and the package managers' own, still do.
+ */
+function pmEnv(): NodeJS.ProcessEnv {
+  const pm = packageManagerEnvOptions();
+  return 'env' in pm ? pm.env : packageManagerEnv();
+}
+
 /** The most a package manager may print: `go list -m -u -json all` on a large module graph is megabytes. */
 const PM_OUTPUT_CAP_BYTES = 64 * 1024 * 1024;
 
@@ -1556,19 +1625,17 @@ const PM_OUTPUT_CAP_BYTES = 64 * 1024 * 1024;
  * project's own git configuration or hooks name; and with a timeout that
  * kills the whole tree and returns at the deadline (review 8, finding 4:
  * execa's own `timeout`, used here before, signalled `npm.cmd`'s `cmd.exe`
- * and then waited on the `node` it had started). In create_fix_pr's
- * package-manager environment when inside one (`fixpr/childEnv.ts`), this
- * server's otherwise, or `env` when the caller names one. A repository whose
- * configuration cannot be read safely is not run: `code:
- * 'git_config_refused'`, which `describeExecFailure` reports.
+ * and then waited on the `node` it had started). In {@link pmEnv}, or `env`
+ * when the caller names one. A repository whose configuration cannot be
+ * read safely is not run: `code: 'git_config_refused'`, which
+ * `describeExecFailure` reports.
  */
 async function execPackageManager(
   command: string,
   args: string[],
   opts: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<PmResult> {
-  const pm = packageManagerEnvOptions();
-  const env: NodeJS.ProcessEnv = opts.env ?? ('env' in pm ? pm.env : { ...process.env });
+  const env: NodeJS.ProcessEnv = opts.env ?? pmEnv();
   const r = await runProcess({ command, args, cwd: opts.cwd, env, extendEnv: false, timeoutMs: opts.timeout, stdoutCapBytes: PM_OUTPUT_CAP_BYTES });
   if (r.notRun !== undefined) {
     return { code: r.notRun.code === 'not_found' ? 'ENOENT' : r.notRun.code, shortMessage: r.notRun.message, stdout: '', stderr: r.stderr };
@@ -1880,8 +1947,14 @@ async function runComposerOutdated(
   // prints `[]` with exit 0 ("No dependencies installed") and every Composer
   // step vanished; `--locked` lists the lock's packages with their latest.
   // It is also the right source: the lock is what the fix edits and what CI
-  // installs from.
-  const result = await execPackageManager('composer', ['outdated', '--locked', '--format=json'], { cwd: projectPath, timeout: 90_000 });
+  // installs from. `--no-plugins`: Composer activates the plugins a committed
+  // vendor/ holds, which the repository's own `allow-plugins` lets run, on
+  // every command — `outdated` included (measured: a plugin's `activate`
+  // wrote its marker, test/e2e/depsUpdatePlanHostile.test.ts).
+  const result = await execPackageManager('composer', ['outdated', '--locked', '--format=json', '--no-plugins'], {
+    cwd: projectPath,
+    timeout: 90_000,
+  });
   const failures: RunnerFailure[] = [];
   const exitFailure = describeExecFailure('composer outdated --locked', result, [0]);
   if (exitFailure) return { steps: [], unplanned: [], failures: [{ ecosystem: 'composer', ...exitFailure }] };
@@ -1931,10 +2004,63 @@ async function runComposerOutdated(
   return { steps: out, unplanned: [], failures };
 }
 
+/** The most of a `rust-toolchain` file read to look for a `path`. */
+const RUST_TOOLCHAIN_MAX_BYTES = 64 * 1024;
+
+/**
+ * Why `cargo outdated` must not run on this project, or null.
+ *
+ * Cargo reads `.cargo/config.toml` (and the legacy `.cargo/config`) in the
+ * directory it starts in and every one above, and cargo-outdated copies the
+ * workspace root's into the temporary workspace it resolves in — so moving
+ * the working directory does not escape it. A repository's own names
+ * programs Cargo runs: `build.rustc` / `build.rustc-wrapper`, and an
+ * `[alias]` that shadows the `outdated` subcommand itself (`outdated =
+ * "run"` builds and runs the project). rustup reads `rust-toolchain.toml` (or
+ * `rust-toolchain`) the same way, and a `path` there makes the `cargo` it
+ * starts a binary at a path the repository chose; a channel name is a
+ * toolchain rustup installs, and passes. create_fix_pr moves the Cargo
+ * configuration out of its disposable checkouts; a user's project is never
+ * moved, so with one present the runner does not run — the project's
+ * directory and each above it up to the repository root (the project's
+ * alone outside a repository: what lies above is the user's).
+ */
+function cargoConfigRefusal(projectPath: string): string | null {
+  const top = gitRootAbove(projectPath) ?? projectPath;
+  const named = (dir: string, name: string): string => toPosix(relative(projectPath, join(dir, name))) || name;
+  for (let dir = projectPath; ; dir = dirname(dir)) {
+    for (const name of ['.cargo/config.toml', '.cargo/config']) {
+      if (presentInProject(dir, join(dir, ...name.split('/')))) {
+        return (
+          `not run: ${named(dir, name)} is the repository's own Cargo configuration, which can name a program ` +
+          'cargo runs (build.rustc-wrapper, build.rustc, an alias for `outdated`) — run `cargo outdated` ' +
+          'yourself where you trust it, or use create_fix_pr, which plans in a checkout with it set aside'
+        );
+      }
+    }
+    for (const name of ['rust-toolchain.toml', 'rust-toolchain']) {
+      const read = readProjectText(dir, join(dir, name), RUST_TOOLCHAIN_MAX_BYTES);
+      if (read.status === 'absent') continue;
+      if (read.status === 'refused' || /^\s*path\s*=/m.test(read.text)) {
+        return (
+          `not run: ${named(dir, name)} ${read.status === 'refused' ? 'could not be read to check for' : 'names'} ` +
+          'a toolchain `path`, which makes rustup run a cargo the repository chose — run `cargo outdated` ' +
+          'yourself where you trust it'
+        );
+      }
+    }
+    if (dir === top || dirname(dir) === dir) return null;
+  }
+}
+
 async function runCargoOutdated(
   projectPath: string,
   cves: Map<string, CveInfo>,
 ): Promise<EcosystemPlan> {
+  const refused = cargoConfigRefusal(projectPath);
+  if (refused !== null) {
+    return { steps: [], unplanned: [], failures: [{ ecosystem: 'cargo', code: 'repository_cargo_config', reason: refused }] };
+  }
   // Requires `cargo install cargo-outdated`.
   const result = await execPackageManager('cargo', ['outdated', '--format', 'json'], { cwd: projectPath, timeout: 90_000 });
   const failures: RunnerFailure[] = [];
@@ -2009,41 +2135,27 @@ async function runGoOutdated(
   return { steps: out, unplanned: [] };
 }
 
-async function runBundlerOutdated(
-  projectPath: string,
-  cves: Map<string, CveInfo>,
-): Promise<EcosystemPlan> {
-  // `bundle outdated --parseable` emits machine-friendly lines:
-  // gem-name (newest 1.2.3, installed 1.2.0)
-  const result = await execPackageManager('bundle', ['outdated', '--parseable'], { cwd: projectPath, timeout: 90_000 });
-  // `bundle outdated` exits 1 when anything is outdated, so only a command
-  // that could not run, or a non-zero exit with nothing parseable, is a
-  // failure.
-  const text = typeof result.stdout === 'string' ? result.stdout : '';
-  const out: UpgradeStep[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^(\S+) \(newest ([^,]+), installed ([^,)]+)/.exec(line);
-    if (!m) continue;
-    const name = m[1] ?? '';
-    const latest = m[2] ?? '';
-    const installed = m[3] ?? '';
-    if (!name || !installed || !latest || installed === latest) continue;
-    out.push(
-      buildStep({
-        package_name: name,
-        installed_version: installed,
-        latest_version: latest,
-        ecosystem: 'rubygems',
-        cves,
-        // Lockfile only (Task 11): `bundle update` INSTALLS the gems — into
-        // the host's GEM_HOME, compiling native extensions — which create_fix_pr
-        // must never do; `bundle lock --update` re-resolves Gemfile.lock alone.
-        upgrade_command: `bundle lock --update ${name}`,
-      }),
-    );
-  }
-  const exitFailure = describeExecFailure('bundle outdated', result, out.length > 0 ? [0, 1] : [0]);
-  return { steps: out, unplanned: [], ...(exitFailure ? { failures: [{ ecosystem: 'rubygems', ...exitFailure }] } : {}) };
+/**
+ * Ruby: never run. Every Bundler command — `bundle outdated` and `bundle
+ * lock` alike — loads the Gemfile, which is Ruby code the repository wrote
+ * (`runners/rubocopRun.ts` keeps RuboCop away from it for the same reason),
+ * and nothing in this tool reads RubyGems' versions any other way. So the
+ * plan has no Ruby step; a gem with an active CVE that Gemfile.lock resolves
+ * is still reported, by the catch-all, beside this failure.
+ */
+function bundlerNotRun(): EcosystemPlan {
+  return {
+    steps: [],
+    unplanned: [],
+    failures: [{
+      ecosystem: 'rubygems',
+      code: 'gemfile_is_code',
+      reason:
+        'not run: `bundle outdated` evaluates the Gemfile, which is Ruby code the repository wrote — run ' +
+        '`bundle outdated --parseable` yourself where you trust the Gemfile; the gems Gemfile.lock pins with ' +
+        'an active CVE are listed in unplanned',
+    }],
+  };
 }
 
 /**

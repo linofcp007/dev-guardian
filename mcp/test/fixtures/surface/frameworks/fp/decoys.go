@@ -1,5 +1,10 @@
 package main
 
+import (
+	"net/http"
+	"strings"
+)
+
 // registry is a settings cache, not a router. Its accessors collide with
 // every Go HTTP framework's verb methods, which is the whole point of it.
 type registry struct{}
@@ -40,4 +45,10 @@ func run(tenant string, defaultEntry any) {
 	//     would never decide anything.
 	cacheKey := "/cache/" + tenant
 	_ = reg.Get(cacheKey, defaultEntry)
+
+	// F34 the standard library's HTTP client: a TitleCase verb, a string
+	//     literal and three arguments, so every other chi guard passes.
+	//     Exercises the leading-`/` half of the $PATH regex — chi panics on a
+	//     pattern without it (review 3.6.1).
+	_, _ = http.Post("https://api.example.com/v1/items", "application/json", strings.NewReader(tenant))
 }

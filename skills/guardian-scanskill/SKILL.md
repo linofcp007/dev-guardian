@@ -101,7 +101,10 @@ que não é sobre segurança de IA, lê esses findings.
 ## Pontuação e veredicto
 
 A tool devolve uma **pontuação de risco de 0 a 100** (pesada pela severidade;
-findings em ficheiros **executáveis** pesam 1,3×) e uma de quatro recomendações:
+pesa 1,3× o que corre como está escrito — um script, o comando de um hook ou de
+um servidor MCP, um comando de um ficheiro de instruções com alvo real; um único
+download-e-execução ou envio de credenciais basta para DO_NOT_INSTALL) e uma de
+quatro recomendações:
 
 - **SAFE** (0-20) — sem sinais relevantes.
 - **REVIEW** (21-35) — sinais menores; passa os olhos antes de instalar.
@@ -128,10 +131,13 @@ findings em ficheiros **executáveis** pesam 1,3×) e uma de quatro recomendaç�
    diferente de `eval(atob(...))` mais um host de exfiltração conhecido e Unicode
    escondido. Relaciona os sinais numa história ("isto parece X") e diz com que
    confiança.
-6. **Sê honesto sobre a cobertura.** Se o OSV esteve offline, diz que as
-   dependências estão "por verificar, não limpas". Se o scan foi `truncated`,
-   di-lo. Se só viste um ficheiro, diz que um scan do repositório inteiro veria
-   mais.
+6. **Sê honesto sobre a cobertura.** Lê `coverage` e `missing_tools`: o que
+   não foi lido (`unread` — código nativo, ficheiros comprimidos, dependências
+   instaladas, ficheiros grandes demais) ou ficou além dos limites (`truncated`)
+   é uma lacuna, e o veredicto nunca é SAFE enquanto existir — nomeia-a. Se o OSV
+   esteve offline ou não consultou todas as dependências (`unqueried`), diz que
+   estão "por verificar, não limpas". Se só viste um ficheiro, diz que um scan
+   do repositório inteiro veria mais.
 
 ## Enquadramento importante
 
