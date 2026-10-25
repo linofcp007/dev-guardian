@@ -128,10 +128,13 @@ findings em ficheiros **executáveis** pesam 1,3×) e uma de quatro recomendaç�
    diferente de `eval(atob(...))` mais um host de exfiltração conhecido e Unicode
    escondido. Relaciona os sinais numa história ("isto parece X") e diz com que
    confiança.
-6. **Sê honesto sobre a cobertura.** Se o OSV esteve offline, diz que as
-   dependências estão "por verificar, não limpas". Se o scan foi `truncated`,
-   di-lo. Se só viste um ficheiro, diz que um scan do repositório inteiro veria
-   mais.
+6. **Sê honesto sobre a cobertura.** Lê `coverage` e `missing_tools`: o que
+   não foi lido (`unread` — código nativo, ficheiros comprimidos, dependências
+   instaladas, ficheiros grandes demais) ou ficou além dos limites (`truncated`)
+   é uma lacuna, e o veredicto nunca é SAFE enquanto existir — nomeia-a. Se o OSV
+   esteve offline ou não consultou todas as dependências (`unqueried`), diz que
+   estão "por verificar, não limpas". Se só viste um ficheiro, diz que um scan
+   do repositório inteiro veria mais.
 
 ## Enquadramento importante
 

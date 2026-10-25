@@ -198,7 +198,7 @@ describe('dependencies → OSV', () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
     const r = await analyzeSkill([manifest], { offline: true });
-    expect(r.osv).toEqual({ online: false, queried: 0, vulnerable_packages: [], error: OSV_OFFLINE_REASON });
+    expect(r.osv).toEqual({ online: false, queried: 0, unqueried: 0, vulnerable_packages: [], error: OSV_OFFLINE_REASON });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

@@ -27,15 +27,16 @@ import { InvalidProjectPathError, resolveProjectPath } from '../platform/project
 import { toSarif } from '../report/sarif.js';
 import { filterFindings } from '../severity/filter.js';
 import { analyzeSkill } from '../skillaudit/analyze.js';
-import { ingestTarget } from '../skillaudit/ingest.js';
+import { ingestTarget, type UnreadEntry } from '../skillaudit/ingest.js';
 import {
   RECOMMENDATIONS,
   THREAT_CATEGORY_META,
   type Recommendation,
 } from '../skillaudit/taxonomy.js';
 import { SeverityMin } from '../schemas.js';
-import type { ToolResult, ToolRun } from '../types.js';
+import type { ScanCoverage, ToolResult, ToolRun } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { computeCoverage } from './scanCoverage.js';
 import { topFindings } from '../severity/counts.js';
 
 const inputSchema = {
@@ -89,7 +90,8 @@ const tool = defineTool({
     '.zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, ' +
     'tool poisoning, dangerous code, taint flows — the commands in instruction files and hook / plugin / ' +
     'MCP configs scored like scripts — and OSV CVEs of its dependencies. Returns a 0-100 risk score and ' +
-    'SAFE, REVIEW, CAUTION or DO_NOT_INSTALL.',
+    'SAFE, REVIEW, CAUTION or DO_NOT_INSTALL. What it could not read or look up is named in missing_tools ' +
+    '(coverage partial), and the verdict is then never SAFE.',
   inputSchema,
   handler: (input, ctx, callMeta) => handler(input, ctx, callMeta),
 });
@@ -149,6 +151,63 @@ async function handler(
       );
     }
 
+    // What was not read, and what was not looked up, is a named gap — never
+    // part of a clean verdict. The score covered only what was read: a
+    // package truncated by 4000 decoy files, a payload in a UTF-16 script or
+    // a native addon, a dependency past OSV's first 200 all read SAFE before.
+    const nothingRead = report.files_scanned === 0;
+    const passStatus: ToolRun['status'] = nothingRead ? 'skipped' : 'ok';
+    const passReason = nothingRead ? { reason: 'no text file in the target to read' } : {};
+    const toolsRun: ToolRun[] = [
+      { name: 'guardian-scanskill:patterns', status: passStatus, ...passReason },
+      { name: 'guardian-scanskill:yara', status: passStatus, ...passReason },
+      { name: 'guardian-scanskill:taint', status: passStatus, ...passReason },
+    ];
+    const missingTools: string[] = [];
+    const gaps: string[] = [];
+    if (ingest.truncated) {
+      const reason = `the walk stopped at its caps after ${report.files_scanned} files: the rest of the package was not read`;
+      toolsRun.push({ name: 'guardian-scanskill:walk', status: 'failed', reason });
+      missingTools.push('guardian-scanskill:walk');
+      gaps.push(reason);
+    }
+    if (ingest.unread.length > 0) {
+      const reason = unreadSummary(ingest.unread);
+      toolsRun.push({ name: 'guardian-scanskill:unread', status: 'failed', reason });
+      missingTools.push('guardian-scanskill:unread');
+      gaps.push(reason);
+    }
+    if (report.osv) {
+      const osv = report.osv;
+      if (!osv.online) {
+        const reason = osv.error ?? 'offline';
+        toolsRun.push({ name: 'osv.dev', status: 'skipped', reason });
+        missingTools.push('osv.dev');
+        gaps.push(`dependencies not checked for known CVEs (osv.dev: ${reason})`);
+      } else if (osv.unqueried > 0) {
+        const reason =
+          `${osv.queried} of ${osv.queried + osv.unqueried} declared dependencies looked up; ` +
+          `the other ${osv.unqueried} were not`;
+        toolsRun.push({ name: 'osv.dev', status: 'ok', reason });
+        missingTools.push('osv.dev');
+        gaps.push(`osv.dev: ${reason}`);
+      } else {
+        toolsRun.push({ name: 'osv.dev', status: 'ok' });
+      }
+    }
+    const coverage = computeCoverage(toolsRun, missingTools);
+    const recommendation = coverageFloor(report.score.recommendation, coverage);
+    const recommendationText =
+      recommendation === report.score.recommendation
+        ? RECOMMENDATION_TEXT[recommendation]
+        : 'Not everything was read or looked up, and the score covers only what was: review what is listed ' +
+          'in missing_tools (or vet a copy without it) before installing.';
+    const coverageWarning =
+      coverage === 'full'
+        ? null
+        : `⚠️ scan_skill: coverage ${coverage} — ${gaps.join('; ')}. The verdict covers only what was read; ` +
+          'it is never SAFE while any of this is unread.';
+
     const reportPaths: string[] = [];
     if (inp.write_reports !== false) {
       try {
@@ -165,7 +224,10 @@ async function handler(
               target,
               kind: ingest.kind,
               risk_score: report.score.score,
-              recommendation: report.score.recommendation,
+              recommendation,
+              coverage,
+              missing_tools: missingTools,
+              unread: ingest.unread,
               category_breakdown: report.category_breakdown,
               osv: report.osv,
               findings,
@@ -181,42 +243,31 @@ async function handler(
       }
     }
 
-    const toolsRun: ToolRun[] = [
-      { name: 'guardian-scanskill:patterns', status: 'ok' },
-      { name: 'guardian-scanskill:yara', status: 'ok' },
-      { name: 'guardian-scanskill:taint', status: 'ok' },
-    ];
-    if (report.osv) {
-      toolsRun.push({
-        name: 'osv.dev',
-        status: report.osv.online ? 'ok' : 'skipped',
-        ...(report.osv.online ? {} : { reason: report.osv.error ?? 'offline' }),
-      });
-    }
-
     ctx.storage.scans.finalize({
       scan_id: scanId,
       status: 'completed',
       tools_run: toolsRun,
-      missing_tools: [],
+      missing_tools: missingTools,
       ...(reportPaths[0] ? { report_dir: reportPaths[0] } : {}),
       meta: {
         risk_score: report.score.score,
-        recommendation: report.score.recommendation,
+        recommendation,
         target,
         kind: ingest.kind,
         category_breakdown: report.category_breakdown,
         files_scanned: report.files_scanned,
         executable_files: report.executable_files,
+        unread: ingest.unread,
         osv_online: report.osv?.online ?? null,
         osv_vulnerable_packages: report.osv?.vulnerable_packages.length ?? 0,
       },
     });
 
+    // A gate never passes on a package that was not all read.
     const passed =
       inp.fail_on === undefined
         ? true
-        : RECOMMENDATION_RANK[report.score.recommendation] < RECOMMENDATION_RANK[inp.fail_on];
+        : coverage === 'full' && RECOMMENDATION_RANK[recommendation] < RECOMMENDATION_RANK[inp.fail_on];
 
     return {
       ok: true,
@@ -224,9 +275,15 @@ async function handler(
       target,
       kind: ingest.kind,
       risk_score: report.score.score,
-      recommendation: report.score.recommendation,
-      recommendation_text: RECOMMENDATION_TEXT[report.score.recommendation],
+      recommendation,
+      recommendation_text: recommendationText,
       passed,
+      coverage,
+      tools_run: toolsRun,
+      missing_tools: missingTools,
+      ...(ingest.unread.length > 0
+        ? { unread: ingest.unread.slice(0, RESPONSE_UNREAD_ENTRIES), unread_total: ingest.unread.length }
+        : {}),
       findings_count: findings.length,
       findings_by_severity: report.score.by_severity,
       category_breakdown: nonZeroBreakdown(report.category_breakdown),
@@ -240,16 +297,37 @@ async function handler(
         ? {
             online: report.osv.online,
             queried: report.osv.queried,
+            ...(report.osv.unqueried > 0 ? { unqueried: report.osv.unqueried } : {}),
             vulnerable_packages: report.osv.vulnerable_packages.length,
             ...(report.osv.error ? { error: report.osv.error } : {}),
           }
         : null,
       report_paths: reportPaths,
-      warnings: ingest.warnings,
+      warnings: coverageWarning === null ? ingest.warnings : [coverageWarning, ...ingest.warnings],
     };
   } finally {
     ingest.cleanup();
   }
+}
+
+/** How many `unread` entries a response carries; the scan row keeps them all. */
+const RESPONSE_UNREAD_ENTRIES = 20;
+
+/** `node_modules/ (installed dependencies…)`, `x.node (native code…)`, … — the first few, and how many in all. */
+function unreadSummary(unread: readonly UnreadEntry[]): string {
+  const shown = unread.slice(0, 5).map((u) => `${u.relPath} (${u.why})`);
+  const more = unread.length > shown.length ? `, and ${unread.length - shown.length} more` : '';
+  return `${unread.length} not read: ${shown.join(', ')}${more}`;
+}
+
+/**
+ * The recommendation once coverage is counted: never SAFE when anything was
+ * not read or looked up, and at least CAUTION when nothing was read at all
+ * while something was left unread — a package of one native binary.
+ */
+function coverageFloor(fromScore: Recommendation, coverage: ScanCoverage): Recommendation {
+  const floor: Recommendation = coverage === 'none' ? 'CAUTION' : coverage === 'partial' ? 'REVIEW' : 'SAFE';
+  return RECOMMENDATION_RANK[fromScore] >= RECOMMENDATION_RANK[floor] ? fromScore : floor;
 }
 
 function nonZeroBreakdown(

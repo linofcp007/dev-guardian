@@ -239,7 +239,7 @@ export async function analyzeSkill(
     const offline = opts.offline ?? process.env['GUARDIAN_OFFLINE'] === '1';
     if (deps.length > 0 && offline) {
       // Unknown, never clean: scan_skill records `osv.dev: skipped` with this reason.
-      osv = { online: false, queried: 0, vulnerable_packages: [], error: OSV_OFFLINE_REASON };
+      osv = { online: false, queried: 0, unqueried: 0, vulnerable_packages: [], error: OSV_OFFLINE_REASON };
     } else if (deps.length > 0) {
       const osvOpts: { signal?: AbortSignal } = {};
       if (opts.signal) osvOpts.signal = opts.signal;

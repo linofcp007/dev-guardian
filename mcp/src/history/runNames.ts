@@ -287,6 +287,10 @@ export const RUN_NAMES = {
   'guardian-scanskill:patterns': scanner(SKILL_TOOL),
   'guardian-scanskill:yara': scanner(SKILL_TOOL),
   'guardian-scanskill:taint': scanner(SKILL_TOOL),
+  // The package past the walk's caps, and the files and directories it did
+  // not read: a finding in them is not re-measured.
+  'guardian-scanskill:walk': scanner(SKILL_TOOL),
+  'guardian-scanskill:unread': scanner(SKILL_TOOL),
   'osv.dev': scanner(SKILL_OSV),
 
   // audit_agent_config: its own static checks of the agent workspace config.
