@@ -85,7 +85,7 @@ export class SuppressionsRepo {
   >;
   private readonly listActiveStmt: Statement<[string], SuppressionRow>;
   private readonly listAllStmt: Statement<[], SuppressionRow>;
-  private readonly isSuppressedStmt: Statement<[string, string | null, string], { n: number }>;
+  private readonly isSuppressedStmt: Statement<[string | null, string, string | null, string], { n: number }>;
   private readonly listForFingerprintStmt: Statement<[string], SuppressionRow>;
   private readonly adoptIdentitiesStmt: Statement<[string, string, string]>;
   private readonly listActiveForRuleStmt: Statement<[string, string, string, string, number], SuppressionRow>;
@@ -117,11 +117,15 @@ export class SuppressionsRepo {
     `);
 
     // findingsRepo's SUPPRESSION_MATCHES_F: the identity where both sides
-    // have one, the fingerprint where either has none.
-    this.isSuppressedStmt = db.prepare<[string, string | null, string], { n: number }>(`
+    // have one, the fingerprint where either has none. Plain `?`s, the
+    // identity passed twice: node:sqlite on Node 22.13 (the engines floor)
+    // reads a numbered `?2` as a NAMED parameter and binds no positional
+    // value to it — "column index out of range", measured in the floor's
+    // container; Node 24 binds it.
+    this.isSuppressedStmt = db.prepare<[string | null, string, string | null, string], { n: number }>(`
       SELECT COUNT(*) AS n FROM suppressions
-      WHERE (finding_identity = ?2 OR (finding_fingerprint = ?1 AND (finding_identity IS NULL OR ?2 IS NULL)))
-        AND (expires_at IS NULL OR expires_at > ?3)
+      WHERE (finding_identity = ? OR (finding_fingerprint = ? AND (finding_identity IS NULL OR ? IS NULL)))
+        AND (expires_at IS NULL OR expires_at > ?)
     `);
 
     this.listForFingerprintStmt = db.prepare<[string], SuppressionRow>(`
@@ -194,7 +198,7 @@ export class SuppressionsRepo {
 
   /** Whether an active suppression names this finding by fingerprint or identity. */
   isSuppressed(fingerprint: string, identity?: string): boolean {
-    const row = this.isSuppressedStmt.get(fingerprint, identity ?? null, nowIso());
+    const row = this.isSuppressedStmt.get(identity ?? null, fingerprint, identity ?? null, nowIso());
     return (row?.n ?? 0) > 0;
   }
 
