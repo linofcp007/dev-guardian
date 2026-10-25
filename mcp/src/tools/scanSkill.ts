@@ -36,6 +36,7 @@ import {
 import { SeverityMin } from '../schemas.js';
 import type { ScanCoverage, ToolResult, ToolRun } from '../types.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
+import { untrustedContent } from '../platform/untrustedText.js';
 import { computeCoverage } from './scanCoverage.js';
 import { topFindings } from '../severity/counts.js';
 
@@ -274,6 +275,7 @@ async function handler(
       scan_id: scanId,
       target,
       kind: ingest.kind,
+      untrusted_content: untrustedContent(['top_findings[].snippet', 'top_findings[].message', 'unread[].relPath', 'warnings']),
       risk_score: report.score.score,
       recommendation,
       recommendation_text: recommendationText,

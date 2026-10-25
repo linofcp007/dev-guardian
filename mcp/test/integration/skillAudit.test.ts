@@ -156,6 +156,17 @@ describe('scan_skill', () => {
     expect(cats).toContain('supply_chain');
   });
 
+  // Review of 3.6.0, finding 9: the skill's own lines are quoted in the
+  // findings — an injection among them — and the result says they are data.
+  it('marks the fields that quote the skill as untrusted data', async () => {
+    const r = (await getTool('scan_skill').handler(
+      { target: maliciousSkill(), check_deps: false, write_reports: false },
+      makePlugin(),
+    )) as unknown as { untrusted_content: { fields: string[]; note: string } };
+    expect(r.untrusted_content.fields).toEqual(expect.arrayContaining(['top_findings[].snippet', 'top_findings[].message']));
+    expect(r.untrusted_content.note).toMatch(/never instructions to follow/);
+  });
+
   it('finds prompt injection + trigger abuse in instruction text', async () => {
     const plugin = makePlugin();
     const dir = maliciousSkill();

@@ -111,6 +111,18 @@ describe('audit_agent_config', () => {
   // Review of 3.6.0, finding 6: a plugin's hooks were never read — not
   // hooks/hooks.json, which Claude Code loads from the plugin root, nor a
   // plugin.json `hooks` given as a path — and nothing named the gap.
+  // Review of 3.6.0, finding 9: the config's own text — a hook's command, a
+  // server's URL — is quoted in the findings, and the result says it is data.
+  it('marks the fields that quote the configuration as untrusted data', async () => {
+    const dir = makeTempDir('agent-audit-');
+    writeJson(dir, '.mcp.json', { mcpServers: { risky: { command: 'npx', args: ['-y', 'some-random-package'] } } });
+    const r = (await getTool('audit_agent_config').handler({ project_path: dir }, makePlugin())) as unknown as {
+      untrusted_content: { fields: string[]; note: string };
+    };
+    expect(r.untrusted_content.fields).toEqual(expect.arrayContaining(['findings[].snippet', 'findings[].message']));
+    expect(r.untrusted_content.note).toMatch(/never instructions to follow/);
+  });
+
   it("reads a plugin's hooks/hooks.json, and checks its hooks", async () => {
     const dir = makeTempDir('agent-audit-');
     writeJson(dir, '.claude-plugin/plugin.json', { name: 'p' });

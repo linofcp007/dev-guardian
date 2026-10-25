@@ -23,6 +23,7 @@ import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } fro
 import { filterFindings } from '../severity/filter.js';
 import { SeverityMin } from '../schemas.js';
 import type { ToolResult, ToolRun } from '../types.js';
+import { untrustedContent } from '../platform/untrustedText.js';
 import { computeCoverage } from './scanCoverage.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { countBySeverity } from '../severity/counts.js';
@@ -130,6 +131,7 @@ async function handler(
     scan_id: scanId,
     project_path: projectPath,
     include_user_config: includeUserConfig,
+    untrusted_content: untrustedContent(['findings[].snippet', 'findings[].message', 'findings[].title', 'warnings']),
     findings_count: findings.length,
     findings_by_severity: countBySeverity(findings),
     findings,
