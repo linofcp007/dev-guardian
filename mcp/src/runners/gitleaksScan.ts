@@ -99,6 +99,7 @@ import {
   shallowBoundary,
   SHALLOW_UNDETERMINED,
   uncommittedFiles,
+  withoutTreeAttributes,
 } from './git.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
@@ -414,7 +415,11 @@ async function historyPass(
     command: 'gitleaks',
     args,
     cwd: opts.projectPath,
-    env: opts.env,
+    // `git log -p` shows every commit's change as the WORKING TREE's
+    // `.gitattributes` says: a pull request adding `config.js binary` (or
+    // `* -diff`) beside a key had its key read in no commit (measured,
+    // gitleaks 8.30.1) — so none of the tree's are applied.
+    env: await withoutTreeAttributes(opts.projectPath, opts.env),
     signal: opts.signal,
     onLog: opts.onLog,
   });

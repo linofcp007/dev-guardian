@@ -43,7 +43,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { countSites, findFsCallSites } from '../../helpers/fsCallSites.js';
+import { countSites, findFsCallSites, fsCallSitesIn } from '../../helpers/fsCallSites.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -107,11 +107,12 @@ const ALLOWED: Record<string, Allowed> = {
       'network path; a stat opens nothing',
   },
   'src/hostsetup/setup.ts': {
-    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2 },
+    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2, realpathSync: 1 },
     kind: 'own',
     reason:
       "the plugin's own legacy templates and host-rules/ template, and a user-scope MCP config in the user's " +
-      'home (the user\'s own file); every project-scope file goes through projectFs',
+      "home (the user's own file: a temp file beside it renamed over it, a dotfiles link followed to the file it " +
+      'names); every project-scope file goes through projectFs',
   },
   'src/mcpaudit/launch.ts': {
     apis: { stat: 1 },
@@ -442,6 +443,26 @@ const ALLOWED: Record<string, Allowed> = {
   },
 };
 
+/**
+ * The CLI too: it writes into the scanned project and the CI checkout — the
+ * baseline, the dashboard, ci-init's pipeline, `scan --sarif` — and a
+ * checkout is the pull request's. `--sarif` was a plain `writeFileSync`, and a
+ * pull request committing `dev-guardian-results.sarif` as a link had the
+ * report overwrite whatever the link named.
+ */
+const ALLOWED_CLI: Record<string, Allowed> = {
+  '../cli/dev-guardian.mjs': {
+    apis: { existsSync: 5, readFileSync: 3, realpathSync: 5, writeFileSync: 3 },
+    kind: 'user',
+    reason:
+      "the temp directory of Node's compile cache, the plugin's own server, plugin.json, pinned.json and CI templates, " +
+      'and its own entry point (own); the file `check --file` names and a dashboard `--out` outside the project (the ' +
+      "operator's); ci-init's ancestor walk and its temp file beside the pipeline, published by link() or rename — a link " +
+      'at the name is replaced, never written through. The baseline, a dashboard inside the project and the SARIF ' +
+      'report go through writeProjectFile',
+  },
+};
+
 describe('raw fs calls in mcp/src', () => {
   const sites = findFsCallSites(MCP, join(MCP, 'src'));
   const actual = countSites(sites);
@@ -510,5 +531,19 @@ describe('raw fs calls in mcp/src', () => {
     );
     const found = findFsCallSites(root, join(root, 'src')).map((x) => `${x.api}@${x.line}`);
     expect(found).toEqual(['readFileSync@5', 'readFile@6', 'statSync@7', 'existsSync@12', 'realpathSync@13', 'realpathSync@14']);
+  });
+});
+
+describe('raw fs calls in cli/dev-guardian.mjs', () => {
+  const sites = fsCallSitesIn(MCP, [join(MCP, '..', 'cli', 'dev-guardian.mjs')]);
+
+  it('every raw read or write of a file is on the list, in the number the list says — no more, no fewer', () => {
+    const counted = Object.fromEntries([...countSites(sites)].map(([file, perApi]) => [file, Object.fromEntries([...perApi].sort())]));
+    const listed = Object.fromEntries(Object.entries(ALLOWED_CLI).map(([file, allowed]) => [file, allowed.apis]));
+    expect(
+      counted,
+      'A raw fs write of the scanned project or the checkout goes through writeProjectFile (engine.js exports it); ' +
+        `a site that is not: add it to ALLOWED_CLI with the reason.\n${sites.map((s) => `    ${s.file}:${s.line}  ${s.text}`).join('\n')}`,
+    ).toEqual(listed);
   });
 });

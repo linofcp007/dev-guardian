@@ -265,6 +265,27 @@ describe('configDifferences', () => {
     ]);
   });
 
+  // A `.gitattributes` decides how git shows each file's changes — `binary`
+  // or `-diff` turns them into "Binary files differ", which hid a pull
+  // request's key from the history pass before it read none of the tree's,
+  // and still hides its diff from a reviewer's view of the pull request.
+  it('a .gitattributes the tree adds or changes, at any depth, is named', async () => {
+    const repo = await newRepo('refcfg-attributes-');
+    write(repo, 'lib/.gitattributes', '*.min.js -diff\n');
+    write(repo, 'README.md', '# x\n');
+    const base = await commitAll(repo, 'base');
+    write(repo, '.gitattributes', 'config.js binary\n');
+    write(repo, 'lib/.gitattributes', '* -diff\n');
+    await commitAll(repo, 'pr');
+    const at = await resolveCiRef(repo, base, '--rules-ref');
+    const copy = await copyConfigFromRef(repo, at, join(makeTempDir('refcfg-into-'), 'copy'));
+    const readBy = ['git (how it diffs each file; not the secrets history pass, which reads none of the tree\'s)'];
+    expect(await configDifferences(repo, at, copy)).toEqual([
+      { path: '.gitattributes', change: 'added', applied: 'tree', read_by: readBy },
+      { path: 'lib/.gitattributes', change: 'modified', applied: 'tree', read_by: readBy },
+    ]);
+  });
+
   it('nothing changed: nothing named', async () => {
     const repo = await newRepo('refcfg-nodiff-');
     write(repo, '.semgrep.yml', 'rules: []\n');

@@ -919,6 +919,8 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
     expect(semgrepArgs().some((a) => a.includes('llm.yml'))).toBe(false);
     const run = r.tools_run.find((t) => t.name === 'semgrep');
     expect(run?.status).toBe('ok');
+    // As data too: the CI gate never lets accepted files clear it (ci/gate.ts).
+    expect(run).toMatchObject({ plugin_pack_missing: true });
     expect(run?.reason ?? '').toMatch(/pack llm\.yml was not found at .*llm\.yml — its rules did not run/);
     expect(run?.reason ?? '').toMatch(/pack web-js\.yml was not found at .*web-js\.yml — its rules did not run/);
     expect(r.missing_tools).toContain('semgrep');
@@ -931,7 +933,7 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
     writeFileSync(join(project, 'a.py'), 'foo()\n', 'utf8');
     mockSemgrepOnPath();
     const r = await runSast(project, makePlugin(project), { scope: { paths: ['a.py'] } });
-    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(r.tools_run.find((t) => t.name === 'semgrep')).toMatchObject({ status: 'ok', plugin_pack_missing: true });
     expect(r.missing_tools).toContain('semgrep');
   });
 });

@@ -38,7 +38,7 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | Flag | Meaning |
 | --- | --- |
 | `--write` | write or merge instead of printing |
-| `--project <path>` | the project to configure (default: current directory) |
+| `--project <path>` | the project to configure (default: current directory). With `--write` it is judged like every command's `--project`: a filesystem root, your home directory or a path that is not a directory is a usage error, so `all --write` run from `~` writes nothing there. An empty value is a usage error |
 | `--scope project\|global`, `--global` | which config to write. `all --write` skips the two global-only hosts (Windsurf, Claude Desktop) unless `--global` is given, so it never touches a global config by surprise; naming either host directly writes its global config. |
 | `--update-mcp` | refresh an entry or rules block that is already there but out of date (`--force` is a deprecated alias) |
 
@@ -48,7 +48,8 @@ Exit codes: 0 done, 1 the MCP server is not built (`mcp/dist/server.js` missing)
 
 - `AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md` and `.clinerules` are files you may already have. dev-guardian manages only a delimited block inside them (`<!-- dev-guardian:begin -->` … `<!-- dev-guardian:end -->`); everything outside it is never touched. A stale block is reported as `needs_update` until you pass `--update-mcp`. A file that mentions dev-guardian without the markers and is not byte-for-byte a template an earlier release installed is reported as `manual_merge_required` and left alone.
 - `.cursor/rules/dev-guardian.mdc` and `.windsurf/rules/dev-guardian.md` belong to dev-guardian alone and are written whole, because both hosts only honour a rules file whose YAML frontmatter is its very first bytes. Both are agent-requested (Cursor: a description, `alwaysApply: false`; Windsurf: `trigger: model_decision`): the host loads them when the task matches their description — security, dependencies, bugs, quality, compliance, or installing a package, an AI skill or an MCP server — instead of on every request.
-- Codex's TOML entry is compared by content; `--update-mcp` replaces every `[mcp_servers.dev-guardian]` table and sub-table in the file, wherever they are.
+- Codex's TOML entry is compared by content; `--update-mcp` replaces every `[mcp_servers.dev-guardian]` table and sub-table in the file, wherever they are, however the heading is spelt (`[ mcp_servers."dev-guardian" ]` is the same table), and keeps the comments that lead into the next table. An entry written with dotted keys or as an inline table (`mcp_servers.dev-guardian.command = …`) is left untouched and reported `failed`: make it a table, or edit it by hand.
+- A JSON config that starts with a byte-order mark is read and written back with it; one with comments (VS Code's `mcp.json` allows them) is reported `failed` and left untouched. A global config (Claude Desktop's, Windsurf's, `~/.codex/config.toml`) is replaced in one step — a temp file renamed over it — so an interrupted write never leaves it truncated; a link there (a dotfiles checkout) stays a link.
 
 ## Manual configuration
 

@@ -541,8 +541,10 @@ function recordSemgrepRun(args: SemgrepRunRecord): void {
   }
   // A damaged install ran without the pack: the note is on the run, and an
   // otherwise-complete run is partial (review of the LLM pack, M-3).
-  if (args.packMissing && args.tools_run.at(-1)?.status === 'ok' && !args.missing_tools.includes('semgrep')) {
-    args.missing_tools.push('semgrep');
+  const judged = args.tools_run.at(-1);
+  if (args.packMissing && judged?.status === 'ok') {
+    judged.plugin_pack_missing = true;
+    if (!args.missing_tools.includes('semgrep')) args.missing_tools.push('semgrep');
   }
 }
 
@@ -955,6 +957,7 @@ async function runSemgrepOnScope(args: Collect & {
   if (entry.status === 'failed' && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {
     entry.plugin_pack_only = true;
   }
+  if (entry.status === 'ok' && plan.packMissing) entry.plugin_pack_missing = true;
   tools_run.push(entry);
   // No rule applied to any file in scope: a gap, not a clean result. Files
   // only partly parsed, rules that did not load, the plugin's pack missing

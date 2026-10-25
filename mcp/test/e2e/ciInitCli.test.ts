@@ -264,6 +264,15 @@ describe('ci-init: generated pipelines are valid YAML with the pinned values sub
     }
   });
 
+  // The CLI runs on the committed bundle, which imports Node's builtins alone
+  // (pluginInstall.test.ts runs it from a git archive with no node_modules):
+  // an `npm ci` of dev-guardian's mcp/ fetched packages nothing loads, and ran
+  // their install scripts, from the npm registry, in the gate job.
+  it.each(['github', 'gitlab', 'bitbucket'] as const)('%s: installs no npm package for dev-guardian itself', (target) => {
+    const body = renderedBody(makeProject(), target);
+    expect(body.split('\n').filter((l) => !l.trimStart().startsWith('#') && /\bnpm\b/.test(l))).toEqual([]);
+  });
+
   it('clones dev-guardian at a v-prefixed, quoted tag matching .claude-plugin/plugin.json, never `main`', () => {
     const plugin = JSON.parse(readFileSync(resolve(REPO_ROOT, '.claude-plugin', 'plugin.json'), 'utf8')) as {
       version: string;

@@ -54,10 +54,11 @@ export interface GitResult {
 /**
  * `git -C cwd …args`, never throwing; a missing git reads as exit 127. A
  * repository whose git configuration could not be read safely is not run at
- * all: exit 126, with the reason in stderr.
+ * all: exit 126, with the reason in stderr. `env`: the environment git runs
+ * with (this process's by default).
  */
-export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<GitResult> {
-  const r = await execGit(cwd, args, { timeoutMs });
+export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS, env?: NodeJS.ProcessEnv): Promise<GitResult> {
+  const r = await execGit(cwd, args, { timeoutMs, ...(env !== undefined ? { env } : {}) });
   const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
   if (r.failure?.code === 'refused') return { exitCode: 126, stdout: '', stderr: r.stderr, ...notApplied };
   // No exit code. 127 — the shell's "command not found" — only when git is not
@@ -310,6 +311,26 @@ export async function historyState(cwd: string): Promise<Record<string, string>>
   const refs = await git(cwd, ['for-each-ref', '--format=%(objectname) %(refname)']);
   if (refs.exitCode !== 0) throw new Error(`git for-each-ref failed: ${firstLine(refs.stderr)}`);
   return { head, refs: createHash('sha256').update(refs.stdout).digest('hex') };
+}
+
+/**
+ * `env`, with `GIT_ATTR_SOURCE` at the empty tree (git 2.40 and later; an
+ * older git ignores it): a git started with it reads the history as
+ * committed — no `.gitattributes` of the working tree, which git otherwise
+ * applies to every commit's diff, only the user's own and
+ * `$GIT_DIR/info/attributes` (measured, git 2.56; the object need not be
+ * stored). A commit adding `config.js binary` made its own change "Binary
+ * files differ" to `git log -p`. The empty tree is SHA-1's when git cannot
+ * name the object format: a wrong id is no silent fallback — the git it
+ * reaches refuses to run ("bad --attr-source or GIT_ATTR_SOURCE").
+ */
+export async function withoutTreeAttributes(cwd: string, env: NodeJS.ProcessEnv): Promise<NodeJS.ProcessEnv> {
+  const r = await git(cwd, ['rev-parse', '--show-object-format']);
+  const emptyTree =
+    r.exitCode === 0 && r.stdout.trim() === 'sha256'
+      ? '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321'
+      : '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+  return { ...env, GIT_ATTR_SOURCE: emptyTree };
 }
 
 /** The project's path inside its repository, `/`-separated with a trailing `/` ('' at the root). */

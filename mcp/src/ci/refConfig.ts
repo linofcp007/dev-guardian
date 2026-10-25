@@ -429,6 +429,11 @@ export async function configDifferences(
     specs.push({ file, nested: false, applied: 'ref', reader: file === MANIFEST_RELATIVE_PATH ? 'semgrep (rule files it records)' : 'semgrep' });
   }
   specs.push({ file: SCAN_SETTINGS_RELATIVE_PATH, nested: false, applied: 'ref', reader: 'semgrep (timeouts), the gate (accept_timeouts)' });
+  // No scanner's, but it decides how git shows a file's changes: `binary` or
+  // `-diff` made them "Binary files differ" to the history pass — which reads
+  // none of the tree's since (`runners/git.ts#withoutTreeAttributes`) — and
+  // still collapses the file's diff in a reviewer's view of the pull request.
+  specs.push({ file: '.gitattributes', nested: true, applied: 'tree', reader: "git (how it diffs each file; not the secrets history pass, which reads none of the tree's)" });
   const changed = await changedAgainst(projectPath, at, [...new Set(specs.flatMap((s) => pathspecsOf(s.file, s.nested)))]);
   // A file the tree's scanners read by its path whether git ignores it or not
   // — gitleaks reads `<source>/.gitleaksignore` — is named when it is there

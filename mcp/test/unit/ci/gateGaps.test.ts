@@ -174,8 +174,12 @@ describe('a gap no acceptance clears', () => {
     expect(remedyFor('other', 'semgrep', `security_scan_full: semgrep ran with reduced coverage (${reason})`)).toMatch(/git rm --cached/);
   });
 
-  it('a run that also missed files over the size limit (unscanned), or rules that did not load: never cleared by naming files', () => {
-    for (const run of [{ unscanned: { oversized: 1 } }, { failed_rules: [{ rule_id: 'r', message: 'bad' }] }] as Array<Partial<ToolRun>>) {
+  // The plugin's own packs not on disk (a damaged install) make a run partial
+  // too: an --accept-partial-parse covering every partly parsed file cleared
+  // that gap with it, and the gate passed with the packs' rules never run.
+  it('a run that also missed files over the size limit (unscanned), rules that did not load, or the plugin pack: never cleared by naming files', () => {
+    const runs: Array<Partial<ToolRun>> = [{ unscanned: { oversized: 1 } }, { failed_rules: [{ rule_id: 'r', message: 'bad' }] }, { plugin_pack_missing: true }];
+    for (const run of runs) {
       const v = evaluateGate(input({ steps: [semgrepStep([{ file: F, type: 'PartialParsing' }], run)], acceptedPartialParses: [F] }));
       expect(v.exitCode, JSON.stringify(run)).toBe(CI_EXIT.INCOMPLETE_SCAN);
       expect(v.acceptedGaps).toEqual([]);

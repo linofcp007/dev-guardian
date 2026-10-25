@@ -62,6 +62,7 @@ import type { Finding, ToolRun } from '../types.js';
 import { configDifferences, copyConfigFromRef, type ResolvedRef } from './refConfig.js';
 import { filesChangedFrom } from './changedSince.js';
 import { acceptedByHistoryIgnores } from './gitleaksIgnore.js';
+import { readInHistoryHunks } from './historyHunks.js';
 import { rememberSecretValues, secretValueOf } from './secretValues.js';
 import type { PartialParseRef, RulesSource, ScanStepResult } from './types.js';
 
@@ -123,9 +124,10 @@ export interface RunScansOptions {
  * that reads the commits only, as `-U0` hunks again. A step lists at most
  * {@link FULL_CONTENT_BATCH} files (`scope.paths`' limit); more take more
  * steps. A listing git cannot make is a failed step — a gap, never a pass.
- * Only its matches over several lines are taken ({@link fullContentFindings}),
- * less those the project's `.gitleaksignore` accepts by their history
- * fingerprint (`ci/gitleaksIgnore.ts`).
+ * Its matches over several lines are taken, and its one-line matches whose
+ * line the history pass read in no hunk ({@link fullContentFindings}), less
+ * those the project's `.gitleaksignore` accepts by their history fingerprint
+ * (`ci/gitleaksIgnore.ts`).
  */
 const FULL_CONTENT_STEP = 'scan_secrets';
 const FULL_CONTENT_BATCH = 1000;
@@ -197,7 +199,11 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
       await rememberSecretValues(scannedProject(opts.projectPath), all, {
         reportDirs: reportDirsOf(storage, opts.projectPath),
       });
-      return { findings: withoutRepeats(all, new Set(wholeFiles)), steps, rulesSource, scanSettings };
+      const kept = withoutRepeats(all, new Set(wholeFiles));
+      // A one-line secret the history pass read in a hunk was judged there.
+      const oneLine = kept.filter((f) => wholeFiles.includes(f) && (f.line_end ?? 0) <= (f.line_start ?? 0));
+      const judged = await readInHistoryHunks(scannedProject(opts.projectPath), oneLine);
+      return { findings: kept.filter((f) => !judged.has(f)), steps, rulesSource, scanSettings };
     } finally {
       try {
         db.close();
@@ -406,14 +412,16 @@ function collectFindings(storage: Storage, projectPath: string): Finding[] {
 }
 
 /**
- * The findings of {@link FULL_CONTENT_STEP}'s scoped secrets scans that span
- * more than one line — every such secret in the full content of the files
- * changed since the ref, read from the working tree (no `;commit=` in the
- * locator). Empty when no step ran. A one-line secret is whole in the hunk
- * that adds it, so the history pass already judged it, with what applies
- * only to history (`.gitleaksignore`'s `<commit>:…` entries, a `.gitleaks.toml`
- * allowlist of commits): taken from here as well, an accepted fixture key
- * came back as new whenever its file changed.
+ * The findings of {@link FULL_CONTENT_STEP}'s scoped secrets scans — every
+ * secret in the full content of the files changed since the ref, read from
+ * the working tree (no `;commit=` in the locator). Empty when no step ran.
+ * One over several lines is in no `-U0` hunk whole. A one-line secret is
+ * whole in the hunk that adds it — when there is one: the history pass judged
+ * it with what applies only to history (`.gitleaksignore`'s `<commit>:…`
+ * entries, a `.gitleaks.toml` allowlist of commits), and taken from here as
+ * well an accepted key came back as new whenever its file changed; so `runScans`
+ * keeps it only when its line was read in no hunk (`ci/historyHunks.ts`: a
+ * merge's own change, a file git reads as binary).
  */
 function fullContentFindings(storage: Storage, projectPath: string): Finding[] {
   const project = scannedProject(projectPath);
@@ -422,7 +430,7 @@ function fullContentFindings(storage: Storage, projectPath: string): Finding[] {
     .filter((scan) => isScopedScan(scan) && scan.scan_type === 'secrets')
     .flatMap((scan) => storage.findings.listByScan(scan.scan_id))
     .filter((f) => f.tool.toLowerCase() === 'gitleaks' && !/;commit=[0-9a-f]+$/i.test(f.snippet ?? ''))
-    .filter((f) => f.line_start !== undefined && f.line_end !== undefined && f.line_end > f.line_start);
+    .filter((f) => f.line_start !== undefined);
 }
 
 /**

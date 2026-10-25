@@ -7,8 +7,8 @@
  * those cases run with apply:false to avoid touching the dev machine.
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -361,6 +361,55 @@ describe('setupHost — MCP registration', () => {
     run({ hosts: ['cursor'], apply: false });
     expect(existsSync(join(project, '.cursor/mcp.json'))).toBe(false);
     expect(existsSync(join(project, '.cursor/rules/dev-guardian.mdc'))).toBe(false);
+  });
+});
+
+// A user-scope config — Claude Desktop's, Windsurf's — was written in place:
+// a crash or a full disk mid-write left it truncated, and every server the
+// user had configured went with it. It is replaced in one step now (a temp
+// file renamed over it: a new file, never the old one rewritten).
+describe('setupHost — a user-scope config is replaced in one step', () => {
+  const OTHER = '{\n  "mcpServers": {\n    "mine": { "command": "x" }\n  }\n}\n';
+  const runGlobal = (home: string) =>
+    run({ hosts: ['windsurf'], scope: 'global', installRules: false, env: { os: 'linux', home, projectPath: project } })[0];
+  const configIn = (home: string): string => join(home, '.codeium', 'windsurf', 'mcp_config.json');
+
+  it('the merged config is a new file renamed into place, the user\'s servers kept, nothing left beside it', () => {
+    const home = makeTempDir('home-');
+    const config = configIn(home);
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(config, OTHER);
+    const before = statSync(config).ino;
+    expect(runGlobal(home)?.mcp.status).toBe('merged');
+    expect(statSync(config).ino).not.toBe(before);
+    expect(JSON.parse(readFileSync(config, 'utf8'))).toMatchObject({ mcpServers: { mine: { command: 'x' }, 'dev-guardian': {} } });
+    expect(readdirSync(dirname(config))).toEqual(['mcp_config.json']);
+  });
+
+  it('a link at the path (a dotfiles checkout) stays a link: the file it names is the one replaced', (t) => {
+    const home = makeTempDir('home-');
+    const dotfiles = join(makeTempDir('dotfiles-'), 'mcp_config.json');
+    writeFileSync(dotfiles, OTHER);
+    const config = configIn(home);
+    mkdirSync(dirname(config), { recursive: true });
+    try {
+      symlinkSync(dotfiles, config, 'file');
+    } catch {
+      return t.skip(); // no symlink privilege on this host
+    }
+    expect(runGlobal(home)?.mcp.status).toBe('merged');
+    expect(lstatSync(config).isSymbolicLink()).toBe(true);
+    expect(readFileSync(dotfiles, 'utf8')).toContain('"dev-guardian"');
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps the permissions of a config that holds tokens (0600)', () => {
+    const home = makeTempDir('home-');
+    const config = configIn(home);
+    mkdirSync(dirname(config), { recursive: true });
+    writeFileSync(config, OTHER, { mode: 0o600 });
+    chmodSync(config, 0o600);
+    runGlobal(home);
+    expect(statSync(config).mode & 0o777).toBe(0o600);
   });
 });
 

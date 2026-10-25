@@ -19,6 +19,8 @@ declare module '*/cli/dev-guardian.mjs' {
   export function isNodeSqliteUnavailable(error: unknown): boolean;
   /** What the last-resort handler prints for `error`, and its exit code — fatalOutcome.test.ts. */
   export function fatalOutcome(error: unknown): { text: string; exitCode: number };
+  /** `scan --sarif`'s write: why the report was not written, or undefined — sarifWrite.test.ts. */
+  export function writeSarif(sarifPath: string, text: string, where: { projectPath: string; repoPrefix: string }): string | undefined;
   /**
    * ci-init's template substitution — see ciInitRender.test.ts for why the
    * leftover-placeholder check needed its own coverage. `sections` turns the
