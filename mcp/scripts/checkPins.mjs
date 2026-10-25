@@ -7,10 +7,10 @@
  * reaches a user unreviewed (`src/runners/installCatalog.ts`).
  *
  * Read: `configs/ci/pinned.json` (the CI templates' actions and scanners),
- * `PINNED_RELEASES`, `COSIGN_VERSION`, `PSALM_VERSION` and the versions
- * `installCatalog.ts` keeps unexported (cppcheck, govulncheck, detekt,
- * SpotBugs, FindSecBugs, RuboCop). Asked: GitHub's newest release tagged with
- * a version (never a pre-release), PyPI, RubyGems, the Go module proxy. For a binary with a newer release, the sha256 GitHub records
+ * `PINNED_RELEASES`, `COSIGN_VERSION`, `PSALM_VERSION`, `WP_CLI_VERSION`,
+ * `ACTIONLINT_VERSION` and the versions `installCatalog.ts` keeps unexported
+ * (cppcheck, govulncheck, detekt, SpotBugs, FindSecBugs, RuboCop). Asked:
+ * GitHub's newest release tagged with a version (never a pre-release), PyPI, RubyGems, the Go module proxy. For a binary with a newer release, the sha256 GitHub records
  * for each asset of that release is printed under its pinned file name — a
  * starting point, never the check itself: hash the download independently and
  * match the release's own checksums (and its signature, when it has one), as
@@ -26,7 +26,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { COSIGN_VERSION, PINNED_RELEASES, PSALM_VERSION } from '../src/runners/installCatalog.js';
+import { ACTIONLINT_VERSION, COSIGN_VERSION, PINNED_RELEASES, PSALM_VERSION, WP_CLI_VERSION } from '../src/runners/installCatalog.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..', '..');
@@ -131,6 +131,8 @@ for (const [name, release] of Object.entries(PINNED_RELEASES)) {
 }
 pins.push({ name: 'cosign (install_toolchain)', pinned: COSIGN_VERSION, latest: fromGithub('sigstore/cosign') });
 pins.push({ name: 'psalm (install_toolchain)', pinned: PSALM_VERSION, latest: fromGithub('vimeo/psalm'), files: ['psalm.phar'] });
+pins.push({ name: 'wp-cli (install_toolchain)', pinned: WP_CLI_VERSION, latest: fromGithub('wp-cli/wp-cli'), files: [`wp-cli-${WP_CLI_VERSION}.phar`] });
+pins.push({ name: 'actionlint (go install)', pinned: ACTIONLINT_VERSION, latest: fromGithub('rhysd/actionlint') });
 pins.push({ name: 'cppcheck (scoop, winget)', pinned: fromCatalog(/const CPPCHECK_VERSION = '([^']+)'/), latest: fromGithub('danmar/cppcheck') });
 pins.push({ name: 'detekt (install_toolchain)', pinned: fromCatalog(/const DETEKT_VERSION = '([^']+)'/), latest: fromGithub('detekt/detekt') });
 pins.push({ name: 'spotbugs (install_toolchain)', pinned: fromCatalog(/const SPOTBUGS_VERSION = '([^']+)'/), latest: fromGithub('spotbugs/spotbugs') });
