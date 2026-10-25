@@ -32,14 +32,16 @@ export const PROJECT_WALK_EXCLUDE: ReadonlySet<string> = new Set([...FS_EXCLUDE,
 export const SCANNED_WALK_EXCLUDE: ReadonlySet<string> = new Set([...PROJECT_WALK_EXCLUDE].filter((d) => d !== '.guardian'));
 
 /**
- * What the walks that mirror what a SCANNER reads leave out besides
- * {@link PROJECT_WALK_EXCLUDE} — Trivy's dependency-manifest walk
- * (`scannerParsers/trivy.ts`) and its IaC-looking-files walk
- * (`trivyConfig.ts`) — while entering every other hidden directory, since
- * Trivy reads them (`.github/actions/…/package.json`, `.devcontainer/
- * Dockerfile`, measured on 0.69.3): version control, the package managers'
- * and tools' caches, and bower's and jspm's dependency directories. Round 4,
- * items 4 and 5; round 5, item 1.
+ * What the walks that mirror what a SCANNER reads leave out — Trivy's
+ * dependency-manifest walk (`scannerParsers/trivy.ts`) and its
+ * IaC-looking-files walk (`trivyConfig.ts`), through
+ * {@link trivyWalkSkipsDir}; the repository-configuration walk
+ * (`repoConfig.ts`) besides {@link PROJECT_WALK_EXCLUDE} — while entering
+ * every other hidden directory, since Trivy reads them
+ * (`.github/actions/…/package.json`, `.devcontainer/Dockerfile`, measured
+ * on 0.69.3): version control, the package managers' and tools' caches, and
+ * bower's and jspm's dependency directories. Round 4, items 4 and 5; round
+ * 5, item 1.
  */
 export const SCANNER_WALK_EXCLUDE: ReadonlySet<string> = new Set([
   '.git',
@@ -57,6 +59,48 @@ export const SCANNER_WALK_EXCLUDE: ReadonlySet<string> = new Set([
   'bower_components',
   'jspm_packages',
 ]);
+
+/**
+ * What the two walks that mirror what TRIVY reads (above) leave out at any
+ * depth: {@link SCANNER_WALK_EXCLUDE}, and the directories that hold
+ * installed dependencies or a tool's cache — `node_modules` (Trivy reads no
+ * lock file there), `vendor`, virtualenvs (a JupyterLab extension's lockless
+ * `package.json` lives in `.venv/share/`), `.tox`, `.cache` and Python's
+ * caches. A manifest there is a dependency's, never the project's.
+ *
+ * Not {@link PROJECT_WALK_EXCLUDE}: it leaves out build output and tools'
+ * folders by NAME at any depth, and Trivy reads them all — measured on
+ * 0.74.0 (2026-10-25), a `package-lock.json` in each of `build`, `dist`,
+ * `target`, `coverage`, `.next`, `.specs`, `.kiro`, `.guardian`,
+ * `lib/.guardian` and `vendor/x` got a Result, one under `.git/` or
+ * `node_modules/` none, and `trivy config` read a Dockerfile in every one,
+ * `node_modules/` included. So a lockless `.github/actions/build/package.json`
+ * read full. Build output is left out at the ROOT only
+ * ({@link TRIVY_WALK_ROOT_EXCLUDE}).
+ */
+const TRIVY_WALK_EXCLUDE: ReadonlySet<string> = new Set([
+  ...SCANNER_WALK_EXCLUDE,
+  'node_modules',
+  'vendor',
+  'venv',
+  '.venv',
+  '.tox',
+  '.cache',
+  '__pycache__',
+  '.pytest_cache',
+]);
+
+/**
+ * Left out by those walks at the project's root alone: generated output — a
+ * build's, a test run's coverage report, and dev-guardian's own `.guardian/`
+ * (a `.guardian` below the root is the project's, as everywhere).
+ */
+const TRIVY_WALK_ROOT_EXCLUDE: ReadonlySet<string> = new Set(['.guardian', 'dist', 'build', 'target', 'coverage', '.next', '.nuxt']);
+
+/** Whether a walk that mirrors what Trivy reads leaves out the directory `name` in `parentRel` (`''`: the root). */
+export function trivyWalkSkipsDir(parentRel: string, name: string): boolean {
+  return TRIVY_WALK_EXCLUDE.has(name) || (parentRel === '' && TRIVY_WALK_ROOT_EXCLUDE.has(name));
+}
 
 function readDir(dir: string): Dirent[] {
   try {

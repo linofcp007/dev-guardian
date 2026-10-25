@@ -77,7 +77,7 @@ import { join } from 'node:path';
 import type { ProjectExclusions } from '../platform/guardianIgnore.js';
 import { describeReadRefusal, linkNotFollowed, listProjectDirOrNull, ReadBudget } from '../platform/projectFs.js';
 import type { ToolRun } from '../types.js';
-import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
+import { trivyWalkSkipsDir } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
 import { trivyFailureReason, withHonoured, type TrivyRunResult } from './trivyRun.js';
 
@@ -214,11 +214,12 @@ interface IacFiles {
 
 /**
  * Files under `projectPath` that look like something `trivy config` scans —
- * see the module comment for how narrow that is. Bounded like the other
- * project walks: `PROJECT_WALK_EXCLUDE`, `SCANNER_WALK_EXCLUDE` (version
- * control and caches — every other hidden directory is entered, as Trivy
- * enters them), a chart's `templates/` and `.guardianignore` entries are not
- * entered, symbolic links not followed; a JSON file is parsed only up to
+ * see the module comment for how narrow that is. Bounded like the manifest
+ * walk (`projectFiles.ts#trivyWalkSkipsDir`: installed dependencies,
+ * virtualenvs, version control and caches at any depth, generated output at
+ * the root alone — every other directory, hidden ones too, is entered, as
+ * Trivy enters them), a chart's `templates/` and `.guardianignore` entries
+ * are not entered, symbolic links not followed; a JSON file is parsed only up to
  * 2 MB. A GitHub workflow is walked and never IaC-looking: it has no
  * top-level `apiVersion`/`kind`/`metadata`. Every listing and read goes
  * through `platform/projectFs.ts`; a candidate that could not be read (it
@@ -259,8 +260,9 @@ export function iacLookingFiles(
     for (const e of entries) {
       const child = rel === '' ? e.name : `${rel}/${e.name}`;
       if (e.kind === 'directory' || e.kind === 'link') {
-        // Hidden directories too (round 5, item 1): Trivy reads `.devcontainer/`, `.k8s/`.
-        if (PROJECT_WALK_EXCLUDE.has(e.name) || SCANNER_WALK_EXCLUDE.has(e.name)) continue;
+        // Hidden directories too (round 5, item 1): Trivy reads `.devcontainer/`, `.k8s/`;
+        // and a `build/` below the root (3.6.1): a docker action's `.github/actions/build/`.
+        if (trivyWalkSkipsDir(rel, e.name)) continue;
         if (isChart && e.name === 'templates') continue;
         if (exclusions !== null && exclusions.ignores(child, true)) continue;
       }

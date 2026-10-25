@@ -436,6 +436,46 @@ describe('assessManifestCoverage — the whole tree', () => {
     expect(assessManifestCoverage(project, results(['web\\package-lock.json', 'npm'])).gaps).toEqual([]);
   });
 
+  /**
+   * 3.6.1: Python was judged per DIRECTORY, so the pip Result of a pinned
+   * `requirements.txt` covered every Python manifest beside it. Measured on
+   * Trivy 0.74.0 (2026-10-25): py/requirements.txt (requests==2.19.0),
+   * py/requirements-dev.txt (pytest==7.0.0), py/Pipfile (flask) and a PEP
+   * 621 py/pyproject.toml gave one Result, `py/requirements.txt` — Trivy
+   * reads `requirements.txt` by that exact name only, and a Pipfile only
+   * through Pipfile.lock. Each manifest is judged by the Targets that stand
+   * for it.
+   */
+  it('a pinned requirements.txt covers only itself and what it locks, never a requirements-dev.txt or a Pipfile beside it', () => {
+    const project = tree({
+      'py/requirements.txt': 'requests==2.19.0\n',
+      'py/requirements-dev.txt': 'pytest==7.0.0\n',
+      'py/Pipfile': '[packages]\nflask = "*"\n',
+      'py/pyproject.toml': DJANGO_PEP621,
+    });
+    expect(assessManifestCoverage(project, results(['py/requirements.txt', 'pip'])).gaps).toEqual([
+      { ecosystem: 'python', files: ['py/Pipfile', 'py/requirements-dev.txt'] },
+    ]);
+  });
+
+  it.each([
+    ['a Pipfile, by its Pipfile.lock', 'Pipfile', '[packages]\nflask = "*"\n', 'Pipfile.lock', 'pipenv'],
+    ['a pyproject.toml, by poetry.lock', 'pyproject.toml', DJANGO_PEP621, 'poetry.lock', 'poetry'],
+    ['a setup.py, by the requirements.txt pip-compile writes for it', 'setup.py', 'setup(install_requires=["django"])\n', 'requirements.txt', 'pip'],
+  ])('%s', (_label, file, body, target, type) => {
+    const project = tree({ [`svc/${file}`]: body, 'svc/requirements-test.txt': 'pytest==7.0.0\n' });
+    expect(assessManifestCoverage(project, results([`svc/${target}`, type])).gaps).toEqual([
+      { ecosystem: 'python', files: ['svc/requirements-test.txt'] },
+    ]);
+  });
+
+  it('a Pipfile.lock does not cover a pyproject.toml beside it', () => {
+    const project = tree({ 'Pipfile': '[packages]\nflask = "*"\n', 'pyproject.toml': DJANGO_PEP621 });
+    expect(assessManifestCoverage(project, results(['Pipfile.lock', 'pipenv'])).gaps).toEqual([
+      { ecosystem: 'python', files: ['pyproject.toml'] },
+    ]);
+  });
+
   it('a different ecosystem in the same directory does not cover it', () => {
     const project = tree({ 'api/pyproject.toml': DJANGO_PEP621, 'api/package.json': LODASH_PKG });
     expect(assessManifestCoverage(project, results(['api/package-lock.json', 'npm'])).gaps).toEqual([
@@ -498,6 +538,43 @@ describe('assessManifestCoverage — the whole tree', () => {
     const ignores = (rel: string): boolean => rel === 'fixtures' || rel.startsWith('fixtures/');
     expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT, { ignores }).gaps).toEqual([
       { ecosystem: 'npm', files: ['app/package.json'] },
+    ]);
+  });
+
+  /**
+   * 3.6.1: the walk left out every directory NAMED like build output or a
+   * tool's (`build`, `dist`, `target`, `coverage`, `.specs`, `.kiro`,
+   * `.guardian`, …) at any depth — but Trivy reads them all (measured on
+   * 0.74.0, 2026-10-25: a package-lock.json in each got its Result; only
+   * `.git/` and `node_modules/` got none), and skips a lockless manifest
+   * there in silence. Build output is left out at the root only, and only
+   * the root `.guardian/`.
+   */
+  it('names a lockless manifest in a directory named like build output below the root', () => {
+    const project = tree({
+      '.github/actions/build/package.json': LODASH_PKG,
+      'packages/web/dist/package.json': LODASH_PKG,
+      'tools/target/Cargo.toml': '[package]\nname = "t"\n[dependencies]\nserde = "1"\n',
+      'lib/.guardian/package.json': LODASH_PKG,
+      '.specs/demo/package.json': LODASH_PKG,
+      // Generated output at the root: left out.
+      'build/package.json': LODASH_PKG,
+      'dist/package.json': LODASH_PKG,
+      'target/package/x-1.0.0/Cargo.toml': '[package]\nname = "x"\n[dependencies]\nserde = "1"\n',
+      'coverage/package.json': LODASH_PKG,
+      '.guardian/package.json': LODASH_PKG,
+      // Installed dependencies, virtualenvs and caches: left out at any depth.
+      'svc/node_modules/x/package.json': LODASH_PKG,
+      'svc/vendor/x/composer.json': '{"require":{"a/b":"1.0"}}',
+      'svc/.venv/share/jupyter/labextensions/x/package.json': LODASH_PKG,
+      'svc/.cache/package.json': LODASH_PKG,
+    });
+    expect(assessManifestCoverage(project, NO_RESULTS_OUTPUT).gaps).toEqual([
+      {
+        ecosystem: 'npm',
+        files: ['.github/actions/build/package.json', '.specs/demo/package.json', 'lib/.guardian/package.json', 'packages/web/dist/package.json'],
+      },
+      { ecosystem: 'cargo', files: ['tools/target/Cargo.toml'] },
     ]);
   });
 
