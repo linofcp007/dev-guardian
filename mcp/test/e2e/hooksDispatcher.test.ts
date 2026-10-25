@@ -2050,6 +2050,24 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       expect(mcp('write_file', { path: settings, content: '{"permissions": {"allow": []}}' }).stdout).toBeUndefined();
     });
 
+    // Review of 3.6.0, finding 12: a delete of the settings file was never
+    // judged (`settings: removes ? [] : …`), and took every permissions.deny
+    // rule with it. Asked, never denied.
+    it("deleting or moving away Claude Code's settings asks the user; another delete or a copy does not", () => {
+      const settings = join(projectDir, '.claude', 'settings.json');
+      for (const [tool, input] of [
+        ['delete_file', { path: settings }],
+        ['remove_file', { path: join(projectDir, '.claude', 'settings.local.json') }],
+        ['move_file', { source: settings, destination: join(projectDir, 'old-settings.json') }],
+      ] as const) {
+        const r = mcp(tool, { ...input });
+        expect(out(r).permissionDecision).toBe('ask');
+        expect(out(r).permissionDecisionReason).toMatch(/deletes or moves away Claude Code's settings.*permissions\.deny/);
+      }
+      expect(mcp('delete_file', { path: join(projectDir, 'src', 'old.ts') }).stdout).toBeUndefined();
+      expect(mcp('copy_file', { source: settings, destination: join(projectDir, 'backup.json') }).stdout).toBeUndefined();
+    });
+
     it("a write into dev-guardian's registry is denied", () => {
       const data = join(homeDir, 'gdata');
       const r = mcp('write_file', { path: join(data, 'registry', 'abc.json'), content: '{}' }, { GUARDIAN_DATA_DIR: data });

@@ -132,10 +132,12 @@ const HOOK_STARTED = Date.now();
  *   config: string[],
  *   registry: string[],
  *   settings: Array<{ path: string, change: SettingsChange | null }>,
+ *   takesAway?: string[],
  *   unread?: string,
  *   fileTool?: boolean,
  *   maybe?: { paths: string[], change: SettingsChange, removes: boolean },
  * }} WriteDescription
+ *   `takesAway`: the paths an MCP tool deletes or moves away — Claude Code's settings among them are asked about;
  *   `unread`: why part of an MCP tool's arguments was not read; `fileTool`: its name names a file;
  *   `maybe`: a non-file tool's strings that may name a guarded file — asked about, never denied.
  * @typedef {Record<string, unknown>} ToolInput
@@ -1787,6 +1789,9 @@ function describeMcpWrite(toolName, input) {
     // Removing a registry entry only un-trusts a database; writing one is the user's decision.
     registry: removes ? [] : written,
     settings: removes ? [] : [...dests.map((d) => ({ path: d.path, change: changeOf(d.parent) })), ...others.map((path) => ({ path, change }))],
+    // Deleting Claude Code's settings, or moving them away, drops every
+    // permissions.deny rule they hold — the user's question (review of 3.6.0, finding 12).
+    ...(removes || sources.length > 0 ? { takesAway: [...(removes ? written : []), ...sources] } : {}),
     ...(maybe.length === 0 ? {} : { maybe: { paths: maybe, change, removes } }),
     ...(unread === undefined ? {} : { unread }),
     fileTool,
@@ -2101,6 +2106,7 @@ async function handlePreToolUseWrite(write, toolName, cwd, root, cfg, allowlist)
   /** @type {string | undefined} */
   let ask;
   for (const { path, change } of write.settings) ask ??= await claudeSettingsWriteGuard(path, change, cwd, root, toolName); // likewise
+  for (const p of write.takesAway ?? []) ask ??= await claudeSettingsRemoveAsk(p, cwd, toolName);
   const maybe = write.maybe;
   if (write.registry.length > 0 || maybe !== undefined) await loadRegistryGuard();
   for (const p of write.registry) guardianRegistryWriteGuard(p, cwd); // likewise
@@ -2143,12 +2149,43 @@ async function maybeGuardedAsk(maybe, toolName, cwd, root) {
       /* fail-open */
     }
     if (registry) return named(p, "dev-guardian's registry of trusted databases");
-    if (!maybe.removes) {
-      const settings = await claudeSettingsWriteGuard(p, maybe.change, cwd, root, toolName, true);
-      if (settings !== undefined) return settings;
-    }
+    const settings = maybe.removes
+      ? await claudeSettingsRemoveAsk(p, cwd, toolName)
+      : await claudeSettingsWriteGuard(p, maybe.change, cwd, root, toolName, true);
+    if (settings !== undefined) return settings;
   }
   return undefined;
+}
+
+/**
+ * The question for an MCP tool that deletes Claude Code's settings or moves
+ * them away (review of 3.6.0, finding 12): `settings` was `[]` for a delete,
+ * so `delete_file {path: ".claude/settings.json"}` went through, and every
+ * `permissions.deny` rule the file held went with it. Asked, never denied —
+ * removing a settings file is sometimes the user's intent. The path is judged
+ * as written (a stream or an 8.3 name of it too); a failure lets the call
+ * through (fail-open), as every guard does.
+ *
+ * @param {string} rawPath
+ * @param {string} cwd
+ * @param {string} toolName
+ * @returns {Promise<string | undefined>}
+ */
+async function claudeSettingsRemoveAsk(rawPath, cwd, toolName) {
+  if (!rawPath) return undefined;
+  try {
+    const abs = guardedPath(resolve(cwd, rawPath));
+    if (!/settings(?:\.local)?\.json$/i.test(abs)) return undefined;
+    const guard = await detector('loadSettingsGuard');
+    const configDir = process.env.CLAUDE_CONFIG_DIR ? guardedPath(resolve(process.env.CLAUDE_CONFIG_DIR)) : undefined;
+    if (!guard.isClaudeSettingsPath(abs, configDir)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return (
+    `dev-guardian: ${toolName} deletes or moves away Claude Code's settings (${normalizePath(rawPath)}), and with ` +
+    'them every permissions.deny rule and hook setting they hold. Confirm it only if you expected this.'
+  );
 }
 
 // ─────────────────────────────────── main ──────────────────────────────────
