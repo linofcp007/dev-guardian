@@ -101,7 +101,10 @@ que não é sobre segurança de IA, lê esses findings.
 ## Pontuação e veredicto
 
 A tool devolve uma **pontuação de risco de 0 a 100** (pesada pela severidade;
-findings em ficheiros **executáveis** pesam 1,3×) e uma de quatro recomendações:
+pesa 1,3× o que corre como está escrito — um script, o comando de um hook ou de
+um servidor MCP, um comando de um ficheiro de instruções com alvo real; um único
+download-e-execução ou envio de credenciais basta para DO_NOT_INSTALL) e uma de
+quatro recomendações:
 
 - **SAFE** (0-20) — sem sinais relevantes.
 - **REVIEW** (21-35) — sinais menores; passa os olhos antes de instalar.

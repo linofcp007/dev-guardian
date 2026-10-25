@@ -284,6 +284,15 @@ interface SkillRule {
    */
   citable?: boolean;
   /**
+   * A command that runs remote code or ships a credential out — download and
+   * execute, the environment or a key file sent over the network, a decoded
+   * payload run. Found at the rule's own severity, it is enough on its own for
+   * DO_NOT_INSTALL (`score.ts`); lowered (a placeholder target) it is not.
+   * The prose variants are not: they read words, and a sentence warning
+   * against the act names the same parts.
+   */
+  decisive?: boolean;
+  /**
    * A literal a unit must contain before the patterns are tried at all — a
    * cheap, linear test in front of patterns that are costly on a long line
    * with nothing for them to find.
@@ -504,6 +513,7 @@ export const SKILL_RULES: SkillRule[] = [
   // ────────────────────────────── data_exfiltration ───────────────────────
   {
     id: 'de-env-over-network',
+    decisive: true,
     category: 'data_exfiltration',
     fetchesOrSends: true,
     severity: 'critical',
@@ -574,6 +584,7 @@ export const SKILL_RULES: SkillRule[] = [
   },
   {
     id: 'de-sensitive-file-over-network',
+    decisive: true,
     category: 'data_exfiltration',
     fetchesOrSends: true,
     severity: 'critical',
@@ -648,6 +659,7 @@ export const SKILL_RULES: SkillRule[] = [
   // ────────────────────────────── supply_chain ────────────────────────────
   {
     id: 'sc-curl-pipe-shell',
+    decisive: true,
     category: 'supply_chain',
     fetchesOrSends: true,
     severity: 'high',
@@ -700,6 +712,7 @@ export const SKILL_RULES: SkillRule[] = [
   },
   {
     id: 'sc-download-then-run',
+    decisive: true,
     category: 'supply_chain',
     fetchesOrSends: true,
     severity: 'high',
@@ -836,6 +849,7 @@ export const SKILL_RULES: SkillRule[] = [
   },
   {
     id: 'dc-encoded-payload-exec',
+    decisive: true,
     category: 'dangerous_code',
     severity: 'critical',
     title: 'Decode-then-execute (obfuscated payload)',

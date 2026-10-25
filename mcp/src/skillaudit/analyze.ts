@@ -71,9 +71,9 @@ export async function analyzeSkill(
   let executableFiles = 0;
   let hiddenUnicodeFiles = 0;
 
-  const push = (f: Finding, isExecutable: boolean, scored = true): void => {
+  const push = (f: Finding, isExecutable: boolean, scored = true, decisive = false): void => {
     findings.push(f);
-    signals.push({ severity: f.severity, isExecutable, scored });
+    signals.push({ severity: f.severity, isExecutable, scored, decisive });
   };
   // A citation (see `patterns.ts`) is reported every time, at low, but a
   // rule's citations score once per skill: a threat catalogue that quotes
@@ -147,8 +147,9 @@ export async function analyzeSkill(
           // response shows each invisible code point as `\u{…}`.
           snippet: how === '' ? m.snippet : (lines[m.line - 1] ?? m.snippet).trim().slice(0, 240),
         }),
-        file.isExecutable,
+        file.isExecutable || runsAsWritten(m),
         !repeat,
+        isDecisive(m),
       );
     }
 
@@ -180,6 +181,8 @@ export async function analyzeSkill(
             snippet: `decoded: ${m.snippet}`.slice(0, 240),
           }),
           file.isExecutable,
+          true,
+          isDecisive(m),
         );
       }
     }
@@ -204,7 +207,10 @@ export async function analyzeSkill(
             line_end: cmd.line,
             snippet: m.snippet,
           }),
-          file.isExecutable,
+          // Run by the host itself: scored as a script, whatever file holds it.
+          true,
+          true,
+          isDecisive(m),
         );
       }
     }
@@ -412,6 +418,22 @@ function emptyBreakdown(): Record<ThreatCategory, number> {
   const out = {} as Record<ThreatCategory, number>;
   for (const c of THREAT_CATEGORIES) out[c] = 0;
   return out;
+}
+
+/**
+ * A command in an instruction file — a code block, inline code, a command
+ * written as a sentence — scored at its rule's own severity: the model runs
+ * it as written, as a script would be (`patterns.ts`), so it weighs what a
+ * script's does. Lowered (no target, a placeholder) or cited, it is the
+ * mention it reads as, and weighs a document's.
+ */
+function runsAsWritten(m: RuleMatch): boolean {
+  return m.source !== 'line' && !m.cited && m.severity === severityOfRule(m.rule);
+}
+
+/** A {@link SkillRule.decisive} match at its rule's own severity: DO_NOT_INSTALL on its own (`score.ts`). */
+function isDecisive(m: RuleMatch): boolean {
+  return m.rule.decisive === true && !m.cited && m.severity === severityOfRule(m.rule);
 }
 
 /** Decoded base64 runs read per file: a file of nothing but blobs costs no more than this many reads. */
