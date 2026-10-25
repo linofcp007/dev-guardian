@@ -275,6 +275,61 @@ describe('scan_sast loads the project’s own Semgrep rules', () => {
     expect(call.args).toContain('--config=/src/.semgrep.yml');
     expect(call.args.some((a) => a.startsWith(`--config=${project}`))).toBe(false);
   });
+
+  /** Docker on PATH, Semgrep not: the container writes `report` where it was told to. */
+  function mockDockerOnly(project: string, report: unknown = CLEAN_REPORT): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) => (name === 'docker' ? '/usr/bin/docker' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      captured.push({ command: opts.command, args: [...(opts.args ?? [])] });
+      const i = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const containerOut = i >= 0 ? opts.args?.[i + 1] : undefined;
+      if (containerOut !== undefined) {
+        writeFileSync(join(project, ...containerOut.replace('/src/', '').split('/')), JSON.stringify(report), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+  }
+
+  // The fallback built its configs from the project's own files alone: the
+  // rules register_custom_rules registered — part of the cache key — never
+  // ran, with no word and coverage full.
+  it('runs the registered rules the container can see, and names the ones it cannot as a gap', async () => {
+    const project = makeTempDir('sast-docker-custom-');
+    mkdirSync(join(project, 'rules'));
+    const inside = join(project, 'rules', 'team.yml');
+    writeFileSync(inside, RULES, 'utf8');
+    const outside = join(makeTempDir('sast-docker-custom-out-'), 'shared.yml');
+    writeFileSync(outside, RULES, 'utf8');
+    const plugin = makePlugin(project);
+    plugin.storage.runtimeMeta.setJson(customRulesMetaKey(project), [inside, outside]);
+    mockDockerOnly(project);
+
+    const r = await runSast(project, plugin);
+    const call = captured.find((c) => c.command === 'docker');
+    if (call === undefined) throw new Error('docker was never invoked');
+    expect(call.args).toContain('--config=/src/rules/team.yml');
+    expect(call.args.some((a) => a.includes('shared.yml'))).toBe(false);
+    const run = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(run?.reason ?? '').toContain(outside);
+    expect(r.missing_tools).toContain('semgrep');
+  });
+
+  // Without the project's .guardianignore excludes, an auto_fix run through
+  // the container rewrote files in the directories the project left out.
+  it("passes the project's .guardianignore excludes to the container", async () => {
+    const project = makeTempDir('sast-docker-ignore-');
+    mkdirSync(join(project, 'vendored'));
+    writeFileSync(join(project, 'vendored', 'lib.py'), 'eval(x)\n', 'utf8');
+    writeFileSync(join(project, 'app.py'), 'x = 1\n', 'utf8');
+    writeFileSync(join(project, '.guardianignore'), 'vendored/\n', 'utf8');
+    mockDockerOnly(project);
+
+    await runSast(project, makePlugin(project), { auto_fix: true, allow_dirty: true });
+    const call = captured.find((c) => c.command === 'docker');
+    if (call === undefined) throw new Error('docker was never invoked');
+    expect(call.args).toContain('--autofix');
+    expect(call.args).toContain('--exclude=/vendored');
+  });
 });
 
 describe('scan_sast cache key covers the rules it loads', () => {
