@@ -3350,6 +3350,8 @@ function powershellDownloadExecution(text: string): boolean {
   const tainted = new Set<string>();
   /** In a `Tee-Object` command, whose `-Variable` receives what it is piped. */
   let inTee = false;
+  /** The `)` just read closed iex's parenthesised argument: a `.DownloadString(…)` chained onto it is still iex's. */
+  let afterIexParen = false;
   let names = 0;
   /** `*`, a variable whose name could not be read, holds whatever any name may. */
   const holdsDownload = (v: string): boolean => tainted.has(v) || tainted.has('*') || (v === '*' && tainted.size > 0);
@@ -3370,11 +3372,19 @@ function powershellDownloadExecution(text: string): boolean {
   for (const m of text.matchAll(PS_EXEC_TOKENS)) {
     const t = m[0].toLowerCase();
     const g = m.groups ?? {};
+    // Cleared every token; set again only by a `)` that closed iex's argument.
+    const afterParen = afterIexParen;
+    afterIexParen = false;
     if (g['run'] !== undefined) {
       if (piped) return true;
       pendingIex = true;
     } else if (g['dl'] !== undefined) {
       if (download()) return true;
+      // `iex (New-Object Net.WebClient).DownloadString(url)`: the `.Download…`
+      // method is chained onto the `)` that closed iex's argument, so its
+      // result is still what iex runs (review of 3.6.0, finding 6). The
+      // method-call form of `dl` begins with a `.`.
+      if (afterParen && t.startsWith('.')) return true;
     } else if (g['ref'] !== undefined) {
       const v = psVariable(g['ref']);
       if (g['assign'] !== undefined) assigning = [v];
@@ -3394,7 +3404,10 @@ function powershellDownloadExecution(text: string): boolean {
       if (pendingIex) inIex += 1;
       pendingIex = false;
     } else if (t === ')') {
-      if (opens.pop() === true) inIex -= 1;
+      if (opens.pop() === true) {
+        inIex -= 1;
+        afterIexParen = true;
+      }
       pendingIex = false;
     } else if (t === '|') {
       if (downloaded) piped = true;
