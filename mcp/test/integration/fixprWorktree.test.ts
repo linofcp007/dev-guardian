@@ -14,7 +14,7 @@
 
 import { describe, expect, it, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorktree, WORKTREE_DIR_PREFIX } from '../../src/fixpr/worktree.js';
@@ -259,6 +259,30 @@ describe('createWorktree — additional coverage beyond the brief', () => {
     await r.worktree.remove();
     const after = tempDirsWithPrefix(WORKTREE_DIR_PREFIX);
     expect(after).toEqual(before);
+  });
+
+  it("never drops the registration of the user's own worktree whose directory is momentarily missing", async () => {
+    // Review of 3.6, finding 7: a blanket `git worktree prune` (no
+    // --expire) drops the admin entry of ANY unlocked worktree whose
+    // directory is not there at that moment — one on a removable drive, a
+    // share that dropped — taking its branch checkout and index with it.
+    const theirs = mkdtempSync(join(tmpdir(), 'fixpr-repo-user-wt-'));
+    rmDir(theirs);
+    git('worktree', 'add', '-q', '-b', 'feature/user', theirs, 'HEAD');
+    const away = `${theirs}-away`;
+    renameSync(theirs, away);
+    try {
+      const r = await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-prune' });
+      expect(r.ok).toBe(true);
+      if (r.ok) await r.worktree.remove();
+      // A failed create cleans up after itself too, without a prune.
+      git('branch', 'dev-guardian/fix-npm-taken');
+      expect((await createWorktree({ projectPath: repo, branch: 'dev-guardian/fix-npm-taken' })).ok).toBe(false);
+    } finally {
+      renameSync(away, theirs);
+    }
+    expect(git('worktree', 'list', '--porcelain')).toContain('branch refs/heads/feature/user');
+    git('worktree', 'remove', '--force', theirs);
   });
 
   it('refuses cleanly and leaves no worktree directory behind when the branch already exists', async () => {

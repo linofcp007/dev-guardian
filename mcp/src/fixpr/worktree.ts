@@ -44,7 +44,7 @@ interface Worktree {
    * files were written as stored in git.
    */
   notApplied: readonly string[];
-  /** Idempotent. Removes the worktree and prunes. Safe to call twice. */
+  /** Idempotent. Removes the worktree and its registration — no other. Safe to call twice. */
   remove(): Promise<{ removed: boolean; warning: string | null }>;
 }
 
@@ -95,26 +95,32 @@ export async function createWorktree(opts: {
   });
 
   if (add.outcome !== 'completed') {
+    // Defence in depth beyond the two failure modes this module tests
+    // directly (target not a git repo; branch already exists) — both
+    // confirmed empirically to leave NO `.git/worktrees/` admin state
+    // behind. A THIRD kind of failure this module cannot rehearse on demand
+    // — `runProcess`'s own timeout or signal killing `git worktree add`
+    // after it has started writing that admin state but before it reports
+    // success — could leave an entry for `dir`. Looked up by `dir` alone
+    // (never by the branch: on a collision that names the user's own
+    // checkout of it) and BEFORE `dir` is deleted, while its real path can
+    // still be read, then removed by that path. Never `git worktree prune`:
+    // with no `--expire` it drops the admin entry of every unlocked
+    // worktree whose directory is missing at that moment — the user's own,
+    // on a removable drive or a share that dropped (review of 3.6, finding 7).
+    const stale = await resolveRegisteredPath(opts.projectPath, null, dir, opts.timeoutMs);
+    if (stale !== null) {
+      await runProcess({
+        command: GIT_COMMAND,
+        args: ['-C', opts.projectPath, 'worktree', 'remove', '--force', stale],
+        cwd: opts.projectPath,
+        timeoutMs: opts.timeoutMs,
+      });
+    }
     // Ours to remove — see the comment on `dir` above. Best-effort: a
     // failure here rides along with the (already-failing) result rather
     // than escalating into a second, different failure.
     safeRmDir(dir);
-    // Defence in depth beyond the two failure modes this module tests
-    // directly (target not a git repo; branch already exists) — both
-    // confirmed empirically to leave NO `.git/worktrees/` admin state
-    // behind, so this is normally a no-op. A THIRD kind of failure this
-    // module cannot rehearse on demand — `runProcess`'s own timeout or
-    // signal killing `git worktree add` after it has started writing that
-    // admin state but before it reports success — could leave a stale
-    // entry pointing at a directory `safeRmDir` just deleted out from under
-    // it. Pruning unconditionally here costs nothing on the common path
-    // (prune against nothing to prune is a fast no-op) and closes that gap.
-    await runProcess({
-      command: GIT_COMMAND,
-      args: ['-C', opts.projectPath, 'worktree', 'prune'],
-      cwd: opts.projectPath,
-      timeoutMs: opts.timeoutMs,
-    });
     return { ok: false, reason: describeFailure(add, 'git worktree add') };
   }
 
@@ -205,18 +211,12 @@ async function removeWorktree(
     timeoutMs,
   });
 
-  // Prune unconditionally, whether `remove` above just succeeded, failed
-  // because there was nothing left to remove (a second, idempotent call —
-  // git itself refuses to operate on a path it no longer has registered),
-  // or failed for some other reason. `prune` clears stale
-  // `.git/worktrees/<name>` admin state regardless, and is a no-op when
-  // there is nothing to prune.
-  await runProcess({
-    command: GIT_COMMAND,
-    args: ['-C', projectPath, 'worktree', 'prune'],
-    cwd: projectPath,
-    timeoutMs,
-  });
+  // No `git worktree prune` afterwards: `remove --force` deletes this
+  // worktree's own `.git/worktrees/<name>` (its directory missing too —
+  // git accepts that), and a prune would drop the admin entry of every
+  // unlocked worktree of the user's whose directory is missing at that
+  // moment (review of 3.6, finding 7). A second, idempotent call fails here
+  // only because git no longer has the path registered.
 
   // Observing the world, not `remove`'s own exit code: idempotency (a
   // second call, where the `remove` above necessarily fails because there
@@ -235,7 +235,7 @@ async function removeWorktree(
       : '';
   return {
     removed: false,
-    warning: `'${path}' still exists after 'git worktree remove --force' and 'git worktree prune'${detail}`,
+    warning: `'${path}' still exists after 'git worktree remove --force'${detail}`,
   };
 }
 
