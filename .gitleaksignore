@@ -1,0 +1,16 @@
+# gitleaks fingerprints (commit:file:rule:line) of the FAKE credentials dev-guardian's
+# own tests feed its detectors and redaction (made-up AWS, Stripe, GitHub, API keys).
+# One line per occurrence, never a path: a real secret committed under mcp/test/ is
+# still reported. Every scan names this file as honoured. mcp/test/fixtures/ is
+# left out by .guardianignore instead.
+
+5531d0c51bd0ee4664ae7e770e5f036a3185b9c7:mcp/test/unit/hooks/secretScan.test.ts:generic-api-key:452
+5ed8af2eecb128de963bed3400cfc0bb6a5a0700:mcp/test/integration/opsTools.test.ts:stripe-access-token:338
+75f4c9e3259df310e1ca2b7a969d42895cdc2243:mcp/test/integration/auditAgentConfig.test.ts:aws-access-token:110
+75f4c9e3259df310e1ca2b7a969d42895cdc2243:mcp/test/integration/auditAgentConfig.test.ts:aws-access-token:117
+75f4c9e3259df310e1ca2b7a969d42895cdc2243:mcp/test/unit/agentaudit/rules.test.ts:aws-access-token:92
+75f4c9e3259df310e1ca2b7a969d42895cdc2243:mcp/test/unit/agentaudit/rules.test.ts:aws-access-token:97
+a1a4e0fe3180b7747e84a0e94b0b216f201559e5:mcp/test/integration/scanDotnetSecrets.test.ts:generic-api-key:70
+cd185ffe06d6b7b0f2437da19c3ffbdf92c41ba6:mcp/test/unit/redaction/secretFindingRedaction.test.ts:aws-access-token:33
+cd185ffe06d6b7b0f2437da19c3ffbdf92c41ba6:mcp/test/unit/runners/scannerParsers/semgrep.test.ts:stripe-access-token:132
+cd185ffe06d6b7b0f2437da19c3ffbdf92c41ba6:mcp/test/unit/runners/scannerParsers/semgrep.test.ts:stripe-access-token:136
