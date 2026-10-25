@@ -27,10 +27,13 @@ describe("the repo's .guardianignore", () => {
       'mcp/test/fixtures/scanners/gitleaks.json',
       'mcp/test/fixtures/dast-app/server.js',
       'mcp/test/e2e/eval-vuln-fixture/app.js',
+      'evals/fixtures/shop-app/src/cart.js',
     ]) {
       expect(ex.ignores(p), p).toBe(true);
     }
-    expect(ex.excludedDirs).toEqual(expect.arrayContaining(['mcp/test/e2e/eval-vuln-fixture', 'mcp/test/fixtures']));
+    expect(ex.excludedDirs).toEqual(
+      expect.arrayContaining(['mcp/test/e2e/eval-vuln-fixture', 'mcp/test/fixtures', 'evals/fixtures']),
+    );
     expect(ex.excludedFileCount).toBeGreaterThan(100);
   });
 
@@ -43,6 +46,7 @@ describe("the repo's .guardianignore", () => {
       'configs/semgrep/bugfix-js.yml',
       'hooks/guardian-hook.mjs',
       'cli/dev-guardian.mjs',
+      'evals/README.md',
     ]) {
       expect(ex.ignores(p), p).toBe(false);
     }

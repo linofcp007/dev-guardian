@@ -9,3 +9,6 @@
 # project.
 mcp/test/fixtures/
 mcp/test/e2e/eval-vuln-fixture/
+# The plugin evals' shop-app carries its bug on purpose (`orderTotal`'s reduce
+# without an initial value is what the bug-routing case reports).
+evals/fixtures/
