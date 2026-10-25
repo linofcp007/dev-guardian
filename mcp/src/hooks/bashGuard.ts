@@ -77,12 +77,14 @@
  * be modelled that way, so it is refused when one of its string literals
  * names a hook configuration path at all (`judgeCode`).
  *
- * What this is NOT: a shell parser, nor an interpreter. Command substitution
- * inside double quotes (`echo "$(rm -rf /)"`) stays invisible, exactly as it
- * was before this file grew a scanner, and so does anything decided at run
- * time — a path in a variable, a script run from a file. Fail-open is the
- * design; a missed warning is the failure mode we accept, and no block rule
- * was narrowed to get here.
+ * What this is NOT: a shell parser, nor an interpreter. A command substitution
+ * inside double quotes (`echo "$(rm -rf /)"`) is masked like any quoted span,
+ * so its body is pulled out and re-entered as a nested script
+ * (`quotedSubstitutions`, review of 3.6.0, finding 4). Anything decided at run
+ * time — a path in a variable, a script run from a file — stays invisible.
+ * Fail-open is the design for the guard's own faults; a limit an input can
+ * reach on purpose (the caps, the budget, the nesting depth) asks the user
+ * instead (finding 9), and no block rule was narrowed to get here.
  *
  * ## ReDoS
  *
