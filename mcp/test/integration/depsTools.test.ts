@@ -527,12 +527,13 @@ describe('deps_audit', () => {
     }
   });
 
-  it('dedupes an npm-audit finding for a package Trivy already reported (no double count)', async () => {
+  it('dedupes an npm-audit finding that is the advisory Trivy already reported for that package (no double count)', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
     const plugin = makePlugin(project);
 
-    // npm audit reports tough-cookie (which Trivy ALSO reports) + lodash (unique to npm).
+    // npm audit reports tough-cookie's CVE-2023-26136 by its GHSA id (which
+    // Trivy ALSO reports, the GHSA among its VendorIDs) + lodash (unique to npm).
     const npmOverlap = JSON.stringify({
       auditReportVersion: 2,
       vulnerabilities: {
@@ -544,7 +545,7 @@ describe('deps_audit', () => {
               source: 9999,
               name: 'tough-cookie',
               title: 'Prototype Pollution in tough-cookie',
-              url: 'https://github.com/advisories/GHSA-tough',
+              url: 'https://github.com/advisories/GHSA-72xf-g2v4-qvf3',
               severity: 'medium',
               range: '<4.1.3',
             },
@@ -580,7 +581,7 @@ describe('deps_audit', () => {
       const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
       const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
       // Trivy fixture reports tough-cookie + semver (vulns) + evil-lib (license).
-      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      if (path) writeFileSync(path, trivyWithVendorIds(), 'utf8');
       return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
     });
 
@@ -598,6 +599,71 @@ describe('deps_audit', () => {
       .listByScan((r as unknown as { scan_id: string }).scan_id)
       .filter((f) => f.tool === 'npm-audit');
     expect(npmFindings.map((f) => f.snippet)).toEqual([expect.stringContaining('lodash')]);
+  });
+
+  /** The Trivy fixture, its tough-cookie CVE carrying its GHSA id as Trivy's database gives it. */
+  function trivyWithVendorIds(): string {
+    const report = JSON.parse(trivyFsFx()) as { Results: Array<{ Vulnerabilities?: Array<Record<string, unknown>> }> };
+    for (const v of report.Results[0]?.Vulnerabilities ?? []) {
+      if (v['VulnerabilityID'] === 'CVE-2023-26136') v['VendorIDs'] = ['GHSA-72xf-g2v4-qvf3'];
+    }
+    return JSON.stringify(report);
+  }
+
+  // Every npm finding of a package Trivy flagged at all was dropped, whatever
+  // its advisory: a second advisory of that package — one Trivy's database
+  // does not carry — was lost, as was one in a manifest Trivy did not read.
+  it("keeps npm audit's other advisories of a package Trivy flagged, and the same advisory of another manifest", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
+    const plugin = makePlugin(project);
+    const via = (name: string, source: number, ghsa: string, range: string) => ({
+      source,
+      name,
+      title: `advisory ${ghsa}`,
+      url: `https://github.com/advisories/${ghsa}`,
+      severity: 'high',
+      range,
+    });
+    const npmReport = JSON.stringify({
+      auditReportVersion: 2,
+      vulnerabilities: {
+        'tough-cookie': {
+          name: 'tough-cookie',
+          severity: 'high',
+          // The advisory Trivy has (dropped), and one it does not (kept).
+          via: [via('tough-cookie', 1, 'GHSA-72xf-g2v4-qvf3', '<4.1.3'), via('tough-cookie', 2, 'GHSA-aaaa-bbbb-cccc', '<5.0.0')],
+          range: '<5.0.0',
+          fixAvailable: true,
+        },
+        // The root's minimist: Trivy reported this advisory for web/'s lock only (kept).
+        minimist: { name: 'minimist', severity: 'high', via: [via('minimist', 3, 'GHSA-xvch-5gv4-984h', '<1.2.6')], range: '<1.2.6', fixAvailable: true },
+      },
+    });
+    const trivyReport = (): string => {
+      const report = JSON.parse(trivyWithVendorIds()) as { Results: unknown[] };
+      report.Results.push({
+        Target: 'web/package-lock.json',
+        Class: 'lang-pkgs',
+        Type: 'npm',
+        Vulnerabilities: [
+          { VulnerabilityID: 'CVE-2021-44906', VendorIDs: ['GHSA-xvch-5gv4-984h'], PkgName: 'minimist', InstalledVersion: '1.2.5', FixedVersion: '1.2.6', Severity: 'CRITICAL' },
+        ],
+      });
+      return JSON.stringify(report);
+    };
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (opts.command === 'npm') return { outcome: 'completed' as const, exitCode: 1, stdout: npmReport, stderr: '', truncated: false };
+      const outIdx = opts.args?.findIndex((a) => a === '--output') ?? -1;
+      const path = outIdx >= 0 ? opts.args?.[outIdx + 1] : undefined;
+      if (path) writeFileSync(path, trivyReport(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = okResult<{ scan_id: string }>(await getTool('deps_audit').handler({ project_path: project }, plugin));
+    const npm = plugin.storage.findings.listByScan(r.scan_id).filter((f) => f.tool === 'npm-audit');
+    expect(npm.map((f) => f.vuln_aliases).sort()).toEqual([['GHSA-aaaa-bbbb-cccc'], ['GHSA-xvch-5gv4-984h']]);
   });
 
   it('marks a missing native auditor (npm) as a coverage gap, not silent full coverage', async () => {

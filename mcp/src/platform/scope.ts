@@ -37,7 +37,7 @@
 
 import { createHash } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
-import { entryKindAnywhere, projectEntryKind } from './projectFs.js';
+import { entryKindAnywhere, hashProjectFile, projectEntryKind } from './projectFs.js';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { changedFiles, git, repoState, resolveCommit, splitNul } from '../runners/git.js';
@@ -118,11 +118,21 @@ export interface ResolvedScope {
   contentFiles: string[];
   /** What `meta.scope` records — the request, resolved, and the counts. */
   meta: Record<string, unknown>;
-  /** Joined to the cache key: the resolved refs and file sets. */
+  /** Joined to the cache key: the resolved refs and file sets, and the content of the files. */
   cacheState: Record<string, string>;
   /** Files the scope named that `.guardianignore` excludes. */
   excludedByIgnore: number;
+  /**
+   * `diff.staged`: the staged files whose working-tree content is not the
+   * staged one (changed or deleted again since `git add`) — every scanner
+   * reads the working tree, so they were not scanned as the commit carries
+   * them: a named gap ({@link STAGED_CONTENT_GAP}). Empty otherwise.
+   */
+  notAsStaged: string[];
 }
+
+/** The `tools_run` / `missing_tools` name of the gap `ResolvedScope.notAsStaged` makes. */
+export const STAGED_CONTENT_GAP = 'staged-content';
 
 /**
  * What to call instead, when `project_path` names a FILE: its repository's
@@ -167,6 +177,7 @@ export async function resolveScope(
   let touched: Set<string> | null = null;
   let history: ScopeHistory | null = null;
   let contentFiles: string[];
+  let notAsStaged: string[] = [];
   const meta: Record<string, unknown> = {};
 
   if (diff !== undefined || since !== undefined) {
@@ -175,6 +186,7 @@ export async function resolveScope(
     const inPaths = (p: string): boolean => pathPart === null || pathPart.member(p);
     files = change.files.filter(inPaths);
     contentFiles = change.contentFiles.filter(inPaths);
+    notAsStaged = (change.notAsStaged ?? []).filter(inPaths);
     touched = new Set([...change.touched, ...change.files].filter(inPaths));
     history = change.history;
     Object.assign(meta, change.meta);
@@ -190,6 +202,7 @@ export async function resolveScope(
   const before = files.length;
   files = files.filter((p) => !ignored(p));
   contentFiles = contentFiles.filter((p) => !ignored(p));
+  notAsStaged = notAsStaged.filter((p) => !ignored(p));
   const excludedByIgnore = before - files.length;
 
   const fileSet = new Set(files);
@@ -208,12 +221,27 @@ export async function resolveScope(
     files: files.length,
     ...(excludedByIgnore > 0 ? { files_excluded_by_guardianignore: excludedByIgnore } : {}),
   };
+  // Each file the scanners read, by content: the tree hash lists what git
+  // lists, and `paths` takes a git-ignored `.env` (or a file under a `build/`
+  // the hash skips) as named — keyed by name only, a token pasted into it was
+  // answered from the clean scan of the file before.
+  const content = createHash('sha256');
+  for (const rel of [...new Set([...files, ...contentFiles])].sort()) {
+    content.update(`${rel}:${await hashProjectFile(projectPath, rel)}\n`);
+  }
   const cacheState = {
     scope: createHash('sha256')
-      .update(JSON.stringify({ files, touched: touched === null ? null : [...touched].sort(), history }))
+      .update(
+        JSON.stringify({
+          files,
+          touched: touched === null ? null : [...touched].sort(),
+          history,
+          content: content.digest('hex'),
+        }),
+      )
       .digest('hex'),
   };
-  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore };
+  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore, notAsStaged };
 }
 
 // ---- paths ------------------------------------------------------------
@@ -396,6 +424,8 @@ interface ChangeSet {
   touched: string[];
   contentFiles: string[];
   history: ScopeHistory | null;
+  /** `staged` only: see `ResolvedScope.notAsStaged`. */
+  notAsStaged?: string[];
   meta: Record<string, unknown>;
 }
 
@@ -514,10 +544,19 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
 
   const includeUntracked = diff.include_untracked ?? diff.staged !== true;
   let tracked: string[];
+  let notAsStaged: string[] = [];
   if (diff.staged === true) {
     tracked = hasCommits
       ? await listZ(projectPath, ['diff', '-z', '--name-only', '--relative', '--cached', '--diff-filter=ACMR', '--no-renames', 'HEAD', '--'])
       : await listZ(projectPath, ['ls-files', '-z', '--cached']);
+    // The scanners read the working tree, and the index holds what the commit
+    // carries: a staged file changed (or deleted) again since `git add` is
+    // not scanned as staged. `git diff` without a commit compares the index
+    // with the working tree.
+    const unstaged = new Set(
+      await listZ(projectPath, ['diff', '-z', '--name-only', '--relative', '--no-renames', '--ignore-submodules=dirty', '--']),
+    );
+    notAsStaged = tracked.filter((f) => unstaged.has(f)).sort();
   } else {
     // `--ignore-submodules=dirty`: git does not go into a submodule's work
     // tree (where the submodule's own drivers would run — they are also
@@ -544,6 +583,7 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
     touched: [],
     contentFiles: files,
     history: null,
+    notAsStaged,
     meta: { diff: { staged: diff.staged === true, include_untracked: includeUntracked } },
   };
 }

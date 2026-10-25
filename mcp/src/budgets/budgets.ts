@@ -56,6 +56,9 @@ interface Budgets {
   quality?: QualityBudgets;
 }
 
+/** Where the budgets live, relative to the project root. */
+export const BUDGETS_RELATIVE_PATH = '.guardian/budgets.yml';
+
 type BudgetsLoadResult =
   | { kind: 'none' }
   | { kind: 'loaded'; path: string; budgets: Budgets }
@@ -74,7 +77,7 @@ const QUALITY_FIELDS: readonly (keyof QualityBudgets)[] = ['duplication_pct', 'c
  * that silently never fires.
  */
 export function loadBudgets(projectPath: string): BudgetsLoadResult {
-  const path = join(projectPath, '.guardian', 'budgets.yml');
+  const path = join(projectPath, ...BUDGETS_RELATIVE_PATH.split('/'));
   // The repository's file: bounded, regular files only, never through a
   // link out of the project (`platform/projectFs.ts`).
   const read = readProjectText(projectPath, path, 1024 * 1024);

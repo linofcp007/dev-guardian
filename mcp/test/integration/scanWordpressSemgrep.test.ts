@@ -174,3 +174,41 @@ describe("scan_wordpress: the plugin's WordPress pack (configs/semgrep/wordpress
     expect(p.storage.findings.listByScan(r.scan_id).map((f) => f.rule_id)).toEqual(['wordpress-esc-sql-unquoted']);
   });
 });
+
+describe('scan_wordpress: auto_fix rewrites only what the project scans, before anything else reads it', () => {
+  // Semgrep got no `.guardianignore` excludes, so `--autofix` rewrote the
+  // directories the project leaves out; and it ran beside gitleaks, Psalm,
+  // PHPCS and Trivy, which read the files it was rewriting (scan_sast runs
+  // every other pass `after: ['semgrep']`).
+  it('passes the excludes to Semgrep, and starts no other scanner until it is done', async () => {
+    const dir = wpProject(true);
+    mkdirSync(join(dir, 'vendored'));
+    writeFileSync(join(dir, 'vendored', 'lib.php'), '<?php echo $_GET["x"];\n');
+    writeFileSync(join(dir, '.guardianignore'), 'vendored/\n');
+    const events: string[] = [];
+    vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+      ['semgrep', 'trivy', 'phpcs', 'gitleaks'].includes(name) ? `/fake/bin/${name}` : null,
+    );
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      events.push(`${opts.command}:start`);
+      const args = opts.args ?? [];
+      if (opts.command === 'semgrep') {
+        await new Promise((r) => setTimeout(r, 100));
+        const out = args[args.indexOf('--output') + 1];
+        if (out !== undefined) writeFileSync(out, JSON.stringify({ results: [], errors: [], paths: { scanned: [] } }));
+        events.push('semgrep:end');
+      }
+      return { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const tool = TOOLS.find((t) => t.name === 'scan_wordpress');
+    if (!tool) throw new Error('scan_wordpress not registered');
+    const r = await tool.handler({ project_path: dir, force: true, auto_fix: true, allow_dirty: true }, plugin(dir));
+    expect(r.ok).toBe(true);
+    const semgrepCall = vi.mocked(runProcess).mock.calls.find((c) => c[0].command === 'semgrep')?.[0];
+    expect(semgrepCall?.args).toEqual(expect.arrayContaining(['--autofix', '--exclude=/vendored']));
+    const end = events.indexOf('semgrep:end');
+    const others = events.map((e, i) => [e, i] as const).filter(([e]) => e.endsWith(':start') && !e.startsWith('semgrep'));
+    expect(others.length).toBeGreaterThan(0);
+    expect(others.filter(([, i]) => i < end), events.join(' ')).toEqual([]);
+  });
+});

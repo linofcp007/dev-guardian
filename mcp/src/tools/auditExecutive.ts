@@ -27,6 +27,7 @@ import { randomUUID } from 'node:crypto';
 import type { PluginContext } from '../context.js';
 import { z } from 'zod';
 import { ProjectPath, SeverityMin } from '../schemas.js';
+import { dedupeFindings } from '../runners/findingMerge.js';
 import { filterFindings } from '../severity/filter.js';
 import { computeTreeHash } from '../treeHash/computeTreeHash.js';
 import {
@@ -169,11 +170,19 @@ async function handler(
     );
   }
 
+  const childFindings: Finding[] = [];
   for (const summary of Object.values(subResults)) {
     if (summary.ok && summary.scan_id) {
-      aggregateFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
+      childFindings.push(...ctx.storage.findings.listByScan(summary.scan_id));
     }
   }
+  // One finding per fingerprint: the children overlap — security_scan_full's
+  // scan_deps and deps_audit both run Trivy over the same manifests, and
+  // compliance_check's licence pass repeats Trivy's licence results — so a
+  // plain concatenation counted the same finding two or three times, while
+  // the audit row below (keyed on fingerprint) stored it once and diff_scans
+  // disagreed with this response.
+  aggregateFindings.push(...dedupeFindings(childFindings));
 
   // Severity floor: re-apply at the aggregate level so audit_executive's own
   // counts match what the model asked for. The floor stops at the RESPONSE —

@@ -146,9 +146,38 @@ export function classDirs(projectPath: string): ClassDirs {
   return out;
 }
 
+interface ClassStats {
+  /** The newest modification time among the `.class` files, or null when there is none. */
+  newest: number | null;
+  count: number;
+  bytes: number;
+}
+
 /** The newest modification time among the `.class` files under `dirs` (bounded), or null when there is none. */
 function newestClass(projectPath: string, dirs: readonly string[]): number | null {
-  let newest: number | null = null;
+  return classStats(projectPath, dirs).newest;
+}
+
+/**
+ * What SpotBugs would read, for a cache key: each class directory with its
+ * `.class` files' count, size and newest time — or null when the project has
+ * none. The tree hash leaves `target/` and `build/` out, so a build after a
+ * run that found no classes was answered with that run's skip.
+ */
+export function classDirsState(projectPath: string): string | null {
+  const { dirs } = classDirs(projectPath);
+  if (dirs.length === 0) return null;
+  return dirs
+    .map((d) => {
+      const s = classStats(projectPath, [d]);
+      return `${d}:${s.count}:${s.bytes}:${s.newest ?? ''}`;
+    })
+    .join(';');
+}
+
+/** The `.class` files under `dirs` (bounded), summed. */
+function classStats(projectPath: string, dirs: readonly string[]): ClassStats {
+  const stats: ClassStats = { newest: null, count: 0, bytes: 0 };
   let seen = 0;
   const stack = dirs.map((d) => realpathInProject(projectPath, d)).filter((d): d is string => d !== null);
   while (stack.length > 0 && seen < 200_000) {
@@ -165,15 +194,17 @@ function newestClass(projectPath: string, dirs: readonly string[]): number | nul
       if (e.isDirectory()) stack.push(path);
       else if (e.isFile() && e.name.endsWith('.class')) {
         try {
-          const t = statSync(path).mtimeMs;
-          if (newest === null || t > newest) newest = t;
+          const st = statSync(path);
+          if (stats.newest === null || st.mtimeMs > stats.newest) stats.newest = st.mtimeMs;
+          stats.count++;
+          stats.bytes += st.size;
         } catch {
           // Gone since it was listed.
         }
       }
     }
   }
-  return newest;
+  return stats;
 }
 
 /** The JVM sources among `files` under `roots` modified after `since` (at most a few named). */
