@@ -163,7 +163,6 @@ export class FindingsRepo {
     string | null, 0 | 1, 0 | 1, string | null, string | null, string | null,
     string | null, string | null, string | null,
   ]>;
-  private readonly identityForFingerprintStmt: Statement<[string], { identity: string }>;
   private readonly listByScanStmt: Statement<[string], FindingRow>;
   private readonly listOpenLatestScanStmt: Statement<[], FindingRow>;
   private readonly listOpenForProjectStmt: Statement<[string], FindingRow>;
@@ -180,18 +179,6 @@ export class FindingsRepo {
         cwe, owasp, vuln_aliases
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-    // The identity of the most recent scan's row for this fingerprint. Rows
-    // of older scans can share a fingerprint with a DIFFERENT identity (same
-    // rule and line under a redacted snippet, other code), so the newest one
-    // — the scan the caller just read the fingerprint from — wins.
-    this.identityForFingerprintStmt = db.prepare<[string], { identity: string }>(`
-      SELECT f.identity AS identity FROM findings f
-      JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND f.identity IS NOT NULL AND ${notInFutureSql('s')}
-      ORDER BY s.started_at DESC, s.rowid DESC
-      LIMIT 1
     `);
 
     this.listByScanStmt = db.prepare<[string], FindingRow>(`
@@ -355,11 +342,6 @@ export class FindingsRepo {
       return inserted;
     });
     return tx(chunk);
-  }
-
-  /** The identity stored with `fingerprint` by the newest scan that has one, or null. */
-  identityForFingerprint(fingerprint: string): string | null {
-    return this.identityForFingerprintStmt.get(fingerprint)?.identity ?? null;
   }
 
   listByScan(scanId: string): Finding[] {

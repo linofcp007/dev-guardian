@@ -130,6 +130,25 @@ describe('pruneScans', () => {
     expect(scanIds(db)).toEqual(['r1', 's3']);
   });
 
+  // create_fix_pr re-scans inside a disposable worktree and deletes the row
+  // itself; a run that dies first leaves it. Each worktree is its own
+  // project_path, so ranked per project such a row was always the newest
+  // of its own partition, and was never pruned.
+  it("reaps a create_fix_pr worktree re-scan left behind once it is a day old, whatever its rank", () => {
+    const { db, storage } = fresh();
+    seedScan(storage, 'stray', '/tmp/guardian-fixpr-wt-Ab12Cd');
+    seedScan(storage, 'fresh', '/tmp/guardian-fixpr-wt-Ef34Gh');
+    seedScan(storage, 'own', '/p1');
+    const recent = new Date(Date.now() - 60_000).toISOString();
+    db.prepare('UPDATE scans SET started_at = ? WHERE id = ?').run(recent, 'fresh');
+
+    pruneScans(db, 50);
+
+    // The one still possibly being read by its create_fix_pr is kept; so is the project's own scan.
+    expect(scanIds(db).sort()).toEqual(['fresh', 'own']);
+    expect(storage.findings.listByScan('stray')).toEqual([]);
+  });
+
   it('removes legacy `cves` rows that point at a pruned scan, instead of failing on the foreign key', () => {
     const { db, storage } = fresh();
     for (const id of ['s1', 's2']) seedScan(storage, id, '/p1');
