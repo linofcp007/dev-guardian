@@ -195,6 +195,25 @@ describe('buildSnapshot', () => {
     db.close();
   });
 
+  it('reads a finding that moved down a line as unchanged, not as one new plus one resolved', () => {
+    // The fingerprint hashes the line range; the identity does not.
+    const { storage, db } = fresh();
+    const row = (scanId: string, fingerprint: string, line: number) => ({
+      scan_id: scanId, fingerprint, identity: 'id-moved', content_key: 'ck', tool: 'semgrep', rule_id: 'r',
+      severity: 'high' as const, category: 'security' as const, title: 't', file_path: 'a.ts',
+      line_start: line, line_end: line, fix_available: false,
+    });
+    const older = completedScan(storage, '/p', { scan_type: 'sast' });
+    storage.findings.bulkInsert([row(older, 'at-line-1', 1)]);
+    const newest = completedScan(storage, '/p', { scan_type: 'sast' });
+    storage.findings.bulkInsert([row(newest, 'at-line-2', 2)]);
+
+    const delta = buildSnapshot(storage, '/p', NOW).deltas.since_previous;
+    expect(delta?.from_scan_id).toBe(older);
+    expect(delta).toMatchObject({ new_count: 0, resolved_count: 0, unchanged_count: 1, new_findings: [] });
+    db.close();
+  });
+
   it('leaves a delta null — not zeroed — when its reference does not exist', () => {
     // Zeros read as "nothing changed". Null reads as "there is nothing to
     // compare against", which is the truth.

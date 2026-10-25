@@ -1,11 +1,18 @@
 /**
- * `compareFindings` — the fingerprint delta between two scans, pure.
+ * `compareFindings` — the delta between two scans, pure.
  *
- * Computed over fingerprint SETS, not array lengths (the design of record), so a
- * side that (a caller merging scans could produce this) holds a repeated
- * fingerprint is never double-counted.
+ * Findings match as every cross-scan reader matches them
+ * (`fingerprint/findingIdentity.ts#indexFindings`): by identity, the
+ * fingerprint only where a side has none. On fingerprints alone, one line
+ * inserted above an unchanged finding read "+1 new · -1 resolved" on the
+ * dashboard and in `status`, while the `classifyDiff` that decides what was
+ * not re-measured, beside it, already matched by identity.
  *
- * `new_count` is always the TRUE count of fingerprints present in `to` but
+ * Each side counts a finding once, not per array entry (the design of
+ * record), so a side that (a caller merging scans could produce this) holds a
+ * repeated finding is never double-counted.
+ *
+ * `new_count` is always the TRUE count of findings present in `to` but
  * not in `from`. `new_findings` may be capped to `cap` entries for display;
  * when it is, `new_count` still reports the true count and a
  * `TruncationNotice` is returned describing the cut — never both a capped
@@ -14,6 +21,7 @@
  * to refuse (the design of record).
  */
 
+import { indexFindings } from '../fingerprint/findingIdentity.js';
 import type { Finding } from '../types.js';
 import type { FindingDelta, TruncationNotice } from './types.js';
 
@@ -22,27 +30,27 @@ export function compareFindings(
   to: { scan_id: string; findings: readonly Finding[] },
   cap: number,
 ): { delta: FindingDelta; truncation: TruncationNotice | null } {
-  const fromFingerprints = new Set(from.findings.map((finding) => finding.fingerprint));
-  const toFingerprints = new Set(to.findings.map((finding) => finding.fingerprint));
+  const fromIndex = indexFindings(from.findings);
+  const toIndex = indexFindings(to.findings);
 
   let unchangedCount = 0;
   let resolvedCount = 0;
-  for (const fingerprint of fromFingerprints) {
-    if (toFingerprints.has(fingerprint)) unchangedCount += 1;
+  const seenFrom = indexFindings<Finding>([]);
+  for (const finding of from.findings) {
+    if (seenFrom.has(finding)) continue;
+    seenFrom.add(finding);
+    if (toIndex.has(finding)) unchangedCount += 1;
     else resolvedCount += 1;
   }
 
-  // One representative Finding per new fingerprint, in `to`'s order. A
-  // fingerprint repeated within `to.findings` must contribute exactly one
-  // row here, same as it contributes exactly one member of `toFingerprints`
-  // above — array iteration with a `seen` guard, not `toFingerprints`
-  // itself, because we need the actual Finding objects, not just the keys.
-  const seenNew = new Set<string>();
+  // One representative Finding per new finding, in `to`'s order: one
+  // repeated within `to.findings` contributes exactly one row, as a repeat
+  // counts once on the `from` side above.
+  const seenNew = indexFindings<Finding>([]);
   const newFindings: Finding[] = [];
   for (const finding of to.findings) {
-    if (fromFingerprints.has(finding.fingerprint)) continue;
-    if (seenNew.has(finding.fingerprint)) continue;
-    seenNew.add(finding.fingerprint);
+    if (fromIndex.has(finding) || seenNew.has(finding)) continue;
+    seenNew.add(finding);
     newFindings.push(finding);
   }
 

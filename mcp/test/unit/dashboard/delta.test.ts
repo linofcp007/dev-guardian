@@ -26,6 +26,17 @@ describe('compareFindings', () => {
     expect(r.delta.to_scan_id).toBe('to');
   });
 
+  it('matches by identity first: a line shift is unchanged, two identities on one fingerprint are two findings', () => {
+    const withIdentity = (fingerprint: string, identity: string): Finding => ({ ...f(fingerprint), identity });
+    const r = compareFindings(
+      { scan_id: 'from', findings: [withIdentity('line-1', 'moved'), withIdentity('same-lines', 'old-code')] },
+      { scan_id: 'to', findings: [withIdentity('line-2', 'moved'), withIdentity('same-lines', 'new-code')] },
+      100,
+    );
+    expect(r.delta).toMatchObject({ new_count: 1, resolved_count: 1, unchanged_count: 1 });
+    expect(r.delta.new_findings.map((x) => x.identity)).toEqual(['new-code']);
+  });
+
   it('reports a truncation notice rather than silently capping new findings', () => {
     // The wrong implementation slices to the cap and returns null. A reader
     // then sees 2 rows and believes there were 2. Counts must stay TRUE even
