@@ -258,6 +258,27 @@ describe('scan_sast — scope', () => {
     expect(scopedRun?.reason).toMatch(/honoured the project's \.bandit \(its skips and tests decide what is reported\)/);
   });
 
+  // The CI gate's --rules-ref reads the project's configuration from a ref's
+  // copy: the whole-project Bandit took the ref's .bandit, a scoped one the
+  // scanned tree's — on a pull request, the pull request's own.
+  it("a scoped Bandit under --rules-ref reads the ref's .bandit, as the whole-project run does", async () => {
+    const dir = project();
+    write(dir, 'src/a.py');
+    write(dir, '.bandit', '[bandit]\nskips: B101,B602,B404\n');
+    const ref = project('scoped-ref-');
+    write(ref, '.bandit', '[bandit]\nskips: B101\n');
+    const tool = TOOLS.find((t) => t.name === 'scan_sast');
+    if (!tool) throw new Error('scan_sast not registered');
+    const p: PluginContext = { ...plugin(dir), repoConfigFromRef: { root: ref, ref: 'origin/main', commit: 'a'.repeat(40) } };
+    for (const scope of [undefined, { paths: ['src'] }]) {
+      const r = await tool.handler({ project_path: dir, force: true, ...(scope !== undefined ? { scope } : {}) }, p);
+      if (!r.ok) throw new Error(JSON.stringify(r.error));
+    }
+    const [wholeCall, scopedCall] = byCommand('bandit');
+    expect(after(wholeCall?.args ?? [], '--ini')).toBe(join(ref, '.bandit'));
+    expect(after(scopedCall?.args ?? [], '--ini')).toBe(join(ref, '.bandit'));
+  });
+
   it('without a root .bandit, a scoped Bandit gets the neutral --ini too, and names nothing', async () => {
     const dir = project();
     write(dir, 'src/a.py');

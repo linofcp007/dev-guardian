@@ -987,7 +987,8 @@ async function runBanditOnScope(args: Collect & { ctx: InvokeContext; reportDir:
     missing_tools.push('bandit');
     return;
   }
-  const ini = banditIni(ctx.projectPath, reportDir);
+  // The CI gate's --rules-ref copy of it when set, as the whole-project run (`ci/refConfig.ts`).
+  const ini = banditIni(ctx.configRoot, reportDir);
   if ('error' in ini) {
     tools_run.push({ name: 'bandit', status: 'failed', reason: ini.error });
     return;
@@ -1002,7 +1003,7 @@ async function runBanditOnScope(args: Collect & { ctx: InvokeContext; reportDir:
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
   });
   for (const raw of run.reports) parser_inputs.push({ parser: banditParser, input: raw });
-  tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.projectPath, 'bandit') : run.toolRun);
+  tools_run.push(ini.honoured ? await nameRepoConfig(run.toolRun, ctx.configRoot, 'bandit') : run.toolRun);
 }
 
 /**
