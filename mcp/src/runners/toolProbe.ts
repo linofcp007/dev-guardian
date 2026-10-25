@@ -76,7 +76,9 @@ const PROBE_TIMEOUT_MS = 30_000;
  * Read a version out of a tool's `--version` output.
  *
  *   1. A line that IS a version line (`Version: 0.69.3` — trivy, syft; syft
- *      also prints `GoVersion:` and `SchemaVersion:`, which this skips).
+ *      also prints `GoVersion:` and `SchemaVersion:`, which this skips), or
+ *      the Go toolchain's own `go version go1.25.1 windows/amd64`, whose
+ *      version is glued to `go` (rule 2 read none of it until 3.6.1).
  *   2. Otherwise the first version-shaped token not glued to a word:
  *      `ruff 0.16.6`, `k6.exe v2.2.0 (… go1.26.5 …)` → 2.2.0 not 1.26.5,
  *      `…\Scripts\bandit 1.9.4` then `python version = 3.14.7` → 1.9.4.
@@ -84,7 +86,7 @@ const PROBE_TIMEOUT_MS = 30_000;
  * Returns `major.minor[.patch]` without a leading `v` or any suffix.
  */
 export function extractVersion(text: string): string | null {
-  const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text);
+  const line = /^\s*Version:\s*v?(\d+\.\d+(?:\.\d+)?)/im.exec(text) ?? /^\s*go version go(\d+\.\d+(?:\.\d+)?)/m.exec(text);
   if (line?.[1] !== undefined) return line[1];
   const token = /(?<![\w.])v?(\d+\.\d+(?:\.\d+)?)/.exec(text);
   return token?.[1] ?? null;

@@ -21,6 +21,12 @@ describe('extractVersion', () => {
     ['wp-cli', 'WP-CLI 2.12.0', '2.12.0'],
     ['nuclei', '[INF] Nuclei Engine Version: v3.4.10', '3.4.10'],
     ['wpscan', 'Current Version: 3.8.28\nLast DB Update: 2026-09-24', '3.8.28'],
+    // 3.6.1: the token rule rejects the digit glued to `go`, so the Go
+    // toolchain's own line read no version (shown: the whole line, floor
+    // null). Go is not installed here: the line is `go version`'s format.
+    ['go', 'go version go1.25.1 windows/amd64', '1.25.1'],
+    ['go (a release without a patch number)', 'go version go1.21 linux/amd64', '1.21'],
+    ['go (a release candidate)', 'go version go1.26rc1 darwin/arm64', '1.26'],
   ])('%s', (_name, output, expected) => {
     expect(extractVersion(output)).toBe(expected);
   });
