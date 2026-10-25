@@ -22,7 +22,7 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { TOOLS, attachAllTools, listedTools, type ToolModule } from '../../src/tools/index.js';
+import { MAX_INPUT_ARRAY, TOOLS, attachAllTools, listedTools, type ToolModule } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { freshPlugin } from '../helpers/historySeed.js';
 // Static, not in a beforeAll: `it.each(TOOLS…)` below is expanded when the
@@ -142,6 +142,26 @@ describe('a tools/call with no arguments', () => {
       expect(spy).not.toHaveBeenCalled();
     },
   );
+});
+
+// zod 3 parses every element of an array even past its `.max()`, keeping one
+// issue per failing element (GHSA-mrhx-c7xc-m3w5): a list longer than any
+// schema accepts is refused before zod walks it.
+describe('a list past MAX_INPUT_ARRAY', () => {
+  it('is -32602 naming its path, and the handler never runs; a list at the limit reaches zod', async () => {
+    const client = await connect();
+    const spy = neverRuns(getTool('llm_scan_start'));
+    const huge = Array.from({ length: MAX_INPUT_ARRAY + 1 }, () => 7);
+    const res = await client.callTool({ name: 'llm_scan_start', arguments: { fingerprints: huge } });
+    expect(res.isError).toBe(true);
+    expect(textOf(res)).toContain('-32602');
+    expect(textOf(res)).toContain(`at most ${MAX_INPUT_ARRAY} items per list (${MAX_INPUT_ARRAY + 1} given)`);
+    expect(textOf(res)).toContain('fingerprints');
+    const atLimit = await client.callTool({ name: 'llm_scan_start', arguments: { fingerprints: huge.slice(1) } });
+    expect(atLimit.isError).toBe(true);
+    expect(textOf(atLimit)).not.toContain('items per list');
+    expect(spy).not.toHaveBeenCalled();
+  });
 });
 
 describe('every registered tool rejects an unknown key', () => {

@@ -36420,6 +36420,7 @@ var init_annotations = __esm({
 var tools_exports = {};
 __export(tools_exports, {
   DATABASE_BUSY_MESSAGE: () => DATABASE_BUSY_MESSAGE,
+  MAX_INPUT_ARRAY: () => MAX_INPUT_ARRAY,
   TOOLS: () => TOOLS,
   attachAllTools: () => attachAllTools,
   defineTool: () => defineTool,
@@ -36503,8 +36504,31 @@ function attachAllTools(server, ctx) {
 function strictInputSchema(tool54) {
   const schema = external_exports.object(tool54.inputSchema).strict();
   const parse11 = schema.safeParseAsync.bind(schema);
-  schema.safeParseAsync = (data, params) => parse11(data ?? {}, params);
+  schema.safeParseAsync = async (data, params) => {
+    const oversized = oversizedArrayIn(data);
+    if (oversized !== null) {
+      const message2 = `at most ${MAX_INPUT_ARRAY} items per list (${oversized.length} given)`;
+      return { success: false, error: new external_exports.ZodError([{ code: "custom", path: oversized.path, message: message2 }]) };
+    }
+    return parse11(data ?? {}, params);
+  };
   return schema;
+}
+function oversizedArrayIn(data) {
+  const stack = [{ value: data, path: [] }];
+  while (stack.length > 0) {
+    const next = stack.pop();
+    if (next === void 0) break;
+    const { value, path: path3 } = next;
+    if (value === null || typeof value !== "object" || path3.length > MAX_INPUT_DEPTH) continue;
+    if (Array.isArray(value)) {
+      if (value.length > MAX_INPUT_ARRAY) return { path: path3, length: value.length };
+      value.forEach((v, i) => stack.push({ value: v, path: [...path3, i] }));
+    } else {
+      for (const [k, v] of Object.entries(value)) stack.push({ value: v, path: [...path3, k] });
+    }
+  }
+  return null;
 }
 function toCallToolResult(result, contentOnlyKeys) {
   if (result.ok) {
@@ -36529,7 +36553,7 @@ function toCallToolResult(result, contentOnlyKeys) {
     structuredContent: errorPayload
   };
 }
-var DATABASE_BUSY_MESSAGE, TOOLS;
+var DATABASE_BUSY_MESSAGE, TOOLS, MAX_INPUT_ARRAY, MAX_INPUT_DEPTH;
 var init_tools = __esm({
   "src/tools/index.ts"() {
     "use strict";
@@ -36542,6 +36566,8 @@ var init_tools = __esm({
     init_db();
     DATABASE_BUSY_MESSAGE = `dev-guardian's database is locked by another process \u2014 another dev-guardian server, hook or CLI writing to it (several can share one project) \u2014 and it was not released within ${SESSION_BUSY_TIMEOUT_MS / 1e3} s. Retry the call in a few seconds. If it keeps happening, close the other sessions working on this project, or end a dev-guardian process that is stuck.`;
     TOOLS = [];
+    MAX_INPUT_ARRAY = 1e4;
+    MAX_INPUT_DEPTH = 32;
   }
 });
 
