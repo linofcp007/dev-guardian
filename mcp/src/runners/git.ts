@@ -56,13 +56,8 @@ export interface GitResult {
  * repository whose git configuration could not be read safely is not run at
  * all: exit 126, with the reason in stderr.
  */
-export async function git(
-  cwd: string,
-  args: readonly string[],
-  timeoutMs = GIT_TIMEOUT_MS,
-  maxBuffer?: number,
-): Promise<GitResult> {
-  const r = await execGit(cwd, args, { timeoutMs, ...(maxBuffer !== undefined ? { maxBuffer } : {}) });
+export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<GitResult> {
+  const r = await execGit(cwd, args, { timeoutMs });
   const notApplied = r.notApplied.length > 0 ? { notApplied: r.notApplied } : {};
   if (r.failure?.code === 'refused') return { exitCode: 126, stdout: '', stderr: r.stderr, ...notApplied };
   // No exit code. 127 — the shell's "command not found" — only when git is not
@@ -162,9 +157,6 @@ export async function shallowBoundary(cwd: string): Promise<string[] | null> {
 /** A shallow file lists one commit per line: 16 MiB is some 250 000 boundary commits. */
 const SHALLOW_FILE_MAX_BYTES = 16 * 1024 * 1024;
 
-/** The index listing is every file in the repository: `platform/gitSafety.ts` lists gitlinks under the same cap. */
-const STAGE_LISTING_MAX_BYTES = 512 * 1024 * 1024;
-
 const UNANSWERED_PREFIX = '(git could not answer: ';
 
 /**
@@ -208,7 +200,7 @@ export function isGitUnanswered(entry: string): boolean {
  * (git 2.52) — on every secrets and SAST scan.
  */
 export async function initialisedSubmodules(cwd: string): Promise<string[]> {
-  const r = await git(cwd, ['ls-files', '-z', '--stage', '--', '.'], GIT_TIMEOUT_MS, STAGE_LISTING_MAX_BYTES);
+  const r = await git(cwd, ['ls-files', '-z', '--stage', '--', '.']);
   const failed = unanswered(r);
   if (failed !== null) return failed;
   const out = new Set<string>();
@@ -232,7 +224,7 @@ export async function initialisedSubmodules(cwd: string): Promise<string[]> {
  */
 export async function gitlinksAmong(cwd: string, rev: string, paths: readonly string[]): Promise<string[]> {
   if (paths.length === 0) return [];
-  const r = await git(cwd, ['ls-tree', '-r', '-z', rev, '--', '.'], GIT_TIMEOUT_MS, STAGE_LISTING_MAX_BYTES);
+  const r = await git(cwd, ['ls-tree', '-r', '-z', rev, '--', '.']);
   const failed = unanswered(r);
   if (failed !== null) return failed;
   const wanted = new Set(paths.map((p) => p.split('\\').join('/')));
