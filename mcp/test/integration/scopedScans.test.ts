@@ -426,6 +426,40 @@ describe('scan_secrets — scope', () => {
     expect(gitleaksSaw[0]).toEqual(['b.env', 'new.env']);
   });
 
+  // The scanners read the working tree, and `staged` took only the file list
+  // from the index: a key staged with `git add`, then deleted unstaged, read
+  // clean while the commit carried it. The files whose working-tree content
+  // is not what is staged are a named gap, never a clean `full`.
+  it('scope.diff.staged: a staged file with unstaged changes on top is a named gap', async () => {
+    const dir = await repo({ 'a.env': 'k=1\n', 'b.env': 'k=2\n' });
+    write(dir, 'a.env', 'k=1\nGITHUB_TOKEN=ghp_000000000000000000000000000000000000\n');
+    write(dir, 'c.env', 'k=3\n');
+    write(dir, 'd.env', 'GITHUB_TOKEN=ghp_000000000000000000000000000000000000\n');
+    await git(dir, 'add', 'a.env', 'c.env', 'd.env');
+    write(dir, 'a.env', 'k=1\n');
+    rmSync(join(dir, 'd.env'));
+    const r = await ok('scan_secrets', dir, { scope: { diff: { staged: true } } });
+    expect(gitleaksSaw[0]).toEqual(['a.env', 'c.env']);
+    expect(r.coverage).toBe('partial');
+    const gap = r.tools_run.find((t) => t.name === 'staged-content');
+    expect(gap).toMatchObject({ status: 'failed' });
+    // Changed since `git add`, or deleted (nothing on disk was read at all).
+    expect(gap?.reason).toContain('(a.env, d.env)');
+    expect(gap?.reason).not.toContain('c.env');
+    expect(r.missing_tools).toContain('staged-content');
+  });
+
+  it('scope.diff.staged: nothing unstaged on top of the staged files, no gap', async () => {
+    const dir = await repo({ 'a.env': 'k=1\n', 'b.env': 'k=2\n' });
+    write(dir, 'a.env', 'k=11\n');
+    await git(dir, 'add', 'a.env');
+    write(dir, 'b.env', 'k=22\n');
+    const r = await ok('scan_secrets', dir, { scope: { diff: { staged: true } } });
+    expect(gitleaksSaw[0]).toEqual(['a.env']);
+    expect(r.coverage).toBe('full');
+    expect(r.tools_run.some((t) => t.name === 'staged-content')).toBe(false);
+  });
+
   it('scope and log_opts together are refused', async () => {
     const dir = await repo({ 'a.env': 'k=1\n' });
     const { r } = await run('scan_secrets', dir, { scope: { paths: ['a.env'] }, log_opts: '--all' });

@@ -90,6 +90,7 @@ import {
   resolveScope,
   ScanScopeInput,
   ScopeError,
+  STAGED_CONTENT_GAP,
   suggestScopeForFile,
   type ResolvedScope,
   type ScanScope,
@@ -628,6 +629,20 @@ function scopeWarnings(scopeMeta: unknown): string[] {
   return warnings;
 }
 
+/** The named gap of a staged scope's files that changed again since `git add` (`ResolvedScope.notAsStaged`), or null. */
+function stagedContentGap(notAsStaged: readonly string[]): ToolRun | null {
+  if (notAsStaged.length === 0) return null;
+  const named = `${notAsStaged.slice(0, 5).join(', ')}${notAsStaged.length > 5 ? ', …' : ''}`;
+  return {
+    name: STAGED_CONTENT_GAP,
+    status: 'failed',
+    reason:
+      `${notAsStaged.length} staged file(s) changed again in the working tree since git add (${named}): the scanners ` +
+      'read the working tree, not the staged content the commit carries — stage or stash the rest ' +
+      '(git stash --keep-index) and re-scan',
+  };
+}
+
 function describeScope(block: Record<string, unknown>): string {
   const diff = block['diff'];
   if (block['kind'] === 'diff' && typeof diff === 'object' && diff !== null) {
@@ -797,6 +812,17 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     invocation = {
       ...invocation,
       tools_run: invocation.tools_run.map((run) => (run.status === 'skipped' ? run : withProjectConfig(run, ignore))),
+    };
+  }
+  // A staged scope with unstaged changes on top of its files: every scanner
+  // read the working tree, so those files were not scanned as the commit
+  // carries them — a key staged and then deleted unstaged read clean.
+  const stagedGap = args.scope !== null ? stagedContentGap(args.scope.notAsStaged) : null;
+  if (stagedGap !== null) {
+    invocation = {
+      ...invocation,
+      tools_run: [...invocation.tools_run, stagedGap],
+      missing_tools: [...invocation.missing_tools, STAGED_CONTENT_GAP],
     };
   }
 
