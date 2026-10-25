@@ -31,8 +31,8 @@
  * name and scan type, the tree hash, the plugin version, the content of every
  * rule pack the tool declares in `rulePacks`, the content of the root
  * `.guardian/` settings a scan reads (`guardianSettingsState`), and a hash of
- * the NORMALISED input. The rule for the input is deliberately blunt, because every
- * exception to it was a reproduced wrong answer (see cacheKey.ts): EVERY
+ * the NORMALISED input. The rule for the input is deliberately blunt, because
+ * every exception to it was a reproduced wrong answer (see cacheKey.ts): EVERY
  * input field takes part, after the tool's own zod schema has applied its
  * defaults, EXCEPT
  *
