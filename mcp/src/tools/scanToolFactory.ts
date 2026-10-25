@@ -172,6 +172,12 @@ export interface ScannerInvocation {
    * structured data (e.g. `deps_audit` returning `bot_configured`).
    */
   extras?: Record<string, unknown>;
+  /**
+   * Where the identities read the findings' lines from, when the scanned
+   * files were not the project's working tree (review_pr's head checkout);
+   * the working tree otherwise.
+   */
+  readSource?: (filePath: string) => string | null;
 }
 
 export interface InvokeContext extends ToolContext {
@@ -618,8 +624,10 @@ function scopeWarnings(scopeMeta: unknown): string[] {
   const outside = typeof block['findings_outside_scope'] === 'number' ? block['findings_outside_scope'] : 0;
   const ignored =
     typeof block['files_excluded_by_guardianignore'] === 'number' ? block['files_excluded_by_guardianignore'] : 0;
+  // A history window (scan_secrets' `log_opts`) narrows commits, not files: no file count to give.
+  const what = block['kind'] === 'log_opts' ? describeScope(block) : `${describeScope(block)}, ${files} file(s)`;
   const warnings = [
-    `Scoped scan (${describeScope(block)}, ${files} file(s)): findings outside the scope are not reported` +
+    `Scoped scan (${what}): findings outside the scope are not reported` +
       `${outside > 0 ? ` (${outside} dropped)` : ''}. It is recorded as scoped — never a baseline, and never ` +
       "counted as the project's current findings.",
   ];
@@ -658,6 +666,7 @@ function describeScope(block: Record<string, unknown>): string {
     return d['staged'] === true ? 'staged changes' : 'uncommitted changes';
   }
   if (block['kind'] === 'since' && typeof block['since'] === 'string') return `since ${block['since']}`;
+  if (block['kind'] === 'log_opts' && typeof block['log_opts'] === 'string') return `history ${block['log_opts']}`;
   return 'paths';
 }
 
@@ -888,7 +897,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // returned, which is what keeps a secret finding's line out of the database.
   findings = assignIdentities(findings, {
     projectPath,
-    readSource: makeSourceReader(projectPath),
+    readSource: invocation.readSource ?? makeSourceReader(projectPath),
   });
 
   // Every finding that flags a credential (subcategory 'secret', Bandit's

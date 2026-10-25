@@ -761,6 +761,36 @@ describe('sbom_diff', () => {
     expect(r.error.message).toContain(projectB);
   });
 
+  it('finds the default pair however many newer scans of other types there are', async () => {
+    // It used to search the 50 newest scans of ANY type: "found 0" with two SBOMs further back.
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSbomScan(plugin, project, 'sbom1', [{ name: 'lodash', version: '3.10.1' }]);
+    seedSbomScan(plugin, project, 'sbom2', [{ name: 'lodash', version: '4.17.21' }]);
+    for (let i = 0; i < 60; i += 1) {
+      plugin.storage.scans.insert({ scan_id: `sast-${i}`, scan_type: 'sast', project_path: project, tree_hash: '' });
+      plugin.storage.scans.finalize({ scan_id: `sast-${i}`, status: 'completed', tools_run: [], missing_tools: [] });
+    }
+    const r = (await getTool('sbom_diff').handler({ project_path: project }, plugin)) as {
+      ok: boolean;
+      from_scan_id?: string;
+      to_scan_id?: string;
+    };
+    expect(r).toMatchObject({ ok: true, from_scan_id: 'sbom1', to_scan_id: 'sbom2' });
+  });
+
+  it('refuses an SBOM file it cannot read, rather than reading every component as removed', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    seedSbomScan(plugin, project, 'sbom1', [{ name: 'lodash', version: '3.10.1' }]);
+    seedSbomScan(plugin, project, 'sbom2', [{ name: 'lodash', version: '3.10.1' }]);
+    writeFileSync(join(project, 'sbom2.cdx.json'), '{ "bomFormat": "CycloneDX", "compon', 'utf8');
+    const r = await getTool('sbom_diff').handler({ project_path: project }, plugin);
+    expect(r.ok).toBe(false);
+    if (r.ok) throw new Error('expected failure');
+    expect(r.error.message).toContain('sbom2');
+  });
+
   it('caps the response arrays but reports true, uncapped totals in summary', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);

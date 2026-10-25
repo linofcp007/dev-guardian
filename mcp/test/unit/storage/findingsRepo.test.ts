@@ -252,6 +252,23 @@ describe('FindingsRepo — line-independent identity (schema 7)', () => {
     expect(findings.listBySeverity('medium').map((f) => f.fingerprint).sort()).toEqual(['legacy', 'other']);
   });
 
+  it('never hides a finding whose identity differs from the suppression’s, on a shared fingerprint', () => {
+    const { scans, findings, suppressions } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'same-lines', identity: 'id-real' }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'bare' }), scan_id: 's1' },
+    ]);
+    scans.finalize({ scan_id: 's1', status: 'completed', tools_run: [], missing_tools: [] });
+    suppressions.insert({ finding_fingerprint: 'same-lines', finding_identity: 'id-false-positive', reason: 'fp' });
+    // The finding has no identity: the fingerprint decides.
+    suppressions.insert({ finding_fingerprint: 'bare', finding_identity: 'id-bare', reason: 'fp' });
+
+    expect(findings.listOpen().map((f) => f.fingerprint)).toEqual(['same-lines']);
+    expect(findings.listOpenForProject('/p').map((f) => f.fingerprint)).toEqual(['same-lines']);
+    expect(findings.listBySeverity('medium').map((f) => f.fingerprint)).toEqual(['same-lines']);
+  });
+
 });
 
 describe('FindingsRepo — suppressions are per project at match time (migration 011)', () => {
@@ -309,24 +326,6 @@ describe('FindingsRepo — suppressions are per project at match time (migration
 
     expect(findings.listOpenForProject('/project-a')).toEqual([]);
     expect(findings.listOpen()).toEqual([]);
-  });
-});
-
-describe('FindingsRepo — identityForFingerprint', () => {
-  it('answers from the newest scan that has one', () => {
-    const { db, scans, findings } = setup();
-    scans.insert({ scan_id: 'old', scan_type: 'sast', project_path: '/p', tree_hash: 'h1' });
-    scans.insert({ scan_id: 'new', scan_type: 'sast', project_path: '/p', tree_hash: 'h2' });
-    db.prepare(`UPDATE scans SET started_at = ? WHERE id = ?`).run('2026-01-01T00:00:00.000Z', 'old');
-    db.prepare(`UPDATE scans SET started_at = ? WHERE id = ?`).run('2026-02-01T00:00:00.000Z', 'new');
-    findings.bulkInsert([
-      { ...makeFinding({ fingerprint: 'fp', identity: 'old-identity' }), scan_id: 'old' },
-      { ...makeFinding({ fingerprint: 'fp', identity: 'new-identity' }), scan_id: 'new' },
-      { ...makeFinding({ fingerprint: 'legacy-only' }), scan_id: 'new' },
-    ]);
-    expect(findings.identityForFingerprint('fp')).toBe('new-identity');
-    expect(findings.identityForFingerprint('legacy-only')).toBeNull();
-    expect(findings.identityForFingerprint('unknown')).toBeNull();
   });
 });
 

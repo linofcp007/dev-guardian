@@ -107,7 +107,10 @@ function verifyDrafts(input: PlanInput): { drafts: Draft[]; notEligible: PlanRes
       notEligible.push({ fingerprint: f.fingerprint, reason: 'the file is outside the project' });
       continue;
     }
-    drafts.push({ kind: 'verify', target: { fingerprint: f.fingerprint, files: [rel] } });
+    drafts.push({
+      kind: 'verify',
+      target: { fingerprint: f.fingerprint, ...(f.identity !== undefined ? { identity: f.identity } : {}), files: [rel] },
+    });
   }
   return { drafts, notEligible };
 }

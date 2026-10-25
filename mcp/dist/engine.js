@@ -4811,13 +4811,14 @@ function identitiesOf(keyed) {
       (a, b) => (a.finding.line_start ?? 0) - (b.finding.line_start ?? 0) || (a.finding.line_end ?? 0) - (b.finding.line_end ?? 0) || compareStrings(snippetOrder(a.finding), snippetOrder(b.finding)) || compareStrings(a.finding.fingerprint, b.finding.fingerprint) || a.index - b.index
     );
     const byFingerprint = /* @__PURE__ */ new Map();
+    const together = sharedSecretCount(members.map((m) => m.finding));
     let occurrence = 0;
     for (const m of members) {
       let identity = byFingerprint.get(m.finding.fingerprint);
       if (identity === void 0) {
-        identity = sha2562(
-          JSON.stringify([IDENTITY_VERSION, m.tool, m.rule, m.path, m.contentKey, occurrence])
-        );
+        const recipe = [IDENTITY_VERSION, m.tool, m.rule, m.path, m.contentKey, occurrence];
+        if (together !== null) recipe.push({ secrets: together });
+        identity = sha2562(JSON.stringify(recipe));
         occurrence += 1;
         byFingerprint.set(m.finding.fingerprint, identity);
       }
@@ -4825,6 +4826,12 @@ function identitiesOf(keyed) {
     }
   }
   return identities;
+}
+function sharedSecretCount(group) {
+  const first = group[0];
+  if (first === void 0 || !isCredentialFinding(first) || isHistoryLocator(first)) return null;
+  const secrets = new Set(group.map((f) => f.fingerprint)).size;
+  return secrets > 1 ? secrets : null;
 }
 function rekeyStoredIdentities(rows, projectPath) {
   const keyed = rows.flatMap((finding4, index) => {
@@ -14674,6 +14681,38 @@ var init_types = __esm({
   }
 });
 
+// src/redaction/secretFindingRedaction.ts
+function redactCredentialSnippet(f) {
+  if (f.snippet === void 0) return f;
+  if (f.tool.toLowerCase() === "gitleaks") return f;
+  if (f.snippet.toLowerCase() === REDACTED_SNIPPET) return f;
+  if (!isCredentialFinding(f)) return f;
+  return { ...f, snippet: REDACTED_SECRET_SNIPPET };
+}
+function credentialSafeFingerprint(f) {
+  if (f.snippet === void 0 || redactCredentialSnippet(f).snippet !== REDACTED_SECRET_SNIPPET) return f.fingerprint;
+  return computeFingerprint({
+    tool: f.tool,
+    ...f.rule_id !== void 0 ? { rule_id: f.rule_id } : {},
+    ...f.file_path !== void 0 ? { file_path: f.file_path } : {},
+    ...f.line_start !== void 0 ? { line_start: f.line_start } : {},
+    ...f.line_end !== void 0 ? { line_end: f.line_end } : {},
+    snippet: REDACTED_SECRET_SNIPPET
+  });
+}
+function redactCredentialSnippets(findings) {
+  return findings.map(redactCredentialSnippet);
+}
+var REDACTED_SECRET_SNIPPET;
+var init_secretFindingRedaction = __esm({
+  "src/redaction/secretFindingRedaction.ts"() {
+    "use strict";
+    init_findingFingerprint();
+    init_findingIdentity();
+    REDACTED_SECRET_SNIPPET = "[redacted \u2014 credential value omitted; see rule_id and file_path]";
+  }
+});
+
 // src/types.ts
 var types_exports2 = {};
 __export(types_exports2, {
@@ -16646,7 +16685,9 @@ function buildBaseline(findings, previous, now, renamedFrom) {
     const entry = {
       ...finding4.identity !== void 0 ? { identity: finding4.identity } : {},
       ...matchKey !== void 0 ? { match_id: matchKey } : {},
-      fingerprint: finding4.fingerprint,
+      // A credential's, over its redacted snippet: a row stored before that
+      // holds one hashed over the plaintext, which this file is committed with.
+      fingerprint: credentialSafeFingerprint(finding4),
       severity: finding4.severity,
       title: finding4.title,
       file_path: finding4.file_path,
@@ -16713,6 +16754,7 @@ var init_baseline = __esm({
   "src/ci/baseline.ts"() {
     "use strict";
     init_findingIdentity();
+    init_secretFindingRedaction();
     init_types2();
     init_secretValues();
     BASELINE_RELATIVE_PATH = ".guardian/baseline.json";
@@ -17351,7 +17393,13 @@ function clampSnippet(snippet) {
   return snippet.length > SNIPPET_MAX_BYTES2 ? snippet.slice(0, SNIPPET_MAX_BYTES2) : snippet;
 }
 function makeFinding(input) {
-  const snippet = clampSnippet(input.snippet);
+  const clamped = clampSnippet(input.snippet);
+  const snippet = clamped === void 0 ? void 0 : redactCredentialSnippet({
+    tool: input.tool,
+    snippet: clamped,
+    ...input.rule_id !== void 0 ? { rule_id: input.rule_id } : {},
+    ...input.subcategory !== void 0 ? { subcategory: input.subcategory } : {}
+  }).snippet;
   const fingerprintInput = {
     tool: input.tool
   };
@@ -17460,6 +17508,7 @@ var init_scannerParsers = __esm({
     "use strict";
     init_findingFingerprint();
     init_taxonomy();
+    init_secretFindingRedaction();
     SNIPPET_MAX_BYTES2 = 1024;
     DEPENDENCY_CWE = "CWE-1395";
     SECRET_CWE = "CWE-798";
@@ -21479,7 +21528,7 @@ function toSarif(findings, opts = {}) {
         severity: f.severity,
         category: f.category,
         ...f.subcategory ? { subcategory: f.subcategory } : {},
-        ...f.fingerprint ? { fingerprint: f.fingerprint } : {},
+        ...f.fingerprint ? { fingerprint: credentialSafeFingerprint(f) } : {},
         ...tags.length > 0 ? { tags } : {}
       }
     };
@@ -21500,7 +21549,7 @@ function toSarif(findings, opts = {}) {
     }
     if (f.fingerprint || f.identity) {
       result.partialFingerprints = {
-        ...f.fingerprint ? { devGuardian: f.fingerprint } : {},
+        ...f.fingerprint ? { devGuardian: credentialSafeFingerprint(f) } : {},
         ...f.identity ? { devGuardianIdentity: f.identity } : {}
       };
     }
@@ -21541,6 +21590,7 @@ var init_sarif = __esm({
     "use strict";
     init_taxonomy();
     init_version();
+    init_secretFindingRedaction();
     DEFAULT_TOOL_VERSION = resolveVersion();
     SARIF_LEVEL_BY_SEVERITY = {
       critical: "error",
@@ -22488,7 +22538,7 @@ var init_findingsRepo = __esm({
     init_repoUtil();
     init_scanClock();
     WORKTREE_PATH_EXCLUSION2 = "%guardian-fixpr-wt-%";
-    SUPPRESSION_MATCHES_F = "(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) AND (s.project_path IS NULL OR s.project_path = l.project_path)";
+    SUPPRESSION_MATCHES_F = "(s.finding_identity = f.identity OR (s.finding_fingerprint = f.fingerprint AND (s.finding_identity IS NULL OR f.identity IS NULL))) AND (s.project_path IS NULL OR s.project_path = l.project_path)";
     FINDINGS_INSERT_CHUNK = 2e3;
     FINDINGS_INSERT_GAP_MS = 120;
     FindingsRepo = class {
@@ -22502,13 +22552,6 @@ var init_findingsRepo = __esm({
         cwe, owasp, vuln_aliases
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-        this.identityForFingerprintStmt = db.prepare(`
-      SELECT f.identity AS identity FROM findings f
-      JOIN scans s ON s.id = f.scan_id
-      WHERE f.fingerprint = ? AND f.identity IS NOT NULL AND ${notInFutureSql("s")}
-      ORDER BY s.started_at DESC, s.rowid DESC
-      LIMIT 1
     `);
         this.listByScanStmt = db.prepare(`
       SELECT * FROM findings WHERE scan_id = ?
@@ -22586,7 +22629,6 @@ var init_findingsRepo = __esm({
       }
       db;
       insertStmt;
-      identityForFingerprintStmt;
       listByScanStmt;
       listOpenLatestScanStmt;
       listOpenForProjectStmt;
@@ -22663,10 +22705,6 @@ var init_findingsRepo = __esm({
           return inserted;
         });
         return tx(chunk);
-      }
-      /** The identity stored with `fingerprint` by the newest scan that has one, or null. */
-      identityForFingerprint(fingerprint) {
-        return this.identityForFingerprintStmt.get(fingerprint)?.identity ?? null;
       }
       listByScan(scanId) {
         return this.listByScanStmt.all(scanId).map(rowToFinding);
@@ -23390,8 +23428,8 @@ var init_suppressionsRepo = __esm({
     `);
         this.isSuppressedStmt = db.prepare(`
       SELECT COUNT(*) AS n FROM suppressions
-      WHERE (finding_fingerprint = ? OR finding_identity = ?)
-        AND (expires_at IS NULL OR expires_at > ?)
+      WHERE (finding_identity = ?2 OR (finding_fingerprint = ?1 AND (finding_identity IS NULL OR ?2 IS NULL)))
+        AND (expires_at IS NULL OR expires_at > ?3)
     `);
         this.listForFingerprintStmt = db.prepare(`
       SELECT * FROM suppressions WHERE finding_fingerprint = ?
@@ -23403,7 +23441,8 @@ var init_suppressionsRepo = __esm({
         AND (s.project_path IS NULL OR s.project_path = ?)
         AND EXISTS (
           SELECT 1 FROM findings f
-          WHERE (f.fingerprint = s.finding_fingerprint OR f.identity = s.finding_identity)
+          WHERE (f.identity = s.finding_identity OR (f.fingerprint = s.finding_fingerprint
+                 AND (f.identity IS NULL OR s.finding_identity IS NULL)))
             AND f.tool = ? AND f.rule_id = ?
         )
       ORDER BY s.created_at DESC, s.id DESC
@@ -37707,26 +37746,6 @@ var init_detect = __esm({
   }
 });
 
-// src/redaction/secretFindingRedaction.ts
-function redactCredentialSnippet(f) {
-  if (f.snippet === void 0) return f;
-  if (f.tool.toLowerCase() === "gitleaks") return f;
-  if (f.snippet.toLowerCase() === REDACTED_SNIPPET) return f;
-  if (!isCredentialFinding(f)) return f;
-  return { ...f, snippet: REDACTED_SECRET_SNIPPET };
-}
-function redactCredentialSnippets(findings) {
-  return findings.map(redactCredentialSnippet);
-}
-var REDACTED_SECRET_SNIPPET;
-var init_secretFindingRedaction = __esm({
-  "src/redaction/secretFindingRedaction.ts"() {
-    "use strict";
-    init_findingIdentity();
-    REDACTED_SECRET_SNIPPET = "[redacted \u2014 credential value omitted; see rule_id and file_path]";
-  }
-});
-
 // src/platform/glob.ts
 import { join as join34, relative as relative9, sep as sep8 } from "node:path";
 function hasGlobMagic(pattern) {
@@ -39030,8 +39049,9 @@ function scopeWarnings(scopeMeta) {
   const files = typeof block["files"] === "number" ? block["files"] : 0;
   const outside = typeof block["findings_outside_scope"] === "number" ? block["findings_outside_scope"] : 0;
   const ignored = typeof block["files_excluded_by_guardianignore"] === "number" ? block["files_excluded_by_guardianignore"] : 0;
+  const what = block["kind"] === "log_opts" ? describeScope(block) : `${describeScope(block)}, ${files} file(s)`;
   const warnings = [
-    `Scoped scan (${describeScope(block)}, ${files} file(s)): findings outside the scope are not reported${outside > 0 ? ` (${outside} dropped)` : ""}. It is recorded as scoped \u2014 never a baseline, and never counted as the project's current findings.`
+    `Scoped scan (${what}): findings outside the scope are not reported${outside > 0 ? ` (${outside} dropped)` : ""}. It is recorded as scoped \u2014 never a baseline, and never counted as the project's current findings.`
   ];
   if (scannedNothing(block)) {
     warnings.push(
@@ -39060,6 +39080,7 @@ function describeScope(block) {
     return d["staged"] === true ? "staged changes" : "uncommitted changes";
   }
   if (block["kind"] === "since" && typeof block["since"] === "string") return `since ${block["since"]}`;
+  if (block["kind"] === "log_opts" && typeof block["log_opts"] === "string") return `history ${block["log_opts"]}`;
   return "paths";
 }
 function exclusionWarning(value) {
@@ -39201,7 +39222,7 @@ async function runScanBody(args) {
   }
   findings = assignIdentities(findings, {
     projectPath,
-    readSource: makeSourceReader(projectPath)
+    readSource: invocation.readSource ?? makeSourceReader(projectPath)
   });
   findings = redactCredentialSnippets(findings);
   if (findings.length > 0) {
@@ -44818,6 +44839,13 @@ var init_scanSecrets = __esm({
           const history = h === null ? null : "base" in h ? h : { logOpts: await resolveLogOpts(ctx.projectPath, h.logOpts) ?? h.logOpts };
           scope = { kind: "scoped", history, files: ctx.scope.contentFiles };
         }
+        const narrowed = logOpts !== void 0 && ctx.scope === null && logOpts.split(" ").some((t) => t !== "--all");
+        const scoped = narrowed ? {
+          extras: { scope: { kind: "log_opts", log_opts: logOpts } },
+          warnings: [
+            `log_opts "${logOpts}" narrowed the history pass: the secrets an earlier full scan found outside it stay open, and this run is never a baseline.`
+          ]
+        } : {};
         const verify = input.verify_live === true;
         const offline = verify && networkDisabled();
         const scan2 = await runGitleaksScan({
@@ -44836,7 +44864,8 @@ var init_scanSecrets = __esm({
           tools_run: scan2.tools_run,
           missing_tools: scan2.missing_tools,
           parser_inputs: scan2.parser_inputs,
-          report_paths: [reportDir]
+          report_paths: [reportDir],
+          ...scoped
         };
         if (!verify) return invocation;
         if (scan2.cancelled) {
@@ -44855,8 +44884,8 @@ var init_scanSecrets = __esm({
         return {
           ...invocation,
           parser_inputs: verified.parser_inputs,
-          warnings: verified.warnings,
-          extras: { secret_verification: verified.summary }
+          warnings: [...scoped.warnings ?? [], ...verified.warnings],
+          extras: { ...scoped.extras, secret_verification: verified.summary }
         };
       }
     });
@@ -49297,6 +49326,19 @@ var init_qualityCheck = __esm({
 // src/tools/reviewPr.ts
 import { lstatSync as lstatSync14 } from "node:fs";
 import { basename as basename8, join as join59 } from "node:path";
+function snapshotSources(root, files) {
+  const read3 = makeSourceReader(root);
+  const texts = /* @__PURE__ */ new Map();
+  let total = 0;
+  for (const file of files) {
+    const text2 = read3(file);
+    if (text2 === null) continue;
+    if (total + text2.length > SOURCE_SNAPSHOT_MAX_CHARS) break;
+    total += text2.length;
+    texts.set(file, text2);
+  }
+  return (filePath) => texts.get(filePath.replace(/\\/g, "/")) ?? null;
+}
 async function runSemgrep3(ctx, input, out, args) {
   const withGaps = async (scannedNothing2) => {
     const at = out.tools_run.length - 1;
@@ -49522,12 +49564,13 @@ async function defaultBaseRef(cwd) {
 function refused(code, message2) {
   return { ok: false, error: { code, message: message2 } };
 }
-var MANIFEST_RE, inputSchema3, reviewPr, isPython2, isManifest, MAX_PREEXISTING_NAMED, tool3;
+var MANIFEST_RE, inputSchema3, reviewPr, SOURCE_SNAPSHOT_MAX_CHARS, isPython2, isManifest, MAX_PREEXISTING_NAMED, tool3;
 var init_reviewPr = __esm({
   "src/tools/reviewPr.ts"() {
     "use strict";
     init_projectLanguages();
     init_zod();
+    init_findingIdentity();
     init_gitSafety();
     init_guardianIgnore();
     init_projectPath();
@@ -49583,6 +49626,7 @@ var init_reviewPr = __esm({
         let tree = null;
         let cleanupNote = null;
         let projectLanguages = null;
+        let readSource;
         try {
           let scanRoot = ctx.projectPath;
           let unavailable = null;
@@ -49604,6 +49648,7 @@ var init_reviewPr = __esm({
             if (touched.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
           } else {
             const present5 = changed.filter((f) => isFileOnDisk(join59(scanRoot, f)));
+            if (tree !== null) readSource = snapshotSources(scanRoot, present5);
             const submodules = await gitlinksAmong(ctx.projectPath, head, changed);
             await runSemgrep3(ctx, input, out, { scanRoot, reportDir, changed, present: present5, where, submodules });
             if (!out.cancelled) await runBandit2(ctx, out, { scanRoot, reportDir, files: present5.filter(isPython2) });
@@ -49646,6 +49691,7 @@ var init_reviewPr = __esm({
           missing_tools: [...new Set(out.missing_tools)],
           parser_inputs: out.parser_inputs,
           report_paths: [reportDir],
+          ...readSource !== void 0 ? { readSource } : {},
           ...warnings.length > 0 ? { warnings } : {},
           extras: {
             base_sha: base2,
@@ -49664,6 +49710,7 @@ var init_reviewPr = __esm({
         };
       }
     });
+    SOURCE_SNAPSHOT_MAX_CHARS = 64 * 1024 * 1024;
     isPython2 = (f) => f.toLowerCase().endsWith(".py");
     isManifest = (f) => MANIFEST_RE.test(basename8(f));
     MAX_PREEXISTING_NAMED = 5;
@@ -51929,7 +51976,9 @@ function toFindingValidation(record8) {
       { detail: EV.independence + record8.independence },
       { detail: EV.decisive + record8.decisive_line },
       { detail: EV.reasoning + record8.reasoning },
-      { detail: EV.prompt + record8.prompt_version }
+      { detail: EV.prompt + record8.prompt_version },
+      // The table is keyed by fingerprint; the identity says which finding of it was judged.
+      ...record8.identity !== void 0 ? [{ detail: EV.identity + record8.identity }] : []
     ],
     coverage_gaps: independent ? [] : ["same_context: the judge shared the scan's context, so the verdict is advisory"],
     // The verdict is about a tree, not a surface snapshot.
@@ -51937,6 +51986,9 @@ function toFindingValidation(record8) {
     tree_hash: record8.tree_hash,
     computed_at: record8.computed_at
   };
+}
+function llmVerdictIdentityOf(validation) {
+  return validation.evidence.find((e) => e.detail.startsWith(EV.identity))?.detail.slice(EV.identity.length);
 }
 function llmMarkerOf(validation) {
   if (validation.provider !== "llm" || !STORED_VERDICTS.includes(validation.verdict)) return null;
@@ -52010,7 +52062,13 @@ var init_submission = __esm({
     CITATION = /^(.+):(\d+)$/;
     DECISIVE = /^(.+?):(\d+) — \S/;
     EVIDENCE_REF = /^(.+?):(\d+)(?:[-–](\d+))?$/;
-    EV = { independence: "independence: ", decisive: "decisive_line: ", reasoning: "reasoning: ", prompt: "prompt_version: " };
+    EV = {
+      independence: "independence: ",
+      decisive: "decisive_line: ",
+      reasoning: "reasoning: ",
+      prompt: "prompt_version: ",
+      identity: "identity: "
+    };
     INDEPENDENCE = ["subagent", "sampling", "same_context"];
     STORED_VERDICTS = ["exploitable", "not_exploitable", "undetermined"];
   }
@@ -53051,6 +53109,7 @@ function summarizeSkipped(hits) {
   return { count: all.length, by_reason, newest };
 }
 function suppressionMatcher(suppressions, now, projectPath) {
+  const bareFingerprints = /* @__PURE__ */ new Set();
   const fingerprints = /* @__PURE__ */ new Set();
   const identities = /* @__PURE__ */ new Set();
   for (const s of suppressions) {
@@ -53058,8 +53117,9 @@ function suppressionMatcher(suppressions, now, projectPath) {
     if (s.project_path !== void 0 && s.project_path !== projectPath) continue;
     fingerprints.add(s.finding_fingerprint);
     if (s.finding_identity !== void 0) identities.add(s.finding_identity);
+    else bareFingerprints.add(s.finding_fingerprint);
   }
-  return (f) => fingerprints.has(f.fingerprint) || f.identity !== void 0 && identities.has(f.identity);
+  return (f) => f.identity === void 0 ? fingerprints.has(f.fingerprint) : identities.has(f.identity) || bareFingerprints.has(f.fingerprint);
 }
 function partitionSuppressed(storage, projectPath, findings, now = Date.now()) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), now, projectPath);
@@ -53067,6 +53127,25 @@ function partitionSuppressed(storage, projectPath, findings, now = Date.now()) {
   const suppressed = [];
   for (const f of findings) (isSuppressed(f) ? suppressed : visible).push(f);
   return { visible, suppressed };
+}
+function unsuppressedCves(storage, projectPath, scanId, now = Date.now()) {
+  const cves = storage.cves.listActive(scanId);
+  if (cves.length === 0) return cves;
+  const { visible, suppressed } = partitionSuppressed(storage, projectPath, storage.findings.listByScan(scanId), now);
+  const keys = (list2) => {
+    const out = /* @__PURE__ */ new Set();
+    for (const f of list2) {
+      const coords = dependencyCoordinates(f);
+      if (coords !== null && f.rule_id !== void 0) out.add(`${f.rule_id}\0${coords.name}`);
+    }
+    return out;
+  };
+  const shown = keys(visible);
+  const hidden = keys(suppressed);
+  return cves.filter((c) => {
+    const key = `${c.cve_id}\0${c.package_name}`;
+    return shown.has(key) || !hidden.has(key);
+  });
 }
 function suppressedOfEither(current, reference) {
   const key = (f) => f.identity !== void 0 ? `i:${f.identity}` : `f:${f.fingerprint}`;
@@ -53203,12 +53282,18 @@ function openSetSlots(storage, projectPath) {
   return [...slots, ...imports.sort()];
 }
 function llmMarkersOf(storage, projectPath) {
-  const markers = /* @__PURE__ */ new Map();
+  const byFingerprint = /* @__PURE__ */ new Map();
   for (const v of storage.validations.listByProvider(projectPath, "llm")) {
     const marker = llmMarkerOf(v);
-    if (marker !== null) markers.set(v.fingerprint, marker);
+    if (marker !== null) byFingerprint.set(v.fingerprint, { marker, identity: llmVerdictIdentityOf(v) });
   }
-  return markers;
+  return {
+    get: (f) => {
+      const hit = byFingerprint.get(f.fingerprint);
+      if (hit === void 0) return void 0;
+      return hit.identity !== void 0 && f.identity !== void 0 && hit.identity !== f.identity ? void 0 : hit.marker;
+    }
+  };
 }
 function isDemoting(marker) {
   return marker !== void 0 && marker.independent && marker.verdict === "not_exploitable";
@@ -53224,7 +53309,7 @@ function splitHuntCandidates(storage, projectPath, rows) {
   const markers = llmMarkersOf(storage, projectPath);
   const counted = [];
   const unconfirmed = [];
-  for (const f of rows) (isHuntFinding(f) && !isConfirming(markers.get(f.fingerprint)) ? unconfirmed : counted).push(f);
+  for (const f of rows) (isHuntFinding(f) && !isConfirming(markers.get(f)) ? unconfirmed : counted).push(f);
   return { counted, unconfirmed };
 }
 function countableFindings(storage, projectPath, rows) {
@@ -53270,7 +53355,7 @@ function openSetForProject(storage, projectPath, opts = {}) {
   carried.sort((a, b) => rankOf(a.scan.scan_id) - rankOf(b.scan.scan_id));
   const llmVerdicts = llmMarkersOf(storage, projectPath);
   const admitted = (f) => {
-    const marker = llmVerdicts.get(f.fingerprint);
+    const marker = llmVerdicts.get(f);
     return { marker, show: !isHuntFinding(f) || isConfirming(marker) };
   };
   const findings = [];
@@ -53284,7 +53369,7 @@ function openSetForProject(storage, projectPath, opts = {}) {
   };
   const suppressedSeen = indexFindings([]);
   let suppressedCount = 0;
-  for (const { slot, scan: scan2, coverage: coverage2 } of picked) {
+  const admitSource = ({ slot, scan: scan2, coverage: coverage2 }) => {
     const batch = [];
     for (const f of rowsOf(scan2)) {
       if (!findingInSlot(scan2, f, slot) || seen.has(f)) continue;
@@ -53310,7 +53395,8 @@ function openSetForProject(storage, projectPath, opts = {}) {
       coverage: coverage2,
       findings: contributed
     });
-  }
+  };
+  for (const p of picked) if (!isSarifSlot(p.slot)) admitSource(p);
   for (const { slot, scan: scan2, coverage: coverage2, findings: rows } of carried) {
     const gaps = /* @__PURE__ */ new Set();
     const batch = [];
@@ -53335,6 +53421,7 @@ function openSetForProject(storage, projectPath, opts = {}) {
       carried_for: [...gaps]
     });
   }
+  for (const p of picked) if (isSarifSlot(p.slot)) admitSource(p);
   findings.sort(
     (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] || a.fingerprint.localeCompare(b.fingerprint)
   );
@@ -56461,6 +56548,18 @@ async function handler7(inp, ctx) {
         `Scan '${inp.scan_id}' is a scoped scan (meta.scope) \u2014 it measured part of the project only, so it cannot be a baseline. Baseline a whole-project scan of the same type.`
       );
     }
+    if (SCAN_TYPE_ROLE[scan2.scan_type] !== "state") {
+      return failDomain3(
+        "unsupported_target",
+        `Scan '${inp.scan_id}' is a ${scan2.scan_type} scan, which records no findings to compare against, so it cannot be a baseline. Baseline a scan of a finding-producing type.`
+      );
+    }
+    if (computeCoverage(scan2.tools_run, scan2.missing_tools) === "none") {
+      return failDomain3(
+        "unsupported_target",
+        `Scan '${inp.scan_id}' measured nothing (coverage none: its scanners did not run), so it cannot be a baseline. Re-run the scan once its scanners work, and baseline that.`
+      );
+    }
     targetScanId = inp.scan_id;
   } else {
     const projectPath = toolProjectPath(inp.project_path);
@@ -56508,6 +56607,7 @@ var init_setBaseline = __esm({
     init_runCompare();
     init_scanRoles();
     init_schemas4();
+    init_scanCoverage();
     init_sourceToolArg();
     init_types2();
     init_tools();
@@ -57950,7 +58050,8 @@ function whyNot(assessment) {
   return assessment.coverage_gaps[0] ?? "nothing showed the package in use";
 }
 function matches(s, f) {
-  return s.finding_fingerprint === f.fingerprint || f.identity !== void 0 && s.finding_identity === f.identity;
+  if (f.identity !== void 0 && s.finding_identity !== void 0) return s.finding_identity === f.identity;
+  return s.finding_fingerprint === f.fingerprint;
 }
 function uniqueFindings(findings) {
   const seen = /* @__PURE__ */ new Set();
@@ -61221,7 +61322,7 @@ async function handler14(inp, ctx) {
   const storage = ctx.storage;
   const open = openSetForProject(storage, projectPath, { now });
   const cveSource = findLatestUsable(storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" });
-  const cves = cveSource.scan ? storage.cves.listActive(cveSource.scan.scan_id) : [];
+  const cves = cveSource.scan ? unsuppressedCves(storage, projectPath, cveSource.scan.scan_id, now) : [];
   const cveIntel = await enrichCveIntel(storage, cves.map((c) => c.cve_id));
   const cveIntelCoverage = summariseCveIntel(cves, cveIntel, open.findings);
   const latestCompliance = findLatestUsable(storage, projectPath, ["compliance"], {
@@ -61336,7 +61437,7 @@ async function handler15(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
   const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
-  const sboms = needsDefaultPair ? ctx.storage.scans.listHistoryForProject(projectPath, 50).filter((s) => s.scan_type === "sbom" && s.status === "completed") : [];
+  const sboms = needsDefaultPair ? ctx.storage.scans.listCompletedOfTypes(projectPath, ["sbom"], { limit: 2 }) : [];
   if (needsDefaultPair && sboms.length < 2) {
     return failDomain7(
       "unknown_scan_id",
@@ -61351,11 +61452,19 @@ async function handler15(inp, ctx) {
   if (toId === fromId) {
     return failDomain7("unknown_scan_id", `Cannot diff a scan against itself (${toId}).`);
   }
-  const fromLoaded = loadComponents(ctx, fromId);
-  const toLoaded = loadComponents(ctx, toId);
-  if (!fromLoaded || !toLoaded) {
+  const fromRead = loadComponents(ctx, fromId);
+  const toRead = loadComponents(ctx, toId);
+  if (!fromRead || !toRead) {
     return failDomain7("unknown_scan_id", "One or both SBOM scans have no components recorded.");
   }
+  const unreadable = (id, file) => failDomain7(
+    "unsupported_target",
+    `The SBOM file of scan '${id}' (${file}) is not a CycloneDX or SPDX JSON document dev-guardian can read, so there is nothing to compare. Re-run generate_sbom, or pass another scan id.`
+  );
+  if ("unreadable" in fromRead) return unreadable(fromId, fromRead.unreadable);
+  if ("unreadable" in toRead) return unreadable(toId, toRead.unreadable);
+  const fromLoaded = fromRead;
+  const toLoaded = toRead;
   if (fromLoaded.source !== toLoaded.source) {
     const describe2 = (s) => s === "full_file" ? "its full SBOM file" : "a capped summary (its SBOM file no longer exists on disk)";
     return failDomain7(
@@ -61431,10 +61540,14 @@ function loadComponents(ctx, scanId) {
   if (!rec) return null;
   const filePath = rec.meta?.file_path;
   if (filePath && existsSync18(filePath)) {
+    let raw = null;
     try {
-      const raw = readFileSync13(filePath, "utf8");
-      return { components: extractFromSbomJson(raw), source: "full_file" };
+      raw = readFileSync13(filePath, "utf8");
     } catch {
+    }
+    if (raw !== null) {
+      const components = extractFromSbomJson(raw);
+      return components === null ? { unreadable: filePath } : { components, source: "full_file" };
     }
   }
   const top = rec.meta?.top_packages;
@@ -61458,8 +61571,9 @@ function extractFromSbomJson(raw) {
   try {
     root = JSON.parse(raw);
   } catch {
-    return [];
+    return null;
   }
+  if (typeof root !== "object" || root === null || Array.isArray(root)) return null;
   const cdx = root?.components;
   if (Array.isArray(cdx)) {
     return cdx.flatMap((c) => {
@@ -61479,7 +61593,8 @@ function extractFromSbomJson(raw) {
       return [out];
     });
   }
-  return [];
+  const doc = root;
+  return doc.bomFormat === "CycloneDX" || typeof doc.spdxVersion === "string" ? [] : null;
 }
 function failDomain7(code, message2) {
   return { ok: false, error: { code, message: message2 } };
@@ -73240,7 +73355,7 @@ function renderReport(format, scan2, findings, cves, lang, owasp, llm) {
   }
 }
 function withVerdict(f, markers) {
-  const marker = markers.get(f.fingerprint);
+  const marker = markers.get(f);
   return marker === void 0 ? f : { ...f, llm: marker };
 }
 function stanceOf(m) {
@@ -73250,14 +73365,14 @@ function stanceOf(m) {
 }
 function entriesOf(findings, markers) {
   return findings.flatMap((f) => {
-    const m = markers.get(f.fingerprint);
+    const m = markers.get(f);
     return m === void 0 ? [] : [{ where: locationOf(f), title: f.title, stance: stanceOf(m), decisive: m.decisive_line, reasoning: m.reasoning }];
   });
 }
 function splitByIndependence(llm, findings) {
   const n = { subagent: 0, sampling: 0, same_context: 0 };
   for (const f of [...findings, ...llm.unconfirmed]) {
-    const m = llm.markers.get(f.fingerprint);
+    const m = llm.markers.get(f);
     if (m !== void 0) n[m.independence] += 1;
   }
   return `subagent ${n.subagent} \xB7 sampling ${n.sampling} \xB7 same_context ${n.same_context}`;
@@ -73280,7 +73395,7 @@ function llmMarkdown(findings, llm) {
     lines.push("", `## LLM hunt candidates, not counted (${llm.unconfirmed.length})`, "");
     lines.push("_Unverified, or judged not exploitable: these are not in the findings above, the totals or the release gates._", "");
     for (const f of llm.unconfirmed) {
-      const m = llm.markers.get(f.fingerprint);
+      const m = llm.markers.get(f);
       lines.push(`- ${mdCode(locationOf(f))} ${mdInline(f.title)} \u2014 ${m === void 0 ? "unverified" : stanceOf(m)}`);
       if (m !== void 0) lines.push(...verdictLines(m.decisive_line, m.reasoning));
     }
@@ -73298,7 +73413,7 @@ function llmHtml(findings, llm) {
   }
   if (llm.unconfirmed.length > 0) {
     const judgedHunt = entriesOf(llm.unconfirmed, llm.markers).map(item);
-    const unverified = llm.unconfirmed.filter((f) => !llm.markers.has(f.fingerprint)).map((f) => `<li><code>${escapeHtml(locationOf(f))}</code> ${escapeHtml(f.title)} \u2014 unverified</li>`);
+    const unverified = llm.unconfirmed.filter((f) => llm.markers.get(f) === void 0).map((f) => `<li><code>${escapeHtml(locationOf(f))}</code> ${escapeHtml(f.title)} \u2014 unverified</li>`);
     html += `
 <h2>LLM hunt candidates, not counted (${llm.unconfirmed.length})</h2>
 <p>Unverified, or judged not exploitable: not in the findings above, the totals or the release gates.</p>
@@ -74497,7 +74612,7 @@ async function handler25(inp, ctx) {
       if (!existing.ok) {
         plan.status = "failed";
         plan.error = `could not list existing issues to avoid duplicates: ${existing.error}`;
-      } else if (existing.tags.has(tagOf(f))) {
+      } else if (hasIssue(existing.tags, f)) {
         plan.status = "skipped_existing";
       } else {
         labelPlan ??= await ensureLabels(projectPath, labels);
@@ -74564,7 +74679,10 @@ function describeFiltered(filtered, severityMin, maxIssues) {
   return `${head} Pass severity_min "${suggested}" to include ${filtered.below_severity_min.recovered_by_suggestion} of them${rest}.`;
 }
 function tagOf(f) {
-  return f.fingerprint.slice(0, 12);
+  return (f.identity ?? credentialSafeFingerprint(f)).slice(0, 12);
+}
+function hasIssue(tags, f) {
+  return tags.has(tagOf(f)) || tags.has(f.fingerprint.slice(0, 12));
 }
 function buildTitle(f) {
   const tag = `[guardian:${tagOf(f)}]`;
@@ -74589,7 +74707,9 @@ ${f.snippet}
     isCredentialFinding(f) ? "\n_This finding flags a credential. Rotate/revoke it at its source and remove it from the file \u2014 dev-guardian withholds the matched value from this issue._\n" : "",
     `
 ---`,
-    `Fingerprint: \`${f.fingerprint}\``,
+    // A credential's over its redacted snippet: a row stored before that
+    // holds one hashed over the plaintext, an oracle in a public issue.
+    `Fingerprint: \`${credentialSafeFingerprint(f)}\``,
     `Scan id: \`${scanId}\``,
     `
 _Filed automatically by dev-guardian. Use \`suppress_finding\` to mark as false positive._`
@@ -74707,6 +74827,7 @@ var init_createGithubIssues = __esm({
     init_zod();
     init_findingIdentity();
     init_openSet();
+    init_secretFindingRedaction();
     init_argFile();
     init_processRunner();
     init_schemas4();
@@ -74733,7 +74854,7 @@ var init_createGithubIssues = __esm({
     tool28 = defineTool({
       name: "create_github_issues",
       title: "File GitHub issues for top findings",
-      description: "Open one GitHub issue per top open finding of project_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its fingerprint is in the title). severity_min (default high) and max_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry_run: preview first.",
+      description: "Open one GitHub issue per top open finding of project_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its identity is in the title). severity_min (default high) and max_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry_run: preview first.",
       inputSchema: inputSchema27,
       handler: async (input, ctx) => handler25(input, ctx)
     });
@@ -75494,7 +75615,7 @@ function prunableSql(candidates2) {
   })() : { partitions: "", ids: "" };
   return `
     SELECT id FROM (
-      SELECT id, status, meta, started_at, rowid AS rid,
+      SELECT id, status, meta, started_at, project_path, rowid AS rid,
              ROW_NUMBER() OVER (
                PARTITION BY project_path, scan_type, ${SCOPED_SQL}, ${USABLE_SQL}
                ORDER BY started_at DESC, rowid DESC
@@ -75502,7 +75623,7 @@ function prunableSql(candidates2) {
       FROM scans
       ${only.partitions}
     )
-    WHERE rn > ?
+    WHERE (rn > ? OR ${STRAY_WORKTREE_RESCAN_SQL})
       ${only.ids}
       AND NOT ${PROTECTED_SQL}
     ORDER BY started_at ASC, rid ASC
@@ -75681,7 +75802,7 @@ function canonicalizeProjectPathsAtStartup(storage, log) {
     log(`project path spelling step failed (continuing): ${describe(error2)}`);
   }
 }
-var DEFAULT_RETENTION_SCANS, PRUNE_BATCH, PRUNE_BATCH_ROWS, RETENTION_BUDGET_MS, RETENTION_START_DELAY_MS, RETENTION_BATCH_GAP_MS, SCOPED_SQL, jsonArrayOr, USABLE_SQL, BASELINED_RUN_MEMBERS_SQL, PROTECTED_SQL, PRUNABLE_SQL, NOTHING_PROTECTED, STACK_PRUNE_BATCH, defaultDefer;
+var DEFAULT_RETENTION_SCANS, PRUNE_BATCH, PRUNE_BATCH_ROWS, RETENTION_BUDGET_MS, RETENTION_START_DELAY_MS, RETENTION_BATCH_GAP_MS, SCOPED_SQL, jsonArrayOr, USABLE_SQL, BASELINED_RUN_MEMBERS_SQL, PROTECTED_SQL, STRAY_WORKTREE_RESCAN_SQL, PRUNABLE_SQL, NOTHING_PROTECTED, STACK_PRUNE_BATCH, defaultDefer;
 var init_maintenance = __esm({
   "src/storage/maintenance.ts"() {
     "use strict";
@@ -75743,6 +75864,8 @@ var init_maintenance = __esm({
   )
   OR id IN (${BASELINED_RUN_MEMBERS_SQL})
 )`;
+    STRAY_WORKTREE_RESCAN_SQL = `(project_path LIKE '%guardian-fixpr-wt-%'
+    AND started_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-1 day'))`;
     PRUNABLE_SQL = prunableSql(0);
     NOTHING_PROTECTED = /* @__PURE__ */ new Set();
     STACK_PRUNE_BATCH = 500;
@@ -97421,7 +97544,10 @@ function verifyDrafts(input) {
       notEligible.push({ fingerprint: f.fingerprint, reason: "the file is outside the project" });
       continue;
     }
-    drafts.push({ kind: "verify", target: { fingerprint: f.fingerprint, files: [rel2] } });
+    drafts.push({
+      kind: "verify",
+      target: { fingerprint: f.fingerprint, ...f.identity !== void 0 ? { identity: f.identity } : {}, files: [rel2] }
+    });
   }
   return { drafts, notEligible };
 }
@@ -98288,6 +98414,7 @@ function acceptVerdict(storage, plan, task, input, verdict, responseChars, now) 
       storage.validations.upsert(plan.project_path, [
         toFindingValidation({
           fingerprint,
+          ...task.target.identity !== void 0 ? { identity: task.target.identity } : {},
           verdict: verdict.verdict === "real" ? "exploitable" : verdict.verdict === "not_real" ? "not_exploitable" : "undetermined",
           independence: input.independence,
           decisive_line: verdict.decisive_line,
@@ -98314,11 +98441,11 @@ function acceptHunt(storage, plan, task, input, value, rejected, responseChars, 
     const withIdentity = assignIdentities(fresh, { projectPath: plan.project_path, readSource: makeSourceReader(plan.project_path) });
     storage.findings.bulkInsert(withIdentity.map((f) => ({ ...f, scan_id: plan.scan_id })));
     const firstNumber = repo.nextTaskNumber(plan.id);
-    const verifyTasks = fresh.map((f, i) => ({
+    const verifyTasks = withIdentity.map((f, i) => ({
       plan_id: plan.id,
       task_id: `t-${String(firstNumber + i).padStart(4, "0")}`,
       kind: "verify",
-      target: { fingerprint: f.fingerprint, files: [f.file_path ?? ""], origin_task_id: task.task_id },
+      target: { fingerprint: f.fingerprint, identity: f.identity, files: [f.file_path ?? ""], origin_task_id: task.task_id },
       status: "open",
       lease_token: null,
       lease_expires_at: null,
@@ -99275,13 +99402,13 @@ var init_surface = __esm({
       name: "guardian-surface-by-id",
       uri: "guardian://surface/{id}",
       isTemplate: true,
-      description: "A specific attack-surface snapshot by id, as returned in `snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id.",
+      description: "A specific attack-surface snapshot of the server's working-directory project by id, as returned in `snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id or another project's snapshot.",
       handler: async (_uri, params, ctx) => {
         const rawId = Array.isArray(params["id"]) ? params["id"][0] : params["id"];
         const id = Number.parseInt(String(rawId ?? ""), 10);
         if (Number.isNaN(id)) return { json: { snapshot: null } };
         const found2 = ctx.storage.surface.getById(id);
-        if (!found2) return { json: { snapshot: null } };
+        if (!found2 || found2.project_path !== serverProjectPath()) return { json: { snapshot: null } };
         return {
           json: {
             snapshot_id: found2.id,
@@ -99790,20 +99917,22 @@ var init_renames = __esm({
 
 // src/dashboard/delta.ts
 function compareFindings(from, to, cap) {
-  const fromFingerprints = new Set(from.findings.map((finding4) => finding4.fingerprint));
-  const toFingerprints = new Set(to.findings.map((finding4) => finding4.fingerprint));
+  const fromIndex = indexFindings(from.findings);
+  const toIndex = indexFindings(to.findings);
   let unchangedCount = 0;
   let resolvedCount = 0;
-  for (const fingerprint of fromFingerprints) {
-    if (toFingerprints.has(fingerprint)) unchangedCount += 1;
+  const seenFrom = indexFindings([]);
+  for (const finding4 of from.findings) {
+    if (seenFrom.has(finding4)) continue;
+    seenFrom.add(finding4);
+    if (toIndex.has(finding4)) unchangedCount += 1;
     else resolvedCount += 1;
   }
-  const seenNew = /* @__PURE__ */ new Set();
+  const seenNew = indexFindings([]);
   const newFindings2 = [];
   for (const finding4 of to.findings) {
-    if (fromFingerprints.has(finding4.fingerprint)) continue;
-    if (seenNew.has(finding4.fingerprint)) continue;
-    seenNew.add(finding4.fingerprint);
+    if (fromIndex.has(finding4) || seenNew.has(finding4)) continue;
+    seenNew.add(finding4);
     newFindings2.push(finding4);
   }
   const shownNewFindings = newFindings2.slice(0, cap);
@@ -99828,6 +99957,7 @@ function compareFindings(from, to, cap) {
 var init_delta = __esm({
   "src/dashboard/delta.ts"() {
     "use strict";
+    init_findingIdentity();
   }
 });
 
@@ -99890,7 +100020,7 @@ function buildSnapshot2(storage, projectPath, now) {
   );
   const coverage = buildCoverage2(open, cveGap, owasp);
   const findings = buildFindingsSummary(openFindings3, truncation, owasp);
-  const cveItems = cveSourceScan ? storage.cves.listActive(cveSourceScan.scan_id) : [];
+  const cveItems = cveSourceScan ? unsuppressedCves(storage, projectPath, cveSourceScan.scan_id, now) : [];
   const cves = buildCveSummary(cveItems);
   const allSuppressions = storage.suppressions.listAll();
   const activeSuppressions2 = allSuppressions.filter(

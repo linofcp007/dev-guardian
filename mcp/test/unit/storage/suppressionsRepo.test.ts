@@ -61,6 +61,12 @@ describe('SuppressionsRepo', () => {
     expect(repo.listActive()[0]?.finding_identity).toBe('id-1');
   });
 
+  it('does not match a finding of another identity on the fingerprint alone', () => {
+    const repo = freshRepo();
+    repo.insert({ finding_fingerprint: 'at-line-10', finding_identity: 'id-1', reason: 'fp' });
+    expect(repo.isSuppressed('at-line-10', 'id-2')).toBe(false);
+  });
+
   it('never matches two missing identities to each other', () => {
     const repo = freshRepo();
     repo.insert({ finding_fingerprint: 'abc', reason: 'fp' }); // a 2.0.x suppression

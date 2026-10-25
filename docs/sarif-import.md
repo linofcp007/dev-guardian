@@ -66,7 +66,9 @@ A finding's identity decides what a diff calls new, resolved or unchanged.
   `sha256(JSON.stringify(['sarif-v1', source_tool, ruleId, key]))`, where `key` is the fingerprints sorted by
   name. Two results of one rule on one line stay two findings.
 - A log written by dev-guardian carries `partialFingerprints.devGuardianIdentity`; that value is used as it is,
-  so an export imported back keeps the identities of the scan it came from.
+  so an export imported back keeps the identities of the scan it came from. Any log can carry one, so in the
+  open findings an imported copy never takes the place of a native finding of the same identity: the native
+  one is kept, with its own severity.
 - A result without usable fingerprints gets the identity the native scanners compute. These are counted in
   `identity_computed`. A fingerprint that is the same on every result (Semgrep without a login writes
   `requires login`) or an empty one (gitleaks `--no-git`) is not an identity and is ignored.

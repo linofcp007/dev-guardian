@@ -72,10 +72,10 @@ export const TOOL_CATEGORIES: Readonly<Record<string, string>> = {
 };
 
 /**
- * The fingerprint delta between two scans — produced by
- * `delta.ts#compareFindings`. `new` = in `to` not `from`, `resolved` = in
- * `from` not `to`, `unchanged` = in both, computed over fingerprint sets
- * (the design of record).
+ * The delta between two scans — produced by `delta.ts#compareFindings`.
+ * `new` = in `to` not `from`, `resolved` = in `from` not `to`, `unchanged` =
+ * in both, each finding counted once and matched by identity, the
+ * fingerprint where a side has none.
  */
 export interface FindingDelta {
   from_scan_id: string;

@@ -11,7 +11,9 @@
  * outside that slice; `top_packages` is a last-resort fallback for a scan
  * row whose file has since been deleted, not the normal path. `use_full_file`
  * is still accepted for backward compatibility but is now a no-op: the
- * behaviour it used to opt into is the only behaviour there is.
+ * behaviour it used to opt into is the only behaviour there is. A file on
+ * disk that is not a CycloneDX or SPDX JSON document is refused: read as
+ * empty, it reported every component of the other side added or removed.
  *
  * Keyed by (ecosystem, name), not name alone: two different ecosystems can
  * legitimately share a package name (an npm `lodash` and an unrelated
@@ -134,10 +136,10 @@ async function handler(
   if (typeof projectPath !== 'string') return projectPath;
 
   const needsDefaultPair = !inp.from_scan_id || !inp.to_scan_id;
+  // Asked of the SBOM scans themselves: filtered out of the 50 newest scans
+  // of any type, two SBOMs behind 49 scans of other types read "found 0".
   const sboms = needsDefaultPair
-    ? ctx.storage.scans
-        .listHistoryForProject(projectPath, 50)
-        .filter((s) => s.scan_type === 'sbom' && s.status === 'completed')
+    ? ctx.storage.scans.listCompletedOfTypes(projectPath, ['sbom'], { limit: 2 })
     : [];
   if (needsDefaultPair && sboms.length < 2) {
     return failDomain(
@@ -156,11 +158,23 @@ async function handler(
     return failDomain('unknown_scan_id', `Cannot diff a scan against itself (${toId}).`);
   }
 
-  const fromLoaded = loadComponents(ctx, fromId);
-  const toLoaded = loadComponents(ctx, toId);
-  if (!fromLoaded || !toLoaded) {
+  const fromRead = loadComponents(ctx, fromId);
+  const toRead = loadComponents(ctx, toId);
+  if (!fromRead || !toRead) {
     return failDomain('unknown_scan_id', 'One or both SBOM scans have no components recorded.');
   }
+  // An SBOM that cannot be read is no SBOM, never an empty one: read as [],
+  // every component of the other side was reported added or removed.
+  const unreadable = (id: string, file: string): ToolResult<Record<string, unknown>> =>
+    failDomain(
+      'unsupported_target',
+      `The SBOM file of scan '${id}' (${file}) is not a CycloneDX or SPDX JSON document dev-guardian can ` +
+        'read, so there is nothing to compare. Re-run generate_sbom, or pass another scan id.',
+    );
+  if ('unreadable' in fromRead) return unreadable(fromId, fromRead.unreadable);
+  if ('unreadable' in toRead) return unreadable(toId, toRead.unreadable);
+  const fromLoaded = fromRead;
+  const toLoaded = toRead;
   if (fromLoaded.source !== toLoaded.source) {
     const describe = (s: ComponentSource): string =>
       s === 'full_file' ? 'its full SBOM file' : 'a capped summary (its SBOM file no longer exists on disk)';
@@ -269,16 +283,20 @@ function groupByKey(components: Component[]): Map<string, GroupedEntry> {
  * removed. The `source` this returns is what `handler` uses to refuse a
  * mixed full-file/fallback comparison (see the module comment).
  */
-function loadComponents(ctx: PluginContext, scanId: string): LoadResult | null {
+function loadComponents(ctx: PluginContext, scanId: string): LoadResult | { unreadable: string } | null {
   const rec = ctx.storage.scans.getById(scanId);
   if (!rec) return null;
   const filePath = (rec.meta as { file_path?: string } | undefined)?.file_path;
   if (filePath && existsSync(filePath)) {
+    let raw: string | null = null;
     try {
-      const raw = readFileSync(filePath, 'utf8');
-      return { components: extractFromSbomJson(raw), source: 'full_file' };
+      raw = readFileSync(filePath, 'utf8');
     } catch {
       /* fall through to the capped summary */
+    }
+    if (raw !== null) {
+      const components = extractFromSbomJson(raw);
+      return components === null ? { unreadable: filePath } : { components, source: 'full_file' };
     }
   }
   const top = (rec.meta as { top_packages?: Array<{ name: string; version?: string }> } | undefined)
@@ -302,13 +320,19 @@ function ecosystemFromPurl(purl: string | undefined): string {
   return m?.[1] ?? 'unknown';
 }
 
-function extractFromSbomJson(raw: string): Component[] {
+/**
+ * The components of a CycloneDX or SPDX JSON document; null when `raw` is not
+ * one (not JSON, or neither shape) — told apart from a document that lists
+ * no components, which is `[]`.
+ */
+function extractFromSbomJson(raw: string): Component[] | null {
   let root: unknown;
   try {
     root = JSON.parse(raw);
   } catch {
-    return [];
+    return null;
   }
+  if (typeof root !== 'object' || root === null || Array.isArray(root)) return null;
   const cdx = (root as { components?: Array<{ name?: string; version?: string; purl?: string }> })
     ?.components;
   if (Array.isArray(cdx)) {
@@ -340,7 +364,10 @@ function extractFromSbomJson(raw: string): Component[] {
       return [out];
     });
   }
-  return [];
+  // A document of either format that lists nothing (CycloneDX may leave
+  // `components` out) is an empty SBOM; anything else is not an SBOM.
+  const doc = root as { bomFormat?: unknown; spdxVersion?: unknown };
+  return doc.bomFormat === 'CycloneDX' || typeof doc.spdxVersion === 'string' ? [] : null;
 }
 
 function failDomain(

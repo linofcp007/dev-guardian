@@ -17,6 +17,7 @@
 import type { Finding, Severity } from '../types.js';
 import { sarifTaxonomyTags } from '../frameworks/taxonomy.js';
 import { resolveVersion } from '../platform/version.js';
+import { credentialSafeFingerprint } from '../redaction/secretFindingRedaction.js';
 
 interface SarifOptions {
   toolName?: string;
@@ -95,7 +96,7 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
         severity: f.severity,
         category: f.category,
         ...(f.subcategory ? { subcategory: f.subcategory } : {}),
-        ...(f.fingerprint ? { fingerprint: f.fingerprint } : {}),
+        ...(f.fingerprint ? { fingerprint: credentialSafeFingerprint(f) } : {}),
         ...(tags.length > 0 ? { tags } : {}),
       },
     };
@@ -121,9 +122,11 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
     }
     // `devGuardianIdentity` is the stable identity (64 hex) — what `import_sarif`
     // adopts as is, so a baseline or suppression keeps recognising the finding.
+    // A credential's fingerprint goes out as the one over its redacted snippet,
+    // never one a row stored before that hashed over the plaintext.
     if (f.fingerprint || f.identity) {
       result.partialFingerprints = {
-        ...(f.fingerprint ? { devGuardian: f.fingerprint } : {}),
+        ...(f.fingerprint ? { devGuardian: credentialSafeFingerprint(f) } : {}),
         ...(f.identity ? { devGuardianIdentity: f.identity } : {}),
       };
     }

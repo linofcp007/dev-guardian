@@ -17,6 +17,7 @@
  */
 
 import { execa } from 'execa';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -424,6 +425,25 @@ describe('review_pr — which tree is scanned', () => {
     expect(existsSync(seen?.cwd ?? dir)).toBe(false);
     const worktrees = (await execa('git', ['worktree', 'list', '--porcelain'], { cwd: dir })).stdout;
     expect(worktrees.match(/^worktree /gm)).toHaveLength(1);
+  });
+
+  // A finding's identity hashes the text of its lines, read from disk. The
+  // lines were read from the working tree — another version of the file, or
+  // none — while the scan had read the head: the stored identity matched no
+  // scan of that code.
+  it('keys the findings of a head that is not checked out on the head\'s own lines', async () => {
+    const dir = await repo('main', { 'a.py': 'a = 1\n' });
+    write(dir, 'a.py', 'eval(feature)\n');
+    await commitAll(dir);
+    await git(dir, 'checkout', '-q', 'main');
+
+    const { r, p } = await review(dir, { base_ref: 'main', head_ref: 'feature' });
+    expect(r.ok).toBe(true);
+    const stored = p.storage.findings.listByScan((r as unknown as ReviewResult).scan_id);
+    const onA = stored.find((f) => f.file_path === 'a.py');
+    const keyOf = (text: string): string => createHash('sha256').update(`text\n${text}`).digest('hex');
+    expect(onA?.content_key).toBe(keyOf('eval(feature)'));
+    expect(onA?.content_key).not.toBe(keyOf('a = 1'));
   });
 
   it('a changed file missing from the checked-out tree is a coverage gap, not a note on a full run', async () => {

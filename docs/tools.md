@@ -153,7 +153,7 @@ Apply scanner-made fixes — deps\_update\_plan upgrades, the rules' own Semgrep
 
 ### `create_github_issues`
 
-Open one GitHub issue per top open finding of project\_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its fingerprint is in the title). severity\_min (default high) and max\_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry\_run: preview first.
+Open one GitHub issue per top open finding of project\_path with the local gh CLI and its existing login (never a suppressed finding). A finding with an issue in any state is skipped (its identity is in the title). severity\_min (default high) and max\_issues (default 10) cap the run; `filtered` and `filtered_reason` count what they dropped. Missing labels are created, or left off (`labels_omitted`). It files real issues unless dry\_run: preview first.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -706,7 +706,7 @@ Every resource returns compact JSON and answers for the project the server was s
 | `guardian://scans/history` | `guardian-scans-history` | Up to 50 most-recent scans of the server's working-directory project, across every type, ordered by start time descending. Records are sparse — call `guardian://scans/{scan_id}` for the full ScanResult. |
 | `guardian://scans/latest` | `guardian-scans-latest` | Latest completed scan of any type of the server's working-directory project, with severity counts and the top-10 findings inlined. Returns `{ last_run: null }` when no scan has run yet. For what is open across every scan type, read guardian://findings/open. |
 | `guardian://stack` | `guardian-stack` | Latest stack snapshot of the server's working-directory project, produced by `detect_stack`. Returns `{ snapshot: null }` when no snapshot exists yet. |
-| `guardian://surface/{id}` | `guardian-surface-by-id` | A specific attack-surface snapshot by id, as returned in `snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id. |
+| `guardian://surface/{id}` | `guardian-surface-by-id` | A specific attack-surface snapshot of the server's working-directory project by id, as returned in `snapshot_id` by `map_attack_surface`, in full. Returns `{ snapshot: null }` for an unknown id or another project's snapshot. |
 | `guardian://surface/latest` | `guardian-surface-latest` | Latest attack-surface snapshot of the server's working-directory project, from `map_attack_surface`: routes (code- and spec-provenance) with resolved path, method, params and auth hint, env vars, declared ports, per-language coverage, spec\_files and the spec\_diff (matched, code\_only, spec\_only, unmatchable). Each list is capped at 200 entries — `totals` has the true counts, `truncated` names what was cut, and guardian://surface/{snapshot\_id} returns the whole snapshot. Import edges and third-party imports are counted, not inlined. Returns `{ snapshot: null }` when none exists yet. |
 | `guardian://wp/audit/{scan_id}` | `guardian-wp-audit-by-id` | wp\_audit result for a specific scan\_id. Errors -32602 when the id is unknown or is not a wp\_audit scan. |
 | `guardian://wp/audit/latest` | `guardian-wp-audit-latest` | Most recent wp\_audit result: WP version, file checksum mismatches, config flags, admin users, plugins with auto\_update. Returns `{ last_run: null }` when no audit exists. |

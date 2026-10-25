@@ -2050,25 +2050,58 @@ describe('guardian://surface resources', () => {
 
   it('serves a snapshot by id and nulls an unknown id', async () => {
     const ctx = makeCtx();
-    const inserted = ctx.storage.surface.insert({
-      project_path: '/p',
-      tree_hash: 'h',
-      snapshot: {
-        routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
-        tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
-        imports: [],
-      },
-    });
+    const project = makeTempDir('surface-by-id-');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(project);
+    try {
+      const inserted = ctx.storage.surface.insert({
+        project_path: project,
+        tree_hash: 'h',
+        snapshot: {
+          routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
+          tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
+          imports: [],
+        },
+      });
 
-    const byId = resource('guardian-surface-by-id');
-    const hit = await byId.handler(
-      new URL(`guardian://surface/${inserted.id}`),
-      { id: String(inserted.id) },
-      ctx,
-    );
-    expect(hit.json).toHaveProperty('snapshot.routes');
+      const byId = resource('guardian-surface-by-id');
+      const hit = await byId.handler(
+        new URL(`guardian://surface/${inserted.id}`),
+        { id: String(inserted.id) },
+        ctx,
+      );
+      expect(hit.json).toHaveProperty('snapshot.routes');
 
-    const miss = await byId.handler(new URL('guardian://surface/999'), { id: '999' }, ctx);
-    expect(miss.json).toEqual({ snapshot: null });
+      const miss = await byId.handler(new URL('guardian://surface/999'), { id: '999' }, ctx);
+      expect(miss.json).toEqual({ snapshot: null });
+    } finally {
+      cwd.mockRestore();
+    }
+  });
+
+  // Ids are sequential integers: unscoped, any project's snapshots in a
+  // shared or per-user fallback database could be read one id at a time.
+  it("answers by id only for the server's own project, like guardian://surface/latest", async () => {
+    const ctx = makeCtx();
+    const project = makeTempDir('surface-by-id-');
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(project);
+    try {
+      const other = ctx.storage.surface.insert({
+        project_path: makeTempDir('surface-other-'),
+        tree_hash: 'h',
+        snapshot: {
+          routes: [], env_vars: [], ports: [], webhooks: [], coverage: [],
+          tools_run: [], missing_tools: [], spec_files: [], spec_diff: null,
+          imports: [],
+        },
+      });
+      const r = await resource('guardian-surface-by-id').handler(
+        new URL(`guardian://surface/${other.id}`),
+        { id: String(other.id) },
+        ctx,
+      );
+      expect(r.json).toEqual({ snapshot: null });
+    } finally {
+      cwd.mockRestore();
+    }
   });
 });

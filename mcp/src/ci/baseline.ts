@@ -52,7 +52,10 @@
  * identity-first with the fingerprint as the fallback
  * (`fingerprint/findingIdentity.ts#indexFindings`). A file without
  * identities — every file 2.0.x wrote — therefore keeps gating exactly as it
- * did: the fingerprint algorithm is frozen.
+ * did: the fingerprint algorithm is frozen. One input is not: a credential
+ * finding's snippet is redacted before it is hashed (3.6.1 — hashed raw, a
+ * committed fingerprint was an oracle for the value), so in such a file only
+ * those entries stop matching, and show once as new.
  *
  * `identity` is an ADDITIVE field and the file stays `version: 1`, on
  * purpose. A baseline is committed and read by every teammate's and every CI
@@ -69,6 +72,7 @@
  */
 
 import { gateMatchKeys, indexFindings, type GateKeys } from '../fingerprint/findingIdentity.js';
+import { credentialSafeFingerprint } from '../redaction/secretFindingRedaction.js';
 import { SEVERITIES, type Finding, type Severity } from '../types.js';
 import { secretIntroducedAt, secretValueOf, secretValuesRead } from './secretValues.js';
 import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion } from './types.js';
@@ -203,7 +207,9 @@ export function buildBaseline(
     const entry: BaselineEntry = {
       ...(finding.identity !== undefined ? { identity: finding.identity } : {}),
       ...(matchKey !== undefined ? { match_id: matchKey } : {}),
-      fingerprint: finding.fingerprint,
+      // A credential's, over its redacted snippet: a row stored before that
+      // holds one hashed over the plaintext, which this file is committed with.
+      fingerprint: credentialSafeFingerprint(finding),
       severity: finding.severity,
       title: finding.title,
       file_path: finding.file_path,

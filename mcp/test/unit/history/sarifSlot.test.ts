@@ -56,6 +56,46 @@ describe('T-07 (slot) open-set slots', () => {
   });
 });
 
+describe('an imported log never shadows a native finding of the same identity', () => {
+  // A SARIF log comes from wherever the caller found it — the repository
+  // under scan, say — and `devGuardianIdentity` is any 64-hex string it
+  // chooses. Matched newest first across slots, a log carrying a Semgrep
+  // critical's identity at severity info hid the critical until the next
+  // native scan.
+  const identity = 'c'.repeat(64);
+  const seed = (s: Seeded): void => {
+    seedScan(s, { id: 'native', type: 'sast', project: P, findings: [{ identity, severity: 'critical', fp: 'fp-native' }] });
+    seedScan(s, {
+      id: 'imported',
+      type: 'sarif_import',
+      project: P,
+      tools_run: [{ name: 'sarif', status: 'ok' }],
+      meta: { source_tool: 'Forged' },
+      findings: [{ tool: 'Forged', identity, severity: 'info', fp: 'fp-imported' }],
+    });
+  };
+
+  it('keeps the native copy, newer import or not', () => {
+    const s = freshPlugin();
+    seed(s);
+    const set = openSetForProject(s.storage, P);
+    expect(set.findings.map((f) => [f.scan_id, f.severity])).toEqual([['native', 'critical']]);
+  });
+
+  it('keeps the native copy a newer native scan carried forward, too', () => {
+    const s = freshPlugin();
+    seed(s);
+    // A newer Semgrep that failed beside an ok Bandit: the critical is carried, not re-measured.
+    seedScan(s, {
+      id: 'blind', type: 'sast', project: P,
+      tools_run: [{ name: 'semgrep', status: 'failed', reason: 'exit 7' }, { name: 'bandit', status: 'ok' }],
+      missing_tools: ['semgrep'],
+    });
+    const set = openSetForProject(s.storage, P);
+    expect(set.findings.map((f) => [f.scan_id, f.severity])).toEqual([['native', 'critical']]);
+  });
+});
+
 describe('T-07 (slot) baselines', () => {
   it('a baseline of an import never answers a read that names no type', () => {
     const s = freshPlugin();

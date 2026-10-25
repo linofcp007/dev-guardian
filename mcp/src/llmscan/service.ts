@@ -621,6 +621,7 @@ function acceptVerdict(storage: Storage, plan: LlmScanPlan, task: LlmScanTask, i
       storage.validations.upsert(plan.project_path, [
         toFindingValidation({
           fingerprint,
+          ...(task.target.identity !== undefined ? { identity: task.target.identity } : {}),
           verdict: verdict.verdict === 'real' ? 'exploitable' : verdict.verdict === 'not_real' ? 'not_exploitable' : 'undetermined',
           independence: input.independence,
           decisive_line: verdict.decisive_line,
@@ -661,11 +662,11 @@ function acceptHunt(
     const firstNumber = repo.nextTaskNumber(plan.id);
     // Created with the hunt's own close: a finding is never stored without the task that will check it (US-2.AC-4),
     // and these tasks are outside max_tasks.
-    const verifyTasks: LlmScanTask[] = fresh.map((f, i) => ({
+    const verifyTasks: LlmScanTask[] = withIdentity.map((f, i) => ({
       plan_id: plan.id,
       task_id: `t-${String(firstNumber + i).padStart(4, '0')}`,
       kind: 'verify',
-      target: { fingerprint: f.fingerprint, files: [f.file_path ?? ''], origin_task_id: task.task_id },
+      target: { fingerprint: f.fingerprint, identity: f.identity, files: [f.file_path ?? ''], origin_task_id: task.task_id },
       status: 'open',
       lease_token: null,
       lease_expires_at: null,
