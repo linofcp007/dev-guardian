@@ -104,9 +104,10 @@ async function handler(
   // cron array, and a running backdoor can no longer hide its own event.
   const [cronResult, pluginList] = await withWpCli(installPath, async (wp) => {
     const cron = await wp(['cron', 'event', 'list', '--format=json'], 60_000);
+    if (cron.outcome !== 'completed') return [cron, null] as const;
     // Plugin slugs for matching (best-effort; if it fails, we still proceed
     // with prefix-only matching).
-    return [cron, cron.outcome === 'completed' ? await wp(['plugin', 'list', '--fields=name,status', '--format=json'], 30_000) : null] as const;
+    return [cron, await wp(['plugin', 'list', '--fields=name,status', '--format=json'], 30_000)] as const;
   });
   if (cronResult.outcome !== 'completed') {
     return failDomain(

@@ -105,9 +105,17 @@ export async function withWpCli<T>(installPath: string, fn: (wp: WpCli) => Promi
   }
   const cwd = problem === '' ? dir : null;
   const env = wpCliEnv();
+  const notRun: ProcessRunResult = {
+    outcome: 'failed',
+    exitCode: null,
+    stdout: '',
+    stderr: `${problem}\n`,
+    truncated: false,
+    notRun: { code: 'wp_cli_dir', message: problem },
+  };
   const wp: WpCli = async (args, timeoutMs) =>
     cwd === null
-      ? { outcome: 'failed', exitCode: null, stdout: '', stderr: `${problem}\n`, truncated: false, notRun: { code: 'wp_cli_dir', message: problem } }
+      ? notRun
       : runProcess({
           command: 'wp',
           args: [...args, `--path=${installPath}`, ...WP_CLI_SKIP_ARGS],
