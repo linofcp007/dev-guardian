@@ -59,7 +59,11 @@ def load_config(stream):
     fourth = yaml.load(stream, yaml.SafeLoader)
     fifth = yaml.load(stream, yaml.CSafeLoader)
     sixth = yaml.load(stream=stream, Loader=yaml.SafeLoader)
-    return first, second, third, fourth, fifth, sixth
+    # BaseLoader builds only strings, lists and dicts: as safe as SafeLoader,
+    # and it fired at ERROR (review 3.6.1).
+    seventh = yaml.load(stream, Loader=yaml.BaseLoader)
+    eighth = yaml.load(stream, yaml.CBaseLoader)
+    return first, second, third, fourth, fifth, sixth, seventh, eighth
 
 
 def persist(obj):

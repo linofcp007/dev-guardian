@@ -248,7 +248,9 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'parseint-without-radix.ts': { ids: ['bugfix-js-edge-case-parseint-without-radix'], count: 1 },
   'race-condition.ts': {
     ids: ['bugfix-js-race-condition-floating-mutation'],
-    count: 3, // handler (decl), arrowHandler (assignment-form arrow), app.post(...) callback (call-arg-form arrow)
+    // handler (decl), arrowHandler (assignment-form arrow), app.post(...) callback (call-arg-form arrow),
+    // and the receiver as a field or a compound name: this.userRepository, this.db, orderRepo.
+    count: 6,
   },
   'reduce-without-initial.ts': { ids: ['bugfix-js-edge-case-reduce-without-initial'], count: 1 },
   'subscribe-without-unsubscribe.ts': {

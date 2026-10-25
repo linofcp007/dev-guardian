@@ -359,24 +359,44 @@ rules:
   # exclusão deixou de ser precisa: um `defer $MU.Unlock()` faz com que não
   # haja Unlock explícito depois do return, por isso o padrão positivo já não
   # casa.
+  #
+  # O achado é agora o `return` que salta o Unlock, e não o bloco inteiro
+  # (revisão 3.6.1): o padrão `Lock() ... return ... Unlock()` casava também
+  # o idioma correto do desbloqueio antecipado, `if mau { mu.Unlock(); return
+  # err }`, porque o `...` entra no `if` e nada excluía um Unlock ANTES do
+  # return (medido no Semgrep 1.182.0). Um `return` precedido, no seu bloco ou
+  # num bloco que o contém, por um Unlock do mesmo lock já o libertou; o
+  # `pattern-inside` com o Unlock no fim mantém a exigência de que a função
+  # desbloqueie à mão (uma função que devolve com o lock na mão, de propósito,
+  # não é este bug).
   - id: bugfix-go-race-condition-lock-without-defer
     metadata:
       cwe:
         - "CWE-667: Improper Locking"
       owasp: []
     pattern-either:
-      - pattern: |
-          $MU.Lock()
-          ...
-          return ...
-          ...
-          $MU.Unlock()
-      - pattern: |
-          $MU.RLock()
-          ...
-          return ...
-          ...
-          $MU.RUnlock()
+      - patterns:
+          - pattern-inside: |
+              $MU.Lock()
+              ...
+              return ...
+              ...
+              $MU.Unlock()
+          - pattern: return ...
+          - pattern-not-inside: |
+              $MU.Unlock()
+              ...
+      - patterns:
+          - pattern-inside: |
+              $MU.RLock()
+              ...
+              return ...
+              ...
+              $MU.RUnlock()
+          - pattern: return ...
+          - pattern-not-inside: |
+              $MU.RUnlock()
+              ...
     message: >-
       `Unlock()` saltado por um `return` antecipado. O lock é adquirido, há um
       caminho de saída antes do `Unlock()`, e a partir daí todos os outros

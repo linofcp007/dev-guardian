@@ -355,5 +355,11 @@ rules:
       app fala (CWE-295). Usar o verificador por omissão
       (`HttpsURLConnection.getDefaultHostnameVerifier()`) ou comparar o nome.
     # Lambdas Java (`(h, s) -> true`) e Kotlin (`{ _, _ -> true }`); a forma de
-    # classe Java e a regra do registo `insecure-hostname-verifier`.
-    pattern-regex: \bHostnameVerifier\b[^;{]*?(?:\{\s*\w+\s*,\s*\w+\s*->\s*true\s*\}|=\s*\(\s*\w+\s*,\s*\w+\s*\)\s*->\s*true\b)
+    # classe Java e a regra do registo `insecure-hostname-verifier`. Sem a
+    # fronteira inicial, para apanhar a chamada a que a lambda é passada, que é
+    # a forma mais comum: `setHostnameVerifier(...)`,
+    # `setDefaultHostnameVerifier(...)` e o `.hostnameVerifier { ... }` do
+    # OkHttp; e parâmetros com tipo (`(String h, SSLSession s)`,
+    # `{ hostname: String, session: SSLSession -> ... }`). Antes só a lambda
+    # atribuída a uma variável casava (revisão 3.6.1).
+    pattern-regex: '[Hh]ostnameVerifier\b[^;{]*?(?:\{\s*\w+(?:\s*:\s*[\w.?]+)?\s*,\s*\w+(?:\s*:\s*[\w.?]+)?\s*->\s*true\s*\}|\(\s*(?:[\w.]+\s+)?\w+\s*,\s*(?:[\w.]+\s+)?\w+\s*\)\s*->\s*true\b)'

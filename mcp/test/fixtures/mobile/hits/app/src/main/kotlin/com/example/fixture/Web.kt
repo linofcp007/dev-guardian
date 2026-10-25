@@ -23,4 +23,5 @@ class Web {
     }
 
     val anyHost = HostnameVerifier { _, _ -> true }
+    fun client() = okhttp3.OkHttpClient.Builder().hostnameVerifier { _, _ -> true }.build()
 }

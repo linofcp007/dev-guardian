@@ -38,7 +38,7 @@ dev-guardian ships **169 rules in 14 packs** under [`configs/semgrep/`](../confi
 | `js-dangerouslySetInnerHTML` | WARNING | javascript, typescript | 0 (bare) |
 | `py-eval-exec` | ERROR | python | 2 |
 | `py-shell-true` | WARNING | python | 0 (bare) |
-| `py-yaml-load` | ERROR | python | 7 |
+| `py-yaml-load` | ERROR | python | 11 |
 | `py-pickle-load` | WARNING | python | 2 |
 | `php-eval` | ERROR | php | 0 (bare) |
 | `php-sql-injection-direct` | ERROR | php | 2 |
@@ -75,7 +75,7 @@ dev-guardian ships **169 rules in 14 packs** under [`configs/semgrep/`](../confi
 | `bugfix-go-off-by-one-loop-lte-len` | WARNING | go | 0 (bare) |
 | `bugfix-go-memory-leak-body-not-closed` | WARNING | go | 10 |
 | `bugfix-go-memory-leak-ticker-not-stopped` | WARNING | go | 3 |
-| `bugfix-go-race-condition-lock-without-defer` | WARNING | go | 2 |
+| `bugfix-go-race-condition-lock-without-defer` | WARNING | go | 6 |
 | `bugfix-go-edge-case-nil-map-write` | WARNING | go | 5 |
 
 ## bugfix-java
@@ -140,7 +140,7 @@ dev-guardian ships **169 rules in 14 packs** under [`configs/semgrep/`](../confi
 | `bugfix-py-memory-leak-open-without-context` | WARNING | python | 9 |
 | `bugfix-py-race-condition-asyncio-not-awaited` | WARNING | python | 9 |
 | `bugfix-py-race-condition-toctou-exists-open` | WARNING | python | 19 |
-| `bugfix-py-edge-case-queryset-n-plus-one` | WARNING | python | 4 |
+| `bugfix-py-edge-case-queryset-n-plus-one` | WARNING | python | 5 |
 
 ## bugfix-rs
 

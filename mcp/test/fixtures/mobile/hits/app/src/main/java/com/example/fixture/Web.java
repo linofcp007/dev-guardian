@@ -33,4 +33,8 @@ public class Web {
     }
 
     HostnameVerifier lambda = (hostname, session) -> true;
+    void install(javax.net.ssl.HttpsURLConnection conn) {
+        conn.setHostnameVerifier((h, s) -> true);
+        javax.net.ssl.HttpsURLConnection.setDefaultHostnameVerifier((String h, SSLSession s) -> true);
+    }
 }

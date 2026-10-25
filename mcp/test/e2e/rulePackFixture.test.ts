@@ -1343,6 +1343,7 @@ const FRAMEWORK_DECOYS = [
   '/cache/one-arg', // a one-argument TitleCase `Get`
   'cacheKey', // a TitleCase `Get` on a computed key — the identifier as written
   '/site/title', // a one-argument read on a receiver the $APP denylist misses
+  'https://api.example.com/v1/items', // F34: net/http's client, a TitleCase verb with three arguments
 ];
 
 /**

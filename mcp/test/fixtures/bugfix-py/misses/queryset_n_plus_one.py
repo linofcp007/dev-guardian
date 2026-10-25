@@ -82,3 +82,29 @@ def plain_list_loop(items):
     for it in items:
         out.append(it.owner.name)
     return out
+
+
+# --- Review 3.6.1: an attribute of a field VALUE, not a relation. A
+# --- DateTimeField's `.year`, a FileField's `.url` / `.name`... read no
+# --- other row; each fired, advised to add `.select_related("created_at")`.
+
+
+def years():
+    out = []
+    for ev in Event.objects.all():
+        out.append(ev.created_at.year)
+    return out
+
+
+def image_urls():
+    out = []
+    for photo in Photo.objects.filter(public=True):
+        out.append(photo.image.url)
+    return out
+
+
+def file_sizes():
+    out = []
+    for doc in Document.objects.all():
+        out.append((doc.file.size, doc.file.path))
+    return out

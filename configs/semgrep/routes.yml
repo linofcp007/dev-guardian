@@ -952,6 +952,12 @@ rules:
   # gin's `r.Group("/api/v1")` has behaved this way for as long as that rule has
   # existed. It is recorded here rather than fixed because the fix is a Go mount
   # resolver, not a rule.
+  #
+  # The path must START with `/`: chi panics on a pattern that does not
+  # ("routing pattern must begin with '/'"), so the guard costs no real route,
+  # and a bare quote let the standard library's client in —
+  # `http.Post("https://api.x/v1", "application/json", body)` was reported as
+  # a chi POST route at medium confidence (review 3.6.1, Semgrep 1.182.0).
   - id: guardian-route-go-chi
     languages: [go]
     severity: INFO
@@ -967,7 +973,7 @@ rules:
           regex: ^(Get|Post|Put|Patch|Delete|Options|Head)$
       - metavariable-regex:
           metavariable: $PATH
-          regex: ^["`]
+          regex: ^["`]/
       - pattern-not: $R.$METHOD($PATH)
       - pattern-not: $R.$METHOD($PATH, nil)
 

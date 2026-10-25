@@ -84,7 +84,11 @@ const EXPECTED_HITS = [
   `mobile-kotlin-trust-all-certificates ${KOTLIN}:21`,
   // The lambdas only: Java's class forms (lines 24-33) are the registry's.
   `mobile-hostname-verifier-accepts-all ${JAVA}:35`,
+  // The lambda handed to the call, the commonest form, and typed parameters (review 3.6.1).
+  `mobile-hostname-verifier-accepts-all ${JAVA}:37`,
+  `mobile-hostname-verifier-accepts-all ${JAVA}:38`,
   `mobile-hostname-verifier-accepts-all ${KOTLIN}:25`,
+  `mobile-hostname-verifier-accepts-all ${KOTLIN}:26`,
 ].sort();
 
 /** The CWE each rule declares, as `metadata.cwe` begins. */
