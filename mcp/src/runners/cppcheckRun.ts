@@ -69,6 +69,9 @@ const CPPCHECK = 'cppcheck';
 /** The C and C++ translation units cppcheck collects from a directory (headers and template parts excepted). */
 const TRANSLATION_UNIT = /\.(c|cc|cpp|cxx|c\+\+)$/i;
 
+/** C and C++ headers: analysed only through the translation units that include them. */
+const HEADER = /\.(h|hh|hpp|hxx|h\+\+)$/i;
+
 /** How long one run may take: a mid-size C project took two minutes on 24 cores. */
 const CPPCHECK_TIMEOUT_MS = 20 * 60_000;
 
@@ -88,6 +91,7 @@ export const CPPCHECK_COVERAGE_IDS: ReadonlySet<string> = new Set([
   'toomanyconfigs',
   'checkLevelNormal',
   'normalCheckLevelMaxBranches',
+  'ConfigurationNotChecked',
   'missingInclude',
   'missingIncludeSystem',
   'checkersReport',
@@ -206,10 +210,12 @@ interface CppcheckJudgement {
   /** The files checked less deeply, and those that include a project header cppcheck did not find (project-relative). */
   shallower: string[];
   noInclude: string[];
+  /** Every other `information` result, `id (file)` once each: what cppcheck said about coverage that this code does not read. */
+  information: string[];
 }
 
 /** The reason's notes on files checked less deeply, never gaps (see the module comment). */
-function limitNotes(shallower: readonly string[], noInclude: readonly string[]): string[] {
+function limitNotes(shallower: readonly string[], noInclude: readonly string[], information: readonly string[] = []): string[] {
   const notes: string[] = [];
   if (shallower.length > 0) {
     notes.push(
@@ -219,6 +225,11 @@ function limitNotes(shallower: readonly string[], noInclude: readonly string[]):
   }
   if (noInclude.length > 0) {
     notes.push(`${noInclude.length} file(s) include a project header cppcheck did not find (its macros and types were unknown there)`);
+  }
+  if (information.length > 0) {
+    notes.push(
+      `cppcheck also said, about what it checked: ${information.slice(0, 3).join(', ')}${information.length > 3 ? `, and ${information.length - 3} more` : ''}`,
+    );
   }
   return notes;
 }
@@ -232,7 +243,7 @@ export function judgeCppcheck(args: {
   projectPath: string;
 }): CppcheckJudgement {
   const { run } = args;
-  const failed = (reason: string): CppcheckJudgement => ({ ok: false, reason, partial: [], notes: [], shallower: [], noInclude: [] });
+  const failed = (reason: string): CppcheckJudgement => ({ ok: false, reason, partial: [], notes: [], shallower: [], noInclude: [], information: [] });
   if (run.outcome === 'cancelled' || run.outcome === 'timed_out' || run.outcome === 'output_too_large') {
     return failed(`did not finish (${run.outcome})`);
   }
@@ -252,15 +263,20 @@ export function judgeCppcheck(args: {
   };
   const shallower = new Set<string>();
   const noInclude = new Set<string>();
+  const information = new Map<string, string>();
   for (const e of report.errors) {
     if (e.id === 'syntaxError') add(fileOf(e), 'Syntax error', e.msg);
     else if (e.id === 'unknownMacro') add(fileOf(e), 'Unknown macro', e.msg);
     else if (e.id === 'noValidConfiguration' || e.id === 'missingFile') add(fileOf(e), 'Not analysed', e.msg);
     else if (e.id === 'preprocessorErrorDirective' && TRANSLATION_UNIT.test(fileOf(e))) add(fileOf(e), 'Not analysed', e.msg);
     else if (e.id === 'internalError' || e.id === 'internalAstError' || e.id === 'cppcheckError') add(fileOf(e), 'Internal error', e.msg);
-    else if (e.id === 'toomanyconfigs' || e.id === 'checkLevelNormal' || e.id === 'normalCheckLevelMaxBranches') {
+    else if (SHALLOWER_IDS.has(e.id)) {
       shallower.add(toRelativeIfPossible(fileOf(e), args.projectPath) || '(a file)');
     } else if (e.id === 'missingInclude') noInclude.add(toRelativeIfPossible(fileOf(e), args.projectPath) || '(a file)');
+    else if (e.severity === 'information' && !CPPCHECK_COVERAGE_IDS.has(e.id) && !information.has(e.id)) {
+      // Enabled for coverage only (module comment): an id this code does not know is said, never a finding.
+      information.set(e.id, `${e.id} (${toRelativeIfPossible(fileOf(e), args.projectPath) || 'a file'})`);
+    }
   }
   if (args.requested !== null) {
     const read = filesRead(args.filesTxt ?? '');
@@ -268,8 +284,24 @@ export function judgeCppcheck(args: {
       if (!read.has(f)) add(f, 'Not read', 'cppcheck did not read it (missing from its build directory’s files.txt)');
     }
   }
-  return { ok: true, partial, notes: limitNotes([...shallower], [...noInclude]), shallower: [...shallower], noInclude: [...noInclude] };
+  const said = [...information.values()];
+  return {
+    ok: true,
+    partial,
+    notes: limitNotes([...shallower], [...noInclude], said),
+    shallower: [...shallower],
+    noInclude: [...noInclude],
+    information: said,
+  };
 }
+
+/**
+ * Checked less deeply, never a gap: only some `#ifdef` configurations
+ * (`toomanyconfigs`; `ConfigurationNotChecked`, one skipped because a macro's
+ * value is unknown — "Use -D if you want to check it", and `-D` is never
+ * passed), or a function too complex for the normal check level.
+ */
+const SHALLOWER_IDS: ReadonlySet<string> = new Set(['toomanyconfigs', 'ConfigurationNotChecked', 'checkLevelNormal', 'normalCheckLevelMaxBranches']);
 
 interface CppcheckPass {
   toolRun: ToolRun | null;
@@ -308,7 +340,25 @@ export async function cppcheckSources(args: {
   onLog?: (line: string) => void;
 }): Promise<CppcheckPass> {
   const sources = cppSources(args.files);
-  if (sources.length === 0) return { toolRun: null, missing: [], reports: [], cancelled: false };
+  if (sources.length === 0) {
+    // A header-only library left no entry at all (3.6.1): its code was checked by nothing, without a
+    // word. Named, never a gap — an Objective-C project's `.h` files read the same.
+    const headers = args.files.filter((f) => HEADER.test(f)).length;
+    if (headers === 0) return { toolRun: null, missing: [], reports: [], cancelled: false };
+    return {
+      toolRun: {
+        name: CPPCHECK,
+        status: 'skipped',
+        reason:
+          `${headers} C/C++ header(s) and no translation unit: cppcheck analyses a header only through the ` +
+          '.c / .cpp files that include it, so they were not checked (a header-only library, or headers of ' +
+          "another language's sources)",
+      },
+      missing: [],
+      reports: [],
+      cancelled: false,
+    };
+  }
   if (!(await scannerAvailable(CPPCHECK))) {
     return { toolRun: { name: CPPCHECK, status: 'skipped', reason: 'not_installed' }, missing: [CPPCHECK], reports: [], cancelled: false };
   }
@@ -373,7 +423,11 @@ export async function cppcheckSources(args: {
             (partial.length > 5 ? '; …' : ''),
         ]
       : []),
-    ...limitNotes([...new Set(judged.flatMap((j) => j.shallower))], [...new Set(judged.flatMap((j) => j.noInclude))]),
+    ...limitNotes(
+      [...new Set(judged.flatMap((j) => j.shallower))],
+      [...new Set(judged.flatMap((j) => j.noInclude))],
+      [...new Set(judged.flatMap((j) => j.information))],
+    ),
   ].join('; ');
   const toolRun: ToolRun = { name: CPPCHECK, status: 'ok', reason };
   if (partial.length > 0) toolRun.partially_parsed = partial;

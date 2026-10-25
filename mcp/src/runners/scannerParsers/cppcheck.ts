@@ -5,7 +5,10 @@
  * One finding per `<error>` that reports a defect — never one of the ids that
  * report coverage (`CPPCHECK_COVERAGE_IDS`: a file not analysed, a missing
  * include, a configuration limit), which the runner turns into gaps and
- * notes. The first `<location>` is the defect; the others are the trace, each
+ * notes, nor any `information` result: the runner enables that severity for
+ * what it says about coverage only, and an id off the list (3.6.1:
+ * `ConfigurationNotChecked`, a configuration skipped) was a low "security"
+ * finding. The first `<location>` is the defect; the others are the trace, each
  * with what happened there, and go into the message. `severity` `error` is
  * `high` and `warning` `medium`, one step lower when cppcheck marks the result
  * `inconclusive`. The CWE is cppcheck's own (`cwe="476"`). A result outside
@@ -26,7 +29,7 @@ export const cppcheckParser: ScannerParser = {
     if (typeof input !== 'string') return { findings: [], cves: [] };
     const findings: Finding[] = [];
     for (const e of parseCppcheckXml(input).errors) {
-      if (CPPCHECK_COVERAGE_IDS.has(e.id)) continue;
+      if (CPPCHECK_COVERAGE_IDS.has(e.id) || e.severity === 'information') continue;
       const finding = mapError(e, ctx);
       if (finding) findings.push(finding);
     }
