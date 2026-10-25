@@ -53,7 +53,7 @@ import { isAbsolute, join } from 'node:path';
 import { parseJsonBounded } from '../platform/boundedJson.js';
 import { readProjectText } from '../platform/projectFs.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
-import { git } from '../runners/git.js';
+import { git, withoutTreeAttributes } from '../runners/git.js';
 import type { Finding } from '../types.js';
 
 /** Drawn once per process; never written, logged or returned. */
@@ -329,24 +329,19 @@ export async function rememberSecretValues(
   // One `git show -M` of the whole commit, no pathspec: a pathspec turns a
   // rename into a whole new file, every line its own first — so a renamed
   // file with an edit on a baselined secret's line was cut one column off and
-  // read as a new secret (review 12, finding 12).
+  // read as a new secret (review 12, finding 12). Without the tree's
+  // `.gitattributes`, as the history pass reads (`runners/git.ts`).
   const hunks = new Map<string, Promise<Map<string, Set<number>> | null>>();
+  let asCommitted: Promise<NodeJS.ProcessEnv> | undefined;
   const hunkStarts = async (commit: string, path: string): Promise<Set<number> | null> => {
     let byPath = hunks.get(commit);
     if (byPath === undefined) {
       if (hunks.size >= MAX_BLOBS) return null;
-      byPath = git(projectPath, [
-        '-c',
-        'core.quotePath=false',
-        'show',
-        '--format=',
-        '--no-color',
-        '--no-ext-diff',
-        '-M',
-        '-U0',
-        '--relative',
-        commit,
-      ]).then((r) => (r.exitCode === 0 ? hunkStartsByPath(r.stdout) : null));
+      asCommitted ??= withoutTreeAttributes(projectPath, process.env);
+      const args = ['-c', 'core.quotePath=false', 'show', '--format=', '--no-color', '--no-ext-diff', '-M', '-U0', '--relative', commit];
+      byPath = asCommitted
+        .then((env) => git(projectPath, args, undefined, env))
+        .then((r) => (r.exitCode === 0 ? hunkStartsByPath(r.stdout) : null));
       hunks.set(commit, byPath);
     }
     return (await byPath)?.get(path) ?? null;

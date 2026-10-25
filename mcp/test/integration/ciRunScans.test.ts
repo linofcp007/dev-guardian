@@ -588,7 +588,10 @@ describe('runScans', () => {
     git('commit', '-qm', 'base');
     const commit = git('rev-parse', 'HEAD');
     writeFileSync(join(projectPath, 'key.pem'), 'b\n');
-    git('commit', '-qam', 'pr');
+    // A NUL byte: git reads the file as binary, and `git log -p` prints no hunk of it.
+    writeFileSync(join(projectPath, 'blob.js'), '\0\nc\n');
+    git('add', '-A');
+    git('commit', '-qm', 'pr');
 
     const order: string[] = [];
     const inputs: unknown[] = [];
@@ -608,8 +611,10 @@ describe('runScans', () => {
       ctx.storage.findings.bulkInsert([
         { ...leak, fingerprint: 'fp-key', file_path: 'key.pem', line_start: 1, line_end: 6, snippet: 'rule=private-key' },
         // One line: whole in the hunk that added it, so the history pass judged
-        // it (with what applies only to history) — never taken from here.
+        // it (with what applies only to history) — not taken from here...
         { ...leak, fingerprint: 'fp-one-line', file_path: 'key.pem', line_start: 1, line_end: 1, snippet: 'rule=aws-access-token' },
+        // ...unless no hunk held it.
+        { ...leak, fingerprint: 'fp-binary', file_path: 'blob.js', line_start: 2, line_end: 2, snippet: 'rule=aws-access-token' },
       ]);
       ctx.storage.scans.finalize({ scan_id: 'whole', status: 'completed', tools_run: [{ name: 'gitleaks-working-tree', status: 'ok' }], missing_tools: [] });
       return ok({ tools_run: [{ name: 'gitleaks-working-tree', status: 'ok' }], missing_tools: [] });
@@ -617,8 +622,8 @@ describe('runScans', () => {
 
     const result = await runScans({ projectPath, changedSince: { ref: 'BASE', commit, prefix: '' } });
     expect(order).toEqual(['security_scan_full', 'scan_secrets', 'license_compatibility']);
-    expect(inputs).toEqual([{ project_path: projectPath, force: true, scope: { paths: ['key.pem'] } }]);
-    expect(result.findings.map((f) => f.fingerprint)).toEqual(['fp-key']);
+    expect(inputs).toEqual([{ project_path: projectPath, force: true, scope: { paths: ['blob.js', 'key.pem'] } }]);
+    expect(result.findings.map((f) => f.fingerprint).sort()).toEqual(['fp-binary', 'fp-key']);
 
     // Without a ref, no such step.
     inputs.length = 0;
