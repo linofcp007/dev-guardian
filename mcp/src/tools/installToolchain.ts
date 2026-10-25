@@ -366,6 +366,7 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
       command: picked.spec.command,
       args: picked.spec.args,
       cwd: opts.ctx.scriptsDir,
+      ...installerEnv(picked.spec.command),
     });
     if (r.outcome === 'completed') {
       opts.result.installed.push({ ...entry, ...placement });
@@ -376,6 +377,23 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
       });
     }
   }
+}
+
+/**
+ * The environment an install step runs in: the server's — except for Windows
+ * PowerShell 5.1 (`powershell`, which every pinned Windows installer runs),
+ * which gets it without `PSModulePath`. Inherited from a PowerShell 7 session
+ * (its `…\PowerShell\7\Modules` first — measured 2026-10-24, a server started
+ * from one), it made Windows PowerShell load PowerShell 7's modules, and
+ * `Get-FileHash`, the checksum step of each of those installers, was "not
+ * recognized": the install stopped before it checked anything. Without the
+ * variable, Windows PowerShell builds its own.
+ */
+export function installerEnv(command: string, env: NodeJS.ProcessEnv = process.env): { env?: NodeJS.ProcessEnv; extendEnv?: boolean } {
+  if (command.toLowerCase() !== 'powershell') return {};
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) if (k.toLowerCase() !== 'psmodulepath') out[k] = v;
+  return { env: out, extendEnv: false };
 }
 
 /**
@@ -428,6 +446,8 @@ async function listAvailableManagers(
       ['choco', 'choco'],
       // `go install` of a pinned module tag (govulncheck), into the per-user tools directory.
       ['go', 'go'],
+      // `gem install` of a pinned version (RuboCop), run as `ruby -S gem`, into the same directory.
+      ['gem', 'ruby'],
     ];
     return Promise.all(
       all.map(async ([name, onPath]): Promise<PkgManagerCandidate> => {
@@ -444,12 +464,13 @@ async function listAvailableManagers(
   // choice, so they are probed last (curl stays the true last resort).
   const order =
     os === 'darwin'
-      ? ['brew', 'pipx', 'npm', 'uv', 'cargo', 'go']
-      : ['apt', 'pipx', 'npm', 'uv', 'cargo', 'go'];
+      ? ['brew', 'pipx', 'npm', 'uv', 'cargo', 'go', 'gem']
+      : ['apt', 'pipx', 'npm', 'uv', 'cargo', 'go', 'gem'];
   const [managers, curlPath] = await Promise.all([
     Promise.all(
       order.map(async (name): Promise<PkgManagerCandidate> => {
-        const path = await resolveBinary(name === 'apt' ? 'apt-get' : name);
+        // `gem` runs as `ruby -S gem` (installCatalog.ts#rubocopGemInstall): Ruby is what it needs.
+        const path = await resolveBinary(name === 'apt' ? 'apt-get' : name === 'gem' ? 'ruby' : name);
         return { name, available: path !== null };
       }),
     ),

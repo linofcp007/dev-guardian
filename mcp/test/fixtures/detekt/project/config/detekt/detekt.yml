@@ -1,0 +1,4 @@
+# The project's own: read after dev-guardian's, it turns MagicNumber back on.
+style:
+  MagicNumber:
+    active: true

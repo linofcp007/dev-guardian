@@ -263,6 +263,26 @@ const PSALM_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A08:2025': rules({ php: cell(2, 2) }),
 };
 
+/**
+ * SpotBugs 4.10.5 with FindSecBugs 1.14.0: the bug patterns of the two
+ * categories scan_sast keeps (`runners/spotbugsRun.ts`), read from each
+ * jar's own `findbugs.xml` — 196 (FindSecBugs' 144 SECURITY, SpotBugs' 23
+ * SECURITY and 29 MALICIOUS_CODE), 163 with a `cweid` — counted with
+ * {@link countRuleReach} as one rule per pattern for Java and for Kotlin
+ * (it reads their bytecode), measured 2026-10-24.
+ */
+const SPOTBUGS_RULES: Partial<Record<Owasp2025Id, Reach>> = {
+  'A01:2025': rules({ java: cell(25, 12), kotlin: cell(25, 12) }),
+  'A02:2025': rules({ java: cell(15, 6), kotlin: cell(15, 6) }),
+  'A04:2025': rules({ java: cell(18, 8), kotlin: cell(18, 8) }),
+  'A05:2025': rules({ java: cell(55, 13), kotlin: cell(55, 13) }),
+  'A06:2025': rules({ java: cell(9, 4), kotlin: cell(9, 4) }),
+  'A07:2025': rules({ java: cell(7, 4), kotlin: cell(7, 4) }),
+  'A08:2025': rules({ java: cell(6, 3), kotlin: cell(6, 3) }),
+  'A09:2025': rules({ java: cell(1, 'CWE-117'), kotlin: cell(1, 'CWE-117') }),
+  'A10:2025': rules({ java: cell(2, 2), kotlin: cell(2, 2) }),
+};
+
 /** configs/semgrep/bugfix-*.yml, recounted by packTaxonomy.test.ts. */
 const BUGFIX_RULES: Partial<Record<Owasp2025Id, Reach>> = {
   'A06:2025': rules({ javascript: cell(1, 'CWE-362'), typescript: cell(1, 'CWE-362') }),
@@ -339,6 +359,15 @@ export const OWASP_DETECTORS: readonly OwaspDetector[] = [
     reach: PSALM_RULES,
     basis: "Psalm's taint types, each with the CWE dev-guardian assigns it (Psalm reports none), mapped with OWASP's CWE list.",
     measured: 'Psalm 6.20.1, 2026-10-24',
+  },
+  {
+    id: 'spotbugs',
+    label: 'SpotBugs with FindSecBugs (scan_sast, compiled Java/Kotlin)',
+    runs: ['spotbugs'],
+    scanTypes: ['sast', 'security_full'],
+    reach: SPOTBUGS_RULES,
+    basis: "each SECURITY and MALICIOUS_CODE bug pattern's own cweid (SpotBugs' and FindSecBugs' findbugs.xml), mapped with OWASP's CWE list.",
+    measured: 'SpotBugs 4.10.5, FindSecBugs 1.14.0, 2026-10-24',
   },
   {
     id: 'bugfix-packs',

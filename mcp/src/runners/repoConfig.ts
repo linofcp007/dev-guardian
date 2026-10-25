@@ -77,6 +77,7 @@ export type RepoConfigRunner =
   | 'eslint'
   | 'shellcheck'
   | 'cppcheck'
+  | 'detekt'
   | 'guardian';
 
 const NUGET_CONFIGS = ['NuGet.config', 'nuget.config', 'NuGet.Config'];
@@ -171,6 +172,12 @@ export const REPO_CONFIG: Readonly<Record<RepoConfigRunner, readonly RepoConfigF
   // The root one only, passed with `--rcfile` (runners/shellcheckRun.ts): it wins over
   // the per-directory search, so a nested one, or the user's own, is never read.
   shellcheck: [{ file: '.shellcheckrc', decides: 'its disabled checks and options decide what is reported' }],
+  // The first that exists, passed after dev-guardian's own with `--config` (runners/detektRun.ts):
+  // the Gradle plugin's default place, then the root. YAML, which runs nothing.
+  detekt: [
+    { file: 'config/detekt/detekt.yml', decides: 'its rules, thresholds and exclusions decide what is reported' },
+    { file: 'detekt.yml', decides: 'its rules, thresholds and exclusions decide what is reported' },
+  ],
   // The first that exists, passed with `--project` (runners/cppcheckRun.ts): its
   // defines, include paths and files decide what cppcheck analyses.
   cppcheck: [
@@ -208,6 +215,8 @@ export const NO_REPO_CONFIG: Readonly<Record<string, string>> = {
   k6: 'runs the script it is given',
   docker: 'runs the Semgrep image, which reads the project as Semgrep does (named on the semgrep run)',
   gosec: 'never given -conf, and looks for no file of its own; a `#nosec` comment is the code\'s own',
+  ruby:
+    "runs RuboCop, which never reads the project's .rubocop.yml, anywhere, nor its .rubocop arguments file (it runs from the report directory): their `require` and `plugins` run the project's code (measured) — dev-guardian's own configuration only; a `# rubocop:disable` comment is the code's own",
   govulncheck: 'reads the modules (go.mod, go.sum, vendor/) as go builds them, with GOWORK=off; no configuration of its own',
   php: "runs Psalm with dev-guardian's own --config and an empty --root: never the project's psalm.xml, composer.json or autoloader (psalmRun.ts)",
 };

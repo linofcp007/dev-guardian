@@ -8,9 +8,9 @@
  *
  * Read: `configs/ci/pinned.json` (the CI templates' actions and scanners),
  * `PINNED_RELEASES`, `COSIGN_VERSION`, `PSALM_VERSION` and the versions
- * `installCatalog.ts` keeps unexported (cppcheck, govulncheck). Asked: GitHub's
- * latest release (`/releases/latest`: never a pre-release), PyPI, the Go
- * module proxy. For a binary with a newer release, the sha256 GitHub records
+ * `installCatalog.ts` keeps unexported (cppcheck, govulncheck, detekt,
+ * SpotBugs, FindSecBugs, RuboCop). Asked: GitHub's newest release tagged with
+ * a version (never a pre-release), PyPI, RubyGems, the Go module proxy. For a binary with a newer release, the sha256 GitHub records
  * for each asset of that release is printed under its pinned file name — a
  * starting point, never the check itself: hash the download independently and
  * match the release's own checksums (and its signature, when it has one), as
@@ -60,7 +60,7 @@ async function getJson(url) {
 const field = (o, key) => (o !== null && typeof o === 'object' ? /** @type {Record<string, unknown>} */ (o)[key] : undefined);
 
 /** `v1.2.3`, `version-1.2.3`, `1.2.3` → `1.2.3`. @param {string} tag */
-const bare = (tag) => tag.replace(/^(?:v|version-)/, '');
+const bare = (tag) => tag.replace(/^(?:version-|v)/, '');
 
 /**
  * The newest release of `ownerRepo` whose tag is a plain version (`v1.2.3`,
@@ -101,6 +101,13 @@ async function latestPypi(name) {
   return v;
 }
 
+/** @param {string} name */
+async function latestGem(name) {
+  const v = field(await getJson(`https://rubygems.org/api/v1/versions/${name}/latest.json`), 'version');
+  if (typeof v !== 'string') throw new Error(`${name}: no version on RubyGems`);
+  return v;
+}
+
 /** @param {string} module */
 async function latestGoModule(module) {
   const v = field(await getJson(`https://proxy.golang.org/${module}/@latest`), 'Version');
@@ -125,6 +132,14 @@ for (const [name, release] of Object.entries(PINNED_RELEASES)) {
 pins.push({ name: 'cosign (install_toolchain)', pinned: COSIGN_VERSION, latest: fromGithub('sigstore/cosign') });
 pins.push({ name: 'psalm (install_toolchain)', pinned: PSALM_VERSION, latest: fromGithub('vimeo/psalm'), files: ['psalm.phar'] });
 pins.push({ name: 'cppcheck (scoop, winget)', pinned: fromCatalog(/const CPPCHECK_VERSION = '([^']+)'/), latest: fromGithub('danmar/cppcheck') });
+pins.push({ name: 'detekt (install_toolchain)', pinned: fromCatalog(/const DETEKT_VERSION = '([^']+)'/), latest: fromGithub('detekt/detekt') });
+pins.push({ name: 'spotbugs (install_toolchain)', pinned: fromCatalog(/const SPOTBUGS_VERSION = '([^']+)'/), latest: fromGithub('spotbugs/spotbugs') });
+pins.push({ name: 'findsecbugs (install_toolchain)', pinned: fromCatalog(/const FINDSECBUGS_VERSION = '([^']+)'/), latest: fromGithub('find-sec-bugs/find-sec-bugs') });
+pins.push({
+  name: 'rubocop (install_toolchain, gem)',
+  pinned: fromCatalog(/const RUBOCOP_VERSION = '([^']+)'/),
+  latest: async () => ({ version: await latestGem('rubocop') }),
+});
 pins.push({
   name: 'govulncheck (go install)',
   pinned: bare(fromCatalog(/golang\.org\/x\/vuln\/cmd\/govulncheck@(v[^']+)'/)),

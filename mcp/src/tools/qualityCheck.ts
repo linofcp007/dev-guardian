@@ -10,6 +10,11 @@
  *   - shellcheck over the shell scripts (`runners/shellcheckRun.ts`: `.sh`,
  *     `.bash`, `.dash`, `.ksh`, and extensionless files with such a shebang),
  *     with the project's root `.shellcheckrc` only.
+ *   - detekt over the Kotlin (`runners/detektRun.ts`: the pinned jar, run by
+ *     `java -jar`), with the project's `detekt.yml` over dev-guardian's own;
+ *   - RuboCop over the Ruby (`runners/rubocopRun.ts`: its Lint, Security,
+ *     Metrics and Naming cops), never with the project's `.rubocop.yml` —
+ *     its `require` and `plugins` run code.
  *
  * It used to run `scripts/scan/quality-scan.sh`, which lost ruff and radon to
  * `find | head -1` under `pipefail` on large Python trees, captured ESLint /
@@ -30,7 +35,8 @@
  * scoped files — a copy of code outside the scope is not seen, and the reason
  * says so), ruff and radon the `.py` ones, ESLint the JS/TS ones, staticcheck
  * the packages holding the `.go` ones (it analyses packages, not files; the
- * factory keeps only findings in scoped files), shellcheck the shell scripts. The budgets in
+ * factory keeps only findings in scoped files), shellcheck the shell scripts, detekt the Kotlin, RuboCop
+ * the Ruby. The budgets in
  * `.guardian/budgets.yml` are project-level — a duplication percentage of the
  * whole project — so a scoped run skips them and says why.
  */
@@ -52,6 +58,10 @@ import { jscpdParser } from '../runners/scannerParsers/jscpd.js';
 import { radonErrors, radonParser } from '../runners/scannerParsers/radon.js';
 import { ruffParser } from '../runners/scannerParsers/ruff.js';
 import { shellcheckParser } from '../runners/scannerParsers/shellcheck.js';
+import { detektParser } from '../runners/scannerParsers/detekt.js';
+import { rubocopParser } from '../runners/scannerParsers/rubocop.js';
+import { detektFiles } from '../runners/detektRun.js';
+import { rubocopFiles } from '../runners/rubocopRun.js';
 import { staticcheckErrors, staticcheckParser } from '../runners/scannerParsers/staticcheck.js';
 import { SHELLCHECK, shellcheckScripts, shellScripts } from '../runners/shellcheckRun.js';
 import { listScannedFiles } from '../platform/guardianIgnore.js';
@@ -119,11 +129,10 @@ registerToolModule(
     title: 'Code quality scan',
     description:
       'jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and ' +
-      "installed in node_modules (it runs the project's config), staticcheck for Go, shellcheck for shell " +
-      'scripts. Findings: duplicate, ' +
-      'complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed ' +
-      'analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with ' +
-      'scope).',
+      "installed in node_modules (it runs the project's config), staticcheck for Go, shellcheck for shell scripts, " +
+      'detekt for Kotlin and RuboCop for Ruby (on Java and Ruby). Findings: duplicate, complexity, smell or naming; ' +
+      '`categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets ' +
+      'exceeded in .guardian/budgets.yml are findings (not with scope).',
     scan_type: 'quality',
     category: 'quality',
     supportsAutoFix: false,
@@ -168,6 +177,8 @@ registerToolModule(
         // What the scan reads, `.guardianignore` applied.
         const files = ctx.exclusions !== null ? ctx.exclusions.keptFiles : await listScannedFiles(ctx.projectPath);
         await runShellcheck(ctx, out, shellScripts(ctx.projectPath, files));
+        if (!out.cancelled) await runDetekt(ctx, reportDir, out, files);
+        if (!out.cancelled) await runRubocop(ctx, reportDir, out, files);
       }
       // Separated step, deliberately: reads the jscpd/radon reports jscpd and
       // radon already wrote above (never re-runs a scanner), and is the only
@@ -451,6 +462,39 @@ async function runShellcheck(ctx: InvokeContext, out: Collected, scripts: readon
   if (pass.missing) out.missing_tools.push(SHELLCHECK);
 }
 
+/** detekt over the Kotlin among `files` (`runners/detektRun.ts`); no entry at all when there is none. */
+async function runDetekt(ctx: InvokeContext, reportDir: string, out: Collected, files: readonly string[], scopeFiles?: number): Promise<void> {
+  const pass = await detektFiles({
+    projectPath: ctx.projectPath,
+    files,
+    ...(scopeFiles !== undefined ? { scopeFiles } : {}),
+    reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  if (pass.cancelled) out.cancelled = true;
+  if (pass.report !== null) out.parser_inputs.push({ parser: detektParser, input: pass.report });
+  if (pass.toolRun !== null) out.tools_run.push(pass.toolRun);
+  for (const name of pass.missing) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
+}
+
+/** RuboCop over the Ruby among `files` (`runners/rubocopRun.ts`); no entry at all when there is none. */
+async function runRubocop(ctx: InvokeContext, reportDir: string, out: Collected, files: readonly string[]): Promise<void> {
+  const pass = await rubocopFiles({
+    projectPath: ctx.projectPath,
+    files,
+    reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  if (pass.cancelled) out.cancelled = true;
+  for (const raw of pass.reports) out.parser_inputs.push({ parser: rubocopParser, input: raw });
+  if (pass.toolRun !== null) out.tools_run.push(pass.toolRun);
+  for (const name of pass.missing) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
+}
+
 // ---- scoped runs ------------------------------------------------------
 
 const JS_TS = /\.(js|jsx|mjs|cjs|ts|tsx|mts|cts)$/i;
@@ -517,6 +561,8 @@ async function runOnScope(ctx: InvokeContext, reportDir: string, out: Collected,
     await runStaticcheck(ctx, out, packages);
   }
   if (!out.cancelled) await runShellcheck(ctx, out, shellScripts(ctx.projectPath, files));
+  if (!out.cancelled) await runDetekt(ctx, reportDir, out, files, files.length);
+  if (!out.cancelled) await runRubocop(ctx, reportDir, out, files);
   if (!out.cancelled && loadBudgets(ctx.projectPath).kind !== 'none') {
     out.tools_run.push({
       name: 'budgets',

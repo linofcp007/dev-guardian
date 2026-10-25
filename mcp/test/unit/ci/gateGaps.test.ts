@@ -290,6 +290,13 @@ describe('every gap as data', () => {
     expect(remedyFor('skipped', 'psalm', 'scan: psalm skipped (Psalm 6 or newer is needed and it is 5.26)')).toMatch(/^Install a newer psalm/);
   });
 
+  it("SpotBugs' gaps: Java is never install_toolchain's; SpotBugs is, with FindSecBugs", () => {
+    expect(remedyFor('missing_tool', 'java', 'scan: java not installed')).toMatch(/^Install Java 11 or newer .* install_toolchain never installs it\.$/);
+    expect(remedyFor('missing_tool', 'spotbugs', 'scan: spotbugs not installed')).toMatch(
+      /^Install SpotBugs with FindSecBugs where the scan runs \(the install_toolchain MCP tool installs both/,
+    );
+  });
+
   it('kinds from what a step says: not installed, no lockfile, a refused step, a failed run, a shallow clone', () => {
     const steps: ScanStepResult[] = [
       { tool: 'security_scan_full', ran: true, tools_run: [], missing_tools: ['bandit'] },

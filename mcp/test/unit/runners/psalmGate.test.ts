@@ -91,15 +91,30 @@ describe('check_toolchain’s probe of a PHAR (runners/toolProbe.ts)', () => {
     const { resolveBinary } = await import('../../../src/platform/pkgManagerDetect.js');
     vi.mocked(runProcess).mockResolvedValue({ outcome: 'completed', exitCode: 0, stdout: 'Psalm 6.20.1@376425b8\n', stderr: '', truncated: false });
     vi.mocked(resolveBinary).mockResolvedValue('/usr/bin/php');
-    expect(await runVersionProbe({ command: 'psalm.phar', args: ['--version'], phar: true }, '/')).toEqual({ installed: true, version: '6.20.1' });
+    expect(await runVersionProbe({ command: 'psalm.phar', args: ['--version'], interpreter: 'php' }, '/')).toEqual({ installed: true, version: '6.20.1' });
     expect(vi.mocked(runProcess).mock.calls[0]?.[0]).toMatchObject({ command: 'php', args: ['/home/u/.local/bin/psalm.phar', '--version'] });
     vi.mocked(resolveBinary).mockResolvedValue(null);
-    expect(await runVersionProbe({ command: 'psalm.phar', args: ['--version'], phar: true }, '/')).toEqual({
+    expect(await runVersionProbe({ command: 'psalm.phar', args: ['--version'], interpreter: 'php' }, '/')).toEqual({
       installed: false,
       version: '',
       error: 'found at /home/u/.local/bin/psalm.phar, but php is not on PATH to run it',
     });
     vi.mocked(findFileOnPath).mockReturnValue(null);
-    expect(await runVersionProbe({ command: 'psalm.phar', args: ['--version'], phar: true }, '/')).toEqual({ installed: false, version: '' });
+    expect(await runVersionProbe({ command: 'psalm.phar', args: ['--version'], interpreter: 'php' }, '/')).toEqual({ installed: false, version: '' });
+  });
+
+  it('a jar is run by java -jar, from where `locate` says when it is not found by name (SpotBugs)', async () => {
+    const { runVersionProbe } = await import('../../../src/runners/toolProbe.js');
+    const { resolveBinary } = await import('../../../src/platform/pkgManagerDetect.js');
+    vi.mocked(runProcess).mockReset();
+    vi.mocked(runProcess).mockResolvedValue({ outcome: 'completed', exitCode: 0, stdout: 'SpotBugs 4.10.5\n', stderr: '', truncated: false });
+    vi.mocked(resolveBinary).mockResolvedValue('/usr/bin/java');
+    const probe = { command: 'spotbugs.jar', args: ['-textui', '-version'], interpreter: 'java' as const, locate: () => '/h/.local/lib/dev-guardian/spotbugs/lib/spotbugs.jar' };
+    expect(await runVersionProbe(probe, '/')).toEqual({ installed: true, version: '4.10.5' });
+    expect(vi.mocked(runProcess).mock.calls[0]?.[0]).toMatchObject({
+      command: 'java',
+      args: ['-jar', '/h/.local/lib/dev-guardian/spotbugs/lib/spotbugs.jar', '-textui', '-version'],
+    });
+    expect(await runVersionProbe({ ...probe, locate: () => null }, '/')).toEqual({ installed: false, version: '' });
   });
 });

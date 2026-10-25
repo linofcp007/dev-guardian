@@ -189,6 +189,24 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "cppcheck's file list into, and its XML report and its build directory's files.txt back from, the report directory ensureReportDir verified",
   },
+  'src/runners/detektRun.ts': {
+    apis: { writeFileSync: 1, readFileSync: 1 },
+    kind: 'own',
+    reason: "detekt's configuration into, and its SARIF back from, the report directory ensureReportDir verified",
+  },
+  'src/runners/rubocopRun.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "RuboCop's configuration — the only one it reads — into the report directory ensureReportDir verified",
+  },
+  'src/runners/spotbugsRun.ts': {
+    apis: { statSync: 3, readdirSync: 2, writeFileSync: 1, readFileSync: 1 },
+    kind: 'repo-safe',
+    reason:
+      'a Dirent-typed walk of the class directories realpathInProject resolved (descends only directories, never a ' +
+      "link), stats that open nothing, SpotBugs' own plugin/ directory; its filter into, and its SARIF back from, " +
+      'the report directory ensureReportDir verified',
+  },
   'src/runners/psalmRun.ts': {
     apis: { writeFileSync: 1, readFileSync: 1 },
     kind: 'own',
@@ -360,9 +378,11 @@ const ALLOWED: Record<string, Allowed> = {
     reason: "which of the plugin's two install layouts holds its scripts/",
   },
   'src/platform/userBin.ts': {
-    apis: { existsSync: 2 },
+    apis: { existsSync: 4 },
     kind: 'user',
-    reason: "the per-user tools directory in the user's own home, and cppcheck.exe where its installer puts it (%ProgramFiles%\\Cppcheck)",
+    reason:
+      "the per-user tools directory in the user's own home, cppcheck.exe where its installer puts it (%ProgramFiles%\\Cppcheck), " +
+      "and SpotBugs' lib/spotbugs.jar in SPOTBUGS_HOME or the directory install_toolchain puts it in",
   },
   'src/runners/git.ts': {
     apis: { existsSync: 1 },

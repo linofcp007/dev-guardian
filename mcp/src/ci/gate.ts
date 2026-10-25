@@ -515,6 +515,14 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
       if (scanner === 'php') {
         return 'Install PHP 8.2 or newer with its xml and mbstring extensions (Debian and Ubuntu: php-cli php-xml php-mbstring) and put it on PATH, then rerun the scan — install_toolchain never installs it.';
       }
+      // The Java runtime SpotBugs runs on, over the classes a build left: never installed for you either.
+      if (scanner === 'java') {
+        return 'Install Java 11 or newer (Debian and Ubuntu: default-jre-headless; on GitHub Actions, actions/setup-java) and put it on PATH, then rerun the scan — install_toolchain never installs it.';
+      }
+      // SpotBugs reads the bytecode the job's own build left (runners/spotbugsRun.ts): installed where it runs.
+      if (scanner === 'spotbugs') {
+        return 'Install SpotBugs with FindSecBugs where the scan runs (the install_toolchain MCP tool installs both, sha256-checked; or set SPOTBUGS_HOME to a SpotBugs with FindSecBugs in its plugin/ directory), then rerun the scan.';
+      }
       const hint = INSTALL_HINT[scanner];
       return hint !== undefined
         ? `Install ${scanner} (\`${hint}\`) and put it on PATH, then rerun the scan.`

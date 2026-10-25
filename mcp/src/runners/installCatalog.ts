@@ -13,6 +13,7 @@
 
 import type { DetectedOs } from '../platform/osDetect.js';
 import { compareSemver } from '../platform/semverCompare.js';
+import { spotbugsJar, userBinDir } from '../platform/userBin.js';
 import { SEMGREP_NO_VERSION_CHECK_ENV } from './semgrepRun.js';
 import type { VersionProbe } from './toolProbe.js';
 
@@ -22,8 +23,8 @@ import type { VersionProbe } from './toolProbe.js';
  * where the catalogue has one; winget, scoop and choco follow their own
  * manifests.
  */
-type WindowsPkgManager = 'release' | 'winget' | 'scoop' | 'choco' | 'go' | 'wsl';
-type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl' | 'uv' | 'cargo' | 'go';
+type WindowsPkgManager = 'release' | 'winget' | 'scoop' | 'choco' | 'go' | 'gem' | 'wsl';
+type PosixPkgManager = 'apt' | 'brew' | 'pipx' | 'npm' | 'curl' | 'uv' | 'cargo' | 'go' | 'gem';
 
 export interface InstallSpec {
   /** Shell command (as a tokenised argv) to install. */
@@ -152,6 +153,80 @@ export const PSALM_PHAR_SHA256 = 'f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321
 const PSALM_PHAR_URL = `https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`;
 const GOSEC_VERSION = '2.30.0';
 const SHELLCHECK_VERSION = '0.11.0';
+
+/**
+ * detekt's command-line jar, from Maven Central — not the GitHub release's:
+ * the two are separate builds (different sums, measured 2026-10-24), and
+ * Central's is signed: `detekt-cli-1.23.8-all.jar.asc` verifies with key
+ * 5F6C 2148 AD49 11FE 3081 10E5 F0D0 AE43 3308 B042 (Artur Bosch, detekt's
+ * author — `io.gitlab.arturbosch`), the key that signed 1.23.6 too, and
+ * Central's `.sha1` matches. 1.23.8 (2025-02-21) is the latest stable: 2.0 is
+ * in alpha.
+ */
+const DETEKT_VERSION = '1.23.8';
+const DETEKT_JAR_URL = `https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar`;
+const DETEKT_JAR_SHA256 = '3afe89a11120303c73c9bdda3d8fe558dd9070a6937d27819ddc04b275381245';
+
+/**
+ * SpotBugs 4.10.5 (2026-10-12): the `.tgz` (POSIX) and `.zip` (Windows) of
+ * its GitHub release, each hashed independently on 2026-10-24 and matching
+ * the digest GitHub records for the asset. FindSecBugs 1.14.0 (2025-06-17,
+ * the latest): the plugin jar from Maven Central, byte for byte the
+ * `lib/findsecbugs-plugin-1.14.0.jar` of the project's own
+ * `findsecbugs-cli-1.14.0.zip` release (whose GitHub digest matched) — two
+ * sources agreeing — and Central's `.sha1` matches.
+ */
+const SPOTBUGS_VERSION = '4.10.5';
+const SPOTBUGS_TGZ_URL = `https://github.com/spotbugs/spotbugs/releases/download/${SPOTBUGS_VERSION}/spotbugs-${SPOTBUGS_VERSION}.tgz`;
+const SPOTBUGS_TGZ_SHA256 = 'cce3244900cc215ccd9f5a8db29ed9468fc47824faf662f4fad005343d96007e';
+const SPOTBUGS_ZIP_URL = `https://github.com/spotbugs/spotbugs/releases/download/${SPOTBUGS_VERSION}/spotbugs-${SPOTBUGS_VERSION}.zip`;
+const SPOTBUGS_ZIP_SHA256 = 'f8eb9cf4ac8e1b29b3e29567541eef3f30b3bf49ff3880670a7963092cd8a859';
+const FINDSECBUGS_VERSION = '1.14.0';
+const FINDSECBUGS_JAR_URL = `https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/${FINDSECBUGS_VERSION}/findsecbugs-plugin-${FINDSECBUGS_VERSION}.jar`;
+const FINDSECBUGS_JAR_SHA256 = '6fa340344fa433ff46c2985dab1010e8bc739f9395c983594a5240095e92abc8';
+
+/** RuboCop, the version quality_check's Ruby pass was measured on (2026-10-22's 1.92.1, the latest). */
+const RUBOCOP_VERSION = '1.92.1';
+
+/** One pinned file a tool is: where it comes from, its sha256, and the name it takes in the per-user tools directory. */
+interface PinnedFile {
+  /** For the description: `Psalm 6.20.1 release PHAR`. */
+  label: string;
+  url: string;
+  sha256: string;
+  /** Its name in `~/.local/bin`: `psalm.phar`, `detekt-cli.jar`. */
+  file: string;
+  /** What runs it: `php`, `java -jar`. */
+  runBy: string;
+}
+
+/** Psalm's release PHAR ({@link PSALM_VERSION}). */
+const PSALM_PHAR: PinnedFile = {
+  label: `Psalm ${PSALM_VERSION} release PHAR`,
+  url: PSALM_PHAR_URL,
+  sha256: PSALM_PHAR_SHA256,
+  file: 'psalm.phar',
+  runBy: 'php',
+};
+
+/** detekt's command-line jar ({@link DETEKT_VERSION}), from Maven Central. */
+const DETEKT_JAR: PinnedFile = {
+  label: `detekt ${DETEKT_VERSION} command-line jar`,
+  url: DETEKT_JAR_URL,
+  sha256: DETEKT_JAR_SHA256,
+  file: 'detekt-cli.jar',
+  runBy: 'java -jar',
+};
+
+/** The opening of the Windows installer scripts here: errors stop it, TLS 1.2, a temporary directory. */
+const PS_PROLOGUE = [
+  "$ErrorActionPreference = 'Stop'",
+  "$ProgressPreference = 'SilentlyContinue'",
+  '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12',
+  '$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())',
+  'New-Item -ItemType Directory -Path $tmp | Out-Null',
+];
+
 
 /**
  * govulncheck publishes no binaries: it is installed with `go install` at
@@ -523,14 +598,14 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     // 6: the release scan_sast's taint pass was measured on (6.20.1) — its
     // configuration and JSON report; checked at run time (runners/psalmRun.ts).
     version_floor: '6.0.0',
-    probe: { command: 'psalm.phar', args: ['--version'], phar: true },
+    probe: { command: 'psalm.phar', args: ['--version'], interpreter: 'php' },
     required_by: ['scan_sast', 'security_scan_full', 'scan_wordpress'],
     install: {
       // The release PHAR, sha256-checked, into the per-user tools directory:
       // dev-guardian runs it with `php`, on every OS (no .cmd shim, no shell).
-      win32: { release: psalmPharWindowsInstaller() },
-      linux: { curl: psalmPharInstaller('linux') },
-      darwin: { curl: psalmPharInstaller('darwin') },
+      win32: { release: pinnedFileWindowsInstaller(PSALM_PHAR) },
+      linux: { curl: pinnedFileInstaller('linux', PSALM_PHAR) },
+      darwin: { curl: pinnedFileInstaller('darwin', PSALM_PHAR) },
     },
     default: false, // only when PHP is detected
   },
@@ -548,6 +623,82 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       win32: { winget: manualHint('winget install PHP.PHP.8.4'), scoop: manualHint('scoop install php') },
       linux: { apt: manualHint('sudo apt-get install php-cli php-xml php-mbstring') },
       darwin: { brew: manualHint('brew install php') },
+    },
+    default: false,
+  },
+  // quality_check's Kotlin pass (runners/detektRun.ts): the pinned jar, run by `java -jar`.
+  detekt: {
+    name: 'detekt',
+    // 1.23: the line quality_check was measured on (1.23.8) — its SARIF, exit codes and config merge.
+    version_floor: '1.23.0',
+    probe: { command: 'detekt-cli.jar', args: ['--version'], interpreter: 'java' },
+    required_by: ['quality_check'],
+    install: {
+      win32: { release: pinnedFileWindowsInstaller(DETEKT_JAR) },
+      linux: { curl: pinnedFileInstaller('linux', DETEKT_JAR) },
+      darwin: { curl: pinnedFileInstaller('darwin', DETEKT_JAR) },
+    },
+    default: false, // only when Kotlin is detected
+  },
+  // scan_sast's pass over compiled Java and Kotlin (runners/spotbugsRun.ts), FindSecBugs in its plugin/ directory.
+  spotbugs: {
+    name: 'spotbugs',
+    // 4.10: the line scan_sast was measured on (4.10.5) — its SARIF, the security filter, the missing-class notice.
+    version_floor: '4.10.0',
+    probe: { command: 'spotbugs.jar', args: ['-textui', '-version'], interpreter: 'java', locate: () => spotbugsJar() },
+    required_by: ['scan_sast', 'security_scan_full'],
+    install: {
+      win32: { release: spotbugsWindowsInstaller() },
+      linux: { curl: spotbugsInstaller('linux') },
+      darwin: { curl: spotbugsInstaller('darwin') },
+    },
+    default: false, // only when compiled Java or Kotlin classes are there
+  },
+  // quality_check's Ruby pass (runners/rubocopRun.ts): the gem's script, run by `ruby`.
+  rubocop: {
+    name: 'rubocop',
+    // 1.60: the configuration keys quality_check passes (NewCops, SuggestExtensions,
+    // Metrics/BlockLength's AllowedMethods); measured on 1.92.1.
+    version_floor: '1.60.0',
+    probe: { command: 'rubocop', args: ['--version'], interpreter: 'ruby' },
+    required_by: ['quality_check'],
+    install: {
+      win32: { gem: rubocopGemInstall('win32') },
+      linux: { gem: rubocopGemInstall('linux') },
+      darwin: { gem: rubocopGemInstall('darwin') },
+    },
+    default: false, // only when Ruby is detected
+  },
+  // The Java runtime detekt and SpotBugs run on, and the Ruby RuboCop runs on —
+  // like PHP and Go, never installed for you (install_toolchain routes them to
+  // manual steps): which runtime a project uses is its own choice.
+  java: {
+    name: 'java',
+    // 11: SpotBugs 4.10 needs it; detekt 1.23.8 and SpotBugs 4.10.5 were measured on Temurin 21.
+    version_floor: '11.0.0',
+    probe: { command: 'java', args: ['-version'] },
+    required_by: ['quality_check', 'scan_sast', 'security_scan_full'],
+    install: {
+      // Verified 2026-10-24: winget-pkgs carries EclipseAdoptium.Temurin.21.JRE, scoop's Java bucket temurin21-jre.
+      win32: { winget: manualHint('winget install EclipseAdoptium.Temurin.21.JRE'), scoop: manualHint('scoop bucket add java; scoop install temurin21-jre') },
+      linux: { apt: manualHint('sudo apt-get install default-jre-headless') },
+      darwin: { brew: manualHint('brew install openjdk') },
+    },
+    default: false,
+  },
+  ruby: {
+    name: 'ruby',
+    // 2.7: RuboCop 1.92's own floor; measured on RubyInstaller 4.0.9.
+    version_floor: '2.7.0',
+    probe: { command: 'ruby', args: ['--version'] },
+    required_by: ['quality_check'],
+    install: {
+      // Verified 2026-10-24: winget-pkgs carries RubyInstallerTeam.Ruby.4.0, scoop's Main bucket `ruby`.
+      win32: { winget: manualHint('winget install RubyInstallerTeam.Ruby.4.0'), scoop: manualHint('scoop install ruby') },
+      // ruby-dev and build-essential: RuboCop's prism (1.7 or newer) is compiled on a Ruby older than 4.0,
+      // which bundles an older one — measured on Debian trixie's Ruby 3.3.8.
+      linux: { apt: manualHint('sudo apt-get install ruby ruby-dev build-essential') },
+      darwin: { brew: manualHint('brew install ruby') },
     },
     default: false,
   },
@@ -923,46 +1074,50 @@ function cosignReleaseInstaller(os: 'linux' | 'darwin'): InstallSpec {
 }
 
 /**
- * Psalm's release PHAR ({@link PSALM_VERSION}), checked against its sha256
- * and installed to `~/.local/bin/psalm.phar` — one file for every CPU, run
- * by `php`. The shape of {@link cosignReleaseInstaller}.
+ * A {@link PinnedFile}, checked against its sha256 and installed to
+ * `~/.local/bin/<file>` — one file for every CPU, run by an interpreter. The
+ * shape of {@link cosignReleaseInstaller}.
  */
-function psalmPharInstaller(os: 'linux' | 'darwin'): InstallSpec {
+function pinnedFileInstaller(os: 'linux' | 'darwin', pin: PinnedFile): InstallSpec {
   const check = os === 'linux' ? 'sha256sum -c -' : 'shasum -a 256 -c -';
   const script = [
     'set -eu',
     'tmp="$(mktemp)"',
     'trap \'rm -f "$tmp"\' EXIT',
-    `curl -sSfL -o "$tmp" "${PSALM_PHAR_URL}"`,
-    `echo "${PSALM_PHAR_SHA256}  $tmp" | ${check}`,
+    `curl -sSfL -o "$tmp" "${pin.url}"`,
+    `echo "${pin.sha256}  $tmp" | ${check}`,
     'mkdir -p "$HOME/.local/bin"',
-    'install -m 0755 "$tmp" "$HOME/.local/bin/psalm.phar"',
+    `install -m 0755 "$tmp" "$HOME/.local/bin/${pin.file}"`,
   ].join('\n');
   return {
     command: 'bash',
     args: ['-c', script],
     needs_elevation: false,
-    description: `Psalm ${PSALM_VERSION} release PHAR (${os}, sha256-checked) → ~/.local/bin/psalm.phar, run by php`,
-    user_bin: 'psalm.phar',
+    description: `${pin.label} (${os}, sha256-checked) → ~/.local/bin/${pin.file}, run by ${pin.runBy}`,
+    user_bin: pin.file,
   };
 }
 
-/** {@link psalmPharInstaller} on Windows: PowerShell, into `%USERPROFILE%\.local\bin\psalm.phar`. */
-function psalmPharWindowsInstaller(): InstallSpec {
+/** PowerShell lines that download `url` into `$tmp` as `name`, in `$<variable>`, and stop unless its sha256 is `sha256`. */
+function psDownloadChecked(variable: string, name: string, url: string, sha256: string, what: string): string[] {
+  return [
+    `  $${variable} = Join-Path $tmp '${name}'`,
+    `  Invoke-WebRequest -UseBasicParsing -Uri '${url}' -OutFile $${variable}`,
+    `  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $${variable}).Hash.ToLowerInvariant()`,
+    `  if ($got -ne '${sha256}') { throw ('${what}: sha256 mismatch, got ' + $got) }`,
+  ];
+}
+
+/** {@link pinnedFileInstaller} on Windows: PowerShell, into `%USERPROFILE%\.local\bin\<file>`. */
+function pinnedFileWindowsInstaller(pin: PinnedFile): InstallSpec {
+  const what = pin.file.replace(/\..*$/, '').replace(/-cli$/, '');
   const script = [
-    "$ErrorActionPreference = 'Stop'",
-    "$ProgressPreference = 'SilentlyContinue'",
-    '[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12',
-    '$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString())',
-    'New-Item -ItemType Directory -Path $tmp | Out-Null',
+    ...PS_PROLOGUE,
     'try {',
-    "  $phar = Join-Path $tmp 'psalm.phar'",
-    `  Invoke-WebRequest -UseBasicParsing -Uri '${PSALM_PHAR_URL}' -OutFile $phar`,
-    '  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $phar).Hash.ToLowerInvariant()',
-    `  if ($got -ne '${PSALM_PHAR_SHA256}') { throw ('psalm: sha256 mismatch, got ' + $got) }`,
+    ...psDownloadChecked('file', pin.file, pin.url, pin.sha256, what),
     "  $bin = Join-Path $env:USERPROFILE '.local\\bin'",
     '  New-Item -ItemType Directory -Force -Path $bin | Out-Null',
-    "  Copy-Item -LiteralPath $phar -Destination (Join-Path $bin 'psalm.phar') -Force",
+    `  Copy-Item -LiteralPath $file -Destination (Join-Path $bin '${pin.file}') -Force`,
     '} finally {',
     '  Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue',
     '}',
@@ -971,8 +1126,108 @@ function psalmPharWindowsInstaller(): InstallSpec {
     command: 'powershell',
     args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
     needs_elevation: false,
-    description: `Psalm ${PSALM_VERSION} release PHAR (windows, sha256-checked) → %USERPROFILE%\\.local\\bin\\psalm.phar, run by php`,
-    user_bin: 'psalm.phar',
+    description: `${pin.label} (windows, sha256-checked) → %USERPROFILE%\\.local\\bin\\${pin.file}, run by ${pin.runBy}`,
+    user_bin: pin.file,
+  };
+}
+
+/**
+ * SpotBugs ({@link SPOTBUGS_VERSION}) with FindSecBugs ({@link FINDSECBUGS_VERSION})
+ * in its `plugin/` directory, each sha256-checked, into
+ * `~/.local/lib/dev-guardian/spotbugs` (`runners/spotbugsRun.ts#spotbugsHome`):
+ * a directory of jars, run by `java -jar lib/spotbugs.jar`. The new tree is
+ * built beside the old one and moved into place only once complete.
+ */
+function spotbugsInstaller(os: 'linux' | 'darwin'): InstallSpec {
+  const check = os === 'linux' ? 'sha256sum -c -' : 'shasum -a 256 -c -';
+  const script = [
+    'set -eu',
+    'tmp="$(mktemp -d)"',
+    'trap \'rm -rf "$tmp"\' EXIT',
+    `curl -sSfL -o "$tmp/spotbugs.tgz" "${SPOTBUGS_TGZ_URL}"`,
+    `echo "${SPOTBUGS_TGZ_SHA256}  $tmp/spotbugs.tgz" | ${check}`,
+    `curl -sSfL -o "$tmp/findsecbugs.jar" "${FINDSECBUGS_JAR_URL}"`,
+    `echo "${FINDSECBUGS_JAR_SHA256}  $tmp/findsecbugs.jar" | ${check}`,
+    'home="$HOME/.local/lib/dev-guardian/spotbugs"',
+    'rm -rf "$home.new"',
+    'mkdir -p "$home.new"',
+    'tar -xzf "$tmp/spotbugs.tgz" -C "$home.new" --strip-components=1',
+    'mkdir -p "$home.new/plugin"',
+    `install -m 0644 "$tmp/findsecbugs.jar" "$home.new/plugin/findsecbugs-plugin-${FINDSECBUGS_VERSION}.jar"`,
+    'rm -rf "$home"',
+    'mv "$home.new" "$home"',
+  ].join('\n');
+  return {
+    command: 'bash',
+    args: ['-c', script],
+    needs_elevation: false,
+    description:
+      `SpotBugs ${SPOTBUGS_VERSION} and FindSecBugs ${FINDSECBUGS_VERSION} (${os}, sha256-checked) → ` +
+      '~/.local/lib/dev-guardian/spotbugs, run by java -jar',
+  };
+}
+
+/** {@link spotbugsInstaller} on Windows: PowerShell, into `%USERPROFILE%\.local\lib\dev-guardian\spotbugs`. */
+function spotbugsWindowsInstaller(): InstallSpec {
+  const script = [
+    ...PS_PROLOGUE,
+    'try {',
+    ...psDownloadChecked('zip', 'spotbugs.zip', SPOTBUGS_ZIP_URL, SPOTBUGS_ZIP_SHA256, 'spotbugs'),
+    ...psDownloadChecked('fsb', 'findsecbugs.jar', FINDSECBUGS_JAR_URL, FINDSECBUGS_JAR_SHA256, 'findsecbugs'),
+    // Unpacked beside the install, never in %TEMP%: Windows PowerShell's Move-Item cannot move a
+    // directory to another volume, and the old install was already gone when it failed.
+    "  $lib = Join-Path $env:USERPROFILE '.local\\lib\\dev-guardian'",
+    '  New-Item -ItemType Directory -Force -Path $lib | Out-Null',
+    "  $stage = Join-Path $lib 'spotbugs.new'",
+    '  if (Test-Path -LiteralPath $stage) { Remove-Item -Recurse -Force -LiteralPath $stage }',
+    '  Expand-Archive -LiteralPath $zip -DestinationPath $stage',
+    `  $tree = Join-Path $stage 'spotbugs-${SPOTBUGS_VERSION}'`,
+    "  New-Item -ItemType Directory -Force -Path (Join-Path $tree 'plugin') | Out-Null",
+    `  Copy-Item -LiteralPath $fsb -Destination (Join-Path $tree 'plugin\\findsecbugs-plugin-${FINDSECBUGS_VERSION}.jar')`,
+    "  $dest = Join-Path $lib 'spotbugs'",
+    '  if (Test-Path -LiteralPath $dest) { Remove-Item -Recurse -Force -LiteralPath $dest }',
+    '  Move-Item -LiteralPath $tree -Destination $dest',
+    '  Remove-Item -Recurse -Force -LiteralPath $stage',
+    '} finally {',
+    '  Remove-Item -Recurse -Force -LiteralPath $tmp -ErrorAction SilentlyContinue',
+    '}',
+  ].join('\n');
+  return {
+    command: 'powershell',
+    args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    needs_elevation: false,
+    description:
+      `SpotBugs ${SPOTBUGS_VERSION} and FindSecBugs ${FINDSECBUGS_VERSION} (windows, sha256-checked) → ` +
+      '%USERPROFILE%\\.local\\lib\\dev-guardian\\spotbugs, run by java -jar',
+  };
+}
+
+/**
+ * RuboCop ({@link RUBOCOP_VERSION}) as a gem, for this user, its script into
+ * the per-user tools directory, where `runners/rubocopRun.ts` finds it and
+ * runs it with `ruby` — never its Windows `.bat` wrapper, which `cmd.exe`
+ * would run. `--conservative` keeps the gems Ruby ships when they meet
+ * RuboCop's requirements: measured on RubyInstaller 4.0.9 without the DevKit,
+ * the newest prism (1.9.0) needed a C compiler and the install failed, where
+ * Ruby's own prism 1.8.2 does; a Ruby older than 4.0 bundles a prism older
+ * than RuboCop needs, which is compiled (Debian trixie's Ruby 3.3.8: with
+ * ruby-dev and build-essential, measured). `ruby -S gem`: the gem command, with no
+ * `.cmd` shim in between. RuboCop's version is pinned; its dependencies
+ * resolve as RubyGems resolves them, as pipx's do for Semgrep.
+ */
+function rubocopGemInstall(os: 'win32' | 'linux' | 'darwin'): InstallSpec {
+  // An argument, never a shell's: the directory itself (`~` and `%USERPROFILE%` would not expand).
+  const bindir = userBinDir();
+  const shown = os === 'win32' ? '%USERPROFILE%\\.local\\bin' : '~/.local/bin';
+  return {
+    command: 'ruby',
+    args: [
+      '-S', 'gem', 'install', 'rubocop', '-v', RUBOCOP_VERSION, '--user-install', '--conservative', '--no-document',
+      ...(bindir !== null ? ['--bindir', bindir] : []),
+    ],
+    needs_elevation: false,
+    description: `gem install rubocop -v ${RUBOCOP_VERSION} --user-install --conservative → ${shown}/rubocop, run by ruby`,
+    user_bin: 'rubocop',
   };
 }
 
@@ -1167,6 +1422,8 @@ export const MANUAL_ONLY_TOOLS: Readonly<Record<string, string>> = {
   'dotnet-sdk': 'the .NET SDK',
   go: 'the Go toolchain',
   php: 'the PHP runtime',
+  java: 'the Java runtime',
+  ruby: 'the Ruby runtime',
 };
 
 function manualHint(humanCommand: string): InstallSpec {

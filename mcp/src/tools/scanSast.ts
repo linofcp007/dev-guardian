@@ -4,8 +4,10 @@
  * loads — and may download — the project's modules), cppcheck's error and
  * warning checks when C or C++ is (`runners/cppcheckRun.ts`), Psalm's taint
  * analysis when PHP is (`runners/psalmRun.ts`: never the project's own
- * configuration or autoloader), and the .NET SDK's security analyzers when
- * the project is .NET.
+ * configuration or autoloader), SpotBugs with FindSecBugs over compiled Java
+ * and Kotlin (`runners/spotbugsRun.ts`: the classes a build left, never a
+ * build of its own), and the .NET SDK's security analyzers when the project
+ * is .NET.
  *
  * Invokes Semgrep directly (no shell script), writing the JSON report to
  * `.guardian/reports/sast-<short-scan-id>/sast.json`.
@@ -77,8 +79,8 @@
  *
  * ---- The scanners run side by side ----------------------------------
  *
- * Semgrep, Bandit, gosec, cppcheck, Psalm and the .NET analyzers ran one
- * after another, so a project in several languages waited for their sum;
+ * Semgrep, Bandit, gosec, cppcheck, Psalm, SpotBugs and the .NET analyzers
+ * ran one after another, so a project in several languages waited for their sum;
  * they now run side by side (`runners/scannerPasses.ts`), at most
  * `GUARDIAN_MAX_PARALLEL_SCANNERS` (default 3) at once, each gathering its
  * own results, merged in that order. Two write into what another reads, and
@@ -123,10 +125,12 @@ import { cppcheckParser } from '../runners/scannerParsers/cppcheck.js';
 import { hasPhpSource, PSALM, psalmTaint } from '../runners/psalmRun.js';
 import { maxParallelScanners, runScannerPasses, type ScannerPass } from '../runners/scannerPasses.js';
 import { psalmParser } from '../runners/scannerParsers/psalm.js';
+import { spotbugsParserFor } from '../runners/scannerParsers/spotbugs.js';
+import { hasJvmSource, SPOTBUGS, spotbugsClasses } from '../runners/spotbugsRun.js';
 import { isWordPressProject } from '../runners/stackDetect.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
-import { getProp, parseInputAsJson, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
+import { getProp, parseInputAsJson, toPosixPath, toRelativeIfPossible } from '../runners/scannerParsers/index.js';
 import { dotnetSarifParser, sarifSecurityRuleCount } from '../runners/scannerParsers/dotnetSarif.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
@@ -207,13 +211,12 @@ registerToolModule(
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description:
-      "Semgrep with the registry rules, the project's own, register_custom_rules' and the plugin's web-JS, " +
-      'mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for ' +
-      "Go, through the Go toolchain (it may download modules); cppcheck for C/C++; Psalm's taint analysis for PHP; for .NET, a " +
-      'locked restore and `dotnet build` ' +
-      "with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial " +
-      'coverage. `tools_run[].honoured_config`: the project files that decided a run. local_only avoids the ' +
-      'registry and its metrics.',
+      "Semgrep (registry rules, the project's own, register_custom_rules' and the plugin's web-JS, mobile and LLM " +
+      'packs; `tools_run[].plugin_packs`: one that ran in part) plus, by language: Bandit (Python), gosec (Go, via the ' +
+      'Go toolchain, which may download modules), cppcheck (C/C++), Psalm taint analysis (PHP), SpotBugs with ' +
+      "FindSecBugs (Java/Kotlin bytecode), the .NET SDK analyzers (a locked restore and `dotnet build`: runs the project's " +
+      'MSBuild). Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a ' +
+      'run. local_only: no registry, no metrics.',
     scan_type: 'sast',
     category: 'security',
     supportsScope: true,
@@ -277,6 +280,14 @@ registerToolModule(
               if (hasPhpSource(files)) await runPsalm({ ctx, reportDir, files: await scanned(), scopeFiles: files.length, ...c });
             },
           },
+          // SpotBugs reads the whole project's bytecode; the factory keeps the scope's findings.
+          {
+            name: SPOTBUGS,
+            after: afterSemgrep,
+            run: async (c) => {
+              if (hasJvmSource(files)) await runSpotbugs({ ctx, reportDir, files: await scanned(), ...c });
+            },
+          },
           { name: 'dotnet-analyzers', run: async (c) => dotnetNotApplicableToScope({ ctx, files, ...c }) },
         ];
       } else {
@@ -306,6 +317,7 @@ registerToolModule(
               if (hasFileWithExtension(ctx.projectPath, ['.php', '.phtml'])) await runPsalm({ ctx, reportDir, files: await scanned(), ...c });
             },
           },
+          { name: SPOTBUGS, after: afterSemgrep, run: async (c) => runSpotbugs({ ctx, reportDir, files: await scanned(), ...c }) },
           { name: 'dotnet-analyzers', after: ['semgrep'], run: (c) => runDotnetAnalyzers({ ctx, ...c }) },
         ];
       }
@@ -1009,6 +1021,27 @@ async function runPsalm(
     ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
   });
   if (pass.report !== null) parser_inputs.push({ parser: psalmParser, input: pass.report });
+  if (pass.toolRun !== null) tools_run.push(pass.toolRun);
+  for (const name of pass.missing) markMissing(missing_tools, name);
+}
+
+/**
+ * SpotBugs with FindSecBugs over the project's compiled classes
+ * (`runners/spotbugsRun.ts`): no entry when the project has neither JVM
+ * sources nor classes, `skipped` with no gap when it has sources and was
+ * never built.
+ */
+async function runSpotbugs(args: Collect & { ctx: InvokeContext; reportDir: string; files: readonly string[] }): Promise<void> {
+  const { ctx, reportDir, files, tools_run, missing_tools, parser_inputs } = args;
+  const pass = await spotbugsClasses({
+    projectPath: ctx.projectPath,
+    files,
+    reportDir,
+    env: ctx.scriptEnv,
+    signal: ctx.signal,
+    ...(ctx.onLog ? { onLog: ctx.onLog } : {}),
+  });
+  if (pass.report !== null) parser_inputs.push({ parser: spotbugsParserFor(files.map(toPosixPath)), input: pass.report });
   if (pass.toolRun !== null) tools_run.push(pass.toolRun);
   for (const name of pass.missing) markMissing(missing_tools, name);
 }

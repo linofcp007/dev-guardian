@@ -1,0 +1,427 @@
+{
+ "version": "2.1.0",
+ "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+ "runs": [
+  {
+   "tool": {
+    "extensions": [
+     {
+      "version": "4.10.5",
+      "name": "edu.umd.cs.findbugs.plugins.core",
+      "shortDescription": {
+       "text": "Core SpotBugs plugin"
+      },
+      "informationUri": "https://github.com/spotbugs",
+      "organization": "SpotBugs project"
+     },
+     {
+      "version": "",
+      "name": "com.h3xstream.findsecbugs",
+      "shortDescription": {
+       "text": "Find Security Bugs"
+      },
+      "informationUri": "https://find-sec-bugs.github.io",
+      "organization": "Find Security Bugs"
+     }
+    ],
+    "driver": {
+     "name": "SpotBugs",
+     "version": "4.10.5",
+     "language": "pt",
+     "informationUri": "https://spotbugs.github.io/",
+     "rules": [
+      {
+       "id": "COMMAND_INJECTION",
+       "shortDescription": {
+        "text": "Potential Command Injection."
+       },
+       "fullDescription": {
+        "text": "The highlighted API is used to execute a system command. If unfiltered input \nis passed to this API, it can lead to arbitrary command execution. \nVulnerable Code: \nimport java.lang.Runtime;\n\nRuntime r = Runtime.getRuntime();\nr.exec(\"/bin/sh -c some_tool\" + input);\nReferencesOWASP: Command InjectionOWASP: Top 10 2013-A1-InjectionCWE-78: \nImproper Neutralization of Special Elements used in an OS Command ('OS Command \nInjection')"
+       },
+       "messageStrings": {
+        "default": {
+         "text": "This usage of {0} can be vulnerable to Command Injection."
+        }
+       },
+       "helpUri": "https://find-sec-bugs.github.io/bugs.htm#COMMAND_INJECTION",
+       "properties": {
+        "tags": [
+         "SECURITY"
+        ]
+       },
+       "relationships": [
+        {
+         "target": {
+          "id": "78",
+          "guid": "de860c32-bc93-5e70-89d7-0877e5abaefb",
+          "toolComponent": {
+           "name": "CWE",
+           "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+          }
+         },
+         "kinds": [
+          "superset"
+         ]
+        }
+       ]
+      },
+      {
+       "id": "SQL_INJECTION_JDBC",
+       "shortDescription": {
+        "text": "Potential JDBC Injection."
+       },
+       "fullDescription": {
+        "text": "The input values included in SQL queries need to be passed in safely. Bind \nvariables in prepared statements can be used to easily mitigate the risk of \nSQL injection. \nVulnerable Code: \nConnection conn = [...];\nStatement stmt = con.createStatement();\nResultSet rs = stmt.executeQuery(\"update COFFEES set SALES = \"+nbSales+\" where COF_NAME = '\"+coffeeName+\"'\");\nSolution: \nConnection conn = [...];\nconn.prepareStatement(\"update COFFEES set SALES = ? where COF_NAME = ?\");\nupdateSales.setInt(1, nbSales);\nupdateSales.setString(2, coffeeName);\nReferences (JDBC)Oracle Documentation: The Java Tutorials > Prepared StatementsReferences \n(SQL injection)WASC-19: SQL InjectionCAPEC-66: SQL InjectionCWE-89: Improper \nNeutralization of Special Elements used in an SQL Command ('SQL Injection')OWASP: \nTop 10 2013-A1-InjectionOWASP: SQL Injection Prevention Cheat SheetOWASP: \nQuery Parameterization Cheat Sheet"
+       },
+       "messageStrings": {
+        "default": {
+         "text": "This use of {0} can be vulnerable to SQL injection (with JDBC)."
+        }
+       },
+       "helpUri": "https://find-sec-bugs.github.io/bugs.htm#SQL_INJECTION_JDBC",
+       "properties": {
+        "tags": [
+         "SECURITY"
+        ]
+       },
+       "relationships": [
+        {
+         "target": {
+          "id": "89",
+          "guid": "ef952f10-a202-504c-8649-9ffcb2291d69",
+          "toolComponent": {
+           "name": "CWE",
+           "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+          }
+         },
+         "kinds": [
+          "superset"
+         ]
+        }
+       ]
+      },
+      {
+       "id": "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
+       "shortDescription": {
+        "text": "Nonconstant string passed to execute or addBatch method on an SQL statement."
+       },
+       "fullDescription": {
+        "text": "The method invokes the execute or addBatch method on an SQL statement with a \nString that seems to be dynamically generated. Consider using a prepared \nstatement instead. It is more efficient and less vulnerable to SQL injection \nattacks. \nSee CWE-89: Improper Neutralization of Special Elements used in an SQL Command \n('SQL Injection')."
+       },
+       "messageStrings": {
+        "default": {
+         "text": "{0} passes a nonconstant String to an execute or addBatch method on an SQL statement."
+        }
+       },
+       "helpUri": "https://spotbugs.readthedocs.io/en/latest/bugDescriptions.html#SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
+       "properties": {
+        "tags": [
+         "SECURITY"
+        ]
+       },
+       "relationships": [
+        {
+         "target": {
+          "id": "89",
+          "guid": "ef952f10-a202-504c-8649-9ffcb2291d69",
+          "toolComponent": {
+           "name": "CWE",
+           "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+          }
+         },
+         "kinds": [
+          "superset"
+         ]
+        }
+       ]
+      },
+      {
+       "id": "WEAK_MESSAGE_DIGEST_MD5",
+       "shortDescription": {
+        "text": "MD2, MD4 and MD5 are weak hash functions."
+       },
+       "fullDescription": {
+        "text": "The algorithms MD2, MD4 and MD5 are not a recommended MessageDigest. PBKDF2 \nshould be used to hash password for example. \n\"The security of the MD5 hash function is severely compromised. A collision \nattack exists that can find collisions within seconds on a computer with a 2.6 \nGHz Pentium 4 processor (complexity of 224.1).[1] Further, there is also a \nchosen-prefix collision attack that can produce a collision for two inputs \nwith specified prefixes within hours, using off-the-shelf computing hardware \n(complexity 239).[2]\"- Wikipedia: MD5 - Security \"SHA-224, SHA-256, SHA-384, \nSHA-512, SHA-512/224, and SHA-512/256:The use of these hash functions is \nacceptable for all hash function applications.\"- NIST: Transitioning the Use \nof Cryptographic Algorithms and Key Lengths p.15 \"The main idea of a PBKDF is \nto slow dictionary or brute force attacks on the passwords by increasing the \ntime needed to test each password. An attacker with a list of likely passwords \ncan evaluate the PBKDF using the known iteration counter and the salt. Since \nan attacker has to spend a significant amount of computing time for each try, \nit becomes harder to apply the dictionary or brute force attacks.\"- NIST: \nRecommendation for Password-Based Key Derivation p.12 Vulnerable Code: \nMessageDigest md5Digest = MessageDigest.getInstance(\"MD5\");\n    md5Digest.update(password.getBytes());\n    byte[] hashValue = md5Digest.digest();\nbyte[] hashValue = DigestUtils.getMd5Digest().digest(password.getBytes());\nSolution (Using bouncy castle): \npublic static byte[] getEncryptedPassword(String password, byte[] salt) throws NoSuchAlgorithmException, InvalidKeySpecException {\n    PKCS5S2ParametersGenerator gen = new PKCS5S2ParametersGenerator(new SHA256Digest());\n    gen.init(password.getBytes(\"UTF-8\"), salt.getBytes(), 4096);\n    return ((KeyParameter) gen.generateDerivedParameters(256)).getKey();\n}\nSolution (Java 8 and later): public static byte[] getEncryptedPassword(String password, byte[] salt) throws NoSuchAlgorithmException, InvalidKeySpecException {\n    KeySpec spec = new PBEKeySpec(password.toCharArray(), salt, 4096, 256 * 8);\n    SecretKeyFactory f = SecretKeyFactory.getInstance(\"PBKDF2WithHmacSHA256\");\n    return f.generateSecret(spec).getEncoded();\n}\nReferences[1] On Collisions for MD5: Master Thesis by M.M.J. Stevens[2] Chosen-prefix \ncollisions for MD5 and applications: Paper written by Marc StevensWikipedia: \nMD5NIST: Transitioning the Use of Cryptographic Algorithms and Key LengthsNIST: \nRecommendation for Password-Based Key DerivationStackoverflow: Reliable \nimplementation of PBKDF2-HMAC-SHA256 for JavaCWE-327: Use of a Broken or Risky \nCryptographic Algorithm CWE-328: Use of Weak Hash"
+       },
+       "messageStrings": {
+        "default": {
+         "text": "This API {0} (MDX) is not a recommended cryptographic hash function."
+        }
+       },
+       "helpUri": "https://find-sec-bugs.github.io/bugs.htm#WEAK_MESSAGE_DIGEST_MD5",
+       "properties": {
+        "tags": [
+         "SECURITY"
+        ]
+       },
+       "relationships": [
+        {
+         "target": {
+          "id": "328",
+          "guid": "dc1e99c1-c57b-5af0-85a4-9ad3bfac9c82",
+          "toolComponent": {
+           "name": "CWE",
+           "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+          }
+         },
+         "kinds": [
+          "superset"
+         ]
+        }
+       ]
+      }
+     ],
+     "supportedTaxonomies": [
+      {
+       "name": "CWE",
+       "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310"
+      }
+     ]
+    }
+   },
+   "invocations": [
+    {
+     "exitCode": 3,
+     "exitCodeDescription": "MISSING CLASS,BUGS FOUND",
+     "executionSuccessful": false,
+     "toolConfigurationNotifications": [
+      {
+       "descriptor": {
+        "id": "spotbugs-missing-classes"
+       },
+       "message": {
+        "text": "Classes needed for analysis were missing: [org.lib.Helper]"
+       },
+       "level": "error"
+      }
+     ]
+    }
+   ],
+   "results": [
+    {
+     "ruleId": "COMMAND_INJECTION",
+     "ruleIndex": 0,
+     "message": {
+      "id": "default",
+      "text": "Potential Command Injection",
+      "arguments": [
+       "java/lang/Runtime.exec(Ljava/lang/String;)Ljava/lang/Process;"
+      ]
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "com/example/App.java",
+         "uriBaseId": "38901169"
+        },
+        "region": {
+         "startLine": 14
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "run(String)",
+         "kind": "function",
+         "fullyQualifiedName": "com.example.App.run(String)"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "SQL_INJECTION_JDBC",
+     "ruleIndex": 1,
+     "message": {
+      "id": "default",
+      "text": "Potential JDBC Injection",
+      "arguments": [
+       "java/sql/Statement.executeQuery(Ljava/lang/String;)Ljava/sql/ResultSet;"
+      ]
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "com/example/App.java",
+         "uriBaseId": "38901169"
+        },
+        "region": {
+         "startLine": 10
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "query(Connection, String)",
+         "kind": "function",
+         "fullyQualifiedName": "com.example.App.query(Connection, String)"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE",
+     "ruleIndex": 2,
+     "message": {
+      "id": "default",
+      "text": "Nonconstant string passed to execute or addBatch method on an SQL statement",
+      "arguments": [
+       "com.example.App.query(Connection, String)"
+      ]
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "com/example/App.java",
+         "uriBaseId": "38901169"
+        },
+        "region": {
+         "startLine": 10
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "query(Connection, String)",
+         "kind": "function",
+         "fullyQualifiedName": "com.example.App.query(Connection, String)"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "WEAK_MESSAGE_DIGEST_MD5",
+     "ruleIndex": 3,
+     "message": {
+      "id": "default",
+      "text": "MD2, MD4 and MD5 are weak hash functions",
+      "arguments": [
+       "MD5"
+      ]
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "com/example/App.java",
+         "uriBaseId": "38901169"
+        },
+        "region": {
+         "startLine": 18
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "hash(byte[])",
+         "kind": "function",
+         "fullyQualifiedName": "com.example.App.hash(byte[])"
+        }
+       ]
+      }
+     ]
+    },
+    {
+     "ruleId": "COMMAND_INJECTION",
+     "ruleIndex": 0,
+     "message": {
+      "id": "default",
+      "text": "Potential Command Injection",
+      "arguments": [
+       "java/lang/Runtime.exec(Ljava/lang/String;)Ljava/lang/Process;"
+      ]
+     },
+     "level": "warning",
+     "locations": [
+      {
+       "physicalLocation": {
+        "artifactLocation": {
+         "uri": "com/example/Uses.java",
+         "uriBaseId": "38901169"
+        },
+        "region": {
+         "startLine": 7
+        }
+       },
+       "logicalLocations": [
+        {
+         "name": "go(String)",
+         "kind": "function",
+         "fullyQualifiedName": "com.example.Uses.go(String)"
+        }
+       ]
+      }
+     ]
+    }
+   ],
+   "originalUriBaseIds": {
+    "38901169": {
+     "uri": "{{ROOT_URI}}/src/main/java/"
+    }
+   },
+   "taxonomies": [
+    {
+     "name": "CWE",
+     "version": "4.10",
+     "minimumRequiredLocalizedDataSemanticVersion": "4.10",
+     "releaseDateUtc": "2023-01-31",
+     "guid": "b8c54a32-de19-51d2-9a08-f0abfbaa7310",
+     "informationUri": "https://cwe.mitre.org/data/published/cwe_v4.10.pdf/",
+     "downloadUri": "https://cwe.mitre.org/data/xml/cwec_v4.10.xml.zip",
+     "isComprehensive": true,
+     "organization": "MITRE",
+     "language": "en",
+     "shortDescription": {
+      "text": "The MITRE Common Weakness Enumeration"
+     },
+     "taxa": [
+      {
+       "id": "328",
+       "guid": "dc1e99c1-c57b-5af0-85a4-9ad3bfac9c82",
+       "shortDescription": {
+        "text": "Use of Weak Hash"
+       },
+       "fullDescription": {
+        "text": "The product uses an algorithm that produces a digest (output value) that does not meet security expectations for a hash function that allows an adversary to reasonably determine the original input (preimage attack), find another input that can produce the same hash (2nd preimage attack), or find multiple inputs that evaluate to the same hash (birthday attack)."
+       },
+       "defaultConfiguration": {
+        "level": "none"
+       }
+      },
+      {
+       "id": "78",
+       "guid": "de860c32-bc93-5e70-89d7-0877e5abaefb",
+       "shortDescription": {
+        "text": "Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')"
+       },
+       "fullDescription": {
+        "text": "The product constructs all or part of an OS command using externally-influenced input from an upstream component, but it does not neutralize or incorrectly neutralizes special elements that could modify the intended OS command when it is sent to a downstream component."
+       },
+       "defaultConfiguration": {
+        "level": "error"
+       }
+      },
+      {
+       "id": "89",
+       "guid": "ef952f10-a202-504c-8649-9ffcb2291d69",
+       "shortDescription": {
+        "text": "Improper Neutralization of Special Elements used in an SQL Command ('SQL Injection')"
+       },
+       "fullDescription": {
+        "text": "The product constructs all or part of an SQL command using externally-influenced input from an upstream component, but it does not neutralize or incorrectly neutralizes special elements that could modify the intended SQL command when it is sent to a downstream component."
+       },
+       "defaultConfiguration": {
+        "level": "error"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
