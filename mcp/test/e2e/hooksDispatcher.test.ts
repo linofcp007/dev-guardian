@@ -717,6 +717,36 @@ describe('hooks/guardian-hook.mjs — task-1 (real subprocess)', () => {
       projectAllowlist(['AKIA']);
       expect(decision(tokenWriteTo('src/k.ts'))).toBeUndefined();
     });
+
+    // Review of 3.6.0, finding 11: an allowlist entry matches any line holding
+    // it, so `"="` or `"e"` silenced every secret warning, and SessionStart said
+    // nothing. Entries under four non-blank characters are ignored, and named.
+    const postWrite = (): HookResult =>
+      runHook(
+        {
+          hook_event_name: 'PostToolUse',
+          tool_name: 'Write',
+          tool_input: { file_path: join(projectDir, 'src', 'k.ts'), content: `const k = "${FAKE_AWS_KEY}";` },
+          cwd: projectDir,
+        },
+        { cwd: projectDir, homeDir },
+      );
+    it.each([[['=']], [['k']], [[' " ']], [['AK', 'AKIA']], [{ secrets: ['"'] }]])('a too-short allowlist entry is ignored (%j)', (entries) => {
+      projectAllowlist(entries);
+      const short = Array.isArray(entries) ? entries.filter((e) => e.trim().length < 4) : entries.secrets;
+      if (Array.isArray(entries) && entries.includes('AKIA')) {
+        expect(postWrite().stdout).toBeUndefined();
+      } else {
+        expect(context(postWrite())).toMatch(/AWS/);
+      }
+      expect(context(sessionStart())).toMatch(/hooks-allowlist\.json holds .*shorter than 4 characters.*ignored: secret warnings still apply/);
+      expect(short.length).toBeGreaterThan(0);
+    });
+
+    it('an allowlist of real markers is not named at SessionStart', () => {
+      projectAllowlist(['AKIA', 'EXAMPLE']);
+      expect(context(sessionStart())).not.toMatch(/hooks-allowlist\.json holds/);
+    });
   });
 
   // Task 23 fix round 2, N1: the config reader did existsSync + readFileSync

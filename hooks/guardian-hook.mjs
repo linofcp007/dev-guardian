@@ -117,6 +117,7 @@ const HOOK_STARTED = Date.now();
  *   invalidSettings: string[],
  *   unreadConfigFiles?: string[],
  *   ignoresEverything?: string,
+ *   shortAllowlistEntries?: string[],
  * }} HookConfig
  * @typedef {{ old_string?: unknown, new_string?: unknown, replace_all?: boolean }} SettingsEdit
  * @typedef {{ old_string: string, new_string: string, replace_all?: boolean }} TextEdit
@@ -617,14 +618,37 @@ function loadConfig(root, unread) {
 }
 
 /**
+ * The fewest non-blank characters an allowlist entry may have. An entry
+ * silences a secret warning on any line that contains it, case-insensitively,
+ * so a one- to three-character entry (`"="`, `"e"`, `" a "`) holds in nearly
+ * every line and silences every warning — and the file comes from the project,
+ * which anyone who controls it writes (review of 3.6.0, finding 11). Four keeps
+ * a real marker (`"AKIA"`, `"EXAMPLE"`, `"fake_"`).
+ */
+const MIN_ALLOWLIST_ENTRY = 4;
+
+/**
+ * The project's secret allowlist, without the entries too short to be one
+ * ({@link MIN_ALLOWLIST_ENTRY}) — those go to `dropped`, for SessionStart to name.
+ *
  * @param {string} root
  * @param {string[]} unread
+ * @param {string[]} [dropped]
  * @returns {string[]}
  */
-function loadAllowlist(root, unread) {
+function loadAllowlist(root, unread, dropped = []) {
   const data = readJsonFile(join(root, '.guardian', 'hooks-allowlist.json'), '.guardian/hooks-allowlist.json', unread, root);
   /** @param {unknown[]} list */
-  const strings = (list) => list.filter((x) => typeof x === 'string');
+  const strings = (list) => {
+    /** @type {string[]} */
+    const out = [];
+    for (const x of list) {
+      if (typeof x !== 'string') continue;
+      if (x.trim().length >= MIN_ALLOWLIST_ENTRY) out.push(x);
+      else dropped.push(x);
+    }
+    return out;
+  };
   if (Array.isArray(data)) return strings(data);
   if (isPlainObject(data) && Array.isArray(data['secrets'])) return strings(data['secrets']);
   return [];
@@ -1061,6 +1085,14 @@ function ignoredSettingsNotice(cfg) {
     lines.push(
       `⚠️ dev-guardian: ${cfg.ignoresEverything}, which every path (or nearly every one) matches — a secret written ` +
         'to such a file is not warned about in this session.',
+    );
+  }
+  const short = cfg.shortAllowlistEntries ?? [];
+  if (short.length > 0) {
+    const shown = short.slice(0, 5).map((e) => JSON.stringify(e.slice(0, 16)));
+    lines.push(
+      `⚠️ dev-guardian: .guardian/hooks-allowlist.json holds ${shown.join(', ')}${short.length > 5 ? ` and ${short.length - 5} more` : ''} — ` +
+        `shorter than ${MIN_ALLOWLIST_ENTRY} characters, nearly every line would match, so ignored: secret warnings still apply.`,
     );
   }
   return lines.length > 0 ? lines.join('\n') : null;
@@ -2139,8 +2171,11 @@ async function main() {
   const root = projectRootOf(cwd);
   const cfg = loadConfig(root, unread);
   if (!cfg.enabled) noop();
-  const allowlist = loadAllowlist(root, unread);
+  /** @type {string[]} */
+  const shortEntries = [];
+  const allowlist = loadAllowlist(root, unread, shortEntries);
   cfg.unreadConfigFiles = unread;
+  cfg.shortAllowlistEntries = shortEntries;
 
   debug(`event=${event} tool=${toolName} cwd=${cwd} root=${root}`);
 

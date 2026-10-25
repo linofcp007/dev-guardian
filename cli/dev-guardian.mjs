@@ -958,13 +958,21 @@ function readRepoJson(projectPath, relPath) {
 }
 
 /**
+ * The project's secret allowlist. An entry under four non-blank characters is
+ * ignored, as the hooks ignore it: it would hold in nearly every line and
+ * silence every finding (review of 3.6.0, finding 11).
+ *
  * @param {string} projectDir
  * @returns {string[]}
  */
 function loadAllowlist(projectDir) {
   const data = readRepoJson(projectDir, join('.guardian', 'hooks-allowlist.json'));
   /** @param {unknown[]} list */
-  const strings = (list) => list.filter((x) => typeof x === 'string');
+  const strings = (list) =>
+    list.filter(
+      /** @returns {x is string} */
+      (x) => typeof x === 'string' && x.trim().length >= 4,
+    );
   if (Array.isArray(data)) return strings(data);
   const secrets = data !== null && typeof data === 'object' ? /** @type {{ secrets?: unknown }} */ (data).secrets : undefined;
   return Array.isArray(secrets) ? strings(secrets) : [];
