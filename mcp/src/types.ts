@@ -177,6 +177,13 @@ export interface ToolRun {
    */
   plugin_pack_only?: true;
   /**
+   * A scan_sast Semgrep run without one of the plugin's own packs, not on
+   * disk (a damaged install): `ok` and missing, the pack named in `reason`.
+   * Here as data, because the CI gate never lets an acceptance of named files
+   * cover it (`ci/gate.ts`). Absent: every pack was there.
+   */
+  plugin_pack_missing?: true;
+  /**
    * A Semgrep run that ran the plugin's own packs, when one of them did not
    * fully run: by pack (`llm`), its status and why. Today only the LLM pack's
    * own taint fixpoint timeouts (`runners/semgrepReport.ts`,

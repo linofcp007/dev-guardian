@@ -390,7 +390,8 @@ function judgeMissing(
   const sameName = toolsRun.filter((run) => run.name === name);
   const blocker = sameName.find((run) => run.status !== 'ok');
   const ok = sameName.find((run) => run.status === 'ok');
-  const otherCause = ok !== undefined && ((ok.failed_rules?.length ?? 0) > 0 || ok.unscanned !== undefined);
+  const otherCause =
+    ok !== undefined && ((ok.failed_rules?.length ?? 0) > 0 || ok.unscanned !== undefined || ok.plugin_pack_missing === true);
 
   if (gatingRefs.length === 0 && blocker === undefined && !otherCause) {
     out.gating = false;
