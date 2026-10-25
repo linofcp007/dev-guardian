@@ -102,7 +102,7 @@ import { userDataDir } from './dataRegistry.js';
 import { powershellAsPosix, powershellOpaque } from './powershellText.js';
 import { pushAll } from './shell/arrays.js';
 import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
-import { ASSIGNMENT, basename, cmdSwitch, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
 import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
 import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
 import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
@@ -791,6 +791,32 @@ const DASH_DELETE_HEADS = new Set(['rm', 'ri', 'remove-item']);
 /** cmd.exe-style delete commands, also reachable from PowerShell — slash flags. */
 const SLASH_DELETE_HEADS = new Set(['rd', 'rmdir', 'del', 'erase']);
 
+/** GNU `rm`'s long options, which getopt_long also takes by any prefix that names one of them alone. */
+const RM_LONG_OPTIONS = ['force', 'interactive', 'one-file-system', 'no-preserve-root', 'preserve-root', 'recursive', 'dir', 'verbose', 'help', 'version'];
+
+/**
+ * The GNU `rm` long option a `--` word names (review of 3.6.0, finding 1):
+ * itself, or the one option it is an unambiguous prefix of — `--rec` and
+ * `--r` are `--recursive`, `--no-p` is `--no-preserve-root` — read without
+ * its `=value` and case. `undefined` for none, or an ambiguous prefix
+ * (`--v`: `--verbose` or `--version`).
+ */
+function rmLongOption(token: string): string | undefined {
+  const name = (token.slice(2).split('=')[0] ?? '').toLowerCase();
+  if (name === '') return undefined;
+  if (RM_LONG_OPTIONS.includes(name)) return name;
+  const named = RM_LONG_OPTIONS.filter((o) => o.startsWith(name));
+  return named.length === 1 ? named[0] : undefined;
+}
+
+/**
+ * A cluster of `rm`'s short options — GNU's `-d -f -i -I -r -R -v` and BSD's
+ * `-P -W -x` — of any length: `-rfvd` is four flags, recursive among them.
+ * A PowerShell parameter name (`-Force`, `-Recurse`) has a letter no `rm`
+ * takes, so it is never read as one.
+ */
+const RM_SHORT_CLUSTER = /^[dfiIPrRvWx]+$/;
+
 /**
  * Tokenised assessment of one simple command. The *target* — not just the
  * flags — decides severity: `rm -rf /` is catastrophic, `rm -rf node_modules`
@@ -817,25 +843,36 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
     // PowerShell takes an en or em dash for a parameter's `-` (fix round 4).
     const token = (rest[k]?.value ?? '').replace(/^[\u2013\u2014\u2015]/, '-');
     // `/q` (quiet) asks nothing \u2014 but neither does a tool with no terminal, so
-    // `/s` alone decides. Git Bash's `//s` reaches cmd as `/s` (review 8, item 2).
+    // `/s` alone decides. Git Bash's `//s` reaches cmd as `/s` (review 8, item 2),
+    // and `/s/q` is `/s` and `/q` (review of 3.6.0, finding 3).
     if (slashStyle && token.startsWith('/')) {
-      if (cmdSwitch(token).toLowerCase() === '/s') recursive = true;
+      if (cmdSwitches(token)?.includes('s') === true) recursive = true;
       continue;
     }
     // Dash flags: `rm`'s and `Remove-Item`'s — and, since `rd`, `rmdir`, `del`
     // and `erase` are Remove-Item aliases in PowerShell, theirs too:
     // `rmdir C:\Users -Recurse -Force` was ok (fix round 4).
-    if (token === '--no-preserve-root') noPreserve = true;
-    else if (token === '--recursive') recursive = true;
-    else if (token.startsWith('--')) continue;
-    else if (token.startsWith('-') && token.length > 1) {
+    // GNU getopt takes a long option by any prefix that names it alone, so
+    // `--rec` recurses as `--recursive` does (review of 3.6.0, finding 1).
+    if (token.startsWith('--')) {
+      const option = rmLongOption(token);
+      if (option === 'no-preserve-root') noPreserve = true;
+      else if (option === 'recursive') recursive = true;
+      continue;
+    }
+    if (token.startsWith('-') && token.length > 1) {
       // A PowerShell parameter may be given its value after a colon, split at
       // the FIRST colon only (`-Path:C:\Users` is `C:\Users` — fix round 6).
       const colon = token.indexOf(':');
       const flags = colon < 0 ? token.slice(1) : token.slice(1, colon);
       let value = colon < 0 ? undefined : token.slice(colon + 1);
       const lower = flags.toLowerCase();
-      const isSwitch = lower === 'recurse' || lower === 'rec' || lower === 'force' || lower === 'fo';
+      // PowerShell binds a parameter by any prefix that names it alone: of
+      // Remove-Item's, only `-Recurse` begins with `r` (`-Recu`, `-Recur` —
+      // review of 3.6.0, finding 2), and `-fo` is the shortest `-Force`
+      // (`-f` is `-Filter` too).
+      const recurseParam = lower !== '' && 'recurse'.startsWith(lower);
+      const isSwitch = recurseParam || (lower.length >= 2 && 'force'.startsWith(lower));
       // A switch's value may also be the next word (`-Recurse: $false`); any
       // other parameter's next word stays where it is — `-Path: C:\Users`
       // names the target (fix round 6).
@@ -847,14 +884,17 @@ function assessRecursiveDelete(words: ShellWord[], start: number, home?: HomeDir
       // `-Recurse:$true` is on, `-Recurse:$false` off.
       const on = value === undefined || !/^\$?(?:false|0)$/i.test(value);
       // PowerShell's whole-word parameter names first — `-Recurse` and its
-      // abbreviation. Checked before the GNU-cluster heuristic below because
-      // that heuristic (does the flag text contain the letter r anywhere?) is
-      // right for a *cluster* of single-letter flags like `-rf`, where every
-      // character really is its own flag, and wrong for a whole parameter
-      // name. `-Force` / `-fo` decide nothing any more (review 8, item 1);
-      // they are read only so that their value is not taken for a target.
-      if (lower === 'recurse' || lower === 'rec') recursive ||= on;
-      else if (!isSwitch && value === undefined && flags.length <= 3 && /r/i.test(flags)) recursive = true;
+      // abbreviations. Checked before the cluster readings below because
+      // those (does the flag text contain the letter r?) are right for a
+      // *cluster* of single-letter flags like `-rf`, where every character
+      // really is its own flag, and wrong for a whole parameter name.
+      // `-Force` / `-fo` decide nothing any more (review 8, item 1); they are
+      // read only so that their value is not taken for a target. A cluster of
+      // `rm`'s own letters recurses at any length (`-rfvd` was ok: only three
+      // letters were read — finding 1); a short word with an `r` still does,
+      // as before.
+      if (recurseParam) recursive ||= on;
+      else if (!isSwitch && value === undefined && /r/i.test(flags) && (RM_SHORT_CLUSTER.test(flags) || flags.length <= 3)) recursive = true;
     } else targets.push(token);
   }
 

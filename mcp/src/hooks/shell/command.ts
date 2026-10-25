@@ -177,6 +177,22 @@ export function cmdSwitch(word: string): string {
   return /^\/\/[A-Za-z?]/.test(word) ? word.slice(1) : word;
 }
 
+/**
+ * The switches one cmd.exe word holds, lower-cased and without their `/`:
+ * `/s` is `['s']`, and `/s/q` or `/Q/S` — cmd's built-ins (`rd`, `del`) take
+ * switches stacked in one word — `['s', 'q']` (review of 3.6.0, finding 3:
+ * `rd /s/q` read as no `/s` at all). Git Bash's `//s/q` too ({@link
+ * cmdSwitch}). `undefined` for a word that is not only switches (`/c/Users`).
+ */
+export function cmdSwitches(word: string): string[] | undefined {
+  const w = cmdSwitch(word);
+  if (!/^(?:\/[A-Za-z?](?::[^/\s]*)?)+$/.test(w)) return undefined;
+  return w
+    .split('/')
+    .filter((s) => s !== '')
+    .map((s) => s.toLowerCase());
+}
+
 interface Redirect {
   /** What precedes the operator in the same word: `''`, an fd number, `&`, or an ordinary word (`x>f`). */
   prefix: string;

@@ -4355,3 +4355,52 @@ describe('assessBashCommand — links: a second name for a guarded file (review 
     expectLinear('ln -s … echo >', (n) => assessBashCommand('ln -s a b; echo x > b/c; '.repeat(Math.max(1, Math.floor(n / 26)))), 20_000);
   }, 120_000);
 });
+
+// Review of 3.6.0, findings 1-3: a recursive delete's flags in every spelling
+// the program itself accepts — GNU getopt's unambiguous prefixes and clusters
+// of any length, PowerShell's parameter prefixes, cmd's stacked switches.
+describe('assessBashCommand — review of 3.6.0: recursion in every spelling the deleter accepts (findings 1-3)', () => {
+  const win = { homeDir: 'C:\\Users\\Administrator', platform: 'win32' as const, cwd: 'C:\\Users\\Administrator\\proj' };
+
+  it.each(['rm --rec ~', 'rm --recur ~', 'rm --r -f ~', 'rm -rfvd ~', 'rm -fvdr /*', 'rm -Rfv /', 'rm --no-preserve /', 'rm -r --no-p /'])(
+    '%s is denied (finding 1)',
+    (command) => {
+      expect(assessBashCommand(command, win).rules).toContain('rm-rf-root');
+    },
+  );
+
+  it.each(['Remove-Item ~ -Recu', 'Remove-Item ~ -Recur -Force', 'Remove-Item ~ -Recurs', 'ri $HOME -Re -Fo', 'rm C:\\ -Recurse:$true'])(
+    '%s (powershell) is denied (finding 2)',
+    (command) => {
+      expect(assessBashCommand(command, { shell: 'powershell', ...win }).rules).toContain('rm-rf-root');
+    },
+  );
+
+  it.each([
+    ['cmd /c "rd /s/q C:\\Users\\Administrator"', 'bash'],
+    ['cmd /c "rmdir /q/s C:\\Users\\Administrator"', 'bash'],
+    ["cmd //c 'rd /S/Q C:\\'", 'bash'],
+    ['rd /s/q C:\\', 'powershell'],
+    ['rmdir /Q/S %USERPROFILE%', 'powershell'],
+  ] as const)('%s (%s) is denied (finding 3)', (command, shell) => {
+    expect(assessBashCommand(command, { shell, ...win }).rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    ['rm -f a.txt', 'bash', 'ok'],
+    ['rm -r build', 'bash', 'warn'],
+    ['rm -rfv build', 'bash', 'warn'],
+    ['rm --verbose --force a.txt', 'bash', 'ok'],
+    ['rm --v a.txt', 'bash', 'ok'],
+    ['rm --dir empty', 'bash', 'ok'],
+    ['Remove-Item .\\dist -Recurse', 'powershell', 'warn'],
+    ['Remove-Item ~ -Force', 'powershell', 'ok'],
+    ['Remove-Item ~ -Recurse:$false', 'powershell', 'ok'],
+    ['Remove-Item ~\\notes.txt -Fo', 'powershell', 'ok'],
+    ['rd /q build', 'powershell', 'ok'],
+    ['rd /s/q build', 'powershell', 'warn'],
+    ['del /f/q C:\\', 'powershell', 'ok'],
+  ] as const)('%s (%s) keeps its verdict: %s', (command, shell, level) => {
+    expect(assessBashCommand(command, { shell, ...win }).level).toBe(level);
+  });
+});
