@@ -25,4 +25,7 @@ starts, builds or stops it.
 Safety envelope (never work around it): read-only methods (GET / HEAD / OPTIONS) unless `allow_write_methods`
 is on, and then with an empty body — plus the optional `probe_rate_limit` burst, the one exception, which sends
 POST to exactly one route. Redirects are never followed — by nuclei either (`-disable-redirects`), which also
-runs HTTP templates only (`-type http`), so it probes no other port or host than the URL.
+runs HTTP templates only (`-type http`), so it probes no other port or host than the URL. The open-redirect
+check sends one more GET per path, offering `https://dev-guardian-redirect-probe.invalid/` in the usual redirect
+parameters (`next`, `url`, `redirect`, `returnUrl`, …), and reports only a redirect there: a fixed one off the
+origin (http→https, www, an SSO login) is no finding.

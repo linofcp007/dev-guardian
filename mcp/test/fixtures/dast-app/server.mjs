@@ -12,7 +12,10 @@
  *   - `GET  /reflect-cors`   200, reflecting whatever `Origin` header it was
  *                            sent back as `Access-Control-Allow-Origin`, with
  *                            `Access-Control-Allow-Credentials: true`.
- *   - `GET  /go`             302 to an off-origin URL.
+ *   - `GET  /go`             302 to the `next` query parameter when one is sent
+ *                            (an open redirect: the redirect probe offers its
+ *                            own destination there), else to a fixed
+ *                            off-origin URL — which is no finding.
  *   - `GET  /boom`           500 with a Node-shaped stack trace in the body.
  *   - `OPTIONS /users`       204 advertising `Allow: GET, HEAD, OPTIONS,
  *                            DELETE` — DELETE is not in the static inventory.
@@ -52,9 +55,10 @@ export async function start() {
 
   const server = createServer((req, res) => {
     const method = req.method ?? '';
-    // Probes built by `mcp/src/dast/plan.ts` never carry a query string, so
-    // `req.url` IS the path here — no query-string handling needed.
-    const path = req.url ?? '/';
+    // Only the redirect probe (`mcp/src/dast/plan.ts`) carries a query
+    // string; `path` is the path alone, as every assertion reads it.
+    const url = new URL(req.url ?? '/', 'http://fixture.invalid');
+    const path = url.pathname;
     requests.push({ method, path });
     // Drain the request body unconditionally, before any routing decision.
     // The rate-limit burst (and any stray write attempt, if the envelope
@@ -90,7 +94,7 @@ export async function start() {
     }
 
     if (path === '/go') {
-      res.writeHead(302, { location: 'https://elsewhere.example.com/' });
+      res.writeHead(302, { location: url.searchParams.get('next') ?? 'https://elsewhere.example.com/' });
       res.end();
       return;
     }

@@ -80,6 +80,11 @@ export function computeCheckStatuses(input: CheckStatusInput): Record<DastCheck,
   const completedCors = results.some(
     (r) => r.request.variant === 'cors' && r.outcome === 'completed',
   );
+  // The open-redirect check reads the redirect probe alone (`analyze.ts`).
+  const plannedRedirect = plan.requests.some((r) => r.variant === 'redirect');
+  const completedRedirect = results.some(
+    (r) => r.request.variant === 'redirect' && r.outcome === 'completed',
+  );
   const plannedAny = plan.requests.length > 0;
   const completedAny = results.some((r) => r.outcome === 'completed');
 
@@ -98,7 +103,7 @@ export function computeCheckStatuses(input: CheckStatusInput): Record<DastCheck,
     security_headers: fromProbes(plannedAny, completedAny),
     info_disclosure: fromProbes(plannedAny, completedAny),
     method_surface: fromProbes(plannedAnonymous, completedAnonymous),
-    open_redirect: fromProbes(plannedAnonymous, completedAnonymous),
+    open_redirect: fromProbes(plannedRedirect, completedRedirect),
     rate_limit: rateLimitStatus(input.rateLimit),
     nuclei: nucleiStatus(input.nuclei),
   };

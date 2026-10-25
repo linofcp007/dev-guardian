@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeRoutes } from '../../../src/dast/analyze.js';
+import { REDIRECT_PROBE_TARGET } from '../../../src/dast/plan.js';
 import type { ProbeResult } from '../../../src/dast/types.js';
 import { input, result, route } from './helpers.js';
 
@@ -219,11 +220,30 @@ describe('analyzeRoutes — CORS', () => {
 });
 
 describe('analyzeRoutes — open redirect and method surface', () => {
-  it('flags a 3xx whose Location leaves the target origin', () => {
-    const f = analyzeRoutes(input({
-      results: [result({ status: 302, headers: { location: 'https://evil.example.com/' } })],
-    }));
-    expect(f.some((x) => x.check === 'open_redirect')).toBe(true);
+  const redirectProbe = { id: 'redirect GET /users', variant: 'redirect' as const };
+
+  it('flags a redirect whose destination is the one the probe put in the request', () => {
+    for (const location of [REDIRECT_PROBE_TARGET, '//dev-guardian-redirect-probe.invalid/x', 'https://DEV-GUARDIAN-REDIRECT-PROBE.invalid/']) {
+      const f = analyzeRoutes(input({
+        results: [result({ status: 302, headers: { location }, request: redirectProbe })],
+      }));
+      const hit = f.find((x) => x.check === 'open_redirect');
+      expect(hit?.severity, location).toBe('medium');
+      expect(hit?.message, location).toContain('from the request');
+    }
+  });
+
+  it('does not flag a fixed redirect off the origin — no attacker destination was tested', () => {
+    // Review of 3.6, finding 6: an http→https upgrade, a www canonicalisation
+    // and an SSO login redirect each read as a medium "open redirect".
+    for (const location of ['https://localhost:3000/users', 'http://www.localhost:3000/', 'https://sso.example.com/login?next=/users']) {
+      for (const request of [{ variant: 'anonymous' as const }, redirectProbe]) {
+        const f = analyzeRoutes(input({
+          results: [result({ status: 302, headers: { location }, request })],
+        }));
+        expect(f.some((x) => x.check === 'open_redirect'), `${location} ${request.variant}`).toBe(false);
+      }
+    }
   });
 
   it('does not flag a same-origin or relative redirect', () => {
@@ -280,11 +300,12 @@ describe('analyzeRoutes — open redirect and method surface', () => {
  */
 describe('analyzeRoutes — route-scoped checks fire once per fact, with credentials in play', () => {
   const r = route({ auth_hint: 'required' });
-  /** The three variants `plan.ts` sends to one route when a credential exists. */
+  /** The four variants `plan.ts` sends to one route when a credential exists. */
   const variants = (over: Partial<ProbeResult> = {}): ProbeResult[] => [
     result({ ...over, request: { id: 'anonymous GET /users', variant: 'anonymous' } }),
     result({ ...over, request: { id: 'authenticated GET /users', variant: 'authenticated' } }),
     result({ ...over, request: { id: 'cors GET /users', variant: 'cors' } }),
+    result({ ...over, request: { id: 'redirect GET /users', variant: 'redirect' } }),
   ];
 
   function analyze(over: Partial<ProbeResult>): ReturnType<typeof analyzeRoutes> {
@@ -305,7 +326,7 @@ describe('analyzeRoutes — route-scoped checks fire once per fact, with credent
   });
 
   it('reports an open redirect once, not once per variant', () => {
-    const f = analyze({ status: 302, headers: { location: 'https://evil.example.com/' } });
+    const f = analyze({ status: 302, headers: { location: REDIRECT_PROBE_TARGET } });
     expect(f.filter((x) => x.check === 'open_redirect')).toHaveLength(1);
   });
 
@@ -432,8 +453,9 @@ describe('dast fingerprints', () => {
     const pick = (results: ProbeResult[]): string | undefined =>
       analyzeRoutes(input({ results })).find((x) => x.check === 'open_redirect')?.fingerprint;
 
-    const a = pick([result({ status: 302, headers: { location: 'https://evil.example.com/' } })]);
-    const b = pick([result({ status: 307, headers: { location: 'https://evil.example.com/x' } })]);
+    const probe = { id: 'redirect GET /users', variant: 'redirect' as const };
+    const a = pick([result({ status: 302, headers: { location: REDIRECT_PROBE_TARGET }, request: probe })]);
+    const b = pick([result({ status: 307, headers: { location: `${REDIRECT_PROBE_TARGET}x` }, request: probe })]);
     expect(a).toBeDefined();
     expect(a).toBe(b);
   });
