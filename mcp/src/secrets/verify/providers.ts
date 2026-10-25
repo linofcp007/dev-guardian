@@ -66,6 +66,15 @@ export interface SecretProvider {
   /** The request headers; the secret goes here and nowhere else. */
   headers(secret: string): Record<string, string>;
   /**
+   * The shape of this provider's tokens — its prefix, alphabet and a length
+   * range wide enough for its formats. A value of another shape is skipped,
+   * never sent: the rule id comes from gitleaks, and a project's own
+   * `.gitleaks.toml` may give any regex the id `github-pat` — the user's
+   * database password went to api.github.com (review of 3.6.0; only Slack
+   * and OpenAI looked at what they were handed).
+   */
+  shape: RegExp;
+  /**
    * Token shapes this endpoint can judge; others are skipped, never sent. A
    * Slack refresh token (`xoxe-`) is not an access token, so auth.test would
    * call a perfectly live one invalid.
@@ -120,6 +129,7 @@ const GITHUB_HOST = hostOf(GITHUB_ENDPOINT);
 const github: SecretProvider = {
   name: 'GitHub',
   rules: ['github-pat', 'github-fine-grained-pat'],
+  shape: /^(?:gh[pousr]_[A-Za-z0-9]{30,251}|github_pat_[A-Za-z0-9_]{22,244})$/,
   endpoint: GITHUB_ENDPOINT,
   method: 'GET',
   headers: (secret) => ({
@@ -158,6 +168,7 @@ const GITLAB_HOST = hostOf(GITLAB_ENDPOINT);
 const gitlab: SecretProvider = {
   name: 'GitLab',
   rules: ['gitlab-pat'],
+  shape: /^glpat-[A-Za-z0-9_.-]{20,255}$/,
   endpoint: GITLAB_ENDPOINT,
   method: 'GET',
   headers: (secret) => ({ 'private-token': secret, accept: 'application/json', 'user-agent': USER_AGENT }),
@@ -189,6 +200,7 @@ const SLACK_DEAD: readonly string[] = ['token_revoked', 'account_inactive', 'tok
 const slack: SecretProvider = {
   name: 'Slack',
   rules: ['slack-bot-token', 'slack-user-token'],
+  shape: /^xox[a-z]-[A-Za-z0-9-]{10,250}$/,
   endpoint: SLACK_ENDPOINT,
   method: 'POST',
   headers: (secret) => ({ ...bearer(secret), 'content-type': 'application/x-www-form-urlencoded' }),
@@ -218,6 +230,7 @@ const STRIPE_HOST = hostOf(STRIPE_ENDPOINT);
 const stripe: SecretProvider = {
   name: 'Stripe',
   rules: ['stripe-access-token'],
+  shape: /^(?:sk|rk)_(?:live|test|prod)_[A-Za-z0-9]{10,247}$/,
   endpoint: STRIPE_ENDPOINT,
   method: 'GET',
   headers: bearer,
@@ -251,6 +264,7 @@ const OPENAI_HOST = hostOf(OPENAI_ENDPOINT);
 const openai: SecretProvider = {
   name: 'OpenAI',
   rules: ['openai-api-key'],
+  shape: /^sk-(?!ant-)[A-Za-z0-9_-]{20,250}$/,
   endpoint: OPENAI_ENDPOINT,
   method: 'GET',
   headers: bearer,
@@ -285,6 +299,7 @@ const ANTHROPIC_HOST = hostOf(ANTHROPIC_ENDPOINT);
 const anthropic: SecretProvider = {
   name: 'Anthropic',
   rules: ['anthropic-api-key'],
+  shape: /^sk-ant-api\d{2}-[A-Za-z0-9_-]{20,250}$/,
   endpoint: ANTHROPIC_ENDPOINT,
   method: 'GET',
   headers: (secret) => ({
@@ -315,6 +330,7 @@ const NPM_HOST = hostOf(NPM_ENDPOINT);
 const npm: SecretProvider = {
   name: 'npm',
   rules: ['npm-access-token'],
+  shape: /^npm_[A-Za-z0-9]{36,64}$/,
   endpoint: NPM_ENDPOINT,
   method: 'GET',
   headers: bearer,
@@ -342,6 +358,7 @@ const SENDGRID_HOST = hostOf(SENDGRID_ENDPOINT);
 const sendgrid: SecretProvider = {
   name: 'SendGrid',
   rules: ['sendgrid-api-token'],
+  shape: /^SG\.[A-Za-z0-9_-]{16,64}\.[A-Za-z0-9_-]{16,64}$/,
   endpoint: SENDGRID_ENDPOINT,
   method: 'GET',
   headers: bearer,

@@ -3,7 +3,8 @@
 When the user asks whether the project's MCP servers (or the agent's configuration) are safe:
 
 1. `audit_agent_config { project_path: "<project>" }` first. It reads the configurations (`.mcp.json`,
-   `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, `.claude-plugin/plugin.json`; with
+   `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`, `.claude-plugin/plugin.json`,
+   `hooks/hooks.json`; with
    `include_user_config: true` the user's too — Claude Code, Claude Desktop, Cursor, Windsurf, Gemini)
    **without running anything**, and says which servers are declared.
 2. `audit_mcp_tools { project_path: "<project>", servers: ["<name>"] }` only for the servers the user asked to

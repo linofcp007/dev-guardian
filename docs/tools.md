@@ -63,7 +63,7 @@ The dev-guardian MCP server lists **50 tools** and **18 resources**. This page i
 
 ### `audit_agent_config`
 
-Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, plugin.json; user-level ones with include\_user\_config): unpinned npx/uvx servers, plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach the network, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. Reads only; audit\_mcp\_tools inspects what servers serve.
+Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, plugin.json, hooks/hooks.json; user-level ones with include\_user\_config): unpinned npx/uvx servers, plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach the network or run what scan\_skill flags, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. Reads only; audit\_mcp\_tools inspects what servers serve.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -528,7 +528,7 @@ gitleaks over git history and uncommitted files (the whole directory outside git
 
 ### `scan_skill`
 
-Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, .zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, tool poisoning, dangerous code, taint flows — the commands in instruction files and hook / plugin / MCP configs scored like scripts — and OSV CVEs of its dependencies. Returns a 0-100 risk score and SAFE, REVIEW, CAUTION or DO\_NOT\_INSTALL.
+Audit a third-party AI skill, MCP server, plugin or agent before installing it (a directory, file, .zip or git/HTTP(S) URL): prompt injection, exfiltration, privilege escalation, excessive agency, tool poisoning, dangerous code, taint flows — the commands in instruction files and hook / plugin / MCP configs scored like scripts — and OSV CVEs of its dependencies. Returns a 0-100 risk score and SAFE, REVIEW, CAUTION or DO\_NOT\_INSTALL. What it could not read or look up is named in missing\_tools (coverage partial), and the verdict is then never SAFE.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

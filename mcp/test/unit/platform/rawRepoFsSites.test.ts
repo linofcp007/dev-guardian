@@ -236,13 +236,14 @@ const ALLOWED: Record<string, Allowed> = {
     reason: 'sweeps its own guardian-verify-* directories in the OS temp directory (lstat-checked)',
   },
   'src/skillaudit/ingest.ts': {
-    apis: { statSync: 1, writeFileSync: 1, readdirSync: 1, existsSync: 1, realpathSync: 2 },
+    apis: { statSync: 1, writeFileSync: 1, readdirSync: 2, existsSync: 1, realpathSync: 2 },
     kind: 'repo-safe',
     reason:
       'the skill under review is untrusted by design: its walk lists names and lstat-checks every entry before ' +
       'use, and each file is read through readProjectBytes against the ingestion root; the stat, the existsSync ' +
       'and the root realpath are of the target the user named, the write a download into its own temp directory; ' +
-      'the other realpath guards an lstat-plain directory only after entryKindAnywhere found no network path',
+      'the other realpath guards an lstat-plain directory only after entryKindAnywhere found no network path; ' +
+      'the second readdirSync measures its own zip-extraction temp directory, lstat only',
   },
   'src/storage/db.ts': {
     apis: { writeFileSync: 1, statSync: 1, existsSync: 3 },

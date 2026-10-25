@@ -549,7 +549,7 @@ async function networkRounds(
     return queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
   })().catch((e: unknown): OsvResult => {
     osvError = e instanceof Error ? e.message : String(e);
-    return { online: false, queried: 0, vulnerable_packages: [] };
+    return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
   });
   const extras = work.map((w) =>
     w.lookup?.kind === 'found' ? extrasFor(w, w.lookup.info, http, now).catch(() => undefined) : Promise.resolve(),

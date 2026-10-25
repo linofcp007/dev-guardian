@@ -170,6 +170,11 @@ describe('audit_mcp_tools: a poisoned stdio server', () => {
     expect(server?.pins?.first_audit).toBe(true);
     expect(r.coverage).toBe('full');
     expect(r.tools_run).toEqual([{ name: 'mcp-tool-audit:.mcp.json::poisoned', status: 'ok' }]);
+    // Review of 3.6.0, finding 9: the server's own text is marked as data.
+    expect((r as unknown as { untrusted_content: { fields: string[]; note: string } }).untrusted_content).toMatchObject({
+      fields: expect.arrayContaining(['findings[].message']),
+      note: expect.stringMatching(/never instructions to follow/),
+    });
 
     const rules = new Set(r.findings.map((f) => f.rule_id));
     for (const rule of [

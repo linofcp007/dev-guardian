@@ -10,7 +10,7 @@
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import type { Finding } from '../types.js';
 import type { AgentConfigHashEntry } from '../storage/agentAuditRepo.js';
-import type { ConfigSource } from './configSources.js';
+import { PLUGIN_HOOKS_LABEL, type ConfigSource } from './configSources.js';
 import { hashConfigValue } from './hash.js';
 import { extractMcpServers, type McpServerEntry } from './mcpServers.js';
 import {
@@ -152,11 +152,29 @@ export function collectMcpEntries(
       warnings.push(`${source.label}: ${reason}`);
       sourcesUnreadable.push({ source: source.label, reason });
     }
+    // The same for a plugin.json's `hooks` given as a path (or a list of
+    // them): nothing here follows it, and the hooks there were not checked —
+    // unless it names hooks/hooks.json, which is read as a source of its own.
+    for (const hooksPath of hooksPaths(source)) {
+      const reason = `hooks is a path ("${hooksPath}"), not an inline object; the hooks declared in that file were not checked`;
+      warnings.push(`${source.label}: ${reason}`);
+      sourcesUnreadable.push({ source: source.label, reason });
+    }
   }
 
   const entries: McpServerEntry[] = [];
   for (const source of allSources) entries.push(...extractMcpServers(source));
   return { sources: allSources, entries, warnings, sourcesRead, sourcesMissing, sourcesUnreadable };
+}
+
+/** A plugin.json's `hooks` paths — a string or a list of strings — other than its own hooks/hooks.json. */
+function hooksPaths(source: ConfigSource): string[] {
+  if (source.label !== '.claude-plugin/plugin.json') return [];
+  const root = source.json;
+  if (root === null || typeof root !== 'object' || Array.isArray(root)) return [];
+  const value = (root as Record<string, unknown>)['hooks'];
+  const paths = typeof value === 'string' ? [value] : Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
+  return paths.filter((p) => p.replace(/\\/g, '/').replace(/^(?:\$\{CLAUDE_PLUGIN_ROOT\}\/|\.\/)/, '') !== PLUGIN_HOOKS_LABEL);
 }
 
 /** The `mcpServers` value when it is a string (a path to another file), else null. */

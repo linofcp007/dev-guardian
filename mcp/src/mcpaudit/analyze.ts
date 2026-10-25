@@ -15,17 +15,13 @@
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import type { Finding, Severity } from '../types.js';
 import { capFindingText, capPath, capSegment, MAX_PATH_CHARS } from './output.js';
+import { escapeInvisible, findEncodedBlob, mixedScriptWord, readAs, scanInvisible } from '../platform/hiddenText.js';
 import {
-  escapeInvisible,
-  findEncodedBlob,
   mcpRuleTaxonomy,
-  mixedScriptWord,
   OVERSIZED_DESCRIPTION_CHARS,
   PASS_TO_DESTINATION,
   PASS_TO_WORD,
-  readAs,
   SENSITIVE_PATH_ANYWHERE,
-  scanInvisible,
   TEXT_RULES,
   type McpRuleId,
 } from './rules.js';

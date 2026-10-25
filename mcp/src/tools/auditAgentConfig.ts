@@ -23,6 +23,7 @@ import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } fro
 import { filterFindings } from '../severity/filter.js';
 import { SeverityMin } from '../schemas.js';
 import type { ToolResult, ToolRun } from '../types.js';
+import { untrustedContent } from '../platform/untrustedText.js';
 import { computeCoverage } from './scanCoverage.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
 import { countBySeverity } from '../severity/counts.js';
@@ -51,9 +52,10 @@ const tool = defineTool({
   title: 'Audit the agent workspace configuration',
   description:
     "Audit this project's agent configuration (.mcp.json, .claude/, .cursor/, .vscode/, .gemini/, " +
-    'plugin.json; user-level ones with include_user_config): unpinned npx/uvx servers, plain-http remote ' +
-    'servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, hooks that reach ' +
-    'the network, ${VAR} placeholders Claude Code does not expand, entries changed since the last audit. ' +
+    'plugin.json, hooks/hooks.json; user-level ones with include_user_config): unpinned npx/uvx servers, ' +
+    'plain-http remote servers, inline secrets (redacted), wildcard Bash permissions, bypassPermissions, ' +
+    'hooks that reach the network or run what scan_skill flags, ${VAR} placeholders Claude Code does not ' +
+    'expand, entries changed since the last audit. ' +
     'Reads only; audit_mcp_tools inspects what servers serve.',
   inputSchema,
   handler: (input, ctx) => handler(input, ctx),
@@ -129,6 +131,7 @@ async function handler(
     scan_id: scanId,
     project_path: projectPath,
     include_user_config: includeUserConfig,
+    untrusted_content: untrustedContent(['findings[].snippet', 'findings[].message', 'findings[].title', 'warnings']),
     findings_count: findings.length,
     findings_by_severity: countBySeverity(findings),
     findings,

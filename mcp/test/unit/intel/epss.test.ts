@@ -1,10 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
 import { queryEpss } from '../../../src/intel/epss.js';
 
+/** A response the clients read as a real one — its body a fresh stream on every read (`mockResolvedValue` hands one object to every call). */
 function jsonResponse(body: unknown, status = 200): Response {
+  const text = JSON.stringify(body);
   return {
     ok: status >= 200 && status < 300,
     status,
+    headers: new Headers({ 'content-type': 'application/json' }),
+    get body() {
+      return new Response(text).body;
+    },
     json: async () => body,
   } as unknown as Response;
 }

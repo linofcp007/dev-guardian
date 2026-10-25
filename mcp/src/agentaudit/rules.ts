@@ -8,14 +8,32 @@
  */
 
 import { redact, scanForSecrets } from '../hooks/secretScan.js';
+import { maskSecrets } from '../redaction/maskSecrets.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
+import { scanContent } from '../skillaudit/patterns.js';
+import { matchSignatures } from '../skillaudit/yaraSignatures.js';
 import type { Finding } from '../types.js';
 import type { ConfigSource } from './configSources.js';
 import type { McpServerEntry } from './mcpServers.js';
 
 const TOOL = 'agent-audit';
 
-const NETWORK_EGRESS_RE = /\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod)\b/i;
+/**
+ * A hook command that reaches the network: a client program, a raw socket,
+ * an interpreter's HTTP or socket API, PowerShell's and Windows' own
+ * downloaders, a DNS lookup. It was curl / wget / iwr / irm alone, and
+ * `| nc host 9000`, `bash -i >& /dev/tcp/…` and `python -c "urllib…"`
+ * audited clean (review of 3.6.0).
+ */
+const NETWORK_EGRESS_RE = new RegExp(
+  [
+    String.raw`\b(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|nc|ncat|netcat|socat|telnet|ssh|scp|sftp|ftp|tftp)(?:\.exe)?\b(?!-)`,
+    String.raw`\/dev\/(?:tcp|udp)\/`,
+    String.raw`\b(?:urllib|http\.client|httplib|requests\.(?:get|post|put|patch|request)|httpx|aiohttp|socket\.(?:socket|create_connection)|net\.(?:connect|createConnection)|https?\.(?:get|request)\s*\(|fetch\s*\(|axios|XMLHttpRequest|Net::HTTP|LWP::|IO::Socket|HTTP::Tiny|fsockopen|curl_exec|open-uri)`,
+    String.raw`\b(?:Net\.WebClient|System\.Net\.Http|Start-BitsTransfer|bitsadmin|certutil(?:\.exe)?\b[^|;&\n]*-urlcache|DownloadString|DownloadFile|UploadString|UploadFile|Resolve-DnsName|nslookup|dig)\b`,
+  ].join('|'),
+  'i',
+);
 // Redirection (`>`/`>>`, optionally preceded by a file-descriptor number) or
 // a write-cmdlet, followed by a path that is absolute (leading `/`, `~`, or
 // a Windows drive letter) or that walks up out of the current directory
@@ -92,7 +110,18 @@ function launchSpecFor(entry: McpServerEntry): LaunchSpec | undefined {
   return undefined;
 }
 
-/** True when `spec` names an exact, non-floating version. */
+/** An exact semver version — what npm resolves to one release, and nothing else does. */
+const EXACT_SEMVER = /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+/** An exact PEP 440 release (`0.3.0`, `2025.1.17`, `1.0rc1`, `1!2.0.post1`): no operator, no `*`. */
+const EXACT_PEP440 = /^(?:\d+!)?\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?(?:\+[0-9A-Za-z.]+)?$/i;
+
+/**
+ * True when `spec` names an exact, non-floating version. Any `@<something>`
+ * read as pinned before (review of 3.6.0): `pkg@^1.2.3`, `@~1.2.3`, `@1.x`,
+ * `@>=1`, `@next`, `@*` all float — only an exact semver version is one
+ * release. uv's own `uvx pkg@1.0` was read as unpinned: uvx takes `@` with
+ * an exact version as `==`.
+ */
 function isPinned(launcher: LaunchSpec['launcher'], spec: string): boolean {
   if (launcher === 'npx') {
     // Strip a leading `@scope/` (npm scope), then look for a `@version` on
@@ -100,12 +129,14 @@ function isPinned(launcher: LaunchSpec['launcher'], spec: string): boolean {
     const unscoped = spec.replace(/^@[^/@]+\//, '');
     const at = unscoped.lastIndexOf('@');
     if (at <= 0) return false; // no version separator (or a bare `@scope/name`)
-    const version = unscoped.slice(at + 1);
-    return version.length > 0 && version.toLowerCase() !== 'latest';
+    return EXACT_SEMVER.test(unscoped.slice(at + 1));
   }
-  // uv's `uvx` and pipx's `pipx run` both pin with PEP 440 `==`.
-  const eq = spec.indexOf('==');
-  return eq > 0 && spec.slice(eq + 2).length > 0;
+  // uv's `uvx` and pipx's `pipx run` both pin with PEP 440 `==` (or `===`);
+  // uvx also with `@<exact version>` (`@latest` floats).
+  const eq = /^[^=<>!~@\s]+===?(.+)$/.exec(spec);
+  if (eq?.[1] !== undefined) return EXACT_PEP440.test(eq[1]);
+  const at = launcher === 'uvx' ? /^[^=<>!~@\s]+@(.+)$/.exec(spec) : null;
+  return at?.[1] !== undefined && EXACT_PEP440.test(at[1]);
 }
 
 export function checkUnpinnedLaunchers(entries: McpServerEntry[]): Finding[] {
@@ -124,7 +155,8 @@ export function checkUnpinnedLaunchers(entries: McpServerEntry[]): Finding[] {
           `A compromised or backdoored release published under this name runs automatically the next ` +
           `time this server starts. Pin an exact version.`,
         file_path: entry.sourceLabel,
-        snippet: `${entry.command} ${(entry.args ?? []).join(' ')}`.trim(),
+        // An argument may be a credential (`--token ghp_…`): masked, as every quoted line here is.
+        snippet: maskSecrets(`${entry.command} ${(entry.args ?? []).join(' ')}`.trim()),
       }),
     );
   }
@@ -149,6 +181,9 @@ export function checkPlainHttpRemotes(entries: McpServerEntry[]): Finding[] {
       continue;
     }
     if (parsed.protocol !== 'http:' || isLoopbackHost(parsed.hostname)) continue;
+    // The address, not its credentials: a query (`?api_key=…`) or a userinfo
+    // password was copied whole into the message and the snippet.
+    const shown = maskSecrets(entry.url);
     out.push(
       finding({
         rule_id: 'agent-audit-http-remote',
@@ -156,37 +191,69 @@ export function checkPlainHttpRemotes(entries: McpServerEntry[]): Finding[] {
         category: 'security',
         title: `MCP server '${entry.name}' connects over plain HTTP`,
         message:
-          `'${entry.name}' points at ${entry.url} — an unencrypted transport. Tool calls, responses, ` +
+          `'${entry.name}' points at ${shown} — an unencrypted transport. Tool calls, responses, ` +
           `and any bearer token/header this server is configured with travel in the clear and can be ` +
           `read or altered in transit. Use https:// instead.`,
         file_path: entry.sourceLabel,
-        snippet: entry.url,
+        snippet: shown,
       }),
     );
   }
   return out;
 }
 
-// ── 3. Inline secrets in `env` ─────────────────────────────────────────────
+// ── 3. Inline secrets in `env`, `headers`, `args` and `url` ────────────────
+
+/** One place of an entry a credential can be written: where (for the message), the text scanned, and the value. */
+interface SecretPlace {
+  where: string;
+  text: string;
+  value: string;
+}
+
+/**
+ * Every place of an entry a credential can be written inline. Only `env` was
+ * searched (review of 3.6.0): an `Authorization: Bearer …` header, a
+ * `--token …` argument and a `?api_key=…` URL went unseen. An argument is
+ * read with the flag before it, so `--api-key X` reads as `api-key=X`.
+ */
+function secretPlaces(entry: McpServerEntry): SecretPlace[] {
+  const places: SecretPlace[] = [];
+  for (const [key, value] of Object.entries(entry.env ?? {})) {
+    if (typeof value === 'string') places.push({ where: `env.${key}`, text: `${key}=${value}`, value });
+  }
+  const headers = asObject(entry.raw['headers']);
+  for (const [key, value] of Object.entries(headers ?? {})) {
+    if (typeof value === 'string') places.push({ where: `headers.${key}`, text: `${key}: ${value}`, value });
+  }
+  const args = entry.args ?? [];
+  args.forEach((arg, i) => {
+    const flag = /^--?([\w.-]+)$/.exec(args[i - 1] ?? '')?.[1];
+    places.push({ where: `args[${i}]`, text: flag === undefined ? arg : `${flag}=${arg}`, value: arg });
+  });
+  if (entry.url !== undefined) places.push({ where: 'url', text: entry.url, value: entry.url });
+  return places;
+}
 
 export function checkInlineSecrets(entries: McpServerEntry[]): Finding[] {
   const out: Finding[] = [];
   for (const entry of entries) {
-    if (!entry.env) continue;
-    for (const [key, value] of Object.entries(entry.env)) {
-      if (typeof value !== 'string') continue;
-      const hits = scanForSecrets(`${key}=${value}`);
-      for (const hit of hits) {
+    for (const place of secretPlaces(entry)) {
+      // One finding per place: the most certain of its hits (a token under a
+      // credential name is both a provider token and an assignment).
+      const hits = scanForSecrets(place.text);
+      const best = hits.find((h) => h.confidence === 'high') ?? hits[0];
+      for (const hit of best === undefined ? [] : [best]) {
         out.push(
           finding({
             rule_id: 'agent-audit-inline-secret',
             severity: hit.confidence === 'high' ? 'critical' : 'medium',
             category: 'security',
-            title: `Possible ${hit.title} inline in MCP server '${entry.name}''s env block`,
+            title: `Possible ${hit.title} inline in MCP server '${entry.name}' (${place.where.split(/[.[]/)[0]})`,
             message:
-              `env.${key} on '${entry.name}' (${entry.sourceLabel}) looks like a ${hit.title.toLowerCase()} ` +
+              `${place.where} on '${entry.name}' (${entry.sourceLabel}) looks like a ${hit.title.toLowerCase()} ` +
               `written directly into the config file rather than referenced from a secret store or ` +
-              `\${VAR} placeholder. ${redact(value)}`,
+              `\${VAR} placeholder. ${place.where === 'url' ? maskSecrets(place.value) : redact(place.value)}`,
             file_path: entry.sourceLabel,
             snippet: hit.preview,
           }),
@@ -211,10 +278,19 @@ function asArray(value: unknown): unknown[] | undefined {
 
 // ── 4. Wildcard Bash permission allowlists ─────────────────────────────────
 
-/** Parses `Bash(<specifier>)`. Returns the specifier, or undefined for another tool / malformed entry. */
+/**
+ * Parses `Bash(<specifier>)`. Returns the specifier, or undefined for another
+ * tool / malformed entry. A bare `Bash` — and `Bash()`, `Bash(:*)`, `Bash( *)`,
+ * whose prefix is empty — grants the tool whole: `*`. Review of 3.6.0: a bare
+ * `"allow": ["Bash"]`, every command with no prompt, was never flagged, and
+ * the empty-prefix spellings were skipped as "no prefix".
+ */
 function bashSpecifier(rule: string): string | undefined {
-  const m = /^Bash\((.*)\)$/.exec(rule);
-  return m?.[1];
+  if (rule.trim() === 'Bash') return '*';
+  const m = /^Bash\((.*)\)$/.exec(rule.trim());
+  const specifier = m?.[1];
+  if (specifier === undefined) return undefined;
+  return specifier.replace(/:?\*$/, '').trim() === '' ? '*' : specifier;
 }
 
 /**
@@ -289,9 +365,11 @@ export function checkWildcardPermissions(source: ConfigSource): Finding[] {
   if (!allow) return [];
 
   const out: Finding[] = [];
-  for (const rule of allow) {
-    if (typeof rule !== 'string') continue;
-    const specifier = bashSpecifier(rule);
+  for (const entry of allow) {
+    if (typeof entry !== 'string') continue;
+    const specifier = bashSpecifier(entry);
+    // Quoted masked: a rule can hold a credential (`Bash(curl -H "Authorization: Bearer …" *)`).
+    const rule = maskSecrets(entry);
     if (specifier === undefined) continue;
 
     if (specifier === '*') {
@@ -327,7 +405,7 @@ export function checkWildcardPermissions(source: ConfigSource): Finding[] {
         title: `Wildcard Bash permission: ${rule}`,
         message:
           `permissions.allow contains "${rule}", which auto-approves any Bash command starting with ` +
-          `'${prefix}' with no confirmation prompt. Narrow it to the specific commands actually needed.`,
+          `'${maskSecrets(prefix)}' with no confirmation prompt. Narrow it to the specific commands actually needed.`,
         file_path: source.label,
         snippet: rule,
       }),
@@ -386,6 +464,15 @@ export function checkEnableAllProjectMcpServers(source: ConfigSource): Finding[]
  * hidden behind a variable (`> "$OUT"`) or a command substitution — those
  * are false negatives, not false positives, and are the same trade-off
  * `bashGuard.ts` documents for its own coarser rules.
+ *
+ * A hook in exec form (`"command": "bash", "args": ["-c", "…"]`) is read
+ * with its arguments: the command alone is only the program's name. The
+ * line is also read with scan_skill's code rules and signatures — the same
+ * download-and-run, credential exfiltration, reverse shell or destructive
+ * command that skill audits score (review of 3.6.0: a hook piping the
+ * transcript to `nc` read clean). Every command is quoted masked
+ * (`redaction/maskSecrets.ts`): a hook's `Authorization: Bearer …` was
+ * copied into the finding whole.
  */
 export function checkHookRisks(source: ConfigSource): Finding[] {
   const root = asObject(source.json);
@@ -402,9 +489,13 @@ export function checkHookRisks(source: ConfigSource): Finding[] {
       if (!hooks) continue;
       for (const hook of hooks) {
         const hookObj = asObject(hook);
-        const command = hookObj?.['command'];
-        if (typeof command !== 'string') continue;
-        if (NETWORK_EGRESS_RE.test(command)) {
+        const program = hookObj?.['command'];
+        if (typeof program !== 'string') continue;
+        const args = (asArray(hookObj?.['args']) ?? []).filter((a): a is string => typeof a === 'string');
+        const command = [program, ...args].join(' ');
+        const shown = maskSecrets(command);
+        const egress = NETWORK_EGRESS_RE.exec(command);
+        if (egress !== null) {
           out.push(
             finding({
               rule_id: 'agent-audit-hook-network-egress',
@@ -413,10 +504,10 @@ export function checkHookRisks(source: ConfigSource): Finding[] {
               title: 'A hook shells out to the network',
               message:
                 `${source.label} runs a hook whose command reaches out over the network ` +
-                `(curl/wget/iwr/irm): "${command}". A hook runs on every matching tool call with no ` +
+                `(${egress[0].trim()}): "${shown}". A hook runs on every matching tool call with no ` +
                 `visible confirmation — this is where session data would leave silently.`,
               file_path: source.label,
-              snippet: command,
+              snippet: shown,
             }),
           );
         }
@@ -429,16 +520,38 @@ export function checkHookRisks(source: ConfigSource): Finding[] {
               title: 'A hook writes outside the project directory',
               message:
                 `${source.label} runs a hook whose command writes to a path outside the project ` +
-                `("${command}"). Confirm this is intended — a hook is not sandboxed to the project root.`,
+                `("${shown}"). Confirm this is intended — a hook is not sandboxed to the project root.`,
               file_path: source.label,
-              snippet: command,
+              snippet: shown,
             }),
           );
         }
+        out.push(...dangerousCommandFindings(source, command, shown));
       }
     }
   }
   return out;
+}
+
+/** scan_skill's code rules and signatures over one hook command: each a finding at that rule's severity. */
+function dangerousCommandFindings(source: ConfigSource, command: string, shown: string): Finding[] {
+  const hits = [
+    ...scanContent(command, true).map((m) => ({ id: m.rule.id, title: m.rule.title, severity: m.severity })),
+    ...matchSignatures(command).map((m) => ({ id: m.signature.id, title: m.signature.title, severity: m.signature.severity })),
+  ];
+  return hits.map((hit) =>
+    finding({
+      rule_id: 'agent-audit-hook-dangerous-command',
+      severity: hit.severity,
+      category: 'security',
+      title: `A hook runs: ${hit.title}`,
+      message:
+        `${source.label} runs a hook whose command scan_skill's rule ${hit.id} flags (${hit.title.toLowerCase()}): ` +
+        `"${shown}". The host runs it as written on every matching event.`,
+      file_path: source.label,
+      snippet: shown,
+    }),
+  );
 }
 
 // ── 8. ${VAR} in a project .mcp.json (unexpanded by Claude Code) ──────────
@@ -474,14 +587,14 @@ export function checkUnexpandedVars(source: ConfigSource): Finding[] {
           category: 'quality',
           title: `MCP server '${name}' will not start: unexpanded \${VAR} in .mcp.json`,
           message:
-            `.mcp.json's "${name}".${field} is "${value_}". Claude Code does NOT expand \${VAR} ` +
+            `.mcp.json's "${name}".${field} is "${maskSecrets(value_)}". Claude Code does NOT expand \${VAR} ` +
             `placeholders for a project-scoped .mcp.json server entry — only \${CLAUDE_PLUGIN_ROOT} ` +
             `inside a plugin's own plugin.json is expanded there. The literal placeholder string ` +
             `becomes part of the spawned command and the server fails to start ` +
             `(MODULE_NOT_FOUND or similar). Use a path relative to the project root (Claude Code sets ` +
             `cwd to it) or an absolute path instead.`,
           file_path: source.label,
-          snippet: value_,
+          snippet: maskSecrets(value_),
         }),
       );
       break; // one finding per server entry is enough context

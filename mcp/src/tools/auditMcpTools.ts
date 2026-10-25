@@ -64,12 +64,13 @@ import {
 } from '../mcpaudit/output.js';
 import { comparePins, parsePinKey, type PinComparison } from '../mcpaudit/pins.js';
 import { isListed, probeServer, type ProbeOutcome } from '../mcpaudit/probe.js';
-import { escapeInvisible } from '../mcpaudit/rules.js';
+import { escapeInvisible } from '../platform/hiddenText.js';
 import { planTargets, qualifiedName, serverNameOfPinKey, serverPinKey } from '../mcpaudit/select.js';
 import { InvalidProjectPathError, projectPathErrorCode, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveVersion } from '../platform/version.js';
 import type { McpPin } from '../storage/mcpToolPinsRepo.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
+import { untrustedContent } from '../platform/untrustedText.js';
 import { computeCoverage } from './scanCoverage.js';
 import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput } from './index.js';
 import { countBySeverity } from '../severity/counts.js';
@@ -543,6 +544,7 @@ async function runAudit(
     ok: true,
     scan_id: scanId,
     project_path: projectPath,
+    untrusted_content: untrustedContent(['findings[].message', 'findings[].snippet', 'findings[].title', 'servers', 'warnings']),
     coverage,
     findings_count: findings.length,
     findings_by_severity: countBySeverity(findings),

@@ -316,6 +316,46 @@ describe('verifySecrets — bounds', () => {
     expect(check?.verdict).toBe('skipped');
   });
 
+  // Review of 3.6.0, finding 8: the rule id is the project's to choose — a
+  // hostile .gitleaks.toml names any regex `github-pat` — and only Slack and
+  // OpenAI checked what they were handed. The user's database password went
+  // to api.github.com.
+  it.each([
+    ['github-pat', 'Tr0ub4dor&3-db-password'],
+    ['github-pat', ['ghx', 'A'.repeat(36)].join('_')],
+    ['github-fine-grained-pat', 'postgres://app:pw@db.internal/app'],
+    ['gitlab-pat', 'hunter2hunter2hunter2'],
+    ['slack-bot-token', 'xoxb-short'],
+    ['stripe-access-token', ['pk', 'live', 'D'.repeat(24)].join('_')],
+    ['openai-api-key', ['sk', 'ant', 'api03', 'F'.repeat(40)].join('-')],
+    ['anthropic-api-key', ['sk', 'proj', 'E'.repeat(40)].join('-')],
+    ['npm-access-token', 'my-registry-password'],
+    ['sendgrid-api-token', 'SG.only-one-part'],
+  ])('%s with a value not of that shape is skipped, never sent: %s', async (rule, secret) => {
+    const m = mockFetch(() => json(200, {}));
+    const [check] = await verifySecrets([{ rule, secret }], { fetchImpl: m.fetch, offline: false });
+    expect(m.calls).toHaveLength(0);
+    expect(check).toMatchObject({ verdict: 'skipped', sent: false });
+    expect(check?.reason).toMatch(/does not have the shape of/);
+  });
+
+  it('every provider still sends a value of its own shape', async () => {
+    const rules: Array<[string, string]> = [
+      ['github-pat', tok.github],
+      ['gitlab-pat', tok.gitlab],
+      ['slack-bot-token', tok.slack],
+      ['stripe-access-token', tok.stripe],
+      ['openai-api-key', tok.openai],
+      ['anthropic-api-key', tok.anthropic],
+      ['npm-access-token', tok.npm],
+      ['sendgrid-api-token', tok.sendgrid],
+    ];
+    const m = mockFetch(() => json(200, { ok: true }));
+    const checks = await verifySecrets(rules.map(([rule, secret]) => ({ rule, secret })), { fetchImpl: m.fetch, offline: false });
+    expect(m.calls).toHaveLength(rules.length);
+    expect(checks.every((c) => c.sent)).toBe(true);
+  });
+
   it('an unsupported rule is skipped, never sent', async () => {
     const m = mockFetch(() => json(200, {}));
     const [check] = await verifySecrets([{ rule: 'aws-access-token', secret: 'x' }], { fetchImpl: m.fetch, offline: false });
