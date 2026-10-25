@@ -52,7 +52,10 @@
  * identity-first with the fingerprint as the fallback
  * (`fingerprint/findingIdentity.ts#indexFindings`). A file without
  * identities — every file 2.0.x wrote — therefore keeps gating exactly as it
- * did: the fingerprint algorithm is frozen.
+ * did: the fingerprint algorithm is frozen. One input is not: a credential
+ * finding's snippet is redacted before it is hashed (3.6.1 — hashed raw, a
+ * committed fingerprint was an oracle for the value), so in such a file only
+ * those entries stop matching, and show once as new.
  *
  * `identity` is an ADDITIVE field and the file stays `version: 1`, on
  * purpose. A baseline is committed and read by every teammate's and every CI
