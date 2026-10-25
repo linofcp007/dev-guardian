@@ -252,6 +252,23 @@ describe('FindingsRepo — line-independent identity (schema 7)', () => {
     expect(findings.listBySeverity('medium').map((f) => f.fingerprint).sort()).toEqual(['legacy', 'other']);
   });
 
+  it('never hides a finding whose identity differs from the suppression’s, on a shared fingerprint', () => {
+    const { scans, findings, suppressions } = setup();
+    scans.insert({ scan_id: 's1', scan_type: 'sast', project_path: '/p', tree_hash: 'h' });
+    findings.bulkInsert([
+      { ...makeFinding({ fingerprint: 'same-lines', identity: 'id-real' }), scan_id: 's1' },
+      { ...makeFinding({ fingerprint: 'bare' }), scan_id: 's1' },
+    ]);
+    scans.finalize({ scan_id: 's1', status: 'completed', tools_run: [], missing_tools: [] });
+    suppressions.insert({ finding_fingerprint: 'same-lines', finding_identity: 'id-false-positive', reason: 'fp' });
+    // The finding has no identity: the fingerprint decides.
+    suppressions.insert({ finding_fingerprint: 'bare', finding_identity: 'id-bare', reason: 'fp' });
+
+    expect(findings.listOpen().map((f) => f.fingerprint)).toEqual(['same-lines']);
+    expect(findings.listOpenForProject('/p').map((f) => f.fingerprint)).toEqual(['same-lines']);
+    expect(findings.listBySeverity('medium').map((f) => f.fingerprint)).toEqual(['same-lines']);
+  });
+
 });
 
 describe('FindingsRepo — suppressions are per project at match time (migration 011)', () => {

@@ -7,9 +7,11 @@
  *   - the fingerprint dedupes inside a scan;
  *   - diffs across scans match on the identity first, the fingerprint as the
  *     fallback for rows that have no identity;
- *   - a suppression hides a finding that matches it on EITHER key
- *     (`SUPPRESSION_MATCHES_F`), so one written before identities existed
- *     still works, and one written after survives a line shift. Since
+ *   - a suppression hides a finding of its identity, or of its fingerprint
+ *     where either side has no identity (`SUPPRESSION_MATCHES_F`), so one
+ *     written before identities existed still works, one written after
+ *     survives a line shift, and neither hides a different finding that
+ *     shares its fingerprint. Since
  *     migration 011 the match is also scoped to the finding's own project
  *     (or to no project at all, for a suppression written before that
  *     column existed) — see that constant's own comment.
@@ -66,8 +68,10 @@ import { notInFutureSql } from './scanClock.js';
 const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
 
 /**
- * Suppression `s` names finding `f`: same fingerprint, or — when both sides
- * have one — the same identity, AND `s` belongs to the finding's own project
+ * Suppression `s` names finding `f`: the same identity when both sides have
+ * one, the same fingerprint when either has none (`indexFindings`' rule: two
+ * identities that differ are two findings, however their fingerprints agree)
+ * — AND `s` belongs to the finding's own project
  * (`l.project_path`, from the `latest` CTE every caller of this constant
  * joins in) or to no project at all (migration 011: NULL means "every
  * project" — every row written before that column existed). SQL's
@@ -86,7 +90,8 @@ const WORKTREE_PATH_EXCLUSION = '%guardian-fixpr-wt-%';
  * only for callers that have not moved to it).
  */
 const SUPPRESSION_MATCHES_F =
-  '(s.finding_fingerprint = f.fingerprint OR s.finding_identity = f.identity) ' +
+  '(s.finding_identity = f.identity OR (s.finding_fingerprint = f.fingerprint ' +
+  'AND (s.finding_identity IS NULL OR f.identity IS NULL))) ' +
   'AND (s.project_path IS NULL OR s.project_path = l.project_path)';
 
 interface FindingRow {

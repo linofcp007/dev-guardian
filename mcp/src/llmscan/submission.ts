@@ -346,6 +346,8 @@ export function validateHuntSubmission(payload: unknown, ctx: SubmissionContext)
 /** One `llm` verdict, as stored for a finding. */
 interface LlmVerdictRecord {
   fingerprint: string;
+  /** The judged finding's identity, when it has one: the verdict is about that finding alone. */
+  identity?: string;
   verdict: LlmVerdict;
   independence: Independence;
   decisive_line: string;
@@ -357,7 +359,13 @@ interface LlmVerdictRecord {
 }
 
 /** Evidence rows are `key: value`; the marker is read back by these keys. */
-const EV = { independence: 'independence: ', decisive: 'decisive_line: ', reasoning: 'reasoning: ', prompt: 'prompt_version: ' } as const;
+const EV = {
+  independence: 'independence: ',
+  decisive: 'decisive_line: ',
+  reasoning: 'reasoning: ',
+  prompt: 'prompt_version: ',
+  identity: 'identity: ',
+} as const;
 const INDEPENDENCE: readonly string[] = ['subagent', 'sampling', 'same_context'];
 const STORED_VERDICTS: readonly string[] = ['exploitable', 'not_exploitable', 'undetermined'];
 
@@ -374,6 +382,8 @@ export function toFindingValidation(record: LlmVerdictRecord): FindingValidation
       { detail: EV.decisive + record.decisive_line },
       { detail: EV.reasoning + record.reasoning },
       { detail: EV.prompt + record.prompt_version },
+      // The table is keyed by fingerprint; the identity says which finding of it was judged.
+      ...(record.identity !== undefined ? [{ detail: EV.identity + record.identity }] : []),
     ],
     coverage_gaps: independent ? [] : ['same_context: the judge shared the scan\'s context, so the verdict is advisory'],
     // The verdict is about a tree, not a surface snapshot.
@@ -381,6 +391,11 @@ export function toFindingValidation(record: LlmVerdictRecord): FindingValidation
     tree_hash: record.tree_hash,
     computed_at: record.computed_at,
   };
+}
+
+/** The identity of the finding an `llm` verdict was given on; undefined when none was recorded. */
+export function llmVerdictIdentityOf(validation: FindingValidation): string | undefined {
+  return validation.evidence.find((e) => e.detail.startsWith(EV.identity))?.detail.slice(EV.identity.length);
 }
 
 /** The marker the open set attaches for a row; null for a row of any other provider. */

@@ -3,10 +3,12 @@
  *
  * A suppression names a finding by its fingerprint and, since schema 7, by
  * its line-independent identity too (`fingerprint/findingIdentity.ts`). While
- * active (NULL expires_at, or expires_at > now), a finding that matches it on
- * EITHER key is hidden from the `findings/open` and `findings/by-severity/*`
- * resources. The fingerprint alone lapsed the moment a line was inserted above
- * the finding; the identity does not. The findings table itself remains
+ * active (NULL expires_at, or expires_at > now), a finding of its identity —
+ * or of its fingerprint, where either side has no identity — is hidden from
+ * the `findings/open` and `findings/by-severity/*` resources. The fingerprint
+ * alone lapsed the moment a line was inserted above the finding; the identity
+ * does not; and two identities on one fingerprint are two findings
+ * (`indexFindings`), so a suppression never hides the other one. The findings table itself remains
  * untouched so historical scans stay intact and the suppression can be lifted
  * later by deleting (or letting expire) the row.
  *
@@ -114,12 +116,12 @@ export class SuppressionsRepo {
       ORDER BY created_at DESC
     `);
 
-    // Either key, like findingsRepo's SUPPRESSION_MATCHES_F. A NULL identity
-    // argument compares unequal to everything, so it matches by fingerprint only.
+    // findingsRepo's SUPPRESSION_MATCHES_F: the identity where both sides
+    // have one, the fingerprint where either has none.
     this.isSuppressedStmt = db.prepare<[string, string | null, string], { n: number }>(`
       SELECT COUNT(*) AS n FROM suppressions
-      WHERE (finding_fingerprint = ? OR finding_identity = ?)
-        AND (expires_at IS NULL OR expires_at > ?)
+      WHERE (finding_identity = ?2 OR (finding_fingerprint = ?1 AND (finding_identity IS NULL OR ?2 IS NULL)))
+        AND (expires_at IS NULL OR expires_at > ?3)
     `);
 
     this.listForFingerprintStmt = db.prepare<[string], SuppressionRow>(`
@@ -133,7 +135,8 @@ export class SuppressionsRepo {
         AND (s.project_path IS NULL OR s.project_path = ?)
         AND EXISTS (
           SELECT 1 FROM findings f
-          WHERE (f.fingerprint = s.finding_fingerprint OR f.identity = s.finding_identity)
+          WHERE (f.identity = s.finding_identity OR (f.fingerprint = s.finding_fingerprint
+                 AND (f.identity IS NULL OR s.finding_identity IS NULL)))
             AND f.tool = ? AND f.rule_id = ?
         )
       ORDER BY s.created_at DESC, s.id DESC
