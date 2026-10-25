@@ -1,5 +1,5 @@
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -10,6 +10,7 @@ import {
   type InvokeContext,
   type ScannerInvocation,
 } from '../../../src/tools/scanToolFactory.js';
+import { DEFAULT_KEPT_REPORTS, ensureReportDir } from '../../../src/tools/scanHelpers.js';
 import type { ShellChoice } from '../../../src/platform/shellProbe.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { Storage } from '../../../src/storage/index.js';
@@ -721,6 +722,59 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
     const again = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
     expect(again.cached).toBeUndefined();
     expect(calls).toHaveLength(2);
+  });
+});
+
+// A new report directory prunes its kind down to the newest three by mtime.
+// A long scan whose directory three quicker scans of the same kind overtook
+// lost it mid-run (POSIX removes it under the scanner writing into it).
+describe('makeScanTool: report pruning spares the scans still running', () => {
+  it('never removes the report directory of a scan that has not finished', async () => {
+    const projectPath = tempProject();
+    const plugin = buildPlugin(projectPath);
+    let release: () => void = () => {};
+    const released = new Promise<void>((r) => {
+      release = r;
+    });
+    let started: () => void = () => {};
+    const dirMade = new Promise<void>((r) => {
+      started = r;
+    });
+    let stillThere: boolean | null = null;
+    const slow = makeScanTool({
+      name: 'prune_slow_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async (_input, ctx) => {
+        const dir = ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
+        // Made an hour ago: the oldest of its kind once the quick ones ran.
+        const hourAgo = new Date(Date.now() - 3_600_000);
+        utimesSync(dir, hourAgo, hourAgo);
+        started();
+        await released;
+        stillThere = existsSync(dir);
+        return emptyRun();
+      },
+    });
+    const quick = makeScanTool({
+      name: 'prune_quick_scan',
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async (_input, ctx) => {
+        ensureReportDir(ctx.projectPath, ctx.scanId, 'sast');
+        return emptyRun();
+      },
+    });
+    const running = slow.handler({ project_path: projectPath }, plugin);
+    await dirMade;
+    for (let i = 0; i < DEFAULT_KEPT_REPORTS; i++) await quick.handler({ project_path: projectPath, force: true }, plugin);
+    release();
+    await running;
+    expect(stillThere).toBe(true);
   });
 });
 

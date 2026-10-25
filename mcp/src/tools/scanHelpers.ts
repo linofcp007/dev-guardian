@@ -78,6 +78,7 @@ export function ensureReportDir(projectPath: string, scanId: string, prefix: str
   const short = scanId.slice(0, 8);
   const made = makeProjectDir(projectPath, join('.guardian', 'reports', `${prefix}-${short}`));
   if (made !== null) {
+    if (heldScans.has(scanId)) heldDirs.set(made, scanId);
     // Every component of the path was just verified a real directory.
     pruneReports(dirname(made), prefix, made);
     return made;
@@ -93,9 +94,38 @@ export function ensureReportDir(projectPath: string, scanId: string, prefix: str
   } catch {
     /* unmarked: never pruned, which is the safe side */
   }
+  if (heldScans.has(scanId)) heldDirs.set(fallback, scanId);
   // Pruned like the project's (review 11): every such scan left one behind.
   pruneReports(tmpdir(), prefix, fallback, `${TEMP_REPORTS_PREFIX}${prefix}`, { markedOnly: true });
   return fallback;
+}
+
+/**
+ * The scans this process is running (each with how many holds it has), and
+ * the report directories {@link ensureReportDir} made for them: never
+ * pruned. {@link pruneReports} keeps the newest few of a kind by modification
+ * time, and a long scan whose directory three quicker scans of the same kind
+ * overtook lost it mid-run — on POSIX, removed under the scanner writing into
+ * it. The scan factory holds a scan for as long as it runs.
+ */
+const heldScans = new Map<string, number>();
+const heldDirs = new Map<string, string>();
+
+/** Holds `scanId`'s report directories out of every prune until the returned release is called (once). */
+export function holdReportDirs(scanId: string): () => void {
+  heldScans.set(scanId, (heldScans.get(scanId) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const left = (heldScans.get(scanId) ?? 1) - 1;
+    if (left > 0) {
+      heldScans.set(scanId, left);
+      return;
+    }
+    heldScans.delete(scanId);
+    for (const [dir, id] of heldDirs) if (id === scanId) heldDirs.delete(dir);
+  };
 }
 
 /** The temp directory fallback's names: `guardian-reports-<kind>-<random>`. */
@@ -163,10 +193,12 @@ function keptReports(): number {
 /**
  * Removes the older `<prefix>-<id>` directories of `reportsDir` — a directory
  * `ensureReportDir` just verified link-free — keeping the newest
- * {@link keptReports}, `current` always among them. Only real directories
+ * {@link keptReports}, `current` always among them, and never one of a scan
+ * this process is still running ({@link holdReportDirs}). Only real directories
  * are touched (a `Dirent` is typed without following a link, and `rmSync`
  * removes a link inside one, never what it names). Best effort: a directory
- * a running scanner still holds is left for the next scan.
+ * another process's scanner still holds open is left for the next scan on
+ * Windows; on POSIX nothing tells it from a finished one.
  *
  * `name`: the directories' name before `-<id>` — `prefix` in a project's
  * `.guardian/reports/`, `guardian-reports-<prefix>` in the temp directory
@@ -200,7 +232,8 @@ export function pruneReports(
     // form of another's id: ids are hex, a tree hash or mkdtemp's suffix).
     if (!/^[0-9A-Za-z]{1,64}$/.test(e.name.slice(name.length + 1))) continue;
     const path = join(reportsDir, e.name);
-    if (path === current) continue;
+    // A scan still running keeps its directory (see `heldScans`).
+    if (path === current || heldDirs.has(path)) continue;
     try {
       const st = lstatSync(path);
       if (!st.isDirectory() || st.isSymbolicLink() || (uid !== undefined && st.uid !== uid)) continue;

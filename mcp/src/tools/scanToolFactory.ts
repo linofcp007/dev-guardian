@@ -129,6 +129,7 @@ import {
   resolveProjectPath,
 } from '../platform/projectPath.js';
 import { workingTreeState } from './gitState.js';
+import { holdReportDirs } from './scanHelpers.js';
 import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import type { ToolCallMeta, ToolInput, ToolModule } from './index.js';
@@ -546,6 +547,8 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
     token: callMeta?.progressToken,
     notifier: plugin.progressNotifier,
   });
+  // Its report directories are never pruned while it runs (scanHelpers.ts#holdReportDirs).
+  const releaseReports = holdReportDirs(scanId);
   try {
     return await runScanBody({
       config,
@@ -572,6 +575,7 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
       ...(parentScanId !== undefined ? { parentScanId } : {}),
     });
   } finally {
+    releaseReports();
     progress.dispose();
   }
 }
