@@ -482,8 +482,21 @@ const WINDOWS_DIR_NAMES = ['windows', 'users', 'program files', 'program files (
  * `C:\Windows\.`, `\\?\C:\Windows`, `\\host\c$\`, `FileSystem::C:\`,
  * `$WINDIR`, `~/..` (review of 3.3.0).
  */
+/**
+ * A leading `${VAR:?…}` / `${VAR:-…}` / `${VAR:=…}` / `${VAR?…}` / `${VAR=…}`
+ * reduced to `${VAR}` (review of 3.6.0, finding 8): these yield the variable's
+ * value, so `"${HOME:?}"` and `${HOME:-x}` name the home directory — a common
+ * idiom that only warned. `:+`/`+` (the alternate, not the value) and `#`/`%`/
+ * `/` (which change the value) are left as written, so they do not match.
+ */
+function normalizeParamModifier(t: string): string {
+  const m = /^\$\{((?:env:)?[A-Za-z_]\w*)(?::?[-=?])[^{}]*\}/.exec(t);
+  return m === null ? t : `\${${m[1] ?? ''}}${t.slice(m[0].length)}`;
+}
+
 function catastrophicKind(raw: string, tildeUsers = true): TargetKind | null {
-  return spelledKind(stripQuotes(raw), tildeUsers) ?? plainKind(raw, tildeUsers);
+  const stripped = normalizeParamModifier(stripQuotes(raw));
+  return spelledKind(stripped, tildeUsers) ?? plainKind(raw, tildeUsers);
 }
 
 /** {@link catastrophicKind} of a target as written — the spellings it names outright. */
@@ -757,7 +770,7 @@ const PWD_PREFIX = /^(?:\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{?PWD\}?|\$env:PWD)(?=[\\
  * when there is nothing to read it against.
  */
 function resolvedTarget(raw: string, ctx: DeleteContext): string | undefined {
-  const t = stripQuotes(raw.trim());
+  const t = normalizeParamModifier(stripQuotes(raw.trim()));
   if (t === '' || t.length > MAX_PLAIN_TARGET || t.includes('::')) return undefined;
   const pwd = PWD_PREFIX.exec(t);
   if (pwd !== null) return ctx.dir === undefined ? undefined : `${ctx.dir}${t.slice(pwd[0].length)}`;

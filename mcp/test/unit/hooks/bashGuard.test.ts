@@ -4533,3 +4533,36 @@ describe('assessBashCommand — review of 3.6.0: nested-script carriers (finding
     expect(assessBashCommand(command, { homeDir: '/home/alice', platform: 'linux' }).level).toBe('ok');
   });
 });
+
+// Review of 3.6.0, finding 8: ANSI-C / locale quoting ($'…', $"…") and a
+// parameter-expansion default ("${HOME:?}", "${HOME:-x}") were not decoded, so
+// a delete of root / home spelled that way only warned.
+describe('assessBashCommand — review of 3.6.0: ANSI-C quoting and parameter defaults (finding 8)', () => {
+  const linux = { homeDir: '/home/alice', platform: 'linux' as const };
+
+  it.each([
+    "rm -rf $'/'",
+    'rm -rf $"/"',
+    "rm -rf $'\\x2f'",
+    "rm -rf $'~'",
+    'rm -rf "${HOME:?}"',
+    'rm -rf "${HOME:-x}"',
+    'rm -rf ${HOME:?}',
+    'rm -rf "${USERPROFILE:?}"',
+    'rm -rf "${TMPDIR:-/tmp}/../../.."',
+  ])('%s is denied', (command) => {
+    expect(assessBashCommand(command, { ...linux, env: { TMPDIR: '/tmp' } }).rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    ['rm -rf "${HOME:?}/build"', 'warn'],
+    ['rm -rf "${HOME:+x}"', 'warn'],
+    ['rm -rf "${BUILD:-dist}"', 'warn'],
+    ["rm -rf $'build'", 'warn'],
+    ['echo $\'hello\\nworld\'', 'ok'],
+    ['echo $"translate me"', 'ok'],
+    ['x=$\'a\\tb\'', 'ok'],
+  ] as const)('%s keeps its verdict: %s', (command, level) => {
+    expect(assessBashCommand(command, linux).level).toBe(level);
+  });
+});
