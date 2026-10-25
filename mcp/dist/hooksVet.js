@@ -159,6 +159,13 @@ var RUNNERS = /* @__PURE__ */ new Set([
   "stdbuf",
   "xargs",
   "watch",
+  // More wrappers that run the command after their own options (review of
+  // 3.6.0, finding 7): BusyBox's applet, `ionice -c3 CMD`, `unbuffer CMD`,
+  // GNU `parallel CMD ::: args`.
+  "busybox",
+  "ionice",
+  "unbuffer",
+  "parallel",
   // cmd's `start [/b] ["title"] PROGRAM` (fix round 2).
   "start"
 ]);
@@ -179,7 +186,11 @@ var RUNNER_VALUED = {
     short: "adEIJLnPs",
     long: /* @__PURE__ */ new Set(["arg-file", "delimiter", "max-args", "max-procs", "max-chars", "process-slot-var"])
   },
-  watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) }
+  watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) },
+  // `ionice -c class -n num -p pid CMD` (review of 3.6.0, finding 7).
+  ionice: { short: "cnp", long: /* @__PURE__ */ new Set(["class", "classdata", "pid"]) },
+  // GNU `parallel`'s commonest valued options; its command template follows them.
+  parallel: { short: "jPNnLSX", long: /* @__PURE__ */ new Set(["jobs", "max-args", "max-replace-args", "max-lines", "sshlogin", "results", "colsep", "retries"]) }
 };
 function runnerOptionWords(runner, option) {
   const valued = RUNNER_VALUED[runner];
@@ -309,6 +320,33 @@ function withoutRedirectWords(words) {
 
 // src/hooks/shell/split.ts
 var MASK = " ";
+var ANSI_C_SIMPLE = {
+  a: "\x07",
+  b: "\b",
+  e: "\x1B",
+  E: "\x1B",
+  f: "\f",
+  n: "\n",
+  r: "\r",
+  t: "	",
+  v: "\v",
+  "\\": "\\",
+  "'": "'",
+  '"': '"',
+  "?": "?"
+};
+function decodeAnsiC(body) {
+  if (!body.includes("\\")) return body;
+  return body.replace(/\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|.)/g, (all, seq) => {
+    const head = seq.charAt(0);
+    if (head === "x" || head === "u" || head === "U") return codePoint(parseInt(seq.slice(1), 16), all);
+    if (head >= "0" && head <= "7") return codePoint(parseInt(seq, 8), all);
+    return ANSI_C_SIMPLE[seq] ?? all;
+  });
+}
+function codePoint(code, fallback) {
+  return Number.isFinite(code) && code >= 0 && code <= 1114111 ? String.fromCodePoint(code) : fallback;
+}
 function scanQuote(source, start) {
   const quote = source.charAt(start);
   let inner = "";
@@ -420,7 +458,7 @@ function skipHeredocBodies(source, from, pending) {
   }
   return pos;
 }
-var COMPOUND_RESERVED = /* @__PURE__ */ new Set(["if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!"]);
+var COMPOUND_RESERVED = /* @__PURE__ */ new Set(["if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!", "coproc"]);
 function splitShell(command) {
   const statements = [];
   let maskedCommand = "";
@@ -532,6 +570,20 @@ function splitShell(command) {
       while (i < command.length && command.charAt(i) !== "\n" && command.charAt(i) !== "\r") i += 1;
       continue;
     }
+    if (ch === "$" && (command.charAt(i + 1) === "'" || command.charAt(i + 1) === '"') && !/[\w}]/.test(command.charAt(i - 1))) {
+      const q = command.charAt(i + 1);
+      const scanned = scanQuote(command, i + 1);
+      buf += q === "'" ? decodeAnsiC(scanned.inner) : scanned.inner;
+      bufQuoted = true;
+      hasWord = true;
+      masked += MASK;
+      maskedCommand += MASK;
+      const vars = q === '"' ? interpolatedVariables(scanned.inner) : [];
+      if (vars.length > 0) interpolations.push({ at: maskedCommand.length, vars: vars.join(" ") });
+      lastCode = MASK;
+      i = scanned.next;
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       const scanned = scanQuote(command, i);
       buf += scanned.inner;
@@ -618,6 +670,14 @@ function splitShell(command) {
       if (next === "|") {
         endStatement("||");
         maskedCommand += "||";
+        i += 2;
+        continue;
+      }
+      if (next === "&") {
+        endCommand();
+        masked += "|";
+        maskedCommand += "|";
+        lastCode = "|";
         i += 2;
         continue;
       }
@@ -896,7 +956,7 @@ function powershellAsPosix(text) {
       if (next === "\n") i += 2;
       else if (next === "\r" && text.charAt(i + 2) === "\n") i += 3;
       else {
-        if (next !== "") out += posixSingle(next);
+        if (next !== "") out += /[A-Za-z0-9_]/.test(next) ? next : posixSingle(next);
         i += 2;
         continue;
       }

@@ -201,7 +201,11 @@ export function powershellAsPosix(text: string): string {
       if (next === '\n') i += 2;
       else if (next === '\r' && text.charAt(i + 2) === '\n') i += 3;
       else {
-        if (next !== '') out += posixSingle(next);
+        // PowerShell ignores a backtick before an ordinary word character, so
+        // `` i`ex `` is `iex`: the character continues the bareword unquoted,
+        // or the iex / download rules miss it (review of 3.6.0, finding 6). A
+        // non-word character (`` `$ ``, `` `" ``) is a literal, kept as one.
+        if (next !== '') out += /[A-Za-z0-9_]/.test(next) ? next : posixSingle(next);
         i += 2;
         continue;
       }

@@ -2658,7 +2658,7 @@ function powershellAsPosix(text2) {
       if (next === "\n") i += 2;
       else if (next === "\r" && text2.charAt(i + 2) === "\n") i += 3;
       else {
-        if (next !== "") out += posixSingle(next);
+        if (next !== "") out += /[A-Za-z0-9_]/.test(next) ? next : posixSingle(next);
         i += 2;
         continue;
       }
@@ -2786,6 +2786,11 @@ function resolveCommand(words, through) {
 function cmdSwitch(word) {
   return /^\/\/[A-Za-z?]/.test(word) ? word.slice(1) : word;
 }
+function cmdSwitches(word) {
+  const w = cmdSwitch(word);
+  if (!/^(?:\/[A-Za-z?](?::[^/\s]*)?)+$/.test(w)) return void 0;
+  return w.split("/").filter((s) => s !== "").map((s) => s.toLowerCase());
+}
 function parseRedirect(word) {
   const at = word.redirectAt?.[0];
   if (at === void 0) return null;
@@ -2823,6 +2828,13 @@ var init_command = __esm({
       "stdbuf",
       "xargs",
       "watch",
+      // More wrappers that run the command after their own options (review of
+      // 3.6.0, finding 7): BusyBox's applet, `ionice -c3 CMD`, `unbuffer CMD`,
+      // GNU `parallel CMD ::: args`.
+      "busybox",
+      "ionice",
+      "unbuffer",
+      "parallel",
       // cmd's `start [/b] ["title"] PROGRAM` (fix round 2).
       "start"
     ]);
@@ -2843,7 +2855,11 @@ var init_command = __esm({
         short: "adEIJLnPs",
         long: /* @__PURE__ */ new Set(["arg-file", "delimiter", "max-args", "max-procs", "max-chars", "process-slot-var"])
       },
-      watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) }
+      watch: { short: "nq", long: /* @__PURE__ */ new Set(["interval", "equexit"]) },
+      // `ionice -c class -n num -p pid CMD` (review of 3.6.0, finding 7).
+      ionice: { short: "cnp", long: /* @__PURE__ */ new Set(["class", "classdata", "pid"]) },
+      // GNU `parallel`'s commonest valued options; its command template follows them.
+      parallel: { short: "jPNnLSX", long: /* @__PURE__ */ new Set(["jobs", "max-args", "max-replace-args", "max-lines", "sshlogin", "results", "colsep", "retries"]) }
     };
     ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
   }
@@ -3614,6 +3630,18 @@ var init_effects = __esm({
 });
 
 // src/hooks/shell/split.ts
+function decodeAnsiC(body) {
+  if (!body.includes("\\")) return body;
+  return body.replace(/\\(x[0-9A-Fa-f]{1,2}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|[0-7]{1,3}|.)/g, (all, seq) => {
+    const head = seq.charAt(0);
+    if (head === "x" || head === "u" || head === "U") return codePoint(parseInt(seq.slice(1), 16), all);
+    if (head >= "0" && head <= "7") return codePoint(parseInt(seq, 8), all);
+    return ANSI_C_SIMPLE[seq] ?? all;
+  });
+}
+function codePoint(code, fallback) {
+  return Number.isFinite(code) && code >= 0 && code <= 1114111 ? String.fromCodePoint(code) : fallback;
+}
 function scanQuote(source, start) {
   const quote = source.charAt(start);
   let inner = "";
@@ -3831,6 +3859,20 @@ function splitShell(command) {
       while (i < command.length && command.charAt(i) !== "\n" && command.charAt(i) !== "\r") i += 1;
       continue;
     }
+    if (ch === "$" && (command.charAt(i + 1) === "'" || command.charAt(i + 1) === '"') && !/[\w}]/.test(command.charAt(i - 1))) {
+      const q = command.charAt(i + 1);
+      const scanned = scanQuote(command, i + 1);
+      buf += q === "'" ? decodeAnsiC(scanned.inner) : scanned.inner;
+      bufQuoted = true;
+      hasWord = true;
+      masked += MASK;
+      maskedCommand += MASK;
+      const vars = q === '"' ? interpolatedVariables(scanned.inner) : [];
+      if (vars.length > 0) interpolations.push({ at: maskedCommand.length, vars: vars.join(" ") });
+      lastCode = MASK;
+      i = scanned.next;
+      continue;
+    }
     if (ch === "'" || ch === '"') {
       const scanned = scanQuote(command, i);
       buf += scanned.inner;
@@ -3920,6 +3962,14 @@ function splitShell(command) {
         i += 2;
         continue;
       }
+      if (next === "&") {
+        endCommand();
+        masked += "|";
+        maskedCommand += "|";
+        lastCode = "|";
+        i += 2;
+        continue;
+      }
       endCommand();
       masked += "|";
       maskedCommand += "|";
@@ -3952,17 +4002,32 @@ function splitShell(command) {
   endStatement();
   return { maskedCommand, interpolatedCommand: withInterpolations(maskedCommand, interpolations), statements };
 }
-var MASK, INTERPOLATION, NAME_POSITION, QUOTED_NAME, TOKEN_WORD, HEREDOC_WORD, COMPOUND_RESERVED;
+var MASK, ANSI_C_SIMPLE, INTERPOLATION, NAME_POSITION, QUOTED_NAME, TOKEN_WORD, HEREDOC_WORD, COMPOUND_RESERVED;
 var init_split = __esm({
   "src/hooks/shell/split.ts"() {
     "use strict";
     MASK = " ";
+    ANSI_C_SIMPLE = {
+      a: "\x07",
+      b: "\b",
+      e: "\x1B",
+      E: "\x1B",
+      f: "\f",
+      n: "\n",
+      r: "\r",
+      t: "	",
+      v: "\v",
+      "\\": "\\",
+      "'": "'",
+      '"': '"',
+      "?": "?"
+    };
     INTERPOLATION = /\$\{[^}\n]{0,128}\}|\$[\w:]+|\$\(|[()]/g;
     NAME_POSITION = /(?:(?:^|[\s;|&(])-(?:ov|outv[a-z]*|v[a-z]*|n[a-z]*)[ \t]*:?[ \t]*|(?:^|[\s;|&(])(?:set-variable|new-variable|get-variable|sv|nv|gv)[ \t]+)$/i;
     QUOTED_NAME = /^(?:(?:global|script|local|private|using|variable):)?[A-Za-z_]\w{0,63}$/i;
     TOKEN_WORD = /^(?:iex|invoke-expression|irm|iwr|invoke-restmethod|invoke-webrequest|curl|wget|set-variable|new-variable|get-variable|sv|nv|gv|tee|tee-object)$/i;
     HEREDOC_WORD = /^[A-Za-z_][A-Za-z0-9_]*$/;
-    COMPOUND_RESERVED = /* @__PURE__ */ new Set(["if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!"]);
+    COMPOUND_RESERVED = /* @__PURE__ */ new Set(["if", "then", "elif", "else", "fi", "while", "until", "do", "done", "esac", "{", "}", "!", "coproc"]);
   }
 });
 
@@ -103421,8 +103486,13 @@ function stripQuotes(token) {
 var SYSTEM_DIRS = ["etc", "usr", "bin", "sbin", "var", "lib", "lib64", "boot", "sys", "proc", "root", "home", "opt", "dev", "Users", "System"];
 var WINDOWS_DIR = /^(?:[A-Za-z]:[\\/]?|\/(?:mnt\/)?[A-Za-z]\/)(?:Windows(?:[\\/]?(?:System32|SysWOW64))?|Users|Program Files(?: \(x86\))?|ProgramData|PROGRA~\d)(?:[\\/]\*?)?$/i;
 var WINDOWS_DIR_NAMES = ["windows", "users", "program files", "program files (x86)", "programdata"];
+function normalizeParamModifier(t) {
+  const m = /^\$\{((?:env:)?[A-Za-z_]\w*)(?::?[-=?])[^{}]*\}/.exec(t);
+  return m === null ? t : `\${${m[1] ?? ""}}${t.slice(m[0].length)}`;
+}
 function catastrophicKind(raw, tildeUsers = true) {
-  return spelledKind(stripQuotes(raw), tildeUsers) ?? plainKind(raw, tildeUsers);
+  const stripped = normalizeParamModifier(stripQuotes(raw));
+  return spelledKind(stripped, tildeUsers) ?? plainKind(raw, tildeUsers);
 }
 function spelledKind(t, tildeUsers) {
   if (t === "/" || /^\/\*+$/.test(t)) return "root";
@@ -103568,7 +103638,7 @@ function isHomeTarget(raw, home) {
 }
 var PWD_PREFIX = /^(?:\$\(\s*pwd\s*\)|`\s*pwd\s*`|\$\{?PWD\}?|\$env:PWD)(?=[\\/]|$)/i;
 function resolvedTarget(raw, ctx) {
-  const t = stripQuotes(raw.trim());
+  const t = normalizeParamModifier(stripQuotes(raw.trim()));
   if (t === "" || t.length > MAX_PLAIN_TARGET || t.includes("::")) return void 0;
   const pwd = PWD_PREFIX.exec(t);
   if (pwd !== null) return ctx.dir === void 0 ? void 0 : `${ctx.dir}${t.slice(pwd[0].length)}`;
@@ -103592,6 +103662,15 @@ function isBareDrive(raw) {
 var PS_PATH_PARAM = /^(?:pa(?:t|th)?|l(?:i(?:t(?:e(?:r(?:a(?:l(?:p(?:a(?:t(?:h)?)?)?)?)?)?)?)?)?)?|lp|pspath)$/;
 var DASH_DELETE_HEADS = /* @__PURE__ */ new Set(["rm", "ri", "remove-item"]);
 var SLASH_DELETE_HEADS = /* @__PURE__ */ new Set(["rd", "rmdir", "del", "erase"]);
+var RM_LONG_OPTIONS = ["force", "interactive", "one-file-system", "no-preserve-root", "preserve-root", "recursive", "dir", "verbose", "help", "version"];
+function rmLongOption(token) {
+  const name = (token.slice(2).split("=")[0] ?? "").toLowerCase();
+  if (name === "") return void 0;
+  if (RM_LONG_OPTIONS.includes(name)) return name;
+  const named2 = RM_LONG_OPTIONS.filter((o) => o.startsWith(name));
+  return named2.length === 1 ? named2[0] : void 0;
+}
+var RM_SHORT_CLUSTER = /^[dfiIPrRvWx]+$/;
 function assessRecursiveDelete(words, start, home, tildeUsers = true, ctx = {}) {
   const head = words[start];
   if (head === void 0) return null;
@@ -103606,30 +103685,35 @@ function assessRecursiveDelete(words, start, home, tildeUsers = true, ctx = {}) 
   for (let k = 0; k < rest.length; k += 1) {
     const token = (rest[k]?.value ?? "").replace(/^[\u2013\u2014\u2015]/, "-");
     if (slashStyle && token.startsWith("/")) {
-      if (cmdSwitch(token).toLowerCase() === "/s") recursive = true;
+      if (cmdSwitches(token)?.includes("s") === true) recursive = true;
       continue;
     }
-    if (token === "--no-preserve-root") noPreserve = true;
-    else if (token === "--recursive") recursive = true;
-    else if (token.startsWith("--")) continue;
-    else if (token.startsWith("-") && token.length > 1) {
+    if (token.startsWith("--")) {
+      const option = rmLongOption(token);
+      if (option === "no-preserve-root") noPreserve = true;
+      else if (option === "recursive") recursive = true;
+      continue;
+    }
+    if (token.startsWith("-") && token.length > 1) {
       const colon = token.indexOf(":");
       const flags = colon < 0 ? token.slice(1) : token.slice(1, colon);
       let value = colon < 0 ? void 0 : token.slice(colon + 1);
       const lower = flags.toLowerCase();
-      const isSwitch = lower === "recurse" || lower === "rec" || lower === "force" || lower === "fo";
+      const recurseParam = lower !== "" && "recurse".startsWith(lower);
+      const isSwitch = recurseParam || lower.length >= 2 && "force".startsWith(lower);
       if (value === "" && isSwitch) {
         value = rest[k + 1]?.value ?? "";
         k += 1;
       }
       if (value !== void 0 && value !== "" && PS_PATH_PARAM.test(lower)) targets.push(value);
       const on = value === void 0 || !/^\$?(?:false|0)$/i.test(value);
-      if (lower === "recurse" || lower === "rec") recursive ||= on;
-      else if (!isSwitch && value === void 0 && flags.length <= 3 && /r/i.test(flags)) recursive = true;
+      if (recurseParam) recursive ||= on;
+      else if (!isSwitch && value === void 0 && /r/i.test(flags) && (RM_SHORT_CLUSTER.test(flags) || flags.length <= 3)) recursive = true;
     } else targets.push(token);
   }
-  if (!(recursive || noPreserve)) return null;
-  if (targets.length === 0 && ctx.piped !== void 0) targets.push(ctx.piped);
+  const fromPipe = targets.length === 0 && ctx.piped !== void 0;
+  if (!(recursive || noPreserve || fromPipe && ctx.pipedRecursive === true)) return null;
+  if (fromPipe && ctx.piped !== void 0) targets.push(ctx.piped);
   if (noPreserve || ctx.bareDriveRoot === true && targets.some(isBareDrive) || judgedTargets(targets, ctx).some((t) => isCatastrophicTarget(t, tildeUsers) || isHomeTarget(t, home))) {
     return { ...RULE_RM_ROOT };
   }
@@ -103652,6 +103736,18 @@ function pipedItems(words) {
   }
   if (name === "get-item" || name === "gi") return path3 ?? ".";
   return `${(path3 ?? ".").replace(/[\\/]+$/, "")}/*`;
+}
+function listsRecursively(words) {
+  const at = resolveCommand(words).index;
+  const name = commandName(words[at]?.value ?? "");
+  if (!LISTERS.has(name) || name === "get-item" || name === "gi") return false;
+  return withoutRedirections(words.slice(at + 1)).some((a) => {
+    const m = /^-([A-Za-z]+)(?::(.*))?$/.exec(a);
+    if (m === null) return false;
+    const p = (m[1] ?? "").toLowerCase();
+    const off = m[2] !== void 0 && /^\$?(?:false|0)$/i.test(m[2]);
+    return !off && (p.length >= 3 && "recurse".startsWith(p) || p.length >= 2 && "depth".startsWith(p));
+  });
 }
 var RULE_RM_ROOT = {
   id: "rm-rf-root",
@@ -103748,6 +103844,21 @@ function assessFind(words, start, home, tildeUsers = true, ctx = {}) {
     return filtered ? { ...RULE_FIND_HOME } : { ...RULE_FIND_ROOT };
   }
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
+  return null;
+}
+function findPipedIntoDeleter(commands, c, home, tildeUsers, ctx) {
+  const words = commands[c];
+  if (words === void 0 || c === 0) return null;
+  const at = resolveCommand(words).index;
+  if (!words.slice(0, at).some((w) => commandName(w.value) === "xargs")) return null;
+  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ""))) return null;
+  for (let p = c - 1; p >= 0; p -= 1) {
+    const prev = commands[p] ?? [];
+    const f = resolveCommand(prev).index;
+    if (commandName(prev[f]?.value ?? "") === "find") {
+      return assessFind([...prev, { value: "-delete", quoted: false }], f, home, tildeUsers, { ...ctx, piped: void 0, pipedRecursive: void 0 });
+    }
+  }
   return null;
 }
 var HOOK_CONFIG_PATH = /(?:\.guardian\/?hooks[^/]*\.json|\.config\/?dev-guardian\/?hooks\.json)$/i;
@@ -104478,8 +104589,54 @@ function shellScript(text2) {
   return { text: text2, powershell: false };
 }
 var DASH_C = /^-[A-Za-z]*c$/;
+var FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
+function carrierScript(name, words, start) {
+  const rest = words.slice(start + 1);
+  const dashC = (w, nextWord) => {
+    if (w === void 0) return void 0;
+    if (w.value.startsWith("--command=")) return w.value.slice("--command=".length);
+    return !w.quoted && (DASH_C.test(w.value) || w.value === "--command") ? nextWord?.value ?? "" : void 0;
+  };
+  const argv = (from) => rest.slice(from).map((x) => x.value).join(" ") || void 0;
+  if (name === "trap") {
+    let i = 0;
+    while (i < rest.length && (rest[i]?.value ?? "").startsWith("-") && rest[i]?.value !== "--") i += 1;
+    if (rest[i]?.value === "--") i += 1;
+    const arg = rest[i]?.value;
+    return arg !== void 0 && arg !== "-" && arg !== "" && rest.length > i + 1 ? arg : void 0;
+  }
+  if (name === "script") {
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== void 0) return c;
+    }
+    return void 0;
+  }
+  if (name === "runuser") {
+    for (let i = 0; i < rest.length; i += 1) {
+      const c = dashC(rest[i], rest[i + 1]);
+      if (c !== void 0) return c;
+      if (rest[i]?.value === "--") return argv(i + 1);
+    }
+    return void 0;
+  }
+  if (name === "flock") {
+    let i = 0;
+    while (i < rest.length && (rest[i]?.value ?? "").startsWith("-")) {
+      const c2 = dashC(rest[i], rest[i + 1]);
+      if (c2 !== void 0) return c2;
+      i += FLOCK_VALUED.test(rest[i]?.value ?? "") ? 2 : 1;
+    }
+    const c = dashC(rest[i + 1], rest[i + 2]);
+    return c !== void 0 ? c : argv(i + 1);
+  }
+  return null;
+}
 function nestedScripts(words, start) {
   const head = words[start];
+  const name = head === void 0 ? "" : basename2(head.value).toLowerCase();
+  const carried = carrierScript(name, words, start);
+  if (carried !== null) return carried === void 0 ? [] : [shellScript(carried)];
   const launcher = head === void 0 ? "" : commandName(head.value);
   if (launcher === "npx" || launcher === "pnpx" || launcher === "npm" && words[firstNonFlag(words, start + 1)]?.value === "exec") {
     for (let i = start + 1; i < words.length; i += 1) {
@@ -104509,11 +104666,11 @@ function nestedScripts(words, start) {
   for (let i = start; i < words.length; i += 1) {
     const word = words[i];
     if (word === void 0) continue;
-    const name = commandName(word.value);
-    if (!word.quoted && (name === "pwsh" || name === "powershell")) {
+    const name2 = commandName(word.value);
+    if (!word.quoted && (name2 === "pwsh" || name2 === "powershell")) {
       return powershellCommand(
         words.slice(i + 1).map((w) => w.value),
-        name
+        name2
       ).filter((s) => s.trim().length > 0).map((text2) => ({ text: text2, powershell: true }));
     }
     if (!word.quoted && DASH_C.test(word.value) && sawShell) {
@@ -104818,6 +104975,66 @@ function processSubstitutionScripts(statements) {
   }
   return out;
 }
+function scanSubstitutionBody(command, from) {
+  let depth = 1;
+  let quote = "";
+  for (let i = from; i < command.length; i += 1) {
+    const ch = command.charAt(i);
+    if (quote !== "") {
+      if (quote === '"' && ch === "\\") i += 1;
+      else if (ch === quote) quote = "";
+      continue;
+    }
+    if (ch === "\\") i += 1;
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === "(") depth += 1;
+    else if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) return { body: command.slice(from, i), next: i + 1 };
+    }
+  }
+  return { body: command.slice(from), next: command.length };
+}
+function scanDoubleQuotedSubstitutions(command, from, out) {
+  let i = from;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (ch === '"') return i + 1;
+    if (ch === "`") {
+      let end = i + 1;
+      while (end < command.length && !(command.charAt(end) === "`" && command.charAt(end - 1) !== "\\")) end += 1;
+      out.push(command.slice(i + 1, end));
+      i = end + 1;
+      continue;
+    }
+    if (ch === "$" && command.charAt(i + 1) === "(" && command.charAt(i + 2) !== "(") {
+      const sub = scanSubstitutionBody(command, i + 2);
+      out.push(sub.body);
+      i = sub.next;
+      continue;
+    }
+    i += 1;
+  }
+  return command.length;
+}
+function quotedSubstitutions(command) {
+  const out = [];
+  let i = 0;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === "\\") i += 2;
+    else if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      i = end < 0 ? command.length : end + 1;
+    } else if (ch === '"') i = scanDoubleQuotedSubstitutions(command, i + 1, out);
+    else i += 1;
+  }
+  return out;
+}
 var DOWNLOADERS = /* @__PURE__ */ new Set(["curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod"]);
 var PIPE_RUNNERS = /* @__PURE__ */ new Set(["sudo", "doas", "env", "command", "exec", "builtin", "nohup", "nice", "time", "timeout", "setsid", "stdbuf"]);
 var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
@@ -104995,6 +105212,51 @@ function pipesDownloadIntoShell(statement) {
   }
   return null;
 }
+function pipesDownloadIntoSubshell(statements) {
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === void 0 || statement.end !== "(" || !statement.masked.endsWith("|")) continue;
+    if (!statement.commands.some((words) => DOWNLOADERS.has(commandName(words[resolveCommand(words, PIPE_RUNNERS).index]?.value ?? "")))) continue;
+    let depth = 1;
+    for (let j = k + 1; j < statements.length && depth > 0; j += 1) {
+      const body = statements[j];
+      if (body === void 0) break;
+      const first = body.commands[0];
+      if (first !== void 0 && readsStdinAsScript(first, resolveCommand(first, PIPE_RUNNERS).index)) return RULE_PIPE_TO_SHELL;
+      if (body.end === "(") depth += 1;
+      else if (body.end === ")") depth -= 1;
+    }
+  }
+  return null;
+}
+function evalSubstitutionBodies(statements) {
+  const out = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === void 0) continue;
+    const words = statement.commands[statement.commands.length - 1];
+    if (words === void 0 || basename2(words[resolveCommand(words).index]?.value ?? "") !== "eval") continue;
+    const backtick = statement.end === "`";
+    const dollarParen = statement.end === "(" && words[words.length - 1]?.value === "$";
+    if (!backtick && !dollarParen) continue;
+    const body = [];
+    let depth = 1;
+    for (let j = k + 1; j < statements.length; j += 1) {
+      const b = statements[j];
+      if (b === void 0) break;
+      body.push(b);
+      if (backtick) {
+        if (b.end === "`") break;
+      } else if (b.end === "(") depth += 1;
+      else if (b.end === ")") {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    if (body.length > 0) out.push(body);
+  }
+  return out;
+}
 var RULE_XARGS_REPLACED = {
   id: "xargs-download-program",
   level: "block",
@@ -105080,6 +105342,7 @@ function powershellDownloadExecution(text2) {
   let assigning = [];
   const tainted = /* @__PURE__ */ new Set();
   let inTee = false;
+  let afterIexParen = false;
   let names = 0;
   const holdsDownload = (v) => tainted.has(v) || tainted.has("*") || v === "*" && tainted.size > 0;
   const download = () => {
@@ -105096,11 +105359,14 @@ function powershellDownloadExecution(text2) {
   for (const m of text2.matchAll(PS_EXEC_TOKENS)) {
     const t = m[0].toLowerCase();
     const g = m.groups ?? {};
+    const afterParen = afterIexParen;
+    afterIexParen = false;
     if (g["run"] !== void 0) {
       if (piped) return true;
       pendingIex = true;
     } else if (g["dl"] !== void 0) {
       if (download()) return true;
+      if (afterParen && t.startsWith(".")) return true;
     } else if (g["ref"] !== void 0) {
       const v = psVariable(g["ref"]);
       if (g["assign"] !== void 0) assigning = [v];
@@ -105120,7 +105386,10 @@ function powershellDownloadExecution(text2) {
       if (pendingIex) inIex += 1;
       pendingIex = false;
     } else if (t === ")") {
-      if (opens.pop() === true) inIex -= 1;
+      if (opens.pop() === true) {
+        inIex -= 1;
+        afterIexParen = true;
+      }
       pendingIex = false;
     } else if (t === "|") {
       if (downloaded) piped = true;
@@ -105927,6 +106196,26 @@ function collect(command, depth, out, scope) {
     out.push(RULE_PROCESS_FETCH);
   }
   if (commandText.includes("<(")) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  const subshell = pipesDownloadIntoSubshell(statements);
+  if (subshell !== null) out.push(subshell);
+  for (const body of evalSubstitutionBodies(statements)) {
+    if (body.some((b) => b.commands.some((words) => DOWNLOADERS.has(commandName(words[resolveCommand(words, PIPE_RUNNERS).index]?.value ?? ""))))) {
+      out.push({ ...RULE_FETCH_EXEC });
+    } else {
+      collectGenerated(body.map((b) => textOutputOf(b.commands.map(expandWords), { heredocs: b.heredocBodies })), depth, out, scope);
+    }
+  }
+  if (cmd.includes("$(") || cmd.includes("`")) {
+    for (const body of quotedSubstitutions(cmd)) {
+      if (body.trim() === "") continue;
+      if (depth >= MAX_NESTING) {
+        scope.notes.depth = true;
+        continue;
+      }
+      noteScript(scope, body, scope.powershell === true);
+      collect(body, depth + 1, out, { ...scope, cmdLine: false });
+    }
+  }
   const dirs = workdirs(statements);
   const startDir = scope.dir;
   let memoSteps;
@@ -105981,12 +106270,15 @@ function collect(command, depth, out, scope) {
         dir: here,
         vars: scope.vars,
         bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true,
-        piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : void 0
+        piped: scope.powershell === true && c > 0 ? pipedItems(statement.commands[c - 1] ?? []) : void 0,
+        pipedRecursive: scope.powershell === true && c > 0 ? listsRecursively(statement.commands[c - 1] ?? []) : void 0
       };
       const del = assessRecursiveDelete(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (del !== null) out.push(del);
       const find = assessFind(words, resolved.index, scope.home, scope.tildeUsers, deleting);
       if (find !== null) out.push(find);
+      const findXargs = findPipedIntoDeleter(statement.commands, c, scope.home, scope.tildeUsers !== false, deleting);
+      if (findXargs !== null) out.push(findXargs);
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       const hereText = hereStringText(words);
       const hereReader = hereText === void 0 ? void 0 : scriptReader(words);
@@ -106094,6 +106386,15 @@ function partialRule(notes) {
   ];
   return causes.length === 0 ? null : { id: "partially-assessed", level: "warn", reason: `part of this command was not assessed (${causes.join("; ")})` };
 }
+function capQuestion(notes) {
+  const causes = [
+    ...notes.command ? ["over 512 KB"] : [],
+    ...notes.statement ? ["a statement over 16 KB"] : [],
+    ...notes.budget ? ["the assessment time budget ran out"] : [],
+    ...notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : []
+  ];
+  return causes.length === 0 ? void 0 : `this command is too large or too deeply nested to assess in full (${causes.join("; ")}), so what it runs past that point was not checked \u2014 the user decides whether to run it`;
+}
 function collapseBlanks(text2) {
   return text2.replace(/[ \t]{2,}/g, " ");
 }
@@ -106186,7 +106487,8 @@ function assessReadings(readings, cut, now, deadline, where) {
   const blocks = effective.filter((r) => r.level === "block");
   const only = blocks.length === 1 ? blocks[0] : void 0;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : void 0;
-  const ask = blocks.length === 0 ? byId.get(RULE_BASELINE_UPDATE.id)?.reason : void 0;
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q) => q !== void 0);
+  const ask = blocks.length === 0 && questions.length > 0 ? questions.join("; and ") : void 0;
   return {
     level: effective[0]?.level ?? "ok",
     reasons: effective.map((r) => r.reason),
