@@ -802,6 +802,98 @@ describe('perf_check', () => {
     expect(r.ok).toBe(true);
     expect(r.findings.some((f) => f.rule_id === 'perf.bundle_size_kb')).toBe(true);
   });
+
+  it('starts Chrome with its sandbox, unless it runs as root', async () => {
+    // Review of 3.6, finding 15: `--no-sandbox` on every run, for a URL the
+    // agent chose. Chrome needs it only as root (a container).
+    mockLighthouseRun({});
+    const project = tempProject();
+    await getTool('perf_check').handler({ project_path: project, target_url: 'https://example.com' }, makePlugin(project));
+    const call = vi.mocked(runProcess).mock.calls.map(([o]) => o).find((o) => o.command === 'lighthouse');
+    const flags = call?.args?.find((a) => a.startsWith('--chrome-flags=')) ?? '';
+    expect(flags).toContain('--headless=new');
+    const root = typeof process.getuid === 'function' && process.getuid() === 0;
+    expect(flags.includes('--no-sandbox')).toBe(root);
+  });
+});
+
+describe('perf_check — k6 (review of 3.6, finding 14)', () => {
+  function mockK6(answer: { exitCode: number; outcome?: 'completed' | 'failed' | 'timed_out'; summary?: unknown; stderr?: string }): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'k6' ? '/fake/bin/k6' : null));
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const flag = opts.args?.find((a) => a.startsWith('--summary-export='));
+      const file = flag?.replace('--summary-export=', '');
+      if (file !== undefined && answer.summary !== undefined) writeFileSync(file, JSON.stringify(answer.summary), 'utf8');
+      return {
+        outcome: answer.outcome ?? (answer.exitCode === 0 ? 'completed' : 'failed'),
+        exitCode: answer.exitCode, stdout: '', stderr: answer.stderr ?? '', truncated: false,
+      };
+    });
+  }
+  const SUMMARY = { metrics: { http_reqs: { count: 10 }, http_req_duration: { avg: 5, 'p(95)': 9 } } };
+
+  it('runs the script from the project, with no token from the server environment', async () => {
+    const project = tempProject();
+    mkdirSync(join(project, 'load'), { recursive: true });
+    writeFileSync(join(project, 'load', 'smoke.js'), 'export default function () {}\n', 'utf8');
+    mockK6({ exitCode: 0, summary: SUMMARY });
+    const before = process.env['GITHUB_TOKEN'];
+    process.env['GITHUB_TOKEN'] = 'ghp_k6_never_exposed';
+    let r: unknown;
+    try {
+      r = await getTool('perf_check').handler({ project_path: project, k6_script_path: 'load/smoke.js' }, makePlugin(project));
+    } finally {
+      if (before === undefined) delete process.env['GITHUB_TOKEN'];
+      else process.env['GITHUB_TOKEN'] = before;
+    }
+    expect((r as { ok: boolean }).ok).toBe(true);
+    const call = vi.mocked(runProcess).mock.calls.map(([o]) => o).find((o) => o.command === 'k6');
+    expect(call?.extendEnv).toBe(false);
+    expect(call?.env?.['GITHUB_TOKEN']).toBeUndefined();
+    expect(call?.args?.at(-1)).toBe(join(project, 'load', 'smoke.js'));
+  });
+
+  it('refuses a script outside the project, or one that is not there', async () => {
+    const project = tempProject();
+    const outside = tempProject();
+    writeFileSync(join(outside, 'evil.js'), 'export default function () {}\n', 'utf8');
+    mockK6({ exitCode: 0, summary: SUMMARY });
+    for (const script of [join(outside, 'evil.js'), '../evil.js', 'missing.js']) {
+      const r = (await getTool('perf_check').handler({ project_path: project, k6_script_path: script }, makePlugin(project))) as {
+        ok: boolean;
+        error?: { code: string; message: string };
+      };
+      expect(r.ok, script).toBe(false);
+    }
+    expect(vi.mocked(runProcess).mock.calls.some(([o]) => o.command === 'k6')).toBe(false);
+  });
+
+  it('judges the exit code: thresholds that failed are a result, a script error is a failure', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'smoke.js'), 'export default function () {}\n', 'utf8');
+    mockK6({ exitCode: 99, summary: SUMMARY });
+    const thresholds = (await getTool('perf_check').handler({ project_path: project, k6_script_path: 'smoke.js' }, makePlugin(project))) as {
+      ok: boolean;
+      passed?: boolean;
+      exit_code?: number;
+    };
+    expect(thresholds).toMatchObject({ ok: true, passed: false, exit_code: 99 });
+
+    mockK6({ exitCode: 107, stderr: 'ReferenceError: x is not defined\n' });
+    const broken = (await getTool('perf_check').handler({ project_path: project, k6_script_path: 'smoke.js' }, makePlugin(project))) as {
+      ok: boolean;
+      error?: { code: string; message: string };
+    };
+    expect(broken.ok).toBe(false);
+    expect(broken.error?.message).toContain('ReferenceError');
+
+    mockK6({ exitCode: 0, summary: SUMMARY });
+    const fine = (await getTool('perf_check').handler({ project_path: project, k6_script_path: 'smoke.js' }, makePlugin(project))) as {
+      ok: boolean;
+      passed?: boolean;
+    };
+    expect(fine).toMatchObject({ ok: true, passed: true });
+  });
 });
 
 // silence unused-import warnings

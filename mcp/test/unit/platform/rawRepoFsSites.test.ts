@@ -296,9 +296,9 @@ const ALLOWED: Record<string, Allowed> = {
   },
   'src/tools/healthStatus.ts': { apis: { statSync: 1, existsSync: 1 }, kind: 'own', reason: 'the presence and size of the database this server opened' },
   'src/tools/perfCheck.ts': {
-    apis: { readFileSync: 2, writeFileSync: 1, existsSync: 3 },
+    apis: { readFileSync: 2, writeFileSync: 1, existsSync: 2 },
     kind: 'own',
-    reason: 'Lighthouse / k6 output in a verified report directory, and the k6_script_path the user named',
+    reason: 'Lighthouse / k6 output in a verified report directory (the k6 script is judged through projectFs)',
   },
   'src/tools/registerCustomRules.ts': {
     apis: { statSync: 3 },
