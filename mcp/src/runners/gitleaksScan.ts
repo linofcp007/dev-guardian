@@ -893,13 +893,25 @@ function short(sha: string): string {
  * gitleaks' parser, with where the secret was found written into each
  * finding, and history paths (relative to the REPOSITORY root) re-expressed
  * relative to the project when the project is a subdirectory of it.
+ *
+ * A history finding outside that subdirectory is left out: the history pass
+ * reads the whole repository (`git log --all`, no pathspec), and a secret a
+ * commit put in a sibling directory — `api/creds.txt` for project `web/` —
+ * was stored, prefix and all, as this project's own `api/creds.txt`. The
+ * working-tree pass is the project's alone already (`git.ts`, `--relative`).
  */
 function locatedParser(location: SecretLocation, projectPrefix: string): ScannerParser {
+  const inProject = (f: Finding): boolean =>
+    location !== 'history' ||
+    projectPrefix === '' ||
+    f.file_path === undefined ||
+    f.file_path === '' ||
+    f.file_path.replace(/\\/g, '/').startsWith(`${projectPrefix}/`);
   return {
     name: gitleaksParser.name,
     parse(input, ctx) {
       const out = gitleaksParser.parse(input, ctx);
-      return { findings: out.findings.map((f) => locate(f, location, projectPrefix)), cves: out.cves };
+      return { findings: out.findings.filter(inProject).map((f) => locate(f, location, projectPrefix)), cves: out.cves };
     },
   };
 }
