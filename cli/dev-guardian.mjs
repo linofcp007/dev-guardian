@@ -1701,6 +1701,34 @@ function armInterruptTeardown(getApp, getStartingApp) {
   };
 }
 
+/**
+ * Writes `scan --sarif`'s report at `sarifPath` (absolute) — why it was not
+ * written, or undefined. The generated pipelines write it in the checkout,
+ * which is the pull request's: one committing `dev-guardian-results.sarif` as
+ * a link to any file the CI user can write had the report overwrite that
+ * file. So inside the repository (the project, outside one) it is written
+ * through `writeProjectFile` — a temp file renamed into place; a link at the
+ * name, or a directory on the way leading out, refused. Elsewhere the path is
+ * the operator's own and its directories are made as given, but a link at the
+ * name is refused there too.
+ *
+ * @param {string} sarifPath
+ * @param {string} text
+ * @param {{ projectPath: string, repoPrefix: string }} where `repoPrefix`: the project's place in its repository (`showPrefix`)
+ * @returns {string | undefined}
+ */
+export function writeSarif(sarifPath, text, { projectPath, repoPrefix }) {
+  const depth = repoPrefix.split('/').filter((s) => s !== '').length;
+  const repoRoot = resolve(projectPath, ...Array.from({ length: depth }, () => '..'));
+  let root = repoRoot;
+  if (!isWithinDir(repoRoot, sarifPath)) {
+    root = dirname(sarifPath);
+    mkdirSync(root, { recursive: true });
+  }
+  const written = writeProjectFile(root, sarifPath, text, { mode: 'replace' });
+  return written.ok ? undefined : describeWriteRefusal(written.reason, written.detail);
+}
+
 /** @param {string[]} argv */
 async function cmdScan(argv) {
   const parsed = parseScanArgs(argv);
@@ -1941,13 +1969,13 @@ async function cmdScan(argv) {
     } catch {
       /* not a git work tree: the project is the root */
     }
+    let refused;
     try {
-      const sarifPath = resolve(opts.sarif);
-      mkdirSync(dirname(sarifPath), { recursive: true });
-      writeFileSync(sarifPath, renderSarif(verdict, projectPath, { repoPrefix }));
+      refused = writeSarif(resolve(opts.sarif), renderSarif(verdict, projectPath, { repoPrefix }), { projectPath, repoPrefix });
     } catch (e) {
-      sarifError = `error: --sarif ${opts.sarif} was not written: ${e instanceof Error ? e.message : String(e)}\n`;
+      refused = e instanceof Error ? e.message : String(e);
     }
+    if (refused !== undefined) sarifError = `error: --sarif ${opts.sarif} was not written: ${refused}\n`;
   }
 
   // A gate verdict (1, 2) stays the exit code; a pass is not one without the
