@@ -17,9 +17,9 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { runProcess } from '../runners/processRunner.js';
 import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult } from '../types.js';
+import { withWpCli } from '../wordpress/wpCli.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
@@ -69,7 +69,8 @@ const tool = defineTool({
   description:
     'List WP scheduled cron events and flag suspicious ones: unknown hook namespaces, ' +
     'base64-looking args, events from inactive plugins. Persistent backdoors on compromised WP ' +
-    'sites almost always live here.',
+    'sites almost always live here. WP-CLI boots the site with its plugins and theme skipped; wp-config.php, ' +
+    'core files and must-use plugins still run.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 });
@@ -98,12 +99,15 @@ async function handler(
     );
   }
 
-  // Cron events
-  const cronResult = await runProcess({
-    command: 'wp',
-    args: ['cron', 'event', 'list', `--path=${installPath}`, '--format=json'],
-    cwd: installPath,
-    timeoutMs: 60_000,
+  // Both read the database with the site's plugins and theme skipped
+  // (`wordpress/wpCli.ts`): a plugin's hook names still come from the stored
+  // cron array, and a running backdoor can no longer hide its own event.
+  const [cronResult, pluginList] = await withWpCli(installPath, async (wp) => {
+    const cron = await wp(['cron', 'event', 'list', '--format=json'], 60_000);
+    if (cron.outcome !== 'completed') return [cron, null] as const;
+    // Plugin slugs for matching (best-effort; if it fails, we still proceed
+    // with prefix-only matching).
+    return [cron, await wp(['plugin', 'list', '--fields=name,status', '--format=json'], 30_000)] as const;
   });
   if (cronResult.outcome !== 'completed') {
     return failDomain(
@@ -118,17 +122,9 @@ async function handler(
     /* leave events empty */
   }
 
-  // Plugin slugs for matching (best-effort; if it fails, we still proceed
-  // with prefix-only matching).
-  const pluginList = await runProcess({
-    command: 'wp',
-    args: ['plugin', 'list', `--path=${installPath}`, '--fields=name,status', '--format=json'],
-    cwd: installPath,
-    timeoutMs: 30_000,
-  });
   const activePlugins = new Set<string>();
   const inactivePlugins = new Set<string>();
-  if (pluginList.outcome === 'completed') {
+  if (pluginList?.outcome === 'completed') {
     try {
       const parsed = JSON.parse(pluginList.stdout) as Array<{ name: string; status: string }>;
       for (const p of parsed) {

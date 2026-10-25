@@ -3,7 +3,10 @@
  *
  * Standalone tool (no factory). Requires `wp` (WP-CLI) on PATH and a
  * directory containing `wp-config.php`. All WP-CLI invocations are
- * read-only.
+ * read-only, and run as `wordpress/wpCli.ts` says: the site's plugins and
+ * theme skipped, from a directory of WP-CLI's own (no `wp-cli.yml` of the
+ * site's), in an allowlisted environment — its wp-config.php, core files and
+ * must-use plugins still run, which WP-CLI cannot skip.
  *
  * Per-subsection retry: each WP-CLI call that FAILED is retried up to 3
  * times with exponential backoff (1s, 3s, 9s) before being skipped. A
@@ -36,10 +39,11 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { resolveProjectPath } from '../platform/projectPath.js';
-import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import type { ProcessRunResult } from '../runners/processRunner.js';
 import { computeCoverage } from './scanCoverage.js';
 import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
+import { withWpCli, type WpCli } from '../wordpress/wpCli.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const RETRY_DELAYS_MS = [1000, 3000, 9000] as const;
@@ -101,7 +105,8 @@ const tool = defineTool({
   description:
     'Audit a running WordPress install via WP-CLI (read-only): core/plugin file checksums (WP-CLI has none ' +
     'for themes: reported not checked), admin user list, dangerous config flags, plugins with auto_update ' +
-    'on. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.',
+    'on. WP-CLI boots the site with its plugins and theme skipped; wp-config.php, core files and must-use ' +
+    'plugins still run. Persists a scan row of type wp_audit so guardian://scans/{id} returns the structured audit.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 });
@@ -162,7 +167,7 @@ async function handler(
   const configFlags = includeOptions
     ? ['DISALLOW_FILE_EDIT', 'WP_DEBUG', 'WP_DEBUG_LOG', 'FORCE_SSL_ADMIN']
     : [];
-  const answers = await askWpCli(installPath, ctx, includeUsers, configFlags);
+  const answers = await withWpCli(installPath, (wp) => askWpCli(wp, includeUsers, configFlags));
   readAnswers(answers, { includeUsers, riskyLogins, configFlags }, meta, gaps);
 
   // -------- Bookkeeping: what did not answer is named, never `ok` in silence.
@@ -217,64 +222,19 @@ interface WpAnswers {
 /**
  * The audit's WP-CLI subcommands, in parallel. Each call goes through the
  * same retry policy (3 attempts, exp. backoff): worst case ~10 s wall-clock
- * when ALL of them retry, not 9 × ~10 s one after the other.
+ * when ALL of them retry, not 9 × ~10 s one after the other. `wp` adds
+ * `--path` and the skip flags (`wordpress/wpCli.ts`).
  */
-async function askWpCli(
-  installPath: string,
-  ctx: PluginContext,
-  includeUsers: boolean,
-  configFlags: readonly string[],
-): Promise<WpAnswers> {
+async function askWpCli(wp: WpCli, includeUsers: boolean, configFlags: readonly string[]): Promise<WpAnswers> {
   const [version, coreVerify, pluginVerify, admins, pluginList, ...config] = await Promise.all([
-    retry(() => wpCall(['core', 'version', `--path=${installPath}`], installPath, ctx)),
-    retry(() =>
-      wpCall(
-        ['core', 'verify-checksums', `--path=${installPath}`, '--format=json'],
-        installPath,
-        ctx,
-        { rowsOnExit1: true },
-      ),
-    ),
-    retry(() =>
-      wpCall(
-        ['plugin', 'verify-checksums', '--all', `--path=${installPath}`, '--format=json'],
-        installPath,
-        ctx,
-        { rowsOnExit1: true },
-      ),
-    ),
+    retry(() => wpCall(wp, ['core', 'version'])),
+    retry(() => wpCall(wp, ['core', 'verify-checksums', '--format=json'], { rowsOnExit1: true })),
+    retry(() => wpCall(wp, ['plugin', 'verify-checksums', '--all', '--format=json'], { rowsOnExit1: true })),
     includeUsers
-      ? retry(() =>
-          wpCall(
-            [
-              'user',
-              'list',
-              '--role=administrator',
-              `--path=${installPath}`,
-              '--fields=user_login,user_email',
-              '--format=json',
-            ],
-            installPath,
-            ctx,
-          ),
-        )
+      ? retry(() => wpCall(wp, ['user', 'list', '--role=administrator', '--fields=user_login,user_email', '--format=json']))
       : Promise.resolve({ ok: true, stdout: '[]', stderr: '', reason: '' } as WpResult),
-    retry(() =>
-      wpCall(
-        [
-          'plugin',
-          'list',
-          `--path=${installPath}`,
-          '--fields=name,auto_update',
-          '--format=json',
-        ],
-        installPath,
-        ctx,
-      ),
-    ),
-    ...configFlags.map((flag) =>
-      retry(() => wpCall(['config', 'get', flag, `--path=${installPath}`], installPath, ctx)),
-    ),
+    retry(() => wpCall(wp, ['plugin', 'list', '--fields=name,auto_update', '--format=json'])),
+    ...configFlags.map((flag) => retry(() => wpCall(wp, ['config', 'get', flag]))),
   ]);
   return { version, coreVerify, pluginVerify, admins, pluginList, config };
 }
@@ -381,19 +341,8 @@ interface WpResult {
  * the answer. Exit 1 without rows (checksums unavailable, no install) is
  * still a failure.
  */
-async function wpCall(
-  args: string[],
-  cwd: string,
-  ctx: PluginContext,
-  opts: { rowsOnExit1?: boolean } = {},
-): Promise<WpResult> {
-  const r: ProcessRunResult = await runProcess({
-    command: 'wp',
-    args,
-    cwd,
-    env: process.env,
-    timeoutMs: 60_000,
-  });
+async function wpCall(wp: WpCli, args: string[], opts: { rowsOnExit1?: boolean } = {}): Promise<WpResult> {
+  const r: ProcessRunResult = await wp(args, 60_000);
   const reported = opts.rowsOnExit1 === true && r.exitCode === 1 && checksumRows(r.stdout) !== null;
   const ok = r.outcome === 'completed' || reported;
   return {
@@ -402,7 +351,6 @@ async function wpCall(
     stderr: r.stderr,
     reason: ok ? '' : `exit ${r.exitCode ?? '?'} (${r.outcome}); ${r.stderr.split(/\r?\n/)[0] ?? ''}`,
   };
-  void ctx;
 }
 
 async function retry(call: () => Promise<WpResult>): Promise<WpResult> {

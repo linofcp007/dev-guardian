@@ -345,6 +345,11 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "the vulnerability feed cache in dev-guardian's own data directory",
   },
+  'src/wordpress/wpCli.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "the empty wp-cli.yml in WP-CLI's own mkdtemp working directory (flag wx)",
+  },
   'src/fingerprint/findingIdentity.ts': {
     apis: { realpathSync: 1 },
     kind: 'user',

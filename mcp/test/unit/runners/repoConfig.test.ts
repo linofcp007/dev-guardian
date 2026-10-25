@@ -202,11 +202,8 @@ const SPAWNS: Readonly<Record<string, RepoConfigRunner | 'none' | `reads none he
   'tools/checkToolchain.ts|node': 'not a scanner: a version probe',
   'tools/checkToolchain.ts|python': 'not a scanner: a version probe',
   'tools/checkToolchain.ts|python3': 'not a scanner: a version probe',
-  'tools/wpAudit.ts|wp': 'not a scanner: WP-CLI reads the WordPress install, not the repository',
   'tools/wpAudit.ts|Checksum_Core_Command': 'not a scanner: a WP-CLI class name in its output, not a spawn',
-  'tools/wpCronAudit.ts|wp': 'not a scanner: WP-CLI reads the WordPress install',
-  'tools/wpPluginCheck.ts|wp': 'not a scanner: WP-CLI reads the WordPress install',
-  'tools/wpVulnCheck.ts|wp': 'not a scanner: WP-CLI reads the WordPress install',
+  'wordpress/wpCli.ts|wp': "not a scanner: WP-CLI reads the WordPress install (never its wp-cli.yml: it runs from its own directory)",
   'tools/precommitInstall.ts|pre-commit': 'not a scanner: installs the hooks',
   'tools/createGithubIssues.ts|gh': 'not a scanner: GitHub CLI',
   // git itself is spawned as GIT_COMMAND, never a literal — test/unit/platform/gitSpawnSites.test.ts.
