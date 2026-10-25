@@ -942,7 +942,7 @@ export function openSetForProject(
   // a reader can say how much a suppression (a mass one included) takes out.
   const suppressedSeen = indexFindings<Finding>([]);
   let suppressedCount = 0;
-  for (const { slot, scan, coverage } of picked) {
+  const admitSource = ({ slot, scan, coverage }: (typeof picked)[number]): void => {
     const batch: OpenFinding[] = [];
     for (const f of rowsOf(scan)) {
       if (!findingInSlot(scan, f, slot) || seen.has(f)) continue;
@@ -968,7 +968,14 @@ export function openSetForProject(
       coverage,
       findings: contributed,
     });
-  }
+  };
+  // An imported log's sources come after every native one, carried findings
+  // included: the log is whatever file the caller named (one in the
+  // repository under scan, say), and its `devGuardianIdentity` any 64-hex
+  // string, so newest first across slots a log carrying a Semgrep critical's
+  // identity at severity info hid the critical until the next native scan.
+  // Among the native sources, and among the imported ones, the newer copy wins.
+  for (const p of picked) if (!isSarifSlot(p.slot)) admitSource(p);
 
   // After every source: a newer copy of the same identity always wins.
   for (const { slot, scan, coverage, findings: rows } of carried) {
@@ -995,6 +1002,7 @@ export function openSetForProject(
       carried_for: [...gaps],
     });
   }
+  for (const p of picked) if (isSarifSlot(p.slot)) admitSource(p);
 
   findings.sort(
     (a, b) =>
