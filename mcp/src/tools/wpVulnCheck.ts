@@ -59,6 +59,7 @@ import { scannerAvailable } from './scanHelpers.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { wpInstallPathProblem, wpSiteKey } from '../wordpress/siteKeys.js';
 import { defaultWordfenceCacheDir } from '../wordpress/vulnFeed.js';
+import { withWpCli } from '../wordpress/wpCli.js';
 import { defineTool, registerToolModule, type ToolInput } from './index.js';
 
 const inputSchema = {
@@ -82,7 +83,8 @@ const tool = defineTool({
   name: 'wp_vuln_check',
   title: 'WordPress vuln-DB lookup (WPScan)',
   description:
-    'Run WPScan against a target URL (or against the URL inferred from a local install_path) and ' +
+    'Run WPScan against a target URL (or against the URL a local install_path names, read by WP-CLI, which ' +
+    'boots the site with its plugins and theme skipped — wp-config.php, core and must-use plugins still run) and ' +
     'return vulnerabilities affecting core / plugins / themes. Without an API token WPScan returns no ' +
     'vulnerability data: the scan then reads not checked (coverage none), never clean. A missing WPScan ' +
     'database is downloaded once (wpscan --update) unless GUARDIAN_OFFLINE=1.',
@@ -121,7 +123,7 @@ async function handler(
     );
   }
 
-  const resolved = await resolveScanUrl(inp, localInstall);
+  const resolved = await resolveScanUrl(inp);
   if (!resolved.ok) return resolved;
   const { url, scanUrl } = resolved;
 
@@ -241,7 +243,6 @@ async function handler(
  */
 async function resolveScanUrl(
   inp: { target_url?: string | undefined; wp_install_path?: string | undefined },
-  localInstall: string | undefined,
 ): Promise<{ ok: true; url: string; scanUrl: string } | { ok: false; error: DomainError }> {
   // When only the install path is given, ask WP-CLI for the home_url.
   let url = inp.target_url;
@@ -253,12 +254,10 @@ async function resolveScanUrl(
         'wp_install_path was provided but WP-CLI is missing to read the URL. Install wp-cli or provide target_url.',
       );
     }
-    const r = await runProcess({
-      command: 'wp',
-      args: ['option', 'get', 'home', `--path=${inp.wp_install_path}`],
-      cwd: localInstall ?? process.cwd(),
-      timeoutMs: 30_000,
-    });
+    // The site's plugins and theme skipped, from WP-CLI's own directory
+    // (`wordpress/wpCli.ts`) — it used to run in the install, or in the
+    // server's working directory, reading whichever `wp-cli.yml` was there.
+    const r = await withWpCli(inp.wp_install_path, (wp) => wp(['option', 'get', 'home'], 30_000));
     if (r.outcome === 'completed') {
       url = r.stdout.trim();
     } else {
