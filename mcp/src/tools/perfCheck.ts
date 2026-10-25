@@ -31,11 +31,13 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { budgetViolationFindings, evaluatePerfBudgets, loadBudgets, type PerfBudgets } from '../budgets/budgets.js';
+import { allowlistedEnv } from '../fixpr/testCommandEnv.js';
+import { projectPathKind } from '../platform/projectFs.js';
 import { runProcess } from '../runners/processRunner.js';
 import { httpUrl, pathArgProblem } from '../platform/toolArgs.js';
 import { httpUrlField, ProjectPath } from '../schemas.js';
@@ -126,6 +128,18 @@ async function handler(
   return runK6({ scriptPath: k6Script, reportDir, projectPath, ctx });
 }
 
+/**
+ * Chrome's flags for Lighthouse. `--no-sandbox` only where Chrome refuses to
+ * start without it — as root, the usual case inside a container. It was on
+ * every run since the first version (no reason recorded), and the page
+ * Chrome renders is one the agent named: its sandbox is what contains a
+ * renderer exploit there (review of 3.6, finding 15).
+ */
+function chromeFlags(): string {
+  const root = typeof process.getuid === 'function' && process.getuid() === 0;
+  return root ? '--headless=new --no-sandbox' : '--headless=new';
+}
+
 interface LighthouseOpts {
   url: string;
   categories?: string[];
@@ -151,7 +165,7 @@ async function runLighthouse(
     '--quiet',
     '--output=json',
     `--output-path=${outFile}`,
-    '--chrome-flags=--headless=new --no-sandbox',
+    `--chrome-flags=${chromeFlags()}`,
   ];
   if (opts.categories && opts.categories.length > 0) {
     args.push(`--only-categories=${opts.categories.join(',')}`);
@@ -359,17 +373,38 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
       'k6 CLI is not installed. Install from https://k6.io/docs/getting-started/installation/.',
     );
   }
-  if (!existsSync(opts.scriptPath)) {
-    return failDomain('scanner_failed', `k6 script not found: ${opts.scriptPath}`);
+  // Resolved against the project — k6 runs there, and `existsSync` of the
+  // bare argument used to answer about the server's own working directory —
+  // and held inside it: a link or `..` out of the project is refused.
+  const script = resolve(opts.projectPath, opts.scriptPath);
+  const kind = projectPathKind(opts.projectPath, script);
+  if (kind === 'outside') {
+    return failDomain('invalid_input', `k6_script_path must be a file inside the project: ${opts.scriptPath}`);
+  }
+  if (kind !== 'file') {
+    return failDomain('scanner_failed', `k6 script not found in the project: ${opts.scriptPath}`);
   }
 
   const summaryFile = join(opts.reportDir, 'k6-summary.json');
   const result = await runProcess({
     command: 'k6',
-    args: ['run', `--summary-export=${summaryFile}`, opts.scriptPath],
+    args: ['run', `--summary-export=${summaryFile}`, script],
     cwd: opts.projectPath,
+    // The script is code, and k6 hands it the environment as `__ENV`: only
+    // what k6 needs, its own `K6_*` options and the proxy — never a token the
+    // server was started with (review of 3.6, finding 14).
+    env: allowlistedEnv((name) => K6_ENV.test(name)),
+    extendEnv: false,
     timeoutMs: 30 * 60_000,
   });
+  // k6's own exit codes: 0, and 99 when the run completed but a threshold
+  // failed — a result, not a failure of the tool. Anything else (a script
+  // error, a bad option, an abort, the timeout) measured nothing to trust.
+  const thresholdsFailed = result.exitCode === K6_THRESHOLDS_FAILED;
+  if (result.outcome === 'timed_out' || (result.exitCode !== 0 && !thresholdsFailed)) {
+    const line = result.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0) ?? result.outcome;
+    return failDomain('scanner_failed', `k6 exit ${String(result.exitCode)}: ${line}`);
+  }
   if (!existsSync(summaryFile)) {
     // Some k6 versions only write summary on success; capture stdout as a fallback.
     writeFileSync(summaryFile, result.stdout || '{}', 'utf8');
@@ -388,9 +423,18 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
     tool: 'k6',
     script: opts.scriptPath,
     report_path: summaryFile,
+    passed: !thresholdsFailed,
+    exit_code: result.exitCode,
+    ...(thresholdsFailed ? { note: 'k6 exited 99: the run completed, and at least one threshold failed' } : {}),
     summary,
   };
 }
+
+/** k6's exit code for a run that completed with a failed threshold. */
+const K6_THRESHOLDS_FAILED = 99;
+
+/** What k6 is given besides the test command's allowlist: its own options and the proxy. */
+const K6_ENV = /^(?:K6_.+|HTTPS?_PROXY|NO_PROXY|ALL_PROXY|SSL_CERT_FILE|SSL_CERT_DIR)$/;
 
 function summariseK6(root: unknown): Record<string, unknown> {
   const metrics = getProp(root, 'metrics');

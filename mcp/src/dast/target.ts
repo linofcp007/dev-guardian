@@ -7,6 +7,15 @@
  * can make is asking for attestation it did not strictly need; it can never
  * wave through a host it should have stopped.
  *
+ * What it does NOT do is pin the address (review of 3.6, finding 9, a named
+ * limit): the probes use the global `fetch` and nuclei its own resolver, so
+ * every request resolves an attested hostname again, and one whose DNS
+ * rebinds mid-scan (to 127.0.0.1, 169.254.169.254) is probed there — the
+ * authenticated variant with the caller's header. Pinning needs a dispatcher
+ * whose `connect.lookup` serves one vetted answer, which the global `fetch`
+ * does not expose without the `undici` package (and nuclei cannot be given);
+ * SECURITY.md and the DAST reference say so, and an IP literal avoids it.
+ *
  * `private` and `public` are gated identically — only loopback is
  * auto-allowed. The distinction exists solely to word the refusal accurately;
  * it must never widen what is allowed.

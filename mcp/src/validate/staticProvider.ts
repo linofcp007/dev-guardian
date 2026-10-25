@@ -16,10 +16,11 @@
  * and its most dangerous: emitting it wrongly deprioritises an exploitable
  * finding, and nobody looks again. So `reachable` is cheap to earn — any
  * discovered path is reported, gates or no gates — while `unreachable` is
- * gated on six independent conditions, ALL of which must hold, checked in
+ * gated on eight independent conditions, ALL of which must hold, checked in
  * order, the first failure deciding `unknown` and naming itself in
  * `coverage_gaps` (the design of record, plus gates 1 and 6 below, ruled in during
- * Task 5 and the final whole-branch review respectively):
+ * Task 5 and the final whole-branch review respectively, and gates 7 and 8 in
+ * the 3.6.1 review):
  *
  *   1. The import graph holds at least one edge. An empty graph is evidence
  *      of missing DATA, not of missing reachability: nothing is reached from
@@ -47,11 +48,16 @@
  *      `no_matches`. `unreachable` is a claim about the WHOLE route list for
  *      that language, so it is unsound when that list is known to be
  *      partial (`no_rules`, `unreadable`) — or entirely absent, which is
- *      treated the same as partial, not as permissive. `no_matches` is
- *      deliberately included: the rules ran and this language genuinely
- *      declares no routes, so no route in it can reach anything. Excluding
- *      it would answer `unknown` for every file in any language with no HTTP
- *      surface, which is most of them in most repositories.
+ *      treated the same as partial, not as permissive. `no_matches` passes
+ *      only while the language's files import nothing the graph resolved:
+ *      the rules ran and found no route in it, which is a self-contained
+ *      script's honest picture — but a language whose files import one
+ *      another and declare no route the pack knows is far more often served
+ *      by a framework the pack does not know (Next.js `pages/api` or an App
+ *      Router `route.ts`, Remix, SvelteKit, a Lambda handler, axum,
+ *      aiohttp). No root of another language imports its files, so every one
+ *      of them would read `unreachable` — a SQL injection in
+ *      `pages/api/users.ts` included.
  *   4. The language is not one of `RUNTIME_RESOLUTION_LANGUAGES` (Ruby,
  *      Java, C#, PHP). Those four resolve code at runtime — autoload,
  *      annotation-driven injection, a DI container — not by import, so
@@ -81,8 +87,21 @@
  *      (see the note below), and gating on "no edges in this language" alone
  *      would delete it for every language whose files genuinely import
  *      nothing — where zero resolved AND zero unresolved is a complete
- *      picture, not a hole. Checked last of the six; see
+ *      picture, not a hole. Checked last of gates 3–6; see
  *      `negativeVerdictBlockedBy` for why.
+ *   7. The snapshot holds at least one CODE route. With no root, "no route
+ *      imports this file" is true of every file by construction — gate 1's
+ *      reasoning for the route list rather than the edges. It is what a
+ *      project on a framework the routes pack does not know looks like.
+ *   8. The snapshot is not partial: nothing in `missing_tools` (part of the
+ *      project was not read) and no `partially_parsed` file (a route inside
+ *      an unparsed span is missing). `map_attack_surface` persists such a
+ *      snapshot, with coverage still `ok`, so the coverage gate cannot see it.
+ *      A partly parsed file blocks only its own resolution family (`familyOf`:
+ *      JavaScript and TypeScript are one) — a PHP file Semgrep could not
+ *      fully parse hides no path into a TypeScript one; whatever else made
+ *      the run partial blocks every finding. Gates 7 and 8 are facts about
+ *      the run, checked right after gate 1.
  *
  * `CoverageEntry.unresolved_imports` is reported whenever it is non-zero for
  * the finding's language — on every verdict, including `reachable` — but
@@ -207,7 +226,13 @@ export function validateStatically(input: StaticProviderInput): FindingValidatio
   const exposedFiles = relativizeSet(input.anonymouslyExposedRouteFiles, input.projectPath);
   const reachCache = new Map<string, ReachResult>();
   const languagesWithEdges = languagesWithResolvedEdges(input);
-  const context: BatchContext = { roots, routesByFile, exposedFiles, reachCache, languagesWithEdges };
+  const familiesWithRoots = new Set(
+    roots.map((root) => input.languageOf(root)).filter((l): l is string => l !== null).map(familyOf),
+  );
+  const run = assessRunCompleteness(input);
+  const context: BatchContext = {
+    roots, routesByFile, exposedFiles, reachCache, languagesWithEdges, familiesWithRoots, run,
+  };
 
   return input.findings.map((finding) => validateOne(finding, input, context));
 }
@@ -218,8 +243,92 @@ interface BatchContext {
   routesByFile: ReadonlyMap<string, RouteRecord[]>;
   exposedFiles: ReadonlySet<string>;
   reachCache: Map<string, ReachResult>;
-  /** Languages the graph holds at least one outbound edge FROM — gate 6. */
+  /** Languages the graph holds at least one outbound edge FROM — gates 3 and 6. */
   languagesWithEdges: ReadonlySet<string>;
+  /** The resolution families (`familyOf`) at least one root file is in — gate 3. */
+  familiesWithRoots: ReadonlySet<string>;
+  /** Gate 8. */
+  run: RunCompleteness;
+}
+
+/**
+ * Languages one resolver links to each other: a TypeScript route imports a
+ * JavaScript helper. Every other language reaches only its own files, so a
+ * route or an import missing from one family cannot hide a path into another.
+ */
+const RESOLUTION_FAMILIES: ReadonlyMap<string, string> = new Map([
+  ['javascript', 'js'],
+  ['typescript', 'js'],
+]);
+
+function familyOf(language: string): string {
+  return RESOLUTION_FAMILIES.get(language) ?? language;
+}
+
+/** Gate 8's two answers: one for every finding, one per resolution family. */
+interface RunCompleteness {
+  /** Blocks every finding — what the run missed cannot be placed in a language. */
+  whole: string | null;
+  /** The partly parsed files of each family, which block that family alone. */
+  unreadByFamily: ReadonlyMap<string, readonly string[]>;
+}
+
+/**
+ * Gate 8: what the surface run itself says it did not read. `map_attack_surface`
+ * persists such a snapshot anyway — a partial parse, a Semgrep that skipped
+ * part of the project — with the per-language coverage left `ok`: the routes
+ * that were read are fine, the ones that were not are simply absent.
+ *
+ * A partly parsed file (the snapshot's `partially_parsed`, and Semgrep's own
+ * run, which also names the files whose path was too long to open) hides
+ * routes and imports of its own language only, so it blocks that family.
+ * Anything else in `missing_tools` — another tool, a file over the size
+ * limit, a submodule, a listing that stopped (`ToolRun.unscanned`) — is not
+ * placed in a language, and blocks every finding.
+ */
+function assessRunCompleteness(input: StaticProviderInput): RunCompleteness {
+  const { snapshot } = input;
+  const semgrep = snapshot.tools_run.find((t) => t.name === 'semgrep');
+  const unread = [
+    ...new Set(
+      [...(snapshot.partially_parsed ?? []), ...(semgrep?.partially_parsed ?? [])].map((p) =>
+        toRelativeIfPossible(p.file, input.projectPath),
+      ),
+    ),
+  ];
+  const unreadByFamily = new Map<string, string[]>();
+  const unplaced: string[] = [];
+  for (const file of unread) {
+    const language = input.languageOf(file);
+    if (language === null) {
+      unplaced.push(file);
+      continue;
+    }
+    const family = familyOf(language);
+    unreadByFamily.set(family, [...(unreadByFamily.get(family) ?? []), file]);
+  }
+
+  const explainedByFiles =
+    unread.length > 0 && snapshot.missing_tools.every((t) => t === 'semgrep') && semgrep?.unscanned === undefined;
+  let whole: string | null = null;
+  if (snapshot.missing_tools.length > 0 && !explainedByFiles) {
+    whole =
+      `the surface run did not complete (${snapshot.missing_tools.map((t) => `'${t}'`).join(', ')} in ` +
+      'missing_tools): part of the project was not read, so its routes and imports may be missing — ' +
+      "see the snapshot's tools_run, fix the cause and re-run map_attack_surface";
+  } else if (unplaced.length > 0) {
+    whole = partlyParsedGap(unplaced);
+  }
+  return { whole, unreadByFamily };
+}
+
+function partlyParsedGap(files: readonly string[]): string {
+  const named = files.slice(0, 3).map((f) => `'${f}'`).join(', ');
+  const more = files.length > 3 ? ` and ${files.length - 3} more` : '';
+  return (
+    `Semgrep only partly parsed ${named}${more} when the surface was mapped: a route or an import ` +
+    'inside an unparsed span is missing, so the route list cannot certify an absent path'
+  );
 }
 
 /**
@@ -326,14 +435,26 @@ function validateOne(
   if (hasNoEdges(input.graph)) {
     return unknownVerdict(envelope, [EMPTY_GRAPH_GAP, ...gaps]);
   }
+  // Gates 7 and 8 — the same kind of fact as gate 1, about the route list.
+  if (context.roots.length === 0) {
+    return unknownVerdict(envelope, [NO_ROOTS_GAP, ...gaps]);
+  }
+  if (context.run.whole !== null) {
+    return unknownVerdict(envelope, [context.run.whole, ...gaps]);
+  }
 
   if (language === null) {
     return unknownVerdict(envelope, [`could not determine the language of '${relFile}'`, ...gaps]);
   }
+  const unread = context.run.unreadByFamily.get(familyOf(language));
+  if (unread !== undefined) {
+    return unknownVerdict(envelope, [partlyParsedGap(unread), ...gaps]);
+  }
 
-  const blocked = negativeVerdictBlockedBy(
-    language, entry, input.graph.truncated, context.languagesWithEdges.has(language),
-  );
+  const blocked = negativeVerdictBlockedBy(language, entry, input.graph.truncated, {
+    hasResolvedEdges: context.languagesWithEdges.has(language),
+    familyHasRoot: context.familiesWithRoots.has(familyOf(language)),
+  });
   if (blocked !== null) return unknownVerdict(envelope, [blocked, ...gaps]);
 
   return unreachableVerdict(envelope, relFile, gaps);
@@ -349,6 +470,14 @@ const EMPTY_GRAPH_GAP =
   'of missing reachability — every file would be unreached by construction. Either the surface ' +
   'snapshot predates the persistence of import edges (re-run map_attack_surface) or no import ' +
   'rule in the pack matched this project.';
+
+/** Gate 7's message. The likeliest cause is named because no re-run changes it. */
+const NO_ROUTES_FRAMEWORKS =
+  'Next.js pages/api or App Router route handlers, Remix, SvelteKit, serverless handlers, axum, aiohttp';
+const NO_ROOTS_GAP =
+  'the surface snapshot holds no code route at all, so "no route imports this file" would be true ' +
+  'of every file by construction — the routes rules found none, which is what a framework they ' +
+  `do not know looks like (${NO_ROUTES_FRAMEWORKS}); an absent path here proves nothing`;
 
 /**
  * True when the graph contains no edge whatsoever.
@@ -395,8 +524,9 @@ function unresolvedImportsGap(language: string, entry: CoverageEntry): string[] 
 /**
  * The first of gates 3–6 (see the module doc comment) that blocks
  * `unreachable` for `language`, or `null` when all four hold. Gates 1 (a
- * non-empty graph) and 2 (a file_path with a determinable language) are
- * handled by the caller before this is ever invoked.
+ * non-empty graph), 2 (a file_path with a determinable language), 7 (a code
+ * route) and 8 (a complete run) are handled by the caller before this is
+ * ever invoked.
  *
  * ORDER. Gate 6 is checked LAST, even though its reasoning is the broadest,
  * because it overlaps with gates 3 and 4 and its message is the least
@@ -409,13 +539,24 @@ function negativeVerdictBlockedBy(
   language: string,
   entry: CoverageEntry | undefined,
   graphTruncated: boolean,
-  languageHasResolvedEdges: boolean,
+  graphFacts: { hasResolvedEdges: boolean; familyHasRoot: boolean },
 ): string | null {
+  const languageHasResolvedEdges = graphFacts.hasResolvedEdges;
   if (entry === undefined) {
     return `no coverage entry was recorded for language '${language}'`;
   }
   if (entry.status !== 'ok' && entry.status !== 'no_matches') {
     return `coverage for '${language}' is '${entry.status}', so its route list cannot be trusted as complete`;
+  }
+  // Gate 3's `no_matches` half. A root of the same family (a TypeScript
+  // route importing this JavaScript file) can still reach it, so only a
+  // family with no root at all is held to it.
+  if (entry.status === 'no_matches' && languageHasResolvedEdges && !graphFacts.familyHasRoot) {
+    return (
+      `coverage for '${language}' is 'no_matches': its files import one another, yet the routes rules ` +
+      'found no route in them, and no route of another language imports them — every file in it would ' +
+      `read as unreached. That is what a framework the rules do not know looks like (${NO_ROUTES_FRAMEWORKS})`
+    );
   }
   if (RUNTIME_RESOLUTION_LANGUAGES.has(language)) {
     return `'${language}' resolves code at runtime (autoload/DI container/injection), not by static import — an absent path proves nothing here`;

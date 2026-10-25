@@ -40,6 +40,19 @@ describe('buildNucleiArgs', () => {
     expect(buildNucleiArgs(BASE)).toContain('-rate-limit');
   });
 
+  it('never leaves the named target: no redirect followed, HTTP templates only', () => {
+    // Review of 3.6, finding 5: a template with `redirects: true` followed a
+    // hostile 302 to 169.254.169.254 or an internal host, and network,
+    // javascript and ssl templates probe other ports of the host.
+    for (const allowIntrusive of [false, true]) {
+      const args = buildNucleiArgs({ ...BASE, allowIntrusive });
+      expect(args).toContain('-disable-redirects');
+      expect(args[args.indexOf('-type') + 1]).toBe('http');
+      expect(args).not.toContain('-follow-redirects');
+      expect(args).not.toContain('-follow-host-redirects');
+    }
+  });
+
   // Addition beyond the brief's given tests: `allowIntrusive` must narrow the
   // exclude list by exactly the `intrusive` tag. A wrong implementation that
   // also drops 'dos' or 'fuzz' once intrusive templates are allowed would

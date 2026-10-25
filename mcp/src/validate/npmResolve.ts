@@ -23,6 +23,7 @@
  * present.
  */
 
+import { describeTooComplex, JSON_MAX_NODES, parseJsonBounded } from '../platform/boundedJson.js';
 import { readProjectText } from '../platform/projectFs.js';
 import { join } from 'node:path';
 import type { NpmResolver, ResolvedPackage } from './dependencyProvider.js';
@@ -31,6 +32,16 @@ import type { NpmResolver, ResolvedPackage } from './dependencyProvider.js';
 const MAX_LOCKFILE_BYTES = 64 * 1024 * 1024;
 const MAX_PACKAGE_JSON_BYTES = 1024 * 1024;
 const LOCKFILES = ['npm-shrinkwrap.json', 'package-lock.json'];
+/**
+ * How deep a v1 lockfile's `dependencies` may nest — npm 5+ flattens, so a
+ * real one is a few levels deep. Past it the lockfile answers nothing: each
+ * level's install path holds every level above it, so 20 000 levels in a
+ * 400 KB file would build keys of quadratic total size (and the recursive
+ * walk this replaced threw a RangeError out of validate_finding). Cut
+ * instead of refused, it could answer with the shallower copy of a package
+ * whose real one sits below the cut.
+ */
+const MAX_V1_DEPTH = 128;
 
 interface LockView {
   kind: 'lock';
@@ -46,7 +57,9 @@ interface LockView {
  * and is never passed over for the installed tree (review of part C, M-f: it
  * was, against this module's own contract).
  */
-type LockState = LockView | { kind: 'none' } | { kind: 'unreadable'; file: string };
+type LockState = LockView | { kind: 'none' } | { kind: 'unreadable'; file: string; why: string };
+
+const NOT_JSON = 'is not valid JSON (or larger than 64 MiB)';
 
 export function makeNpmResolver(projectPath: string): NpmResolver {
   const locks = new Map<string, LockState>();
@@ -61,7 +74,7 @@ export function makeNpmResolver(projectPath: string): NpmResolver {
   return (fromDir, rootDir, name) => {
     const lock = lockOf(rootDir);
     if (lock.kind === 'unreadable') {
-      return { version: null, reason: `${lock.file} is not valid JSON (or larger than 64 MiB)` };
+      return { version: null, reason: `${lock.file} ${lock.why}` };
     }
     let dir = fromDir;
     for (;;) {
@@ -95,56 +108,74 @@ function readLock(projectPath: string, rootDir: string): LockState {
     const parsed = readJson(projectPath, join(projectPath, rootDir, candidate), MAX_LOCKFILE_BYTES);
     if (parsed === undefined) continue;
     // Present but unreadable: never fall back to a lesser source.
-    if (parsed === null) return { kind: 'unreadable', file };
+    if ('why' in parsed) return { kind: 'unreadable', file, why: parsed.why };
     const versions = new Map<string, string>();
-    const packages = record(parsed['packages']);
+    const packages = record(parsed.value['packages']);
     if (packages !== null) {
       for (const [key, value] of Object.entries(packages)) {
         const entry = record(value);
         if (key === '' || entry === null || entry['link'] === true) continue;
         if (typeof entry['version'] === 'string') versions.set(key, entry['version']);
       }
-    } else {
-      walkV1(record(parsed['dependencies']), '', versions);
+    } else if (!walkV1(record(parsed.value['dependencies']), versions)) {
+      return { kind: 'unreadable', file, why: `nests its dependencies deeper than ${MAX_V1_DEPTH} levels, and was not read` };
     }
     return { kind: 'lock', file, versions };
   }
   return { kind: 'none' };
 }
 
-function walkV1(deps: Record<string, unknown> | null, prefix: string, out: Map<string, string>): void {
-  if (deps === null) return;
-  for (const [name, value] of Object.entries(deps)) {
-    const entry = record(value);
-    if (entry === null) continue;
-    const key = `${prefix}node_modules/${name}`;
-    if (typeof entry['version'] === 'string') out.set(key, entry['version']);
-    walkV1(record(entry['dependencies']), `${key}/`, out);
+/**
+ * A v1 lockfile's nested `dependencies`, as the install paths v2 keys by.
+ * Iterative, with an explicit stack; false when the nesting passes
+ * {@link MAX_V1_DEPTH} (`out` is then partial and must not be used).
+ */
+function walkV1(top: Record<string, unknown> | null, out: Map<string, string>): boolean {
+  const stack: { deps: Record<string, unknown>; prefix: string; depth: number }[] = [];
+  if (top !== null) stack.push({ deps: top, prefix: '', depth: 1 });
+  for (let level = stack.pop(); level !== undefined; level = stack.pop()) {
+    if (level.depth > MAX_V1_DEPTH) return false;
+    for (const [name, value] of Object.entries(level.deps)) {
+      const entry = record(value);
+      if (entry === null) continue;
+      const key = `${level.prefix}node_modules/${name}`;
+      if (typeof entry['version'] === 'string') out.set(key, entry['version']);
+      const nested = record(entry['dependencies']);
+      if (nested !== null) stack.push({ deps: nested, prefix: `${key}/`, depth: level.depth + 1 });
+    }
   }
+  return true;
 }
 
 function readInstalled(projectPath: string, dir: string, name: string): ResolvedPackage | null {
   const parsed = readJson(projectPath, join(projectPath, dir, 'node_modules', ...name.split('/'), 'package.json'), MAX_PACKAGE_JSON_BYTES);
-  const version = parsed?.['version'];
+  const version = parsed !== undefined && 'value' in parsed ? parsed.value['version'] : undefined;
   if (typeof version !== 'string') return null;
   return { version, source: `${dir === '' ? '' : `${dir}/`}node_modules/${name}/package.json` };
 }
 
 /**
- * `undefined`: no such regular file. `null`: present, but too large, not a
- * JSON object, or refused. Read through `platform/projectFs.ts`: contained in
- * the project (a package name with `..` in it, or a `node_modules` link out
- * of the project, reads nothing), judged on the opened descriptor.
+ * `undefined`: no such regular file. `why`: present, but too large, not a
+ * JSON object, holding more values than the bounded parser reads
+ * (`platform/boundedJson.ts`), or refused. Read through
+ * `platform/projectFs.ts`: contained in the project (a package name with `..`
+ * in it, or a `node_modules` link out of the project, reads nothing), judged
+ * on the opened descriptor.
  */
-function readJson(projectPath: string, path: string, maxBytes: number): Record<string, unknown> | null | undefined {
+function readJson(
+  projectPath: string,
+  path: string,
+  maxBytes: number,
+): { value: Record<string, unknown> } | { why: string } | undefined {
   const r = readProjectText(projectPath, path, maxBytes);
   if (r.status === 'absent') return undefined;
-  if (r.status === 'refused') return r.reason === 'not-a-regular-file' ? undefined : null;
-  try {
-    return record(JSON.parse(r.text) as unknown);
-  } catch {
-    return null;
+  if (r.status === 'refused') return r.reason === 'not-a-regular-file' ? undefined : { why: NOT_JSON };
+  const parsed = parseJsonBounded(r.text);
+  if (!parsed.ok) {
+    return { why: parsed.reason === 'too-complex' ? describeTooComplex(JSON_MAX_NODES, 'JSON values') : NOT_JSON };
   }
+  const value = record(parsed.value);
+  return value === null ? { why: NOT_JSON } : { value };
 }
 
 function record(value: unknown): Record<string, unknown> | null {

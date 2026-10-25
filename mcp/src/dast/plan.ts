@@ -45,6 +45,32 @@ export const DEFAULT_MAX_REQUESTS = 750;
  */
 export const CORS_PROBE_ORIGIN = 'https://dev-guardian-cors-probe.invalid';
 
+/**
+ * The destination the open-redirect probe offers, `.invalid` for the same
+ * reason. A redirect to it proves the destination came from the request; a
+ * redirect anywhere else off the origin (http→https, www, an SSO login)
+ * proves only that the route redirects, which is no finding (review of 3.6,
+ * finding 6).
+ */
+export const REDIRECT_PROBE_TARGET = 'https://dev-guardian-redirect-probe.invalid/';
+
+/**
+ * The query parameters the redirect probe sets to {@link REDIRECT_PROBE_TARGET},
+ * all in one request: the names frameworks and login flows commonly read a
+ * post-action destination from.
+ */
+export const REDIRECT_PROBE_PARAMS = [
+  'next', 'url', 'redirect', 'redirect_uri', 'redirect_url', 'redirectUrl', 'return', 'return_to',
+  'returnTo', 'returnUrl', 'continue', 'dest', 'destination', 'goto', 'target',
+] as const;
+
+/** `url` (already built and origin-checked) with every redirect parameter set to the probe target. */
+function withRedirectParams(url: string): string {
+  const out = new URL(url);
+  for (const name of REDIRECT_PROBE_PARAMS) out.searchParams.set(name, REDIRECT_PROBE_TARGET);
+  return out.toString();
+}
+
 const SYNTHETIC_PARAM_VALUE = '1';
 
 /** `buildProbeUrl`'s result when the path resolves to a request on `origin`. */
@@ -157,9 +183,11 @@ export function planProbes(
     }
     const corsKey = `cors ${path}`;
     const needCors = !seen.has(corsKey);
+    const redirectKey = `redirect ${path}`;
+    const needRedirect = !seen.has(redirectKey);
     // Nothing new for this route: every method already planned and the path
-    // already carries a cors probe.
-    if (fresh.length === 0 && !needCors) continue;
+    // already carries a cors and a redirect probe.
+    if (fresh.length === 0 && !needCors && !needRedirect) continue;
 
     const routeIndex = kept.length;
     kept.push(r);
@@ -186,6 +214,12 @@ export function planProbes(
       requests.push(
         build('GET', path, built.url, 'cors', { origin: CORS_PROBE_ORIGIN }, synthetic, routeIndex),
       );
+    }
+    // A GET, like the CORS probe: only its query grows, so it stays on the
+    // URL `buildProbeUrl` already checked.
+    if (needRedirect) {
+      seen.add(redirectKey);
+      requests.push(build('GET', path, withRedirectParams(built.url), 'redirect', {}, synthetic, routeIndex));
     }
   }
 

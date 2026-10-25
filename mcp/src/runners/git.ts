@@ -391,7 +391,12 @@ export async function materialiseCommit(cwd: string, sha: string): Promise<Mater
     } catch (e) {
       problems.push(e instanceof Error ? e.message : String(e));
     }
-    await git(cwd, ['worktree', 'prune']);
+    // Its own registration only, never `git worktree prune`: with no
+    // --expire it drops the admin entry of EVERY unlocked worktree whose
+    // directory is missing at that moment — the user's own, on a removable
+    // drive or a share that dropped (review of 3.6.0, measured). `remove
+    // --force` deletes this one's entry even once its directory is gone.
+    if (rm.exitCode !== 0) await git(cwd, ['worktree', 'remove', '--force', root]);
     return problems.length > 0 ? `temporary checkout ${root} not fully removed: ${problems.join('; ')}` : null;
   };
   if (r.exitCode !== 0) {

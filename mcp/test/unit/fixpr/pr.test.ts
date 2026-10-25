@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { branchName, deleteLocalBranch, EXCLUDE_GUARDIAN_DIR, existsOutcome, prExists, openPr } from '../../../src/fixpr/pr.js';
+import type { CommitScope } from '../../../src/fixpr/commitScope.js';
 
 /**
  * `openPr` now checks `git status --porcelain -- ':!.guardian'` before
@@ -9,7 +10,7 @@ import { branchName, deleteLocalBranch, EXCLUDE_GUARDIAN_DIR, existsOutcome, prE
  * scripts a non-empty `git status` response so it is exercising what it says
  * it is, not silently short-circuiting into `no_changes`.
  */
-const REAL_CHANGES = { outcome: 'completed', exitCode: 0, stdout: ' M file.txt\n' };
+const REAL_CHANGES = { outcome: 'completed', exitCode: 0, stdout: ' M file.txt\0' };
 
 function fakeRun(script: Record<string, { outcome: string; exitCode: number | null;
   stdout?: string; stderr?: string }>) {
@@ -86,8 +87,9 @@ describe('prExists', () => {
 });
 
 describe('openPr', () => {
+  const scope: CommitScope = { allows: (path) => path === 'file.txt' || path === 'app/package-lock.json' };
   const base = { projectPath: '/p', worktreePath: '/w', branch: 'dev-guardian/fix-npm-abc',
-    title: 'T', body: 'B' };
+    title: 'T', body: 'B', scope };
 
   it('refuses rather than duplicating when existence cannot be determined', async () => {
     const { run, calls } = fakeRun({
@@ -152,19 +154,44 @@ describe('openPr', () => {
     expect(calls.some((c) => c.join(' ').includes('pr create'))).toBe(false);
   });
 
-  it('excludes .guardian from what git add stages, so the re-scan report can never ride along with a real fix', async () => {
+  it('stages exactly the changed paths the scope allows, each literal — never git add -A', async () => {
     const { run, calls } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
-      'git status': REAL_CHANGES,
+      'git status': { outcome: 'completed', exitCode: 0, stdout: ' M file.txt\0?? app/package-lock.json\0' },
       'gh pr create': { outcome: 'completed', exitCode: 0,
         stdout: 'https://github.com/o/r/pull/1\n' },
     });
     await openPr({ ...base, run });
     const addCall = calls.find((c) => c[0] === 'git' && c[1] === 'add');
-    expect(addCall).toEqual(['git', 'add', '-A', '--', EXCLUDE_GUARDIAN_DIR]);
+    expect(addCall).toEqual(['git', 'add', '--', ':(literal)file.txt', ':(literal)app/package-lock.json']);
   });
 
-  it('checks for real changes with the SAME .guardian exclusion git add uses, not a bare git status', async () => {
+  it('refuses, naming them, when the worktree changed beyond the fix — and commits nothing', async () => {
+    // Review of 3.6, finding 4: `git add -A` staged a full npm install, a
+    // restore's obj/ and the tests' coverage/ along with the fix.
+    const { run, calls } = fakeRun({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': { outcome: 'completed', exitCode: 0, stdout: ' M file.txt\0?? coverage/\0?? obj/project.assets.json\0' },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('refused');
+    expect(r.detail).toContain('coverage/');
+    expect(r.detail).toContain('obj/project.assets.json');
+    expect(r.detail).not.toContain('file.txt');
+    expect(calls.some((c) => c.includes('add') || c.includes('commit') || c.includes('push'))).toBe(false);
+  });
+
+  it('counts both paths of a rename as changes', async () => {
+    const { run } = fakeRun({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': { outcome: 'completed', exitCode: 0, stdout: 'R  file.txt\0secret.env\0' },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('refused');
+    expect(r.detail).toContain('secret.env');
+  });
+
+  it('checks for real changes with the .guardian exclusion, not a bare git status', async () => {
     const { run, calls } = fakeRun({
       'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
       'git status': REAL_CHANGES,
@@ -174,7 +201,7 @@ describe('openPr', () => {
     await openPr({ ...base, run });
     const statusCall = calls.find((c) => c[0] === 'git' && c[1] === 'status');
     // `--ignore-submodules=dirty`: git stays out of any submodule work tree (W2E-git round 2).
-    expect(statusCall).toEqual(['git', 'status', '--porcelain', '--ignore-submodules=dirty', '--', EXCLUDE_GUARDIAN_DIR]);
+    expect(statusCall).toEqual(['git', 'status', '--porcelain=v1', '-z', '--ignore-submodules=dirty', '--', EXCLUDE_GUARDIAN_DIR]);
   });
 });
 
@@ -303,7 +330,7 @@ describe('prExists — additional coverage', () => {
 
 describe('openPr — order of operations and refusal (additional coverage)', () => {
   const base = { projectPath: '/proj', worktreePath: '/wt', branch: 'dev-guardian/fix-npm-abc',
-    title: 'T', body: 'B' };
+    title: 'T', body: 'B', scope: { allows: (path: string) => path === 'file.txt' } };
 
   it('performs the full sequence in order: existence check, status, add, commit, push, then pr create', async () => {
     // The safety property named in the task: nothing is pushed before the
@@ -320,8 +347,8 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     await openPr({ ...base, run });
     expect(calls.map((c) => [c.command, c.args[0], c.args[1]])).toEqual([
       ['gh', 'pr', 'list'],
-      ['git', 'status', '--porcelain'],
-      ['git', 'add', '-A'],
+      ['git', 'status', '--porcelain=v1'],
+      ['git', 'add', '--'],
       ['git', 'commit', '--no-verify'],
       // Where the push goes (review 3.0, W2E-git): a repository on this machine
       // gets a hardened receive-pack, and a URL the repository's own

@@ -31,7 +31,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { DastFinding } from './analyze.js';
-import type { Redactor } from './redact.js';
+import { redactHeaderCredentials, type Redactor } from './redact.js';
 import type { ProbeRequest, ProbeResult, ProbeVariant } from './types.js';
 
 /**
@@ -97,7 +97,7 @@ function toExchange(result: ProbeResult): EvidenceExchange {
 function requestPart(request: ProbeRequest): Omit<EvidenceExchange, 'response'> {
   const part: Omit<EvidenceExchange, 'response'> = {
     variant: request.variant,
-    request: { method: request.method, url: request.url, headers: request.headers },
+    request: { method: request.method, url: request.url, headers: redactHeaderCredentials(request.headers) },
   };
   if (request.body !== undefined) part.request.body = request.body;
   return part;
@@ -108,7 +108,9 @@ function responsePart(result: ProbeResult): EvidenceResponse {
   return {
     outcome: result.outcome,
     status: result.status,
-    headers: result.headers,
+    // The target's own credentials — a session cookie it issued, an
+    // Authorization it echoed — never reach the file (`redact.ts`).
+    headers: redactHeaderCredentials(result.headers),
     body_excerpt: body.slice(0, EVIDENCE_BODY_CHARS),
     body_truncated: body.length > EVIDENCE_BODY_CHARS,
     elapsed_ms: result.elapsed_ms,

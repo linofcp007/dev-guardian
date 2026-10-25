@@ -29,10 +29,13 @@ import { untrustedText } from '../platform/untrustedText.js';
 export interface ProgressPayload {
   progressToken: string | number;
   /**
-   * Either step_index/total*100 (0..100) when total is known, or a
-   * monotonically increasing counter when it isn't.
+   * The step reached, in the same unit as `total` when that is known (at
+   * most `total`), else a monotonically increasing counter. It used to be a
+   * percentage beside a `total` in steps — `{ progress: 60, total: 5 }` —
+   * which a host divides into 1200 % (review of 3.6, finding 11).
    */
   progress: number;
+  /** How many steps there are; never below `progress` when sent. */
   total?: number;
   message?: string;
 }
@@ -101,9 +104,14 @@ export function sendMonotonic(notifier: ProgressNotifier, payload: ProgressPaylo
   // and zero-width characters — and line breaks: a progress message is one
   // line — are written as visible `\u{XXXX}` (`platform/untrustedText.ts`),
   // as in every tool result.
+  // A token several emitters share can be nudged past one emitter's own
+  // total (a second sub-scan counting from 1 again): the total is then left
+  // out — the spec makes it optional — rather than sent below the progress.
+  const { total, ...rest } = payload;
   notifier.send({
-    ...payload,
+    ...rest,
     progress,
+    ...(total !== undefined && progress <= total ? { total } : {}),
     ...(payload.message !== undefined ? { message: untrustedText(payload.message, { multiline: false }) } : {}),
   });
 }
@@ -149,7 +157,7 @@ export function makeProgressEmitter(options: ProgressEmitterOptions): ProgressEm
       noted = null;
       const payload: ProgressPayload = {
         progressToken: token,
-        progress: total ? Math.min(100, (step / total) * 100) : step,
+        progress: total ? Math.min(total, step) : step,
       };
       if (total !== undefined) payload.total = total;
       if (message !== undefined) payload.message = message;

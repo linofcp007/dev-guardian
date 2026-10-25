@@ -156,3 +156,33 @@ describe('install_toolchain and the scanner cache', () => {
     expect(await scannerAvailable('gitleaks')).toBe('C:\\bin\\gitleaks.exe');
   });
 });
+
+describe('install_toolchain changes nothing on a dry run, and survives any tool name', () => {
+  it('a dry run never runs `pipx ensurepath`, which edits the shell rc and the user PATH', async () => {
+    // Review of 3.6, finding 12: the verification step ran it on every call.
+    vi.mocked(resolveBinary).mockImplementation(async (name) => (name === 'pipx' ? 'C:\\pipx.exe' : null));
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: '' } as never);
+    await tool('install_toolchain').handler({ dry_run: true }, plugin());
+    await tool('install_toolchain').handler({ tools: ['semgrep'], dry_run: true }, plugin());
+    const pipx = vi.mocked(runProcess).mock.calls.filter((c) => c[0].args?.includes('ensurepath'));
+    expect(pipx).toEqual([]);
+  });
+
+  it('a name that is an Object.prototype key is not in the catalogue — never a crash', async () => {
+    // Review of 3.6, finding 13: `constructor` passed both plain-object
+    // lookups, then `undefined[os]` threw out of the tool.
+    vi.mocked(resolveBinary).mockResolvedValue(null);
+    vi.mocked(captureOutput).mockResolvedValue({ exitCode: 0, stdout: '' } as never);
+    const r = (await tool('install_toolchain').handler(
+      { tools: ['constructor', '__proto__', 'toString', 'hasOwnProperty'], dry_run: true },
+      plugin(),
+    )) as unknown as { ok: boolean; skipped: Array<{ tool: string; reason: string }> };
+    expect(r.ok).toBe(true);
+    expect(r.skipped.map((s) => [s.tool, s.reason])).toEqual([
+      ['constructor', 'not_in_catalog'],
+      ['__proto__', 'not_in_catalog'],
+      ['toString', 'not_in_catalog'],
+      ['hasOwnProperty', 'not_in_catalog'],
+    ]);
+  });
+});

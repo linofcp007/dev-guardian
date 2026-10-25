@@ -153,7 +153,7 @@ async function handler(
   // may only now exist: it joins this server's PATH (platform/userBin.ts).
   ensureUserBinOnPath();
   resetScannerCache();
-  const verification = await runCheckToolchain(ctx);
+  const verification = await runCheckToolchain(ctx, dryRun);
 
   return {
     ok: true,
@@ -299,7 +299,10 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
   const availableManagers = await listAvailableManagers(opts.os);
 
   for (const toolName of opts.tools) {
-    const meta = TOOL_CATALOG[toolName];
+    // Own properties only: `constructor`, `__proto__`, `toString` are the
+    // caller's text, and a plain lookup found Object.prototype's members —
+    // `undefined[os]` then threw out of the tool (review of 3.6, finding 13).
+    const meta = Object.hasOwn(TOOL_CATALOG, toolName) ? TOOL_CATALOG[toolName] : undefined;
     if (!meta) {
       opts.result.skipped.push({
         tool: toolName,
@@ -310,9 +313,9 @@ async function installPerTool(opts: PerToolContext): Promise<void> {
     // Hard rule: never auto-install an SDK — the .NET SDK, the Go toolchain
     // (MANUAL_ONLY_TOOLS). Each is routed to manual_steps with the
     // OS-appropriate hint from the catalogue.
-    const manualName = MANUAL_ONLY_TOOLS[toolName];
+    const manualName = Object.hasOwn(MANUAL_ONLY_TOOLS, toolName) ? MANUAL_ONLY_TOOLS[toolName] : undefined;
     if (manualName !== undefined && opts.os !== 'unsupported') {
-      const specs = TOOL_CATALOG[toolName]?.install[opts.os];
+      const specs = meta.install[opts.os];
       const first = specs ? (Object.values(specs)[0] as { description?: string } | undefined) : undefined;
       const hint = first?.description ?? (toolName === 'go' ? 'See https://go.dev/doc/install' : 'See https://learn.microsoft.com/dotnet/core/install/');
       opts.result.manual_steps.push({
@@ -509,10 +512,13 @@ async function ensurePipxOnPath(ctx: PluginContext): Promise<void> {
 
 async function runCheckToolchain(
   ctx: PluginContext,
+  dryRun: boolean,
 ): Promise<unknown> {
   // After install, make sure pipx-installed binaries are reachable in the
-  // shell the user will use next.
-  await ensurePipxOnPath(ctx);
+  // shell the user will use next. Never on a dry run: `pipx ensurepath`
+  // edits the user's shell rc and PATH, and a dry run changes nothing
+  // (review of 3.6, finding 12).
+  if (!dryRun) await ensurePipxOnPath(ctx);
   const check = TOOLS.find((t) => t.name === 'check_toolchain');
   if (!check) return null;
   const r = await check.handler({}, ctx);

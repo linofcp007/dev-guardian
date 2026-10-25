@@ -140,6 +140,7 @@ import { branchName, deleteLocalBranch, existsOutcome, openPr, prExists, type Pr
 import { disposeSemgrepFixPlan, planSemgrepFix, type SemgrepFixPlan, type SemgrepFixSource } from '../fixpr/semgrepFix.js';
 import { deriveTestCommand, TEST_MANIFESTS, type DerivedTestCommand } from '../fixpr/testCommand.js';
 import { prepareTestEnvironment } from '../fixpr/testEnv.js';
+import { commitScopeFor } from '../fixpr/commitScope.js';
 import { withPackageManagerEnv } from '../fixpr/childEnv.js';
 import {
   composerChoosesRepository,
@@ -541,7 +542,7 @@ async function fetchUpgradeSteps(
       originProjectPath: projectPath,
     };
     // The planner runs `npm outdated`, `composer outdated`, `cargo outdated`,
-    // `go list -m -u`, `bundle outdated` and `dotnet restore` in this tree:
+    // `go list -m -u` and `dotnet restore` in this tree (never Bundler):
     // the repository's own package-manager configuration is set aside first,
     // and every one of them runs with the package-manager environment.
     const planDir = inWorktree(created.worktree.path, prefix);
@@ -828,6 +829,7 @@ async function processGroup(opts: {
       derived: derivedTest,
       worktreePath: projectDir,
       baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
+      ...(env.ok && env.unprepared !== undefined ? { unprepared: env.unprepared } : {}),
     });
 
     if (!mayOpenPr(scanVerdict, testVerdict)) {
@@ -835,7 +837,8 @@ async function processGroup(opts: {
         ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still ` +
           `present, ${scanVerdict.new_findings.length} new finding(s))`
         : testVerdict.outcome === 'unattributed'
-          ? 'the test suite failed after the fix and the base-commit comparison could not be run'
+          ? 'the test suite failed after the fix and the failure could not be attributed (the tree was not ' +
+            'prepared, or the base-commit comparison could not be run — see tests.output_head)'
           : 'the fix broke the test suite';
       return {
         ...base,
@@ -865,7 +868,7 @@ async function processGroup(opts: {
     setAside.restore();
     const title = buildPrTitle(group, targets.length);
     const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
-    const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body });
+    const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body, scope: commitScopeFor(group, prefix) });
     keepBranch = KEEPS_BRANCH.has(pr.status);
     return {
       ...base,

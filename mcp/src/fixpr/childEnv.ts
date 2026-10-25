@@ -1,12 +1,13 @@
 /**
  * The environment of the package-manager processes `create_fix_pr` runs
  * through OTHER tools: `deps_update_plan` (`npm outdated`, `composer
- * outdated`, `cargo outdated`, `go list`, `bundle outdated`, `dotnet
- * restore`) in its planning worktree, and `deps_audit` (`npm audit`,
- * `pip-audit`, `dotnet restore`) when it re-scans a fix.
+ * outdated`, `cargo outdated`, `go list`, `dotnet restore`) in its planning
+ * worktree, and `deps_audit` (`npm audit`, `pip-audit`, `dotnet restore`)
+ * when it re-scans a fix.
  *
  * Those tools run the same way whoever calls them, and a user's own
- * `deps_audit` keeps its environment. Only while `create_fix_pr` runs them
+ * `deps_audit` keeps its environment (`deps_update_plan` builds the same
+ * allowlist itself when called directly). Only while `create_fix_pr` runs them
  * does `packageManagerEnvOptions()` return `{ env, extendEnv: false }` —
  * `packageManagerEnv` (`fixpr/testCommandEnv.ts`) — which each such call site spreads into its
  * process options. An `AsyncLocalStorage`, not a parameter threaded through

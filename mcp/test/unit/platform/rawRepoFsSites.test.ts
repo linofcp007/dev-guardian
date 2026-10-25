@@ -67,6 +67,13 @@ const ALLOWED: Record<string, Allowed> = {
       '--reset-exclusions-from (CI only, clean checkout) restoring an exclusion file after lstat-checking ' +
       'every path segment and unlinking the old one, written with flag wx; every read goes through projectFs',
   },
+  'src/deps/npmPlanningCopy.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason:
+      "the manifest and lock files, read through projectFs, written (flag wx) into the run's own mkdtemp " +
+      'directory, where npm outdated runs without the repository .npmrc',
+  },
   'src/dast/evidence.ts': {
     apis: { writeFileSync: 1 },
     kind: 'own',
@@ -296,9 +303,9 @@ const ALLOWED: Record<string, Allowed> = {
   },
   'src/tools/healthStatus.ts': { apis: { statSync: 1, existsSync: 1 }, kind: 'own', reason: 'the presence and size of the database this server opened' },
   'src/tools/perfCheck.ts': {
-    apis: { readFileSync: 2, writeFileSync: 1, existsSync: 3 },
+    apis: { readFileSync: 2, writeFileSync: 1, existsSync: 2 },
     kind: 'own',
-    reason: 'Lighthouse / k6 output in a verified report directory, and the k6_script_path the user named',
+    reason: 'Lighthouse / k6 output in a verified report directory (the k6 script is judged through projectFs)',
   },
   'src/tools/registerCustomRules.ts': {
     apis: { statSync: 3 },

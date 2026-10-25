@@ -59,6 +59,15 @@ function excludedTags(allowIntrusive: boolean): string[] {
  * anything else: out-of-band probes make the TARGET call a third-party
  * interactsh server, an exfiltration channel out of a scanner that may be
  * pointed at the user's internal network. No envelope setting removes it.
+ *
+ * So are the two that keep nuclei on the target it was given (review of
+ * 3.6, finding 5). `-disable-redirects` (nuclei 3's flag, overriding a
+ * template's own `redirects: true`): a hostile target's 302 to
+ * `169.254.169.254` or an internal host was followed, and answered there.
+ * `-type http` (nuclei 3's `-pt`): network, javascript, ssl, dns and
+ * websocket templates connect to other ports of the host, or other hosts,
+ * than the URL authorised; headless and code templates need flags of their
+ * own this run never passes.
  */
 export function buildNucleiArgs(opts: NucleiRunOptions): string[] {
   return [
@@ -67,6 +76,8 @@ export function buildNucleiArgs(opts: NucleiRunOptions): string[] {
     '-output', opts.outputPath,
     '-silent',
     '-no-interactsh',
+    '-disable-redirects',
+    '-type', 'http',
     '-exclude-tags', excludedTags(opts.allowIntrusive).join(','),
     '-rate-limit', String(DEFAULT_NUCLEI_RATE_LIMIT),
   ];

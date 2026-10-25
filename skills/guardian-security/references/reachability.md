@@ -24,5 +24,10 @@ Limits to state whenever you present an `unreachable`:
   stack — there an `unreachable` can be wrong with no way to tell.
 - **Only HTTP routes count as entry points.** A file called only by a CLI, a cron job or a queue consumer reads
   `unreachable`-by-route; that is not a claim the code never runs.
+- **Only the routes the routes rules recognise.** A framework they do not know (Next.js `pages/api` or App
+  Router handlers, Remix, SvelteKit, serverless handlers, axum, aiohttp) declares routes that are no entry point
+  here. With no route mapped at all, none in the finding's language while its files import one another, or a
+  partial surface run (`missing_tools`, `partially_parsed`), the answer is `unknown`; a project that mixes a
+  known framework with an unknown one can still read `unreachable`.
 - **File granularity, not function.** A finding in a helper nobody calls, in a file that is imported, reads
   `reachable`.

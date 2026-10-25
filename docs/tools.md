@@ -175,7 +175,7 @@ Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virt
 
 ### `deps_update_plan`
 
-Ordered upgrades from each stack's own outdated command (npm, composer, cargo, go, rubygems; dotnet after a locked restore, which runs MSBuild) and pip's own pins. Each entry: security (an active CVE in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest available), patch, minor or major, with its upgrade\_command; pnpm and yarn get overrides to apply by hand. `unplanned`: CVEs with no step, and why; `runner_failures`: commands that failed.
+Ordered upgrades from each stack's own outdated command (npm on a copy of the manifests, never the repo's .npmrc; composer without plugins; cargo, go; dotnet after a locked restore, which runs MSBuild) and pip's own pins, with no token in their environment. Bundler is not run: the Gemfile is Ruby code. Each entry: security (an active CVE in the latest deps scan; npm/pip target the minimum fixed version, other stacks the latest available), patch, minor or major, with its upgrade\_command; pnpm and yarn get overrides to apply by hand. `unplanned`: CVEs with no step; `runner_failures`: why.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
