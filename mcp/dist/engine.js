@@ -56177,6 +56177,11 @@ function extractSurface(semgrepJson) {
   }
   return { routes, mounts };
 }
+function classPrefixApplies(metadata, path3) {
+  const rule = str(metadata, CLASS_PREFIX_KEY);
+  if (rule === CLASS_PREFIX_ALWAYS) return true;
+  return rule === CLASS_PREFIX_UNLESS_ROOTED && !/^~?\//.test(path3);
+}
 function toRoute(metadata, metavars, file, line) {
   const namespace = stripQuotes2(metavar(metavars, "$NS"));
   const captured = stripQuotes2(metavar(metavars, "$PATH") ?? metavar(metavars, "$ROUTE"));
@@ -56190,7 +56195,7 @@ function toRoute(metadata, metavars, file, line) {
     provenance: "code",
     path_raw: path3,
     path_resolved: path3,
-    path_partial: !usable,
+    path_partial: !usable || classPrefixApplies(metadata, path3),
     file,
     line,
     framework: str(metadata, "framework") ?? "unknown",
@@ -56254,7 +56259,7 @@ function asArray2(value) {
 function metavar(metavars, name) {
   return str(prop(metavars, name), "abstract_content");
 }
-var METHOD_NAMES, EXTENSION_LANGUAGES, ROUTE_PACK_EXTENSIONS, CODE_TOKENS, CALL_OR_INDEX, BARE_ROUTE, HOST_CONFUSION_CHARS, INHERITED_PATH_KEY, INHERITED_PATH, QUOTES;
+var METHOD_NAMES, EXTENSION_LANGUAGES, ROUTE_PACK_EXTENSIONS, CODE_TOKENS, CALL_OR_INDEX, BARE_ROUTE, HOST_CONFUSION_CHARS, INHERITED_PATH_KEY, INHERITED_PATH, CLASS_PREFIX_KEY, CLASS_PREFIX_ALWAYS, CLASS_PREFIX_UNLESS_ROOTED, QUOTES;
 var init_extract = __esm({
   "src/surface/extract.ts"() {
     "use strict";
@@ -56293,6 +56298,9 @@ var init_extract = __esm({
     HOST_CONFUSION_CHARS = /[@\\]/;
     INHERITED_PATH_KEY = "guardian_path";
     INHERITED_PATH = "inherited";
+    CLASS_PREFIX_KEY = "guardian_class_prefix";
+    CLASS_PREFIX_ALWAYS = "always";
+    CLASS_PREFIX_UNLESS_ROOTED = "unless-rooted";
     QUOTES = /^['"`]$/;
   }
 });
