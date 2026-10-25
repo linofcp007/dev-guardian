@@ -11,7 +11,9 @@
  */
 import { describe, expect, it } from 'vitest';
 import { buildBaseline, newFindings, readBaselineText } from '../../../src/ci/baseline.js';
+import { computeFingerprint } from '../../../src/fingerprint/findingFingerprint.js';
 import { assignIdentities } from '../../../src/fingerprint/findingIdentity.js';
+import { REDACTED_SECRET_SNIPPET } from '../../../src/redaction/secretFindingRedaction.js';
 import type { Finding } from '../../../src/types.js';
 
 function finding(over: Partial<Finding> = {}): Finding {
@@ -193,5 +195,24 @@ describe('the baseline file holds nothing a secret scanner reads as a credential
     const file = buildBaseline([code('src/app.js', 'f1'), dep('4.17.15')], null, '2026-01-01');
     const names = new Set(file.entries.flatMap((e) => Object.keys(e)));
     for (const name of names) expect(name).not.toMatch(/key|token|secret|passw|api|auth|cred/i);
+  });
+});
+
+describe('a credential finding\'s fingerprint over the redacted snippet', () => {
+  const at = { tool: 'bandit', rule_id: 'B105', file_path: 'app.py', line_start: 12, line_end: 12 };
+  const plaintextDerived = computeFingerprint({ ...at, snippet: '12 password = "x"' });
+  const safe = computeFingerprint({ ...at, snippet: REDACTED_SECRET_SNIPPET });
+  const credential = (fingerprint: string): Finding =>
+    finding({ ...at, fingerprint, subcategory: 'hardcoded_password_string', snippet: REDACTED_SECRET_SNIPPET, identity: 'i'.repeat(64) });
+
+  it('an entry written before, with the plaintext-derived fingerprint, still matches: by identity', () => {
+    const before = buildBaseline([credential(plaintextDerived)], null, '2026-01-01');
+    expect(newFindings([credential(safe)], before)).toEqual([]);
+  });
+
+  it('a stored row\'s plaintext-derived fingerprint never reaches the committed file', () => {
+    const file = buildBaseline([credential(plaintextDerived)], null, '2026-01-01');
+    expect(JSON.stringify(file)).not.toContain(plaintextDerived);
+    expect(file.entries[0]?.fingerprint).toBe(safe);
   });
 });

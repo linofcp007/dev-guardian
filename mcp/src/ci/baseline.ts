@@ -69,6 +69,7 @@
  */
 
 import { gateMatchKeys, indexFindings, type GateKeys } from '../fingerprint/findingIdentity.js';
+import { credentialSafeFingerprint } from '../redaction/secretFindingRedaction.js';
 import { SEVERITIES, type Finding, type Severity } from '../types.js';
 import { secretIntroducedAt, secretValueOf, secretValuesRead } from './secretValues.js';
 import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion } from './types.js';
@@ -203,7 +204,9 @@ export function buildBaseline(
     const entry: BaselineEntry = {
       ...(finding.identity !== undefined ? { identity: finding.identity } : {}),
       ...(matchKey !== undefined ? { match_id: matchKey } : {}),
-      fingerprint: finding.fingerprint,
+      // A credential's, over its redacted snippet: a row stored before that
+      // holds one hashed over the plaintext, which this file is committed with.
+      fingerprint: credentialSafeFingerprint(finding),
       severity: finding.severity,
       title: finding.title,
       file_path: finding.file_path,

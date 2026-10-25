@@ -45,6 +45,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { openSetForProject } from '../history/openSet.js';
+import { credentialSafeFingerprint } from '../redaction/secretFindingRedaction.js';
 import { withTextFile } from '../runners/argFile.js';
 import { runProcess } from '../runners/processRunner.js';
 import { ProjectPath } from '../schemas.js';
@@ -281,12 +282,13 @@ function describeFiltered(
 
 /**
  * The `[guardian:<12 hex>]` tag a finding is filed under: its identity's
- * prefix, the fingerprint's for a finding stored without one. The fingerprint
+ * prefix, the fingerprint's for a finding stored without one (a credential's
+ * over its redacted snippet: `credentialSafeFingerprint`). The fingerprint
  * hashes the line range, so tagged with it a finding whose code moved down a
  * line was filed again on the next run.
  */
 function tagOf(f: Finding): string {
-  return (f.identity ?? f.fingerprint).slice(0, 12);
+  return (f.identity ?? credentialSafeFingerprint(f)).slice(0, 12);
 }
 
 /**
@@ -325,7 +327,9 @@ function buildBody(f: Finding, scanId: string): string {
         "file — dev-guardian withholds the matched value from this issue._\n"
       : '',
     `\n---`,
-    `Fingerprint: \`${f.fingerprint}\``,
+    // A credential's over its redacted snippet: a row stored before that
+    // holds one hashed over the plaintext, an oracle in a public issue.
+    `Fingerprint: \`${credentialSafeFingerprint(f)}\``,
     `Scan id: \`${scanId}\``,
     `\n_Filed automatically by dev-guardian. Use \`suppress_finding\` to mark as false positive._`,
   ]

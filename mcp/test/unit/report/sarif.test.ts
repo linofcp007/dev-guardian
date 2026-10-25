@@ -7,6 +7,8 @@
  * output and the region-pairing rule directly, independent of that harness.
  */
 import { describe, expect, it } from 'vitest';
+import { computeFingerprint } from '../../../src/fingerprint/findingFingerprint.js';
+import { REDACTED_SECRET_SNIPPET } from '../../../src/redaction/secretFindingRedaction.js';
 import { toSarif } from '../../../src/report/sarif.js';
 import type { Finding } from '../../../src/types.js';
 
@@ -154,5 +156,20 @@ describe('toSarif — CWE and OWASP Top 10:2025 tags', () => {
     const doc = parse([finding({ rule_id: 'r' })]);
     expect(doc.runs[0]?.results[0]?.properties).not.toHaveProperty('tags');
     expect(doc.runs[0]?.tool.driver.rules[0]).not.toHaveProperty('properties');
+  });
+});
+
+describe('toSarif — a credential finding\'s fingerprint', () => {
+  // A row stored before credential fingerprints were taken over the redacted
+  // snippet holds one hashed over the plaintext: exported as is, the SARIF
+  // log was an offline oracle for the value.
+  it('is exported as the fingerprint over the redacted snippet, never one hashed over the plaintext', () => {
+    const at = { tool: 'bandit', rule_id: 'B105', file_path: 'app.py', line_start: 12, line_end: 12 };
+    const plaintextDerived = computeFingerprint({ ...at, snippet: '12 password = "x"' });
+    const doc = toSarif([
+      finding({ ...at, subcategory: 'hardcoded_password_string', snippet: REDACTED_SECRET_SNIPPET, fingerprint: plaintextDerived }),
+    ]);
+    expect(doc).not.toContain(plaintextDerived);
+    expect(doc).toContain(computeFingerprint({ ...at, snippet: REDACTED_SECRET_SNIPPET }));
   });
 });
