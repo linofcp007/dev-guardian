@@ -183,6 +183,13 @@ export async function judgeTests(opts: {
   /** Injected so tests can supply a fake. Defaults to the real runProcess. */
   run?: typeof runProcess;
   timeoutMs?: number;
+  /**
+   * Why the fix's tree is missing dependencies its tests need
+   * (`testEnv.ts#prepareTestEnvironment`), when it is. The base tree is
+   * prepared the same way, so it would fail the same way: a failing run is
+   * then `unattributed`, and no base tree is built to "confirm" it.
+   */
+  unprepared?: string;
 }): Promise<TestVerdict> {
   const { derived, worktreePath, timeoutMs } = opts;
 
@@ -215,6 +222,16 @@ export async function judgeTests(opts: {
   if (!hasFailed(worktreeResult)) {
     return { outcome: 'passed', command, origin: derived.origin, output_head: null };
   }
+  const failureHead = (): string | null => withoutCheckoutPath(headOf(worktreeResult.stdout, worktreeResult.stderr), worktreePath);
+  if (opts.unprepared !== undefined) {
+    const head = failureHead();
+    return {
+      outcome: 'unattributed',
+      command,
+      origin: derived.origin,
+      output_head: `the test environment was not prepared (${opts.unprepared})${head !== null ? `\n${head}` : ''}`,
+    };
+  }
 
   // Lazy: this second run — the whole cost of the test differential — is
   // only ever paid once the worktree run has already produced a failure that
@@ -225,7 +242,7 @@ export async function judgeTests(opts: {
   if (!baseTree.ok) {
     // Nobody can say whether the fix broke the suite. Not a pass, and not
     // "already failing": unattributed, and `mayOpenPr` refuses it.
-    const head = headOf(worktreeResult.stdout, worktreeResult.stderr);
+    const head = failureHead();
     return {
       outcome: 'unattributed',
       command,
@@ -254,7 +271,7 @@ export async function judgeTests(opts: {
     origin: derived.origin,
     // The worktree run's output, not the base commit's — it is the failure
     // that needs explaining; the base run only exists to assign blame for it.
-    output_head: headOf(worktreeResult.stdout, worktreeResult.stderr),
+    output_head: failureHead(),
   };
 }
 
@@ -288,4 +305,21 @@ function headOf(stdout: string, stderr: string): string | null {
   const text = stdout.trim().length > 0 ? stdout : stderr;
   if (text.trim().length === 0) return null;
   return text.split(/\r?\n/).slice(0, OUTPUT_HEAD_LINES).join('\n');
+}
+
+/**
+ * `head` with the checkout's own path written `<checkout>`, in either
+ * separator: the head rides into the pull request body, and the path is a
+ * temporary directory under the user's profile — their account name and
+ * their machine's layout, nothing a reader of the PR needs.
+ */
+function withoutCheckoutPath(head: string | null, checkout: string): string | null {
+  if (head === null || checkout.length === 0) return head;
+  const flags = /^[A-Za-z]:[\\/]/.test(checkout) ? 'gi' : 'g';
+  const spellings = [...new Set([checkout, checkout.replace(/\\/g, '/'), checkout.replace(/\//g, '\\')])];
+  let out = head;
+  for (const spelling of spellings.sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(spelling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags), '<checkout>');
+  }
+  return out;
 }

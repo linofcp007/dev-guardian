@@ -828,6 +828,7 @@ async function processGroup(opts: {
       derived: derivedTest,
       worktreePath: projectDir,
       baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
+      ...(env.ok && env.unprepared !== undefined ? { unprepared: env.unprepared } : {}),
     });
 
     if (!mayOpenPr(scanVerdict, testVerdict)) {
@@ -835,7 +836,8 @@ async function processGroup(opts: {
         ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still ` +
           `present, ${scanVerdict.new_findings.length} new finding(s))`
         : testVerdict.outcome === 'unattributed'
-          ? 'the test suite failed after the fix and the base-commit comparison could not be run'
+          ? 'the test suite failed after the fix and the failure could not be attributed (the tree was not ' +
+            'prepared, or the base-commit comparison could not be run — see tests.output_head)'
           : 'the fix broke the test suite';
       return {
         ...base,

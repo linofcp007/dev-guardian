@@ -15,12 +15,20 @@
  *     writes nothing but `node_modules`, where `npm install` would create a
  *     lockfile that a pull request would then carry;
  *   - only when `node_modules` is git-ignored in that tree, so the install
- *     can never end up in the commit.
+ *     can never end up in the commit — asked as `node_modules/`, a
+ *     directory: the commonest `.gitignore` line is the directory pattern
+ *     `node_modules/`, which `git check-ignore node_modules` does not match
+ *     while nothing is there yet. Asked that way, no `npm ci` ran in either
+ *     tree, the suite failed in both for want of its dependencies, and the
+ *     fix's pull request said the tests were "already failing".
  *
- * Anything else prepares nothing — in both trees alike.
+ * Anything else prepares nothing — in both trees alike — and a tree whose
+ * dependencies are needed but were not installed is `unprepared`, with the
+ * reason: a failing run there says nothing about the fix, so the test
+ * differential calls it unattributed, never already failing (`verify.ts`).
  */
 
-import { presentInProject } from '../platform/projectFs.js';
+import { PROJECT_FILE_MAX_BYTES, presentInProject, readProjectJson } from '../platform/projectFs.js';
 import { runProcess } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
 import type { DerivedTestCommand } from './testCommand.js';
@@ -30,8 +38,27 @@ import { packageManagerEnv } from './testCommandEnv.js';
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
 
 type TestEnvironment =
-  | { ok: true; /** The command run, or null when nothing needed preparing. */ command: string | null }
+  | {
+      ok: true;
+      /** The command run, or null when nothing needed preparing. */
+      command: string | null;
+      /** Why the tree's dependencies were needed but not installed. Absent: nothing is missing. */
+      unprepared?: string;
+    }
   | { ok: false; command: string; reason: string };
+
+/** The `package.json` fields whose packages `npm ci` would install. */
+const DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies'];
+
+/** Whether the tree's `package.json` declares a package to install — true when it cannot be read. */
+function declaresDependencies(treePath: string): boolean {
+  const pkg = readProjectJson(treePath, 'package.json', PROJECT_FILE_MAX_BYTES);
+  if (typeof pkg !== 'object' || pkg === null || Array.isArray(pkg)) return true;
+  return DEPENDENCY_FIELDS.some((field) => {
+    const value = (pkg as Record<string, unknown>)[field];
+    return typeof value === 'object' && value !== null && Object.keys(value).length > 0;
+  });
+}
 
 export async function prepareTestEnvironment(opts: {
   treePath: string;
@@ -42,11 +69,27 @@ export async function prepareTestEnvironment(opts: {
   const { treePath, derived } = opts;
   if (derived === null || derived.command !== 'npm') return { ok: true, command: null };
   const hasLock = presentInProject(treePath, 'package-lock.json') || presentInProject(treePath, 'npm-shrinkwrap.json');
-  if (!hasLock) return { ok: true, command: null };
+  if (!hasLock) {
+    return declaresDependencies(treePath)
+      ? {
+          ok: true,
+          command: null,
+          unprepared:
+            'package.json declares dependencies but the tree has no lockfile, so none were installed ' +
+            '(npm install would write a lockfile into the pull request)',
+        }
+      : { ok: true, command: null };
+  }
   const run = opts.run ?? runProcess;
 
-  const ignored = await run({ command: GIT_COMMAND, args: ['-C', treePath, 'check-ignore', '-q', 'node_modules'], cwd: treePath });
-  if (ignored.outcome !== 'completed') return { ok: true, command: null };
+  const ignored = await run({ command: GIT_COMMAND, args: ['-C', treePath, 'check-ignore', '-q', 'node_modules/'], cwd: treePath });
+  if (ignored.outcome !== 'completed') {
+    return {
+      ok: true,
+      command: null,
+      unprepared: 'node_modules/ is not git-ignored, so its dependencies were not installed (they would be committed)',
+    };
+  }
 
   const command = 'npm ci --ignore-scripts';
   // A fetch: the package-manager environment, never this server's

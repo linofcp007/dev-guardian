@@ -264,6 +264,37 @@ describe('judgeTests', () => {
     expect(mayOpenPr({ passed: true, resolved: [A], still_present: [], new_findings: [] }, v)).toBe(false);
   });
 
+  it('an unprepared tree leaves a failure unattributed, never already_failing — and builds no base tree', async () => {
+    // Both trees prepared alike means both unprepared alike: the suite fails
+    // in each for want of its dependencies, and "already failing … not caused
+    // by this fix" let a fix that breaks the tests ship.
+    const b = base('/base-tree');
+    const { run, calls } = fakeRun([{ outcome: 'failed', exitCode: 1, stdout: "Cannot find module 'mocha'\n" }]);
+    const v = await judgeTests({
+      derived, worktreePath: '/w', baseTree: b.tree, run,
+      unprepared: 'node_modules/ is not git-ignored, so its dependencies were not installed',
+    });
+    expect(v.outcome).toBe('unattributed');
+    expect(v.output_head).toContain('not git-ignored');
+    expect(calls).toEqual(['/w']);
+    expect(b.log.created).toBe(0);
+    expect(mayOpenPr({ passed: true, resolved: [A], still_present: [], new_findings: [] }, v)).toBe(false);
+    // A run that passes anyway needed nothing that was missing.
+    const ok = await judgeTests({ derived, worktreePath: '/w', baseTree: b.tree, run: fakeRun([{ outcome: 'completed', exitCode: 0 }]).run, unprepared: 'x' });
+    expect(ok.outcome).toBe('passed');
+  });
+
+  it("names the checkout as <checkout>, never its temporary path, in the output it keeps", async () => {
+    const { run } = fakeRun([
+      { outcome: 'failed', exitCode: 1, stdout: 'FAIL C:\\Users\\dev\\AppData\\Local\\Temp\\wt-1\\app\\test\\a.test.js\nat /tmp/wt-1/app/x.js\n' },
+      { outcome: 'failed', exitCode: 1 },
+    ]);
+    const v = await judgeTests({ derived, worktreePath: 'C:\\Users\\dev\\AppData\\Local\\Temp\\wt-1\\app', baseTree: base('/p').tree, run });
+    expect(v.outcome).toBe('already_failing');
+    expect(v.output_head).toContain('FAIL <checkout>\\test\\a.test.js');
+    expect(v.output_head).not.toContain('AppData');
+  });
+
   it('passes without ever touching the base commit', async () => {
     // The laziness is the point: the second run costs minutes and is only
     // needed to assign blame for a failure that has not happened.
