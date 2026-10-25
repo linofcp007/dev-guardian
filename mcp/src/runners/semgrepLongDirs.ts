@@ -23,8 +23,16 @@
  *   - `--exclude=<the directory, project-relative>` keeps the walk out of it
  *     and the rest is listed, every `.semgrepignore` still honoured — explicit
  *     targets bypass `.semgrepignore` (measured: one under an ignored
- *     directory was scanned). With the absolute target the callers pass, the
- *     pattern has no leading `/`: an anchored one matched nothing.
+ *     directory was scanned). The walk fails only outside git, and there
+ *     Semgrep anchors a pattern holding a slash at the scan target, the
+ *     absolute one the callers pass included (`platform/guardianIgnore.ts`;
+ *     inside a work tree it anchors at the git root). Measured on 1.182.0,
+ *     2026-10-25 (review 3.6.1, finding 8, which corrected "an anchored one
+ *     matched nothing" here): `--exclude=<dir>` and `--exclude=/<dir>` alike
+ *     kept the walk out of a 248-character directory, one file listed and
+ *     exit 0, against exit 2 without. The spelling without the `/` is kept: a
+ *     top-level directory's name alone matches at any depth too, but any
+ *     directory of that name below it is longer still, so long itself.
  *
  * So, on Windows (`runners/semgrepRun.ts#runSemgrep`): a walk that failed that
  * way is run again with each directory at {@link WINDOWS_DIR_MAX} or more
