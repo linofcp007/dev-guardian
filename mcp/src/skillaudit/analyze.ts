@@ -453,17 +453,27 @@ function analyzeMcpManifest(file: IngestedFile): Finding[] {
   return out;
 }
 
-function collectDescriptions(json: unknown, acc: string[] = []): string[] {
-  if (!json || typeof json !== 'object') return acc;
-  if (Array.isArray(json)) {
-    for (const item of json) collectDescriptions(item, acc);
-    return acc;
-  }
-  for (const [key, value] of Object.entries(json as Record<string, unknown>)) {
-    if ((key === 'description' || key === 'name' || key === 'instructions') && typeof value === 'string') {
-      acc.push(value);
-    } else if (value && typeof value === 'object') {
-      collectDescriptions(value, acc);
+/**
+ * Every `description` / `name` / `instructions` string in a manifest, at any
+ * depth. A stack of its own, not recursion: `JSON.parse` takes a 2 MB file of
+ * `[[[…]]]` some 20 000 levels deep, and the recursive walk this was threw
+ * RangeError on it, leaving the skill with no verdict at all (review of
+ * 3.6.0; `agentaudit/hash.ts` measured ~6000 levels enough).
+ */
+function collectDescriptions(json: unknown): string[] {
+  const acc: string[] = [];
+  const stack: unknown[] = [json];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (node === null || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      // One push per item: a spread of a 500 000-item array is a RangeError of its own.
+      for (const item of node as unknown[]) stack.push(item);
+      continue;
+    }
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if ((key === 'description' || key === 'name' || key === 'instructions') && typeof value === 'string') acc.push(value);
+      else if (value !== null && typeof value === 'object') stack.push(value);
     }
   }
   return acc;
