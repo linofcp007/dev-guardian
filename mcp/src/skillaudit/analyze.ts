@@ -20,6 +20,7 @@
  * recommendation comes from `score.ts`.
  */
 
+import { asTheModelReads, encodedBlobs, escapeInvisible, mixedScriptWord, readAs, scanInvisible } from '../platform/hiddenText.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import { queryOsv, type OsvResult } from '../runners/osv.js';
 import type { Finding, Severity } from '../types.js';
@@ -109,8 +110,25 @@ export async function analyzeSkill(
   for (const file of files) {
     if (file.isExecutable) executableFiles += 1;
 
-    // 1. Pattern rules.
-    for (const m of scanContent(file.content, file.isCode, { markdown: isMarkdownLike(file.relPath) })) {
+    // 1. Pattern rules — on the text as written, and as the model reads it
+    // (`platform/hiddenText.ts#asTheModelReads`: invisible code points
+    // dropped, compatibility forms and look-alike letters folded). Review of
+    // 3.6.0: `Іgnоrе all previous instructions` in Cyrillic look-alikes,
+    // full-width letters or a word split by a soft hyphen matched nothing,
+    // while audit_mcp_tools has read such text both ways since fix round 3.
+    const markdown = isMarkdownLike(file.relPath);
+    const written = scanContent(file.content, file.isCode, { markdown });
+    const reading = asTheModelReads(file.content);
+    const seen = new Set(written.map((m) => `${m.rule.id}:${m.line}`));
+    const disguised =
+      reading === file.content
+        ? []
+        : scanContent(reading, file.isCode, { markdown }).filter((m) => !seen.has(`${m.rule.id}:${m.line}`));
+    const lines = disguised.length > 0 ? file.content.split(/\r?\n/) : [];
+    for (const [m, how] of [
+      ...written.map((m) => [m, ''] as const),
+      ...disguised.map((m) => [m, disguise(lines[m.line - 1] ?? '', m.snippet)] as const),
+    ]) {
       const repeat = m.cited && citedRules.has(m.rule.id);
       if (m.cited) citedRules.add(m.rule.id);
       push(
@@ -121,15 +139,49 @@ export async function analyzeSkill(
           category: 'security',
           subcategory: m.rule.category,
           title: m.rule.title,
-          message: m.rule.message + whereFound(m),
+          message: m.rule.message + whereFound(m) + how,
           file_path: file.relPath,
           line_start: m.line,
           line_end: m.line,
-          snippet: m.snippet,
+          // What is in the file, not the folded copy: the escape at the
+          // response shows each invisible code point as `\u{…}`.
+          snippet: how === '' ? m.snippet : (lines[m.line - 1] ?? m.snippet).trim().slice(0, 240),
         }),
         file.isExecutable,
         !repeat,
       );
+    }
+
+    // 1c. Base64 that decodes to text, read as text and as code: a 100- to
+    // 219-character blob met no rule at all (sig-long-base64 starts at 220,
+    // and nothing decoded one), where audit_mcp_tools decodes from 100.
+    for (const blob of encodedBlobs(file.content, MAX_BLOBS_PER_FILE)) {
+      if (blob.decodedText === null) continue;
+      const line = file.content.slice(0, blob.index).split(/\r?\n/).length;
+      const decodedMatches = new Map<string, RuleMatch>();
+      for (const m of [...scanContent(blob.decodedText, true), ...scanContent(blob.decodedText, false, { markdown: false })]) {
+        if (!decodedMatches.has(m.rule.id)) decodedMatches.set(m.rule.id, m);
+      }
+      for (const m of decodedMatches.values()) {
+        push(
+          makeFinding({
+            tool: TOOL,
+            rule_id: m.rule.id,
+            severity: m.severity,
+            category: 'security',
+            subcategory: m.rule.category,
+            title: m.rule.title,
+            message:
+              `${m.rule.message} Found base64-encoded — a ${blob.length}-character run at line ${line}, decoded: ` +
+              'the encoding hides it from a reviewer, not from whatever decodes it.',
+            file_path: file.relPath,
+            line_start: line,
+            line_end: line,
+            snippet: `decoded: ${m.snippet}`.slice(0, 240),
+          }),
+          file.isExecutable,
+        );
+      }
     }
 
     // 1b. The commands a plugin's configuration runs. A `.json` file is not
@@ -215,7 +267,7 @@ export async function analyzeSkill(
           subcategory: 'rogue_agent',
           title: 'Hidden / invisible Unicode characters',
           message:
-            `Invisible code point(s) found (e.g. U+${hidden.code.toString(16).toUpperCase()}). ` +
+            `Invisible code point(s) found (e.g. U+${hidden.code.toString(16).toUpperCase()}): ${hidden.detail}. ` +
             'Zero-width / tag characters are a channel for instructions invisible to humans but read by the model.',
           file_path: file.relPath,
           line_start: hidden.line,
@@ -362,27 +414,43 @@ function emptyBreakdown(): Record<ThreatCategory, number> {
   return out;
 }
 
-/** First invisible code point + its line, or null. */
-function findHiddenUnicode(content: string): { code: number; line: number } | null {
-  const lines = content.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? '';
-    for (const ch of line) {
-      const code = ch.codePointAt(0);
-      if (code !== undefined && isInvisible(code)) return { code, line: i + 1 };
-    }
-  }
-  return null;
+/** Decoded base64 runs read per file: a file of nothing but blobs costs no more than this many reads. */
+const MAX_BLOBS_PER_FILE = 50;
+
+/**
+ * Says how a match found only as the model reads the text was disguised: the
+ * look-alike word, when there is one, and the line as it reads.
+ */
+function disguise(line: string, reads: string): string {
+  const mixed = mixedScriptWord(line);
+  const word = mixed === null ? '' : ` (${JSON.stringify(mixed.word)} reads as ${JSON.stringify(readAs(mixed.word))})`;
+  return (
+    ` Written with look-alike letters, compatibility forms or invisible characters${word}, so it matches no ` +
+    `pattern as written; as the model reads it: ${JSON.stringify(reads.slice(0, 160))}.`
+  );
 }
 
-function isInvisible(code: number): boolean {
-  return (
-    (code >= 0x200b && code <= 0x200f) || // zero-width space/joiner/non-joiner + LRM/RLM
-    (code >= 0x202a && code <= 0x202e) || // bidi overrides
-    (code >= 0x2060 && code <= 0x2064) || // word joiner / invisible operators
-    code === 0xfeff || // BOM / zero-width no-break space
-    (code >= 0xe0000 && code <= 0xe007f) // Unicode tag block
-  );
+/**
+ * The first invisible code point that does not belong where it is, its
+ * line, and what the scan saw — `platform/hiddenText.ts#scanInvisible`, the
+ * classes audit_mcp_tools reads (review of 3.6.0: the hand-written list
+ * here missed U+2066–2069, U+00AD, U+034F, U+061C, the variation selectors,
+ * the Hangul fillers and U+FFF9–FFFB). A byte-order mark that opens the file
+ * is its encoding, and a zero-width joiner inside an emoji (👩‍💻) belongs
+ * there; both read high here before.
+ */
+function findHiddenUnicode(content: string): { code: number; line: number; detail: string } | null {
+  const from = content.charCodeAt(0) === 0xfeff ? 1 : 0;
+  const scan = scanInvisible(from === 0 ? content : content.slice(from));
+  if (scan === null) return null;
+  const index = scan.index + from;
+  const tags = scan.decodedTags.trim();
+  const selectors = scan.decodedSelectors.trim();
+  const detail =
+    `${scan.count} in all — ${scan.kinds.join(', ')}` +
+    (tags === '' ? '' : `; the tag characters spell ${JSON.stringify(tags.slice(0, 200))}`) +
+    (selectors === '' ? '' : `; the variation selectors spell ${JSON.stringify(escapeInvisible(selectors).slice(0, 200))}`);
+  return { code: scan.first, line: content.slice(0, index).split(/\r?\n/).length, detail };
 }
 
 /**
@@ -436,7 +504,7 @@ function analyzeMcpManifest(file: IngestedFile): Finding[] {
   // Tool poisoning: hidden directives inside tool descriptions.
   const desc = collectDescriptions(json);
   for (const d of desc) {
-    if (MCP_DESCRIPTION_POISONING.test(d)) {
+    if (MCP_DESCRIPTION_POISONING.test(d) || MCP_DESCRIPTION_POISONING.test(asTheModelReads(d))) {
       out.push(
         finding(
           file,

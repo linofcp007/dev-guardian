@@ -22,7 +22,7 @@
  *   - the interlinear annotation controls U+FFF9–FFFB and the line and
  *     paragraph separators U+2028/2029.
  *
- * The one exemption is the one `mcpaudit/rules.ts` already makes, for the
+ * The one exemption is the one `platform/hiddenText.ts` already makes, for the
  * same reason: an invisible code point that belongs where it is — VS15/VS16
  * after an emoji or on a keycap, a zero-width joiner inside an emoji
  * sequence, an ideographic variation selector after a CJK ideograph, and the

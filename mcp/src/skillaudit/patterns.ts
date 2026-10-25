@@ -4,8 +4,10 @@
  * Each rule maps to one `ThreatCategory` and is matched line-by-line against
  * a file's content. A rule declares a `target`:
  *   - 'text' → only run against instruction/doc artifacts (SKILL.md, README,
- *     *.md, *.txt, plain MCP manifest prose), over the whole file. These are
- *     where prompt-level attacks live.
+ *     *.md, *.txt, plain MCP manifest prose), over the whole file — line by
+ *     line, and the prompt-level phrases over each paragraph too, so a
+ *     hard-wrapped phrase is one (`paragraphUnits`). These are where
+ *     prompt-level attacks live.
  *   - 'code' → run against executable/source artifacts (*.sh, *.py, *.js,
  *     *.ts, *.ps1, …), AND against the code inside an instruction file: its
  *     fenced, indented and `<pre>` / `<code>` blocks and its inline code
@@ -941,6 +943,7 @@ export function scanContent(content: string, isCode: boolean, opts: ScanOptions 
     }));
   return finalize([
     ...matchUnits(rulesFor('text', 'any'), whole),
+    ...matchUnits(rulesFor('text', 'any').filter((r) => r.citable === true), paragraphUnits(lines, views.code, citing)),
     ...matchUnits(rulesFor('description'), frontmatterDescription(lines)),
     ...matchUnits(rulesFor('prose'), prose),
     ...matchUnits(rulesFor('code'), code),
@@ -971,12 +974,90 @@ function frontmatterDescription(lines: string[]): Unit[] {
   return [];
 }
 
+/**
+ * The paragraphs of an instruction file — runs of non-blank lines, a code
+ * block's lines a run of their own, a blockquote's `>` dropped from each
+ * continuation line — joined by a space, for the prompt-level phrases
+ * (`citable` rules). They ran line by line only, so `ignore all previous`
+ * hard-wrapped before `instructions` matched nothing (review of 3.6.0).
+ * Only a match that crosses a line break is taken from these
+ * ({@link Unit.joins}): one within a line is the line units'. A one-line
+ * paragraph is not one.
+ */
+function paragraphUnits(lines: string[], code: CodeUnit[], citing: ((line: number) => Citing) | null): Unit[] {
+  const blockOf = new Map<number, number>();
+  for (const u of code) if (u.block !== null) blockOf.set(u.line, u.block);
+  const out: Unit[] = [];
+  let start = -1;
+  const flush = (end: number): void => {
+    if (start !== -1 && end - start >= 2) {
+      const first = start + 1;
+      let text = lines[start] ?? '';
+      const joins: number[] = [];
+      for (let i = start + 1; i < end; i += 1) {
+        text += ' ';
+        joins.push(text.length);
+        text += (lines[i] ?? '').replace(/^[ \t]*(?:>[ \t]*)*/, '');
+      }
+      out.push({
+        line: first,
+        text,
+        source: 'line',
+        noTarget: false,
+        placeholder: false,
+        joins,
+        // The paragraph is whole, so a quotation it holds is closed or not
+        // within it: no quote carries in from above or out below.
+        citing: citing === null ? undefined : () => ({ ...citing(first), quoteOpenAtStart: false, quoteClosesAfter: false }),
+      });
+    }
+    start = -1;
+  };
+  for (let i = 0; i < lines.length; i += 1) {
+    const text = lines[i] ?? '';
+    if (text.trim() === '' || FENCE_OPEN.test(text)) {
+      flush(i);
+      continue;
+    }
+    if (start !== -1 && blockOf.get(i + 1) !== blockOf.get(start + 1)) flush(i);
+    if (start === -1) start = i;
+  }
+  flush(lines.length);
+  return out;
+}
+
+/**
+ * The first match of `pattern` in a paragraph unit that crosses one of its
+ * joins, with the line (0-based, from the unit's first) it starts on.
+ */
+function crossLineMatch(pattern: RegExp, unit: Unit, joins: readonly number[]): { index: number; lineOffset: number } | null {
+  const global = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
+  const lineOf = (at: number): number => {
+    let k = 0;
+    while (k < joins.length && (joins[k] ?? Number.POSITIVE_INFINITY) <= at) k += 1;
+    return k;
+  };
+  let tries = 0;
+  for (const m of unit.text.matchAll(global)) {
+    if (m[0] === '' || (tries += 1) > 50) break;
+    const startLine = lineOf(m.index);
+    if (lineOf(m.index + m[0].length - 1) !== startLine) return { index: m.index, lineOffset: startLine };
+  }
+  return null;
+}
+
 interface Unit {
   line: number;
   /** What the rules match. */
   text: string;
   /** What the finding shows, when it differs from `text`. */
   display?: string;
+  /**
+   * A paragraph of joined lines ({@link paragraphUnits}): where in `text`
+   * each line after the first starts. Only a match across one counts, at the
+   * line it starts on.
+   */
+  joins?: readonly number[];
   source: MatchSource;
   /** Code in an instruction file whose span and block have no fetch target: other rules score it a level lower. */
   noTarget: boolean;
@@ -1393,12 +1474,19 @@ function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
       for (const unit of units) {
         if (rule.requires !== undefined && !rule.requires.test(unit.text)) continue;
         pattern.lastIndex = 0;
-        if (!pattern.test(unit.text)) continue;
+        let line = unit.line;
+        let snippet: string | null = null;
+        if (unit.joins !== undefined) {
+          const across = crossLineMatch(pattern, unit, unit.joins);
+          if (across === null) continue;
+          line = unit.line + across.lineOffset;
+          snippet = unit.text.slice(across.index).trim().slice(0, 240);
+        } else if (!pattern.test(unit.text)) continue;
         const cited = rule.citable === true && isCited(pattern, unit);
         const lowered = rule.fetchesOrSends === true ? unit.placeholder : unit.noTarget;
         const severity = cited ? 'low' : lowered ? ONE_LEVEL_LOWER[full] : full;
         if (best === null || SEVERITY_RANK[severity] > SEVERITY_RANK[best.severity]) {
-          best = { rule, line: unit.line, snippet: snippetOf(unit), source: unit.source, severity, cited };
+          best = { rule, line, snippet: snippet ?? snippetOf(unit), source: unit.source, severity, cited };
         }
         if (severity === full) break; // nothing later can outrank it
       }

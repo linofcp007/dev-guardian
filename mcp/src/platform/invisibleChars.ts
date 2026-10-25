@@ -1,8 +1,8 @@
 /**
  * Which invisible code points belong where they are — shared by
- * `audit_mcp_tools` (`mcpaudit/rules.ts`, which reports the others as
- * smuggling) and `platform/untrustedText.ts` (which escapes the others before
- * repository text is shown). One definition, so the two never disagree about
+ * `platform/hiddenText.ts` (by which `audit_mcp_tools` and `scan_skill` report
+ * the others as smuggling) and `platform/untrustedText.ts` (which escapes the
+ * others before repository text is shown). One definition, so the two never disagree about
  * what an emoji sequence, a keycap, a CJK variation selector or a
  * subdivision flag is.
  */
