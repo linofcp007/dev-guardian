@@ -8,6 +8,8 @@ version bump.
 
 ## [Unreleased]
 
+## [3.6.1] - 2026-10-25
+
 A full review of 3.6.0 — every area read against the code by its own reviewer, each finding reproduced (by a
 failing test, or with the real scanner) before it was fixed. The theme: the scanned repository is hostile input,
 and an unread file, an unanswered query or a skipped pass is a named gap, never a clean result.
