@@ -107,11 +107,12 @@ const ALLOWED: Record<string, Allowed> = {
       'network path; a stat opens nothing',
   },
   'src/hostsetup/setup.ts': {
-    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2 },
+    apis: { readdirSync: 1, readFileSync: 3, writeFileSync: 1, existsSync: 2, realpathSync: 1 },
     kind: 'own',
     reason:
       "the plugin's own legacy templates and host-rules/ template, and a user-scope MCP config in the user's " +
-      'home (the user\'s own file); every project-scope file goes through projectFs',
+      "home (the user's own file: a temp file beside it renamed over it, a dotfiles link followed to the file it " +
+      'names); every project-scope file goes through projectFs',
   },
   'src/mcpaudit/launch.ts': {
     apis: { stat: 1 },

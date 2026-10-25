@@ -149,6 +149,8 @@ function deepEqual(a: unknown, b: unknown): boolean {
  * Merge our server entry into a JSON host config, preserving everything else.
  * `existing` is the current file contents, or null when the file is absent.
  * Throws on malformed JSON so the caller can report `failed` without clobbering.
+ * A leading byte-order mark (Windows PowerShell's UTF-8, Notepad's "UTF-8
+ * with BOM") is read past and written back: `JSON.parse` refused such a file.
  */
 export function mergeJsonConfig(
   existing: string | null,
@@ -156,11 +158,12 @@ export function mergeJsonConfig(
   entry: ServerEntry,
   force: boolean,
 ): MergeResult {
+  const bom = existing?.startsWith(BOM) === true ? BOM : '';
   let cfg: Record<string, unknown>;
   if (existing == null || existing.trim() === '') {
     cfg = {};
   } else {
-    const parsed = JSON.parse(existing) as unknown;
+    const parsed = JSON.parse(existing.slice(bom.length)) as unknown;
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new Error('config root is not a JSON object');
     }
@@ -179,7 +182,7 @@ export function mergeJsonConfig(
 
   const nextContainer = { ...(container ?? {}), [SERVER_ID]: entry };
   cfg[serverKey] = nextContainer;
-  const content = `${JSON.stringify(cfg, null, 2)}\n`;
+  const content = `${bom}${JSON.stringify(cfg, null, 2)}\n`;
   return { status: existing == null || existing.trim() === '' ? 'written' : 'merged', content };
 }
 
@@ -194,21 +197,140 @@ function tomlString(value: string): string {
 
 const OUR_TABLE_PATH = `mcp_servers.${SERVER_ID}`;
 
-/** Any top-level TOML table heading (`[a.b.c]`) at the start of a line —
- *  used to find every heading that is OURS anywhere in the file. Not
- *  `g`-scoped as a shared constant: `RegExp.exec` with the `g` flag is
- *  STATEFUL (advances `lastIndex` across calls), so each caller below
- *  constructs its own instance rather than risk a skipped or repeated match
- *  from a shared one used across two scans. */
-function headingRegex(): RegExp {
-  return /^\[([^\]]+)\]/gm;
-}
+/** A byte-order mark: a config may start with one, which no parse may trip on. */
+const BOM = '﻿';
 
 /** True for `mcp_servers.dev-guardian` itself AND any of its own sub-tables
  *  (`mcp_servers.dev-guardian.env`, …) — everything a fresh write of our
- *  block would own or replace. */
-function isOwnTablePath(path: string): boolean {
-  return path === OUR_TABLE_PATH || path.startsWith(`${OUR_TABLE_PATH}.`);
+ *  block would own or replace. Keys, already unquoted. */
+function isOwnTablePath(keys: readonly string[]): boolean {
+  return keys[0] === 'mcp_servers' && keys[1] === SERVER_ID;
+}
+
+/**
+ * The keys of a TOML key — bare (`a-b_1`), basic-quoted (`"dev-guardian"`)
+ * or literal-quoted (`'dev-guardian'`), dotted with optional whitespace —
+ * starting at `text[from]`, and where they end; null when it is not one.
+ */
+function parseTomlKeys(text: string, from: number): { keys: string[]; end: number } | null {
+  const keys: string[] = [];
+  let i = from;
+  for (;;) {
+    while (text[i] === ' ' || text[i] === '\t') i++;
+    const c = text[i];
+    if (c === '"' || c === "'") {
+      let key = '';
+      let j = i + 1;
+      for (; j < text.length && text[j] !== c; j++) {
+        // A basic string's escapes: the escaped character, as TOML reads `\"` and `\\`.
+        if (c === '"' && text[j] === '\\') j++;
+        key += text[j] ?? '';
+      }
+      if (j >= text.length) return null;
+      keys.push(key);
+      i = j + 1;
+    } else {
+      const bare = /^[A-Za-z0-9_-]+/.exec(text.slice(i));
+      if (bare === null) return null;
+      keys.push(bare[0]);
+      i += bare[0].length;
+    }
+    while (text[i] === ' ' || text[i] === '\t') i++;
+    if (text[i] !== '.') return { keys, end: i };
+    i++;
+  }
+}
+
+/** One line of a TOML document, as the merge reads it: offsets into the whole text. */
+interface TomlLine {
+  start: number;
+  /** Just past its line break (or the end of the text). */
+  end: number;
+  kind: 'heading' | 'keyValue' | 'comment' | 'blank' | 'continuation';
+  /** A heading's keys, or a key-value's whole path (its table's keys, then its own). */
+  keys?: string[];
+  /** A key-value's value, as written on its line. */
+  value?: string;
+}
+
+/**
+ * The document's lines, each read as TOML reads it — enough to find tables,
+ * never a full parser. A line inside a multi-line string (`"""`, `'''`) or a
+ * value still open over several lines (an array, an inline table) is a
+ * `continuation`: `[mcp_servers.dev-guardian]` inside a string, or `[1, 2],`
+ * inside an array, is no heading. A leading byte-order mark is read past.
+ */
+function scanToml(text: string): TomlLine[] {
+  const lines: TomlLine[] = [];
+  let table: string[] = [];
+  let openString: string | null = null;
+  let depth = 0;
+  for (let start = text.startsWith(BOM) ? BOM.length : 0; start < text.length; ) {
+    const nl = text.indexOf('\n', start);
+    const end = nl < 0 ? text.length : nl + 1;
+    const line = text.slice(start, nl < 0 ? text.length : nl).replace(/\r$/, '');
+    // Where in `line` structure is read again after an open string closes, or -1.
+    let from = 0;
+    if (openString !== null) {
+      const close = line.indexOf(openString);
+      if (close < 0) from = -1;
+      else {
+        from = close + openString.length;
+        openString = null;
+      }
+    }
+    const trimmed = line.trimStart();
+    let kind: TomlLine['kind'] = 'continuation';
+    let keys: string[] | undefined;
+    let value: string | undefined;
+    if (from === 0 && depth === 0 && openString === null) {
+      const indent = line.length - trimmed.length;
+      if (trimmed === '') kind = 'blank';
+      else if (trimmed.startsWith('#')) kind = 'comment';
+      else if (trimmed.startsWith('[')) {
+        const open = trimmed.startsWith('[[') ? 2 : 1;
+        const parsed = parseTomlKeys(line, indent + open);
+        if (parsed !== null && line.slice(parsed.end, parsed.end + open) === ']'.repeat(open)) {
+          kind = 'heading';
+          keys = parsed.keys;
+          table = parsed.keys;
+        }
+        from = -1;
+      } else {
+        const parsed = parseTomlKeys(line, indent);
+        if (parsed !== null && line[parsed.end] === '=') {
+          kind = 'keyValue';
+          keys = [...table, ...parsed.keys];
+          value = line.slice(parsed.end + 1).trim();
+          from = parsed.end + 1;
+        } else from = -1;
+      }
+    }
+    // What stays open past this line: a multi-line string, or brackets.
+    for (let i = from; i >= 0 && i < line.length; i++) {
+      const c = line[i];
+      if (c === '#') break;
+      if (c === '"' || c === "'") {
+        const triple = c.repeat(3);
+        if (line.startsWith(triple, i)) {
+          const close = line.indexOf(triple, i + 3);
+          if (close < 0) {
+            openString = triple;
+            break;
+          }
+          i = close + 2;
+        } else {
+          let j = i + 1;
+          for (; j < line.length && line[j] !== c; j++) if (c === '"' && line[j] === '\\') j++;
+          i = j;
+        }
+      } else if (c === '[' || c === '{') depth++;
+      else if (c === ']' || c === '}') depth = Math.max(0, depth - 1);
+    }
+    lines.push({ start, end, kind, ...(keys !== undefined ? { keys } : {}), ...(value !== undefined ? { value } : {}) });
+    start = end;
+  }
+  return lines;
 }
 
 interface TomlSpan {
@@ -247,23 +369,48 @@ interface TomlSpan {
  * other, and "does an entry already exist" (for `mergeTomlConfig`'s own
  * needs_update/already_present decision) is now "is this list non-empty",
  * not "does the exact main heading exist".
+ *
+ * A heading is ours by its KEYS ({@link scanToml}): `[ mcp_servers.dev-guardian ]`,
+ * `[mcp_servers."dev-guardian"]`, an indented one or one after a byte-order
+ * mark were missed by a `^\[([^\]]+)\]` match — a fresh table appended
+ * beside them, which Codex could not load. A span ends before the comments
+ * and blank lines that lead into the next heading: those are the next
+ * table's (`# my own server` above `[mcp_servers.other]` went with ours).
+ * Our table defined without a heading of ours — dotted keys
+ * (`mcp_servers.dev-guardian.command = …`, `dev-guardian.command = …` under
+ * `[mcp_servers]`) or an inline table — throws: appending a heading would
+ * define it twice, and rewriting the user's own form is not ours to do.
  */
 function findAllOwnTomlSpans(existing: string): TomlSpan[] {
-  const re = headingRegex();
-  const headings: Array<{ index: number; path: string }> = [];
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(existing)) !== null) {
-    const path = match[1];
-    if (path === undefined) continue;
-    headings.push({ index: match.index, path });
-  }
+  const lines = scanToml(existing);
   const spans: TomlSpan[] = [];
-  for (let i = 0; i < headings.length; i++) {
-    const heading = headings[i];
-    if (heading === undefined || !isOwnTablePath(heading.path)) continue;
-    const next = headings[i + 1];
-    spans.push({ start: heading.index, end: next ? next.index : existing.length, path: heading.path });
+  let own: { start: number; path: string; last: number } | null = null;
+  const close = (): void => {
+    if (own !== null) spans.push({ start: own.start, end: own.last, path: own.path });
+    own = null;
+  };
+  for (const line of lines) {
+    if (line.kind === 'heading') {
+      close();
+      const keys = line.keys ?? [];
+      if (isOwnTablePath(keys)) own = { start: line.start, path: keys.join('.'), last: line.end };
+      continue;
+    }
+    if (line.kind === 'keyValue' && own === null) {
+      const keys = line.keys ?? [];
+      const inlineOfOurs =
+        keys.length === 1 && keys[0] === 'mcp_servers' && /[{,]\s*(?:"dev-guardian"|'dev-guardian'|dev-guardian)\s*[=.]/.test(line.value ?? '');
+      if (isOwnTablePath(keys) || inlineOfOurs) {
+        throw new Error(
+          `${OUR_TABLE_PATH} is defined with dotted keys or an inline table ` +
+            `(${keys.join('.')} = …), which dev-guardian does not rewrite — make it a [${OUR_TABLE_PATH}] table, or edit it by hand`,
+        );
+      }
+    }
+    // Comments and blank lines extend our span only once a line of ours follows them.
+    if (own !== null && line.kind !== 'comment' && line.kind !== 'blank') own.last = line.end;
   }
+  close();
   return spans;
 }
 
