@@ -58,11 +58,12 @@
 #      history and deliberately-vulnerable test fixtures as if they were
 #      part of THIS project — polluting the SARIF report, the baseline and
 #      the gate with findings that have nothing to do with this repository.
-#   6. `npm ci --omit=dev` inside the clone's mcp/ directory. mcp/dist/ is
-#      committed to the dev-guardian repo (its own convention: the repo IS
-#      the distribution, no build step at install time) but its RUNTIME
-#      dependencies (execa, zod, yaml, the MCP SDK) are ordinary npm
-#      packages, not vendored, so they still need installing once per run.
+#   6. Installs nothing for dev-guardian itself — no `npm ci`. Its CLI runs
+#      on the bundle the clone holds, mcp/dist/engine.js (committed: the
+#      repo IS the distribution), which esbuild built with every npm package
+#      it uses inlined and which imports Node's builtins alone — so no
+#      package from the npm registry, nor an install script of one, runs in
+#      this job.
 #   7. Installs the scanner binaries `dev-guardian scan` drives underneath
 #      — Trivy, gitleaks and actionlint — each pinned by exact version and
 #      verified against a sha256 fetched from that tool's own GitHub
@@ -75,12 +76,16 @@
 #      same way, and bandit by version — both unconditionally (cheap;
 #      scan_sast only attempts each on a repo with Go or Python files, but a
 #      template cannot know that in advance). Semgrep and zizmor are
-#      Python-distributed (pipx); pip
-#      verifies each downloaded wheel's hash against what PyPI's own index
-#      recorded for that exact version — real integrity, weaker than
-#      `--require-hashes` against a pinned constraints file (see
-#      configs/ci/pinned.json's own note) — so they are pinned by exact
-#      version instead of a hand-fetched checksum.
+#      Python-distributed (pipx), so bandit, Semgrep and zizmor are pinned
+#      by exact version — those three packages only. Every dependency of
+#      theirs is resolved when the job runs, to the newest release their
+#      own requirements allow: a dependency's new release (or a hijacked
+#      one) reaches the next run unreviewed. pip checks each download
+#      against the hash the index lists beside it, which catches a
+#      corrupted download, not what the index serves. Pinning the rest takes
+#      `--require-hashes` against a constraints file holding every
+#      transitive dependency's hashes for the runner's Python — not shipped
+#      yet (configs/ci/pinned.json's own note).
 #   8. Runs `dev-guardian scan`, gated against the COMMITTED baseline
 #      (.guardian/baseline.json). If this repository has never run
 #      `dev-guardian baseline update`, every existing finding reads as
@@ -191,7 +196,7 @@ jobs:
           # package.json names it, and a cache a pull request can write is
           # restored on a push to --branch — zizmor's cache-poisoning finding
           # on a release branch. Nothing here needs the scanned project's
-          # dependencies cached; dev-guardian's own install is `npm ci`.
+          # dependencies cached, and dev-guardian installs none (header, step 6).
           package-manager-cache: false
 
       - name: Detect a .NET project (root .csproj/.fsproj/.sln/.slnx — same set scan_sast's own hasRootDotnetSignal checks)
@@ -281,9 +286,6 @@ jobs:
             echo "dev-guardian clone at {{DEV_GUARDIAN_TAG}} resolved to $actual_sha, expected {{DEV_GUARDIAN_SHA}} -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
-
-      - name: Install dev-guardian's runtime dependencies
-        run: npm ci --omit=dev --prefix "$DEV_GUARDIAN_HOME/mcp"
 
       - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor pinned by version)
         run: |
