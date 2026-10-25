@@ -3044,6 +3044,73 @@ function pipesDownloadIntoShell(statement: ShellStatement): MatchedRule | null {
   return null;
 }
 
+/**
+ * A download piped into a subshell that runs a shell (review of 3.6.0, finding
+ * 5): `curl … | (sh)`, `wget … | (bash -s)` — the `(` ends the piping
+ * statement, so the shell inside it is not a member of that pipeline and
+ * `pipesDownloadIntoShell` never saw it. Statement `k` pipes (its masked text
+ * ends with `|`) into a group it opens (`end === '('`), and a downloader runs
+ * somewhere in it; a command in the subshell, up to its matching `)`, reads
+ * its stdin as a script.
+ */
+function pipesDownloadIntoSubshell(statements: readonly ShellStatement[]): MatchedRule | null {
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined || statement.end !== '(' || !statement.masked.endsWith('|')) continue;
+    if (!statement.commands.some((words) => DOWNLOADERS.has(commandName(words[resolveCommand(words, PIPE_RUNNERS).index]?.value ?? '')))) continue;
+    let depth = 1;
+    for (let j = k + 1; j < statements.length && depth > 0; j += 1) {
+      const body = statements[j];
+      if (body === undefined) break;
+      const first = body.commands[0];
+      if (first !== undefined && readsStdinAsScript(first, resolveCommand(first, PIPE_RUNNERS).index)) return RULE_PIPE_TO_SHELL;
+      if (body.end === '(') depth += 1;
+      else if (body.end === ')') depth -= 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * The command substitution `eval` runs across the `(` or backtick that split
+ * it from `eval` (review of 3.6.0, finding 5): `eval $(curl …)`, `` eval
+ * `curl …` `` — the quoted `eval "$(curl …)"` already blocks (the quote keeps
+ * it one word), these did not. Statement `k`'s last command is `eval` ending
+ * with `$(` (its last word the `$`, `end === '('`) or with a backtick; the
+ * body is the statements up to the matching close. `eval` runs that body's
+ * OUTPUT, so a download there is the downloaded script it runs
+ * ({@link isBareRemoteFetch}'s hazard), and anything else is read as the text
+ * it writes ({@link substitutionOutput}).
+ */
+function evalSubstitutionBodies(statements: readonly ShellStatement[]): ShellStatement[][] {
+  const out: ShellStatement[][] = [];
+  for (let k = 0; k < statements.length - 1; k += 1) {
+    const statement = statements[k];
+    if (statement === undefined) continue;
+    const words = statement.commands[statement.commands.length - 1];
+    if (words === undefined || basename(words[resolveCommand(words).index]?.value ?? '') !== 'eval') continue;
+    const backtick = statement.end === '`';
+    const dollarParen = statement.end === '(' && words[words.length - 1]?.value === '$';
+    if (!backtick && !dollarParen) continue;
+    const body: ShellStatement[] = [];
+    let depth = 1;
+    for (let j = k + 1; j < statements.length; j += 1) {
+      const b = statements[j];
+      if (b === undefined) break;
+      body.push(b);
+      if (backtick) {
+        if (b.end === '`') break;
+      } else if (b.end === '(') depth += 1;
+      else if (b.end === ')') {
+        depth -= 1;
+        if (depth === 0) break;
+      }
+    }
+    if (body.length > 0) out.push(body);
+  }
+  return out;
+}
+
 /** A download written into xargs's program through its replacement string — and how to hand it over as data. */
 const RULE_XARGS_REPLACED: MatchedRule = {
   id: 'xargs-download-program',
@@ -4226,6 +4293,19 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
   }
   // `bash <(echo 'rm -rf /')`: what the substitution writes is the script (review 8, item 8).
   if (commandText.includes('<(')) collectGenerated(processSubstitutionScripts(statements), depth, out, scope);
+  // `curl … | (sh)`: a subshell runs the download the pipe hands it — the `(`
+  // separated the shell from the pipeline (review of 3.6.0, finding 5).
+  const subshell = pipesDownloadIntoSubshell(statements);
+  if (subshell !== null) out.push(subshell);
+  // `eval $(curl …)` / `` eval `curl …` ``: the substitution eval runs, split
+  // off by the `(` / backtick — the quoted form already blocks (finding 5).
+  for (const body of evalSubstitutionBodies(statements)) {
+    if (body.some((b) => b.commands.some((words) => DOWNLOADERS.has(commandName(words[resolveCommand(words, PIPE_RUNNERS).index]?.value ?? ''))))) {
+      out.push({ ...RULE_FETCH_EXEC });
+    } else {
+      collectGenerated(body.map((b) => textOutputOf(b.commands.map(expandWords), { heredocs: b.heredocBodies })), depth, out, scope);
+    }
+  }
   // Where each command runs, as the `cd`s before it moved it (review of
   // 3.4.0, finding 9): a relative delete target is read against it.
   const dirs = workdirs(statements);

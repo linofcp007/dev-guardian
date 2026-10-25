@@ -579,6 +579,17 @@ export function splitShell(command: string): ShellSplit {
         i += 2;
         continue;
       }
+      // `|&` is `2>&1 |`: a pipe that also carries stderr, not a pipe then a
+      // background `&` (which left `curl x |& sh` reading `& sh` as a word, so
+      // `curl … |& sh` was ok). The `&` is consumed with the pipe.
+      if (next === '&') {
+        endCommand();
+        masked += '|';
+        maskedCommand += '|';
+        lastCode = '|';
+        i += 2;
+        continue;
+      }
       // A pipe stays *inside* the statement: `curl … | sh` is one hazard.
       endCommand();
       masked += '|';
