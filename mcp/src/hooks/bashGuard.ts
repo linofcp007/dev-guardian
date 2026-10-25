@@ -2797,6 +2797,90 @@ function processSubstitutionScripts(statements: readonly ShellStatement[]): Arra
   return out;
 }
 
+/**
+ * The body of a `$( … )` command substitution starting just after its `$(` at
+ * `from`, and the index after its `)`. Parens are balanced, and a `)` inside a
+ * quoted span or escaped does not close it (`$(echo ")")`).
+ */
+function scanSubstitutionBody(command: string, from: number): { body: string; next: number } {
+  let depth = 1;
+  let quote = '';
+  for (let i = from; i < command.length; i += 1) {
+    const ch = command.charAt(i);
+    if (quote !== '') {
+      if (quote === '"' && ch === '\\') i += 1;
+      else if (ch === quote) quote = '';
+      continue;
+    }
+    if (ch === '\\') i += 1;
+    else if (ch === "'" || ch === '"') quote = ch;
+    else if (ch === '(') depth += 1;
+    else if (ch === ')') {
+      depth -= 1;
+      if (depth === 0) return { body: command.slice(from, i), next: i + 1 };
+    }
+  }
+  return { body: command.slice(from), next: command.length };
+}
+
+/**
+ * Collects the command substitutions inside the double-quoted string that
+ * begins just after the `"` at `from` — `$( … )` and `` `…` `` — appending
+ * each body to `out`, and returns the index after the closing `"`. A `\$`,
+ * `` \` `` or `\\` is a literal, and `$((` is arithmetic (no command runs).
+ */
+function scanDoubleQuotedSubstitutions(command: string, from: number, out: string[]): number {
+  let i = from;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '"') return i + 1;
+    if (ch === '`') {
+      let end = i + 1;
+      while (end < command.length && !(command.charAt(end) === '`' && command.charAt(end - 1) !== '\\')) end += 1;
+      out.push(command.slice(i + 1, end));
+      i = end + 1;
+      continue;
+    }
+    if (ch === '$' && command.charAt(i + 1) === '(' && command.charAt(i + 2) !== '(') {
+      const sub = scanSubstitutionBody(command, i + 2);
+      out.push(sub.body);
+      i = sub.next;
+      continue;
+    }
+    i += 1;
+  }
+  return command.length;
+}
+
+/**
+ * The command substitutions a command runs from INSIDE a double-quoted string
+ * (review of 3.6.0, finding 4): `echo "$(rm -rf /)"`, `: "$(…)"`, `` x="`…`"
+ * ``. `splitShell` masks a double-quoted span to one space, so a `$( … )` or
+ * backtick in it was never a statement and the body — which the shell runs
+ * regardless of the quotes — went unassessed, defeating every block rule. An
+ * UNQUOTED substitution is already a statement of its own (`(` / backtick is a
+ * boundary), and a single-quoted one never runs, so only the double-quoted
+ * ones are collected here; nested ones are reached by recursing on each body.
+ */
+function quotedSubstitutions(command: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i < command.length) {
+    const ch = command.charAt(i);
+    if (ch === '\\') i += 2;
+    else if (ch === "'") {
+      const end = command.indexOf("'", i + 1);
+      i = end < 0 ? command.length : end + 1;
+    } else if (ch === '"') i = scanDoubleQuotedSubstitutions(command, i + 1, out);
+    else i += 1;
+  }
+  return out;
+}
+
 // ─────────────────────────────────────────────── download, then run it
 
 /** Commands that fetch a URL: `curl`, `wget` and PowerShell's web cmdlets and their aliases. */
@@ -4304,6 +4388,22 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       out.push({ ...RULE_FETCH_EXEC });
     } else {
       collectGenerated(body.map((b) => textOutputOf(b.commands.map(expandWords), { heredocs: b.heredocBodies })), depth, out, scope);
+    }
+  }
+  // A `$( … )` or backtick inside a double-quoted string runs regardless of
+  // the quotes (review of 3.6.0, finding 4): `echo "$(rm -rf /)"`, `: "$(…)"`.
+  // splitShell masked it away; it is re-entered here as a nested script,
+  // within the same nesting cap and budget. An unquoted one is already a
+  // statement of its own, so it is not collected twice.
+  if (cmd.includes('$(') || cmd.includes('`')) {
+    for (const body of quotedSubstitutions(cmd)) {
+      if (body.trim() === '') continue;
+      if (depth >= MAX_NESTING) {
+        scope.notes.depth = true;
+        continue;
+      }
+      noteScript(scope, body, scope.powershell === true);
+      collect(body, depth + 1, out, { ...scope, cmdLine: false });
     }
   }
   // Where each command runs, as the `cd`s before it moved it (review of
