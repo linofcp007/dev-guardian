@@ -287,8 +287,9 @@ export function semgrepExcludeForDir(rel: string): string {
 
 /**
  * A Semgrep JSON report with each path `rewrite` maps replaced — the results',
- * the errors' (and their spans'), `paths.scanned` and `paths.skipped`. A path
- * `rewrite` returns null for is kept.
+ * the errors' (and their spans'), `paths.scanned`, `paths.skipped` and the
+ * taint timeouts' (`time.fixpoint_timeouts[].location`). A path `rewrite`
+ * returns null for is kept.
  */
 export function rewriteReportPaths(raw: unknown, rewrite: (path: string) => string | null): unknown {
   if (raw === null || typeof raw !== 'object') return raw;
@@ -312,6 +313,16 @@ export function rewriteReportPaths(raw: unknown, rewrite: (path: string) => stri
     if (Array.isArray(p['scanned'])) p['scanned'] = p['scanned'].map(map);
     if (Array.isArray(p['skipped'])) p['skipped'] = p['skipped'].map((s: unknown) => withPath(s, 'path'));
     report['paths'] = p;
+  }
+  const time = report['time'];
+  if (time !== null && typeof time === 'object' && Array.isArray((time as Record<string, unknown>)['fixpoint_timeouts'])) {
+    const t = { ...(time as Record<string, unknown>) };
+    t['fixpoint_timeouts'] = (t['fixpoint_timeouts'] as unknown[]).map((entry) =>
+      entry !== null && typeof entry === 'object'
+        ? { ...(entry as Record<string, unknown>), location: withPath((entry as Record<string, unknown>)['location'], 'path') }
+        : entry,
+    );
+    report['time'] = t;
   }
   return report;
 }

@@ -38,6 +38,7 @@ import {
 } from '../platform/scanSettings.js';
 import { semgrepGuardianOutputExcludes } from '../platform/guardianOutput.js';
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from './processRunner.js';
+import { effectiveTimeoutMs } from './processTimeout.js';
 import { pythonUtf8Env } from './semgrepReport.js';
 import { batchArgs } from './argBatches.js';
 import { compileIgnore } from '../platform/guardianIgnore.js';
@@ -205,6 +206,8 @@ interface SemgrepRunResult extends ProcessRunResult {
   excludedLongDirs?: string[];
   /** How many files too long for the walk were read on their own, their findings merged into the report. Absent: none. */
   longFilesRead?: number;
+  /** Why some of those were not read (the time ran out, a run wrote no report). Absent: none was left. */
+  longFilesUnread?: string;
 }
 
 /** The `--output` file the arguments name, if any. */
@@ -249,6 +252,9 @@ export async function runSemgrep(
   run: (options: ProcessRunOptions) => Promise<ProcessRunResult> = runProcess,
   platform: NodeJS.Platform = process.platform,
 ): Promise<SemgrepRunResult> {
+  // One timeout for the whole call: the retry and the long files' runs get
+  // what the first left of it, never the caller's whole budget again.
+  const deadline = Date.now() + effectiveTimeoutMs(opts.timeoutMs);
   const first = await run({ ...opts, ...semgrepSpawn(opts.env) });
   const args = opts.args ?? [];
   const target = args.at(-1);
@@ -262,21 +268,46 @@ export async function runSemgrep(
   const walk = await longPathWalk(target, platform, { dirs: listingFailed });
   if (walk.dirs.length === 0 && walk.files.length === 0) return first;
   let result: SemgrepRunResult = first;
-  if (listingFailed && walk.dirs.length > 0) {
-    const retry = await run({ ...opts, args: [...args.slice(0, -1), ...walk.dirs.map(semgrepExcludeForDir), target], ...semgrepSpawn(opts.env) });
+  if (listingFailed && walk.dirs.length > 0 && deadline > Date.now()) {
+    const retry = await run({
+      ...opts,
+      args: [...args.slice(0, -1), ...walk.dirs.map(semgrepExcludeForDir), target],
+      timeoutMs: deadline - Date.now(),
+      ...semgrepSpawn(opts.env),
+    });
     result = { ...retry, excludedLongDirs: walk.dirs };
   }
   if (walk.files.length === 0 || out === undefined || result.exitCode === null || result.outcome === 'cancelled') return result;
-  const read = await readLongFiles({ opts, run, target, out, files: walk.files, semgrepignores: walk.semgrepignores });
-  return read > 0 ? { ...result, longFilesRead: read } : result;
+  const long = await readLongFiles({ opts, run, target, out, files: walk.files, semgrepignores: walk.semgrepignores, deadline });
+  if (long.cancelled) return { ...result, outcome: 'cancelled' };
+  return {
+    ...result,
+    ...(long.read > 0 ? { longFilesRead: long.read } : {}),
+    ...(long.unread !== undefined ? { longFilesUnread: long.unread } : {}),
+  };
+}
+
+/** What {@link readLongFiles} did. */
+interface LongFilesRead {
+  /** How many it read. */
+  read: number;
+  /** Why some it meant to read were not — they stay the long-path gap's to name. */
+  unread?: string;
+  /** A run of them was cancelled: so is the whole run. */
+  cancelled?: boolean;
 }
 
 /**
  * The second run: the files the walk did not list for their length, each an
  * extended-length explicit target — never one the run's own `--exclude`s or a
  * `.semgrepignore` leave out, which explicit targets would bypass — merged
- * into `out` under the path the walk would have given (`target\rel`). Returns
- * how many it read; 0 when there was none, or the report is not one.
+ * into `out` under the path the walk would have given (`target\rel`): their
+ * results, errors, `paths` and taint timeouts (`time.fixpoint_timeouts`),
+ * which make a run partial as an error does (`semgrepReport.ts`). Every batch
+ * runs within what is left of the call's timeout; one cancelled stops them,
+ * one cut short or failed stops them too, and the files left are named in
+ * `unread` (the long-path gap names each). Nothing when there is nothing to
+ * read, or the report is not one.
  */
 async function readLongFiles(a: {
   opts: SemgrepRunOptions;
@@ -285,58 +316,116 @@ async function readLongFiles(a: {
   out: string;
   files: readonly string[];
   semgrepignores: Parameters<typeof semgrepIgnores>[0]['semgrepignores'];
-}): Promise<number> {
+  deadline: number;
+}): Promise<LongFilesRead> {
   const report = parsed(readReport(a.out));
-  if (report === null) return 0;
+  if (report === null) return { read: 0 };
   const paths = report['paths'];
-  const scanned = listOf(paths !== null && typeof paths === 'object' ? (paths as Record<string, unknown>)['scanned'] : undefined)
-    .filter((p): p is string => typeof p === 'string')
-    .map((p) => p.split('\\').join('/').replace(/^\.\//, '').toLowerCase());
+  const base = windowsBase(a.target);
+  // Semgrep names a target relative to its working directory, or absolute:
+  // one set of project-relative keys, never a scan of the list per file.
+  const prefixes = [a.target, base].map((p) => `${p.split('\\').join('/').replace(/\/+$/, '').toLowerCase()}/`);
+  const scanned = new Set(
+    listOf(paths !== null && typeof paths === 'object' ? (paths as Record<string, unknown>)['scanned'] : undefined)
+      .filter((p): p is string => typeof p === 'string')
+      .map((p) => {
+        const key = p.split('\\').join('/').replace(/^\.\//, '').toLowerCase();
+        const under = prefixes.find((prefix) => key.startsWith(prefix));
+        return under === undefined ? key : key.slice(under.length);
+      }),
+  );
   const args = a.opts.args ?? [];
   const excludes = compileIgnore(args.filter((x) => x.startsWith('--exclude=')).map((x) => x.slice('--exclude='.length)).join('\n'));
   const wanted = a.files.filter((rel) => {
-    const key = rel.toLowerCase();
-    if (scanned.some((s) => s === key || s.endsWith(`/${key}`))) return false;
+    if (scanned.has(rel.toLowerCase())) return false;
     // A `.semgrepignore` that could not be read may leave it out: not read
     // here, so the long-path gap names it rather than a finding in a file the
     // project excluded.
     return !excludes.ignores(rel) && semgrepIgnores({ semgrepignores: a.semgrepignores }, rel) === false;
   });
-  if (wanted.length === 0) return 0;
+  if (wanted.length === 0) return { read: 0 };
 
-  const base = windowsBase(a.target);
   const norm = windowsPathKey;
   const given = new Map(wanted.map((rel) => [norm(win32.join(base, ...rel.split('/'))), win32.join(a.target, ...rel.split('/'))]));
   const targets = wanted.map((rel) => extendedLengthPath(win32.join(base, ...rel.split('/'))));
   // The run's own arguments, without its target and its report.
   const outAt = args.indexOf('--output');
   const fixed = args.slice(0, -1).filter((_x, i) => i !== outAt && i !== outAt + 1);
-  const merged = { results: listOf(report['results']), errors: listOf(report['errors']), scanned: [] as unknown[] };
+  const ownTime = report['time'];
+  const merged = {
+    results: listOf(report['results']),
+    errors: listOf(report['errors']),
+    scanned: [] as unknown[],
+    skipped: [] as unknown[],
+    fixpoint: [] as unknown[],
+  };
   let read = 0;
-  for (const [i, batch] of batchArgs(targets, { command: SEMGREP_COMMAND, fixedArgs: [...fixed, '--output', a.out] }).entries()) {
+  let unreadFiles = 0;
+  let unreadWhy: string | undefined;
+  const skip = (files: number, why: string): void => {
+    unreadFiles += files;
+    unreadWhy ??= why;
+  };
+  const spent = `the run's ${seconds(effectiveTimeoutMs(a.opts.timeoutMs))} timeout was spent`;
+  const batches = batchArgs(targets, { command: SEMGREP_COMMAND, fixedArgs: [...fixed, '--output', a.out] });
+  for (const [i, batch] of batches.entries()) {
+    const after = batches.slice(i + 1).reduce((n, b) => n + b.length, 0);
+    const left = a.deadline - Date.now();
+    if (left <= 0) {
+      skip(batch.length + after, spent);
+      break;
+    }
     const part = `${a.out}.long-${String(i + 1)}.json`;
-    await a.run({ ...a.opts, args: [...fixed, '--output', part, ...batch], ...semgrepSpawn(a.opts.env) });
+    const r = await a.run({ ...a.opts, args: [...fixed, '--output', part, ...batch], timeoutMs: left, ...semgrepSpawn(a.opts.env) });
     const raw = parsed(readReport(part));
     rmSync(part, { force: true });
-    if (raw === null) continue;
-    const back = rewriteReportPaths(raw, (p) => given.get(norm(p)) ?? null) as Record<string, unknown>;
-    merged.results.push(...listOf(back['results']));
-    merged.errors.push(...listOf(back['errors']));
-    const backPaths = back['paths'];
-    const got = listOf(backPaths !== null && typeof backPaths === 'object' ? (backPaths as Record<string, unknown>)['scanned'] : undefined);
-    merged.scanned.push(...got);
-    read += got.length;
+    if (r.outcome === 'cancelled') return { read, cancelled: true };
+    if (raw === null) {
+      skip(batch.length, r.outcome === 'timed_out' ? 'Semgrep timed out on them' : `Semgrep wrote no report on them (exit ${String(r.exitCode)})`);
+    } else {
+      const back = rewriteReportPaths(raw, (p) => given.get(norm(p)) ?? null) as Record<string, unknown>;
+      const backPaths = back['paths'];
+      const backTime = back['time'];
+      const got = listOf(backPaths !== null && typeof backPaths === 'object' ? (backPaths as Record<string, unknown>)['scanned'] : undefined);
+      merged.results.push(...listOf(back['results']));
+      merged.errors.push(...listOf(back['errors']));
+      merged.scanned.push(...got);
+      merged.skipped.push(...listOf(backPaths !== null && typeof backPaths === 'object' ? (backPaths as Record<string, unknown>)['skipped'] : undefined));
+      merged.fixpoint.push(...listOf(backTime !== null && typeof backTime === 'object' ? (backTime as Record<string, unknown>)['fixpoint_timeouts'] : undefined));
+      read += got.length;
+    }
+    // Out of time: the batches after this one are not run.
+    if (r.outcome === 'timed_out') {
+      if (after > 0) skip(after, spent);
+      break;
+    }
   }
-  if (read === 0 && merged.errors.length === listOf(report['errors']).length) return 0;
+  const unread = unreadFiles > 0 && unreadWhy !== undefined ? `${String(unreadFiles)} file(s) at a path too long for Windows not read: ${unreadWhy}` : undefined;
+  if (read === 0 && merged.errors.length === listOf(report['errors']).length && merged.fixpoint.length === 0) {
+    return unread !== undefined ? { read: 0, unread } : { read: 0 };
+  }
   const ownPaths = paths !== null && typeof paths === 'object' ? (paths as Record<string, unknown>) : {};
+  const timeObj = ownTime !== null && typeof ownTime === 'object' ? (ownTime as Record<string, unknown>) : {};
   const next = {
     ...report,
     results: merged.results,
     errors: merged.errors,
-    paths: { ...ownPaths, scanned: [...listOf(ownPaths['scanned']), ...merged.scanned] },
+    paths: {
+      ...ownPaths,
+      scanned: [...listOf(ownPaths['scanned']), ...merged.scanned],
+      ...(merged.skipped.length > 0 || ownPaths['skipped'] !== undefined ? { skipped: [...listOf(ownPaths['skipped']), ...merged.skipped] } : {}),
+    },
+    ...(merged.fixpoint.length > 0 || ownTime !== undefined
+      ? { time: { ...timeObj, fixpoint_timeouts: [...listOf(timeObj['fixpoint_timeouts']), ...merged.fixpoint] } }
+      : {}),
   };
   writeFileSync(a.out, JSON.stringify(next), 'utf8');
-  return read;
+  return unread !== undefined ? { read, unread } : { read };
+}
+
+/** `0.02 s`, `600 s`. */
+function seconds(ms: number): string {
+  return `${String(Math.round(ms / 10) / 100)} s`;
 }
 
 /** The note a run that worked around Windows' path limits carries, for its `reason`; null when it did not. */
@@ -353,5 +442,6 @@ export function longDirsNote(result: SemgrepRunResult): string | null {
     );
   }
   if (files > 0) notes.push(`${files} file(s) at a path too long for Windows read on their own, as extended-length paths`);
+  if (result.longFilesUnread !== undefined) notes.push(result.longFilesUnread);
   return notes.length > 0 ? notes.join('; ') : null;
 }

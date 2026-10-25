@@ -251,6 +251,77 @@ describe('runSemgrep: the files too long for Windows, read on their own', () => 
     expect(longDirsNote(r)).toBe('1 file(s) at a path too long for Windows read on their own, as extended-length paths');
   });
 
+  /**
+   * Review 3.6.1, finding 5: only results, errors and paths.scanned were
+   * merged, so a taint timeout in a long file (`time.fixpoint_timeouts`) was
+   * lost and the run read ok; each later run had the caller's whole timeout
+   * again, and a batch's outcome was never looked at.
+   */
+  describe('what the second run says, and when', () => {
+    const okRun: ProcessRunResult = { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
+    const firstReport = (root: string): string =>
+      JSON.stringify({ results: [], errors: [], paths: { scanned: [join(root, 'short.js')] }, time: { fixpoint_timeouts: [] } });
+
+    it("a long file's fixpoint timeout reaches the run's report, under the walk's path", async () => {
+      const { root, long } = longFilesProject();
+      const out = join(makeTempDir('semgrep-longfiles-report-'), 'sast.json');
+      const run = vi.fn(async (o: ProcessRunOptions): Promise<ProcessRunResult> => {
+        const args = o.args ?? [];
+        const file = args[args.indexOf('--output') + 1] ?? '';
+        if (run.mock.calls.length === 1) writeFileSync(file, firstReport(root));
+        else {
+          const target = args.at(-1) ?? '';
+          const timeout = { error_type: 'Fixpoint timeout', message: 'x [rules: 1, first: r]', location: { path: target, start: { line: 3 } } };
+          writeFileSync(file, JSON.stringify({ results: [], errors: [], paths: { scanned: [target] }, time: { fixpoint_timeouts: [timeout] } }));
+        }
+        return okRun;
+      });
+      await runSemgrep({ args: ['--config=r.yml', '--exclude=gone', '--json', '--output', out, root], cwd: root }, run, 'win32');
+      const merged = JSON.parse(readFileSync(out, 'utf8')) as { time: { fixpoint_timeouts: Array<{ location: { path: string } }> } };
+      expect(merged.time.fixpoint_timeouts.map((t) => t.location.path)).toEqual([win32.join(root, ...long.split('/'))]);
+    });
+
+    it("the runs after the first share the caller's one timeout; past it, none runs and the run says why", async () => {
+      const { root } = longFilesProject();
+      const out = join(makeTempDir('semgrep-longfiles-report-'), 'sast.json');
+      const given: Array<number | undefined> = [];
+      const slowFirst = (ms: number) =>
+        vi.fn(async (o: ProcessRunOptions): Promise<ProcessRunResult> => {
+          given.push(o.timeoutMs);
+          const args = o.args ?? [];
+          if (given.length === 1) {
+            await new Promise((r) => setTimeout(r, ms));
+            writeFileSync(args[args.indexOf('--output') + 1] ?? '', firstReport(root));
+          }
+          return okRun;
+        });
+      const args = ['--config=r.yml', '--json', '--output', out, root];
+      await runSemgrep({ args, cwd: root, timeoutMs: 60_000 }, slowFirst(50), 'win32');
+      expect(given).toHaveLength(2);
+      expect(given[1]).toBeLessThanOrEqual(60_000 - 50);
+      given.length = 0;
+      const late = await runSemgrep({ args, cwd: root, timeoutMs: 20 }, slowFirst(60), 'win32');
+      expect(given).toHaveLength(1);
+      expect(late.longFilesRead).toBeUndefined();
+      expect(longDirsNote(late)).toMatch(/file\(s\) at a path too long for Windows not read: the run's 0\.02 s timeout was spent/);
+    });
+
+    it('a second run that was cancelled cancels the run', async () => {
+      const { root } = longFilesProject();
+      const out = join(makeTempDir('semgrep-longfiles-report-'), 'sast.json');
+      const run = vi.fn(async (o: ProcessRunOptions): Promise<ProcessRunResult> => {
+        const args = o.args ?? [];
+        if (run.mock.calls.length === 1) {
+          writeFileSync(args[args.indexOf('--output') + 1] ?? '', firstReport(root));
+          return okRun;
+        }
+        return { outcome: 'cancelled', exitCode: null, stdout: '', stderr: '', truncated: false };
+      });
+      const r = await runSemgrep({ args: ['--json', '--output', out, root], cwd: root }, run, 'win32');
+      expect(r.outcome).toBe('cancelled');
+    });
+  });
+
   it('nothing more when the walk read them (long paths enabled), off Windows, or with no report', async () => {
     const { root, long, ignored, excluded } = longFilesProject();
     const reportDir = makeTempDir('semgrep-longfiles-report-');
