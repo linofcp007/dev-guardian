@@ -1057,6 +1057,20 @@ describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 i
     return project;
   }
 
+  it("the CI gate on a pull request's tree (buildRefused): no restore, no build — the analyzers a named gap with the reason", async () => {
+    // The pull request's MSBuild is its own code: it never runs in the gate job.
+    const project = dotnetProject();
+    writeFileSync(join(project, 'App.csproj'), CSPROJ.replace('</PropertyGroup>', '</PropertyGroup><ItemGroup><PackageReference Include="SecurityCodeScan.VS2019" Version="5.6.7" /></ItemGroup>'), 'utf8');
+    mockDotnet();
+    const plugin = { ...makePlugin(project), buildRefused: "the tree is a pull request's, judged against origin/main: … pass --build-pr only for a pull request you trust" };
+    const r = await runSast(project, plugin);
+    expect(dotnetCalls()).toEqual([]);
+    const run = r.tools_run.find((t) => t.name === 'dotnet-analyzers');
+    expect(run).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/^not built: the tree is a pull request's.*--build-pr/) });
+    expect(r.tools_run.find((t) => t.name === 'security-code-scan')?.status).toBe('skipped');
+    expect(r.missing_tools).toEqual(expect.arrayContaining(['dotnet-analyzers', 'security-code-scan']));
+  });
+
   it('restores in --locked-mode FIRST, then builds --no-restore with the analyzers enabled — never --verbosity:diag', async () => {
     // A plain `dotnet build` restores implicitly without locked mode: it
     // rewrote an out-of-date packages.lock.json in the user's tree.

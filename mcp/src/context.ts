@@ -44,6 +44,17 @@ export interface PluginContext {
     ref: string;
     commit: string;
   };
+  /**
+   * The CI gate judging a pull request (`--baseline-ref` / `--rules-ref`)
+   * without `--build-pr` only — never the MCP server: why no scan in this
+   * context may build the tree. A .NET restore and build run the tree's
+   * MSBuild (its `Directory.Build.targets`, `<Exec>` tasks, the analyzers and
+   * source generators of its packages), and in a pull request's tree that is
+   * the pull request's code, run inside the gate job — where it could replace
+   * a scanner or rewrite a report before the gate reads it. scan_sast names
+   * the .NET analyzers a gap with this reason instead of building.
+   */
+  buildRefused?: string;
 }
 
 export interface ToolContext {

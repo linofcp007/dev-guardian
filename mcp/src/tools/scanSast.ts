@@ -1173,6 +1173,21 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
   if (!hasRootDotnetSignal(ctx.projectPath)) return;
   const referencesScs = projectReferencesScs(ctx.projectPath);
 
+  // The CI gate on a pull request's tree (`PluginContext.buildRefused`): its
+  // MSBuild is the pull request's code, never run here. A named gap, so the
+  // gate reads the run as incomplete, never as a clean .NET pass.
+  const refused = ctx.plugin.buildRefused;
+  if (refused !== undefined) {
+    const reason = `not built: ${refused}`;
+    tools_run.push({ name: 'dotnet-analyzers', status: 'skipped', reason });
+    missing_tools.push('dotnet-analyzers');
+    if (referencesScs) {
+      tools_run.push({ name: 'security-code-scan', status: 'skipped', reason });
+      missing_tools.push('security-code-scan');
+    }
+    return;
+  }
+
   const dotnetBin = await scannerAvailable('dotnet');
   if (!dotnetBin) {
     tools_run.push({ name: 'dotnet-analyzers', status: 'skipped', reason: 'dotnet SDK not installed' });

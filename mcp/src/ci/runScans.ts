@@ -114,6 +114,11 @@ export interface RunScansOptions {
    * multi-line rule matched nothing and the gate passed (review 12, finding 11).
    */
   changedSince?: ResolvedRef;
+  /**
+   * Why no step may build the tree (`PluginContext.buildRefused`): the CLI sets
+   * it when it judges a pull request against a ref without `--build-pr`.
+   */
+  buildRefused?: string;
 }
 
 /**
@@ -161,6 +166,7 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
         // CI has no progress channel to report to — a no-op sink, same
         // ProgressNotifier shape server.ts wires to the real MCP transport.
         progressNotifier: { send: () => {} },
+        ...(opts.buildRefused !== undefined ? { buildRefused: opts.buildRefused } : {}),
       };
 
       let rulesSource: RulesSource = { from: 'tree' };

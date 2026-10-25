@@ -565,6 +565,15 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          cannot add its own findings to the baseline it is gated
                          against. None at <ref> is no baseline; a <ref> that names
                          no commit (not fetched) is exit 3.
+  --build-pr            With --baseline-ref or --rules-ref only. Under a ref
+                         the tree is a pull request's, and the .NET analyzers'
+                         restore and build would run ITS MSBuild in this job —
+                         so by default the tree is not built and they are a
+                         named gap (exit 2). --build-pr builds it all the same:
+                         only for a pull request you trust (from this
+                         repository, never a fork's). CLI ARGV ONLY, like
+                         --start-command: a repository file declaring it is
+                         refused.
   --rules-ref <ref>     Read the project's Semgrep rules (.semgrep.yml/.yaml and
                          those .dev-guardian/configs.json records), .guardianignore,
                          .trivyignore, .bandit and .guardian/scan.yml from <ref>
@@ -1218,6 +1227,47 @@ function acceptPartialParseRefusalMessage(configPath) {
 }
 
 /**
+ * `--build-pr` is argv-only by the same rule: it lets a pull request's own
+ * MSBuild run in the gate job, and a repository file the pull request can edit
+ * must never grant that. A `.guardian/ci.json` declaring `build_pr` is refused.
+ *
+ * @param {string} projectPath
+ * @returns {string | null}
+ */
+function findBuildPrInRepoConfig(projectPath) {
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
+  return isRecord(data) && data['build_pr'] !== undefined ? resolve(projectPath, CI_CONFIG_RELATIVE_PATH) : null;
+}
+
+/** @param {string} configPath */
+function buildPrRefusalMessage(configPath) {
+  return (
+    `refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "build_pr" (found at ${configPath}). ` +
+    "--build-pr may only be supplied on the command line, never from a file inside the repository — a pull " +
+    "request could otherwise edit this file and have its own build run in the gate job. Remove build_pr from " +
+    `${CI_CONFIG_RELATIVE_PATH} and pass --build-pr in the pipeline definition, for pull requests you trust.`
+  );
+}
+
+/**
+ * Why the gate does not build the tree it scans, or undefined: under a ref the
+ * tree is a pull request's, and its .NET restore and build would run its own
+ * MSBuild in this job (`PluginContext.buildRefused`) — unless `--build-pr`
+ * says the pull request is trusted.
+ *
+ * @param {{ ref: string } | null} judgedAgainst
+ * @param {boolean} buildPr
+ * @returns {string | undefined}
+ */
+function buildRefusedFor(judgedAgainst, buildPr) {
+  if (judgedAgainst === null || buildPr) return undefined;
+  return (
+    `the tree is a pull request's, judged against ${judgedAgainst.ref}: building it would run its MSBuild in ` +
+    'this job — pass --build-pr only for a pull request you trust'
+  );
+}
+
+/**
  * Why a `--accept-partial-parse` value cannot name a project file, or null.
  * The gate matches it exactly against project-relative paths, so an absolute
  * path or one climbing out with `..` could never match anything — refused as
@@ -1366,6 +1416,7 @@ function takeProject(argv, i, a) {
  *   localOnly: boolean,
  *   startCommand: string[] | undefined,
  *   acceptPartialParse: string[],
+ *   buildPr: boolean,
  *   baselineRef: string | undefined,
  *   rulesRef: string | undefined,
  *   resetExclusionsFrom: string | undefined,
@@ -1397,6 +1448,7 @@ function parseScanArgs(argv) {
     localOnly: false,
     startCommand: undefined,
     acceptPartialParse: [],
+    buildPr: false,
     baselineRef: undefined,
     rulesRef: undefined,
     resetExclusionsFrom: undefined,
@@ -1463,6 +1515,7 @@ function parseScanArgs(argv) {
     } else if (a.startsWith('--base-url=')) out.baseUrl = a.slice('--base-url='.length);
     else if (a === '--authorized-target') out.authorizedTarget = true;
     else if (a === '--local-only') out.localOnly = true;
+    else if (a === '--build-pr') out.buildPr = true;
     else if (a === '--start-command') {
       out.startCommand = consumeStartCommand(argv, i);
       break;
@@ -1797,12 +1850,18 @@ async function cmdScan(argv) {
     return usageError('--compact applies to --format json (it cuts new_findings to the blocking ones)');
   }
 
+  if (opts.buildPr && opts.baselineRef === undefined && opts.rulesRef === undefined) {
+    return usageError('--build-pr applies with --baseline-ref or --rules-ref: without a ref the tree is built as it is');
+  }
+
   const projectPath = resolveProjectOrExit(opts.project);
   const start = enforceStartCommandRules(projectPath, opts);
   // The same argv-only rule for --accept-partial-parse, checked whatever argv
   // says (see `findAcceptPartialParseInRepoConfig`).
   const acceptConfig = findAcceptPartialParseInRepoConfig(projectPath);
   if (acceptConfig) return usageError(acceptPartialParseRefusalMessage(acceptConfig));
+  const buildConfig = findBuildPrInRepoConfig(projectPath);
+  if (buildConfig) return usageError(buildPrRefusalMessage(buildConfig));
   // `.guardian/scan.yml`, before the scan: the tree's (a --rules-ref run reads
   // the ref's, checked once the scan copied it).
   if (opts.rulesRef === undefined) refuseInvalidScanSettings(loadScanSettings(projectPath), SCAN_SETTINGS_RELATIVE_PATH);
@@ -1887,6 +1946,7 @@ async function cmdScan(argv) {
       });
       app = await startingApp;
     }
+    const buildRefused = buildRefusedFor(baselineRef ?? rulesRef, opts.buildPr);
     result = await runScans({
       projectPath,
       baseUrl: opts.baseUrl,
@@ -1897,6 +1957,8 @@ async function cmdScan(argv) {
       // (a private key's BEGIN / END lines fall outside gitleaks' -U0 hunks;
       // review 12, finding 11).
       ...(baselineRef !== null ? { changedSince: baselineRef } : rulesRef !== null ? { changedSince: rulesRef } : {}),
+      // Nor is a pull request's own build run here, unless --build-pr trusts it.
+      ...(buildRefused !== undefined ? { buildRefused } : {}),
     });
   } catch (e) {
     pipelineFailure = { error: e };

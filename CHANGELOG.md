@@ -30,6 +30,12 @@ and an unread file, an unanswered query or a skipped pass is a named gap, never 
   suppression; those suppressions lapse once. A credential finding's fingerprint is no longer a hash of the
   plaintext secret: a `baseline.json` entry without an identity (a 2.0.x baseline never regenerated) shows that
   finding once as new — `baseline update` on the base branch re-accepts it.
+- **A .NET pull request's gate exits 2 by default.** Under `--baseline-ref` / `--rules-ref` (the `ci-init` pipelines
+  pass both on a pull request) the gate no longer builds the tree: a .NET restore and build ran the pull request's
+  own MSBuild inside the gate job, where it could replace a scanner or rewrite a report. The .NET analyzers are a
+  named gap instead (`not built: the tree is a pull request's …`). For a pull request you trust — one from your own
+  repository — add `--build-pr` to the scan command in the pipeline (argv only; a `.guardian/ci.json` declaring it is
+  refused). Push runs on the base branch take no ref and build as before.
 - **The shell guard asks more.** A command a cap or the time budget cut short (past 512 KB, a statement past
   16 KB, nesting deeper than 3) is now a question, not a warning; `gci .\build -Recurse | ri -Force` warns like
   `Remove-Item .\build -Recurse`.
@@ -42,6 +48,8 @@ and an unread file, an unanswered query or a skipped pass is a named gap, never 
 
 ### Security
 
+- **The CI gate never runs a pull request's build**: under a ref, the .NET restore and build are refused (a named
+  gap) unless `--build-pr` trusts the pull request.
 - **The CI gate**: a pull request could hide a one-line committed secret from the history pass with a
   `.gitattributes` (`config.js binary`), a NUL byte, or an evil merge; the history pass now runs with the
   repository's attributes neutralised, and the full-content pass keeps a one-line match whose line came from a

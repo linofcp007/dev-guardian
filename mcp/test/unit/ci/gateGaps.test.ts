@@ -217,6 +217,22 @@ describe('every gap as data', () => {
     expect(remedyFor('other', 'gosec', 'scan: gosec … Package not loaded on pkg')).toMatch(/go mod download/);
   });
 
+  it("a pull request's .NET build refused: the analyzers gate as incomplete, and the remedy names --build-pr and its trust", () => {
+    const reason = "not built: the tree is a pull request's, judged against origin/main: building it would run its MSBuild in this job — pass --build-pr only for a pull request you trust";
+    const step: ScanStepResult = {
+      tool: 'security_scan_full',
+      ran: true,
+      tools_run: [{ name: 'dotnet-analyzers', status: 'skipped', reason }],
+      missing_tools: ['dotnet-analyzers'],
+    };
+    const v = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps: [step], droppedBaselineEntries: 0 });
+    expect(v.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
+    const gap = v.coverageGapDetails.find((d) => d.tool.startsWith('dotnet-analyzers') || d.detail.includes('dotnet-analyzers'));
+    expect(gap?.gating).toBe(true);
+    expect(gap?.remedy).toMatch(/--build-pr/);
+    expect(gap?.remedy).toMatch(/never from a repository file/);
+  });
+
   it('a gosec step: a type error gates as `other`, a syntax error is accepted by --accept-partial-parse', () => {
     const toolsRun = [
       {

@@ -21789,6 +21789,9 @@ function remedyFor(kind, tool54, detail, cause) {
       }
       return /did not load|rule/i.test(detail) ? "Fix or remove the rule the detail names, then rerun the scan." : "Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.";
     case "skipped":
+      if (/\bnot built: .*--build-pr/.test(detail)) {
+        return "The .NET analyzers need a build, and a pull request's build runs its own MSBuild in this job. Pass `--build-pr` on the scan command line (never from a repository file) only for a pull request you trust \u2014 one from this repository, not a fork's; otherwise review its .NET changes by hand: the push run on the base branch builds and covers them once merged.";
+      }
       if (/ needs PHP \d+\.\d+ or newer and /.test(detail)) {
         return "Install PHP 8.2 or newer and put it first on PATH, then rerun the scan.";
       }
@@ -43573,6 +43576,17 @@ async function runDotnetAnalyzers(args) {
   const { ctx, tools_run, missing_tools, parser_inputs } = args;
   if (!hasRootDotnetSignal(ctx.projectPath)) return;
   const referencesScs = projectReferencesScs(ctx.projectPath);
+  const refused2 = ctx.plugin.buildRefused;
+  if (refused2 !== void 0) {
+    const reason = `not built: ${refused2}`;
+    tools_run.push({ name: "dotnet-analyzers", status: "skipped", reason });
+    missing_tools.push("dotnet-analyzers");
+    if (referencesScs) {
+      tools_run.push({ name: "security-code-scan", status: "skipped", reason });
+      missing_tools.push("security-code-scan");
+    }
+    return;
+  }
   const dotnetBin = await scannerAvailable("dotnet");
   if (!dotnetBin) {
     tools_run.push({ name: "dotnet-analyzers", status: "skipped", reason: "dotnet SDK not installed" });
@@ -101087,7 +101101,8 @@ async function runScans(opts) {
         // CI has no progress channel to report to — a no-op sink, same
         // ProgressNotifier shape server.ts wires to the real MCP transport.
         progressNotifier: { send: () => {
-        } }
+        } },
+        ...opts.buildRefused !== void 0 ? { buildRefused: opts.buildRefused } : {}
       };
       let rulesSource = { from: "tree" };
       const at = opts.rulesRef;

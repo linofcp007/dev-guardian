@@ -555,6 +555,15 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
         ? 'Fix or remove the rule the detail names, then rerun the scan.'
         : 'Fix the cause the detail names (the scanner, its configuration or its rules), then rerun the scan.';
     case 'skipped':
+      // A pull request's .NET build refused (PluginContext.buildRefused): its MSBuild is its own code.
+      if (/\bnot built: .*--build-pr/.test(detail)) {
+        return (
+          "The .NET analyzers need a build, and a pull request's build runs its own MSBuild in this job. Pass " +
+          '`--build-pr` on the scan command line (never from a repository file) only for a pull request you trust — ' +
+          "one from this repository, not a fork's; otherwise review its .NET changes by hand: the push run on the " +
+          'base branch builds and covers them once merged.'
+        );
+      }
       // Psalm's PHP older than it runs (runners/psalmRun.ts#PHP_MIN_VERSION).
       if (/ needs PHP \d+\.\d+ or newer and /.test(detail)) {
         return 'Install PHP 8.2 or newer and put it first on PATH, then rerun the scan.';

@@ -209,6 +209,17 @@ describe('runScans', () => {
     expect(inputs[1]?.['local_only']).toBeUndefined();
   });
 
+  it("hands every step the reason the tree is not built (a pull request's, without --build-pr), and only when given", async () => {
+    const seen: Array<string | undefined> = [];
+    mockTool('security_scan_full', async (_input, plugin) => {
+      seen.push(plugin.buildRefused);
+      return ok();
+    });
+    await runScans({ projectPath: makeProjectDir(), buildRefused: "the tree is a pull request's" });
+    await runScans({ projectPath: makeProjectDir() });
+    expect(seen).toEqual(["the tree is a pull request's", undefined]);
+  });
+
   // Follow-up X1: the files a step's scanner only partly parsed travel to the
   // gate — per missing name, so `--accept-partial-parse` can be matched
   // against exactly the gap they cause.
