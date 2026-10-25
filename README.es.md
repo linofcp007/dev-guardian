@@ -40,7 +40,7 @@ Después, en tu proyecto:
 /guardian-status      estado del proyecto en una sola pantalla
 ```
 
-Desde un clon local: `claude --plugin-dir /ruta/a/dev-guardian` para una sesión, o `/plugin marketplace add /ruta/a/dev-guardian` para instalarlo. Todas las skills responden también a lenguaje natural — "audita el proyecto", "¿es seguro lanzarlo?", "¿hay agujeros de seguridad?".
+Desde un clon local: `claude --plugin-dir /ruta/a/dev-guardian` para una sesión, o `/plugin marketplace add /ruta/a/dev-guardian` para instalarlo. Todas las skills responden también a lenguaje natural — "audita el proyecto", "¿es seguro lanzarlo?", "vê se há vulnerabilidades", "¿hay agujeros de seguridad?".
 
 ## Comandos slash
 
@@ -68,7 +68,7 @@ La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo,
 | `/guardian-bugfix` | Bugs de implementación, encontrados y corregidos con método |
 | `/guardian-init` | Primer uso en un proyecto: toolchain, configuraciones, pre-commit |
 | `/guardian-review` | Revisión de nivel sénior antes de un PR, merge o despliegue |
-| `/guardian-deps` | Auditoría de CVEs, plan y PRs de actualización, revisión de instalaciones, licencias, SBOM |
+| `/guardian-deps` | Auditoría de CVEs, plan y PRs de actualización, revisión de instalaciones, VEX |
 | `/guardian-quality` | Duplicación, complejidad, deuda técnica, `.guardian/budgets.yml` |
 | `/guardian-compliance` | RGPD, licencias, SBOM, evidencias de auditoría, plantillas de banner de cookies y de política de privacidad |
 | `/guardian-observability` | Logging estructurado y métricas |
@@ -86,7 +86,7 @@ La versión 2.0.0 tenía 48; el `CHANGELOG.md` indica, para cada nombre antiguo,
 | Dependencias y cadena de suministro | `deps_audit`, `deps_update_plan`, `vet_packages`, `generate_sbom`, `sbom_diff`, `export_vex`, `license_compatibility`, `scan_skill`, `audit_agent_config`, `audit_mcp_tools` |
 | Superficie de ataque | `map_attack_surface`, `scan_dast`, `validate_finding` |
 | Escaneo asistido por LLM | `llm_scan` (`step`: start, task, submit) — el modelo de tu host verifica los findings y busca lo que los escáneres no ven; el servidor no llama a ningún modelo ([docs/llm-scan.md](docs/llm-scan.md), en inglés) |
-| Historial y triaje | `diff_scans`, `set_baseline`, `suppress_finding`, `risk_score`, `prioritize_findings`, `health_status` |
+| Historial y triaje | `diff_scans`, `set_baseline`, `suppress_finding`, `risk_score`, `prioritize_findings`, `health_status`, `import_sarif` |
 | Informes | `audit_executive`, `report_export`, `compliance_check`, `compliance_evidence`, `create_github_issues` |
 | Configuración y operación | `detect_stack`, `check_toolchain`, `install_toolchain`, `init_project`, `precommit_install`, `register_custom_rules`, `observability_setup`, `perf_check` |
 | WordPress | `scan_wordpress`, `wp_audit`, `wp_vuln_check`, `wp_report` |
@@ -109,7 +109,7 @@ Los recursos (`guardian://scans/latest`, `guardian://findings/open`, `guardian:/
 | Ruby | sí | ninguna (RuboCop corre en `quality_check`) | rutas estilo Rails | Trivy (`Gemfile.lock`) | solo alcanzable / desconocido |
 | Kotlin | sí | ninguna (detekt corre en `quality_check`) | — | Trivy (Gradle solo con `gradle.lockfile`) | — |
 
-Más allá de la tabla, `scan_sast` ejecuta el ruleset del registry de Semgrep (`--config=auto`), que elige reglas para los lenguajes que encuentre — Kotlin incluido — más Bandit para Python y gosec para Go (a través del toolchain de Go, que puede descargar los módulos del proyecto) y cppcheck para C y C++ (2.13 o posterior; usa el `compile_commands.json` cuando el proyecto lo tiene), además del análisis de taint de Psalm para PHP (también en `scan_wordpress`, con las consultas de `$wpdb` de WordPress como sinks de SQL y sus funciones de escape como seguras) y de SpotBugs con FindSecBugs sobre Java y Kotlin compilados (las clases que dejó un build — `scan_sast` nunca compila el proyecto; sin ellas lo dice, y no es un hueco), y gitleaks busca secretos en cualquier proyecto. `deps_audit` añade govulncheck para Go — las funciones vulnerables que el código llama de verdad — y `quality_check` añade shellcheck para scripts de shell, detekt para Kotlin y RuboCop para Ruby (con la configuración del propio dev-guardian: el `require` de un `.rubocop.yml` ejecuta código). Un proyecto Rails puede traer el SARIF del propio Brakeman al mismo historial con `import_sarif` ([docs/sarif-import.md](docs/sarif-import.md)). Contenedores e IaC (Dockerfile, imágenes, compose, Terraform, Kubernetes, CloudFormation, Helm, workflows de GitHub Actions) quedan cubiertos por `scan_containers` y `scan_iac`; en una imagen, `scan_containers` usa además cosign para ver si está firmada y tiene procedencia SLSA firmada, y verifica quién la firmó cuando indicas el firmante. "Solo alcanzable / desconocido" significa que la herramienta nunca afirma que un código es inalcanzable en un lenguaje que resuelve el código en tiempo de ejecución (autoload, anotaciones, contenedores de DI). .NET tiene además cuatro herramientas propias y WordPress diez. Trivy lee un lock file de Gradle en cualquier proyecto, Kotlin incluido, y un build de Gradle que no pudo leer se señala como hueco de cobertura; para Kotlin no hay reglas de `bug_hunt` ni extracción de rutas.
+Más allá de la tabla, `scan_sast` ejecuta el ruleset del registry de Semgrep (`--config=auto`), que elige reglas para los lenguajes que encuentre — Kotlin incluido — más Bandit para Python y gosec para Go (a través del toolchain de Go, que puede descargar los módulos del proyecto) y cppcheck para C y C++ (2.13 o posterior; usa el `compile_commands.json` cuando el proyecto lo tiene), además del análisis de taint de Psalm para PHP (también en `scan_wordpress`, con las consultas de `$wpdb` de WordPress como sinks de SQL y sus funciones de escape como seguras) y de SpotBugs con FindSecBugs sobre Java y Kotlin compilados (las clases que dejó un build — `scan_sast` nunca compila el proyecto; sin ellas lo dice, y no es un hueco), y gitleaks busca secretos en cualquier proyecto. `deps_audit` añade govulncheck para Go — las funciones vulnerables que el código llama de verdad — y `quality_check` añade shellcheck para scripts de shell, detekt para Kotlin y RuboCop para Ruby (con la configuración del propio dev-guardian: el `require` de un `.rubocop.yml` ejecuta código). Un proyecto Rails puede traer el SARIF del propio Brakeman al mismo historial con `import_sarif` ([docs/sarif-import.md](docs/sarif-import.md)). Contenedores e IaC (Dockerfile, imágenes, compose, Terraform, Kubernetes, CloudFormation, Helm, workflows de GitHub Actions) quedan cubiertos por `scan_containers` y `scan_iac`; en una imagen, `scan_containers` usa además cosign para ver si está firmada y tiene procedencia SLSA firmada, y verifica quién la firmó cuando indicas el firmante. "Solo alcanzable / desconocido" significa que la herramienta nunca afirma que un código es inalcanzable en un lenguaje que resuelve el código en tiempo de ejecución (autoload, anotaciones, contenedores de DI). `dotnet_check` hace cuatro comprobaciones de .NET (secretos, target framework, migraciones de EF Core, setup), y las cuatro herramientas de WordPress diez modos entre ellas. Trivy lee un lock file de Gradle en cualquier proyecto, Kotlin incluido, y un build de Gradle que no pudo leer se señala como hueco de cobertura; para Kotlin no hay reglas de `bug_hunt` ni extracción de rutas.
 
 **Gradle y Python necesitan un lock file para Trivy.** Trivy solo lee las dependencias de Gradle desde `gradle.lockfile`, y las de Python desde `poetry.lock`, `uv.lock`, `Pipfile.lock` o un `requirements.txt` con versiones fijadas. Un `build.gradle` / `build.gradle.kts`, `pyproject.toml`, `setup.py` / `setup.cfg`, `Pipfile` o `requirements*.txt` que no pudo leer se informa como hueco de cobertura (`trivy:gradle`, `trivy:python`, o `trivy` omitido cuando no leyó nada más), nunca como un escaneo limpio. Vale para un manifiesto en cualquier punto del árbol — incluido un `web/package.json` junto a un lock file en la raíz; solo un miembro de un workspace queda cubierto por el lock de la raíz — y para un `go.mod` que Trivy no pudo interpretar (`trivy:go`). Para cerrarlo, genera el lock file. En Gradle, activa primero `dependencyLocking { lockAllConfigurations() }` en el build — sin ello, `gradle dependencies --write-locks` no escribe nada — y solo después ejecuta ese comando. En Python, ejecuta `poetry lock`, `uv lock` o `pipenv lock`, o fija la versión de cada dependencia en `requirements.txt`.
 
@@ -122,13 +122,13 @@ Se cargan automáticamente con el plugin, sin dependencias y en fail-open:
 - **PreToolUse** en Bash y PowerShell — bloquea comandos catastróficos (`rm -rf /`, `curl … | sh`, `iwr … | iex`, escrituras directas en disco, fork bombs), avisa en los arriesgados y revisa los paquetes antes de que `npm`, `pnpm`, `yarn`, `bun`, `pip`, `uv`, `poetry`, `composer` o `dotnet add package` los instalen: un paquete malicioso se bloquea; uno inexistente solo se bloquea en un comando de instalación simple y único.
 - **PreToolUse** en escrituras — impide que un asistente edite la propia configuración de los hooks; opcionalmente bloquea la escritura de un token de un proveedor.
 
-El `.guardian/hooks.config.json` de un proyecto solo puede hacerlos más estrictos; desactivar uno exige la configuración del usuario o una variable de entorno.
+El `.guardian/hooks.config.json` de un proyecto no desactiva un hook de protección: solo tienen efecto sus ajustes informativos (`secrets.warn`, `sessionStart`, `ignorePaths`) y los más estrictos. Desactivar uno exige la configuración del usuario o una variable de entorno.
 
 Detalles, configuración y formas de desactivarlos: [docs/hooks.md](docs/hooks.md). Los mismos detectores se ejecutan desde la terminal con `node cli/dev-guardian.mjs check --file <ruta>` o `--bash "<comando>"`.
 
 ## Otros hosts de IA
 
-Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI, Cline y Claude Desktop reciben el servidor MCP y un archivo de reglas (sin skills, comandos ni hooks). Clona una vez y después ejecuta la CLI **por su ruta absoluta** desde tu proyecto:
+Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI y Cline reciben el servidor MCP y un archivo de reglas, Claude Desktop solo el servidor MCP (sin skills, comandos ni hooks). Clona una vez y después ejecuta la CLI **por su ruta absoluta** desde tu proyecto:
 
 ```text
 git clone --depth 1 --branch v3.6.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
@@ -181,7 +181,7 @@ mcp/              el servidor MCP: src/, test/, dist/ (en el repositorio)
 configs/          packs Semgrep, plantillas de CI, configuraciones de gitleaks/Renovate/pre-commit, plantillas de cumplimiento
 host-rules/       plantillas de reglas para otros hosts
 docs/             herramientas, packs de reglas, hooks, CI, hosts, entorno (en inglés)
-scripts/          install-linux.sh, install-macos.sh, initial-scan.sh
+scripts/          install/install-linux.sh, install/install-macos.sh, scan/initial-scan.sh
 ```
 
 Contribuir: [CONTRIBUTING.md](CONTRIBUTING.md) y [CLAUDE.md](CLAUDE.md). Informar de vulnerabilidades: [SECURITY.md](SECURITY.md).

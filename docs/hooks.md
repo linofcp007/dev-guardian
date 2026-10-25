@@ -145,4 +145,4 @@ node cli/dev-guardian.mjs check --bash 'Remove-Item "C:\Users\" -Recurse' --powe
 node cli/dev-guardian.mjs check --file .env --min high --json
 ```
 
-Exit code 2 is a usage error — neither or both of `--file` and `--bash`, an unknown argument, a `--min` other than `high` or `medium` — or an unreadable `--file`. A file is read as UTF-16 when it starts with a UTF-16 byte-order mark or its bytes are NUL-interleaved (what PowerShell 5.1's `>` and `Out-File` write), as UTF-8 otherwise.
+Exit code 3 is a usage error — neither or both of `--file` and `--bash`, an unknown argument, a `--min` other than `high` or `medium` — or an unreadable `--file` (2 before 3.3.0, as for every command). A file is read as UTF-16 when it starts with a UTF-16 byte-order mark or its bytes are NUL-interleaved (what PowerShell 5.1's `>` and `Out-File` write), as UTF-8 otherwise.

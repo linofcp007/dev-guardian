@@ -73,8 +73,11 @@ A finding's identity decides what a diff calls new, resolved or unchanged.
 
 ## Severity
 
+The first source a result has decides, in this order:
+
 | Source | dev-guardian severity |
 | --- | --- |
+| a valid `properties.severity`, in any tool's log (a dev-guardian export carries one) | that value |
 | `security-severity` of 9.0 or more | critical |
 | `security-severity` of 7.0 or more | high |
 | `security-severity` of 4.0 or more | medium |
@@ -84,7 +87,6 @@ A finding's identity decides what a diff calls new, resolved or unchanged.
 | `level` `warning` | medium |
 | `level` `note` | info |
 | `level` `none` on a result with `kind: fail` | info (with no `kind`, `level: none` is not a finding) |
-| `properties.severity` valid, from a dev-guardian export | that value |
 
 ## Counts
 

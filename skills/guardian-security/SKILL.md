@@ -60,8 +60,10 @@ Never dump the raw results. For each finding:
    - 🟡 High — XSS / CSRF / SSRF, a CVE with a public PoC, a vulnerable dependency with no patch
    - 🟢 Medium — residual-risk smells, secrets in test or example files
    - ℹ️ Low / Info — best practice, likely false positives
-2. **Demote common false positives**: secrets under `examples/`, `*test*`, `fixtures/`, `*.md` → Low (still
-   mention them); CVEs in dev / test dependencies → one level down; a Semgrep rule known to be noisy in this
+2. **Demote common false positives**: a secret whose value is a placeholder or a published example (`xxx`,
+   `changeme`, AWS's `…EXAMPLE` keys), or a made-up value under `examples/`, `fixtures/` or a test directory →
+   Low (still mention it). A real-looking key in a README or a test file keeps its severity — keys get pasted
+   into docs; only `verify_live` (with the user's consent) or the user settles it. CVEs in dev / test dependencies → one level down; a Semgrep rule known to be noisy in this
    context → say so; `console.log` / `print` of data → Info.
 3. **Correlate** across scanners: Semgrep's "use of crypto X" plus Trivy's CVE in library X is one problem
    with more weight, not two.
@@ -77,7 +79,8 @@ Highest priority first:
 ## 🔴 Critical (N) — blocks deploy
 ### 1. Exposed secret: AWS access key
 - File: src/config/aws.js:14 — key AKIA… committed 3 days ago (commit abc123)
-- Now: revoke it in the AWS console; remove it from history (`git filter-repo --invert-paths --path src/config/aws.js`); move it to an environment variable; treat it as compromised
+- Now: revoke it in the AWS console and treat it as compromised; move it to an environment variable
+- Later, best-effort only: a history rewrite (`git filter-repo`) — clones, forks and CI logs keep the old objects, so it is never the fix (`/guardian-incident leak`)
 
 ## 🟡 High (N) — fix before release
 ## 🟢 Medium (N) — backlog, grouped by category

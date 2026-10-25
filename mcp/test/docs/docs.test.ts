@@ -294,10 +294,39 @@ describe('CLAUDE.md is an index', () => {
 // ------------------------------------------------------------- docs/env.md
 
 /** Where environment variables are read: runtime code, and the developer tooling. */
-const ENV_SOURCES = ['mcp/src', 'hooks', 'cli', 'mcp/test/ablate', 'mcp/test/evals', 'mcp/test/helpers', 'mcp/test/setup', 'mcp/vitest.config.ts'];
+const ENV_SOURCES = [
+  'mcp/src',
+  'hooks',
+  'cli',
+  'mcp/scripts',
+  'mcp/test/ablate',
+  'mcp/test/e2e',
+  'mcp/test/evals',
+  'mcp/test/helpers',
+  'mcp/test/integration',
+  'mcp/test/setup',
+  'mcp/test/unit',
+  'mcp/vitest.config.ts',
+];
 
-/** `GUARDIAN_*` tokens that are identifiers, not environment variables. */
-const NOT_ENV_VARS = new Set(['GUARDIAN_IGNORE_FILE']);
+/**
+ * `GUARDIAN_*` tokens that are identifiers, not environment variables: a
+ * constant's name, the `GUARDIAN_REQUIRE_` prefix written alone, another
+ * project's identifier, and the names tests set or look for in an environment
+ * they build (a hook switch nobody defined, the variable a DAST credential is
+ * read from), which dev-guardian itself never reads.
+ */
+const NOT_ENV_VARS = new Set([
+  'GUARDIAN_IGNORE_FILE',
+  'GUARDIAN_REQUIRE',
+  'GUARDIAN_GAP_KINDS',
+  'GUARDIAN_ANYTHING',
+  'GUARDIAN_SOMETHING_NEW',
+  'GUARDIAN_EXPLICIT',
+  'GUARDIAN_PROCESSRUNNER_PARENT_SECRET',
+  'GUARDIAN_DAST_AUTH',
+  'GUARDIAN_DAST_TEST_AUTH',
+]);
 
 function filesUnder(rel: string): string[] {
   const abs = resolve(REPO_ROOT, rel);

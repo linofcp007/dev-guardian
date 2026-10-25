@@ -57,7 +57,7 @@ Pergunta confirmação. Se o utilizador disser "só X e Y", faz só isso.
 
 `profile: "paranoid"` para projetos críticos. `base.yml` e `pre-commit-config.yaml` já vêm combinados para todas as linguagens suportadas — não há um ficheiro por linguagem.
 
-Não existe template de workflow CI: o dev-guardian não gera `.github/workflows/` (local-first; ver `CHANGELOG.md`, "Dropped the GitHub Actions CI workflow"). A proteção equivalente é local — os hooks de pre-commit do passo 6, `review_pr` antes do merge e `create_github_issues` para transformar findings em issues. Se o utilizador pedir um workflow CI, escreve-se de raiz; o CLI do dev-guardian tem um modo headless próprio para isso (`node "${CLAUDE_PLUGIN_ROOT}/cli/dev-guardian.mjs" scan`, com exit codes para gate).
+O `init_project` não escreve workflow CI (local-first): a proteção por omissão é local — os hooks de pre-commit do passo 6, `review_pr` antes do merge e `create_github_issues` para transformar findings em issues. Se o utilizador pedir um gate de CI, nunca se escreve de raiz: `node "${CLAUDE_PLUGIN_ROOT}/cli/dev-guardian.mjs" ci-init github --write` (ou `gitlab`, `bitbucket`) gera o pipeline com as actions fixadas por commit, o gate contra a base do PR e `persist-credentials: false` — ver `docs/ci.md`.
 
 #### Proveniência: o que fica registado
 

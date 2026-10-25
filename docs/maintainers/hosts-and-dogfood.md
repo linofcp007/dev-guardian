@@ -29,7 +29,7 @@ it validates it on a remote Anthropic service that *rejects* any plugin shipping
 with `status=failed_content` and the UI shows only "Marketplace sync failed. Check the repository
 URL", which points nowhere near the cause. The local CLI (`/plugin marketplace add`) uses `git clone`
 and does **not** apply this rule, so it passes even when Desktop refuses — it is not a valid pre-check.
-Executable entry points belong in `hooks/`, `commands/` or `mcpServers`.
+Executable entry points belong in `hooks/`, `commands/`, `cli/` or `mcpServers`.
 
 ## The rules template
 

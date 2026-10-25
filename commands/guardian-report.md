@@ -18,7 +18,7 @@ Arguments: $ARGUMENTS
 
 ## `exec` — executive report (default)
 
-1. `audit_executive { project_path: "<project>" }` runs `security_scan_full`, `quality_check`, `deps_audit` and `compliance_check` in sequence and returns severity counts, the top 10 findings and the delta against the previous executive audit.
+1. `audit_executive { project_path: "<project>" }` runs `security_scan_full`, `quality_check`, `deps_audit` and `compliance_check` side by side and returns severity counts, the top 10 findings and the delta against the previous executive audit.
 2. Write the report for people who do not read code — no rule ids, no scanner names, findings translated into outcomes:
    1. **Executive summary** — three sentences: where the project is, the biggest risk, the next move.
    2. **Security posture** — 🔴 / 🟡 / 🟢 counts and the trend against the previous audit.
