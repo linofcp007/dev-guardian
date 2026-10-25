@@ -10,7 +10,8 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { checkBanditReport } from '../../../src/runners/fileBatchScan.js';
+import { checkBanditReport, rewriteBanditReportPaths } from '../../../src/runners/fileBatchScan.js';
+import { windowsPathKey } from '../../../src/runners/semgrepLongDirs.js';
 
 const SYNTAX = 'syntax error while parsing AST from file';
 
@@ -63,5 +64,26 @@ describe('checkBanditReport', () => {
     const r = judge(report(), 0, 'completed');
     expect(r.ok).toBe(true);
     expect(r.partial ?? []).toEqual([]);
+  });
+});
+
+describe('rewriteBanditReportPaths', () => {
+  it("the results' and errors' filename and the metrics keys rewritten, _totals kept; one the map does not know kept", () => {
+    const L = '\\\\?\\C:\\p\\deep\\a.py';
+    const raw = {
+      results: [{ filename: L, test_id: 'B301' }, { filename: 'short.py', test_id: 'B301' }],
+      errors: [{ filename: L, reason: SYNTAX }, { reason: 'no file' }],
+      metrics: { [L]: { loc: 3 }, 'short.py': { loc: 1 }, _totals: { loc: 4 } },
+    };
+    const out = rewriteBanditReportPaths(raw, (p) => (windowsPathKey(p) === 'c:\\p\\deep\\a.py' ? 'deep/a.py' : null)) as typeof raw;
+    expect(out.results.map((r) => r.filename)).toEqual(['deep/a.py', 'short.py']);
+    expect(out.errors).toEqual([{ filename: 'deep/a.py', reason: SYNTAX }, { reason: 'no file' }]);
+    expect(Object.keys(out.metrics)).toEqual(['deep/a.py', 'short.py', '_totals']);
+  });
+
+  it('windowsPathKey: the extended-length prefix off (a share back to \\\\host), one separator, lower case', () => {
+    expect(windowsPathKey('\\\\?\\C:\\P\\A.py')).toBe('c:\\p\\a.py');
+    expect(windowsPathKey('C:/P/A.py')).toBe('c:\\p\\a.py');
+    expect(windowsPathKey('\\\\?\\UNC\\host\\share\\a.py')).toBe(windowsPathKey('\\\\host\\share\\a.py'));
   });
 });

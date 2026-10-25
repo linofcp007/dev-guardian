@@ -12,7 +12,7 @@ ranks by real risk — rather than dumping raw tool output. Respond in the user'
 
 | Kind | Finds | MCP tool |
 | --- | --- | --- |
-| SAST | application code flaws | `scan_sast` (Semgrep; Bandit for Python; gosec for Go; cppcheck for C/C++; Psalm taint for PHP; the SDK analyzers for .NET) |
+| SAST | application code flaws | `scan_sast` (Semgrep; Bandit for Python; gosec for Go; cppcheck for C/C++; Psalm taint for PHP; SpotBugs + FindSecBugs for compiled Java/Kotlin; the SDK analyzers for .NET) |
 | Secrets | keys, tokens, passwords in the code and the git history | `scan_secrets` (gitleaks) |
 | Dependencies | CVEs in libraries | `scan_deps` (Trivy); `deps_audit` adds npm audit / pip-audit / govulncheck |
 | Containers / IaC | Dockerfile, image, compose, Terraform, Kubernetes, Helm | `scan_containers` (Trivy + hadolint; cosign for the image signature), `scan_iac` (Trivy) |

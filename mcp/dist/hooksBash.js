@@ -4363,6 +4363,8 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
   const pathBins = /* @__PURE__ */ new Map();
   const verified = /* @__PURE__ */ new Map();
   let listAt = -2;
+  let errexit = false;
+  let errexitHolds = true;
   let cwd = "";
   const extracted = /* @__PURE__ */ new Map();
   for (let k = 0; k < statements.length; k += 1) {
@@ -4452,18 +4454,63 @@ function downloadsThenRuns(text, statements, bareRunsCwd) {
       const bin = lastSegment(key);
       if (PATH_DIRS.test(dirOf(key)) && bin !== "") pathBins.set(bin, key);
     }
-    const check = integrityCheckOf(statement, heads, cwd);
+    const lead = /^\s*(\S+)/.exec(statement.masked)?.[1] ?? "";
+    if (COMPOUND_WORDS.has(lead) || statement.end === "(" || statement.end === ")" || statement.end === "`") errexitHolds = false;
+    const setting = statement.end !== "&" ? errexitSetting(statement) : void 0;
+    if (setting !== void 0) errexit = setting;
+    const check = statements[k - 1]?.end === "||" ? void 0 : integrityCheckOf(statement, heads, cwd);
     if (check !== void 0) {
       for (const name of check.names) if (downloads2.has(name)) verified.set(name, k);
       for (const name of check.implied) verified.set(name, k);
       if (check.lists.some((list) => downloads2.has(list))) listAt = k;
     }
-    if (statement.end !== "&&") {
+    const carried = statement.end === "&&" || errexit && errexitHolds && (statement.end === ";" || statement.end === "\n");
+    if (!carried) {
       verified.clear();
       listAt = -2;
     }
   }
   return null;
+}
+var COMPOUND_WORDS = /* @__PURE__ */ new Set([
+  "if",
+  "then",
+  "else",
+  "elif",
+  "fi",
+  "for",
+  "while",
+  "until",
+  "do",
+  "done",
+  "case",
+  "esac",
+  "select",
+  "function",
+  "{",
+  "}",
+  "!",
+  "[[",
+  "]]",
+  "coproc"
+]);
+function errexitSetting(statement) {
+  if (statement.commands.length !== 1) return void 0;
+  const words = statement.commands[0] ?? [];
+  if (words[0]?.value !== "set") return void 0;
+  let out;
+  for (let i = 1; i < words.length; i += 1) {
+    const m = /^([-+])([A-Za-z]+)$/.exec(words[i]?.value ?? "");
+    if (m === null) break;
+    const on = m[1] === "-";
+    const letters = m[2] ?? "";
+    if (letters.includes("e")) out = on;
+    if (letters.endsWith("o")) {
+      if (words[i + 1]?.value === "errexit") out = on;
+      i += 1;
+    }
+  }
+  return out;
 }
 function cdpathValue(word) {
   const m = /^CDPATH=(.*)$/.exec(word);

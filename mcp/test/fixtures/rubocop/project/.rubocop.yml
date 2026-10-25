@@ -1,0 +1,7 @@
+# Loaded by RuboCop when it reads the project's configuration — and it would
+# RUN evil.rb (measured: it wrote its marker). quality_check never reads it:
+# test/e2e/rubocopQuality.test.ts asserts the marker is never written.
+require:
+  - ./evil.rb
+plugins:
+  - ./evil.rb

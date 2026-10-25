@@ -49,6 +49,7 @@ import {
   semgrepExcludeForDir,
   semgrepIgnores,
   windowsBase,
+  windowsPathKey,
 } from './semgrepLongDirs.js';
 
 /** The command itself, for callers that describe a Semgrep spawn as data (`scanFileBatches`, `batchArgs`). */
@@ -297,7 +298,7 @@ async function readLongFiles(a: {
   if (wanted.length === 0) return 0;
 
   const base = windowsBase(a.target);
-  const norm = (p: string): string => p.replace(/^\\\\\?\\/, '').split('/').join('\\').toLowerCase();
+  const norm = windowsPathKey;
   const given = new Map(wanted.map((rel) => [norm(win32.join(base, ...rel.split('/'))), win32.join(a.target, ...rel.split('/'))]));
   const targets = wanted.map((rel) => extendedLengthPath(win32.join(base, ...rel.split('/'))));
   // The run's own arguments, without its target and its report.

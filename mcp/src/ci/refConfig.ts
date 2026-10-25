@@ -178,6 +178,7 @@ export const GATE_CONFIG: Readonly<Record<RepoConfigRunner, 'ref' | 'tree' | 'no
   staticcheck: 'not_in_gate',
   eslint: 'not_in_gate',
   shellcheck: 'not_in_gate',
+  detekt: 'not_in_gate',
 };
 
 /** What `--rules-ref` copied, for the gate's output. */

@@ -44,8 +44,19 @@ function sources(dir: string): string[] {
   });
 }
 
+/** Each file parsed once for both tests below: parsing all of src/ took over 10 s under coverage (Node 22.13). */
+const parsed = new Map<string, Array<{ text: string; line: number }>>();
+
 /** Every string and template literal of a file, with its line — comments are not literals. */
 function literals(file: string): Array<{ text: string; line: number }> {
+  const known = parsed.get(file);
+  if (known !== undefined) return known;
+  const out = parseLiterals(file);
+  parsed.set(file, out);
+  return out;
+}
+
+function parseLiterals(file: string): Array<{ text: string; line: number }> {
   const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
   const out: Array<{ text: string; line: number }> = [];
   const at = (node: ts.Node): number => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
@@ -63,7 +74,8 @@ function literals(file: string): Array<{ text: string; line: number }> {
   return out;
 }
 
-describe('response strings in src/', () => {
+// The TypeScript parser over every file of src/: seconds here, more under coverage instrumentation.
+describe('response strings in src/', { timeout: 60_000 }, () => {
   it('listedCall names the fold call for a hidden alias, the name itself otherwise', () => {
     expect(listedCall('scan_dotnet_secrets')).toBe('dotnet_check { check: "secrets" }');
     expect(listedCall('wp_rest_audit')).toBe('wp_vuln_check { mode: "rest" }');

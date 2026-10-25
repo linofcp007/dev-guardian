@@ -3690,7 +3690,10 @@ const NOT_FROM_ARCHIVE = new Set([
  * counted when a check OF THAT FILE — naming it, its `.sha256` / `.asc` /
  * `.sig` / `.minisig`, or a checksum list downloaded in the command — lies
  * between its latest download and the run, and every statement from the check
- * to the run is joined by `&&`: the run is then conditional on the check. A run
+ * to the run is joined by `&&` — or, after a plain `set -e` with no compound
+ * command or subshell since, by `;` or a new line: the run is then conditional
+ * on the check. A check right after `||` never counts (`a || check && run`
+ * skips it when `a` succeeds). A run
  * in a later, separate command is not seen at all: that is download, inspect,
  * run. Returns what saved the file that ran, which names the shape in the deny.
  */
@@ -3710,6 +3713,14 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
    */
   const verified = new Map<string, number>();
   let listAt = -2;
+  /**
+   * `set -e` in force ({@link errexitSetting}): a check's failure ends the
+   * script, so a `;` or a new line after it is as conditional as `&&` — while
+   * `errexitHolds`, false for good after a compound command, a subshell or a
+   * command substitution ({@link COMPOUND_WORDS}).
+   */
+  let errexit = false;
+  let errexitHolds = true;
   let cwd = '';
   /**
    * PATH directories a download was extracted into (round 2), each with its
@@ -3821,20 +3832,69 @@ function downloadsThenRuns(text: string, statements: readonly ShellStatement[], 
       const bin = lastSegment(key);
       if (PATH_DIRS.test(dirOf(key)) && bin !== '') pathBins.set(bin, key);
     }
+    // A compound command, a subshell or a command substitution: a check inside
+    // one may be skipped, or its failure not end the script — `set -e` carries
+    // nothing from here on.
+    // Read on the statement's own text: `splitShell` drops the reserved word
+    // that opens a body (`if`, `then`, `!`, `{`), so its commands do not hold it.
+    const lead = /^\s*(\S+)/.exec(statement.masked)?.[1] ?? '';
+    if (COMPOUND_WORDS.has(lead) || statement.end === '(' || statement.end === ')' || statement.end === '`') errexitHolds = false;
+    const setting = statement.end !== '&' ? errexitSetting(statement) : undefined;
+    if (setting !== undefined) errexit = setting;
     // A pipeline's status is its last member's: only a check there decides —
-    // and only for the files it names (review round 3, item 3).
-    const check = integrityCheckOf(statement, heads, cwd);
+    // and only for the files it names (review round 3, item 3). Never one
+    // after `||`: in `a || check && run` the check is skipped whenever `a`
+    // succeeds, and the run goes ahead.
+    const check = statements[k - 1]?.end === '||' ? undefined : integrityCheckOf(statement, heads, cwd);
     if (check !== undefined) {
       for (const name of check.names) if (downloads.has(name)) verified.set(name, k);
       for (const name of check.implied) verified.set(name, k);
       if (check.lists.some((list) => downloads.has(list))) listAt = k;
     }
-    if (statement.end !== '&&') {
+    const carried = statement.end === '&&' || (errexit && errexitHolds && (statement.end === ';' || statement.end === '\n'));
+    if (!carried) {
       verified.clear();
       listAt = -2;
     }
   }
   return null;
+}
+
+/**
+ * Words that lead a compound command or a negation — `if`, `then`, `while`,
+ * `do`, `{`, `!`, … A statement they lead may never run, or run only on a
+ * condition, and errexit does not apply to a condition or to `!`.
+ */
+const COMPOUND_WORDS = new Set([
+  'if', 'then', 'else', 'elif', 'fi', 'for', 'while', 'until', 'do', 'done', 'case', 'esac', 'select', 'function', '{', '}',
+  '!', '[[', ']]', 'coproc',
+]);
+
+/**
+ * What a `set` statement does to errexit: `true` for `set -e` (any flag
+ * cluster holding `e`: `-eu`, `-euo pipefail`, `-xe`) and `set -o errexit`,
+ * `false` for `+e` / `+o errexit`, `undefined` when it does neither or the
+ * statement is no plain `set` (a pipeline member runs in a subshell). The
+ * options end at the first word that is not one — `set -- -e` sets a
+ * positional parameter.
+ */
+function errexitSetting(statement: ShellStatement): boolean | undefined {
+  if (statement.commands.length !== 1) return undefined;
+  const words = statement.commands[0] ?? [];
+  if (words[0]?.value !== 'set') return undefined;
+  let out: boolean | undefined;
+  for (let i = 1; i < words.length; i += 1) {
+    const m = /^([-+])([A-Za-z]+)$/.exec(words[i]?.value ?? '');
+    if (m === null) break;
+    const on = m[1] === '-';
+    const letters = m[2] ?? '';
+    if (letters.includes('e')) out = on;
+    if (letters.endsWith('o')) {
+      if (words[i + 1]?.value === 'errexit') out = on;
+      i += 1;
+    }
+  }
+  return out;
 }
 
 /** A POSIX shell's `CDPATH=a:b`: the directories a relative `cd` also searches. */

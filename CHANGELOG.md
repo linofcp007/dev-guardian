@@ -8,6 +8,86 @@ version bump.
 
 ## [Unreleased]
 
+## [3.6.0] - 2026-10-25
+
+`scan_sast` runs its scanners side by side and adds SpotBugs with FindSecBugs over compiled Java and Kotlin;
+`quality_check` adds detekt for Kotlin and RuboCop for Ruby. Bandit now reads Python files at paths too long for
+Windows, the GitLab and Bitbucket templates move to Debian trixie with cppcheck, and `install_toolchain`'s Windows
+installers work from a server started in PowerShell 7.
+
+### Upgrading from 3.5.0
+
+- **A Java or Kotlin project that was built needs SpotBugs and Java.** `scan_sast` (and so `security_scan_full`,
+  `audit_executive` and the CLI `scan`) runs SpotBugs whenever a module has `target/classes` or
+  `build/classes/<java|kotlin|scala|groovy>/main`; without SpotBugs the run lists `spotbugs` missing, without Java
+  `java`, and the CLI `scan` exits 2 until both are there. A project never built is untouched: SpotBugs is skipped,
+  said so, and no gap — `scan_sast` never builds a project. `install_toolchain { tools: ["spotbugs"] }` installs
+  SpotBugs 4.10.5 with FindSecBugs 1.14.0, both sha256-checked; Java is never installed for you. The generated CI
+  pipelines build nothing, so they are unaffected.
+- **A Kotlin or Ruby project's `quality_check` needs detekt or RuboCop.** Without them it lists `detekt` / `rubocop`
+  (or `java` / `ruby`) missing and its coverage is partial. `install_toolchain { tools: ["detekt"] }` installs
+  detekt 1.23.8's jar, `{ tools: ["rubocop"] }` RuboCop 1.92.1 as a gem; on a Ruby older than 4.0, RuboCop's prism
+  is compiled (Debian and Ubuntu: `ruby-dev build-essential`).
+
+### Added
+
+- `scan_sast` runs **SpotBugs 4.10.5 with FindSecBugs 1.14.0** over each module's compiled classes, keeping its
+  SECURITY and MALICIOUS_CODE categories (command, SQL, LDAP and XPath injection, XXE, unsafe deserialisation, weak
+  crypto, …), each finding with its CWE, injections `high`. A class it could not analyse (exit 0 all the same) is
+  named, partial; classes older than a source and dependencies not on SpotBugs' classpath are noted. The OWASP coverage
+  tables count its 196 security patterns (A05: 55).
+- `quality_check` runs **detekt 1.23.8** over Kotlin — dev-guardian's configuration first (`MagicNumber` and
+  `MaxLineLength` off: 72% of Okio's findings were `MagicNumber`; validation off, since one unknown property in a
+  project's file made detekt exit with no report), then the project's `config/detekt/detekt.yml` or `detekt.yml`,
+  named. detekt walks the project itself, with no file name on its command line — a comma, a space or `日本.kt` there
+  failed the whole run — and its findings are kept to the files the scan reads.
+- `quality_check` runs **RuboCop 1.92.1** over Ruby — its Lint, Security, Metrics and Naming departments, never with
+  the project's `.rubocop.yml`, nor its `.rubocop` arguments file, which RuboCop reads from its working directory
+  whatever `--config` says: measured, a `require` in either ran the file it named. A file with a `*` in its path,
+  which RuboCop would read as a pattern, is named, never handed over. It parses for the Ruby the project
+  declares (`.ruby-version`, `.tool-versions`, `Gemfile.lock`, a `ruby '…'` line), else the Ruby that runs it — with
+  none set it parsed as 2.7 and valid Ruby 3 was a syntax error. RSpec's, Rake's and Rails' DSL blocks may be long.
+  It runs as `ruby <its script>`, never through its Windows `.bat` wrapper, and without `RUBYOPT`,
+  `RUBYGEMS_GEMDEPS` or `BUNDLE_GEMFILE`, which load code first.
+- `install_toolchain` installs detekt, SpotBugs (with FindSecBugs) and RuboCop; `check_toolchain` lists 33 tools,
+  with Java and Ruby as manual steps.
+- `npm run pins` (maintainers): every pinned scanner and action against the newest release tagged upstream, the
+  sha256 GitHub records for a newer asset as a starting point. A PyPI release with no tag upstream is named, never
+  taken (Semgrep 1.182.1 today).
+
+### Changed
+
+- **`scan_sast` runs its scanners side by side** — Semgrep, Bandit, gosec, cppcheck, Psalm, SpotBugs and the .NET
+  analyzers — at most `GUARDIAN_MAX_PARALLEL_SCANNERS` (default 3) at once, their results merged in the same order:
+  a five-language project took ~6 s instead of ~10 s, with the same 95 findings. The .NET build (`obj/` and `bin/` in
+  the tree Semgrep walks) and, with `auto_fix`, every scanner wait for Semgrep.
+- The GitLab and Bitbucket templates run on `node:22-trixie` (Debian 13): cppcheck 2.17.1 is installed when the
+  project has C or C++ — bookworm's 2.10 is below what `scan_sast` runs, so a C/C++ pipeline always exited 2 — and
+  PHP is 8.4.
+- `scan_sast`'s description lists its scanners by language, with room under its budget.
+- The Windows long-path behaviour was measured again on Semgrep 1.182.0, the version the templates pin: the same.
+
+### Fixed
+
+- **Bandit reads a Python file at a path too long for Windows.** Its walk dropped one at 260+ characters with no
+  error (Bandit 1.9.4); such files are read in a second run as extended-length paths (`\\?\C:\…`), and so are a
+  scope's and `review_pr`'s. A file still not read stays a named gap.
+- **`install_toolchain` on Windows, from a server started in PowerShell 7**: the inherited `PSModulePath` made
+  Windows PowerShell load PowerShell 7's modules, and every pinned installer (Trivy, gitleaks, Syft, gosec,
+  shellcheck, Psalm, …) stopped at `Get-FileHash`, "not recognized". Install steps run without it.
+- **The download-then-run guard and `set -e`**: a script that downloads a file, checks its sha256 and runs it under
+  `set -e` was blocked — the check's failure ends the script, so its `;` is as conditional as `&&`. It is allowed now,
+  for a plain check at the top level (never inside `if`, `while`, `!`, a subshell, after `set +e`, or in the
+  background). And a check right after `||` no longer counts: `a || check && run` skips the check whenever `a`
+  succeeds, and the guard let the file run unchecked.
+- **Package vetting read a redirection as a package**: `pip install x 2>&1` warned that a package `2` was not on
+  PyPI (PEP 508 reads `2>&1` as `2` at `>&1`), and `2> err.log` named two.
+
+### Measured, not adopted
+
+- **Psalm's cache**: in taint mode it reanalyses everything — WooCommerce (3 365 files, 8 threads) took 77 s with no
+  cache, 73 s cold and 72 s warm, the same findings each time, with 142 MB of cache. Psalm keeps `--no-cache`.
+
 ## [3.5.0] - 2026-10-24
 
 gosec joins `scan_sast` and `review_pr` for Go, cppcheck joins them for C and C++, Psalm's taint analysis joins

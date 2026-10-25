@@ -278,6 +278,35 @@ function commandName(word) {
   return basename(word).toLowerCase().replace(/\.exe$/, "");
 }
 
+// src/hooks/shell/paths.ts
+var CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
+var CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
+function cdOperand(args) {
+  const named = psParam(args, ["path", "literalpath"]);
+  if (named !== void 0) return named;
+  const operands = [];
+  let ended = false;
+  for (const a of args) {
+    if (!ended && a === "--") ended = true;
+    else if (!ended && a !== "-" && (/^-[LPe@]+$/.test(a) || /^\/d$/i.test(a))) continue;
+    else operands.push(a);
+  }
+  return operands.length > 1 ? null : operands[0];
+}
+
+// src/hooks/shell/effects.ts
+function withoutRedirectWords(words) {
+  const out = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === void 0) continue;
+    const r = parseRedirect(word);
+    if (r === null) out.push(word);
+    else if (r.inline === "") i += 1;
+  }
+  return out;
+}
+
 // src/hooks/shell/split.ts
 var MASK = " ";
 function scanQuote(source, start) {
@@ -623,22 +652,6 @@ function splitShell(command) {
   }
   endStatement();
   return { maskedCommand, interpolatedCommand: withInterpolations(maskedCommand, interpolations), statements };
-}
-
-// src/hooks/shell/paths.ts
-var CD_COMMANDS = /* @__PURE__ */ new Set(["cd", "chdir", "pushd", "set-location", "sl", "push-location"]);
-var CD_RETURNS = /* @__PURE__ */ new Set(["popd", "pop-location"]);
-function cdOperand(args) {
-  const named = psParam(args, ["path", "literalpath"]);
-  if (named !== void 0) return named;
-  const operands = [];
-  let ended = false;
-  for (const a of args) {
-    if (!ended && a === "--") ended = true;
-    else if (!ended && a !== "-" && (/^-[LPe@]+$/.test(a) || /^\/d$/i.test(a))) continue;
-    else operands.push(a);
-  }
-  return operands.length > 1 ? null : operands[0];
 }
 
 // src/hooks/shell/workdir.ts
@@ -1993,7 +2006,7 @@ function parseReading(text, forced, cdpath) {
   let dirChanged = false;
   split.statements.forEach((statement, s) => {
     statement.commands.forEach((words, w) => {
-      const d = detect(words);
+      const d = detect(withoutRedirectWords(words));
       if (d !== null) {
         const context = [];
         if (envChange) context.push("inline environment assignment in the command (it can redirect the registry)");

@@ -40,6 +40,27 @@ export function userBinDir(home?: string): string | null {
   return h.trim() === '' ? null : join(h, '.local', 'bin');
 }
 
+/**
+ * Where SpotBugs is (`runners/spotbugsRun.ts`): `SPOTBUGS_HOME` — SpotBugs'
+ * own variable, its scripts read it — when it holds `lib/spotbugs.jar`, else
+ * the directory `install_toolchain` installs it to,
+ * `<home>/.local/lib/dev-guardian/spotbugs` (a directory of jars, not one
+ * binary, so not the tools directory itself). Null with no home.
+ */
+export function spotbugsHome(env: NodeJS.ProcessEnv = process.env, home?: string): string | null {
+  const own = env['SPOTBUGS_HOME'];
+  if (own !== undefined && own.trim() !== '' && existsSync(join(own, 'lib', 'spotbugs.jar'))) return own;
+  const bin = userBinDir(home);
+  return bin === null ? null : join(bin, '..', 'lib', 'dev-guardian', 'spotbugs');
+}
+
+/** `<spotbugsHome>/lib/spotbugs.jar` when it is there; else null. */
+export function spotbugsJar(env: NodeJS.ProcessEnv = process.env, home?: string): string | null {
+  const dir = spotbugsHome(env, home);
+  const jar = dir === null ? null : resolve(dir, 'lib', 'spotbugs.jar');
+  return jar !== null && existsSync(jar) ? jar : null;
+}
+
 function normalised(entry: string, win: boolean): string {
   const unquoted = entry.trim().replace(/^"(.*)"$/, '$1');
   const out = resolve(unquoted).replace(/[\\/]+$/, '');

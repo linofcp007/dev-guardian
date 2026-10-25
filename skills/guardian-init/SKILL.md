@@ -38,7 +38,7 @@ Pergunta confirmação. Se o utilizador disser "só X e Y", faz só isso.
 
 ### 4. Instalar os scanners
 
-`install_toolchain { dry_run: true }` mostra os comandos; depois, com aprovação, `install_toolchain {}`. Sem `tools`, instala o conjunto por omissão (semgrep, trivy, gitleaks, syft, pre-commit; no Linux e no macOS o script junta ruff / bandit / jscpd). Os do stack pedem-se pelo nome: `tools: ["gosec", "govulncheck"]` em Go (precisam do Go, que nunca é instalado), `["cppcheck"]` em C/C++, `["psalm"]` em PHP (precisa do PHP 8.2+, que também nunca é instalado), `["shellcheck"]` com scripts de shell; `tools: ["hadolint", "lighthouse"]` limita a esses.
+`install_toolchain { dry_run: true }` mostra os comandos; depois, com aprovação, `install_toolchain {}`. Sem `tools`, instala o conjunto por omissão (semgrep, trivy, gitleaks, syft, pre-commit; no Linux e no macOS o script junta ruff / bandit / jscpd). Os do stack pedem-se pelo nome: `tools: ["gosec", "govulncheck"]` em Go (precisam do Go, que nunca é instalado), `["cppcheck"]` em C/C++, `["psalm"]` em PHP (precisa do PHP 8.2+, que também nunca é instalado), `["shellcheck"]` com scripts de shell, `["detekt"]` em Kotlin e `["spotbugs"]` em Java/Kotlin compilado (precisam do Java 11+), `["rubocop"]` em Ruby (precisa do Ruby; nenhum dos dois é instalado); `tools: ["hadolint", "lighthouse"]` limita a esses.
 
 - Linux e macOS: delega em `scripts/install/install-linux.sh` / `install-macos.sh` (detetam `apt`, `dnf`, `pacman`, `brew`).
 - Windows: winget, scoop ou choco (ou WSL) — funciona nativamente, não é preciso mudar de sistema.
@@ -126,8 +126,8 @@ Próximos passos sugeridos:
 | C / C++ | cppcheck 2.13+ (`scan_sast`, `review_pr`; usa o `compile_commands.json` quando existe), Semgrep (registry) | — |
 | Shell | shellcheck (`quality_check`) | — |
 | Rust | Semgrep (uma regra, `bugfix-rs.yml`), Trivy em `Cargo.lock` | `cargo clippy`, `cargo audit`, `cargo deny` |
-| Ruby | Semgrep (registry), Trivy em `Gemfile.lock` | Brakeman (corrido à parte; o SARIF entra com `import_sarif`), RuboCop |
-| Java / Kotlin | Semgrep, `bugfix-java.yml`, Trivy em `pom.xml` / `build.gradle` | SpotBugs + FindSecBugs |
+| Ruby | Semgrep (registry), RuboCop (`quality_check`, nunca com o `.rubocop.yml` do projeto), Trivy em `Gemfile.lock` | Brakeman (corrido à parte; o SARIF entra com `import_sarif`) |
+| Java / Kotlin | Semgrep, `bugfix-java.yml`, SpotBugs + FindSecBugs (`scan_sast`, sobre as classes de um build), detekt (`quality_check`, Kotlin), Trivy em `pom.xml` / `build.gradle` | — |
 | Android / iOS | Semgrep (`mobile.yml`: manifesto Android, network security config, Info.plist) | MobSF, para o APK / IPA compilado |
 | C# / .NET | Semgrep, `bugfix-cs.yml`, analyzers do SDK, `dotnet list package --vulnerable`, `/guardian-dotnet` | — |
 | Docker / IaC | Trivy (`scan_containers`, `scan_iac`), hadolint, cosign (assinatura da imagem), checks de compose | Checkov, se quiserem uma segunda opinião |

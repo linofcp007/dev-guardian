@@ -103,8 +103,9 @@ function bookkeepingNames(): string[] {
     ...collect(/judgeTrivyConfig\(\{\s*name:\s*'([^']+)'/g),
     // gitleaks' passes.
     ...collect(/export const GITLEAKS_[A-Z_]+\s*=\s*'([^']+)'/g),
-    // gosec's, govulncheck's, shellcheck's, cppcheck's and Psalm's passes, and the Go and PHP runtimes' gaps.
-    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK|PSALM|PHP_RUNTIME)\s*=\s*'([^']+)'/g),
+    // gosec's, govulncheck's, shellcheck's, cppcheck's, Psalm's, detekt's, RuboCop's and SpotBugs' passes, and the
+    // Go, PHP, Java and Ruby runtimes' gaps.
+    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK|PSALM|PHP_RUNTIME|DETEKT|RUBOCOP|SPOTBUGS|JAVA_RUNTIME|RUBY_RUNTIME)\s*=\s*'([^']+)'/g),
     // judgeTrivyFs' walk gap: `export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk'`.
     ...collect(/export const TRIVY_[A-Z_]+_GAP\s*=\s*'([^']+)'/g),
     // audit_executive: one entry per sub-tool.
@@ -158,12 +159,18 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/gitleaksScan.ts:name': 'a parameter only ever given a GITLEAKS_* constant',
   'runners/gitleaksScan.ts:entry.name': "noteSubmodules: the name of one of this scan's own passes (GITLEAKS_*)",
   'runners/fileBatchScan.ts:opts.name': "semgrepOnFiles' and banditOnFiles' `name: '…'`",
+  'runners/scannerPasses.ts:pass.name':
+    "a pass that threw: its ScannerPass `name: '…'` in tools/scanSast.ts — 'semgrep', 'bandit', 'gosec', 'cppcheck', PSALM, 'dotnet-analyzers', the names the passes write themselves",
+  'runners/scannerPasses.ts:name': "the merge's copy of each pass's own missing_tools names",
   'runners/gosecRun.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
   'runners/govulncheckRun.ts:GOVULNCHECK': 'the GOVULNCHECK constant',
   'runners/cppcheckRun.ts:CPPCHECK': 'the CPPCHECK constant',
   'runners/psalmRun.ts:PSALM': 'the PSALM / PHP_RUNTIME constants',
   'tools/scanWordpress.ts:PSALM': 'the PSALM constant',
   'runners/shellcheckRun.ts:SHELLCHECK': 'the SHELLCHECK constant',
+  'runners/detektRun.ts:DETEKT': 'the DETEKT / JAVA_RUNTIME constants',
+  'runners/rubocopRun.ts:RUBOCOP': 'the RUBOCOP / RUBY_RUNTIME constants',
+  'runners/spotbugsRun.ts:SPOTBUGS': 'the SPOTBUGS / JAVA_RUNTIME constants',
   'tools/qualityCheck.ts:SHELLCHECK': 'the SHELLCHECK constant',
   'tools/depsAudit.ts:name': "runners/govulncheckRun.ts#govulncheckModules' `missing`: GOVULNCHECK or 'go'",
   'tools/reviewPr.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
@@ -297,7 +304,7 @@ describe('runNames: the pairs that do not share a name', () => {
     ['hadolint', ['hadolint']],
     ['docker-compose', ['docker-compose']],
     ['budgets', ['budgets']],
-    ['scan_sast', ['semgrep', 'bandit', 'gosec', 'cppcheck', 'psalm', 'security-code-scan', 'dotnet-analyzers']],
+    ['scan_sast', ['semgrep', 'bandit', 'gosec', 'cppcheck', 'psalm', 'spotbugs', 'security-code-scan', 'dotnet-analyzers']],
     ['php', ['psalm']],
     ['cppcheck', ['cppcheck']],
     ['go', ['gosec', 'govulncheck']],

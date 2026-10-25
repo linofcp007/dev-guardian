@@ -39,11 +39,21 @@ export interface VersionProbe {
    */
   env?: Readonly<Record<string, string>>;
   /**
-   * `command` is a PHAR (`psalm.phar`): a file found by its exact name on the
-   * PATH (`platform/binaryPath.ts#findFileOnPath`), run by `php` — Windows
-   * runs no `.phar` itself.
+   * `command` is a file run by an interpreter, found by its exact name on the
+   * PATH (`platform/binaryPath.ts#findFileOnPath`) — or where `locate` says:
+   * a PHAR (`psalm.phar`) by `php`, a jar (`detekt-cli.jar`, SpotBugs'
+   * `spotbugs.jar`) by `java -jar`, a gem's script (`rubocop`) by `ruby`.
+   * Windows runs none of them itself, and a gem's `.bat` wrapper would go
+   * through `cmd.exe`.
    */
-  phar?: boolean;
+  interpreter?: 'php' | 'java' | 'ruby';
+  /** Where the file is when it is not found on the PATH by name (SpotBugs' install directory); null when it is not there. */
+  locate?: () => string | null;
+}
+
+/** How an interpreter runs a file: `java -jar <jar>`, `php <phar>`, `ruby <script>`. */
+export function interpreterArgs(interpreter: NonNullable<VersionProbe['interpreter']>, file: string): string[] {
+  return interpreter === 'java' ? ['-jar', file] : [file];
 }
 
 export interface ProbeResult {
@@ -96,13 +106,14 @@ export async function runVersionProbe(probe: VersionProbe, cwd: string): Promise
   // check_toolchain sees what the scans will: the per-user tools directory
   // the pinned installers write to is on the PATH (`platform/userBin.ts`).
   ensureUserBinOnPath();
-  if (probe.phar === true) {
-    const phar = findFileOnPath(probe.command);
-    if (phar === null) return { installed: false, version: '' };
-    if ((await resolveBinary('php')) === null) {
-      return { installed: false, version: '', error: `found at ${phar}, but php is not on PATH to run it` };
+  if (probe.interpreter !== undefined) {
+    const { interpreter, locate, ...plain } = probe;
+    const file = locate !== undefined ? locate() : findFileOnPath(probe.command);
+    if (file === null) return { installed: false, version: '' };
+    if ((await resolveBinary(interpreter)) === null) {
+      return { installed: false, version: '', error: `found at ${file}, but ${interpreter} is not on PATH to run it` };
     }
-    return runVersionProbe({ ...probe, command: 'php', args: [phar, ...probe.args], phar: false }, cwd);
+    return runVersionProbe({ ...plain, command: interpreter, args: [...interpreterArgs(interpreter, file), ...probe.args] }, cwd);
   }
   const r = await runProcess({
     command: probe.command,

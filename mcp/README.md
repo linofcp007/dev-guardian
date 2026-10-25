@@ -101,7 +101,7 @@ Migrations are numbered, additive and idempotent; a database written by 2.0.0 ke
 - **Cache.** A scan-tool call within 5 minutes of an identical one — same project, inputs, tree hash, rule packs and plugin version — is served from the database, but only when the earlier run had full coverage.
 - **Filters are views.** `severity_min`, `categories` and `packages` shape the response; every finding is still recorded, and the response says what it held back.
 - **Bounded output.** Each spawned process is capped at 5 MB of stdout (`output_too_large` beyond that, with the report paths); a process that times out or is cancelled is killed with its whole tree.
-- **Concurrency.** At most `GUARDIAN_MAX_CONCURRENT_SCANS` (default 2) scanner processes at once.
+- **Concurrency.** At most `GUARDIAN_MAX_CONCURRENT_SCANS` (default 2) scans at once, and within one `scan_sast` at most `GUARDIAN_MAX_PARALLEL_SCANNERS` (default 3) of its scanners side by side.
 - **Cancellation.** A host's cancel stops the scanner processes. `create_fix_pr` is the exception to the usual error answer: a cancelled call returns `ok: true` with `cancelled: true` and the groups it finished, and an apply or verification step already in flight stops at the next boundary.
 
 ## What the server writes

@@ -357,7 +357,7 @@ One project's open findings (newest usable scan of each type, suppressions out).
 
 ### `quality_check`
 
-jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and installed in node\_modules (it runs the project's config), staticcheck for Go, shellcheck for shell scripts. Findings: duplicate, complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with scope).
+jscpd duplication (any language), ruff and radon complexity for Python, ESLint when configured and installed in node\_modules (it runs the project's config), staticcheck for Go, shellcheck for shell scripts, detekt for Kotlin and RuboCop for Ruby (on Java and Ruby). Findings: duplicate, complexity, smell or naming; `categories` filters the response, not the scan. A missing or failed analyser makes coverage partial. Budgets exceeded in .guardian/budgets.yml are findings (not with scope).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -488,7 +488,7 @@ Trivy config over Terraform, Kubernetes, CloudFormation and Helm; with .github/w
 
 ### `scan_sast`
 
-Semgrep with the registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs (`tools_run[].plugin_packs`: one that ran in part); Bandit for Python; gosec for Go, through the Go toolchain (it may download modules); cppcheck for C/C++; Psalm's taint analysis for PHP; for .NET, a locked restore and `dotnet build` with the SDK analyzers, which runs the project's MSBuild. What a scanner could not process is partial coverage. `tools_run[].honoured_config`: the project files that decided a run. local\_only avoids the registry and its metrics.
+Semgrep (registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs; `tools_run[].plugin_packs`: one that ran in part) plus, by language: Bandit (Python), gosec (Go, via the Go toolchain, which may download modules), cppcheck (C/C++), Psalm taint analysis (PHP), SpotBugs with FindSecBugs (Java/Kotlin bytecode), the .NET SDK analyzers (a locked restore and `dotnet build`: runs the project's MSBuild). Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a run. local\_only: no registry, no metrics.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

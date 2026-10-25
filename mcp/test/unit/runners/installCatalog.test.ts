@@ -536,7 +536,7 @@ describe('Psalm: the release PHAR, sha256-checked, run by php; PHP itself never 
     const script = TOOL_CATALOG['psalm']?.install.win32.release?.args.at(-1) ?? '';
     expect(script).toContain(`if ($got -ne '${PSALM_PHAR_SHA256}')`);
     expect(script).toContain("Join-Path $env:USERPROFILE '.local\\bin'");
-    expect(TOOL_CATALOG['psalm']?.probe).toEqual({ command: 'psalm.phar', args: ['--version'], phar: true });
+    expect(TOOL_CATALOG['psalm']?.probe).toEqual({ command: 'psalm.phar', args: ['--version'], interpreter: 'php' });
   });
 
   it('PHP: manual steps only, on every OS', () => {
@@ -546,5 +546,60 @@ describe('Psalm: the release PHAR, sha256-checked, run by php; PHP itself never 
       for (const spec of Object.values(TOOL_CATALOG['php']?.install[os] ?? {})) expect(spec.command).toBe('echo');
     }
     expect(TOOL_CATALOG['php']?.version_floor).toBe(`${PHP_MIN_VERSION.join('.')}.0`);
+  });
+});
+
+describe('detekt, SpotBugs and RuboCop: pinned, checked before installed; Java and Ruby never installed', () => {
+  it('detekt: the Maven Central jar, its sum checked before it is installed to ~/.local/bin/detekt-cli.jar, run by java -jar', () => {
+    for (const os of ['linux', 'darwin'] as const) {
+      const spec = TOOL_CATALOG['detekt']?.install[os].curl;
+      const script = spec?.args[1] ?? '';
+      expect(script).toContain('https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/1.23.8/detekt-cli-1.23.8-all.jar');
+      expect(script).toMatch(/echo "[0-9a-f]{64} {2}\$tmp" \| (sha256sum|shasum -a 256) -c -/);
+      expect(script.indexOf('-c -')).toBeLessThan(script.indexOf('install -m 0755'));
+      expect(spec?.user_bin).toBe('detekt-cli.jar');
+    }
+    const win = TOOL_CATALOG['detekt']?.install.win32.release?.args.at(-1) ?? '';
+    expect(win).toMatch(/if \(\$got -ne '[0-9a-f]{64}'\)/);
+    expect(win.indexOf('Get-FileHash')).toBeLessThan(win.indexOf('Copy-Item'));
+    expect(TOOL_CATALOG['detekt']?.probe).toEqual({ command: 'detekt-cli.jar', args: ['--version'], interpreter: 'java' });
+  });
+
+  it('SpotBugs: its archive and the FindSecBugs jar each checked, then the tree moved into place with the plugin in plugin/', () => {
+    const script = TOOL_CATALOG['spotbugs']?.install.linux.curl?.args[1] ?? '';
+    expect(script).toContain('https://github.com/spotbugs/spotbugs/releases/download/4.10.5/spotbugs-4.10.5.tgz');
+    expect(script).toContain('https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/1.14.0/findsecbugs-plugin-1.14.0.jar');
+    expect(script.match(/sha256sum -c -/g)).toHaveLength(2);
+    expect(script.lastIndexOf('-c -')).toBeLessThan(script.indexOf('tar -xzf'));
+    expect(script).toContain('"$home.new/plugin/findsecbugs-plugin-1.14.0.jar"');
+    expect(script.indexOf('mv "$home.new" "$home"')).toBeGreaterThan(script.indexOf('install -m 0644'));
+    const win = TOOL_CATALOG['spotbugs']?.install.win32.release?.args.at(-1) ?? '';
+    expect(win.match(/Get-FileHash/g)).toHaveLength(2);
+    expect(win.lastIndexOf('Get-FileHash')).toBeLessThan(win.indexOf('Expand-Archive'));
+    // Unpacked beside the install (one volume), and the old one removed only once the new tree is complete.
+    expect(win).toContain("Expand-Archive -LiteralPath $zip -DestinationPath $stage");
+    expect(win.indexOf("$stage = Join-Path $lib 'spotbugs.new'")).toBeLessThan(win.indexOf('Expand-Archive'));
+    expect(win.indexOf('Remove-Item -Recurse -Force -LiteralPath $dest')).toBeGreaterThan(win.indexOf('findsecbugs-plugin-1.14.0.jar'));
+    expect(TOOL_CATALOG['spotbugs']?.probe.args).toEqual(['-textui', '-version']);
+  });
+
+  it('RuboCop: the pinned gem, conservative, for this user, its script into the per-user tools directory, run by ruby -S gem', () => {
+    for (const os of ['win32', 'linux', 'darwin'] as const) {
+      const spec = TOOL_CATALOG['rubocop']?.install[os].gem;
+      expect(spec?.command).toBe('ruby');
+      expect(spec?.args.slice(0, 10)).toEqual(['-S', 'gem', 'install', 'rubocop', '-v', '1.92.1', '--user-install', '--conservative', '--no-document', '--bindir']);
+      expect(spec?.user_bin).toBe('rubocop');
+    }
+    expect(TOOL_CATALOG['rubocop']?.probe).toEqual({ command: 'rubocop', args: ['--version'], interpreter: 'ruby' });
+  });
+
+  it('Java and Ruby: manual steps only, on every OS', () => {
+    expect(suggestedInstallCommandString('java', 'win32')).toBe('winget install EclipseAdoptium.Temurin.21.JRE');
+    expect(suggestedInstallCommandString('ruby', 'linux')).toBe('sudo apt-get install ruby ruby-dev build-essential');
+    for (const tool of ['java', 'ruby']) {
+      for (const os of ['win32', 'linux', 'darwin'] as const) {
+        for (const spec of Object.values(TOOL_CATALOG[tool]?.install[os] ?? {})) expect(spec.command).toBe('echo');
+      }
+    }
   });
 });

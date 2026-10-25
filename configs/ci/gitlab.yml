@@ -6,7 +6,7 @@
 # together in one command.
 #
 # What this job does, and why each step exists:
-#   1. Runs in a plain node:22-bookworm image — dev-guardian's own floor is
+#   1. Runs in a plain node:22-trixie image (Debian 13) — dev-guardian's own floor is
 #      Node >= 22.13 (`node:sqlite` with no `--experimental-sqlite` flag).
 #      `GIT_DEPTH: "0"` clones FULL history, not GitLab's own shallow
 #      default (50 commits): gitleaks' own finding identity includes the
@@ -15,7 +15,7 @@
 #      every pre-existing secret to the grafted boundary commit instead,
 #      which moves with every push, so every finding looks "new" on every
 #      run and the gate never passes twice in a row for the same repo.
-#   2. Installs curl/git/pipx from Debian's own apt repo — the bookworm
+#   2. Installs curl/git/pipx from Debian's own apt repo — the trixie
 #      base image does not carry them by default. A .NET project also
 #      needs the .NET SDK for scan_sast's .NET analyzers (the identical
 #      gate `hasRootDotnetSignal` applies on the GitHub template — a root
@@ -29,13 +29,13 @@
 #      toolchain gosec loads its packages through (`go` on PATH, at the
 #      version its go.mod names — Debian's own `golang` is too old for
 #      most), or `dev-guardian scan` reports `go` as a named gap and exits 2.
-#      A C or C++ project needs cppcheck 2.13 or newer on PATH: this image's
-#      Debian bookworm package is 2.10, which skips a file it cannot
-#      configure without saying so, and scan_sast refuses it — `cppcheck`
-#      is then a named gap and the gate exits 2. A PHP project gets this
-#      image's PHP (Debian bookworm's 8.2: php-cli, php-xml, php-mbstring)
-#      and Psalm's release PHAR, sha256-checked like the binaries of step 5,
-#      only when the checkout has a PHP source outside vendor/.
+#      A C or C++ project gets Debian trixie's cppcheck (2.17.1; scan_sast
+#      needs 2.13 or newer — bookworm's 2.10 skipped a file it could not
+#      configure without saying so), only when the checkout has a C or C++
+#      source. A PHP project gets this image's PHP (Debian trixie's 8.4:
+#      php-cli, php-xml, php-mbstring) and Psalm's release PHAR,
+#      sha256-checked like the binaries of step 5, only when the checkout
+#      has a PHP source outside vendor/.
 #   3. Clones dev-guardian itself at a pinned release tag, resolved to its
 #      exact commit SHA when this pipeline was GENERATED (ci-init: `git
 #      ls-remote`/a local tag lookup) and verified again with `git
@@ -98,7 +98,7 @@
 #
 # Shell: `set -eu`, deliberately not `set -o pipefail`, and no `local` in
 # `install_checked`. GitLab Runner's own default IS bash when the image has
-# it — confirmed against GitLab's docs, not assumed — and node:22-bookworm
+# it — confirmed against GitLab's docs, not assumed — and node:22-trixie
 # does; this is NOT written to defend against a dash-only shell. It is
 # written to the POSIX-portable subset regardless, so it behaves
 # identically whichever shell actually runs it (a stripped image, or a
@@ -112,7 +112,7 @@ stages:
 
 dev-guardian:
   stage: scan
-  image: node:22-bookworm
+  image: node:22-trixie
   variables:
     GIT_DEPTH: "0"
     DEV_GUARDIAN_HOME: /tmp/dev-guardian
@@ -142,6 +142,9 @@ dev-guardian:
       install_checked gitleaks "{{GITLEAKS_URL}}" "{{GITLEAKS_SHA256}}" "{{GITLEAKS_MEMBER}}"
       install_checked actionlint "{{ACTIONLINT_URL}}" "{{ACTIONLINT_SHA256}}" "{{ACTIONLINT_MEMBER}}"
       install_checked gosec "{{GOSEC_URL}}" "{{GOSEC_SHA256}}" "{{GOSEC_MEMBER}}"
+      if find . -path './.*' -prune -o -type f \( -iname '*.c' -o -iname '*.cc' -o -iname '*.cpp' -o -iname '*.cxx' -o -iname '*.c++' \) -print -quit | grep -q .; then
+        apt-get install -y --no-install-recommends cppcheck
+      fi
       if find . -path './.*' -prune -o -name vendor -prune -o -name node_modules -prune -o -type f \( -iname '*.php' -o -iname '*.phtml' \) -print -quit | grep -q .; then
         apt-get install -y --no-install-recommends php-cli php-xml php-mbstring
         curl -sSfL -o /tmp/dev-guardian-scanners/psalm.phar "{{PSALM_URL}}"

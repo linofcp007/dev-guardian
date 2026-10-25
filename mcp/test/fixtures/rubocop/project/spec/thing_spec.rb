@@ -1,0 +1,32 @@
+describe 'thing' do
+  it('x1') { expect(1).to eq(1) }
+  it('x2') { expect(1).to eq(1) }
+  it('x3') { expect(1).to eq(1) }
+  it('x4') { expect(1).to eq(1) }
+  it('x5') { expect(1).to eq(1) }
+  it('x6') { expect(1).to eq(1) }
+  it('x7') { expect(1).to eq(1) }
+  it('x8') { expect(1).to eq(1) }
+  it('x9') { expect(1).to eq(1) }
+  it('x10') { expect(1).to eq(1) }
+  it('x11') { expect(1).to eq(1) }
+  it('x12') { expect(1).to eq(1) }
+  it('x13') { expect(1).to eq(1) }
+  it('x14') { expect(1).to eq(1) }
+  it('x15') { expect(1).to eq(1) }
+  it('x16') { expect(1).to eq(1) }
+  it('x17') { expect(1).to eq(1) }
+  it('x18') { expect(1).to eq(1) }
+  it('x19') { expect(1).to eq(1) }
+  it('x20') { expect(1).to eq(1) }
+  it('x21') { expect(1).to eq(1) }
+  it('x22') { expect(1).to eq(1) }
+  it('x23') { expect(1).to eq(1) }
+  it('x24') { expect(1).to eq(1) }
+  it('x25') { expect(1).to eq(1) }
+  it('x26') { expect(1).to eq(1) }
+  it('x27') { expect(1).to eq(1) }
+  it('x28') { expect(1).to eq(1) }
+  it('x29') { expect(1).to eq(1) }
+  it('x30') { expect(1).to eq(1) }
+end
