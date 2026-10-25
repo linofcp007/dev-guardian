@@ -35,7 +35,7 @@ const COPIED: ReadonlyArray<{ name: string; maxBytes: number }> = [
 /** The npm package configuration files a repository may carry, which the copy leaves behind. */
 export const NPM_PROJECT_CONFIG = ['.npmrc', '.pnpmrc', '.yarnrc', '.yarnrc.yml'] as const;
 
-export type NpmPlanningCopy = { ok: true; dir: string; dispose(): void } | { ok: false; reason: string };
+type NpmPlanningCopy = { ok: true; dir: string; dispose(): void } | { ok: false; reason: string };
 
 /** Copies the project's manifest and lock files into a new temporary directory. */
 export function npmPlanningCopy(projectPath: string): NpmPlanningCopy {
