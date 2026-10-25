@@ -65,6 +65,7 @@ import {
   PROJECT_TRIVYIGNORE,
   runTrivy as spawnTrivy,
   TRIVY_MANIFEST_WALK_GAP,
+  trivyFailureReason,
   withHonoured,
   type TrivyFsJudgement,
 } from '../runners/trivyRun.js';
@@ -499,7 +500,7 @@ async function runTrivy(
         {
           name: 'trivy',
           status: 'failed',
-          reason: raw === null ? `no report (${run.outcome}, exit ${String(run.exitCode)})` : run.outcome,
+          reason: raw === null ? `no report: ${trivyFailureReason(run)}` : trivyFailureReason(run),
         },
         run,
       ),

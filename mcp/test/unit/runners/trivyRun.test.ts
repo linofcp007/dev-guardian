@@ -30,6 +30,8 @@ import {
   runTrivy,
   suppressionNote,
   trivyArgv,
+  trivyErrorLine,
+  trivyFailureReason,
   withHonoured,
 } from '../../../src/runners/trivyRun.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -444,6 +446,39 @@ describe('judgeTrivyFs: a manifest walk that stopped early', () => {
   it('a walk that read everything adds nothing', () => {
     const j = judgeTrivyFs({ projectPath: deepTree(), raw: RAW, run: completed, exclusions: null });
     expect(j).toEqual({ toolRun: { name: 'trivy', status: 'ok' }, missing: [], gaps: [] });
+  });
+});
+
+describe("a failed run says Trivy's own error", () => {
+  // Trivy 0.74.0's log of a vulnerability DB download that could not connect (measured 2026-10-25).
+  const DB = [
+    '2026-10-25T03:05:58Z\tINFO\t[vulndb] Downloading vulnerability DB...',
+    '2026-10-25T03:05:59Z\tFATAL\tFatal error\trun error: init error: DB error: failed to download vulnerability DB: OCI repository error: 1 error occurred:',
+    '\t* Get "https://127.0.0.1:1/v2/": dial tcp 127.0.0.1:1: connectex: No connection could be made',
+    '',
+    '',
+  ].join('\n');
+
+  it('the FATAL message without its time, level and "Fatal error", with the lines that continue it; else the first ERROR', () => {
+    expect(trivyErrorLine(DB)).toBe(
+      'run error: init error: DB error: failed to download vulnerability DB: OCI repository error: 1 error occurred: ' +
+        '* Get "https://127.0.0.1:1/v2/": dial tcp 127.0.0.1:1: connectex: No connection could be made',
+    );
+    expect(trivyErrorLine('t\tERROR\t[misconfig] could not read x.tf\terr="denied"\r\nt\tINFO\tdone')).toBe('[misconfig] could not read x.tf err="denied"');
+    expect(trivyErrorLine('t\tINFO\tall good\n')).toBeNull();
+    expect(trivyErrorLine(`t\tFATAL\tFatal error\t${'x'.repeat(400)}`)).toHaveLength(300);
+  });
+
+  it('the reason: the outcome and exit, then what Trivy said; the outcome alone when it said nothing', () => {
+    expect(trivyFailureReason({ outcome: 'failed', exitCode: 1, stderr: DB })).toMatch(/^failed \(exit 1\): run error: init error: DB error/);
+    expect(trivyFailureReason({ outcome: 'timed_out', exitCode: null, stderr: '' })).toBe('timed_out');
+    const j = judgeTrivyFs({
+      projectPath: makeTempDir('trivy-failed-'),
+      raw: null,
+      run: { outcome: 'failed', exitCode: 1, stdout: '', stderr: DB, truncated: false, honoured: [] },
+      exclusions: null,
+    });
+    expect(j.toolRun).toMatchObject({ name: 'trivy', status: 'failed', reason: expect.stringContaining('failed to download vulnerability DB') });
   });
 });
 

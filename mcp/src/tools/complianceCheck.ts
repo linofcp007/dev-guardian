@@ -54,7 +54,7 @@ import { runSemgrep, semgrepScanFlags } from '../runners/semgrepRun.js';
 import { applySemgrepCoverageGaps, markMissing, semgrepCoverageGaps } from '../runners/semgrepCoverageGaps.js';
 import { semgrepParser, semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { trivyParser } from '../runners/scannerParsers/trivy.js';
-import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { runTrivy, trivyFailureReason, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath } from '../schemas.js';
 import {
   asArray,
@@ -420,7 +420,12 @@ registerToolModule(
           licensesSummary = summariseLicenses(raw);
         }
         tools_run.push(
-          withHonoured({ name: 'trivy', status: result.outcome === 'completed' ? 'ok' : 'failed' }, result),
+          withHonoured(
+            result.outcome === 'completed'
+              ? { name: 'trivy', status: 'ok' }
+              : { name: 'trivy', status: 'failed', reason: trivyFailureReason(result) },
+            result,
+          ),
         );
       } else {
         tools_run.push({ name: 'trivy', status: 'skipped', reason: 'not_installed' });

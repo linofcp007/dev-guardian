@@ -422,6 +422,28 @@ describe('generate_sbom', () => {
     expect(r.inline).toBeDefined();
   });
 
+  it('both installed, neither wrote an SBOM: scanner_failed with what each said — never "not installed"', async () => {
+    const project = tempProject();
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => `/fake/bin/${name}`);
+    vi.mocked(runProcess).mockImplementation(async (opts) => ({
+      outcome: 'failed' as const,
+      exitCode: 1,
+      stdout: '',
+      stderr: opts.command === 'syft' ? 'could not determine source: no such file\n' : 't\tFATAL\tFatal error\trun error: init error: DB error\n',
+      truncated: false,
+    }));
+    const r = (await getTool('generate_sbom').handler({ project_path: project }, plugin)) as {
+      ok: false;
+      error: { code: string; message: string };
+    };
+    expect(r.ok).toBe(false);
+    expect(r.error.code).toBe('scanner_failed');
+    expect(r.error.message).toBe(
+      'No SBOM was produced. Syft: failed (exit 1): could not determine source: no such file; Trivy: failed (exit 1): run error: init error: DB error',
+    );
+  });
+
   it('records the tree it described, so export_vex can tell an SBOM of another tree', async () => {
     const project = tempProject();
     const plugin = makePlugin(project);

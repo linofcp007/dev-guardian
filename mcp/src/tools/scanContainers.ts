@@ -78,7 +78,7 @@ import type { ParserOutput, ScannerParser } from '../runners/scannerParsers/inde
 import { runProcess } from '../runners/processRunner.js';
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import { judgeTrivyConfig } from '../runners/trivyConfig.js';
-import { runTrivy, withHonoured } from '../runners/trivyRun.js';
+import { runTrivy, trivyFailureReason, withHonoured } from '../runners/trivyRun.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { Finding, ToolResult, ToolRun } from '../types.js';
 import { defineTool, registerToolModule } from './index.js';
@@ -267,7 +267,7 @@ const scanContainers = makeScanTool({
                 {
                   name: 'trivy-image',
                   status: result.outcome === 'completed' ? 'ok' : 'failed',
-                  reason: `image ${inp.image}`,
+                  reason: result.outcome === 'completed' ? `image ${inp.image}` : `image ${inp.image}: ${trivyFailureReason(result)}`,
                   target: inp.image,
                 },
                 result,

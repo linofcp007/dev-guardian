@@ -79,7 +79,7 @@ import { describeReadRefusal, linkNotFollowed, listProjectDirOrNull, ReadBudget 
 import type { ToolRun } from '../types.js';
 import { PROJECT_WALK_EXCLUDE, SCANNER_WALK_EXCLUDE } from './projectFiles.js';
 import { asArray, getProp, getString, parseInputAsJson } from './scannerParsers/index.js';
-import { withHonoured, type TrivyRunResult } from './trivyRun.js';
+import { trivyFailureReason, withHonoured, type TrivyRunResult } from './trivyRun.js';
 
 interface TrivyConfigParseError {
   /** The file Trivy names (`file_path=`), relative to its target; null when it names none. */
@@ -394,7 +394,7 @@ export function judgeTrivyConfig(args: {
 }): TrivyConfigJudgement {
   const { name, run, raw, iacFiles } = args;
   if (run.outcome !== 'completed') {
-    return { toolRun: withHonoured({ name, status: 'failed', reason: run.outcome }, run), missing: [] };
+    return { toolRun: withHonoured({ name, status: 'failed', reason: trivyFailureReason(run) }, run), missing: [] };
   }
   const log = parseTrivyConfigLog(run.stderr);
   const gaps: string[] = [];

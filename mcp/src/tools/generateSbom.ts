@@ -24,7 +24,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { runSyft } from '../runners/syftRun.js';
-import { runTrivy } from '../runners/trivyRun.js';
+import { runTrivy, trivyFailureReason } from '../runners/trivyRun.js';
 import { summarize as summariseSbom } from '../runners/scannerParsers/syft.js';
 import { ProjectPath } from '../schemas.js';
 import type { ToolResult } from '../types.js';
@@ -90,6 +90,8 @@ async function handler(
 
   const syftBin = await scannerAvailable('syft');
   let producedBy: 'syft' | 'trivy' | null = null;
+  // An installed scanner that ran and wrote no SBOM: never reported as "not installed".
+  const failures: string[] = [];
 
   if (syftBin) {
     const syftFormat = format === 'cyclonedx-json' ? 'cyclonedx-json' : 'spdx-json';
@@ -97,6 +99,8 @@ async function handler(
     const result = await runSyft({ target: projectPath, format: syftFormat, outFile, workDir: reportDir });
     if (result.outcome === 'completed' && existsSync(outFile)) {
       producedBy = 'syft';
+    } else {
+      failures.push(`Syft: ${runFailure(result.outcome, result.exitCode, firstLine(result.stderr))}`);
     }
   }
 
@@ -112,10 +116,15 @@ async function handler(
       });
       if (result.outcome === 'completed' && existsSync(outFile)) {
         producedBy = 'trivy';
+      } else {
+        failures.push(`Trivy: ${result.outcome === 'completed' ? 'wrote no SBOM' : trivyFailureReason(result)}`);
       }
     }
   }
 
+  if (!producedBy && failures.length > 0) {
+    return { ok: false, error: { code: 'scanner_failed', message: `No SBOM was produced. ${failures.join('; ')}` } };
+  }
   if (!producedBy) {
     return {
       ok: false,
@@ -180,4 +189,16 @@ async function handler(
   payload['inline_max_kb'] = inlineMaxBytes / 1024;
 
   return payload as ToolResult<Record<string, unknown>>;
+}
+
+/** How a run that wrote no SBOM ended, with the scanner's first words on stderr. */
+function runFailure(outcome: string, exitCode: number | null, said: string): string {
+  if (outcome === 'completed') return 'wrote no SBOM';
+  const exit = exitCode !== null ? ` (exit ${String(exitCode)})` : '';
+  return said.length > 0 ? `${outcome}${exit}: ${said}` : `${outcome}${exit}`;
+}
+
+function firstLine(text: string): string {
+  const line = text.split(/\r?\n/).find((l) => l.trim().length > 0) ?? '';
+  return line.trim().slice(0, 300);
 }

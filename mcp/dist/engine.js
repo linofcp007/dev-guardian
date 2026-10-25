@@ -18790,6 +18790,27 @@ async function runTrivy(inv) {
   }
   return { ...run2, honoured, suppressed: repoSuppressionFrom(raw, inv.ignoreFrom) };
 }
+function trivyErrorLine(stderr) {
+  const lines = stderr.split(/\r?\n/);
+  const at = (level) => lines.findIndex((l) => l.includes(`	${level}	`));
+  const i = at("FATAL") >= 0 ? at("FATAL") : at("ERROR");
+  if (i < 0) return null;
+  const fields = (lines[i] ?? "").split("	").slice(2);
+  if (fields[0] === "Fatal error") fields.shift();
+  const continued = [];
+  for (const l of lines.slice(i + 1)) {
+    if (!/^\s/.test(l) || l.trim().length === 0) break;
+    continued.push(l.trim());
+  }
+  const text2 = [fields.join(" ").trim(), ...continued].filter((s) => s.length > 0).join(" ");
+  if (text2.length === 0) return null;
+  return text2.length > ERROR_LINE_MAX ? `${text2.slice(0, ERROR_LINE_MAX - 1)}\u2026` : text2;
+}
+function trivyFailureReason(run2) {
+  const said = trivyErrorLine(run2.stderr);
+  const exit = run2.exitCode !== null ? ` (exit ${String(run2.exitCode)})` : "";
+  return said === null ? `${run2.outcome}${exit}` : `${run2.outcome}${exit}: ${said}`;
+}
 function trivyFiles(honoured) {
   return honoured.map((path3) => ({
     path: path3,
@@ -18811,7 +18832,7 @@ function judgeTrivyFs(args) {
   const { projectPath, raw, run: run2, exclusions } = args;
   if (run2.outcome !== "completed") {
     return {
-      toolRun: withHonoured({ name: "trivy", status: "failed", reason: run2.outcome }, run2),
+      toolRun: withHonoured({ name: "trivy", status: "failed", reason: trivyFailureReason(run2) }, run2),
       missing: [],
       gaps: []
     };
@@ -18841,7 +18862,7 @@ function judgeTrivyFs(args) {
   }
   return { toolRun: withNote2({ name: "trivy", status: "ok" }), missing: walkGap, gaps: [] };
 }
-var PROJECT_TRIVYIGNORE, NEUTRAL_TRIVY_CONFIG, NEUTRAL_CONFIG_TEXT, SHOW_SUPPRESSED_SINCE, SHOW_SUPPRESSED_COMMANDS, MAX_SUPPRESSED_IDS, MAX_SUPPRESSED_FINDINGS, NOTE_IDS, FINDING_ARRAY, TRIVY_NO_PHONE_HOME_ENV, NO_PHONE_HOME_FLAGS, NO_PHONE_HOME_FLAGS_SINCE, versionProbe, TRIVY_MANIFEST_WALK_GAP;
+var PROJECT_TRIVYIGNORE, NEUTRAL_TRIVY_CONFIG, NEUTRAL_CONFIG_TEXT, SHOW_SUPPRESSED_SINCE, SHOW_SUPPRESSED_COMMANDS, MAX_SUPPRESSED_IDS, MAX_SUPPRESSED_FINDINGS, NOTE_IDS, FINDING_ARRAY, TRIVY_NO_PHONE_HOME_ENV, NO_PHONE_HOME_FLAGS, NO_PHONE_HOME_FLAGS_SINCE, versionProbe, ERROR_LINE_MAX, TRIVY_MANIFEST_WALK_GAP;
 var init_trivyRun = __esm({
   "src/runners/trivyRun.ts"() {
     "use strict";
@@ -18885,6 +18906,7 @@ var init_trivyRun = __esm({
     NO_PHONE_HOME_FLAGS = ["--skip-version-check", "--disable-telemetry"];
     NO_PHONE_HOME_FLAGS_SINCE = "0.63.0";
     versionProbe = null;
+    ERROR_LINE_MAX = 300;
     TRIVY_MANIFEST_WALK_GAP = "trivy:manifest-walk";
   }
 });
@@ -39220,11 +39242,11 @@ function classifyRestoreFailure(stdout, stderr) {
   const lines = `${stderr}
 ${stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const errorLine = lines.find((l) => /\berror\s+[A-Z]+\d+\b/.test(l)) ?? lines.find((l) => /\berror\b/i.test(l));
-  const firstLine10 = errorLine ?? lines[0] ?? "(no output)";
-  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine10)?.[1] ?? "restore_failed";
+  const firstLine11 = errorLine ?? lines[0] ?? "(no output)";
+  const code = /\berror\s+([A-Z]+\d+)\b/.exec(firstLine11)?.[1] ?? "restore_failed";
   const kind = KIND_BY_CODE[code] ?? "other";
   const lead = kind === "lock_out_of_sync" ? "packages.lock.json is out of sync with the project (restore runs in --locked-mode and never rewrites it)" : kind === "package_not_found" ? "a package or version could not be found on the configured feeds" : kind === "feed_unreachable" ? "a package feed could not be reached" : "restore failed";
-  const stripped = firstLine10.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
+  const stripped = firstLine11.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
   const message2 = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
   return { code, kind, reason: `${lead} (${code}: ${message2})` };
 }
@@ -42019,8 +42041,8 @@ function mapSubcategory(metadata, checkId) {
 }
 function shortenTitle(message2, checkId) {
   if (message2 && message2.length > 0) {
-    const firstLine10 = message2.split(/\r?\n/)[0] ?? message2;
-    return firstLine10.length > 140 ? firstLine10.slice(0, 137) + "\u2026" : firstLine10;
+    const firstLine11 = message2.split(/\r?\n/)[0] ?? message2;
+    return firstLine11.length > 140 ? firstLine11.slice(0, 137) + "\u2026" : firstLine11;
   }
   return checkId;
 }
@@ -44993,7 +45015,7 @@ function readByTrivy(file, read3, singleFile) {
 function judgeTrivyConfig(args) {
   const { name, run: run2, raw, iacFiles } = args;
   if (run2.outcome !== "completed") {
-    return { toolRun: withHonoured({ name, status: "failed", reason: run2.outcome }, run2), missing: [] };
+    return { toolRun: withHonoured({ name, status: "failed", reason: trivyFailureReason(run2) }, run2), missing: [] };
   }
   const log = parseTrivyConfigLog(run2.stderr);
   const gaps = [];
@@ -45095,7 +45117,10 @@ async function runWorkflowScanner(spec, ctx, reportDir) {
       processOutcome: "completed"
     };
   }
-  const toolRun = result.outcome === "completed" ? { name: spec.name, status: "failed" } : { name: spec.name, status: "failed", reason: result.outcome };
+  const said = result.stderr.split(/\r?\n/).find((l) => l.trim().length > 0)?.trim().slice(0, 300) ?? "";
+  const exit = result.exitCode !== null ? `exit ${String(result.exitCode)}` : result.outcome;
+  const how = result.outcome === "completed" || result.outcome === "failed" ? exit : result.outcome;
+  const toolRun = { name: spec.name, status: "failed", reason: said.length > 0 ? `${how}: ${said}` : how };
   return { toolRun: await named2(toolRun), missing: false, processOutcome: result.outcome };
 }
 var WORKFLOWS_DIR, WORKFLOW_EXTENSIONS;
@@ -46655,7 +46680,7 @@ var init_scanContainers = __esm({
                   {
                     name: "trivy-image",
                     status: result.outcome === "completed" ? "ok" : "failed",
-                    reason: `image ${inp.image}`,
+                    reason: result.outcome === "completed" ? `image ${inp.image}` : `image ${inp.image}: ${trivyFailureReason(result)}`,
                     target: inp.image
                   },
                   result
@@ -49001,7 +49026,7 @@ async function runTrivy2(ctx, out, args) {
         {
           name: "trivy",
           status: "failed",
-          reason: raw === null ? `no report (${run2.outcome}, exit ${String(run2.exitCode)})` : run2.outcome
+          reason: raw === null ? `no report: ${trivyFailureReason(run2)}` : trivyFailureReason(run2)
         },
         run2
       )
@@ -54450,7 +54475,10 @@ var init_complianceCheck = __esm({
               licensesSummary = summariseLicenses(raw);
             }
             tools_run.push(
-              withHonoured({ name: "trivy", status: result.outcome === "completed" ? "ok" : "failed" }, result)
+              withHonoured(
+                result.outcome === "completed" ? { name: "trivy", status: "ok" } : { name: "trivy", status: "failed", reason: trivyFailureReason(result) },
+                result
+              )
             );
           } else {
             tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
@@ -54594,11 +54622,14 @@ async function handler2(inp, ctx) {
   const outFile = join67(reportDir, `sbom.${format === "cyclonedx-json" ? "cdx" : "spdx"}.json`);
   const syftBin = await scannerAvailable("syft");
   let producedBy = null;
+  const failures = [];
   if (syftBin) {
     const syftFormat = format === "cyclonedx-json" ? "cyclonedx-json" : "spdx-json";
     const result = await runSyft({ target: projectPath, format: syftFormat, outFile, workDir: reportDir });
     if (result.outcome === "completed" && existsSync15(outFile)) {
       producedBy = "syft";
+    } else {
+      failures.push(`Syft: ${runFailure(result.outcome, result.exitCode, firstLine9(result.stderr))}`);
     }
   }
   if (!producedBy) {
@@ -54612,8 +54643,13 @@ async function handler2(inp, ctx) {
       });
       if (result.outcome === "completed" && existsSync15(outFile)) {
         producedBy = "trivy";
+      } else {
+        failures.push(`Trivy: ${result.outcome === "completed" ? "wrote no SBOM" : trivyFailureReason(result)}`);
       }
     }
+  }
+  if (!producedBy && failures.length > 0) {
+    return { ok: false, error: { code: "scanner_failed", message: `No SBOM was produced. ${failures.join("; ")}` } };
   }
   if (!producedBy) {
     return {
@@ -54670,6 +54706,15 @@ async function handler2(inp, ctx) {
   payload["inlined"] = inlined;
   payload["inline_max_kb"] = inlineMaxBytes / 1024;
   return payload;
+}
+function runFailure(outcome, exitCode, said) {
+  if (outcome === "completed") return "wrote no SBOM";
+  const exit = exitCode !== null ? ` (exit ${String(exitCode)})` : "";
+  return said.length > 0 ? `${outcome}${exit}: ${said}` : `${outcome}${exit}`;
+}
+function firstLine9(text2) {
+  const line = text2.split(/\r?\n/).find((l) => l.trim().length > 0) ?? "";
+  return line.trim().slice(0, 300);
 }
 var DEFAULT_INLINE_KB, MAX_INLINE_KB, inputSchema5, tool5;
 var init_generateSbom = __esm({
@@ -61494,8 +61539,8 @@ async function handler19(inp, _ctx) {
     if (r.outcome === "completed") {
       stagesInstalled.push(stage);
     } else {
-      const firstLine10 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
-      stagesFailed.push({ stage, error: firstLine10?.trim() ?? r.outcome });
+      const firstLine11 = (r.stderr || r.stdout).split(/\r?\n/).find((l) => l.trim().length > 0);
+      stagesFailed.push({ stage, error: firstLine11?.trim() ?? r.outcome });
     }
   }
   return {
@@ -74022,7 +74067,7 @@ async function listExistingTags(cwd) {
     timeoutMs: 3e4
   });
   if (r.outcome !== "completed") {
-    return { ok: false, error: firstLine9(r.stderr) ?? `gh exited ${r.outcome}` };
+    return { ok: false, error: firstLine10(r.stderr) ?? `gh exited ${r.outcome}` };
   }
   let parsed2;
   try {
@@ -74087,7 +74132,7 @@ async function ensureLabels(cwd, labels) {
   }
   return { applied, omitted: omitted2 };
 }
-function firstLine9(text2) {
+function firstLine10(text2) {
   return text2.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
 }
 async function createIssue(cwd, title, body, labels) {
@@ -74102,7 +74147,7 @@ async function createIssue(cwd, title, body, labels) {
   }
   return {
     ok: false,
-    error: firstLine9(r.stderr) ?? `gh exited ${r.outcome}`
+    error: firstLine10(r.stderr) ?? `gh exited ${r.outcome}`
   };
 }
 function failDomain11(code, message2) {
@@ -79057,12 +79102,12 @@ function framesAsResisted(framing) {
 }
 function citationContext(lines, code) {
   const blockOf = /* @__PURE__ */ new Map();
-  const firstLine10 = /* @__PURE__ */ new Map();
+  const firstLine11 = /* @__PURE__ */ new Map();
   for (const u of code) {
     if (u.block === null) continue;
     blockOf.set(u.line, u.block);
-    const first = firstLine10.get(u.block);
-    if (first === void 0 || u.line < first) firstLine10.set(u.block, u.line);
+    const first = firstLine11.get(u.block);
+    if (first === void 0 || u.line < first) firstLine11.set(u.block, u.line);
   }
   const lastLine = /* @__PURE__ */ new Map();
   for (const u of code) {
@@ -79080,7 +79125,7 @@ function citationContext(lines, code) {
     if (block !== void 0) {
       let yes = announced.get(block);
       if (yes === void 0) {
-        const first = firstLine10.get(block) ?? line;
+        const first = firstLine11.get(block) ?? line;
         const last = lastLine.get(block) ?? line;
         yes = framesAsResisted(withoutQuotes(introducingParagraph(lines, first))) && !directsUse(followingParagraph(lines, last - 1, isBlockLine));
         announced.set(block, yes);
@@ -81989,8 +82034,8 @@ function buildToolRun(run2, via) {
   if (ok) {
     return via ? { name: "semgrep", status: "ok", reason: `ran via ${via}` } : { name: "semgrep", status: "ok" };
   }
-  const firstLine10 = failureCause(run2.stderr) ?? void 0;
-  const reason = via ? `${via}: ${firstLine10 ?? "fallback failed"}` : firstLine10 ?? "unknown";
+  const firstLine11 = failureCause(run2.stderr) ?? void 0;
+  const reason = via ? `${via}: ${firstLine11 ?? "fallback failed"}` : firstLine11 ?? "unknown";
   return { name: "semgrep", status: "failed", reason };
 }
 function failureCause(stderr) {
@@ -83932,8 +83977,8 @@ async function invokeNuclei(opts) {
 }
 function interpretRun(run2) {
   if (run2.outcome === "completed") return { ok: true };
-  const firstLine10 = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
-  return { ok: false, reason: firstLine10 ?? `nuclei ${run2.outcome}` };
+  const firstLine11 = run2.stderr.split(/\r?\n/).find((l) => l.trim().length > 0);
+  return { ok: false, reason: firstLine11 ?? `nuclei ${run2.outcome}` };
 }
 var DEFAULT_NUCLEI_RATE_LIMIT, ALWAYS_EXCLUDED_TAGS, NUCLEI_ENV_ALLOWLIST;
 var init_nuclei = __esm({
@@ -97009,7 +97054,7 @@ function isKeyBodyLine(line) {
   const content = line.replace(/\\[rn]/g, "").replace(/^[\s'"`]+|[\s'"`,+]+$/g, "");
   return /^[A-Za-z0-9+/=]{8,}$/.test(content);
 }
-function scrubSecrets(text2, firstLine10 = 1) {
+function scrubSecrets(text2, firstLine11 = 1) {
   const hits = scanForSecrets(text2, { skipPlaceholders: false });
   if (hits.length === 0) return text2;
   const lines = text2.split(/\r?\n/);
@@ -97034,7 +97079,7 @@ function scrubSecrets(text2, firstLine10 = 1) {
     const rules2 = rulesByLine.get(i);
     if (rules2 === void 0) return keyBody.has(i) ? "\u2039private key body removed\u203A" : line;
     const indent = /^\s*/.exec(line)?.[0] ?? "";
-    return `${indent}\u2039${rules2.join(", ")} line ${String(firstLine10 + i)}\u203A`;
+    return `${indent}\u2039${rules2.join(", ")} line ${String(firstLine11 + i)}\u203A`;
   }).join("\n");
 }
 function startsFunction(line) {
