@@ -168,6 +168,23 @@ describe('longPathWalk and semgrepIgnores', () => {
     expect((await longPathWalk(root, 'win32', { dirs: true })).files).toContain(gone);
   });
 
+  /**
+   * Review 3.6.1, finding 3: only the ~30 source extensions were candidates,
+   * so a Kubernetes manifest, a Dockerfile or an AndroidManifest.xml at a
+   * long path was neither read nor named — and coverage read full.
+   */
+  it('every file Semgrep reads is a candidate — markup, configuration and shell too — never an image', async () => {
+    const root = makeTempDir('semgrep-longfiles-kinds-');
+    let rel = 'deep';
+    while (`${root}/${rel}/AndroidManifest.xml`.length < WINDOWS_MAX_PATH + 4) rel = `${rel}/dddddddddd`;
+    mkdirSync(join(root, ...rel.split('/')), { recursive: true });
+    const names = ['k8s.yaml', 'ci.yml', 'Dockerfile', 'api.dockerfile', 'main.tf', 'run.sh', 'index.html', 'App.vue', 'AndroidManifest.xml', 'Info.plist', 'util.h', 'logo.png', 'notes.txt'];
+    for (const n of names) writeFileSync(join(root, ...rel.split('/'), n), 'x');
+    const walk = await longPathWalk(root, 'win32');
+    const read = names.filter((n) => n !== 'logo.png' && n !== 'notes.txt').map((n) => `${rel}/${n}`);
+    expect(walk.files).toEqual(read.sort());
+  });
+
   it('a .semgrepignore is read only when a candidate lies below it, all of them within one read budget', async () => {
     const root = makeTempDir('semgrep-longfiles-budget-');
     // ~60 KiB that applies (comments): only the budget refuses it.

@@ -28,8 +28,9 @@
  *
  * So, on Windows (`runners/semgrepRun.ts#runSemgrep`): a walk that failed that
  * way is run again with each directory at {@link WINDOWS_DIR_MAX} or more
- * excluded; then every source file the walk did not read because its path is
- * too long — those in the excluded directories too — is read in a second run,
+ * excluded; then every file Semgrep reads ({@link semgrepReadsFile}) that the
+ * walk left unread because its path is too long — those in the excluded
+ * directories too — is read in a second run,
  * as extended-length explicit targets filtered by the run's own `--exclude`s
  * and the project's `.semgrepignore` files, and the findings are merged into
  * the run's report under the paths the walk would have given. The explicit
@@ -83,6 +84,26 @@ const LISTING_FAILED = /Failed to obtain target files from semgrep-core/;
 /** The real path Windows' limits are measured on: a short (8.3) name in the given one would hide its length. */
 export function windowsBase(root: string): string {
   return realpathInProject(root, '.') ?? win32.resolve(root);
+}
+
+/**
+ * Markup, configuration and shell Semgrep reads besides the source languages:
+ * what its registry rules and dev-guardian's own packs (Android's and iOS's
+ * manifests, templates) are written for.
+ */
+const SEMGREP_TEXT_TARGET = /\.(?:ya?ml|json|tf|tfvars|hcl|sh|bash|zsh|ksh|html?|xhtml|vue|svelte|xml|plist|twig|razor|cshtml|hbs|ejs|erb|jsp|sol)$/i;
+const DOCKERFILE = /(?:^|\/)(?:dockerfile|containerfile)(?:\.[^/]*)?$|\.dockerfile$/i;
+
+/**
+ * Whether Semgrep reads `rel` when it can open it: a source language
+ * (`languageOfFile`, or a `.h`), or one of {@link SEMGREP_TEXT_TARGET} or a
+ * Dockerfile. What a file at a long path is judged by — review 3.6.1, finding
+ * 3: the source languages alone were, so a Kubernetes manifest, a Dockerfile
+ * or an AndroidManifest.xml Semgrep never opened was neither read on its own
+ * nor named, and coverage read full.
+ */
+export function semgrepReadsFile(rel: string): boolean {
+  return languageOfFile(rel) !== null || /\.h$/i.test(rel) || SEMGREP_TEXT_TARGET.test(rel) || DOCKERFILE.test(rel);
 }
 
 /** Whether `rel` (project-relative, `/`-separated) under `base` is too long for Semgrep to open, or to list its directory. */
@@ -174,7 +195,7 @@ class NestedSemgrepIgnores {
 interface LongPathWalk {
   /** The top-most directories at {@link WINDOWS_DIR_MAX} or more — searched for only when asked (`dirs`). */
   dirs: string[];
-  /** The source files (a known language) too long for Windows, those in `dirs` included. */
+  /** The files Semgrep reads ({@link semgrepReadsFile}) too long for Windows, those in `dirs` included. */
   files: string[];
   /** The tree's `.semgrepignore` files. */
   semgrepignores: NestedSemgrepIgnores;
@@ -216,7 +237,7 @@ export async function longPathWalk(
       .map((rel) => (rel === IGNORE_NAME ? '' : rel.slice(0, -(IGNORE_NAME.length + 1))));
     return {
       dirs: [],
-      files: kept.filter((rel) => languageOfFile(rel) !== null && tooLongForWindows(base, rel)).sort(),
+      files: kept.filter((rel) => semgrepReadsFile(rel) && tooLongForWindows(base, rel)).sort(),
       semgrepignores: new NestedSemgrepIgnores(root, ignoreDirs),
     };
   }
@@ -242,7 +263,7 @@ export async function longPathWalk(
         stack.push({ rel: child, long: long || isLong });
       } else if (e.isFile()) {
         if (e.name === IGNORE_NAME) out.ignoreDirs.push(rel);
-        else if (languageOfFile(child) !== null && tooLongForWindows(base, child)) out.files.push(child);
+        else if (semgrepReadsFile(child) && tooLongForWindows(base, child)) out.files.push(child);
       }
     }
   }
