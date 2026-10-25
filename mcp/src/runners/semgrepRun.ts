@@ -253,12 +253,16 @@ export async function runSemgrep(
   const args = opts.args ?? [];
   const target = args.at(-1);
   if (platform !== 'win32' || target === undefined || first.exitCode === null || first.outcome === 'cancelled') return first;
-  // Nothing for a file target: the walk lists a directory.
-  const walk = longPathWalk(target, platform);
-  if (walk.dirs.length === 0 && walk.files.length === 0) return first;
   const out = outputOf(args);
+  const listingFailed = first.exitCode !== 0 && failedToListTargets(readReport(out), first.stdout, first.stderr);
+  // Searched only for what can be acted on: the long directories after a
+  // walk that failed, the long files when there is a report to merge into.
+  // Nothing for a file target: the search lists a directory.
+  if (!listingFailed && out === undefined) return first;
+  const walk = await longPathWalk(target, platform, { dirs: listingFailed });
+  if (walk.dirs.length === 0 && walk.files.length === 0) return first;
   let result: SemgrepRunResult = first;
-  if (first.exitCode !== 0 && walk.dirs.length > 0 && failedToListTargets(readReport(out), first.stdout, first.stderr)) {
+  if (listingFailed && walk.dirs.length > 0) {
     const retry = await run({ ...opts, args: [...args.slice(0, -1), ...walk.dirs.map(semgrepExcludeForDir), target], ...semgrepSpawn(opts.env) });
     result = { ...retry, excludedLongDirs: walk.dirs };
   }
@@ -293,7 +297,10 @@ async function readLongFiles(a: {
   const wanted = a.files.filter((rel) => {
     const key = rel.toLowerCase();
     if (scanned.some((s) => s === key || s.endsWith(`/${key}`))) return false;
-    return !excludes.ignores(rel) && !semgrepIgnores({ semgrepignores: a.semgrepignores }, rel);
+    // A `.semgrepignore` that could not be read may leave it out: not read
+    // here, so the long-path gap names it rather than a finding in a file the
+    // project excluded.
+    return !excludes.ignores(rel) && semgrepIgnores({ semgrepignores: a.semgrepignores }, rel) === false;
   });
   if (wanted.length === 0) return 0;
 

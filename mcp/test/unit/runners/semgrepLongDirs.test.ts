@@ -6,6 +6,7 @@
  * Semgrep case is `e2e/sastLongPath.test.ts`; here the decisions, on any host
  * (the platform is a parameter, and Windows' path rules are `path.win32`).
  */
+import { execa } from 'execa';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, win32 } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
@@ -51,10 +52,10 @@ describe('failedToListTargets', () => {
 });
 
 describe('longDirsUnder', () => {
-  it('the top-most directories at the limit or past it, never below one, never .git; nothing off Windows', () => {
+  it('the top-most directories at the limit or past it, never below one, never .git; nothing off Windows', async () => {
     const { root, long } = project();
-    expect(longDirsUnder(root, 'win32')).toEqual([long]);
-    expect(longDirsUnder(root, 'linux')).toEqual([]);
+    expect(await longDirsUnder(root, 'win32')).toEqual([long]);
+    expect(await longDirsUnder(root, 'linux')).toEqual([]);
   });
 });
 
@@ -136,13 +137,67 @@ function longFilesProject(): { root: string; long: string; ignored: string; excl
 }
 
 describe('longPathWalk and semgrepIgnores', () => {
-  it('the source files too long for Windows, a .semgrepignore read where it sits; nothing off Windows', () => {
+  it('the source files too long for Windows, a .semgrepignore read where it sits; nothing off Windows', async () => {
     const { root, long, ignored, excluded } = longFilesProject();
-    const walk = longPathWalk(root, 'win32');
+    const walk = await longPathWalk(root, 'win32');
     expect(walk.files).toEqual([excluded, long, ignored].sort());
     expect(semgrepIgnores(walk, ignored)).toBe(true);
     expect(semgrepIgnores(walk, long)).toBe(false);
-    expect(longPathWalk(root, 'linux')).toEqual({ dirs: [], files: [], semgrepignores: [] });
+    const off = await longPathWalk(root, 'linux');
+    expect([off.dirs, off.files, off.semgrepignores.dirs]).toEqual([[], [], []]);
+    // A file target: the search lists a directory.
+    expect((await longPathWalk(join(root, 'short.js'), 'win32')).files).toEqual([]);
+  });
+
+  /**
+   * Review 3.6.1, finding 2: the walk ran synchronously after every Semgrep
+   * run on Windows. Inside a work tree Semgrep lists through git, and so does
+   * this — with `core.longpaths=true`, without which git leaves out an
+   * untracked directory past MAX_PATH (measured, git 2.51: a warning, exit 0).
+   */
+  it("inside a git work tree, git's listing: an untracked long file found, one .gitignore leaves out not a candidate", async () => {
+    const { root, long } = longFilesProject();
+    await execa('git', ['init', '-q'], { cwd: root });
+    const gone = long.replace(/name\.js$/, 'gone/e.js');
+    writeFileSync(join(root, '.gitignore'), 'gone/\n');
+    const walk = await longPathWalk(root, 'win32');
+    expect(walk.files).toContain(long);
+    expect(walk.files).not.toContain(gone);
+    expect(walk.semgrepignores.dirs).toEqual(['']);
+    // Semgrep's own walk failed: the directories are wanted, and only a walk finds them.
+    expect((await longPathWalk(root, 'win32', { dirs: true })).files).toContain(gone);
+  });
+
+  it('a .semgrepignore is read only when a candidate lies below it, all of them within one read budget', async () => {
+    const root = makeTempDir('semgrep-longfiles-budget-');
+    // ~60 KiB that applies (comments): only the budget refuses it.
+    const blob = `${'#'.repeat(1000)}\n`.repeat(60);
+    // Forty large ones with no candidate below them: never read.
+    for (let i = 0; i < 40; i++) {
+      mkdirSync(join(root, `quiet${String(i)}`));
+      writeFileSync(join(root, `quiet${String(i)}`, '.semgrepignore'), blob);
+    }
+    // Forty with a long candidate below each: read until the budget is spent.
+    const candidates: string[] = [];
+    for (let i = 0; i < 40; i++) {
+      let rel = `loud${String(i)}`;
+      while (`${root}/${rel}/name.js`.length < WINDOWS_MAX_PATH + 4) rel = `${rel}/dddddddddd`;
+      mkdirSync(join(root, ...rel.split('/')), { recursive: true });
+      writeFileSync(join(root, ...rel.split('/'), 'name.js'), 'x');
+      writeFileSync(join(root, `loud${String(i)}`, '.semgrepignore'), blob);
+      candidates.push(`${rel}/name.js`);
+    }
+    let rel = 'plain';
+    while (`${root}/${rel}/name.js`.length < WINDOWS_MAX_PATH + 4) rel = `${rel}/dddddddddd`;
+    mkdirSync(join(root, ...rel.split('/')), { recursive: true });
+    writeFileSync(join(root, ...rel.split('/'), 'name.js'), 'x');
+    const walk = await longPathWalk(root, 'win32');
+    expect(walk.semgrepignores.dirs).toHaveLength(80);
+    expect(semgrepIgnores(walk, `${rel}/name.js`)).toBe(false);
+    const verdicts = candidates.map((c) => semgrepIgnores(walk, c));
+    // 1 MiB of 60 060-byte files: seventeen read (and say nothing about name.js), the rest unknown.
+    expect(verdicts.filter((v) => v === false)).toHaveLength(17);
+    expect(verdicts.filter((v) => v === null)).toHaveLength(23);
   });
 });
 

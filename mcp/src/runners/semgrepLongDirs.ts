@@ -36,12 +36,25 @@
  * targets of a scope or a review get the same form
  * (`runners/fileBatchScan.ts#semgrepOnFiles`). A file still not read is named
  * by the long-path gap (`frameworks/projectLanguages.ts#longPathsOf`).
+ *
+ * Finding those files costs a listing of the tree, after every Semgrep run on
+ * Windows — 3.6.0 walked it synchronously (up to 100 000 directories, every
+ * path component checked for links) and read and compiled every nested
+ * `.semgrepignore` it met (review 3.6.1, finding 2). Inside a git work tree
+ * Semgrep lists through git, so git's own listing answers, with
+ * `core.longpaths=true` — measured, git 2.51: without it git leaves out an
+ * untracked directory past MAX_PATH with only a warning, exit 0. A walk, not
+ * blocking the event loop, is needed only outside one, or when Semgrep's own
+ * walk failed (the directories are wanted then). A `.semgrepignore` is read
+ * only when a candidate lies below it, within one read budget.
  */
 
-import { win32 } from 'node:path';
+import { readdir, stat } from 'node:fs/promises';
+import { join, win32 } from 'node:path';
 import { languageOfFile } from '../frameworks/languages.js';
 import { compileIgnore, type IgnoreMatcher } from '../platform/guardianIgnore.js';
-import { listProjectDirOrNull, readProjectTextOrUndefined, realpathInProject } from '../platform/projectFs.js';
+import { ReadBudget, realpathInProject } from '../platform/projectFs.js';
+import { git, splitNul } from './git.js';
 import { SCANNED_WALK_EXCLUDE } from './projectFiles.js';
 
 /**
@@ -103,65 +116,147 @@ export function failedToListTargets(...outputs: ReadonlyArray<string | null | un
   return outputs.some((o) => o !== null && o !== undefined && LISTING_FAILED.test(o));
 }
 
+const IGNORE_NAME = '.semgrepignore';
+/** What all the `.semgrepignore` files one search reads may hold, and each: an ignore file is applied up to 64 KiB. */
+const IGNORE_BUDGET_BYTES = 1024 * 1024;
+const IGNORE_BUDGET_FILES = 64;
+const IGNORE_FILE_MAX_BYTES = 64 * 1024;
+
+/**
+ * The `.semgrepignore` files of a tree, each applying to its own directory's
+ * subtree — read and compiled only when a path below one is asked about, all
+ * of them within one {@link ReadBudget}: 3.6.0 read every one it met, 8 MiB
+ * each, and kept them all compiled — dozens of copies of one 8 MiB blob of
+ * `a` lines, a few KB on the wire, were millions of RegExps.
+ */
+class NestedSemgrepIgnores {
+  private readonly matchers = new Map<string, IgnoreMatcher | null>();
+  private readonly budget = new ReadBudget(IGNORE_BUDGET_BYTES, IGNORE_BUDGET_FILES);
+
+  constructor(
+    private readonly root: string,
+    /** The directories holding one (`''`: the root), project-relative, `/`-separated. */
+    readonly dirs: readonly string[],
+  ) {}
+
+  /**
+   * Whether one of them leaves `rel` out: true, false — or null when one that
+   * applies was not read (the budget, a refusal) or not applied (too large, or
+   * too costly to test), so that nobody can say.
+   */
+  ignores(rel: string): boolean | null {
+    let unknown = false;
+    for (const dir of this.dirs) {
+      if (dir !== '' && !rel.startsWith(`${dir}/`)) continue;
+      const matcher = this.matcher(dir);
+      if (matcher === null) {
+        unknown = true;
+        continue;
+      }
+      const before = matcher.overBudget;
+      if (matcher.ignores(dir === '' ? rel : rel.slice(dir.length + 1))) return true;
+      if (matcher.overBudget !== before) unknown = true;
+    }
+    return unknown ? null : false;
+  }
+
+  private matcher(dir: string): IgnoreMatcher | null {
+    const known = this.matchers.get(dir);
+    if (known !== undefined) return known;
+    const read = this.budget.readText(this.root, dir === '' ? IGNORE_NAME : `${dir}/${IGNORE_NAME}`, IGNORE_FILE_MAX_BYTES);
+    const compiled = read.status === 'ok' ? compileIgnore(read.text) : null;
+    const matcher = compiled === null || compiled.refused !== undefined ? null : compiled;
+    this.matchers.set(dir, matcher);
+    return matcher;
+  }
+}
+
 interface LongPathWalk {
-  /** The top-most directories at {@link WINDOWS_DIR_MAX} or more. */
+  /** The top-most directories at {@link WINDOWS_DIR_MAX} or more — searched for only when asked (`dirs`). */
   dirs: string[];
   /** The source files (a known language) too long for Windows, those in `dirs` included. */
   files: string[];
-  /** Each `.semgrepignore` met, by the directory that holds it (`''`: the root). */
-  semgrepignores: Array<{ dir: string; matcher: IgnoreMatcher }>;
+  /** The tree's `.semgrepignore` files. */
+  semgrepignores: NestedSemgrepIgnores;
+}
+
+/** `git ls-files` as Semgrep lists a work tree, with git's own long-path support; null outside one, or when git cannot answer. */
+async function gitListing(root: string): Promise<string[] | null> {
+  const r = await git(root, ['-c', 'core.longpaths=true', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'], 30_000);
+  return r.exitCode === 0 ? splitNul(r.stdout).map((p) => p.split('\\').join('/')) : null;
 }
 
 /**
- * One walk of `root` for what Windows' limits hide from Semgrep: project-relative,
- * `/`-separated, sorted; nothing elsewhere than Windows. The directories the
- * scanners' own listing leaves out (`.git`, `node_modules`, `vendor`, …) are
- * left out; links are never followed (`listProjectDirOrNull`).
+ * What Windows' limits hide from Semgrep under `root`: project-relative,
+ * `/`-separated, sorted; nothing elsewhere than Windows, or for a target that
+ * is not a directory. The directories the scanners' own listing leaves out
+ * (`.git`, `node_modules`, `vendor`, …) are left out. Inside a git work tree
+ * the files are git's listing — unless `dirs` is asked for (Semgrep's own
+ * walk failed): then, as outside one, a walk, which never descends a link (a
+ * junction is one) and stops at {@link MAX_DIRS} directories.
  */
-export function longPathWalk(root: string, platform: NodeJS.Platform = process.platform): LongPathWalk {
-  const out: LongPathWalk = { dirs: [], files: [], semgrepignores: [] };
-  if (platform !== 'win32') return out;
+export async function longPathWalk(
+  root: string,
+  platform: NodeJS.Platform = process.platform,
+  opts: { dirs?: boolean } = {},
+): Promise<LongPathWalk> {
+  const none = (): LongPathWalk => ({ dirs: [], files: [], semgrepignores: new NestedSemgrepIgnores(root, []) });
+  if (platform !== 'win32') return none();
+  const isDir = await stat(root).then(
+    (s) => s.isDirectory(),
+    () => false,
+  );
+  if (!isDir) return none();
   const base = windowsBase(root);
+  const listed = opts.dirs === true ? null : await gitListing(root);
+  if (listed !== null) {
+    const kept = listed.filter((rel) => !rel.split('/').some((segment) => SCANNED_WALK_EXCLUDE.has(segment)));
+    const ignoreDirs = kept
+      .filter((rel) => rel === IGNORE_NAME || rel.endsWith(`/${IGNORE_NAME}`))
+      .map((rel) => (rel === IGNORE_NAME ? '' : rel.slice(0, -(IGNORE_NAME.length + 1))));
+    return {
+      dirs: [],
+      files: kept.filter((rel) => languageOfFile(rel) !== null && tooLongForWindows(base, rel)).sort(),
+      semgrepignores: new NestedSemgrepIgnores(root, ignoreDirs),
+    };
+  }
+  const out = { dirs: [] as string[], files: [] as string[], ignoreDirs: [] as string[] };
   const stack: Array<{ rel: string; long: boolean }> = [{ rel: '', long: false }];
-  let listed = 0;
-  while (stack.length > 0 && listed < MAX_DIRS) {
+  let listedDirs = 0;
+  while (stack.length > 0 && listedDirs < MAX_DIRS) {
     const { rel, long } = stack.pop() ?? { rel: '', long: false };
-    const entries = listProjectDirOrNull(root, rel === '' ? '.' : rel);
-    listed++;
-    if (entries === null) continue;
+    listedDirs++;
+    let entries;
+    try {
+      entries = await readdir(rel === '' ? root : join(root, ...rel.split('/')), { withFileTypes: true });
+    } catch {
+      continue;
+    }
     for (const e of entries) {
       const child = rel === '' ? e.name : `${rel}/${e.name}`;
-      if (e.kind === 'directory') {
+      // Typed from the directory itself: a link (a junction included) is neither.
+      if (e.isDirectory()) {
         if (SCANNED_WALK_EXCLUDE.has(e.name)) continue;
         const isLong = !long && win32.join(base, ...child.split('/')).length >= WINDOWS_DIR_MAX;
         if (isLong) out.dirs.push(child);
         stack.push({ rel: child, long: long || isLong });
-      } else if (e.kind === 'file') {
-        if (e.name === '.semgrepignore') {
-          const text = readProjectTextOrUndefined(root, child);
-          if (text !== undefined) out.semgrepignores.push({ dir: rel, matcher: compileIgnore(text) });
-        } else if (languageOfFile(child) !== null && tooLongForWindows(base, child)) {
-          out.files.push(child);
-        }
+      } else if (e.isFile()) {
+        if (e.name === IGNORE_NAME) out.ignoreDirs.push(rel);
+        else if (languageOfFile(child) !== null && tooLongForWindows(base, child)) out.files.push(child);
       }
     }
   }
-  out.dirs.sort();
-  out.files.sort();
-  return out;
+  return { dirs: out.dirs.sort(), files: out.files.sort(), semgrepignores: new NestedSemgrepIgnores(root, out.ignoreDirs) };
 }
 
 /** {@link longPathWalk}'s directories alone. */
-export function longDirsUnder(root: string, platform: NodeJS.Platform = process.platform): string[] {
-  return longPathWalk(root, platform).dirs;
+export async function longDirsUnder(root: string, platform: NodeJS.Platform = process.platform): Promise<string[]> {
+  return (await longPathWalk(root, platform, { dirs: true })).dirs;
 }
 
-/** Whether a `.semgrepignore` of the walk leaves `rel` out (each read relative to its own directory). */
-export function semgrepIgnores(walk: Pick<LongPathWalk, 'semgrepignores'>, rel: string): boolean {
-  return walk.semgrepignores.some(({ dir, matcher }) => {
-    if (dir === '') return matcher.ignores(rel);
-    return rel.startsWith(`${dir}/`) && matcher.ignores(rel.slice(dir.length + 1));
-  });
+/** Whether a `.semgrepignore` of the walk leaves `rel` out (each read relative to its own directory); null: one could not be read. */
+export function semgrepIgnores(walk: Pick<LongPathWalk, 'semgrepignores'>, rel: string): boolean | null {
+  return walk.semgrepignores.ignores(rel);
 }
 
 /** `--exclude=<rel>`, its glob characters escaped (gitignore's rules: a backslash before each). */
