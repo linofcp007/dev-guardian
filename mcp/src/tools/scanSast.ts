@@ -126,7 +126,7 @@ import { hasPhpSource, PSALM, psalmTaint } from '../runners/psalmRun.js';
 import { maxParallelScanners, runScannerPasses, type ScannerPass } from '../runners/scannerPasses.js';
 import { psalmParser } from '../runners/scannerParsers/psalm.js';
 import { spotbugsParserFor } from '../runners/scannerParsers/spotbugs.js';
-import { hasJvmSource, SPOTBUGS, spotbugsClasses } from '../runners/spotbugsRun.js';
+import { classDirsState, hasJvmSource, SPOTBUGS, spotbugsClasses } from '../runners/spotbugsRun.js';
 import { isWordPressProject } from '../runners/stackDetect.js';
 import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
@@ -225,10 +225,13 @@ registerToolModule(
     // re-scans a worktree and needs the original project's rules.
     rulePacks: (input, { rulesProjectPath, plugin, projectPath }) =>
       planSemgrepConfigs(rulesProjectPath, plugin, input.local_only === true, projectPath).rulePacks,
-    // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds.
+    // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds (the
+    // factory keys that file for every tool); the class directories SpotBugs
+    // reads are under `target/` and `build/`, which the tree hash leaves out.
     cacheState: async (_input, { plugin, projectPath }) => {
       const flags = semgrepScanFlags(plugin.repoConfigFromRef?.root ?? projectPath);
-      return { semgrep_flags: flags.args.join(' ') };
+      const classes = classDirsState(projectPath);
+      return { semgrep_flags: flags.args.join(' '), ...(classes !== null ? { class_dirs: classes } : {}) };
     },
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.

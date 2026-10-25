@@ -625,6 +625,52 @@ describe('review_pr — a diff that edits .guardianignore', () => {
   });
 });
 
+describe('the cache key covers what a scan reads outside the tree hash', () => {
+  /** Two calls of `name` on one database, the cache in play (no `force`). */
+  async function twice(name: string, dir: string, input: Record<string, unknown>, between: () => void) {
+    const tool = TOOLS.find((t) => t.name === name);
+    if (!tool) throw new Error(`${name} not registered`);
+    const p = plugin(dir);
+    const call = async (): Promise<ScanPayload> => {
+      const r = await tool.handler({ project_path: dir, ...input }, p);
+      if (!r.ok) throw new Error(JSON.stringify(r.error));
+      return r as unknown as ScanPayload;
+    };
+    const first = await call();
+    between();
+    return { first, second: await call(), third: await call() };
+  }
+
+  // The tree hash lists what git does: a git-ignored `.env` is not in it, and
+  // `scope.paths` takes it as named. A token pasted into it was answered from
+  // the clean scan of the file before.
+  it('a git-ignored file named in scope.paths: an edit of it misses the cache', async () => {
+    const dir = await repo({ '.gitignore': '.env\n', 'a.py': 'x = 1\n' });
+    write(dir, '.env', 'k=1\n');
+    const { first, second, third } = await twice('scan_secrets', dir, { scope: { paths: ['.env'] } }, () =>
+      write(dir, '.env', 'k=1\nGITHUB_TOKEN=ghp_000000000000000000000000000000000000\n'),
+    );
+    expect(first.cached).toBeUndefined();
+    expect(second.cached).toBeUndefined();
+    expect(third.cached).toBe(true);
+    expect(byCommand('gitleaks')).toHaveLength(2);
+  });
+
+  // SpotBugs reads `target/classes`, which the tree hash leaves out: the skip
+  // of an unbuilt project ("no compiled classes", no gap) was served again
+  // after the build, inside the cache window.
+  it('a build that leaves classes misses the cache of the run that found none', async () => {
+    const dir = await repo({ 'src/main/java/A.java': 'class A {}\n' });
+    const { first, second } = await twice('scan_sast', dir, {}, () =>
+      write(dir, 'target/classes/A.class', 'cafebabe'),
+    );
+    const spotbugs = (r: ScanPayload) => r.tools_run.find((t) => t.name === 'spotbugs');
+    expect(spotbugs(first)?.reason).toMatch(/no compiled classes/);
+    expect(second.cached).toBeUndefined();
+    expect(spotbugs(second)?.reason ?? '').not.toMatch(/no compiled classes/);
+  });
+});
+
 describe('tool descriptions', () => {
   // Claude Code truncates at 2048; this repo keeps a 1500 margin (Global Constraint 11).
   it.each(['scan_sast', 'scan_secrets', 'quality_check', 'scan_deps'])('%s stays within 1500 characters', (name) => {

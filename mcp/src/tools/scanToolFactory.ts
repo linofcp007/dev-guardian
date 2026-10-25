@@ -29,8 +29,9 @@
  * A scan is served from the cache only under exactly the same key
  * (`treeHash/cacheKey.ts#scanCacheKey`): the canonical project path, the tool
  * name and scan type, the tree hash, the plugin version, the content of every
- * rule pack the tool declares in `rulePacks`, and a hash of the NORMALISED
- * input. The rule for the input is deliberately blunt, because every
+ * rule pack the tool declares in `rulePacks`, the content of the root
+ * `.guardian/` settings a scan reads (`guardianSettingsState`), and a hash of
+ * the NORMALISED input. The rule for the input is deliberately blunt, because every
  * exception to it was a reproduced wrong answer (see cacheKey.ts): EVERY
  * input field takes part, after the tool's own zod schema has applied its
  * defaults, EXCEPT
@@ -94,6 +95,9 @@ import {
   type ScanScope,
 } from '../platform/scope.js';
 import { resolveVersion } from '../platform/version.js';
+import { hashProjectFile } from '../platform/projectFs.js';
+import { SCAN_SETTINGS_RELATIVE_PATH } from '../platform/scanSettings.js';
+import { BUDGETS_RELATIVE_PATH } from '../budgets/budgets.js';
 import { makeProgressEmitter, type ProgressEmitter } from '../progress/progressEmitter.js';
 import {
   type ParserContext,
@@ -456,6 +460,8 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   // exactly what it was before either existed.
   if (scope !== null) cacheState = { ...cacheState, scope: scope.cacheState['scope'] ?? '' };
   if (exclusions !== null) cacheState = { ...cacheState, guardianignore: exclusions.hash };
+  const settings = await guardianSettingsState(projectPath, configRoot);
+  if (settings !== null) cacheState = { ...cacheState, guardian_settings: settings };
   const cacheKey = buildCacheKey(config, input, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
   if (config.configWarnings) {
     try {
@@ -1049,6 +1055,22 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     ...(exclusionReport !== null ? { exclusions: exclusionReport } : {}),
   };
   return { ok: true, ...payload };
+}
+
+/**
+ * The root `.guardian/` files a scan reads, by content — the tree hash leaves
+ * that whole directory out (its reports change on every scan,
+ * `treeHash/computeTreeHash.ts`), so an edited budget or Semgrep timeout was
+ * answered with the run made under the old one: `.guardian/scan.yml` from
+ * `configRoot` (every Semgrep run's timeouts, `runners/semgrepRun.ts`) and
+ * `.guardian/budgets.yml` from the project (quality_check). Null when
+ * neither exists, which leaves the key exactly as it was before.
+ */
+async function guardianSettingsState(projectPath: string, configRoot: string): Promise<string | null> {
+  const scan = await hashProjectFile(configRoot, SCAN_SETTINGS_RELATIVE_PATH);
+  const budgets = await hashProjectFile(projectPath, BUDGETS_RELATIVE_PATH);
+  if (scan === 'missing' && budgets === 'missing') return null;
+  return `scan.yml:${scan};budgets.yml:${budgets}`;
 }
 
 /**

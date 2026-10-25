@@ -1,5 +1,5 @@
 import { GuardianDatabase as Database } from '../../../src/storage/db.js';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
@@ -602,6 +602,25 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
     const miss = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
     expect(miss.cached).toBeUndefined();
     expect(invokes).toBe(2);
+  });
+
+  // The tree hash leaves the root `.guardian/` out (its reports change on
+  // every scan), but the scans read two of its files: quality_check's
+  // budgets, and the Semgrep timeouts of every Semgrep run. An edited budget
+  // was answered with the run made under the old one.
+  it.each(['budgets.yml', 'scan.yml'])('misses when .guardian/%s changes', async (file) => {
+    const { tool, calls } = countingTool(`key_settings_${file.replace('.', '_')}`);
+    mkdirSync(join(projectPath, '.guardian'), { recursive: true });
+    const settings = join(projectPath, '.guardian', file);
+    writeFileSync(settings, file === 'scan.yml' ? 'semgrep:\n  timeout: 30\n' : 'quality:\n  complexity: 20\n');
+    await tool.handler({ project_path: projectPath }, plugin);
+    const hit = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(hit.cached).toBe(true);
+
+    writeFileSync(settings, file === 'scan.yml' ? 'semgrep:\n  timeout: 1\n' : 'quality:\n  complexity: 2\n');
+    const miss = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(miss.cached).toBeUndefined();
+    expect(calls).toHaveLength(2);
   });
 
   it('never serves a run whose scanner was missing or failed — install, re-run, and the re-run scans', async () => {

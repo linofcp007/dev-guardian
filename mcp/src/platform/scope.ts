@@ -37,7 +37,7 @@
 
 import { createHash } from 'node:crypto';
 import { lstatSync, realpathSync } from 'node:fs';
-import { entryKindAnywhere, projectEntryKind } from './projectFs.js';
+import { entryKindAnywhere, hashProjectFile, projectEntryKind } from './projectFs.js';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { changedFiles, git, repoState, resolveCommit, splitNul } from '../runners/git.js';
@@ -118,7 +118,7 @@ export interface ResolvedScope {
   contentFiles: string[];
   /** What `meta.scope` records — the request, resolved, and the counts. */
   meta: Record<string, unknown>;
-  /** Joined to the cache key: the resolved refs and file sets. */
+  /** Joined to the cache key: the resolved refs and file sets, and the content of the files. */
   cacheState: Record<string, string>;
   /** Files the scope named that `.guardianignore` excludes. */
   excludedByIgnore: number;
@@ -208,9 +208,24 @@ export async function resolveScope(
     files: files.length,
     ...(excludedByIgnore > 0 ? { files_excluded_by_guardianignore: excludedByIgnore } : {}),
   };
+  // Each file the scanners read, by content: the tree hash lists what git
+  // lists, and `paths` takes a git-ignored `.env` (or a file under a `build/`
+  // the hash skips) as named — keyed by name only, a token pasted into it was
+  // answered from the clean scan of the file before.
+  const content = createHash('sha256');
+  for (const rel of [...new Set([...files, ...contentFiles])].sort()) {
+    content.update(`${rel}:${await hashProjectFile(projectPath, rel)}\n`);
+  }
   const cacheState = {
     scope: createHash('sha256')
-      .update(JSON.stringify({ files, touched: touched === null ? null : [...touched].sort(), history }))
+      .update(
+        JSON.stringify({
+          files,
+          touched: touched === null ? null : [...touched].sort(),
+          history,
+          content: content.digest('hex'),
+        }),
+      )
       .digest('hex'),
   };
   return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore };
