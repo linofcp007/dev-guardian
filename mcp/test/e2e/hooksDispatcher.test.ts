@@ -1985,6 +1985,14 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       const r = hook(preToolUse('Bash', { command: 'node .specs/guardian.cjs scan --project . --format json' }, projectDir));
       expect(r.stdout).toBeUndefined();
     });
+
+    // Review of 3.6.0, finding 9: a denied command padded past a cap ran with a note.
+    it('a command cut short by the 512 KB cap asks the user, naming the cap', () => {
+      const r = hook(preToolUse('Bash', { command: `${'echo x; '.repeat(70_000)}rm -rf /` }, projectDir));
+      expect(out(r).permissionDecision).toBe('ask');
+      // Under load the hook's real 2.5 s budget may be named too: the cap leads.
+      expect(out(r).permissionDecisionReason).toMatch(/too large or too deeply nested to assess in full \(over 512 KB/);
+    }, 30_000);
   });
 
   describe('third-party MCP write tools are guarded like Write (item 18)', () => {

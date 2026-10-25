@@ -1377,8 +1377,11 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   if (vet?.context) notes.push(vet.context);
   const context = notes.length > 0 ? { additionalContext: notes.join('\n') } : {};
   // The user's decision, not a hazard (review 8, C2: an agent-run `baseline
-  // update`): Claude Code asks the user, showing them why. With the block
-  // switched off it is only the warning above, as a block would be.
+  // update`; review of 3.6.0, finding 9: a command a cap or the time budget
+  // cut short, which padding could otherwise push a denied command past):
+  // Claude Code asks the user, showing them why. With the block switched off
+  // it is only the warning above, as a block would be. An internal error of
+  // the guard is no question — it fails open, as every hook does.
   if (a.ask && cfg.bash.block) {
     return respond('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: `dev-guardian: ${a.ask}.`, ...context });
   }

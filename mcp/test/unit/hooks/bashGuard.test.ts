@@ -4597,3 +4597,56 @@ describe('assessBashCommand — review of 3.6.0: a mass deletion handed over a p
     expect(assessBashCommand(command, { shell, ...win }).level).toBe(level);
   });
 });
+
+// Review of 3.6.0, finding 9: a command a cap or the budget cut short only
+// warned, so a denied command padded past a cap ran with a note. The user
+// decides now (`ask`); the level stays `warn` for `check --bash`.
+describe('assessBashCommand — review of 3.6.0: a command cut short by a cap is the user’s to decide (finding 9)', () => {
+  const ticking = (): (() => number) => {
+    let t = 0;
+    return () => (t += 1);
+  };
+
+  it.each([
+    ['past 512 KB', (): BashAssessment => assessBashCommand(`${'echo x; '.repeat(70_000)}rm -rf /`), /over 512 KB/],
+    ['a statement over 16 KB', (): BashAssessment => assessBashCommand(`echo ${'a'.repeat(20_000)}`), /a statement over 16 KB/],
+    ['the time budget', (): BashAssessment => assessBashCommand('echo one; echo two; echo three', { budgetMs: 1, now: ticking() }), /time budget ran out/],
+    [
+      'nested past the depth',
+      (): BashAssessment => assessBashCommand(`bash -c "bash -c \\"bash -c 'bash -c \\\\\\"rm -rf /\\\\\\"'\\""`),
+      /nested more than 3 levels deep/,
+    ],
+  ] as const)('%s: the hook asks, naming the cap', (_label, run, cause) => {
+    const a = run();
+    expect(a.level).toBe('warn');
+    expect(a.rules).toContain('partially-assessed');
+    expect(a.ask).toMatch(cause);
+    expect(a.ask).toMatch(/the user decides/);
+  }, 30_000);
+
+  it('a block found before the cap still blocks, and asks nothing', () => {
+    const a = assessBashCommand(`rm -rf /; echo ${'a'.repeat(20_000)}`);
+    expect(a.level).toBe('block');
+    expect(a.ask).toBeUndefined();
+  });
+
+  it('a baseline update cut short asks once, with both reasons', () => {
+    const a = assessBashCommand(`dev-guardian baseline update; echo ${'a'.repeat(20_000)}`);
+    expect(a.ask).toMatch(/EVERY current finding[\s\S]*; and this command is too large/);
+  });
+
+  it.each([
+    ['a 58 KB command of many ordinary statements', Array.from({ length: 1400 }, (_, i) => `echo step${i} >> log.txt`).join(' && ')],
+    ['a 30 KB heredoc fed to bash', `bash <<'EOF'\n${'echo building; npm run build > out.log 2>&1\n'.repeat(700)}EOF`],
+  ])('%s asks nothing', (_label, command) => {
+    const a = assessBashCommand(command);
+    expect(a.level).toBe('ok');
+    expect(a.ask).toBeUndefined();
+  });
+
+  it('an [IO.File] call whose content runs past the argument cap only warns: a long inline file body is ordinary', () => {
+    const a = assessBashCommand(`[IO.File]::WriteAllText('notes.md', '${'x'.repeat(600)}')`, { shell: 'powershell' });
+    expect(a.rules).toContain('partially-assessed');
+    expect(a.ask).toBeUndefined();
+  });
+});

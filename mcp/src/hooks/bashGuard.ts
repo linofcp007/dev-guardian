@@ -160,7 +160,9 @@ export interface BashAssessment {
   denyMessage?: string;
   /**
    * Set when the command is the user's decision to take rather than a hazard —
-   * `dev-guardian baseline update` (review 8, C2) — and nothing blocks it: the
+   * `dev-guardian baseline update` (review 8, C2), or a command a cap or the
+   * time budget cut short (review of 3.6.0, finding 9: past 512 KB, 16 KB of a
+   * statement, the budget, the nesting depth) — and nothing blocks it: the
    * hook asks the user, with this as the reason, instead of letting it run.
    * The level stays `warn`, which is what `check --bash` and a hook whose
    * block is switched off report.
@@ -4857,6 +4859,30 @@ function partialRule(notes: Notes): MatchedRule | null {
     : { id: 'partially-assessed', level: 'warn', reason: `part of this command was not assessed (${causes.join('; ')})` };
 }
 
+/**
+ * The question for a command a cap or the budget cut short (review of 3.6.0,
+ * finding 9): past 512 KB, 16 KB of one statement, the time budget or the
+ * nesting depth, what follows was never judged — and padding a command that
+ * would be denied past one of them made it run with only a note. Those caps
+ * are deliberate limits an input can reach on purpose, so the user decides
+ * ({@link BashAssessment.ask}). An internal error (`failed`) stays a warning:
+ * the hooks fail open on their own faults (docs/maintainers/architecture.md),
+ * and so do the path-resolution limits (`calls`, `links`), whose ordinary
+ * triggers — a long file body written inline, a command touching many
+ * directories — are everyday work.
+ */
+function capQuestion(notes: Notes): string | undefined {
+  const causes = [
+    ...(notes.command ? ['over 512 KB'] : []),
+    ...(notes.statement ? ['a statement over 16 KB'] : []),
+    ...(notes.budget ? ['the assessment time budget ran out'] : []),
+    ...(notes.depth ? [`nested more than ${MAX_NESTING} levels deep`] : []),
+  ];
+  return causes.length === 0
+    ? undefined
+    : `this command is too large or too deeply nested to assess in full (${causes.join('; ')}), so what it runs past that point was not checked — the user decides whether to run it`;
+}
+
 /** Runs of spaces and tabs as one space: no rule pattern tells them apart, and padding stops counting. */
 function collapseBlanks(text: string): string {
   return text.replace(/[ \t]{2,}/g, ' ');
@@ -5041,7 +5067,10 @@ function assessReadings(
   const blocks = effective.filter((r) => r.level === 'block');
   const only = blocks.length === 1 ? blocks[0] : undefined;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
-  const ask = blocks.length === 0 ? byId.get(RULE_BASELINE_UPDATE.id)?.reason : undefined;
+  // Nothing blocks: the user decides an agent-run `baseline update`, and a
+  // command a cap cut short (finding 9) — a block always wins over a question.
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q): q is string => q !== undefined);
+  const ask = blocks.length === 0 && questions.length > 0 ? questions.join('; and ') : undefined;
 
   return {
     level: effective[0]?.level ?? 'ok',
