@@ -61,6 +61,7 @@ import { shellcheckParser } from '../runners/scannerParsers/shellcheck.js';
 import { detektParser } from '../runners/scannerParsers/detekt.js';
 import { rubocopParser } from '../runners/scannerParsers/rubocop.js';
 import { detektFiles } from '../runners/detektRun.js';
+import { testCommandEnv } from '../fixpr/testCommandEnv.js';
 import { rubocopFiles } from '../runners/rubocopRun.js';
 import { staticcheckErrors, staticcheckParser } from '../runners/scannerParsers/staticcheck.js';
 import { SHELLCHECK, shellcheckScripts, shellScripts } from '../runners/shellcheckRun.js';
@@ -393,11 +394,16 @@ async function runEslint(ctx: InvokeContext, reportDir: string, out: Collected):
     );
   }
   const file = join(reportDir, 'eslint.json');
+  // The project's ESLint and its eslint.config.js are the project's code: they
+  // get the environment create_fix_pr gives a test command (a toolchain's
+  // locations, no credential, no GUARDIAN_*), never the server's own, which
+  // can hold a GITHUB_TOKEN or cloud keys (review of 3.6.0).
   const run = await runProcess({
     command: process.execPath,
     args: [eslint, '--format', 'json', '--output-file', file, '.'],
     cwd: ctx.projectPath,
-    env: ctx.scriptEnv,
+    env: testCommandEnv(ctx.scriptEnv),
+    extendEnv: false,
     signal: ctx.signal,
     onLog: ctx.onLog,
   });

@@ -229,6 +229,24 @@ describe('quality_check', () => {
     expect(calls.some((c) => c.command === 'npx')).toBe(false);
   });
 
+  it("the project's ESLint (its code) gets a test command's environment: no credential, no GUARDIAN_*", async () => {
+    const saved = { token: process.env['GITHUB_TOKEN'], guardian: process.env['GUARDIAN_OFFLINE'] };
+    process.env['GITHUB_TOKEN'] = 'ghp_fake_for_the_test';
+    try {
+      await quality(polyglot());
+    } finally {
+      if (saved.token === undefined) delete process.env['GITHUB_TOKEN'];
+      else process.env['GITHUB_TOKEN'] = saved.token;
+    }
+    const eslint = calls.find((c) => c.args[0]?.endsWith('eslint.js'));
+    expect(eslint?.extendEnv).toBe(false);
+    const names = Object.keys(eslint?.env ?? {});
+    expect(names.some((n) => n.toUpperCase() === 'PATH')).toBe(true);
+    expect(names).not.toContain('GITHUB_TOKEN');
+    expect(names.filter((n) => n.toUpperCase().startsWith('GUARDIAN_'))).toEqual([]);
+    expect(saved.guardian).toBe(process.env['GUARDIAN_OFFLINE']);
+  });
+
   it('honours categories in the response, and still records every finding', async () => {
     const { r, p } = await quality(polyglot(), { categories: ['duplicate'] });
     expect(total(r.findings_count_by_severity)).toBe(2);
