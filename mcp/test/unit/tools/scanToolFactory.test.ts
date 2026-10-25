@@ -623,6 +623,21 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
     expect(calls).toHaveLength(2);
   });
 
+  // An auto_fix call asks for files to be rewritten: autofix tree T, `git
+  // checkout .` back to T, re-run inside the window — the cache answered
+  // with the first run, and nothing was rewritten.
+  it('never answers an auto_fix call from the cache', async () => {
+    const { tool, calls } = countingTool('key_autofix_scan', {
+      auto_fix: z.boolean().optional(),
+      allow_dirty: z.boolean().optional(),
+    });
+    const input = { project_path: projectPath, auto_fix: true, allow_dirty: true };
+    await tool.handler(input, plugin);
+    const again = okResult<CachePayload>(await tool.handler(input, plugin));
+    expect(again.cached).toBeUndefined();
+    expect(calls).toHaveLength(2);
+  });
+
   it('never serves a run whose scanner was missing or failed — install, re-run, and the re-run scans', async () => {
     // A run with the scanner not installed is `completed` with coverage
     // `none`, and its own warning says "install … and re-run". The re-run,

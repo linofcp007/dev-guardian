@@ -479,7 +479,10 @@ async function runScanPipeline<TInput extends ScanToolBaseInput>(
   // after `install_toolchain` had already made the scanner visible.
   const ttl = config.cacheTtlMs ?? FIVE_MINUTES_MS;
   const fresh = new Date(Date.now() - ttl).toISOString();
-  if (input.force !== true) {
+  // Nor is an auto_fix call ever answered from the cache: it asks for files
+  // to be rewritten, and a tree autofixed, restored (`git checkout .`) and
+  // autofixed again inside the window got the first run back, nothing rewritten.
+  if (input.force !== true && input.auto_fix !== true) {
     const cached = plugin.storage.scans.findCacheHit({
       cache_key: cacheKey,
       freshThreshold: fresh,
