@@ -254,13 +254,21 @@ describe('validateStatically — unknown, never unreachable', () => {
     expect(v?.verdict).toBe('unknown');
   });
 
-  it('STILL reports unreachable when the language legitimately declares no routes', () => {
-    // no_matches means the rules ran and found nothing, so no route in this
-    // language can reach anything. The strict reading ("only ok") would answer
-    // unknown for every file in every language with no HTTP surface.
+  it('STILL reports unreachable when the language declares no routes and its files import nothing', () => {
+    // no_matches means the rules ran and found nothing in this language. When
+    // its files also import nothing (no edge resolved, none unresolved), a
+    // file of it is a self-contained script no route of the project's other
+    // languages reaches — the case the strict reading ("only ok") would have
+    // turned into unknown.
+    const byExtension = (path: string): string | null => (path.endsWith('.py') ? 'python' : 'typescript');
     const v = validateStatically(input({
       ...orphan,
-      snapshot: { ...input().snapshot, coverage: [coverage({ status: 'no_matches', routes_found: 0 })] },
+      languageOf: byExtension,
+      findings: [finding({ file_path: 'scripts/cleanup.py' })],
+      snapshot: {
+        ...input().snapshot,
+        coverage: [coverage(), coverage({ language: 'python', status: 'no_matches', routes_found: 0 })],
+      },
     }))[0];
     expect(v?.verdict).toBe('unreachable');
   });
@@ -306,6 +314,153 @@ describe('validateStatically — unknown, never unreachable', () => {
       findings: [finding({ fingerprint: 'a' }), finding({ fingerprint: 'b' })],
     }));
     expect(out.map((v) => v.fingerprint)).toEqual(['a', 'b']);
+  });
+});
+
+describe('validateStatically — a route list known to be incomplete', () => {
+  // `unreachable` says "no route imports this file". It is only as complete
+  // as the route list: a framework the routes pack does not know (Next.js
+  // pages/api or app/**/route.ts, Remix, SvelteKit, a Lambda handler, axum,
+  // aiohttp) declares routes that never become roots, and a SQL injection in
+  // pages/api/users.ts read `unreachable`, confidence medium.
+  const nextGraph = buildImportGraph([imp('pages/api/users.ts', 'lib/db.ts')]);
+
+  it('is unknown when the snapshot holds no code route at all', () => {
+    const v = validateStatically(input({
+      graph: nextGraph,
+      findings: [finding({ file_path: 'pages/api/users.ts' })],
+      snapshot: {
+        ...input().snapshot,
+        routes: [],
+        coverage: [coverage({ status: 'no_matches', routes_found: 0 })],
+      },
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => g.includes('no route') && g.includes('framework'))).toBe(true);
+  });
+
+  it('is unknown with only spec routes: they are never roots', () => {
+    const v = validateStatically(input({
+      graph: nextGraph,
+      findings: [finding({ file_path: 'lib/db.ts' })],
+      snapshot: { ...input().snapshot, routes: [route({ provenance: 'spec', file: 'openapi.yaml' })] },
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+  });
+
+  it("is unknown when the finding's language has files and edges but no route", () => {
+    // Another language's routes are roots, so the global check passes — but
+    // none can import a TypeScript file, so every one of them would read
+    // unreachable: the Next.js API beside a Flask service.
+    const byExtension = (path: string): string | null => (path.endsWith('.py') ? 'python' : 'typescript');
+    const v = validateStatically(input({
+      languageOf: byExtension,
+      graph: buildImportGraph([imp('pages/api/users.ts', 'lib/db.ts'), imp('app/web.py', 'app/models.py')]),
+      findings: [finding({ file_path: 'pages/api/users.ts' })],
+      snapshot: {
+        ...input().snapshot,
+        routes: [route({ file: 'app/web.py', language: 'python', framework: 'flask' })],
+        coverage: [
+          coverage({ language: 'python' }),
+          coverage({ language: 'typescript', status: 'no_matches', routes_found: 0 }),
+        ],
+      },
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => g.includes("'typescript'") && g.includes('no_matches'))).toBe(true);
+  });
+
+  it('is unknown when Semgrep only partly parsed some file', () => {
+    const v = validateStatically(input({
+      graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts')]),
+      snapshot: {
+        ...input().snapshot,
+        missing_tools: ['semgrep'],
+        partially_parsed: [{ file: 'src/admin.ts', type: 'PartialParsing', message: 'x' }],
+      },
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => g.includes('partly parsed') && g.includes("'src/admin.ts'"))).toBe(true);
+  });
+
+  it("blocks only the partly parsed file's own family", () => {
+    // A PHP file Semgrep could not fully parse hides no route and no import
+    // that reaches a TypeScript file; a JavaScript one can (one resolver).
+    const byExtension = (path: string): string | null =>
+      path.endsWith('.php') ? 'php' : path.endsWith('.js') ? 'javascript' : 'typescript';
+    const verdictWith = (partialFile: string): string | undefined =>
+      validateStatically(input({
+        languageOf: byExtension,
+        graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts')]),
+        snapshot: {
+          ...input().snapshot,
+          missing_tools: ['semgrep'],
+          partially_parsed: [{ file: partialFile, type: 'PartialParsing', message: 'x' }],
+        },
+      }))[0]?.verdict;
+    expect(verdictWith('wp/rest-controller.php')).toBe('unreachable');
+    expect(verdictWith('public/legacy.js')).toBe('unknown');
+  });
+
+  it('blocks every family when the run also left files unscanned', () => {
+    const byExtension = (path: string): string | null => (path.endsWith('.php') ? 'php' : 'typescript');
+    const v = validateStatically(input({
+      languageOf: byExtension,
+      graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts')]),
+      snapshot: {
+        ...input().snapshot,
+        missing_tools: ['semgrep'],
+        tools_run: [{ name: 'semgrep', status: 'ok', unscanned: { oversized: 2 } }],
+        partially_parsed: [{ file: 'wp/rest-controller.php', type: 'PartialParsing', message: 'x' }],
+      },
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+  });
+
+  it('reads a path too long to open, named on the Semgrep run, as partly parsed', () => {
+    const v = validateStatically(input({
+      graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts')]),
+      snapshot: {
+        ...input().snapshot,
+        missing_tools: ['semgrep'],
+        tools_run: [{
+          name: 'semgrep', status: 'ok',
+          partially_parsed: [{ file: 'src/very/long/admin.ts', type: 'Path too long', message: 'x' }],
+        }],
+      },
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => g.includes("'src/very/long/admin.ts'"))).toBe(true);
+  });
+
+  it('does not hold a JavaScript file to no_matches while a TypeScript route can import it', () => {
+    const byExtension = (path: string): string | null => (path.endsWith('.js') ? 'javascript' : 'typescript');
+    const v = validateStatically(input({
+      languageOf: byExtension,
+      graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts'), imp('lib/a.js', 'lib/b.js')]),
+      findings: [finding({ file_path: 'lib/orphan.js' })],
+      snapshot: {
+        ...input().snapshot,
+        coverage: [coverage(), coverage({ language: 'javascript', status: 'no_matches', routes_found: 0 })],
+      },
+    }))[0];
+    expect(v?.verdict).toBe('unreachable');
+  });
+
+  it('is unknown when part of the project was not read (missing_tools)', () => {
+    const v = validateStatically(input({
+      graph: buildImportGraph([imp('src/routes.ts', 'src/other.ts')]),
+      snapshot: { ...input().snapshot, missing_tools: ['semgrep'] },
+    }))[0];
+    expect(v?.verdict).toBe('unknown');
+    expect(v?.coverage_gaps.some((g) => g.includes("'semgrep'"))).toBe(true);
+  });
+
+  it('leaves the positive direction untouched', () => {
+    const v = validateStatically(input({
+      snapshot: { ...input().snapshot, missing_tools: ['semgrep'] },
+    }))[0];
+    expect(v?.verdict).toBe('reachable');
   });
 });
 
