@@ -781,13 +781,12 @@ function parseArgs(argv) {
       out.scope = r.value;
       i = r.nextIndex;
     } else if (a.startsWith('--scope=')) out.scope = a.slice('--scope='.length);
-    else if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    else if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return { error: r.error };
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else out._.push(a);
+    } else out._.push(a);
   }
   const scope = out.scope;
   if (scope !== 'project' && scope !== 'global') return { error: `--scope must be project or global (got '${scope}')` };
@@ -837,7 +836,11 @@ function cmdMcpConfig(argv) {
     process.exit(1);
   }
 
-  const projectPath = resolve(args.project);
+  // A write puts the rules files (AGENTS.md, GEMINI.md, …) and the
+  // project-scope configs in the project — judged like every command's: run
+  // from the home directory, `mcp-config all --write` wrote them all there.
+  // A preview writes nothing and runs anywhere.
+  const projectPath = args.write ? resolveProjectOrExit(args.project) : resolve(args.project);
   const env = { os: detectOs(), home: homedir(), appData: process.env.APPDATA, projectPath };
   const hosts = hostArg === 'all' ? [...ALL_HOSTS] : [hostArg];
 
@@ -1327,6 +1330,24 @@ function takeOperand(argv, i, flagName, requireNonEmpty = false) {
 }
 
 /**
+ * `--project <path>` or `--project=<path>` at `argv[i]` (`a`, one of the
+ * two), for every command that takes it. An empty value is refused in both
+ * spellings: `resolve('')` is the working directory, so `--project "$DIR"`
+ * with `DIR` unset scanned — and `baseline update` rewrote the baseline of —
+ * wherever the command happened to run.
+ *
+ * @param {string[]} argv
+ * @param {number} i
+ * @param {string} a
+ * @returns {Operand}
+ */
+function takeProject(argv, i, a) {
+  if (a === '--project') return takeOperand(argv, i, a, true);
+  const value = a.slice('--project='.length);
+  return isMissingOperand(value, true) ? { error: '--project requires a value' } : { value, nextIndex: i };
+}
+
+/**
  * @typedef {{
  *   project: string,
  *   failOn: string,
@@ -1390,13 +1411,12 @@ function parseScanArgs(argv) {
         if (isMissingOperand(value, true)) return { error: `${ref.flag} requires a value` };
       }
       out[ref.key] = value;
-    } else if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    } else if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
+    } else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
       const r = takeAcceptPartialParse(argv, i, a);
       if (r.error !== undefined) return r;
       out.acceptPartialParse.push(r.value);
@@ -1512,13 +1532,12 @@ function parseBaselineUpdateArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
+    } else if (a === '--accept-partial-parse' || a.startsWith('--accept-partial-parse=')) {
       const r = takeAcceptPartialParse(argv, i, a);
       if (r.error !== undefined) return r;
       out.acceptPartialParse.push(r.value);
@@ -2266,13 +2285,12 @@ function parseCiInitArgs(argv) {
     if (a === '--write') out.write = true;
     else if (a === '--force') out.force = true;
     else if (a === '--attest') out.attest = true;
-    else if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    else if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return { error: r.error };
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--branch') {
+    } else if (a === '--branch') {
       const r = takeOperand(argv, i, a, true); // requireNonEmpty — an empty branch name is never meaningful
       if (r.error !== undefined) return { error: r.error };
       out.branch = r.value;
@@ -3216,13 +3234,12 @@ function parseStatusArgs(argv) {
   const out = { project: process.cwd() };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else return { error: `Unknown flag: ${a}` };
+    } else return { error: `Unknown flag: ${a}` };
   }
   return { value: out };
 }
@@ -3236,13 +3253,12 @@ function parseDashboardArgs(argv) {
   const out = { project: process.cwd(), out: undefined, noOpen: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) out.project = a.slice('--project='.length);
-    else if (a === '--out') {
+    } else if (a === '--out') {
       // requireNonEmpty: true — fix-round-2 correction, mirroring --sarif's
       // OWN existing treatment in parseScanArgs exactly (both call sites,
       // not just this one). An empty --out is never a real destination
@@ -3315,15 +3331,11 @@ function parseImportSarifArgs(argv) {
   const out = { file: undefined, project: process.cwd(), allowOutside: false, maxResults: undefined };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a, true);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) {
-      const value = a.slice('--project='.length);
-      if (isMissingOperand(value, true)) return { error: '--project requires a value' };
-      out.project = value;
     } else if (a === '--allow-outside-project') out.allowOutside = true;
     else if (a === '--max-results' || a.startsWith('--max-results=')) {
       let raw = a.slice('--max-results='.length);
@@ -3657,15 +3669,11 @@ function parseDbAdoptArgs(argv) {
   const out = { project: process.cwd(), yes: false, rehome: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
-    if (a === '--project') {
-      const r = takeOperand(argv, i, a, true);
+    if (a === '--project' || a.startsWith('--project=')) {
+      const r = takeProject(argv, i, a);
       if (r.error !== undefined) return r;
       out.project = r.value;
       i = r.nextIndex;
-    } else if (a.startsWith('--project=')) {
-      const value = a.slice('--project='.length);
-      if (isMissingOperand(value, true)) return { error: '--project requires a value' };
-      out.project = value;
     } else if (a === '--yes') out.yes = true;
     else if (a === '--rehome') out.rehome = true;
     else return { error: `Unknown flag: ${a}` };

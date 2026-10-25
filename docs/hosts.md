@@ -38,7 +38,7 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | Flag | Meaning |
 | --- | --- |
 | `--write` | write or merge instead of printing |
-| `--project <path>` | the project to configure (default: current directory) |
+| `--project <path>` | the project to configure (default: current directory). With `--write` it is judged like every command's `--project`: a filesystem root, your home directory or a path that is not a directory is a usage error, so `all --write` run from `~` writes nothing there. An empty value is a usage error |
 | `--scope project\|global`, `--global` | which config to write. `all --write` skips the two global-only hosts (Windsurf, Claude Desktop) unless `--global` is given, so it never touches a global config by surprise; naming either host directly writes its global config. |
 | `--update-mcp` | refresh an entry or rules block that is already there but out of date (`--force` is a deprecated alias) |
 

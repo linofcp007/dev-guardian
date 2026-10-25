@@ -25,7 +25,7 @@ node dev-guardian.mjs baseline update --project .
 
 | Flag | Meaning |
 | --- | --- |
-| `--project <path>` | project to scan (default: current directory) |
+| `--project <path>` | project to scan (default: current directory). An empty value — `--project "$DIR"` with `DIR` unset, or `--project=` — is a usage error (exit 3), never the current directory |
 | `--fail-on <severity>` | `info`, `low`, `medium`, `high` (default) or `critical`: a finding new to the baseline at or above it fails the gate |
 | `--format human\|json` | report on stdout — the JSON keys: [below](#the-json-verdict) |
 | `--compact` | with `--format json`: `new_findings` holds only the blocking findings, beside `new_findings_count` and `new_findings_by_severity` — the same keys, small enough to hand to a tool call (623 KB of JSON for 487 new findings did not). Without `--format json` it is a usage error (exit 3) |
