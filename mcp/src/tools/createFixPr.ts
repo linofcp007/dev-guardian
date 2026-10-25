@@ -541,7 +541,7 @@ async function fetchUpgradeSteps(
       originProjectPath: projectPath,
     };
     // The planner runs `npm outdated`, `composer outdated`, `cargo outdated`,
-    // `go list -m -u`, `bundle outdated` and `dotnet restore` in this tree:
+    // `go list -m -u` and `dotnet restore` in this tree (never Bundler):
     // the repository's own package-manager configuration is set aside first,
     // and every one of them runs with the package-manager environment.
     const planDir = inWorktree(created.worktree.path, prefix);

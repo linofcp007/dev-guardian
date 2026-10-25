@@ -81,20 +81,21 @@ describe('deps_update_plan on a fresh checkout — lock file, nothing installed 
   );
 
   it.skipIf(!BUNDLE)(
-    'bundler: plans from Gemfile.lock with no gems installed, and only re-locks',
+    'bundler: never run — the Gemfile is Ruby code — and the failure says so',
     async () => {
       const project = makeTempDir('fresh-bundler-');
       writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack', '2.2.3'\n");
       execFileSync('bundle', ['lock'], { cwd: project, shell: SHELL, stdio: 'ignore' });
       expect(existsSync(join(project, 'Gemfile.lock'))).toBe(true);
+      // The Gemfile runs on every Bundler command: one that writes a marker.
+      writeFileSync(join(project, 'Gemfile'), "File.write('GEMFILE_RAN', 'x')\nsource 'https://rubygems.org'\ngem 'rack', '2.2.3'\n");
 
       const r = await plan(project);
-      expect(r.runner_failures.filter((f) => f.ecosystem === 'rubygems')).toEqual([]);
-      expect(r.plan).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ package_name: 'rack', installed_version: '2.2.3', upgrade_command: 'bundle lock --update rack' }),
-        ]),
+      expect(existsSync(join(project, 'GEMFILE_RAN'))).toBe(false);
+      expect(r.runner_failures).toEqual(
+        expect.arrayContaining([expect.objectContaining({ ecosystem: 'rubygems', code: 'gemfile_is_code' })]),
       );
+      expect(r.plan.filter((s) => s.ecosystem === 'rubygems')).toEqual([]);
     },
     TIMEOUT_MS,
   );

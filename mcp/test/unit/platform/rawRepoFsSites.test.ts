@@ -67,6 +67,13 @@ const ALLOWED: Record<string, Allowed> = {
       '--reset-exclusions-from (CI only, clean checkout) restoring an exclusion file after lstat-checking ' +
       'every path segment and unlinking the old one, written with flag wx; every read goes through projectFs',
   },
+  'src/deps/npmPlanningCopy.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason:
+      "the manifest and lock files, read through projectFs, written (flag wx) into the run's own mkdtemp " +
+      'directory, where npm outdated runs without the repository .npmrc',
+  },
   'src/dast/evidence.ts': {
     apis: { writeFileSync: 1 },
     kind: 'own',

