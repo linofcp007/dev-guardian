@@ -192,6 +192,29 @@ describe('iacLookingFiles', () => {
     const ignores = (rel: string): boolean => rel === 'fixtures' || rel.startsWith('fixtures/');
     expect(iacLookingFiles(dir, { ignores }).files).toEqual(['main.tf']);
   });
+
+  // 3.6.1: `trivy config` reads every one of these (measured on 0.74.0,
+  // 2026-10-25: a Dockerfile in each was a Result, node_modules/ and
+  // vendor/ included). A directory named like build output is left out at
+  // the root only — a docker action at `.github/actions/build/` is IaC.
+  it('walks a directory named like build output below the root, and the root .guardian/ alone is left out', () => {
+    const dir = tree({
+      '.github/actions/build/Dockerfile': 'FROM alpine\n',
+      'packages/a/dist/Dockerfile': 'FROM alpine\n',
+      'lib/.guardian/Dockerfile': 'FROM alpine\n',
+      '.kiro/Dockerfile': 'FROM alpine\n',
+      'build/Dockerfile': 'FROM alpine\n',
+      'target/Dockerfile': 'FROM alpine\n',
+      '.guardian/Dockerfile': 'FROM alpine\n',
+      'svc/.venv/Dockerfile': 'FROM alpine\n',
+    });
+    expect(iacLookingFiles(dir, null).files).toEqual([
+      '.github/actions/build/Dockerfile',
+      '.kiro/Dockerfile',
+      'lib/.guardian/Dockerfile',
+      'packages/a/dist/Dockerfile',
+    ]);
+  });
 });
 
 /**

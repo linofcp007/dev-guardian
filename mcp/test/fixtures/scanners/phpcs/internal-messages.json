@@ -1,0 +1,153 @@
+{
+  "totals": {
+    "errors": 11,
+    "warnings": 3,
+    "fixable": 1
+  },
+  "files": {
+    "nocode.php": {
+      "errors": 0,
+      "warnings": 1,
+      "messages": [
+        {
+          "message": "No PHP code was found in this file and short open tags are not allowed by this install of PHP. This file may be using short open tags but PHP does not allow them.",
+          "source": "Internal.NoCodeFound",
+          "severity": 5,
+          "fixable": false,
+          "type": "WARNING",
+          "line": 1,
+          "column": 1
+        }
+      ]
+    },
+    "broken5.php": {
+      "errors": 6,
+      "warnings": 1,
+      "messages": [
+        {
+          "message": "Missing file doc comment",
+          "source": "Squiz.Commenting.FileComment.Missing",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "message": "An error occurred during processing; checking has been aborted. The error message was: Undefined array key -1 in /project/vendor/squizlabs/php_codesniffer/src/Standards/PSR12/Sniffs/Functions/ReturnTypeDeclarationSniff.php on line 87\\r\\nThe error originated in the PSR12.Functions.ReturnTypeDeclaration sniff on line 87.",
+          "source": "Internal.Exception",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "message": "Possible parse error: non-abstract method defined as abstract",
+          "source": "Squiz.Commenting.ClosingDeclarationComment.Abstract",
+          "severity": 5,
+          "fixable": false,
+          "type": "WARNING",
+          "line": 2,
+          "column": 21
+        },
+        {
+          "message": "Missing doc comment for function ()",
+          "source": "Squiz.Commenting.FunctionComment.Missing",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 2,
+          "column": 21
+        },
+        {
+          "message": "Expected 1 space after FUNCTION keyword; 0 found",
+          "source": "Squiz.Functions.MultiLineFunctionDeclaration.SpaceAfterFunction",
+          "severity": 5,
+          "fixable": true,
+          "type": "ERROR",
+          "line": 2,
+          "column": 21
+        },
+        {
+          "message": "There must be a single space between the colon and type in a return type declaration",
+          "source": "PSR12.Functions.ReturnTypeDeclaration.SpaceBeforeReturnType",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 2,
+          "column": 41
+        },
+        {
+          "message": "PHP syntax error: Unclosed '(' on line 2",
+          "source": "Generic.PHP.Syntax.PHPSyntax",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 3,
+          "column": 1
+        }
+      ]
+    },
+    "ok.php": {
+      "errors": 5,
+      "warnings": 1,
+      "messages": [
+        {
+          "message": "Missing file doc comment",
+          "source": "Squiz.Commenting.FileComment.Missing",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 1,
+          "column": 1
+        },
+        {
+          "message": "Processing form data without nonce verification.",
+          "source": "WordPress.Security.NonceVerification.Recommended",
+          "severity": 5,
+          "fixable": false,
+          "type": "WARNING",
+          "line": 2,
+          "column": 6
+        },
+        {
+          "message": "All output should be run through an escaping function (see the Security sections in the WordPress Developer Handbooks), found '$_GET['x']'.",
+          "source": "WordPress.Security.EscapeOutput.OutputNotEscaped",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 2,
+          "column": 6
+        },
+        {
+          "message": "Detected usage of a possibly undefined superglobal array index: $_GET['x']. Check that the array index exists before using it.",
+          "source": "WordPress.Security.ValidatedSanitizedInput.InputNotValidated",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 2,
+          "column": 6
+        },
+        {
+          "message": "$_GET['x'] not unslashed before sanitization. Use wp_unslash() or similar",
+          "source": "WordPress.Security.ValidatedSanitizedInput.MissingUnslash",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 2,
+          "column": 6
+        },
+        {
+          "message": "Detected usage of a non-sanitized input variable: $_GET['x']",
+          "source": "WordPress.Security.ValidatedSanitizedInput.InputNotSanitized",
+          "severity": 5,
+          "fixable": false,
+          "type": "ERROR",
+          "line": 2,
+          "column": 6
+        }
+      ]
+    }
+  }
+}

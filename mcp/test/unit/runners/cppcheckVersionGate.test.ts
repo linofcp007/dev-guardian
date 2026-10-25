@@ -62,16 +62,30 @@ describe('cppcheckSources: the version gate', () => {
     expect(r.toolRun).toEqual({ name: 'cppcheck', status: 'failed', reason: 'cppcheck wrote no XML report' });
   });
 
-  it('no translation unit: no entry, nothing probed', async () => {
-    const r = await cppcheckSources({
+  const filesOnly = (files: string[]) =>
+    cppcheckSources({
       projectPath: makeTempDir('cppcheck-gate-'),
-      files: ['include/a.h', 'README.md'],
+      files,
       scoped: false,
       reportDir: makeTempDir('cppcheck-gate-report-'),
       env: {},
       signal: new AbortController().signal,
     });
+
+  it('no C or C++ at all: no entry, nothing probed', async () => {
+    const r = await filesOnly(['README.md', 'main.go']);
     expect(r).toEqual({ toolRun: null, missing: [], reports: [], cancelled: false });
+    expect(vi.mocked(scannerAvailable)).not.toHaveBeenCalled();
+  });
+
+  // 3.6.1: a header-only library produced no entry at all — its code checked
+  // by nothing, and nothing said so. Not a gap (an Objective-C project has
+  // `.h` files too), but named.
+  it('headers and no translation unit: a skipped entry that says so, no gap, nothing probed', async () => {
+    const r = await filesOnly(['include/lib.hpp', 'include/detail/impl.h', 'README.md']);
+    expect(r.toolRun).toMatchObject({ name: 'cppcheck', status: 'skipped' });
+    expect(r.toolRun?.reason).toMatch(/^2 C\/C\+\+ header\(s\) and no translation unit/);
+    expect(r.missing).toEqual([]);
     expect(vi.mocked(scannerAvailable)).not.toHaveBeenCalled();
   });
 });

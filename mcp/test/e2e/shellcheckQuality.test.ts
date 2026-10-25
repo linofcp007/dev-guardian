@@ -14,8 +14,8 @@
  * skip into a failure.
  */
 
-import { cpSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { cpSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PluginContext } from '../../src/context.js';
@@ -52,6 +52,10 @@ interface Out {
 async function qualityCheck(input: Record<string, unknown>): Promise<{ out: Out; findings: Finding[] }> {
   const dir = resolveProjectPath(makeTempDir('shellcheck-e2e-')).path;
   cpSync(FIXTURE, dir, { recursive: true });
+  return qualityCheckIn(dir, input);
+}
+
+async function qualityCheckIn(dir: string, input: Record<string, unknown>): Promise<{ out: Out; findings: Finding[] }> {
   const db = new Database(':memory:');
   runMigrations(db);
   const p: PluginContext = { storage: new Storage(db), shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
@@ -80,6 +84,22 @@ describe('quality_check: shellcheck over the shell scripts (real shellcheck, gat
     // Disabled by the root rc; the nested rc's SC2164 above was not.
     expect(findings.some((f) => f.rule_id === 'SC2035')).toBe(false);
     expect(findings.filter((f) => /^tools\//.test(f.file_path ?? '') || f.file_path === 'scripts/clean.sh')).toEqual([]);
+  });
+
+  // 3.6.1, measured on 0.11.0: a root rc's `external-sources=true` made
+  // shellcheck read a sourced file outside the project — its variable was
+  // then assigned, and SC2154 gone. The rc is handed on without it.
+  it.skipIf(!INSTALLED)('a root .shellcheckrc never makes it read a sourced file outside the project', async () => {
+    const outside = resolveProjectPath(makeTempDir('shellcheck-e2e-outside-')).path;
+    writeFileSync(join(outside, 'lib.sh'), '#!/bin/sh\noutside_var=1\n');
+    const dir = resolveProjectPath(makeTempDir('shellcheck-e2e-rc-')).path;
+    writeFileSync(join(dir, '.shellcheckrc'), 'disable=SC2034 external-sources=true\n');
+    writeFileSync(join(dir, 'a.sh'), `#!/bin/sh\n. '${join(outside, 'lib.sh').split('\\').join('/')}'\necho "$outside_var"\n`);
+    const { out, findings } = await qualityCheckIn(dir, {});
+    const run = out.tools_run.find((t) => t.name === 'shellcheck');
+    expect(run?.status).toBe('ok');
+    expect(run?.reason).toMatch(/not passed on from the root \.shellcheckrc: external-sources=true/);
+    expect(findings.map((f) => f.rule_id)).toContain('SC2154');
   });
 
   it.skipIf(!INSTALLED)('a scope hands it the scope’s scripts only', async () => {

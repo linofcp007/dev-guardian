@@ -24,6 +24,15 @@
  *     `.syft.yaml` above is ignored even with the project as working
  *     directory).
  *   - `SYFT_CHECK_FOR_APP_UPDATE=false` in every run's environment.
+ *   - The root `.guardian/`'s generated output (`platform/guardianOutput.ts`)
+ *     is left out, `--exclude ./<path>` each: measured on Syft 1.55.0
+ *     (2026-10-25), a `package-lock.json` under `.guardian/reports/` became
+ *     components of the project's SBOM, and `./.guardian/reports` left it
+ *     out while `lib/.guardian/reports/` and the root `.guardian/` itself
+ *     were still read; a pattern without `./` is refused on a directory
+ *     scan. An earlier `sbom.cdx.json` there was not re-read — the
+ *     sbom-cataloger is off on a directory scan — but nothing there is the
+ *     project's.
  *
  * `test/unit/runners/syftRun.test.ts` fails when any spawn in `src/` names
  * Syft outside this file.
@@ -31,6 +40,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ROOT_OUTPUT_PATHS } from '../platform/guardianOutput.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 
 /** The empty configuration file written into the working directory. */
@@ -62,7 +72,9 @@ interface SyftInvocation {
 
 /** The argv of one run — pure, for the tests. */
 export function syftArgv(inv: Pick<SyftInvocation, 'target' | 'format' | 'outFile'>, configPath: string): string[] {
-  return [inv.target, '-o', `${inv.format}=${inv.outFile}`, '--quiet', '-c', configPath];
+  // Relative to the scanned directory, where Syft anchors a `./` pattern (module comment).
+  const excludes = ROOT_OUTPUT_PATHS.flatMap((p) => ['--exclude', `./${p}`]);
+  return [inv.target, '-o', `${inv.format}=${inv.outFile}`, '--quiet', '-c', configPath, ...excludes];
 }
 
 /** Run Syft — see the module comment. A config that cannot be written is a failed run, never one without it. */

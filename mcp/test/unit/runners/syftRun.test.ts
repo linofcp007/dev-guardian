@@ -17,6 +17,7 @@ vi.mock('../../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() })
 
 import { runProcess } from '../../../src/runners/processRunner.js';
 import { NEUTRAL_SYFT_CONFIG, runSyft, syftArgv, SYFT_NO_PHONE_HOME_ENV } from '../../../src/runners/syftRun.js';
+import { ROOT_OUTPUT_PATHS } from '../../../src/platform/guardianOutput.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -30,7 +31,7 @@ beforeEach(() => {
 
 describe('syftArgv', () => {
   it('names the target, the output, and the empty config explicitly', () => {
-    expect(syftArgv({ target: '/p', format: 'cyclonedx-json', outFile: '/r/sbom.cdx.json' }, '/r/cfg.yaml')).toEqual([
+    expect(syftArgv({ target: '/p', format: 'cyclonedx-json', outFile: '/r/sbom.cdx.json' }, '/r/cfg.yaml').slice(0, 6)).toEqual([
       '/p',
       '-o',
       'cyclonedx-json=/r/sbom.cdx.json',
@@ -38,6 +39,19 @@ describe('syftArgv', () => {
       '-c',
       '/r/cfg.yaml',
     ]);
+  });
+
+  // 3.6.1, measured on Syft 1.55.0 (the pinned release, 2026-10-25): a
+  // package-lock.json under the root `.guardian/reports/` became components
+  // of the project's SBOM; `--exclude ./.guardian/reports` left it out and
+  // kept `lib/.guardian/reports/` and the root `.guardian/` itself, and the
+  // form without `./` is refused. (An earlier `sbom.cdx.json` there is not
+  // re-read: the sbom-cataloger is off on a directory scan.)
+  it("leaves out the root .guardian/'s generated output, each path anchored with ./", () => {
+    const argv = syftArgv({ target: '/p', format: 'cyclonedx-json', outFile: '/r/sbom.cdx.json' }, '/r/cfg.yaml');
+    const excluded = argv.flatMap((a, i) => (a === '--exclude' ? [argv[i + 1]] : []));
+    expect(excluded).toEqual(ROOT_OUTPUT_PATHS.map((p) => `./${p}`));
+    expect(excluded).toContain('./.guardian/reports');
   });
 });
 
@@ -53,7 +67,7 @@ describe('runSyft', () => {
     expect(call?.command).toBe('syft');
     expect(call?.cwd).toBe(work);
     const config = join(work, NEUTRAL_SYFT_CONFIG);
-    expect(call?.args).toEqual([project, '-o', `spdx-json=${join(work, 'sbom.spdx.json')}`, '--quiet', '-c', config]);
+    expect(call?.args?.slice(0, 6)).toEqual([project, '-o', `spdx-json=${join(work, 'sbom.spdx.json')}`, '--quiet', '-c', config]);
     const text = readFileSync(config, 'utf8');
     expect(text.split('\n').every((l) => l === '' || l.startsWith('#'))).toBe(true);
     expect(call?.env?.['SYFT_CHECK_FOR_APP_UPDATE']).toBe('false');

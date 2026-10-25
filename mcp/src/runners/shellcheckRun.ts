@@ -23,10 +23,21 @@
  *   - SC1091 ("Not following: … was not specified as input") is about the
  *     analysis, not the code, and is excluded; `-x` is never passed, so a
  *     sourced file outside the project is never read.
+ *   - Nor through the rc (3.6.1): its `external-sources=true` is `-x`, and
+ *     with `source-path=` a sourced name is looked for in any directory —
+ *     measured on 0.11.0 (2026-10-25), `. ../outside/lib.sh` was read once
+ *     the root rc said so (and a `source /dev/zero` would read until the
+ *     timeout). The rc shellcheck is handed is a copy, in a temporary
+ *     directory, holding only its `disable`, `enable`, `shell` and
+ *     `extended-analysis` directives ({@link neutralShellcheckRc}), read
+ *     through the bounded project reader — never through a link out of the
+ *     project; the reason names what was left out.
  */
 
 import type { PartialParse, ToolRun } from '../types.js';
-import { readProjectHead, presentInProject } from '../platform/projectFs.js';
+import { describeReadRefusal, readProjectHead, readProjectText } from '../platform/projectFs.js';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { batchArgs } from './argBatches.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
@@ -135,15 +146,101 @@ interface ShellcheckPass {
  * and `missing`), or `failed` with the batch's reason; the reports any batch
  * wrote are kept either way.
  */
-export async function shellcheckScripts(args: {
+export async function shellcheckScripts(args: ShellcheckArgs): Promise<ShellcheckPass> {
+  const rc = readRootRc(args.projectPath);
+  if (rc === null || 'refused' in rc) {
+    const note = rc === null ? [] : [`the root .shellcheckrc was not honoured: ${rc.refused}`];
+    return checkScripts(args, ['--norc'], note, false);
+  }
+  const neutral = neutralShellcheckRc(rc.text);
+  let dir: string;
+  try {
+    dir = mkdtempSync(join(tmpdir(), 'dg-shellcheckrc-'));
+    writeFileSync(join(dir, '.shellcheckrc'), neutral.text, 'utf8');
+  } catch (e) {
+    // Never the project's own file instead: what it would switch on is the point.
+    const why = e instanceof Error ? e.message : String(e);
+    return {
+      toolRun: { name: SHELLCHECK, status: 'failed', reason: `could not write the filtered copy of the root .shellcheckrc: ${why}` },
+      missing: false,
+      reports: [],
+      cancelled: false,
+    };
+  }
+  const note =
+    neutral.dropped.length > 0
+      ? [
+          `not passed on from the root .shellcheckrc: ${neutral.dropped.join(', ')} (only disable, enable, shell and ` +
+            'extended-analysis are: external-sources and source-path make shellcheck read files it was not handed, ' +
+            'outside the project too)',
+        ]
+      : [];
+  try {
+    return await checkScripts(args, ['--rcfile', join(dir, '.shellcheckrc')], note, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+interface ShellcheckArgs {
   projectPath: string;
   scripts: readonly string[];
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   onLog?: (line: string) => void;
-}): Promise<ShellcheckPass> {
-  const rootRc = presentInProject(args.projectPath, '.shellcheckrc');
-  const fixed = ['-f', 'json1', ...(rootRc ? ['--rcfile', join(args.projectPath, '.shellcheckrc')] : ['--norc']), '--exclude=SC1091', '--'];
+}
+
+/** The root `.shellcheckrc`'s text (bounded, never through a link out of the project), why it was not read, or null: none. */
+function readRootRc(projectPath: string): { text: string } | { refused: string } | null {
+  const r = readProjectText(projectPath, '.shellcheckrc', RC_MAX_BYTES);
+  if (r.status === 'absent') return null;
+  if (r.status === 'refused') return { refused: describeReadRefusal(r.reason) };
+  return { text: r.text };
+}
+
+/** A `.shellcheckrc` is a few lines; one larger than this is not read. */
+const RC_MAX_BYTES = 64 * 1024;
+
+/**
+ * The directives of a `.shellcheckrc` passed on (shellcheck 0.11.0's wiki
+ * lists `disable`, `enable`, `external-sources`, `source`, `source-path`,
+ * `shell` and `extended-analysis`): every one but those that make shellcheck
+ * read files it was not handed.
+ */
+const RC_KEYS_KEPT: ReadonlySet<string> = new Set(['disable', 'enable', 'shell', 'extended-analysis']);
+
+/**
+ * `text` (a `.shellcheckrc`) with only {@link RC_KEYS_KEPT} directives, one
+ * line for each of its lines, comments removed, and the directives it
+ * dropped, once each. Every `key=value` word of a line is a directive — as
+ * shellcheck reads it, measured on 0.11.0: `disable=SC2034
+ * external-sources=true` on one line, before a `# comment` or a CR, turned
+ * on external sources; `EXTERNAL-SOURCES=` and `external-sources = true` did
+ * not, and are dropped as unknown words.
+ */
+export function neutralShellcheckRc(text: string): { text: string; dropped: string[] } {
+  const dropped: string[] = [];
+  const lines = text.split('\n').map((raw) => {
+    const hash = raw.indexOf('#');
+    const words = (hash < 0 ? raw : raw.slice(0, hash)).trim().split(/\s+/).filter((w) => w !== '');
+    const kept = words.filter((w) => {
+      const eq = w.indexOf('=');
+      if (eq > 0 && RC_KEYS_KEPT.has(w.slice(0, eq))) return true;
+      if (!dropped.includes(w)) dropped.push(w);
+      return false;
+    });
+    return kept.join(' ');
+  });
+  return { text: lines.join('\n'), dropped };
+}
+
+async function checkScripts(
+  args: ShellcheckArgs,
+  rcArgs: readonly string[],
+  notes: readonly string[],
+  honoured: boolean,
+): Promise<ShellcheckPass> {
+  const fixed = ['-f', 'json1', ...rcArgs, '--exclude=SC1091', '--'];
   const batches = batchArgs(args.scripts, { command: 'shellcheck', fixedArgs: fixed });
   const reports: string[] = [];
   const failures: string[] = [];
@@ -188,6 +285,8 @@ export async function shellcheckScripts(args: {
     toolRun.reason += `; partial: ${partial.length} script(s) not fully checked (${shown}${partial.length > 5 ? '; …' : ''})`;
     toolRun.partially_parsed = partial;
   }
-  // The root .shellcheckrc it was handed, named (`runners/repoConfig.ts`).
-  return { toolRun: await nameRepoConfig(toolRun, args.projectPath, 'shellcheck'), missing: partial.length > 0, reports, cancelled };
+  if (notes.length > 0) toolRun.reason += `; ${notes.join('; ')}`;
+  // The root .shellcheckrc it was handed, named (`runners/repoConfig.ts`) — only when it was.
+  const named = honoured ? await nameRepoConfig(toolRun, args.projectPath, 'shellcheck') : toolRun;
+  return { toolRun: named, missing: partial.length > 0, reports, cancelled };
 }

@@ -230,4 +230,25 @@ describe('assessManifestCoverage on a real Trivy report (Gradle and Python)', ()
     },
     TEST_TIMEOUT_MS,
   );
+
+  // 3.6.1, measured on 0.74.0: Trivy reads `requirements.txt` by that exact
+  // name, and a Pipfile only through Pipfile.lock — the pinned file's pip
+  // Result used to cover both beside it.
+  it.skipIf(!TRIVY_INSTALLED)(
+    'a requirements-dev.txt and a Pipfile beside the pinned requirements.txt: one pip Result, both python gaps',
+    () => {
+      const dir = textProject({
+        'requirements.txt': 'django==3.2.0\n',
+        'requirements-dev.txt': 'pytest==7.0.0\n',
+        Pipfile: '[packages]\nflask = "==2.0.0"\n',
+      });
+      const raw = trivyFs(dir);
+      expect((resultsOf(raw) ?? []).map((r) => r.Target)).toEqual(['requirements.txt']);
+      expect(assessManifestCoverage(dir, raw)).toEqual({
+        gaps: [{ ecosystem: 'python', files: ['Pipfile', 'requirements-dev.txt'] }],
+        sawAnyResults: true,
+      });
+    },
+    TEST_TIMEOUT_MS,
+  );
 });

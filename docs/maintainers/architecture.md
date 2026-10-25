@@ -72,7 +72,10 @@ root is the project's code: 3.3.0 left out every folder of that name and a
 pull request hid a command injection in `lib/.guardian/` (review 10, finding
 1). Never add `.guardian` to an any-depth exclusion; walks that only look for
 manifests or languages may keep `PROJECT_WALK_EXCLUDE`, listings that stand
-for what a scanner reads use `SCANNED_WALK_EXCLUDE`. A Semgrep `--exclude`
+for what a scanner reads use `SCANNED_WALK_EXCLUDE`, and the two walks that
+check what Trivy read (its manifests, its IaC-looking files) use
+`trivyWalkSkipsDir` — build output left out at the root only, since Trivy
+reads a `build/` at any depth (3.6.1). A Semgrep `--exclude`
 with a slash is anchored at the GIT ROOT; measure one from Git Bash only with
 `MSYS_NO_PATHCONV=1` (MSYS rewrites a leading `/`).
 
