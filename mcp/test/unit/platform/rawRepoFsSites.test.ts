@@ -212,6 +212,13 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "Psalm's configuration into the temp directory mkdtemp just made, and its JSON report back from the verified report directory",
   },
+  'src/runners/semgrepLongDirs.ts': {
+    apis: { stat: 1, readdir: 1 },
+    kind: 'repo-safe',
+    reason:
+      "the search for Windows' long paths outside git: a listing typed from each directory's Dirents that never " +
+      'descends a link (a junction included), and a stat of the scan target itself, which opens nothing',
+  },
   'src/runners/semgrepRun.ts': {
     apis: { readFileSync: 1, writeFileSync: 1 },
     kind: 'own',
