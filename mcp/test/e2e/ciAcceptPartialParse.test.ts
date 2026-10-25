@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { isInstalled } from '../helpers/toolchain.js';
+import { findPsalm } from '../../src/runners/psalmRun.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(here, '..', '..', '..');
@@ -41,9 +42,19 @@ const FAST_TIMEOUT_MS = 45_000;
 /** Real pipeline runs; a hang-breaker only (see ciCliFixture.test.ts for why it is this large). */
 const SCAN_TIMEOUT_MS = 600_000;
 
-const TOOLCHAIN_AVAILABLE =
+const SCANNERS_AVAILABLE =
   (await isInstalled('semgrep')) && (await isInstalled('gitleaks')) && (await isInstalled('trivy'));
+/**
+ * The fixture is PHP, and since 3.5.0 scan_sast runs Psalm on PHP: without it
+ * (or without php) the scan names `psalm` / `php` missing — a gap no
+ * `--accept-partial-parse` may clear — and the matrix reads 2 where it means
+ * to measure the acceptance. Measured on a machine with php and no Psalm: the
+ * three "accepted" cases exited 2 on `security_scan_full: psalm not installed`.
+ */
+const PSALM_AVAILABLE = findPsalm() !== null && (await isInstalled('php'));
+const TOOLCHAIN_AVAILABLE = SCANNERS_AVAILABLE && PSALM_AVAILABLE;
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
+const REQUIRE_PSALM = process.env['GUARDIAN_REQUIRE_PSALM'] === '1';
 
 // Above the usage tests' cap, so a hung CLI is reported by the cap — naming
 // it — and not by vitest's 10 s default after the fact (review 3.0, R7-I1).
@@ -237,7 +248,11 @@ describe('dev-guardian scan --accept-partial-parse — the gate matrix, real Sem
     expect(otherPath.stdout).toMatch(/--accept-partial-parse wp\/other\.php: no step reported it partly parsed/);
   });
 
-  it.runIf(REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1 — the matrix must have run', () => {
-    expect(TOOLCHAIN_AVAILABLE, 'GUARDIAN_REQUIRE_SEMGREP=1 but semgrep/gitleaks/trivy are not all on PATH.').toBe(true);
+  it.runIf(REQUIRE_SEMGREP)('GUARDIAN_REQUIRE_SEMGREP=1 — semgrep, gitleaks and trivy are on PATH', () => {
+    expect(SCANNERS_AVAILABLE, 'GUARDIAN_REQUIRE_SEMGREP=1 but semgrep/gitleaks/trivy are not all on PATH.').toBe(true);
+  });
+
+  it.runIf(REQUIRE_PSALM)('GUARDIAN_REQUIRE_PSALM=1 — php and Psalm are there, so the matrix ran', () => {
+    expect(PSALM_AVAILABLE, 'GUARDIAN_REQUIRE_PSALM=1 but php or Psalm (psalm.phar) is not on PATH.').toBe(true);
   });
 });
