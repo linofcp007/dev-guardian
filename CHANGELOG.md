@@ -92,6 +92,13 @@ and the push-run history pass left two kinds of change unread.
   download-then-run: 23 s for 4 000 lines). Each is read in linear time now. A workspace pattern with more than six
   `*` now declares its members instead of being a coverage gap, and a skill whose run checks would read more than 64
   times the file reports a download-then-run rather than nothing.
+- **A crafted skill could hold `scan_skill` for minutes** (measured): a line of `curl`, `wget` or `iwr` words, `curl
+  -O` before a long run of letters, `grep … -q`, a run of `<`, `base64 -d` words, unclosed `<code` / `<pre` tags,
+  `cat` words with no `/`, an MCP manifest's never-closed permission arrays, or a `go.mod` of blank lines each took
+  the square of the file's size (files may be 2 MB; a `go.mod` of 160 000 blank lines took 24 s). All are read in
+  linear time. Two rules are bounded as the rest are: grep's `-q` veto counts within 300 characters of `grep`
+  (beyond that the read is reported), and `base64 -d … | sh` is recognised when the pipe comes within 300
+  characters.
 - `guardian-deps`' no-server fallback no longer tells you to run `npm audit` inside the repository.
 - **The standard Renovate profile** (`init_project`'s `renovate.json`) holds every update 3 days, not only the
   auto-merged ones: a group, a major or a digest pin opened a PR the day a version was published. Vulnerability
