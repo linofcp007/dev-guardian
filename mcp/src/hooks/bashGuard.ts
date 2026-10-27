@@ -1660,6 +1660,19 @@ const RULE_SETTINGS: MatchedRule = {
   level: 'block',
   reason: "Writes Claude Code's settings with a key that switches the guardrail hooks off",
 };
+/**
+ * Claude Code's settings deleted or moved away from the shell: the user's
+ * question ({@link BashAssessment.ask}), as an MCP tool's delete of them is
+ * (review of 3.6.0, finding 12) — never a deny, since removing a settings file
+ * is sometimes what the user wants.
+ */
+const RULE_SETTINGS_REMOVE: MatchedRule = {
+  id: 'claude-settings-remove',
+  level: 'warn',
+  reason:
+    "this command deletes or moves away Claude Code's settings, and with them every permissions.deny rule and hook " +
+    'setting they hold — the user decides; to change one setting, edit the file instead',
+};
 
 /**
  * Where a guarded path a command names lies: `inside` — where the hooks of
@@ -1963,8 +1976,14 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   ) {
     out.push({ ...RULE_REGISTRY });
   }
-  const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  const isSettings = (p: string): boolean => isSettingsPath(p, scope.configDirName);
+  const settings = locate(e.writes, isSettings, scope);
   if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
+  // Claude Code's settings deleted or moved away (`rm .claude/settings.json`,
+  // `mv … x`, `Remove-Item`, `del`, a residual of 3.6.1): every
+  // permissions.deny rule they hold goes with them. Matched as their writes
+  // are, `CLAUDE_CONFIG_DIR` included; one provably elsewhere only warns.
+  judged(RULE_SETTINGS_REMOVE, locate(e.removes, isSettings, scope));
   return out;
 }
 
@@ -5102,9 +5121,12 @@ function assessReadings(
   const blocks = effective.filter((r) => r.level === 'block');
   const only = blocks.length === 1 ? blocks[0] : undefined;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
-  // Nothing blocks: the user decides an agent-run `baseline update`, and a
-  // command a cap cut short (finding 9) — a block always wins over a question.
-  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q): q is string => q !== undefined);
+  // Nothing blocks: the user decides an agent-run `baseline update`, a delete
+  // of Claude Code's settings, and a command a cap cut short (finding 9) — a
+  // block always wins over a question.
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, byId.get(RULE_SETTINGS_REMOVE.id)?.reason, capQuestion(notes)].filter(
+    (q): q is string => q !== undefined,
+  );
   const ask = blocks.length === 0 && questions.length > 0 ? questions.join('; and ') : undefined;
 
   return {

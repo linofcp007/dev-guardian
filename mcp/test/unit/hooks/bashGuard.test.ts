@@ -4709,3 +4709,63 @@ describe('assessBashCommand — a PowerShell subexpression inside a double-quote
     expectLinear('PowerShell quoted $() scan', (n) => assessBashCommand('Write-Host "$(Get-Date)"; '.repeat(Math.max(1, Math.floor(n / 26))), ps), 20_000);
   }, 120_000);
 });
+
+// A residual of 3.6.1: an MCP tool that deletes Claude Code's settings or moves
+// them away is asked about (review of 3.6.0, finding 12) — every
+// permissions.deny rule they hold goes with them — but the same from the shell
+// was not judged at all. Asked, never denied: the user may mean it.
+describe("assessBashCommand — deleting or moving away Claude Code's settings from the shell asks the user", () => {
+  const ccd = process.platform === 'win32' ? 'C:\\Users\\me\\.claude-conta2' : '/home/me/.claude-conta2';
+
+  it.each([
+    ['rm .claude/settings.json', 'bash'],
+    ['rm -f ~/.claude/settings.json', 'bash'],
+    ['mv .claude/settings.local.json x', 'bash'],
+    ['unlink .claude/settings.local.json', 'bash'],
+    ['cd .claude && rm settings.json', 'bash'],
+    ['rm "$CLAUDE_CONFIG_DIR/settings.json"', 'bash'],
+    ['rm ~/.claude-conta2/settings.json', 'bash'],
+    ['cmd /c del .claude\\settings.json', 'bash'],
+    ["bash -c 'rm .claude/settings.json'", 'bash'],
+    ['rm /etc/claude-code/managed-settings.json', 'bash'],
+    ['Remove-Item .claude\\settings.json', 'powershell'],
+    ['del .claude\\settings.json', 'powershell'],
+    ['ri .CLAUDE\\Settings.Local.JSON -Force', 'powershell'],
+    ['Remove-Item $env:CLAUDE_CONFIG_DIR\\settings.local.json', 'powershell'],
+    ['Move-Item .claude\\settings.json old.json', 'powershell'],
+    ['Rename-Item .claude\\settings.json settings.old', 'powershell'],
+    ["[IO.File]::Delete('.claude/settings.json')", 'powershell'],
+  ] as const)('%s (%s) asks', (command, shell) => {
+    const a = assessBashCommand(command, { shell, claudeConfigDir: ccd });
+    expect({ command, level: a.level, settings: a.rules.includes('claude-settings-remove') }).toEqual({ command, level: 'warn', settings: true });
+    expect(a.ask).toMatch(/Claude Code's settings.*permissions\.deny/);
+  });
+
+  it.each([
+    'cp .claude/settings.json backup.json',
+    'cat .claude/settings.json',
+    'rm .claude/settings.json.bak',
+    'rm docs/settings.json',
+    'mv tmp.json .claude/settings.json',
+    'rm -f a.txt',
+  ])('%s stays ok', (command) => {
+    expect(assessBashCommand(command, { claudeConfigDir: ccd }).level).toBe('ok');
+  });
+
+  it('without CLAUDE_CONFIG_DIR a directory merely named like it holds no settings', () => {
+    expect(assessBashCommand('rm ~/.claude-conta2/settings.json', { claudeConfigDir: '' }).level).toBe('ok');
+  });
+
+  it('one provably elsewhere — a fixture’s — only warns; the project’s own asks', () => {
+    const here = { cwd: '/work/proj', projectDir: '/work/proj', homeDir: '/home/alice', platform: 'linux' as const, claudeConfigDir: '' };
+    const fixture = assessBashCommand('rm /tmp/fx/.claude/settings.json', here);
+    expect({ rules: fixture.rules, ask: fixture.ask }).toEqual({ rules: ['guard-config-elsewhere'], ask: undefined });
+    expect(assessBashCommand('rm /work/proj/.claude/settings.local.json', here).ask).toMatch(/permissions\.deny/);
+  });
+
+  it('a block in the same command wins over the question', () => {
+    const a = assessBashCommand('rm .claude/settings.json; rm -rf /', { claudeConfigDir: '' });
+    expect(a.level).toBe('block');
+    expect(a.ask).toBeUndefined();
+  });
+});
