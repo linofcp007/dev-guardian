@@ -172,7 +172,10 @@ function sections(text: string, name: string): string[] {
  * dropped — a commented-out feed declares nothing.
  */
 export function parseNugetConfig(raw: string): ParsedConfig {
-  const text = raw.replace(/<!--[\s\S]*?(?:-->|$)/g, '');
+  // `<!-{2}`, not the four characters: Semgrep's TypeScript parser (1.182.0)
+  // reads `<!--` in a regular expression literal as an HTML comment, and
+  // left the rest of this function unparsed — and unscanned.
+  const text = raw.replace(/<!-{2}[\s\S]*?(?:-->|$)/g, '');
   const adds: ParsedConfig['adds'] = [];
   let clears = false;
   for (const body of sections(text, 'packageSources')) {
