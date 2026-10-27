@@ -45,6 +45,27 @@ describe('every rule stays linear on a 1 MB line', () => {
   });
 });
 
+// A client, then what it saves or reaches, in the same command: each such
+// expression read the command again from every client — `curl ` 6 400 times
+// in a code block took 3.9 s, a word of 32 000 `O` after `curl -` 2.2 s
+// (review of the 3.7.0 self-scan, measured).
+describe('downloads and fetch targets stay linear on a 1 MB line', () => {
+  const block = (body: string): string => `# Setup\n\n\`\`\`bash\n${body}\n\`\`\`\n`;
+  it.each([
+    ['curl words', (n: number): string => line('curl ', n)],
+    ['a word of O after curl -', (n: number): string => `curl -${line('O', n)}=`],
+    ['wget words, then -O', (n: number): string => `${line('wget ', n)} -O`],
+    ['iwr words', (n: number): string => line('iwr ', n)],
+  ])('%s', (label, make) => {
+    expectLinear(`${label} (code file)`, (size) => {
+      scanContent(make(size), true);
+    }, SIZE);
+    expectLinear(`${label} (code block)`, (size) => {
+      scanContent(block(make(size)), false);
+    }, SIZE);
+  });
+});
+
 // Download, then run: every download was checked against every unit after
 // it, and a run by its path was read again from every `(` of a word — 4 000
 // lines of downloads took 23 s, the square of the file (review of the
