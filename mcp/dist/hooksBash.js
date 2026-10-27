@@ -82,6 +82,41 @@ function posixSingle(text) {
 function hereStrings() {
   return { single: Number.POSITIVE_INFINITY, double: Number.POSITIVE_INFINITY };
 }
+function isSingleQuote(c) {
+  return c !== "" && SINGLE_QUOTES.includes(c);
+}
+function isDoubleQuote(c) {
+  return c !== "" && DOUBLE_QUOTES.includes(c);
+}
+function subexpressionEnd(text, from) {
+  let depth = 1;
+  for (let i = from; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (c === "`") i += 1;
+    else if (c === "(") depth += 1;
+    else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+function bracedVariableEnd(text, from) {
+  for (let i = from; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (c === "`") i += 1;
+    else if (c === "}") return i + 1;
+  }
+  return text.length;
+}
+function expandablePieceEnd(text, i) {
+  if (text.charAt(i) !== "$") return -1;
+  const next = text.charAt(i + 1);
+  if (next === "{") return bracedVariableEnd(text, i + 2);
+  if (next !== "(") return -1;
+  const end = subexpressionEnd(text, i + 2);
+  return end < 0 ? text.length : end;
+}
 function hereString(text, at, seen) {
   const quote = text.charAt(at + 1);
   const single = SINGLE_QUOTES.includes(quote);
@@ -92,13 +127,20 @@ function hereString(text, at, seen) {
   const kind = single ? "single" : "double";
   if (start >= seen[kind]) return null;
   const closers = single ? SINGLE_QUOTES : DOUBLE_QUOTES;
-  for (let line = start; line < text.length; ) {
-    if (closers.includes(text.charAt(line)) && text.charAt(line + 1) === "@") {
-      return { body: text.slice(start, line).replace(/\r?\n$/, ""), next: line + 2 };
+  for (let i = start; i < text.length; ) {
+    if ((i === start || text.charAt(i - 1) === "\n") && closers.includes(text.charAt(i)) && text.charAt(i + 1) === "@") {
+      return { body: text.slice(start, i).replace(/\r?\n$/, ""), next: i + 2 };
     }
-    const nl = text.indexOf("\n", line);
-    if (nl < 0) break;
-    line = nl + 1;
+    if (single) {
+      const nl = text.indexOf("\n", i);
+      if (nl < 0) break;
+      i = nl + 1;
+    } else if (text.charAt(i) === "`") i += 2;
+    else if (text.startsWith("$(", i)) {
+      const end = subexpressionEnd(text, i + 2);
+      if (end < 0) break;
+      i = end;
+    } else i += 1;
   }
   seen[kind] = start;
   return null;
@@ -133,6 +175,81 @@ function powershellOpaque(text) {
     i += 1;
   }
   return out;
+}
+function expandableSubexpressions(text, from, closes, out) {
+  let j = from;
+  while (j < text.length) {
+    const c = text.charAt(j);
+    if (c === "`") {
+      j += 2;
+      continue;
+    }
+    if (closes && isDoubleQuote(c)) {
+      if (!isDoubleQuote(text.charAt(j + 1))) return j + 1;
+      j += 2;
+      continue;
+    }
+    if (c === "$" && text.charAt(j + 1) === "(") {
+      const end = subexpressionEnd(text, j + 2);
+      out.push(text.slice(j + 2, end < 0 ? text.length : end - 1));
+      if (end < 0) return text.length;
+      j = end;
+      continue;
+    }
+    const piece = expandablePieceEnd(text, j);
+    j = piece < 0 ? j + 1 : piece;
+  }
+  return text.length;
+}
+function powershellSubexpressions(text) {
+  if (!text.includes("$(")) return [];
+  const seen = hereStrings();
+  const out = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text.charAt(i);
+    const boundary = atBoundary(text, i);
+    if (ch === "`") {
+      i += 2;
+      continue;
+    }
+    if (boundary && text.startsWith("<#", i)) {
+      i = blockCommentEnd(text, i);
+      continue;
+    }
+    if (boundary && (ch === "#" || text.startsWith("--%", i) && /^(?:\s|$)/.test(text.charAt(i + 3)))) {
+      const stops = ch === "#" ? "\n\r" : "\n\r|";
+      while (i < text.length && !stops.includes(text.charAt(i))) i += 1;
+      continue;
+    }
+    if (ch === "@" && atBoundary(text, i, HERE_STRING_BOUNDARY)) {
+      const here = hereString(text, i, seen);
+      if (here !== null) {
+        if (isDoubleQuote(text.charAt(i + 1))) expandableSubexpressions(here.body, 0, false, out);
+        i = here.next;
+        continue;
+      }
+    }
+    if (isSingleQuote(ch)) {
+      i = singleQuotedEnd(text, i);
+      continue;
+    }
+    if (ch === "$" && text.charAt(i + 1) === "{") {
+      i = bracedVariableEnd(text, i + 2);
+      continue;
+    }
+    i = isDoubleQuote(ch) ? expandableSubexpressions(text, i + 1, true, out) : i + 1;
+  }
+  return out;
+}
+var PLAIN_BRACED_VARIABLE = /^\$\{[\w:.?\\/-]*\}$/;
+function singleQuotedEnd(text, at) {
+  for (let j = at + 1; j < text.length; j += 1) {
+    if (!isSingleQuote(text.charAt(j))) continue;
+    if (!isSingleQuote(text.charAt(j + 1))) return j + 1;
+    j += 1;
+  }
+  return text.length;
 }
 function powershellAsPosix(text) {
   const seen = hereStrings();
@@ -179,6 +296,12 @@ function powershellAsPosix(text) {
           j += 2;
           continue;
         }
+        const piece = double ? expandablePieceEnd(text, j) : -1;
+        if (piece >= 0) {
+          lit += text.slice(j, piece);
+          j = piece;
+          continue;
+        }
         if (quotes.includes(c)) {
           if (quotes.includes(text.charAt(j + 1)) && text.charAt(j + 1) !== "") {
             lit += c;
@@ -193,6 +316,15 @@ function powershellAsPosix(text) {
       out += posixSingle(lit);
       i = j + 1;
       continue;
+    }
+    if (ch === "$" && text.charAt(i + 1) === "{") {
+      const end = bracedVariableEnd(text, i + 2);
+      const spelled = text.slice(i, end);
+      if (!PLAIN_BRACED_VARIABLE.test(spelled)) {
+        out += posixSingle(spelled);
+        i = end;
+        continue;
+      }
     }
     if (ch === "`") {
       const next = text.charAt(i + 1);
@@ -297,6 +429,69 @@ function runnerOptionWords(runner, option) {
   return 1;
 }
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+function handsScript(word) {
+  if (word === void 0 || word.quoted) return false;
+  return /^-[A-Za-z]*c$/.test(word.value) || word.value === "--command" || word.value.startsWith("--command=");
+}
+function longNames(option, names) {
+  const name = option.slice(2).replace(/=.*$/s, "");
+  return name !== "" && names.some((n) => n.startsWith(name));
+}
+function flockLockFile(words, from) {
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? "";
+    if (v === "--") return i + 1;
+    if (!v.startsWith("-") || v === "-") return i;
+    const valued = v.startsWith("--") ? !v.includes("=") && longNames(v, ["timeout", "wait", "conflict-exit-code"]) : /[wE]$/.test(v);
+    if (valued) i += 1;
+  }
+  return words.length;
+}
+function flockCommand(words, from) {
+  const file = flockLockFile(words, from);
+  for (let i = from; i < file; i += 1) if (handsScript(words[i])) return void 0;
+  const command = file + 1;
+  return command >= words.length || handsScript(words[command]) ? void 0 : command;
+}
+var RUNUSER_VALUED = { short: "gGsuw", long: ["group", "supp-group", "shell", "user", "whitelist-environment"] };
+function runuserCommand(words, from) {
+  let user = false;
+  let i = from;
+  for (; i < words.length; i += 1) {
+    const word = words[i];
+    const v = word?.value ?? "";
+    if (v === "--") return i + 1 < words.length ? i + 1 : void 0;
+    if (!v.startsWith("-") || v === "-") {
+      if (v === "-") continue;
+      break;
+    }
+    if (handsScript(word) || v.startsWith("--") && longNames(v, ["session-command"])) return void 0;
+    if (v.startsWith("--")) {
+      if (longNames(v, ["user"])) user = true;
+      if (!v.includes("=") && longNames(v, RUNUSER_VALUED.long)) i += 1;
+      continue;
+    }
+    for (let k = 1; k < v.length; k += 1) {
+      const letter = v.charAt(k);
+      if (letter === "c" || letter === "C") return void 0;
+      if (!RUNUSER_VALUED.short.includes(letter)) continue;
+      if (letter === "u") user = true;
+      if (k === v.length - 1) i += 1;
+      break;
+    }
+  }
+  if (i >= words.length) return void 0;
+  if (user) return i;
+  for (let j = i + 1; j < words.length; j += 1) {
+    if (handsScript(words[j])) return void 0;
+    if (words[j]?.value === "--") return j + 1 < words.length ? j + 1 : void 0;
+  }
+  return void 0;
+}
+var CARRIERS = /* @__PURE__ */ new Map([
+  ["flock", flockCommand],
+  ["runuser", runuserCommand]
+]);
 function resolveCommand(words, through) {
   let i = 0;
   let elevated = false;
@@ -313,6 +508,13 @@ function resolveCommand(words, through) {
       continue;
     }
     const name = basename(word.value);
+    const carrier = through === void 0 || through.has(name) ? CARRIERS.get(name) : void 0;
+    if (carrier !== void 0) {
+      const command = carrier(words, i + 1);
+      if (command === void 0) break;
+      i = command;
+      continue;
+    }
     if (!RUNNERS.has(name) || through !== void 0 && !through.has(name)) break;
     if (name === "sudo" || name === "doas") elevated = true;
     i += 1;
@@ -2985,6 +3187,11 @@ var RULE_SETTINGS = {
   level: "block",
   reason: "Writes Claude Code's settings with a key that switches the guardrail hooks off"
 };
+var RULE_SETTINGS_REMOVE = {
+  id: "claude-settings-remove",
+  level: "warn",
+  reason: "this command deletes or moves away Claude Code's settings, and with them every permissions.deny rule and hook setting they hold \u2014 the user decides; to change one setting, edit the file instead"
+};
 function worst(placements) {
   if (placements.includes("inside")) return "inside";
   return placements.includes("outside") ? "outside" : null;
@@ -3164,8 +3371,10 @@ function judgeEffects(effects, scope) {
   if (e.writes.some(inRegistry) || e.special.some(inRegistry) || e.hardLinkSources.some(inRegistry) || e.links.some(registryOrData) || e.dirs.some(registryOrData) || targets.some(registryOrData)) {
     out.push({ ...RULE_REGISTRY });
   }
-  const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  const isSettings = (p) => isSettingsPath(p, scope.configDirName);
+  const settings = locate(e.writes, isSettings, scope);
   if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
+  judged(RULE_SETTINGS_REMOVE, locate(e.removes, isSettings, scope));
   return out;
 }
 var RULE_PLUGIN_OFF = {
@@ -3362,7 +3571,6 @@ function shellScript(text) {
   return { text, powershell: false };
 }
 var DASH_C = /^-[A-Za-z]*c$/;
-var FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
 function carrierScript(name, words, start) {
   const rest = words.slice(start + 1);
   const dashC = (w, nextWord) => {
@@ -3370,7 +3578,6 @@ function carrierScript(name, words, start) {
     if (w.value.startsWith("--command=")) return w.value.slice("--command=".length);
     return !w.quoted && (DASH_C.test(w.value) || w.value === "--command") ? nextWord?.value ?? "" : void 0;
   };
-  const argv = (from) => rest.slice(from).map((x) => x.value).join(" ") || void 0;
   if (name === "trap") {
     let i = 0;
     while (i < rest.length && (rest[i]?.value ?? "").startsWith("-") && rest[i]?.value !== "--") i += 1;
@@ -3386,22 +3593,19 @@ function carrierScript(name, words, start) {
     return void 0;
   }
   if (name === "runuser") {
-    for (let i = 0; i < rest.length; i += 1) {
+    for (let i = 0; i < rest.length && rest[i]?.value !== "--"; i += 1) {
       const c = dashC(rest[i], rest[i + 1]);
       if (c !== void 0) return c;
-      if (rest[i]?.value === "--") return argv(i + 1);
     }
     return void 0;
   }
   if (name === "flock") {
-    let i = 0;
-    while (i < rest.length && (rest[i]?.value ?? "").startsWith("-")) {
-      const c2 = dashC(rest[i], rest[i + 1]);
-      if (c2 !== void 0) return c2;
-      i += FLOCK_VALUED.test(rest[i]?.value ?? "") ? 2 : 1;
+    const file = flockLockFile(words, start + 1);
+    for (let i = start + 1; i < file; i += 1) {
+      const c = dashC(words[i], words[i + 1]);
+      if (c !== void 0) return c;
     }
-    const c = dashC(rest[i + 1], rest[i + 2]);
-    return c !== void 0 ? c : argv(i + 1);
+    return dashC(words[file + 1], words[file + 2]);
   }
   return null;
 }
@@ -3809,7 +4013,22 @@ function quotedSubstitutions(command) {
   return out;
 }
 var DOWNLOADERS = /* @__PURE__ */ new Set(["curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod"]);
-var PIPE_RUNNERS = /* @__PURE__ */ new Set(["sudo", "doas", "env", "command", "exec", "builtin", "nohup", "nice", "time", "timeout", "setsid", "stdbuf"]);
+var PIPE_RUNNERS = /* @__PURE__ */ new Set([
+  "sudo",
+  "doas",
+  "env",
+  "command",
+  "exec",
+  "builtin",
+  "nohup",
+  "nice",
+  "time",
+  "timeout",
+  "setsid",
+  "stdbuf",
+  "flock",
+  "runuser"
+]);
 var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
 var STDIN_PATHS = /* @__PURE__ */ new Set(["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 var RULE_PIPE_TO_SHELL = {
@@ -4946,7 +5165,7 @@ function targetVariables(env) {
   }
   return out;
 }
-function collect(command, depth, out, scope) {
+function collect(command, depth, out, scope, source) {
   const cmd = command.trim();
   if (cmd.length === 0) return;
   if (scope.notes.now() > scope.notes.deadline) {
@@ -4989,6 +5208,7 @@ function collect(command, depth, out, scope) {
       collect(body, depth + 1, out, { ...scope, cmdLine: false });
     }
   }
+  if (source !== void 0) collectSubexpressions(source, depth, out, scope);
   const dirs = workdirs(statements);
   const startDir = scope.dir;
   let memoSteps;
@@ -5087,7 +5307,7 @@ function collect(command, depth, out, scope) {
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here }, powershell ? script : void 0);
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
@@ -5121,9 +5341,23 @@ function collectFed(fed, depth, out, scope) {
     const kind = f.kind ?? scriptReader(f.reader) ?? "shell";
     const powershell = kind === "powershell";
     noteScript(scope, f.text, powershell);
-    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === "cmd", powershell });
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === "cmd", powershell }, powershell ? f.text : void 0);
     const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
     if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
+  }
+}
+function collectSubexpressions(source, depth, out, scope) {
+  for (const body of powershellSubexpressions(source)) {
+    if (body.trim() === "") continue;
+    if (depth >= MAX_NESTING) {
+      scope.notes.depth = true;
+      continue;
+    }
+    const nested = { ...scope, cmdLine: false, powershell: true };
+    noteScript(scope, body, true);
+    collect(body, depth + 1, out, nested, body);
+    const asPosix = powershellAsPosix(body);
+    if (asPosix !== body) collect(asPosix, depth + 1, out, nested);
   }
 }
 function collectGenerated(texts, depth, out, scope) {
@@ -5214,7 +5448,7 @@ function assessBashCommand(command, opts = {}) {
     realPath: opts.realPath
   };
   if (opts.shell !== "powershell") return assessReadings([text], cut, now, deadline, where);
-  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
+  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where, text);
 }
 function safeUserDataDir() {
   try {
@@ -5223,7 +5457,7 @@ function safeUserDataDir() {
     return "";
   }
 }
-function assessReadings(readings, cut, now, deadline, where) {
+function assessReadings(readings, cut, now, deadline, where, source) {
   const notes = {
     statement: false,
     command: cut,
@@ -5244,7 +5478,7 @@ function assessReadings(readings, cut, now, deadline, where) {
     if (n > 0 && (cmd === readings[n - 1] || matched.some((m) => m.level === "block"))) continue;
     notes.loosens = void 0;
     try {
-      collect(cmd, 0, matched, { raw: cmd, cwd: "", notes, ...where });
+      collect(cmd, 0, matched, { raw: cmd, cwd: "", notes, ...where }, n === 0 ? source : void 0);
     } catch {
       notes.failed = true;
     }
@@ -5260,7 +5494,9 @@ function assessReadings(readings, cut, now, deadline, where) {
   const blocks = effective.filter((r) => r.level === "block");
   const only = blocks.length === 1 ? blocks[0] : void 0;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : void 0;
-  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q) => q !== void 0);
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, byId.get(RULE_SETTINGS_REMOVE.id)?.reason, capQuestion(notes)].filter(
+    (q) => q !== void 0
+  );
   const ask = blocks.length === 0 && questions.length > 0 ? questions.join("; and ") : void 0;
   return {
     level: effective[0]?.level ?? "ok",

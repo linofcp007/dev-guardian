@@ -80,7 +80,8 @@
  * What this is NOT: a shell parser, nor an interpreter. A command substitution
  * inside double quotes (`echo "$(rm -rf /)"`) is masked like any quoted span,
  * so its body is pulled out and re-entered as a nested script
- * (`quotedSubstitutions`, review of 3.6.0, finding 4). Anything decided at run
+ * (`quotedSubstitutions`, review of 3.6.0, finding 4) — and a PowerShell
+ * script's, read as PowerShell (`collectSubexpressions`). Anything decided at run
  * time — a path in a variable, a script run from a file — stays invisible.
  * Fail-open is the design for the guard's own faults; a limit an input can
  * reach on purpose (the caps, the budget, the nesting depth) asks the user
@@ -101,10 +102,10 @@
 
 import { homedir } from 'node:os';
 import { userDataDir } from './dataRegistry.js';
-import { powershellAsPosix, powershellOpaque } from './powershellText.js';
+import { powershellAsPosix, powershellOpaque, powershellSubexpressions } from './powershellText.js';
 import { pushAll } from './shell/arrays.js';
 import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
-import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, flockLockFile, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
 import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
 import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
 import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
@@ -1659,6 +1660,19 @@ const RULE_SETTINGS: MatchedRule = {
   level: 'block',
   reason: "Writes Claude Code's settings with a key that switches the guardrail hooks off",
 };
+/**
+ * Claude Code's settings deleted or moved away from the shell: the user's
+ * question ({@link BashAssessment.ask}), as an MCP tool's delete of them is
+ * (review of 3.6.0, finding 12) — never a deny, since removing a settings file
+ * is sometimes what the user wants.
+ */
+const RULE_SETTINGS_REMOVE: MatchedRule = {
+  id: 'claude-settings-remove',
+  level: 'warn',
+  reason:
+    "this command deletes or moves away Claude Code's settings, and with them every permissions.deny rule and hook " +
+    'setting they hold — the user decides; to change one setting, edit the file instead',
+};
 
 /**
  * Where a guarded path a command names lies: `inside` — where the hooks of
@@ -1962,8 +1976,14 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   ) {
     out.push({ ...RULE_REGISTRY });
   }
-  const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  const isSettings = (p: string): boolean => isSettingsPath(p, scope.configDirName);
+  const settings = locate(e.writes, isSettings, scope);
   if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
+  // Claude Code's settings deleted or moved away (`rm .claude/settings.json`,
+  // `mv … x`, `Remove-Item`, `del`, a residual of 3.6.1): every
+  // permissions.deny rule they hold goes with them. Matched as their writes
+  // are, `CLAUDE_CONFIG_DIR` included; one provably elsewhere only warns.
+  judged(RULE_SETTINGS_REMOVE, locate(e.removes, isSettings, scope));
   return out;
 }
 
@@ -2328,9 +2348,6 @@ function shellScript(text: string): NestedScript {
 }
 const DASH_C = /^-[A-Za-z]*c$/;
 
-/** flock's options that take the next word as their value (`-w SECS`, `-E CODE`). */
-const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
-
 /**
  * The script a nested-script carrier runs (review of 3.6.0, finding 7), or
  * `null` when `name` is not one. The carriers run their payload through a
@@ -2339,9 +2356,14 @@ const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
  *
  *   - `trap 'SCRIPT' SIGSPEC` — the first operand, run on the signal (a lone
  *     operand with no sigspec is `trap SCRIPT` querying/printing, not running);
- *   - `flock FILE -c 'SCRIPT'`, or `flock [opts] FILE CMD …` run directly;
+ *   - `flock FILE -c 'SCRIPT'`;
  *   - `script [-q] -c 'SCRIPT' FILE` (also `-qc`, `--command`);
- *   - `runuser … -c 'SCRIPT'`, or `runuser … -- CMD …` run as the user.
+ *   - `runuser … -c 'SCRIPT'`, run as the user.
+ *
+ * `flock [opts] FILE CMD …` and `runuser … -u USER -- CMD …` run CMD as its
+ * own words, not through a shell: `resolveCommand` walks past them, as past
+ * `sudo` (a residual of 3.6.1 — joined into a script here, `flock /tmp/l rm
+ * -rf "/ x"` read as `rm -rf / x`).
  */
 function carrierScript(name: string, words: readonly ShellWord[], start: number): string | undefined | null {
   const rest = words.slice(start + 1);
@@ -2351,7 +2373,6 @@ function carrierScript(name: string, words: readonly ShellWord[], start: number)
     if (w.value.startsWith('--command=')) return w.value.slice('--command='.length);
     return !w.quoted && (DASH_C.test(w.value) || w.value === '--command') ? (nextWord?.value ?? '') : undefined;
   };
-  const argv = (from: number): string | undefined => rest.slice(from).map((x) => x.value).join(' ') || undefined;
   if (name === 'trap') {
     let i = 0;
     while (i < rest.length && (rest[i]?.value ?? '').startsWith('-') && rest[i]?.value !== '--') i += 1;
@@ -2368,24 +2389,21 @@ function carrierScript(name: string, words: readonly ShellWord[], start: number)
     return undefined;
   }
   if (name === 'runuser') {
-    for (let i = 0; i < rest.length; i += 1) {
+    // Its `-c` script, before a `--` that would hand on a command instead.
+    for (let i = 0; i < rest.length && rest[i]?.value !== '--'; i += 1) {
       const c = dashC(rest[i], rest[i + 1]);
       if (c !== undefined) return c;
-      if (rest[i]?.value === '--') return argv(i + 1);
     }
     return undefined;
   }
   if (name === 'flock') {
-    // flock's own options precede the lock FILE; `-c` may follow it (`flock
-    // FILE -c '…'`), else the command runs directly (`flock FILE CMD …`).
-    let i = 0;
-    while (i < rest.length && (rest[i]?.value ?? '').startsWith('-')) {
-      const c = dashC(rest[i], rest[i + 1]);
+    // flock's own options precede the lock FILE; `-c` follows it (`flock FILE -c '…'`).
+    const file = flockLockFile(words, start + 1);
+    for (let i = start + 1; i < file; i += 1) {
+      const c = dashC(words[i], words[i + 1]);
       if (c !== undefined) return c;
-      i += FLOCK_VALUED.test(rest[i]?.value ?? '') ? 2 : 1;
     }
-    const c = dashC(rest[i + 1], rest[i + 2]);
-    return c !== undefined ? c : argv(i + 1);
+    return dashC(words[file + 1], words[file + 2]);
   }
   return null;
 }
@@ -3024,9 +3042,12 @@ const DOWNLOADERS = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 
 /**
  * The runners a pipeline member is looked through to find what reads the
  * pipe — never `xargs`, `watch` or cmd's `start`, which do not hand the
- * command their stdin as a script.
+ * command their stdin as a script. `flock FILE` and `runuser -u USER` do,
+ * like `sudo` (`curl … | flock /tmp/l sh`).
  */
-const PIPE_RUNNERS = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf']);
+const PIPE_RUNNERS = new Set([
+  'sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf', 'flock', 'runuser',
+]);
 
 /** Shells that run what arrives on their stdin. */
 const STDIN_SHELLS = new Set([...SHELLS, 'fish', 'csh', 'tcsh']);
@@ -4486,9 +4507,11 @@ function targetVariables(env: Readonly<Record<string, string | undefined>>): Rec
  * as given (a loosening key for Claude Code's settings is looked for there)
  * and the directory the statements have `cd`'d into so far, which each
  * statement updates in order; a nested script starts from the directory its
- * parent was in and cannot move the parent.
+ * parent was in and cannot move the parent. `source`, for one reading of a
+ * PowerShell script, is that script as written: the subexpressions its
+ * double-quoted strings run are read from it ({@link collectSubexpressions}).
  */
-function collect(command: string, depth: number, out: MatchedRule[], scope: Scope): void {
+function collect(command: string, depth: number, out: MatchedRule[], scope: Scope, source?: string): void {
   const cmd = command.trim();
   if (cmd.length === 0) return;
   // Before any whole-text work: a nested script is split and scanned whole,
@@ -4554,6 +4577,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       collect(body, depth + 1, out, { ...scope, cmdLine: false });
     }
   }
+  if (source !== undefined) collectSubexpressions(source, depth, out, scope);
   // Where each command runs, as the `cd`s before it moved it (review of
   // 3.4.0, finding 9): a relative delete target is read against it.
   const dirs = workdirs(statements);
@@ -4694,7 +4718,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here }, powershell ? script : undefined);
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
@@ -4747,9 +4771,33 @@ function collectFed(fed: readonly FedScript[], depth: number, out: MatchedRule[]
     const kind = f.kind ?? scriptReader(f.reader) ?? 'shell';
     const powershell = kind === 'powershell';
     noteScript(scope, f.text, powershell);
-    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell });
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell }, powershell ? f.text : undefined);
     const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
     if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
+  }
+}
+
+/**
+ * The subexpressions a PowerShell script runs from inside its double-quoted
+ * strings and `@"…"@` here-strings ({@link powershellSubexpressions}): each a
+ * PowerShell script of its own, read both ways as a `pwsh -c` script is,
+ * within the same nesting cap and budget. Read the POSIX way alone — finding
+ * 4's `quotedSubstitutions`, a residual of 3.6.1 — `"$(Remove-Item C:\
+ * -Recurse -Force)"` lost the `\` of `C:\` and was ok, and a here-string's
+ * subexpression was never read at all.
+ */
+function collectSubexpressions(source: string, depth: number, out: MatchedRule[], scope: Scope): void {
+  for (const body of powershellSubexpressions(source)) {
+    if (body.trim() === '') continue;
+    if (depth >= MAX_NESTING) {
+      scope.notes.depth = true;
+      continue;
+    }
+    const nested: Scope = { ...scope, cmdLine: false, powershell: true };
+    noteScript(scope, body, true);
+    collect(body, depth + 1, out, nested, body);
+    const asPosix = powershellAsPosix(body);
+    if (asPosix !== body) collect(asPosix, depth + 1, out, nested);
   }
 }
 
@@ -4978,8 +5026,10 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   // PowerShell's own reading goes first, so the one budget is never spent on
   // the POSIX reading before the reading that matches what will run; a block
   // needs no second reading. The POSIX reading sees here-strings and block
-  // comments for what they are: nothing else can be meant by them.
-  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
+  // comments for what they are: nothing else can be meant by them. The
+  // subexpressions the command's strings run are read from it as written,
+  // with the first reading.
+  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where, text);
 }
 
 /** What the assessment knows of the machine: the home directory, and Claude Code's `CLAUDE_CONFIG_DIR`. */
@@ -5016,6 +5066,8 @@ function safeUserDataDir(): string {
  * The readings of one command, assessed into one verdict: every rule any
  * reading matched, and one partial note for all of them — so on a tie no
  * reading's reasons are dropped. A reading after one that blocked is skipped.
+ * `source`: the PowerShell command the readings respell, given to the first
+ * ({@link collect}).
  */
 function assessReadings(
   readings: readonly string[],
@@ -5023,6 +5075,7 @@ function assessReadings(
   now: () => number,
   deadline: number,
   where: Where,
+  source?: string,
 ): BashAssessment {
   const notes: Notes = {
     statement: false,
@@ -5049,7 +5102,7 @@ function assessReadings(
     // 125 000 operands overflowed the stack). Whatever throws now, the answer
     // is at least a warning, and a block found before it still blocks.
     try {
-      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where });
+      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where }, n === 0 ? source : undefined);
     } catch {
       notes.failed = true;
     }
@@ -5069,9 +5122,12 @@ function assessReadings(
   const blocks = effective.filter((r) => r.level === 'block');
   const only = blocks.length === 1 ? blocks[0] : undefined;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
-  // Nothing blocks: the user decides an agent-run `baseline update`, and a
-  // command a cap cut short (finding 9) — a block always wins over a question.
-  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q): q is string => q !== undefined);
+  // Nothing blocks: the user decides an agent-run `baseline update`, a delete
+  // of Claude Code's settings, and a command a cap cut short (finding 9) — a
+  // block always wins over a question.
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, byId.get(RULE_SETTINGS_REMOVE.id)?.reason, capQuestion(notes)].filter(
+    (q): q is string => q !== undefined,
+  );
   const ask = blocks.length === 0 && questions.length > 0 ? questions.join('; and ') : undefined;
 
   return {
