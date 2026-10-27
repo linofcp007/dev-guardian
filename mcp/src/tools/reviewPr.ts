@@ -66,6 +66,7 @@ import {
   PROJECT_TRIVYIGNORE,
   runTrivy as spawnTrivy,
   TRIVY_MANIFEST_WALK_GAP,
+  TRIVY_MAVEN_OFFLINE_GAP,
   trivyFailureReason,
   withHonoured,
   type TrivyFsJudgement,
@@ -560,7 +561,9 @@ const MAX_PREEXISTING_NAMED = 5;
  * project's, would make every review of the project partial, and is
  * returned as `preexisting` — a note, bounded, never lower coverage. The
  * walk's own gap (`trivy:manifest-walk`) stays: a cut walk cannot say
- * whether the diff's manifests were read.
+ * whether the diff's manifests were read. So does the Maven offline gap
+ * (`trivy:maven-offline`): a pom scanned offline is the whole scan's, diff or
+ * not.
  */
 function scopeManifestGaps(
   judged: TrivyFsJudgement,
@@ -582,7 +585,7 @@ function scopeManifestGaps(
     if (mine.length > 0) gaps.push({ ecosystem: g.ecosystem, files: mine });
     if (theirs.length > 0) preexisting.push({ ecosystem: g.ecosystem, files: theirs });
   }
-  const walk = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP);
+  const walk = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP || m === TRIVY_MAVEN_OFFLINE_GAP);
   let toolRun: ToolRun = judged.toolRun;
   let missing: string[];
   if (gaps.length > 0) {

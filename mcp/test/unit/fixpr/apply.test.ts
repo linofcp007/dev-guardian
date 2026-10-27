@@ -201,6 +201,24 @@ describe('applyGroup — deps', () => {
     expect(calls[0]?.args).toEqual(['update', '-p', 'smallvec', '--precise', '1.13.2']);
   });
 
+  it("`dotnet add package` restores without the -p: that empties a project's NuGet-configuration property: such a project is refused, by name", async () => {
+    const w = makeTempDir('apply-dotnet-');
+    const step = npmStep({ ecosystem: 'dotnet', package_name: 'Newtonsoft.Json', upgrade_command: 'dotnet add package Newtonsoft.Json --version 13.0.3' });
+    const g = group({ key: 'dotnet', candidates: [candidate([step])] });
+    writeFileSync(join(w, 'App.csproj'), '<Project Sdk="Microsoft.NET.Sdk"></Project>');
+    writeFileSync(join(w, 'Directory.Build.props'), '<Project><PropertyGroup><RestoreRootConfigDirectory>cfg</RestoreRootConfigDirectory></PropertyGroup></Project>');
+    const refused = fakeRun([]);
+    const r = await applyGroup({ group: g, worktreePath: w, run: refused.run, lockfileOnly: false });
+    expect(refused.calls).toEqual([]);
+    expect(r.applied).toBe(false);
+    expect(r.failure?.stderr_head).toMatch(/^not restored: Directory\.Build\.props sets RestoreRootConfigDirectory, which this command cannot override/);
+
+    writeFileSync(join(w, 'Directory.Build.props'), '<Project></Project>');
+    const ran = fakeRun([{ outcome: 'completed', exitCode: 0 }]);
+    expect((await applyGroup({ group: g, worktreePath: w, run: ran.run, lockfileOnly: false })).applied).toBe(true);
+    expect(ran.calls[0]?.args).toEqual(['add', 'package', 'Newtonsoft.Json', '--version', '13.0.3']);
+  });
+
   it('names a candidate that carries no step instead of reporting applied', async () => {
     const g = group({ candidates: [candidate([])] });
     const { run, calls } = fakeRun([]);

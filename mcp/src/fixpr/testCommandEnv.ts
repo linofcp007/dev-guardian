@@ -22,11 +22,11 @@
  *     `VIRTUAL_ENV`, `CONDA_PREFIX`, `CARGO_HOME`, `RUSTUP_HOME`,
  *     `RUSTUP_TOOLCHAIN`, `GOPATH`, `GOROOT`, `GOCACHE`, `GOMODCACHE`,
  *     `JAVA_HOME`, `DOTNET_*` (the .NET host's and SDK's: `DOTNET_ROOT`,
- *     `DOTNET_CLI_HOME`, and a `DOTNET_CLI_TELEMETRY_OPTOUT` the user set:
- *     with `DOTNET_ROOT` alone, as until 3.7.0, a user's opt-out never reached
- *     the restores deps_update_plan and deps_audit run here, and the SDK
- *     collects its telemetry unless that variable is set — Microsoft's
- *     documentation, not measured).
+ *     `DOTNET_CLI_HOME`, and the SDK's other switches: with `DOTNET_ROOT`
+ *     alone, as until 3.7.0, none reached the restores deps_update_plan and
+ *     deps_audit run here. Every `dotnet` dev-guardian starts has its
+ *     telemetry off whatever this passes — `runners/processRunner.ts#
+ *     DOTNET_NO_TELEMETRY_ENV`, measured).
  *
  * A name matching a credential — `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`,
  * `CREDENTIAL`, `AUTH`, `API_KEY`, `PRIVATE_KEY`, `SESSION`, `COOKIE` — is

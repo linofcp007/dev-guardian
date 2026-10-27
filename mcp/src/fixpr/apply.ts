@@ -61,6 +61,7 @@ import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { checkSemgrepReport } from '../runners/semgrepReport.js';
 import { runSemgrep, SEMGREP_COMMAND } from '../runners/semgrepRun.js';
 import { readJsonSafe } from '../tools/scanHelpers.js';
+import { dotnetAddPackageRefusal } from '../deps/dotnetRestore.js';
 import type { SemgrepFixPlan } from './semgrepFix.js';
 import { packageManagerEnv } from './testCommandEnv.js';
 import type { FixCandidate, FixGroup, UpgradeStep } from './types.js';
@@ -235,6 +236,13 @@ async function runCommand(
   const refused = harden(argv, lockfileOnly);
   if (refused !== null) {
     return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: refused };
+  }
+  // `dotnet add package` restores: never where it would send a NuGet credential of the user's to a feed the
+  // repository named (`deps/nugetCredentials.ts`) — the repository's NuGet.config files in the project's
+  // directory and above are set aside already, but not one a project property points the restore at.
+  const nuget = argv.command === 'dotnet' ? dotnetAddPackageRefusal(worktreePath) : null;
+  if (nuget !== null) {
+    return { command: commandLine, outcome: 'failed', exit_code: null, stderr_head: nuget.reason };
   }
   // A package manager, fetching: never with this server's environment — the
   // allowlist plus the user's own package-manager configuration

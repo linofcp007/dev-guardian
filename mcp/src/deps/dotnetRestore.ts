@@ -29,6 +29,21 @@
  *     in depth for an opt-in this module's textual check could not see (an
  *     imported `.props` outside the project tree, a custom
  *     `NuGetLockFilePath`).
+ *   - No restore runs where it would send a NuGet credential of the user's
+ *     to a feed the repository named (`./nugetCredentials.ts`, which has the
+ *     measurements): NuGet binds a credential to a feed's name. MSBuild picks
+ *     the configuration too — measured on SDK 10.0.403, a project's own
+ *     `RestoreRootConfigDirectory`, `RestoreSolutionDirectory` or
+ *     `RestoreConfigFile` sent the user's `corp` credential to a `corp` in a
+ *     directory no walk from the project reaches (the last one the
+ *     `NuGetPackageSourceCredentials_corp` variable's). So every restore
+ *     passes all three EMPTY on the command line: a global property outranks
+ *     the project's (measured: the redirect was ignored, and a plain
+ *     project's own `NuGet.config` still read) — unless the project names it
+ *     in `TreatAsLocalProperty` (measured: the redirect won again), so a
+ *     project or `Directory.Build.*` that does is not restored
+ *     (`nuget_config_redirected`). `dotnet list package` after the restore
+ *     asked the restore's feeds, not the redirected ones (measured).
  *
  * `dotnet restore` evaluates and runs the project's own MSBuild — the same
  * trust boundary both tools' descriptions name.
@@ -38,6 +53,8 @@ import { unlinkSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { entryKindAnywhere, listProjectDir } from '../platform/projectFs.js';
+import { gitRootAbove } from './npmPlanningCopy.js';
+import { nugetRestoreRefusal, type NugetEnvironment, type NugetRestoreRefusal } from './nugetCredentials.js';
 
 /** The largest `.sln` / project / `.props` file read; a real one is well under this. */
 const MAX_DOTNET_FILE_BYTES = 4 * 1024 * 1024;
@@ -184,12 +201,92 @@ export function lockFileCandidates(project: string): string[] {
  *  `removeCreatedLockFiles`. */
 function optsIntoLockFile(project: string, root: string): boolean {
   const optIn = /<RestorePackagesWithLockFile>\s*true\s*<\/RestorePackagesWithLockFile>/i;
-  if (optIn.test(readText(project))) return true;
+  return [project, ...directoryBuildFiles(project, root, 'Directory.Build.props')].some((f) => optIn.test(readText(f)));
+}
+
+/** The `Directory.Build.props` (or `.targets`) MSBuild may import for `project`: one per directory from its own up to the scanned root. */
+function directoryBuildFiles(project: string, root: string, name: string): string[] {
+  const out: string[] = [];
   const stop = resolve(root);
   for (let dir = dirname(resolve(project)); ; dir = dirname(dir)) {
-    if (optIn.test(readText(join(dir, 'Directory.Build.props')))) return true;
-    if (dir === stop || dirname(dir) === dir || relative(stop, dir).startsWith('..')) return false;
+    out.push(join(dir, name));
+    if (dir === stop || dirname(dir) === dir || relative(stop, dir).startsWith('..')) return out;
   }
+}
+
+/** The properties that choose a restore's NuGet configuration, passed empty on every restore (see the module comment). */
+const CONFIG_CHOOSERS = ['RestoreConfigFile', 'RestoreRootConfigDirectory', 'RestoreSolutionDirectory'] as const;
+
+/**
+ * A project file or `Directory.Build.*` that keeps one of
+ * {@link CONFIG_CHOOSERS} from the command line (`TreatAsLocalProperty`) —
+ * or, with `orSets`, that sets one at all: for a command that cannot be
+ * given the empty properties (`dotnet add package`).
+ */
+function configChooser(projects: readonly string[], root: string, orSets: boolean): { file: string; property: string; kept: boolean } | null {
+  const choosers = new Map<string, string>(CONFIG_CHOOSERS.map((p) => [p.toLowerCase(), p]));
+  const seen = new Set<string>();
+  for (const project of projects) {
+    const files = [
+      project,
+      ...directoryBuildFiles(project, root, 'Directory.Build.props'),
+      ...directoryBuildFiles(project, root, 'Directory.Build.targets'),
+    ];
+    for (const file of files.filter((f) => !seen.has(f))) {
+      seen.add(file);
+      const text = readText(file);
+      for (const m of text.matchAll(/\bTreatAsLocalProperty\s*=\s*(?:"([^"]*)"|'([^']*)')/gi)) {
+        for (const name of (m[1] ?? m[2] ?? '').split(';')) {
+          const property = choosers.get(name.trim().toLowerCase());
+          if (property !== undefined) return { file, property, kept: true };
+        }
+      }
+      if (!orSets) continue;
+      for (const m of text.matchAll(/<([A-Za-z]+)\b/g)) {
+        const property = choosers.get((m[1] ?? '').toLowerCase());
+        if (property !== undefined) return { file, property, kept: false };
+      }
+    }
+  }
+  return null;
+}
+
+/** Why a NuGet operation on `projects` must not run (see the module comment), or null. */
+function nugetConfigRefusal(
+  root: string,
+  starts: readonly string[],
+  projects: readonly string[],
+  orSets: boolean,
+  nuget: NugetEnvironment,
+): { code: 'nuget_config_redirected' | NugetRestoreRefusal['code']; reason: string } | null {
+  const chooser = configChooser(projects, root, orSets);
+  if (chooser !== null) {
+    const how = chooser.kept ? 'keeps' : 'sets';
+    return {
+      code: 'nuget_config_redirected',
+      reason:
+        `not restored: ${relative(root, chooser.file) || chooser.file} ${how} ${chooser.property}` +
+        `${chooser.kept ? ' from the command line (TreatAsLocalProperty)' : ', which this command cannot override'}, so the ` +
+        'project chooses its own NuGet configuration — and where a credential you hold for a feed it names is sent',
+    };
+  }
+  // Each project's directory (NuGet's chain starts there), the solution's, and the one the command runs in.
+  return nugetRestoreRefusal(gitRootAbove(root) ?? root, [root, ...starts, ...projects.map((p) => dirname(p))], nuget);
+}
+
+/**
+ * Why create_fix_pr's `dotnet add package` must not run in `root` — it
+ * restores, and takes no `-p:` to empty the configuration choosers, so a
+ * project that sets one is refused outright — or null. The same chain check
+ * as a restore's (`./nugetCredentials.ts`).
+ */
+export function dotnetAddPackageRefusal(root: string, nuget: NugetEnvironment = {}): { code: string; reason: string } | null {
+  for (const target of findDotnetTargets(root)) {
+    const projects = projectsForTarget(target).filter(present);
+    const refusal = nugetConfigRefusal(root, [dirname(resolve(target))], projects, true, nuget);
+    if (refusal !== null) return refusal;
+  }
+  return null;
 }
 
 interface DotnetRestorePlan {
@@ -201,13 +298,24 @@ interface DotnetRestorePlan {
   /** `dotnet` argv, `restore` first. Always carries `--locked-mode`. */
   args: string[];
   /** Set when the restore must NOT run: it would create a lock file that
-   *  cannot be prevented with a global property (see the module comment). */
-  blocked?: { code: 'lock_file_would_be_created' | 'network_path_reference'; reason: string };
+   *  cannot be prevented with a global property, open a network path, or
+   *  could send a NuGet credential where the repository chose (see the
+   *  module comment). */
+  blocked?: {
+    code: 'lock_file_would_be_created' | 'network_path_reference' | 'nuget_config_redirected' | NugetRestoreRefusal['code'];
+    reason: string;
+  };
   /** Lock-file paths that do not exist yet — checked again after restore. */
   absentLockCandidates: string[];
 }
 
-export function planDotnetRestore(root: string, target: string): DotnetRestorePlan {
+/**
+ * The restore of `target` (a solution or project under the scanned `root`):
+ * its argv, the lock files at stake, or why it must not run. `nuget` says
+ * where the user's NuGet configuration is — this process's environment and
+ * home unless a test says otherwise.
+ */
+export function planDotnetRestore(root: string, target: string, nuget: NugetEnvironment = {}): DotnetRestorePlan {
   const projects = projectsForTarget(target);
   const lockFiles: string[] = [];
   const absentLockCandidates: string[] = [];
@@ -219,7 +327,7 @@ export function planDotnetRestore(root: string, target: string): DotnetRestorePl
     absentLockCandidates.push(...candidates.filter((c) => !present(c)));
     if (locks.length === 0) withoutLock.push(project);
   }
-  const args = ['restore', target, '--locked-mode', '--nologo', '--verbosity', 'quiet'];
+  const args = ['restore', target, '--locked-mode', '--nologo', '--verbosity', 'quiet', ...CONFIG_CHOOSERS.map((p) => `-p:${p}=`)];
   const plan: DotnetRestorePlan = { target, projects, lockFiles, args, absentLockCandidates };
   // A solution entry or a ProjectReference on a network path: `dotnet restore` would open it, and Windows
   // would authenticate to its host with the user's credentials.
@@ -229,6 +337,11 @@ export function planDotnetRestore(root: string, target: string): DotnetRestorePl
       code: 'network_path_reference',
       reason: `not restored: ${remote.map((p) => relative(root, p) || p).join(', ')} is on a network path, which dotnet restore would open`,
     };
+    return plan;
+  }
+  const refusal = nugetConfigRefusal(root, [dirname(resolve(target))], projects.filter(present), false, nuget);
+  if (refusal !== null) {
+    plan.blocked = refusal;
     return plan;
   }
   if (lockFiles.length === 0) {

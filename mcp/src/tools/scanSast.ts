@@ -115,6 +115,8 @@ import {
   projectsForTarget,
   removeCreatedLockFiles,
 } from '../deps/dotnetRestore.js';
+import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { packageManagerEnv } from '../fixpr/testCommandEnv.js';
 import { gitSafetyFor } from '../platform/gitSafety.js';
 import { banditExcludeArgs, listScannedFiles, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
@@ -1167,6 +1169,8 @@ function dotnetNotApplicableToScope(args: Collect & { ctx: InvokeContext; files:
  * `CustomAfterMicrosoftCommonTargets` is a global property: a project that
  * sets its own is built without it for this scan, and the reason says so
  * (`customAfterTargetsSetters`) as reduced coverage.
+ *
+ * Both run in {@link dotnetBuildEnv}, never this server's environment.
  */
 async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promise<void> {
   const { ctx, tools_run, missing_tools, parser_inputs } = args;
@@ -1208,6 +1212,7 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
   // Parsed together, so a result every target framework reports is one finding.
   const sarifs: string[] = [];
   let reports = 0;
+  const env = dotnetBuildEnv();
   try {
     for (const target of findDotnetTargets(ctx.projectPath)) {
       const rel = relative(ctx.projectPath, target) || basename(target);
@@ -1220,7 +1225,7 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
         command: 'dotnet',
         args: plan.args,
         cwd: ctx.projectPath,
-        env: ctx.scriptEnv,
+        ...env,
         signal: ctx.signal,
         onLog: ctx.onLog,
         timeoutMs: DOTNET_BUILD_TIMEOUT_MS,
@@ -1257,7 +1262,7 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
           `-p:DevGuardianSarifDir=${sarifDir}${sep}`,
         ],
         cwd: ctx.projectPath,
-        env: ctx.scriptEnv,
+        ...env,
         signal: ctx.signal,
         onLog: ctx.onLog,
         timeoutMs: DOTNET_BUILD_TIMEOUT_MS,
@@ -1308,6 +1313,24 @@ async function runDotnetAnalyzers(args: Collect & { ctx: InvokeContext }): Promi
     // the same SARIF, so it ran exactly as well as the build did.
     tools_run.push({ ...run, name: 'security-code-scan' });
   }
+}
+
+/**
+ * The environment of the .NET restore and build — the project's MSBuild:
+ * its `<Exec>` tasks, its packages' analyzers and source generators, all
+ * running as the user. They ran with this server's whole environment, so any
+ * of them could read the `GITHUB_TOKEN` or cloud credentials the server was
+ * started with. Now the package managers' allowlist `deps_audit` gives its own
+ * `dotnet` runs (`fixpr/testCommandEnv.ts#packageManagerEnv`, or
+ * `create_fix_pr`'s while it re-scans a fix): the toolchain's variables
+ * (`DOTNET_*`), the user's NuGet configuration (`NUGET_*`,
+ * `NuGetPackageSourceCredentials_*`) and the home and temp directories —
+ * no token, no `GUARDIAN_*`. The SDK's telemetry is off on top
+ * (`runners/processRunner.ts#DOTNET_NO_TELEMETRY_ENV`).
+ */
+function dotnetBuildEnv(): { env: NodeJS.ProcessEnv; extendEnv: false } {
+  const pm = packageManagerEnvOptions();
+  return { env: 'env' in pm ? pm.env : packageManagerEnv(), extendEnv: false };
 }
 
 /**
