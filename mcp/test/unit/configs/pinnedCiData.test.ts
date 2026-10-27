@@ -24,7 +24,7 @@
  *     nothing at the path the template expects.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -143,5 +143,89 @@ describe('configs/ci/pinned.json: pip-distributed scanners', () => {
     expect(pinned.scanners[key]?.version).toMatch(/^\d+\.\d+\.\d+$/);
     expect(pinned.scanners[key]?.linux_amd64_url).toBeUndefined();
     expect(pinned.scanners[key]?.linux_amd64_sha256).toBeUndefined();
+  });
+});
+
+// 3.7.0: the templates install the three with every dependency from a hashed
+// lock per Python (`pip install --require-hashes -r`), read from the clone the
+// job verified against the release commit. `pipx install semgrep==X` pinned
+// the three alone, and pipx upgraded its own pip from PyPI on first use. The
+// locks are uv's output (`uv pip compile`, the command in each header); a bump
+// of pinned.json that is not recompiled would install the old version.
+const LOCK_DIR = resolve(REPO_ROOT, 'configs', 'ci', 'python');
+/** The Pythons the templates run on: ubuntu-24.04, node:22-trixie, ubuntu-26.04. */
+const LOCK_PYTHONS = ['3.12', '3.13', '3.14'];
+const PIP_SCANNERS = ['bandit', 'semgrep', 'zizmor'];
+
+interface LockedPackage {
+  version: string;
+  hashes: string[];
+  /** Named by `-r configs/ci/python/requirements.in` in uv's `# via` annotation: a top-level requirement. */
+  topLevel: boolean;
+}
+
+/** uv's `name==version \`, its `--hash=sha256:` lines and `# via` annotation, per package. */
+function readLock(file: string): Map<string, LockedPackage> {
+  const out = new Map<string, LockedPackage>();
+  let current: LockedPackage | null = null;
+  for (const line of readFileSync(resolve(LOCK_DIR, file), 'utf8').split('\n')) {
+    const pin = /^([a-z0-9][a-z0-9._-]*)==(\S+)/.exec(line);
+    if (pin?.[1] !== undefined && pin[2] !== undefined) {
+      current = { version: pin[2], hashes: [], topLevel: false };
+      out.set(pin[1], current);
+      continue;
+    }
+    const hash = /^\s+--hash=sha256:(\S+?)\s*\\?$/.exec(line)?.[1];
+    if (hash !== undefined) current?.hashes.push(hash);
+    else if (current !== null && /^\s+#\s+(?:via\s+)?-r configs\/ci\/python\/requirements\.in$/.test(line)) current.topLevel = true;
+  }
+  return out;
+}
+
+describe('configs/ci/python: the hashed locks the templates install bandit, Semgrep and zizmor from', () => {
+  const pinned = readPinned();
+
+  it('there is one lock per Python a template runs on, and no other', () => {
+    const locks = readdirSync(LOCK_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    expect(locks).toEqual([...LOCK_PYTHONS].sort());
+    for (const py of LOCK_PYTHONS) expect(readdirSync(resolve(LOCK_DIR, py)), py).toEqual(['requirements.txt']);
+  });
+
+  it("requirements.in names the three at pinned.json's versions, and nothing else", () => {
+    const lines = readFileSync(resolve(LOCK_DIR, 'requirements.in'), 'utf8')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l !== '' && !l.startsWith('#'));
+    expect(lines).toEqual(['bandit[toml]', 'semgrep', 'zizmor'].map((name) => `${name}==${pinned.scanners[name.replace(/\[.*$/, '')]?.version ?? '?'}`));
+  });
+
+  it.each(LOCK_PYTHONS)("%s/requirements.txt: its top-level requirements are the three, at pinned.json's versions", (py) => {
+    const lock = readLock(`${py}/requirements.txt`);
+    const topLevel = [...lock].filter(([, p]) => p.topLevel).map(([name, p]) => `${name}==${p.version}`);
+    expect(topLevel.sort()).toEqual(PIP_SCANNERS.map((name) => `${name}==${pinned.scanners[name]?.version ?? '?'}`));
+  });
+
+  it.each(LOCK_PYTHONS)('%s/requirements.txt: every package pinned by == with at least one sha256, nothing else in it', (py) => {
+    const text = readFileSync(resolve(LOCK_DIR, `${py}/requirements.txt`), 'utf8');
+    const lock = readLock(`${py}/requirements.txt`);
+    expect(lock.size).toBeGreaterThan(PIP_SCANNERS.length);
+    for (const [name, p] of lock) {
+      expect(p.version, name).toMatch(/^[0-9][0-9A-Za-z.+!]*$/);
+      expect(p.hashes.length, name).toBeGreaterThan(0);
+      for (const h of p.hashes) expect(h, name).toMatch(SHA256);
+    }
+    // No option line (an index URL, `--trusted-host`, an include) and no
+    // reference by URL or path: pip would follow it.
+    const other = text.split('\n').filter((l) => l.trim() !== '' && !/^\s*#/.test(l) && !/^[a-z0-9][a-z0-9._-]*==\S+ \\$/.test(l) && !/^\s+--hash=sha256:[0-9a-f]{64}( \\)?$/.test(l));
+    expect(other).toEqual([]);
+  });
+
+  it.each(LOCK_PYTHONS)('%s/requirements.txt says how it was made: uv pip compile, for that Python, hashed, wheels only', (py) => {
+    const header = readFileSync(resolve(LOCK_DIR, `${py}/requirements.txt`), 'utf8').split('\n').slice(0, 2).join('\n');
+    expect(header).toContain('autogenerated by uv');
+    expect(header).toContain(`uv pip compile configs/ci/python/requirements.in --python-version ${py} `);
+    expect(header).toContain('--generate-hashes');
+    expect(header).toContain('--only-binary :all:');
+    expect(header).toContain(`-o configs/ci/python/${py}/requirements.txt`);
   });
 });

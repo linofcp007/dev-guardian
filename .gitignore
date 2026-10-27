@@ -74,3 +74,5 @@ build/
 
 # Plugin eval results (claude plugin eval) — local runs, never committed
 evals/results/
+# A case's second plugin, copied in before a run (evals/README.md)
+evals/*/plugins/

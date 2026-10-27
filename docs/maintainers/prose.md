@@ -37,8 +37,9 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
 
 - `tools/list` is served by `toolListing()` (`mcp/src/tools/index.ts`), not the SDK's handler: the same JSON
   schema, less `$schema` (absent means JSON Schema 2020-12 in MCP 2025-11-25; no listed schema uses a keyword
-  that means something else in draft-07 — `toolFolds.test.ts`) and `execution` (absent means
-  `taskSupport: "forbidden"`).
+  that means something else in draft-07 — `toolFolds.test.ts`), `execution` (absent means
+  `taskSupport: "forbidden"`) and the `pattern` zod 4 writes beside its own `uuid` / `date-time` formats (it
+  restates the format, at 1 500 characters of the budget).
 - **Folds** (`mcp/src/tools/fold.ts`, the list in `folds.ts`): a family of one risk class is listed as one tool
   whose `check` / `mode` / `kind` / `view` / `step` picks the member; each member name stays a hidden alias
   (`listed: false`) that `tools/call` still answers with its own parameters. A model in Claude Code can only call

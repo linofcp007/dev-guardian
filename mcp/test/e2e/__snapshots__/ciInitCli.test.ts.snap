@@ -76,19 +76,22 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      straight into the working directory, which gitleaks' own
 #      working-tree pass then saw as untracked files well over its size
 #      limit — a self-inflicted coverage gap on every run). gosec too, the
-#      same way, and bandit by version — both unconditionally (cheap;
-#      scan_sast only attempts each on a repo with Go or Python files, but a
-#      template cannot know that in advance). Semgrep and zizmor are
-#      Python-distributed (pipx), so bandit, Semgrep and zizmor are pinned
-#      by exact version — those three packages only. Every dependency of
-#      theirs is resolved when the job runs, to the newest release their
-#      own requirements allow: a dependency's new release (or a hijacked
-#      one) reaches the next run unreviewed. pip checks each download
-#      against the hash the index lists beside it, which catches a
-#      corrupted download, not what the index serves. Pinning the rest takes
-#      \`--require-hashes\` against a constraints file holding every
-#      transitive dependency's hashes for the runner's Python — not shipped
-#      yet (configs/ci/pinned.json's own note).
+#      same way, and bandit — both unconditionally (cheap; scan_sast only
+#      attempts each on a repo with Go or Python files, but a template
+#      cannot know that in advance). bandit, Semgrep and zizmor are Python
+#      packages: they are installed with EVERY dependency of theirs pinned
+#      by version and sha256, from the lock the dev-guardian clone of step 5
+#      holds for the runner's Python (configs/ci/python/<X.Y>/requirements.txt
+#      — the commit verified there fixes its content), into a venv of the
+#      runner's own python3, whose pip is the OS's (never one from PyPI),
+#      in hash-checking mode (\`--require-hashes\`) and from wheels only
+#      (\`--only-binary :all:\`: no package's build code runs). A download
+#      whose sha256 the lock does not list — a dependency's new release, or
+#      another file served under the same version — is refused, and the
+#      job stops. So does a runner whose Python has no lock in the clone.
+#      (pipx, before 3.7.0, pinned the three packages alone: their
+#      dependencies, and the pip that installed them — pipx upgrades its
+#      own from PyPI — were the newest on every run.)
 #   8. Runs \`dev-guardian scan\`, gated against the COMMITTED baseline
 #      (.guardian/baseline.json). If this repository has never run
 #      \`dev-guardian baseline update\`, every existing finding reads as
@@ -271,14 +274,14 @@ jobs:
       - name: Clone dev-guardian (outside this checkout — see the header comment)
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
           if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-            echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
 
-      - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor pinned by version)
+      - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor from a hashed lock)
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dev-guardian-scanners"
@@ -294,13 +297,26 @@ jobs:
           install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
           install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
           install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
-          pipx install "bandit[toml]==1.9.4"
-          pipx install "semgrep==1.182.0"
-          pipx install "zizmor==1.31.1"
+          # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+          # pinned by version and sha256 in the verified clone's lock (header, step 7).
+          # \`-I\` everywhere: this step runs in the checkout, and \`python3 -m venv\`
+          # would otherwise import a \`venv\` package the checkout holds.
+          py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+          lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
+          if [ ! -f "$lock" ]; then
+            echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+            exit 1
+          fi
+          venv="$RUNNER_TEMP/dev-guardian-scanners/python"
+          python3 -I -m venv "$venv"
+          "$venv/bin/python" -I -m pip install --disable-pip-version-check --no-input --require-hashes --only-binary :all: -r "$lock"
+          # Only the scanners' own commands on PATH — not the venv's python or pip.
+          mkdir -p "$RUNNER_TEMP/dev-guardian-scanners/bin"
+          for tool in bandit semgrep pysemgrep zizmor; do ln -s "$venv/bin/$tool" "$RUNNER_TEMP/dev-guardian-scanners/bin/$tool"; done
           # \`run:\` steps do not share a shell, so \`export PATH=...\` here
-          # would not reach the later "dev-guardian scan" step — pipx's own
-          # install directory has to be persisted the GitHub Actions way.
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # would not reach the later "dev-guardian scan" step — the scanners'
+          # directory has to be persisted the GitHub Actions way.
+          echo "$RUNNER_TEMP/dev-guardian-scanners/bin" >> "$GITHUB_PATH"
 
       - name: dev-guardian scan
         id: scan
@@ -436,7 +452,7 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      fixed shallow default this template can name, and not something
 #      \`depth: full\` controls — and there is no config-only way to change
 #      that.
-#   2. Installs curl/git/pipx from Debian's own apt repo — the trixie
+#   2. Installs curl/git/python3-venv from Debian's own apt repo — the trixie
 #      base image does not carry them by default. A .NET project also
 #      needs the .NET SDK for scan_sast's .NET analyzers (the identical
 #      gate \`hasRootDotnetSignal\` applies on the GitHub template — a root
@@ -484,20 +500,22 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      downloaded tarballs and extracted binaries straight into the working
 #      directory, which gitleaks' own working-tree pass then saw as
 #      untracked files well over its size limit — a self-inflicted coverage
-#      gap on every run). gosec too, the same way, and bandit by version —
-#      both unconditionally (cheap; scan_sast only attempts each on a repo
-#      with Go or Python files, but a template cannot know that in
-#      advance). Semgrep and zizmor are
-#      Python-distributed (pipx), so bandit, Semgrep and zizmor are pinned
-#      by exact version — those three packages only. Every dependency of
-#      theirs is resolved when the job runs, to the newest release their
-#      own requirements allow: a dependency's new release (or a hijacked
-#      one) reaches the next run unreviewed. pip checks each download
-#      against the hash the index lists beside it, which catches a
-#      corrupted download, not what the index serves. Pinning the rest takes
-#      \`--require-hashes\` against a constraints file holding every
-#      transitive dependency's hashes for the image's Python — not shipped
-#      yet (configs/ci/pinned.json's own note).
+#      gap on every run). gosec too, the same way, and bandit — both
+#      unconditionally (cheap; scan_sast only attempts each on a repo with
+#      Go or Python files, but a template cannot know that in advance).
+#      bandit, Semgrep and zizmor are Python packages: they are installed
+#      with EVERY dependency of theirs pinned by version and sha256, from the
+#      lock the dev-guardian clone of step 3 holds for the image's Python
+#      (configs/ci/python/<X.Y>/requirements.txt — the commit verified there
+#      fixes its content), into a venv of Debian's python3, whose pip is
+#      Debian's (never one from PyPI), in hash-checking mode
+#      (\`--require-hashes\`) and from wheels only (\`--only-binary :all:\`: no
+#      package's build code runs). A download whose sha256 the lock does not
+#      list — a dependency's new release, or another file served under the
+#      same version — is refused, and the job stops. So does an image whose
+#      Python has no lock in the clone. (pipx, before 3.7.0, pinned the three
+#      packages alone: their dependencies, and the pip that installed them —
+#      pipx upgrades its own from PyPI — were the newest on every run.)
 #   6. Runs \`dev-guardian scan\`, gated against the COMMITTED baseline
 #      (.guardian/baseline.json). If this repository has never run
 #      \`dev-guardian baseline update\`, every existing finding reads as
@@ -538,13 +556,13 @@ definitions:
         name: dev-guardian scan
         script:
           - set -eu
-          - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git pipx
+          - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git python3-venv
           - export DEV_GUARDIAN_HOME=/tmp/dev-guardian
-          - git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          - git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           - |
             actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
             if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-              echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+              echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
               exit 1
             fi
           - |
@@ -569,10 +587,23 @@ definitions:
               echo "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51  /tmp/dev-guardian-scanners/psalm.phar" | sha256sum -c -
               install -m 0755 /tmp/dev-guardian-scanners/psalm.phar /usr/local/bin/psalm.phar
             fi
-          - pipx install "bandit[toml]==1.9.4"
-          - pipx install "semgrep==1.182.0"
-          - pipx install "zizmor==1.31.1"
-          - export PATH="$HOME/.local/bin:$PATH"
+          - |
+            # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+            # pinned by version and sha256 in the verified clone's lock (header, step 5).
+            # \`-I\` everywhere: the build runs in the checkout, and \`python3 -m venv\`
+            # would otherwise import a \`venv\` package the checkout holds.
+            py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+            lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
+            if [ ! -f "$lock" ]; then
+              echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this step on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+              exit 1
+            fi
+            python3 -I -m venv /tmp/dev-guardian-scanners/python
+            /tmp/dev-guardian-scanners/python/bin/python -I -m pip install --disable-pip-version-check --no-input --require-hashes --only-binary :all: -r "$lock"
+            # Only the scanners' own commands on PATH — not the venv's python or pip.
+            mkdir -p /tmp/dev-guardian-scanners/bin
+            for tool in bandit semgrep pysemgrep zizmor; do ln -s "/tmp/dev-guardian-scanners/python/bin/$tool" "/tmp/dev-guardian-scanners/bin/$tool"; done
+          - export PATH="/tmp/dev-guardian-scanners/bin:$PATH"
           - |
             set --
             if [ -n "\${BITBUCKET_PR_DESTINATION_BRANCH:-}" ]; then
@@ -671,19 +702,22 @@ exports[`ci-init: snapshot of the rendered templates > github renders exactly as
 #      straight into the working directory, which gitleaks' own
 #      working-tree pass then saw as untracked files well over its size
 #      limit — a self-inflicted coverage gap on every run). gosec too, the
-#      same way, and bandit by version — both unconditionally (cheap;
-#      scan_sast only attempts each on a repo with Go or Python files, but a
-#      template cannot know that in advance). Semgrep and zizmor are
-#      Python-distributed (pipx), so bandit, Semgrep and zizmor are pinned
-#      by exact version — those three packages only. Every dependency of
-#      theirs is resolved when the job runs, to the newest release their
-#      own requirements allow: a dependency's new release (or a hijacked
-#      one) reaches the next run unreviewed. pip checks each download
-#      against the hash the index lists beside it, which catches a
-#      corrupted download, not what the index serves. Pinning the rest takes
-#      \`--require-hashes\` against a constraints file holding every
-#      transitive dependency's hashes for the runner's Python — not shipped
-#      yet (configs/ci/pinned.json's own note).
+#      same way, and bandit — both unconditionally (cheap; scan_sast only
+#      attempts each on a repo with Go or Python files, but a template
+#      cannot know that in advance). bandit, Semgrep and zizmor are Python
+#      packages: they are installed with EVERY dependency of theirs pinned
+#      by version and sha256, from the lock the dev-guardian clone of step 5
+#      holds for the runner's Python (configs/ci/python/<X.Y>/requirements.txt
+#      — the commit verified there fixes its content), into a venv of the
+#      runner's own python3, whose pip is the OS's (never one from PyPI),
+#      in hash-checking mode (\`--require-hashes\`) and from wheels only
+#      (\`--only-binary :all:\`: no package's build code runs). A download
+#      whose sha256 the lock does not list — a dependency's new release, or
+#      another file served under the same version — is refused, and the
+#      job stops. So does a runner whose Python has no lock in the clone.
+#      (pipx, before 3.7.0, pinned the three packages alone: their
+#      dependencies, and the pip that installed them — pipx upgrades its
+#      own from PyPI — were the newest on every run.)
 #   8. Runs \`dev-guardian scan\`, gated against the COMMITTED baseline
 #      (.guardian/baseline.json). If this repository has never run
 #      \`dev-guardian baseline update\`, every existing finding reads as
@@ -834,14 +868,14 @@ jobs:
       - name: Clone dev-guardian (outside this checkout — see the header comment)
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
           if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-            echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
 
-      - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor pinned by version)
+      - name: Install scanners (Trivy/gitleaks/actionlint/gosec checksum-verified; bandit/semgrep/zizmor from a hashed lock)
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dev-guardian-scanners"
@@ -857,13 +891,26 @@ jobs:
           install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
           install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
           install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
-          pipx install "bandit[toml]==1.9.4"
-          pipx install "semgrep==1.182.0"
-          pipx install "zizmor==1.31.1"
+          # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+          # pinned by version and sha256 in the verified clone's lock (header, step 7).
+          # \`-I\` everywhere: this step runs in the checkout, and \`python3 -m venv\`
+          # would otherwise import a \`venv\` package the checkout holds.
+          py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+          lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
+          if [ ! -f "$lock" ]; then
+            echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+            exit 1
+          fi
+          venv="$RUNNER_TEMP/dev-guardian-scanners/python"
+          python3 -I -m venv "$venv"
+          "$venv/bin/python" -I -m pip install --disable-pip-version-check --no-input --require-hashes --only-binary :all: -r "$lock"
+          # Only the scanners' own commands on PATH — not the venv's python or pip.
+          mkdir -p "$RUNNER_TEMP/dev-guardian-scanners/bin"
+          for tool in bandit semgrep pysemgrep zizmor; do ln -s "$venv/bin/$tool" "$RUNNER_TEMP/dev-guardian-scanners/bin/$tool"; done
           # \`run:\` steps do not share a shell, so \`export PATH=...\` here
-          # would not reach the later "dev-guardian scan" step — pipx's own
-          # install directory has to be persisted the GitHub Actions way.
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # would not reach the later "dev-guardian scan" step — the scanners'
+          # directory has to be persisted the GitHub Actions way.
+          echo "$RUNNER_TEMP/dev-guardian-scanners/bin" >> "$GITHUB_PATH"
 
       - name: dev-guardian scan
         id: scan
@@ -936,7 +983,7 @@ exports[`ci-init: snapshot of the rendered templates > gitlab renders exactly as
 #      every pre-existing secret to the grafted boundary commit instead,
 #      which moves with every push, so every finding looks "new" on every
 #      run and the gate never passes twice in a row for the same repo.
-#   2. Installs curl/git/pipx from Debian's own apt repo — the trixie
+#   2. Installs curl/git/python3-venv from Debian's own apt repo — the trixie
 #      base image does not carry them by default. A .NET project also
 #      needs the .NET SDK for scan_sast's .NET analyzers (the identical
 #      gate \`hasRootDotnetSignal\` applies on the GitHub template — a root
@@ -984,20 +1031,22 @@ exports[`ci-init: snapshot of the rendered templates > gitlab renders exactly as
 #      downloaded tarballs and extracted binaries straight into the working
 #      directory, which gitleaks' own working-tree pass then saw as
 #      untracked files well over its size limit — a self-inflicted coverage
-#      gap on every run). gosec too, the same way, and bandit by version —
-#      both unconditionally (cheap; scan_sast only attempts each on a repo
-#      with Go or Python files, but a template cannot know that in
-#      advance). Semgrep and zizmor are
-#      Python-distributed (pipx), so bandit, Semgrep and zizmor are pinned
-#      by exact version — those three packages only. Every dependency of
-#      theirs is resolved when the job runs, to the newest release their
-#      own requirements allow: a dependency's new release (or a hijacked
-#      one) reaches the next run unreviewed. pip checks each download
-#      against the hash the index lists beside it, which catches a
-#      corrupted download, not what the index serves. Pinning the rest takes
-#      \`--require-hashes\` against a constraints file holding every
-#      transitive dependency's hashes for the image's Python — not shipped
-#      yet (configs/ci/pinned.json's own note).
+#      gap on every run). gosec too, the same way, and bandit — both
+#      unconditionally (cheap; scan_sast only attempts each on a repo with
+#      Go or Python files, but a template cannot know that in advance).
+#      bandit, Semgrep and zizmor are Python packages: they are installed
+#      with EVERY dependency of theirs pinned by version and sha256, from the
+#      lock the dev-guardian clone of step 3 holds for the image's Python
+#      (configs/ci/python/<X.Y>/requirements.txt — the commit verified there
+#      fixes its content), into a venv of Debian's python3, whose pip is
+#      Debian's (never one from PyPI), in hash-checking mode
+#      (\`--require-hashes\`) and from wheels only (\`--only-binary :all:\`: no
+#      package's build code runs). A download whose sha256 the lock does not
+#      list — a dependency's new release, or another file served under the
+#      same version — is refused, and the job stops. So does an image whose
+#      Python has no lock in the clone. (pipx, before 3.7.0, pinned the three
+#      packages alone: their dependencies, and the pip that installed them —
+#      pipx upgrades its own from PyPI — were the newest on every run.)
 #   6. Runs \`dev-guardian scan\`, gated against the COMMITTED baseline
 #      (.guardian/baseline.json). If this repository has never run
 #      \`dev-guardian baseline update\`, every existing finding reads as
@@ -1046,14 +1095,14 @@ dev-guardian:
     DEV_GUARDIAN_HOME: /tmp/dev-guardian
   before_script:
     - set -eu
-    - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git pipx
+    - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git python3-venv
   script:
     - set -eu
-    - git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+    - git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
     - |
       actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
       if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-        echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+        echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
         exit 1
       fi
     - |
@@ -1078,10 +1127,23 @@ dev-guardian:
         echo "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51  /tmp/dev-guardian-scanners/psalm.phar" | sha256sum -c -
         install -m 0755 /tmp/dev-guardian-scanners/psalm.phar /usr/local/bin/psalm.phar
       fi
-    - pipx install "bandit[toml]==1.9.4"
-    - pipx install "semgrep==1.182.0"
-    - pipx install "zizmor==1.31.1"
-    - export PATH="$HOME/.local/bin:$PATH"
+    - |
+      # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+      # pinned by version and sha256 in the verified clone's lock (header, step 5).
+      # \`-I\` everywhere: the job runs in the checkout, and \`python3 -m venv\`
+      # would otherwise import a \`venv\` package the checkout holds.
+      py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
+      lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
+      if [ ! -f "$lock" ]; then
+        echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this job on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+        exit 1
+      fi
+      python3 -I -m venv /tmp/dev-guardian-scanners/python
+      /tmp/dev-guardian-scanners/python/bin/python -I -m pip install --disable-pip-version-check --no-input --require-hashes --only-binary :all: -r "$lock"
+      # Only the scanners' own commands on PATH — not the venv's python or pip.
+      mkdir -p /tmp/dev-guardian-scanners/bin
+      for tool in bandit semgrep pysemgrep zizmor; do ln -s "/tmp/dev-guardian-scanners/python/bin/$tool" "/tmp/dev-guardian-scanners/bin/$tool"; done
+    - export PATH="/tmp/dev-guardian-scanners/bin:$PATH"
     - |
       set --
       if [ -n "\${CI_MERGE_REQUEST_IID:-}" ]; then

@@ -1,10 +1,10 @@
-import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { chmodSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { execPath } from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runProcess } from '../../../src/runners/processRunner.js';
+import { DOTNET_NO_TELEMETRY_ENV, runProcess } from '../../../src/runners/processRunner.js';
 import { makeTempDir, cleanupTempDirs } from '../../helpers/tempDir.js';
 import { hangBound, PERF_STRICT } from '../../helpers/timing.js';
 
@@ -342,5 +342,66 @@ describe('runProcess disables MSYS path conversion for docker', () => {
     const env = await childEnv({});
     expect(env['MSYS_NO_PATHCONV']).toBeUndefined();
     expect(env['MSYS2_ARG_CONV_EXCL']).toBeUndefined();
+    expect(env['DOTNET_CLI_TELEMETRY_OPTOUT']).toBeUndefined();
+  });
+});
+
+/**
+ * Every `dotnet` dev-guardian starts sends no .NET SDK telemetry
+ * (`DOTNET_NO_TELEMETRY_ENV`: measured, SDK 10.0.403 asked
+ * `dc.services.visualstudio.com` on every command without it). Set in the
+ * runner, so it holds for a bare `dotnet` resolved on PATH, an absolute
+ * `dotnet.exe`, an allowlisted environment (`extendEnv: false`) and a user
+ * who set `DOTNET_CLI_TELEMETRY_OPTOUT=0` — and the source scan below fails
+ * on a `dotnet` started any way that bypasses the runner.
+ */
+describe('runProcess turns the .NET SDK telemetry off for dotnet', () => {
+  function fakeDotnetDir(): string {
+    const dir = makeTempDir('processrunner-dotnet-');
+    const printer = join(dir, 'printenv.cjs');
+    writeFileSync(printer, 'process.stdout.write(JSON.stringify(process.env));');
+    if (process.platform === 'win32') {
+      writeFileSync(join(dir, 'dotnet.cmd'), `@"${execPath}" "${printer}" %*\r\n`);
+    } else {
+      writeFileSync(join(dir, 'dotnet'), `#!/bin/sh\nexec "${execPath}" "${printer}" "$@"\n`);
+      chmodSync(join(dir, 'dotnet'), 0o755);
+    }
+    return dir;
+  }
+
+  it('sets DOTNET_CLI_TELEMETRY_OPTOUT and DOTNET_NOLOGO over the caller\'s environment, allowlisted or not', async () => {
+    const dir = fakeDotnetDir();
+    const base: NodeJS.ProcessEnv = { PATH: `${dir}${delimiter}${process.env['PATH'] ?? ''}`, DOTNET_CLI_TELEMETRY_OPTOUT: '0' };
+    for (const name of ['SystemRoot', 'ComSpec', 'PATHEXT']) if (process.env[name] !== undefined) base[name] = process.env[name];
+    for (const extendEnv of [false, true]) {
+      const r = await runProcess({ command: 'dotnet', args: ['--version'], cwd: dir, env: base, extendEnv, gitHardening: false });
+      expect(r.outcome).toBe('completed');
+      const env = JSON.parse(r.stdout) as Record<string, string>;
+      expect(env['DOTNET_CLI_TELEMETRY_OPTOUT']).toBe(DOTNET_NO_TELEMETRY_ENV['DOTNET_CLI_TELEMETRY_OPTOUT']);
+      expect(env['DOTNET_NOLOGO']).toBe('1');
+    }
+    expect(DOTNET_NO_TELEMETRY_ENV).toEqual({ DOTNET_CLI_TELEMETRY_OPTOUT: '1', DOTNET_NOLOGO: '1' });
+  });
+
+  it('every dotnet spawn in src/ goes through the runner (runProcess, or a probe / install spec / package manager run by it)', () => {
+    // `command: 'dotnet'` is an option object of runProcess (or of a probe, an
+    // install spec, execPackageManager — each handed to it); anything that
+    // names dotnet to another spawn API bypasses the runner's environment.
+    const SRC = join(MCP_ROOT, 'src');
+    const DIRECT = /\b(?:execa|execaSync|spawn|spawnSync|execFile|execFileSync|exec|execSync|captureOutput|startChild|crossSpawn)\(\s*(?:commandFor\(\s*)?['"`]dotnet(?:\.exe)?['"`]/;
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? files(join(dir, e.name)) : e.name.endsWith('.ts') ? [join(dir, e.name)] : [],
+      );
+    const offenders = files(SRC).flatMap((path) =>
+      readFileSync(path, 'utf8')
+        .split(/\r?\n/)
+        .flatMap((line, i) => (DIRECT.test(line) ? [`${path.slice(SRC.length + 1)}:${i + 1}: ${line.trim()}`] : [])),
+    );
+    expect(offenders).toEqual([]);
+    // Positive controls.
+    expect(DIRECT.test("await execa('dotnet', ['build'])")).toBe(true);
+    expect(DIRECT.test("captureOutput(commandFor('dotnet'), ['--info'], {})")).toBe(true);
+    expect(DIRECT.test("runProcess({ command: 'dotnet', args })")).toBe(false);
   });
 });

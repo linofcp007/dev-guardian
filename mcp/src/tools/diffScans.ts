@@ -70,8 +70,7 @@ const inputSchema = {
     .describe("With to='latest': diff the newest scan of this type. Default: the newest scan of any finding-producing type."),
   source_tool: SourceToolInput,
   from_scan_id: z
-    .string()
-    .uuid()
+    .guid()
     .optional()
     .describe('The older side: this exact scan. Takes precedence over from. Default: see from.'),
   from: FromEnum.optional().describe(
@@ -79,8 +78,7 @@ const inputSchema = {
       'that type).',
   ),
   to_scan_id: z
-    .string()
-    .uuid()
+    .guid()
     .optional()
     .describe('The newer side: this exact scan. Takes precedence over to. Default: see to.'),
   to: ToEnum.optional().describe(

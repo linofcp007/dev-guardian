@@ -81,13 +81,11 @@ const RESPONSE_CAP = 50;
 const inputSchema = {
   project_path: ProjectPath,
   from_scan_id: z
-    .string()
-    .uuid()
+    .guid()
     .optional()
     .describe('The older SBOM scan. Default: the second-newest.'),
   to_scan_id: z
-    .string()
-    .uuid()
+    .guid()
     .optional()
     .describe('The newer SBOM scan. Default: the newest.'),
   /** No longer changes behaviour — full-file comparison always happens now

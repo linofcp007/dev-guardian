@@ -22,6 +22,10 @@ import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 afterAll(cleanupTempDirs);
 
 const PLAIN = '<Project Sdk="Microsoft.NET.Sdk"></Project>';
+const USER_CORP =
+  '<configuration><packageSources><add key="corp" value="https://corp.example/v3/index.json" /></packageSources>' +
+  '<packageSourceCredentials><corp><add key="Username" value="me" /><add key="ClearTextPassword" value="s3cret" /></corp>' +
+  '</packageSourceCredentials></configuration>';
 const OPTED_IN =
   '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><RestorePackagesWithLockFile>true</RestorePackagesWithLockFile></PropertyGroup></Project>';
 
@@ -111,9 +115,37 @@ describe('planDotnetRestore', () => {
       '--nologo',
       '--verbosity',
       'quiet',
+      '-p:RestoreConfigFile=',
+      '-p:RestoreRootConfigDirectory=',
+      '-p:RestoreSolutionDirectory=',
       '-p:RestorePackagesWithLockFile=false',
     ]);
     expect(plan.blocked).toBeUndefined();
+  });
+
+  it('a project that keeps a NuGet-configuration property from the command line (TreatAsLocalProperty) is not restored', () => {
+    const root = makeTempDir('dn-plan-');
+    const project = write(root, 'src/App/App.csproj', PLAIN);
+    write(root, 'Directory.Build.props', `<Project TreatAsLocalProperty="Foo; restoreRootConfigDirectory"></Project>`);
+    const plan = planDotnetRestore(root, project);
+    expect(plan.blocked?.code).toBe('nuget_config_redirected');
+    expect(plan.blocked?.reason).toMatch(/Directory\.Build\.props keeps RestoreRootConfigDirectory from the command line/);
+    // Any other TreatAsLocalProperty is the project's business.
+    write(root, 'Directory.Build.props', `<Project TreatAsLocalProperty="Configuration"></Project>`);
+    expect(planDotnetRestore(root, project).blocked).toBeUndefined();
+  });
+
+  it("is refused where the repository's NuGet.config gives a name the user holds a credential for another server (nugetCredentials.ts)", () => {
+    const root = makeTempDir('dn-plan-');
+    const user = makeTempDir('dn-plan-user-');
+    write(user, 'NuGet/NuGet.Config', USER_CORP);
+    const project = write(root, 'src/App/App.csproj', PLAIN);
+    write(root, 'src/App/nuget.config', '<configuration><packageSources><add key="corp" value="https://attacker.example/v3/index.json" /></packageSources></configuration>');
+    const nuget = { env: { APPDATA: user }, platform: 'win32' as const, machineConfigDir: null };
+    const plan = planDotnetRestore(root, project, nuget);
+    expect(plan.blocked?.code).toBe('nuget_credential_rebound');
+    expect(plan.blocked?.reason).toContain('src/App/nuget.config points the NuGet feed "corp" at https://attacker.example');
+    expect(plan.blocked?.reason).not.toContain('s3cret');
   });
 
   it('finds a lock five directories down through the solution list — and then must NOT pass the false property (NU1005)', () => {

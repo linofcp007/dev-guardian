@@ -10,7 +10,7 @@ Trilingual: the skills and commands answer in English, Portuguese or Spanish, wh
 
 - **13 skills** and **10 slash commands** for Claude Code / Cowork (below).
 - An **MCP server** with **50 tools** and **18 resources**, TypeScript on `node:sqlite`, committed pre-built — full reference in [docs/tools.md](docs/tools.md). The 13 tool names that 3.3.0 folded into `dotnet_check`, `wp_audit`, `wp_vuln_check`, `wp_report`, `diff_scans` and `prioritize_findings`, and the three LLM-scan steps 3.4.0 folded into `llm_scan`, still answer calls; they are no longer listed.
-- **169 Semgrep rules in 14 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, a route-inventory pack for nine languages, a Node/Express pack (SQL built by interpolation, request path to a file API, request URL fetched), a mobile pack (a debuggable or backup-enabled Android app, cleartext traffic, exported components without a permission, user-installed CAs trusted, iOS App Transport Security switched off, and in Java and Kotlin WebView debugging, trust-all TLS and world-readable files), a WordPress pack (an `esc_sql` value put outside quotes in SQL, the shape of CVE-2021-24340) and an LLM-application pack (model output reaching eval/shell/SQL, remote code in a model load, prompt injection surface, no token cap) that `scan_sast` runs — see [docs/rule-packs.md](docs/rule-packs.md).
+- **178 Semgrep rules in 14 packs** written for this project: bug classes for seven languages, an RGPD/GDPR pack, a route-inventory pack for nine languages, a Node/Express pack (SQL built by interpolation, request path to a file API, request URL fetched), a mobile pack (a debuggable or backup-enabled Android app, cleartext traffic, exported components without a permission, user-installed CAs trusted, iOS App Transport Security switched off, and in Java and Kotlin WebView debugging, trust-all TLS and world-readable files), a WordPress pack (an `esc_sql` value put outside quotes in SQL, the shape of CVE-2021-24340) and an LLM-application pack (model output reaching eval/shell/SQL, remote code in a model load, prompt injection surface, no token cap) that `scan_sast` runs — see [docs/rule-packs.md](docs/rule-packs.md).
 - **Guardrail hooks** that deny catastrophic shell commands, vet packages at install time and warn on secrets as they are written — see [docs/hooks.md](docs/hooks.md).
 - A **CLI** (`cli/dev-guardian.mjs`) for CI gating, host setup, a terminal status view and an HTML dashboard.
 
@@ -131,12 +131,12 @@ Details, configuration and the escape hatches: [docs/hooks.md](docs/hooks.md). T
 Cursor, Windsurf, GitHub Copilot, Codex CLI, Gemini CLI and Cline get the MCP server and a rules file, Claude Desktop the MCP server alone (no skills, commands or hooks). Clone once, then run the CLI **by its absolute path** from your project:
 
 ```text
-git clone --depth 1 --branch v3.6.1 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.7.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config cursor --write
 node ~/tools/dev-guardian/cli/dev-guardian.mjs mcp-config all --write --update-mcp
 ```
 
-The clone above pins 3.6.1; to follow a later release, clone its `vX.Y.Z` tag instead. `--update-mcp`, `--global` and `ci-init` need 3.0.0 or later — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
+The clone above pins 3.7.0; to follow a later release, clone its `vX.Y.Z` tag instead. `--update-mcp`, `--global` and `ci-init` need 3.0.0 or later — 2.0.0 also writes the global Windsurf and Claude Desktop configs on `mcp-config all --write`. The CLI fills in absolute paths, merges instead of overwriting, and manages only a delimited block inside `AGENTS.md`-style files; `--update-mcp` refreshes an entry that is out of date. Per-host paths and manual snippets: [docs/hosts.md](docs/hosts.md).
 
 ## CI
 

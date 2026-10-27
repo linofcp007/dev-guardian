@@ -177,7 +177,6 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'tools/depsAudit.ts:name': "runners/govulncheckRun.ts#govulncheckModules' `missing`: GOVULNCHECK or 'go'",
   'tools/reviewPr.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
   'tools/reviewPr.ts:name': "runners/gosecRun.ts#gosecOnPackages' `missing`: GOSEC or GO_TOOLCHAIN",
-  'tools/depsAudit.ts:opts.command': "tryNativeAudit's `command: '…'`",
   'tools/qualityCheck.ts:name': "notInstalled's and record's name argument",
   'tools/qualityCheck.ts:opts.name': "runOnFileBatches' `name: '…'` (ruff, radon, eslint)",
   'tools/auditExecutive.ts:name': 'the *SUB_TOOLS arrays',

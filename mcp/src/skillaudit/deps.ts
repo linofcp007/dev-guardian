@@ -73,7 +73,11 @@ function fromRequirements(content: string): OsvPackageQuery[] {
 
 function fromGoMod(content: string): OsvPackageQuery[] {
   const out: OsvPackageQuery[] = [];
-  const re = /^\s*([\w./-]+)\s+v(\d+\.\d+\.\d+[\w.-]*)/gm;
+  // A line's own leading space, never the line breaks before it: `^\s*` from
+  // every line of a run of blank ones read the whole run again — 160 000
+  // blank lines took 24 s (measured; review of the 3.7.0 self-scan). The
+  // same requirements, from their own line.
+  const re = /^[^\S\r\n\u2028\u2029]*([\w./-]+)\s+v(\d+\.\d+\.\d+[\w.-]*)/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content)) !== null) {
     const name = m[1];

@@ -17,7 +17,7 @@
  * collector only takes `*.test.ts`).
  */
 
-import type { ZodTypeAny } from 'zod';
+import type { z } from 'zod';
 import type { ResourceModule } from '../../src/resources/index.js';
 import type { FoldRecord } from '../../src/tools/fold.js';
 import type { ToolModule } from '../../src/tools/index.js';
@@ -69,87 +69,89 @@ function escapeProse(text: string, inTable: boolean): string {
 
 // ------------------------------------------------------------ zod parameters
 
+/**
+ * The parts of a zod 4 definition read here. zod types the nested schemas as
+ * its core ones; every tool schema is built with the classic API, so they are
+ * classic schemas (`description`, `isOptional`).
+ */
 interface ZodDefLike {
-  typeName?: string;
-  description?: string;
-  innerType?: ZodTypeAny;
-  schema?: ZodTypeAny;
-  type?: ZodTypeAny;
-  values?: unknown;
-  value?: unknown;
-  options?: unknown;
-  shape?: () => Record<string, ZodTypeAny>;
-  defaultValue?: () => unknown;
-  valueType?: ZodTypeAny;
+  type: string;
+  innerType?: z.ZodType;
+  element?: z.ZodType;
+  entries?: Record<string, unknown>;
+  values?: unknown[];
+  options?: z.ZodType[];
+  shape?: Record<string, z.ZodType>;
+  defaultValue?: unknown;
+  valueType?: z.ZodType;
 }
 
-function def(t: ZodTypeAny): ZodDefLike {
-  return t._def as ZodDefLike;
+function def(t: z.ZodType): ZodDefLike {
+  return t.def as ZodDefLike;
 }
 
-const WRAPPERS = new Set(['ZodOptional', 'ZodDefault', 'ZodNullable', 'ZodEffects', 'ZodReadonly', 'ZodBranded']);
+/** The wrappers a type can sit under. A refinement is no wrapper in zod 4: it is a check of the type itself. */
+const WRAPPERS = new Set(['optional', 'default', 'nullable', 'readonly']);
 
-/** Strip optional / default / nullable / effects wrappers. */
-function unwrap(t: ZodTypeAny): ZodTypeAny {
+/** Strip optional / default / nullable / readonly wrappers. */
+function unwrap(t: z.ZodType): z.ZodType {
   let cur = t;
   for (;;) {
     const d = def(cur);
-    if (d.typeName === undefined || !WRAPPERS.has(d.typeName)) return cur;
-    const next = d.innerType ?? d.schema ?? d.type;
-    if (next === undefined) return cur;
-    cur = next;
+    if (!WRAPPERS.has(d.type) || d.innerType === undefined) return cur;
+    cur = d.innerType;
   }
 }
 
 /** The first `.describe()` text found walking in through the wrappers. */
-function descriptionOf(t: ZodTypeAny): string {
-  let cur: ZodTypeAny | undefined = t;
+function descriptionOf(t: z.ZodType): string {
+  let cur: z.ZodType | undefined = t;
   while (cur !== undefined) {
+    if (typeof cur.description === 'string' && cur.description.trim() !== '') return cur.description.trim();
     const d = def(cur);
-    if (typeof d.description === 'string' && d.description.trim() !== '') return d.description.trim();
-    if (d.typeName === undefined || !WRAPPERS.has(d.typeName)) return '';
-    cur = d.innerType ?? d.schema ?? d.type;
+    if (!WRAPPERS.has(d.type)) return '';
+    cur = d.innerType;
   }
   return '';
 }
 
 /** A `.default()` anywhere in the wrapper chain, rendered as JSON. */
-function defaultOf(t: ZodTypeAny): string | undefined {
-  let cur: ZodTypeAny | undefined = t;
+function defaultOf(t: z.ZodType): string | undefined {
+  let cur: z.ZodType | undefined = t;
   while (cur !== undefined) {
     const d = def(cur);
-    if (d.typeName === 'ZodDefault' && d.defaultValue !== undefined) return JSON.stringify(d.defaultValue());
-    if (d.typeName === undefined || !WRAPPERS.has(d.typeName)) return undefined;
-    cur = d.innerType ?? d.schema ?? d.type;
+    if (d.type === 'default') return JSON.stringify(d.defaultValue);
+    if (!WRAPPERS.has(d.type)) return undefined;
+    cur = d.innerType;
   }
   return undefined;
 }
 
 /** A short, pipe-free type label. */
-export function typeLabel(t: ZodTypeAny): string {
+export function typeLabel(t: z.ZodType): string {
   const inner = unwrap(t);
   const d = def(inner);
-  switch (d.typeName) {
-    case 'ZodString':
-      return 'string';
-    case 'ZodNumber':
-      return 'number';
-    case 'ZodBoolean':
-      return 'boolean';
-    case 'ZodEnum':
-      return Array.isArray(d.values) ? `one of ${d.values.map((v) => `"${String(v)}"`).join(', ')}` : 'enum';
-    case 'ZodLiteral':
-      return JSON.stringify(d.value);
-    case 'ZodArray':
-      return d.type !== undefined ? `array of ${typeLabel(d.type)}` : 'array';
-    case 'ZodObject':
+  switch (d.type) {
+    case 'string':
+    case 'number':
+    case 'boolean':
+      return d.type;
+    case 'enum':
+      return d.entries !== undefined
+        ? `one of ${Object.values(d.entries).map((v) => `"${String(v)}"`).join(', ')}`
+        : 'enum';
+    case 'literal':
+      return (d.values ?? []).map((v) => JSON.stringify(v)).join(' or ');
+    case 'array':
+      return d.element !== undefined ? `array of ${typeLabel(d.element)}` : 'array';
+    case 'object':
       return 'object';
-    case 'ZodRecord':
+    case 'record':
       return d.valueType !== undefined ? `map of ${typeLabel(d.valueType)}` : 'map';
-    case 'ZodUnion':
-      return Array.isArray(d.options) ? (d.options as ZodTypeAny[]).map((o) => typeLabel(o)).join(' or ') : 'union';
+    case 'union':
+      return d.options !== undefined ? d.options.map((o) => typeLabel(o)).join(' or ') : 'union';
     default:
-      return (d.typeName ?? 'unknown').replace(/^Zod/, '').toLowerCase();
+      return d.type;
   }
 }
 
@@ -163,7 +165,7 @@ export interface ParamRow {
 }
 
 /** Every parameter of a raw zod shape, nested object members included. */
-export function paramRows(shape: Record<string, ZodTypeAny>, prefix = ''): ParamRow[] {
+export function paramRows(shape: Readonly<Record<string, z.ZodType>>, prefix = ''): ParamRow[] {
   const rows: ParamRow[] = [];
   for (const [key, field] of Object.entries(shape)) {
     const path = prefix === '' ? key : `${prefix}.${key}`;
@@ -176,7 +178,7 @@ export function paramRows(shape: Record<string, ZodTypeAny>, prefix = ''): Param
       description: descriptionOf(field),
     });
     const inner = def(unwrap(field));
-    if (inner.typeName === 'ZodObject' && inner.shape !== undefined) rows.push(...paramRows(inner.shape(), path));
+    if (inner.type === 'object' && inner.shape !== undefined) rows.push(...paramRows(inner.shape, path));
   }
   return rows;
 }

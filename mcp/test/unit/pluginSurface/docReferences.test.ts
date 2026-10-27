@@ -26,7 +26,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ZodTypeAny } from 'zod';
+import type { z } from 'zod';
 import { loadBudgets } from '../../../src/budgets/budgets.js';
 import { RESOURCES } from '../../../src/resources/index.js';
 import { TOOL_CATALOG } from '../../../src/runners/installCatalog.js';
@@ -105,7 +105,7 @@ let toolPrefixes: Set<string>;
 beforeAll(() => {
   toolByName = new Map(listedTools().map((t) => [t.name, t]));
   allParamNames = new Set<string>();
-  const collect = (shape: Record<string, ZodTypeAny>): void => {
+  const collect = (shape: Record<string, z.ZodType>): void => {
     for (const [k, v] of Object.entries(shape)) {
       allParamNames.add(k);
       for (const value of enumValues(v) ?? []) allParamNames.add(value);
@@ -180,8 +180,8 @@ describe('tool calls in commands and skills', () => {
         const tool = toolByName.get(call.tool);
         if (tool === undefined) continue;
         for (const { path, literals } of call.keys) {
-          let shape: Record<string, ZodTypeAny> | null = tool.inputSchema;
-          let field: ZodTypeAny | undefined;
+          let shape: Record<string, z.ZodType> | null = tool.inputSchema;
+          let field: z.ZodType | undefined;
           for (const seg of path) {
             field = shape?.[seg];
             if (field === undefined) break;
@@ -215,7 +215,7 @@ describe('tool calls in commands and skills', () => {
         const named = new Set(call.keys.map((k) => k.path.join('.')));
         // Top-level required keys always; a nested object's required keys
         // only when the call names that object.
-        const check = (shape: Record<string, ZodTypeAny>, prefix: string[]): void => {
+        const check = (shape: Record<string, z.ZodType>, prefix: string[]): void => {
           for (const [key, field] of Object.entries(shape)) {
             const path = [...prefix, key].join('.');
             if (!field.isOptional() && !named.has(path)) missing.push(`${call.tool}: ${path} — in ${call.snippet}`);

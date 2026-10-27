@@ -127,8 +127,8 @@ function makePlugin(projectPath: string): PluginContext {
   };
 }
 
-/** Captured argv of the last `runProcess` call, per command. */
-const captured: Array<{ command: string; args: string[] }> = [];
+/** Captured argv of the last `runProcess` call, per command (and, for the .NET mock, its environment). */
+const captured: Array<{ command: string; args: string[]; env?: NodeJS.ProcessEnv | undefined; extendEnv?: boolean | undefined }> = [];
 
 /** What the mocked Semgrep writes as its report — a real run always has `paths`. */
 const CLEAN_REPORT = { results: [], errors: [], paths: { scanned: ['a.py'] } };
@@ -1024,7 +1024,7 @@ describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 i
       name === 'semgrep' || name === 'dotnet' ? `/fake/bin/${name}` : null,
     );
     vi.mocked(runProcess).mockImplementation(async (o) => {
-      captured.push({ command: o.command, args: [...(o.args ?? [])] });
+      captured.push({ command: o.command, args: [...(o.args ?? [])], env: o.env, extendEnv: o.extendEnv });
       const ok = { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
       if (o.command === 'semgrep') {
         const out = o.args?.find((_a, i) => o.args?.[i - 1] === '--output');
@@ -1100,6 +1100,34 @@ describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 i
     expect(rows.map((f) => f.rule_id).sort()).toEqual(['CA5351', 'SCS0005']);
     // Nothing of ours is left in the project.
     expect(existsSync(join(project, 'obj'))).toBe(false);
+  });
+
+  it("the restore and the build — the project's MSBuild — get the package managers' allowlist, never the server's environment", async () => {
+    // Its <Exec> tasks and its packages' analyzers ran with every variable the
+    // server was started with, a GITHUB_TOKEN included.
+    vi.stubEnv('GITHUB_TOKEN', 'ghp_the_servers_token');
+    vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'the-servers-cloud-key');
+    vi.stubEnv('GUARDIAN_TEST_SAST_MARKER', 'x');
+    vi.stubEnv('DOTNET_ROOT', '/opt/dotnet');
+    vi.stubEnv('NUGET_PACKAGES', '/tmp/nuget-packages');
+    vi.stubEnv('NuGetPackageSourceCredentials_corp', 'Username=u;Password=p');
+    try {
+      const project = dotnetProject();
+      mockDotnet();
+      await runSast(project, makePlugin(project));
+      const calls = captured.filter((c) => c.command === 'dotnet');
+      expect(calls.map((c) => c.args[0])).toEqual(['restore', 'build']);
+      for (const call of calls) {
+        expect(call.extendEnv).toBe(false);
+        const env = call.env ?? {};
+        expect(Object.keys(env).filter((k) => /GITHUB_TOKEN|AWS_SECRET|^GUARDIAN_|^PROJECT_PATH$/i.test(k))).toEqual([]);
+        expect(env['DOTNET_ROOT']).toBe('/opt/dotnet');
+        expect(env['NUGET_PACKAGES']).toBe('/tmp/nuget-packages');
+        expect(env['NuGetPackageSourceCredentials_corp']).toBe('Username=u;Password=p');
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('the targets file writes one SARIF per project AND target framework', async () => {

@@ -12,3 +12,7 @@ mcp/test/e2e/eval-vuln-fixture/
 # The plugin evals' shop-app carries its bug on purpose (`orderTotal`'s reduce
 # without an initial value is what the bug-routing case reports).
 evals/fixtures/
+# A feature's eval corpus under .specs/ (git-ignored, on a maintainer's machine
+# only): the llm-scan spike's apps are vulnerable on purpose, and one has a
+# package.json with no lock, which read as an npm coverage gap of this project.
+.specs/*/evals/

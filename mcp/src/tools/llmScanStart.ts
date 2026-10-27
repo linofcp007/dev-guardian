@@ -21,7 +21,7 @@ const inputSchema = {
     .max(2)
     .optional()
     .describe('verify checks scanner findings; hunt looks for what they miss. Default [verify].'),
-  scan_id: z.string().uuid().optional().describe('Verify the findings of this scan. Default: the project open set.'),
+  scan_id: z.guid().optional().describe('Verify the findings of this scan. Default: the project open set.'),
   fingerprints: z.array(z.string().min(1).max(200)).min(1).max(1000).optional().describe('Verify only these findings.'),
   max_tasks: z.number().int().min(1).optional().describe(`Stop handing out tasks after this many. Default ${String(LLM_SCAN_DEFAULTS.max_tasks)}.`),
   max_estimated_tokens: z

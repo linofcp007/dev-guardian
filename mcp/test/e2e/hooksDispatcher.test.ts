@@ -2016,6 +2016,25 @@ describe('hooks/guardian-hook.mjs — review 8 (real subprocess)', () => {
       expect(r.stdout).toBeUndefined();
     });
 
+    // A residual of 3.6.1: the shell's delete of Claude Code's settings was
+    // not judged, while an MCP tool's was asked about.
+    it.each([
+      ['Bash', 'rm .claude/settings.json'],
+      ['Bash', 'mv .claude/settings.local.json /tmp/old.json'],
+      ['PowerShell', 'Remove-Item .claude\\settings.json -Force'],
+    ])("%s %s: ask, saying what the settings' removal takes with it", (tool, command) => {
+      const r = hook(preToolUse(tool, { command }, projectDir));
+      expect(out(r).permissionDecision).toBe('ask');
+      expect(out(r).permissionDecisionReason).toMatch(/^dev-guardian: this command deletes or moves away Claude Code's settings.*permissions\.deny/);
+    });
+
+    it("with the shell block switched off, deleting Claude Code's settings is only a warning", () => {
+      userConfig({ bash: { block: false } });
+      const r = hook(preToolUse('Bash', { command: 'rm .claude/settings.json' }, projectDir));
+      expect(out(r).permissionDecision).toBeUndefined();
+      expect(out(r).additionalContext).toMatch(/deletes or moves away Claude Code's settings/);
+    });
+
     // Review of 3.6.0, finding 9: a denied command padded past a cap ran with a note.
     it('a command cut short by the 512 KB cap asks the user, naming the cap', () => {
       const r = hook(preToolUse('Bash', { command: `${'echo x; '.repeat(70_000)}rm -rf /` }, projectDir));

@@ -11,7 +11,7 @@ npm run ablate -- all                          # every registered pack
 npm run ablate -- bugfix-js                    # one pack
 npm run ablate -- bugfix-java --filter=optional-get # one rule, while iterating
 npm run ablate -- bugfix-js --list             # enumerate clauses, no scanning
-npm run ablate -- routes                       # the 64-rule route pack, ~73 min
+npm run ablate -- routes                       # the 73-rule route pack, ~73 min
 ```
 
 Semgrep is found via `--semgrep=<path>`, then `GUARDIAN_SEMGREP`, then `PATH`.
@@ -60,7 +60,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **42 of the 169 rules** across the fourteen packs are
+nothing but positive terms. **42 of the 178 rules** across the fourteen packs are
 one of those — 36 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -78,7 +78,7 @@ prints `N/A`.
 | `bugfix-php` | 6 | 6 | 0 |
 | `bugfix-rs` | 1 | 1 | 0 |
 | `base` | 13 | 7 | 6 |
-| `routes` | 64 | 44 | 20 |
+| `routes` | 73 | 53 | 20 |
 | `rgpd` | 8 | 8 | 0 |
 | `llm` | 9 | 8 | 1 |
 | `web-js` | 3 | 3 | 0 |
@@ -137,9 +137,9 @@ precision evidence it does have). Measured with the corpora below:
 
 | pack | corpus | files | baseline findings | axis-3 flags |
 | --- | --- | ---: | ---: | ---: |
-| `bugfix-js` | this repo's `mcp/src` | 190 | 45 | 3 |
-| `bugfix-py` | CPython `Lib/` | 5803 | 1078 | several, all positive branches |
-| `bugfix-go` | Go stdlib `src/` | 6515 | 3101 | **1** |
+| `bugfix-js` | this repo's `mcp/src` | 419 | 76 | 3, all working positive branches or a regex inside an exclusion |
+| `bugfix-py` | CPython 3.15.2 `Lib/` | 760 | 704 | 16: 13 working positive branches, 3 a regex inside an exclusion |
+| `bugfix-go` | Go 1.27.3 `src/` | 5084 | 3709 (3513 comparable) | 4, all working positive branches; 2 clauses ERROR (below) |
 | `bugfix-php` | WordPress core | 1512 | 40 | 8 |
 | `bugfix-cs` | `dotnet/runtime` | 11800 | ~790 | 10 |
 | `bugfix-java` | OpenJDK + Spring | 17347 | — | 5 |
@@ -147,6 +147,56 @@ precision evidence it does have). Measured with the corpora below:
 | `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 | `web-js` | uptime-kuma, actual and outline (Node apps) | 4933 | 15 (14 comparable) | 3, all working positive branches |
 | `wordpress` | WooCommerce 11.2.1, wp-statistics 13.0.7, Contact Form 7 6.2.3 | 4176 | 7 (5 comparable) | 0 |
+| `mobile` | Nextcloud Android 35.0.1 and iOS 35.2.1, Gotify Android 2.10.1, Syncthing Android 1.28.1 | 1403 | 20 | 0 |
+
+The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
+in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
+code nobody wrote as a fixture; the rows they replace did not record a
+version, so their counts (190 files and 45 findings, CPython 5803 and 1078, Go
+6515 and 3101) are not comparable with these. The corpora: `go1.27.3.src.tar.gz`
+from go.dev/dl (sha256 `6e7749035cf3…`, as published) with `GUARDIAN_GO_SRC` at
+`go/src`; `Python-3.15.2.tgz` from python.org (sha256 `f74e1db0eabd…`) with
+`GUARDIAN_PY_SRC` at `Lib`; and for `GUARDIAN_MOBILE_SRC` one directory holding
+shallow clones of `nextcloud/android` `stable-35.0.1` (`e6a4ade5`),
+`nextcloud/ios` `35.2.1` (`faf96179`), `gotify/android` `v2.10.1` (`211682fd`)
+and `syncthing/syncthing-android` `1.28.1` (`64d2b8e3`). The last two were
+chosen because they hold an accept-all hostname-verifier lambda each, the shape
+3.6.1 widened that rule to; a corpus picked for the change it measures is
+evidence of recall, not of precision. The file counts are what Semgrep scans,
+not what the tree holds: its default ignore list skips `test/`, `tests/`,
+`vendor/` and `*_test.go` (but not Go's `testdata/`, 1142 of the 5084), which
+is why CPython's `Lib/` scans 760 of its 2060 `.py` files.
+
+Two of the five rules have nothing to measure on their registered corpus —
+CPython holds no Django queryset and `mcp/src` no un-awaited repository call —
+so each was also scanned, by hand and with both versions of the pack, on a tree
+of its own kind: Zulip 12.3 (`b3198225`) and Saleor 3.23.44 (`b2587a12`) for
+the Django rule, Outline v1.12.0 (`09f11188`) and Uptime Kuma 2.5.8
+(`0bd417b9`) for the Node one. Neither is registered; `--real-code=<dir>` is how
+to repeat it. Rule by rule, v3.6.0 → v3.6.1 → after this review:
+
+| rule (pack) | corpus | findings | what the hand-check found |
+| --- | --- | --- | --- |
+| `lock-without-defer` (`bugfix-go`) | Go 1.27.3 | 102 → 39 → 20 | 3.6.1 dropped 75 spans in 52 functions, every one the early-unlock idiom, no true positive among them (16 relock first, all with the return between the Unlock and the Lock). Half of the 39 were the same idiom deferred — `defer mu.Unlock()` before the return — now excluded, with two closure branches so that the goker `grpc3017` true positive the defer exclusion alone swallowed comes back. Of the 20: 5 true, 2 deliberate lock handoffs, 13 a closure's return (a documented gap) |
+| `floating-mutation` (`bugfix-js`) | `mcp/src` | 0 → 0 → 0 | vacuous |
+| | Outline + Uptime Kuma (2694 files) | 2 → 6 → 2 | all six false. The leading `.*` added an IndexedDB `objectStore.delete`, a promise pushed into an array a later `Promise.all` awaits, and two calls inside `await expect(…)`; the two from before were the same IndexedDB and array shapes. The array and assertion shapes have one exclusion each now; the two left are IndexedDB's, which return an IDBRequest and not a promise — documented |
+| `queryset-n-plus-one` (`bugfix-py`) | CPython 3.15.2 | 0 → 0 → 0 | vacuous |
+| | Zulip + Saleor (4563 files) | 21 → 21 → 21 | no `.year`, `.url`, `.size`… chain in either; of the 21, 18 are real foreign-key traversals in a loop (most in data migrations) and 3 the same field-value class through third-party fields (`phone.raw_input`, `country.code`, `flags.mask`), which the list does not name |
+| `hostname-verifier-accepts-all` (`mobile`) | the mobile corpus | 0 → 2 → 2 | both true: Gotify's `builder.hostnameVerifier { _, _ -> true }` behind its "disable SSL validation" setting, Syncthing's `setHostnameVerifier((hostname, session) -> true)` beside a trust manager pinned to the local instance's certificate |
+| `py-yaml-load` (`base`) | none (axis 3 N/A) | — | the harness read two of the four new BaseLoader exclusions DEAD for want of a fixture; each has a near-miss line now and all eleven clauses read live |
+
+The harness runs that go with it: `bugfix-js` 52 clauses live, 3 axis-2 and 3
+axis-3 flags, none in `floating-mutation` (all 17 of its clauses pass, axis 3
+vacuous on `mcp/src`); `bugfix-py` 82 live, 4 axis-2, 16 axis-3, none in
+`queryset-n-plus-one`; `mobile` 2 of 2 clean; `base` 46 live, the 2 axis-2
+flags its `wp-unescaped-output` fixtures carry beside the bug on purpose;
+`bugfix-go` 49 of 51 live and 0 DEAD, noise floor 0 on all five. The lock
+rule's axis-2 flags (three) are the excluded near-miss each `hits/` file holds
+beside its bug, and Semgrep reading a closure's last statement — there, the
+closure's own `Unlock()` — as a return. Its two `ERROR`s are by construction:
+removing either lock branch's anchoring `pattern-inside` leaves `return ...`
+matching every return in 5084 files, and that scan outruns the harness's
+ten-minute limit — twenty of the run's 133 minutes.
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
@@ -165,7 +215,7 @@ blind to the one genuine race either corpus held, and `off-by-one` to `++i`,
 pass.** Axis 3 compares the ablated rule's *own* findings, so a rule the corpus
 never triggers passes by comparing an empty set against an empty set.
 `routes.yml` makes this the common case rather than the exception: `mcp/src` is
-TypeScript, and of the pack's 64 rules exactly **two** ever fire on it —
+TypeScript, and of the pack's 73 rules exactly **two** ever fire on it —
 `guardian-import-esm` (824 findings) and `guardian-env-node` (6). The corpus is
 registered anyway, because 824 findings on 190 files of our own code is the
 most sensitive real-code baseline in the repo and the alternative was `N/A` for
@@ -325,7 +375,8 @@ name. So the registration in `packs.ts` maps them instead:
 `decoySubdirs: ['frameworks/fp']` subtracts the decoy tree from it. Both knobs
 exist for this pack; `--hits=` and `--decoys=` are their ad-hoc equivalents.
 
-**The decoy baseline is 9, and pinning it is the point.** Four of those
+**The decoy baseline is 9 (11 since; see the class-prefix run below), and
+pinning it is the point.** Four of those
 are `guardian_kind: route` and every one is *undecidable*, not untried:
 `Route::get('not/a/leading/slash')` on a class that merely happens to be called
 `Route` is indistinguishable from Laravel's facade, and Ruby's
@@ -438,3 +489,51 @@ full run the DEAD count drops by those five, to 33. Every other verdict in
 those two rules is unchanged, and the surface e2e still reports **zero** routes
 out of either decoy file — the decoys have to be silent on the shipped pack and
 loud only with the guard removed, or they are measuring something else.
+
+**Class-prefix run** (3.7.0, sha256 `6de0cd7f…`, 7570 s wall clock, Semgrep
+1.182.0 without login, noise floor 0). The nine `guardian_kind: scope` rules
+that let Spring and ASP.NET routes resolve their class-level prefix, and
+`guardian-route-spring-request` rewritten to name the method it decorates —
+73 rules, 143 clauses, 139 ablated after 4 collapsed as duplicates (a
+`pattern-inside` and the `pattern-either` branch that holds nothing else):
+
+| axis | result |
+| --- | --- |
+| 0 fires on hits/ | **73/73 rules fire** |
+| 1 live | 105/139 pass, 34 DEAD — **33** the pre-existing ones (the predicted count, confirmed), 1 new |
+| 2 keeps true positives | 115/139 pass, 24 "suppressing" — the 16 above plus 8 new |
+| 3 no rise on `mcp/src` | 136/139 pass, 3 "raising" — all working positive branches |
+
+Of the 30 new or rewritten clauses, 29 read live. The one DEAD was
+`guardian-scope-spring-inherits`'s `@Controller` branch, for the reason five
+clauses above read DEAD: no `@Controller` class in the corpus extended
+anything, so nothing reached it. `LegacyPageController` in
+`annotations/spring/PrefixForms.java` is that fixture, and
+`--filter=guardian-scope-spring-inherits` then read 4/4 live. All 8 new
+"suppressing" verdicts are the guard working and are each its own fixture: the
+abstract-class `pattern-not`s (an abstract handler is no handler, an abstract
+controller has no route or name of its own), `[ControllerName]` and
+`[ActionName]`, and the `pattern-inside` that keeps the ASP.NET boundaries
+and actions to `[Route]` classes (`JsonHelper` and `NoRouteController` appear
+without it). Axis 3 is vacuous for all of them — `mcp/src` holds no Java or
+C#. The pair pass found the same 5 MOVES and 1 structural ERROR as the first
+run.
+
+The decoy baseline read **11**, not 9, on this run — and on the 3.6.1 pack
+too, measured by scanning `frameworks/fp/` with both: the same four undecidable
+routes and one mount, and six imports rather than four (`decoys.go`'s grouped
+import reports one match per item, and `decoys.py` has one). The class-prefix
+rules added none.
+
+**Named-argument run** (3.7.0, sha256 `9a4f3c14…`, 1462 s, Semgrep 1.182.0
+without login, noise floor 0): `npm run ablate -- routes
+--filter=aspnet-attribute`, the ten ASP.NET attribute rules after the bare ones
+gained an all-named alternative (`[HttpGet(Name = "…")]`, which `dotnet new
+webapi` emits) and two `pattern-not`s, and the path ones a `template:`
+alternative — 40 clauses. Axis 0 73/73, axis 1 **40/40 live, 0 DEAD**, axis 3
+40/40 (vacuous: `mcp/src` holds no C#). Axis 2 flags all 15 bare-rule
+`pattern-not`s, and each reveal is the near-miss its clause is for — a path
+before a named argument, a `template:`, a `[Route]` companion (those five
+flags predate this run) — a row of `annotations/aspnet/NamedArguments.cs` or
+`OrdersController.cs`, or `frameworks/cs/`'s `C03` / `C06`. Decoy baseline
+still 11.

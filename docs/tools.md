@@ -165,7 +165,7 @@ Open one GitHub issue per top open finding of project\_path with the local gh CL
 
 ### `deps_audit`
 
-Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync lock is a gap); for Go, govulncheck, which reports the vulnerable functions the code calls. Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).
+Trivy fs plus the stack's own auditors: npm audit on a copy of the manifests, never the repo's .npmrc; pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync lock is a gap) — none given the server's tokens; for Go, govulncheck, which reports the vulnerable functions the code calls. Returns findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

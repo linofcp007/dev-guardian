@@ -94,8 +94,9 @@ function describeRoute(route: RouteRecord): string {
  * An empty own-path reads as `<inherited>` rather than as nothing at all.
  *
  * A route from a bare `@Get()` / `[HttpGet]` / `@GetMapping` has no path of
- * its own — the served URL is the class-level prefix, which no resolver here
- * follows — so `path_resolved` is the empty string by design (see the
+ * its own — the served URL is the class-level prefix — so where that prefix is
+ * not resolved (NestJS always; Spring and ASP.NET when the class gives none we
+ * can read) `path_resolved` is the empty string by design (see the
  * "annotation with no path of its own" section of configs/semgrep/routes.yml).
  * Interpolated raw, that produces a row with two spaces in it, which reads as
  * a typo and invites someone to "fix" the expected value rather than the rule.
@@ -182,32 +183,33 @@ const BASE_ROUTES = [
   'rails GET /rails/orders',
   'rails GET /rails/orders/:id',
   'rails POST /rails/orders',
-  // ---- Spring. @RequestMapping declares no verb, so both the class-level
-  // base path and the method-level one are reported as ANY.
+  // ---- Spring. @RequestMapping declares no verb, so the method-level one is
+  // reported as ANY.
   //
   // The six Spring rules are focused on $PATH now — for a reason of their own
   // (a named annotation argument, see routes.yml's Java section), not the
   // declaration-spanning one FOCUSED_ROUTES below is about — so their rows
   // stay here rather than moving.
   //
-  // Every one is [partial] (review of 3.6.0): Spring joins the class-level
-  // `@RequestMapping("/spring/orders")` to each method mapping, so `GET /list`
-  // is served at `/spring/orders/list`, and the rules cannot bind the class's
-  // path (extract.ts CLASS_PREFIX_KEY). Partial rows are left out of the spec
-  // diff, which is why EXPECTED_SHADOW no longer lists them.
-  'spring ANY /legacy [partial]',
-  'spring ANY /spring/orders [partial]',
-  'spring DELETE /{id} [partial]',
-  'spring GET /list [partial]',
+  // Every one carries the class-level `@RequestMapping("/spring/orders")`,
+  // resolved: the controller is a concrete @RestController with one literal
+  // prefix, joined by resolvers/classPrefix.ts. 3.6.1 reported them all
+  // [partial] at the method's own path (`GET /list`), and the class-level
+  // annotation itself as a route, `ANY /spring/orders` — a prefix, which
+  // serves nothing; that row is gone, and no rule matches a type-level
+  // @RequestMapping any more.
+  'spring ANY /spring/orders/legacy',
+  'spring DELETE /spring/orders/{id}',
+  'spring GET /spring/orders/list',
   // `@GetMapping(value = "/named", produces = "application/json")`. This one
   // was pinned in java-spring/OrderController.java as a KNOWN LIMITATION —
   // "the named-argument form is not matched" — on the strength of
   // `@GetMapping($PATH, ...)` being an invalid Java pattern. The ellipsis is
   // rejected only after a bare metavariable; `(value = $PATH, ...)` parses.
-  'spring GET /named [partial]',
-  'spring PATCH /{id}/status [partial]',
-  'spring POST /create [partial]',
-  'spring PUT /{id} [partial]',
+  'spring GET /spring/orders/named',
+  'spring PATCH /spring/orders/{id}/status',
+  'spring POST /spring/orders/create',
+  'spring PUT /spring/orders/{id}',
   // ---- WordPress. The literal namespace resolves to the served /wp-json
   // path; the `self::NAMESPACE` one cannot, and is flagged rather than
   // concatenated into a URL that exists nowhere.
@@ -268,13 +270,15 @@ const FOCUSED_ROUTES = [
  * rather than a decision: `@Get()` is what docs.nestjs.com uses for an index
  * action and `[HttpGet]` is what `dotnet new webapi` scaffolds, so a real
  * controller loses its collection endpoints entirely and says nothing about
- * it. They are now reported with an empty own-path at `path_partial: true` —
- * the endpoint exists, its full URL is the class-level prefix and is honestly
- * unknown. `test/fixtures/surface/annotations/` is where that behaviour is
+ * it. They are reported, and their full URL is the class-level prefix:
+ * `[HttpGet]` under `[Route("api/orders")]` is served at `/api/orders` and
+ * resolved there (resolvers/classPrefix.ts), while NestJS's controller prefix
+ * is not followed, so `@Get()` keeps an empty own-path at `path_partial:
+ * true`. `test/fixtures/surface/annotations/` is where that behaviour is
  * pinned in depth; these two rows are here so this tree's own set stays exact.
  */
 const INHERITED_ROUTES = [
-  'aspnet GET <inherited> [partial]',
+  'aspnet GET /api/orders',
   'nestjs GET <inherited> [partial]',
 ].sort();
 
@@ -359,6 +363,9 @@ const EXPECTED_SHADOW = [
   'ANY /flask/items/{}',
   'ANY /go/health',
   'ANY /go/orders',
+  // The Spring and ASP.NET class-prefixed routes, resolved since the class
+  // prefix is joined, and undocumented in openapi.yaml like the rest.
+  'ANY /spring/orders/legacy',
   'ANY /wp-json/guardian/v1/items',
   'DELETE /api/users/{}',
   'DELETE /aspnet/orders/{}',
@@ -368,7 +375,9 @@ const EXPECTED_SHADOW = [
   'DELETE /minimal/orders/{}',
   'DELETE /rails/orders/{}',
   'DELETE /rust/items/{}',
+  'DELETE /spring/orders/{}',
   'GET /admin/reports',
+  'GET /api/orders',
   'GET /api/users/list',
   'GET /aspnet/orders',
   'GET /aspnet/orders/audit',
@@ -383,10 +392,13 @@ const EXPECTED_SHADOW = [
   'GET /rust/documented',
   'GET /rust/gated',
   'GET /rust/health',
+  'GET /spring/orders/list',
+  'GET /spring/orders/named',
   'GET /stats',
   'PATCH /aspnet/orders/{}/status',
   'PATCH /laravel/orders/{}/status',
   'PATCH /rust/items/{}/status',
+  'PATCH /spring/orders/{}/status',
   'POST /api/users/create',
   'POST /aspnet/orders',
   'POST /fastapi/items',
@@ -395,9 +407,11 @@ const EXPECTED_SHADOW = [
   'POST /minimal/orders',
   'POST /rails/orders',
   'POST /rust/items',
+  'POST /spring/orders/create',
   'PUT /aspnet/orders/{}',
   'PUT /laravel/orders/{}',
   'PUT /rust/items/{}',
+  'PUT /spring/orders/{}',
 ].sort();
 
 const EXPECTED_DEAD = ['GET /deprecated/v0/orders'];
@@ -908,9 +922,10 @@ function describeAnnotationRoute(route: RouteRecord): string {
  * declaration against the files rather than pasted from a run.
  *
  * `<inherited>` is an empty own-path: the annotation carries no path and the
- * served URL is the class-level prefix, which no resolver here can follow, so
- * the endpoint is inventoried and flagged `partial` rather than dropped (which
- * is what used to happen) or guessed (which would be worse). See the
+ * served URL is the class-level prefix. NestJS's is not followed, so the
+ * endpoint is inventoried and flagged `partial` rather than dropped (which is
+ * what used to happen) or guessed (which would be worse); a Spring or ASP.NET
+ * one under a literal class prefix is reported AT the prefix, resolved. See the
  * "annotation with no path of its own" section of configs/semgrep/routes.yml.
  *
  * Two line numbers point one line ABOVE the route annotation
@@ -922,10 +937,11 @@ function describeAnnotationRoute(route: RouteRecord): string {
  * declaration it decorates.
  *
  * Measured against the shipped pack before the fix, this same fixture produced
- * 18 of these 52 rows: ASP.NET 5 of 15, NestJS 6 of 12, Spring 7 of 25. What
- * was missing was every bare annotation in all three frameworks, every Spring
- * named-argument mapping, and every ASP.NET path carried by a `[Route]`
- * companion attribute.
+ * 18 of the 52 rows then expected: ASP.NET 5 of 15, NestJS 6 of 12, Spring 7
+ * of 25. What was missing was every bare annotation in all three frameworks,
+ * every Spring named-argument mapping, and every ASP.NET path carried by a
+ * `[Route]` companion attribute. (Spring's 25th row was the class-level
+ * @RequestMapping, reported as a route until its prefix was resolved.)
  */
 const EXPECTED_ANNOTATION_ROUTES = [
   // ---- NestJS: every verb bare and with a path. EVERY route here is
@@ -950,58 +966,143 @@ const EXPECTED_ANNOTATION_ROUTES = [
   'nest/users.controller.ts:106 nestjs DELETE :id [partial]',
   // The arrow-property handler, bare.
   'nest/users.controller.ts:112 nestjs GET <inherited> [partial]',
-  // ---- ASP.NET: every verb in all three forms. A path from a `[Route]`
-  // companion is reported at the line of the `[Route]` attribute, which is
-  // where the focused span is. `all`, `submit`, `get-named` and friends are
-  // bare relative segments, which isLiteralPath accepts (lower-case, no code
-  // punctuation); `{id}` is not, while `{id}/status` is (it has a slash).
-  'aspnet/OrdersController.cs:31 aspnet GET all [partial]',
-  'aspnet/OrdersController.cs:35 aspnet GET get-named [partial]',
-  'aspnet/OrdersController.cs:39 aspnet GET <inherited> [partial]',
-  'aspnet/OrdersController.cs:43 aspnet POST post-attr [partial]',
-  'aspnet/OrdersController.cs:47 aspnet POST submit [partial]',
-  'aspnet/OrdersController.cs:51 aspnet POST <inherited> [partial]',
-  'aspnet/OrdersController.cs:55 aspnet PUT put-attr [partial]',
-  'aspnet/OrdersController.cs:60 aspnet PUT before [partial]',
-  'aspnet/OrdersController.cs:64 aspnet PUT <inherited> [partial]',
-  'aspnet/OrdersController.cs:68 aspnet PATCH {id}/status [partial]',
-  'aspnet/OrdersController.cs:72 aspnet PATCH patch-named [partial]',
-  'aspnet/OrdersController.cs:76 aspnet PATCH <inherited> [partial]',
-  'aspnet/OrdersController.cs:81 aspnet DELETE {id} [partial]',
-  'aspnet/OrdersController.cs:85 aspnet DELETE delete-named [partial]',
-  'aspnet/OrdersController.cs:89 aspnet DELETE <inherited> [partial]',
-  // ---- Spring: every annotation in all four forms. The class-level
-  // @RequestMapping is itself reported, as it always was. `/reordered` is the
-  // load-bearing one — reachable only by binding the named argument, never by
-  // reading the first one. Every @RequestMapping row is ANY, `/request-value`
-  // included: its `method = RequestMethod.GET` is an attribute this pack does
-  // not read, and ANY is the truth rather than a guess.
-  'spring/OrderController.java:50 spring ANY /api/orders [partial]',
-  'spring/OrderController.java:54 spring GET /get-positional [partial]',
-  'spring/OrderController.java:57 spring GET /get-value [partial]',
-  'spring/OrderController.java:60 spring GET /get-path [partial]',
-  'spring/OrderController.java:63 spring GET <inherited> [partial]',
-  'spring/OrderController.java:67 spring POST /post-positional [partial]',
-  'spring/OrderController.java:70 spring POST /post-value [partial]',
-  'spring/OrderController.java:73 spring POST /post-path [partial]',
+  // ---- ASP.NET: every verb in all three forms, under the class's
+  // `[Route("api/[controller]")]` — `[controller]` is `Orders`, the class
+  // name less its `Controller` suffix, with the case as written (ASP.NET
+  // routing ignores case). A path from a `[Route]` companion is reported at
+  // the line of the `[Route]` attribute, which is where the focused span is.
+  // `{id}` alone was never path syntax to isLiteralPath; joined to the
+  // prefix, `/api/Orders/{id}` is. The bare forms are served AT the prefix.
+  'aspnet/OrdersController.cs:31 aspnet GET /api/Orders/all',
+  'aspnet/OrdersController.cs:35 aspnet GET /api/Orders/get-named',
+  'aspnet/OrdersController.cs:39 aspnet GET /api/Orders',
+  'aspnet/OrdersController.cs:43 aspnet POST /api/Orders/post-attr',
+  'aspnet/OrdersController.cs:47 aspnet POST /api/Orders/submit',
+  'aspnet/OrdersController.cs:51 aspnet POST /api/Orders',
+  'aspnet/OrdersController.cs:55 aspnet PUT /api/Orders/put-attr',
+  'aspnet/OrdersController.cs:60 aspnet PUT /api/Orders/before',
+  'aspnet/OrdersController.cs:64 aspnet PUT /api/Orders',
+  'aspnet/OrdersController.cs:68 aspnet PATCH /api/Orders/{id}/status',
+  'aspnet/OrdersController.cs:72 aspnet PATCH /api/Orders/patch-named',
+  'aspnet/OrdersController.cs:76 aspnet PATCH /api/Orders',
+  'aspnet/OrdersController.cs:81 aspnet DELETE /api/Orders/{id}',
+  'aspnet/OrdersController.cs:85 aspnet DELETE /api/Orders/delete-named',
+  'aspnet/OrdersController.cs:89 aspnet DELETE /api/Orders',
+  // ---- ASP.NET named arguments (aspnet/NamedArguments.cs), every verb in
+  // three shapes. The pack matched 5 of these 17 before 3.7.0 (measured on
+  // 1.182.0: the five with a path before a named argument). An attribute
+  // whose arguments are all named — `dotnet new webapi`'s `[HttpGet(Name =
+  // "GetWeatherForecast")]`, `Order = 1` — matched no rule, nor did a
+  // template passed as `template: "…"`. Named-only is served at the
+  // controller's route, like a bare attribute — `WithCompanion` too, beside
+  // its `[Route("companion")]` (ASP.NET makes that a second selector, with no
+  // verb, which no rule reports). A path before a named argument is the path
+  // rule's, at the path, never `Name = …`.
+  'aspnet/NamedArguments.cs:38 aspnet GET /WeatherForecast',
+  'aspnet/NamedArguments.cs:51 aspnet GET /api/NamedArgs',
+  'aspnet/NamedArguments.cs:54 aspnet GET /api/NamedArgs/{id}',
+  'aspnet/NamedArguments.cs:57 aspnet GET /api/NamedArgs/get-template',
+  'aspnet/NamedArguments.cs:63 aspnet GET /api/NamedArgs',
+  'aspnet/NamedArguments.cs:69 aspnet POST /api/NamedArgs',
+  'aspnet/NamedArguments.cs:72 aspnet POST /api/NamedArgs/post-named',
+  'aspnet/NamedArguments.cs:75 aspnet POST /api/NamedArgs/post-template',
+  'aspnet/NamedArguments.cs:80 aspnet PUT /api/NamedArgs',
+  'aspnet/NamedArguments.cs:83 aspnet PUT /api/NamedArgs/{id}',
+  'aspnet/NamedArguments.cs:87 aspnet PUT /api/NamedArgs/put-template',
+  'aspnet/NamedArguments.cs:93 aspnet PATCH /api/NamedArgs',
+  'aspnet/NamedArguments.cs:96 aspnet PATCH /api/NamedArgs/{id}/flag',
+  'aspnet/NamedArguments.cs:100 aspnet PATCH /api/NamedArgs/patch-template',
+  'aspnet/NamedArguments.cs:105 aspnet DELETE /api/NamedArgs',
+  'aspnet/NamedArguments.cs:108 aspnet DELETE /api/NamedArgs/{id}/hard',
+  'aspnet/NamedArguments.cs:111 aspnet DELETE /api/NamedArgs/delete-template',
+  // ---- Spring: every annotation in all four forms, under the class's
+  // `@RequestMapping("/api/orders")`. The class-level annotation itself is
+  // NOT a row: it is a prefix, and 3.6.1's `ANY /api/orders [partial]` was a
+  // route Spring never serves. `/reordered` is the load-bearing one —
+  // reachable only by binding the named argument, never by reading the first
+  // one. Every @RequestMapping row is ANY, `/request-value` included: its
+  // `method = RequestMethod.GET` is an attribute this pack does not read, and
+  // ANY is the truth rather than a guess.
+  'spring/OrderController.java:54 spring GET /api/orders/get-positional',
+  'spring/OrderController.java:57 spring GET /api/orders/get-value',
+  'spring/OrderController.java:60 spring GET /api/orders/get-path',
+  'spring/OrderController.java:63 spring GET /api/orders',
+  'spring/OrderController.java:67 spring POST /api/orders/post-positional',
+  'spring/OrderController.java:70 spring POST /api/orders/post-value',
+  'spring/OrderController.java:73 spring POST /api/orders/post-path',
   // Line 77 is `@Deprecated`, not the `@PostMapping` below it.
-  'spring/OrderController.java:77 spring POST <inherited> [partial]',
-  'spring/OrderController.java:82 spring PUT /put-positional [partial]',
-  'spring/OrderController.java:87 spring PUT /reordered [partial]',
-  'spring/OrderController.java:90 spring PUT /put-path [partial]',
-  'spring/OrderController.java:93 spring PUT <inherited> [partial]',
-  'spring/OrderController.java:97 spring PATCH /{id}/status [partial]',
-  'spring/OrderController.java:100 spring PATCH /patch-value [partial]',
-  'spring/OrderController.java:103 spring PATCH /patch-path [partial]',
-  'spring/OrderController.java:106 spring PATCH <inherited> [partial]',
-  'spring/OrderController.java:110 spring DELETE /delete-positional [partial]',
+  'spring/OrderController.java:77 spring POST /api/orders',
+  'spring/OrderController.java:82 spring PUT /api/orders/put-positional',
+  'spring/OrderController.java:87 spring PUT /api/orders/reordered',
+  'spring/OrderController.java:90 spring PUT /api/orders/put-path',
+  'spring/OrderController.java:93 spring PUT /api/orders',
+  'spring/OrderController.java:97 spring PATCH /api/orders/{id}/status',
+  'spring/OrderController.java:100 spring PATCH /api/orders/patch-value',
+  'spring/OrderController.java:103 spring PATCH /api/orders/patch-path',
+  'spring/OrderController.java:106 spring PATCH /api/orders',
+  'spring/OrderController.java:110 spring DELETE /api/orders/delete-positional',
+  // Two paths in one mapping: not one literal, so nothing is joined to it.
   'spring/OrderController.java:115 spring DELETE {"/a", "/b"} [partial]',
-  'spring/OrderController.java:118 spring DELETE /delete-path [partial]',
-  'spring/OrderController.java:122 spring DELETE <inherited> [partial]',
-  'spring/OrderController.java:126 spring ANY /request-positional [partial]',
-  'spring/OrderController.java:131 spring ANY /request-value [partial]',
-  'spring/OrderController.java:134 spring ANY /request-path [partial]',
-  'spring/OrderController.java:137 spring ANY <inherited> [partial]',
+  'spring/OrderController.java:118 spring DELETE /api/orders/delete-path',
+  'spring/OrderController.java:122 spring DELETE /api/orders',
+  'spring/OrderController.java:126 spring ANY /api/orders/request-positional',
+  'spring/OrderController.java:131 spring ANY /api/orders/request-value',
+  'spring/OrderController.java:134 spring ANY /api/orders/request-path',
+  'spring/OrderController.java:137 spring ANY /api/orders',
+  // ---- Spring class-level prefixes (spring/PrefixForms.java): one class
+  // per shape the join decides. Resolved: the `value =` and `path =` prefix
+  // forms (a bare mapping served AT the prefix, relative halves given their
+  // slash), a handler with no prefix and no supertype, an outer class's own
+  // route, and a nested @RestController with a prefix of its own.
+  'spring/PrefixForms.java:22 spring GET /v1/items/list',
+  'spring/PrefixForms.java:25 spring POST /v1/items',
+  'spring/PrefixForms.java:34 spring GET /v2/items/detail',
+  'spring/PrefixForms.java:58 spring GET /health',
+  'spring/PrefixForms.java:107 spring GET /outer/o',
+  'spring/PrefixForms.java:120 spring GET /nested/n',
+  // Partial, each for its own reason: a constant prefix (`Paths.ORDERS`); a
+  // superclass, and an interface, that may carry the prefix; an abstract
+  // handler; an API interface's abstract methods, one per argument form; a
+  // nested type that is no handler — a class, an interface, a record.
+  // `OnlyPrefixController` has a prefix and no mapping, so no row at all.
+  'spring/PrefixForms.java:42 spring GET /c [partial]',
+  'spring/PrefixForms.java:65 spring GET /inherited [partial]',
+  'spring/PrefixForms.java:73 spring DELETE /impl [partial]',
+  'spring/PrefixForms.java:83 spring GET /a [partial]',
+  'spring/PrefixForms.java:92 spring ANY /abs-positional [partial]',
+  'spring/PrefixForms.java:95 spring ANY /abs-value [partial]',
+  'spring/PrefixForms.java:98 spring ANY /abs-path [partial]',
+  'spring/PrefixForms.java:112 spring GET /helper [partial]',
+  'spring/PrefixForms.java:126 spring GET /inner-iface [partial]',
+  'spring/PrefixForms.java:131 spring GET /in-record [partial]',
+  // The @Controller twin of `InheritingController` — the inherits rule's
+  // `@Controller` branch read DEAD in the ablation run until it existed.
+  'spring/PrefixForms.java:141 spring GET /page [partial]',
+  // ---- ASP.NET class routes and tokens (aspnet/PrefixTokens.cs). Resolved:
+  // `[controller]/[action]` with the `Async` suffix dropped, a bare attribute
+  // served AT the template, an action whose body holds a local function
+  // (still `Compute`), two rooted paths — one still replacing its token — a
+  // rooted path on an abstract base, and nested controllers' own routes.
+  'aspnet/PrefixTokens.cs:22 aspnet GET /api/Reports/Summary',
+  'aspnet/PrefixTokens.cs:26 aspnet GET /api/Reports/Detail/{id}',
+  'aspnet/PrefixTokens.cs:35 aspnet GET /rooted/Reports',
+  'aspnet/PrefixTokens.cs:39 aspnet GET /legacy/reports',
+  'aspnet/PrefixTokens.cs:43 aspnet GET /api/Reports/Compute/calc',
+  'aspnet/PrefixTokens.cs:87 aspnet GET /rooted-ping',
+  'aspnet/PrefixTokens.cs:113 aspnet GET /api/outer/o',
+  'aspnet/PrefixTokens.cs:127 aspnet GET /api/inner/i',
+  // Partial: `[ActionName]` (a bare attribute, so its own path is empty),
+  // two class routes, a constant one, `[area]`, an abstract base's relative
+  // route, a controller with no [Route] of its own, `[ControllerName]`, and
+  // a nested class that is no controller.
+  'aspnet/PrefixTokens.cs:30 aspnet POST <inherited> [partial]',
+  'aspnet/PrefixTokens.cs:56 aspnet GET m [partial]',
+  'aspnet/PrefixTokens.cs:64 aspnet GET c [partial]',
+  'aspnet/PrefixTokens.cs:73 aspnet GET a [partial]',
+  'aspnet/PrefixTokens.cs:84 aspnet GET ping [partial]',
+  'aspnet/PrefixTokens.cs:95 aspnet GET x [partial]',
+  'aspnet/PrefixTokens.cs:104 aspnet GET r [partial]',
+  'aspnet/PrefixTokens.cs:119 aspnet GET n [partial]',
 ].sort();
 
 /**
@@ -1012,7 +1113,34 @@ const EXPECTED_ANNOTATION_ROUTES = [
  * Semgrep focused reports the route under that text instead of under its
  * path (measured: `spring PUT produces = "application/json" [partial]`).
  */
-const ANNOTATION_DECOYS = ['application/json', 'AuthGuard', 'IgnoreApi', 'RemoveOrder', 'pong'];
+const ANNOTATION_DECOYS = [
+  'application/json',
+  'AuthGuard',
+  'IgnoreApi',
+  'RemoveOrder',
+  // A named attribute argument is never a path (aspnet/NamedArguments.cs).
+  'Name =',
+  'Order =',
+  'GetWeatherForecast',
+  'GetById',
+  'nameof',
+  'pong',
+  // The class-prefix fixtures: a commented-out prefix in each file; a type
+  // whose @RequestMapping is no route (`/only` has no mapping, `/feign` is
+  // an interface's); an outer prefix joined to a nested type that is no
+  // handler; a renamed action or controller read as written; a local
+  // function's name read as the action's.
+  'commented',
+  '/only',
+  '/feign',
+  '/outer/helper',
+  '/outer/inner-iface',
+  '/api/outer/n',
+  'Original',
+  'renamed',
+  'Custom',
+  'Inner',
+];
 
 describe('E2E — annotation route rules against the auditor fixture', () => {
   it.skipIf(!SEMGREP_AVAILABLE)(
@@ -1174,15 +1302,16 @@ describe('E2E — annotation route rules against the auditor fixture', () => {
  * harness's, and it is what the fixtures exist to give it.
  */
 const EXPECTED_FRAMEWORK_ROUTES = [
-  // ---- C#: attribute + minimal API. Unchanged by this work, and here as the
-  // regression guard for the `using static` import fix in the same file.
-  'cs/OrdersController.cs:14 aspnet GET all [partial]',
-  'cs/OrdersController.cs:18 aspnet GET <inherited> [partial]',
-  'cs/OrdersController.cs:23 aspnet POST submit [partial]',
-  'cs/OrdersController.cs:27 aspnet GET quick [partial]',
-  'cs/OrdersController.cs:31 aspnet PUT {id:int} [partial]',
-  'cs/OrdersController.cs:35 aspnet DELETE {id} [partial]',
-  'cs/OrdersController.cs:39 aspnet PATCH {id}/status [partial]',
+  // ---- C#: attribute + minimal API, the attribute routes under the class's
+  // `[Route("api/[controller]")]`; here too as the regression guard for the
+  // `using static` import fix in the same file.
+  'cs/OrdersController.cs:14 aspnet GET /api/Orders/all',
+  'cs/OrdersController.cs:18 aspnet GET /api/Orders',
+  'cs/OrdersController.cs:23 aspnet POST /api/Orders/submit',
+  'cs/OrdersController.cs:27 aspnet GET /api/Orders/quick',
+  'cs/OrdersController.cs:31 aspnet PUT /api/Orders/{id:int}',
+  'cs/OrdersController.cs:35 aspnet DELETE /api/Orders/{id}',
+  'cs/OrdersController.cs:39 aspnet PATCH /api/Orders/{id}/status',
   'cs/Program.cs:7 aspnet-minimal GET /minimal/health',
   'cs/Program.cs:10 aspnet-minimal POST /minimal/orders',
   'cs/Program.cs:14 aspnet-minimal GET /stats',
@@ -1204,16 +1333,16 @@ const EXPECTED_FRAMEWORK_ROUTES = [
   'go/routes.go:34 chi POST /chi/items',
   'go/routes.go:35 chi GET /x',
   'go/routes.go:39 gin GET /echo/items',
-  // ---- Spring. Unchanged here; the annotations tree pins it in depth.
-  'java/OrderController.java:9 spring ANY /api/orders [partial]',
-  'java/OrderController.java:13 spring GET /list [partial]',
-  'java/OrderController.java:17 spring GET /detail [partial]',
-  'java/OrderController.java:21 spring GET <inherited> [partial]',
-  'java/OrderController.java:25 spring POST /create [partial]',
+  // ---- Spring, under the class's `@RequestMapping("/api/orders")`, which is
+  // no row of its own; the annotations tree pins it in depth.
+  'java/OrderController.java:13 spring GET /api/orders/list',
+  'java/OrderController.java:17 spring GET /api/orders/detail',
+  'java/OrderController.java:21 spring GET /api/orders',
+  'java/OrderController.java:25 spring POST /api/orders/create',
   'java/OrderController.java:29 spring DELETE {"/a", "/b"} [partial]',
-  'java/OrderController.java:33 spring ANY /legacy [partial]',
-  'java/OrderController.java:37 spring PUT /{id} [partial]',
-  'java/OrderController.java:40 spring PATCH /{id}/status [partial]',
+  'java/OrderController.java:33 spring ANY /api/orders/legacy',
+  'java/OrderController.java:37 spring PUT /api/orders/{id}',
+  'java/OrderController.java:40 spring PATCH /api/orders/{id}/status',
   // ---- Express/Fastify/Koa/Hono. Line 21 carries BOTH chain routes, and
   // koa-hono.js:10 carries both halves of the multi-line Hono chain.
   'js/express5.js:10 express GET /health',
@@ -1319,9 +1448,9 @@ const EXPECTED_FRAMEWORK_ENV = [
  *
  * Every entry is either a decoy the pack DID report before this change or a
  * form whose absence is a decision. This is not redundant with the set
- * equality above: the equality says "these 88 rows and no others", while this
+ * equality above: the equality says "these 87 rows and no others", while this
  * says WHY a particular string would be a defect, so a failure names the
- * fabrication instead of showing an 88-row diff.
+ * fabrication instead of showing an 87-row diff.
  */
 const FRAMEWORK_DECOYS = [
   '/etc/passwd', // Map.get with a path-shaped key

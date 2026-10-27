@@ -30,7 +30,7 @@
  * `FOLDS` lists the folds for the generated `docs/tools.md` and the tests.
  */
 
-import { z, ZodDefault, ZodEnum, type ZodRawShape, type ZodTypeAny } from 'zod';
+import { z } from 'zod';
 import type { ToolResult } from '../types.js';
 import { registerToolModule, strictInputSchema, TOOLS, type ToolModule } from './index.js';
 
@@ -61,17 +61,17 @@ export interface FoldRecord {
 /** Every registered fold, in registration order. */
 export const FOLDS: FoldRecord[] = [];
 
-const WRAPPERS = new Set(['ZodOptional', 'ZodDefault', 'ZodNullable', 'ZodEffects']);
+/** The wrappers a parameter's type can sit under. A refinement is no wrapper in zod 4: it is a check of the type itself. */
+const WRAPPERS = new Set(['optional', 'default', 'nullable']);
 
 /** The type under the optional / default / nullable wrappers. */
-function base(field: ZodTypeAny): ZodTypeAny {
+function base(field: z.ZodType): z.ZodType {
   let cur = field;
   for (;;) {
-    const def = cur._def as { typeName?: string; innerType?: ZodTypeAny; schema?: ZodTypeAny };
-    if (def.typeName === undefined || !WRAPPERS.has(def.typeName)) return cur;
-    const next = def.innerType ?? def.schema;
-    if (next === undefined) return cur;
-    cur = next;
+    // Typed by zod as its core type; every schema here is built with the classic API, so the inner one is classic too.
+    const def = cur.def as { type: string; innerType?: z.ZodType };
+    if (!WRAPPERS.has(def.type) || def.innerType === undefined) return cur;
+    cur = def.innerType;
   }
 }
 
@@ -81,9 +81,10 @@ function base(field: ZodTypeAny): ZodTypeAny {
  * call, and the mode that does not take it would then refuse the call. The
  * member's own parse applies its defaults.
  */
-function asFoldParam(field: ZodTypeAny, description: string | undefined): ZodTypeAny {
-  const inner = field instanceof ZodDefault ? (field.removeDefault() as ZodTypeAny) : field;
-  const optional = inner.isOptional() ? inner : inner.optional();
+function asFoldParam(field: z.ZodType, description: string | undefined): z.ZodType {
+  const inner = field instanceof z.ZodDefault ? (field.unwrap() as z.ZodType) : field;
+  // An optional KEY, not merely a type that takes `undefined`: zod 4 requires a key whose schema is not optional.
+  const optional = inner instanceof z.ZodOptional ? inner : inner.optional();
   return description !== undefined ? optional.describe(description) : optional;
 }
 
@@ -110,7 +111,7 @@ export function registerFold(spec: FoldSpec): ToolModule {
   }
 
   const modeField = z.enum([firstMode, ...otherModes]);
-  const shape: ZodRawShape = {
+  const shape: Record<string, z.ZodType> = {
     [spec.modeKey]: (spec.defaultMode !== undefined ? modeField.optional() : modeField).describe(spec.modeDescription),
   };
   for (const member of members.values()) {
@@ -119,13 +120,11 @@ export function registerFold(spec: FoldSpec): ToolModule {
       const seen = shape[key];
       if (seen !== undefined) {
         const [a, b] = [base(seen), base(field)];
-        const typeA = (a._def as { typeName?: string }).typeName;
-        const typeB = (b._def as { typeName?: string }).typeName;
         const sameEnum =
-          !(a instanceof ZodEnum) ||
-          !(b instanceof ZodEnum) ||
+          !(a instanceof z.ZodEnum) ||
+          !(b instanceof z.ZodEnum) ||
           JSON.stringify(a.options) === JSON.stringify(b.options);
-        if (typeA !== typeB || !sameEnum) {
+        if (a.def.type !== b.def.type || !sameEnum) {
           throw new Error(`fold ${spec.name}: '${key}' has different types in its members`);
         }
         continue;

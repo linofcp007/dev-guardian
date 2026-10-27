@@ -124,7 +124,7 @@ import type { PluginContext } from '../context.js';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
 import { checkNpmSources, npmSourcesRefusal } from '../fixpr/repoPackageConfig.js';
 import { packageManagerEnv } from '../fixpr/testCommandEnv.js';
-import { NPM_PROJECT_CONFIG, npmPlanningCopy } from '../deps/npmPlanningCopy.js';
+import { gitRootAbove, npmConfigNotRead, npmPlanningCopy } from '../deps/npmPlanningCopy.js';
 import { runProcess } from '../runners/processRunner.js';
 import { exactPin, findRequirementFiles, parseRequirementSpec, requirementMentions, type RequirementSpec } from '../deps/pipRequirements.js';
 import { matchesAny } from '../platform/glob.js';
@@ -132,7 +132,6 @@ import {
   listProjectDir,
   presentInProject,
   PROJECT_LOCKFILE_MAX_BYTES,
-  projectEntryKind,
   projectPathKind,
   readProjectJson,
   readProjectText,
@@ -756,24 +755,6 @@ async function npmOutdated(projectPath: string): Promise<PmResult> {
 }
 
 /**
- * The repository's own npm configuration files the copy left behind, relative
- * to the project — the project's directory and each above it up to the
- * repository root (a workspace root's applies to its members). Named in the
- * result so a plan made against the user's registry instead of the one a
- * committed `.npmrc` names says so.
- */
-function npmConfigNotRead(projectPath: string): string[] {
-  const top = gitRootAbove(projectPath) ?? projectPath;
-  const out: string[] = [];
-  for (let dir = projectPath; ; dir = dirname(dir)) {
-    for (const name of NPM_PROJECT_CONFIG) {
-      if (presentInProject(dir, join(dir, name))) out.push(toPosix(relative(projectPath, join(dir, name))));
-    }
-    if (dir === top || dirname(dir) === dir) return out;
-  }
-}
-
-/**
  * npm branch (item 4, fix round 1 items 1 and 2):
  *   - a package with an active CVE upgrades to the MINIMUM fixed version
  *     (`cves.fixed_version`) rather than `npm outdated`'s own `latest` —
@@ -1129,18 +1110,6 @@ function detectNpmPackageManager(projectPath: string): NpmPackageManager {
     return { name: 'pnpm', evidence: 'node_modules/.pnpm', root: projectPath };
   }
   return { name: 'npm', evidence: 'default', root: projectPath };
-}
-
-/** The nearest directory at or above `start` holding `.git` (a directory, or
- *  a worktree's `.git` file), or null when there is none. */
-function gitRootAbove(start: string): string | null {
-  for (let dir = start; ; ) {
-    // lstat only: `.git` is never followed to find out.
-    if (projectEntryKind(join(dir, '.git')) !== 'absent') return dir;
-    const parent = dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
 }
 
 /**

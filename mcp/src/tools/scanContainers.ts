@@ -125,10 +125,10 @@ const IMAGE_REF = new RegExp(`^(?!-)[^\\s"%${UNSAFE_CHAR_CLASS}]+$`);
 
 /**
  * A signer value: an e-mail, a workflow URL or an RE2 regexp — never a control character.
- * A FACTORY, not one shared instance: the JSON-schema converter emits a reused
- * zod instance as `$ref` to its first use, and draft-07 ignores every keyword
- * beside a `$ref` — the other three parameters' descriptions were invisible
- * (review 3.0 M2).
+ * A FACTORY, not one shared instance: zod 3's JSON-schema converter emitted a
+ * reused zod instance as `$ref` to its first use, and draft-07 ignores every
+ * keyword beside a `$ref` — the other three parameters' descriptions were
+ * invisible (review 3.0 M2). zod 4's inlines it.
  */
 const signerValue = (): z.ZodString => z.string().min(1).max(1024);
 

@@ -73,7 +73,7 @@
 import { OWASP_SCAN_TYPES } from '../frameworks/coverage.js';
 import { PROJECT_LANGUAGES_META_KEY, resolveProjectLanguagesAsync } from '../frameworks/projectLanguages.js';
 import { randomUUID } from 'node:crypto';
-import { z, type ZodRawShape } from 'zod';
+import { z } from 'zod';
 import { buildDriftAdvisory } from '../configdrift/advisory.js';
 import { detectConfigDrift } from '../configdrift/detect.js';
 import type { PluginContext, ToolContext } from '../context.js';
@@ -132,7 +132,7 @@ import { workingTreeState } from './gitState.js';
 import { holdReportDirs } from './scanHelpers.js';
 import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scanCoverage.js';
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
-import type { ToolCallMeta, ToolInput, ToolModule } from './index.js';
+import type { ToolCallMeta, ToolInput, ToolModule, ToolShape } from './index.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
 
 /**
@@ -228,7 +228,7 @@ export interface ScanToolBaseInput {
  * A scan tool's input: what its schema parses (`./index.ts#ToolInput`), with
  * the fields the factory itself reads.
  */
-type ScanToolInput<S extends ZodRawShape> = ToolInput<S> & ScanToolBaseInput;
+type ScanToolInput<S extends ToolShape> = ToolInput<S> & ScanToolBaseInput;
 
 /** What `rulePacks` gets to decide which packs a call would load. */
 export interface RulePackContext {
@@ -253,7 +253,7 @@ export interface ResponseView {
   warning: string | null;
 }
 
-export interface ScanToolConfig<TInput extends ScanToolBaseInput, S extends ZodRawShape = ZodRawShape> {
+export interface ScanToolConfig<TInput extends ScanToolBaseInput, S extends ToolShape = ToolShape> {
   name: string;
   description: string;
   title?: string;
@@ -349,7 +349,7 @@ const MAX_LOG_LINE = 200;
  * as in `./index.ts#defineTool`: a caller hands the handler the parse of
  * exactly this schema.
  */
-export function makeScanTool<S extends ZodRawShape>(config: ScanToolConfig<ScanToolInput<S>, S>): ToolModule {
+export function makeScanTool<S extends ToolShape>(config: ScanToolConfig<ScanToolInput<S>, S>): ToolModule {
   return {
     name: config.name,
     description: config.description,

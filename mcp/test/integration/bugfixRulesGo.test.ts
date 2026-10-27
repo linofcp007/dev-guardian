@@ -146,7 +146,10 @@ const EXPECTED_HITS_BY_FILE: Readonly<Record<string, FileExpectation>> = {
   'empty_err_block.go': { ids: ['bugfix-go-error-handling-empty-err-block'], count: 1 },
   'err_blank_assign.go': { ids: ['bugfix-go-error-handling-err-blank-assign'], count: 1 },
   'err_discarded.go': { ids: ['bugfix-go-error-handling-err-discarded'], count: 1 },
-  'lock_without_defer.go': { ids: ['bugfix-go-race-condition-lock-without-defer'], count: 2 },
+  // writeUnlockedOnHappyPathOnly, oneReturnForgets (its second return only),
+  // deferOfAnotherLock, and the two callbacks that lock for themselves under
+  // the outer function's defer (review 3.7.0).
+  'lock_without_defer.go': { ids: ['bugfix-go-race-condition-lock-without-defer'], count: 5 },
   'loop_lte_len.go': { ids: ['bugfix-go-off-by-one-loop-lte-len'], count: 1 },
   'nil_map_write.go': { ids: ['bugfix-go-edge-case-nil-map-write'], count: 1 },
   'ticker_not_stopped.go': { ids: ['bugfix-go-memory-leak-ticker-not-stopped'], count: 1 },

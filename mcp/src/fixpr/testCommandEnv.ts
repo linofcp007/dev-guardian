@@ -21,7 +21,12 @@
  *   - the toolchains' own locations and switches: `NODE_*`, `PYTHON*`,
  *     `VIRTUAL_ENV`, `CONDA_PREFIX`, `CARGO_HOME`, `RUSTUP_HOME`,
  *     `RUSTUP_TOOLCHAIN`, `GOPATH`, `GOROOT`, `GOCACHE`, `GOMODCACHE`,
- *     `JAVA_HOME`, `DOTNET_ROOT`.
+ *     `JAVA_HOME`, `DOTNET_*` (the .NET host's and SDK's: `DOTNET_ROOT`,
+ *     `DOTNET_CLI_HOME`, and the SDK's other switches: with `DOTNET_ROOT`
+ *     alone, as until 3.7.0, none reached the restores deps_update_plan and
+ *     deps_audit run here. Every `dotnet` dev-guardian starts has its
+ *     telemetry off whatever this passes — `runners/processRunner.ts#
+ *     DOTNET_NO_TELEMETRY_ENV`, measured).
  *
  * A name matching a credential — `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`,
  * `CREDENTIAL`, `AUTH`, `API_KEY`, `PRIVATE_KEY`, `SESSION`, `COOKIE` — is
@@ -74,12 +79,11 @@ const EXACT = new Set(
     'GOCACHE',
     'GOMODCACHE',
     'JAVA_HOME',
-    'DOTNET_ROOT',
   ].map((n) => n.toUpperCase()),
 );
 
 /** Families kept by prefix (upper-cased names). */
-const PREFIXES = ['LC_', 'NODE_', 'PYTHON'];
+const PREFIXES = ['LC_', 'NODE_', 'PYTHON', 'DOTNET_'];
 
 /** Never passed, whatever family the name is in. */
 const CREDENTIAL = /TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|API_?KEY|PRIVATE_?KEY|SESSION|COOKIE/i;

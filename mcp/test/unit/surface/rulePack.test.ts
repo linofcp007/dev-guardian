@@ -2,8 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { INHERITED_PATH, INHERITED_PATH_KEY } from '../../../src/surface/extract.js';
-import { FOCUS_METADATA_KEY, FOCUS_PATH } from '../../../src/surface/recoverMetavars.js';
+import {
+  CLASS_PREFIX_ASPNET,
+  CLASS_PREFIX_KEY,
+  CLASS_PREFIX_SPRING,
+  INHERITED_PATH,
+  INHERITED_PATH_KEY,
+  SCOPE_KIND,
+  SCOPE_ROLE_KEY,
+} from '../../../src/surface/extract.js';
+import { FOCUS_METADATA_KEY, FOCUS_NAME, FOCUS_PATH } from '../../../src/surface/recoverMetavars.js';
+import { SCOPE_ROLES, VALUE_ROLES, type ScopeRole } from '../../../src/surface/resolvers/classPrefix.js';
 
 const PACK_PATH = join(__dirname, '../../../../configs/semgrep/routes.yml');
 
@@ -134,7 +143,7 @@ function hasBracedBody(pattern: string): boolean {
   return false;
 }
 
-const KINDS = new Set(['route', 'mount', 'import', 'env']);
+const KINDS = new Set(['route', 'mount', 'import', 'env', SCOPE_KIND]);
 
 describe('configs/semgrep/routes.yml', () => {
   it('parses and is non-empty', () => {
@@ -224,7 +233,10 @@ describe('configs/semgrep/routes.yml', () => {
       'guardian-route-spring-request',
       'guardian-route-laravel-match',
     ]);
-    for (const rule of rules().filter((r) => r.metadata?.[FOCUS_METADATA_KEY] !== undefined)) {
+    const focusedRoutes = rules().filter(
+      (r) => r.metadata?.guardian_kind === 'route' && r.metadata[FOCUS_METADATA_KEY] !== undefined,
+    );
+    for (const rule of focusedRoutes) {
       if (!VERBLESS_FOCUSED.has(String(rule.id))) {
         expect(rule.metadata?.method, `${rule.id} declares no metadata.method`).toBeDefined();
       }
@@ -249,13 +261,18 @@ describe('configs/semgrep/routes.yml', () => {
     // operator without the flag is merely lossy — the span is the path literal
     // and the scanner would refuse it — but it means a rule silently stopped
     // being recovered, so it fails too.
+    // A `scope` rule focuses too: on the class prefix ($PATH, the same value a
+    // route's is) or on a controller / action name ($NAME).
+    const FOCUSED_ON: Record<string, string> = { [FOCUS_PATH]: '$PATH', [FOCUS_NAME]: '$NAME' };
     for (const rule of rules()) {
       const declared = rule.metadata?.[FOCUS_METADATA_KEY];
       const focused = focusedMetavars(rule);
       if (declared !== undefined) {
-        expect(declared, `${rule.id}: unknown ${FOCUS_METADATA_KEY} value`).toBe(FOCUS_PATH);
-        expect(rule.metadata?.guardian_kind, `${rule.id}: focus is a route concept`).toBe('route');
-        expect([...focused], `${rule.id} declares the flag but focuses nothing`).toEqual(['$PATH']);
+        const metavar = FOCUSED_ON[String(declared)];
+        expect(metavar, `${rule.id}: unknown ${FOCUS_METADATA_KEY} value`).toBeDefined();
+        expect(['route', SCOPE_KIND], `${rule.id}: focus is a route or scope concept`).toContain(rule.metadata?.guardian_kind);
+        if (rule.metadata?.guardian_kind === 'route') expect(declared, `${rule.id}: a route focuses its path`).toBe(FOCUS_PATH);
+        expect([...focused], `${rule.id} declares the flag but focuses something else`).toEqual([metavar]);
       } else {
         expect([...focused], `${rule.id} focuses but declares no flag`).toEqual([]);
       }
@@ -415,6 +432,67 @@ describe('configs/semgrep/routes.yml', () => {
       'guardian-route-go-nethttp',
       'guardian-route-rails',
     ]);
+  });
+
+  it('gives every scope rule a known role, and focuses exactly the roles that bind a value', () => {
+    // resolvers/classPrefix.ts reads a range by its offsets and a value by its
+    // capture, and cannot tell which a match is meant to be except through the
+    // role. A range rule that focused would hand the join a literal where it
+    // expects a class; a value rule that did not would hand it a whole class
+    // where it expects a literal — and its recovery would read the span.
+    const scopes = rules().filter((r) => r.metadata?.guardian_kind === SCOPE_KIND);
+    expect(scopes.length).toBeGreaterThan(0);
+    for (const rule of scopes) {
+      const role = rule.metadata?.[SCOPE_ROLE_KEY];
+      expect(SCOPE_ROLES, `${rule.id}: unknown ${SCOPE_ROLE_KEY}`).toContain(role);
+      const valued = VALUE_ROLES.has(role as ScopeRole);
+      const expected = role === 'prefix' ? FOCUS_PATH : valued ? FOCUS_NAME : undefined;
+      expect(rule.metadata?.[FOCUS_METADATA_KEY], `${rule.id}: ${String(role)} focus`).toBe(expected);
+      expect(typeof rule.metadata?.framework, `${rule.id} names no framework`).toBe('string');
+    }
+  });
+
+  it('joins exactly the Spring and ASP.NET attribute routes to a class, and gives each join its facts', () => {
+    // A route rule that declares `guardian_class_prefix` stays partial unless
+    // its class's facts resolve it, so a style with a missing fact rule would
+    // silently resolve nothing — and a rule that forgot the key would resolve
+    // its method path WITHOUT the prefix, the confidently wrong URL.
+    const STYLES: Record<string, { framework: string; roles: string[] }> = {
+      [CLASS_PREFIX_SPRING]: { framework: 'spring', roles: ['type', 'handler', 'inherits', 'prefix'] },
+      [CLASS_PREFIX_ASPNET]: { framework: 'aspnet', roles: ['type', 'prefix', 'class-name', 'method', 'method-name'] },
+    };
+    const routeRules = rules().filter((r) => r.metadata?.guardian_kind === 'route');
+    for (const rule of routeRules) {
+      const style = rule.metadata?.[CLASS_PREFIX_KEY];
+      const spec = STYLES[rule.metadata?.framework === 'spring' ? CLASS_PREFIX_SPRING : rule.metadata?.framework === 'aspnet' ? CLASS_PREFIX_ASPNET : ''];
+      if (spec === undefined) {
+        expect(style, `${rule.id} is not a Spring or ASP.NET attribute route`).toBeUndefined();
+      } else {
+        expect(STYLES[String(style)], `${rule.id}: ${CLASS_PREFIX_KEY}`).toBe(spec);
+      }
+    }
+    for (const spec of Object.values(STYLES)) {
+      const declared = rules()
+        .filter((r) => r.metadata?.guardian_kind === SCOPE_KIND && r.metadata.framework === spec.framework)
+        .map((r) => String(r.metadata?.[SCOPE_ROLE_KEY]))
+        .sort();
+      expect(declared, `${spec.framework} scope roles`).toEqual([...spec.roles].sort());
+    }
+    expect(routeRules.filter((r) => r.metadata?.[CLASS_PREFIX_KEY] !== undefined)).toHaveLength(22);
+  });
+
+  it('never matches a type-level @RequestMapping as a route — it is a prefix', () => {
+    // @RequestMapping is the one mapping annotation allowed on a type, and an
+    // annotation-alone pattern matched the class-level one too: every Spring
+    // controller reported its prefix as an `ANY` endpoint of its own. Every
+    // positive pattern of the two @RequestMapping route rules must name the
+    // method it decorates.
+    for (const id of ['guardian-route-spring-request', 'guardian-route-spring-request-bare']) {
+      const rule = rules().find((r) => r.id === id);
+      const patterns = rule === undefined ? [] : positivePatternsOf(rule);
+      expect(patterns.length, id).toBeGreaterThan(0);
+      for (const pattern of patterns) expect(pattern, id).toMatch(/\$M\(\.\.\.\)/);
+    }
   });
 
   it('covers all 8 supported stacks with at least one route rule', () => {

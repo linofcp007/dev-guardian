@@ -80,7 +80,8 @@
  * What this is NOT: a shell parser, nor an interpreter. A command substitution
  * inside double quotes (`echo "$(rm -rf /)"`) is masked like any quoted span,
  * so its body is pulled out and re-entered as a nested script
- * (`quotedSubstitutions`, review of 3.6.0, finding 4). Anything decided at run
+ * (`quotedSubstitutions`, review of 3.6.0, finding 4) — and a PowerShell
+ * script's, read as PowerShell (`collectSubexpressions`). Anything decided at run
  * time — a path in a variable, a script run from a file — stays invisible.
  * Fail-open is the design for the guard's own faults; a limit an input can
  * reach on purpose (the caps, the budget, the nesting depth) asks the user
@@ -101,11 +102,11 @@
 
 import { homedir } from 'node:os';
 import { userDataDir } from './dataRegistry.js';
-import { powershellAsPosix, powershellOpaque } from './powershellText.js';
+import { powershellAsPosix, powershellOpaque, powershellSubexpressions } from './powershellText.js';
 import { pushAll } from './shell/arrays.js';
 import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
-import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
-import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
+import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, flockLockFile, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { commandWriteDestinations, type Effects, effectsOf, gitRemoves, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
 import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
 import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
 import { MASK, splitShell, type ShellStatement, type ShellWord } from './shell/split.js';
@@ -1052,20 +1053,7 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
   if (inner !== undefined && inner !== null) return inner;
   if (!viaExec && !rest.some((w) => w.value === '-delete')) return null;
 
-  let k = 0;
-  while (k < rest.length) {
-    const v = rest[k]?.value ?? '';
-    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
-    else if (v === '-D') k += 2;
-    else break;
-  }
-  const targets: string[] = [];
-  for (; k < rest.length; k += 1) {
-    const v = rest[k]?.value ?? '';
-    if (v.startsWith('-') || v === '(' || v === '!' || v === ')' || v === ',') break; // the first test ends the paths
-    targets.push(stripQuotes(v));
-  }
-  if (targets.length === 0) targets.push('.');
+  const { starts: targets } = findStartPaths(rest);
   const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
   // A relative start path is where the command runs (review of 3.4.0, finding 9: `cd / && find . -delete`).
   const judged = judgedTargets(targets, ctx);
@@ -1079,6 +1067,29 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
 }
 
 /**
+ * `find`'s start paths, from the words after `find` (`rest`): past its own
+ * options (`-H`, `-L`, `-P`, `-O3`, `-D tree`) to the first test, unquoted —
+ * GNU find's `.` when there is none — and the index of that first test.
+ */
+function findStartPaths(rest: readonly ShellWord[]): { starts: string[]; end: number } {
+  let k = 0;
+  while (k < rest.length) {
+    const v = rest[k]?.value ?? '';
+    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
+    else if (v === '-D') k += 2;
+    else break;
+  }
+  const starts: string[] = [];
+  for (; k < rest.length; k += 1) {
+    const v = rest[k]?.value ?? '';
+    if (v.startsWith('-') || v === '(' || v === '!' || v === ')' || v === ',') break; // the first test ends the paths
+    starts.push(stripQuotes(v));
+  }
+  if (starts.length === 0) starts.push('.');
+  return { starts, end: k };
+}
+
+/**
  * `find … | xargs rm` (review of 3.6.0, finding 10): xargs hands the deleter
  * every path find lists, exactly as `find … -exec rm` does, so the pipeline is
  * judged as that — by find's start paths and its tests ({@link assessFind}).
@@ -1087,19 +1098,27 @@ function assessFind(words: ShellWord[], start: number, home?: HomeDir, tildeUser
  * Member `c` is xargs running a deleter; the nearest `find` before it lists.
  */
 function findPipedIntoDeleter(commands: readonly ShellWord[][], c: number, home: HomeDir | undefined, tildeUsers: boolean, ctx: DeleteContext): MatchedRule | null {
+  const fed = findFedToDeleter(commands, c);
+  return fed === undefined ? null : assessFind(fed.words, fed.at, home, tildeUsers, { ...ctx, piped: undefined, pipedRecursive: undefined });
+}
+
+/**
+ * The `find` whose listing `xargs` hands a deleter in member `c` of a
+ * pipeline ({@link findPipedIntoDeleter}), as the `find … -delete` it amounts
+ * to: its words with `-delete` added, and where `find` is among them.
+ */
+function findFedToDeleter(commands: readonly ShellWord[][], c: number): { words: ShellWord[]; at: number } | undefined {
   const words = commands[c];
-  if (words === undefined || c === 0) return null;
+  if (words === undefined || c === 0) return undefined;
   const at = resolveCommand(words).index;
-  if (!words.slice(0, at).some((w) => commandName(w.value) === 'xargs')) return null;
-  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ''))) return null;
+  if (!words.slice(0, at).some((w) => commandName(w.value) === 'xargs')) return undefined;
+  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ''))) return undefined;
   for (let p = c - 1; p >= 0; p -= 1) {
     const prev = commands[p] ?? [];
     const f = resolveCommand(prev).index;
-    if (commandName(prev[f]?.value ?? '') === 'find') {
-      return assessFind([...prev, { value: '-delete', quoted: false }], f, home, tildeUsers, { ...ctx, piped: undefined, pipedRecursive: undefined });
-    }
+    if (commandName(prev[f]?.value ?? '') === 'find') return { words: [...prev, { value: '-delete', quoted: false }], at: f };
   }
-  return null;
+  return undefined;
 }
 
 /**
@@ -1149,8 +1168,11 @@ const CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
  */
 const MANAGED_SETTINGS_PATH = /(?:ClaudeCode|claude-code)\/?managed-settings\.json$/i;
 
-/** The same files through Claude Code's `CLAUDE_CONFIG_DIR`, spelled as a variable (bash, cmd, PowerShell). */
-const CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
+/** Claude Code's `CLAUDE_CONFIG_DIR` spelled as a variable (bash, cmd, PowerShell). */
+const CONFIG_DIR_VARIABLE = String.raw`(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)`;
+
+/** The same files through that variable. */
+const CONFIG_DIR_VARIABLE_SETTINGS = new RegExp(String.raw`${CONFIG_DIR_VARIABLE}\/?settings(?:\.local)?\.json$`, 'i');
 
 /**
  * Whether a path names Claude Code's settings (review round 2, ruling 3): under
@@ -1659,6 +1681,87 @@ const RULE_SETTINGS: MatchedRule = {
   level: 'block',
   reason: "Writes Claude Code's settings with a key that switches the guardrail hooks off",
 };
+/**
+ * Claude Code's settings deleted or moved away from the shell: the user's
+ * question ({@link BashAssessment.ask}), as an MCP tool's delete of them is
+ * (review of 3.6.0, finding 12) — never a deny, since removing a settings file
+ * is sometimes what the user wants.
+ */
+const RULE_SETTINGS_REMOVE: MatchedRule = {
+  id: 'claude-settings-remove',
+  level: 'warn',
+  reason:
+    "this command deletes or moves away Claude Code's settings, and with them every permissions.deny rule and hook " +
+    'setting they hold — the user decides; to change one setting, edit the file instead',
+};
+
+/** The `CLAUDE_CONFIG_DIR` variable naming the directory itself (`"$CLAUDE_CONFIG_DIR"`, `${env:CLAUDE_CONFIG_DIR}\`). */
+const CONFIG_DIR_VARIABLE_DIR = new RegExp(String.raw`(?:^|\/)${CONFIG_DIR_VARIABLE}\/?$`, 'i');
+/** The same variable anywhere in a path, read as a directory that holds the settings by {@link globNamesSettings}. */
+const CONFIG_DIR_VARIABLE_ANYWHERE = new RegExp(CONFIG_DIR_VARIABLE, 'gi');
+
+/**
+ * Whether a path is a directory that holds Claude Code's settings — a
+ * `.claude`, the `CLAUDE_CONFIG_DIR` variable or (`configDirName`) a directory
+ * of its name, the managed-settings directory — so that removing it removes
+ * them (a residual of 3.7.0: `rm -rf .claude` only warned, as any recursive
+ * delete).
+ */
+function isSettingsDir(path: string, configDirName: string | undefined): boolean {
+  if (CLAUDE_DIR.test(path) || CONFIG_DIR_VARIABLE_DIR.test(path) || MANAGED_SETTINGS_DIR.test(path)) return true;
+  return configDirName !== undefined && lastSegment(path).toLowerCase() === configDirName;
+}
+
+/** Claude Code's settings files by name: a `find -name` test and a glob are matched against them. */
+const SETTINGS_FILE_NAMES: readonly string[] = ['settings.json', 'settings.local.json', 'managed-settings.json'];
+
+/**
+ * Each directory that holds Claude Code's settings, segment by segment from
+ * its end, with the files it holds — what a glob is matched against
+ * ({@link globNamesSettings}).
+ */
+function settingsTails(configDirName: string | undefined): ReadonlyArray<{ dirs: readonly string[]; files: readonly string[] }> {
+  const user = ['settings.json', 'settings.local.json'];
+  const managed = ['managed-settings.json'];
+  return [
+    { dirs: ['.claude'], files: user },
+    ...(configDirName === undefined ? [] : [{ dirs: [configDirName], files: user }]),
+    { dirs: ['etc', 'claude-code'], files: managed },
+    ...['program files', 'programdata', 'application support'].map((parent) => ({ dirs: [parent, 'claudecode'], files: managed })),
+  ];
+}
+
+/**
+ * True when a glob in `path` can name Claude Code's settings (a residual of
+ * 3.7.0: `rm .claude/settings*.json`): a settings file — any wildcard may
+ * stand for the file's name (`.claude/*`) — or a directory that holds them
+ * (`rm -rf .clau*`). A directory's name is matched only by a pattern that
+ * begins with its first character, as bash's leading-dot rule requires of
+ * `.claude`: `rm -rf build/*` names no `.claude`, nor a `CLAUDE_CONFIG_DIR`
+ * whose name has no dot. Judged by what the glob COULD match, never by
+ * expanding it on disk; a trailing `/` matches directories only.
+ */
+function globNamesSettings(path: string, configDirName: string | undefined): boolean {
+  const t = tail(path).replace(CONFIG_DIR_VARIABLE_ANYWHERE, '.claude');
+  if (!GLOB.test(t)) return false;
+  const dirOnly = t.endsWith('/');
+  const segs = t.split('/').filter((s) => s !== '').map((s) => s.toLowerCase());
+  const matches = (names: readonly string[], file: boolean): boolean =>
+    names.length <= segs.length &&
+    names.every((name, k) => {
+      const seg = segs[segs.length - names.length + k] ?? '';
+      const anyStart = file && k === names.length - 1;
+      return (anyStart || seg.charAt(0) === name.charAt(0)) && wildcardMatch(seg, name);
+    });
+  return settingsTails(configDirName).some(
+    ({ dirs, files }) => matches(dirs, false) || (!dirOnly && files.some((f) => matches([...dirs, f], true))),
+  );
+}
+
+/** A path whose removal takes Claude Code's settings: a settings file, a directory that holds them, or a glob that can name either. */
+function takesSettings(path: string, configDirName: string | undefined): boolean {
+  return isSettingsPath(path, configDirName) || isSettingsDir(path, configDirName) || globNamesSettings(path, configDirName);
+}
 
 /**
  * Where a guarded path a command names lies: `inside` — where the hooks of
@@ -1732,8 +1835,8 @@ function placeOf(raw: string, scope: Scope): Placement {
     if (places.home === undefined) return 'inside';
     return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? 'inside' : 'outside';
   }
-  if (MANAGED_SETTINGS_PATH.test(key)) return 'inside';
-  if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
+  if (MANAGED_SETTINGS_PATH.test(key) || MANAGED_SETTINGS_DIR.test(key)) return 'inside';
+  if (isSettingsPath(key, scope.configDirName) || isSettingsDir(key, scope.configDirName)) {
     return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
   }
   return [places.project, places.cwd].some((d) => keyAtOrBelow(d, key)) ? 'inside' : 'outside';
@@ -1962,9 +2065,161 @@ function judgeEffects(effects: Effects, scope: Scope): MatchedRule[] {
   ) {
     out.push({ ...RULE_REGISTRY });
   }
-  const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  const isSettings = (p: string): boolean => isSettingsPath(p, scope.configDirName);
+  const settings = locate(e.writes, isSettings, scope);
   if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
+  // Claude Code's settings deleted or moved away (`rm .claude/settings.json`,
+  // `mv … x`, `Remove-Item`, `del`, a residual of 3.6.1): every
+  // permissions.deny rule they hold goes with them. Matched as their writes
+  // are, `CLAUDE_CONFIG_DIR` included — and, a residual of 3.7.0, through a
+  // glob that can name them or with the directory that holds them (`rm
+  // .claude/*.json`, `rm -rf .claude`). One provably elsewhere only warns.
+  judged(RULE_SETTINGS_REMOVE, locate(e.removes, (p) => takesSettings(p, scope.configDirName), scope));
   return out;
+}
+
+/** `rule` as `where` places it: this session's path, the elsewhere warning for one provably elsewhere, or nothing. */
+function placedRule(rule: MatchedRule, where: Placement): MatchedRule[] {
+  if (where === 'inside') return [{ ...rule }];
+  return where === 'outside' ? [{ ...RULE_ELSEWHERE }] : [];
+}
+
+/** `find`'s tests on the name of what it finds, and on the whole path it prints. */
+const FIND_NAME_TESTS = new Set(['-name', '-iname']);
+const FIND_PATH_TESTS = new Set(['-path', '-ipath', '-wholename', '-iwholename']);
+/** What `find -exec` runs to take away what it found: a deleter, or a move. */
+const FIND_TAKERS = new Set([...FIND_DELETERS, 'mv', 'move-item']);
+
+/** The home directory alone, as `~` or a variable. */
+const HOME_SPELLED = /^(?:~|\$\{?HOME\}?|\$\{?(?:env:)?USERPROFILE\}?|%USERPROFILE%)\/?$/i;
+
+/** The most name and path tests of one `find` read; past them, its tests are taken to match. */
+const MAX_FIND_TESTS = 64;
+/** The longest test pattern read; a longer one is taken to match. */
+const MAX_FIND_PATTERN = 256;
+
+/**
+ * This session's directories that hold Claude Code's settings, as {@link
+ * targetKey} spells them, where their paths are known: the working
+ * directory's, the project's and the home directory's `.claude`, and
+ * `CLAUDE_CONFIG_DIR`.
+ */
+function sessionSettingsDirs(scope: Scope): string[] {
+  const fold = scope.windows === true;
+  const places = scope.places;
+  const dirs = [scope.dir, scope.homePath, places?.project, places?.cwd, places?.home]
+    .filter((d): d is string => d !== undefined && d !== '')
+    .map((d) => `${targetKey(d, fold)}/.claude`);
+  if (places?.configDir !== undefined) dirs.push(places.configDir);
+  return [...new Set(dirs)];
+}
+
+/**
+ * The directories of `dirs` ({@link sessionSettingsDirs}) below a `find`
+ * start path (`resolved` from where the command runs), each as the path from
+ * the start to it — and `.claude` below the working directory or the home
+ * directory, whatever their paths (`find /work -name …` from `/work/proj`
+ * reaches `proj/.claude`).
+ */
+function settingsDirsBelow(resolved: string, dirs: readonly string[], scope: Scope): string[] {
+  if (resolved === '' || HOME_SPELLED.test(resolved)) return ['.claude'];
+  const abs = absoluteOf(resolved, scope);
+  if (abs === undefined) return [];
+  const key = targetKey(abs, scope.windows === true);
+  return dirs.filter((d) => d.startsWith(`${key}/`)).map((d) => d.slice(key.length + 1));
+}
+
+/**
+ * Whether a `find` that takes away what it finds — `-delete`, or an `-exec` /
+ * `-execdir` / `-ok` of `rm`, `mv` and the like — takes Claude Code's settings
+ * (a residual of 3.7.0: `find .claude -name 'settings*' -delete` was ok), and
+ * where. A start path that names them (a settings file, a directory that
+ * holds them, a glob that can name either) finds them unless its tests rule
+ * them out (`find .claude -name '*.md' -delete` does not); a start above such
+ * a directory ({@link settingsDirsBelow}) finds them only through a test that
+ * matches them — `find . -name settings.local.json -delete`, not a bare `find
+ * . -delete`, which warns already. What is found matches every name and path
+ * test (`-name`, `-iname`, `-path`, `-wholename` and their `-i` forms; any one
+ * of them when the expression has an `-o`), a test under `!` / `-not`
+ * narrowing nothing, within any `-maxdepth`; the other tests (`-type`,
+ * `-mtime`, `-regex`) are taken to match, and so are tests past {@link
+ * MAX_FIND_TESTS} or a pattern past {@link MAX_FIND_PATTERN}. Each start is
+ * read once, and within the assessment's time budget.
+ */
+function findTakesSettings(words: readonly ShellWord[], start: number, scope: Scope): Placement {
+  const head = words[start];
+  if (head === undefined || basename(head.value) !== 'find') return null;
+  const rest = words.slice(start + 1);
+  const takes =
+    rest.some((w) => w.value === '-delete') ||
+    findExecCommands(words, start).some((cmd) => FIND_TAKERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? '')));
+  if (!takes) return null;
+  const { starts, end } = findStartPaths(rest);
+  const tests: Array<{ path: boolean; pattern: string }> = [];
+  let maxDepth = Number.POSITIVE_INFINITY;
+  for (let k = end; k + 1 < rest.length; k += 1) {
+    const test = rest[k]?.value ?? '';
+    const value = stripQuotes(rest[k + 1]?.value ?? '');
+    if (test === '-maxdepth' && /^\d+$/.test(value)) maxDepth = Math.min(maxDepth, Number(value));
+    const negated = /^(?:!|-not)$/.test(rest[k - 1]?.value ?? '');
+    if (!negated && (FIND_NAME_TESTS.has(test) || FIND_PATH_TESTS.has(test))) tests.push({ path: FIND_PATH_TESTS.has(test), pattern: value.toLowerCase() });
+  }
+  const unread = tests.length > MAX_FIND_TESTS;
+  const anyOf = rest.some((w) => w.value === '-o' || w.value === '-or');
+  const finds = (found: string, depth: number): boolean => {
+    if (depth > maxDepth) return false;
+    if (unread) return true;
+    const f = tail(found.toLowerCase());
+    const match = (t: { path: boolean; pattern: string }): boolean =>
+      t.pattern.length > MAX_FIND_PATTERN || wildcardMatch(t.pattern, t.path ? f : lastSegment(f));
+    return anyOf ? tests.some(match) : tests.every(match);
+  };
+  const configDirName = scope.configDirName;
+  const named = (p: string): boolean => takesSettings(p, configDirName);
+  let dirs: string[] | undefined;
+  let where: Placement = null;
+  const seen = new Set<string>();
+  for (const s of starts) {
+    const resolved = resolveFrom(scope.cwd, s);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    if (scope.notes.now() > scope.notes.deadline) {
+      scope.notes.budget = true;
+      break;
+    }
+    // What find prints for the start: as written, without a trailing separator.
+    const spelled = s.replace(/\\/g, '/').replace(/(?<=.)\/+$/, '');
+    if (named(resolved)) {
+      const files = isSettingsPath(resolved, configDirName) ? [] : SETTINGS_FILE_NAMES.map((f) => `${spelled}/${f}`);
+      if (tests.length === 0 || finds(spelled, 0) || files.some((f) => finds(f, 1))) where = worst([where, locate([resolved], named, scope)]);
+    } else if (tests.length > 0) {
+      dirs ??= sessionSettingsDirs(scope);
+      for (const rel of settingsDirsBelow(resolved, dirs, scope)) {
+        const dir = `${spelled}/${rel}`;
+        const depth = rel.split('/').length;
+        if (finds(dir, depth) || SETTINGS_FILE_NAMES.some((f) => finds(`${dir}/${f}`, depth + 1))) where = 'inside';
+      }
+    }
+    if (where === 'inside') break;
+  }
+  return where;
+}
+
+/**
+ * Whether `git rm` or `git mv` takes Claude Code's settings out of the working
+ * tree (a residual of 3.7.0: `git rm .claude/settings.json` was ok), and
+ * where: a pathspec ({@link gitRemoves} — never `--cached` or `-n`) that names
+ * them as `rm`'s operand would, or a glob git itself matches to them, its `*`
+ * crossing `/` (`git rm '*.json'` takes `.claude/settings.json`).
+ */
+function gitTakesSettings(words: readonly ShellWord[], start: number, scope: Scope): Placement {
+  const head = words[start];
+  if (head === undefined || commandName(head.value) !== 'git') return null;
+  const configDirName = scope.configDirName;
+  const settings = (configDirName === undefined ? ['.claude'] : ['.claude', configDirName]).flatMap((d) => SETTINGS_FILE_NAMES.map((f) => `${d}/${f}`));
+  const gitGlob = (p: string): boolean => GLOB.test(p) && settings.some((s) => wildcardMatch(p.toLowerCase(), s));
+  const paths = gitRemoves(withoutRedirections(words.slice(start + 1))).map((p) => resolveFrom(scope.cwd, p));
+  return locate(paths, (p) => takesSettings(p, configDirName) || gitGlob(p), scope);
 }
 
 const RULE_PLUGIN_OFF: MatchedRule = {
@@ -2283,6 +2538,8 @@ function assessGuardConfig(words: ShellWord[], start: number, scope: Scope): Mat
   const commands = commandName(head.value) === 'cmd' ? cmdInnerCommands(words.slice(start + 1).map((w) => w.value)) : [];
   for (const [cmdWords, at] of [[words, start] as const, ...commands.map((c) => [c, 0] as const)]) {
     if (turnsPluginOff(cmdWords, at)) out.push({ ...RULE_PLUGIN_OFF });
+    // Programs that pick what they take away themselves (a residual of 3.7.0).
+    pushAll(out, placedRule(RULE_SETTINGS_REMOVE, worst([findTakesSettings(cmdWords, at, scope), gitTakesSettings(cmdWords, at, scope)])));
     const lang = codeLang(interpreterName(cmdWords[interpreterIndex(cmdWords, at)]?.value ?? ''));
     for (const code of inlineCode(cmdWords, at)) pushAll(out, judgeCode(code, lang, scope));
   }
@@ -2328,9 +2585,6 @@ function shellScript(text: string): NestedScript {
 }
 const DASH_C = /^-[A-Za-z]*c$/;
 
-/** flock's options that take the next word as their value (`-w SECS`, `-E CODE`). */
-const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
-
 /**
  * The script a nested-script carrier runs (review of 3.6.0, finding 7), or
  * `null` when `name` is not one. The carriers run their payload through a
@@ -2339,9 +2593,14 @@ const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
  *
  *   - `trap 'SCRIPT' SIGSPEC` — the first operand, run on the signal (a lone
  *     operand with no sigspec is `trap SCRIPT` querying/printing, not running);
- *   - `flock FILE -c 'SCRIPT'`, or `flock [opts] FILE CMD …` run directly;
+ *   - `flock FILE -c 'SCRIPT'`;
  *   - `script [-q] -c 'SCRIPT' FILE` (also `-qc`, `--command`);
- *   - `runuser … -c 'SCRIPT'`, or `runuser … -- CMD …` run as the user.
+ *   - `runuser … -c 'SCRIPT'`, run as the user.
+ *
+ * `flock [opts] FILE CMD …` and `runuser … -u USER -- CMD …` run CMD as its
+ * own words, not through a shell: `resolveCommand` walks past them, as past
+ * `sudo` (a residual of 3.6.1 — joined into a script here, `flock /tmp/l rm
+ * -rf "/ x"` read as `rm -rf / x`).
  */
 function carrierScript(name: string, words: readonly ShellWord[], start: number): string | undefined | null {
   const rest = words.slice(start + 1);
@@ -2351,7 +2610,6 @@ function carrierScript(name: string, words: readonly ShellWord[], start: number)
     if (w.value.startsWith('--command=')) return w.value.slice('--command='.length);
     return !w.quoted && (DASH_C.test(w.value) || w.value === '--command') ? (nextWord?.value ?? '') : undefined;
   };
-  const argv = (from: number): string | undefined => rest.slice(from).map((x) => x.value).join(' ') || undefined;
   if (name === 'trap') {
     let i = 0;
     while (i < rest.length && (rest[i]?.value ?? '').startsWith('-') && rest[i]?.value !== '--') i += 1;
@@ -2368,24 +2626,21 @@ function carrierScript(name: string, words: readonly ShellWord[], start: number)
     return undefined;
   }
   if (name === 'runuser') {
-    for (let i = 0; i < rest.length; i += 1) {
+    // Its `-c` script, before a `--` that would hand on a command instead.
+    for (let i = 0; i < rest.length && rest[i]?.value !== '--'; i += 1) {
       const c = dashC(rest[i], rest[i + 1]);
       if (c !== undefined) return c;
-      if (rest[i]?.value === '--') return argv(i + 1);
     }
     return undefined;
   }
   if (name === 'flock') {
-    // flock's own options precede the lock FILE; `-c` may follow it (`flock
-    // FILE -c '…'`), else the command runs directly (`flock FILE CMD …`).
-    let i = 0;
-    while (i < rest.length && (rest[i]?.value ?? '').startsWith('-')) {
-      const c = dashC(rest[i], rest[i + 1]);
+    // flock's own options precede the lock FILE; `-c` follows it (`flock FILE -c '…'`).
+    const file = flockLockFile(words, start + 1);
+    for (let i = start + 1; i < file; i += 1) {
+      const c = dashC(words[i], words[i + 1]);
       if (c !== undefined) return c;
-      i += FLOCK_VALUED.test(rest[i]?.value ?? '') ? 2 : 1;
     }
-    const c = dashC(rest[i + 1], rest[i + 2]);
-    return c !== undefined ? c : argv(i + 1);
+    return dashC(words[file + 1], words[file + 2]);
   }
   return null;
 }
@@ -3024,9 +3279,12 @@ const DOWNLOADERS = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 
 /**
  * The runners a pipeline member is looked through to find what reads the
  * pipe — never `xargs`, `watch` or cmd's `start`, which do not hand the
- * command their stdin as a script.
+ * command their stdin as a script. `flock FILE` and `runuser -u USER` do,
+ * like `sudo` (`curl … | flock /tmp/l sh`).
  */
-const PIPE_RUNNERS = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf']);
+const PIPE_RUNNERS = new Set([
+  'sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf', 'flock', 'runuser',
+]);
 
 /** Shells that run what arrives on their stdin. */
 const STDIN_SHELLS = new Set([...SHELLS, 'fish', 'csh', 'tcsh']);
@@ -4486,9 +4744,11 @@ function targetVariables(env: Readonly<Record<string, string | undefined>>): Rec
  * as given (a loosening key for Claude Code's settings is looked for there)
  * and the directory the statements have `cd`'d into so far, which each
  * statement updates in order; a nested script starts from the directory its
- * parent was in and cannot move the parent.
+ * parent was in and cannot move the parent. `source`, for one reading of a
+ * PowerShell script, is that script as written: the subexpressions its
+ * double-quoted strings run are read from it ({@link collectSubexpressions}).
  */
-function collect(command: string, depth: number, out: MatchedRule[], scope: Scope): void {
+function collect(command: string, depth: number, out: MatchedRule[], scope: Scope, source?: string): void {
   const cmd = command.trim();
   if (cmd.length === 0) return;
   // Before any whole-text work: a nested script is split and scanned whole,
@@ -4554,6 +4814,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       collect(body, depth + 1, out, { ...scope, cmdLine: false });
     }
   }
+  if (source !== undefined) collectSubexpressions(source, depth, out, scope);
   // Where each command runs, as the `cd`s before it moved it (review of
   // 3.4.0, finding 9): a relative delete target is read against it.
   const dirs = workdirs(statements);
@@ -4640,6 +4901,9 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       // `find ~ -type f | xargs rm -f`: judged as `find … -exec rm` (finding 10).
       const findXargs = findPipedIntoDeleter(statement.commands, c, scope.home, scope.tildeUsers !== false, deleting);
       if (findXargs !== null) out.push(findXargs);
+      // … and judged for Claude Code's settings as that `find … -delete` (a residual of 3.7.0).
+      const fed = findFedToDeleter(statement.commands, c);
+      if (fed !== undefined) pushAll(out, placedRule(RULE_SETTINGS_REMOVE, findTakesSettings(fed.words, fed.at, scope)));
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       // `bash <<< 'rm -rf /'`, `sh <<< "$(echo … | base64 -d)"`: the here-string is the script (review 8, item 8).
       const hereText = hereStringText(words);
@@ -4694,7 +4958,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here }, powershell ? script : undefined);
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
@@ -4747,9 +5011,33 @@ function collectFed(fed: readonly FedScript[], depth: number, out: MatchedRule[]
     const kind = f.kind ?? scriptReader(f.reader) ?? 'shell';
     const powershell = kind === 'powershell';
     noteScript(scope, f.text, powershell);
-    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell });
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell }, powershell ? f.text : undefined);
     const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
     if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
+  }
+}
+
+/**
+ * The subexpressions a PowerShell script runs from inside its double-quoted
+ * strings and `@"…"@` here-strings ({@link powershellSubexpressions}): each a
+ * PowerShell script of its own, read both ways as a `pwsh -c` script is,
+ * within the same nesting cap and budget. Read the POSIX way alone — finding
+ * 4's `quotedSubstitutions`, a residual of 3.6.1 — `"$(Remove-Item C:\
+ * -Recurse -Force)"` lost the `\` of `C:\` and was ok, and a here-string's
+ * subexpression was never read at all.
+ */
+function collectSubexpressions(source: string, depth: number, out: MatchedRule[], scope: Scope): void {
+  for (const body of powershellSubexpressions(source)) {
+    if (body.trim() === '') continue;
+    if (depth >= MAX_NESTING) {
+      scope.notes.depth = true;
+      continue;
+    }
+    const nested: Scope = { ...scope, cmdLine: false, powershell: true };
+    noteScript(scope, body, true);
+    collect(body, depth + 1, out, nested, body);
+    const asPosix = powershellAsPosix(body);
+    if (asPosix !== body) collect(asPosix, depth + 1, out, nested);
   }
 }
 
@@ -4978,8 +5266,10 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   // PowerShell's own reading goes first, so the one budget is never spent on
   // the POSIX reading before the reading that matches what will run; a block
   // needs no second reading. The POSIX reading sees here-strings and block
-  // comments for what they are: nothing else can be meant by them.
-  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
+  // comments for what they are: nothing else can be meant by them. The
+  // subexpressions the command's strings run are read from it as written,
+  // with the first reading.
+  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where, text);
 }
 
 /** What the assessment knows of the machine: the home directory, and Claude Code's `CLAUDE_CONFIG_DIR`. */
@@ -5016,6 +5306,8 @@ function safeUserDataDir(): string {
  * The readings of one command, assessed into one verdict: every rule any
  * reading matched, and one partial note for all of them — so on a tie no
  * reading's reasons are dropped. A reading after one that blocked is skipped.
+ * `source`: the PowerShell command the readings respell, given to the first
+ * ({@link collect}).
  */
 function assessReadings(
   readings: readonly string[],
@@ -5023,6 +5315,7 @@ function assessReadings(
   now: () => number,
   deadline: number,
   where: Where,
+  source?: string,
 ): BashAssessment {
   const notes: Notes = {
     statement: false,
@@ -5049,7 +5342,7 @@ function assessReadings(
     // 125 000 operands overflowed the stack). Whatever throws now, the answer
     // is at least a warning, and a block found before it still blocks.
     try {
-      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where });
+      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where }, n === 0 ? source : undefined);
     } catch {
       notes.failed = true;
     }
@@ -5069,9 +5362,12 @@ function assessReadings(
   const blocks = effective.filter((r) => r.level === 'block');
   const only = blocks.length === 1 ? blocks[0] : undefined;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : undefined;
-  // Nothing blocks: the user decides an agent-run `baseline update`, and a
-  // command a cap cut short (finding 9) — a block always wins over a question.
-  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q): q is string => q !== undefined);
+  // Nothing blocks: the user decides an agent-run `baseline update`, a delete
+  // of Claude Code's settings, and a command a cap cut short (finding 9) — a
+  // block always wins over a question.
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, byId.get(RULE_SETTINGS_REMOVE.id)?.reason, capQuestion(notes)].filter(
+    (q): q is string => q !== undefined,
+  );
   const ask = blocks.length === 0 && questions.length > 0 ? questions.join('; and ') : undefined;
 
   return {

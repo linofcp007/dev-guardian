@@ -1,7 +1,7 @@
 /**
  * Which word of a simple command names the program it runs — past `VAR=x`
  * assignments, redirections and runners (`sudo`, `env`, `timeout 30`,
- * cmd's `start`, …) read with their own options — and the small readers that
+ * cmd's `start`, `flock FILE`, …) read with their own options — and the small readers that
  * needs: a word's last path segment, its first redirection, a cmd.exe switch
  * in Git Bash's `//x` spelling. Moved out of `bashGuard.ts`, shared with the
  * install vetting's parser.
@@ -94,11 +94,114 @@ export function runnerOptionWords(runner: string, option: string): number {
 
 export const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+/** A `-c` script handed on (`-c`, a cluster ending in it, `--command`, `--command=…`): a nested script, never a command's words. */
+function handsScript(word: ShellWord | undefined): boolean {
+  if (word === undefined || word.quoted) return false;
+  return /^-[A-Za-z]*c$/.test(word.value) || word.value === '--command' || word.value.startsWith('--command=');
+}
+
+/** A long option `--x` / `--x=v` that names one of `names`, spelled whole or as a prefix of it (getopt's). */
+function longNames(option: string, names: readonly string[]): boolean {
+  const name = option.slice(2).replace(/=.*$/s, '');
+  return name !== '' && names.some((n) => n.startsWith(name));
+}
+
+/**
+ * The index of the lock file (or descriptor) of `flock [opts] FILE …` whose
+ * options start at `from` — past those that take a value (`-w SECS`, `-E
+ * CODE`, at the end of a cluster too, and `--timeout`, `--wait`,
+ * `--conflict-exit-code` or a prefix of one) and a `--` — or `words.length`
+ * when none follows them.
+ */
+export function flockLockFile(words: readonly ShellWord[], from: number): number {
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (v === '--') return i + 1;
+    if (!v.startsWith('-') || v === '-') return i;
+    const valued = v.startsWith('--') ? !v.includes('=') && longNames(v, ['timeout', 'wait', 'conflict-exit-code']) : /[wE]$/.test(v);
+    if (valued) i += 1;
+  }
+  return words.length;
+}
+
+/**
+ * Where the command `flock [opts] FILE CMD…` runs starts, right after the lock
+ * file ({@link flockLockFile}) — `undefined` when it runs none that way: a
+ * `-c` script (`flock FILE -c '…'`, a nested script) or a lock alone (`flock
+ * -n 9`).
+ */
+function flockCommand(words: readonly ShellWord[], from: number): number | undefined {
+  const file = flockLockFile(words, from);
+  for (let i = from; i < file; i += 1) if (handsScript(words[i])) return undefined;
+  const command = file + 1;
+  return command >= words.length || handsScript(words[command]) ? undefined : command;
+}
+
+/** runuser's options that take a value, short and long; `u` / `user` also make it run a command directly. */
+const RUNUSER_VALUED = { short: 'gGsuw', long: ['group', 'supp-group', 'shell', 'user', 'whitelist-environment'] } as const;
+
+/**
+ * Where the command `runuser [opts] -u USER [--] CMD…` runs starts — or, as
+ * the shell guard always read it, the words after a `--` (`runuser bob --
+ * CMD`) — `undefined` when it runs none that way: a `-c` / `--command` /
+ * `--session-command` script (a nested script), or a login shell (`runuser -
+ * bob`).
+ */
+function runuserCommand(words: readonly ShellWord[], from: number): number | undefined {
+  let user = false;
+  let i = from;
+  for (; i < words.length; i += 1) {
+    const word = words[i];
+    const v = word?.value ?? '';
+    if (v === '--') return i + 1 < words.length ? i + 1 : undefined;
+    if (!v.startsWith('-') || v === '-') {
+      if (v === '-') continue;
+      break;
+    }
+    if (handsScript(word) || (v.startsWith('--') && longNames(v, ['session-command']))) return undefined;
+    if (v.startsWith('--')) {
+      if (longNames(v, ['user'])) user = true;
+      if (!v.includes('=') && longNames(v, RUNUSER_VALUED.long)) i += 1;
+      continue;
+    }
+    // A short cluster: the first letter that takes a value takes the rest, or the next word.
+    for (let k = 1; k < v.length; k += 1) {
+      const letter = v.charAt(k);
+      if (letter === 'c' || letter === 'C') return undefined;
+      if (!RUNUSER_VALUED.short.includes(letter)) continue;
+      if (letter === 'u') user = true;
+      if (k === v.length - 1) i += 1;
+      break;
+    }
+  }
+  if (i >= words.length) return undefined;
+  if (user) return i;
+  // `runuser USER ARGS…` hands its arguments to the user's shell; a `--` among them was read as a command before.
+  for (let j = i + 1; j < words.length; j += 1) {
+    if (handsScript(words[j])) return undefined;
+    if (words[j]?.value === '--') return j + 1 < words.length ? j + 1 : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * The runners that hand their command on as its own words, past their lock
+ * file or user: `flock FILE CMD…` and `runuser -u USER -- CMD…` (a residual of
+ * 3.6.1 — their words were joined and re-read as a script, so `flock /tmp/l
+ * rm -rf "/ x"` read as `rm -rf / x`, and `flock /tmp/l bash -c 'rm -rf ~'`
+ * lost its script). Their `-c` forms stay nested scripts.
+ */
+const CARRIERS: ReadonlyMap<string, (words: readonly ShellWord[], from: number) => number | undefined> = new Map([
+  ['flock', flockCommand],
+  ['runuser', runuserCommand],
+]);
+
 /**
  * Walks past `VAR=x` assignments and runner prefixes (`sudo`, `env`, `xargs`,
- * `timeout 30`, …) to the index of the word that actually names the command,
- * reporting on the way whether privilege was elevated. `through`, when given,
- * limits the runners walked past to those named (the rest end the walk).
+ * `timeout 30`, `flock FILE`, `runuser -u USER --`, …) to the index of the
+ * word that actually names the command, reporting on the way whether
+ * privilege was elevated. `through`, when given, limits the runners walked
+ * past to those named (the rest end the walk).
  */
 export function resolveCommand(words: readonly ShellWord[], through?: ReadonlySet<string>): { index: number; elevated: boolean } {
   let i = 0;
@@ -120,6 +223,13 @@ export function resolveCommand(words: readonly ShellWord[], through?: ReadonlySe
       continue;
     }
     const name = basename(word.value);
+    const carrier = through === undefined || through.has(name) ? CARRIERS.get(name) : undefined;
+    if (carrier !== undefined) {
+      const command = carrier(words, i + 1);
+      if (command === undefined) break;
+      i = command;
+      continue;
+    }
     if (!RUNNERS.has(name) || (through !== undefined && !through.has(name))) break;
     if (name === 'sudo' || name === 'doas') elevated = true;
     i += 1;

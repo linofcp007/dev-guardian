@@ -116,11 +116,11 @@ Corre antes `generate_sbom` (dá os purls) e `map_attack_surface` (dá a alcanç
 
 ## Fallback sem servidor MCP
 
-Só quando as tools não estão disponíveis — diz ao utilizador que assim não há histórico, baseline nem plano ligado aos CVEs:
+Só quando as tools não estão disponíveis — diz ao utilizador que assim não há histórico, baseline nem plano ligado aos CVEs. Num repositório que não é dele, o `.npmrc` do repositório pode mandar o token do utilizador para outro registo (`//host/:_authToken=${GITHUB_TOKEN}`): o `npm audit` corre numa cópia dos manifestos, fora do repositório, e o `pip-audit` só com `--disable-pip` sobre requisitos fixados:
 
 ```bash
 trivy fs --scanners vuln --severity HIGH,CRITICAL --format table .
-npm audit --json
-pip-audit -r requirements.txt
+d="$(mktemp -d)" && cp package.json package-lock.json "$d"/ && (cd "$d" && npm audit --json)
+pip-audit --disable-pip --no-deps -r requirements.txt
 syft . -o cyclonedx-json > sbom.json
 ```

@@ -22,7 +22,15 @@ import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { MAX_INPUT_ARRAY, TOOLS, attachAllTools, listedTools, type ToolModule } from '../../src/tools/index.js';
+import { z } from 'zod';
+import {
+  MAX_INPUT_ARRAY,
+  TOOLS,
+  attachAllTools,
+  listedTools,
+  strictInputSchema,
+  type ToolModule,
+} from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { freshPlugin } from '../helpers/historySeed.js';
 // Static, not in a beforeAll: `it.each(TOOLS…)` below is expanded when the
@@ -81,7 +89,7 @@ describe('an argument a tool does not take is an error', () => {
       arguments: { fingerprint: FP, finding_fingerprint: FP, reason: 'r' },
     });
     expect(res.isError).toBe(true);
-    expect(textOf(res)).toMatch(/Unrecognized key.*'fingerprint'/);
+    expect(textOf(res)).toMatch(/Unrecognized key.*"fingerprint"/);
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -144,10 +152,29 @@ describe('a tools/call with no arguments', () => {
   );
 });
 
-// zod 3 parses every element of an array even past its `.max()`, keeping one
-// issue per failing element (GHSA-mrhx-c7xc-m3w5): a list longer than any
-// schema accepts is refused before zod walks it.
+// zod 3 parsed every element of an array even past its `.max()`, keeping one
+// issue per failing element (GHSA-mrhx-c7xc-m3w5); zod 4.6.6 answers a `.max()`
+// first. A list longer than any schema accepts is still refused before zod
+// walks it: a list with no `.max()` is walked whole.
 describe('a list past MAX_INPUT_ARRAY', () => {
+  const wrong = Array.from({ length: 200_000 }, () => 7);
+
+  it('zod answers 200 000 wrong items past a .max(1000) with one issue; with no .max(), one per item', () => {
+    const capped = z.array(z.string()).max(1000).safeParse(wrong);
+    expect(capped.success).toBe(false);
+    expect(capped.error?.issues.map((i) => i.code)).toEqual(['too_big']);
+    expect(z.array(z.string()).safeParse(wrong).error?.issues).toHaveLength(wrong.length);
+  });
+
+  it('is refused by the preprocess step alone: one issue, the object never parsed', async () => {
+    const parsed = await strictInputSchema(getTool('llm_scan_start')).safeParseAsync({ fingerprints: wrong, not_a_parameter: 1 });
+    expect(parsed.error?.issues).toEqual([
+      expect.objectContaining({ code: 'custom', path: ['fingerprints'], message: `at most ${MAX_INPUT_ARRAY} items per list (200000 given)` }),
+    ]);
+    const none = await strictInputSchema(getTool('check_toolchain')).safeParseAsync(undefined);
+    expect(none).toMatchObject({ success: true, data: {} });
+  });
+
   it('is -32602 naming its path, and the handler never runs; a list at the limit reaches zod', async () => {
     const client = await connect();
     const spy = neverRuns(getTool('llm_scan_start'));

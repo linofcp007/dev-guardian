@@ -252,16 +252,40 @@ function gitNotAppliedField(keys: readonly string[]): { gitNotApplied?: readonly
 }
 
 /**
+ * The .NET SDK's telemetry, off for every `dotnet` dev-guardian starts — a
+ * restore, a build, `dotnet list package`, `check_toolchain`'s
+ * `--list-sdks`, `install_toolchain`'s `dotnet tool install`,
+ * `create_fix_pr`'s `dotnet add package` — whatever the caller's
+ * environment says (a user's `DOTNET_CLI_TELEMETRY_OPTOUT=0` included).
+ * Measured on SDK 10.0.403 (Windows, 2026-10-27) through a logging proxy
+ * that refused every tunnel, with a fresh `DOTNET_CLI_HOME`: every `dotnet
+ * restore`, `build --no-restore` and `list package` after the first opened
+ * three connections to `dc.services.visualstudio.com:443` (Application
+ * Insights); with `DOTNET_CLI_TELEMETRY_OPTOUT=1`, none — the same commands,
+ * the same results. `DOTNET_NOLOGO` drops the first-run banner from the
+ * output dev-guardian reads. `DOTNET_SKIP_FIRST_TIME_EXPERIENCE` is not set:
+ * no 10.0.403 assembly reads it.
+ */
+export const DOTNET_NO_TELEMETRY_ENV: Readonly<Record<string, string>> = {
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1',
+  DOTNET_NOLOGO: '1',
+};
+
+/**
  * Environment for the child: the caller's, plus — for `docker` only — the
  * two variables that stop Git Bash's MSYS layer rewriting POSIX-looking
  * arguments. An MSYS parent turns `-w /src` into `-w C:/Program
  * Files/Git/src` (measured). A Node parent does not rewrite anything itself,
  * so from here this is defence for any MSYS process that ends up between us
  * and docker — never for other commands, where scripts running under Git
- * Bash rely on the conversion to hand Windows paths to native tools.
+ * Bash rely on the conversion to hand Windows paths to native tools. For
+ * `dotnet`, {@link DOTNET_NO_TELEMETRY_ENV}: set here, where every spawn of
+ * it passes, so no caller can forget it (`processRunner.test.ts` fails on a
+ * `dotnet` started any other way).
  */
 function envFor(command: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const name = basename(command.replace(/\\/g, '/')).replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+  if (name === 'dotnet') return { ...env, ...DOTNET_NO_TELEMETRY_ENV };
   if (name !== 'docker') return env;
   return { ...env, MSYS_NO_PATHCONV: '1', MSYS2_ARG_CONV_EXCL: '*' };
 }

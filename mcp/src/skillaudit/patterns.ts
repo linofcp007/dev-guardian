@@ -84,6 +84,7 @@
  */
 
 import type { Severity } from '../types.js';
+import { keywordThenTail, keywordWithoutVeto } from './forwardSearch.js';
 import { FENCE_OPEN, continues, inlineSpans, joinContinued, splitMarkdown, type CodeUnit } from './markdownCode.js';
 import type { ThreatCategory } from './taxonomy.js';
 import { THREAT_CATEGORY_META } from './taxonomy.js';
@@ -206,8 +207,16 @@ const LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[
  * none of which reads a secret out. Loading it into the environment
  * (`source .env`) is not a read that shows or ships it either; sending it is
  * `de-sensitive-file-over-network`.
+ *
+ * Bounded, as every run here (review of the 3.7.0 self-scan): grep's `-q` is
+ * looked for in the 300 characters after it — past them a quiet grep counts
+ * as a read, a finding more and never one fewer — where the whole command
+ * was read again from every `grep` (`grep ` 6 400 times then `-q`: the square
+ * of the line). A path read in with `<` holds no `<`: from every `<` of a
+ * word the rest of it was read again, and a path with one is still read, from
+ * its last.
  */
-const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
+const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]{0,300}\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&<]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 
 /** A program or API call that sends bytes off the machine. */
 const NETWORK_SENDER =
@@ -232,21 +241,21 @@ const SHELL_VALUE = String.raw`(\$env:[A-Za-z_]\w*|\$\{?[A-Za-z_]\w*\}?|\$\d|\$\
 const BARE_HOST = String.raw`(?<![\w@/.$%-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s'"|;&)]*)?(?![\w.-])`;
 
 /** Shell programs that fetch from, or send to, the target they are given. */
-const SHELL_NET_CLIENT = String.raw`\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b`;
+const SHELL_NET_CLIENT = /\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b/gi;
+
+/** What a network command reaches when no URL names it: a variable, a substitution or a scheme-less host. */
+const NET_TARGET = new RegExp(`${SHELL_VALUE}|${BARE_HOST}`, 'gi');
 
 /**
  * A network command with something to reach: a shell client followed, within
  * the same simple command, by a variable, a substitution or a scheme-less
- * host. With the URL / IP check this is what "has a fetch target" means — see
- * the header: the one-level downgrade is for code that has none.
+ * host (`SHELL_NET_CLIENT[^|;&\n]*?NET_TARGET`, read forward only — as one
+ * expression it read the command again from every client, the square of a
+ * line of them). With the URL / IP check this is what "has a fetch target"
+ * means — see the header: the one-level downgrade is for code that has none.
  */
-const NET_COMMAND_WITH_TARGET_RE = new RegExp(
-  `${SHELL_NET_CLIENT}[^|;&\\n]*?(${SHELL_VALUE}|${BARE_HOST})`,
-  'i',
-);
-
 function hasFetchTarget(text: string): boolean {
-  return REMOTE_DESTINATION_RE.test(text) || NET_COMMAND_WITH_TARGET_RE.test(text);
+  return REMOTE_DESTINATION_RE.test(text) || keywordThenTail(text, SHELL_NET_CLIENT, NET_TARGET).length > 0;
 }
 
 /** Programs that run the program text they are handed. */
@@ -860,8 +869,10 @@ export const SKILL_RULES: SkillRule[] = [
       /base64\.b64decode\s*\([^\n]{0,160}(exec|eval|os\.system|subprocess)/i,
       /(eval|exec)\s*\([^\n]{0,40}(decode|b64decode|unhexlify|fromCharCode)/i,
       // `echo <b64> | base64 -D | bash`: the macOS stealer in the ClawHub
-      // skills of 2026-02, whose download hides inside the blob.
-      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]*\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
+      // skills of 2026-02, whose download hides inside the blob. The pipe is
+      // looked for in the 300 characters after the flag, as every run here:
+      // unbounded, the line was read again from every `base64 -d` on it.
+      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
       /FromBase64String[^\n]{0,200}\b(iex|Invoke-Expression)\b|\b(iex|Invoke-Expression)\b[^\n]{0,120}FromBase64String/i,
     ],
   },
@@ -1585,12 +1596,23 @@ interface Download {
   file: string;
 }
 
-const CURL_OUTPUT = /\bcurl\b[^|;&\n]*?(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
-const CURL_REDIRECT = /\bcurl\b[^|;&\n]*?\s>\s*["']?([^\s"'|;&<>]+)/g;
-const CURL_REMOTE_NAME = /\bcurl\b[^|;&\n]*?\s(?:-[A-Za-z]*O[A-Za-z]*|--remote-name)(?=\s|$)[^|;&\n]*/g;
-const WGET_OUTPUT = /\bwget\b[^|;&\n]*?(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
-const WGET_REMOTE_NAME = /\bwget\b(?![^|;&\n]*\s-[A-Za-z]*O)[^|;&\n]*/g;
-const PS_OUTFILE = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|;&\n]*?\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
+// A download is a client, then — in the same command — what names the file
+// it saves: `curl … -o FILE`, read as `\bcurl\b[^|;&\n]*?` + the tail, by
+// `forwardSearch.ts#keywordThenTail`: the expression read the command again
+// from every `curl` — 16 000 of them took 0.6 s each for three of these, the
+// square of the line (measured).
+const CURL = /\bcurl\b/g;
+const WGET = /\bwget\b/g;
+const POWERSHELL_FETCH = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b/gi;
+const CURL_OUTPUT = /(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
+const CURL_REDIRECT = /\s>\s*["']?([^\s"'|;&<>]+)/g;
+// `-[A-Za-z]*O[A-Za-z]*(?=\s|$)`, its letters read once: the two runs split a
+// long word at every `O`, and a word of 32 000 of them took 2.2 s (measured).
+const CURL_REMOTE_NAME = /\s(?:-(?=[A-Za-z]*O)[A-Za-z]+|--remote-name)(?=\s|$)[^|;&\n]*/g;
+const WGET_OUTPUT = /(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
+/** A `wget` flag naming the file (`-O`, `-qO`): its command does not save under the URL's name. */
+const WGET_NAMES_FILE = /\s-[A-Za-z]*O/g;
+const POWERSHELL_OUTFILE = /\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
 const URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
 
 function downloadsIn(unit: Unit): Download[] {
@@ -1599,17 +1621,20 @@ function downloadsIn(unit: Unit): Download[] {
     const base = basenameOf(file ?? '');
     if (base !== '') out.push({ unit, end, file: base });
   };
-  for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
-    for (const m of unit.text.matchAll(re)) add(m.index + m[0].length, m[1]);
+  for (const [client, tail] of [
+    [CURL, CURL_OUTPUT],
+    [CURL, CURL_REDIRECT],
+    [WGET, WGET_OUTPUT],
+    [POWERSHELL_FETCH, POWERSHELL_OUTFILE],
+  ] as const) {
+    for (const m of keywordThenTail(unit.text, client, tail)) add(m.index + m.text.length, m.tail[1]);
   }
   // Saved under the URL's own name: the download ends with its URL, so that
   // "wget https://…/i.sh, then sh i.sh" — one sentence, no `;` — is still a
   // download and then a run (wave 2 of the 3.0 review).
-  for (const re of [CURL_REMOTE_NAME, WGET_REMOTE_NAME]) {
-    for (const m of unit.text.matchAll(re)) {
-      const url = URL_IN.exec(m[0]);
-      if (url) add(m.index + url.index + url[0].length, url[0].replace(/[?#].*$/, ''));
-    }
+  for (const m of [...keywordThenTail(unit.text, CURL, CURL_REMOTE_NAME), ...keywordWithoutVeto(unit.text, WGET, WGET_NAMES_FILE)]) {
+    const url = URL_IN.exec(m.text);
+    if (url) add(m.index + url.index + url[0].length, url[0].replace(/[?#].*$/, ''));
   }
   return out;
 }
@@ -1626,14 +1651,73 @@ function basenameOf(path: string): string {
 
 const RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
 
+/**
+ * Whether `text` runs `file` — through a runner, or by its path. The path
+ * run by itself (`direct`) holds no `(`: a `(` starts one of its own, and from
+ * every `(` of a long word the path before the name was read to the word's
+ * end again (20 000 of them after a download took 0.65 s, measured — the
+ * square of the line). It runs the same files: a path holding a `(` is still
+ * read, from its last one.
+ */
 function runsFile(text: string, file: string): boolean {
   const f = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Sentence punctuation ends the name too: "Then run bash setup.sh."
   const end = String.raw`(?=$|[\s"'|;&)]|[.,!?:](?:\s|$))`;
   const viaRunner = String.raw`(?:^|[\s;&|(])(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\s+(?:-\S+\s+)*["']?(?:[^\s"'|;&]*[\/\\])?${f}${end}`;
-  const direct = String.raw`(?:^\s*|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)["']?[^\s"'|;&]*[\/\\]${f}${end}`;
+  const direct = String.raw`(?:^\s*|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)["']?[^\s"'|;&(]*[\/\\]${f}${end}`;
   return new RegExp(`${viaRunner}|${direct}`).test(text);
 }
+
+/** A character no downloaded file's name holds (`downloadsIn`, `basenameOf`): one a run's name follows. */
+const NAME_BREAK = /[\s"'|;&<>/\\]/;
+
+/** The downloaded files' names, a character at a time. */
+interface NameTrie {
+  next: Map<string, NameTrie>;
+  name: string | null;
+}
+
+function nameTrie(names: Iterable<string>): NameTrie {
+  const root: NameTrie = { next: new Map(), name: null };
+  for (const name of names) {
+    let node = root;
+    for (let i = 0; i < name.length; i++) {
+      const c = name.charAt(i);
+      const child = node.next.get(c) ?? { next: new Map(), name: null };
+      node.next.set(c, child);
+      node = child;
+    }
+    node.name = name;
+  }
+  return root;
+}
+
+/**
+ * Every place in `text` a name of `trie` starts at the text's start or right
+ * after a {@link NAME_BREAK} — where {@link runsFile} finds a name, if it
+ * finds one, and more. Each walk stops at the next break (no name holds
+ * one), so the text is read about once.
+ */
+function nameMentions(text: string, trie: NameTrie, found: (name: string, at: number) => void): void {
+  for (let start = 0; start < text.length; start++) {
+    if (start > 0 && !NAME_BREAK.test(text.charAt(start - 1))) continue;
+    let node: NameTrie | undefined = trie;
+    for (let i = start; i < text.length; i++) {
+      node = node.next.get(text.charAt(i));
+      if (node === undefined) break;
+      if (node.name !== null) found(node.name, start);
+    }
+  }
+}
+
+/**
+ * How much text the run checks of one file may read, as a multiple of the
+ * file: past it, a download still to be checked counts as run, never as not
+ * run. Only text mentioning a downloaded name is checked, once a unit per
+ * name, so a real file stays far below it; a unit of thousands of names, each
+ * downloaded and none run, would otherwise be read once for each.
+ */
+const RUN_CHECK_READS = 64;
 
 const DOWNLOAD_THEN_RUN = SKILL_RULES.find((r) => r.id === 'sc-download-then-run');
 
@@ -1641,15 +1725,51 @@ const DOWNLOAD_THEN_RUN = SKILL_RULES.find((r) => r.id === 'sc-download-then-run
  * A file downloaded and later run — on the same line or anywhere further down
  * the same file (round 3, N6: the hook's shell guard follows the same policy
  * for one command line). `units` must be in file order. One finding per file.
+ *
+ * Each download used to search every unit after its own, and a file of
+ * downloads alone took the square of its length — 4 000 lines 23 s
+ * (measured). A unit is now checked only where the name is mentioned
+ * ({@link nameMentions}), a name's later units are searched in full once, and
+ * every check counts against {@link RUN_CHECK_READS}.
  */
 function downloadThenRun(units: Unit[], instructionFile: boolean): RuleMatch[] {
   if (!DOWNLOAD_THEN_RUN) return [];
   const full = severityOfRule(DOWNLOAD_THEN_RUN);
-  for (const dl of units.flatMap(downloadsIn)) {
-    const rest = dl.unit.text.slice(dl.end);
-    const run = runsFile(rest, dl.file)
-      ? dl.unit
-      : units.find((u) => u.line > dl.unit.line && runsFile(u.text, dl.file));
+  const downloads = units.flatMap((unit, index) => downloadsIn(unit).map((dl) => ({ ...dl, index })));
+  if (downloads.length === 0) return [];
+  // Per name: the units mentioning it, in order, and the last place in each.
+  const mentions = new Map<string, Map<number, number>>();
+  const trie = nameTrie(new Set(downloads.map((dl) => dl.file)));
+  units.forEach((unit, index) =>
+    nameMentions(unit.text, trie, (name, at) => {
+      const byUnit = mentions.get(name) ?? new Map<number, number>();
+      byUnit.set(index, at);
+      mentions.set(name, byUnit);
+    }),
+  );
+  let budget = RUN_CHECK_READS * units.reduce((n, u) => n + u.text.length + 1, 0);
+  const runs = (text: string, file: string): boolean => {
+    budget -= text.length;
+    return budget < 0 || runsFile(text, file);
+  };
+  // Per name: the lowest line whose later units were searched, finding no run.
+  const searchedAfter = new Map<string, number>();
+  for (const dl of downloads) {
+    const mentioned = mentions.get(dl.file);
+    if (mentioned === undefined) continue;
+    let run: Unit | undefined;
+    if ((mentioned.get(dl.index) ?? -1) >= dl.end && runs(dl.unit.text.slice(dl.end), dl.file)) {
+      run = dl.unit;
+    } else if (dl.unit.line < (searchedAfter.get(dl.file) ?? Number.POSITIVE_INFINITY)) {
+      for (const index of mentioned.keys()) {
+        const u = units[index];
+        if (u !== undefined && u.line > dl.unit.line && runs(u.text, dl.file)) {
+          run = u;
+          break;
+        }
+      }
+      if (run === undefined) searchedAfter.set(dl.file, dl.unit.line);
+    }
     if (!run) continue;
     const lowered = instructionFile && isPlaceholder(dl.unit.text);
     return [

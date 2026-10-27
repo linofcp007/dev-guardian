@@ -16,6 +16,13 @@
  * match the release's own checksums (and its signature, when it has one), as
  * the comments beside each pin record.
  *
+ * The CI templates install bandit, Semgrep and zizmor from hashed locks,
+ * `configs/ci/python/<X.Y>/requirements.txt`, every dependency pinned (3.7.0).
+ * A lock whose top-level versions are not pinned.json's — bumped there, not
+ * recompiled — and a locked release PyPI has since yanked each count as
+ * behind; a locked dependency with a newer release is listed, not counted:
+ * the dependencies move with the scanners, recompiled when one is bumped.
+ *
  * Exit 0: every pin is the latest; 1: one or more is behind; 2: a lookup
  * failed (the table says which). `GITHUB_TOKEN` / `GH_TOKEN`, when set, lifts
  * GitHub's limit of 60 unauthenticated calls an hour.
@@ -23,7 +30,7 @@
  * Run under tsx (`tsx scripts/checkPins.mjs`): it imports `src/` directly.
  */
 
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACTIONLINT_VERSION, COSIGN_VERSION, PINNED_RELEASES, PSALM_VERSION, WP_CLI_VERSION } from '../src/runners/installCatalog.js';
@@ -149,7 +156,7 @@ pins.push({
 });
 
 const CI_REPOS = { trivy: 'aquasecurity/trivy', gitleaks: 'gitleaks/gitleaks', actionlint: 'rhysd/actionlint', gosec: 'securego/gosec', psalm: 'vimeo/psalm' };
-/** pipx installs from PyPI; the pin is the newest version with a release tag upstream too (pinned.json's semgrep note). */
+/** From PyPI, through the hashed locks; the pin is the newest version with a release tag upstream too (pinned.json's semgrep note). */
 const PYPI = { bandit: 'PyCQA/bandit', semgrep: 'semgrep/semgrep', zizmor: 'zizmorcore/zizmor' };
 for (const [name, entry] of Object.entries(pinned.scanners)) {
   if (name.startsWith('_') || typeof entry.version !== 'string') continue;
@@ -157,7 +164,7 @@ for (const [name, entry] of Object.entries(pinned.scanners)) {
   const tagged = PYPI[/** @type {keyof typeof PYPI} */ (name)];
   if (tagged !== undefined) {
     pins.push({
-      name: `${name} (CI, pipx)`,
+      name: `${name} (CI, hashed lock)`,
       pinned: version,
       latest: async () => {
         const [onPypi, release] = await Promise.all([latestPypi(name), latestRelease(tagged)]);
@@ -229,6 +236,69 @@ for (const r of results) {
 if (sums.length > 0) {
   console.log('\nThe sha256 GitHub records for the newer assets — a starting point; hash each download yourself:');
   for (const line of sums) console.log(line);
+}
+
+// The hashed locks the CI templates install the pip-distributed scanners from.
+const LOCK_DIR = resolve(repo, 'configs', 'ci', 'python');
+/** Each `name==version` of a uv lock, by the (normalised) name uv writes. @param {string} text */
+function lockPins(text) {
+  /** @type {Map<string, string>} */
+  const out = new Map();
+  for (const line of text.split('\n')) {
+    const m = /^([a-z0-9][a-z0-9._-]*)==([^\s\\;]+)/i.exec(line);
+    if (m?.[1] !== undefined && m[2] !== undefined) out.set(m[1].toLowerCase(), m[2]);
+  }
+  return out;
+}
+const locks = readdirSync(LOCK_DIR, { withFileTypes: true })
+  .filter((e) => e.isDirectory() && /^\d+\.\d+$/.test(e.name))
+  .map((e) => `${e.name}/requirements.txt`)
+  .sort();
+/** @type {string[]} */
+const stale = [];
+/** Every locked `name==version`, across the locks. @type {Map<string, [string, string]>} */
+const lockedPairs = new Map();
+for (const file of locks) {
+  const pinsOf = lockPins(readFileSync(resolve(LOCK_DIR, file), 'utf8'));
+  for (const name of Object.keys(PYPI)) {
+    const want = pinned.scanners[name]?.version;
+    const got = pinsOf.get(name);
+    if (got !== want) stale.push(`${file}: ${name} ${got ?? '(absent)'}, pinned.json ${want ?? '(absent)'}`);
+  }
+  for (const [name, version] of pinsOf) lockedPairs.set(`${name}==${version}`, [name, version]);
+}
+const lockLookups = await Promise.all(
+  [...lockedPairs.values()].map(async ([name, version]) => {
+    try {
+      const [latest, release] = await Promise.all([latestPypi(name), getJson(`https://pypi.org/pypi/${name}/${version}/json`)]);
+      return { name, version, latest, yanked: field(field(release, 'info'), 'yanked') === true };
+    } catch (e) {
+      return { name, version, error: e instanceof Error ? e.message : String(e) };
+    }
+  }),
+);
+console.log(`\nHashed Python locks (configs/ci/python): ${locks.join(', ') || 'NONE'} — ${lockedPairs.size} locked releases`);
+if (locks.length === 0) stale.push('no lock in configs/ci/python — the templates install from one');
+for (const line of stale) console.log(`  STALE  ${line} — recompile with the lock's header command`);
+behind += stale.length;
+/** @type {string[]} */
+const newer = [];
+for (const r of lockLookups) {
+  if ('error' in r) {
+    failed += 1;
+    console.log(`  ?      ${r.name}==${r.version}: lookup failed: ${r.error}`);
+    continue;
+  }
+  if (r.yanked) {
+    behind += 1;
+    console.log(`  YANKED ${r.name}==${r.version} — PyPI yanked this release: find out why, then recompile`);
+  }
+  // The scanners themselves are rows of the table above.
+  if (!Object.hasOwn(PYPI, r.name) && compareVersions(r.version, r.latest) < 0) newer.push(`${r.name} ${r.version} → ${r.latest}`);
+}
+if (newer.length > 0) {
+  console.log(`  ${newer.length} locked dependencies have a newer release on PyPI (not counted: a recompile takes those the scanners' own requirements allow):`);
+  console.log(`    ${newer.sort().join(', ')}`);
 }
 console.log(`\n${pins.length} pins: ${behind} behind, ${failed} not looked up`);
 process.exitCode = failed > 0 ? 2 : behind > 0 ? 1 : 0;

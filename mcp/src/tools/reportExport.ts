@@ -60,8 +60,7 @@ import { toolProjectPath } from './projectArg.js';
 const inputSchema = {
   project_path: ProjectPath,
   scan_id: z
-    .string()
-    .uuid()
+    .guid()
     .optional()
     .describe("Scan to export. Default: project_path's newest usable scan."),
   source_tool: SourceToolInput.describe(

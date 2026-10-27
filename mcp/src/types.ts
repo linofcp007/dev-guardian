@@ -503,7 +503,10 @@ export type RouteProvenance = 'code' | 'spec';
  * which happens for two distinct reasons:
  *   1. A prefix may be missing and we could not resolve it — the module is
  *      mounted twice, or at a computed prefix, or not mounted anywhere we can
- *      see.
+ *      see; or a Spring / ASP.NET class-level prefix cannot be read from the
+ *      controller's file (surface/resolvers/classPrefix.ts). `path_raw` is
+ *      always the route's OWN path; a resolved prefix shows in `path_resolved`
+ *      only.
  *   2. The captured value is not a literal path at all but a code expression
  *      (`self::NAMESPACE`, `Paths.ORDERS`, `$route`). No prefix is involved;
  *      the path itself is unknown. `path_resolved` then holds the raw source

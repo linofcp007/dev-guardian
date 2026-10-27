@@ -29,12 +29,12 @@ git_init_main() {
   g commit -q -m "$1"
 }
 
-# dev-spec-driven's CLI from the sibling checkout (../dev-spec-driven next to this repository), for the
-# routing cases that load both plugins. Quiet unless it fails.
-DEV_SPEC_ROOT="$(cd "$PLUGIN_ROOT/.." && pwd)/dev-spec-driven"
+# dev-spec-driven's CLI, for the routing case that loads both plugins: the copy that case loads as its
+# second plugin (evals/README.md, "Run", says how to make it). Quiet unless it fails.
+DEV_SPEC_ROOT="$PLUGIN_ROOT/evals/route-reported-bug-specs-en/plugins/dev-spec-driven"
 ds() {
   if [ ! -f "$DEV_SPEC_ROOT/cli/dev-spec.js" ]; then
-    echo "fixture: this case needs a dev-spec-driven checkout at $DEV_SPEC_ROOT" >&2
+    echo "fixture: this case needs a copy of dev-spec-driven at $DEV_SPEC_ROOT (evals/README.md, Run)" >&2
     return 1
   fi
   local out

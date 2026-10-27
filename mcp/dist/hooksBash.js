@@ -82,6 +82,41 @@ function posixSingle(text) {
 function hereStrings() {
   return { single: Number.POSITIVE_INFINITY, double: Number.POSITIVE_INFINITY };
 }
+function isSingleQuote(c) {
+  return c !== "" && SINGLE_QUOTES.includes(c);
+}
+function isDoubleQuote(c) {
+  return c !== "" && DOUBLE_QUOTES.includes(c);
+}
+function subexpressionEnd(text, from) {
+  let depth = 1;
+  for (let i = from; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (c === "`") i += 1;
+    else if (c === "(") depth += 1;
+    else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+function bracedVariableEnd(text, from) {
+  for (let i = from; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (c === "`") i += 1;
+    else if (c === "}") return i + 1;
+  }
+  return text.length;
+}
+function expandablePieceEnd(text, i) {
+  if (text.charAt(i) !== "$") return -1;
+  const next = text.charAt(i + 1);
+  if (next === "{") return bracedVariableEnd(text, i + 2);
+  if (next !== "(") return -1;
+  const end = subexpressionEnd(text, i + 2);
+  return end < 0 ? text.length : end;
+}
 function hereString(text, at, seen) {
   const quote = text.charAt(at + 1);
   const single = SINGLE_QUOTES.includes(quote);
@@ -92,13 +127,20 @@ function hereString(text, at, seen) {
   const kind = single ? "single" : "double";
   if (start >= seen[kind]) return null;
   const closers = single ? SINGLE_QUOTES : DOUBLE_QUOTES;
-  for (let line = start; line < text.length; ) {
-    if (closers.includes(text.charAt(line)) && text.charAt(line + 1) === "@") {
-      return { body: text.slice(start, line).replace(/\r?\n$/, ""), next: line + 2 };
+  for (let i = start; i < text.length; ) {
+    if ((i === start || text.charAt(i - 1) === "\n") && closers.includes(text.charAt(i)) && text.charAt(i + 1) === "@") {
+      return { body: text.slice(start, i).replace(/\r?\n$/, ""), next: i + 2 };
     }
-    const nl = text.indexOf("\n", line);
-    if (nl < 0) break;
-    line = nl + 1;
+    if (single) {
+      const nl = text.indexOf("\n", i);
+      if (nl < 0) break;
+      i = nl + 1;
+    } else if (text.charAt(i) === "`") i += 2;
+    else if (text.startsWith("$(", i)) {
+      const end = subexpressionEnd(text, i + 2);
+      if (end < 0) break;
+      i = end;
+    } else i += 1;
   }
   seen[kind] = start;
   return null;
@@ -133,6 +175,81 @@ function powershellOpaque(text) {
     i += 1;
   }
   return out;
+}
+function expandableSubexpressions(text, from, closes, out) {
+  let j = from;
+  while (j < text.length) {
+    const c = text.charAt(j);
+    if (c === "`") {
+      j += 2;
+      continue;
+    }
+    if (closes && isDoubleQuote(c)) {
+      if (!isDoubleQuote(text.charAt(j + 1))) return j + 1;
+      j += 2;
+      continue;
+    }
+    if (c === "$" && text.charAt(j + 1) === "(") {
+      const end = subexpressionEnd(text, j + 2);
+      out.push(text.slice(j + 2, end < 0 ? text.length : end - 1));
+      if (end < 0) return text.length;
+      j = end;
+      continue;
+    }
+    const piece = expandablePieceEnd(text, j);
+    j = piece < 0 ? j + 1 : piece;
+  }
+  return text.length;
+}
+function powershellSubexpressions(text) {
+  if (!text.includes("$(")) return [];
+  const seen = hereStrings();
+  const out = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text.charAt(i);
+    const boundary = atBoundary(text, i);
+    if (ch === "`") {
+      i += 2;
+      continue;
+    }
+    if (boundary && text.startsWith("<#", i)) {
+      i = blockCommentEnd(text, i);
+      continue;
+    }
+    if (boundary && (ch === "#" || text.startsWith("--%", i) && /^(?:\s|$)/.test(text.charAt(i + 3)))) {
+      const stops = ch === "#" ? "\n\r" : "\n\r|";
+      while (i < text.length && !stops.includes(text.charAt(i))) i += 1;
+      continue;
+    }
+    if (ch === "@" && atBoundary(text, i, HERE_STRING_BOUNDARY)) {
+      const here = hereString(text, i, seen);
+      if (here !== null) {
+        if (isDoubleQuote(text.charAt(i + 1))) expandableSubexpressions(here.body, 0, false, out);
+        i = here.next;
+        continue;
+      }
+    }
+    if (isSingleQuote(ch)) {
+      i = singleQuotedEnd(text, i);
+      continue;
+    }
+    if (ch === "$" && text.charAt(i + 1) === "{") {
+      i = bracedVariableEnd(text, i + 2);
+      continue;
+    }
+    i = isDoubleQuote(ch) ? expandableSubexpressions(text, i + 1, true, out) : i + 1;
+  }
+  return out;
+}
+var PLAIN_BRACED_VARIABLE = /^\$\{[\w:.?\\/-]*\}$/;
+function singleQuotedEnd(text, at) {
+  for (let j = at + 1; j < text.length; j += 1) {
+    if (!isSingleQuote(text.charAt(j))) continue;
+    if (!isSingleQuote(text.charAt(j + 1))) return j + 1;
+    j += 1;
+  }
+  return text.length;
 }
 function powershellAsPosix(text) {
   const seen = hereStrings();
@@ -179,6 +296,12 @@ function powershellAsPosix(text) {
           j += 2;
           continue;
         }
+        const piece = double ? expandablePieceEnd(text, j) : -1;
+        if (piece >= 0) {
+          lit += text.slice(j, piece);
+          j = piece;
+          continue;
+        }
         if (quotes.includes(c)) {
           if (quotes.includes(text.charAt(j + 1)) && text.charAt(j + 1) !== "") {
             lit += c;
@@ -193,6 +316,15 @@ function powershellAsPosix(text) {
       out += posixSingle(lit);
       i = j + 1;
       continue;
+    }
+    if (ch === "$" && text.charAt(i + 1) === "{") {
+      const end = bracedVariableEnd(text, i + 2);
+      const spelled = text.slice(i, end);
+      if (!PLAIN_BRACED_VARIABLE.test(spelled)) {
+        out += posixSingle(spelled);
+        i = end;
+        continue;
+      }
     }
     if (ch === "`") {
       const next = text.charAt(i + 1);
@@ -297,6 +429,69 @@ function runnerOptionWords(runner, option) {
   return 1;
 }
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+function handsScript(word) {
+  if (word === void 0 || word.quoted) return false;
+  return /^-[A-Za-z]*c$/.test(word.value) || word.value === "--command" || word.value.startsWith("--command=");
+}
+function longNames(option, names) {
+  const name = option.slice(2).replace(/=.*$/s, "");
+  return name !== "" && names.some((n) => n.startsWith(name));
+}
+function flockLockFile(words, from) {
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? "";
+    if (v === "--") return i + 1;
+    if (!v.startsWith("-") || v === "-") return i;
+    const valued = v.startsWith("--") ? !v.includes("=") && longNames(v, ["timeout", "wait", "conflict-exit-code"]) : /[wE]$/.test(v);
+    if (valued) i += 1;
+  }
+  return words.length;
+}
+function flockCommand(words, from) {
+  const file = flockLockFile(words, from);
+  for (let i = from; i < file; i += 1) if (handsScript(words[i])) return void 0;
+  const command = file + 1;
+  return command >= words.length || handsScript(words[command]) ? void 0 : command;
+}
+var RUNUSER_VALUED = { short: "gGsuw", long: ["group", "supp-group", "shell", "user", "whitelist-environment"] };
+function runuserCommand(words, from) {
+  let user = false;
+  let i = from;
+  for (; i < words.length; i += 1) {
+    const word = words[i];
+    const v = word?.value ?? "";
+    if (v === "--") return i + 1 < words.length ? i + 1 : void 0;
+    if (!v.startsWith("-") || v === "-") {
+      if (v === "-") continue;
+      break;
+    }
+    if (handsScript(word) || v.startsWith("--") && longNames(v, ["session-command"])) return void 0;
+    if (v.startsWith("--")) {
+      if (longNames(v, ["user"])) user = true;
+      if (!v.includes("=") && longNames(v, RUNUSER_VALUED.long)) i += 1;
+      continue;
+    }
+    for (let k = 1; k < v.length; k += 1) {
+      const letter = v.charAt(k);
+      if (letter === "c" || letter === "C") return void 0;
+      if (!RUNUSER_VALUED.short.includes(letter)) continue;
+      if (letter === "u") user = true;
+      if (k === v.length - 1) i += 1;
+      break;
+    }
+  }
+  if (i >= words.length) return void 0;
+  if (user) return i;
+  for (let j = i + 1; j < words.length; j += 1) {
+    if (handsScript(words[j])) return void 0;
+    if (words[j]?.value === "--") return j + 1 < words.length ? j + 1 : void 0;
+  }
+  return void 0;
+}
+var CARRIERS = /* @__PURE__ */ new Map([
+  ["flock", flockCommand],
+  ["runuser", runuserCommand]
+]);
 function resolveCommand(words, through) {
   let i = 0;
   let elevated = false;
@@ -313,6 +508,13 @@ function resolveCommand(words, through) {
       continue;
     }
     const name = basename(word.value);
+    const carrier = through === void 0 || through.has(name) ? CARRIERS.get(name) : void 0;
+    if (carrier !== void 0) {
+      const command = carrier(words, i + 1);
+      if (command === void 0) break;
+      i = command;
+      continue;
+    }
     if (!RUNNERS.has(name) || through !== void 0 && !through.has(name)) break;
     if (name === "sudo" || name === "doas") elevated = true;
     i += 1;
@@ -994,6 +1196,34 @@ function commandWriteDestinations(name, args) {
     default:
       return [];
   }
+}
+var GIT_VALUED = /* @__PURE__ */ new Set(["-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env", "--super-prefix", "--attr-source"]);
+function gitRemoves(args) {
+  let dir = "";
+  let i = 0;
+  for (; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a === "-C") dir = resolveFrom(dir, args[++i] ?? ".");
+    else if (GIT_VALUED.has(a)) i += 1;
+    else if (!a.startsWith("-")) break;
+  }
+  const sub = args[i];
+  if (sub !== "rm" && sub !== "mv") return [];
+  const paths = [];
+  let optionsDone = false;
+  for (let k = i + 1; k < args.length; k += 1) {
+    const a = args[k] ?? "";
+    if (!optionsDone && a === "--") optionsDone = true;
+    else if (!optionsDone && a.startsWith("--")) {
+      const name = a.slice(2).split("=")[0] ?? "";
+      if (name !== "" && (sub === "rm" && "cached".startsWith(name) || "dry-run".startsWith(name))) return [];
+      if (name === "pathspec-from-file" && !a.includes("=")) k += 1;
+    } else if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
+      if (a.includes("n")) return [];
+    } else if (!/^:(?:\/*[!^]|\([^)]*\bexclude\b)/.test(a)) paths.push(a.replace(/^:(?:\([^)]*\)|\/+)/, ""));
+  }
+  const gone = sub === "mv" ? paths.slice(0, -1) : paths;
+  return gone.filter((p) => p !== "").map((p) => resolveFrom(dir, p));
 }
 var REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
 var CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
@@ -2596,20 +2826,7 @@ function assessFind(words, start, home, tildeUsers = true, ctx = {}) {
   const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers, { ...ctx, piped: void 0 })).find((r) => r?.level === "block");
   if (inner !== void 0 && inner !== null) return inner;
   if (!viaExec && !rest.some((w) => w.value === "-delete")) return null;
-  let k = 0;
-  while (k < rest.length) {
-    const v = rest[k]?.value ?? "";
-    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
-    else if (v === "-D") k += 2;
-    else break;
-  }
-  const targets = [];
-  for (; k < rest.length; k += 1) {
-    const v = rest[k]?.value ?? "";
-    if (v.startsWith("-") || v === "(" || v === "!" || v === ")" || v === ",") break;
-    targets.push(stripQuotes(v));
-  }
-  if (targets.length === 0) targets.push(".");
+  const { starts: targets } = findStartPaths(rest);
   const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
   const judged = judgedTargets(targets, ctx);
   if (judged.some((t) => catastrophicKind(t, tildeUsers) === "root")) return { ...RULE_FIND_ROOT };
@@ -2619,20 +2836,39 @@ function assessFind(words, start, home, tildeUsers = true, ctx = {}) {
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
   return null;
 }
+function findStartPaths(rest) {
+  let k = 0;
+  while (k < rest.length) {
+    const v = rest[k]?.value ?? "";
+    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
+    else if (v === "-D") k += 2;
+    else break;
+  }
+  const starts = [];
+  for (; k < rest.length; k += 1) {
+    const v = rest[k]?.value ?? "";
+    if (v.startsWith("-") || v === "(" || v === "!" || v === ")" || v === ",") break;
+    starts.push(stripQuotes(v));
+  }
+  if (starts.length === 0) starts.push(".");
+  return { starts, end: k };
+}
 function findPipedIntoDeleter(commands, c, home, tildeUsers, ctx) {
+  const fed = findFedToDeleter(commands, c);
+  return fed === void 0 ? null : assessFind(fed.words, fed.at, home, tildeUsers, { ...ctx, piped: void 0, pipedRecursive: void 0 });
+}
+function findFedToDeleter(commands, c) {
   const words = commands[c];
-  if (words === void 0 || c === 0) return null;
+  if (words === void 0 || c === 0) return void 0;
   const at = resolveCommand(words).index;
-  if (!words.slice(0, at).some((w) => commandName(w.value) === "xargs")) return null;
-  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ""))) return null;
+  if (!words.slice(0, at).some((w) => commandName(w.value) === "xargs")) return void 0;
+  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ""))) return void 0;
   for (let p = c - 1; p >= 0; p -= 1) {
     const prev = commands[p] ?? [];
     const f = resolveCommand(prev).index;
-    if (commandName(prev[f]?.value ?? "") === "find") {
-      return assessFind([...prev, { value: "-delete", quoted: false }], f, home, tildeUsers, { ...ctx, piped: void 0, pipedRecursive: void 0 });
-    }
+    if (commandName(prev[f]?.value ?? "") === "find") return { words: [...prev, { value: "-delete", quoted: false }], at: f };
   }
-  return null;
+  return void 0;
 }
 var HOOK_CONFIG_PATH = /(?:\.guardian\/?hooks[^/]*\.json|\.config\/?dev-guardian\/?hooks\.json)$/i;
 function isHookConfigPath(arg) {
@@ -2645,7 +2881,8 @@ function isHookConfigDir(arg) {
 var USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
 var CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
 var MANAGED_SETTINGS_PATH = /(?:ClaudeCode|claude-code)\/?managed-settings\.json$/i;
-var CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
+var CONFIG_DIR_VARIABLE = String.raw`(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)`;
+var CONFIG_DIR_VARIABLE_SETTINGS = new RegExp(String.raw`${CONFIG_DIR_VARIABLE}\/?settings(?:\.local)?\.json$`, "i");
 function isSettingsPath(path, configDirName) {
   if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path) || MANAGED_SETTINGS_PATH.test(path)) return true;
   if (configDirName === void 0) return false;
@@ -2985,6 +3222,45 @@ var RULE_SETTINGS = {
   level: "block",
   reason: "Writes Claude Code's settings with a key that switches the guardrail hooks off"
 };
+var RULE_SETTINGS_REMOVE = {
+  id: "claude-settings-remove",
+  level: "warn",
+  reason: "this command deletes or moves away Claude Code's settings, and with them every permissions.deny rule and hook setting they hold \u2014 the user decides; to change one setting, edit the file instead"
+};
+var CONFIG_DIR_VARIABLE_DIR = new RegExp(String.raw`(?:^|\/)${CONFIG_DIR_VARIABLE}\/?$`, "i");
+var CONFIG_DIR_VARIABLE_ANYWHERE = new RegExp(CONFIG_DIR_VARIABLE, "gi");
+function isSettingsDir(path, configDirName) {
+  if (CLAUDE_DIR.test(path) || CONFIG_DIR_VARIABLE_DIR.test(path) || MANAGED_SETTINGS_DIR.test(path)) return true;
+  return configDirName !== void 0 && lastSegment(path).toLowerCase() === configDirName;
+}
+var SETTINGS_FILE_NAMES = ["settings.json", "settings.local.json", "managed-settings.json"];
+function settingsTails(configDirName) {
+  const user = ["settings.json", "settings.local.json"];
+  const managed = ["managed-settings.json"];
+  return [
+    { dirs: [".claude"], files: user },
+    ...configDirName === void 0 ? [] : [{ dirs: [configDirName], files: user }],
+    { dirs: ["etc", "claude-code"], files: managed },
+    ...["program files", "programdata", "application support"].map((parent) => ({ dirs: [parent, "claudecode"], files: managed }))
+  ];
+}
+function globNamesSettings(path, configDirName) {
+  const t = tail(path).replace(CONFIG_DIR_VARIABLE_ANYWHERE, ".claude");
+  if (!GLOB.test(t)) return false;
+  const dirOnly = t.endsWith("/");
+  const segs = t.split("/").filter((s) => s !== "").map((s) => s.toLowerCase());
+  const matches = (names, file) => names.length <= segs.length && names.every((name, k) => {
+    const seg = segs[segs.length - names.length + k] ?? "";
+    const anyStart = file && k === names.length - 1;
+    return (anyStart || seg.charAt(0) === name.charAt(0)) && wildcardMatch(seg, name);
+  });
+  return settingsTails(configDirName).some(
+    ({ dirs, files }) => matches(dirs, false) || !dirOnly && files.some((f) => matches([...dirs, f], true))
+  );
+}
+function takesSettings(path, configDirName) {
+  return isSettingsPath(path, configDirName) || isSettingsDir(path, configDirName) || globNamesSettings(path, configDirName);
+}
 function worst(placements) {
   if (placements.includes("inside")) return "inside";
   return placements.includes("outside") ? "outside" : null;
@@ -3020,8 +3296,8 @@ function placeOf(raw, scope) {
     if (places.home === void 0) return "inside";
     return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? "inside" : "outside";
   }
-  if (MANAGED_SETTINGS_PATH.test(key)) return "inside";
-  if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
+  if (MANAGED_SETTINGS_PATH.test(key) || MANAGED_SETTINGS_DIR.test(key)) return "inside";
+  if (isSettingsPath(key, scope.configDirName) || isSettingsDir(key, scope.configDirName)) {
     return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? "inside" : "outside";
   }
   return [places.project, places.cwd].some((d) => keyAtOrBelow(d, key)) ? "inside" : "outside";
@@ -3164,9 +3440,98 @@ function judgeEffects(effects, scope) {
   if (e.writes.some(inRegistry) || e.special.some(inRegistry) || e.hardLinkSources.some(inRegistry) || e.links.some(registryOrData) || e.dirs.some(registryOrData) || targets.some(registryOrData)) {
     out.push({ ...RULE_REGISTRY });
   }
-  const settings = locate(e.writes, (p) => isSettingsPath(p, scope.configDirName), scope);
+  const isSettings = (p) => isSettingsPath(p, scope.configDirName);
+  const settings = locate(e.writes, isSettings, scope);
   if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
+  judged(RULE_SETTINGS_REMOVE, locate(e.removes, (p) => takesSettings(p, scope.configDirName), scope));
   return out;
+}
+function placedRule(rule, where) {
+  if (where === "inside") return [{ ...rule }];
+  return where === "outside" ? [{ ...RULE_ELSEWHERE }] : [];
+}
+var FIND_NAME_TESTS = /* @__PURE__ */ new Set(["-name", "-iname"]);
+var FIND_PATH_TESTS = /* @__PURE__ */ new Set(["-path", "-ipath", "-wholename", "-iwholename"]);
+var FIND_TAKERS = /* @__PURE__ */ new Set([...FIND_DELETERS, "mv", "move-item"]);
+var HOME_SPELLED = /^(?:~|\$\{?HOME\}?|\$\{?(?:env:)?USERPROFILE\}?|%USERPROFILE%)\/?$/i;
+var MAX_FIND_TESTS = 64;
+var MAX_FIND_PATTERN = 256;
+function sessionSettingsDirs(scope) {
+  const fold = scope.windows === true;
+  const places = scope.places;
+  const dirs = [scope.dir, scope.homePath, places?.project, places?.cwd, places?.home].filter((d) => d !== void 0 && d !== "").map((d) => `${targetKey(d, fold)}/.claude`);
+  if (places?.configDir !== void 0) dirs.push(places.configDir);
+  return [...new Set(dirs)];
+}
+function settingsDirsBelow(resolved, dirs, scope) {
+  if (resolved === "" || HOME_SPELLED.test(resolved)) return [".claude"];
+  const abs = absoluteOf(resolved, scope);
+  if (abs === void 0) return [];
+  const key = targetKey(abs, scope.windows === true);
+  return dirs.filter((d) => d.startsWith(`${key}/`)).map((d) => d.slice(key.length + 1));
+}
+function findTakesSettings(words, start, scope) {
+  const head = words[start];
+  if (head === void 0 || basename(head.value) !== "find") return null;
+  const rest = words.slice(start + 1);
+  const takes = rest.some((w) => w.value === "-delete") || findExecCommands(words, start).some((cmd) => FIND_TAKERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? "")));
+  if (!takes) return null;
+  const { starts, end } = findStartPaths(rest);
+  const tests = [];
+  let maxDepth = Number.POSITIVE_INFINITY;
+  for (let k = end; k + 1 < rest.length; k += 1) {
+    const test = rest[k]?.value ?? "";
+    const value = stripQuotes(rest[k + 1]?.value ?? "");
+    if (test === "-maxdepth" && /^\d+$/.test(value)) maxDepth = Math.min(maxDepth, Number(value));
+    const negated = /^(?:!|-not)$/.test(rest[k - 1]?.value ?? "");
+    if (!negated && (FIND_NAME_TESTS.has(test) || FIND_PATH_TESTS.has(test))) tests.push({ path: FIND_PATH_TESTS.has(test), pattern: value.toLowerCase() });
+  }
+  const unread = tests.length > MAX_FIND_TESTS;
+  const anyOf2 = rest.some((w) => w.value === "-o" || w.value === "-or");
+  const finds = (found, depth) => {
+    if (depth > maxDepth) return false;
+    if (unread) return true;
+    const f = tail(found.toLowerCase());
+    const match = (t) => t.pattern.length > MAX_FIND_PATTERN || wildcardMatch(t.pattern, t.path ? f : lastSegment(f));
+    return anyOf2 ? tests.some(match) : tests.every(match);
+  };
+  const configDirName = scope.configDirName;
+  const named = (p) => takesSettings(p, configDirName);
+  let dirs;
+  let where = null;
+  const seen = /* @__PURE__ */ new Set();
+  for (const s of starts) {
+    const resolved = resolveFrom(scope.cwd, s);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    if (scope.notes.now() > scope.notes.deadline) {
+      scope.notes.budget = true;
+      break;
+    }
+    const spelled = s.replace(/\\/g, "/").replace(/(?<=.)\/+$/, "");
+    if (named(resolved)) {
+      const files = isSettingsPath(resolved, configDirName) ? [] : SETTINGS_FILE_NAMES.map((f) => `${spelled}/${f}`);
+      if (tests.length === 0 || finds(spelled, 0) || files.some((f) => finds(f, 1))) where = worst([where, locate([resolved], named, scope)]);
+    } else if (tests.length > 0) {
+      dirs ??= sessionSettingsDirs(scope);
+      for (const rel of settingsDirsBelow(resolved, dirs, scope)) {
+        const dir = `${spelled}/${rel}`;
+        const depth = rel.split("/").length;
+        if (finds(dir, depth) || SETTINGS_FILE_NAMES.some((f) => finds(`${dir}/${f}`, depth + 1))) where = "inside";
+      }
+    }
+    if (where === "inside") break;
+  }
+  return where;
+}
+function gitTakesSettings(words, start, scope) {
+  const head = words[start];
+  if (head === void 0 || commandName(head.value) !== "git") return null;
+  const configDirName = scope.configDirName;
+  const settings = (configDirName === void 0 ? [".claude"] : [".claude", configDirName]).flatMap((d) => SETTINGS_FILE_NAMES.map((f) => `${d}/${f}`));
+  const gitGlob = (p) => GLOB.test(p) && settings.some((s) => wildcardMatch(p.toLowerCase(), s));
+  const paths = gitRemoves(withoutRedirections(words.slice(start + 1))).map((p) => resolveFrom(scope.cwd, p));
+  return locate(paths, (p) => takesSettings(p, configDirName) || gitGlob(p), scope);
 }
 var RULE_PLUGIN_OFF = {
   id: "claude-plugin-disable",
@@ -3347,6 +3712,7 @@ function assessGuardConfig(words, start, scope) {
   const commands = commandName(head.value) === "cmd" ? cmdInnerCommands(words.slice(start + 1).map((w) => w.value)) : [];
   for (const [cmdWords, at] of [[words, start], ...commands.map((c) => [c, 0])]) {
     if (turnsPluginOff(cmdWords, at)) out.push({ ...RULE_PLUGIN_OFF });
+    pushAll(out, placedRule(RULE_SETTINGS_REMOVE, worst([findTakesSettings(cmdWords, at, scope), gitTakesSettings(cmdWords, at, scope)])));
     const lang = codeLang(interpreterName(cmdWords[interpreterIndex(cmdWords, at)]?.value ?? ""));
     for (const code of inlineCode(cmdWords, at)) pushAll(out, judgeCode(code, lang, scope));
   }
@@ -3362,7 +3728,6 @@ function shellScript(text) {
   return { text, powershell: false };
 }
 var DASH_C = /^-[A-Za-z]*c$/;
-var FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
 function carrierScript(name, words, start) {
   const rest = words.slice(start + 1);
   const dashC = (w, nextWord) => {
@@ -3370,7 +3735,6 @@ function carrierScript(name, words, start) {
     if (w.value.startsWith("--command=")) return w.value.slice("--command=".length);
     return !w.quoted && (DASH_C.test(w.value) || w.value === "--command") ? nextWord?.value ?? "" : void 0;
   };
-  const argv = (from) => rest.slice(from).map((x) => x.value).join(" ") || void 0;
   if (name === "trap") {
     let i = 0;
     while (i < rest.length && (rest[i]?.value ?? "").startsWith("-") && rest[i]?.value !== "--") i += 1;
@@ -3386,22 +3750,19 @@ function carrierScript(name, words, start) {
     return void 0;
   }
   if (name === "runuser") {
-    for (let i = 0; i < rest.length; i += 1) {
+    for (let i = 0; i < rest.length && rest[i]?.value !== "--"; i += 1) {
       const c = dashC(rest[i], rest[i + 1]);
       if (c !== void 0) return c;
-      if (rest[i]?.value === "--") return argv(i + 1);
     }
     return void 0;
   }
   if (name === "flock") {
-    let i = 0;
-    while (i < rest.length && (rest[i]?.value ?? "").startsWith("-")) {
-      const c2 = dashC(rest[i], rest[i + 1]);
-      if (c2 !== void 0) return c2;
-      i += FLOCK_VALUED.test(rest[i]?.value ?? "") ? 2 : 1;
+    const file = flockLockFile(words, start + 1);
+    for (let i = start + 1; i < file; i += 1) {
+      const c = dashC(words[i], words[i + 1]);
+      if (c !== void 0) return c;
     }
-    const c = dashC(rest[i + 1], rest[i + 2]);
-    return c !== void 0 ? c : argv(i + 1);
+    return dashC(words[file + 1], words[file + 2]);
   }
   return null;
 }
@@ -3809,7 +4170,22 @@ function quotedSubstitutions(command) {
   return out;
 }
 var DOWNLOADERS = /* @__PURE__ */ new Set(["curl", "wget", "iwr", "irm", "invoke-webrequest", "invoke-restmethod"]);
-var PIPE_RUNNERS = /* @__PURE__ */ new Set(["sudo", "doas", "env", "command", "exec", "builtin", "nohup", "nice", "time", "timeout", "setsid", "stdbuf"]);
+var PIPE_RUNNERS = /* @__PURE__ */ new Set([
+  "sudo",
+  "doas",
+  "env",
+  "command",
+  "exec",
+  "builtin",
+  "nohup",
+  "nice",
+  "time",
+  "timeout",
+  "setsid",
+  "stdbuf",
+  "flock",
+  "runuser"
+]);
 var STDIN_SHELLS = /* @__PURE__ */ new Set([...SHELLS, "fish", "csh", "tcsh"]);
 var STDIN_PATHS = /* @__PURE__ */ new Set(["/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"]);
 var RULE_PIPE_TO_SHELL = {
@@ -4946,7 +5322,7 @@ function targetVariables(env) {
   }
   return out;
 }
-function collect(command, depth, out, scope) {
+function collect(command, depth, out, scope, source) {
   const cmd = command.trim();
   if (cmd.length === 0) return;
   if (scope.notes.now() > scope.notes.deadline) {
@@ -4989,6 +5365,7 @@ function collect(command, depth, out, scope) {
       collect(body, depth + 1, out, { ...scope, cmdLine: false });
     }
   }
+  if (source !== void 0) collectSubexpressions(source, depth, out, scope);
   const dirs = workdirs(statements);
   const startDir = scope.dir;
   let memoSteps;
@@ -5052,6 +5429,8 @@ function collect(command, depth, out, scope) {
       if (find !== null) out.push(find);
       const findXargs = findPipedIntoDeleter(statement.commands, c, scope.home, scope.tildeUsers !== false, deleting);
       if (findXargs !== null) out.push(findXargs);
+      const fed2 = findFedToDeleter(statement.commands, c);
+      if (fed2 !== void 0) pushAll(out, placedRule(RULE_SETTINGS_REMOVE, findTakesSettings(fed2.words, fed2.at, scope)));
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       const hereText = hereStringText(words);
       const hereReader = hereText === void 0 ? void 0 : scriptReader(words);
@@ -5087,7 +5466,7 @@ function collect(command, depth, out, scope) {
           if (!powershell) collectGenerated([substitutionOutput(script)], depth, out, scope);
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here }, powershell ? script : void 0);
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
@@ -5121,9 +5500,23 @@ function collectFed(fed, depth, out, scope) {
     const kind = f.kind ?? scriptReader(f.reader) ?? "shell";
     const powershell = kind === "powershell";
     noteScript(scope, f.text, powershell);
-    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === "cmd", powershell });
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === "cmd", powershell }, powershell ? f.text : void 0);
     const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
     if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
+  }
+}
+function collectSubexpressions(source, depth, out, scope) {
+  for (const body of powershellSubexpressions(source)) {
+    if (body.trim() === "") continue;
+    if (depth >= MAX_NESTING) {
+      scope.notes.depth = true;
+      continue;
+    }
+    const nested = { ...scope, cmdLine: false, powershell: true };
+    noteScript(scope, body, true);
+    collect(body, depth + 1, out, nested, body);
+    const asPosix = powershellAsPosix(body);
+    if (asPosix !== body) collect(asPosix, depth + 1, out, nested);
   }
 }
 function collectGenerated(texts, depth, out, scope) {
@@ -5214,7 +5607,7 @@ function assessBashCommand(command, opts = {}) {
     realPath: opts.realPath
   };
   if (opts.shell !== "powershell") return assessReadings([text], cut, now, deadline, where);
-  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
+  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where, text);
 }
 function safeUserDataDir() {
   try {
@@ -5223,7 +5616,7 @@ function safeUserDataDir() {
     return "";
   }
 }
-function assessReadings(readings, cut, now, deadline, where) {
+function assessReadings(readings, cut, now, deadline, where, source) {
   const notes = {
     statement: false,
     command: cut,
@@ -5244,7 +5637,7 @@ function assessReadings(readings, cut, now, deadline, where) {
     if (n > 0 && (cmd === readings[n - 1] || matched.some((m) => m.level === "block"))) continue;
     notes.loosens = void 0;
     try {
-      collect(cmd, 0, matched, { raw: cmd, cwd: "", notes, ...where });
+      collect(cmd, 0, matched, { raw: cmd, cwd: "", notes, ...where }, n === 0 ? source : void 0);
     } catch {
       notes.failed = true;
     }
@@ -5260,7 +5653,9 @@ function assessReadings(readings, cut, now, deadline, where) {
   const blocks = effective.filter((r) => r.level === "block");
   const only = blocks.length === 1 ? blocks[0] : void 0;
   const own = only?.id === RULE_DB_ADOPT.id ? only.reason : void 0;
-  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, capQuestion(notes)].filter((q) => q !== void 0);
+  const questions = [byId.get(RULE_BASELINE_UPDATE.id)?.reason, byId.get(RULE_SETTINGS_REMOVE.id)?.reason, capQuestion(notes)].filter(
+    (q) => q !== void 0
+  );
   const ask = blocks.length === 0 && questions.length > 0 ? questions.join("; and ") : void 0;
   return {
     level: effective[0]?.level ?? "ok",

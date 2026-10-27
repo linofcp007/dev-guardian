@@ -29,8 +29,7 @@ import { toolProjectPath } from './projectArg.js';
 const inputSchema = {
   project_path: ProjectPath,
   scan_id: z
-    .string()
-    .uuid()
+    .guid()
     .optional()
     .describe("Scan to mark as the baseline. Defaults to project_path's newest usable scan."),
   scan_type: z

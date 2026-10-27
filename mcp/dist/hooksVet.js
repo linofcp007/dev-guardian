@@ -204,6 +204,69 @@ function runnerOptionWords(runner, option) {
   return 1;
 }
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+function handsScript(word) {
+  if (word === void 0 || word.quoted) return false;
+  return /^-[A-Za-z]*c$/.test(word.value) || word.value === "--command" || word.value.startsWith("--command=");
+}
+function longNames(option, names) {
+  const name = option.slice(2).replace(/=.*$/s, "");
+  return name !== "" && names.some((n) => n.startsWith(name));
+}
+function flockLockFile(words, from) {
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? "";
+    if (v === "--") return i + 1;
+    if (!v.startsWith("-") || v === "-") return i;
+    const valued = v.startsWith("--") ? !v.includes("=") && longNames(v, ["timeout", "wait", "conflict-exit-code"]) : /[wE]$/.test(v);
+    if (valued) i += 1;
+  }
+  return words.length;
+}
+function flockCommand(words, from) {
+  const file = flockLockFile(words, from);
+  for (let i = from; i < file; i += 1) if (handsScript(words[i])) return void 0;
+  const command = file + 1;
+  return command >= words.length || handsScript(words[command]) ? void 0 : command;
+}
+var RUNUSER_VALUED = { short: "gGsuw", long: ["group", "supp-group", "shell", "user", "whitelist-environment"] };
+function runuserCommand(words, from) {
+  let user = false;
+  let i = from;
+  for (; i < words.length; i += 1) {
+    const word = words[i];
+    const v = word?.value ?? "";
+    if (v === "--") return i + 1 < words.length ? i + 1 : void 0;
+    if (!v.startsWith("-") || v === "-") {
+      if (v === "-") continue;
+      break;
+    }
+    if (handsScript(word) || v.startsWith("--") && longNames(v, ["session-command"])) return void 0;
+    if (v.startsWith("--")) {
+      if (longNames(v, ["user"])) user = true;
+      if (!v.includes("=") && longNames(v, RUNUSER_VALUED.long)) i += 1;
+      continue;
+    }
+    for (let k = 1; k < v.length; k += 1) {
+      const letter = v.charAt(k);
+      if (letter === "c" || letter === "C") return void 0;
+      if (!RUNUSER_VALUED.short.includes(letter)) continue;
+      if (letter === "u") user = true;
+      if (k === v.length - 1) i += 1;
+      break;
+    }
+  }
+  if (i >= words.length) return void 0;
+  if (user) return i;
+  for (let j = i + 1; j < words.length; j += 1) {
+    if (handsScript(words[j])) return void 0;
+    if (words[j]?.value === "--") return j + 1 < words.length ? j + 1 : void 0;
+  }
+  return void 0;
+}
+var CARRIERS = /* @__PURE__ */ new Map([
+  ["flock", flockCommand],
+  ["runuser", runuserCommand]
+]);
 function resolveCommand(words, through) {
   let i = 0;
   let elevated = false;
@@ -220,6 +283,13 @@ function resolveCommand(words, through) {
       continue;
     }
     const name = basename(word.value);
+    const carrier = through === void 0 || through.has(name) ? CARRIERS.get(name) : void 0;
+    if (carrier !== void 0) {
+      const command = carrier(words, i + 1);
+      if (command === void 0) break;
+      i = command;
+      continue;
+    }
     if (!RUNNERS.has(name) || through !== void 0 && !through.has(name)) break;
     if (name === "sudo" || name === "doas") elevated = true;
     i += 1;
@@ -863,6 +933,35 @@ function posixSingle(text) {
 function hereStrings() {
   return { single: Number.POSITIVE_INFINITY, double: Number.POSITIVE_INFINITY };
 }
+function subexpressionEnd(text, from) {
+  let depth = 1;
+  for (let i = from; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (c === "`") i += 1;
+    else if (c === "(") depth += 1;
+    else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+function bracedVariableEnd(text, from) {
+  for (let i = from; i < text.length; i += 1) {
+    const c = text.charAt(i);
+    if (c === "`") i += 1;
+    else if (c === "}") return i + 1;
+  }
+  return text.length;
+}
+function expandablePieceEnd(text, i) {
+  if (text.charAt(i) !== "$") return -1;
+  const next = text.charAt(i + 1);
+  if (next === "{") return bracedVariableEnd(text, i + 2);
+  if (next !== "(") return -1;
+  const end = subexpressionEnd(text, i + 2);
+  return end < 0 ? text.length : end;
+}
 function hereString(text, at, seen) {
   const quote = text.charAt(at + 1);
   const single = SINGLE_QUOTES.includes(quote);
@@ -873,13 +972,20 @@ function hereString(text, at, seen) {
   const kind = single ? "single" : "double";
   if (start >= seen[kind]) return null;
   const closers = single ? SINGLE_QUOTES : DOUBLE_QUOTES;
-  for (let line = start; line < text.length; ) {
-    if (closers.includes(text.charAt(line)) && text.charAt(line + 1) === "@") {
-      return { body: text.slice(start, line).replace(/\r?\n$/, ""), next: line + 2 };
+  for (let i = start; i < text.length; ) {
+    if ((i === start || text.charAt(i - 1) === "\n") && closers.includes(text.charAt(i)) && text.charAt(i + 1) === "@") {
+      return { body: text.slice(start, i).replace(/\r?\n$/, ""), next: i + 2 };
     }
-    const nl = text.indexOf("\n", line);
-    if (nl < 0) break;
-    line = nl + 1;
+    if (single) {
+      const nl = text.indexOf("\n", i);
+      if (nl < 0) break;
+      i = nl + 1;
+    } else if (text.charAt(i) === "`") i += 2;
+    else if (text.startsWith("$(", i)) {
+      const end = subexpressionEnd(text, i + 2);
+      if (end < 0) break;
+      i = end;
+    } else i += 1;
   }
   seen[kind] = start;
   return null;
@@ -891,6 +997,7 @@ function blockCommentEnd(text, i) {
   const end = text.indexOf("#>", i + 2);
   return end < 0 ? text.length : end + 2;
 }
+var PLAIN_BRACED_VARIABLE = /^\$\{[\w:.?\\/-]*\}$/;
 function powershellAsPosix(text) {
   const seen = hereStrings();
   const braces = [];
@@ -936,6 +1043,12 @@ function powershellAsPosix(text) {
           j += 2;
           continue;
         }
+        const piece = double ? expandablePieceEnd(text, j) : -1;
+        if (piece >= 0) {
+          lit += text.slice(j, piece);
+          j = piece;
+          continue;
+        }
         if (quotes.includes(c)) {
           if (quotes.includes(text.charAt(j + 1)) && text.charAt(j + 1) !== "") {
             lit += c;
@@ -950,6 +1063,15 @@ function powershellAsPosix(text) {
       out += posixSingle(lit);
       i = j + 1;
       continue;
+    }
+    if (ch === "$" && text.charAt(i + 1) === "{") {
+      const end = bracedVariableEnd(text, i + 2);
+      const spelled = text.slice(i, end);
+      if (!PLAIN_BRACED_VARIABLE.test(spelled)) {
+        out += posixSingle(spelled);
+        i = end;
+        continue;
+      }
     }
     if (ch === "`") {
       const next = text.charAt(i + 1);

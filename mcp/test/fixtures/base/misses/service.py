@@ -60,10 +60,15 @@ def load_config(stream):
     fifth = yaml.load(stream, yaml.CSafeLoader)
     sixth = yaml.load(stream=stream, Loader=yaml.SafeLoader)
     # BaseLoader builds only strings, lists and dicts: as safe as SafeLoader,
-    # and it fired at ERROR (review 3.6.1).
+    # and it fired at ERROR (review 3.6.1). One line per exclusion clause —
+    # both classes, keyword and positional — so each of the four is
+    # load-bearing: the ablation harness read the two without a line here
+    # (`Loader=yaml.CBaseLoader`, positional `yaml.BaseLoader`) DEAD.
     seventh = yaml.load(stream, Loader=yaml.BaseLoader)
     eighth = yaml.load(stream, yaml.CBaseLoader)
-    return first, second, third, fourth, fifth, sixth, seventh, eighth
+    ninth = yaml.load(stream, Loader=yaml.CBaseLoader)
+    tenth = yaml.load(stream, yaml.BaseLoader)
+    return first, second, third, fourth, fifth, sixth, seventh, eighth, ninth, tenth
 
 
 def persist(obj):
