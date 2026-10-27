@@ -1197,6 +1197,34 @@ function commandWriteDestinations(name, args) {
       return [];
   }
 }
+var GIT_VALUED = /* @__PURE__ */ new Set(["-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--config-env", "--super-prefix", "--attr-source"]);
+function gitRemoves(args) {
+  let dir = "";
+  let i = 0;
+  for (; i < args.length; i += 1) {
+    const a = args[i] ?? "";
+    if (a === "-C") dir = resolveFrom(dir, args[++i] ?? ".");
+    else if (GIT_VALUED.has(a)) i += 1;
+    else if (!a.startsWith("-")) break;
+  }
+  const sub = args[i];
+  if (sub !== "rm" && sub !== "mv") return [];
+  const paths = [];
+  let optionsDone = false;
+  for (let k = i + 1; k < args.length; k += 1) {
+    const a = args[k] ?? "";
+    if (!optionsDone && a === "--") optionsDone = true;
+    else if (!optionsDone && a.startsWith("--")) {
+      const name = a.slice(2).split("=")[0] ?? "";
+      if (name !== "" && (sub === "rm" && "cached".startsWith(name) || "dry-run".startsWith(name))) return [];
+      if (name === "pathspec-from-file" && !a.includes("=")) k += 1;
+    } else if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
+      if (a.includes("n")) return [];
+    } else if (!/^:(?:\/*[!^]|\([^)]*\bexclude\b)/.test(a)) paths.push(a.replace(/^:(?:\([^)]*\)|\/+)/, ""));
+  }
+  const gone = sub === "mv" ? paths.slice(0, -1) : paths;
+  return gone.filter((p) => p !== "").map((p) => resolveFrom(dir, p));
+}
 var REMOVERS = /* @__PURE__ */ new Set(["rm", "unlink", "ri", "remove-item", "del", "erase", "rd", "rmdir"]);
 var CMD_SWITCHED = /* @__PURE__ */ new Set(["copy", "move", "xcopy", "robocopy", "mklink", "del", "erase", "rd", "rmdir", "ren", "rename"]);
 function effectsOf(name, rawArgs, cwd, depth = 0) {
@@ -2798,20 +2826,7 @@ function assessFind(words, start, home, tildeUsers = true, ctx = {}) {
   const inner = execs.map((cmd) => assessRecursiveDelete(cmd, resolveCommand(cmd).index, home, tildeUsers, { ...ctx, piped: void 0 })).find((r) => r?.level === "block");
   if (inner !== void 0 && inner !== null) return inner;
   if (!viaExec && !rest.some((w) => w.value === "-delete")) return null;
-  let k = 0;
-  while (k < rest.length) {
-    const v = rest[k]?.value ?? "";
-    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
-    else if (v === "-D") k += 2;
-    else break;
-  }
-  const targets = [];
-  for (; k < rest.length; k += 1) {
-    const v = rest[k]?.value ?? "";
-    if (v.startsWith("-") || v === "(" || v === "!" || v === ")" || v === ",") break;
-    targets.push(stripQuotes(v));
-  }
-  if (targets.length === 0) targets.push(".");
+  const { starts: targets } = findStartPaths(rest);
   const filtered = rest.some((w) => FIND_FILTERS.has(w.value));
   const judged = judgedTargets(targets, ctx);
   if (judged.some((t) => catastrophicKind(t, tildeUsers) === "root")) return { ...RULE_FIND_ROOT };
@@ -2821,20 +2836,39 @@ function assessFind(words, start, home, tildeUsers = true, ctx = {}) {
   if (!filtered && targets.some((t) => /^\.[\\/]?$/.test(t))) return { ...RULE_FIND_BROAD };
   return null;
 }
+function findStartPaths(rest) {
+  let k = 0;
+  while (k < rest.length) {
+    const v = rest[k]?.value ?? "";
+    if (/^-(?:[HLP]|O\d*)$/.test(v)) k += 1;
+    else if (v === "-D") k += 2;
+    else break;
+  }
+  const starts = [];
+  for (; k < rest.length; k += 1) {
+    const v = rest[k]?.value ?? "";
+    if (v.startsWith("-") || v === "(" || v === "!" || v === ")" || v === ",") break;
+    starts.push(stripQuotes(v));
+  }
+  if (starts.length === 0) starts.push(".");
+  return { starts, end: k };
+}
 function findPipedIntoDeleter(commands, c, home, tildeUsers, ctx) {
+  const fed = findFedToDeleter(commands, c);
+  return fed === void 0 ? null : assessFind(fed.words, fed.at, home, tildeUsers, { ...ctx, piped: void 0, pipedRecursive: void 0 });
+}
+function findFedToDeleter(commands, c) {
   const words = commands[c];
-  if (words === void 0 || c === 0) return null;
+  if (words === void 0 || c === 0) return void 0;
   const at = resolveCommand(words).index;
-  if (!words.slice(0, at).some((w) => commandName(w.value) === "xargs")) return null;
-  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ""))) return null;
+  if (!words.slice(0, at).some((w) => commandName(w.value) === "xargs")) return void 0;
+  if (!FIND_DELETERS.has(commandName(words[at]?.value ?? ""))) return void 0;
   for (let p = c - 1; p >= 0; p -= 1) {
     const prev = commands[p] ?? [];
     const f = resolveCommand(prev).index;
-    if (commandName(prev[f]?.value ?? "") === "find") {
-      return assessFind([...prev, { value: "-delete", quoted: false }], f, home, tildeUsers, { ...ctx, piped: void 0, pipedRecursive: void 0 });
-    }
+    if (commandName(prev[f]?.value ?? "") === "find") return { words: [...prev, { value: "-delete", quoted: false }], at: f };
   }
-  return null;
+  return void 0;
 }
 var HOOK_CONFIG_PATH = /(?:\.guardian\/?hooks[^/]*\.json|\.config\/?dev-guardian\/?hooks\.json)$/i;
 function isHookConfigPath(arg) {
@@ -2847,7 +2881,8 @@ function isHookConfigDir(arg) {
 var USER_CONFIG_DIR = /\.config\/?dev-guardian\/?$/i;
 var CLAUDE_SETTINGS_PATH = /\.claude\/?settings(?:\.local)?\.json$/i;
 var MANAGED_SETTINGS_PATH = /(?:ClaudeCode|claude-code)\/?managed-settings\.json$/i;
-var CONFIG_DIR_VARIABLE_SETTINGS = /(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)\/?settings(?:\.local)?\.json$/i;
+var CONFIG_DIR_VARIABLE = String.raw`(?:\$\{?(?:env:)?CLAUDE_CONFIG_DIR\}?|%CLAUDE_CONFIG_DIR%)`;
+var CONFIG_DIR_VARIABLE_SETTINGS = new RegExp(String.raw`${CONFIG_DIR_VARIABLE}\/?settings(?:\.local)?\.json$`, "i");
 function isSettingsPath(path, configDirName) {
   if (CLAUDE_SETTINGS_PATH.test(path) || CONFIG_DIR_VARIABLE_SETTINGS.test(path) || MANAGED_SETTINGS_PATH.test(path)) return true;
   if (configDirName === void 0) return false;
@@ -3192,6 +3227,40 @@ var RULE_SETTINGS_REMOVE = {
   level: "warn",
   reason: "this command deletes or moves away Claude Code's settings, and with them every permissions.deny rule and hook setting they hold \u2014 the user decides; to change one setting, edit the file instead"
 };
+var CONFIG_DIR_VARIABLE_DIR = new RegExp(String.raw`(?:^|\/)${CONFIG_DIR_VARIABLE}\/?$`, "i");
+var CONFIG_DIR_VARIABLE_ANYWHERE = new RegExp(CONFIG_DIR_VARIABLE, "gi");
+function isSettingsDir(path, configDirName) {
+  if (CLAUDE_DIR.test(path) || CONFIG_DIR_VARIABLE_DIR.test(path) || MANAGED_SETTINGS_DIR.test(path)) return true;
+  return configDirName !== void 0 && lastSegment(path).toLowerCase() === configDirName;
+}
+var SETTINGS_FILE_NAMES = ["settings.json", "settings.local.json", "managed-settings.json"];
+function settingsTails(configDirName) {
+  const user = ["settings.json", "settings.local.json"];
+  const managed = ["managed-settings.json"];
+  return [
+    { dirs: [".claude"], files: user },
+    ...configDirName === void 0 ? [] : [{ dirs: [configDirName], files: user }],
+    { dirs: ["etc", "claude-code"], files: managed },
+    ...["program files", "programdata", "application support"].map((parent) => ({ dirs: [parent, "claudecode"], files: managed }))
+  ];
+}
+function globNamesSettings(path, configDirName) {
+  const t = tail(path).replace(CONFIG_DIR_VARIABLE_ANYWHERE, ".claude");
+  if (!GLOB.test(t)) return false;
+  const dirOnly = t.endsWith("/");
+  const segs = t.split("/").filter((s) => s !== "").map((s) => s.toLowerCase());
+  const matches = (names, file) => names.length <= segs.length && names.every((name, k) => {
+    const seg = segs[segs.length - names.length + k] ?? "";
+    const anyStart = file && k === names.length - 1;
+    return (anyStart || seg.charAt(0) === name.charAt(0)) && wildcardMatch(seg, name);
+  });
+  return settingsTails(configDirName).some(
+    ({ dirs, files }) => matches(dirs, false) || !dirOnly && files.some((f) => matches([...dirs, f], true))
+  );
+}
+function takesSettings(path, configDirName) {
+  return isSettingsPath(path, configDirName) || isSettingsDir(path, configDirName) || globNamesSettings(path, configDirName);
+}
 function worst(placements) {
   if (placements.includes("inside")) return "inside";
   return placements.includes("outside") ? "outside" : null;
@@ -3227,8 +3296,8 @@ function placeOf(raw, scope) {
     if (places.home === void 0) return "inside";
     return keyAtOrBelow(`${places.home}/.config/dev-guardian`, key) ? "inside" : "outside";
   }
-  if (MANAGED_SETTINGS_PATH.test(key)) return "inside";
-  if (isSettingsPath(key, scope.configDirName) || CLAUDE_DIR.test(key)) {
+  if (MANAGED_SETTINGS_PATH.test(key) || MANAGED_SETTINGS_DIR.test(key)) return "inside";
+  if (isSettingsPath(key, scope.configDirName) || isSettingsDir(key, scope.configDirName)) {
     return [places.project, places.cwd, places.home, places.configDir].some((d) => keyAtOrBelow(d, key)) ? "inside" : "outside";
   }
   return [places.project, places.cwd].some((d) => keyAtOrBelow(d, key)) ? "inside" : "outside";
@@ -3374,8 +3443,95 @@ function judgeEffects(effects, scope) {
   const isSettings = (p) => isSettingsPath(p, scope.configDirName);
   const settings = locate(e.writes, isSettings, scope);
   if (settings !== null && loosens(scope)) judged(RULE_SETTINGS, settings);
-  judged(RULE_SETTINGS_REMOVE, locate(e.removes, isSettings, scope));
+  judged(RULE_SETTINGS_REMOVE, locate(e.removes, (p) => takesSettings(p, scope.configDirName), scope));
   return out;
+}
+function placedRule(rule, where) {
+  if (where === "inside") return [{ ...rule }];
+  return where === "outside" ? [{ ...RULE_ELSEWHERE }] : [];
+}
+var FIND_NAME_TESTS = /* @__PURE__ */ new Set(["-name", "-iname"]);
+var FIND_PATH_TESTS = /* @__PURE__ */ new Set(["-path", "-ipath", "-wholename", "-iwholename"]);
+var FIND_TAKERS = /* @__PURE__ */ new Set([...FIND_DELETERS, "mv", "move-item"]);
+var HOME_SPELLED = /^(?:~|\$\{?HOME\}?|\$\{?(?:env:)?USERPROFILE\}?|%USERPROFILE%)\/?$/i;
+var MAX_FIND_TESTS = 64;
+var MAX_FIND_PATTERN = 256;
+function sessionSettingsDirs(scope) {
+  const fold = scope.windows === true;
+  const places = scope.places;
+  const dirs = [scope.dir, scope.homePath, places?.project, places?.cwd, places?.home].filter((d) => d !== void 0 && d !== "").map((d) => `${targetKey(d, fold)}/.claude`);
+  if (places?.configDir !== void 0) dirs.push(places.configDir);
+  return [...new Set(dirs)];
+}
+function settingsDirsBelow(resolved, dirs, scope) {
+  if (resolved === "" || HOME_SPELLED.test(resolved)) return [".claude"];
+  const abs = absoluteOf(resolved, scope);
+  if (abs === void 0) return [];
+  const key = targetKey(abs, scope.windows === true);
+  return dirs.filter((d) => d.startsWith(`${key}/`)).map((d) => d.slice(key.length + 1));
+}
+function findTakesSettings(words, start, scope) {
+  const head = words[start];
+  if (head === void 0 || basename(head.value) !== "find") return null;
+  const rest = words.slice(start + 1);
+  const takes = rest.some((w) => w.value === "-delete") || findExecCommands(words, start).some((cmd) => FIND_TAKERS.has(commandName(cmd[resolveCommand(cmd).index]?.value ?? "")));
+  if (!takes) return null;
+  const { starts, end } = findStartPaths(rest);
+  const tests = [];
+  let maxDepth = Number.POSITIVE_INFINITY;
+  for (let k = end; k + 1 < rest.length; k += 1) {
+    const test = rest[k]?.value ?? "";
+    const value = stripQuotes(rest[k + 1]?.value ?? "");
+    if (test === "-maxdepth" && /^\d+$/.test(value)) maxDepth = Math.min(maxDepth, Number(value));
+    const negated = /^(?:!|-not)$/.test(rest[k - 1]?.value ?? "");
+    if (!negated && (FIND_NAME_TESTS.has(test) || FIND_PATH_TESTS.has(test))) tests.push({ path: FIND_PATH_TESTS.has(test), pattern: value.toLowerCase() });
+  }
+  const unread = tests.length > MAX_FIND_TESTS;
+  const anyOf2 = rest.some((w) => w.value === "-o" || w.value === "-or");
+  const finds = (found, depth) => {
+    if (depth > maxDepth) return false;
+    if (unread) return true;
+    const f = tail(found.toLowerCase());
+    const match = (t) => t.pattern.length > MAX_FIND_PATTERN || wildcardMatch(t.pattern, t.path ? f : lastSegment(f));
+    return anyOf2 ? tests.some(match) : tests.every(match);
+  };
+  const configDirName = scope.configDirName;
+  const named = (p) => takesSettings(p, configDirName);
+  let dirs;
+  let where = null;
+  const seen = /* @__PURE__ */ new Set();
+  for (const s of starts) {
+    const resolved = resolveFrom(scope.cwd, s);
+    if (seen.has(resolved)) continue;
+    seen.add(resolved);
+    if (scope.notes.now() > scope.notes.deadline) {
+      scope.notes.budget = true;
+      break;
+    }
+    const spelled = s.replace(/\\/g, "/").replace(/(?<=.)\/+$/, "");
+    if (named(resolved)) {
+      const files = isSettingsPath(resolved, configDirName) ? [] : SETTINGS_FILE_NAMES.map((f) => `${spelled}/${f}`);
+      if (tests.length === 0 || finds(spelled, 0) || files.some((f) => finds(f, 1))) where = worst([where, locate([resolved], named, scope)]);
+    } else if (tests.length > 0) {
+      dirs ??= sessionSettingsDirs(scope);
+      for (const rel of settingsDirsBelow(resolved, dirs, scope)) {
+        const dir = `${spelled}/${rel}`;
+        const depth = rel.split("/").length;
+        if (finds(dir, depth) || SETTINGS_FILE_NAMES.some((f) => finds(`${dir}/${f}`, depth + 1))) where = "inside";
+      }
+    }
+    if (where === "inside") break;
+  }
+  return where;
+}
+function gitTakesSettings(words, start, scope) {
+  const head = words[start];
+  if (head === void 0 || commandName(head.value) !== "git") return null;
+  const configDirName = scope.configDirName;
+  const settings = (configDirName === void 0 ? [".claude"] : [".claude", configDirName]).flatMap((d) => SETTINGS_FILE_NAMES.map((f) => `${d}/${f}`));
+  const gitGlob = (p) => GLOB.test(p) && settings.some((s) => wildcardMatch(p.toLowerCase(), s));
+  const paths = gitRemoves(withoutRedirections(words.slice(start + 1))).map((p) => resolveFrom(scope.cwd, p));
+  return locate(paths, (p) => takesSettings(p, configDirName) || gitGlob(p), scope);
 }
 var RULE_PLUGIN_OFF = {
   id: "claude-plugin-disable",
@@ -3556,6 +3712,7 @@ function assessGuardConfig(words, start, scope) {
   const commands = commandName(head.value) === "cmd" ? cmdInnerCommands(words.slice(start + 1).map((w) => w.value)) : [];
   for (const [cmdWords, at] of [[words, start], ...commands.map((c) => [c, 0])]) {
     if (turnsPluginOff(cmdWords, at)) out.push({ ...RULE_PLUGIN_OFF });
+    pushAll(out, placedRule(RULE_SETTINGS_REMOVE, worst([findTakesSettings(cmdWords, at, scope), gitTakesSettings(cmdWords, at, scope)])));
     const lang = codeLang(interpreterName(cmdWords[interpreterIndex(cmdWords, at)]?.value ?? ""));
     for (const code of inlineCode(cmdWords, at)) pushAll(out, judgeCode(code, lang, scope));
   }
@@ -5272,6 +5429,8 @@ function collect(command, depth, out, scope, source) {
       if (find !== null) out.push(find);
       const findXargs = findPipedIntoDeleter(statement.commands, c, scope.home, scope.tildeUsers !== false, deleting);
       if (findXargs !== null) out.push(findXargs);
+      const fed2 = findFedToDeleter(statement.commands, c);
+      if (fed2 !== void 0) pushAll(out, placedRule(RULE_SETTINGS_REMOVE, findTakesSettings(fed2.words, fed2.at, scope)));
       if (hereStringFetchIntoShell(words, resolved.index)) out.push(RULE_FETCH_EXEC);
       const hereText = hereStringText(words);
       const hereReader = hereText === void 0 ? void 0 : scriptReader(words);
