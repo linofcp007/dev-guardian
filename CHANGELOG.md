@@ -11,8 +11,8 @@ version bump.
 ### Fixed
 
 - **`register_custom_rules` no longer calls a valid rule refused when Semgrep broke.** Every non-zero `semgrep
-  --validate` read as a refusal, and the exit code cannot tell them apart (measured on 1.182.0: a broken pattern and a
-  crash both exit 2). A refusal is now Semgrep's verdict in its output; a run whose engine stopped, or that crashed
+  --validate` read as a refusal, and the exit code cannot tell them apart (measured on 1.182.0: a broken pattern, a rule
+  missing a key and a missing config all exit 2). A refusal is now Semgrep's verdict in its output; a run whose engine stopped, or that crashed
   with no verdict, validates nothing — the file keeps its shape check and `semgrep_validated: false` says why.
 
 ## [3.7.0] - 2026-10-27
