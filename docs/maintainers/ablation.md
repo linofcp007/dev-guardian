@@ -524,3 +524,16 @@ too, measured by scanning `frameworks/fp/` with both: the same four undecidable
 routes and one mount, and six imports rather than four (`decoys.go`'s grouped
 import reports one match per item, and `decoys.py` has one). The class-prefix
 rules added none.
+
+**Named-argument run** (3.7.0, sha256 `9a4f3c14…`, 1462 s, Semgrep 1.182.0
+without login, noise floor 0): `npm run ablate -- routes
+--filter=aspnet-attribute`, the ten ASP.NET attribute rules after the bare ones
+gained an all-named alternative (`[HttpGet(Name = "…")]`, which `dotnet new
+webapi` emits) and two `pattern-not`s, and the path ones a `template:`
+alternative — 40 clauses. Axis 0 73/73, axis 1 **40/40 live, 0 DEAD**, axis 3
+40/40 (vacuous: `mcp/src` holds no C#). Axis 2 flags all 15 bare-rule
+`pattern-not`s, and each reveal is the near-miss its clause is for — a path
+before a named argument, a `template:`, a `[Route]` companion (those five
+flags predate this run) — a row of `annotations/aspnet/NamedArguments.cs` or
+`OrdersController.cs`, or `frameworks/cs/`'s `C03` / `C06`. Decoy baseline
+still 11.
