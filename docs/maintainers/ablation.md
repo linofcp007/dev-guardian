@@ -137,9 +137,9 @@ precision evidence it does have). Measured with the corpora below:
 
 | pack | corpus | files | baseline findings | axis-3 flags |
 | --- | --- | ---: | ---: | ---: |
-| `bugfix-js` | this repo's `mcp/src` | 190 | 45 | 3 |
-| `bugfix-py` | CPython `Lib/` | 5803 | 1078 | several, all positive branches |
-| `bugfix-go` | Go stdlib `src/` | 6515 | 3101 | **1** |
+| `bugfix-js` | this repo's `mcp/src` | 419 | 76 | 3, all working positive branches or a regex inside an exclusion |
+| `bugfix-py` | CPython 3.15.2 `Lib/` | 760 | 704 | 16: 13 working positive branches, 3 a regex inside an exclusion |
+| `bugfix-go` | Go 1.27.3 `src/` | 5084 | 3709 (3513 comparable) | not yet measured: run in progress |
 | `bugfix-php` | WordPress core | 1512 | 40 | 8 |
 | `bugfix-cs` | `dotnet/runtime` | 11800 | ~790 | 10 |
 | `bugfix-java` | OpenJDK + Spring | 17347 | — | 5 |
@@ -147,6 +147,43 @@ precision evidence it does have). Measured with the corpora below:
 | `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 | `web-js` | uptime-kuma, actual and outline (Node apps) | 4933 | 15 (14 comparable) | 3, all working positive branches |
 | `wordpress` | WooCommerce 11.2.1, wp-statistics 13.0.7, Contact Form 7 6.2.3 | 4176 | 7 (5 comparable) | 0 |
+| `mobile` | Nextcloud Android 35.0.1 and iOS 35.2.1, Gotify Android 2.10.1, Syncthing Android 1.28.1 | 1403 | 20 | 0 |
+
+The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
+in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
+code nobody wrote as a fixture; the rows they replace did not record a
+version, so their counts (190 files and 45 findings, CPython 5803 and 1078, Go
+6515 and 3101) are not comparable with these. The corpora: `go1.27.3.src.tar.gz`
+from go.dev/dl (sha256 `6e7749035cf3…`, as published) with `GUARDIAN_GO_SRC` at
+`go/src`; `Python-3.15.2.tgz` from python.org (sha256 `f74e1db0eabd…`) with
+`GUARDIAN_PY_SRC` at `Lib`; and for `GUARDIAN_MOBILE_SRC` one directory holding
+shallow clones of `nextcloud/android` `stable-35.0.1` (`e6a4ade5`),
+`nextcloud/ios` `35.2.1` (`faf96179`), `gotify/android` `v2.10.1` (`211682fd`)
+and `syncthing/syncthing-android` `1.28.1` (`64d2b8e3`). The last two were
+chosen because they hold an accept-all hostname-verifier lambda each, the shape
+3.6.1 widened that rule to; a corpus picked for the change it measures is
+evidence of recall, not of precision. The file counts are what Semgrep scans,
+not what the tree holds: its default ignore list skips `test/`, `tests/`,
+`vendor/` and `*_test.go` (but not Go's `testdata/`, 1142 of the 5084), which
+is why CPython's `Lib/` scans 760 of its 2060 `.py` files.
+
+Two of the five rules have nothing to measure on their registered corpus —
+CPython holds no Django queryset and `mcp/src` no un-awaited repository call —
+so each was also scanned, by hand and with both versions of the pack, on a tree
+of its own kind: Zulip 12.3 (`b3198225`) and Saleor 3.23.44 (`b2587a12`) for
+the Django rule, Outline v1.12.0 (`09f11188`) and Uptime Kuma 2.5.8
+(`0bd417b9`) for the Node one. Neither is registered; `--real-code=<dir>` is how
+to repeat it. Rule by rule, v3.6.0 → v3.6.1 → after this review:
+
+| rule (pack) | corpus | findings | what the hand-check found |
+| --- | --- | --- | --- |
+| `lock-without-defer` (`bugfix-go`) | Go 1.27.3 | 102 → 39 → 20 | 3.6.1 dropped 75 spans in 52 functions, every one the early-unlock idiom, no true positive among them (16 relock first, all with the return between the Unlock and the Lock). Half of the 39 were the same idiom deferred — `defer mu.Unlock()` before the return — now excluded, with two closure branches so that the goker `grpc3017` true positive the defer exclusion alone swallowed comes back. Of the 20: 5 true, 2 deliberate lock handoffs, 13 a closure's return (a documented gap) |
+| `floating-mutation` (`bugfix-js`) | `mcp/src` | 0 → 0 → 0 | vacuous |
+| | Outline + Uptime Kuma (2694 files) | 2 → 6 → 2 | the leading `.*` added four findings, all false: two promises pushed into an array a later `Promise.all` awaits and two calls inside `await expect(…)`. One exclusion each now; the two left are IndexedDB's `store.delete`, an IDBRequest and not a promise — documented |
+| `queryset-n-plus-one` (`bugfix-py`) | CPython 3.15.2 | 0 → 0 → 0 | vacuous |
+| | Zulip + Saleor (4563 files) | 21 → 21 → 21 | no `.year`, `.url`, `.size`… chain in either; of the 21, 18 are real foreign-key traversals in a loop (most in data migrations) and 3 the same field-value class through third-party fields (`phone.raw_input`, `country.code`, `flags.mask`), which the list does not name |
+| `hostname-verifier-accepts-all` (`mobile`) | the mobile corpus | 0 → 2 → 2 | both true: Gotify's `builder.hostnameVerifier { _, _ -> true }` behind its "disable SSL validation" setting, Syncthing's `setHostnameVerifier((hostname, session) -> true)` beside a trust manager pinned to the local instance's certificate |
+| `py-yaml-load` (`base`) | none (axis 3 N/A) | — | the harness read two of the four new BaseLoader exclusions DEAD for want of a fixture; each has a near-miss line now and all eleven clauses read live |
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
