@@ -44,3 +44,30 @@ describe('every rule stays linear on a 1 MB line', () => {
     }
   });
 });
+
+// Download, then run: every download was checked against every unit after
+// it, and a run by its path was read again from every `(` of a word — 4 000
+// lines of downloads took 23 s, the square of the file (review of the
+// self-scan, 3.7.0).
+describe('download-then-run stays linear in the file', () => {
+  const lines = (count: number, make: (i: number) => string): string => Array.from({ length: count }, (_, i) => make(i)).join('\n');
+  it.each([
+    ['a line of downloads of one name, over and over', (n: number): string => lines(n / 32, () => 'curl https://x.invalid/a -o a.sh')],
+    ['a line of downloads of a name of its own each', (n: number): string => lines(n / 32, (i) => `curl https://x.invalid/a -o a${String(i)}.sh`)],
+    ['downloads of one name on one line', (n: number): string => line('curl https://x.invalid/a -o a.sh; ', n)],
+    ['a download, then a word of (', (n: number): string => `curl https://x.invalid/a -o a.sh\n${line('(', n)}`],
+    [
+      'downloads, then a line mentioning every one',
+      (n: number): string => {
+        const count = Math.floor(n / 48);
+        return `${lines(count, (i) => `curl https://x.invalid/a -o a${String(i)}.sh`)}\n${lines(count, (i) => `echo ./a${String(i)}.sh;`).replace(/\n/g, ' ')}`;
+      },
+    ],
+  ])('%s', (label, make) => {
+    for (const isCode of [true, false]) {
+      expectLinear(`${label} (${isCode ? 'code' : 'instruction'} file)`, (size) => {
+        scanContent(make(size), isCode);
+      }, SIZE * 4);
+    }
+  });
+});

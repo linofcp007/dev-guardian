@@ -1626,14 +1626,73 @@ function basenameOf(path: string): string {
 
 const RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
 
+/**
+ * Whether `text` runs `file` — through a runner, or by its path. The path
+ * run by itself (`direct`) holds no `(`: a `(` starts one of its own, and from
+ * every `(` of a long word the path before the name was read to the word's
+ * end again (20 000 of them after a download took 0.65 s, measured — the
+ * square of the line). It runs the same files: a path holding a `(` is still
+ * read, from its last one.
+ */
 function runsFile(text: string, file: string): boolean {
   const f = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // Sentence punctuation ends the name too: "Then run bash setup.sh."
   const end = String.raw`(?=$|[\s"'|;&)]|[.,!?:](?:\s|$))`;
   const viaRunner = String.raw`(?:^|[\s;&|(])(?:sudo\s+(?:-\S+\s+)*)?${RUNNER}\s+(?:-\S+\s+)*["']?(?:[^\s"'|;&]*[\/\\])?${f}${end}`;
-  const direct = String.raw`(?:^\s*|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)["']?[^\s"'|;&]*[\/\\]${f}${end}`;
+  const direct = String.raw`(?:^\s*|[;&|(]\s*|\bsudo\s+(?:-\S+\s+)*)["']?[^\s"'|;&(]*[\/\\]${f}${end}`;
   return new RegExp(`${viaRunner}|${direct}`).test(text);
 }
+
+/** A character no downloaded file's name holds (`downloadsIn`, `basenameOf`): one a run's name follows. */
+const NAME_BREAK = /[\s"'|;&<>/\\]/;
+
+/** The downloaded files' names, a character at a time. */
+interface NameTrie {
+  next: Map<string, NameTrie>;
+  name: string | null;
+}
+
+function nameTrie(names: Iterable<string>): NameTrie {
+  const root: NameTrie = { next: new Map(), name: null };
+  for (const name of names) {
+    let node = root;
+    for (let i = 0; i < name.length; i++) {
+      const c = name.charAt(i);
+      const child = node.next.get(c) ?? { next: new Map(), name: null };
+      node.next.set(c, child);
+      node = child;
+    }
+    node.name = name;
+  }
+  return root;
+}
+
+/**
+ * Every place in `text` a name of `trie` starts at the text's start or right
+ * after a {@link NAME_BREAK} — where {@link runsFile} finds a name, if it
+ * finds one, and more. Each walk stops at the next break (no name holds
+ * one), so the text is read about once.
+ */
+function nameMentions(text: string, trie: NameTrie, found: (name: string, at: number) => void): void {
+  for (let start = 0; start < text.length; start++) {
+    if (start > 0 && !NAME_BREAK.test(text.charAt(start - 1))) continue;
+    let node: NameTrie | undefined = trie;
+    for (let i = start; i < text.length; i++) {
+      node = node.next.get(text.charAt(i));
+      if (node === undefined) break;
+      if (node.name !== null) found(node.name, start);
+    }
+  }
+}
+
+/**
+ * How much text the run checks of one file may read, as a multiple of the
+ * file: past it, a download still to be checked counts as run, never as not
+ * run. Only text mentioning a downloaded name is checked, once a unit per
+ * name, so a real file stays far below it; a unit of thousands of names, each
+ * downloaded and none run, would otherwise be read once for each.
+ */
+const RUN_CHECK_READS = 64;
 
 const DOWNLOAD_THEN_RUN = SKILL_RULES.find((r) => r.id === 'sc-download-then-run');
 
@@ -1641,15 +1700,51 @@ const DOWNLOAD_THEN_RUN = SKILL_RULES.find((r) => r.id === 'sc-download-then-run
  * A file downloaded and later run — on the same line or anywhere further down
  * the same file (round 3, N6: the hook's shell guard follows the same policy
  * for one command line). `units` must be in file order. One finding per file.
+ *
+ * Each download used to search every unit after its own, and a file of
+ * downloads alone took the square of its length — 4 000 lines 23 s
+ * (measured). A unit is now checked only where the name is mentioned
+ * ({@link nameMentions}), a name's later units are searched in full once, and
+ * every check counts against {@link RUN_CHECK_READS}.
  */
 function downloadThenRun(units: Unit[], instructionFile: boolean): RuleMatch[] {
   if (!DOWNLOAD_THEN_RUN) return [];
   const full = severityOfRule(DOWNLOAD_THEN_RUN);
-  for (const dl of units.flatMap(downloadsIn)) {
-    const rest = dl.unit.text.slice(dl.end);
-    const run = runsFile(rest, dl.file)
-      ? dl.unit
-      : units.find((u) => u.line > dl.unit.line && runsFile(u.text, dl.file));
+  const downloads = units.flatMap((unit, index) => downloadsIn(unit).map((dl) => ({ ...dl, index })));
+  if (downloads.length === 0) return [];
+  // Per name: the units mentioning it, in order, and the last place in each.
+  const mentions = new Map<string, Map<number, number>>();
+  const trie = nameTrie(new Set(downloads.map((dl) => dl.file)));
+  units.forEach((unit, index) =>
+    nameMentions(unit.text, trie, (name, at) => {
+      const byUnit = mentions.get(name) ?? new Map<number, number>();
+      byUnit.set(index, at);
+      mentions.set(name, byUnit);
+    }),
+  );
+  let budget = RUN_CHECK_READS * units.reduce((n, u) => n + u.text.length + 1, 0);
+  const runs = (text: string, file: string): boolean => {
+    budget -= text.length;
+    return budget < 0 || runsFile(text, file);
+  };
+  // Per name: the lowest line whose later units were searched, finding no run.
+  const searchedAfter = new Map<string, number>();
+  for (const dl of downloads) {
+    const mentioned = mentions.get(dl.file);
+    if (mentioned === undefined) continue;
+    let run: Unit | undefined;
+    if ((mentioned.get(dl.index) ?? -1) >= dl.end && runs(dl.unit.text.slice(dl.end), dl.file)) {
+      run = dl.unit;
+    } else if (dl.unit.line < (searchedAfter.get(dl.file) ?? Number.POSITIVE_INFINITY)) {
+      for (const index of mentioned.keys()) {
+        const u = units[index];
+        if (u !== undefined && u.line > dl.unit.line && runs(u.text, dl.file)) {
+          run = u;
+          break;
+        }
+      }
+      if (run === undefined) searchedAfter.set(dl.file, dl.unit.line);
+    }
     if (!run) continue;
     const lowered = instructionFile && isPlaceholder(dl.unit.text);
     return [

