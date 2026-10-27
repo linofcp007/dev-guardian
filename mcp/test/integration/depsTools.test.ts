@@ -606,6 +606,7 @@ describe('deps_audit', () => {
     vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'aws_never_passed');
     vi.stubEnv('PIP_INDEX_URL', 'https://pypi.user.example/simple');
     vi.stubEnv('NUGET_PACKAGES', 'C:\\nuget-cache');
+    vi.stubEnv('DOTNET_CLI_TELEMETRY_OPTOUT', '1');
     try {
       const project = tempProject();
       writeFileSync(join(project, 'requirements.txt'), 'requests==2.0.0\n', 'utf8');
@@ -642,6 +643,8 @@ describe('deps_audit', () => {
         // The package managers' own configuration is the user's, and stays.
         expect(run.env['PIP_INDEX_URL'], run.what).toBe('https://pypi.user.example/simple');
         expect(run.env['NUGET_PACKAGES'], run.what).toBe('C:\\nuget-cache');
+        // A user's opt-out of the .NET SDK's telemetry reaches the restore.
+        expect(run.env['DOTNET_CLI_TELEMETRY_OPTOUT'], run.what).toBe('1');
       }
     } finally {
       vi.unstubAllEnvs();

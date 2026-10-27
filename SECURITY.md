@@ -526,8 +526,8 @@ their respective projects.
   **on a dry run too**, and its description says so. That command runs with an
   allowlisted environment (`extendEnv: false`): `PATH`, the home and temp
   directories, the locale, `CI`, the variables every Windows process expects,
-  and the toolchains' own (`NODE_*`, `PYTHON*`, `CARGO_HOME`, `RUSTUP_HOME`,
-  `GOPATH`, `GOCACHE`, …), with any name that looks like a credential
+  and the toolchains' own (`NODE_*`, `PYTHON*`, `DOTNET_*`, `CARGO_HOME`,
+  `RUSTUP_HOME`, `GOPATH`, `GOCACHE`, …), with any name that looks like a credential
   (`TOKEN`, `SECRET`, `PASSWORD`, `AUTH`, `API_KEY`, …), every `GUARDIAN_*`
   and every `npm_config_*` removed — no token or cloud credential the server
   was started with reaches it. It is still the repository's code, running as
