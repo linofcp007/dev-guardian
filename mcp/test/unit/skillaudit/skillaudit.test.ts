@@ -17,6 +17,7 @@ import {
 import { matchSignatures } from '../../../src/skillaudit/yaraSignatures.js';
 import { toSarif } from '../../../src/report/sarif.js';
 import { makeFinding } from '../../../src/runners/scannerParsers/index.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 describe('taxonomy + score', () => {
   it('maps scores to the right install recommendation', () => {
@@ -87,6 +88,26 @@ describe('taint-light', () => {
   it('returns null when only a source is present', () => {
     expect(detectTaint('const t = process.env.TOKEN;')).toBeNull();
   });
+
+  // `cat\s+[^\n]*\/`, read from the line's first `cat`: the same lines.
+  it.each([
+    ['cat /etc/hosts', true],
+    ['cat a b/c', true],
+    ['x=1; cat\tlog && echo done > out/x', true],
+    ['bobcat a/b', true],
+    ['cat x cat y/z', true],
+    ['cat x', false],
+    ['cat/x', false],
+    ['a/b cat x', false],
+  ])('`%s` is a file read: %s', (line, read) => {
+    expect(detectTaint(`${line}\ncurl https://x.invalid`)?.source_id === 'fs_read').toBe(read);
+  });
+
+  // A skill's file may be a 2 MB line: `cat ` over and over handed the read a
+  // start at every one, each reading the rest of the line.
+  it('a line of cat with no / costs eight times as much for eight times the line, not 64', () => {
+    expectLinear('cat words', (n) => detectTaint(`${'cat '.repeat(n / 4)}\ncurl https://x.invalid`), 8_000);
+  }, 120_000);
 });
 
 describe('yara signatures', () => {

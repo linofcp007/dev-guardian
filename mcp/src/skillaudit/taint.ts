@@ -21,7 +21,11 @@ const SOURCES: Array<{ id: string; re: RegExp }> = [
   { id: 'cloud_creds', re: /(\.aws\/credentials|AWS_SECRET|GCP_|AZURE_|\.npmrc|\.netrc)/i },
   { id: 'browser_data', re: /(cookies\.sqlite|Login Data|Local Storage|key4\.db|logins\.json)/i },
   { id: 'token_var', re: /\b[A-Za-z_]*(TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|CREDENTIAL)[A-Za-z_]*\b/ },
-  { id: 'fs_read', re: /(readFileSync|fs\.readFile|open\s*\(|Get-Content|cat\s+[^\n]*\/)/ },
+  // `cat\s+[^\n]*\/` (a line holds `cat` and then a `/`), from the line's
+  // first `cat` only — the lookahead is not entered again: from every `cat`
+  // of a line the rest of it was read to its end, the square of the line
+  // (`cat ` 8 000 times: 0.18 s, measured; review of the 3.7.0 self-scan).
+  { id: 'fs_read', re: /(readFileSync|fs\.readFile|open\s*\(|Get-Content|^(?=([^\n]*?cat\s+))\2[^\n]*\/)/ },
 ];
 
 const SINKS: Array<{ id: string; re: RegExp }> = [
