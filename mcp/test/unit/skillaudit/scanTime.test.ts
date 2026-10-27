@@ -66,6 +66,23 @@ describe('downloads and fetch targets stay linear on a 1 MB line', () => {
   });
 });
 
+// The `.env` read and decode-then-run rules looked for grep's `-q`, a path
+// after `<` and a pipe after `base64 -d` to the end of the command, again
+// from every start (review of the 3.7.0 self-scan).
+describe('the read and decode rules stay linear on a 1 MB line', () => {
+  it.each([
+    ['grep words, then -q', (n: number): string => `${line('grep ', n)} -q`],
+    ['a word of <', (n: number): string => line('<', n)],
+    ['base64 -d words', (n: number): string => line('base64 -d ', n)],
+  ])('%s', (label, make) => {
+    for (const isCode of [true, false]) {
+      expectLinear(`${label} (${isCode ? 'code' : 'instruction'} file)`, (size) => {
+        scanContent(make(size), isCode);
+      }, SIZE);
+    }
+  });
+});
+
 // Download, then run: every download was checked against every unit after
 // it, and a run by its path was read again from every `(` of a word — 4 000
 // lines of downloads took 23 s, the square of the file (review of the

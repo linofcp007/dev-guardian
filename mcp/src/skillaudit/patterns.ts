@@ -207,8 +207,16 @@ const LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[
  * none of which reads a secret out. Loading it into the environment
  * (`source .env`) is not a read that shows or ships it either; sending it is
  * `de-sensitive-file-over-network`.
+ *
+ * Bounded, as every run here (review of the 3.7.0 self-scan): grep's `-q` is
+ * looked for in the 300 characters after it — past them a quiet grep counts
+ * as a read, a finding more and never one fewer — where the whole command
+ * was read again from every `grep` (`grep ` 6 400 times then `-q`: the square
+ * of the line). A path read in with `<` holds no `<`: from every `<` of a
+ * word the rest of it was read again, and a path with one is still read, from
+ * its last.
  */
-const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
+const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]{0,300}\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&<]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 
 /** A program or API call that sends bytes off the machine. */
 const NETWORK_SENDER =
@@ -861,8 +869,10 @@ export const SKILL_RULES: SkillRule[] = [
       /base64\.b64decode\s*\([^\n]{0,160}(exec|eval|os\.system|subprocess)/i,
       /(eval|exec)\s*\([^\n]{0,40}(decode|b64decode|unhexlify|fromCharCode)/i,
       // `echo <b64> | base64 -D | bash`: the macOS stealer in the ClawHub
-      // skills of 2026-02, whose download hides inside the blob.
-      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]*\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
+      // skills of 2026-02, whose download hides inside the blob. The pipe is
+      // looked for in the 300 characters after the flag, as every run here:
+      // unbounded, the line was read again from every `base64 -d` on it.
+      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
       /FromBase64String[^\n]{0,200}\b(iex|Invoke-Expression)\b|\b(iex|Invoke-Expression)\b[^\n]{0,120}FromBase64String/i,
     ],
   },

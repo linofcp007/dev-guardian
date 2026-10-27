@@ -373,6 +373,10 @@ describe('scanContent over an instruction file', () => {
     ['chmod 600 ~/.claude/channels/discord/.env', false],
     ['echo "KEY=x" > .env', false],
     ['grep -q "^TOKEN=" .env', false],
+    // `-q` is looked for in the 300 characters after grep: past them, a read.
+    [`grep TOKEN .env ${' '.repeat(300)}-q`, true],
+    ['psql < ./conf/.env', true],
+    ['psql <./a<b/.env', true],
     ['cat .env.example', false],
     ['source ./.env', false],
     ['env_file = Path.home() / ".claude" / ".env"', false],
