@@ -272,6 +272,24 @@ their respective projects.
   `.guardian/ci.json` declaring it is refused). The pipeline file itself runs from the
   pull request's branch on every host: it needs a required review
   ([docs/ci.md](docs/ci.md#a-pull-request-cannot-gate-itself)).
+- **The secrets history pass reads what `git log -p` leaves out** (3.7.0).
+  gitleaks reads history as `git log -p`, and on a push no other pass stands
+  behind it: a key in a file git reads as binary by its content (a NUL byte)
+  and a key only a merge commit adds (an "evil merge" — git prints no merge's
+  diff) were read by nothing, exit 0 (measured, gitleaks 8.30.1). Every file
+  is now diffed as text, through an attributes file handed to git in the
+  environment (`mcp/src/runners/historyView.ts`), and each two-parent merge's
+  own change is read by a second run, `git log --merges
+  --diff-merges=remerge`, whose temporary objects git writes to a scratch
+  directory, never the repository. Named limits, said on the run: an
+  octopus merge's own change; with a git older than 2.36 every merge's, and
+  with one older than 2.40 what the working tree's `.gitattributes` hide; a file git
+  reads as binary at a path that holds a file over 1 MiB in some commit (a
+  text read of large binaries holds them whole: 110 MB took gitleaks to 1 GB);
+  the repository's own `$GIT_DIR/info/attributes`, which outranks the
+  attributes file (none in a fresh clone). The merges' run has a scanner's
+  timeout — git's own history (21,575 merges) took 11 minutes to re-merge —
+  and one that does not finish is a gap ([docs/ci.md](docs/ci.md#what-the-secrets-history-pass-reads)).
 - **What `install_toolchain` installs is pinned, and checked before it
   runs.** Syft, Trivy and gitleaks came from routes that follow upstream —
   Syft's `install.sh` piped from its `main` branch, Trivy from its apt
