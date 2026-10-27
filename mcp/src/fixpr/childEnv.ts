@@ -5,9 +5,10 @@
  * worktree, and `deps_audit` (`npm audit`, `pip-audit`, `dotnet restore`)
  * when it re-scans a fix.
  *
- * Those tools run the same way whoever calls them, and a user's own
- * `deps_audit` keeps its environment (`deps_update_plan` builds the same
- * allowlist itself when called directly). Only while `create_fix_pr` runs them
+ * Those tools run the same way whoever calls them: called directly, each
+ * builds the same allowlist itself (`deps_audit` too since 3.7.0 — its own
+ * `npm audit` sent the server's `GITHUB_TOKEN` to the registry a repository's
+ * `.npmrc` named). Only while `create_fix_pr` runs them
  * does `packageManagerEnvOptions()` return `{ env, extendEnv: false }` —
  * `packageManagerEnv` (`fixpr/testCommandEnv.ts`) — which each such call site spreads into its
  * process options. An `AsyncLocalStorage`, not a parameter threaded through

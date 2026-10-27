@@ -48,6 +48,8 @@ describe('testCommandEnv', () => {
       CARGO_HOME: '/c',
       GOPATH: '/g',
       SystemRoot: 'C:\\Windows',
+      DOTNET_ROOT: '/d',
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1',
       ...SECRETS,
     });
     for (const name of Object.keys(SECRETS)) expect(env, name).not.toHaveProperty(name);
@@ -64,6 +66,9 @@ describe('testCommandEnv', () => {
       CARGO_HOME: '/c',
       GOPATH: '/g',
       SystemRoot: 'C:\\Windows',
+      // The .NET host's and SDK's own switches: a user's telemetry opt-out reaches dotnet.
+      DOTNET_ROOT: '/d',
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1',
     });
   });
 

@@ -98,7 +98,7 @@ describe('REPO_CONFIG: each runner names exactly the files it reads', () => {
     expect(honouredHandedFiles(dir, 'pip-audit', ['requirements.txt', 'missing.txt']).map((f) => f.path)).toEqual([
       'requirements.txt',
     ]);
-    expect(honouredHandedFiles(dir, 'npm', ['requirements.txt'])).toEqual([]);
+    expect(honouredHandedFiles(dir, 'trivy', ['requirements.txt'])).toEqual([]);
   });
 
   it('matches names exactly: a NuGet.Config is named as NuGet.Config, once', async () => {
@@ -173,7 +173,8 @@ const SPAWNS: Readonly<Record<string, RepoConfigRunner | 'none' | `reads none he
   'tools/scanContainers.ts|hadolint': 'hadolint',
   'tools/scanIac.ts|zizmor': 'zizmor',
   'tools/scanIac.ts|actionlint': 'actionlint',
-  'tools/depsAudit.ts|npm': 'npm',
+  'tools/depsAudit.ts|npm':
+    "reads none here: npm audit runs on a copy of the manifests (deps/npmPlanningCopy.ts), never the project's .npmrc — named in package_config_not_read",
   'tools/depsAudit.ts|dotnet': 'dotnet',
   'tools/depsAudit.ts|pip-audit': 'pip-audit',
   'tools/scanSast.ts|dotnet': 'dotnet-analyzers',

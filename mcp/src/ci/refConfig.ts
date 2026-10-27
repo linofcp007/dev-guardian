@@ -168,7 +168,6 @@ export const GATE_CONFIG: Readonly<Record<RepoConfigRunner, 'ref' | 'tree' | 'no
   // scan_sast's cppcheck pass reads the tree's compile_commands.json.
   cppcheck: 'tree',
   // deps_audit, scan_containers and quality_check are not gate steps.
-  npm: 'not_in_gate',
   'pip-audit': 'not_in_gate',
   dotnet: 'not_in_gate',
   hadolint: 'not_in_gate',

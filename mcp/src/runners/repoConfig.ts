@@ -66,7 +66,6 @@ export type RepoConfigRunner =
   | 'actionlint'
   | 'zizmor'
   | 'semgrep'
-  | 'npm'
   | 'pip-audit'
   | 'dotnet'
   | 'dotnet-analyzers'
@@ -125,8 +124,8 @@ export const REPO_CONFIG: Readonly<Record<RepoConfigRunner, readonly RepoConfigF
   // all scanned — only an untracked ignored file was not; in a plain
   // directory the `.gitignore` was not applied at all.
   semgrep: [{ file: '.semgrepignore', decides: 'its patterns decide which files are scanned', nested: true }],
-  // npm audit reads the project's .npmrc (registry, omit=dev, audit-level).
-  npm: [{ file: '.npmrc', decides: 'its registry and settings decide what npm audit reads and reports' }],
+  // No `npm` entry: npm audit runs on a copy of the manifests and never reads
+  // the project's `.npmrc` (deps_audit names it in `package_config_not_read`).
   // pip-audit installs the requirements files deps_audit hands it (`-r`) with
   // pip, which honours their index options, and those of the files they
   // include (`-r`, `-c`): which index the audited versions come from is

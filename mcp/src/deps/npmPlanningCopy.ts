@@ -1,6 +1,7 @@
 /**
- * The directory `deps_update_plan` runs `npm outdated` in: a temporary copy
- * of the project's `package.json` and lock files, and nothing else.
+ * The directory `deps_update_plan` runs `npm outdated` in, and `deps_audit`
+ * `npm audit`: a temporary copy of the project's `package.json` and lock
+ * files, and nothing else.
  *
  * npm reads project configuration from the `.npmrc` beside the package it
  * works on (a workspace root's, from a member), and a repository's `.npmrc`
@@ -12,16 +13,22 @@
  * own: in a directory dev-guardian created outside the project, the user's
  * configuration is the only one there is. With no `node_modules` beside it,
  * npm reports no `current` version — a fresh checkout's shape, which the npm
- * runner already reads from the project's lock file.
+ * runner already reads from the project's lock file. `npm audit` needs
+ * nothing more: it reads the lock (measured on npm 11.20.0, 2026-10-27 — the
+ * copy sent the same bulk-advisory request as the project, a workspace
+ * root's members' dependencies included, and without a lock both fail
+ * `ENOLOCK`, whatever `node_modules` holds).
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
 import {
   describeReadRefusal,
+  presentInProject,
   PROJECT_FILE_MAX_BYTES,
   PROJECT_LOCKFILE_MAX_BYTES,
+  projectEntryKind,
   readProjectBytes,
 } from '../platform/projectFs.js';
 
@@ -33,7 +40,37 @@ const COPIED: ReadonlyArray<{ name: string; maxBytes: number }> = [
 ];
 
 /** The npm package configuration files a repository may carry, which the copy leaves behind. */
-export const NPM_PROJECT_CONFIG = ['.npmrc', '.pnpmrc', '.yarnrc', '.yarnrc.yml'] as const;
+const NPM_PROJECT_CONFIG = ['.npmrc', '.pnpmrc', '.yarnrc', '.yarnrc.yml'] as const;
+
+/** The nearest directory at or above `start` holding `.git` (a directory, or
+ *  a worktree's `.git` file), or null when there is none. */
+export function gitRootAbove(start: string): string | null {
+  for (let dir = start; ; ) {
+    // lstat only: `.git` is never followed to find out.
+    if (projectEntryKind(join(dir, '.git')) !== 'absent') return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * The repository's own npm configuration files the copy left behind, relative
+ * to the project, `/`-separated — the project's directory and each above it up
+ * to the repository root (a workspace root's applies to its members). Named in
+ * the result so an answer from the user's registry, instead of the one a
+ * committed `.npmrc` names, says so.
+ */
+export function npmConfigNotRead(projectPath: string): string[] {
+  const top = gitRootAbove(projectPath) ?? projectPath;
+  const out: string[] = [];
+  for (let dir = projectPath; ; dir = dirname(dir)) {
+    for (const name of NPM_PROJECT_CONFIG) {
+      if (presentInProject(dir, join(dir, name))) out.push(relative(projectPath, join(dir, name)).split(sep).join('/'));
+    }
+    if (dir === top || dirname(dir) === dir) return out;
+  }
+}
 
 type NpmPlanningCopy = { ok: true; dir: string; dispose(): void } | { ok: false; reason: string };
 
