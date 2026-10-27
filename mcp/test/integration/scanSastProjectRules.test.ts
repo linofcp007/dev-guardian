@@ -1107,7 +1107,7 @@ describe('scan_sast .NET: the SDK security analyzers, read from SARIF (Task 11 i
     // server was started with, a GITHUB_TOKEN included.
     vi.stubEnv('GITHUB_TOKEN', 'ghp_the_servers_token');
     vi.stubEnv('AWS_SECRET_ACCESS_KEY', 'the-servers-cloud-key');
-    vi.stubEnv('GUARDIAN_SAST_MARKER', 'x');
+    vi.stubEnv('GUARDIAN_TEST_SAST_MARKER', 'x');
     vi.stubEnv('DOTNET_ROOT', '/opt/dotnet');
     vi.stubEnv('NUGET_PACKAGES', '/tmp/nuget-packages');
     vi.stubEnv('NuGetPackageSourceCredentials_corp', 'Username=u;Password=p');
