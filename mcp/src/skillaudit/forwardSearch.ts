@@ -19,7 +19,7 @@
  * again only when a position passes it — positions asked in increasing order
  * read `text` about once.
  */
-function forwardSearch(text: string, re: RegExp): (from: number) => RegExpExecArray | null {
+export function forwardSearch(text: string, re: RegExp): (from: number) => RegExpExecArray | null {
   let searchedFrom = Number.POSITIVE_INFINITY;
   let found: RegExpExecArray | null = null;
   return (from: number): RegExpExecArray | null => {

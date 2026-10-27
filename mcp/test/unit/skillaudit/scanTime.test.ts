@@ -83,6 +83,21 @@ describe('the read and decode rules stay linear on a 1 MB line', () => {
   });
 });
 
+// An instruction file's HTML code: a `<code` or `<pre` tag with no `>`, and
+// an element with no closing tag, were searched for again from every tag
+// (review of the 3.7.0 self-scan).
+describe('HTML code tags stay linear on a 1 MB line', () => {
+  it.each([
+    ['<code tags with no >', '<code '],
+    ['<pre tags with no >', '<pre '],
+    ['<code> elements never closed', '<code>'],
+  ])('%s', (label, chunk) => {
+    expectLinear(label, (size) => {
+      scanContent(`x ${line(chunk, size)}`, false);
+    }, SIZE);
+  });
+});
+
 // Download, then run: every download was checked against every unit after
 // it, and a run by its path was read again from every `(` of a word — 4 000
 // lines of downloads took 23 s, the square of the file (review of the
