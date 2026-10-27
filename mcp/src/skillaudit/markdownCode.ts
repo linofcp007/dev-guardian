@@ -36,6 +36,8 @@
  * Pure functions. No I/O.
  */
 
+import { forwardSearch } from './forwardSearch.js';
+
 type CodeKind = 'fenced' | 'indented' | 'pre' | 'inline';
 
 export interface CodeUnit {
@@ -55,11 +57,61 @@ interface MarkdownViews {
 
 export const FENCE_OPEN = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
 const INDENTED = /^(?: {4,}|\t)(?=\S)/;
+// HTML code tags are found forward only (review of the 3.7.0 self-scan): as
+// `<code\b[^>]*>` alone, a tag with no `>` after it searched the rest of the
+// line again from every `<code` on it, and an element with no closing tag
+// its body to the end of the line — the square of a line of them (`x <code `
+// or `x <pre ` 32 000 characters long: ratio 52 and 47 for 8x, measured).
 const HTML_CODE_TAG = /<\/?(?:pre|code|kbd|samp|tt)\b[^>]*>/gi;
-const HTML_CODE_INLINE = /<(pre|code|kbd|samp|tt)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
+const HTML_CODE_OPEN = /<(pre|code|kbd|samp|tt)\b/gi;
+const HTML_CODE_CLOSE: Readonly<Record<string, RegExp>> = {
+  pre: /<\/pre\s*>/gi,
+  code: /<\/code\s*>/gi,
+  kbd: /<\/kbd\s*>/gi,
+  samp: /<\/samp\s*>/gi,
+  tt: /<\/tt\s*>/gi,
+};
 /** `<pre>` opens a block anywhere outside a backtick span; a multi-line `<code>` only at the start of its line. */
-const PRE_OPEN = /<pre\b[^>]*>/i;
+const PRE_OPEN = /<pre\b/i;
 const CODE_BLOCK_OPEN = /^[ \t>]{0,3}<code\b[^>]*>/i;
+
+/** `text` without its HTML code tags. None ends after the last `>`, so nothing past it is searched. */
+export function withoutCodeTags(text: string): string {
+  const end = text.lastIndexOf('>') + 1;
+  return text.slice(0, end).replace(HTML_CODE_TAG, '') + text.slice(end);
+}
+
+/**
+ * The bodies of `text`'s one-line code elements, in order — what
+ * `/<(pre|code|kbd|samp|tt)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi` matches: an opening
+ * tag ends at its first `>`, its body at the first closing tag of its name.
+ */
+export function inlineCodeBodies(text: string): string[] {
+  const out: string[] = [];
+  const nextTagEnd = forwardSearch(text, />/g);
+  const nextClose = new Map<string, (from: number) => RegExpExecArray | null>();
+  HTML_CODE_OPEN.lastIndex = 0;
+  for (let open = HTML_CODE_OPEN.exec(text); open !== null; open = HTML_CODE_OPEN.exec(text)) {
+    const tagEnd = nextTagEnd(open.index + open[0].length);
+    // No `>` after this tag: none after a later one.
+    if (tagEnd === null) break;
+    const name = (open[1] ?? '').toLowerCase();
+    const closeTag = HTML_CODE_CLOSE[name];
+    let close = nextClose.get(name);
+    if (close === undefined && closeTag !== undefined) {
+      close = forwardSearch(text, closeTag);
+      nextClose.set(name, close);
+    }
+    const end = close?.(tagEnd.index + 1) ?? null;
+    if (end === null) {
+      HTML_CODE_OPEN.lastIndex = open.index + 1;
+      continue;
+    }
+    out.push(text.slice(tagEnd.index + 1, end.index));
+    HTML_CODE_OPEN.lastIndex = end.index + end[0].length;
+  }
+  return out;
+}
 const BACKSLASH_CONTINUATION = /\\[ \t]*$/;
 const PIPE_CONTINUATION = /(?<!\|)\|[ \t]*$/;
 
@@ -180,7 +232,7 @@ export function splitMarkdown(content: string, opts: SplitOptions = {}): Markdow
 
     if (state?.kind === 'pre') {
       const close = state.close.exec(line);
-      const inside = decodeEntities((close ? line.slice(0, close.index) : line).replace(HTML_CODE_TAG, ''));
+      const inside = decodeEntities(withoutCodeTags(close ? line.slice(0, close.index) : line));
       if (inside.trim() !== '') block.add({ line: lineNo, text: inside, kind: 'pre', block: current });
       prose.push(inside);
       if (close) {
@@ -227,9 +279,9 @@ export function splitMarkdown(content: string, opts: SplitOptions = {}): Markdow
     if (opener) {
       state = { kind: 'pre', close: opener.close, endsAtBlank: opener.endsAtBlank };
       blocks += 1;
-      const after = decodeEntities(line.slice(opener.end).replace(HTML_CODE_TAG, ''));
+      const after = decodeEntities(withoutCodeTags(line.slice(opener.end)));
       if (after.trim() !== '') block.add({ line: lineNo, text: after, kind: 'pre', block: blocks - 1 });
-      prose.push(decodeEntities(line.replace(HTML_CODE_TAG, '')));
+      prose.push(decodeEntities(withoutCodeTags(line)));
       previousBlank = false;
       continue;
     }
@@ -244,11 +296,11 @@ export function splitMarkdown(content: string, opts: SplitOptions = {}): Markdow
     }
 
     for (const s of spans) code.push({ line: lineNo, text: s.text, kind: 'inline', block: null });
-    for (const m of outside.matchAll(HTML_CODE_INLINE)) {
-      const text = decodeEntities((m[2] ?? '').replace(HTML_CODE_TAG, ''));
+    for (const body of inlineCodeBodies(outside)) {
+      const text = decodeEntities(withoutCodeTags(body));
       if (text.trim() !== '') code.push({ line: lineNo, text, kind: 'inline', block: null });
     }
-    prose.push(decodeEntities(keepSpanText(line, spans).replace(HTML_CODE_TAG, '')));
+    prose.push(decodeEntities(withoutCodeTags(keepSpanText(line, spans))));
     previousBlank = line.trim() === '';
   }
   block.end();
@@ -257,9 +309,12 @@ export function splitMarkdown(content: string, opts: SplitOptions = {}): Markdow
 
 /** An HTML element that opens a code block on this line and does not close on it. */
 function htmlBlockOpener(outside: string): { close: RegExp; endsAtBlank: boolean; end: number } | null {
+  // The first `<pre` tag, to its first `>`: when the first `<pre` has no `>`
+  // after it, no later one has.
   const pre = PRE_OPEN.exec(outside);
-  if (pre && !/<\/pre\s*>/i.test(outside.slice(pre.index))) {
-    return { close: /<\/pre\s*>/i, endsAtBlank: false, end: pre.index + pre[0].length };
+  const preEnd = pre === null ? -1 : outside.indexOf('>', pre.index + pre[0].length);
+  if (pre && preEnd !== -1 && !/<\/pre\s*>/i.test(outside.slice(pre.index))) {
+    return { close: /<\/pre\s*>/i, endsAtBlank: false, end: preEnd + 1 };
   }
   const codeOpen = CODE_BLOCK_OPEN.exec(outside);
   if (codeOpen && !/<\/code\s*>/i.test(outside)) {

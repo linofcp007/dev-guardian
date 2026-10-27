@@ -84,6 +84,7 @@
  */
 
 import type { Severity } from '../types.js';
+import { keywordThenTail, keywordWithoutVeto } from './forwardSearch.js';
 import { FENCE_OPEN, continues, inlineSpans, joinContinued, splitMarkdown, type CodeUnit } from './markdownCode.js';
 import type { ThreatCategory } from './taxonomy.js';
 import { THREAT_CATEGORY_META } from './taxonomy.js';
@@ -206,8 +207,16 @@ const LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[
  * none of which reads a secret out. Loading it into the environment
  * (`source .env`) is not a read that shows or ships it either; sending it is
  * `de-sensitive-file-over-network`.
+ *
+ * Bounded, as every run here (review of the 3.7.0 self-scan): grep's `-q` is
+ * looked for in the 300 characters after it — past them a quiet grep counts
+ * as a read, a finding more and never one fewer — where the whole command
+ * was read again from every `grep` (`grep ` 6 400 times then `-q`: the square
+ * of the line). A path read in with `<` holds no `<`: from every `<` of a
+ * word the rest of it was read again, and a path with one is still read, from
+ * its last.
  */
-const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
+const ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]{0,300}\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&<]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
 
 /** A program or API call that sends bytes off the machine. */
 const NETWORK_SENDER =
@@ -232,21 +241,21 @@ const SHELL_VALUE = String.raw`(\$env:[A-Za-z_]\w*|\$\{?[A-Za-z_]\w*\}?|\$\d|\$\
 const BARE_HOST = String.raw`(?<![\w@/.$%-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s'"|;&)]*)?(?![\w.-])`;
 
 /** Shell programs that fetch from, or send to, the target they are given. */
-const SHELL_NET_CLIENT = String.raw`\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b`;
+const SHELL_NET_CLIENT = /\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b/gi;
+
+/** What a network command reaches when no URL names it: a variable, a substitution or a scheme-less host. */
+const NET_TARGET = new RegExp(`${SHELL_VALUE}|${BARE_HOST}`, 'gi');
 
 /**
  * A network command with something to reach: a shell client followed, within
  * the same simple command, by a variable, a substitution or a scheme-less
- * host. With the URL / IP check this is what "has a fetch target" means — see
- * the header: the one-level downgrade is for code that has none.
+ * host (`SHELL_NET_CLIENT[^|;&\n]*?NET_TARGET`, read forward only — as one
+ * expression it read the command again from every client, the square of a
+ * line of them). With the URL / IP check this is what "has a fetch target"
+ * means — see the header: the one-level downgrade is for code that has none.
  */
-const NET_COMMAND_WITH_TARGET_RE = new RegExp(
-  `${SHELL_NET_CLIENT}[^|;&\\n]*?(${SHELL_VALUE}|${BARE_HOST})`,
-  'i',
-);
-
 function hasFetchTarget(text: string): boolean {
-  return REMOTE_DESTINATION_RE.test(text) || NET_COMMAND_WITH_TARGET_RE.test(text);
+  return REMOTE_DESTINATION_RE.test(text) || keywordThenTail(text, SHELL_NET_CLIENT, NET_TARGET).length > 0;
 }
 
 /** Programs that run the program text they are handed. */
@@ -860,8 +869,10 @@ export const SKILL_RULES: SkillRule[] = [
       /base64\.b64decode\s*\([^\n]{0,160}(exec|eval|os\.system|subprocess)/i,
       /(eval|exec)\s*\([^\n]{0,40}(decode|b64decode|unhexlify|fromCharCode)/i,
       // `echo <b64> | base64 -D | bash`: the macOS stealer in the ClawHub
-      // skills of 2026-02, whose download hides inside the blob.
-      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]*\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
+      // skills of 2026-02, whose download hides inside the blob. The pipe is
+      // looked for in the 300 characters after the flag, as every run here:
+      // unbounded, the line was read again from every `base64 -d` on it.
+      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
       /FromBase64String[^\n]{0,200}\b(iex|Invoke-Expression)\b|\b(iex|Invoke-Expression)\b[^\n]{0,120}FromBase64String/i,
     ],
   },
@@ -1585,12 +1596,23 @@ interface Download {
   file: string;
 }
 
-const CURL_OUTPUT = /\bcurl\b[^|;&\n]*?(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
-const CURL_REDIRECT = /\bcurl\b[^|;&\n]*?\s>\s*["']?([^\s"'|;&<>]+)/g;
-const CURL_REMOTE_NAME = /\bcurl\b[^|;&\n]*?\s(?:-[A-Za-z]*O[A-Za-z]*|--remote-name)(?=\s|$)[^|;&\n]*/g;
-const WGET_OUTPUT = /\bwget\b[^|;&\n]*?(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
-const WGET_REMOTE_NAME = /\bwget\b(?![^|;&\n]*\s-[A-Za-z]*O)[^|;&\n]*/g;
-const PS_OUTFILE = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|;&\n]*?\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
+// A download is a client, then — in the same command — what names the file
+// it saves: `curl … -o FILE`, read as `\bcurl\b[^|;&\n]*?` + the tail, by
+// `forwardSearch.ts#keywordThenTail`: the expression read the command again
+// from every `curl` — 16 000 of them took 0.6 s each for three of these, the
+// square of the line (measured).
+const CURL = /\bcurl\b/g;
+const WGET = /\bwget\b/g;
+const POWERSHELL_FETCH = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b/gi;
+const CURL_OUTPUT = /(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
+const CURL_REDIRECT = /\s>\s*["']?([^\s"'|;&<>]+)/g;
+// `-[A-Za-z]*O[A-Za-z]*(?=\s|$)`, its letters read once: the two runs split a
+// long word at every `O`, and a word of 32 000 of them took 2.2 s (measured).
+const CURL_REMOTE_NAME = /\s(?:-(?=[A-Za-z]*O)[A-Za-z]+|--remote-name)(?=\s|$)[^|;&\n]*/g;
+const WGET_OUTPUT = /(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
+/** A `wget` flag naming the file (`-O`, `-qO`): its command does not save under the URL's name. */
+const WGET_NAMES_FILE = /\s-[A-Za-z]*O/g;
+const POWERSHELL_OUTFILE = /\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
 const URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
 
 function downloadsIn(unit: Unit): Download[] {
@@ -1599,17 +1621,20 @@ function downloadsIn(unit: Unit): Download[] {
     const base = basenameOf(file ?? '');
     if (base !== '') out.push({ unit, end, file: base });
   };
-  for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
-    for (const m of unit.text.matchAll(re)) add(m.index + m[0].length, m[1]);
+  for (const [client, tail] of [
+    [CURL, CURL_OUTPUT],
+    [CURL, CURL_REDIRECT],
+    [WGET, WGET_OUTPUT],
+    [POWERSHELL_FETCH, POWERSHELL_OUTFILE],
+  ] as const) {
+    for (const m of keywordThenTail(unit.text, client, tail)) add(m.index + m.text.length, m.tail[1]);
   }
   // Saved under the URL's own name: the download ends with its URL, so that
   // "wget https://…/i.sh, then sh i.sh" — one sentence, no `;` — is still a
   // download and then a run (wave 2 of the 3.0 review).
-  for (const re of [CURL_REMOTE_NAME, WGET_REMOTE_NAME]) {
-    for (const m of unit.text.matchAll(re)) {
-      const url = URL_IN.exec(m[0]);
-      if (url) add(m.index + url.index + url[0].length, url[0].replace(/[?#].*$/, ''));
-    }
+  for (const m of [...keywordThenTail(unit.text, CURL, CURL_REMOTE_NAME), ...keywordWithoutVeto(unit.text, WGET, WGET_NAMES_FILE)]) {
+    const url = URL_IN.exec(m.text);
+    if (url) add(m.index + url.index + url[0].length, url[0].replace(/[?#].*$/, ''));
   }
   return out;
 }

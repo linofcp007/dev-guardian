@@ -52,7 +52,7 @@ interface GlobState {
 const isSlash = (c: string): boolean => c === '/';
 const notSlash = (c: string): boolean => c !== '/';
 /** A regular expression's `.`, which `any` was: a character but a line terminator. */
-const notLineBreak = (c: string): boolean => c !== '\n' && c !== '\r' && c !== ' ' && c !== ' ';
+const notLineBreak = (c: string): boolean => c !== '\n' && c !== '\r' && c !== '\u2028' && c !== '\u2029';
 
 /** `states` and every state they lead to with no character. */
 function closure(states: readonly GlobState[]): Set<GlobState> {

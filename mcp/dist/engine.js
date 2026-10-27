@@ -97249,7 +97249,7 @@ function fromRequirements(content) {
 }
 function fromGoMod(content) {
   const out = [];
-  const re = /^\s*([\w./-]+)\s+v(\d+\.\d+\.\d+[\w.-]*)/gm;
+  const re = /^[^\S\r\n\u2028\u2029]*([\w./-]+)\s+v(\d+\.\d+\.\d+[\w.-]*)/gm;
   let m;
   while ((m = re.exec(content)) !== null) {
     const name = m[1];
@@ -97331,7 +97331,94 @@ var init_deps = __esm({
   }
 });
 
+// src/skillaudit/forwardSearch.ts
+function forwardSearch(text2, re) {
+  let searchedFrom = Number.POSITIVE_INFINITY;
+  let found2 = null;
+  return (from) => {
+    if (from < searchedFrom || found2 !== null && found2.index < from) {
+      re.lastIndex = from;
+      found2 = re.exec(text2);
+      searchedFrom = from;
+    }
+    return found2;
+  };
+}
+function keywordThenTail(text2, keyword, tail2) {
+  const out = [];
+  const commandEnd = forwardSearch(text2, COMMAND_END);
+  const nextTail = forwardSearch(text2, tail2);
+  keyword.lastIndex = 0;
+  for (let k = keyword.exec(text2); k !== null; k = keyword.exec(text2)) {
+    const end = k.index + k[0].length;
+    const t = nextTail(end);
+    if (t === null) break;
+    if (t.index > (commandEnd(end)?.index ?? text2.length)) {
+      keyword.lastIndex = k.index + 1;
+      continue;
+    }
+    const stop = t.index + t[0].length;
+    out.push({ index: k.index, text: text2.slice(k.index, stop), tail: t });
+    keyword.lastIndex = Math.max(stop, k.index + 1);
+  }
+  return out;
+}
+function keywordWithoutVeto(text2, keyword, veto) {
+  const out = [];
+  const commandEnd = forwardSearch(text2, COMMAND_END);
+  const nextVeto = forwardSearch(text2, veto);
+  keyword.lastIndex = 0;
+  for (let k = keyword.exec(text2); k !== null; k = keyword.exec(text2)) {
+    const end = k.index + k[0].length;
+    const stop = commandEnd(end)?.index ?? text2.length;
+    const v = nextVeto(end);
+    if (v !== null && v.index <= stop) {
+      keyword.lastIndex = k.index + 1;
+      continue;
+    }
+    out.push({ index: k.index, text: text2.slice(k.index, stop) });
+    keyword.lastIndex = Math.max(stop, k.index + 1);
+  }
+  return out;
+}
+var COMMAND_END;
+var init_forwardSearch = __esm({
+  "src/skillaudit/forwardSearch.ts"() {
+    "use strict";
+    COMMAND_END = /[|;&\n]/g;
+  }
+});
+
 // src/skillaudit/markdownCode.ts
+function withoutCodeTags(text2) {
+  const end = text2.lastIndexOf(">") + 1;
+  return text2.slice(0, end).replace(HTML_CODE_TAG, "") + text2.slice(end);
+}
+function inlineCodeBodies(text2) {
+  const out = [];
+  const nextTagEnd = forwardSearch(text2, />/g);
+  const nextClose = /* @__PURE__ */ new Map();
+  HTML_CODE_OPEN.lastIndex = 0;
+  for (let open2 = HTML_CODE_OPEN.exec(text2); open2 !== null; open2 = HTML_CODE_OPEN.exec(text2)) {
+    const tagEnd = nextTagEnd(open2.index + open2[0].length);
+    if (tagEnd === null) break;
+    const name = (open2[1] ?? "").toLowerCase();
+    const closeTag = HTML_CODE_CLOSE[name];
+    let close = nextClose.get(name);
+    if (close === void 0 && closeTag !== void 0) {
+      close = forwardSearch(text2, closeTag);
+      nextClose.set(name, close);
+    }
+    const end = close?.(tagEnd.index + 1) ?? null;
+    if (end === null) {
+      HTML_CODE_OPEN.lastIndex = open2.index + 1;
+      continue;
+    }
+    out.push(text2.slice(tagEnd.index + 1, end.index));
+    HTML_CODE_OPEN.lastIndex = end.index + end[0].length;
+  }
+  return out;
+}
 function continues(text2) {
   return BACKSLASH_CONTINUATION.test(text2) || PIPE_CONTINUATION.test(text2);
 }
@@ -97379,7 +97466,7 @@ function splitMarkdown(content, opts = {}) {
     }
     if (state?.kind === "pre") {
       const close = state.close.exec(line);
-      const inside = decodeEntities2((close ? line.slice(0, close.index) : line).replace(HTML_CODE_TAG, ""));
+      const inside = decodeEntities2(withoutCodeTags(close ? line.slice(0, close.index) : line));
       if (inside.trim() !== "") block.add({ line: lineNo, text: inside, kind: "pre", block: current });
       prose.push(inside);
       if (close) {
@@ -97419,9 +97506,9 @@ function splitMarkdown(content, opts = {}) {
     if (opener) {
       state = { kind: "pre", close: opener.close, endsAtBlank: opener.endsAtBlank };
       blocks += 1;
-      const after2 = decodeEntities2(line.slice(opener.end).replace(HTML_CODE_TAG, ""));
+      const after2 = decodeEntities2(withoutCodeTags(line.slice(opener.end)));
       if (after2.trim() !== "") block.add({ line: lineNo, text: after2, kind: "pre", block: blocks - 1 });
-      prose.push(decodeEntities2(line.replace(HTML_CODE_TAG, "")));
+      prose.push(decodeEntities2(withoutCodeTags(line)));
       previousBlank = false;
       continue;
     }
@@ -97434,11 +97521,11 @@ function splitMarkdown(content, opts = {}) {
       continue;
     }
     for (const s of spans) code.push({ line: lineNo, text: s.text, kind: "inline", block: null });
-    for (const m of outside.matchAll(HTML_CODE_INLINE)) {
-      const text2 = decodeEntities2((m[2] ?? "").replace(HTML_CODE_TAG, ""));
+    for (const body of inlineCodeBodies(outside)) {
+      const text2 = decodeEntities2(withoutCodeTags(body));
       if (text2.trim() !== "") code.push({ line: lineNo, text: text2, kind: "inline", block: null });
     }
-    prose.push(decodeEntities2(keepSpanText(line, spans).replace(HTML_CODE_TAG, "")));
+    prose.push(decodeEntities2(withoutCodeTags(keepSpanText(line, spans))));
     previousBlank = line.trim() === "";
   }
   block.end();
@@ -97446,8 +97533,9 @@ function splitMarkdown(content, opts = {}) {
 }
 function htmlBlockOpener(outside) {
   const pre = PRE_OPEN.exec(outside);
-  if (pre && !/<\/pre\s*>/i.test(outside.slice(pre.index))) {
-    return { close: /<\/pre\s*>/i, endsAtBlank: false, end: pre.index + pre[0].length };
+  const preEnd = pre === null ? -1 : outside.indexOf(">", pre.index + pre[0].length);
+  if (pre && preEnd !== -1 && !/<\/pre\s*>/i.test(outside.slice(pre.index))) {
+    return { close: /<\/pre\s*>/i, endsAtBlank: false, end: preEnd + 1 };
   }
   const codeOpen = CODE_BLOCK_OPEN.exec(outside);
   if (codeOpen && !/<\/code\s*>/i.test(outside)) {
@@ -97518,15 +97606,23 @@ function keepSpanText(line, spans) {
   }
   return out + line.slice(at);
 }
-var FENCE_OPEN, INDENTED, HTML_CODE_TAG, HTML_CODE_INLINE, PRE_OPEN, CODE_BLOCK_OPEN, BACKSLASH_CONTINUATION, PIPE_CONTINUATION, NAMED_ENTITIES, BlockLines;
+var FENCE_OPEN, INDENTED, HTML_CODE_TAG, HTML_CODE_OPEN, HTML_CODE_CLOSE, PRE_OPEN, CODE_BLOCK_OPEN, BACKSLASH_CONTINUATION, PIPE_CONTINUATION, NAMED_ENTITIES, BlockLines;
 var init_markdownCode = __esm({
   "src/skillaudit/markdownCode.ts"() {
     "use strict";
+    init_forwardSearch();
     FENCE_OPEN = /^[ \t>]*(`{3,}|~{3,})(.*)$/;
     INDENTED = /^(?: {4,}|\t)(?=\S)/;
     HTML_CODE_TAG = /<\/?(?:pre|code|kbd|samp|tt)\b[^>]*>/gi;
-    HTML_CODE_INLINE = /<(pre|code|kbd|samp|tt)\b[^>]*>([\s\S]*?)<\/\1\s*>/gi;
-    PRE_OPEN = /<pre\b[^>]*>/i;
+    HTML_CODE_OPEN = /<(pre|code|kbd|samp|tt)\b/gi;
+    HTML_CODE_CLOSE = {
+      pre: /<\/pre\s*>/gi,
+      code: /<\/code\s*>/gi,
+      kbd: /<\/kbd\s*>/gi,
+      samp: /<\/samp\s*>/gi,
+      tt: /<\/tt\s*>/gi
+    };
+    PRE_OPEN = /<pre\b/i;
     CODE_BLOCK_OPEN = /^[ \t>]{0,3}<code\b[^>]*>/i;
     BACKSLASH_CONTINUATION = /\\[ \t]*$/;
     PIPE_CONTINUATION = /(?<!\|)\|[ \t]*$/;
@@ -97744,7 +97840,7 @@ function writesInto(path3) {
   ];
 }
 function hasFetchTarget(text2) {
-  return REMOTE_DESTINATION_RE.test(text2) || NET_COMMAND_WITH_TARGET_RE.test(text2);
+  return REMOTE_DESTINATION_RE.test(text2) || keywordThenTail(text2, SHELL_NET_CLIENT, NET_TARGET).length > 0;
 }
 function scanContent(content, isCode, opts = {}) {
   const lines = content.split(/\r?\n/);
@@ -98146,14 +98242,17 @@ function downloadsIn(unit) {
     const base2 = basenameOf(file2 ?? "");
     if (base2 !== "") out.push({ unit, end, file: base2 });
   };
-  for (const re of [CURL_OUTPUT, CURL_REDIRECT, WGET_OUTPUT, PS_OUTFILE]) {
-    for (const m of unit.text.matchAll(re)) add(m.index + m[0].length, m[1]);
+  for (const [client, tail2] of [
+    [CURL, CURL_OUTPUT],
+    [CURL, CURL_REDIRECT],
+    [WGET, WGET_OUTPUT],
+    [POWERSHELL_FETCH, POWERSHELL_OUTFILE]
+  ]) {
+    for (const m of keywordThenTail(unit.text, client, tail2)) add(m.index + m.text.length, m.tail[1]);
   }
-  for (const re of [CURL_REMOTE_NAME, WGET_REMOTE_NAME]) {
-    for (const m of unit.text.matchAll(re)) {
-      const url2 = URL_IN.exec(m[0]);
-      if (url2) add(m.index + url2.index + url2[0].length, url2[0].replace(/[?#].*$/, ""));
-    }
+  for (const m of [...keywordThenTail(unit.text, CURL, CURL_REMOTE_NAME), ...keywordWithoutVeto(unit.text, WGET, WGET_NAMES_FILE)]) {
+    const url2 = URL_IN.exec(m.text);
+    if (url2) add(m.index + url2.index + url2[0].length, url2[0].replace(/[?#].*$/, ""));
   }
   return out;
 }
@@ -98258,10 +98357,11 @@ function finalize2(matches3) {
 function severityOfRule(rule) {
   return rule.severity ?? THREAT_CATEGORY_META[rule.category].defaultSeverity;
 }
-var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_COMMAND_WITH_TARGET_RE, INTERPRETER, PROSE_TARGET, AUTH_HEADER, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_REMOTE_NAME, PS_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
+var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_TARGET, INTERPRETER, PROSE_TARGET, AUTH_HEADER, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL, WGET, POWERSHELL_FETCH, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_NAMES_FILE, POWERSHELL_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
 var init_patterns = __esm({
   "src/skillaudit/patterns.ts"() {
     "use strict";
+    init_forwardSearch();
     init_markdownCode();
     init_taxonomy2();
     AGENT_AND_CLOUD_CREDENTIALS = String.raw`\.claude[\/\\]\.credentials\.json|(?<![\w-])\.claude\.json|gh[\/\\]hosts\.ya?ml|gcloud[\/\\](?:[^\s"'|;&<>]{0,80}[\/\\])?(?:credentials\.db|access_tokens\.db|legacy_credentials)|application_default_credentials\.json|\.azure[\/\\](?:accessTokens\.json|msal_token_cache\.(?:json|bin)|service_principal_entries\.json)`;
@@ -98274,18 +98374,15 @@ var init_patterns = __esm({
     AGENT_CONFIG = String.raw`(?:CLAUDE(?:\.local)?\.md|AGENTS\.md|GEMINI\.md|MEMORY\.md|\.cursorrules|\.windsurfrules|\.clinerules|copilot-instructions\.md|\.claude[\/\\](?:settings(?:\.local)?\.json|memory|skills|agents|rules|hooks)|\.claude[\/\\]projects[\/\\][^\s"'|;&<>]{0,200}?[\/\\]memory|\.cursor[\/\\]rules|\.windsurf[\/\\]rules|\.gemini[\/\\]settings\.json|\.mcp\.json|\.claude\.json)`;
     AGENT_COMMANDS = String.raw`\.claude[\/\\]commands(?![\w-])`;
     LOCAL_HOST = String.raw`(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|\[::1\]|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:local|localhost|internal|lan|home\.arpa))`;
-    ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]*\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
+    ENV_READ = String.raw`(\b(cat|head|tail|less|more|type|Get-Content|gc|xxd|od|base64|strings|awk|cut)\b[^|;&\n]{0,120}?|\bgrep\b(?![^|;&\n]{0,300}\s-[A-Za-z]*q)[^|;&\n]{0,120}?|<\s*["']?[^\s"'|;&<]*?|\b(cp|scp|rsync|tar|zip)\s+(-\S+\s+)*["']?[^\s"']*?)${ENV_FILE}`;
     NETWORK_SENDER = String.raw`\b(curl|wget|nc|ncat|netcat|scp|sftp|Invoke-WebRequest|Invoke-RestMethod|iwr|irm|requests\.(post|put)|httpx\.(post|put)|fetch|axios)\b`;
     SEND_VERB = String.raw`\b(send|sends|sent|upload|uploads|post|posts|transmit|forward|submit|paste|exfiltrate)\b`;
     REMOTE_DESTINATION = String.raw`(\b(https?|s?ftp):\/\/[^\s'"<>)]+|\b\d{1,3}(\.\d{1,3}){3}\b)`;
     REMOTE_DESTINATION_RE = new RegExp(REMOTE_DESTINATION, "i");
     SHELL_VALUE = String.raw`(\$env:[A-Za-z_]\w*|\$\{?[A-Za-z_]\w*\}?|\$\d|\$\(|` + "`[^`\\n]+`" + String.raw`|%[A-Za-z_]\w*%)`;
     BARE_HOST = String.raw`(?<![\w@/.$%-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:\/[^\s'"|;&)]*)?(?![\w.-])`;
-    SHELL_NET_CLIENT = String.raw`\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b`;
-    NET_COMMAND_WITH_TARGET_RE = new RegExp(
-      `${SHELL_NET_CLIENT}[^|;&\\n]*?(${SHELL_VALUE}|${BARE_HOST})`,
-      "i"
-    );
+    SHELL_NET_CLIENT = /\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|netcat|scp|sftp|ftp|DownloadString|DownloadFile)\b/gi;
+    NET_TARGET = new RegExp(`${SHELL_VALUE}|${BARE_HOST}`, "gi");
     INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
     PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
     AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
@@ -98782,8 +98879,10 @@ var init_patterns = __esm({
           /base64\.b64decode\s*\([^\n]{0,160}(exec|eval|os\.system|subprocess)/i,
           /(eval|exec)\s*\([^\n]{0,40}(decode|b64decode|unhexlify|fromCharCode)/i,
           // `echo <b64> | base64 -D | bash`: the macOS stealer in the ClawHub
-          // skills of 2026-02, whose download hides inside the blob.
-          new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]*\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
+          // skills of 2026-02, whose download hides inside the blob. The pipe is
+          // looked for in the 300 characters after the flag, as every run here:
+          // unbounded, the line was read again from every `base64 -d` on it.
+          new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
           /FromBase64String[^\n]{0,200}\b(iex|Invoke-Expression)\b|\b(iex|Invoke-Expression)\b[^\n]{0,120}FromBase64String/i
         ]
       },
@@ -98845,12 +98944,15 @@ var init_patterns = __esm({
       low: "info",
       info: "info"
     };
-    CURL_OUTPUT = /\bcurl\b[^|;&\n]*?(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
-    CURL_REDIRECT = /\bcurl\b[^|;&\n]*?\s>\s*["']?([^\s"'|;&<>]+)/g;
-    CURL_REMOTE_NAME = /\bcurl\b[^|;&\n]*?\s(?:-[A-Za-z]*O[A-Za-z]*|--remote-name)(?=\s|$)[^|;&\n]*/g;
-    WGET_OUTPUT = /\bwget\b[^|;&\n]*?(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
-    WGET_REMOTE_NAME = /\bwget\b(?![^|;&\n]*\s-[A-Za-z]*O)[^|;&\n]*/g;
-    PS_OUTFILE = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|;&\n]*?\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
+    CURL = /\bcurl\b/g;
+    WGET = /\bwget\b/g;
+    POWERSHELL_FETCH = /\b(?:iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b/gi;
+    CURL_OUTPUT = /(?:\s-[A-Za-z]*o\s*|\s--output(?:\s+|=))["']?([^\s"'|;&<>]+)/g;
+    CURL_REDIRECT = /\s>\s*["']?([^\s"'|;&<>]+)/g;
+    CURL_REMOTE_NAME = /\s(?:-(?=[A-Za-z]*O)[A-Za-z]+|--remote-name)(?=\s|$)[^|;&\n]*/g;
+    WGET_OUTPUT = /(?:\s-[A-Za-z]*O\s*|\s--output-document(?:\s+|=))["']?([^\s"'|;&<>-][^\s"'|;&<>]*)/g;
+    WGET_NAMES_FILE = /\s-[A-Za-z]*O/g;
+    POWERSHELL_OUTFILE = /\s-OutFile\s+["']?([^\s"'|;&<>]+)/gi;
     URL_IN = /\b(?:https?|ftp):\/\/[^\s'"|;&<>)]+/i;
     RUNNER = String.raw`(?:bash|sh|zsh|dash|ksh|source|\.|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?|&)`;
     NAME_BREAK = /[\s"'|;&<>/\\]/;
@@ -98936,7 +99038,11 @@ var init_taint = __esm({
       { id: "cloud_creds", re: /(\.aws\/credentials|AWS_SECRET|GCP_|AZURE_|\.npmrc|\.netrc)/i },
       { id: "browser_data", re: /(cookies\.sqlite|Login Data|Local Storage|key4\.db|logins\.json)/i },
       { id: "token_var", re: /\b[A-Za-z_]*(TOKEN|SECRET|PASSWORD|APIKEY|API_KEY|CREDENTIAL)[A-Za-z_]*\b/ },
-      { id: "fs_read", re: /(readFileSync|fs\.readFile|open\s*\(|Get-Content|cat\s+[^\n]*\/)/ }
+      // `cat\s+[^\n]*\/` (a line holds `cat` and then a `/`), from the line's
+      // first `cat` only — the lookahead is not entered again: from every `cat`
+      // of a line the rest of it was read to its end, the square of the line
+      // (`cat ` 8 000 times: 0.18 s, measured; review of the 3.7.0 self-scan).
+      { id: "fs_read", re: /(readFileSync|fs\.readFile|open\s*\(|Get-Content|^(?=([^\n]*?cat\s+))\2[^\n]*\/)/ }
     ];
     SINKS = [
       { id: "http", re: /\b(fetch|axios|XMLHttpRequest|http[s]?\.request|requests?\.(post|get|put)|urllib|httpx|Invoke-WebRequest|Invoke-RestMethod)\b/i },
@@ -99366,6 +99472,20 @@ function findHiddenUnicode(content) {
   const detail = `${scan2.count} in all \u2014 ${scan2.kinds.join(", ")}` + (tags === "" ? "" : `; the tag characters spell ${JSON.stringify(tags.slice(0, 200))}`) + (selectors === "" ? "" : `; the variation selectors spell ${JSON.stringify(escapeInvisible(selectors).slice(0, 200))}`);
   return { code: scan2.first, line: content.slice(0, index).split(/\r?\n/).length, detail };
 }
+function grantsWildcard(content) {
+  const nextWildcard = forwardSearch(content, WILDCARD);
+  const nextClose = forwardSearch(content, /\]/g);
+  for (const key of content.matchAll(PERMISSION_KEY)) {
+    const at = key.index + key[0].length;
+    const wildcard = nextWildcard(at);
+    if (wildcard === null) return false;
+    if (wildcard.index === at) return true;
+    if (content.charAt(at) !== "[") continue;
+    const close = nextClose(at + 1);
+    if (close === null || wildcard.index < close.index) return true;
+  }
+  return false;
+}
 function analyzeMcpManifest(file2) {
   const name = file2.relPath.split("/").pop()?.toLowerCase() ?? "";
   const looksMcp = /mcp.*\.json$/.test(name) || name === "plugin.json" || /"mcpservers"\s*:/i.test(file2.content) || /"command"\s*:/.test(file2.content) && /"args"\s*:/.test(file2.content) && name.endsWith(".json");
@@ -99377,9 +99497,7 @@ function analyzeMcpManifest(file2) {
   } catch {
     json2 = null;
   }
-  if (/"(permissions|scopes|allowedTools|capabilities)"\s*:\s*(\[[^\]]*"(\*|all)"|"(\*|all)")/i.test(
-    file2.content
-  )) {
+  if (grantsWildcard(file2.content)) {
     out.push(
       finding2(
         file2,
@@ -99439,7 +99557,7 @@ function finding2(file2, ruleId, severity, subcategory, title, message3) {
     line_start: 1
   });
 }
-var TOOL, OSV_OFFLINE_REASON, CODE_SOURCE_TEXT, MAX_BLOBS_PER_FILE, MCP_DESCRIPTION_POISONING;
+var TOOL, OSV_OFFLINE_REASON, CODE_SOURCE_TEXT, MAX_BLOBS_PER_FILE, MCP_DESCRIPTION_POISONING, PERMISSION_KEY, WILDCARD;
 var init_analyze = __esm({
   "src/skillaudit/analyze.ts"() {
     "use strict";
@@ -99447,6 +99565,7 @@ var init_analyze = __esm({
     init_scannerParsers();
     init_osv();
     init_deps();
+    init_forwardSearch();
     init_patterns();
     init_score();
     init_taint();
@@ -99462,6 +99581,8 @@ var init_analyze = __esm({
     };
     MAX_BLOBS_PER_FILE = 50;
     MCP_DESCRIPTION_POISONING = /(ignore\s+(previous|all)|do\s+not\s+(tell|mention|inform)|system\s+prompt|<important>|<secret>|<system>)/i;
+    PERMISSION_KEY = /"(?:permissions|scopes|allowedTools|capabilities)"\s*:\s*/gi;
+    WILDCARD = /"(?:\*|all)"/gi;
   }
 });
 

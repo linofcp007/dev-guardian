@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { extractDependencies } from '../../../src/skillaudit/deps.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 const one = (relPath: string, content: string) => extractDependencies([{ relPath, content }]);
 
@@ -127,6 +128,21 @@ describe('extractDependencies — go.mod', () => {
   it('never reports the module line or the go directive as a dependency', () => {
     expect(one('go.mod', 'module example.test/m\n\ngo 1.21\n')).toEqual([]);
   });
+
+  it('reads a requirement after blank lines, CRLF line ends and a no-break space the same', () => {
+    expect(one('go.mod', 'require (\r\n\r\n\r\n \u00a0golang.org/x/net v0.23.0\r\n)\r\n')).toEqual([
+      { ecosystem: 'Go', name: 'golang.org/x/net', version: '0.23.0' },
+    ]);
+  });
+
+  // A go.mod is the skill's own: blank lines handed `^\s*` a start at every
+  // one of them, each reading the whole run (review of the 3.7.0 self-scan).
+  it.each([
+    ['blank lines', '\n'],
+    ['lines of one space', ' \n'],
+  ])('%s: eight times the file costs well under 22.6 times as much', (label, chunk) => {
+    expectLinear(label, (n) => one('go.mod', chunk.repeat(n / chunk.length)), 8_000);
+  }, 120_000);
 });
 
 describe('extractDependencies — Cargo.toml', () => {
