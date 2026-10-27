@@ -150,8 +150,9 @@
 #
 # `@Get()`, `[HttpGet]` and `@GetMapping` are each their framework's OWN
 # documented form for the endpoint whose path is entirely the class-level
-# prefix — NestJS's index and create actions, `dotnet new webapi`'s scaffold,
-# spring.io's guides. Each was matched by nothing: every route rule here
+# prefix — NestJS's index and create actions, `dotnet new webapi`'s scaffold
+# (as `[HttpGet(Name = "…")]`: named arguments only, no path), spring.io's
+# guides. Each was matched by nothing: every route rule here
 # demanded an argument the canonical form does not supply, so a C# controller
 # written the framework's way reported zero routes, and 3 of 7 endpoints
 # vanished from a NestJS controller — silently, since a route this pack misses
@@ -1753,7 +1754,7 @@ rules:
   # `[Roles("HttpGet(")]` and a commented-out `// [HttpGet("/orders/legacy")]`
   # above the live attribute are all ignored, because nothing is searched for.
   #
-  # TWO alternatives per verb. The second covers the form where the verb
+  # THREE alternatives per verb. The third covers the form where the verb
   # attribute carries no path and a separate `[Route("…")]` on the same method
   # does:
   #
@@ -1766,6 +1767,15 @@ rules:
   # write. The bare rules further down exclude exactly this shape with a
   # `pattern-not`, so a method carrying both attributes is reported once, at the
   # path `[Route]` names, rather than twice.
+  #
+  # The second is the template passed BY NAME, `[HttpGet(template: "x")]` —
+  # legal C#, `template` being the constructor's own parameter. Measured on
+  # 1.182.0 (no login): `[HttpGet($PATH, ...)]` binds a POSITIONAL first
+  # argument only — `"{id}"` out of `[HttpGet("{id}", Name = "GetById")]`,
+  # never `Name = "GetById"` — and matches neither `template: "x"` nor an
+  # attribute whose arguments are all named (those are the bare rules');
+  # `template: $PATH` matches the named template wherever it stands in the
+  # list (`Name = "n", template: "x"` too) and focuses on the literal alone.
   #
   # `guardian_class_prefix: aspnet` on these five and the five bare rules: the
   # controller's own `[Route]` is joined to the method's path from the `scope`
@@ -1786,6 +1796,9 @@ rules:
       - pattern-either:
           - pattern: |
               [HttpGet($PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpGet(template: $PATH, ...)]
               $RET $M(...) { ... }
           - pattern: |
               [HttpGet]
@@ -1810,6 +1823,9 @@ rules:
               [HttpPost($PATH, ...)]
               $RET $M(...) { ... }
           - pattern: |
+              [HttpPost(template: $PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
               [HttpPost]
               [Route($PATH, ...)]
               $RET $M(...) { ... }
@@ -1830,6 +1846,9 @@ rules:
       - pattern-either:
           - pattern: |
               [HttpPut($PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpPut(template: $PATH, ...)]
               $RET $M(...) { ... }
           - pattern: |
               [HttpPut]
@@ -1854,6 +1873,9 @@ rules:
               [HttpPatch($PATH, ...)]
               $RET $M(...) { ... }
           - pattern: |
+              [HttpPatch(template: $PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
               [HttpPatch]
               [Route($PATH, ...)]
               $RET $M(...) { ... }
@@ -1876,14 +1898,18 @@ rules:
               [HttpDelete($PATH, ...)]
               $RET $M(...) { ... }
           - pattern: |
+              [HttpDelete(template: $PATH, ...)]
+              $RET $M(...) { ... }
+          - pattern: |
               [HttpDelete]
               [Route($PATH, ...)]
               $RET $M(...) { ... }
       - focus-metavariable: $PATH
 
   # ASP.NET, bare attribute: `[HttpGet]` with the path on the class-level
-  # `[Route("api/[controller]")]`. This is what `dotnet new webapi` emits and
-  # what the ASP.NET docs use for an index action; before these five rules a
+  # `[Route("api/[controller]")]`. This is what the ASP.NET docs use for an
+  # index action, and `dotnet new webapi` emits it with a `Name` (the second
+  # alternative, below); before these five rules a
   # controller written that way reported ZERO routes — an entire C# API
   # described as exposing nothing. See the header for why they capture nothing.
   #
@@ -1892,10 +1918,32 @@ rules:
   # of its own. A combined attribute list (`[ApiExplorerSettings(…), HttpPatch]`)
   # matches, as does an expression-bodied or `async Task<…>` action.
   #
-  # The `pattern-not` is what keeps a `[HttpGet]` + `[Route("named")]` method
-  # from being reported twice — once at "named" by the path rule above and once
-  # here with no path at all. Removing it is visible as a duplicated endpoint in
-  # the annotations fixture, not as a silent extra.
+  # The `[Route]` `pattern-not` is what keeps a `[HttpGet]` + `[Route("named")]`
+  # method from being reported twice — once at "named" by the path rule above
+  # and once here with no path at all. Removing it is visible as a duplicated
+  # endpoint in the annotations fixture, not as a silent extra.
+  #
+  # TWO alternatives, the second for a verb attribute whose arguments are all
+  # NAMED: `[HttpGet(Name = "GetWeatherForecast")]` is what `dotnet new webapi`
+  # emits, and `Order = 1` is the other property the attribute takes. Neither
+  # sets a template, so the action is served at the controller's route, as a
+  # bare `[HttpGet]` is. Measured on 1.182.0 (no login): `[HttpGet]` matches
+  # `[HttpGet]` and `[HttpGet()]` only, and `[HttpGet($PATH, ...)]` no named
+  # argument, so until 3.7.0 the scaffold's one endpoint matched no rule and
+  # its controller reported nothing. `[HttpGet($NAMED = $VALUE, ...)]` matches
+  # a named argument in any position, and `name: value` as well as `Name =
+  # value` — so also `[HttpGet("{id}", Name = "GetById")]` and
+  # `[HttpGet(template: "x")]`, which carry a path and are the path rule's.
+  # The two `pattern-not`s naming `$TEMPLATE` exclude exactly those; each has
+  # a fixture per verb (`annotations/aspnet/NamedArguments.cs`).
+  #
+  # `[HttpGet(Name = "n")]` beside a `[Route("r")]` is kept here, at the
+  # controller's route, and that is ASP.NET's own reading: an attribute with a
+  # Name or an Order is no "silent" route attribute
+  # (`DefaultApplicationModelProvider.IsSilentRouteAttribute`), so it is a
+  # selector of its own with no template, and `[Route("r")]` is another with
+  # no verb (ANY at "r", which no rule here reports — nor for `[HttpGet("a")]`
+  # beside `[Route("b")]`; a stated gap).
   - id: guardian-route-aspnet-attribute-get-bare
     languages: [csharp]
     severity: INFO
@@ -1908,8 +1956,18 @@ rules:
       guardian_path: inherited
       guardian_class_prefix: aspnet
     patterns:
-      - pattern: |
-          [HttpGet]
+      - pattern-either:
+          - pattern: |
+              [HttpGet]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpGet($NAMED = $VALUE, ...)]
+              $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpGet($TEMPLATE, ...)]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpGet(template: $TEMPLATE, ...)]
           $RET $M(...) { ... }
       - pattern-not: |
           [HttpGet]
@@ -1928,8 +1986,18 @@ rules:
       guardian_path: inherited
       guardian_class_prefix: aspnet
     patterns:
-      - pattern: |
-          [HttpPost]
+      - pattern-either:
+          - pattern: |
+              [HttpPost]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpPost($NAMED = $VALUE, ...)]
+              $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPost($TEMPLATE, ...)]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPost(template: $TEMPLATE, ...)]
           $RET $M(...) { ... }
       - pattern-not: |
           [HttpPost]
@@ -1948,8 +2016,18 @@ rules:
       guardian_path: inherited
       guardian_class_prefix: aspnet
     patterns:
-      - pattern: |
-          [HttpPut]
+      - pattern-either:
+          - pattern: |
+              [HttpPut]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpPut($NAMED = $VALUE, ...)]
+              $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPut($TEMPLATE, ...)]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPut(template: $TEMPLATE, ...)]
           $RET $M(...) { ... }
       - pattern-not: |
           [HttpPut]
@@ -1968,8 +2046,18 @@ rules:
       guardian_path: inherited
       guardian_class_prefix: aspnet
     patterns:
-      - pattern: |
-          [HttpPatch]
+      - pattern-either:
+          - pattern: |
+              [HttpPatch]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpPatch($NAMED = $VALUE, ...)]
+              $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPatch($TEMPLATE, ...)]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpPatch(template: $TEMPLATE, ...)]
           $RET $M(...) { ... }
       - pattern-not: |
           [HttpPatch]
@@ -1988,8 +2076,18 @@ rules:
       guardian_path: inherited
       guardian_class_prefix: aspnet
     patterns:
-      - pattern: |
-          [HttpDelete]
+      - pattern-either:
+          - pattern: |
+              [HttpDelete]
+              $RET $M(...) { ... }
+          - pattern: |
+              [HttpDelete($NAMED = $VALUE, ...)]
+              $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpDelete($TEMPLATE, ...)]
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [HttpDelete(template: $TEMPLATE, ...)]
           $RET $M(...) { ... }
       - pattern-not: |
           [HttpDelete]
