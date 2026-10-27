@@ -262,7 +262,7 @@ describe('ci-init: generated pipelines are valid YAML with the pinned values sub
       const project = makeProject();
       const body = renderedBody(project, target);
       expect(body, target).toMatch(/sha256sum -c -/);
-      expect(body, target).toContain('lock="$DEV_GUARDIAN_HOME/configs/ci/python/requirements-$py.txt"');
+      expect(body, target).toContain('lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"');
       // Into the scratch directory, never the checkout.
       expect(body, target).toMatch(/python3 -I -m venv ("\$venv"|\/tmp\/dev-guardian-scanners\/python)\n/);
       if (target === 'github') expect(body).toContain('venv="$RUNNER_TEMP/dev-guardian-scanners/python"');

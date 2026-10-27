@@ -17,7 +17,7 @@
  * the comments beside each pin record.
  *
  * The CI templates install bandit, Semgrep and zizmor from hashed locks,
- * `configs/ci/python/requirements-<X.Y>.txt`, every dependency pinned (3.7.0).
+ * `configs/ci/python/<X.Y>/requirements.txt`, every dependency pinned (3.7.0).
  * A lock whose top-level versions are not pinned.json's — bumped there, not
  * recompiled — and a locked release PyPI has since yanked each count as
  * behind; a locked dependency with a newer release is listed, not counted:
@@ -250,7 +250,10 @@ function lockPins(text) {
   }
   return out;
 }
-const locks = readdirSync(LOCK_DIR).filter((f) => /^requirements-\d+\.\d+\.txt$/.test(f)).sort();
+const locks = readdirSync(LOCK_DIR, { withFileTypes: true })
+  .filter((e) => e.isDirectory() && /^\d+\.\d+$/.test(e.name))
+  .map((e) => `${e.name}/requirements.txt`)
+  .sort();
 /** @type {string[]} */
 const stale = [];
 /** Every locked `name==version`, across the locks. @type {Map<string, [string, string]>} */

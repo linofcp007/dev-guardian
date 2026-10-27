@@ -81,7 +81,7 @@ exports[`ci-init --attest (GitHub build-provenance attestations of the scan outp
 #      cannot know that in advance). bandit, Semgrep and zizmor are Python
 #      packages: they are installed with EVERY dependency of theirs pinned
 #      by version and sha256, from the lock the dev-guardian clone of step 5
-#      holds for the runner's Python (configs/ci/python/requirements-<X.Y>.txt
+#      holds for the runner's Python (configs/ci/python/<X.Y>/requirements.txt
 #      — the commit verified there fixes its content), into a venv of the
 #      runner's own python3, whose pip is the OS's (never one from PyPI),
 #      in hash-checking mode (\`--require-hashes\`) and from wheels only
@@ -302,7 +302,7 @@ jobs:
           # \`-I\` everywhere: this step runs in the checkout, and \`python3 -m venv\`
           # would otherwise import a \`venv\` package the checkout holds.
           py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-          lock="$DEV_GUARDIAN_HOME/configs/ci/python/requirements-$py.txt"
+          lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
           if [ ! -f "$lock" ]; then
             echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
             exit 1
@@ -506,7 +506,7 @@ exports[`ci-init: snapshot of the rendered templates > bitbucket renders exactly
 #      bandit, Semgrep and zizmor are Python packages: they are installed
 #      with EVERY dependency of theirs pinned by version and sha256, from the
 #      lock the dev-guardian clone of step 3 holds for the image's Python
-#      (configs/ci/python/requirements-<X.Y>.txt — the commit verified there
+#      (configs/ci/python/<X.Y>/requirements.txt — the commit verified there
 #      fixes its content), into a venv of Debian's python3, whose pip is
 #      Debian's (never one from PyPI), in hash-checking mode
 #      (\`--require-hashes\`) and from wheels only (\`--only-binary :all:\`: no
@@ -593,7 +593,7 @@ definitions:
             # \`-I\` everywhere: the build runs in the checkout, and \`python3 -m venv\`
             # would otherwise import a \`venv\` package the checkout holds.
             py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-            lock="$DEV_GUARDIAN_HOME/configs/ci/python/requirements-$py.txt"
+            lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
             if [ ! -f "$lock" ]; then
               echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this step on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
               exit 1
@@ -707,7 +707,7 @@ exports[`ci-init: snapshot of the rendered templates > github renders exactly as
 #      cannot know that in advance). bandit, Semgrep and zizmor are Python
 #      packages: they are installed with EVERY dependency of theirs pinned
 #      by version and sha256, from the lock the dev-guardian clone of step 5
-#      holds for the runner's Python (configs/ci/python/requirements-<X.Y>.txt
+#      holds for the runner's Python (configs/ci/python/<X.Y>/requirements.txt
 #      — the commit verified there fixes its content), into a venv of the
 #      runner's own python3, whose pip is the OS's (never one from PyPI),
 #      in hash-checking mode (\`--require-hashes\`) and from wheels only
@@ -896,7 +896,7 @@ jobs:
           # \`-I\` everywhere: this step runs in the checkout, and \`python3 -m venv\`
           # would otherwise import a \`venv\` package the checkout holds.
           py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-          lock="$DEV_GUARDIAN_HOME/configs/ci/python/requirements-$py.txt"
+          lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
           if [ ! -f "$lock" ]; then
             echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
             exit 1
@@ -1037,7 +1037,7 @@ exports[`ci-init: snapshot of the rendered templates > gitlab renders exactly as
 #      bandit, Semgrep and zizmor are Python packages: they are installed
 #      with EVERY dependency of theirs pinned by version and sha256, from the
 #      lock the dev-guardian clone of step 3 holds for the image's Python
-#      (configs/ci/python/requirements-<X.Y>.txt — the commit verified there
+#      (configs/ci/python/<X.Y>/requirements.txt — the commit verified there
 #      fixes its content), into a venv of Debian's python3, whose pip is
 #      Debian's (never one from PyPI), in hash-checking mode
 #      (\`--require-hashes\`) and from wheels only (\`--only-binary :all:\`: no
@@ -1133,7 +1133,7 @@ dev-guardian:
       # \`-I\` everywhere: the job runs in the checkout, and \`python3 -m venv\`
       # would otherwise import a \`venv\` package the checkout holds.
       py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-      lock="$DEV_GUARDIAN_HOME/configs/ci/python/requirements-$py.txt"
+      lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
       if [ ! -f "$lock" ]; then
         echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this job on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
         exit 1

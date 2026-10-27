@@ -1,7 +1,7 @@
 # The Python scanners the ci-init pipelines install, at the versions configs/ci/pinned.json
 # pins (test/unit/configs/pinnedCiData.test.ts holds them equal). Compiled with every
-# dependency of theirs, by version and sha256, into requirements-<python>.txt beside this
-# file, one per Python the templates run on — the command is each file's header. pip
+# dependency of theirs, by version and sha256, into <python>/requirements.txt beside this
+# file (the name Trivy reads), one per Python the templates run on — the command is each file's header. pip
 # installs them with --require-hashes --only-binary :all: (configs/ci/pinned.json).
 bandit[toml]==1.9.4
 semgrep==1.182.0

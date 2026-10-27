@@ -323,7 +323,7 @@ their respective projects.
   zizmor came from `pipx install semgrep==<version>`, which pinned those three
   packages and nothing they depend on, and pipx first upgraded its own pip
   from PyPI. They now come, with every dependency, from a lock per Python
-  (`configs/ci/python/requirements-<X.Y>.txt`, compiled with uv, every sha256
+  (`configs/ci/python/<X.Y>/requirements.txt`, compiled with uv, every sha256
   PyPI lists for each pinned release, each matched against PyPI's JSON API)
   read from the dev-guardian clone the job verifies against the release
   commit, installed into a venv of the image's own Python with `pip install

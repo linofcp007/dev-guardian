@@ -33,7 +33,7 @@ and the push-run history pass left two kinds of change unread.
   dependencies are not resolved, only its direct ones, and that is a named partial gap (`trivy:maven-offline`)
   whenever Trivy read a pom. Lock-based ecosystems are unaffected.
 - **CI templates**: regenerate with `ci-init`. The pipelines now install bandit, Semgrep and zizmor into a venv
-  from a lock per Python the images run (`configs/ci/python/requirements-{3.12,3.13,3.14}.txt`, every dependency
+  from a lock per Python the images run (`configs/ci/python/{3.12,3.13,3.14}/requirements.txt`, every dependency
   sha256-hashed, `pip install --require-hashes --only-binary :all:`); an image whose Python has no lock (3.11, say)
   stops the job, naming it. The old pipelines keep working.
 - **The shell guard asks more**: deleting or moving Claude Code's settings from the shell — the file, a glob that
