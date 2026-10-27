@@ -149,19 +149,77 @@ function decodeXmlName(name: string): string {
   return name.replace(/_x([0-9a-f]{8}|[0-9a-f]{4})_/gi, (whole, hex: string) => codePoint(Number.parseInt(hex, 16), whole));
 }
 
+/**
+ * A tag's attributes, the first of each name. A name is read from the start
+ * of its run of name characters (`[\w.:-]`), past the digits, dots and
+ * hyphens no name begins with: only a run's end can be followed by `=`, so a
+ * search from each character inside the run read the rest of it again — a
+ * tag of one 80 KB word took 6 s (measured), the square of its length.
+ */
 function attributes(text: string): Map<string, string> {
   const out = new Map<string, string>();
-  for (const m of text.matchAll(/([A-Za-z_:][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
+  for (const m of text.matchAll(/(?<![\w.:-])[\d.-]*([A-Za-z_:][\w.:-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/g)) {
     const name = m[1]?.toLowerCase();
     if (name !== undefined && !out.has(name)) out.set(name, decodeEntities(m[2] ?? m[3] ?? ''));
   }
   return out;
 }
 
-/** The bodies of every `<name>…</name>` section, matched without case (a self-closing one has none). */
-function sections(text: string, name: string): string[] {
-  const re = new RegExp(`<${name}\\b[^>]*?(?<!/)>([\\s\\S]*?)</${name}\\s*>`, 'gi');
-  return [...text.matchAll(re)].map((m) => m[1] ?? '');
+/**
+ * `text` up to its last `>`: no element can end after it, and a search for
+ * one from every `<` beyond it read to the end of the text each time.
+ */
+function upToLastTagEnd(text: string): string {
+  return text.slice(0, text.lastIndexOf('>') + 1);
+}
+
+/** A section's opening and closing tags, matched without case. */
+interface SectionTags {
+  open: RegExp;
+  close: RegExp;
+}
+
+const PACKAGE_SOURCES: SectionTags = { open: /<packageSources\b/gi, close: /<\/packageSources\s*>/gi };
+const PACKAGE_SOURCE_CREDENTIALS: SectionTags = {
+  open: /<packageSourceCredentials\b/gi,
+  close: /<\/packageSourceCredentials\s*>/gi,
+};
+
+/**
+ * The bodies of every `<name>…</name>` section, matched without case (a
+ * self-closing one has none): an opening tag ends at the first `>` after
+ * it, its body at the first closing tag after that. Both are searched for
+ * forward only — when none is left after one opening tag, none is after a
+ * later one — where the expression this was searched both again from every
+ * opening tag: 320 KB of `<packageSources>` alone took 2.3 s (measured), a
+ * 1 MB configuration minutes.
+ */
+function sections(text: string, tags: SectionTags): string[] {
+  const out: string[] = [];
+  let tagEnd = -1;
+  let close: { index: number; end: number } | null = null;
+  let at = 0;
+  for (;;) {
+    tags.open.lastIndex = at;
+    const open = tags.open.exec(text);
+    if (open === null) break;
+    const nameEnd = open.index + open[0].length;
+    if (tagEnd < nameEnd) tagEnd = text.indexOf('>', nameEnd);
+    if (tagEnd === -1) break;
+    if (text.charAt(tagEnd - 1) === '/') {
+      at = open.index + 1;
+      continue;
+    }
+    if (close === null || close.index <= tagEnd) {
+      tags.close.lastIndex = tagEnd + 1;
+      const m = tags.close.exec(text);
+      if (m === null) break;
+      close = { index: m.index, end: m.index + m[0].length };
+    }
+    out.push(text.slice(tagEnd + 1, close.index));
+    at = close.end;
+  }
+  return out;
 }
 
 /**
@@ -178,8 +236,8 @@ export function parseNugetConfig(raw: string): ParsedConfig {
   const text = raw.replace(/<!-{2}[\s\S]*?(?:-->|$)/g, '');
   const adds: ParsedConfig['adds'] = [];
   let clears = false;
-  for (const body of sections(text, 'packageSources')) {
-    for (const m of body.matchAll(/<(add|clear)\b([^>]*?)\/?>/gi)) {
+  for (const body of sections(text, PACKAGE_SOURCES)) {
+    for (const m of upToLastTagEnd(body).matchAll(/<(add|clear)\b([^>]*?)\/?>/gi)) {
       if ((m[1] ?? '').toLowerCase() === 'clear') {
         clears = true;
         continue;
@@ -190,8 +248,8 @@ export function parseNugetConfig(raw: string): ParsedConfig {
     }
   }
   const credentialNames: string[] = [];
-  for (const body of sections(text, 'packageSourceCredentials')) {
-    for (const m of body.matchAll(/<([A-Za-z_][\w.:-]*)\b[^>]*>/g)) {
+  for (const body of sections(text, PACKAGE_SOURCE_CREDENTIALS)) {
+    for (const m of upToLastTagEnd(body).matchAll(/<([A-Za-z_][\w.:-]*)\b[^>]*>/g)) {
       const name = m[1] ?? '';
       if (!['add', 'clear'].includes(name.toLowerCase())) credentialNames.push(decodeXmlName(name));
     }
