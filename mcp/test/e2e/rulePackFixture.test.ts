@@ -1022,6 +1022,57 @@ const EXPECTED_ANNOTATION_ROUTES = [
   'spring/OrderController.java:131 spring ANY /api/orders/request-value',
   'spring/OrderController.java:134 spring ANY /api/orders/request-path',
   'spring/OrderController.java:137 spring ANY /api/orders',
+  // ---- Spring class-level prefixes (spring/PrefixForms.java): one class
+  // per shape the join decides. Resolved: the `value =` and `path =` prefix
+  // forms (a bare mapping served AT the prefix, relative halves given their
+  // slash), a handler with no prefix and no supertype, an outer class's own
+  // route, and a nested @RestController with a prefix of its own.
+  'spring/PrefixForms.java:22 spring GET /v1/items/list',
+  'spring/PrefixForms.java:25 spring POST /v1/items',
+  'spring/PrefixForms.java:34 spring GET /v2/items/detail',
+  'spring/PrefixForms.java:58 spring GET /health',
+  'spring/PrefixForms.java:107 spring GET /outer/o',
+  'spring/PrefixForms.java:120 spring GET /nested/n',
+  // Partial, each for its own reason: a constant prefix (`Paths.ORDERS`); a
+  // superclass, and an interface, that may carry the prefix; an abstract
+  // handler; an API interface's abstract methods, one per argument form; a
+  // nested type that is no handler — a class, an interface, a record.
+  // `OnlyPrefixController` has a prefix and no mapping, so no row at all.
+  'spring/PrefixForms.java:42 spring GET /c [partial]',
+  'spring/PrefixForms.java:65 spring GET /inherited [partial]',
+  'spring/PrefixForms.java:73 spring DELETE /impl [partial]',
+  'spring/PrefixForms.java:83 spring GET /a [partial]',
+  'spring/PrefixForms.java:92 spring ANY /abs-positional [partial]',
+  'spring/PrefixForms.java:95 spring ANY /abs-value [partial]',
+  'spring/PrefixForms.java:98 spring ANY /abs-path [partial]',
+  'spring/PrefixForms.java:112 spring GET /helper [partial]',
+  'spring/PrefixForms.java:126 spring GET /inner-iface [partial]',
+  'spring/PrefixForms.java:131 spring GET /in-record [partial]',
+  // ---- ASP.NET class routes and tokens (aspnet/PrefixTokens.cs). Resolved:
+  // `[controller]/[action]` with the `Async` suffix dropped, a bare attribute
+  // served AT the template, an action whose body holds a local function
+  // (still `Compute`), two rooted paths — one still replacing its token — a
+  // rooted path on an abstract base, and nested controllers' own routes.
+  'aspnet/PrefixTokens.cs:22 aspnet GET /api/Reports/Summary',
+  'aspnet/PrefixTokens.cs:26 aspnet GET /api/Reports/Detail/{id}',
+  'aspnet/PrefixTokens.cs:35 aspnet GET /rooted/Reports',
+  'aspnet/PrefixTokens.cs:39 aspnet GET /legacy/reports',
+  'aspnet/PrefixTokens.cs:43 aspnet GET /api/Reports/Compute/calc',
+  'aspnet/PrefixTokens.cs:87 aspnet GET /rooted-ping',
+  'aspnet/PrefixTokens.cs:113 aspnet GET /api/outer/o',
+  'aspnet/PrefixTokens.cs:127 aspnet GET /api/inner/i',
+  // Partial: `[ActionName]` (a bare attribute, so its own path is empty),
+  // two class routes, a constant one, `[area]`, an abstract base's relative
+  // route, a controller with no [Route] of its own, `[ControllerName]`, and
+  // a nested class that is no controller.
+  'aspnet/PrefixTokens.cs:30 aspnet POST <inherited> [partial]',
+  'aspnet/PrefixTokens.cs:56 aspnet GET m [partial]',
+  'aspnet/PrefixTokens.cs:64 aspnet GET c [partial]',
+  'aspnet/PrefixTokens.cs:73 aspnet GET a [partial]',
+  'aspnet/PrefixTokens.cs:84 aspnet GET ping [partial]',
+  'aspnet/PrefixTokens.cs:95 aspnet GET x [partial]',
+  'aspnet/PrefixTokens.cs:104 aspnet GET r [partial]',
+  'aspnet/PrefixTokens.cs:119 aspnet GET n [partial]',
 ].sort();
 
 /**
@@ -1032,7 +1083,28 @@ const EXPECTED_ANNOTATION_ROUTES = [
  * Semgrep focused reports the route under that text instead of under its
  * path (measured: `spring PUT produces = "application/json" [partial]`).
  */
-const ANNOTATION_DECOYS = ['application/json', 'AuthGuard', 'IgnoreApi', 'RemoveOrder', 'pong'];
+const ANNOTATION_DECOYS = [
+  'application/json',
+  'AuthGuard',
+  'IgnoreApi',
+  'RemoveOrder',
+  'pong',
+  // The class-prefix fixtures: a commented-out prefix in each file; a type
+  // whose @RequestMapping is no route (`/only` has no mapping, `/feign` is
+  // an interface's); an outer prefix joined to a nested type that is no
+  // handler; a renamed action or controller read as written; a local
+  // function's name read as the action's.
+  'commented',
+  '/only',
+  '/feign',
+  '/outer/helper',
+  '/outer/inner-iface',
+  '/api/outer/n',
+  'Original',
+  'renamed',
+  'Custom',
+  'Inner',
+];
 
 describe('E2E — annotation route rules against the auditor fixture', () => {
   it.skipIf(!SEMGREP_AVAILABLE)(
