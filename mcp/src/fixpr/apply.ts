@@ -343,17 +343,12 @@ function editPipPin(
   if (read.status === 'refused') {
     return { ok: false, label, reason: `'${file}' was not read: ${describeReadRefusal(read.reason)}` };
   }
-  const text = read.bytes.toString('utf8');
-  const name = step.package_name.split(/[-_.]+/).map(escapeRegExp).join('[-_.]+');
-  const pin = new RegExp(
-    `(^|[\\s"'\\[,])(${name})(\\s*\\[[^\\]]*\\])?(\\s*==\\s*)${escapeRegExp(step.installed_version)}(?=$|[\\s;"',#\\]\\\\])`,
-    'gim',
+  const { text: edited, count } = repinPip(
+    read.bytes.toString('utf8'),
+    step.package_name,
+    step.installed_version,
+    step.latest_version,
   );
-  let count = 0;
-  const edited = text.replace(pin, (_m, lead: string, pkg: string, extras: string | undefined, op: string) => {
-    count += 1;
-    return `${lead}${pkg}${extras ?? ''}${op}${step.latest_version}`;
-  });
   if (count === 0) {
     return { ok: false, label, reason: `no '${step.package_name}==${step.installed_version}' pin in '${file}'` };
   }
@@ -362,6 +357,27 @@ function editPipPin(
     return { ok: false, label, reason: `'${file}' was not written: ${describeWriteRefusal(written.reason, written.detail)}` };
   }
   return { ok: true, label };
+}
+
+/**
+ * `text` with every exact pin `name==installed` made `name==latest` (see
+ * {@link editPipPin}), and how many there were. An extra holds no `[`: the
+ * search for an extra's `]` ran again from every `name[` before it, the
+ * square of a requirements file of them — 40 KB of `a[` took 0.9 s
+ * (measured), and the file may be 8 MB.
+ */
+export function repinPip(text: string, name: string, installed: string, latest: string): { text: string; count: number } {
+  const pattern = name.split(/[-_.]+/).map(escapeRegExp).join('[-_.]+');
+  const pin = new RegExp(
+    `(^|[\\s"'\\[,])(${pattern})(\\s*\\[[^\\[\\]]*\\])?(\\s*==\\s*)${escapeRegExp(installed)}(?=$|[\\s;"',#\\]\\\\])`,
+    'gim',
+  );
+  let count = 0;
+  const edited = text.replace(pin, (_m, lead: string, pkg: string, extras: string | undefined, op: string) => {
+    count += 1;
+    return `${lead}${pkg}${extras ?? ''}${op}${latest}`;
+  });
+  return { text: edited, count };
 }
 
 // --------------------------------------------------------------- shared
