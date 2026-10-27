@@ -1,6 +1,6 @@
 ---
 name: guardian-performance
-description: "Performance — Lighthouse Core Web Vitals against the budgets, k6 load tests, and hunting bottlenecks (N+1 queries, slow endpoints, bundle size, high CPU) — for \"it's slow\" or \"how much load can this take?\". Not for a leak found as a code bug (guardian-bugfix)."
+description: "Performance — Lighthouse Core Web Vitals against the budgets, k6 load tests, and hunting bottlenecks (N+1 queries, slow endpoints, bundle size, high CPU) — for \"it's slow\", \"this endpoint takes seconds\" or \"how much load can this take?\". Not for a leak found as a code bug (guardian-bugfix)."
 ---
 
 # Guardian Performance
