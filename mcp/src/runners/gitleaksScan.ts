@@ -53,6 +53,15 @@
  * pass, and nothing this helper meets is allowed to throw out of it and take
  * the passes that did finish with it.
  *
+ * **The history pass reads what `git log -p` leaves out** (3.7.0,
+ * `runners/historyView.ts`): a file git reads as binary by its content (a
+ * NUL byte) is diffed as text, unless its path holds a file over 1 MiB, and
+ * a two-parent merge's own change — a line neither parent has — is read by a
+ * second gitleaks run, `git log --merges --diff-merges=remerge`, whose
+ * findings join the first's. On a push no full-content pass stands behind
+ * the history pass, and a key in either was read by none, exit 0. What the
+ * view cannot show is named on the run.
+ *
  * **The project's own gitleaks configuration is honoured, and named.**
  * gitleaks reads `<source>/.gitleaks.toml` on its own (the history pass runs
  * `detect -s <project>`; measured on 8.30.1: a committed allowlist over the
@@ -100,8 +109,8 @@ import {
   shallowBoundary,
   SHALLOW_UNDETERMINED,
   uncommittedFiles,
-  withoutTreeAttributes,
 } from './git.js';
+import { openHistoryView, REMERGE_DIFF, type HistoryView } from './historyView.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { SCANNED_WALK_EXCLUDE } from './projectFiles.js';
@@ -396,35 +405,39 @@ async function historyPass(
   /** The project's path inside its repository ('' at the root): history paths are repo-relative. */
   projectPrefix: string,
 ): Promise<void> {
-  const outFile = join(opts.reportDir, 'secrets-history.json');
-  rmSync(outFile, { force: true });
-  const target = reportTarget(opts, outFile);
-  const args = [
-    'detect',
-    '--no-banner',
-    '--log-level=info',
-    '--report-format=json',
-    `--report-path=${target.path}`,
-    ...target.redact,
-    '-s',
-    opts.projectPath,
-  ];
-  if (logOpts !== undefined && logOpts.length > 0) args.push(`--log-opts=${logOpts}`);
-  const run = await runProcess({
-    command: 'gitleaks',
-    args,
-    cwd: opts.projectPath,
-    // `git log -p` shows every commit's change as the WORKING TREE's
-    // `.gitattributes` says: a pull request adding `config.js binary` (or
-    // `* -diff`) beside a key had its key read in no commit (measured,
-    // gitleaks 8.30.1) — so none of the tree's are applied.
-    env: await withoutTreeAttributes(opts.projectPath, opts.env),
-    signal: opts.signal,
-    onLog: opts.onLog,
-  });
-  if (run.outcome === 'cancelled') result.cancelled = true;
+  const own = logOpts !== undefined && logOpts.length > 0 ? logOpts.split(' ').filter((t) => t.length > 0) : null;
+  // `git log -p` shows every commit's change as the WORKING TREE's
+  // `.gitattributes` says (a pull request adding `config.js binary` beside a
+  // key had it read in no commit), a file with a NUL byte as binary, and no
+  // merge's own change: the view lifts all three (`runners/historyView.ts`).
+  const view = await openHistoryView(opts.projectPath, opts.env, own ?? ['--all']);
+  let removal: string | null;
+  try {
+    await commitsPass(opts, result, logOpts, own, expectedCommits, projectPrefix, view);
+  } finally {
+    removal = view.remove();
+  }
+  // Nothing of the repository's: a stray temporary directory is said, never a failed pass.
+  const entry = result.tools_run.find((t) => t.name === GITLEAKS_HISTORY);
+  if (removal !== null && entry !== undefined) entry.reason = entry.reason ? `${entry.reason}; ${removal}` : removal;
+}
 
-  const report = takeReport(opts, target.path, outFile);
+/**
+ * The commits' pass — `git log -p` of every commit, a merge's own change
+ * aside ({@link mergesPass}) — and the history pass's `tools_run` entry.
+ */
+async function commitsPass(
+  opts: ScanRun,
+  result: GitleaksScanResult,
+  logOpts: string | undefined,
+  own: readonly string[] | null,
+  expectedCommits: number | null,
+  projectPrefix: string,
+  view: HistoryView,
+): Promise<void> {
+  const outFile = join(opts.reportDir, HISTORY_REPORT);
+  const { run, report } = await gitleaksLog(opts, outFile, own, view.env);
+  if (run.outcome === 'cancelled') result.cancelled = true;
   const raw = report.text;
   const commits = commitsScanned(run.stderr);
   const problems = runProblems(run, raw);
@@ -479,11 +492,84 @@ async function historyPass(
   // program, …): gitleaks read the history as stored, which is named.
   const notApplied = describeNotApplied(run.gitNotApplied ?? []);
   if (notApplied !== null) reasons.push(notApplied);
+  if (problems.length === 0 && !result.cancelled && view.merges !== null) {
+    const merges = await mergesPass(opts, result, view.merges, own, projectPrefix);
+    reasons.push(merges);
+  }
+  // What the view could not show is named, never a gap of its own: the pass
+  // read every commit's own change as before (`runners/historyView.ts`).
+  if (problems.length === 0) reasons.push(...view.limits);
   result.tools_run.push({
     name: GITLEAKS_HISTORY,
     status: problems.length === 0 ? 'ok' : 'failed',
     reason: reasons.join('; '),
   });
+}
+
+/** The commits' pass's report, and the merges' (kept beside it, read by `ci/secretValues.ts`). */
+const HISTORY_REPORT = 'secrets-history.json';
+const MERGES_REPORT = 'secrets-history-merges.json';
+
+/**
+ * One `gitleaks detect` over git history into `outFile` (or the private
+ * directory's file of that name), with `logOptions` as `--log-opts` — none,
+ * gitleaks' own walk — and `env` for its git.
+ */
+async function gitleaksLog(
+  opts: ScanRun,
+  outFile: string,
+  logOptions: readonly string[] | null,
+  env: NodeJS.ProcessEnv,
+): Promise<{ run: ProcessRunResult; report: TakenReport }> {
+  rmSync(outFile, { force: true });
+  const target = reportTarget(opts, outFile);
+  const args = [
+    'detect',
+    '--no-banner',
+    '--log-level=info',
+    '--report-format=json',
+    `--report-path=${target.path}`,
+    ...target.redact,
+    '-s',
+    opts.projectPath,
+  ];
+  if (logOptions !== null) args.push(`--log-opts=${logOptions.join(' ')}`);
+  const run = await runProcess({ command: 'gitleaks', args, cwd: opts.projectPath, env, signal: opts.signal, onLog: opts.onLog });
+  return { run, report: takeReport(opts, target.path, outFile) };
+}
+
+/**
+ * The merges' pass (3.7.0, `runners/historyView.ts`): `git log --merges
+ * --diff-merges=remerge` over the same walk — each two-parent merge's own
+ * change, never what a parent brought — as a second gitleaks run, apart from
+ * the commits' so that one which does not finish within a scanner's timeout
+ * costs the merges alone. Its findings join the history pass's; one it could
+ * not make is a named gap (`missing_tools`), the commits' pass standing.
+ * Returns the sentence for the history pass's reason.
+ */
+async function mergesPass(
+  opts: ScanRun,
+  result: GitleaksScanResult,
+  merges: { env: NodeJS.ProcessEnv; count: number | null },
+  own: readonly string[] | null,
+  projectPrefix: string,
+): Promise<string> {
+  const outFile = join(opts.reportDir, MERGES_REPORT);
+  const { run, report } = await gitleaksLog(opts, outFile, [...(own ?? GITLEAKS_LOG_OPTS), '--merges', REMERGE_DIFF], merges.env);
+  if (run.outcome === 'cancelled') result.cancelled = true;
+  const raw = report.text === null ? null : await withRemergePaths(opts.projectPath, report.text, outFile);
+  const problems = runProblems(run, raw);
+  const gitError = gitErrorLine(run.stderr);
+  if (gitError) problems.push(`git: ${gitError}`);
+  const some = merges.count === null ? 'merge commits' : `${merges.count} merge commit(s)`;
+  if (raw === null || problems.length > 0) {
+    if (!result.missing_tools.includes(GITLEAKS_HISTORY)) result.missing_tools.push(GITLEAKS_HISTORY);
+    const timedOut = run.outcome === 'timed_out' ? ' — raise GUARDIAN_SCAN_TIMEOUT_MS' : '';
+    return `${some}' own changes were not read: ${problems.join('; ')}${timedOut}`;
+  }
+  pushParserInput(result, { parser: locatedParser('history', projectPrefix), input: raw }, report.secrets);
+  // gitleaks counts the commits it read a file of: here, the merges with a change of their own.
+  return `merges: ${describeCount(commitsScanned(run.stderr), 'merge')} with a change of its own scanned (of ${some})`;
 }
 
 /**
@@ -507,6 +593,69 @@ async function truncatedAt(cwd: string, logOpts: string | undefined): Promise<st
   if (r.exitCode !== 0) return boundary;
   const reached = new Set(r.stdout.split(/\r?\n/).map((l) => l.trim()));
   return boundary.filter((b) => reached.has(b));
+}
+
+/**
+ * gitleaks 8.30.1's own `git log` options when it is given none
+ * (`sources/git.go`): `--log-opts` replaces them, so a pass that passes any
+ * passes these too.
+ */
+const GITLEAKS_LOG_OPTS = ['--full-history', '--all', '--diff-filter=tuxdb'];
+
+/** At most this many `b/` paths are checked per report; the rest keep gitleaks' name. */
+const MAX_REMERGE_PATHS = 200;
+
+/**
+ * `text` (the history pass's report) with each conflicted merge's file named
+ * as git names it, written back to `outFile` when one changed. A
+ * remerge-diff's header holds a `remerge CONFLICT (content): …` line for a
+ * file whose merge had a conflict, which gitleaks' diff parser (go-gitdiff
+ * 0.9.1) takes for the end of the header; it then reads the `--- a/` / `+++
+ * b/` lines as a plain patch's, unstripped, and names the file `b/f.txt` —
+ * measured, a key resolved into a conflicted `f.txt` at the merge. A name is
+ * changed only where it cannot be the file's own: the finding's commit is a
+ * merge, it has no `b/f.txt` and has `f.txt`. The `Fingerprint` follows;
+ * gitleaks itself matched `.gitleaksignore` against its own, `b/` and all.
+ */
+async function withRemergePaths(projectPath: string, text: string, outFile: string): Promise<string> {
+  const items = parseInputAsJson(text);
+  if (!Array.isArray(items)) return text;
+  const merges = new Map<string, Promise<boolean>>();
+  let checked = 0;
+  let changed = false;
+  for (const item of items as unknown[]) {
+    if (item === null || typeof item !== 'object') continue;
+    const e = item as Record<string, unknown>;
+    const { File: file, Commit: commit } = e;
+    if (typeof file !== 'string' || typeof commit !== 'string' || !file.startsWith('b/') || !/^[0-9a-f]{40,64}$/.test(commit)) continue;
+    if (checked >= MAX_REMERGE_PATHS) break;
+    checked += 1;
+    let merge = merges.get(commit);
+    if (merge === undefined) {
+      merge = git(projectPath, ['rev-list', '--parents', '-n', '1', commit, '--']).then(
+        (r) => r.exitCode === 0 && r.stdout.trim().split(/\s+/).length > 2,
+      );
+      merges.set(commit, merge);
+    }
+    if (!(await merge)) continue;
+    const own = file.slice(2);
+    const [asNamed, asOwn] = await Promise.all([
+      git(projectPath, ['cat-file', '-e', `${commit}:${file}`]),
+      git(projectPath, ['cat-file', '-e', `${commit}:${own}`]),
+    ]);
+    if (asNamed.exitCode === 0 || asOwn.exitCode !== 0) continue;
+    e['File'] = own;
+    if (typeof e['Fingerprint'] === 'string') e['Fingerprint'] = e['Fingerprint'].replace(`${commit}:${file}:`, `${commit}:${own}:`);
+    changed = true;
+  }
+  if (!changed) return text;
+  const fixed = JSON.stringify(items, null, 1);
+  try {
+    writeFileSync(outFile, fixed);
+  } catch {
+    // The kept copy is for `report_paths` and the CI gate's value reading; the scan reads `fixed`.
+  }
+  return fixed;
 }
 
 /**

@@ -237,13 +237,17 @@ describe.skipIf(!GITLEAKS)('a one-line secret the history pass read in no hunk i
     expect(where(fresh)).toEqual([['aws-access-token', 'config.js', 1, expect.any(String)]]);
   });
 
-  it('a key in a file git reads as binary by its content (a NUL byte): new', async () => {
+  // Since 3.7.0 the history pass reads both of these itself
+  // (`runners/historyView.ts`, `secretHistoryView.test.ts` for a push): the
+  // full-content pass still takes the line, and the repeat — same file, rule
+  // and value — is listed once, as the history pass's finding, at its commit.
+  it('a key in a file git reads as binary by its content (a NUL byte): new — once', async () => {
     const { fresh, failed } = await judge(BASE, (dir) => writeFileSync(join(dir, 'blob.js'), `// \0\nconst AWS_KEY = "${NEW}";\n`));
     expect(failed).toEqual([]);
-    expect(where(fresh)).toEqual([['aws-access-token', 'blob.js', 2, expect.not.stringContaining(';commit=')]]);
+    expect(where(fresh)).toEqual([['aws-access-token', 'blob.js', 2, expect.stringContaining(';commit=')]]);
   });
 
-  it("a key only the merge commit adds (an evil merge — git log -p prints no merge's diff): new", async () => {
+  it("a key only the merge commit adds (an evil merge — git log -p prints no merge's diff): new — once", async () => {
     const { fresh, failed } = await judge(BASE, (dir) => {
       git(dir, 'checkout', '-q', '-b', 'side');
       write(dir, 'b.txt', ['b']);
@@ -258,7 +262,12 @@ describe.skipIf(!GITLEAKS)('a one-line secret the history pass read in no hunk i
       write(dir, 'evil.js', [`const AWS_KEY = "${NEW}";`]);
     });
     expect(failed).toEqual([]);
-    expect(where(fresh)).toEqual([['aws-access-token', 'evil.js', 1, expect.not.stringContaining(';commit=')]]);
+    // Listed once only when the gate reads the merge's line as the history
+    // pass did, in a remerge-diff (`ci/secretValues.ts`): with no hunk to say
+    // where gitleaks' piece began, the key could not be cut from its line,
+    // the line's value was not the full-content pass's, and it was listed
+    // twice (measured).
+    expect(where(fresh)).toEqual([['aws-access-token', 'evil.js', 1, expect.stringContaining(';commit=')]]);
   });
 
   // The control: a one-line key the history pass DID read in a hunk was

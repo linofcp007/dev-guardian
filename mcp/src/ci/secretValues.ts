@@ -54,6 +54,7 @@ import { parseJsonBounded } from '../platform/boundedJson.js';
 import { readProjectText } from '../platform/projectFs.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { git, withoutTreeAttributes } from '../runners/git.js';
+import { openRemergeEnv, REMERGE_DIFF } from '../runners/historyView.js';
 import type { Finding } from '../types.js';
 
 /** Drawn once per process; never written, logged or returned. */
@@ -68,8 +69,8 @@ const MAX_BLOBS = 2_000;
 /** The largest gitleaks report read for its columns. */
 const MAX_REPORT_BYTES = 64 * 1024 * 1024;
 
-/** The reports a gitleaks pass writes into its scan's report directory (`runners/gitleaksScan.ts`). */
-const REPORT_FILES = ['secrets-history.json', 'secrets-working-tree.json', 'secrets.json'];
+/** The reports a gitleaks pass writes into its scan's report directory (`runners/gitleaksScan.ts`), the merges' pass's included. */
+const REPORT_FILES = ['secrets-history.json', 'secrets-history-merges.json', 'secrets-working-tree.json', 'secrets.json'];
 
 /** Commits per `git show` call. */
 const COMMIT_BATCH = 100;
@@ -329,19 +330,30 @@ export async function rememberSecretValues(
   // One `git show -M` of the whole commit, no pathspec: a pathspec turns a
   // rename into a whole new file, every line its own first — so a renamed
   // file with an edit on a baselined secret's line was cut one column off and
-  // read as a new secret (review 12, finding 12). Without the tree's
-  // `.gitattributes`, as the history pass reads (`runners/git.ts`).
+  // read as a new secret (review 12, finding 12). As the history pass reads
+  // (`runners/historyView.ts`): without the tree's `.gitattributes`, every
+  // file as text (a NUL byte in it made "Binary files differ"), and a merge
+  // as its remerge-diff — or no merge's diff at all where git has none:
+  // `git show`'s own combined diff of a merge has `+++` lines and `@@@`
+  // hunks, and every line would read as no hunk's first, a definite answer
+  // where the honest one is "unknown".
   const hunks = new Map<string, Promise<Map<string, Set<number>> | null>>();
-  let asCommitted: Promise<NodeJS.ProcessEnv> | undefined;
+  let asRead: Promise<{ env: NodeJS.ProcessEnv; merges: string; remove: () => string | null }> | undefined;
   const hunkStarts = async (commit: string, path: string): Promise<Set<number> | null> => {
     let byPath = hunks.get(commit);
     if (byPath === undefined) {
       if (hunks.size >= MAX_BLOBS) return null;
-      asCommitted ??= withoutTreeAttributes(projectPath, process.env);
-      const args = ['-c', 'core.quotePath=false', 'show', '--format=', '--no-color', '--no-ext-diff', '-M', '-U0', '--relative', commit];
-      byPath = asCommitted
-        .then((env) => git(projectPath, args, undefined, env))
-        .then((r) => (r.exitCode === 0 ? hunkStartsByPath(r.stdout) : null));
+      asRead ??= openRemergeEnv(projectPath, process.env).then(
+        async (remerge) =>
+          remerge === null
+            ? { env: await withoutTreeAttributes(projectPath, process.env), merges: '--diff-merges=off', remove: () => null }
+            : { env: remerge.env, merges: REMERGE_DIFF, remove: remerge.remove },
+      );
+      byPath = asRead.then(async ({ env, merges }) => {
+        const args = ['-c', 'core.quotePath=false', 'show', '--format=', '--no-color', '--no-ext-diff', '--text', merges, '-M', '-U0', '--relative', commit];
+        const r = await git(projectPath, args, undefined, env);
+        return r.exitCode === 0 ? hunkStartsByPath(r.stdout) : null;
+      });
       hunks.set(commit, byPath);
     }
     return (await byPath)?.get(path) ?? null;
@@ -350,38 +362,43 @@ export async function rememberSecretValues(
   const commits = [...new Set(leaks.map((f) => commitOf(f.snippet)).filter((c): c is string => c !== null))];
   const times = await commitTimes(projectPath, commits);
 
-  for (const f of leaks) {
-    attempted.add(f);
-    const commit = commitOf(f.snippet);
-    if (commit === null) introduced.set(f, Number.POSITIVE_INFINITY);
-    else {
-      const at = times.get(commit.toLowerCase()) ?? [...times].find(([sha]) => sha.startsWith(commit.toLowerCase()))?.[1];
-      if (at !== undefined) introduced.set(f, at);
-    }
-    if (f.line_start === undefined) continue;
-    const path = (f.file_path ?? '').split('\\').join('/');
-    if (path === '' || isAbsolute(path) || path === '..' || path.startsWith('../')) continue;
-    try {
-      const text = commit !== null ? await blob(commit, path) : working(path);
-      if (text === null) continue;
-      const end = f.line_end ?? f.line_start;
-      const located = matches.get(locationKey(f.rule_id ?? '', commit ?? '', f.line_start, end, path)) ?? [];
-      const line = end === f.line_start ? lineAt(text, f.line_start) : null;
-      let first: boolean | undefined;
-      if (located.length > 0 && line !== null) {
-        if (commit === null) first = f.line_start === 1;
-        else first = (await hunkStarts(commit, path))?.has(f.line_start);
+  try {
+    for (const f of leaks) {
+      attempted.add(f);
+      const commit = commitOf(f.snippet);
+      if (commit === null) introduced.set(f, Number.POSITIVE_INFINITY);
+      else {
+        const at = times.get(commit.toLowerCase()) ?? [...times].find(([sha]) => sha.startsWith(commit.toLowerCase()))?.[1];
+        if (at !== undefined) introduced.set(f, at);
       }
-      const secrets = line === null ? [] : located.map((m) => secretFromLine(line, m, first));
-      if (located.length > 0 && secrets.every((s): s is string => s !== null)) {
-        // The secret(s) themselves: a comment on the line, or a move, is the same value.
-        values.set(f, hmac(`secret\n${[...new Set(secrets)].sort().join('\n')}`));
-        continue;
+      if (f.line_start === undefined) continue;
+      const path = (f.file_path ?? '').split('\\').join('/');
+      if (path === '' || isAbsolute(path) || path === '..' || path.startsWith('../')) continue;
+      try {
+        const text = commit !== null ? await blob(commit, path) : working(path);
+        if (text === null) continue;
+        const end = f.line_end ?? f.line_start;
+        const located = matches.get(locationKey(f.rule_id ?? '', commit ?? '', f.line_start, end, path)) ?? [];
+        const line = end === f.line_start ? lineAt(text, f.line_start) : null;
+        let first: boolean | undefined;
+        if (located.length > 0 && line !== null) {
+          if (commit === null) first = f.line_start === 1;
+          else first = (await hunkStarts(commit, path))?.has(f.line_start);
+        }
+        const secrets = line === null ? [] : located.map((m) => secretFromLine(line, m, first));
+        if (located.length > 0 && secrets.every((s): s is string => s !== null)) {
+          // The secret(s) themselves: a comment on the line, or a move, is the same value.
+          values.set(f, hmac(`secret\n${[...new Set(secrets)].sort().join('\n')}`));
+          continue;
+        }
+        const lines = linesOf(text, f.line_start, end);
+        if (lines !== null) values.set(f, hmac(`lines\n${lines}`));
+      } catch {
+        /* unknown — that finding matches by its exact identity only */
       }
-      const lines = linesOf(text, f.line_start, end);
-      if (lines !== null) values.set(f, hmac(`lines\n${lines}`));
-    } catch {
-      /* unknown — that finding matches by its exact identity only */
     }
+  } finally {
+    // The remerge-diffs' scratch object directory (a temporary one, never the repository's).
+    if (asRead !== undefined) (await asRead).remove();
   }
 }
