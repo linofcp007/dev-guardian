@@ -14,11 +14,13 @@
   "rangeStrategy": "bump",
   "prHourlyLimit": 4,
   "prConcurrentLimit": 10,
+  "minimumReleaseAge": "3 days",
   "vulnerabilityAlerts": {
     "enabled": true,
     "labels": ["security", "vulnerability"],
     "schedule": [],
-    "prPriority": 10
+    "prPriority": 10,
+    "minimumReleaseAge": null
   },
   "lockFileMaintenance": {
     "enabled": true,
