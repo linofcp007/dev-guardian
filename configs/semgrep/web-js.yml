@@ -43,9 +43,11 @@
 #     chamada, ou numa variável atribuída no mesmo bloco.
 #   - Excluídos por forma (o valor só pode ser um de vários literais), lidos
 #     no TEXTO do valor: um literal, um ternário entre literais,
-#     `Number`/`parseInt`/`parseFloat`, `new Date(...).toISOString()`,
+#     `Number`/`parseInt`/`parseFloat` e uma função de `Math` (um número:
+#     `Math.max(0, Math.floor(ms))`), `new Date(...).toISOString()`,
 #     `x.length`, marcadores gerados (`Array(n).fill('?').join(',')`,
-#     `.map(() => '?').join(',')`, com o separador LITERAL) e um acesso a um
+#     `.map(() => '?').join(',')`, `Array.from({ length: n }, () => '?')`
+#     com `.join(',')`, sempre com o separador LITERAL) e um acesso a um
 #     objeto de NOME CONSTANTE (`SORT_COLUMNS[k]`, `COLUNAS.titulo`, com ou sem
 #     `?? OUTRO`). A convenção do nome só vale para acessos a um objeto:
 #     substitui "declarado const", que custava segundos por ficheiro grande
@@ -59,17 +61,54 @@
 #     alternativa exigia as duas: até à D-2 um `const COLS = \`...\`` disparava
 #     sempre (43 falsos positivos no mcp/src deste repositório, 26 depois da
 #     correção). O nome nunca conta: `const SORT = req.query.sort` dispara
-#     (D-4). Um `let`/`var` NUNCA é excluído: pode ser
+#     (D-4). Um `let`/`var` declarado NUNCA é excluído (a variável de um
+#     ciclo é o caso abaixo): pode ser
 #     reatribuído com dados do pedido, e a regra não segue a ordem das
 #     atribuições. Preço medido: um `let direction = x ? 'ASC' : 'DESC'` dispara
 #     (falso positivo). Outro preço: uma constante importada
 #     (`import { PREFIX } from './x'`) interpolada dispara, a regra não a vê,
 #     e uma constante calculada por uma função do próprio módulo
-#     (`const READABLE = notInFutureSql()`) também: são os 26 que ficam no
-#     mcp/src, todos fragmentos montados pelo código.
+#     (`const READABLE = notInFutureSql()`) também, como o valor devolvido
+#     por uma função (`${notInFutureSql()}`): ver um fragmento de SQL
+#     constante através de uma chamada ou de outro ficheiro pede propagação
+#     INTER-procedimento, que o Semgrep OSS não faz. São 19 dos 22 que ficam
+#     no mcp/src (2026-10-27, Semgrep 1.182.0; eram 26 antes dos ciclos, do
+#     `Math` e do `Array.from`): o `READABLE` 9 vezes, `notInFutureSql(...)`
+#     5, `datedInFutureSql()` 2, `seenIn('ASC'|'DESC')` 2 e `PROTECTED_SQL`
+#     (um template de módulo que interpola outra constante) 1. Os outros 3:
+#     dois ciclos sobre um array IMPORTADO (abaixo) e o parâmetro de
+#     `pragma(source)`, que a regra não distingue de um valor do pedido.
+#     Todos lidos à mão: nenhum é atacável.
 #     Fica de fora: o acesso a um objeto em minúsculas, mesmo constante, dispara;
 #     e o `.join(...)` de um array local de literais SEM nenhum `push` de um
 #     valor interpolado (a decoy D01) é tratado como seguro só em linha.
+#     A exclusão de `Math` e dos números lê o texto inteiro do valor: um
+#     `Math.max(a, b) && g(x)` passa por um número (um `+` não, o ramo da
+#     concatenação apanha o lado direito; medido).
+#   - Excluída também a variável de um `for (... of ...)` sobre um conjunto
+#     fechado: o valor interpolado É a variável do ciclo (a mesma, não uma
+#     que a sombreie) e o array percorrido só tem literais de texto, escrito
+#     no ciclo ou num `const` do MESMO ficheiro (`export` e `as const`
+#     incluídos; em função ou método de classe: sondado). Medido no Semgrep
+#     1.182.0: nem a propagação de constantes nem a simbólica levam um array
+#     de um `const` ao ciclo (só escalares), por isso a declaração é lida por
+#     sequência; `for (const`, `for (let`, `for (var` e um identificador de
+#     fora casam o mesmo padrão, e o `as const` não chega ao texto do valor.
+#     Daí as guardas: não é excluído um ciclo cujo corpo atribui à variável
+#     (`=`, `+=`, em qualquer bloco do corpo), nem um `const` com um push,
+#     unshift, splice, fill, copyWithin ou uma atribuição por índice depois
+#     da declaração, em qualquer função do ficheiro (sondado). Ancorar estas
+#     guardas num `const $A = [...]` e não em qualquer `const` foi o que
+#     evitou um timeout no mcp/src/hooks/bashGuard.ts (5 381 linhas: 12,6 s
+#     contra 4,7 s, medido). O nome nunca conta (`for (const t of TABELAS)`
+#     com `TABELAS` parâmetro dispara). Não vistos (lacunas): um array
+#     importado dispara (os dois de db.ts no mcp/src: `PROJECT_KEYED_TABLES`
+#     vem de dbProvenance.ts); um `const` mudado por um alias, por uma função
+#     que o recebe ou por uma função declarada ACIMA dele é excluído; um
+#     identificador de fora usado como variável do ciclo e reatribuído por
+#     uma função chamada no corpo é excluído; um `forEach`/`map` sobre o
+#     mesmo array dispara (só o `for ... of`). `Math` é o objeto global: um
+#     `Math` local que o sombreie não é visto.
 #
 # web-js-path-traversal
 #   - Taint INTRA-procedimento: a fonte (`req.query`, `req.params`, `req.body`)
@@ -325,7 +364,7 @@ rules:
       # (regex sobre o texto do valor) e através de uma variável do mesmo bloco.
       - metavariable-regex:
           metavariable: $X
-          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$).+'
+          regex: '(?s)^(?!(?:(?:Number|parseInt|parseFloat|Math\.\w+)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|Array\.from\(\s*\{\s*length\s*:[^{}]*\}\s*,\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$).+'
       - pattern-not-inside:
           patterns:
             - pattern: |
@@ -333,7 +372,58 @@ rules:
                 ...
             - metavariable-regex:
                 metavariable: $V
-                regex: '(?s)^(?:-?\d[\d_]*(?:\.\d+)?|(?:"[^"]*"|''[^'']*''|`[^`$]*`?)(?:\s*\+\s*(?:"[^"]*"|''[^'']*''|`[^`$]*`?))+|(?:Number|parseInt|parseFloat)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$'
+                regex: '(?s)^(?:-?\d[\d_]*(?:\.\d+)?|(?:"[^"]*"|''[^'']*''|`[^`$]*`?)(?:\s*\+\s*(?:"[^"]*"|''[^'']*''|`[^`$]*`?))+|(?:Number|parseInt|parseFloat|Math\.\w+)\(.*\)|"[^"]*"|''[^'']*''|`[^`$]*`?|[^?]+\?\s*(?:"[^"]*"|''[^'']*'')\s*:\s*(?:"[^"]*"|''[^'']*'')|[A-Z][A-Z0-9_]*(?:\[[^\]]*\]|\.\w+)(?:\s*(?:\?\?|\|\|)\s*[A-Z][A-Z0-9_]*(?:\.\w+|\[[^\]]*\])?)?|(?:new\s+)?Array\([^)]*\)\.fill\(\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|[\w$.]+\.map\(\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|Array\.from\(\s*\{\s*length\s*:[^{}]*\}\s*,\s*\(\)\s*=>\s*["'']\?["'']\s*\)\.join\(\s*["''][^"'']*["'']\s*\)|new Date\(.*\)\.toISOString\(\)|[\w.]+\.length)$'
+      # Um ciclo sobre um conjunto fechado (cabeçalho, "Excluída também a
+      # variável de um `for`"): o valor interpolado É a variável do ciclo
+      # (`$X` unifica com o valor do achado) e o array só tem literais de
+      # texto, em linha ou num `const` do mesmo ficheiro lido por sequência
+      # (a propagação de constantes não leva arrays). O padrão do ciclo casa
+      # também `let`/`var` (medido), daí os dois `pattern-not` sobre uma
+      # atribuição à variável no corpo; as guardas da declaração ancoram num
+      # `const $ARR = [...]` (ancoradas em qualquer `const`, deram timeout).
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - patterns:
+                    - pattern: for (const $X of $ARR) $BODY
+                    - metavariable-regex:
+                        metavariable: $ARR
+                        regex: '(?s)^\[\s*(?:"[^"]*"|''[^'']*'')(?:\s*,\s*(?:"[^"]*"|''[^'']*''))*\s*,?\s*\]$'
+                - patterns:
+                    - pattern-inside: |
+                        const $ARR = $LIST;
+                        ...
+                    - metavariable-regex:
+                        metavariable: $LIST
+                        regex: '(?s)^\[\s*(?:"[^"]*"|''[^'']*'')(?:\s*,\s*(?:"[^"]*"|''[^'']*''))*\s*,?\s*\]$'
+                    - pattern-not-inside:
+                        patterns:
+                          - pattern: |
+                              const $ARR = [...];
+                              ...
+                              $ARR.$MUT(...);
+                              ...
+                          - metavariable-regex:
+                              metavariable: $MUT
+                              regex: ^(push|unshift|splice|fill|copyWithin)$
+                    - pattern-not-inside: |
+                        const $ARR = [...];
+                        ...
+                        $ARR[$I] = $W;
+                        ...
+                    - pattern: for (const $X of $ARR) $BODY
+            - pattern-not: |
+                for (const $X of $ARR) {
+                  ...
+                  $X = $Y;
+                  ...
+                }
+            - pattern-not: |
+                for (const $X of $ARR) {
+                  ...
+                  $X += $Y;
+                  ...
+                }
       - pattern-not:
           patterns:
             - pattern: $W.join(...)
