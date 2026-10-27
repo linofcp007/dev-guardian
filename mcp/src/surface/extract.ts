@@ -182,19 +182,26 @@ export function isLiteralPath(value: string): boolean {
 
 /**
  * Normalise every path-parameter syntax we support to a bare name:
- *   :id  ·  :id?  ·  {id}  ·  <int:item_id>  →  id / item_id
+ *   :id  ·  :id?  ·  {id}  ·  {id:int}  ·  <int:item_id>  →  id / item_id
+ *
+ * A brace group names its parameter FIRST, whatever follows: ASP.NET's
+ * `{id:int}`, `{id?}`, `{**slug}`, `{id=5}`, Spring's `{id:[0-9]+}`,
+ * Starlette's `{id:int}`. Reading the last `:` segment (as `<int:id>` is
+ * read) gave `int`, and so did the `:name` pass, which therefore reads the
+ * path with those groups taken out. A group that does not open on a name is
+ * Express 5's optional segment (`{/:id}`): it stays, for the `:name` pass.
  */
 export function extractParams(path: string): string[] {
   const params: string[] = [];
-  for (const match of path.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
+  const unbraced = path.replace(/\{([^}]*)\}/g, (group, inner: string) => {
+    const name = /^\*{0,2}([A-Za-z_]\w*)/.exec(inner)?.[1];
+    if (name === undefined) return group;
+    params.push(name);
+    return '';
+  });
+  for (const match of unbraced.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
     const name = match[1];
     if (name !== undefined) params.push(name);
-  }
-  for (const match of path.matchAll(/\{([^}]+)\}/g)) {
-    const inner = match[1];
-    if (inner === undefined) continue;
-    const name = inner.split(':').pop()?.trim();
-    if (name !== undefined && name.length > 0) params.push(name);
   }
   for (const match of path.matchAll(/<([^>]+)>/g)) {
     const inner = match[1];

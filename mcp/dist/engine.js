@@ -58736,15 +58736,15 @@ function isLiteralPath(value) {
 }
 function extractParams(path3) {
   const params = [];
-  for (const match of path3.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
+  const unbraced = path3.replace(/\{([^}]*)\}/g, (group, inner) => {
+    const name = /^\*{0,2}([A-Za-z_]\w*)/.exec(inner)?.[1];
+    if (name === void 0) return group;
+    params.push(name);
+    return "";
+  });
+  for (const match of unbraced.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
     const name = match[1];
     if (name !== void 0) params.push(name);
-  }
-  for (const match of path3.matchAll(/\{([^}]+)\}/g)) {
-    const inner = match[1];
-    if (inner === void 0) continue;
-    const name = inner.split(":").pop()?.trim();
-    if (name !== void 0 && name.length > 0) params.push(name);
   }
   for (const match of path3.matchAll(/<([^>]+)>/g)) {
     const inner = match[1];

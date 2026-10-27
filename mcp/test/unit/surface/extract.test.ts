@@ -751,6 +751,22 @@ describe('extractParams', () => {
     expect(extractParams('/opt/:id?')).toEqual(['id']);
     expect(extractParams('/static/path')).toEqual([]);
   });
+
+  it('reads a brace group by its leading name, never its constraint', () => {
+    expect(extractParams('/api/Orders/{id:int}')).toEqual(['id']);
+    expect(extractParams('/a/{id:int:min(1)}/{slug?}')).toEqual(['id', 'slug']);
+    expect(extractParams('/files/{**path}')).toEqual(['path']);
+    expect(extractParams('/files/{*path}')).toEqual(['path']);
+    expect(extractParams('/page/{n=1}')).toEqual(['n']);
+    expect(extractParams('/x/{id:[0-9]+}')).toEqual(['id']);
+    expect(extractParams('/x/{code:\\d{3}}')).toEqual(['code']);
+    expect(extractParams('/items/{item_id:int}')).toEqual(['item_id']);
+  });
+
+  it("leaves Express 5's optional segment to the :name pass", () => {
+    expect(extractParams('/users{/:id}')).toEqual(['id']);
+    expect(extractParams('/file{.:ext}')).toEqual(['ext']);
+  });
 });
 
 describe('languageFromPath', () => {
