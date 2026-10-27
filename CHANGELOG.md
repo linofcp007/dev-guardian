@@ -49,6 +49,13 @@ and the push-run history pass left two kinds of change unread.
   `[Route]`s, a supertype, `[area]`, `[ActionName]` — stays partial with the route's own path. Cached surfaces are
   recomputed (the cache key holds the pack's hash). The routes pack grows from 64 to 73 rules (`guardian_kind:
   scope`, `guardian_class_prefix: spring | aspnet` in the pack contract).
+- **zod 4.** A refused tool call's -32602 / `invalid_input` text is now zod 4's — "Required" reads `Invalid input:
+  expected string, received undefined`, an unknown key `Unrecognized key: "x"`, a bad scan id `Invalid GUID`, a bad
+  `expires_at` `Invalid ISO datetime` — and still names every key. A client matching zod 3's wording must change.
+  The advertised schemas are otherwise identical (draft-07 output, `additionalProperties: false` throughout), but
+  six integer parameters with no upper bound (`scan_dast`'s `max_requests`, `timeout_ms`, `wall_clock_ms`;
+  `llm_scan`'s `max_tasks`, `max_estimated_tokens`, `per_task_overhead`) now advertise and enforce `maximum:
+  9007199254740991`.
 
 ### Security
 
@@ -78,6 +85,10 @@ and the push-run history pass left two kinds of change unread.
   holds (`${"}; Remove-Item C:\ …` was ok), and `flock` / `runuser` hand their command on with its quoting intact
   (`flock /tmp/l bash -c 'rm -rf ~'` was ok).
 - `guardian-deps`' no-server fallback no longer tells you to run `npm audit` inside the repository.
+- **zod 4.6.7** (from 3.25.76) fixes GHSA-mrhx-c7xc-m3w5 — one issue kept per failing element of an array, even
+  past its `.max()`. 3.6.1's 10 000-item cap on a tool call's lists stays, for a list with no `.max()` or nested in
+  another; it now runs as a preprocess step zod 4 stops at, since zod 4's SDK path no longer calls the method 3.6.1
+  overrode.
 
 ### Fixed
 
