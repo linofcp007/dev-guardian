@@ -198,6 +198,31 @@ removing either lock branch's anchoring `pattern-inside` leaves `return ...`
 matching every return in 5084 files, and that scan outruns the harness's
 ten-minute limit — twenty of the run's 133 minutes.
 
+**`web-js-sql-template`, review 3.7.1** (Semgrep 1.182.0, pack sha256 `267dad37…`, 809 s). Three exclusions for
+the false positives dev-guardian's own scan reported in `mcp/src/storage/`: the variable of a `for (… of …)` over
+an array of string literals — written in the loop, or a `const` of the same file that nothing pushes into,
+splices or writes by index after its declaration, and that the loop body never assigns — `Math.<fn>(…)` as a
+number, and `Array.from({ length: n }, () => '?').join(<literal>)` as generated placeholders.
+`npm run ablate -- web-js --filter=web-js-sql-template`, with the registered Node corpus fetched as tarballs of
+the pack header's three commits into `GUARDIAN_WEBJS_SRC` (Semgrep read 4892 files, not the header's 4933: here
+the forty or so whose path passes Windows' 260-character limit are not read; the same 15 findings on the same
+lines):
+
+| axis | result |
+| --- | --- |
+| 0 fires on hits/ | 3/3 rules; `hits/` holds 35 SQL findings now (54 in all, 59 in the fixture corpus) |
+| 1 live | **24/24, 0 DEAD** |
+| 2 keeps true positives | 22/24 — both flags the `${table}` that `hits/sql-loop-escapes.ts` keeps, annotated, beside its bug |
+| 3 no rise in the real-code count | 21/24 — the same three as before: the template and concatenation branches and the `$V` regex |
+
+The first run had a 25th clause, DEAD: a `pattern-not` for `$X += $Y` in the loop body. Probed, it was inert
+rather than unfixtured — Semgrep's `$X = $Y` already matches `+=`, `-=`, `||=` and `??=` — so it was deleted,
+and the `+=` line in `hits/` stays loud through the `=` guard alone. None of the new clauses moves the Node
+corpus, which holds none of the three shapes. With `--real-code=src` they do: the rule goes from 26 findings to
+22 on `mcp/src` (noise floor 0, 22 of 22 comparable), and axis 3 adds one flag there, the inline branch's `$ARR`
+regex, whose removal would silence the two loops over `PROJECT_KEYED_TABLES` in `db.ts`. That array is imported
+from `dbProvenance.ts`, and an unproven array is supposed to fire.
+
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
 by a different method. The C# one was added after the fact and immediately deleted a rule:

@@ -213,6 +213,19 @@
 # em todas as chamadas de método e só depois filtrar pelos nomes e pelo texto.
 # O rácio depende da máquina: o mesmo pack deu 1,19 na primeira medição; por
 # isso o limite ficou em 1,30 (D-5) e não em 1,25.
+# Terceira medição (2026-10-27, revisão 3.7.1, Semgrep 1.182.0, outra
+# máquina, carregada por outras sessões; o mesmo argv, 5 rodadas ALTERNADAS
+# sem o pack / com o pack novo / com o pack antes dos ciclos): mínimos 25,4 /
+# 33,0 / 34,0 s, rácios 1,300 (novo) e 1,338 (antigo); as medianas (26,3 /
+# 53,3 / 36,3) são carga — as corridas lentas trazem timeouts em regras de
+# todos os packs, também no llm.yml sozinho. O pack novo não custa mais do
+# que o antigo dentro desse ruído, e nesta máquina nenhum dos dois fica com
+# folga abaixo de 1,30. Só a regra SQL, `--time`, 3 rodadas alternadas numa
+# janela calma: tempo de match (CPU) mínimo 45,2 s antes, 51,2 s depois
+# (+13 %), relógio igual (23 a 26 s, dominado pelo parse); numa janela
+# carregada as mesmas variantes espalharam-se por 53 a 95 s. O
+# documents.test.ts do outline sai por timeout da regra SQL sob carga, antes
+# e depois (0,2 s nele sozinho, nas duas versões).
 # Primeira medição (2026-10-02, limite então 1,10: não cumprido):
 # Medido sobre o corpus do eixo 3 (os três commits acima, 4933 ficheiros),
 # com o argv do `scan_sast` em `local_only` (`--metrics=off --config=llm.yml
@@ -228,6 +241,21 @@
 # web-js-path-traversal 34,1 (1,11, mas 42,7 noutra rodada), web-js-ssrf 30,2
 # (1,00). A regra SQL percorre cada chamada com texto interpolado; as outras
 # duas partem de uma fonte `req.*` e quase não custam.
+#
+# ABLAÇÃO depois dos ciclos, do `Math` e do `Array.from` (2026-10-27,
+# revisão 3.7.1, Semgrep 1.182.0; pack sha256 267dad37…, 809 s;
+# `--filter=web-js-sql-template`, o corpus real de sempre, 4892 ficheiros
+# lidos e os mesmos 15 achados): 24 cláusulas, eixo 0 3/3, eixo 1 24/24
+# vivas (0 DEAD), eixo 2 22/24 e eixo 3 21/24. As 2 do eixo 2 são o
+# `${table}` que hits/sql-loop-escapes.ts guarda, anotado, ao lado do bug
+# (a cláusula a funcionar); as 3 do eixo 3 são as de sempre (ramo de
+# template, ramo de concatenação, `$V`). Uma primeira corrida tinha uma 25.ª
+# cláusula, DEAD: um `pattern-not` para `$X += $Y`, que o `$X = $Y` já casa
+# (sondado), apagada. As cláusulas novas não mexem no corpus real (que não
+# tem nenhuma das três formas); com `--real-code=src` (o mcp/src) levam a
+# regra de 26 a 22 achados, e o eixo 3 marca também a regex de `$ARR`: sem
+# ela, os dois ciclos de db.ts sobre um array importado calavam-se. hits/
+# tem agora 35 achados SQL (54 no total; 59 no corpus de fixtures inteiro).
 #
 # ABLAÇÃO depois da D-2/D-4 (2026-10-08, máquina nova; pack sha256
 # a3fb662b…, 904 s de relógio): o mesmo veredicto da medição abaixo. Eixo 0
