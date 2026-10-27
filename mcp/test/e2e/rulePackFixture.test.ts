@@ -1048,6 +1048,9 @@ const EXPECTED_ANNOTATION_ROUTES = [
   'spring/PrefixForms.java:112 spring GET /helper [partial]',
   'spring/PrefixForms.java:126 spring GET /inner-iface [partial]',
   'spring/PrefixForms.java:131 spring GET /in-record [partial]',
+  // The @Controller twin of `InheritingController` — the inherits rule's
+  // `@Controller` branch read DEAD in the ablation run until it existed.
+  'spring/PrefixForms.java:141 spring GET /page [partial]',
   // ---- ASP.NET class routes and tokens (aspnet/PrefixTokens.cs). Resolved:
   // `[controller]/[action]` with the `Async` suffix dropped, a bare attribute
   // served AT the template, an action whose body holds a local function

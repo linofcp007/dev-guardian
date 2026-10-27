@@ -132,3 +132,12 @@ public class OuterController {
         public String inRecord() { return v; }
     }
 }
+
+// A plain @Controller with a superclass and no prefix: partial, like the
+// @RestController one above — the fixture of the inherits rule's
+// `@Controller` branch, which read DEAD without it.
+@Controller
+class LegacyPageController extends BasePage {
+    @GetMapping("/page")
+    public String page() { return "page"; }
+}

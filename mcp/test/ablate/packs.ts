@@ -149,14 +149,16 @@
  * `test/e2e/rulePackFixture.test.ts` and the surface tools address them by
  * name, so the harness takes `hitsSubdir: '.'` (the fixture root) instead.
  *
- * **The decoy baseline is 9, not 0**, and four of those are `guardian_kind:
+ * **The decoy baseline is 11, not 0**, and four of those are `guardian_kind:
  * route`. Every one is undecidable rather than untried, and the e2e test
  * enumerates them: `Route::get('not/a/leading/slash')` on a class that merely
  * happens to be called `Route` is indistinguishable from Laravel's facade, and
  * Ruby's `get 'config/value'` is exactly what a Sinatra route looks like. The
- * other five are an `app.use('/static', express.static(...))` mount, which is
- * a real mount, and four ordinary imports in the decoy files. So the number is
- * printed and pinned, never gated at zero.
+ * other seven are an `app.use('/static', express.static(...))` mount, which is
+ * a real mount, and six ordinary imports in the decoy files (`decoys.go`'s
+ * grouped import is one match per item). So the number is printed and pinned,
+ * never gated at zero. (These notes said 9, four imports, until the 3.7.0
+ * class-prefix run measured 11 on the 3.6.1 pack as well.)
  *
  * It was 8 until five decoys were added for the guards that the first full run
  * reported DEAD — three chi exclusions, `guardian-mount-express`'s `$PREFIX`

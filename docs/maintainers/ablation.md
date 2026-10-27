@@ -325,7 +325,8 @@ name. So the registration in `packs.ts` maps them instead:
 `decoySubdirs: ['frameworks/fp']` subtracts the decoy tree from it. Both knobs
 exist for this pack; `--hits=` and `--decoys=` are their ad-hoc equivalents.
 
-**The decoy baseline is 9, and pinning it is the point.** Four of those
+**The decoy baseline is 9 (11 since; see the class-prefix run below), and
+pinning it is the point.** Four of those
 are `guardian_kind: route` and every one is *undecidable*, not untried:
 `Route::get('not/a/leading/slash')` on a class that merely happens to be called
 `Route` is indistinguishable from Laravel's facade, and Ruby's
@@ -438,3 +439,38 @@ full run the DEAD count drops by those five, to 33. Every other verdict in
 those two rules is unchanged, and the surface e2e still reports **zero** routes
 out of either decoy file — the decoys have to be silent on the shipped pack and
 loud only with the guard removed, or they are measuring something else.
+
+**Class-prefix run** (3.7.0, sha256 `6de0cd7f…`, 7570 s wall clock, Semgrep
+1.182.0 without login, noise floor 0). The nine `guardian_kind: scope` rules
+that let Spring and ASP.NET routes resolve their class-level prefix, and
+`guardian-route-spring-request` rewritten to name the method it decorates —
+73 rules, 143 clauses, 139 ablated after 4 collapsed as duplicates (a
+`pattern-inside` and the `pattern-either` branch that holds nothing else):
+
+| axis | result |
+| --- | --- |
+| 0 fires on hits/ | **73/73 rules fire** |
+| 1 live | 105/139 pass, 34 DEAD — **33** the pre-existing ones (the predicted count, confirmed), 1 new |
+| 2 keeps true positives | 115/139 pass, 24 "suppressing" — the 16 above plus 8 new |
+| 3 no rise on `mcp/src` | 136/139 pass, 3 "raising" — all working positive branches |
+
+Of the 30 new or rewritten clauses, 29 read live. The one DEAD was
+`guardian-scope-spring-inherits`'s `@Controller` branch, for the reason five
+clauses above read DEAD: no `@Controller` class in the corpus extended
+anything, so nothing reached it. `LegacyPageController` in
+`annotations/spring/PrefixForms.java` is that fixture, and
+`--filter=guardian-scope-spring-inherits` then read 4/4 live. All 8 new
+"suppressing" verdicts are the guard working and are each its own fixture: the
+abstract-class `pattern-not`s (an abstract handler is no handler, an abstract
+controller has no route or name of its own), `[ControllerName]` and
+`[ActionName]`, and the `pattern-inside` that keeps the ASP.NET boundaries
+and actions to `[Route]` classes (`JsonHelper` and `NoRouteController` appear
+without it). Axis 3 is vacuous for all of them — `mcp/src` holds no Java or
+C#. The pair pass found the same 5 MOVES and 1 structural ERROR as the first
+run.
+
+The decoy baseline read **11**, not 9, on this run — and on the 3.6.1 pack
+too, measured by scanning `frameworks/fp/` with both: the same four undecidable
+routes and one mount, and six imports rather than four (`decoys.go`'s grouped
+import reports one match per item, and `decoys.py` has one). The class-prefix
+rules added none.

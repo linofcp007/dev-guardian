@@ -1568,10 +1568,9 @@ rules:
   # login` (every match below arrived with none): a class range starts at the
   # class's FIRST annotation (`@RestController`), so the prefix literal lies
   # inside it; the prefix rule's range is the literal alone, quotes included;
-  # a nested class's range
-  # is strictly inside its outer class's; `class $C { ... }` matches enums
-  # too, and `interface $C { ... }` annotation types, while a record needs
-  # its own `record $C(...) { ... }`.
+  # a nested class's range is strictly inside its outer class's; `class $C {
+  # ... }` matches enums too, and `interface $C { ... }` annotation types,
+  # while a record needs its own `record $C(...) { ... }`.
   #
   # The join resolves a route only when every fact agrees, and leaves it
   # partial otherwise — it never guesses:
