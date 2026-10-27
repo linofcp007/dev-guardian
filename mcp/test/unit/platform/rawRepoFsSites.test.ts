@@ -163,11 +163,16 @@ const ALLOWED: Record<string, Allowed> = {
   },
   'src/platform/version.ts': { apis: { readFileSync: 1 }, kind: 'own', reason: "the plugin's own plugin.json / package.json" },
   'src/runners/gitleaksScan.ts': {
-    apis: { writeFileSync: 3 },
+    apis: { writeFileSync: 4 },
     kind: 'own',
     reason:
       'writes into its own mkdtemp directory the uncommitted project files it read through readProjectBytes, ' +
-      'and its own gitleaks config and sanitized report',
+      "and its own gitleaks config and sanitized report, and the merges' report with conflicted files renamed",
+  },
+  'src/runners/historyView.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason: "the history pass's attributes file (`* diff`), into its own mkdtemp scratch directory",
   },
   'src/runners/projectFiles.ts': {
     apis: { readdirSync: 1 },
