@@ -71,6 +71,8 @@ export function appended(req: { query: { suffix: string } }) {
 
 export function besideTheLoopVariable(owner: string) {
   for (const table of ['scans', 'findings']) {
+    // excluded: the `${table}` on the next line is the near-miss the loop
+    // exclusion keeps silent (the ablation's axis 2 reveals it there).
     db.prepare(`DELETE FROM ${table} WHERE owner = '${owner}'`).run(); // BUG: web-js-sql-template -- the owner, not the table
   }
 }

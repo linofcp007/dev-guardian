@@ -95,7 +95,8 @@
 #     sequência; `for (const`, `for (let`, `for (var` e um identificador de
 #     fora casam o mesmo padrão, e o `as const` não chega ao texto do valor.
 #     Daí as guardas: não é excluído um ciclo cujo corpo atribui à variável
-#     (`=`, `+=`, em qualquer bloco do corpo), nem um `const` com um push,
+#     (`=` e os compostos `+=`, `??=`..., que o mesmo padrão casa: medido; em
+#     qualquer bloco do corpo), nem um `const` com um push,
 #     unshift, splice, fill, copyWithin ou uma atribuição por índice depois
 #     da declaração, em qualquer função do ficheiro (sondado). Ancorar estas
 #     guardas num `const $A = [...]` e não em qualquer `const` foi o que
@@ -106,7 +107,8 @@
 #     vem de dbProvenance.ts); um `const` mudado por um alias, por uma função
 #     que o recebe ou por uma função declarada ACIMA dele é excluído; um
 #     identificador de fora usado como variável do ciclo e reatribuído por
-#     uma função chamada no corpo é excluído; um `forEach`/`map` sobre o
+#     uma função chamada no corpo, ou a variável reatribuída por
+#     desestruturação (`[t] = [x]`, medido), é excluído; um `forEach`/`map` sobre o
 #     mesmo array dispara (só o `for ... of`). `Math` é o objeto global: um
 #     `Math` local que o sombreie não é visto.
 #
@@ -378,8 +380,10 @@ rules:
       # (`$X` unifica com o valor do achado) e o array só tem literais de
       # texto, em linha ou num `const` do mesmo ficheiro lido por sequência
       # (a propagação de constantes não leva arrays). O padrão do ciclo casa
-      # também `let`/`var` (medido), daí os dois `pattern-not` sobre uma
-      # atribuição à variável no corpo; as guardas da declaração ancoram num
+      # também `let`/`var` (medido), daí o `pattern-not` sobre uma atribuição
+      # à variável no corpo (`$X = $Y` casa também `+=`, `-=`, `||=` e `??=`:
+      # medido, um `pattern-not` só para o `+=` leu DEAD na ablação e saiu);
+      # as guardas da declaração ancoram num
       # `const $ARR = [...]` (ancoradas em qualquer `const`, deram timeout).
       - pattern-not-inside:
           patterns:
@@ -416,12 +420,6 @@ rules:
                 for (const $X of $ARR) {
                   ...
                   $X = $Y;
-                  ...
-                }
-            - pattern-not: |
-                for (const $X of $ARR) {
-                  ...
-                  $X += $Y;
                   ...
                 }
       - pattern-not:
