@@ -662,7 +662,9 @@ their respective projects.
   `NPM_CONFIG_*` variables): the run names the registry the project named, to
   set in your own `~/.npmrc` if you want it asked — and its `omit=dev` or
   `audit-level` no longer narrow what is reported. `pip-audit`, `dotnet
-  restore` and `dotnet list package` get the allowlisted environment too. A
+  restore` and `dotnet list package` get the allowlisted environment too, and
+  so do `scan_sast`'s `dotnet restore` and `dotnet build` (3.7.0: they ran
+  the project's MSBuild with the server's whole environment). A
   repository still configures them where they read it, and each such file is
   named on its run: a requirements file's index options and references
   (pip expands a `${VAR}` there — measured on pip 26.2.1, a
@@ -745,6 +747,7 @@ project's own build and test commands.
 | Package registries, through the package managers | `deps_audit` and `audit_executive`, which runs it (`npm audit` on a copy of the manifests, so the registry of your own npm configuration, never one the project's `.npmrc` names; `pip-audit`, which installs the requirements into a temporary virtualenv from PyPI, or from the index a requirements file names — named on the run) — **even with `local_only: true`**, `deps_update_plan` (`npm outdated` on a copy of the manifests, `composer outdated --no-plugins`, `go list -m -u`, `cargo outdated`; never Bundler), `create_fix_pr` (installs in its worktree with `--ignore-scripts` / `--no-scripts --no-plugins`) | per call |
 | The project's own test command and whatever it fetches | `create_fix_pr` runs `npm test`, `pytest`, `cargo test` or `go test ./...` in its worktrees — the project's own code, with an allowlisted environment that carries no token or credential of the server's (see [Hardening posture](#hardening-posture)) — (`cargo` and `go` download the project's dependencies; `npm ci --ignore-scripts` runs first when there is a lock file) | only for a candidate fix, dry runs included |
 | nuclei's update check and templates | `scan_dast` with `use_nuclei` | nuclei's own automatic update check and template download are on by default; dev-guardian does not pass `-disable-update-check` |
+| The .NET SDK's telemetry (`dc.services.visualstudio.com`, Application Insights) | **disabled by dev-guardian**: every `dotnet` it starts — `scan_sast`'s restore and build, `deps_audit`'s and `deps_update_plan`'s restores and `dotnet list package`, `check_toolchain`'s `dotnet --list-sdks`, `install_toolchain`'s `dotnet tool install`, `create_fix_pr`'s `dotnet add package` and re-scans — gets `DOTNET_CLI_TELEMETRY_OPTOUT=1` and `DOTNET_NOLOGO=1`, set by the process runner over any value of yours (`mcp/src/runners/processRunner.ts`) | never. Measured on SDK 10.0.403 through a refusing proxy with a fresh `DOTNET_CLI_HOME`: every `dotnet restore`, `build` and `list package` after the first opened three connections to `dc.services.visualstudio.com:443`; with the variable, none. |
 | Syft's update check (`toolbox-data.anchore.io`) | **disabled by dev-guardian**: every Syft run gets `SYFT_CHECK_FOR_APP_UPDATE=false`, and `-c` pointing at an empty file, so a repository's `.syft.yaml` cannot turn on Syft's network lookups either (`mcp/src/runners/syftRun.ts`) | never |
 | The GitHub API | `scan_iac`'s zizmor, when a GitHub token (`GH_TOKEN`) is in the server's environment | zizmor's online audits; without a token it runs offline |
 | WPScan API, and the site itself | `wp_vuln_check` (through the `wpscan` CLI) | per call |
