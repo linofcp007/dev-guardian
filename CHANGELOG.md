@@ -85,6 +85,10 @@ and the push-run history pass left two kinds of change unread.
   holds (`${"}; Remove-Item C:\ …` was ok), and `flock` / `runuser` hand their command on with its quoting intact
   (`flock /tmp/l bash -c 'rm -rf ~'` was ok).
 - `guardian-deps`' no-server fallback no longer tells you to run `npm audit` inside the repository.
+- **The standard Renovate profile** (`init_project`'s `renovate.json`) holds every update 3 days, not only the
+  auto-merged ones: a group, a major or a digest pin opened a PR the day a version was published. Vulnerability
+  alerts keep no floor. An installed copy is refreshed through the config-drift check; the paranoid profile is
+  unchanged.
 - **zod 4.6.7** (from 3.25.76) fixes GHSA-mrhx-c7xc-m3w5 — one issue kept per failing element of an array, even
   past its `.max()`. 3.6.1's 10 000-item cap on a tool call's lists stays, for a list with no `.max()` or nested in
   another; it now runs as a preprocess step zod 4 stops at, since zod 4's SDK path no longer calls the method 3.6.1
