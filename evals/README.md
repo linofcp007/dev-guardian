@@ -47,10 +47,12 @@ case expects them to fire.
 
 `fixture.sh` sources `fixtures/lib.sh` and copies `fixtures/shop-app/` (a small Express app whose `orderTotal`
 calls `reduce` with no initial value — a TypeError on an empty cart). Its manifest is stored as
-`package.json.fixture` and renamed on copy, so this repository carries no vulnerable `package.json` of its own. The routing case builds `.specs/` with
-dev-spec-driven's own CLI from the sibling checkout `../dev-spec-driven` (next to this repository) and loads that
-checkout as a second plugin (`plugins: ["../..", "../../../dev-spec-driven"]`); without it the scaffold fails and
-says why.
+`package.json.fixture` and renamed on copy, so this repository carries no vulnerable `package.json` of its own. The routing case loads a second plugin,
+dev-spec-driven, from a copy inside the case (`plugins: ["plugins/dev-spec-driven"]`; the plugin under test is
+loaded on its own) and builds `.specs/` with that copy's CLI; without it the scaffold fails and says why. The
+harness loads a case's plugin only from a subdirectory of the case: neither the sibling checkout nor `../..` is
+accepted. The copy leaves out dev-spec-driven's own `evals/`, which this suite would otherwise run as its own, and
+is git-ignored.
 
 ## Run (local only)
 
@@ -62,7 +64,9 @@ claude plugin eval . --ablation none --tag triggering negative --trust-plugin --
 claude plugin eval . --ablation none --tag behavior --scaffold --allow-real-servers --trust-plugin --no-publish \
   --allow-tools Write Edit "mcp__plugin_dev-guardian_dev-guardian__*" --max-cost-usd 6 -j 2
 
-# Routing — both plugins (needs ../dev-spec-driven)
+# Routing — both plugins: first a copy of the dev-spec-driven checkout next to this repository, without its evals/
+mkdir -p evals/route-reported-bug-specs-en/plugins/dev-spec-driven
+git -C ../dev-spec-driven archive HEAD -- . ':(exclude)evals' | tar -x -C evals/route-reported-bug-specs-en/plugins/dev-spec-driven
 claude plugin eval . --ablation none --tag routing --scaffold --allow-real-servers --trust-plugin --no-publish \
   --allow-tools Write Edit "mcp__plugin_dev-guardian_dev-guardian__*" "mcp__plugin_dev-spec-driven_spec-driven__*" \
   --max-cost-usd 4
@@ -76,6 +80,11 @@ claude plugin eval . --ablation none --tag routing --scaffold --allow-real-serve
 - The behavioural cases scan for real: Semgrep, Trivy and gitleaks are used when installed, and their absence is
   part of what `behavior-gap-not-clean-en` grades. A scan can take a few minutes (`timeout_seconds: 420`).
 - Results land in `evals/results/` (git-ignored).
+- On Windows, run `--scaffold` from Git Bash: from PowerShell `bash` is WSL's, and every scaffold fails with
+  `execvpe(/bin/bash) failed`.
+- Agent worktrees under `.claude/worktrees/` make the harness fail with `ENAMETOOLONG` (it copies the plugin
+  directory): run from a clean export instead — `git archive HEAD | tar -x -C <dir>`, with the dev-spec-driven
+  checkout beside `<dir>` for the routing copy.
 
 When you change a skill's or a command's `description`, add a case for any new trigger or exclusion before relying
 on it, and keep the near-miss cases passing.
