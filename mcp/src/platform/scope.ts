@@ -43,7 +43,7 @@ import { z } from 'zod';
 import { changedFiles, git, repoState, resolveCommit, splitNul } from '../runners/git.js';
 import { listProjectFiles, SCANNED_WALK_EXCLUDE } from '../runners/projectFiles.js';
 import { isGuardianOutput } from './guardianOutput.js';
-import { globToRegExp, hasGlobMagic } from './glob.js';
+import { compileGlob, hasGlobMagic, type GlobMatcher } from './glob.js';
 import type { ProjectExclusions } from './guardianIgnore.js';
 
 export const ScanScopeInput = z
@@ -264,7 +264,7 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
   const assertInside = insideChecker(projectPath, root);
   const files = new Set<string>();
   const dirs: string[] = [];
-  const globs: RegExp[] = [];
+  const globs: GlobMatcher[] = [];
   const missing: string[] = [];
   let allFiles: string[] | null = null;
 
@@ -298,11 +298,11 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
       // Not `expandGlob`: it stops after 50 000 entries without saying so,
       // and a truncated scope would read as a complete one.
       allFiles ??= listProjectFiles(projectPath, SCANNED_WALK_EXCLUDE).filter((f) => !isGuardianOutput(f));
-      const re = globToRegExp(rel);
-      globs.push(re);
+      const glob = compileGlob(rel);
+      globs.push(glob);
       let matched = 0;
       for (const f of allFiles) {
-        if (matchesSelfOrAncestor(re, f)) {
+        if (matchesSelfOrAncestor(glob, f)) {
           assertInside(f);
           files.add(f);
           matched += 1;
@@ -324,16 +324,16 @@ function resolvePaths(projectPath: string, entries: readonly string[]): PathPart
     member: (p) =>
       files.has(p) ||
       dirs.some((d) => d === '' || p.startsWith(`${d}/`)) ||
-      globs.some((re) => matchesSelfOrAncestor(re, p)),
+      globs.some((glob) => matchesSelfOrAncestor(glob, p)),
   };
 }
 
-/** Does `re` match `path` or one of its parent directories? */
-function matchesSelfOrAncestor(re: RegExp, path: string): boolean {
-  if (re.test(path)) return true;
+/** Does `glob` match `path` or one of its parent directories? */
+function matchesSelfOrAncestor(glob: GlobMatcher, path: string): boolean {
+  if (glob.test(path)) return true;
   const segments = path.split('/');
   for (let i = 1; i < segments.length; i++) {
-    if (re.test(segments.slice(0, i).join('/'))) return true;
+    if (glob.test(segments.slice(0, i).join('/'))) return true;
   }
   return false;
 }

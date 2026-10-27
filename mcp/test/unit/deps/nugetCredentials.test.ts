@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import { nugetRestoreRefusal, parseNugetConfig, type NugetEnvironment } from '../../../src/deps/nugetCredentials.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -67,6 +68,37 @@ describe('parseNugetConfig', () => {
   it('an unterminated comment hides the rest; a self-closing section declares nothing', () => {
     expect(parseNugetConfig(config(`<packageSources /><!-- ${sources(['x', OWN])}`)).adds).toEqual([]);
   });
+
+  it('a section after a self-closing one, a closing tag in any case and spacing, and none for a section left open', () => {
+    expect(parseNugetConfig(config(`<packageSources/>${sources(['a', OWN])}`)).adds).toEqual([{ key: 'a', value: OWN }]);
+    expect(parseNugetConfig(config(`<packageSources><add key="a" value="${OWN}"/></PACKAGESOURCES >`)).adds).toEqual([
+      { key: 'a', value: OWN },
+    ]);
+    expect(parseNugetConfig(config(`<packageSources><add key="a" value="${OWN}"/>`)).adds).toEqual([]);
+  });
+
+  it("an attribute's name is its whole run of name characters, past leading digits — never a tail of a longer name", () => {
+    const parsed = parseNugetConfig(config(`<packageSources><add xkey="no" 1key="a" value="${OWN}" /></packageSources>`));
+    expect(parsed.adds).toEqual([{ key: 'a', value: OWN }]);
+  });
+});
+
+// A NuGet.config is the scanned repository's, up to 1 MB: each shape hands a
+// search that restarts at every tag (or every character of a word) as many
+// starting points as it can.
+describe('parseNugetConfig stays linear on a hostile configuration', () => {
+  const fill = (chunk: string, size: number): string => chunk.repeat(Math.ceil(size / chunk.length)).slice(0, size);
+  it.each([
+    ['opening tags alone', (n: number): string => fill('<packageSources>', n)],
+    ['opening tags with no >', (n: number): string => fill('<packageSources ', n)],
+    ['opening tags, then one self-closing end', (n: number): string => `${fill('<packageSources ', n)}/>`],
+    ['<add with no >', (n: number): string => `<packageSources>${fill('<add ', n)}</packageSources>`],
+    ['credential elements with no >', (n: number): string => `<packageSourceCredentials>${fill('<a', n)}</packageSourceCredentials>`],
+    ['an attribute of one long word', (n: number): string => `<packageSources><add ${fill('a', n)}/></packageSources>`],
+    ['an attribute of digits and letters', (n: number): string => `<packageSources><add ${fill('1a', n)}/></packageSources>`],
+  ])('%s: eight times the configuration costs well under 22.6 times as much', (label, make) => {
+    expectLinear(label, (n) => parseNugetConfig(make(n)), 8_000);
+  }, 120_000);
 });
 
 describe('nugetRestoreRefusal', () => {

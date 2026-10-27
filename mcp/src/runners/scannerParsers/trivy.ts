@@ -21,6 +21,7 @@
 
 import { dirname, join, relative, sep } from 'node:path';
 import { parseYamlBounded } from '../../platform/boundedParse.js';
+import { globMatcher, withoutTrailingSlashes, type GlobMatcher, type GlobStep } from '../../platform/glob.js';
 import {
   listProjectDirOrNull,
   presentInProject,
@@ -509,10 +510,9 @@ const TOML_SCAN_MAX = 1024 * 1024;
 /** What the whole assessment may read. */
 const COVERAGE_BUDGET_BYTES = 64 * 1024 * 1024;
 const COVERAGE_BUDGET_FILES = 5_000;
-/** Workspace patterns considered per declaration, their length, and their wildcards. */
+/** Workspace patterns considered per declaration, and their length. */
 const MAX_WORKSPACE_PATTERNS = 1_000;
 const MAX_WORKSPACE_PATTERN_LENGTH = 256;
-const MAX_WORKSPACE_PATTERN_STARS = 6;
 
 /** The project, the assessment's read budget, and what it has already learned. */
 interface CoverageReader {
@@ -842,36 +842,41 @@ function walkManifests(
 // `[workspace] members` / `exclude`, uv `[tool.uv.workspace] members` /
 // `exclude`. Gradle and .NET lock per project, so no workspace applies.
 
-/** A workspace glob, relative to its root: `*` one segment, `**` any depth. Null: not one this code compiles. */
-function workspaceGlob(pattern: string): RegExp | null {
-  const p = pattern.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+/**
+ * A workspace glob, relative to its root: `*` one segment, `**` any depth.
+ * Null: not one this code compiles. Matched by `platform/glob.ts`'s
+ * {@link globMatcher}, never a backtracking expression: as one, six `*`
+ * (the bound this kept) took 0.75 s on a 75-character member name and grew
+ * with its sixth power (measured). A test costs at most the path's length
+ * times the pattern's, which stays bounded: a longer pattern declares no
+ * member here — the member stays a gap, the conservative answer.
+ */
+function workspaceGlob(pattern: string): GlobMatcher | null {
+  const p = withoutTrailingSlashes(pattern.trim().replace(/\\/g, '/').replace(/^\.\//, ''));
   if (p === '' || p.startsWith('/') || p.split('/').includes('..')) return null;
-  // Bounded: a long pattern, or one with many wildcards, backtracks without
-  // end on a member's path. Such a pattern declares no member here — the
-  // member stays a gap, the conservative answer.
-  if (p.length > MAX_WORKSPACE_PATTERN_LENGTH || (p.match(/\*/g) ?? []).length > MAX_WORKSPACE_PATTERN_STARS) return null;
-  let re = '';
+  if (p.length > MAX_WORKSPACE_PATTERN_LENGTH) return null;
+  const steps: GlobStep[] = [];
   for (let i = 0; i < p.length; i++) {
     const c = p.charAt(i);
     if (c === '*') {
       if (p.charAt(i + 1) === '*') {
-        re += '.*';
+        steps.push({ kind: 'any' });
         i += 1;
       } else {
-        re += '[^/]*';
+        steps.push({ kind: 'star' });
       }
     } else if (c === '?') {
-      re += '[^/]';
+      steps.push({ kind: 'char' });
     } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+      steps.push({ kind: 'literal', options: [c] });
     }
   }
-  return new RegExp(`^${re}$`);
+  return globMatcher(steps);
 }
 
 interface WorkspaceDecl {
-  include: RegExp[];
-  exclude: RegExp[];
+  include: GlobMatcher[];
+  exclude: GlobMatcher[];
 }
 
 /** The quoted strings of a TOML array `key = [ … ]` inside `table` (possibly multi-line), line by line. */
@@ -912,10 +917,10 @@ function tomlArrayIn(text: string, table: string, key: string): string[] | null 
 
 /** Compiled include/exclude patterns, or null when none includes anything. */
 function compileDecl(include: readonly string[], exclude: readonly string[]): WorkspaceDecl | null {
-  const compile = (ps: readonly string[]): RegExp[] =>
+  const compile = (ps: readonly string[]): GlobMatcher[] =>
     ps.slice(0, MAX_WORKSPACE_PATTERNS).flatMap((p) => {
-      const re = workspaceGlob(p);
-      return re === null ? [] : [re];
+      const glob = workspaceGlob(p);
+      return glob === null ? [] : [glob];
     });
   const inc = compile(include);
   return inc.length > 0 ? { include: inc, exclude: compile(exclude) } : null;
@@ -983,7 +988,7 @@ function readWorkspace(r: CoverageReader, rootAbs: string, ecosystem: string): W
 }
 
 function declaredMember(decl: WorkspaceDecl, relFromRoot: string): boolean {
-  return decl.include.some((re) => re.test(relFromRoot)) && !decl.exclude.some((re) => re.test(relFromRoot));
+  return decl.include.some((glob) => glob.test(relFromRoot)) && !decl.exclude.some((glob) => glob.test(relFromRoot));
 }
 
 /**

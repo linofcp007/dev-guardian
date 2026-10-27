@@ -1,10 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { applyGroup } from '../../../src/fixpr/apply.js';
+import { applyGroup, repinPip } from '../../../src/fixpr/apply.js';
 import type { SemgrepFixPlan } from '../../../src/fixpr/semgrepFix.js';
 import type { FixCandidate, FixGroup, UpgradeStep } from '../../../src/fixpr/types.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 afterAll(cleanupTempDirs);
 
@@ -289,6 +290,25 @@ describe('applyGroup — pip steps edit the pin in the worktree, never pip insta
     expect(r.applied).toBe(false);
     expect(r.failure?.stderr_head).toContain("no 'requests==2.31.0' pin");
   });
+});
+
+describe('repinPip', () => {
+  it('repins every spelling pip reads as the name, with its extras; an extra holding a [ is no pin', () => {
+    expect(repinPip('Py_Yaml[a,b] ==6.0\npy.yaml==6.0.1\n', 'py-yaml', '6.0', '6.0.2')).toEqual({
+      text: 'Py_Yaml[a,b] ==6.0.2\npy.yaml==6.0.1\n',
+      count: 1,
+    });
+    expect(repinPip('requests[so[cks]==2.31.0\n', 'requests', '2.31.0', '2.32.0').count).toBe(0);
+  });
+
+  // The requirements file is the scanned repository's: `a[` over and over
+  // hands the extra's `[^…]*` a start at every one.
+  it.each([
+    ['a[ over and over', (n: number): string => 'a['.repeat(n / 2)],
+    ['a[ over and over, then one ]', (n: number): string => `${'a['.repeat(n / 2)}]`],
+  ])('%s: eight times the file costs well under 22.6 times as much', (label, make) => {
+    expectLinear(label, (n) => repinPip(make(n), 'a', '1.0', '1.1'), 8_000);
+  }, 120_000);
 });
 
 describe('applyGroup — semgrep applies only the target rules (Task 11 item 4)', () => {
