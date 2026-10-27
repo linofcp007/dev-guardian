@@ -560,6 +560,49 @@ export function commandWriteDestinations(name: string, args: readonly string[]):
   }
 }
 
+/** git's own options before its subcommand that take the next word as their value. */
+const GIT_VALUED = new Set(['-c', '--git-dir', '--work-tree', '--namespace', '--exec-path', '--config-env', '--super-prefix', '--attr-source']);
+
+/**
+ * The working-tree paths `git rm` deletes and `git mv` moves away — its
+ * pathspecs past its options and `--`, read from the directory git's `-C`
+ * moves to — as written: a pathspec is git's, not the shell's (its `*`
+ * crosses `/`), so the guard judges them itself. None for `git rm --cached`,
+ * which only untracks, for `-n` / `--dry-run`, which only lists, and for an
+ * exclusion (`:!x`, `:^x`, `:(exclude)x`); any other magic (`:/x`,
+ * `:(top,glob)x`) is dropped and the rest read from where the command runs.
+ * Not in {@link effectsOf}: only Claude Code's settings are judged on them.
+ */
+export function gitRemoves(args: readonly string[]): string[] {
+  let dir = '';
+  let i = 0;
+  for (; i < args.length; i += 1) {
+    const a = args[i] ?? '';
+    if (a === '-C') dir = resolveFrom(dir, args[++i] ?? '.');
+    else if (GIT_VALUED.has(a)) i += 1;
+    else if (!a.startsWith('-')) break;
+  }
+  const sub = args[i];
+  if (sub !== 'rm' && sub !== 'mv') return [];
+  const paths: string[] = [];
+  let optionsDone = false;
+  for (let k = i + 1; k < args.length; k += 1) {
+    const a = args[k] ?? '';
+    if (!optionsDone && a === '--') optionsDone = true;
+    else if (!optionsDone && a.startsWith('--')) {
+      // git takes a long option by any prefix that names it alone: `--cach`, `--dry`.
+      const name = a.slice(2).split('=')[0] ?? '';
+      if (name !== '' && ((sub === 'rm' && 'cached'.startsWith(name)) || 'dry-run'.startsWith(name))) return [];
+      if (name === 'pathspec-from-file' && !a.includes('=')) k += 1;
+    } else if (!optionsDone && /^-[A-Za-z]+$/.test(a)) {
+      if (a.includes('n')) return [];
+    } else if (!/^:(?:\/*[!^]|\([^)]*\bexclude\b)/.test(a)) paths.push(a.replace(/^:(?:\([^)]*\)|\/+)/, ''));
+  }
+  // `git mv SOURCE… DEST`: the sources go; with one operand it does nothing.
+  const gone = sub === 'mv' ? paths.slice(0, -1) : paths;
+  return gone.filter((p) => p !== '').map((p) => resolveFrom(dir, p));
+}
+
 /** Commands that delete what they are given. */
 const REMOVERS = new Set(['rm', 'unlink', 'ri', 'remove-item', 'del', 'erase', 'rd', 'rmdir']);
 

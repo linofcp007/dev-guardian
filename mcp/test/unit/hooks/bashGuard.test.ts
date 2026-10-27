@@ -4786,6 +4786,200 @@ describe("assessBashCommand — deleting or moving away Claude Code's settings f
     expect(a.level).toBe('block');
     expect(a.ask).toBeUndefined();
   });
+
+  // A residual of 3.7.0: the question was asked only for a command that named a
+  // settings file — not for a glob that can match one, the whole directory that
+  // holds them, `git rm` or `find … -delete`, which took them as surely.
+  describe('a glob, the directory that holds them, git rm and find take them too', () => {
+    it.each([
+      // a glob that can match a settings file's name
+      ['rm .claude/settings*.json', 'bash'],
+      ['rm .claude/*.json', 'bash'],
+      ['rm -f .claude/*', 'bash'],
+      ['rm ~/.claude/settings.?ocal.json', 'bash'],
+      ['rm .clau[d]e/settings.json', 'bash'],
+      ['rm "$CLAUDE_CONFIG_DIR"/settings*', 'bash'],
+      ['rm ~/.claude-conta2/*.json', 'bash'],
+      ['cd .claude && rm settings*', 'bash'],
+      ['rm "C:/ProgramData/ClaudeCode/"*.json', 'bash'],
+      ['Remove-Item .claude\\settings*', 'powershell'],
+      ['Remove-Item .claude\\* -Force', 'powershell'],
+      ['del .claude\\*.json', 'powershell'],
+      ['cmd /c "del /q .claude\\*"', 'bash'],
+      // the directory that holds them, or a glob that can name it
+      ['rm -rf .claude', 'bash'],
+      ['rm -r ~/.claude', 'bash'],
+      ['rm -rf .claude/', 'bash'],
+      ['rm -rf ./.claude', 'bash'],
+      ['rm -rf .clau*', 'bash'],
+      ['rm -rf ~/.c*', 'bash'],
+      ['mv .claude .claude.bak', 'bash'],
+      ['rm -rf "$CLAUDE_CONFIG_DIR"', 'bash'],
+      ['rm -rf "${CLAUDE_CONFIG_DIR}/"', 'bash'],
+      ['rm -rf ~/.claude-conta2', 'bash'],
+      ['rm -rf /etc/claude-code', 'bash'],
+      ['Remove-Item .claude -Recurse', 'powershell'],
+      ['Remove-Item -LiteralPath .claude -Recurse -Force', 'powershell'],
+      ['Remove-Item $env:CLAUDE_CONFIG_DIR -Recurse -Force', 'powershell'],
+      ['Move-Item .claude .claude-old', 'powershell'],
+      ['rd /s /q .claude', 'powershell'],
+      ['cmd /c rd /s /q .claude', 'bash'],
+      // git rm deletes the working file (not --cached); git mv moves it away
+      ['git rm .claude/settings.json', 'bash'],
+      ['git rm -f .claude/settings.local.json', 'bash'],
+      ['git rm -q -- .claude/settings.json', 'bash'],
+      ['git rm -r .claude', 'bash'],
+      ["git rm '*.json'", 'bash'],
+      ["git rm -r '.claude/*'", 'bash'],
+      ['git -C sub rm .claude/settings.json', 'bash'],
+      ['git -C .claude rm settings.json', 'bash'],
+      ["git rm ':/.claude/settings.json'", 'bash'],
+      ['git --no-pager -c core.quotepath=off rm .claude/settings.json', 'bash'],
+      ['sudo git rm .claude/settings.json', 'bash'],
+      ['git mv .claude/settings.json old.json', 'bash'],
+      ['git mv -k .claude/settings.json x.json', 'bash'],
+      ["bash -c 'git rm .claude/settings.json'", 'bash'],
+      ['git rm .claude\\settings.json', 'powershell'],
+      // find deletes what it finds: a start that names them, or one above them whose tests can match them
+      ["find .claude -name 'settings*' -delete", 'bash'],
+      ['find ~/.claude -delete', 'bash'],
+      ['find .claude -name settings.json -exec rm {} \\;', 'bash'],
+      ['find .claude -type f -exec rm -f {} +', 'bash'],
+      ['find .claude -name settings.local.json -exec mv {} /tmp/ \\;', 'bash'],
+      ['find "$CLAUDE_CONFIG_DIR" -name "*.json" -delete', 'bash'],
+      ["find .claude ! -name '*.md' -delete", 'bash'],
+      ["find .claude -maxdepth 1 -name '*.json' -delete", 'bash'],
+      ['find . -name settings.local.json -delete', 'bash'],
+      ['find . -maxdepth 2 -name settings.json -delete', 'bash'],
+      ["find . -name '*.json' -not -path './node_modules/*' -delete", 'bash'],
+      ["find . -path ./node_modules -prune -o -name '*.json' -delete", 'bash'],
+      ["find . -path '*/.claude/*' -delete", 'bash'],
+      ["find ~ -name 'settings*.json' -delete", 'bash'],
+      ["find .claude -name 'settings*' | xargs rm", 'bash'],
+      ["find .claude -name 'settings*' -print0 | xargs -0 rm -f", 'bash'],
+    ] as const)('%s (%s) asks', (command, shell) => {
+      const a = assessBashCommand(command, { shell, claudeConfigDir: ccd });
+      expect({ command, settings: a.rules.includes('claude-settings-remove'), level: a.level }).toEqual({ command, settings: true, level: 'warn' });
+      expect(a.ask).toMatch(/Claude Code's settings.*permissions\.deny/);
+    });
+
+    // The verdict each had before — no question, nothing more, nothing less.
+    it.each([
+      ['rm -f a.txt', 'bash', 'ok', []],
+      ['rm .claude/agents/old.md', 'bash', 'ok', []],
+      ['rm -f .claude/*.md', 'bash', 'ok', []],
+      ['rm -f .claude/agents/*', 'bash', 'ok', []],
+      ['rm .claude/settings.json.bak', 'bash', 'ok', []],
+      ['rm -r build', 'bash', 'warn', ['rm-rf-broad']],
+      ['rm -rf build/*', 'bash', 'warn', ['rm-rf-broad']],
+      ['rm -rf ./*', 'bash', 'warn', ['rm-rf-broad']],
+      ['rm -rf .claude-plugin', 'bash', 'warn', ['rm-rf-broad']],
+      ['rm -rf .claude-plugin*', 'bash', 'warn', ['rm-rf-broad']],
+      ['rm -rf .claude/worktrees/agent-1', 'bash', 'warn', ['rm-rf-broad']],
+      ['rm -rf ~/.claude/projects', 'bash', 'warn', ['rm-rf-broad']],
+      ['rm -rf .claude/*/', 'bash', 'warn', ['rm-rf-broad']],
+      ['Remove-Item .\\dist -Recurse', 'powershell', 'warn', ['rm-rf-broad']],
+      ['Remove-Item .\\dist\\* -Recurse', 'powershell', 'warn', ['rm-rf-broad']],
+      ['git rm src/old.ts', 'bash', 'ok', []],
+      ["git rm '*.log'", 'bash', 'ok', []],
+      ["git rm -r 'src/*'", 'bash', 'ok', []],
+      ['git rm --cached .claude/settings.json', 'bash', 'ok', []],
+      ['git rm --cached -r .claude', 'bash', 'ok', []],
+      ['git rm -r --cached .', 'bash', 'ok', []],
+      ['git rm --cach .claude/settings.json', 'bash', 'ok', []],
+      ['git rm -n .claude/settings.json', 'bash', 'ok', []],
+      ['git rm -rn .claude', 'bash', 'ok', []],
+      ['git rm --dry-run .claude/settings.local.json', 'bash', 'ok', []],
+      ["git rm ':!.claude/settings.json' src/x.ts", 'bash', 'ok', []],
+      ['git mv -n .claude/settings.json old.json', 'bash', 'ok', []],
+      ['git mv old.json .claude/settings.json', 'bash', 'ok', []],
+      ['git log -- .claude/settings.json', 'bash', 'ok', []],
+      ['git checkout -- .claude/settings.json', 'bash', 'ok', []],
+      ["find . -name '*.tmp' -delete", 'bash', 'ok', []],
+      ["find .claude -name '*.md' -delete", 'bash', 'ok', []],
+      ["find ~/.claude -name '*.jsonl' -mtime +30 -delete", 'bash', 'ok', []],
+      ['find ~/.claude/todos -empty -delete', 'bash', 'ok', []],
+      ["find . -maxdepth 1 -name '*.json' -delete", 'bash', 'ok', []],
+      ['find . -maxdepth 1 -name settings.json -delete', 'bash', 'ok', []],
+      ["find . -name '*.json' -path '*/fixtures/*' -delete", 'bash', 'ok', []],
+      ["find . -type d -name __pycache__ -exec rm -rf {} +", 'bash', 'ok', []],
+      ['find .claude -name settings.json', 'bash', 'ok', []],
+      ['find . -type d -empty -delete', 'bash', 'ok', []],
+      ['find . -type f -delete', 'bash', 'warn', ['find-delete-broad']],
+    ] as const)('%s (%s) keeps its verdict', (command, shell, level, rules) => {
+      const a = assessBashCommand(command, { shell, claudeConfigDir: ccd });
+      expect({ command, level: a.level, rules: a.rules, ask: a.ask }).toEqual({ command, level, rules, ask: undefined });
+    });
+
+    it('a CLAUDE_CONFIG_DIR whose name has no dot is named by a glob only as it begins — `build/*` is not it', () => {
+      const plain = { claudeConfigDir: '/home/me/claude-cfg' };
+      expect(assessBashCommand('rm -rf build/*', plain).rules).toEqual(['rm-rf-broad']);
+      expect(assessBashCommand('rm -rf ~/claude-cfg', plain).ask).toMatch(/permissions\.deny/);
+      expect(assessBashCommand('rm -rf ~/claude*', plain).ask).toMatch(/permissions\.deny/);
+      expect(assessBashCommand('rm ~/claude-cfg/*.json', plain).ask).toMatch(/permissions\.deny/);
+    });
+
+    it('without CLAUDE_CONFIG_DIR a directory merely named like it holds no settings — with it, a glob that can name it asks', () => {
+      for (const command of ['rm -rf ~/.claude-conta2', 'rm -rf .claude-*']) {
+        expect(assessBashCommand(command, { claudeConfigDir: '' }).rules).toEqual(['rm-rf-broad']);
+      }
+      expect(assessBashCommand('rm -rf .claude-*', { claudeConfigDir: ccd }).ask).toMatch(/permissions\.deny/);
+    });
+
+    it('one provably elsewhere — a fixture’s — only warns; the project’s, the home directory’s and CLAUDE_CONFIG_DIR ask', () => {
+      const here = { cwd: '/work/proj', projectDir: '/work/proj', homeDir: '/home/alice', platform: 'linux' as const, claudeConfigDir: '/data/cfg/cc' };
+      for (const command of ['rm -rf /tmp/fx/.claude', 'git rm /tmp/fx/.claude/settings.json', 'find /tmp/fx/.claude -delete']) {
+        const a = assessBashCommand(command, here);
+        expect({ command, settings: a.rules.includes('claude-settings-remove'), elsewhere: a.rules.includes('guard-config-elsewhere'), ask: a.ask }).toEqual({
+          command,
+          settings: false,
+          elsewhere: true,
+          ask: undefined,
+        });
+      }
+      for (const command of [
+        'rm -rf /work/proj/.claude',
+        'rm -rf /home/alice/.claude',
+        'rm -rf /data/cfg/cc',
+        'rm -rf ~/.claude',
+        'rm -rf /etc/claude-code',
+        'find /work/proj -name settings.local.json -delete',
+        'find /work -name settings.local.json -delete',
+        'find /data/cfg -name settings.json -delete',
+      ]) {
+        expect({ command, ask: assessBashCommand(command, here).ask }).toEqual({ command, ask: expect.stringMatching(/permissions\.deny/) });
+      }
+      // Above nothing of this session's: not this rule.
+      expect(assessBashCommand('find /tmp/x -name settings.json -delete', here).level).toBe('ok');
+      expect(assessBashCommand('find /work/proj/src -name settings.json -delete', here).level).toBe('ok');
+    });
+
+    it.each(['rm -rf .claude; rm -rf /', 'git rm .claude/settings.json && rm -rf ~', 'find .claude -delete; rm -rf /'])('%s: the block wins over the question', (command) => {
+      const a = assessBashCommand(command, { claudeConfigDir: '' });
+      expect(a.level).toBe('block');
+      expect(a.ask).toBeUndefined();
+    });
+
+    it('a find with more tests than are read takes them to match', () => {
+      const a = assessBashCommand(`find .claude ${"-name 'zz*' -o ".repeat(64)}-name zz -delete`, { claudeConfigDir: '' });
+      expect(a.ask).toMatch(/permissions\.deny/);
+    });
+
+    // Every start a glob that names the settings, read against tests none of which match: with as
+    // many tests as starts (the cap is what keeps that linear), and with the most tests read.
+    timeShape(
+      'a find with as many tests as start paths that name the settings',
+      (n) => assessBashCommand(`find ${Array.from({ length: n }, (_, k) => `.c[${String(k)}]*`).join(' ')} ${"-name 'zz*' -o ".repeat(n)}-name zz -delete`),
+      100,
+      2_000,
+    );
+    timeShape(
+      'a find with many start paths that name the settings and the most tests read',
+      (n) => assessBashCommand(`find ${Array.from({ length: n }, (_, k) => `.c[${String(k)}]*`).join(' ')} ${"-name 'zz*' -o ".repeat(63)}-name zz -delete`),
+      1_000,
+      2_000,
+    );
+  });
 });
 
 // A residual of 3.6.1: `flock FILE CMD…` and `runuser … -- CMD…` (finding 7)
