@@ -57,8 +57,14 @@ function withMerge(): string {
   return dir;
 }
 
+// The two cases below are about a git that has both (2.40+); the host's may
+// not — Debian 12, the test:docker images, ships 2.39 — so its version is
+// pinned here, and the older ones have the last case.
+const MODERN_GIT = '2.47.3';
+
 describe('the history view (runners/historyView.ts)', () => {
   it('a git with remerge-diff and GIT_ATTR_SOURCE: a merges pass, every file as text, nothing to name', async () => {
+    fake.version = MODERN_GIT;
     const dir = withMerge();
     const view = await openHistoryView(dir, process.env, ['--all']);
     try {
@@ -78,6 +84,7 @@ describe('the history view (runners/historyView.ts)', () => {
   });
 
   it('no merge in the walk: no merges pass', async () => {
+    fake.version = MODERN_GIT;
     const dir = makeTempDir('history-view-');
     git(dir, 'init', '-q', '-b', 'main');
     writeFileSync(join(dir, 'a.txt'), 'a\n');
