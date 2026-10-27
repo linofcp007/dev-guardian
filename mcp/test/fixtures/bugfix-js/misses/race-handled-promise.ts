@@ -66,3 +66,26 @@ export async function mappedReturn(ids: string[]): Promise<void> {
   const pending = ids.map((id) => repo.save(id));
   await Promise.all(pending);
 }
+
+// --- Review 3.7.0, measured on Outline v1.12.0: once the receiver regex
+// --- reached `this.oauthClient` and `OAuthClient`, these two shapes were
+// --- four of its six findings there, all false.
+
+declare const expect: (v: unknown) => { rejects: { toThrow(): Promise<void> } };
+
+// Collected into an array and awaited as a batch further down — the same
+// deliberate act as capturing it in a variable (outline's
+// OAuthAuthentication.updateActiveAt and utils/indexing.ts).
+export async function collected(a: unknown, b: unknown): Promise<void> {
+  const promises: Promise<void>[] = [];
+  if (a !== undefined) {
+    promises.push(repo.save(a));
+  }
+  promises.push(repo.update(b));
+  await Promise.all(promises);
+}
+
+// Handed to a test assertion, which awaits it (outline's OAuthClient.test.ts).
+export async function assertedRejection(a: unknown): Promise<void> {
+  await expect(repo.update(a)).rejects.toThrow();
+}

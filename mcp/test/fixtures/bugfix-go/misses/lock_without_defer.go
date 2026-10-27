@@ -91,3 +91,63 @@ func earlyUnlock(mu *sync.Mutex, m map[string]int, key string) error {
 	mu.Unlock()
 	return nil
 }
+
+// Its read-lock twin (crypto/tls, os/pipe_unix.go in the Go 1.27.3 tree).
+// Without it the RUnlock exclusion had no fixture, only real code, behind it.
+func earlyRUnlock(mu *sync.RWMutex, m map[string]int, key string) int {
+	mu.RLock()
+	if key == "" {
+		mu.RUnlock()
+		return 0
+	}
+	v := m[key]
+	mu.RUnlock()
+	return v
+}
+
+// --- Review 3.7.0, measured on the Go 1.27.3 standard library: the DEFERRED
+// --- spelling of the same idiom. A deferred Unlock runs at every return of
+// --- the function, so nothing after it skips anything. 21 of the 39
+// --- findings 3.6.1 left on that tree were these three shapes.
+
+// net/http/httputil's ServerConn: defer, then return, inside the branch.
+func deferredEarlyUnlock(mu *sync.Mutex, m map[string]int, key string) error {
+	mu.Lock()
+	if key == "" {
+		defer mu.Unlock()
+		return nil
+	}
+	m[key] = 1
+	mu.Unlock()
+	return nil
+}
+
+func deferredEarlyRUnlock(mu *sync.RWMutex, m map[string]int, key string) int {
+	mu.RLock()
+	if key == "" {
+		defer mu.RUnlock()
+		return 0
+	}
+	v := m[key]
+	mu.RUnlock()
+	return v
+}
+
+// net/http's gzipReader.acquire: a deferred Unlock at the top, and the lock
+// dropped and retaken by hand around a call that may block. Every return is
+// covered by the defer; the explicit Unlock is what made the rule match.
+func deferAndDropAroundSlowCall(mu *sync.Mutex, m map[string]int, key string, slow func()) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if m == nil {
+		return nil
+	}
+	mu.Unlock()
+	slow()
+	mu.Lock()
+	if key == "" {
+		return nil
+	}
+	m[key] = 1
+	return nil
+}

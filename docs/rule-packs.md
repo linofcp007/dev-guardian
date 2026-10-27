@@ -75,7 +75,7 @@ dev-guardian ships **169 rules in 14 packs** under [`configs/semgrep/`](../confi
 | `bugfix-go-off-by-one-loop-lte-len` | WARNING | go | 0 (bare) |
 | `bugfix-go-memory-leak-body-not-closed` | WARNING | go | 10 |
 | `bugfix-go-memory-leak-ticker-not-stopped` | WARNING | go | 3 |
-| `bugfix-go-race-condition-lock-without-defer` | WARNING | go | 6 |
+| `bugfix-go-race-condition-lock-without-defer` | WARNING | go | 16 |
 | `bugfix-go-edge-case-nil-map-write` | WARNING | go | 5 |
 
 ## bugfix-java
@@ -102,7 +102,7 @@ dev-guardian ships **169 rules in 14 packs** under [`configs/semgrep/`](../confi
 | `bugfix-js-error-handling-empty-promise-catch` | WARNING | javascript, typescript | 2 |
 | `bugfix-js-off-by-one-loop-lte-length` | WARNING | javascript, typescript | 2 |
 | `bugfix-js-off-by-one-index-at-length` | ERROR | javascript, typescript | 1 |
-| `bugfix-js-race-condition-floating-mutation` | WARNING | javascript, typescript | 18 |
+| `bugfix-js-race-condition-floating-mutation` | WARNING | javascript, typescript | 20 |
 | `bugfix-js-edge-case-reduce-without-initial` | WARNING | javascript, typescript | 1 |
 | `bugfix-js-edge-case-parseint-without-radix` | INFO | javascript, typescript | 0 (bare) |
 | `bugfix-js-null-safety-unchecked-find` | WARNING | javascript, typescript | 2 |

@@ -369,6 +369,46 @@ rules:
   # `pattern-inside` com o Unlock no fim mantém a exigência de que a função
   # desbloqueie à mão (uma função que devolve com o lock na mão, de propósito,
   # não é este bug).
+  #
+  # Medido no código real (revisão 3.7.0, Go 1.27.3 `src/`, Semgrep 1.182.0):
+  # a 3.6.0 dava 102 achados (blocos) e a 3.6.1 dá 39 (returns). Os 75 blocos
+  # que sumiram (52 funções), lidos à mão, eram TODOS o desbloqueio
+  # antecipado — nenhum verdadeiro positivo perdido, nem nas 16 funções com
+  # um Unlock seguido de novo Lock (todos os returns estavam entre os dois,
+  # com o lock livre).
+  #
+  # O `defer $MU.Unlock()` antes do return é a mesma forma, diferida, e era
+  # metade do que sobrava: `if mau { defer mu.Unlock(); return err }`
+  # (net/http/httputil) e o `Lock(); defer Unlock()` no topo de uma função que
+  # ainda larga e volta a pegar no lock à mão à volta de uma chamada lenta
+  # (o gzipReader do net/http, o crypto/tls, o vcweb). O defer corre em
+  # QUALQUER return da função, por isso o return que vem depois dele não
+  # salta nada: 39 -> 20, e os 19 que saem eram todos falsos positivos. Um
+  # defer de OUTRO lock não liberta este (fixture).
+  #
+  # Mas o defer da função de fora não liberta o lock que um closure pega por
+  # conta própria: `time.AfterFunc(d, func() { mu.Lock(); if x { return };
+  # ...; mu.Unlock() })` sob um `defer mu.Unlock()` é o bug, e a exclusão do
+  # defer apagava-o (o grpc3017 do goker, no testdata do Go). As duas últimas
+  # branches repõem-no: um return dentro de uma função literal que faz o seu
+  # próprio Lock só é excluído por um Unlock explícito, nunca pelo defer de
+  # fora. O `func(...) { ... }` só casa funções literais, não declarações
+  # (medido).
+  #
+  # LIMITAÇÕES medidas, ambas porque a Semgrep não segue o estado do lock:
+  #   - um return depois de Unlock ... Lock (largar e voltar a pegar) fica
+  #     excluído pelo Unlock anterior, mesmo com o lock outra vez na mão. Não
+  #     custou nenhum verdadeiro positivo no Go 1.27.3 (ver acima);
+  #   - o `...` entra nas funções literais, e a Semgrep lê a última instrução
+  #     de uma como um return: o `return` de um closure criado na secção
+  #     crítica (`sort.Slice(xs, func(i, j int) bool { return ... })`,
+  #     `time.AfterFunc(d, func() { ... })`) dispara, e não sai da função.
+  #     São 13 dos 20 achados no Go 1.27.3, todos falsos; excluí-los
+  #     apagaria também o closure que pega no lock e devolve sem o largar.
+  #     Dos outros sete, cinco são verdadeiros (quatro do goker, o benchmark
+  #     de bugs de concorrência do testdata, e o `makeTempDir` do `testing`,
+  #     que devolve o erro do `os.Stat` com o `tempDirMu` na mão) e dois são
+  #     funções que devolvem com o lock na mão de propósito.
   - id: bugfix-go-race-condition-lock-without-defer
     metadata:
       cwe:
@@ -386,7 +426,47 @@ rules:
           - pattern-not-inside: |
               $MU.Unlock()
               ...
+          - pattern-not-inside: |
+              defer $MU.Unlock()
+              ...
       - patterns:
+          - pattern-inside: |
+              $MU.RLock()
+              ...
+              return ...
+              ...
+              $MU.RUnlock()
+          - pattern: return ...
+          - pattern-not-inside: |
+              $MU.RUnlock()
+              ...
+          - pattern-not-inside: |
+              defer $MU.RUnlock()
+              ...
+      - patterns:
+          - pattern-inside: |
+              func(...) {
+                ...
+                $MU.Lock()
+                ...
+              }
+          - pattern-inside: |
+              $MU.Lock()
+              ...
+              return ...
+              ...
+              $MU.Unlock()
+          - pattern: return ...
+          - pattern-not-inside: |
+              $MU.Unlock()
+              ...
+      - patterns:
+          - pattern-inside: |
+              func(...) {
+                ...
+                $MU.RLock()
+                ...
+              }
           - pattern-inside: |
               $MU.RLock()
               ...

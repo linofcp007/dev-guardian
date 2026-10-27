@@ -542,6 +542,20 @@ rules:
       - pattern-not-inside: $O.$M(...).then(...)
       - pattern-not-inside: $O.$M(...).finally(...)
       - pattern-not-inside: $VAR = $O.$M(...)
+      # Mais duas formas deliberadas, medidas em código real (revisão 3.7.0,
+      # Outline v1.12.0 e Uptime Kuma 2.5.8): com o `.*` acima a regra passou
+      # de 2 para 6 achados ali, e os 6 eram falsos positivos. A promise metida
+      # num array que um `await Promise.all(promises)` espera depois é o mesmo
+      # ato deliberado que a captura numa variável (`promises.push(
+      # this.oauthClient.save(...))`); a chamada entregue a uma asserção de
+      # teste (`await expect(OAuthClient.update(...)).rejects.toThrow()`) é
+      # esperada pela asserção. Ficam os dois do IndexedDB
+      # (`store.delete(...)`, `objectStore.delete(...)`): devolvem um
+      # IDBRequest, não uma promise, e o nome do recetor não o distingue de um
+      # repositório. Custo: uma promise posta num array que ninguém espera
+      # deixa de disparar, como a capturada.
+      - pattern-not-inside: $ARR.push(...)
+      - pattern-not-inside: expect(...)
     message: >-
       Chamada que altera estado sem await. Quem chama continua como se a
       escrita tivesse terminado — é ao mesmo tempo uma race e um happy path
