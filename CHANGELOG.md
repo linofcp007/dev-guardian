@@ -97,6 +97,10 @@ and the push-run history pass left two kinds of change unread.
   (Go 1.27.3 `src/`: 39 → 20 findings, the 19 removed all false); bugfix-js' floating-mutation skips a promise pushed
   into an array or handed to an assertion (Outline + Uptime Kuma: 6 → 2). Base `py-yaml-load`'s four `BaseLoader`
   exclusions each have a near-miss fixture (two were `DEAD`).
+- **Attack surface (ASP.NET)**: a verb attribute whose arguments are all named — `[HttpGet(Name =
+  "GetWeatherForecast")]`, exactly what `dotnet new webapi` emits, or `[HttpPost(Order = 1)]` — is a route at the
+  controller's path; it matched no rule, so a scaffolded controller reported no endpoint at all. A template passed by
+  name, `[HttpGet(template: "x")]`, is read as the path.
 - **Route parameters**: a brace parameter is read by its name, never its constraint — `{id:int}` gave `int`
   (ASP.NET, Spring's `{id:[0-9]+}`, Starlette); `{**slug}`, `{id?}` and `{n=1}` give `slug`, `id`, `n`.
 - `guardian-performance` fires on "this endpoint takes seconds".
