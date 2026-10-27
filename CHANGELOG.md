@@ -84,6 +84,14 @@ and the push-run history pass left two kinds of change unread.
   (`Write-Host "x $(Remove-Item C:\ -Recurse -Force)"` was ok), a braced variable as one word whatever its name
   holds (`${"}; Remove-Item C:\ …` was ok), and `flock` / `runuser` hand their command on with its quoting intact
   (`flock /tmp/l bash -c 'rm -rf ~'` was ok).
+- **A hostile repository or skill could hold the server for minutes with crafted text** (measured, each the square
+  of its size or worse): a `NuGet.config` of bare opening tags or one long attribute word (the credential check
+  before every .NET restore: 2.3 s for 320 KB), workspace globs of repeated `**/` or `*a` in `pnpm-workspace.yaml`
+  / `package.json` (`deps_update_plan`, `create_fix_pr`, Trivy's coverage assessment: 3.9 s for eight `**/`), a
+  requirements file of `a[` (`create_fix_pr`'s pip repin), and a skill of thousands of downloads (`scan_skill`'s
+  download-then-run: 23 s for 4 000 lines). Each is read in linear time now. A workspace pattern with more than six
+  `*` now declares its members instead of being a coverage gap, and a skill whose run checks would read more than 64
+  times the file reports a download-then-run rather than nothing.
 - `guardian-deps`' no-server fallback no longer tells you to run `npm audit` inside the repository.
 - **The standard Renovate profile** (`init_project`'s `renovate.json`) holds every update 3 days, not only the
   auto-merged ones: a group, a major or a digest pin opened a PR the day a version was published. Vulnerability
