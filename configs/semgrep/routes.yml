@@ -15,9 +15,16 @@
 #            per-rule comments below; extractImports() then drops that match,
 #            since it currently requires both fields.)
 #   env    → mcp/src/surface/collectors/envVars.ts. Captures $NAME.
-# All four kinds are reconstructed the same way when Semgrep redacts
+#   scope  → mcp/src/surface/extract.ts, joined by resolvers/classPrefix.ts.
+#            NOT a route: a fact about the class a Spring / ASP.NET method
+#            route is declared in — a declaration's range (`guardian_scope:
+#            type`, `handler`, `inherits`, `method`), or a value bound inside
+#            one (`prefix` focused on $PATH, `class-name` / `method-name`
+#            focused on $NAME). See "Class-level prefixes" in the Java section.
+# All five kinds are reconstructed the same way when Semgrep redacts
 # `extra.metavars` (mcp/src/surface/recoverMetavars.ts), regardless of which
-# file reads the result afterward.
+# file reads the result afterward; a `scope` range binds nothing and is read
+# by its offsets alone.
 #
 # ---- Import rules: two Semgrep quirks that recur across languages ---------
 #
@@ -156,7 +163,9 @@
 #
 #   extract.ts        emits the route with an empty own-path, `path_partial:
 #                     true` and 'low' confidence — the endpoint is inventoried,
-#                     its full URL is honestly declared unknown.
+#                     its full URL is honestly declared unknown — unless the
+#                     rule also declares `guardian_class_prefix` and the class
+#                     prefix resolves (Spring, ASP.NET), which IS the URL.
 #   recoverMetavars.ts has nothing to recover and says so, rather than counting
 #                     the match as unreadable (which would flip the language's
 #                     `coverage` to `unreadable`, i.e. "routes here could not be
@@ -185,10 +194,16 @@
 #      partial (node.ts's `mountingFiles` check). Adding a NestJS mount rule
 #      would therefore flip every route in that controller from honestly
 #      partial to confidently WRONG — reported at its un-prefixed path, which
-#      the next tool in this series would then send HTTP requests to. Resolving
-#      class-level prefixes needs work in resolvers/node.ts (and an equivalent
-#      for java/csharp, which have no resolver at all); it is a follow-up, and
-#      until then an inherited-path route is the honest record.
+#      the next tool in this series would then send HTTP requests to.
+#      Spring and ASP.NET now resolve their class-level prefix, through
+#      `guardian_kind: scope` facts rather than a mount, joined inside the one
+#      file (resolvers/classPrefix.ts; "Class-level prefixes" in the Java
+#      section): a bare mapping under a literal prefix is served AT the prefix
+#      and reported there, resolved. NestJS has no such rules yet: a
+#      controller's routes also take the prefix of the module that registers
+#      it (`RouterModule.register`), which is not in the controller's file, and
+#      resolvers/node.ts flags every JS/TS route in an unmounted file partial
+#      anyway — so its inherited-path routes stay the honest partial record.
 #   3. A path the framework supplies through a SECOND annotation is read where
 #      one exists: ASP.NET's `[HttpGet]` + `[Route("named")]` is matched by the
 #      path rule, and the bare rule excludes that shape with a `pattern-not` so
@@ -1271,15 +1286,16 @@ rules:
   # versions agree. Measured across all four forms of all six annotations,
   # reordered case included.
   #
-  # `guardian_class_prefix: always` on the six path rules (review of 3.6.0):
+  # `guardian_class_prefix: spring` on these six and the six bare rules below:
   # Spring joins a class-level @RequestMapping to every method mapping, so
   # `@GetMapping("/list")` under `@RequestMapping("/api/orders")` is served at
   # `/api/orders/list`. A rule focused on the method's path cannot bind the
-  # class's, so the route keeps the path it names and is flagged partial
-  # (extract.ts CLASS_PREFIX_KEY) instead of being presented as a resolved URL
-  # the probes downstream would then send requests to. The ASP.NET attribute
-  # rules carry `unless-rooted`: there a method path starting with `/` or `~/`
-  # ignores the class's [Route].
+  # class's, so the extractor joins the two from the `scope` facts further
+  # down ("Class-level prefixes"), and a route it cannot join keeps the path
+  # it names, flagged partial — never a resolved URL the probes downstream
+  # would send requests to. 3.6.1 flagged every one of them partial; the
+  # ASP.NET attribute rules carry `aspnet`, the same join with that
+  # framework's own semantics.
   - id: guardian-route-spring-get
     languages: [java]
     severity: INFO
@@ -1290,7 +1306,7 @@ rules:
       confidence: medium
       method: GET
       guardian_focus: path
-      guardian_class_prefix: always
+      guardian_class_prefix: spring
     patterns:
       - pattern-either:
           - pattern: "@GetMapping($PATH)"
@@ -1308,7 +1324,7 @@ rules:
       confidence: medium
       method: POST
       guardian_focus: path
-      guardian_class_prefix: always
+      guardian_class_prefix: spring
     patterns:
       - pattern-either:
           - pattern: "@PostMapping($PATH)"
@@ -1326,7 +1342,7 @@ rules:
       confidence: medium
       method: PUT
       guardian_focus: path
-      guardian_class_prefix: always
+      guardian_class_prefix: spring
     patterns:
       - pattern-either:
           - pattern: "@PutMapping($PATH)"
@@ -1344,7 +1360,7 @@ rules:
       confidence: medium
       method: PATCH
       guardian_focus: path
-      guardian_class_prefix: always
+      guardian_class_prefix: spring
     patterns:
       - pattern-either:
           - pattern: "@PatchMapping($PATH)"
@@ -1362,7 +1378,7 @@ rules:
       confidence: medium
       method: DELETE
       guardian_focus: path
-      guardian_class_prefix: always
+      guardian_class_prefix: spring
     patterns:
       - pattern-either:
           - pattern: "@DeleteMapping($PATH)"
@@ -1370,6 +1386,24 @@ rules:
           - pattern: "@DeleteMapping(path = $PATH, ...)"
       - focus-metavariable: $PATH
 
+  # @RequestMapping is the one mapping annotation that also goes on a TYPE, and
+  # there it is a prefix, not an endpoint. Its five siblings are method-only
+  # (`@Target(METHOD)`), so their annotation-alone patterns cannot meet a
+  # class; this one did, and every Spring controller with a class-level
+  # @RequestMapping reported that prefix as a route of its own — `ANY
+  # /api/orders` — beside the methods actually served under it. So its
+  # patterns name the method the annotation decorates, the way the bare rules
+  # always have, and the class-level annotation is read by
+  # `guardian-scope-spring-prefix` instead. A class with a prefix and no
+  # method mapping now declares no endpoint, which is what Spring serves.
+  #
+  # Six alternatives, not three: a body (`{ ... }`) and an abstract method
+  # (`;`) for each of the three argument forms. The `;` ones keep an API
+  # interface's mappings, which a controller implementing it inherits without
+  # repeating, and which the annotation-alone patterns used to read. Measured
+  # on 1.182.0 (no login): `@RequestMapping("/x") String abs();` in an
+  # interface, a generic method with a `throws` clause and `value = …, method
+  # = …` all match, and a class-level @RequestMapping matches none of the six.
   - id: guardian-route-spring-request
     languages: [java]
     severity: INFO
@@ -1379,12 +1413,27 @@ rules:
       framework: spring
       confidence: medium
       guardian_focus: path
-      guardian_class_prefix: always
+      guardian_class_prefix: spring
     patterns:
       - pattern-either:
-          - pattern: "@RequestMapping($PATH)"
-          - pattern: "@RequestMapping(value = $PATH, ...)"
-          - pattern: "@RequestMapping(path = $PATH, ...)"
+          - pattern: |
+              @RequestMapping($PATH)
+              $RET $M(...) { ... }
+          - pattern: |
+              @RequestMapping(value = $PATH, ...)
+              $RET $M(...) { ... }
+          - pattern: |
+              @RequestMapping(path = $PATH, ...)
+              $RET $M(...) { ... }
+          - pattern: |
+              @RequestMapping($PATH)
+              $RET $M(...);
+          - pattern: |
+              @RequestMapping(value = $PATH, ...)
+              $RET $M(...);
+          - pattern: |
+              @RequestMapping(path = $PATH, ...)
+              $RET $M(...);
       - focus-metavariable: $PATH
 
   # Spring, bare annotation: `@GetMapping` with no argument list, the form
@@ -1413,6 +1462,7 @@ rules:
       confidence: low
       method: GET
       guardian_path: inherited
+      guardian_class_prefix: spring
     pattern: |
       @GetMapping
       $RET $M(...) { ... }
@@ -1427,6 +1477,7 @@ rules:
       confidence: low
       method: POST
       guardian_path: inherited
+      guardian_class_prefix: spring
     pattern: |
       @PostMapping
       $RET $M(...) { ... }
@@ -1441,6 +1492,7 @@ rules:
       confidence: low
       method: PUT
       guardian_path: inherited
+      guardian_class_prefix: spring
     pattern: |
       @PutMapping
       $RET $M(...) { ... }
@@ -1455,6 +1507,7 @@ rules:
       confidence: low
       method: PATCH
       guardian_path: inherited
+      guardian_class_prefix: spring
     pattern: |
       @PatchMapping
       $RET $M(...) { ... }
@@ -1469,6 +1522,7 @@ rules:
       confidence: low
       method: DELETE
       guardian_path: inherited
+      guardian_class_prefix: spring
     pattern: |
       @DeleteMapping
       $RET $M(...) { ... }
@@ -1482,9 +1536,168 @@ rules:
       framework: spring
       confidence: low
       guardian_path: inherited
+      guardian_class_prefix: spring
     pattern: |
       @RequestMapping
       $RET $M(...) { ... }
+
+  # ---- Class-level prefixes: the `scope` facts --------------------------
+  #
+  # A method route is served at its class's prefix plus its own path, and no
+  # route rule can see both: each is focused on the METHOD's literal. A rule
+  # that bound the class's too would have to span the class, and a class span
+  # starts at its first annotation and runs to its closing brace — reading
+  # the prefix out of it is exactly the "find the attribute in the span"
+  # fabrication the header rules out (a commented-out `// @RequestMapping`
+  # above the live one, a decoy in a string). So the class is described by
+  # FACTS, each a match of its own, and extract.ts joins them by byte offset
+  # inside the one file (resolvers/classPrefix.ts):
+  #
+  #   type      every class / interface / record declaration in a handler —
+  #             the boundaries. A route belongs to the INNERMOST one whose
+  #             range holds its offset, so a nested type is never mistaken
+  #             for the class around it.
+  #   handler   a concrete @RestController / @Controller class: the only kind
+  #             Spring serves a mapping from directly.
+  #   inherits  a handler that extends or implements something, from which
+  #             it may inherit a type-level @RequestMapping we cannot see.
+  #   prefix    the class-level @RequestMapping's literal, focused on $PATH the
+  #             same way the route rules are — the span IS the value.
+  #
+  # Measured on 1.182.0, which redacts `extra.metavars` without `semgrep
+  # login` (every match below arrived with none): a class range starts at the
+  # class's FIRST annotation (`@RestController`), so the prefix literal lies
+  # inside it; the prefix rule's range is the literal alone, quotes included;
+  # a nested class's range is strictly inside its outer class's; `class $C {
+  # ... }` matches enums too, and `interface $C { ... }` annotation types,
+  # while a record needs its own `record $C(...) { ... }`.
+  #
+  # The join resolves a route only when every fact agrees, and leaves it
+  # partial otherwise — it never guesses:
+  #
+  #   resolved  the innermost type is a handler with one literal prefix
+  #             (`/api/orders` + `/list` → `/api/orders/list`, Spring's own
+  #             slash rules), or with none and nothing it inherits from
+  #             (`/list` as written). A bare mapping is served AT the prefix.
+  #   partial   a prefix that is not one string literal (`Paths.ORDERS`, a
+  #             `${…}` placeholder, `{"/a", "/b"}`, a wildcard); no prefix on a
+  #             handler that extends or implements (its supertype may carry
+  #             one: an OpenAPI-generated `implements OrdersApi` does); a
+  #             route outside any handler — an interface's, a base class's,
+  #             an abstract class's — since it is served under whichever
+  #             subclass's prefix inherits it; a bare mapping with no prefix.
+  #
+  # What remains unseen and is stated rather than solved: a composed
+  # annotation that carries the prefix while @RestController is written
+  # beside it, and an application-wide prefix
+  # (`PathMatchConfigurer.addPathPrefix`, `server.servlet.context-path`),
+  # which no controller file declares — the same blind spot as an Express app
+  # mounted behind a proxy. A composed annotation that REPLACES
+  # @RestController is safe: the class is then no handler here, so partial.
+  #
+  # All four are restricted to handler classes and what they contain — the
+  # `pattern-inside` — so a Java tree with no controller in it adds no match.
+  - id: guardian-scope-spring-type
+    languages: [java]
+    severity: INFO
+    message: Spring handler type boundary
+    metadata:
+      guardian_kind: scope
+      framework: spring
+      guardian_scope: type
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              @RestController(...)
+              class $HANDLER { ... }
+          - pattern-inside: |
+              @Controller(...)
+              class $HANDLER { ... }
+      - pattern-either:
+          - pattern: |
+              class $C { ... }
+          - pattern: |
+              interface $C { ... }
+          - pattern: |
+              record $C(...) { ... }
+
+  # `@RestController(...)` matches the bare annotation and `@RestController("name")`
+  # alike (measured); written without the parentheses it matched only the
+  # bare one. The fully qualified spelling matches neither, and neither does
+  # a custom stereotype — both read as "no handler", i.e. partial.
+  - id: guardian-scope-spring-handler
+    languages: [java]
+    severity: INFO
+    message: Spring handler class
+    metadata:
+      guardian_kind: scope
+      framework: spring
+      guardian_scope: handler
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @RestController(...)
+              class $C { ... }
+          - pattern: |
+              @Controller(...)
+              class $C { ... }
+      - pattern-not: |
+          abstract class $C { ... }
+
+  - id: guardian-scope-spring-inherits
+    languages: [java]
+    severity: INFO
+    message: Spring handler with a supertype
+    metadata:
+      guardian_kind: scope
+      framework: spring
+      guardian_scope: inherits
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @RestController(...)
+              class $C { ... }
+          - pattern: |
+              @Controller(...)
+              class $C { ... }
+      - pattern-either:
+          - pattern: |
+              class $C extends $SUPER { ... }
+          - pattern: |
+              class $C implements $SUPER { ... }
+
+  # The same three argument forms as the method-level rule, on a class. The
+  # `pattern-inside` keeps a prefix whose class is no handler out of the
+  # facts: such a prefix would have no `type` around it, which the join reads
+  # as a fact it cannot place — and then leaves the whole file partial.
+  - id: guardian-scope-spring-prefix
+    languages: [java]
+    severity: INFO
+    message: Spring class-level mapping
+    metadata:
+      guardian_kind: scope
+      framework: spring
+      guardian_scope: prefix
+      guardian_focus: path
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              @RestController(...)
+              class $HANDLER { ... }
+          - pattern-inside: |
+              @Controller(...)
+              class $HANDLER { ... }
+      - pattern-either:
+          - pattern: |
+              @RequestMapping($PATH)
+              class $C { ... }
+          - pattern: |
+              @RequestMapping(value = $PATH, ...)
+              class $C { ... }
+          - pattern: |
+              @RequestMapping(path = $PATH, ...)
+              class $C { ... }
+      - focus-metavariable: $PATH
 
   # Three alternatives — static, wildcard and plain — deliberately each with a
   # SINGLE metavariable, matching the brief's own `import $P;` notation.
@@ -1553,6 +1766,11 @@ rules:
   # write. The bare rules further down exclude exactly this shape with a
   # `pattern-not`, so a method carrying both attributes is reported once, at the
   # path `[Route]` names, rather than twice.
+  #
+  # `guardian_class_prefix: aspnet` on these five and the five bare rules: the
+  # controller's own `[Route]` is joined to the method's path from the `scope`
+  # facts after the bare rules ("Class-level prefixes" in the Java section is
+  # the design; the ASP.NET differences are stated there, beside the rules).
   - id: guardian-route-aspnet-attribute-get
     languages: [csharp]
     severity: INFO
@@ -1563,7 +1781,7 @@ rules:
       confidence: medium
       method: GET
       guardian_focus: path
-      guardian_class_prefix: unless-rooted
+      guardian_class_prefix: aspnet
     patterns:
       - pattern-either:
           - pattern: |
@@ -1585,7 +1803,7 @@ rules:
       confidence: medium
       method: POST
       guardian_focus: path
-      guardian_class_prefix: unless-rooted
+      guardian_class_prefix: aspnet
     patterns:
       - pattern-either:
           - pattern: |
@@ -1607,7 +1825,7 @@ rules:
       confidence: medium
       method: PUT
       guardian_focus: path
-      guardian_class_prefix: unless-rooted
+      guardian_class_prefix: aspnet
     patterns:
       - pattern-either:
           - pattern: |
@@ -1629,7 +1847,7 @@ rules:
       confidence: medium
       method: PATCH
       guardian_focus: path
-      guardian_class_prefix: unless-rooted
+      guardian_class_prefix: aspnet
     patterns:
       - pattern-either:
           - pattern: |
@@ -1651,7 +1869,7 @@ rules:
       confidence: medium
       method: DELETE
       guardian_focus: path
-      guardian_class_prefix: unless-rooted
+      guardian_class_prefix: aspnet
     patterns:
       - pattern-either:
           - pattern: |
@@ -1688,6 +1906,7 @@ rules:
       confidence: low
       method: GET
       guardian_path: inherited
+      guardian_class_prefix: aspnet
     patterns:
       - pattern: |
           [HttpGet]
@@ -1707,6 +1926,7 @@ rules:
       confidence: low
       method: POST
       guardian_path: inherited
+      guardian_class_prefix: aspnet
     patterns:
       - pattern: |
           [HttpPost]
@@ -1726,6 +1946,7 @@ rules:
       confidence: low
       method: PUT
       guardian_path: inherited
+      guardian_class_prefix: aspnet
     patterns:
       - pattern: |
           [HttpPut]
@@ -1745,6 +1966,7 @@ rules:
       confidence: low
       method: PATCH
       guardian_path: inherited
+      guardian_class_prefix: aspnet
     patterns:
       - pattern: |
           [HttpPatch]
@@ -1764,6 +1986,7 @@ rules:
       confidence: low
       method: DELETE
       guardian_path: inherited
+      guardian_class_prefix: aspnet
     patterns:
       - pattern: |
           [HttpDelete]
@@ -1772,6 +1995,136 @@ rules:
           [HttpDelete]
           [Route($ROUTE_PATH, ...)]
           $RET $M(...) { ... }
+
+  # ---- ASP.NET class-level prefixes: the `scope` facts -------------------
+  #
+  # The same design as Spring's (Java section), with ASP.NET's semantics,
+  # which the join reproduces from AttributeRouteModel.CombineTemplates:
+  #
+  #   - only the controller's OWN `[Route]` counts. MVC walks up the base
+  #     classes to the first that declares one, and we cannot see a base, so a
+  #     controller with none of its own is partial — unless the method path is
+  #     rooted (`/x` or `~/x`), which ignores the class route entirely and is
+  #     resolved on its own, as before;
+  #   - two `[Route]`s on one class serve every action twice: partial, the
+  #     way resolvers/node.ts treats a router mounted at two prefixes;
+  #   - an abstract class is no controller: its actions are served under
+  #     whichever derived controller inherits them, and `[controller]` is that
+  #     class's name, not this one's. The prefix and class-name rules exclude
+  #     it, so its routes join nothing;
+  #   - tokens are replaced after the join: `[controller]` by the class name
+  #     less a `Controller` suffix (case kept as written — routing ignores
+  #     case), `[action]` by the method name less an `Async` suffix
+  #     (`SuppressAsyncSuffixInActionNames`, true by default since ASP.NET
+  #     Core 3.0). `[area]`, any other token and an escaped `[[` are partial,
+  #     and so is a class carrying `[ControllerName]` or a method carrying
+  #     `[ActionName]`, the two attributes that rename those tokens.
+  #
+  # Five rules where Spring needs four, because the tokens need two names
+  # and a name needs a range to belong to: `type` (the boundaries), `prefix`
+  # (focused on $PATH), `class-name` (focused on $NAME), `method` (the
+  # action's range) and `method-name` (focused on $NAME). A method-name
+  # belongs to the innermost method range holding it, and a route to the
+  # innermost method range holding its offset — so a local function's name
+  # is never read as its enclosing action's.
+  #
+  # Measured on 1.182.0 (no login): a C# declaration range starts INSIDE its
+  # first attribute's brackets — at `ApiController]`, not at `[` — which
+  # still holds every `[Route]` and `[HttpGet]` literal on it; `class $C {
+  # ... }` matches structs too (harmless: no struct is a controller);
+  # `[Route($PATH)]` without `, ...` misses `[Route("v1", Name = "v1")]`;
+  # a local function is matched as a method of its own, inside its
+  # enclosing one's range.
+  #
+  # `type`, `method` and `method-name` are restricted to `[Route]` classes and
+  # what they contain, so a C# tree with no attribute-routed controller adds
+  # no match — every method of every class would otherwise be one.
+  - id: guardian-scope-aspnet-type
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET controller type boundary
+    metadata:
+      guardian_kind: scope
+      framework: aspnet
+      guardian_scope: type
+    patterns:
+      - pattern-inside: |
+          [Route(...)]
+          class $CONTROLLER { ... }
+      - pattern: |
+          class $C { ... }
+
+  - id: guardian-scope-aspnet-prefix
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET controller route
+    metadata:
+      guardian_kind: scope
+      framework: aspnet
+      guardian_scope: prefix
+      guardian_focus: path
+    patterns:
+      - pattern: |
+          [Route($PATH, ...)]
+          class $C { ... }
+      - pattern-not: |
+          abstract class $C { ... }
+      - focus-metavariable: $PATH
+
+  - id: guardian-scope-aspnet-class-name
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET controller name
+    metadata:
+      guardian_kind: scope
+      framework: aspnet
+      guardian_scope: class-name
+      guardian_focus: name
+    patterns:
+      - pattern: |
+          [Route(...)]
+          class $NAME { ... }
+      - pattern-not: |
+          abstract class $NAME { ... }
+      - pattern-not: |
+          [ControllerName(...)]
+          class $NAME { ... }
+      - focus-metavariable: $NAME
+
+  - id: guardian-scope-aspnet-method
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET action range
+    metadata:
+      guardian_kind: scope
+      framework: aspnet
+      guardian_scope: method
+    patterns:
+      - pattern-inside: |
+          [Route(...)]
+          class $CONTROLLER { ... }
+      - pattern: |
+          $RET $M(...) { ... }
+      - pattern-not: |
+          [ActionName(...)]
+          $RET $M(...) { ... }
+
+  - id: guardian-scope-aspnet-method-name
+    languages: [csharp]
+    severity: INFO
+    message: ASP.NET action name
+    metadata:
+      guardian_kind: scope
+      framework: aspnet
+      guardian_scope: method-name
+      guardian_focus: name
+    patterns:
+      - pattern-inside: |
+          [Route(...)]
+          class $CONTROLLER { ... }
+      - pattern: |
+          $RET $NAME(...) { ... }
+      - focus-metavariable: $NAME
 
   # `using $SYMBOL = $MODULE;` (aliased) gives a clean, real bound name.
   # Plain `using $MODULE;` binds no $SYMBOL — a `using` directive brings a

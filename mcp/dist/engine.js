@@ -58543,6 +58543,175 @@ var init_scope2 = __esm({
   }
 });
 
+// src/surface/resolvers/classPrefix.ts
+function scopeKey(file, framework) {
+  return `${framework}\0${file}`;
+}
+function indexScopes(facts) {
+  const index = /* @__PURE__ */ new Map();
+  for (const fact of facts) {
+    const key = scopeKey(fact.file, fact.framework);
+    let scopes = index.get(key);
+    if (scopes === void 0) {
+      scopes = { types: [], handlers: [], inherits: [], prefixes: [], classNames: [], methods: [], methodNames: [], unsure: false };
+      index.set(key, scopes);
+    }
+    if (fact.start === void 0 || fact.end === void 0) {
+      if (fact.role !== "method" && fact.role !== "method-name") scopes.unsure = true;
+      continue;
+    }
+    const range = { start: fact.start, end: fact.end };
+    const placed = { ...range, value: fact.value };
+    switch (fact.role) {
+      case "type":
+        scopes.types.push(range);
+        break;
+      case "handler":
+        scopes.handlers.push(range);
+        break;
+      case "inherits":
+        scopes.inherits.push(range);
+        break;
+      case "prefix":
+        scopes.prefixes.push(placed);
+        break;
+      case "class-name":
+        scopes.classNames.push(placed);
+        break;
+      case "method":
+        scopes.methods.push(range);
+        break;
+      case "method-name":
+        scopes.methodNames.push(placed);
+        break;
+    }
+  }
+  for (const scopes of index.values()) {
+    const orphan = [...scopes.prefixes, ...scopes.classNames].some((f) => innermost(scopes.types, f.start) === void 0);
+    if (orphan) scopes.unsure = true;
+  }
+  return index;
+}
+function classRoutePath(route, index) {
+  if (route.offset === void 0 || route.own === void 0) return void 0;
+  const scopes = index.get(scopeKey(route.file, route.framework)) ?? NO_SCOPES;
+  return route.style === "spring" ? springPath(route.offset, route.own, scopes) : aspnetPath(route.offset, route.own, scopes);
+}
+function springPath(offset, own, scopes) {
+  if (scopes.unsure) return void 0;
+  const type = innermost(scopes.types, offset);
+  if (type === void 0 || !sameRange(scopes.handlers, type)) return void 0;
+  const prefixes = scopes.prefixes.filter((p) => innermost(scopes.types, p.start) === type);
+  if (prefixes.length > 1) return void 0;
+  const prefix = prefixes[0];
+  if (prefix === void 0) {
+    if (sameRange(scopes.inherits, type) || own === "") return void 0;
+    return springJoin("", own);
+  }
+  if (prefix.value === void 0 || /[*?]/.test(prefix.value)) return void 0;
+  return springJoin(prefix.value, own);
+}
+function springJoin(prefix, own) {
+  const lead = (p) => p === "" || p.startsWith("/") ? p : `/${p}`;
+  const left = lead(prefix);
+  const right = lead(own);
+  if (left === "") return right === "" ? void 0 : right;
+  if (right === "") return left;
+  return left.endsWith("/") ? `${left}${right.slice(1)}` : `${left}${right}`;
+}
+function aspnetPath(offset, own, scopes) {
+  const type = innermost(scopes.types, offset);
+  let template;
+  if (isOverridePattern(own)) {
+    template = own;
+  } else {
+    if (scopes.unsure || type === void 0) return void 0;
+    const prefixes = scopes.prefixes.filter((p) => innermost(scopes.types, p.start) === type);
+    const prefix = prefixes.length === 1 ? prefixes[0] : void 0;
+    if (prefix?.value === void 0) return void 0;
+    template = combineTemplates(prefix.value, own);
+  }
+  const cleaned = cleanTemplate(template);
+  if (cleaned === void 0) return void 0;
+  const replaced = replaceTokens(cleaned, {
+    controller: () => controllerName(type, scopes),
+    action: () => actionName(offset, scopes)
+  });
+  return replaced === void 0 ? void 0 : `/${replaced}`;
+}
+function isOverridePattern(template) {
+  return template.startsWith("/") || template.startsWith("~/");
+}
+function combineTemplates(prefix, own) {
+  if (prefix === "" || prefix === "/" || prefix === "~/") return own;
+  return prefix.endsWith("/") ? `${prefix}${own}` : `${prefix}/${own}`;
+}
+function cleanTemplate(template) {
+  if (template === "//") return void 0;
+  const start = template.startsWith("/") ? 1 : template.startsWith("~/") ? 2 : 0;
+  const body = template.slice(start);
+  return body.endsWith("/") ? body.slice(0, -1) : body;
+}
+function replaceTokens(template, values2) {
+  if (/\[\[|\]\]/.test(template)) return void 0;
+  let unresolved = false;
+  const replaced = template.replace(/\[([^[\]]*)\]/g, (_token, name) => {
+    const token = name.toLowerCase();
+    const value = token === "controller" ? values2.controller() : token === "action" ? values2.action() : void 0;
+    if (value === void 0 || value === "") unresolved = true;
+    return value ?? "";
+  });
+  if (unresolved || /[[\]]/.test(replaced)) return void 0;
+  return replaced;
+}
+function controllerName(type, scopes) {
+  if (scopes.unsure || type === void 0) return void 0;
+  const names = scopes.classNames.filter((n) => innermost(scopes.types, n.start) === type);
+  const name = names.length === 1 ? names[0]?.value : void 0;
+  if (name === void 0 || !IDENTIFIER.test(name)) return void 0;
+  return /controller$/i.test(name) ? name.slice(0, -"Controller".length) : name;
+}
+function actionName(offset, scopes) {
+  const method = innermost(scopes.methods, offset);
+  if (method === void 0) return void 0;
+  const names = scopes.methodNames.filter((n) => innermost(scopes.methods, n.start) === method);
+  const name = names.length === 1 ? names[0]?.value : void 0;
+  if (name === void 0 || !IDENTIFIER.test(name)) return void 0;
+  return name.endsWith("Async") ? name.slice(0, -"Async".length) : name;
+}
+function innermost(ranges, offset) {
+  let best;
+  for (const range of ranges) {
+    if (range.start > offset || offset >= range.end) continue;
+    if (best === void 0 || range.start > best.start || range.start === best.start && range.end < best.end) {
+      best = range;
+    }
+  }
+  return best;
+}
+function sameRange(ranges, target) {
+  return ranges.some((r) => r.start === target.start && r.end === target.end);
+}
+var SCOPE_ROLES, VALUE_ROLES, NO_SCOPES, IDENTIFIER;
+var init_classPrefix = __esm({
+  "src/surface/resolvers/classPrefix.ts"() {
+    "use strict";
+    SCOPE_ROLES = ["type", "handler", "inherits", "prefix", "class-name", "method", "method-name"];
+    VALUE_ROLES = /* @__PURE__ */ new Set(["prefix", "class-name", "method-name"]);
+    NO_SCOPES = {
+      types: [],
+      handlers: [],
+      inherits: [],
+      prefixes: [],
+      classNames: [],
+      methods: [],
+      methodNames: [],
+      unsure: false
+    };
+    IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  }
+});
+
 // src/surface/extract.ts
 function languageFromPath(file) {
   const ext = file.split(".").pop()?.toLowerCase();
@@ -58588,6 +58757,8 @@ function extractParams(path3) {
 function extractSurface(semgrepJson) {
   const routes = [];
   const mounts = [];
+  const facts = [];
+  const joins = [];
   for (const raw of asArray2(prop(semgrepJson, "results"))) {
     const extra = prop(raw, "extra");
     const metadata = prop(extra, "metadata");
@@ -58596,19 +58767,78 @@ function extractSurface(semgrepJson) {
     const line = num(prop(raw, "start"), "line") ?? 0;
     if (file === void 0) continue;
     if (kind === "route") {
-      const route = toRoute(metadata, prop(extra, "metavars"), file, line);
-      if (route) routes.push(route);
+      const metavars = prop(extra, "metavars");
+      const route = toRoute(metadata, metavars, file, line);
+      if (route === null) continue;
+      const style = classPrefixStyle(metadata);
+      if (style !== void 0) {
+        joins.push({
+          at: routes.length,
+          route: {
+            style,
+            framework: route.framework,
+            file,
+            offset: num(prop(raw, "start"), "offset"),
+            own: ownPath(metadata, metavars)
+          },
+          confidence: normalizeConfidence(str(metadata, "confidence"))
+        });
+      }
+      routes.push(route);
     } else if (kind === "mount") {
       const mount = toMount(prop(extra, "metavars"), file, line);
       if (mount) mounts.push(mount);
+    } else if (kind === SCOPE_KIND) {
+      const fact = toScopeFact(metadata, prop(extra, "metavars"), raw, file);
+      if (fact) facts.push(fact);
+    }
+  }
+  if (joins.length > 0) {
+    const index = indexScopes(facts);
+    for (const join114 of joins) {
+      const route = routes[join114.at];
+      const served = classRoutePath(join114.route, index);
+      if (route === void 0 || served === void 0 || !isLiteralPath(served)) continue;
+      routes[join114.at] = {
+        ...route,
+        path_resolved: served,
+        path_partial: false,
+        confidence: join114.confidence,
+        // From the served path: a `{tenant}` in the prefix is a parameter too.
+        params: extractParams(served)
+      };
     }
   }
   return { routes, mounts };
 }
-function classPrefixApplies(metadata, path3) {
-  const rule = str(metadata, CLASS_PREFIX_KEY);
-  if (rule === CLASS_PREFIX_ALWAYS) return true;
-  return rule === CLASS_PREFIX_UNLESS_ROOTED && !/^~?\//.test(path3);
+function toScopeFact(metadata, metavars, raw, file) {
+  const role = str(metadata, SCOPE_ROLE_KEY);
+  if (!isScopeRole(role)) return null;
+  const value = role === "prefix" ? stringLiteral(metavar(metavars, "$PATH")) : VALUE_ROLES.has(role) ? metavar(metavars, "$NAME") : void 0;
+  return {
+    role,
+    framework: str(metadata, "framework") ?? "unknown",
+    file,
+    start: num(prop(raw, "start"), "offset"),
+    end: num(prop(raw, "end"), "offset"),
+    value
+  };
+}
+function isScopeRole(value) {
+  return value !== void 0 && SCOPE_ROLES.includes(value);
+}
+function ownPath(metadata, metavars) {
+  const raw = metavar(metavars, "$PATH");
+  if (raw === void 0) return str(metadata, INHERITED_PATH_KEY) === INHERITED_PATH ? "" : void 0;
+  return stringLiteral(raw);
+}
+function stringLiteral(raw) {
+  const content = stripQuotes2(raw);
+  return content !== void 0 && content !== raw ? content : void 0;
+}
+function classPrefixStyle(metadata) {
+  const style = str(metadata, CLASS_PREFIX_KEY);
+  return style === CLASS_PREFIX_SPRING || style === CLASS_PREFIX_ASPNET ? style : void 0;
 }
 function toRoute(metadata, metavars, file, line) {
   const namespace = stripQuotes2(metavar(metavars, "$NS"));
@@ -58623,7 +58853,8 @@ function toRoute(metadata, metavars, file, line) {
     provenance: "code",
     path_raw: path3,
     path_resolved: path3,
-    path_partial: !usable || classPrefixApplies(metadata, path3),
+    // A class route is partial until `extractSurface` joins its prefix.
+    path_partial: !usable || str(metadata, CLASS_PREFIX_KEY) !== void 0,
     file,
     line,
     framework: str(metadata, "framework") ?? "unknown",
@@ -58687,10 +58918,11 @@ function asArray2(value) {
 function metavar(metavars, name) {
   return str(prop(metavars, name), "abstract_content");
 }
-var METHOD_NAMES, EXTENSION_LANGUAGES, ROUTE_PACK_EXTENSIONS, CODE_TOKENS, CALL_OR_INDEX, BARE_ROUTE, HOST_CONFUSION_CHARS, INHERITED_PATH_KEY, INHERITED_PATH, CLASS_PREFIX_KEY, CLASS_PREFIX_ALWAYS, CLASS_PREFIX_UNLESS_ROOTED, QUOTES;
+var METHOD_NAMES, EXTENSION_LANGUAGES, ROUTE_PACK_EXTENSIONS, CODE_TOKENS, CALL_OR_INDEX, BARE_ROUTE, HOST_CONFUSION_CHARS, SCOPE_KIND, SCOPE_ROLE_KEY, INHERITED_PATH_KEY, INHERITED_PATH, CLASS_PREFIX_KEY, CLASS_PREFIX_SPRING, CLASS_PREFIX_ASPNET, QUOTES;
 var init_extract = __esm({
   "src/surface/extract.ts"() {
     "use strict";
+    init_classPrefix();
     METHOD_NAMES = /* @__PURE__ */ new Set([
       "get",
       "post",
@@ -58724,11 +58956,13 @@ var init_extract = __esm({
     CALL_OR_INDEX = /[A-Za-z_]\w*\s*[([]/;
     BARE_ROUTE = /^[a-z0-9][a-z0-9_~-]*$/;
     HOST_CONFUSION_CHARS = /[@\\]/;
+    SCOPE_KIND = "scope";
+    SCOPE_ROLE_KEY = "guardian_scope";
     INHERITED_PATH_KEY = "guardian_path";
     INHERITED_PATH = "inherited";
     CLASS_PREFIX_KEY = "guardian_class_prefix";
-    CLASS_PREFIX_ALWAYS = "always";
-    CLASS_PREFIX_UNLESS_ROOTED = "unless-rooted";
+    CLASS_PREFIX_SPRING = "spring";
+    CLASS_PREFIX_ASPNET = "aspnet";
     QUOTES = /^['"`]$/;
   }
 });
@@ -84677,6 +84911,7 @@ function recoverMetavars(semgrepJson, sources) {
       noCaptures += 1;
       return raw;
     }
+    if (kind === SCOPE_KIND && str5(metadata, FOCUS_METADATA_KEY) === void 0) return raw;
     if (hasMetavars(extra)) {
       intact += 1;
       return raw;
@@ -84685,7 +84920,7 @@ function recoverMetavars(semgrepJson, sources) {
     const metavars = span2 === void 0 ? void 0 : synthesize(kind, span2, metadata);
     if (metavars === void 0 || !isRecord9(raw)) {
       unrecoverable += 1;
-      if (kind === "import" || kind === "env") lostEdges += 1;
+      if (kind === "import" || kind === "env" || kind === SCOPE_KIND) lostEdges += 1;
       const path3 = kind === "route" ? str5(raw, "path") : void 0;
       if (path3 !== void 0) unreadableRouteFiles.push(path3);
       return raw;
@@ -84732,9 +84967,17 @@ function synthesize(kind, span2, metadata) {
       return synthesizeImport(span2, metadata);
     case "env":
       return synthesizeEnv(span2);
+    case SCOPE_KIND:
+      return synthesizeScope(span2, metadata);
     default:
       return void 0;
   }
+}
+function synthesizeScope(span2, metadata) {
+  const focus = str5(metadata, FOCUS_METADATA_KEY);
+  if (focus === FOCUS_PATH) return { $PATH: { abstract_content: span2 } };
+  if (focus === FOCUS_NAME) return { $NAME: { abstract_content: span2 } };
+  return void 0;
 }
 function synthesizeRoute(span2, metadata) {
   if (str5(metadata, FOCUS_METADATA_KEY) === FOCUS_PATH) {
@@ -84807,7 +85050,7 @@ function synthesizeMount(span2) {
   const prefix = args[0];
   const last = args[args.length - 1];
   if (prefix === void 0 || last === void 0) return void 0;
-  const router = IDENTIFIER.exec(last)?.[1];
+  const router = IDENTIFIER2.exec(last)?.[1];
   if (router === void 0) return void 0;
   return {
     $PREFIX: { abstract_content: prefix },
@@ -85175,15 +85418,16 @@ function hasMetavars(extra) {
   if (!isRecord9(metavars)) return false;
   return Object.keys(metavars).length > 0;
 }
-var RECOVERABLE_KINDS, FOCUS_METADATA_KEY, FOCUS_PATH, IDENTIFIER, CLOSERS2;
+var RECOVERABLE_KINDS, FOCUS_METADATA_KEY, FOCUS_PATH, FOCUS_NAME, IDENTIFIER2, CLOSERS2;
 var init_recoverMetavars = __esm({
   "src/surface/recoverMetavars.ts"() {
     "use strict";
     init_extract();
-    RECOVERABLE_KINDS = /* @__PURE__ */ new Set(["route", "mount", "import", "env"]);
+    RECOVERABLE_KINDS = /* @__PURE__ */ new Set(["route", "mount", "import", "env", SCOPE_KIND]);
     FOCUS_METADATA_KEY = "guardian_focus";
     FOCUS_PATH = "path";
-    IDENTIFIER = /([A-Za-z_$][\w$]*)/;
+    FOCUS_NAME = "name";
+    IDENTIFIER2 = /([A-Za-z_$][\w$]*)/;
     CLOSERS2 = { "(": ")", "[": "]", "{": "}" };
   }
 });
@@ -86055,7 +86299,7 @@ function recoveryToolRun(recovery) {
   if (recovery.unrecoverable === 0) {
     return [{ name: RECOVERY_STEP, status: "ok", reason: base2 }];
   }
-  const edgesNote = recovery.lostEdges > 0 ? `${recovery.lostEdges} import/env edge(s) could not be read (not a route: a mount's prefix that relied on one may read partial)` : "";
+  const edgesNote = recovery.lostEdges > 0 ? `${recovery.lostEdges} import/env edge(s) or class-prefix fact(s) could not be read (not a route: a mount's or a class's prefix that relied on one may read partial)` : "";
   const routesLost = recovery.unrecoverable - recovery.lostEdges;
   if (routesLost === 0) {
     return [{ name: RECOVERY_STEP, status: "ok", reason: `${base2}; ${edgesNote}` }];
@@ -98494,9 +98738,9 @@ function fromYarnrcYml(text2, scope) {
       continue;
     }
     if (!inScopes) continue;
-    const scopeKey = /^["']?@?([^"':]+)["']?\s*:\s*$/.exec(line);
-    if (scopeKey !== null) {
-      currentScope = scopeKey[1];
+    const scopeKey2 = /^["']?@?([^"':]+)["']?\s*:\s*$/.exec(line);
+    if (scopeKey2 !== null) {
+      currentScope = scopeKey2[1];
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);

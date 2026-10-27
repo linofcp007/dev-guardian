@@ -85,7 +85,7 @@
  * stripping one would erase a route we can legitimately name.
  */
 
-import { INHERITED_PATH, INHERITED_PATH_KEY } from './extract.js';
+import { INHERITED_PATH, INHERITED_PATH_KEY, SCOPE_KIND } from './extract.js';
 
 /** Source text of each file Semgrep reported, keyed by the `path` value verbatim. */
 export type SourceMap = ReadonlyMap<string, string>;
@@ -105,6 +105,11 @@ export interface RecoveryOutcome {
    * run — only a lost route or mount is a hole in the surface (review 8,
    * finding 1: unreadable `import type` edges failed the run, and the CI
    * gate exited 2 on every TypeScript project).
+   *
+   * A focused `scope` fact — a class prefix, a controller or action name —
+   * counts here too. Losing one loses no route: resolvers/classPrefix.ts
+   * reads a fact it has without a value as one it cannot use, and leaves the
+   * class's routes partial at the paths they name.
    */
   lostEdges: number;
   /**
@@ -150,7 +155,7 @@ type Metavars = Record<string, { abstract_content: string }>;
  * calling them "unrecoverable" would manufacture a broken-toolchain signal out
  * of a rule pack that simply contains other rules.
  */
-const RECOVERABLE_KINDS = new Set(['route', 'mount', 'import', 'env']);
+const RECOVERABLE_KINDS = new Set(['route', 'mount', 'import', 'env', SCOPE_KIND]);
 
 export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): RecoveryOutcome {
   const results = prop(semgrepJson, 'results');
@@ -194,6 +199,13 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
       return raw;
     }
 
+    // A `scope` range — a class or an action, read by its offsets alone — has
+    // nothing to rebuild, and is no route to count among them: one per class
+    // and per action of every routed controller. Checked before `hasMetavars`
+    // for the reason above, since a non-redacting Semgrep binds `$C` / `$M`
+    // on it.
+    if (kind === SCOPE_KIND && str(metadata, FOCUS_METADATA_KEY) === undefined) return raw;
+
     // Real metavars are more precise than anything we can reconstruct — an
     // older Semgrep, or a logged-in one, must win.
     if (hasMetavars(extra)) {
@@ -205,7 +217,7 @@ export function recoverMetavars(semgrepJson: unknown, sources: SourceMap): Recov
     const metavars = span === undefined ? undefined : synthesize(kind, span, metadata);
     if (metavars === undefined || !isRecord(raw)) {
       unrecoverable += 1;
-      if (kind === 'import' || kind === 'env') lostEdges += 1;
+      if (kind === 'import' || kind === 'env' || kind === SCOPE_KIND) lostEdges += 1;
       // Routes only — see the field's doc comment.
       const path = kind === 'route' ? str(raw, 'path') : undefined;
       if (path !== undefined) unreadableRouteFiles.push(path);
@@ -275,9 +287,24 @@ function synthesize(kind: string, span: string, metadata: unknown): Metavars | u
       return synthesizeImport(span, metadata);
     case 'env':
       return synthesizeEnv(span);
+    case SCOPE_KIND:
+      return synthesizeScope(span, metadata);
     default:
       return undefined;
   }
+}
+
+/**
+ * A focused `scope` fact: the class prefix (`$PATH`) or a controller / action
+ * name (`$NAME`). Like a focused route, the span IS the value — Semgrep bound
+ * it by name and narrowed the range to it — so nothing is searched for. An
+ * unfocused scope fact never gets here (see the loop above).
+ */
+function synthesizeScope(span: string, metadata: unknown): Metavars | undefined {
+  const focus = str(metadata, FOCUS_METADATA_KEY);
+  if (focus === FOCUS_PATH) return { $PATH: { abstract_content: span } };
+  if (focus === FOCUS_NAME) return { $NAME: { abstract_content: span } };
+  return undefined;
 }
 
 /**
@@ -293,6 +320,8 @@ function synthesize(kind: string, span: string, metadata: unknown): Metavars | u
  */
 export const FOCUS_METADATA_KEY = 'guardian_focus';
 export const FOCUS_PATH = 'path';
+/** A `scope` rule focused on `$NAME`: a controller's class name, an action's method name. */
+export const FOCUS_NAME = 'name';
 
 /* ---- route ---------------------------------------------------------------
  *

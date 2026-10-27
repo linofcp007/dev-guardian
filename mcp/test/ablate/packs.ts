@@ -149,14 +149,16 @@
  * `test/e2e/rulePackFixture.test.ts` and the surface tools address them by
  * name, so the harness takes `hitsSubdir: '.'` (the fixture root) instead.
  *
- * **The decoy baseline is 9, not 0**, and four of those are `guardian_kind:
+ * **The decoy baseline is 11, not 0**, and four of those are `guardian_kind:
  * route`. Every one is undecidable rather than untried, and the e2e test
  * enumerates them: `Route::get('not/a/leading/slash')` on a class that merely
  * happens to be called `Route` is indistinguishable from Laravel's facade, and
  * Ruby's `get 'config/value'` is exactly what a Sinatra route looks like. The
- * other five are an `app.use('/static', express.static(...))` mount, which is
- * a real mount, and four ordinary imports in the decoy files. So the number is
- * printed and pinned, never gated at zero.
+ * other seven are an `app.use('/static', express.static(...))` mount, which is
+ * a real mount, and six ordinary imports in the decoy files (`decoys.go`'s
+ * grouped import is one match per item). So the number is printed and pinned,
+ * never gated at zero. (These notes said 9, four imports, until the 3.7.0
+ * class-prefix run measured 11 on the 3.6.1 pack as well.)
  *
  * It was 8 until five decoys were added for the guards that the first full run
  * reported DEAD — three chi exclusions, `guardian-mount-express`'s `$PREFIX`
@@ -170,7 +172,7 @@
  * an import, like the three that were already here.
  *
  * **Axis 3 is `mcp/src`, and it is nearly all vacuous.** Measured: 830 baseline
- * findings, and they belong to exactly TWO of the pack's 64 rules --
+ * findings, and they belong to exactly TWO of the pack's 73 rules --
  * `guardian-import-esm` (824) and `guardian-env-node` (6). Those two are worth
  * the corpus on their own: `guardian-import-esm` fires 824 times on 190 files
  * of this repo's own TypeScript, so a clause of it that starts matching more
@@ -478,7 +480,7 @@ export const PACKS: readonly PackSpec[] = [
   { name: 'base', config: config('base'), fixtures: fixtures('base'), hitsSubdir: 'hits' },
   // The route-inventory pack. See the file header for the corpus mapping, the
   // pinned decoy baseline and why axis 3 is `mcp/src` despite reaching only
-  // two of its 64 rules.
+  // two of its 73 rules.
   {
     name: 'routes',
     config: config('routes'),
