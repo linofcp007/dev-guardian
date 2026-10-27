@@ -10,8 +10,9 @@
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { analyzeSkill, MCP_DESCRIPTION_POISONING, OSV_OFFLINE_REASON } from '../../../src/skillaudit/analyze.js';
+import { analyzeSkill, grantsWildcard, MCP_DESCRIPTION_POISONING, OSV_OFFLINE_REASON } from '../../../src/skillaudit/analyze.js';
 import type { IngestedFile } from '../../../src/skillaudit/ingest.js';
+import { expectLinear } from '../../helpers/timing.js';
 
 function file(relPath: string, content: string, over: Partial<IngestedFile> = {}): IngestedFile {
   return {
@@ -52,6 +53,27 @@ describe('MCP manifest — least privilege', () => {
   it('is read from the text, so a manifest that does not parse is still checked for it', async () => {
     expect(await ruleIds([file('mcp-server.json', '{ "permissions": ["*"], ')])).toContain('mcp-wildcard-scope');
   });
+
+  // What the expression this replaced matched, on generated manifests.
+  it('grantsWildcard matches what the expression did, on 5 000 generated manifests', () => {
+    const whole = /"(permissions|scopes|allowedTools|capabilities)"\s*:\s*(\[[^\]]*"(\*|all)"|"(\*|all)")/i;
+    const pieces = ['"permissions"', '"Scopes"', '"capabilities"', ':', ' ', '[', ']', '"*"', '"ALL"', '"read"', ',', '{', '"x"'];
+    let seed = 3;
+    const next = (n: number): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return Math.floor(seed / 65536) % n;
+    };
+    for (let i = 0; i < 5_000; i++) {
+      const content = Array.from({ length: 1 + next(12) }, () => pieces[next(pieces.length)] ?? '').join('');
+      expect(grantsWildcard(content), content).toBe(whole.test(content));
+    }
+  });
+
+  // The manifest is the skill's own: every key with an array and no `]`
+  // handed the expression a start that read to the end of the file.
+  it('grantsWildcard costs eight times as much for eight times the manifest, not 64', () => {
+    expectLinear('permission keys with no ]', (n) => grantsWildcard('"permissions": [ '.repeat(n / 17)), 8_000);
+  }, 120_000);
 });
 
 describe('MCP manifest — tool-description poisoning', () => {

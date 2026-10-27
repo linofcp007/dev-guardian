@@ -25,6 +25,7 @@ import { makeFinding } from '../runners/scannerParsers/index.js';
 import { queryOsv, type OsvResult } from '../runners/osv.js';
 import type { Finding, Severity } from '../types.js';
 import { extractDependencies } from './deps.js';
+import { forwardSearch } from './forwardSearch.js';
 import type { IngestedFile, SymlinkEntry } from './ingest.js';
 import { scanContent, severityOfRule, type RuleMatch } from './patterns.js';
 import { scoreFindings, type ScoreResult, type ScoreSignal } from './score.js';
@@ -488,6 +489,32 @@ export const MCP_DESCRIPTION_POISONING =
  * capability) and tool poisoning (instructions hidden in tool descriptions).
  * Only runs on JSON manifests that actually look like MCP configs.
  */
+const PERMISSION_KEY = /"(?:permissions|scopes|allowedTools|capabilities)"\s*:\s*/gi;
+const WILDCARD = /"(?:\*|all)"/gi;
+
+/**
+ * Whether `content` grants a wildcard: a permission key whose value is
+ * `"*"` / `"all"`, or an array holding one before its first `]` — what
+ * `"(permissions|…)"\s*:\s*(\[[^\]]*"(\*|all)"|"(\*|all)")` (`i`) matched,
+ * searched forward only. The expression read each key's array to its `]`
+ * again from every key: 32 KB of `"permissions": [` took 43 ms, the square
+ * of the manifest (measured; review of the 3.7.0 self-scan).
+ */
+export function grantsWildcard(content: string): boolean {
+  const nextWildcard = forwardSearch(content, WILDCARD);
+  const nextClose = forwardSearch(content, /\]/g);
+  for (const key of content.matchAll(PERMISSION_KEY)) {
+    const at = key.index + key[0].length;
+    const wildcard = nextWildcard(at);
+    if (wildcard === null) return false;
+    if (wildcard.index === at) return true;
+    if (content.charAt(at) !== '[') continue;
+    const close = nextClose(at + 1);
+    if (close === null || wildcard.index < close.index) return true;
+  }
+  return false;
+}
+
 function analyzeMcpManifest(file: IngestedFile): Finding[] {
   const name = file.relPath.split('/').pop()?.toLowerCase() ?? '';
   const looksMcp =
@@ -506,11 +533,7 @@ function analyzeMcpManifest(file: IngestedFile): Finding[] {
   }
 
   // Least privilege: wildcard scopes/permissions.
-  if (
-    /"(permissions|scopes|allowedTools|capabilities)"\s*:\s*(\[[^\]]*"(\*|all)"|"(\*|all)")/i.test(
-      file.content,
-    )
-  ) {
+  if (grantsWildcard(file.content)) {
     out.push(
       finding(
         file,
