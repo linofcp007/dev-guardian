@@ -518,6 +518,22 @@ describe('assessManifestCoverage — the whole tree', () => {
     expect(assessManifestCoverage(project, output).gaps).toEqual([{ ecosystem: 'cargo', files: ['crates/old/Cargo.toml'] }]);
   });
 
+  // The pattern and the member's name are the repository's. As a backtracking
+  // expression, eight `*` against a 100-character name it does not match was
+  // some 10^11 steps; six was the bound, and still minutes at 255 characters.
+  it('a workspace pattern of many wildcards declares its members, and a long name it does not match costs a pass', () => {
+    const name = 'a'.repeat(100);
+    const project = tree({
+      'pnpm-workspace.yaml': "packages:\n  - '*a*a*a*a*a*a*a*a'\n",
+      'package.json': '{"name":"root","private":true}',
+      [`${name}/package.json`]: LODASH_PKG,
+      [`${name}b/package.json`]: LODASH_PKG,
+    });
+    expect(assessManifestCoverage(project, results(['pnpm-lock.yaml', 'pnpm'])).gaps).toEqual([
+      { ecosystem: 'npm', files: [`${name}b/package.json`] },
+    ]);
+  });
+
   it('never walks into dependency, build, version-control, cache or .guardianignore directories', () => {
     const project = tree({
       'node_modules/lodash/package.json': LODASH_PKG,
