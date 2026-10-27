@@ -288,7 +288,7 @@ dev-guardian ships **178 rules in 14 packs** under [`configs/semgrep/`](../confi
 
 | Rule | Severity | Languages | Ablatable clauses |
 | --- | --- | --- | --- |
-| `web-js-sql-template` | ERROR | javascript, typescript | 14 |
+| `web-js-sql-template` | ERROR | javascript, typescript | 24 |
 | `web-js-path-traversal` | ERROR | javascript, typescript | 6 |
 | `web-js-ssrf` | ERROR | javascript, typescript | 11 |
 
