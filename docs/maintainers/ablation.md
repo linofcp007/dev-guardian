@@ -11,7 +11,7 @@ npm run ablate -- all                          # every registered pack
 npm run ablate -- bugfix-js                    # one pack
 npm run ablate -- bugfix-java --filter=optional-get # one rule, while iterating
 npm run ablate -- bugfix-js --list             # enumerate clauses, no scanning
-npm run ablate -- routes                       # the 64-rule route pack, ~73 min
+npm run ablate -- routes                       # the 73-rule route pack, ~73 min
 ```
 
 Semgrep is found via `--semgrep=<path>`, then `GUARDIAN_SEMGREP`, then `PATH`.
@@ -60,7 +60,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **42 of the 169 rules** across the fourteen packs are
+nothing but positive terms. **42 of the 178 rules** across the fourteen packs are
 one of those — 36 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -78,7 +78,7 @@ prints `N/A`.
 | `bugfix-php` | 6 | 6 | 0 |
 | `bugfix-rs` | 1 | 1 | 0 |
 | `base` | 13 | 7 | 6 |
-| `routes` | 64 | 44 | 20 |
+| `routes` | 73 | 53 | 20 |
 | `rgpd` | 8 | 8 | 0 |
 | `llm` | 9 | 8 | 1 |
 | `web-js` | 3 | 3 | 0 |
@@ -165,7 +165,7 @@ blind to the one genuine race either corpus held, and `off-by-one` to `++i`,
 pass.** Axis 3 compares the ablated rule's *own* findings, so a rule the corpus
 never triggers passes by comparing an empty set against an empty set.
 `routes.yml` makes this the common case rather than the exception: `mcp/src` is
-TypeScript, and of the pack's 64 rules exactly **two** ever fire on it —
+TypeScript, and of the pack's 73 rules exactly **two** ever fire on it —
 `guardian-import-esm` (824 findings) and `guardian-env-node` (6). The corpus is
 registered anyway, because 824 findings on 190 files of our own code is the
 most sensitive real-code baseline in the repo and the alternative was `N/A` for

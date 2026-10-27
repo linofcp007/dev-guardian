@@ -266,7 +266,7 @@ export interface RuleVerdict {
    *
    * It is on the page because a multi-language pack makes that the common
    * case, not the exception. `mcp/src` is TypeScript, so it exercises exactly
-   * two of `routes.yml`'s 64 rules; the other 62 would otherwise print the
+   * two of `routes.yml`'s 73 rules; the other 71 would otherwise print the
    * same `does not raise ...'s real-code count (+0, floor 0)` line as a rule
    * the corpus genuinely tested. Same principle as the `N/A` axis 3 prints
    * when a pack has no corpus at all -- the difference between "measured and

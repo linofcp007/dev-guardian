@@ -520,8 +520,8 @@ function recoveryToolRun(recovery: RecoveryOutcome): ToolRun[] {
   // route or mount is a hole in the surface, and does fail it.
   const edgesNote =
     recovery.lostEdges > 0
-      ? `${recovery.lostEdges} import/env edge(s) could not be read (not a route: a mount's prefix that ` +
-        'relied on one may read partial)'
+      ? `${recovery.lostEdges} import/env edge(s) or class-prefix fact(s) could not be read (not a route: ` +
+        "a mount's or a class's prefix that relied on one may read partial)"
       : '';
   const routesLost = recovery.unrecoverable - recovery.lostEdges;
   if (routesLost === 0) {

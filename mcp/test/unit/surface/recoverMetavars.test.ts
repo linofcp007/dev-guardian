@@ -181,6 +181,50 @@ describe('recoverMetavars — a rule that captures nothing by design', () => {
   });
 });
 
+describe('recoverMetavars — the class facts a prefix is joined from', () => {
+  // Spans as Semgrep 1.182.0 reported them (no login, no metavariables) for
+  // `test/fixtures/surface/annotations/`: a focused prefix is the literal,
+  // quotes kept; a focused name is the identifier; a range is a whole
+  // declaration from its first annotation.
+  const PREFIX = { guardian_kind: 'scope', framework: 'spring', guardian_scope: 'prefix', guardian_focus: 'path' };
+  const NAME = { guardian_kind: 'scope', framework: 'aspnet', guardian_scope: 'class-name', guardian_focus: 'name' };
+  const TYPE = { guardian_kind: 'scope', framework: 'spring', guardian_scope: 'type' };
+
+  it('recovers a focused prefix as $PATH — the span is the value', () => {
+    const outcome = recoverSpan('"/api/orders"', PREFIX, '@RestController\n@RequestMapping("/api/orders")\nclass C {}');
+    expect(mv(outcome, '$PATH')).toBe('"/api/orders"');
+    expect(outcome.recovered).toBe(1);
+  });
+
+  it('recovers a focused name as $NAME', () => {
+    const outcome = recoverSpan('OrdersController', NAME, '[Route("api/[controller]")]\npublic class OrdersController {}');
+    expect(mv(outcome, '$NAME')).toBe('OrdersController');
+    expect(outcome.recovered).toBe(1);
+  });
+
+  it('leaves a range untouched and counts it nowhere, on either Semgrep version', () => {
+    // One of these per class and per action of every routed controller: none
+    // is a route, and a decoy inside the span is never read.
+    const span = '@RestController\nclass C { @GetMapping("/decoy") String d() { return ""; } }';
+    const redacted = recoverSpan(span, TYPE);
+    const { json, sources } = scenario(span, span, TYPE);
+    const intact = recoverMetavars(
+      { results: json.results.map((r) => ({ ...r, extra: { ...r.extra, metavars: { $C: { abstract_content: 'C' } } } })) },
+      sources,
+    );
+    for (const outcome of [redacted, intact]) {
+      expect(outcome).toMatchObject({ intact: 0, recovered: 0, unrecoverable: 0, noCaptures: 0, lostEdges: 0 });
+    }
+    expect(mv(redacted, '$PATH')).toBeUndefined();
+  });
+
+  it('counts an unreadable fact as a lost edge — its class reads partial, no route is missing', () => {
+    const { json } = scenario('"/api/orders"', '"/api/orders"', PREFIX);
+    const outcome = recoverMetavars(json, new Map());
+    expect(outcome).toMatchObject({ unrecoverable: 1, lostEdges: 1, unreadableRouteFiles: [] });
+  });
+});
+
 describe('recoverMetavars — $METHOD from the callee', () => {
   const cases: [span: string, expected: string][] = [
     ["app.get('/health', h)", 'get'],

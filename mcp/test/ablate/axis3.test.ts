@@ -310,7 +310,7 @@ describe('under and outside', () => {
   it("treats '.' as the fixture root -- every finding, not none of them", () => {
     // The failure this pins is the one that would ship silently: `'.'` handled
     // as an ordinary prefix yields `./`, which matches nothing, and a hits
-    // corpus of zero makes axis 0 report all 64 rules as firing on nothing.
+    // corpus of zero makes axis 0 report all 73 rules as firing on nothing.
     expect(under(corpus, '.')).toHaveLength(corpus.length);
   });
 

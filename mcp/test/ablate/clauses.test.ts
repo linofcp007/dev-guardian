@@ -287,7 +287,9 @@ describe('the rule inventory', () => {
       // pack is where the missing axis 3 was recorded as permanent. See
       // `packs.ts` and the deletion note in the pack.
       'bugfix-cs': { rules: 11, withClauses: 10 },
-      routes: { rules: 64, withClauses: 44 },
+      // 73: the nine `guardian_kind: scope` rules the Spring / ASP.NET
+      // class-prefix join reads, every one with a branch or a guard to ablate.
+      routes: { rules: 73, withClauses: 53 },
       // 8 of 8: every RGPD rule has at least one guard or branch to ablate.
       // The YouTube rule's only ablatable clause is its JSX consent guard;
       // its data-src exclusion is structural (a space before `src`), not a

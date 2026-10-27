@@ -170,7 +170,7 @@
  * an import, like the three that were already here.
  *
  * **Axis 3 is `mcp/src`, and it is nearly all vacuous.** Measured: 830 baseline
- * findings, and they belong to exactly TWO of the pack's 64 rules --
+ * findings, and they belong to exactly TWO of the pack's 73 rules --
  * `guardian-import-esm` (824) and `guardian-env-node` (6). Those two are worth
  * the corpus on their own: `guardian-import-esm` fires 824 times on 190 files
  * of this repo's own TypeScript, so a clause of it that starts matching more
@@ -478,7 +478,7 @@ export const PACKS: readonly PackSpec[] = [
   { name: 'base', config: config('base'), fixtures: fixtures('base'), hitsSubdir: 'hits' },
   // The route-inventory pack. See the file header for the corpus mapping, the
   // pinned decoy baseline and why axis 3 is `mcp/src` despite reaching only
-  // two of its 64 rules.
+  // two of its 73 rules.
   {
     name: 'routes',
     config: config('routes'),
