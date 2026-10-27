@@ -18,6 +18,18 @@
  * give an answer (it did not start, timed out, or was cancelled) validates
  * nothing — the caller keeps the shape check and says Semgrep did not look.
  * `--metrics=off`: nothing is sent anywhere.
+ *
+ * Nor does a run that broke: the exit code cannot tell it from a refusal
+ * (measured on 1.182.0: a broken pattern, a rule missing a key and a
+ * missing config all exit 2, a YAML or regex error 5, an unknown language
+ * 8). A refusal is Semgrep's verdict in its output — "Configuration is
+ * invalid - found N configuration error(s)", or a `semgrep error:` line
+ * (the unknown language prints only that) — and an engine that stopped
+ * under the run says so ("semgrep-core exited with", "the engine was
+ * killed", printed beside the verdict). A non-zero exit with no verdict, or
+ * with the engine stopped (a crash, a killed process, an OS error under
+ * load), refused nothing: a valid house rule read as "Semgrep refused it"
+ * was left unregistered.
  */
 
 import { runSemgrep } from './semgrepRun.js';
@@ -31,6 +43,10 @@ type SemgrepValidation =
 
 const ANSI = /\u001b\[[0-9;]*m/g;
 const MAX_MESSAGE = 400;
+/** What only a refusal prints (module comment). */
+const REFUSAL = /Configuration is invalid|^\s*semgrep error:/im;
+/** What a run whose engine stopped prints, refusal or not. */
+const ENGINE_STOPPED = /semgrep-core exited with|the engine was killed/i;
 
 /** Semgrep's own words for why it refused a config: its error lines, else its first lines. */
 function validateMessage(stderr: string, stdout: string): string {
@@ -59,6 +75,10 @@ async function validateOnce(
     return { answered: false, reason: `semgrep --validate did not finish (${run.outcome})` };
   }
   if (run.exitCode === 0) return { answered: true, ok: true, message: '' };
+  const said = `${run.stderr}\n${run.stdout}`.replace(ANSI, '');
+  if (ENGINE_STOPPED.test(said) || !REFUSAL.test(said)) {
+    return { answered: false, reason: `semgrep --validate failed (exit ${String(run.exitCode)}): ${validateMessage(run.stderr, run.stdout)}` };
+  }
   return { answered: true, ok: false, message: validateMessage(run.stderr, run.stdout) };
 }
 
