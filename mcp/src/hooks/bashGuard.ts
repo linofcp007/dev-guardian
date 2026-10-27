@@ -80,7 +80,8 @@
  * What this is NOT: a shell parser, nor an interpreter. A command substitution
  * inside double quotes (`echo "$(rm -rf /)"`) is masked like any quoted span,
  * so its body is pulled out and re-entered as a nested script
- * (`quotedSubstitutions`, review of 3.6.0, finding 4). Anything decided at run
+ * (`quotedSubstitutions`, review of 3.6.0, finding 4) — and a PowerShell
+ * script's, read as PowerShell (`collectSubexpressions`). Anything decided at run
  * time — a path in a variable, a script run from a file — stays invisible.
  * Fail-open is the design for the guard's own faults; a limit an input can
  * reach on purpose (the caps, the budget, the nesting depth) asks the user
@@ -101,7 +102,7 @@
 
 import { homedir } from 'node:os';
 import { userDataDir } from './dataRegistry.js';
-import { powershellAsPosix, powershellOpaque } from './powershellText.js';
+import { powershellAsPosix, powershellOpaque, powershellSubexpressions } from './powershellText.js';
 import { pushAll } from './shell/arrays.js';
 import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
 import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
@@ -4486,9 +4487,11 @@ function targetVariables(env: Readonly<Record<string, string | undefined>>): Rec
  * as given (a loosening key for Claude Code's settings is looked for there)
  * and the directory the statements have `cd`'d into so far, which each
  * statement updates in order; a nested script starts from the directory its
- * parent was in and cannot move the parent.
+ * parent was in and cannot move the parent. `source`, for one reading of a
+ * PowerShell script, is that script as written: the subexpressions its
+ * double-quoted strings run are read from it ({@link collectSubexpressions}).
  */
-function collect(command: string, depth: number, out: MatchedRule[], scope: Scope): void {
+function collect(command: string, depth: number, out: MatchedRule[], scope: Scope, source?: string): void {
   const cmd = command.trim();
   if (cmd.length === 0) return;
   // Before any whole-text work: a nested script is split and scanned whole,
@@ -4554,6 +4557,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
       collect(body, depth + 1, out, { ...scope, cmdLine: false });
     }
   }
+  if (source !== undefined) collectSubexpressions(source, depth, out, scope);
   // Where each command runs, as the `cd`s before it moved it (review of
   // 3.4.0, finding 9): a relative delete target is read against it.
   const dirs = workdirs(statements);
@@ -4694,7 +4698,7 @@ function collect(command: string, depth: number, out: MatchedRule[], scope: Scop
           // download anywhere in it — quoted or not — is run (review I1).
           if (iex === true && PS_DOWNLOAD.test(script)) out.push(RULE_IEX_DOWNLOAD);
           noteScript(scope, script, powershell);
-          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
+          collect(script, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here }, powershell ? script : undefined);
           const asPowerShell = powershell ? powershellAsPosix(script) : script;
           if (asPowerShell !== script) collect(asPowerShell, depth + 1, out, { ...scope, cmdLine: false, powershell, dir: here });
         }
@@ -4747,9 +4751,33 @@ function collectFed(fed: readonly FedScript[], depth: number, out: MatchedRule[]
     const kind = f.kind ?? scriptReader(f.reader) ?? 'shell';
     const powershell = kind === 'powershell';
     noteScript(scope, f.text, powershell);
-    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell });
+    collect(f.text, depth + 1, out, { ...scope, cmdLine: kind === 'cmd', powershell }, powershell ? f.text : undefined);
     const asPosix = powershell ? powershellAsPosix(f.text) : f.text;
     if (asPosix !== f.text) collect(asPosix, depth + 1, out, { ...scope, cmdLine: false, powershell });
+  }
+}
+
+/**
+ * The subexpressions a PowerShell script runs from inside its double-quoted
+ * strings and `@"…"@` here-strings ({@link powershellSubexpressions}): each a
+ * PowerShell script of its own, read both ways as a `pwsh -c` script is,
+ * within the same nesting cap and budget. Read the POSIX way alone — finding
+ * 4's `quotedSubstitutions`, a residual of 3.6.1 — `"$(Remove-Item C:\
+ * -Recurse -Force)"` lost the `\` of `C:\` and was ok, and a here-string's
+ * subexpression was never read at all.
+ */
+function collectSubexpressions(source: string, depth: number, out: MatchedRule[], scope: Scope): void {
+  for (const body of powershellSubexpressions(source)) {
+    if (body.trim() === '') continue;
+    if (depth >= MAX_NESTING) {
+      scope.notes.depth = true;
+      continue;
+    }
+    const nested: Scope = { ...scope, cmdLine: false, powershell: true };
+    noteScript(scope, body, true);
+    collect(body, depth + 1, out, nested, body);
+    const asPosix = powershellAsPosix(body);
+    if (asPosix !== body) collect(asPosix, depth + 1, out, nested);
   }
 }
 
@@ -4978,8 +5006,10 @@ export function assessBashCommand(command: string, opts: AssessOptions = {}): Ba
   // PowerShell's own reading goes first, so the one budget is never spent on
   // the POSIX reading before the reading that matches what will run; a block
   // needs no second reading. The POSIX reading sees here-strings and block
-  // comments for what they are: nothing else can be meant by them.
-  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where);
+  // comments for what they are: nothing else can be meant by them. The
+  // subexpressions the command's strings run are read from it as written,
+  // with the first reading.
+  return assessReadings([powershellAsPosix(text), powershellOpaque(text)], cut, now, deadline, where, text);
 }
 
 /** What the assessment knows of the machine: the home directory, and Claude Code's `CLAUDE_CONFIG_DIR`. */
@@ -5016,6 +5046,8 @@ function safeUserDataDir(): string {
  * The readings of one command, assessed into one verdict: every rule any
  * reading matched, and one partial note for all of them — so on a tie no
  * reading's reasons are dropped. A reading after one that blocked is skipped.
+ * `source`: the PowerShell command the readings respell, given to the first
+ * ({@link collect}).
  */
 function assessReadings(
   readings: readonly string[],
@@ -5023,6 +5055,7 @@ function assessReadings(
   now: () => number,
   deadline: number,
   where: Where,
+  source?: string,
 ): BashAssessment {
   const notes: Notes = {
     statement: false,
@@ -5049,7 +5082,7 @@ function assessReadings(
     // 125 000 operands overflowed the stack). Whatever throws now, the answer
     // is at least a warning, and a block found before it still blocks.
     try {
-      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where });
+      collect(cmd, 0, matched, { raw: cmd, cwd: '', notes, ...where }, n === 0 ? source : undefined);
     } catch {
       notes.failed = true;
     }

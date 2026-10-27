@@ -4650,3 +4650,62 @@ describe('assessBashCommand — review of 3.6.0: a command cut short by a cap is
     expect(a.ask).toBeUndefined();
   });
 });
+
+// A residual of 3.6.1: PowerShell runs a `$( … )` inside a double-quoted string
+// or an `@"…"@` here-string, and reads its body as PowerShell — but the body
+// was read only as a POSIX shell would (finding 4's fix), so `C:\` read as `C:`
+// and its delete was ok, and a here-string's was never read at all.
+describe('assessBashCommand — a PowerShell subexpression inside a double-quoted string is read as PowerShell', () => {
+  const ps = { shell: 'powershell' as const, homeDir: 'C:\\Users\\alice', platform: 'win32' as const, claudeConfigDir: '' };
+
+  it.each([
+    'Write-Host "x $(Remove-Item C:\\ -Recurse -Force)"',
+    '"$(Remove-Item C:\\Users\\alice -Recurse -Force)"',
+    'Write-Host "x $(Remove-Item "C:\\Users\\" -Recurse -Force) y"',
+    'Write-Host "$(cmd /c rd /s /q C:\\)"',
+    // A doubled backtick is one literal backtick: the `$(` after it runs.
+    'Write-Host "x ``$(Remove-Item C:\\ -Recurse -Force)"',
+    'Write-Host "$(Write-Output "a $(Remove-Item C:\\ -Recurse -Force)")"',
+    'Write-Host \u201c$(Remove-Item C:\\ -Recurse -Force)\u201d',
+    '$m = @"\nbefore\n$(Remove-Item C:\\ -Recurse -Force)\n"@',
+    // A string's extent is PowerShell's (measured with its parser): past the
+    // `"` its subexpression or a braced variable holds, and a here-string's
+    // closing `"@` inside a subexpression closes nothing.
+    '"$(\'"\')"; Remove-Item C:\\ -Recurse -Force',
+    '"${"}"; Remove-Item C:\\ -Recurse -Force',
+    '$m = @"\n$( \'\n"@\n\' )\n"@; Remove-Item C:\\ -Recurse -Force',
+  ])('%j is denied', (command) => {
+    expect(assessBashCommand(command, ps).rules).toContain('rm-rf-root');
+  });
+
+  it.each([
+    "Write-Host 'x $(Remove-Item C:\\ -Recurse -Force)'",
+    'Write-Host "x `$(Remove-Item C:\\ -Recurse -Force)"',
+    "$m = @'\n$(Remove-Item C:\\ -Recurse -Force)\n'@",
+    '# "$(Remove-Item C:\\ -Recurse -Force)"',
+    '"$(Get-Date)"',
+    'Write-Host "Build $(git rev-parse HEAD) at $((Get-Date).ToString(\'u\'))"',
+    '$x = "$($env:USERPROFILE)\\foo"; Write-Host "$($x.Length) chars"',
+  ])('%j stays ok', (command) => {
+    expect(assessBashCommand(command, ps).level).toBe('ok');
+  });
+
+  it('a recursive delete of a build directory there keeps its warning', () => {
+    expect(assessBashCommand('Write-Host "a $(Remove-Item .\\dist -Recurse) b"', ps).level).toBe('warn');
+  });
+
+  it('a subexpression nested past the cap is asked about, never silently passed', () => {
+    const a = assessBashCommand('"$("$("$("$(Remove-Item C:\\ -Recurse -Force)")")")"', ps);
+    expect(a.rules).toContain('partially-assessed');
+    expect(a.ask).toMatch(/nested more than 3 levels deep/);
+  });
+
+  it('an install inside a here-string subexpression is handed to the vetting as PowerShell', () => {
+    const a = assessBashCommand('$log = @"\n$(npm i left-pad)\n"@', ps);
+    expect(a.scripts).toContainEqual({ text: 'npm i left-pad', shell: 'powershell' });
+  });
+
+  it('eight times a line of quoted subexpressions costs well under 22.6 times as much', () => {
+    expectLinear('PowerShell quoted $() scan', (n) => assessBashCommand('Write-Host "$(Get-Date)"; '.repeat(Math.max(1, Math.floor(n / 26))), ps), 20_000);
+  }, 120_000);
+});
