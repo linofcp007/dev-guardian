@@ -988,6 +988,33 @@ const EXPECTED_ANNOTATION_ROUTES = [
   'aspnet/OrdersController.cs:81 aspnet DELETE /api/Orders/{id}',
   'aspnet/OrdersController.cs:85 aspnet DELETE /api/Orders/delete-named',
   'aspnet/OrdersController.cs:89 aspnet DELETE /api/Orders',
+  // ---- ASP.NET named arguments (aspnet/NamedArguments.cs), every verb in
+  // three shapes. The pack matched 5 of these 17 before 3.7.0 (measured on
+  // 1.182.0: the five with a path before a named argument). An attribute
+  // whose arguments are all named — `dotnet new webapi`'s `[HttpGet(Name =
+  // "GetWeatherForecast")]`, `Order = 1` — matched no rule, nor did a
+  // template passed as `template: "…"`. Named-only is served at the
+  // controller's route, like a bare attribute — `WithCompanion` too, beside
+  // its `[Route("companion")]` (ASP.NET makes that a second selector, with no
+  // verb, which no rule reports). A path before a named argument is the path
+  // rule's, at the path, never `Name = …`.
+  'aspnet/NamedArguments.cs:38 aspnet GET /WeatherForecast',
+  'aspnet/NamedArguments.cs:51 aspnet GET /api/NamedArgs',
+  'aspnet/NamedArguments.cs:54 aspnet GET /api/NamedArgs/{id}',
+  'aspnet/NamedArguments.cs:57 aspnet GET /api/NamedArgs/get-template',
+  'aspnet/NamedArguments.cs:63 aspnet GET /api/NamedArgs',
+  'aspnet/NamedArguments.cs:69 aspnet POST /api/NamedArgs',
+  'aspnet/NamedArguments.cs:72 aspnet POST /api/NamedArgs/post-named',
+  'aspnet/NamedArguments.cs:75 aspnet POST /api/NamedArgs/post-template',
+  'aspnet/NamedArguments.cs:80 aspnet PUT /api/NamedArgs',
+  'aspnet/NamedArguments.cs:83 aspnet PUT /api/NamedArgs/{id}',
+  'aspnet/NamedArguments.cs:87 aspnet PUT /api/NamedArgs/put-template',
+  'aspnet/NamedArguments.cs:93 aspnet PATCH /api/NamedArgs',
+  'aspnet/NamedArguments.cs:96 aspnet PATCH /api/NamedArgs/{id}/flag',
+  'aspnet/NamedArguments.cs:100 aspnet PATCH /api/NamedArgs/patch-template',
+  'aspnet/NamedArguments.cs:105 aspnet DELETE /api/NamedArgs',
+  'aspnet/NamedArguments.cs:108 aspnet DELETE /api/NamedArgs/{id}/hard',
+  'aspnet/NamedArguments.cs:111 aspnet DELETE /api/NamedArgs/delete-template',
   // ---- Spring: every annotation in all four forms, under the class's
   // `@RequestMapping("/api/orders")`. The class-level annotation itself is
   // NOT a row: it is a prefix, and 3.6.1's `ANY /api/orders [partial]` was a
@@ -1091,6 +1118,12 @@ const ANNOTATION_DECOYS = [
   'AuthGuard',
   'IgnoreApi',
   'RemoveOrder',
+  // A named attribute argument is never a path (aspnet/NamedArguments.cs).
+  'Name =',
+  'Order =',
+  'GetWeatherForecast',
+  'GetById',
+  'nameof',
   'pong',
   // The class-prefix fixtures: a commented-out prefix in each file; a type
   // whose @RequestMapping is no route (`/only` has no mapping, `/feign` is
