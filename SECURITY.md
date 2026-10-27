@@ -300,6 +300,21 @@ their respective projects.
   pinned to a version) with the pinned archive as the fallback. cosign's
   installer was already pinned this way. A test holds the Linux script and
   the macOS script's Trivy to the catalogue's versions and sums.
+- **The pipelines `ci-init` writes install nothing by name alone** (3.7.0 and
+  later). Their binaries were already pinned by sha256; bandit, Semgrep and
+  zizmor came from `pipx install semgrep==<version>`, which pinned those three
+  packages and nothing they depend on, and pipx first upgraded its own pip
+  from PyPI. They now come, with every dependency, from a lock per Python
+  (`configs/ci/python/requirements-<X.Y>.txt`, compiled with uv, every sha256
+  PyPI lists for each pinned release, each matched against PyPI's JSON API)
+  read from the dev-guardian clone the job verifies against the release
+  commit, installed into a venv of the image's own Python with `pip install
+  --require-hashes --only-binary :all:` — a file the lock does not hash is
+  refused, and no package's build code runs ([docs/ci.md](docs/ci.md#ci-init)).
+  `test/unit/configs/pinnedCiData.test.ts` holds each lock's top-level
+  versions to `configs/ci/pinned.json`; `npm run pins` reports a lock that
+  is stale, a locked release PyPI yanked, and the dependencies with newer
+  releases.
 - **Least privilege.** The MCP server reads and writes within the target project
   and its `.guardian/` directory, plus the temporary directories, the per-user
   data directory and cache listed in

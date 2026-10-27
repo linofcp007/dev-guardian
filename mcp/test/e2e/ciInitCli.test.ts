@@ -254,13 +254,22 @@ describe('ci-init: generated pipelines are valid YAML with the pinned values sub
     expect(r.stdout).not.toMatch(/uses: actions\/setup-node@v\d/);
   });
 
-  it('every target pins Trivy/gitleaks/actionlint by version + sha256, and semgrep/zizmor by exact version', () => {
+  // 3.7.0: `pipx install semgrep==X` pinned the three packages alone — every
+  // dependency, and the pip pipx upgrades from PyPI, floated. Now each
+  // dependency is pinned by sha256 in the verified clone's lock.
+  it('every target pins Trivy/gitleaks/actionlint by version + sha256, and bandit/semgrep/zizmor with every dependency by sha256', () => {
     for (const target of ['github', 'gitlab', 'bitbucket']) {
       const project = makeProject();
-      const r = runCli(['ci-init', target, '--project', project]);
-      expect(r.stdout, target).toMatch(/sha256sum -c -/);
-      expect(r.stdout, target).toMatch(/semgrep==\d+\.\d+\.\d+/);
-      expect(r.stdout, target).toMatch(/zizmor==\d+\.\d+\.\d+/);
+      const body = renderedBody(project, target);
+      expect(body, target).toMatch(/sha256sum -c -/);
+      expect(body, target).toContain('lock="$DEV_GUARDIAN_HOME/configs/ci/python/requirements-$py.txt"');
+      // Into the scratch directory, never the checkout.
+      expect(body, target).toMatch(/python3 -I -m venv ("\$venv"|\/tmp\/dev-guardian-scanners\/python)\n/);
+      if (target === 'github') expect(body).toContain('venv="$RUNNER_TEMP/dev-guardian-scanners/python"');
+      expect(body, target).toMatch(/\/bin\/python"? -I -m pip install --disable-pip-version-check --no-input --require-hashes --only-binary :all: -r "\$lock"/);
+      // No package by name alone: pipx, or a pip install the lock does not hash.
+      const unhashed = body.split('\n').filter((l) => !l.trimStart().startsWith('#') && (/\bpipx\b/.test(l) || (/pip install/.test(l) && !l.includes('--require-hashes'))));
+      expect(unhashed, target).toEqual([]);
     }
   });
 
@@ -424,10 +433,14 @@ describe('ci-init fix round 1: full-history clone (gitleaks needs commit history
 });
 
 describe('ci-init fix round 1: bandit always installed; .NET SDK conditional (github) or documented (gitlab/bitbucket)', () => {
-  it.each(['github', 'gitlab', 'bitbucket'] as const)('%s: bandit[toml] is pipx-installed unconditionally', (target) => {
+  it.each(['github', 'gitlab', 'bitbucket'] as const)('%s: bandit is installed unconditionally (with Semgrep and zizmor, from the lock)', (target) => {
     const project = makeProject();
     const body = renderedBody(project, target);
-    expect(body).toMatch(/pipx install "bandit\[toml\]==\d+\.\d+\.\d+"/);
+    expect(body).toMatch(/for tool in bandit semgrep pysemgrep zizmor; do ln -s /);
+    // Not inside a probe's `if`: at the same indentation as the lock it reads.
+    const lines = body.split('\n');
+    const indent = (needle: string): string | undefined => lines.find((l) => l.includes(needle))?.match(/^\s*/)?.[0];
+    expect(indent('-m pip install')).toBe(indent('lock="$DEV_GUARDIAN_HOME'));
   });
 
   it('github: .NET SDK setup is present, gated on a root .csproj/.fsproj/.sln/.slnx probe', () => {
