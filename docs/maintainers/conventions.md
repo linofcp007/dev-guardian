@@ -179,4 +179,8 @@ Enforced by the compiler where possible, by review where not:
   behind, with the sha256 GitHub records for the newer assets as a starting point. Never bump on that
   alone: hash the download yourself, match the release's own checksums and its signature where it has
   one, and record how beside the pin. A PyPI release with no upstream tag (Semgrep 1.182.1) is not
-  taken as the latest.
+  taken as the latest. The CI templates install bandit, Semgrep and zizmor, with every dependency,
+  from `configs/ci/python/requirements-<X.Y>.txt` (3.7.0): bump one of them in `pinned.json` and
+  `configs/ci/python/requirements.in` together, then recompile every lock with the `uv pip compile`
+  command in its header, from the repository root (`pinnedCiData.test.ts` fails until the locks
+  agree; `npm run pins` reports a stale lock, a yanked locked release, and newer dependencies).

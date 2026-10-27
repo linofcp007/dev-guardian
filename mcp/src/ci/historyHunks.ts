@@ -13,10 +13,17 @@
  *     so a line neither parent has (an "evil merge") is in none;
  *   - a file git reads as binary — by its content (a NUL byte), or by the
  *     working tree's `.gitattributes` (`binary`, `-diff`), which git applies
- *     to every commit's diff: "Binary files differ". The history pass reads
- *     no attributes of the tree any more (`GIT_ATTR_SOURCE`,
- *     `runners/gitleaksScan.ts`), but a git older than 2.40, or the content
- *     itself, still hides one.
+ *     to every commit's diff: "Binary files differ".
+ *
+ * Since 3.7.0 git shows the history pass both (`runners/historyView.ts`): a
+ * two-parent merge's own change as a remerge-diff (git 2.36 and later), and
+ * every file as text, the tree's attributes and a NUL byte notwithstanding,
+ * but at a path that holds a file over 1 MiB. This check stays as it was —
+ * a merge commit's line, and one whose commit's diff of the file reads as
+ * binary, count as read by no hunk — because an octopus merge, an older
+ * git, a large path or the repository's own `$GIT_DIR/info/attributes`
+ * still hide one, and a secret both passes report in the same file (same
+ * rule, same value) is listed once.
  *
  * `git blame` names the commit that added the line, following the file's
  * renames (a key in a file renamed since it was committed was read where it

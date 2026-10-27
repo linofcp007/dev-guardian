@@ -13,13 +13,18 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildBaseline, newFindings } from '../../../src/ci/baseline.js';
 import { hunkStartsByPath, rememberSecretValues, secretFromLine, secretValueOf, secretValuesRead } from '../../../src/ci/secretValues.js';
 import { assignIdentities } from '../../../src/fingerprint/findingIdentity.js';
 import { resolveProjectPath } from '../../../src/platform/projectPath.js';
 import type { Finding } from '../../../src/types.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+
+// Real git subprocesses (each history read now runs the commits' pass and the
+// merges' pass, `runners/historyView.ts`): ~1.5 s a test alone, past vitest's
+// 10 s default under a loaded full suite.
+vi.setConfig({ testTimeout: 60_000 });
 
 afterAll(cleanupTempDirs);
 
