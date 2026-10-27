@@ -192,6 +192,13 @@ export const RUN_NAMES = {
   // coverage cannot be full, but Trivy read the whole tree — no finding of
   // its is left unmeasured by this, only the check of which manifests it read.
   'trivy:manifest-walk': scanner(),
+  // A pom.xml was scanned with --offline-scan (runners/trivyRun.ts): Trivy
+  // read its direct dependencies but did not fetch and resolve the
+  // transitive ones — a repository's pom must not choose where Trivy fetches
+  // or send the user's ~/.m2 credentials there. The direct-dependency CVEs it
+  // did report are real; the transitive ones it never produced measure
+  // nothing to carry forward.
+  'trivy:maven-offline': scanner(),
 
   // deps_audit's native auditors, recorded by command: `npm audit`,
   // `pip-audit` (parsed into findings since Task 10), and the .NET SDK's

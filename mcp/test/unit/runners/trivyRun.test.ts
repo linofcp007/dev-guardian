@@ -50,19 +50,24 @@ beforeEach(() => {
 });
 
 describe('trivyArgv', () => {
-  it('puts --config before the target, and the target last', () => {
+  it('puts --offline-scan on a filesystem scan, then --config before the target, and the target last', () => {
+    // A repository's pom.xml must not choose where Trivy fetches, or send the user's ~/.m2 credentials there.
     expect(trivyArgv({ args: ['fs', '--scanners', 'vuln', '--quiet'], target: '/p' }, '/r/cfg.yaml', null)).toEqual([
       'fs',
       '--scanners',
       'vuln',
       '--quiet',
+      '--offline-scan',
       '--config',
       '/r/cfg.yaml',
       '/p',
     ]);
+    // repo/rootfs resolve a tree too; config/image do not take it.
+    expect(trivyArgv({ args: ['rootfs'], target: '/p' }, '/r/c.yaml', null)).toContain('--offline-scan');
+    expect(trivyArgv({ args: ['image'], target: 'alpine' }, '/r/c.yaml', null)).not.toContain('--offline-scan');
   });
 
-  it('adds --ignorefile when the project has a .trivyignore', () => {
+  it('adds --ignorefile when the project has a .trivyignore, and no --offline-scan on a config scan', () => {
     expect(trivyArgv({ args: ['config'], target: '/p' }, '/r/cfg.yaml', '/p/.trivyignore')).toEqual([
       'config',
       '--config',
@@ -86,7 +91,7 @@ describe('runTrivy', () => {
     expect(call?.command).toBe('trivy');
     expect(call?.cwd).toBe(work);
     const config = join(work, NEUTRAL_TRIVY_CONFIG);
-    expect(call?.args).toEqual(['fs', '--format', 'json', '--config', config, project]);
+    expect(call?.args).toEqual(['fs', '--format', 'json', '--offline-scan', '--config', config, project]);
     // Comments only: YAML with no key, which Trivy reads as no configuration.
     const text = readFileSync(config, 'utf8');
     expect(text.split('\n').every((l) => l === '' || l.startsWith('#'))).toBe(true);
@@ -178,6 +183,7 @@ describe('Trivy never phones home', () => {
     expect(trivyArgv({ args: ['fs', '--quiet'], target: '/p' }, '/r/c.yaml', null, '0.69.3')).toEqual([
       'fs',
       '--quiet',
+      '--offline-scan',
       '--skip-version-check',
       '--disable-telemetry',
       '--config',
@@ -446,6 +452,31 @@ describe('judgeTrivyFs: a manifest walk that stopped early', () => {
   it('a walk that read everything adds nothing', () => {
     const j = judgeTrivyFs({ projectPath: deepTree(), raw: RAW, run: completed, exclusions: null });
     expect(j).toEqual({ toolRun: { name: 'trivy', status: 'ok' }, missing: [], gaps: [] });
+  });
+});
+
+/**
+ * A pom.xml scanned under --offline-scan: Trivy reports a `pom` Result for
+ * the direct dependencies, but did not fetch the transitive ones. A named
+ * partial gap (`trivy:maven-offline`), never a clean Maven pass.
+ */
+describe('judgeTrivyFs: a pom.xml scanned offline is a named gap', () => {
+  const completed = { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false, honoured: [] };
+  const POM = JSON.stringify({ Results: [{ Target: 'pom.xml', Class: 'lang-pkgs', Type: 'pom', Vulnerabilities: [] }] });
+
+  it('lists trivy:maven-offline, trivy stays ok, and the reason says transitive deps were not resolved', () => {
+    const dir = makeTempDir('trivy-maven-');
+    writeFileSync(join(dir, 'pom.xml'), '<project/>');
+    const j = judgeTrivyFs({ projectPath: dir, raw: POM, run: completed, exclusions: null });
+    expect(j.toolRun.status).toBe('ok');
+    expect(j.missing).toEqual(['trivy:maven-offline']);
+    expect(j.toolRun.reason).toMatch(/transitive Maven dependencies were not resolved/);
+  });
+
+  it('no pom Result, no gap', () => {
+    const dir = makeTempDir('trivy-maven-');
+    const j = judgeTrivyFs({ projectPath: dir, raw: JSON.stringify({ Results: [] }), run: completed, exclusions: null });
+    expect(j.missing).toEqual([]);
   });
 });
 

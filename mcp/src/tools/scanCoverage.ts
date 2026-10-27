@@ -277,13 +277,20 @@ export function assessCoverage(
     );
   }
   for (const [base, allParts] of partsOf) {
-    // `trivy:manifest-walk` (runners/trivyRun.ts#judgeTrivyFs): not a part
-    // Trivy missed, but the check of which manifests it read cut short.
-    const parts = allParts.filter((part) => part !== 'manifest-walk');
-    if (parts.length < allParts.length) {
+    // `trivy:manifest-walk` and `trivy:maven-offline`
+    // (runners/trivyRun.ts#judgeTrivyFs): not an ecosystem Trivy missed, but
+    // the manifest-read check cut short, and a pom.xml scanned offline.
+    const parts = allParts.filter((part) => part !== 'manifest-walk' && part !== 'maven-offline');
+    if (allParts.includes('manifest-walk')) {
       clauses.push(
         `${base} ran, but the check of which dependency manifests it read stopped early (see its tools_run ` +
           'reason) — manifests beyond it were not checked',
+      );
+    }
+    if (allParts.includes('maven-offline')) {
+      clauses.push(
+        `${base} ran, but a pom.xml was scanned offline (so a repository's pom cannot choose where Trivy ` +
+          'fetches, or send your Maven credentials) — its transitive Maven dependencies were not resolved',
       );
     }
     if (parts.length === 0) continue;
