@@ -683,7 +683,14 @@ describe('parseInstallCommands — launchers that download and run a package (re
 
   // The runner prefix is read with its own options, as the shell guard reads
   // it: a table shared by every runner made `sudo -n` swallow the `npm`.
-  it.each(['sudo -n npm install left-pad', 'sudo -i npm i left-pad', 'env -i npm i left-pad', 'sudo -u ci -- npx -y left-pad'])(
+  it.each([
+    'sudo -n npm install left-pad',
+    'sudo -i npm i left-pad',
+    'env -i npm i left-pad',
+    'sudo -u ci -- npx -y left-pad',
+    'flock -w 5 /tmp/ci.lock npm i left-pad',
+    'runuser -u ci -- npm i left-pad',
+  ])(
     '%s is still an install of left-pad',
     (command) => {
       expect(parseInstallCommands(command).flatMap((c) => c.packages.map((p) => p.name))).toEqual(['left-pad']);

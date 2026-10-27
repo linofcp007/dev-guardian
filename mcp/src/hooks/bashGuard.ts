@@ -105,7 +105,7 @@ import { userDataDir } from './dataRegistry.js';
 import { powershellAsPosix, powershellOpaque, powershellSubexpressions } from './powershellText.js';
 import { pushAll } from './shell/arrays.js';
 import { cmdInnerCommands, cmdLineText, posixWord } from './shell/cmd.js';
-import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
+import { ASSIGNMENT, basename, cmdSwitch, cmdSwitches, commandName, flockLockFile, psParam, resolveCommand, runnerOptionWords } from './shell/command.js';
 import { commandWriteDestinations, type Effects, effectsOf, lastSegment, noEffects, parseTransfer, redirectTargets, withoutRedirections, withoutRedirectWords } from './shell/effects.js';
 import { asWindowsOpens, codeLang, type CodeLang, codeLiterals, firstNonFlag, inlineCode, interpreterIndex, interpreterName, interpreterProgram, isBareInterpreterStdin, isInterpreter, LAUNCHER_VALUED, literalPaths, NODE_OPTION_VALUED, powershellCommand, powershellReadsStdin, RUN_WRAPPERS, tail } from './shell/interpreters.js';
 import { CD_COMMANDS, CD_RETURNS, cwdAfter, dirOf, isAbsolutePath, MAX_CWD, normalizedPath, resolveFrom, wildcardMatch } from './shell/paths.js';
@@ -2348,9 +2348,6 @@ function shellScript(text: string): NestedScript {
 }
 const DASH_C = /^-[A-Za-z]*c$/;
 
-/** flock's options that take the next word as their value (`-w SECS`, `-E CODE`). */
-const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
-
 /**
  * The script a nested-script carrier runs (review of 3.6.0, finding 7), or
  * `null` when `name` is not one. The carriers run their payload through a
@@ -2359,9 +2356,14 @@ const FLOCK_VALUED = /^-[wE]$|^--(?:timeout|conflict-exit-code)$/;
  *
  *   - `trap 'SCRIPT' SIGSPEC` — the first operand, run on the signal (a lone
  *     operand with no sigspec is `trap SCRIPT` querying/printing, not running);
- *   - `flock FILE -c 'SCRIPT'`, or `flock [opts] FILE CMD …` run directly;
+ *   - `flock FILE -c 'SCRIPT'`;
  *   - `script [-q] -c 'SCRIPT' FILE` (also `-qc`, `--command`);
- *   - `runuser … -c 'SCRIPT'`, or `runuser … -- CMD …` run as the user.
+ *   - `runuser … -c 'SCRIPT'`, run as the user.
+ *
+ * `flock [opts] FILE CMD …` and `runuser … -u USER -- CMD …` run CMD as its
+ * own words, not through a shell: `resolveCommand` walks past them, as past
+ * `sudo` (a residual of 3.6.1 — joined into a script here, `flock /tmp/l rm
+ * -rf "/ x"` read as `rm -rf / x`).
  */
 function carrierScript(name: string, words: readonly ShellWord[], start: number): string | undefined | null {
   const rest = words.slice(start + 1);
@@ -2371,7 +2373,6 @@ function carrierScript(name: string, words: readonly ShellWord[], start: number)
     if (w.value.startsWith('--command=')) return w.value.slice('--command='.length);
     return !w.quoted && (DASH_C.test(w.value) || w.value === '--command') ? (nextWord?.value ?? '') : undefined;
   };
-  const argv = (from: number): string | undefined => rest.slice(from).map((x) => x.value).join(' ') || undefined;
   if (name === 'trap') {
     let i = 0;
     while (i < rest.length && (rest[i]?.value ?? '').startsWith('-') && rest[i]?.value !== '--') i += 1;
@@ -2388,24 +2389,21 @@ function carrierScript(name: string, words: readonly ShellWord[], start: number)
     return undefined;
   }
   if (name === 'runuser') {
-    for (let i = 0; i < rest.length; i += 1) {
+    // Its `-c` script, before a `--` that would hand on a command instead.
+    for (let i = 0; i < rest.length && rest[i]?.value !== '--'; i += 1) {
       const c = dashC(rest[i], rest[i + 1]);
       if (c !== undefined) return c;
-      if (rest[i]?.value === '--') return argv(i + 1);
     }
     return undefined;
   }
   if (name === 'flock') {
-    // flock's own options precede the lock FILE; `-c` may follow it (`flock
-    // FILE -c '…'`), else the command runs directly (`flock FILE CMD …`).
-    let i = 0;
-    while (i < rest.length && (rest[i]?.value ?? '').startsWith('-')) {
-      const c = dashC(rest[i], rest[i + 1]);
+    // flock's own options precede the lock FILE; `-c` follows it (`flock FILE -c '…'`).
+    const file = flockLockFile(words, start + 1);
+    for (let i = start + 1; i < file; i += 1) {
+      const c = dashC(words[i], words[i + 1]);
       if (c !== undefined) return c;
-      i += FLOCK_VALUED.test(rest[i]?.value ?? '') ? 2 : 1;
     }
-    const c = dashC(rest[i + 1], rest[i + 2]);
-    return c !== undefined ? c : argv(i + 1);
+    return dashC(words[file + 1], words[file + 2]);
   }
   return null;
 }
@@ -3044,9 +3042,12 @@ const DOWNLOADERS = new Set(['curl', 'wget', 'iwr', 'irm', 'invoke-webrequest', 
 /**
  * The runners a pipeline member is looked through to find what reads the
  * pipe — never `xargs`, `watch` or cmd's `start`, which do not hand the
- * command their stdin as a script.
+ * command their stdin as a script. `flock FILE` and `runuser -u USER` do,
+ * like `sudo` (`curl … | flock /tmp/l sh`).
  */
-const PIPE_RUNNERS = new Set(['sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf']);
+const PIPE_RUNNERS = new Set([
+  'sudo', 'doas', 'env', 'command', 'exec', 'builtin', 'nohup', 'nice', 'time', 'timeout', 'setsid', 'stdbuf', 'flock', 'runuser',
+]);
 
 /** Shells that run what arrives on their stdin. */
 const STDIN_SHELLS = new Set([...SHELLS, 'fish', 'csh', 'tcsh']);
