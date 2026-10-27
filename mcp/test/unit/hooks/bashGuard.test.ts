@@ -37,6 +37,7 @@ import {
   type AssessOptions,
   type BashAssessment,
 } from '../../../src/hooks/bashGuard.js';
+import { powershellSubexpressions } from '../../../src/hooks/powershellText.js';
 import { costOf, expectLinear, expectNearReference, PERF_STRICT } from '../../helpers/timing.js';
 
 /** The assessment with its time budget out of the way — see the file header. A test passing `now` keeps it. */
@@ -4688,6 +4689,23 @@ describe('assessBashCommand — a PowerShell subexpression inside a double-quote
     '$x = "$($env:USERPROFILE)\\foo"; Write-Host "$($x.Length) chars"',
   ])('%j stays ok', (command) => {
     expect(assessBashCommand(command, ps).level).toBe('ok');
+  });
+
+  // A braced variable's name is any text to its `}` (PowerShell's parser
+  // reads `${"}` as a variable): read as code, a quote or a `#` in it hid the
+  // rest of the line from the PowerShell reading.
+  it.each([
+    '${"}; Remove-Item C:\\ -Recurse -Force',
+    "${'}; Remove-Item C:\\ -Recurse -Force",
+    '${#}; Remove-Item C:\\ -Recurse -Force',
+    '${\u201c}; Remove-Item C:\\ -Recurse -Force',
+    'Remove-Item ${env:ProgramFiles(x86)} -Recurse -Force',
+  ])('%j is denied: a braced variable is one word', (command) => {
+    expect(assessBashCommand(command, ps).rules).toContain('rm-rf-root');
+  });
+
+  it("a braced variable's quote opens no string for the subexpression reading either", () => {
+    expect(powershellSubexpressions('${"}; Write-Host "$(Get-Date)"')).toEqual(['Get-Date']);
   });
 
   it('a recursive delete of a build directory there keeps its warning', () => {

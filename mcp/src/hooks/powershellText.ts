@@ -262,10 +262,17 @@ export function powershellSubexpressions(text: string): string[] {
       i = singleQuotedEnd(text, i);
       continue;
     }
+    if (ch === '$' && text.charAt(i + 1) === '{') {
+      i = bracedVariableEnd(text, i + 2);
+      continue;
+    }
     i = isDoubleQuote(ch) ? expandableSubexpressions(text, i + 1, true, out) : i + 1;
   }
   return out;
 }
+
+/** A braced variable's whole spelling (`${env:USERPROFILE}`, `${C:\x.txt}`) whose characters the POSIX reader reads as written. */
+const PLAIN_BRACED_VARIABLE = /^\$\{[\w:.?\\/-]*\}$/;
 
 /** The index just past the `'…'` string opened at `at`, `''` inside it being one quote. */
 function singleQuotedEnd(text: string, at: number): number {
@@ -365,6 +372,20 @@ export function powershellAsPosix(text: string): string {
       out += posixSingle(lit);
       i = j + 1;
       continue;
+    }
+    // A braced variable's name is any text to its `}` — PowerShell's parser
+    // reads `${"}` and `${#}` as variables — so one holding a quote, a `#`, a
+    // parenthesis or a space is one literal word: read as code, `${"};
+    // Remove-Item C:\ …` hid the delete, and `${env:ProgramFiles(x86)}` was
+    // split at its `(`. A plain name is left as it was.
+    if (ch === '$' && text.charAt(i + 1) === '{') {
+      const end = bracedVariableEnd(text, i + 2);
+      const spelled = text.slice(i, end);
+      if (!PLAIN_BRACED_VARIABLE.test(spelled)) {
+        out += posixSingle(spelled);
+        i = end;
+        continue;
+      }
     }
     if (ch === '`') {
       const next = text.charAt(i + 1);
