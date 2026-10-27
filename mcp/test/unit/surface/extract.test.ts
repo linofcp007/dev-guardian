@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { RouteRecord } from '../../../src/types.js';
 import {
-  CLASS_PREFIX_ALWAYS,
+  CLASS_PREFIX_ASPNET,
   CLASS_PREFIX_KEY,
-  CLASS_PREFIX_UNLESS_ROOTED,
+  CLASS_PREFIX_SPRING,
   extractParams,
   extractSurface,
   INHERITED_PATH,
@@ -403,41 +404,309 @@ describe('extractSurface — an annotation with no path of its own', () => {
   });
 });
 
-describe('extractSurface — a path a class-level prefix completes', () => {
-  /** One focused route match: its path is the span's text, recovered as `$PATH`. */
-  function match(path: string, metadata: Record<string, unknown>): unknown {
-    return {
-      results: [
-        {
-          check_id: 'guardian-route-x',
-          path: 'src/main/java/OrderController.java',
-          start: { line: 9 },
-          extra: {
-            metadata: { guardian_kind: 'route', framework: 'spring', confidence: 'medium', method: 'GET', ...metadata },
-            metavars: { $PATH: { abstract_content: `"${path}"` } },
-          },
-        },
-      ],
-    };
-  }
-  const route = (path: string, metadata: Record<string, unknown>) => extractSurface(match(path, metadata)).routes[0];
+/* ---- class-level prefixes ------------------------------------------------
+ *
+ * The facts as configs/semgrep/routes.yml's `scope` rules report them: a
+ * declaration's byte range, or a value bound inside one. The offsets below are
+ * synthetic — only containment matters to the join — but the shapes are the
+ * ones Semgrep 1.182.0 emitted for the fixtures: a class range from its first
+ * annotation to its closing brace, the prefix literal inside it, quotes kept.
+ */
+const JAVA = 'src/main/java/OrderController.java';
+const CS = 'Controllers/OrdersController.cs';
 
-  it('always: the path is kept, never resolved — Spring joins the class @RequestMapping to it', () => {
-    expect(route('/list', { [CLASS_PREFIX_KEY]: CLASS_PREFIX_ALWAYS })).toMatchObject({
+interface Fact {
+  role: string;
+  start: number;
+  end: number;
+  value?: string;
+  framework?: string;
+  file?: string;
+}
+
+function scopeMatch(fact: Fact): unknown {
+  const focus = fact.role === 'prefix' ? 'path' : fact.role.endsWith('name') ? 'name' : undefined;
+  const metavar = fact.role === 'prefix' ? '$PATH' : '$NAME';
+  return {
+    check_id: `guardian-scope-${fact.role}`,
+    path: fact.file ?? JAVA,
+    start: { line: 1, offset: fact.start },
+    end: { line: 1, offset: fact.end },
+    extra: {
+      metadata: {
+        guardian_kind: 'scope',
+        framework: fact.framework ?? 'spring',
+        guardian_scope: fact.role,
+        ...(focus !== undefined ? { guardian_focus: focus } : {}),
+      },
+      ...(fact.value !== undefined ? { metavars: { [metavar]: { abstract_content: fact.value } } } : {}),
+    },
+  };
+}
+
+/** A class route at `offset`: `path` is its `$PATH` capture as Semgrep reports it, quotes kept; undefined for a bare one. */
+function classRoute(
+  path: string | undefined,
+  offset: number,
+  options: { style?: string; framework?: string; file?: string; confidence?: string } = {},
+): unknown {
+  const style = options.style ?? CLASS_PREFIX_SPRING;
+  return {
+    check_id: 'guardian-route-x',
+    path: options.file ?? (style === CLASS_PREFIX_ASPNET ? CS : JAVA),
+    start: { line: 9, offset },
+    end: { line: 9, offset: offset + 1 },
+    extra: {
+      metadata: {
+        guardian_kind: 'route',
+        framework: options.framework ?? (style === CLASS_PREFIX_ASPNET ? 'aspnet' : 'spring'),
+        confidence: options.confidence ?? (path === undefined ? 'low' : 'medium'),
+        method: 'GET',
+        [CLASS_PREFIX_KEY]: style,
+        ...(path === undefined ? { [INHERITED_PATH_KEY]: INHERITED_PATH } : {}),
+      },
+      ...(path !== undefined ? { metavars: { $PATH: { abstract_content: path } } } : {}),
+    },
+  };
+}
+
+function served(route: unknown, facts: readonly Fact[]): RouteRecord | undefined {
+  const json = { results: [...facts.map(scopeMatch), route] };
+  return extractSurface(json).routes[0];
+}
+
+/** `@RestController @RequestMapping("/api/orders") class OrderController { … }` */
+const SPRING_HANDLER: readonly Fact[] = [
+  { role: 'type', start: 0, end: 1000 },
+  { role: 'handler', start: 0, end: 1000 },
+  { role: 'prefix', start: 20, end: 33, value: '"/api/orders"' },
+];
+
+describe('extractSurface — Spring: a handler joins its class-level @RequestMapping', () => {
+  it('serves a method mapping at the prefix plus its own path, resolved', () => {
+    expect(served(classRoute('"/list"', 100), SPRING_HANDLER)).toMatchObject({
       path_raw: '/list',
-      path_resolved: '/list',
-      path_partial: true,
+      path_resolved: '/api/orders/list',
+      path_partial: false,
       confidence: 'medium',
     });
   });
 
-  it('unless-rooted: a path starting with / or ~/ ignores the class [Route] and stays resolved (ASP.NET)', () => {
-    expect(route('{id}/status', { [CLASS_PREFIX_KEY]: CLASS_PREFIX_UNLESS_ROOTED })?.path_partial).toBe(true);
-    expect(route('/aspnet/orders', { [CLASS_PREFIX_KEY]: CLASS_PREFIX_UNLESS_ROOTED })?.path_partial).toBe(false);
+  it("applies Spring's slash rules: a leading one added, a doubled one kept once", () => {
+    const withPrefix = (prefix: string, own: string): string | undefined =>
+      served(classRoute(own, 100), [
+        ...SPRING_HANDLER.slice(0, 2),
+        { role: 'prefix', start: 20, end: 33, value: prefix },
+      ])?.path_resolved;
+    expect(withPrefix('"/api/orders"', '"list"')).toBe('/api/orders/list');
+    expect(withPrefix('"api/orders"', '"/list"')).toBe('/api/orders/list');
+    expect(withPrefix('"/api/"', '"/list"')).toBe('/api/list');
+    expect(withPrefix('"/api/orders"', '""')).toBe('/api/orders');
+    expect(withPrefix('""', '"/list"')).toBe('/list');
+  });
+
+  it('serves a bare mapping AT the prefix, its own path left empty', () => {
+    expect(served(classRoute(undefined, 100), SPRING_HANDLER)).toMatchObject({
+      path_raw: '',
+      path_resolved: '/api/orders',
+      path_partial: false,
+    });
+  });
+
+  it('carries a parameter of the prefix into params', () => {
+    const route = served(classRoute('"/{id}"', 100), [
+      ...SPRING_HANDLER.slice(0, 2),
+      { role: 'prefix', start: 20, end: 40, value: '"/tenants/{tenant}/orders"' },
+    ]);
+    expect(route?.path_resolved).toBe('/tenants/{tenant}/orders/{id}');
+    expect(route?.params).toEqual(['tenant', 'id']);
+  });
+
+  it('resolves a handler with no prefix and no supertype at its own path', () => {
+    const facts = SPRING_HANDLER.slice(0, 2);
+    expect(served(classRoute('"list"', 100), facts)).toMatchObject({ path_resolved: '/list', path_partial: false });
+  });
+
+  it('keeps partial what the facts cannot settle', () => {
+    const partial = (route: unknown, facts: readonly Fact[]): unknown => served(route, facts)?.path_partial;
+    // No prefix, but a supertype that may carry one — an OpenAPI-generated
+    // `implements OrdersApi` puts the type-level mapping on the interface.
+    expect(partial(classRoute('"/list"', 100), [...SPRING_HANDLER.slice(0, 2), { role: 'inherits', start: 0, end: 1000 }])).toBe(true);
+    // A bare mapping with no prefix at all maps the empty pattern.
+    expect(partial(classRoute(undefined, 100), SPRING_HANDLER.slice(0, 2))).toBe(true);
+    // Not a handler: an interface's, a base class's or an abstract class's
+    // mapping is served under whichever subclass inherits it.
+    expect(partial(classRoute('"/list"', 100), [{ role: 'type', start: 0, end: 1000 }, SPRING_HANDLER[2] ?? { role: 'x', start: 0, end: 0 }])).toBe(true);
+    // In no type at all.
+    expect(partial(classRoute('"/list"', 2000), SPRING_HANDLER)).toBe(true);
+    // A prefix that is not one string literal: a constant, a placeholder, an
+    // array, a wildcard pattern.
+    for (const prefix of ['Paths.ORDERS', '"${api.prefix}/orders"', '{"/a", "/b"}', '"/api/*"']) {
+      const facts = [...SPRING_HANDLER.slice(0, 2), { role: 'prefix', start: 20, end: 33, value: prefix }];
+      expect(partial(classRoute('"/list"', 100), facts), prefix).toBe(true);
+    }
+    // A prefix Semgrep reported and recovery could not read: the class HAS
+    // one, so leaving it off would be the confidently wrong URL.
+    expect(partial(classRoute('"/list"', 100), [...SPRING_HANDLER.slice(0, 2), { role: 'prefix', start: 20, end: 33 }])).toBe(true);
+    // An own path that is not one literal names nothing a prefix completes.
+    expect(served(classRoute('{"/a", "/b"}', 100), SPRING_HANDLER)).toMatchObject({
+      path_resolved: '{"/a", "/b"}',
+      path_partial: true,
+      confidence: 'low',
+    });
+    expect(partial(classRoute('Paths.LIST', 100), SPRING_HANDLER)).toBe(true);
+  });
+
+  it('gives a nested type its own answer, never its outer class prefix', () => {
+    const facts: Fact[] = [
+      ...SPRING_HANDLER,
+      // `public static class Plain { @GetMapping("/p") … }` — no handler.
+      { role: 'type', start: 200, end: 300 },
+      // `@RestController @RequestMapping("/inner") static class Inner { … }`
+      { role: 'type', start: 400, end: 600 },
+      { role: 'handler', start: 400, end: 600 },
+      { role: 'prefix', start: 420, end: 428, value: '"/inner"' },
+    ];
+    expect(served(classRoute('"/p"', 250), facts)?.path_partial).toBe(true);
+    expect(served(classRoute('"/i"', 500), facts)?.path_resolved).toBe('/inner/i');
+    // And the outer class's own routes keep the outer prefix.
+    expect(served(classRoute('"/o"', 700), facts)?.path_resolved).toBe('/api/orders/o');
+  });
+
+  it('keeps two classes in one file apart', () => {
+    const facts: Fact[] = [
+      ...SPRING_HANDLER,
+      { role: 'type', start: 1100, end: 1500 },
+      { role: 'handler', start: 1100, end: 1500 },
+    ];
+    expect(served(classRoute('"/second"', 1200), facts)?.path_resolved).toBe('/second');
+  });
+
+  it('leaves the whole file partial when a prefix lies in no type it was told about', () => {
+    const facts: Fact[] = [...SPRING_HANDLER, { role: 'prefix', start: 5000, end: 5010, value: '"/lost"' }];
+    expect(served(classRoute('"/list"', 100), facts)?.path_partial).toBe(true);
+  });
+
+  it("reads only its own framework's facts, in its own file", () => {
+    const aspnetFacts = SPRING_HANDLER.map((f) => ({ ...f, framework: 'aspnet' }));
+    expect(served(classRoute('"/list"', 100), aspnetFacts)?.path_partial).toBe(true);
+    const otherFile = SPRING_HANDLER.map((f) => ({ ...f, file: 'src/Other.java' }));
+    expect(served(classRoute('"/list"', 100), otherFile)?.path_partial).toBe(true);
+  });
+
+  it('keeps a route partial under a guardian_class_prefix value it does not know', () => {
+    expect(served(classRoute('"/list"', 100, { style: 'always' }), SPRING_HANDLER)?.path_partial).toBe(true);
   });
 
   it('without the key, a literal path is resolved as before', () => {
-    expect(route('/list', {})?.path_partial).toBe(false);
+    const { routes } = extractSurface({
+      results: [
+        {
+          check_id: 'guardian-route-x',
+          path: JAVA,
+          start: { line: 9, offset: 100 },
+          extra: {
+            metadata: { guardian_kind: 'route', framework: 'spring', confidence: 'medium', method: 'GET' },
+            metavars: { $PATH: { abstract_content: '"/list"' } },
+          },
+        },
+      ],
+    });
+    expect(routes[0]?.path_partial).toBe(false);
+  });
+
+  it('never reports a scope fact as a route or a mount', () => {
+    expect(extractSurface({ results: SPRING_HANDLER.map(scopeMatch) })).toEqual({ routes: [], mounts: [] });
+  });
+});
+
+/** `[ApiController] [Route("api/[controller]")] public class OrdersController : ControllerBase { … }` */
+const CONTROLLER: readonly Fact[] = [
+  { role: 'type', start: 0, end: 1000, framework: 'aspnet', file: CS },
+  { role: 'prefix', start: 20, end: 38, value: '"api/[controller]"', framework: 'aspnet', file: CS },
+  { role: 'class-name', start: 50, end: 66, value: 'OrdersController', framework: 'aspnet', file: CS },
+];
+
+/** An action's range [`start`, `end`) and its name, as the two ASP.NET method rules report them. */
+function action(start: number, end: number, name: string, nameAt = start + 30): Fact[] {
+  return [
+    { role: 'method', start, end, framework: 'aspnet', file: CS },
+    { role: 'method-name', start: nameAt, end: nameAt + name.length, value: name, framework: 'aspnet', file: CS },
+  ];
+}
+
+const aspnet = (path: string | undefined, offset: number): unknown => classRoute(path, offset, { style: CLASS_PREFIX_ASPNET });
+
+describe("extractSurface — ASP.NET: a controller joins its own [Route]", () => {
+  it('replaces [controller] with the class name less its Controller suffix, case kept', () => {
+    expect(served(aspnet('"{id}"', 100), CONTROLLER)).toMatchObject({
+      path_raw: '{id}',
+      path_resolved: '/api/Orders/{id}',
+      path_partial: false,
+      params: ['id'],
+    });
+    const named = (name: string): string | undefined =>
+      served(aspnet('"all"', 100), [...CONTROLLER.slice(0, 2), { ...CONTROLLER[2], role: 'class-name', start: 50, end: 60, value: name }])?.path_resolved;
+    expect(named('Orders')).toBe('/api/Orders/all');
+    expect(named('Reportcontroller')).toBe('/api/Report/all');
+  });
+
+  it('serves a bare attribute AT the class route, and cleans the slashes CombineTemplates does', () => {
+    expect(served(aspnet(undefined, 100), CONTROLLER)?.path_resolved).toBe('/api/Orders');
+    expect(served(aspnet('"list/"', 100), CONTROLLER)?.path_resolved).toBe('/api/Orders/list');
+    expect(served(aspnet('""', 100), CONTROLLER)?.path_resolved).toBe('/api/Orders');
+  });
+
+  it('lets a rooted method path ignore the class route, with or without any fact in the file', () => {
+    expect(served(aspnet('"/aspnet/orders"', 100), CONTROLLER)?.path_resolved).toBe('/aspnet/orders');
+    expect(served(aspnet('"~/legacy/orders"', 100), CONTROLLER)).toMatchObject({
+      path_raw: '~/legacy/orders',
+      path_resolved: '/legacy/orders',
+      path_partial: false,
+    });
+    expect(served(aspnet('"/aspnet/orders"', 100), [])?.path_partial).toBe(false);
+    // A rooted template still replaces its tokens.
+    expect(served(aspnet('"/v2/[controller]"', 100), CONTROLLER)?.path_resolved).toBe('/v2/Orders');
+    expect(served(aspnet('"/v2/[controller]"', 100), [])?.path_partial).toBe(true);
+  });
+
+  it('replaces [action] with the method name less an Async suffix', () => {
+    const facts = [...CONTROLLER, ...action(80, 300, 'ListAsync')];
+    expect(served(aspnet('"[action]"', 90), facts)?.path_resolved).toBe('/api/Orders/List');
+    // A local function inside the action is a method of its own: its name
+    // belongs to its own range, never to the action around it.
+    const withLocal = [...CONTROLLER, ...action(80, 300, 'Index', 100), ...action(200, 250, 'Local', 210)];
+    expect(served(aspnet('"[action]"', 90), withLocal)?.path_resolved).toBe('/api/Orders/Index');
+  });
+
+  it('keeps partial what the facts cannot settle', () => {
+    const partial = (route: unknown, facts: readonly Fact[]): unknown => served(route, facts)?.path_partial;
+    // No [Route] of its own: a base class may declare the one MVC uses.
+    expect(partial(aspnet('"all"', 100), [CONTROLLER[0] ?? { role: 'x', start: 0, end: 0 }])).toBe(true);
+    // Two [Route]s: every action is served twice.
+    const twice = [...CONTROLLER, { role: 'prefix', start: 40, end: 48, value: '"api/v2"', framework: 'aspnet', file: CS }];
+    expect(partial(aspnet('"all"', 100), twice)).toBe(true);
+    // A prefix that is not one string literal.
+    for (const prefix of ['Routes.Orders', '@"api/orders"']) {
+      const facts = [CONTROLLER[0], { ...CONTROLLER[1], role: 'prefix', start: 20, end: 38, value: prefix }].filter(
+        (f): f is Fact => f !== undefined,
+      );
+      expect(partial(aspnet('"all"', 100), facts), prefix).toBe(true);
+    }
+    // No class name read — an abstract class, `[ControllerName]` — for a
+    // template that needs one.
+    expect(partial(aspnet('"all"', 100), CONTROLLER.slice(0, 2))).toBe(true);
+    // [area], an unknown token, an escape.
+    for (const prefix of ['"[area]/[controller]"', '"api/[version]"', '"api/[[controller]]"']) {
+      const facts = [CONTROLLER[0], CONTROLLER[2], { role: 'prefix', start: 20, end: 38, value: prefix, framework: 'aspnet', file: CS }].filter(
+        (f): f is Fact => f !== undefined,
+      );
+      expect(partial(aspnet('"all"', 100), facts), prefix).toBe(true);
+    }
+    // [action] on a method with no range — `[ActionName]` excludes it — or
+    // with no name inside its range.
+    expect(partial(aspnet('"[action]"', 90), CONTROLLER)).toBe(true);
+    expect(partial(aspnet('"[action]"', 90), [...CONTROLLER, { role: 'method', start: 80, end: 300, framework: 'aspnet', file: CS }])).toBe(true);
   });
 });
 
@@ -481,6 +750,22 @@ describe('extractParams', () => {
     expect(extractParams('/items/<int:item_id>')).toEqual(['item_id']);
     expect(extractParams('/opt/:id?')).toEqual(['id']);
     expect(extractParams('/static/path')).toEqual([]);
+  });
+
+  it('reads a brace group by its leading name, never its constraint', () => {
+    expect(extractParams('/api/Orders/{id:int}')).toEqual(['id']);
+    expect(extractParams('/a/{id:int:min(1)}/{slug?}')).toEqual(['id', 'slug']);
+    expect(extractParams('/files/{**path}')).toEqual(['path']);
+    expect(extractParams('/files/{*path}')).toEqual(['path']);
+    expect(extractParams('/page/{n=1}')).toEqual(['n']);
+    expect(extractParams('/x/{id:[0-9]+}')).toEqual(['id']);
+    expect(extractParams('/x/{code:\\d{3}}')).toEqual(['code']);
+    expect(extractParams('/items/{item_id:int}')).toEqual(['item_id']);
+  });
+
+  it("leaves Express 5's optional segment to the :name pass", () => {
+    expect(extractParams('/users{/:id}')).toEqual(['id']);
+    expect(extractParams('/file{.:ext}')).toEqual(['ext']);
   });
 });
 

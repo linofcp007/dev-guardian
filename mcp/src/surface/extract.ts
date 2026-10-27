@@ -12,6 +12,16 @@
  */
 
 import type { HttpMethod, MountRecord, RouteRecord } from '../types.js';
+import {
+  classRoutePath,
+  indexScopes,
+  SCOPE_ROLES,
+  VALUE_ROLES,
+  type ClassPrefixStyle,
+  type ClassRoute,
+  type ScopeFact,
+  type ScopeRole,
+} from './resolvers/classPrefix.js';
 
 const METHOD_NAMES = new Set([
   'get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'all', 'any',
@@ -172,19 +182,26 @@ export function isLiteralPath(value: string): boolean {
 
 /**
  * Normalise every path-parameter syntax we support to a bare name:
- *   :id  ·  :id?  ·  {id}  ·  <int:item_id>  →  id / item_id
+ *   :id  ·  :id?  ·  {id}  ·  {id:int}  ·  <int:item_id>  →  id / item_id
+ *
+ * A brace group names its parameter FIRST, whatever follows: ASP.NET's
+ * `{id:int}`, `{id?}`, `{**slug}`, `{id=5}`, Spring's `{id:[0-9]+}`,
+ * Starlette's `{id:int}`. Reading the last `:` segment (as `<int:id>` is
+ * read) gave `int`, and so did the `:name` pass, which therefore reads the
+ * path with those groups taken out. A group that does not open on a name is
+ * Express 5's optional segment (`{/:id}`): it stays, for the `:name` pass.
  */
 export function extractParams(path: string): string[] {
   const params: string[] = [];
-  for (const match of path.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
+  const unbraced = path.replace(/\{([^}]*)\}/g, (group, inner: string) => {
+    const name = /^\*{0,2}([A-Za-z_]\w*)/.exec(inner)?.[1];
+    if (name === undefined) return group;
+    params.push(name);
+    return '';
+  });
+  for (const match of unbraced.matchAll(/:([A-Za-z_][\w]*)\??/g)) {
     const name = match[1];
     if (name !== undefined) params.push(name);
-  }
-  for (const match of path.matchAll(/\{([^}]+)\}/g)) {
-    const inner = match[1];
-    if (inner === undefined) continue;
-    const name = inner.split(':').pop()?.trim();
-    if (name !== undefined && name.length > 0) params.push(name);
   }
   for (const match of path.matchAll(/<([^>]+)>/g)) {
     const inner = match[1];
@@ -201,6 +218,10 @@ export function extractSurface(semgrepJson: unknown): {
 } {
   const routes: RouteRecord[] = [];
   const mounts: MountRecord[] = [];
+  // The class facts, and the routes a class prefix may complete — by their
+  // index in `routes`, so the inventory keeps Semgrep's order.
+  const facts: ScopeFact[] = [];
+  const joins: { at: number; route: ClassRoute; confidence: RouteRecord['confidence'] }[] = [];
 
   for (const raw of asArray(prop(semgrepJson, 'results'))) {
     const extra = prop(raw, 'extra');
@@ -211,11 +232,50 @@ export function extractSurface(semgrepJson: unknown): {
     if (file === undefined) continue;
 
     if (kind === 'route') {
-      const route = toRoute(metadata, prop(extra, 'metavars'), file, line);
-      if (route) routes.push(route);
+      const metavars = prop(extra, 'metavars');
+      const route = toRoute(metadata, metavars, file, line);
+      if (route === null) continue;
+      const style = classPrefixStyle(metadata);
+      if (style !== undefined) {
+        joins.push({
+          at: routes.length,
+          route: {
+            style,
+            framework: route.framework,
+            file,
+            offset: num(prop(raw, 'start'), 'offset'),
+            own: ownPath(metadata, metavars),
+          },
+          confidence: normalizeConfidence(str(metadata, 'confidence')),
+        });
+      }
+      routes.push(route);
     } else if (kind === 'mount') {
       const mount = toMount(prop(extra, 'metavars'), file, line);
       if (mount) mounts.push(mount);
+    } else if (kind === SCOPE_KIND) {
+      const fact = toScopeFact(metadata, prop(extra, 'metavars'), raw, file);
+      if (fact) facts.push(fact);
+    }
+  }
+
+  // A class route leaves `toRoute` partial at the path it names; it is
+  // resolved here only when its class's facts give a served path, and that
+  // path passes the same literal test as every other route.
+  if (joins.length > 0) {
+    const index = indexScopes(facts);
+    for (const join of joins) {
+      const route = routes[join.at];
+      const served = classRoutePath(join.route, index);
+      if (route === undefined || served === undefined || !isLiteralPath(served)) continue;
+      routes[join.at] = {
+        ...route,
+        path_resolved: served,
+        path_partial: false,
+        confidence: join.confidence,
+        // From the served path: a `{tenant}` in the prefix is a parameter too.
+        params: extractParams(served),
+      };
     }
   }
 
@@ -223,14 +283,65 @@ export function extractSurface(semgrepJson: unknown): {
 }
 
 /**
+ * The `guardian_kind` of a fact about the class a route is declared in — its
+ * range, its prefix, its name — rather than a route; see
+ * resolvers/classPrefix.ts. Never a record of its own.
+ */
+export const SCOPE_KIND = 'scope';
+
+/** The metadata key naming a `scope` rule's role (resolvers/classPrefix.ts SCOPE_ROLES). */
+export const SCOPE_ROLE_KEY = 'guardian_scope';
+
+function toScopeFact(metadata: unknown, metavars: unknown, raw: unknown, file: string): ScopeFact | null {
+  const role = str(metadata, SCOPE_ROLE_KEY);
+  if (!isScopeRole(role)) return null;
+  // A prefix must be ONE string literal: Semgrep keeps the quotes on one, and
+  // on nothing else it binds (`Paths.ORDERS`, `{"/a", "/b"}`, `@"…"`).
+  const value =
+    role === 'prefix' ? stringLiteral(metavar(metavars, '$PATH'))
+    : VALUE_ROLES.has(role) ? metavar(metavars, '$NAME')
+    : undefined;
+  return {
+    role,
+    framework: str(metadata, 'framework') ?? 'unknown',
+    file,
+    start: num(prop(raw, 'start'), 'offset'),
+    end: num(prop(raw, 'end'), 'offset'),
+    value,
+  };
+}
+
+function isScopeRole(value: string | undefined): value is ScopeRole {
+  return value !== undefined && (SCOPE_ROLES as readonly string[]).includes(value);
+}
+
+/**
+ * What a class prefix would complete: the method path's literal content, `''`
+ * for an annotation with no path, undefined for anything else — a prefix
+ * joined to `Paths.ORDERS` reads as path syntax and names no URL.
+ */
+function ownPath(metadata: unknown, metavars: unknown): string | undefined {
+  const raw = metavar(metavars, '$PATH');
+  if (raw === undefined) return str(metadata, INHERITED_PATH_KEY) === INHERITED_PATH ? '' : undefined;
+  return stringLiteral(raw);
+}
+
+/** The content of a quoted literal, or undefined when the capture is not one. */
+function stringLiteral(raw: string | undefined): string | undefined {
+  const content = stripQuotes(raw);
+  return content !== undefined && content !== raw ? content : undefined;
+}
+
+/**
  * The metadata key a route rule sets to declare that its framework's
  * annotation carries NO path of its own, so there is no metavariable to
  * capture and none is bound: `@Get()`, `[HttpGet]`, `@GetMapping`. The served
  * path is entirely the class-level prefix (`@Controller('users')`,
- * `[Route("api/[controller]")]`, a class `@RequestMapping`), which no resolver
- * in this codebase can follow today — see the "annotation with no path of its
- * own" section of `configs/semgrep/routes.yml` for why a companion `mount`
- * rule would make that worse rather than better.
+ * `[Route("api/[controller]")]`, a class `@RequestMapping`). Spring's and
+ * ASP.NET's are joined from `scope` facts (CLASS_PREFIX_KEY below); NestJS's
+ * is not followed — see the "annotation with no path of its own" section of
+ * `configs/semgrep/routes.yml` for why a companion `mount` rule would make
+ * that worse rather than better.
  *
  * Exported so `test/unit/surface/rulePack.test.ts` can hold the flag and the
  * rules in lock-step, the same way FOCUS_METADATA_KEY is: a route rule that
@@ -244,25 +355,29 @@ export const INHERITED_PATH = 'inherited';
 
 /**
  * The metadata key a route rule sets when the path it captures is joined to a
- * CLASS-level prefix the pack cannot see: Spring concatenates a class's
- * `@RequestMapping` with every method mapping (`always`); ASP.NET does the
- * same with a class `[Route]`, except that a method path starting with `/` or
- * `~/` ignores it (`unless-rooted`). Such a route keeps its path but is never
- * presented as resolved — `GET /list` under `@RequestMapping("/api/orders")`
- * is served at `/api/orders/list`, and reporting `/list` as resolved was a
- * confidently wrong URL for the probes downstream (review of 3.6.0).
- * Resolving the prefix needs the class's own annotation, which a rule
- * focused on the method's path does not bind.
+ * CLASS-level prefix: Spring concatenates a handler's type-level
+ * `@RequestMapping` with every method mapping (`spring`); ASP.NET does the
+ * same with the controller's own `[Route]`, except that a method path starting
+ * with `/` or `~/` ignores it, and replaces `[controller]` / `[action]`
+ * afterwards (`aspnet`). `GET /list` under `@RequestMapping("/api/orders")` is
+ * served at `/api/orders/list`.
+ *
+ * A rule focused on the method's path cannot bind the class's, so the route
+ * leaves `toRoute` partial at the path it names, and `extractSurface` resolves
+ * it only when the class's `scope` facts give the served path
+ * (resolvers/classPrefix.ts). 3.6.1 stopped there — every such route partial,
+ * since reporting `/list` as resolved had been a confidently wrong URL for the
+ * probes downstream (review of 3.6.0). Any value of the key, a misspelt one
+ * included, keeps the route partial; only the two styles below are joined.
  */
 export const CLASS_PREFIX_KEY = 'guardian_class_prefix';
-export const CLASS_PREFIX_ALWAYS = 'always';
-export const CLASS_PREFIX_UNLESS_ROOTED = 'unless-rooted';
+export const CLASS_PREFIX_SPRING = 'spring';
+export const CLASS_PREFIX_ASPNET = 'aspnet';
 
-/** Whether a class-level prefix may complete `path` (see {@link CLASS_PREFIX_KEY}). */
-function classPrefixApplies(metadata: unknown, path: string): boolean {
-  const rule = str(metadata, CLASS_PREFIX_KEY);
-  if (rule === CLASS_PREFIX_ALWAYS) return true;
-  return rule === CLASS_PREFIX_UNLESS_ROOTED && !/^~?\//.test(path);
+/** The join a route asks for (see {@link CLASS_PREFIX_KEY}), when it is one this module knows. */
+function classPrefixStyle(metadata: unknown): ClassPrefixStyle | undefined {
+  const style = str(metadata, CLASS_PREFIX_KEY);
+  return style === CLASS_PREFIX_SPRING || style === CLASS_PREFIX_ASPNET ? style : undefined;
 }
 
 function toRoute(
@@ -304,7 +419,8 @@ function toRoute(
     provenance: 'code',
     path_raw: path,
     path_resolved: path,
-    path_partial: !usable || classPrefixApplies(metadata, path),
+    // A class route is partial until `extractSurface` joins its prefix.
+    path_partial: !usable || str(metadata, CLASS_PREFIX_KEY) !== undefined,
     file,
     line,
     framework: str(metadata, 'framework') ?? 'unknown',

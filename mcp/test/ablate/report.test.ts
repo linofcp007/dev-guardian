@@ -207,7 +207,7 @@ describe('renderPackReport corpora that are not named hits/ and misses/', () => 
   it('says on the rule line when the real corpus never reached a rule at all', () => {
     // Axis 3 compares the ablated rule's OWN findings, so a rule with no
     // baseline on the corpus passes by comparing nothing to nothing. That is
-    // 62 of `routes.yml`'s 64 rules against `mcp/src`, and it must not print
+    // 71 of `routes.yml`'s 73 rules against `mcp/src`, and it must not print
     // the same as a rule the corpus genuinely exercised.
     const rules = [
       ruleVerdict({ ruleId: 'guardian-import-esm', realFindings: 824 }),
