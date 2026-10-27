@@ -4954,6 +4954,13 @@ describe("assessBashCommand — deleting or moving away Claude Code's settings f
       expect(assessBashCommand('find /work/proj/src -name settings.json -delete', here).level).toBe('ok');
     });
 
+    // The managed-settings directory is always this machine's, as its file is: a link to it from a
+    // hook call that knows its working directory was the elsewhere warning, not the link's deny.
+    it.each(['ln -s /etc/claude-code x', 'ln -s "/Library/Application Support/ClaudeCode" x'])('%s is denied wherever the command runs', (command) => {
+      const here = { cwd: '/work/proj', projectDir: '/work/proj', homeDir: '/home/alice', platform: 'linux' as const, claudeConfigDir: '' };
+      expect(assessBashCommand(command, here).rules).toEqual(['guard-config-link']);
+    });
+
     it.each(['rm -rf .claude; rm -rf /', 'git rm .claude/settings.json && rm -rf ~', 'find .claude -delete; rm -rf /'])('%s: the block wins over the question', (command) => {
       const a = assessBashCommand(command, { claudeConfigDir: '' });
       expect(a.level).toBe('block');
