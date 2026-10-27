@@ -139,7 +139,7 @@ precision evidence it does have). Measured with the corpora below:
 | --- | --- | ---: | ---: | ---: |
 | `bugfix-js` | this repo's `mcp/src` | 419 | 76 | 3, all working positive branches or a regex inside an exclusion |
 | `bugfix-py` | CPython 3.15.2 `Lib/` | 760 | 704 | 16: 13 working positive branches, 3 a regex inside an exclusion |
-| `bugfix-go` | Go 1.27.3 `src/` | 5084 | 3709 (3513 comparable) | not yet measured: run in progress |
+| `bugfix-go` | Go 1.27.3 `src/` | 5084 | 3709 (3513 comparable) | 4, all working positive branches; 2 clauses ERROR (below) |
 | `bugfix-php` | WordPress core | 1512 | 40 | 8 |
 | `bugfix-cs` | `dotnet/runtime` | 11800 | ~790 | 10 |
 | `bugfix-java` | OpenJDK + Spring | 17347 | — | 5 |
@@ -179,11 +179,24 @@ to repeat it. Rule by rule, v3.6.0 → v3.6.1 → after this review:
 | --- | --- | --- | --- |
 | `lock-without-defer` (`bugfix-go`) | Go 1.27.3 | 102 → 39 → 20 | 3.6.1 dropped 75 spans in 52 functions, every one the early-unlock idiom, no true positive among them (16 relock first, all with the return between the Unlock and the Lock). Half of the 39 were the same idiom deferred — `defer mu.Unlock()` before the return — now excluded, with two closure branches so that the goker `grpc3017` true positive the defer exclusion alone swallowed comes back. Of the 20: 5 true, 2 deliberate lock handoffs, 13 a closure's return (a documented gap) |
 | `floating-mutation` (`bugfix-js`) | `mcp/src` | 0 → 0 → 0 | vacuous |
-| | Outline + Uptime Kuma (2694 files) | 2 → 6 → 2 | the leading `.*` added four findings, all false: two promises pushed into an array a later `Promise.all` awaits and two calls inside `await expect(…)`. One exclusion each now; the two left are IndexedDB's `store.delete`, an IDBRequest and not a promise — documented |
+| | Outline + Uptime Kuma (2694 files) | 2 → 6 → 2 | all six false. The leading `.*` added an IndexedDB `objectStore.delete`, a promise pushed into an array a later `Promise.all` awaits, and two calls inside `await expect(…)`; the two from before were the same IndexedDB and array shapes. The array and assertion shapes have one exclusion each now; the two left are IndexedDB's, which return an IDBRequest and not a promise — documented |
 | `queryset-n-plus-one` (`bugfix-py`) | CPython 3.15.2 | 0 → 0 → 0 | vacuous |
 | | Zulip + Saleor (4563 files) | 21 → 21 → 21 | no `.year`, `.url`, `.size`… chain in either; of the 21, 18 are real foreign-key traversals in a loop (most in data migrations) and 3 the same field-value class through third-party fields (`phone.raw_input`, `country.code`, `flags.mask`), which the list does not name |
 | `hostname-verifier-accepts-all` (`mobile`) | the mobile corpus | 0 → 2 → 2 | both true: Gotify's `builder.hostnameVerifier { _, _ -> true }` behind its "disable SSL validation" setting, Syncthing's `setHostnameVerifier((hostname, session) -> true)` beside a trust manager pinned to the local instance's certificate |
 | `py-yaml-load` (`base`) | none (axis 3 N/A) | — | the harness read two of the four new BaseLoader exclusions DEAD for want of a fixture; each has a near-miss line now and all eleven clauses read live |
+
+The harness runs that go with it: `bugfix-js` 52 clauses live, 3 axis-2 and 3
+axis-3 flags, none in `floating-mutation` (all 17 of its clauses pass, axis 3
+vacuous on `mcp/src`); `bugfix-py` 82 live, 4 axis-2, 16 axis-3, none in
+`queryset-n-plus-one`; `mobile` 2 of 2 clean; `base` 46 live, the 2 axis-2
+flags its `wp-unescaped-output` fixtures carry beside the bug on purpose;
+`bugfix-go` 49 of 51 live and 0 DEAD, noise floor 0 on all five. The lock
+rule's axis-2 flags (three) are the excluded near-miss each `hits/` file holds
+beside its bug, and Semgrep reading a closure's last statement — there, the
+closure's own `Unlock()` — as a return. Its two `ERROR`s are by construction:
+removing either lock branch's anchoring `pattern-inside` leaves `return ...`
+matching every return in 5084 files, and that scan outruns the harness's
+ten-minute limit — twenty of the run's 133 minutes.
 
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
