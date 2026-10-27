@@ -8,6 +8,10 @@ version bump.
 
 ## [Unreleased]
 
+## [3.7.1] - 2026-10-27
+
+The two follow-ups 3.7.0 left open.
+
 ### Fixed
 
 - **`register_custom_rules` no longer calls a valid rule refused when Semgrep broke.** Every non-zero `semgrep
