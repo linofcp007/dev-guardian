@@ -677,14 +677,32 @@ their respective projects.
   is what the allowlist passes — your package managers' own variables
   (`PIP_*`, `NUGET_*`, `NuGetPackageSourceCredentials_*`, …) — and what your
   account can read, never a token or cloud credential the server was started
-  with. **Not covered**: NuGet binds a credential to a feed's NAME, and a
-  repository `NuGet.config` can give a name your user-level `NuGet.Config`
-  holds a credential for another URL — measured on the .NET SDK 10.0.403,
-  your `corp` feed's user name and password went to the repository's `corp`
-  URL, and your own feed was not asked; the restore's MSBuild, the project's
-  code running as you, can read that file anyway. Run `deps_audit` on a .NET
-  repository you do not trust only on a machine whose NuGet credentials you
-  would hand it.
+  with. **NuGet binds a credential to a feed's NAME**, and a repository
+  `NuGet.config` can give a name another URL — measured on the .NET SDK
+  10.0.403, your `corp` feed's user name and password (from your
+  `NuGet.Config`, a drop-in beside it, or `NuGetPackageSourceCredentials_corp`)
+  went to the repository's `corp` URL, through a `<clear/>` and from a
+  project's directory below the solution too, and your own feed was not
+  asked. So no restore runs (`scan_sast`, `deps_audit`, `deps_update_plan`,
+  and `create_fix_pr`'s re-scans and `dotnet add package` steps) before
+  dev-guardian has read the chain the way NuGet reads it (each project's
+  directory up to the filesystem root; `%APPDATA%\NuGet` or
+  `~/.nuget/NuGet` and its `config/*.config`; the machine's `NuGet\Config`):
+  a feed the repository declares under a name you hold a credential for, on
+  another server than your own feed of that name (or with no feed of yours of
+  that name), refuses the restore — a named gap with the feed and the file,
+  never the credential (`nuget_credential_rebound`). So does a network path
+  in a repository config, and a config on either side that could not be read.
+  MSBuild chooses the chain too (a project's `RestoreConfigFile`,
+  `RestoreRootConfigDirectory`, `RestoreSolutionDirectory` — measured, each
+  sent the credential to a feed no walk reaches): every restore passes them
+  empty on the command line, which the project cannot override, and a project
+  that keeps them with `TreatAsLocalProperty` is refused
+  (`nuget_config_redirected`). A repository `http_proxy` is not read by the
+  restore (measured). Still not covered: the restore's MSBuild is the
+  project's code running as you, and can read your `NuGet.Config` itself —
+  run a .NET scan of a repository you do not trust only where its build may
+  run.
 
 ## Network egress
 
@@ -716,7 +734,7 @@ project's own build and test commands.
 | --- | --- | --- |
 | Semgrep registry (`semgrep.dev`) — rules download **and usage metrics to Semgrep Inc.** | `scan_sast` and `security_scan_full` (`--config=auto`), `review_pr`, `bug_hunt` (`p/r2c-bug-scan`, `p/security-audit`, optional language packs), `scan_wordpress` (`p/php`, `p/wordpress`), `audit_executive` (through `security_scan_full`, and `scan_wordpress` on a WordPress project), `init_project`'s first-pass status report (`semgrep --config=auto`, when a bash other than WSL's is available), `create_fix_pr`'s re-scans (`scan_sast` with the original scan's `local_only`, `bug_hunt`'s packs) | by default. Semgrep refuses `--config=auto` with metrics off, so `scan_sast`, `security_scan_full`, `review_pr`, `audit_executive` and the CLI's `--local-only` offer `local_only: true`: only rules on disk, `--metrics=off`, nothing sent to Semgrep's registry or metrics endpoint. `bug_hunt` and `scan_wordpress` have no local-only mode; `audit_executive` with `local_only` skips `scan_wordpress` and says so. Semgrep's `--metrics=auto` also sends metrics with local rules when you are logged in to Semgrep, which is how `map_attack_surface` can send them. What Semgrep collects: <https://semgrep.dev/docs/metrics>. `compliance_check` (RGPD pack) and `create_fix_pr`'s autofix always run with `--metrics=off`. |
 | Semgrep's version check (`semgrep.dev`) | **disabled by dev-guardian**: every Semgrep run gets `SEMGREP_ENABLE_VERSION_CHECK=0` — native runs (`mcp/src/runners/semgrepRun.ts`), the Docker fallback's container (`-e`), `check_toolchain`'s `semgrep --version`, and `init_project`'s status script | never. Measured through a refusing proxy on 1.176.1: `semgrep --version`, and a scan with local rules and `--metrics=off`, each asked for `semgrep.dev` four times with a fresh home; with the variable, neither asked, and the scan's results were the same. |
-| The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, `audit_executive`, the CLI `scan` (under `--baseline-ref` / `--rules-ref` only with `--build-pr`) and `create_fix_pr`'s re-scans; `deps_audit` (and `audit_executive`, which runs it) and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. |
+| The project's NuGet feeds, and its MSBuild code | `scan_sast` on a .NET project (`dotnet restore --locked-mode`, then `dotnet build`) — **even with `local_only: true`** — and so `security_scan_full`, `audit_executive`, the CLI `scan` (under `--baseline-ref` / `--rules-ref` only with `--build-pr`) and `create_fix_pr`'s re-scans; `deps_audit` (and `audit_executive`, which runs it) and `deps_update_plan` (`dotnet restore`, `dotnet list package`) | when the .NET SDK is installed: for `scan_sast`, whenever a root `.csproj` / `.fsproj` / `.sln` / `.slnx` is present; for `deps_audit` and `deps_update_plan`, for every `.sln` / `.csproj` they find. A restore and a build execute the project's own MSBuild targets. A feed the repository declares under the name of one you hold a credential for, on another server, refuses the restore before it runs (see "A repository never chooses where … your credentials"). |
 | The Go module proxy (`proxy.golang.org`, or the project's `GOPROXY`) and checksum database (`sum.golang.org`); a Go toolchain download | `scan_sast` on a Go project — gosec loads every package through `go list` — **even with `local_only: true`**, and so `security_scan_full`, `review_pr`, `audit_executive`, the CLI `scan` and `create_fix_pr`'s re-scans; `deps_audit` (govulncheck, which loads the packages the same way) | when gosec and Go are installed and a module's dependencies are not in the module cache; a `GOFLAGS` `-mod=mod` is run as `-mod=readonly`, so `go.mod` and `go.sum` are never rewritten. When `go.mod` names a newer Go and `GOTOOLCHAIN` allows it, `go` downloads that toolchain. With cgo files, `go list` runs the C compiler over them, as a build would. A warm module cache, a `vendor/` directory or `GOPROXY=off` keep it local; a dependency that cannot be loaded is a named partial gap (`Type error`), never a clean package. |
 | The Go vulnerability database (`vuln.go.dev`, run by Google) | `deps_audit` on a Go project (govulncheck, once per module), and `audit_executive` through it | when govulncheck and Go are installed; it reads the database's index and the entries of the vulnerabilities that concern the modules the project requires. An unreachable database fails that module's run, named, never a clean one. |
 | Docker registry (`semgrep/semgrep` image) | `scan_sast`, `map_attack_surface` | only when Semgrep is not installed and Docker is |

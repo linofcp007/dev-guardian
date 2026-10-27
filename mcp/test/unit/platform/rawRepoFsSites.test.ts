@@ -74,6 +74,13 @@ const ALLOWED: Record<string, Allowed> = {
       "the manifest and lock files, read through projectFs, written (flag wx) into the run's own mkdtemp " +
       'directory, where npm outdated runs without the repository .npmrc',
   },
+  'src/deps/nugetCredentials.ts': {
+    apis: { readdirSync: 1 },
+    kind: 'user',
+    reason:
+      "names only, of the user's and the machine's NuGet drop-in directories (%APPDATA%\\NuGet\\config, " +
+      '~/.nuget/NuGet/config, NuGet/Config); every repository directory and file goes through projectFs',
+  },
   'src/dast/evidence.ts': {
     apis: { writeFileSync: 1 },
     kind: 'own',
