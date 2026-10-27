@@ -274,10 +274,10 @@ jobs:
       - name: Clone dev-guardian (outside this checkout — see the header comment)
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
           if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-            echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
 
@@ -304,7 +304,7 @@ jobs:
           py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
           lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
           if [ ! -f "$lock" ]; then
-            echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+            echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
             exit 1
           fi
           venv="$RUNNER_TEMP/dev-guardian-scanners/python"
@@ -558,11 +558,11 @@ definitions:
           - set -eu
           - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git python3-venv
           - export DEV_GUARDIAN_HOME=/tmp/dev-guardian
-          - git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          - git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           - |
             actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
             if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-              echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+              echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
               exit 1
             fi
           - |
@@ -595,7 +595,7 @@ definitions:
             py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
             lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
             if [ ! -f "$lock" ]; then
-              echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this step on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+              echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this step on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
               exit 1
             fi
             python3 -I -m venv /tmp/dev-guardian-scanners/python
@@ -868,10 +868,10 @@ jobs:
       - name: Clone dev-guardian (outside this checkout — see the header comment)
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+          git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
           actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
           if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-            echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
             exit 1
           fi
 
@@ -898,7 +898,7 @@ jobs:
           py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
           lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
           if [ ! -f "$lock" ]; then
-            echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+            echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this job on ubuntu-24.04, or re-run 'dev-guardian ci-init' from a release that has one." >&2
             exit 1
           fi
           venv="$RUNNER_TEMP/dev-guardian-scanners/python"
@@ -1098,11 +1098,11 @@ dev-guardian:
     - apt-get update && apt-get install -y --no-install-recommends curl ca-certificates git python3-venv
   script:
     - set -eu
-    - git clone --depth 1 --branch "v3.6.1" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
+    - git clone --depth 1 --branch "v3.7.0" "https://github.com/linofcp007/dev-guardian.git" "$DEV_GUARDIAN_HOME"
     - |
       actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
       if [ "$actual_sha" != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ]; then
-        echo "dev-guardian clone at v3.6.1 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+        echo "dev-guardian clone at v3.7.0 resolved to $actual_sha, expected aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
         exit 1
       fi
     - |
@@ -1135,7 +1135,7 @@ dev-guardian:
       py="$(python3 -I -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
       lock="$DEV_GUARDIAN_HOME/configs/ci/python/$py/requirements.txt"
       if [ ! -f "$lock" ]; then
-        echo "dev-guardian v3.6.1 has no hashed lock for Python $py ($lock): run this job on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
+        echo "dev-guardian v3.7.0 has no hashed lock for Python $py ($lock): run this job on node:22-trixie, or re-run 'dev-guardian ci-init' from a release that has one." >&2
         exit 1
       fi
       python3 -I -m venv /tmp/dev-guardian-scanners/python

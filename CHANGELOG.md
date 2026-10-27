@@ -8,6 +8,8 @@ version bump.
 
 ## [Unreleased]
 
+## [3.7.0] - 2026-10-27
+
 What the 3.6.1 review left open, each measured before it was closed: a scanned repository's package-manager config
 could still send the user's credentials where it chose, the CI pipelines installed unhashed Python dependencies,
 and the push-run history pass left two kinds of change unread.
