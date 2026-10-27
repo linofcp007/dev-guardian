@@ -39,6 +39,16 @@ and the push-run history pass left two kinds of change unread.
 - **The shell guard asks more**: deleting or moving Claude Code's settings from the shell — the file, a glob that
   could match it, the `.claude` directory, `git rm`, `find … -delete` — is now a question
   (`claude-settings-remove`).
+- **Spring and ASP.NET routes change shape in `map_attack_surface`.** A route under a literal class-level prefix
+  (`@RequestMapping("/api/orders")`, `[Route("api/[controller]")]`) is reported at its served path, resolved
+  (`path_resolved` = prefix + its own path, `path_partial: false`; `path_raw` stays the method's own). The
+  class-level `@RequestMapping` is no longer a route of its own — one row fewer per prefixed controller, and a Java
+  project whose only "route" was one now reads `no_matches`. A bare `[HttpGet]` / `@GetMapping` under a prefix is
+  served at the prefix; a Spring handler with no prefix and no supertype is resolved; `[controller]` and `[action]`
+  are replaced; ASP.NET's `~/x` is `/x`. What the join cannot decide — a constant or placeholder prefix, two
+  `[Route]`s, a supertype, `[area]`, `[ActionName]` — stays partial with the route's own path. Cached surfaces are
+  recomputed (the cache key holds the pack's hash). The routes pack grows from 64 to 73 rules (`guardian_kind:
+  scope`, `guardian_class_prefix: spring | aspnet` in the pack contract).
 
 ### Security
 
@@ -76,6 +86,8 @@ and the push-run history pass left two kinds of change unread.
   (Go 1.27.3 `src/`: 39 → 20 findings, the 19 removed all false); bugfix-js' floating-mutation skips a promise pushed
   into an array or handed to an assertion (Outline + Uptime Kuma: 6 → 2). Base `py-yaml-load`'s four `BaseLoader`
   exclusions each have a near-miss fixture (two were `DEAD`).
+- **Route parameters**: a brace parameter is read by its name, never its constraint — `{id:int}` gave `int`
+  (ASP.NET, Spring's `{id:[0-9]+}`, Starlette); `{**slug}`, `{id?}` and `{n=1}` give `slug`, `id`, `n`.
 - `guardian-performance` fires on "this endpoint takes seconds".
 
 ## [3.6.1] - 2026-10-25
