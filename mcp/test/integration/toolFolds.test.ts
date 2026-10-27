@@ -149,7 +149,8 @@ describe('the folds', () => {
   it('a fold with no default mode requires one (the schema says so; the handler too, when called directly)', async () => {
     const r = await call('dotnet_check', { project_path: project });
     expect(r.isError).toBe(true);
-    expect(text(r)).toMatch(/Required at check/);
+    // zod 4 has no "Required": a missing enum key is its invalid option.
+    expect(text(r)).toMatch(/Invalid option: expected one of "secrets"\|"target_framework"\|"efcore"\|"setup" at check/);
     const direct = await TOOLS.find((t) => t.name === 'dotnet_check')?.handler({ project_path: project }, s.plugin);
     expect(direct).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
     expect(JSON.stringify(direct)).toMatch(/dotnet_check needs check: one of \\"secrets\\", \\"target_framework\\", \\"efcore\\", \\"setup\\"/);

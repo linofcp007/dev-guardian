@@ -155,10 +155,17 @@ describe('each step takes its own parameters, and requires what its member requi
     expect(text(r)).toMatch(why);
   });
 
+  // zod 4 has no "Required": a missing key is the type it expected, received undefined (an enum: its options).
   it.each([
-    [{ step: 'task' }, /plan_id: Required/],
-    [{ step: 'submit', plan_id: 'p', task_id: 't', lease_token: 'l', payload: {} }, /independence: Required/],
-    [{ step: 'submit', plan_id: 'p', independence: 'subagent', payload: {} }, /task_id: Required; lease_token: Required/],
+    [{ step: 'task' }, /plan_id: Invalid input: expected string, received undefined/],
+    [
+      { step: 'submit', plan_id: 'p', task_id: 't', lease_token: 'l', payload: {} },
+      /independence: Invalid option: expected one of "subagent"\|"same_context"/,
+    ],
+    [
+      { step: 'submit', plan_id: 'p', independence: 'subagent', payload: {} },
+      /task_id: Invalid input: expected string, received undefined; lease_token: Invalid input: expected string, received undefined/,
+    ],
   ])('%j is refused, naming the missing argument', async (args, why) => {
     const s = await session();
     const r = await s.call('llm_scan', args);

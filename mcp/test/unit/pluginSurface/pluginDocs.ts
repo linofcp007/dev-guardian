@@ -22,7 +22,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
-import type { ZodTypeAny } from 'zod';
+import type { z } from 'zod';
 
 export const REPO_ROOT = resolve(fileURLToPath(new URL('../../../..', import.meta.url)));
 export const COMMANDS_DIR = resolve(REPO_ROOT, 'commands');
@@ -90,41 +90,44 @@ export function frontmatter(doc: PluginDoc): Record<string, unknown> {
 
 // ---------------------------------------------------------------- zod shapes
 
+/**
+ * The parts of a zod 4 definition read here. zod types the nested schemas as
+ * its core ones; every tool schema is built with the classic API, so they are
+ * classic schemas.
+ */
 interface ZodDefLike {
-  typeName?: string;
-  innerType?: ZodTypeAny;
-  schema?: ZodTypeAny;
-  type?: ZodTypeAny;
-  values?: unknown;
-  shape?: () => Record<string, ZodTypeAny>;
+  type: string;
+  innerType?: z.ZodType;
+  element?: z.ZodType;
+  entries?: Record<string, unknown>;
+  shape?: Record<string, z.ZodType>;
 }
 
-function def(t: ZodTypeAny): ZodDefLike {
-  return t._def as ZodDefLike;
+function def(t: z.ZodType): ZodDefLike {
+  return t.def as ZodDefLike;
 }
 
-/** Strip optional / default / nullable / effects wrappers. */
-export function unwrap(t: ZodTypeAny): ZodTypeAny {
+/** Strip optional / default / nullable wrappers (a refinement is no wrapper in zod 4). */
+export function unwrap(t: z.ZodType): z.ZodType {
   let cur = t;
   for (;;) {
-    const d = def(cur);
-    const next = d.innerType ?? (d.typeName === 'ZodEffects' ? d.schema : undefined);
+    const next = def(cur).innerType;
     if (next === undefined) return cur;
     cur = next;
   }
 }
 
-export function objectShape(t: ZodTypeAny): Record<string, ZodTypeAny> | null {
+export function objectShape(t: z.ZodType): Record<string, z.ZodType> | null {
   const d = def(unwrap(t));
-  return d.typeName === 'ZodObject' && d.shape ? d.shape() : null;
+  return d.type === 'object' && d.shape ? d.shape : null;
 }
 
 /** The allowed literals of an enum field, or of an array-of-enum field. */
-export function enumValues(t: ZodTypeAny): readonly string[] | null {
+export function enumValues(t: z.ZodType): readonly string[] | null {
   const inner = unwrap(t);
   const d = def(inner);
-  if (d.typeName === 'ZodEnum' && Array.isArray(d.values)) return d.values.map(String);
-  if (d.typeName === 'ZodArray' && d.type) return enumValues(d.type);
+  if (d.type === 'enum' && d.entries !== undefined) return Object.values(d.entries).map(String);
+  if (d.type === 'array' && d.element) return enumValues(d.element);
   return null;
 }
 

@@ -44,11 +44,8 @@ export const AllowDirty = z
 /**
  * An http or https URL (`platform/toolArgs.ts#httpUrl`): a tool hands the
  * program it runs the RE-SERIALISED URL, never the text. A FACTORY, not one
- * shared instance: the JSON-schema converter emits a reused zod instance as a
- * `$ref` to its first use.
+ * shared instance: zod 3's JSON-schema converter emitted a reused zod
+ * instance as a `$ref` to its first use (zod 4's inlines it).
  */
-export const httpUrlField = (): z.ZodEffects<z.ZodString, string, string> =>
-  z
-    .string()
-    .url()
-    .refine((text) => httpUrl(text) !== null, { message: 'must be an http:// or https:// URL' });
+export const httpUrlField = (): z.ZodURL =>
+  z.url().refine((text) => httpUrl(text) !== null, { error: 'must be an http:// or https:// URL' });

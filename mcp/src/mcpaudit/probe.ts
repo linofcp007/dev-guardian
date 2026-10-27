@@ -326,7 +326,7 @@ async function listAll(
 }
 
 /** Any object: the list keys and `nextCursor` are checked by hand. */
-const PAGE = z.object({}).passthrough();
+const PAGE = z.looseObject({});
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

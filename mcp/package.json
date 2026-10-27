@@ -31,7 +31,7 @@
     "cross-spawn": "^7.0.6",
     "signal-exit": "^4.1.0",
     "yaml": "^2.9.0",
-    "zod": "^3.23.8"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "~22.13.17",

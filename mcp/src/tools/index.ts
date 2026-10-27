@@ -9,7 +9,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { toJsonSchemaCompat } from '@modelcontextprotocol/sdk/server/zod-json-schema-compat.js';
 import { ListToolsRequestSchema, type ToolAnnotations } from '@modelcontextprotocol/sdk/types.js';
-import { z, type ZodRawShape } from 'zod';
+import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import type { SamplingFn } from '../llmscan/types.js';
 import type { ToolResult } from '../types.js';
@@ -31,10 +31,17 @@ export const DATABASE_BUSY_MESSAGE =
   'or end a dev-guardian process that is stuck.';
 
 /**
- * The shape registered with the SDK. `inputSchema` is a raw zod shape (an
- * object literal of zod fields), NOT a `ZodObject`; `attachAllTools` wraps it
- * in a strict `z.object` (`strictInputSchema`), from which the SDK derives
- * both the JSON schema for the client and the validation.
+ * A tool's parameters: an object literal of zod fields, NOT a `ZodObject`.
+ * zod 4's own `ZodRawShape` holds `zod/v4/core` types, which have none of the
+ * methods (`isOptional`, `description`) the folds and the tests read.
+ */
+export type ToolShape = Readonly<Record<string, z.ZodType>>;
+
+/**
+ * The shape registered with the SDK. `inputSchema` is a raw zod shape
+ * (`ToolShape`); `attachAllTools` wraps it in a strict `z.object`
+ * (`strictInputSchema`), from which the SDK derives both the JSON schema for
+ * the client and the validation.
  */
 /**
  * Per-call metadata the registry extracts from the MCP request and forwards
@@ -89,7 +96,7 @@ export interface ToolModule {
    * `./annotations.ts` when the module does not declare its own.
    */
   annotations?: ToolAnnotations;
-  inputSchema: ZodRawShape;
+  inputSchema: ToolShape;
   /**
    * Handler returns a typed `ToolResult`. The registry wrapper turns it
    * into the MCP CallToolResult shape (content blocks + structuredContent
@@ -129,10 +136,10 @@ export interface ToolModule {
  * (dg-maint finding 12: 51 hand-written `input as {…}` casts, nothing tying
  * one to its schema).
  */
-export type ToolInput<S extends ZodRawShape> = z.output<z.ZodObject<S>>;
+export type ToolInput<S extends ToolShape> = z.output<z.ZodObject<S>>;
 
 /** A {@link ToolModule} whose handler takes its own schema's {@link ToolInput}. */
-interface ToolSpec<S extends ZodRawShape> extends Omit<ToolModule, 'inputSchema' | 'handler'> {
+interface ToolSpec<S extends ToolShape> extends Omit<ToolModule, 'inputSchema' | 'handler'> {
   inputSchema: S;
   handler: (input: ToolInput<S>, ctx: PluginContext, callMeta?: ToolCallMeta) => Promise<ToolResult<Record<string, unknown>>>;
 }
@@ -145,7 +152,7 @@ interface ToolSpec<S extends ZodRawShape> extends Omit<ToolModule, 'inputSchema'
  * in-process caller (`audit_executive`, a test) passes what the schema
  * would have produced.
  */
-export function defineTool<S extends ZodRawShape>(spec: ToolSpec<S>): ToolModule {
+export function defineTool<S extends ToolShape>(spec: ToolSpec<S>): ToolModule {
   const { handler, ...rest } = spec;
   return { ...rest, handler: (input, ctx, callMeta) => handler(input as ToolInput<S>, ctx, callMeta) };
 }
@@ -185,7 +192,9 @@ export interface ListedTool {
  *     meaning differs between the two (no tuple `items`, `definitions`,
  *     `dependencies` or `$ref` — `toolFolds.test.ts` holds that);
  *   - `execution: {taskSupport: "forbidden"}`, which the SDK adds to every
- *     tool: an absent `execution` means exactly that.
+ *     tool: an absent `execution` means exactly that;
+ *   - the `pattern` zod 4 writes beside its own string formats
+ *     ({@link FORMATS_WITH_OWN_PATTERN}).
  *
  * Computed once per server: the registry does not change after startup.
  */
@@ -196,6 +205,7 @@ export function toolListing(tools: readonly ToolModule[] = TOOLS): ListedTool[] 
       pipeStrategy: 'input',
     });
     delete inputSchema['$schema'];
+    dropFormatPatterns(inputSchema);
     return {
       name: t.name,
       ...(t.title ? { title: t.title } : {}),
@@ -204,6 +214,31 @@ export function toolListing(tools: readonly ToolModule[] = TOOLS): ListedTool[] 
       ...(t.annotations !== undefined ? { annotations: t.annotations } : {}),
     };
   });
+}
+
+/**
+ * The JSON Schema formats zod 4 lists with its own regular expression beside
+ * them (`z.guid()`: `uuid`, `z.iso.datetime()`: `date-time`). The expression
+ * restates the format — zod 3's converter wrote the format alone — and the
+ * scan ids' and `expires_at`'s cost 1 500 characters of the tools/list budget.
+ * A tool's own `.regex()` on such a field would be listed as an `allOf` of
+ * the two patterns, never as a lone `pattern`, so it is never the one dropped.
+ */
+const FORMATS_WITH_OWN_PATTERN = new Set(['uuid', 'date-time']);
+
+/** Removes, in place, every lone `pattern` beside a {@link FORMATS_WITH_OWN_PATTERN} format. */
+function dropFormatPatterns(node: unknown): void {
+  if (node === null || typeof node !== 'object') return;
+  if (Array.isArray(node)) {
+    for (const item of node) dropFormatPatterns(item);
+    return;
+  }
+  const schema = node as Record<string, unknown>;
+  const format = schema['format'];
+  if (typeof format === 'string' && FORMATS_WITH_OWN_PATTERN.has(format) && typeof schema['pattern'] === 'string') {
+    delete schema['pattern'];
+  }
+  for (const value of Object.values(schema)) dropFormatPatterns(value);
 }
 
 export function registerToolModule(tool: ToolModule): void {
@@ -279,36 +314,41 @@ export function attachAllTools(server: McpServer, ctx: PluginContext): void {
   server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: listing }));
 }
 
+/** What {@link strictInputSchema} returns: the tool's strict object behind a preprocess step. */
+export type StrictInputSchema = z.ZodPreprocess<z.ZodObject<ToolShape, z.core.$strict>>;
+
 /**
  * The schema a tool is registered with: its shape, rejecting any other key,
- * and reading an absent `arguments` as `{}`.
+ * reading an absent `arguments` as `{}`, and refusing a list longer than
+ * {@link MAX_INPUT_ARRAY} before the object is parsed at all.
  *
- * The default is applied on THIS instance's `safeParseAsync`, the one call
- * the SDK validates tool input with, rather than with `z.preprocess` or
- * `.default({})`: the SDK lists a tool's JSON schema only when the schema it
- * was given is an object (`.shape`), and either wrapper would turn every
- * tool's advertised schema into an empty one.
+ * Both are a `z.preprocess` step in front of the strict object: an issue it
+ * adds stops the pipe, so zod never walks the oversized list. Under zod 3 they
+ * overrode the object's own `safeParseAsync`; zod 4's SDK path calls the
+ * top-level `safeParseAsync(schema, data)`, which never reads that method.
+ * The SDK takes a pipe as a tool's schema, and `toolListing` lists the
+ * object's (`io: "input"` reads a preprocess as the schema it feeds).
  */
-export function strictInputSchema(tool: Pick<ToolModule, 'inputSchema'>): z.ZodObject<ZodRawShape, 'strict'> {
-  const schema = z.object(tool.inputSchema).strict();
-  const parse = schema.safeParseAsync.bind(schema);
-  schema.safeParseAsync = async (data, params) => {
+export function strictInputSchema(tool: Pick<ToolModule, 'inputSchema'>): StrictInputSchema {
+  return z.preprocess((data, ctx) => {
     const oversized = oversizedArrayIn(data);
     if (oversized !== null) {
       const message = `at most ${MAX_INPUT_ARRAY} items per list (${oversized.length} given)`;
-      return { success: false, error: new z.ZodError([{ code: 'custom', path: oversized.path, message }]) };
+      ctx.addIssue({ code: 'custom', path: oversized.path, message, input: data });
+      return data;
     }
-    return parse(data ?? {}, params);
-  };
-  return schema;
+    return data ?? {};
+  }, z.strictObject(tool.inputSchema));
 }
 
 /**
  * The longest list a tool call may carry — ten times the largest any schema
- * accepts (1 000). Checked before zod sees the input: zod 3 parses EVERY
+ * accepts (1 000). Checked before zod sees the input. zod 3 parsed EVERY
  * element of an array even past its `.max()`, keeping one issue per failing
- * element with no cap (GHSA-mrhx-c7xc-m3w5, fixed only in zod 4.6.6), so a
- * call of millions of wrong items would hold millions of issues in memory.
+ * element with no cap (GHSA-mrhx-c7xc-m3w5); zod 4.6.6 checks a `.max()`
+ * first and answers one issue without walking the elements. The cap stays:
+ * it covers a list with no `.max()` and a list nested in another, and a call
+ * of ten million items is refused without zod walking any of it.
  */
 export const MAX_INPUT_ARRAY = 10_000;
 /** How deep {@link oversizedArrayIn} looks; tool inputs nest two or three levels. */
