@@ -1,0 +1,1491 @@
+{
+  "version": 1,
+  "generated_at": "2026-10-27T20:04:47.066Z",
+  "entries": [
+    {
+      "identity": "0231d64e102c4a2862fd78839c9cb9fc6001c745c8a4f39f9bb533a0dbc44f0d",
+      "match_id": "3a7b8ad16c92b4bd3a73a6c83bfd6a0ccef9911446ef7309c024b5eb59b8172a",
+      "fingerprint": "727521af53032c5b41d7da6219fe82162b60a5cb1afefc172c79d1aa02a7baa4",
+      "severity": "low",
+      "title": "License 'MIT' on side-channel-list",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "03e531c6b50d3041e495a3f51927a285200e7674c762731201bb2dfd0ce817d4",
+      "match_id": "95f74790da44896ca53c8e692975b7c68d17e0e3488f60ab30a34e7235785657",
+      "fingerprint": "4a44195a3f686ec86ebed6212dcf73ec349ea618916c411446005e3266da81ab",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/cvesRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "05ca24a29f0c1df9bfeb7dc0fc62213a7f073c35f68809ebf58a4bbb193adc84",
+      "match_id": "ad7f110ead89ffe1eec46087f70b45a2a28280448c8e119baca14f9698af81ba",
+      "fingerprint": "437189b08c7437690da992e5bd49f2d01209aec41726a0256e61f08196d9c6e1",
+      "severity": "low",
+      "title": "License 'MIT' on raw-body",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "06ba947f0cd52ec5d6c592cf707b681e2578894c3697bfb0031b97d8f8c162ba",
+      "match_id": "35b8257dad8e320c330c139a850dff58342569f44717dbdfedc885ef2250627d",
+      "fingerprint": "c37bceb2a645ff95c0721debd95f5364c59496610d4ac1bcc8f112a08a777dbd",
+      "severity": "critical",
+      "title": "Detected calls to child_process from a function argument `target`. This could lead to a command injection if the input is user controllab…",
+      "file_path": "cli/dev-guardian.mjs",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "07b3d6e51c80e8d9cd24580a87fcba25de2cb7bfe3f255eddbc40f6aa017a7b4",
+      "match_id": "08118aaedd7461f387fdb8dddadaf5eb5ff341b5160eb8ca81b6ab72d74dcbaf",
+      "fingerprint": "240d27662f4e45ff3aa301ec34c0a685994f10b83577ea5a4c9da39abdeae799",
+      "severity": "medium",
+      "title": "RegExp() called with a `installed` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS…",
+      "file_path": "mcp/src/fixpr/apply.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "08e41d057b375fd5d093cb38ed48fc9141a3e4c8c000ac32b461697b45253b88",
+      "match_id": "db568fc8d7a171eaf5f289d85f6a61b4e643611a209f1b0750e106c5a937029c",
+      "fingerprint": "31514f055cb6206d927f5dd6419dced68ab70ce8e7c8efb1226f613e5d2660aa",
+      "severity": "low",
+      "title": "License 'MIT' on es-errors",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "0aa3645fd90a704a8051f44b8bce476d3b775ccaa5c03aab99dd6b086ff02e7d",
+      "match_id": "ee96c6353cfeeb6bb192f714b4883e138ce1095d9a4af66e04f39d93925b4d8f",
+      "fingerprint": "3d86b37504f733a86183a11c803ae67043085799e9c7470bf01baee6d1ff1df3",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "0d2940511502f3eb45cb82c39c9515b8cd40766e3fb42a1ed77c5d0e03cf98d4",
+      "match_id": "0a2050d54f32be11f95f9be8f5c229400d4c2c36d9a530e9230bd3733cde5e0b",
+      "fingerprint": "fb47e37bad39fc7dbd21aa53492743f86a196fb473d9bc27916e11c4aaacb2b8",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/cvesRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "0e8c85f18e36167d51953f45c1147a2e47f059623e0063cfabd23bc69101b315",
+      "match_id": "9a9d997789f41e7c3401769d6dde2f9ecd35b627df07b4848e96ec44da76a560",
+      "fingerprint": "3a9cd2fc48224eb60a598f5aa0c9bb3e7da126a8389ba02f17992b6c2a20fbfc",
+      "severity": "low",
+      "title": "License 'MIT' on negotiator",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "0f25cb871afd3a626fd666413134e3ffe9bfb070655b7ad83b575b9fa66863b6",
+      "match_id": "f56d648e595a816cf0e631aceca7116108b543c98f94f2cfa293b9b4a5c35cd8",
+      "fingerprint": "c3ded4e4986dbd12ee8cad51e049f282b9ca82a5ee12eafbe2ea7a4b8f7d469f",
+      "severity": "low",
+      "title": "License 'MIT' on forwarded",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "0ffacf32039367e5881df80a1a5eeed3b96d304c63e94380d6588d9883009fea",
+      "match_id": "11db5c5da4b6d6c4a88e46d58621788efd5134f0600762b94f24df33fc4b438b",
+      "fingerprint": "22eb8ccb59883eaf830b10090a205f3908e032de77464220bb1bc4a596a4e274",
+      "severity": "low",
+      "title": "License 'MIT' on is-promise",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "121a693cd7f9953e46ad8e70d29c1a6c524aa2e2599946c6f4d4be8b828f5cf9",
+      "match_id": "ed09e716a40dfc5a137cbb06ea6780a99e19e05fd84cc96630365a4be2541dee",
+      "fingerprint": "b186a509aad1202042e8c704f84dc4c50aaef30a36152c752ecac62db54e7d30",
+      "severity": "low",
+      "title": "License 'MIT' on side-channel-map",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "1320b84a2cdafac569e4eeeb2371fdd0ccdc3f2499e268ab8c6fb4733c05eb5c",
+      "match_id": "fbf8e0ed6534227504f38dd3d3a69025c42fb53d90adf76697933c4aa4218e3b",
+      "fingerprint": "91d395d4dfe053070922a187586f44b39d8bda8276447b556ceb32dbadf58e01",
+      "severity": "low",
+      "title": "License 'MIT' on es-define-property",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "143d16de64ae81d82946d502a145e37c13ef5d35900c38dc95ff2f8c72206112",
+      "match_id": "4907cb76ec20fb7bb37a3dd3b0be905e91340a52de4f40f911ffd6b40676cfd9",
+      "fingerprint": "5eb6ae1ba4bea531e8e745caa5d144c4742733a3eed093eeb2c9ae22566dfd2e",
+      "severity": "low",
+      "title": "License 'MIT' on get-proto",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "159dc87a3f2680f4235a61f22aad02b5f53d8c73a040d333b3b75eef7a11c5e4",
+      "match_id": "293bda713de5fa1a2aedcbd15de2a085e6ddd611ee5efb523e5201fb16772de7",
+      "fingerprint": "715f1bc646577e2cec482720761b7ead7ba2ffe051ea7af57e981862b6a41bfc",
+      "severity": "low",
+      "title": "License 'MIT' on side-channel",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "1d37bf968a120cb30b8a1c618fbed835c32ee4e76049b761eba2cfa2f2d52710",
+      "match_id": "67ab450ba524ae76c8bad3625623796b15025cdd57bff725bcf79f899ee52925",
+      "fingerprint": "ed1dc0da718494616ecfbfb5b283a1fea347f0ccb8d72ce69691ddd1588e0508",
+      "severity": "low",
+      "title": "License 'MIT' on media-typer",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "1ef5a9260f1761012046000db99030add215b5b1a840ad7b6f9cdab25b6fa8a3",
+      "match_id": "135f6c2e146ec6e0f138b5ad54e978a9c984532fca2995b1a92ed2dadbda5f1c",
+      "fingerprint": "59db0e81f5eb431875303611f09994a9e15a18908f2a47198fabfc056d1f1524",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "21327a21a86402d5c07cdb8203851559899d413e0ceb8b50ad6b0a17851afd76",
+      "match_id": "c1efb58a331885450d9e59022271f0186107e012d918016f9476d5945bdbf071",
+      "fingerprint": "483f1da5e5f9fcf909d7f292a2fd3d4789ba7bc82aefb617fdf5be17e6d196c7",
+      "severity": "low",
+      "title": "License 'MIT' on call-bound",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "215e2f8a3e8f2f01cd222d19d1eb49a587dacabb4b0ab1ed067ac359f9d51a51",
+      "match_id": "b87ff84ebb28ee9f97e191d6aac1fa5818de58238e330223fba97dff510e02d1",
+      "fingerprint": "b7c87e97064adfdee9f0fb65b7374cbddc3d6a0d2c68a2c2b19f80c1c5c643b5",
+      "severity": "low",
+      "title": "License 'MIT' on debug",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "222fffee8bbafd11fb303bc84cd1c70a6cec9cdf53850f64d016c5577dd65988",
+      "match_id": "f5c5c32a43e50a2efed57dd95840e415d5431a8817a018e0999cddab3ba0fb75",
+      "fingerprint": "f707f6ac5228cab70fb383932c59532668d6a5e569df7c3a2531f2401a690db4",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "23d18adb89db53f5a44afc2d2e4a2a02a14c5473a7446c3abc5636b91b36bfde",
+      "match_id": "daa12b5b8c858c276b50ed848e1ae2ec1f420b738d96ca79e0450ddbf0736fa1",
+      "fingerprint": "e5fae0d0c1feef5980042146e2f0aeabeff86b3ffca11b0bc0ea32e0a244a873",
+      "severity": "low",
+      "title": "License 'MIT' on side-channel-weakmap",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2483334557cc3a4ec9d6bd363b8e0642329f0e3c4919ff3d1414efafbbe074d8",
+      "match_id": "f5aa45b0d5bd0ea5c3ede7fe220b5291ad9b07929ac588fab6ac68cf0ddef61f",
+      "fingerprint": "a73f7e9f093ca080daa7f15d28a0d3a299bd53be48f2222cc995662380f5779a",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "265d85a883a6d97046eecc6fd1fdf8596381178e6bdb615a73974ee66318fb5f",
+      "match_id": "833f6bb0f398f8530465d26b73279794e8b46dabd6c01a878f0a9406cab738a1",
+      "fingerprint": "bb68b91bd90c15c0c9577f321418301038e57b8b79c484792cb65c8a8d43b5be",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/db.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "26b309ce206f6e30a644c413e612265ef601dd1c7cd7697625fbc24d06763f5d",
+      "match_id": "303c2ca48161745ca7122c2d096f5ae7d8e0dcc115d58247a401cbcd84f9dab5",
+      "fingerprint": "4edb73acb5be5d00431842077362eb4091a678f7651a8cfb6c8124104070041a",
+      "severity": "low",
+      "title": "License 'MIT' on router",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "270927bbd82e4f059137c0e7c2d3cde1bee8cf91924c3ae1beb08fce608925e9",
+      "match_id": "711938ae83197e9640bc1f57a36940b726d670943b7bd9fbda6fcb9177075f4f",
+      "fingerprint": "047255af33a0549d76c625c20e30a9c74f1ced4e8fa4b1d7f7eaf51a7794e2aa",
+      "severity": "low",
+      "title": "License 'MIT' on depd",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2b2bdb8d150915a2ba2db82043076cafbfd3ba5c3f1296302a468c58ded7ce1e",
+      "match_id": "8b4f64115b2c51891abbe859045872ab5615c61b67be288be2bcfa55afa906e4",
+      "fingerprint": "8f28ed05512c265c85b5d05893cd5d1288e3449f5930af66bd19f1bca681cba6",
+      "severity": "critical",
+      "title": "Detected calls to child_process from a function argument `opts`. This could lead to a command injection if the input is user controllable…",
+      "file_path": "mcp/src/platform/gitSafety.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2b4403a7ed32df77b159fbe6aa0292db645d4e54b5a55e45cc18e7772825b60a",
+      "match_id": "498e6a465cf654172e8568ef8c955547a8d8d2c32dc73468433011fcf6b65154",
+      "fingerprint": "b69723be46638b174d2b1b2162c68a3f555d08995805943d5872f287bfa05305",
+      "severity": "low",
+      "title": "License 'ISC' on zod-to-json-schema",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2b46740559ba339bdb9cdb462d6b7641c53dcd18283050270f50bb19ce529680",
+      "match_id": "7c083a147b76a41e037366a56fdbbceb4d50afc01a1c4c64b1736d524bc38525",
+      "fingerprint": "3c3a438758b0b77bbb661935702ec5411e517d10e7061bfbfdc19078bd9de7ea",
+      "severity": "medium",
+      "title": "RegExp() called with a `file` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2bb0ec6515f691b6d70dd1851cc2e65166ba5bf4cc012c30311eba4aa7381292",
+      "match_id": "506c02fd78f6e84cd82bb3b3fd94c186cdcdf5dfdb5d5e3af9fefddfcf898c1a",
+      "fingerprint": "1d6d5fb85805cbe8c99ea68a90be2951c972d23ed32876a1a3759e2f06247266",
+      "severity": "low",
+      "title": "License 'ISC' on wrappy",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2bda1bf4f087ce3246542143076e7e47bcdc7f74a54009c10d2181fe97d3ef66",
+      "match_id": "d0099803bfb325c5b46ae1e59f822145537eca172fbbc171c78c084fd195c664",
+      "fingerprint": "9cc7ac899d914fcd81818152adb5a3cce9dd970a17c6821c382eeab336bd9274",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2cac898f9e3e39f169cd812f2dddc29ff28a0c1eff7c4e0d23d3db4cdd90f4ea",
+      "match_id": "8c251d703b975c22a9edd9e810eabe5a081dcba7497a2b01549f90bc369aa242",
+      "fingerprint": "b9f4d73ae4530f2bfa4a006c021fb5eff54a05081b7e4c091b0d4d0d6f86fd66",
+      "severity": "low",
+      "title": "License 'MIT' on gopd",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2cb2cf800254b0f898db07f9b25fd793e20e3b4577207bde595f868a0f31bb21",
+      "match_id": "867421be7e11c7b06af1904d404eedb6747b68744f55f222f57938aab6f527c7",
+      "fingerprint": "a21fb23befe49567bd7819ba023690f4280d556a4aacdd5a83670b0fd3d39aa3",
+      "severity": "low",
+      "title": "License 'ISC' on setprototypeof",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2d0022e9d42eb35fe456c859c4d39ef74623fd0d578a9554c569d3716f99120b",
+      "match_id": "73063abd1984f442de716b903ac8611d6a1dc036206c431d96685fc0188b68b2",
+      "fingerprint": "d23770fac0706f4a9e9e5aef0a656678b83f532dbf86c2dbd966db8ce941154c",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/dbProvenance.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2d6ec81e899563ff25eb46a261206b2abe246ef03838cd0058f6106da9aad7d3",
+      "match_id": "fcb079ec5400fc82a832c66c3ede85c1ec5354b18a1f35d15788d1befba6562a",
+      "fingerprint": "a4f011ce8d68cc01d667bd651ee59b971915e28ebf941a984a3ac01465e5f005",
+      "severity": "low",
+      "title": "License 'MIT' on call-bind-apply-helpers",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "2e819d0e5be95b6c068564cc0946928ea4eb48e6c79cde50daeaa1482ad577df",
+      "match_id": "a2c31ddafa5f33e98a532cf8be83dceb5806aa0ae7edac4dd9e9655ab14f5a1f",
+      "fingerprint": "70f06ea5adf9bc408c788b4597f8ad3f643795a2d63f5b1c4ce7cd79892f17aa",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/findingsRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "31cfff41cf5a1647fa39b55211a7ee3ec230ed5a9a0a598d8602e9da1cde1c37",
+      "match_id": "7456e92d3426c5f8ae9a69e644ec230da7bd16fe0e1a952b759f64dabc96191f",
+      "fingerprint": "7d5aaab90f3ed3951956f747cba7a242537e945a8e0f3260bd568b19478a0cc1",
+      "severity": "low",
+      "title": "License 'MIT' on cookie-signature",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "35287f1c2c2a316b5d5dbbaec78f7cd0e6c8a7a03561e85deca6e3e5390c738c",
+      "match_id": "07dbda9881dbf704b601828edcc4b8d6878cc39f1caad99804b17f7b4087b8e1",
+      "fingerprint": "238d5be996c66d709ebc148e78f48d493d0dbb9967effd236c1078de7532e7d1",
+      "severity": "low",
+      "title": "License 'BSD-3-Clause' on fast-uri",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "362fff0d8b0ab376d3e73008614a89ad9fd436392016e6e897bcdb02a0862eba",
+      "match_id": "ec0d49f5efade50c43f20a046c0260b4cf71a56dd5e35ea7a087d809a24b9686",
+      "fingerprint": "1eabadf38268a31b6eeedf2442322ccb12dbc7df2577265dd2083f3eb51c457c",
+      "severity": "low",
+      "title": "License 'MIT' on ip-address",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "36ea814ce2701b2277752e8b2c7f219236e0ca517db1de92c9baa80f4dda4e38",
+      "match_id": "95294ecbb8c98e412feba2b70593f4c0b5777758479e1628ebb939cbdd0176d6",
+      "fingerprint": "6cd49d108e0dd897ffc502c3363f1be7b01dfba532154da5f9acd5492ef67097",
+      "severity": "medium",
+      "title": "This Renovate configuration does not set a minimum release age. Newly published packages can be malicious or unstable. Add `\"minimumRelea…",
+      "file_path": "configs/renovate/renovate.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "3749c6f329f72f38500c4d40e9f34a5ad852ff015611a204ab853a9be93cd0bf",
+      "match_id": "fd321384ac5e74e1f27df44222818403f5fb4cd1a4d91f44b718fcab19385ff9",
+      "fingerprint": "03388ec20c0397d9f35501631442cef5b0aaae796b1a5f6c1db982d07c936423",
+      "severity": "medium",
+      "title": "RegExp() called with a `tail` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/hooks/bashGuard.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "3b398fb3f1583374118f1a9959fd068cfb79cd965f545323b1e0387247f88d5e",
+      "match_id": "4008eec35aa57a77100bf4928a021c2a0c37f269a73a5cdd73b6a979071f6097",
+      "fingerprint": "fbd7c58a2f933eb3f66d84c69febe859449552c5fcfd896271d981d3ac52000f",
+      "severity": "medium",
+      "title": "RegExp() called with a `text` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/hooks/bashGuard.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "3bf5e384645cbd7a6f140162f95e10ae69fb103590957a3d0a6cfd05b4344f80",
+      "match_id": "224ab5e61af39669f2f4a12ca1585556682fe552128093ec431fa61b3915440d",
+      "fingerprint": "81fadbbd3f07008f8755bf8fc3e03e209586fbe0130985d3290c3e00025a974d",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/findingsRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "3c2f94e7eb4391d8ab11101e5be170c4f0513c1d9fc87023dd64a00cb9672e59",
+      "match_id": "1c503c1a69f20fe248863ad133229641c26b25d1cce2ffd1b9a20ccb48dfdabb",
+      "fingerprint": "02ce1f69f65c81467beed53e710b52a970b2c06b3c41205b8725f0d0915414a6",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "48d01abdcca2e4b1a03a7f2a3e452e6b2a9af3d5205bb87258625a66dee853ea",
+      "match_id": "c4e01c7b163c794bcc0407e099aa71526c08592a6b1dacfd672ddbc8e7372482",
+      "fingerprint": "4e8af326da989187914a9e0b255ec150ae4f74c10d04bc44e59b448195a91968",
+      "severity": "medium",
+      "title": "opentelemetry-api: opentelemetry-api: Denial of Service via regular expression backtracking in header parsing",
+      "file_path": "configs/ci/python/3.14/requirements.txt",
+      "added": "2026-10-27T20:04:47.066Z"
+    },
+    {
+      "identity": "491d89503a42d7d5f847f0a5303376e69ad925f4e95941d0a444823863d2117c",
+      "match_id": "48d53ce4de0a0e68efe250e03479e81d2ad08a41a5db93f74ed25ffed8aef17a",
+      "fingerprint": "f3746e784073e05dd14062c51049254fb1a39608fd487ac6571529a15a9e8ab1",
+      "severity": "low",
+      "title": "License 'MIT' on @hono/node-server",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "49230331dfb2d93ed618991fad7100e0cba5b121d6fe8c95a7aea4065f0224d4",
+      "match_id": "d91dcd35f142b2dc66d813490a4173aad744894ea3fc6e61bdefd52778c76eeb",
+      "fingerprint": "fde257e5c5837401ac26523f67654c8ebc5f0f3d63d03edb3148d71a6ba9735e",
+      "severity": "medium",
+      "title": "This Renovate configuration does not set a minimum release age. Newly published packages can be malicious or unstable. Add `\"minimumRelea…",
+      "file_path": "configs/renovate/renovate.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "49648f445d497204719fc3fd42056dab0ba03cdb4dfdc6c02e3a9659adf849a3",
+      "match_id": "749a00c0891521b3abe22282efd70eefabda9db4946cf12a5bd4d4fc1c656e01",
+      "fingerprint": "3df5c68e3706c9048587970c2345845eceb214a013942c2ca74bb220d63e3206",
+      "severity": "critical",
+      "title": "Detected calls to child_process from a function argument `command`. This could lead to a command injection if the input is user controlla…",
+      "file_path": "mcp/src/platform/gitSafety.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "49f83e015becdd5a6b7f6a073903263c088cee97920676b5e60c03fde90598ff",
+      "match_id": "c92c55073fc7a5b38ad4c789c8f5fcf53519b4949fe37d0262c1a2784ecabcd5",
+      "fingerprint": "9fb3b232c262c285c97602986a491317020572f24422a5b162eb0e77c27f9bdb",
+      "severity": "low",
+      "title": "License 'MIT' on on-finished",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "4cd691ec3c74d380a8b80744152cb6bd01e8da362a3f1d4ccbe7085c31784f5a",
+      "match_id": "c8f0c1d2d057893b9ff8ea8df69a6ebb8a50b293645cfbfb68e72360f4baefb1",
+      "fingerprint": "ea3b14010a4034c7bc908660afddbad449c71ae294b19449baf4a2d3b1b1a140",
+      "severity": "low",
+      "title": "License 'MIT' on body-parser",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "4ce2dbf7fd2a11d8ea3e6148486c252602ef9a824b7726163dd51e2d5557b1a2",
+      "match_id": "8c767ed9cf7265b2d84b3b14f95fe5e0e611920735972e8023f7abfdb12bcb52",
+      "fingerprint": "b4e5e2defa1b4ec7aebb69be881fcf3152a8200559377211633602925dd46fd0",
+      "severity": "low",
+      "title": "License 'MIT' on cors",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "4e41b56f66f41cc5171c78ec8fa640588e4118b5c4022d17800afbe3075db782",
+      "match_id": "1779b19ee0c6af8e8d173a170dfc5ba936da7856d8e6fd20bb6443ed7d386d32",
+      "fingerprint": "5d6a4dbfb721a372156bfa7d24a708ffe441f9c59bccbd5d7c1fdef5ba49f994",
+      "severity": "low",
+      "title": "License 'MIT' on ajv",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "4fd26e6de0beb73fe9b916382a542c2bcbd42c10f5568e66de977d6aa32ab665",
+      "match_id": "94c38585fad719da35f30b643f84e75743d357113292ab20ee626e9827d5347b",
+      "fingerprint": "ae16d9be2628db9b926868aa1880f9649aed61059981146ec64af5849b301d11",
+      "severity": "medium",
+      "title": "mcp: mcp: Denial of Service via session memory exhaustion in streamable HTTP servers",
+      "file_path": "configs/ci/python/3.13/requirements.txt",
+      "added": "2026-10-27T20:04:47.066Z"
+    },
+    {
+      "identity": "51d0d45048f4975de0d504c33d9fe198844688c555ae163170d1a122e4b667f0",
+      "match_id": "a69d07b6cb4d8a8c0c3e3c3336d4cd84feddf9a72d69eff63e1e5fb3728581bb",
+      "fingerprint": "e5d4115b3a6f2b963c9290a5f0019555725156cc1ccd1fc77c9daea94c8d8230",
+      "severity": "low",
+      "title": "License 'MIT' on object-inspect",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "550423983db6edb1c599648174da472b44b5fa9d003fbf753a8cfd0daae86814",
+      "match_id": "544ebf56214c65e5f8be92242aba049d1ffe0e3ae113826cf0f235172e08bcbe",
+      "fingerprint": "b77ec8a160a1a0bbaceba8db663fa29ff1513f28f70eec333d88527c3477cd74",
+      "severity": "low",
+      "title": "License 'ISC' on signal-exit",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "55241c9f15b695aa25b5fa6095d2bf745d949afcf80b32258d88ef5c2492a18b",
+      "match_id": "547382a7feca2c47661aa8cc36362939054c1c5377d13ce1b04b5a280fe2bcf4",
+      "fingerprint": "8c3270ab7e0f0fb27db995da47129f8d29be3072a4724c093871045a261ee3e4",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "582b8e6a2e1bae93eb30b5e67137de947f0c197178c3581ce1f735f525bd8152",
+      "match_id": "7ce19361d00dd3d79a9a22cf5b492ec46e9b107da2b4376744f58afcf9ccca8f",
+      "fingerprint": "f169a2388e78b73f19e3fe785dcdc9a8e5bbd3d8f963708b7b7670cc1a6544a3",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "5d06e250d475c7cdbc1fd87a602336df2e12554bfbbde8212d9eb51ad31c9dcc",
+      "match_id": "c4a5587f72f3c81bc180f95e54957e81f9eb82e872d78c04c0870f8f620c6176",
+      "fingerprint": "3aae1247eddf9c420e76c8a6642a086b86488145536cf9ec3cf596eb2be99736",
+      "severity": "low",
+      "title": "License 'MIT' on eventsource-parser",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "5df21901ab4a93dad4b8570452c32faa2ce0291385d4e53ee8cb7d811be389e5",
+      "match_id": "33bf0dd882ad0d2c3cf5976df84ba5a0d80f36ae0a2a99282b616e718dd65d51",
+      "fingerprint": "66571e612f752b058ca1d67abe99a0a6dcc92d553c74e2a15212ff66f2559bfc",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/maintenance.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "623944aedfcb1edfbc139bf195e21481247291c431a8308718dfa32beaed818e",
+      "match_id": "bc0181f0d02d8f0212dc9a074b272c43866dfe74edd79e32052d27215ee65b80",
+      "fingerprint": "f76781034edb6a96be5bb519cf136fc6f3c41d1e019a8c92044f165bb4f9a971",
+      "severity": "low",
+      "title": "License 'MIT' on fast-deep-equal",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "65765c62f5e3dfb96da68902cf6dbc818157d62ea408ecd190b132cf5a123a5e",
+      "match_id": "f04b7c30e4e8f57f8e8356e38b8ceb23d522c1b26e24bea5b5214e0b974a6020",
+      "fingerprint": "031b944b8ce4e78c3db0d6fcf8e22f67cc5bd2e11a25e19140a5a1ae9f2195b1",
+      "severity": "low",
+      "title": "License 'BSD-3-Clause' on qs",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "65d67980abd8b845dd5c9b498e963ee5e6789ca16c1eaac0fda20f7c90e41cc6",
+      "match_id": "3eb6fce40dcee760c478baa31246c36a8ced413262dff50a1235114239f91429",
+      "fingerprint": "c911dfb8c58de301920a56a01e2878e627c635214e84cb2c88b7a00ec20b2d23",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/db.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "66f0595e753f01316c2898884047db223d66d54ef91a54f6a393b5dc3a711120",
+      "match_id": "5ffc3a649cceeb4b8078cb32c3f9263ac50afce502614111e1bc123107835bed",
+      "fingerprint": "1c543f6edf563cb7371bf4b9fef721951ae2e0bb10a359aec3d9b7b42a2d11ee",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "681c4d866e99dddcdc40b73dc9a357fd11b8c283b7aaec56dbfe6f098f35092f",
+      "match_id": "a3e86d3a5b123d315917c0f02ca4800d947b872cacf9d060ea922d8eb7bf6d2b",
+      "fingerprint": "e42ef3e457fa74b5f73337b744f9f8ee5e11b6be83a648718546491742e3ab88",
+      "severity": "medium",
+      "title": "mcp: mcp: Denial of Service via session memory exhaustion in streamable HTTP servers",
+      "file_path": "configs/ci/python/3.14/requirements.txt",
+      "added": "2026-10-27T20:04:47.066Z"
+    },
+    {
+      "identity": "6976e74eddd455facb0bcc43b48a6cf8ddd8245cb7a83beaa318eec82886d20c",
+      "match_id": "f64a2a097c9df99ef0ca3da736095e3fbf009a82c53f0e5f66478453edef41f3",
+      "fingerprint": "5c0936a9a024dd725ee1ede67049935ca16ae21522758cba343329776961f33c",
+      "severity": "low",
+      "title": "License 'MIT' on escape-html",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "69f972155f425b282d1096b51a150b1555d567e69037acf012929abb58c32e7c",
+      "match_id": "cad0c048767ab75bdaa34a5a7bd2bc70d89057c1b0b64cc28c6ecb6bde2f6de3",
+      "fingerprint": "d422a1470e553c24ff1add2b725e5cb1c3015df47aec0581d5422b5c6965da49",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "6b18000d844642322a316afcd2d1264d4379302acf75ab136429037a26102171",
+      "match_id": "14e04c4b42ef91d60a7d82c5c4a744b1a4d7e95443a32d7ee3dee9cd68e48ed9",
+      "fingerprint": "23dbd7c598fef28f65ffeeac11c476169000618dc342bbba8d65a0fada6dc5bf",
+      "severity": "low",
+      "title": "License 'MIT' on require-from-string",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "6f6b75f04c32dfedb35cc6c2704836f7f17ce58beb258bea7d93526ad5f9f42e",
+      "match_id": "38d50707a2b1c7ec35d4fe233ca5540a5c3a40291e0ad218a8ef7ddf00bb0933",
+      "fingerprint": "12fb9e1b43ffb762c1d63c6a504fdfaa09d2e6e8c87a50c4214d85fa7d622691",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "753cf47853ad5c873fe35221d9db438822ca101b03441d7ebe36989d7fcb7d47",
+      "match_id": "08325507b58274ba4af787e43fa7b2c2b105e855658ca4d8e7e28bc375fadc6f",
+      "fingerprint": "febbc93b23ae3ffae141b7353a0d36ff80ddcb2fccab93d6817aeb07d5172f6b",
+      "severity": "low",
+      "title": "License 'MIT' on function-bind",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "7825ba6222fafde5d59878ed7ec2f493c6b76f9a939ef74b486d4adbe14ae7f4",
+      "match_id": "f006cfff5f1ad639dcf12c917fd0f4dbdcc181eb7dd217e2dbc48a173792b754",
+      "fingerprint": "98a7bc01db2976e0502efbe067f2cc784d243dc908b1c71d451c6b14e6d62f3d",
+      "severity": "low",
+      "title": "License 'MIT' on finalhandler",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "78fd07933ccf38b452a7aed426b7af20061ce190523bb25ffdadb125653090d1",
+      "match_id": "c081d051fb048b872a2c87e7ffac4a890cb400a179f498fddb7aa34a29bae643",
+      "fingerprint": "abdb9aa1804863cc870d5a2f56a589cad6da55f7d2a7e7a0d36060e878ad0824",
+      "severity": "low",
+      "title": "License 'MIT' on hono",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "8076bbd5bfa02680c0635cc8087a9b9edc68b78b459e492160b7b19dc0add348",
+      "match_id": "82715facb155083298fea81e1830641accbb2445b31c225604d69596bedd521a",
+      "fingerprint": "2a33149bccdf9d17b8fa290a5c10a890dc87f1a1fc34bec3c5282d5801ca1d22",
+      "severity": "low",
+      "title": "License 'MIT' on get-intrinsic",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "80a2fc11216787ef7b3d69476d4390933de8a2d88d25ec49dde02c5959a0dbcc",
+      "match_id": "efefdedf4366f6329ae958d4b360b7bd75db9bd649728e31a95d0762b4e9dee5",
+      "fingerprint": "555207ce6ad9ad57bf11ee2836d67a77c39c10002e8f578c3bfdaed9285978cf",
+      "severity": "low",
+      "title": "License 'MIT' on math-intrinsics",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "80f02f30e1314e72c0e1599b3bc7605ee2b89a23ea88e56dab059fa2fa3a0b63",
+      "match_id": "78c6567296363de22843b7361f577e321904c81a48ef241c808182bd83f5df05",
+      "fingerprint": "7800104386d0e1419ba909eb772d16ca73f8fc80a0674f52833a749a43e8055d",
+      "severity": "medium",
+      "title": "RegExp() called with a `pattern` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) …",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "82207f289d9aba663e3cfb3eefcc6b540d0475ddbd57efb16c4194e25906f7da",
+      "match_id": "5f717a0012ebb67b557caa1fa64722ffd71422d45f7c6ec6c06b3ffd499ad20e",
+      "fingerprint": "66d07bb7ec5b4f79b1373be8bd5054095be1f70383ac7f8a13d260c0bc2113be",
+      "severity": "low",
+      "title": "License 'MIT' on statuses",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "82b883fe14f0e177aceb2e38d3c6094bdc6925786b4b6dddaecc459bdf81b783",
+      "match_id": "253055c376145b1e6e5ec9c08cd943016822dec877212c01ea8301644f664b8c",
+      "fingerprint": "98a80f82acd760b4310555d458a8480b432b76e98f15aa7e6fd3deb7ec0f561d",
+      "severity": "low",
+      "title": "License 'MIT' on object-assign",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "837e32fd504787b1816734f10d053ecc1f03fd5e7d5b0645b254a425772f3824",
+      "match_id": "7ba96a701f78eb3dfe1dc3bd344f2b3dafc229cdac8b34b677bbba0086bf8744",
+      "fingerprint": "7bfa1a193fe5ec0b3216321fce9b177defbf23b6b57118faece9749bbf158444",
+      "severity": "low",
+      "title": "License 'MIT' on pkce-challenge",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "8415bdb053f153e89c494dd309ede29c0a17ee377b800fc59679ea961151ef7c",
+      "match_id": "08dd4429af22c1d4a04000092929b09d8de7ac00b5ba75e927592d2b679e3555",
+      "fingerprint": "5a98187e61e5e4779e368917c662f007ed3ec01da77856898f360b8905a3795e",
+      "severity": "critical",
+      "title": "Detected calls to child_process from a function argument `git`. This could lead to a command injection if the input is user controllable.…",
+      "file_path": "mcp/src/platform/gitSafety.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "842d7690c094d50f359a15414a8c27b2860dcb9d34c7408030578ae7d2a5ecc7",
+      "match_id": "744cbdcc2c82c2306f8fb7342bd101143e75882d79704d086b9de5eaff56e1c7",
+      "fingerprint": "a94280184d03807e810f9c3d994219c31c435ccef332e78449ca95f0de7ddfa4",
+      "severity": "low",
+      "title": "License 'MIT' on path-key",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "848d61a03776395ab1f0bc4b4edbeaa175ed8939426ad2fbc457e7dd668162e0",
+      "match_id": "1b04b13b29a407323dd1c8693992a0aa34d2f0a5aad43a4a4463c7e04cd1db77",
+      "fingerprint": "34a908a4050449a17ff422fa7057836adc1fa160b5d90d73ca132ca49c720458",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "86efd8447b15e9a5327327b427ce0d67bbc398a2afff4c7cd2935041a96db84f",
+      "match_id": "15cdb9d52acc2123d5ebb5e16a859c339bdd19a24483fd44d6cb316cdcf396a5",
+      "fingerprint": "ce0fdcee993b4f3e429d4f5ede656ca92ebcfc117b6162f9eb42e6eb0ec9aed5",
+      "severity": "low",
+      "title": "License 'MIT' on type-is",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "878891d6924f1e72323081be17417f2b86cdd94fffd498a2433cdc94c9664a0f",
+      "match_id": "78f162cd0a207ffdd6de87ca343d9edaa4a9125e1410d1be48ff52edbe3a821b",
+      "fingerprint": "23ede6beea075a681b1678b61d5de4d0ec7eb5ec72a26b6c0d4f74b64678603e",
+      "severity": "low",
+      "title": "License 'MIT' on encodeurl",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "8a8f9409549828572cae4ee61a29cbd4b3ca5729ca563d69083ab46e33f2a20d",
+      "match_id": "db50e73464ea2d9d9c469e3071bf897661f8d0b9cf81462e7b1f2f5ed2147125",
+      "fingerprint": "80e892f835bd69e2f1250e4db865de124bc08fe8e81ad9928ca13f643752a399",
+      "severity": "low",
+      "title": "License 'ISC' on inherits",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "8ac81ec1fd9bcf5f6a66b0a3b90de1c6dcba94ca0e0b0a9ae89794ee8f6c1083",
+      "match_id": "1e7c3a7daa38c735217d64b45196d9a0a2f7d1ee2f9556b2221db46044652b4a",
+      "fingerprint": "ca2e14e4fc1ae1dab1e23270d91b225a2db8391f71c06fdec44f4ddbdf8c47cc",
+      "severity": "low",
+      "title": "License 'MIT' on serve-static",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "8ac9938f37eb2345ec37d0052ba2795e0e391b50083955693fc8e6e5aea2595d",
+      "match_id": "14b79dcba7479fa7d0c6d08a102b7d4ff614e6dc34435058398e75eb02770960",
+      "fingerprint": "d9b98d7a60d9566dcd69ac20570d5c55cdc34010d2d9192e801c6a6e43d69e0f",
+      "severity": "medium",
+      "title": "opentelemetry-api: opentelemetry-api: Denial of Service via regular expression backtracking in header parsing",
+      "file_path": "configs/ci/python/3.13/requirements.txt",
+      "added": "2026-10-27T20:04:47.066Z"
+    },
+    {
+      "identity": "8d3a028a6028623402c1e9007e195bb4cd84cc8bd31d04e2c3dce224a0f4c28b",
+      "match_id": "cc15b1f434682d70dcd96601a28de43e71d6f4f54474ed939b94e2de7ac764fd",
+      "fingerprint": "399c84043414c87670b1fa8cef2cabbd600eaf124541417f53c501c2fd06e8a5",
+      "severity": "low",
+      "title": "License 'MIT' on shebang-regex",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "8e725e5ffbe170245720e7c72ecdd2e8090bb6158e104d0f924aff126f2c0f23",
+      "match_id": "25ea67446c042fc2c5c698bb82df0149c8fc032621b29668a1c24ddf621542ab",
+      "fingerprint": "409b5d8feb613fd6f4e3c50397a0a36f40a74b09c41723f4d7c5088aecfa0be9",
+      "severity": "low",
+      "title": "License 'MIT' on bytes",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "91c52192679f462fbff8a125f9ec68b5dc47800881c62d45c140cddfd64c76c0",
+      "match_id": "2840124c321022ddb5299d961ed2347867c73bedb42dd77ec6aadec7fed1516f",
+      "fingerprint": "68e8f9971cc05dfea50a8a18e1285bdab16c23384fbde44805dedf5176e6546f",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/db.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "924cc0df7996e9bfada3770e72cba9263c59f4c3ea015c678e03d6aa52dcc83f",
+      "match_id": "1a80586e9a4312a27a5fc5fd004763cbca7b7fbe559ebff0bd4268910d2d8d12",
+      "fingerprint": "adf1003e9d106b2d9432bfc14baf82895ba505cc34029178668852f36c58574c",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/dbProvenance.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "96307080086e88a9743bdaf9eb252a135f83f8bc93e7b10bef4cc052203717a3",
+      "match_id": "e7b9e71198057db840ba2801cc31b5e2f938b2ea3d8504b5c8590da04a6cf433",
+      "fingerprint": "bcaf4e761109368cc72376431c8e9fd7e4d342d6dba94d6b302a8188aab28e64",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "977a92ebb6d8bc317917983003e21c44493f78e730e0592f3797999839765df8",
+      "match_id": "acfb47f4c1e855741da5d9a967b54c9698057dfc42aebee18228eb5fb932a19f",
+      "fingerprint": "ee3a664b62f7802e115a1c1982b5f37beec21b450a8bf4e8414f09242a941577",
+      "severity": "low",
+      "title": "License 'MIT' on content-disposition",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "99e37fe9004859368a09b7ab58d26a4ff16e6286fb1eb19ec925547a2a34fa19",
+      "match_id": "825d05e97e7ab7312d109513c8c132734865c229a786587019ca31908527a3e7",
+      "fingerprint": "a3d4645aa3088322ce1c61f1f0ddd98fedcfc51386c768908bedfb1bfd317faf",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "9b3672e5a43c00060cf824dc1bd9d76f64abea075a82643b27242e302a324ef5",
+      "match_id": "9469cc6545a78cfac35b9fc4fe37c41ab4d7f68fae9661cf21c8465c510f8986",
+      "fingerprint": "de826bd7372a071286eaae1bb65fa981abe0c24a499c3a19b579e0f38031702d",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "9bd2fc96eac6b147ef75bd4383d852c0d5eaef7321a0f15bd294bb5bee4ee2f1",
+      "match_id": "4da7c65364f6575262771bb488d44827ace788e5114477862d4761ad017cfeca",
+      "fingerprint": "387fc373cd2778f60c0024aa4205d559724f7e1c7e3621e132a94af45ba9bbaf",
+      "severity": "low",
+      "title": "License 'MIT' on shebang-command",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "9bd458d512019ad66165856aec8545edb1cf676461d9d016f73ec788c48c27e4",
+      "match_id": "671c37e44251bfaffc4d32fb34d2982cb6cb4b2223451626a60b44dc8b3a94f5",
+      "fingerprint": "7f5c7c92a29551c4e6d1cbe98b468748a47037eb2b043736d403044008168774",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "9e9cd814222f0c192f81e05cd389ee3778a84f4715cdd98eba75dee7c32039d5",
+      "match_id": "801fdc936be96dfc7e1d11a0c7991dc23029a240a4bbae061b32cb46343c2e57",
+      "fingerprint": "0a4f7f4ebfbab08e1331034d707bf063f8ea19619fccba36db0e4d00e30ca2c9",
+      "severity": "low",
+      "title": "License 'MIT' on range-parser",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "9f3cee5df02353044f7219e91574c20813416707cf1ec8d9406326ebee97aca1",
+      "match_id": "7caee7b161ce902243c5782981b065adf451d2cffe387533d6ba0f89c8bbcb96",
+      "fingerprint": "9a1f132405e683854c47bfca6abd1412ccdccc36489b589eeba024ddebf12db6",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/db.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a00d6ee8e96eca8c59dde28c1ddad5c591d30780b5f7731607f1c3981171a3ec",
+      "match_id": "6ccec4a9b80b8d9d91e5510a31d222841c8887aa82e2465a55e7af6560dfb307",
+      "fingerprint": "e0a71349e0b94f6383e1a9566729392b99bf868808449a879fed75aa132c1891",
+      "severity": "low",
+      "title": "License 'MIT' on express",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a0d63550e8f706136150f7a14cd0701be5bf12475e475f11568bbb7e121caeb8",
+      "match_id": "ed36516aca30b38865778ab89b1be74858570855fce3e53e417addf1109e7cea",
+      "fingerprint": "ad672660b21d9d5a56c1ed82db4d2b5f24dc2b4dd6ffb3f9d987c3cfde7fa34b",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a1f76f4cb25f459e82fc9cb236a1271c70b909aee822deaa0340072515cc7628",
+      "match_id": "d545de0699d12aa6e3f0b8ae29916d82a023cdf79cae2f6fd99a05274729b3b0",
+      "fingerprint": "df15f7b9fe3bfe1254c824403556ab90aeb1efefb06e3d3d97c1f178e7298b04",
+      "severity": "medium",
+      "title": "RegExp() called with a `label` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wi…",
+      "file_path": "mcp/scripts/test-docker.mjs",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a28ccc48ab37d98a870c7ce99fbffb2eda7720aae8f581ffd5c5f32e8bcf7761",
+      "match_id": "2e52fa2562645c4034fe8eadcc7a3db3df0b87ace983194ef207380720af1bb6",
+      "fingerprint": "6e7ef203bb2e180c7e8ac5e8e4a8437ca37da7e4f422fe2009ef4d2bd136bd25",
+      "severity": "low",
+      "title": "License 'MIT' on iconv-lite",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a486fc23a2ae4bb3552b039c3a3a76d536a2672f76badef66e39fec84099df4f",
+      "match_id": "52ee0105575725241abc1e25e8aed4c45022f2e6cefe2db2b122627eddde1c3d",
+      "fingerprint": "eb5b7b349a7402534b037b0c4a57ac64cf5baf423d34f596c2b273910cc87250",
+      "severity": "low",
+      "title": "License 'MIT' on parseurl",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a6c5c791574d1c23668e16326d0d5a5297a468ef0f7ce1519eda35fb18f83c10",
+      "match_id": "f532570f9aacfc8885974f13c45c7013a7d39f3d14e84e39e4acf62e33a57bea",
+      "fingerprint": "268ce30b19fcdb9a9e775f1035b78011be5a0623aefc5f9624492a1c48a08d90",
+      "severity": "low",
+      "title": "License 'MIT' on json-schema-traverse",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a70070b1ede77faa22ebc9b9f621f6ddb558fe5ad87ae6c7fda9dd57adeb419b",
+      "match_id": "8c5c6fa5914ff310431ac76c0295a52d9c6543857d65ee76239ffae3d16fa825",
+      "fingerprint": "635179340b226feec64815d81588b7b081581869f7cc002ada2635f14fceac28",
+      "severity": "low",
+      "title": "License 'MIT' on cookie",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a831e3dad05bf43c857cba9ef53f250ccaa69c2ebf3104310572cf5002f3e109",
+      "match_id": "aa001cfc196c19f1cc1aedd2f168b09f9a69a6d89bbfcc8dd7b0d73389956907",
+      "fingerprint": "12d50921a81860c17b19945b32cc4a265b2f18a4e9c42add156e5285df06dbed",
+      "severity": "low",
+      "title": "License 'MIT' on es-object-atoms",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "a9f0c0e75e801f58c1b288dfa17fe93739fd88a5eb1441fc3a1b2781e527471a",
+      "match_id": "3398d17d08c3403105fd32d6c3be030011f34555ea81a0fbcb0389270afb9405",
+      "fingerprint": "53bc57d0dc56a95f73d8dd54378b68262b8b1492718363a460118008ed7957c2",
+      "severity": "low",
+      "title": "License 'MIT' on toidentifier",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "aa57b31ee330368b9760dc8759b55e092879b45b1eff91aac697d7213e611624",
+      "match_id": "2e17a640207aeefbfafb477487ae4f06bb053aa4dde6a0233b30b9ee396a91b3",
+      "fingerprint": "a7fb0522be0e5541c87942c6b7b2e1cd335de692e65c72f9d50ed03e28f59ef6",
+      "severity": "low",
+      "title": "License 'MIT' on hasown",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "aa73797023504820568ad8ff1b446e4ebaf0a371b49724771e81a5251c509062",
+      "match_id": "44ef3602301fbf82d8d28b992f091a4a03690b7ad53ae6c8e89d30e52a4757f3",
+      "fingerprint": "2616eb2923a5eb03e317039f0b4b80aea0defb888eb09c321e9896e3e9b61f18",
+      "severity": "low",
+      "title": "License 'MIT' on vary",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "aa7bc312c8c6c21e6c84f7c89e81e97fd31965665ecbbf86fc4870c9f083095f",
+      "match_id": "2eb22ee2ebea28fe8121937e82246695ef2faaeed675099deccc28467bf4baf3",
+      "fingerprint": "774048a5bfc93d277a9c59596f909af69f1261eaaf7e74bf6a8d0b709d3a96d5",
+      "severity": "low",
+      "title": "License 'MIT' on cross-spawn",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "ab8facfad0465cea5ba3ff709f369bd1655496e2cbe1e4806b9fe3891a40e56c",
+      "match_id": "4851e516eb8b9c9602030dbbae16a3484a5743c0a7bf0bb0f7914cb07add2b9d",
+      "fingerprint": "a56e16ceb8792bbf289bf09879eb3e84b8d88450f489b1144f1d5c53b2cd2ea8",
+      "severity": "medium",
+      "title": "RegExp() called with a `pattern` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) …",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "af5a2144b977dbf074c9ed1ae668dbe516673351dc5ed6816537cf694d61dc69",
+      "match_id": "dab93db209eeca62a87971ed4dd94c52f7bd71d6182bd23168a51d09ab369281",
+      "fingerprint": "6d48f0631bff6e515cda140bcccb2cee1529a938ceee2c1cce05dee768a07875",
+      "severity": "medium",
+      "title": "RegExp() called with a `rule` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/hooks/secretScan.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "af86eb81cdb4dcae50f04302fdc78f5d7aafb861ddad17b2be4653951cc16b1e",
+      "match_id": "9cabe3444beb53e6c185f1f7a5d30d8320c304e250d95a8363caf7af6b4fccba",
+      "fingerprint": "facf3cad8e1de26481e77e7ca0ad2536b1e397ea2218ed2ae031e1816883823f",
+      "severity": "low",
+      "title": "License 'MIT' on dunder-proto",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "b0ef967a9ad3099ec5b3ca1728d1888edb985e5dbb068ee768f2ea01b9251aae",
+      "match_id": "a390300c740a67c98a2169c253a617bda79e92add0306e11ece632654517ebc8",
+      "fingerprint": "0dec99cdb970cb1e265aebe2bd5d4cfbaa07ce72adff714652df87e515c21467",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "b141828d27f79012f1429837ad350c0cd4a92da2a5be96f3f52de36ee3937b3f",
+      "match_id": "97cc35ad3360d3e26a3851a33e276e8e0c383ba254674071a316c53458be091a",
+      "fingerprint": "a31b4105547127f87d51e1ae9b634712492ae21e8e775fc90a6b56bc3c18dfde",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "b1d1cc2ea603e3f486ecc392be1644e0424b50460b843d294c39a63deef2f00e",
+      "match_id": "85116acebdedbb98ca6a99da42b023bcf576bac25dc4eef623dac6a17c11b045",
+      "fingerprint": "521dc339fcb53e0acd7f919dc85d83e67806224259af000d5022ad85edcdf6e5",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "b97d9a0fb3f9b6e31d8b30e60b0a284e9d70db8a3d2de82ef2e22aff3771d814",
+      "match_id": "5a8d547e07b085525eee80ba52e282b31f539a56ced3f1d0fe2bde55fe35f84f",
+      "fingerprint": "e492df635d8b9a5610cc87fa70a7404b1934d363a6714f7c3ebeba7eb258f04c",
+      "severity": "low",
+      "title": "License 'ISC' on yaml",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "b9d3127615441f5c8c7ca0c8a0aac6113eb5653850cf14be687785cf35940be5",
+      "match_id": "519e6f0eedc323674fc510882cd9eade27184e40854a35a5ec1e8a3099af8913",
+      "fingerprint": "316f3c0ead625a5c5be8750c8db224402db6d8511b6be31cd90528935163907a",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "bbe0d4d41cce059ec00d14412f35831f833296d866894d7d21b3490fff000a24",
+      "match_id": "edf5652efc4b0f4fbb844f4f8e5814d34aebc0a2d961e885247c99901287f14d",
+      "fingerprint": "a4f1b5d7935f35e2692c3ca9304318bca96d03a8c9424e49345bd72b75969a60",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "bc522737d3ce90da0a7673217b2c7afc577780f0157c53efd8afab4cd7055964",
+      "match_id": "580ae8a443260360647fc10eef7a22bbad56bba3064c7e43940818b8c1d56369",
+      "fingerprint": "d4964d0e468eff785c00111923cfbec3aad80b4d8e521c7b09678fe2df700000",
+      "severity": "low",
+      "title": "License 'ISC' on once",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c03b7dc5f51ed6a34dd3dcea8211557382ecbc266992baef6fad89831409a24c",
+      "match_id": "e6daa73f30ef54af1d08c85fffc85514ee2ffe38f7b684317d225499b7429698",
+      "fingerprint": "de38c3f9603c453f999682d09b34111a3bbffe0bf3035bd9369a010ea1efbfb7",
+      "severity": "medium",
+      "title": "RegExp() called with a `key` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) with…",
+      "file_path": "mcp/src/runners/scannerParsers/trivy.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c27eeb2d318e2f7083252186c5c7396d7019135cecd18b6f88b2afd20b0baf61",
+      "match_id": "78d450405b2323afebe4010e907c4e3faae42e7da82e3da3bbd3a64e1f1151f8",
+      "fingerprint": "ca2c9874b850708cf599b0a033eb53450dd5db97bba4cc5fd29c001871179236",
+      "severity": "low",
+      "title": "License 'MIT' on @modelcontextprotocol/sdk",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c29e6b43a8b595efdf9b6961c0b56b45f71bb910371ec3ec7ec8411e173d6f67",
+      "match_id": "ffa36e859041275b142c76e9ffdc07b1d88de68123642686331ec7188174aa5d",
+      "fingerprint": "0379005060397c610ffab54e1544489006cb5d8c4f30106d3214dda239b2e5bc",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c35f508e2d9bcc96c4eaba47a93834787a1170a7f9bc67efc9cf273dd6b29a1e",
+      "match_id": "9b9c6e22e93f0874ae3f7828b818f4a024fbd83d895b0bdecfdab4f5dd66a43f",
+      "fingerprint": "36f7fa4c835d9e90bf638af31e97e0b77392c5bbc1edb66dfacd86b1a5b27359",
+      "severity": "medium",
+      "title": "opentelemetry-api: opentelemetry-api: Denial of Service via regular expression backtracking in header parsing",
+      "file_path": "configs/ci/python/3.12/requirements.txt",
+      "added": "2026-10-27T20:04:47.066Z"
+    },
+    {
+      "identity": "c502d962622061195f1dba97efa6a97161dee7015e3996de6697c7c235e54231",
+      "match_id": "751ecbcc6b8d27f248b89b087af7b1554656a6abb030459634e8ee250cd9dff2",
+      "fingerprint": "cb8294098fd1247e9a128c68c84de3e220282f37f21edf9a8df96d3365a4da15",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/findingsRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c808bf1f0ab29fb6c5908a1dfd3874514a6f01c228579ac4728b09f13bd90282",
+      "match_id": "b368b06df790de3e46203a957fe1bc4b4d811bcc1ec1e4c02c64186210872ee4",
+      "fingerprint": "8b09e7ac6dec3ba119cf42b2c420c6290a2f11b063624be6e964e7795f3acdb7",
+      "severity": "low",
+      "title": "License 'MIT' on zod",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c9a09ab3189f7e3919a23158395612a52523426323baaaef7f8073c1eb8e65e8",
+      "match_id": "75b5fc2e1efb6c7d9ad0ac41b3236c78893f7c337b01f4952215a1f0b4b50cfe",
+      "fingerprint": "a0689811c37e4b5add46dad56828b518a95924b913aa751e2ee98a8229ad276f",
+      "severity": "low",
+      "title": "License 'MIT' on eventsource",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c9b6ca55a80df50639fee0ea428aee22515d05ce8c6617d7fe1ed0579626c59e",
+      "match_id": "573420833768e9e81a0b6e24f6b78aefcaebb494c496109d4fd04de5e1b82a53",
+      "fingerprint": "01b0e80aaada275ebe1880e56a27499289b17bd982e88c981ed29e021129cbb6",
+      "severity": "low",
+      "title": "License 'MIT' on mime-types",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "c9dc795a48886ec71ab4f370741f701cc78fe7722a76d193285a57e32666c942",
+      "match_id": "2bd68be790d19d019fa0b0f4637d274f0689798beacf12d361015cba5f4a4ba9",
+      "fingerprint": "52c4ee8985bbd0528df6ca01cd2e5fec1d9d8fd40d59c6343c5241992a113c89",
+      "severity": "medium",
+      "title": "This Renovate configuration does not set a minimum release age. Newly published packages can be malicious or unstable. Add `\"minimumRelea…",
+      "file_path": "configs/renovate/renovate.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "ca5d6c2f05d5f5809bead21ac9e68ba3192bf882c4346897d6cb22348c83e422",
+      "match_id": "6715612cc435b55d28cf2d5d9631d5469f66f12adca26d483a42aea1ad397b77",
+      "fingerprint": "b94d137ceb0b1d99d01c0ca2f909896a7427f2b7d2fafd3c3cdf261ab2572683",
+      "severity": "low",
+      "title": "License 'ISC' on isexe",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "cfdcd3729c49a810e78d7138b710a2932cb6f260be4186fae1a34155082cd8d5",
+      "match_id": "bbea6565444b654507e894f173f8665f32bf9fc8794c4e353a3f06add540b0c2",
+      "fingerprint": "35a82401d18b6bdbf6df854725b5d2f9f3e5bce58584746b1d367324b75cd7a8",
+      "severity": "low",
+      "title": "License 'MIT' on http-errors",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "d0fa99f2fedd25378cd90b30ff2e8db370c12571cc4de911865b0121cb457753",
+      "match_id": "4b2cd36b44f42c40e700bd6fb34a594bfbc67a51b7d134843c2c12c4c18d2c74",
+      "fingerprint": "aa46a102bf710f4daf333d3c1aeb4450cd4b701af1896a19b881614d6c0b8910",
+      "severity": "low",
+      "title": "License 'MIT' on fresh",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "d1b014a277ddfeb8bcc4940e91e215bb257810c2502cdc73a7d1b5fd67fca287",
+      "match_id": "5b562a8c49d478e0e2896c7bc2902665b2efe77c405efe1a837dc5c130262fef",
+      "fingerprint": "460a89a640dd48d794dbae036b572c9addc31e999c132ba8ea360a11040f20b5",
+      "severity": "medium",
+      "title": "This Renovate configuration does not set a minimum release age. Newly published packages can be malicious or unstable. Add `\"minimumRelea…",
+      "file_path": "configs/renovate/renovate.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "d511e69d9e8dd3ad8fe581b2c492fa1703435945f15bdcd86ec6ceb1e6302b35",
+      "match_id": "292385b2c98ebdb8d505382af74a1a687e659f20b11bcdc91d66843d22e4da6e",
+      "fingerprint": "6581b9b99558d5c7b7b25630413a1b542a7cfc20b270ed187027a09b38168dbf",
+      "severity": "low",
+      "title": "License 'MIT' on merge-descriptors",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "d6ee33b9e76edc240a2763ce9ed5e5fb602f7b7778ea0b307eaca74630ac7e4b",
+      "match_id": "e990ce104e7be39a868d29e9e55d30ad4e366367937dcdc819e9e12e068679b1",
+      "fingerprint": "e70de0f3dce44747a2e786314f4e4294595159df32276af9e65c8833b684df55",
+      "severity": "low",
+      "title": "License 'MIT' on ipaddr.js",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "d7ef65780126625e9c50b11dcddbd4a87b3262468cbe77c68a62991c6bc1246d",
+      "match_id": "8d0e179c50613ad76a51df0d663080439e63e8bfa71b94b7676efafb664c8e91",
+      "fingerprint": "09b73a6a1e8cd01287ea616a2d81c1cc05bbda0546f587fb10be82967f3e1abc",
+      "severity": "medium",
+      "title": "RegExp() called with a `keyword` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) …",
+      "file_path": "mcp/src/hooks/bashGuard.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "daafb76dcd7c39bc0cca1b496783c382c0e330374f401d17d95a6851a2d954ee",
+      "match_id": "e73e14e23a29807035bb748226f241aef709b62e17865bea67537e8b7e891823",
+      "fingerprint": "0005188c492028d0b0d1d5d465f3c944d8c4af3a7d88814a9710e9163134f8e7",
+      "severity": "low",
+      "title": "License 'MIT' on etag",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "dad20ade18cfb434658798ce207e09c166560288612d2cf36a982afe61ece5b2",
+      "match_id": "68ebb0a272004247fd0b5e1d78411215f7b45d56b45b890a1a5533f8ba2d01e2",
+      "fingerprint": "9de72694c7eba7c446ec16d760565b1745e227c07f059967935491c0363fe45e",
+      "severity": "low",
+      "title": "License 'MIT' on send",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "dbf591f8b9a0df82cb12a3fab67756b119b14da477248bf9a9df27b0c83bc98c",
+      "match_id": "d609f0afa259ebbffe6eb99a89541ec9955d05fbe413ca07ae1400f17142b87f",
+      "fingerprint": "e54f085be08ee30b93d200b0a93e93b34760651c172cd896ab38c35dbfe75519",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/maintenance.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "dc9b85aae6d6893a00fc6d5c1e475c368abbbfe41afc6978d4a0a2a62b31eb30",
+      "match_id": "d68b850e0e6d752ed2c6aef83bddf3ed8da04e2fc3e674b2b51b35fdf6dbdb7e",
+      "fingerprint": "12541823f86041fda594a672831638923f27289b0e63f1cfa02b3062776b5a82",
+      "severity": "critical",
+      "title": "Detected calls to child_process from a function argument `args`. This could lead to a command injection if the input is user controllable…",
+      "file_path": "mcp/src/runners/spawn.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "dce49223996afc780ed8525dd21d348ec56ba6ad47869d9705bbf8cf1f2a5db1",
+      "match_id": "56870f261b1a99b8c11ee2cdcf6b0c544c769ec7fc5ec1190805ec8c31ca3d29",
+      "fingerprint": "81da8484b4394f362861f3f039d1a83220f41448e0470a7e43445eba1d4c8f82",
+      "severity": "low",
+      "title": "License 'MIT' on has-symbols",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "de3045c39e0dcc7d5754939b88b61878e5107b740ce1ad160b11a205216bf732",
+      "match_id": "7129d15684215a8753e6accac5bf111b3f14a97055a25eaa9beecc7921c74cef",
+      "fingerprint": "7a66bafbdf286fef3ca04f1424dd8a9ad3c545500b684d61d8a8fff9b7260b5b",
+      "severity": "medium",
+      "title": "mcp: mcp: Denial of Service via session memory exhaustion in streamable HTTP servers",
+      "file_path": "configs/ci/python/3.12/requirements.txt",
+      "added": "2026-10-27T20:04:47.066Z"
+    },
+    {
+      "identity": "e052cdbbcc78290dab824ced35605fc2ffedd5eb1159da2bf2abb35074852fc6",
+      "match_id": "0698e0339adade472f5f582d5b34394d9a6791ba988f79d493408f140f784058",
+      "fingerprint": "8d739af73443cb65ee1d423a70ccd92c6511c832769f454e94b12d120fa52024",
+      "severity": "low",
+      "title": "License 'MIT' on ee-first",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "e2c173d1b8c3f87952610cd4ab6da1bfee3425b777ba20adff344c36266044f8",
+      "match_id": "10576e1bebd1e3ce6d11ebaa1fdfcbb765ea10d279543f514c52057022591cde",
+      "fingerprint": "ced166fe90f10fd50276d365fb37a12c1a6c22dafad2128b5de4269692021c55",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/findingsRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "e482ef00d2b369afcee9ba7b08e079e4d892dbae74a170e811eb3f11e801ae4f",
+      "match_id": "832e29612d5ce3b941aa5124cdd3b7b3296d692906369ffa33fb9fef6cb6b28f",
+      "fingerprint": "fdd7695f458c0d72bd4c5d628354c246b39402f3c5a39071cf26c5994d667acf",
+      "severity": "low",
+      "title": "License 'MIT' on mime-db",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "e4a698d5782a4be333f586414957d370b169eefb376fba8e838d9cdd8710b836",
+      "match_id": "978e0ac0bf015b6a2c3ec5f68f2dac21837e5ae2e332dbb4813df16899b97e31",
+      "fingerprint": "49823055e8738a87736afecc58017eefc0fea54e4a34ded0d1229c5c1ae6d981",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "e4ae74aacd424a85b745bd483a9b13ce1805994c52b2c56b3041606a2565d5a4",
+      "match_id": "045d037435abd8e04a765ff7261ce42ce6c3c9e158bab7eea67a4dd48f512ed7",
+      "fingerprint": "3cb7d5f2f666f02827013adedd18ab6dc49282a1ee090bcf7b8e11dd5afbdd89",
+      "severity": "low",
+      "title": "License 'MIT' on ms",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "e4bdce8834d206b72d193ea38e29ef9b09167a903de12e9cf04d6394260c2cc6",
+      "match_id": "6721d5df5fbb99117b7148d0f292af81c699912a7d36b7b28ccf621996adf110",
+      "fingerprint": "7c45454849d60ef11e624aab730c30cec795875a177ca1c7803a0af3ac10b178",
+      "severity": "medium",
+      "title": "RegExp() called with a `name` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/wordpress/sourceInventory.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "e4e5db4f93996417a93be1fe5a97abc5938f6294a52628fc55ebf0a448e966ec",
+      "match_id": "35ec81b121afb34642317d0e168626eabcb143b94087688118898c2a60c37cac",
+      "fingerprint": "95150c37e7ce73ce00b32cba502b5b6f4cc8d4fc9034e12b3d00bd4b29b21c8f",
+      "severity": "critical",
+      "title": "Detected calls to child_process from a function argument `git`. This could lead to a command injection if the input is user controllable.…",
+      "file_path": "mcp/src/platform/gitSafety.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "e8da501a3ca3d684424c7cf4c67f3e37d4da6bd422dc289df4d60ad88ea8fe7d",
+      "match_id": "4122f3a5b8fae28b935522cf944b1d59203794de57c0708af75f9fb8a13fae00",
+      "fingerprint": "a24b174d0010de7fbaf73dc8a6187d16d86e2ea1cf1f34977b448612bf7d603e",
+      "severity": "critical",
+      "title": "Detected calls to child_process from a function argument `args`. This could lead to a command injection if the input is user controllable…",
+      "file_path": "mcp/src/runners/spawn.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "ebd1ea8736ef31bda8ab61624a69ac2b01bff81a4832018813ced18d4bd90739",
+      "match_id": "b75c1e99a9b6157b606b351f46fffcf3d1580da35358a46f4e9f432b516215b3",
+      "fingerprint": "29ace06162163e2c95524210fc63d1ee3b44ba040c396c95a4b765c5313c105b",
+      "severity": "low",
+      "title": "License 'MIT' on content-type",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "ed02c3112be6910362ba28a75f46959f0f1f5939da407ba3e7b1fc007716a02c",
+      "match_id": "07c6d34dcc585270e80c5b8c220f021eb888caa31c27a349cd038f95aff46fe2",
+      "fingerprint": "923653897b902dce20f8c88a35f8eeea8169253996e1ddb9416e3ef0a13ca8fd",
+      "severity": "low",
+      "title": "License 'MIT' on jose",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "eddd80a6a8f1f464818f46adb6daf6589dfb3e8b5096d72dedffe742475441d2",
+      "match_id": "8bea97a2d9eee3f7e28c334df71826390ec2a7f68082d2ca9dd463194ec36755",
+      "fingerprint": "0797c118b7bfd583ecd189514e990e4e1e50b75384a2a4edcdf65ba3befe194f",
+      "severity": "high",
+      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
+      "file_path": "mcp/src/storage/scansRepo.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "ef59a23983c190c8b3d2b44a2504f74f3f0e055727195bdc9c8c8e7a8b011b0b",
+      "match_id": "1952681757481390209a28b0a9488bde8fdde6ab6fad3ae21feea32de730ac57",
+      "fingerprint": "157d970e3780248310a6378159561c37b064850a6506a69f648867c5e3201792",
+      "severity": "low",
+      "title": "License 'MIT' on ajv-formats",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "f097e32880bb4b14fd21ab4265196bbc3a60ab8b2dc37943600a3edc37ee7be7",
+      "match_id": "7b9769ba91af76e16d72ab4d3138f09bfaaaf68979ea078e9cb23071ded59cd0",
+      "fingerprint": "e16b503e53aca12719f1908516f4cc25b12514a0d26b38450e9799b92d53bb02",
+      "severity": "low",
+      "title": "License 'MIT' on unpipe",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "f26313f2749b188d4709d0ab2addd8b606ffcb7a1a24e9d7d8ce6e2a65db5e17",
+      "match_id": "0bad2e08dafbe6f336aab061bdbe192ca43459bf5ab186cb1fc666cea44f7d49",
+      "fingerprint": "e483bd61f1b05b96814c213359a664900d4ef9e04054295bcc2c120429fa1e0b",
+      "severity": "low",
+      "title": "License 'ISC' on which",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "f3d3ccacca6844b19b52ff1ba122866a804cb0f67fa7ae73c068ad8affcc52fa",
+      "match_id": "f1dbc69864bf6343ae4811b3c19739f6e033cb5c952d09980c6ee520e5ecf31d",
+      "fingerprint": "e4924c7b7c95ce8c99ad4aded371bdb121fb5a92069ae6f848358097a183bc74",
+      "severity": "medium",
+      "title": "RegExp() called with a `checkout` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS)…",
+      "file_path": "mcp/src/fixpr/verify.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "f52b4c0acb62ddc94c62b95ae4f7adfc3d80bc29c7085964a1076f2c4373290c",
+      "match_id": "8fc0f9c43c290ff8c04036251ee59bbe0d358454bc14e3edd7586432ce87ebd8",
+      "fingerprint": "eb2e0b69d9e4928999db661f4c4b9baebf271d0e8a1497ec7cb33da75672ceff",
+      "severity": "low",
+      "title": "License 'MIT' on express-rate-limit",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "f6950de34afdeec561eacb58731854705b25960e9a764074e484aebe60aec0ee",
+      "match_id": "f8a55415645c0a3e1aa7adb1202ce372e617e687fecdbe975fee65b8279b2303",
+      "fingerprint": "e8654b15fdc2ff7b8119a3e8088f0570db0cbb0658fac43fe1b6e1c723962363",
+      "severity": "low",
+      "title": "License 'MIT' on proxy-addr",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "f6e60b41c0bc85a2eaf395b47850b7532a327b26d8e5626cef27b1202e81bb91",
+      "match_id": "63ba2e28683fed6d3926d7406373d6256afcfc4d853c44302bfecc1986f68f83",
+      "fingerprint": "23bf8ecead653e69395e86f30c416ff0b4b80a42cf6b84fedac288f3003cf4da",
+      "severity": "low",
+      "title": "License 'MIT' on accepts",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "f969d0a5ee7d6831be594968dfe4977a628f2064bb736782c37d3ed08d6b8e9c",
+      "match_id": "042a2b9b460c4d1366477cc56a05b0652799951655d0907bf4368b24cf976ba8",
+      "fingerprint": "f29e057c9a529ba8a0441fe350ad762f0321c9958d1a6d6c03a86941752fbf00",
+      "severity": "medium",
+      "title": "RegExp() called with a `rule` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/redaction/maskSecrets.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "fa026cc3b31148301a5f8a32d51aa5997b0f90c634396fd4310c09be171c0880",
+      "match_id": "212f153350a31c982bb11c29ca50fe79de0acb4614f257ab5740abf910322052",
+      "fingerprint": "c86760b33f487f07be47243b505a4424181e3ae91af7d4c9e7b60a2d38732880",
+      "severity": "low",
+      "title": "License 'BSD-2-Clause' on json-schema-typed",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "fb2fafbf81cfdac4eac0cd441da9cb530ebc6e4196dcaea061eb7af9925d2f2f",
+      "match_id": "573abdeedfc9e2160eb30af6f12f5b9d4a578fb69bc782f26345cff9bafcc7d5",
+      "fingerprint": "60dc603c7597655345980c54c80d042af66eab770afc4c4a8305abb1b1b64725",
+      "severity": "medium",
+      "title": "RegExp() called with a `path` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) wit…",
+      "file_path": "mcp/src/skillaudit/patterns.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "fb5ead782ce55084667ac38d156d45c8e355461f4ab94ae5cda204ae067dcb24",
+      "match_id": "86ae78a678e8cb454e17bfae57303a00a8aa03320ef618ddc3e680e499e7f2c3",
+      "fingerprint": "ebbf6e39fef000b5baa2e2f2d3fb471b659b5e95045564399e29df259f92d23a",
+      "severity": "low",
+      "title": "License 'MIT' on safer-buffer",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "fbe780a367a0ead4212302b8b5c98c0cda08bbfb2e637800c90d4b5f54c86334",
+      "match_id": "c502a7770ec1cf3255e855712ad8ef6d27dad554984cbbb6688aecbb868cc019",
+      "fingerprint": "99002e533022439ba649e1f9c877384f01b4c0ff1e5e6c1f9b28e6f89209ccc2",
+      "severity": "medium",
+      "title": "GitHub Actions step uses a mutable tag or branch reference. Tags and branch names can be silently repointed by the action owner, enabling…",
+      "file_path": "configs/ci/github.yml",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "fcb8a78ba2ce6617529a144bbb086192c0edccf7f4a5ae8fe15bf19ed3aa1a5a",
+      "match_id": "ef99c0cada5bdfb964916b2d289b0ee03d4145532d53f14c7069dc4ee246bad5",
+      "fingerprint": "1d818b80fc45c883988d5e926524f3ec2e914b30abbe0308ca5d458ba93620e4",
+      "severity": "medium",
+      "title": "RegExp() called with a `re` function argument, this might allow an attacker to cause a Regular Expression Denial-of-Service (ReDoS) withi…",
+      "file_path": "mcp/src/skillaudit/yaraSignatures.ts",
+      "added": "2026-10-27T19:08:54.914Z"
+    },
+    {
+      "identity": "fdf19eded348a5b050a378ac2bc631175aef5b5fd6952e61f3b6bf8e006dacd9",
+      "match_id": "4d214f80711624db4d3bbedb4215e05d422cf935b7e37f38a20ad71f6192ee3e",
+      "fingerprint": "e06479c56600450d4bec8d91226d3e178a8a6b9d05379de437f48ed8626f77cb",
+      "severity": "low",
+      "title": "License 'MIT' on path-to-regexp",
+      "file_path": "mcp/package-lock.json",
+      "added": "2026-10-27T19:08:54.914Z"
+    }
+  ]
+}
