@@ -47,8 +47,5 @@ export const AllowDirty = z
  * shared instance: the JSON-schema converter emits a reused zod instance as a
  * `$ref` to its first use.
  */
-export const httpUrlField = (): z.ZodEffects<z.ZodString, string, string> =>
-  z
-    .string()
-    .url()
-    .refine((text) => httpUrl(text) !== null, { message: 'must be an http:// or https:// URL' });
+export const httpUrlField = (): z.ZodURL =>
+  z.url().refine((text) => httpUrl(text) !== null, { error: 'must be an http:// or https:// URL' });

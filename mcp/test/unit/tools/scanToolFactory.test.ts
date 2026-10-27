@@ -526,7 +526,7 @@ describe('makeScanTool: the cache key covers everything that shapes a scan', () 
     plugin = buildPlugin(projectPath);
   });
 
-  function countingTool(name: string, extraSchema: Record<string, z.ZodTypeAny> = {}) {
+  function countingTool(name: string, extraSchema: Record<string, z.ZodType> = {}) {
     const calls: Array<Record<string, unknown>> = [];
     const tool = makeScanTool({
       name,

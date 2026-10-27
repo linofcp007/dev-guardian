@@ -19,12 +19,13 @@ const inputSchema = {
     .enum(['subagent', 'same_context'])
     .describe('subagent: a fresh context ran the brief; same_context: you did (never demotes or confirms).'),
   // Required: a call without it is refused here as invalid_input, before the
-  // task is touched. `z.unknown()` alone accepted a missing payload, and the
+  // task is touched. `z.unknown()` alone accepted a missing payload under zod 3
+  // (zod 4 requires the key, but still takes an `undefined` value), and the
   // validator then counted it as an invalid ANSWER — one of the task's three
   // tries spent on a call that carried no answer at all.
   payload: z
     .unknown()
-    .refine((value) => value !== undefined, { message: 'Required' })
+    .refine((value) => value !== undefined, { error: 'Required' })
     .describe('The answer, matching the task response_schema. At most 64 KiB serialized.'),
 };
 

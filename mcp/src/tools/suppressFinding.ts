@@ -56,8 +56,7 @@ const inputSchema = {
     .min(1)
     .max(1000)
     .describe('Why this finding is being suppressed. Required.'),
-  expires_at: z
-    .string()
+  expires_at: z.iso
     .datetime()
     .optional()
     .describe('ISO-8601 expiry. When omitted, the suppression never expires.'),
