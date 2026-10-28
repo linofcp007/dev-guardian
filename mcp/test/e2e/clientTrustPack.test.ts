@@ -50,11 +50,15 @@ const MISSES = resolve(FIXTURES, 'misses');
 const REQUIRE_SEMGREP = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 const AVAILABLE = semgrepAvailable();
 
-/** Each rule, the CWE it declares and the severity it has on the repo's scheme (after the Semgrep parser). */
+/**
+ * Each rule, the CWE it declares and the severity it has on the repo's scheme
+ * (after the Semgrep parser): `high` for the three that decide by a name or a
+ * heuristic, through `metadata.guardian_severity` — never critical (fix round 1).
+ */
 const RULES: Readonly<Record<string, { cwe: string; severity: string }>> = {
-  'client-public-env-secret': { cwe: 'CWE-798', severity: 'critical' },
-  'client-supabase-service-role': { cwe: 'CWE-284', severity: 'critical' },
-  'client-webhook-unverified': { cwe: 'CWE-345', severity: 'critical' },
+  'client-public-env-secret': { cwe: 'CWE-798', severity: 'high' },
+  'client-supabase-service-role': { cwe: 'CWE-284', severity: 'high' },
+  'client-webhook-unverified': { cwe: 'CWE-345', severity: 'high' },
   'client-webhook-parsed-body': { cwe: 'CWE-347', severity: 'medium' },
 };
 const RULE_IDS = Object.keys(RULES);
@@ -138,11 +142,12 @@ describe('configs/semgrep/client-trust.yml', () => {
   it('declares exactly the four rules, each with its CWE, category security and the planned Semgrep severity', () => {
     expectPack();
     const doc = parseYaml(readFileSync(PACK, 'utf8')) as {
-      rules: Array<{ id: string; severity: string; metadata: { category: string; cwe: string[] } }>;
+      rules: Array<{ id: string; severity: string; metadata: { category: string; cwe: string[]; guardian_severity?: string } }>;
     };
     expect(doc.rules.map((r) => r.id)).toEqual(RULE_IDS);
     for (const r of doc.rules) {
       expect(r.metadata.category, r.id).toBe('security');
+      expect(r.metadata.guardian_severity ?? (r.severity === 'WARNING' ? 'medium' : 'critical'), r.id).toBe(RULES[r.id]?.severity);
       expect(r.metadata.cwe.some((c) => c.startsWith(`${RULES[r.id]?.cwe ?? '?'}:`)), r.id).toBe(true);
     }
   });

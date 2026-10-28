@@ -598,9 +598,25 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
   }
   const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];
   const files = [...new Set([...onDisk(projectPath, tracked), ...extra])].sort();
+  // The files the change deletes: nothing to scan, but part of the change set —
+  // a deleted test file is what the test-integrity check reports (`member`).
+  const deleted = hasCommits
+    ? await listZ(projectPath, [
+        'diff',
+        '-z',
+        '--name-only',
+        '--relative',
+        '--diff-filter=D',
+        '--no-renames',
+        '--ignore-submodules=dirty',
+        ...(diff.staged === true ? ['--cached'] : []),
+        'HEAD',
+        '--',
+      ])
+    : [];
   return {
     files,
-    touched: [],
+    touched: deleted,
     contentFiles: files,
     history: null,
     notAsStaged,

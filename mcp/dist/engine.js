@@ -54065,7 +54065,7 @@ function scriptFindings(c) {
   }
   return out;
 }
-var TEST_INTEGRITY_TOOL, NOT_TESTS, JS_CALLEE, MARKERS, ASSERTIONS, JS_TEST_DECL, TEST_SCRIPT, ALWAYS_PASSES, NO_OP, ASK;
+var TEST_INTEGRITY_TOOL, NOT_TESTS, JS_CALLEE, NAMED_DECLARATION, MARKERS, ASSERTIONS, JS_TEST_DECL, TEST_SCRIPT, ALWAYS_PASSES, NO_OP, ASK;
 var init_detect = __esm({
   "src/testintegrity/detect.ts"() {
     "use strict";
@@ -54073,15 +54073,20 @@ var init_detect = __esm({
     init_scannerParsers();
     TEST_INTEGRITY_TOOL = "guardian-test-integrity";
     NOT_TESTS = /(?:^|\/)(?:fixtures?|__fixtures__|__snapshots__|testdata|__mocks__|mocks?|snapshots?)\//i;
-    JS_CALLEE = String.raw`\b(?:it|test|describe|context|suite|specify|bench)\b(?:\.\w+)*`;
+    JS_CALLEE = String.raw`(?<![\w$.])(?:it|test|describe|context|suite|specify|bench)\b(?:\.\w+)*`;
+    NAMED_DECLARATION = String.raw`\s*\(\s*['"\x60]`;
     MARKERS = {
       js: [
         { rule: "test-focused", re: new RegExp(String.raw`${JS_CALLEE}\.only\s*[.(\x60]`), what: "a focused test (.only)" },
-        { rule: "test-focused", re: /\bf(?:it|describe)\s*\(/, what: "a focused test (fit / fdescribe)" },
+        { rule: "test-focused", re: new RegExp(String.raw`(?<![\w$.])f(?:it|describe)${NAMED_DECLARATION}`), what: "a focused test (fit / fdescribe)" },
         { rule: "test-skipped", re: new RegExp(String.raw`${JS_CALLEE}\.skip\s*[.(\x60]`), what: "a skipped test (.skip)" },
-        { rule: "test-skipped", re: /\bx(?:it|test|describe|context|specify)\s*\(/, what: "a skipped test (xit / xdescribe / xtest)" },
-        { rule: "test-skipped", re: /\b(?:test|it)\.fixme\s*\(/, what: "a skipped test (.fixme)" },
-        { rule: "test-todo-replaced", re: /\b(?:it|test)\.todo\s*\(/, what: "a test turned into a todo (.todo)" }
+        {
+          rule: "test-skipped",
+          re: new RegExp(String.raw`(?<![\w$.])x(?:it|test|describe|context|specify)${NAMED_DECLARATION}`),
+          what: "a skipped test (xit / xdescribe / xtest)"
+        },
+        { rule: "test-skipped", re: /(?<![\w$.])(?:test|it)\.fixme\s*\(/, what: "a skipped test (.fixme)" },
+        { rule: "test-todo-replaced", re: /(?<![\w$.])(?:it|test)\.todo\s*\(/, what: "a test turned into a todo (.todo)" }
       ],
       py: [
         { rule: "test-skipped", re: /@pytest\.mark\.(?:skip|skipif|xfail)\b/, what: "a skipped test (@pytest.mark.skip / skipif / xfail)" },
@@ -54203,6 +54208,7 @@ async function readChangeSet(cwd, base2, target, member) {
     const u = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]);
     if (u.exitCode === 0) for (const path3 of splitNul(u.stdout)) listed2.push({ status: "added", path: path3, untracked: true });
   }
+  if (target.kind === "worktree" && target.untracked) await pairUntrackedMoves(cwd, base2, listed2);
   const relevant = listed2.filter(
     (l) => (isRelevantPath(l.path) || l.oldPath !== void 0 && isRelevantPath(l.oldPath)) && (member === void 0 || member(l.path) || l.oldPath !== void 0 && member(l.oldPath))
   );
@@ -54216,7 +54222,7 @@ async function readChangeSet(cwd, base2, target, member) {
     const after2 = await textAfter(cwd, target, l.path);
     let lines;
     if (l.untracked === true && after2 !== null) {
-      lines = { added: after2.split(/\r?\n/).map((text2, i) => ({ line: i + 1, text: text2 })), removed: [] };
+      lines = l.oldPath !== void 0 && before !== null ? lineChanges(before, after2) : { added: numbered(after2), removed: [] };
     } else {
       const paths = l.oldPath !== void 0 ? [l.oldPath, l.path] : [l.path];
       const d = await git(cwd, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--relative", ...diffRange(base2, target), "--", ...paths]);
@@ -54233,6 +54239,74 @@ async function readChangeSet(cwd, base2, target, member) {
   }
   return { changes, skipped: Math.max(0, relevant.length - MAX_FILES) };
 }
+function numbered(text2) {
+  return text2.split(/\r?\n/).map((line, i) => ({ line: i + 1, text: line }));
+}
+function lineChanges(before, after2) {
+  const left = /* @__PURE__ */ new Map();
+  for (const l of before.split(/\r?\n/)) left.set(l.trim(), (left.get(l.trim()) ?? 0) + 1);
+  const right = /* @__PURE__ */ new Map();
+  const added = [];
+  for (const l of numbered(after2)) {
+    const key = l.text.trim();
+    right.set(key, (right.get(key) ?? 0) + 1);
+    const n = left.get(key) ?? 0;
+    if (n > 0) left.set(key, n - 1);
+    else added.push(l);
+  }
+  const removed = [];
+  for (const l of numbered(before)) {
+    const key = l.text.trim();
+    const n = right.get(key) ?? 0;
+    if (n > 0) right.set(key, n - 1);
+    else removed.push({ line: 1, text: l.text });
+  }
+  return { added, removed };
+}
+function similarity(a, b) {
+  const count = /* @__PURE__ */ new Map();
+  const linesA = a.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+  for (const l of linesA) count.set(l, (count.get(l) ?? 0) + 1);
+  let shared = 0;
+  const linesB = b.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+  for (const l of linesB) {
+    const n = count.get(l) ?? 0;
+    if (n > 0) {
+      shared += 1;
+      count.set(l, n - 1);
+    }
+  }
+  return shared / Math.max(1, linesA.length, linesB.length);
+}
+async function pairUntrackedMoves(cwd, base2, listed2) {
+  const deleted = listed2.filter((l) => l.status === "deleted" && isRelevantPath(l.path)).slice(0, MAX_FILES);
+  const fresh = listed2.filter((l) => l.untracked === true && isRelevantPath(l.path)).slice(0, MAX_FILES);
+  if (deleted.length === 0 || fresh.length === 0) return;
+  const oldTexts = /* @__PURE__ */ new Map();
+  for (const d of deleted) {
+    const text2 = await showAt(cwd, base2, d.path);
+    if (text2 !== null) oldTexts.set(d.path, text2);
+  }
+  const taken = /* @__PURE__ */ new Set();
+  for (const f of fresh) {
+    const r = readProjectText(cwd, f.path, MAX_TEXT_BYTES);
+    if (r.status !== "ok") continue;
+    let best = null;
+    for (const [path3, text2] of oldTexts) {
+      if (taken.has(path3)) continue;
+      const score = similarity(text2, r.text);
+      if (score >= 0.5 && (best === null || score > best.score)) best = { path: path3, score };
+    }
+    if (best === null) continue;
+    taken.add(best.path);
+    f.status = "renamed";
+    f.oldPath = best.path;
+  }
+  for (let i = listed2.length - 1; i >= 0; i -= 1) {
+    const l = listed2[i];
+    if (l !== void 0 && l.status === "deleted" && taken.has(l.path)) listed2.splice(i, 1);
+  }
+}
 async function runTestIntegrityCheck(cwd, opts) {
   const fail6 = (reason) => ({
     toolRun: { name: TEST_INTEGRITY_TOOL, status: "failed", reason },
@@ -54240,9 +54314,19 @@ async function runTestIntegrityCheck(cwd, opts) {
     findings: []
   });
   const label = opts.label ?? opts.base;
-  const merged = await mergeBase(cwd, opts.base, opts.head ?? "HEAD");
-  const from = merged ?? await resolveCommit(cwd, opts.base);
-  if (from === null) return fail6(`${label} names no commit: the change could not be read`);
+  const from = await mergeBase(cwd, opts.base, opts.head ?? "HEAD");
+  if (from === null) {
+    if (await resolveCommit(cwd, opts.base) === null) return fail6(`${label} names no commit: the change could not be read`);
+    return {
+      toolRun: {
+        name: TEST_INTEGRITY_TOOL,
+        status: "skipped",
+        reason: `no merge base of ${label} and ${opts.head ?? "HEAD"} in this clone (a shallow fetch?): the change cannot be told from the base's own, so it was not read \u2014 fetch the history between them`
+      },
+      missing: [],
+      findings: []
+    };
+  }
   let read3;
   try {
     read3 = await readChangeSet(cwd, from, opts.target, opts.member);
@@ -54252,10 +54336,7 @@ async function runTestIntegrityCheck(cwd, opts) {
   if (read3.changes.length === 0) return null;
   const findings = detectTestWeakening(read3.changes);
   const where = opts.target.kind === "index" ? "the staged changes" : opts.target.kind === "commit" ? opts.target.sha.slice(0, 12) : "the working tree";
-  const notes = [
-    ...merged === null ? [`no merge base of ${label} and ${opts.head ?? "HEAD"} in this clone: compared with ${label} itself`] : [],
-    ...read3.skipped > 0 ? [`${read3.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : []
-  ];
+  const notes = read3.skipped > 0 ? [`${read3.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : [];
   return {
     toolRun: {
       name: TEST_INTEGRITY_TOOL,
@@ -55076,9 +55157,21 @@ async function resolveDiff(projectPath, diff) {
   }
   const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];
   const files = [.../* @__PURE__ */ new Set([...onDisk(projectPath, tracked), ...extra])].sort();
+  const deleted = hasCommits ? await listZ(projectPath, [
+    "diff",
+    "-z",
+    "--name-only",
+    "--relative",
+    "--diff-filter=D",
+    "--no-renames",
+    "--ignore-submodules=dirty",
+    ...diff.staged === true ? ["--cached"] : [],
+    "HEAD",
+    "--"
+  ]) : [];
   return {
     files,
-    touched: [],
+    touched: deleted,
     contentFiles: files,
     history: null,
     notAsStaged,
@@ -60277,6 +60370,9 @@ function relativePath2(filePath, projectPath) {
   return rel2.startsWith(mount) ? rel2.slice(mount.length) : rel2;
 }
 function mapSeverity(rawSeverity, metadata) {
+  const stated = getString(metadata, "guardian_severity")?.trim().toLowerCase();
+  const declared = SEVERITIES.find((s) => s === stated);
+  if (declared !== void 0) return declared;
   const base2 = normalizeSeverity(rawSeverity);
   const cat = getString(metadata, "category")?.toLowerCase();
   if (base2 === "high" && (cat === "security" || cat === "vulnerability")) return "critical";
@@ -60320,6 +60416,7 @@ var SEMGREP_TOOL_NAME, semgrepParser;
 var init_semgrep = __esm({
   "src/runners/scannerParsers/semgrep.ts"() {
     "use strict";
+    init_types2();
     init_dockerScanner();
     init_secretFindingRedaction();
     init_semgrepRuleIds();
@@ -60438,6 +60535,14 @@ function classifySecretValue(value) {
   if (hit !== void 0) return { label: `${/^[aeiou]/i.test(hit.title) ? "an" : "a"} ${hit.title}`, live: true };
   return null;
 }
+function looksSecret(value) {
+  const v = value.trim();
+  if (v.length < 12) return false;
+  if (/^[A-Za-z]+(?:[\s_.:/-]+[A-Za-z]+)*$/.test(v)) return false;
+  if (/^\d+(?:\.\d+)?$/.test(v)) return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v) && !/:\/\/[^\s/@]+:[^\s/@]+@/.test(v)) return false;
+  return shannonEntropy(v) >= 3;
+}
 function checkEnvFile(relPath, text2) {
   const fileName = relPath.split("/").pop() ?? relPath;
   const template = isEnvTemplateName(fileName);
@@ -60447,16 +60552,19 @@ function checkEnvFile(relPath, text2) {
     if (exposed === null) continue;
     const named2 = publicNameSaysSecret(a.name);
     const kind = classifySecretValue(a.value);
-    const empty = isPlaceholderValue(a.value);
     if (kind === null && !named2) continue;
+    const empty = isPlaceholderValue(a.value);
+    const seen = kind !== null || !empty && looksSecret(a.value);
     let severity;
     if (kind !== null) severity = kind.live ? "critical" : "high";
-    else severity = empty ? "medium" : "critical";
+    else severity = seen ? "critical" : "medium";
     const what = kind?.label ?? "a secret";
     const how = `${exposed.framework} writes every ${exposed.prefix} variable into the JavaScript the browser downloads`;
     let message3;
-    if (kind === null && empty) {
-      message3 = `${fileName} declares ${a.name}, whose name says it is a secret, with no value here (${how}). ${template ? "Developers who copy this template" : "A deployment that sets it"} will ship the secret to every visitor: drop the ${exposed.prefix} prefix and read the secret in server code only (an API route, a server action, an edge function). If a build already had a value for it, rotate that secret at its provider.`;
+    if (!seen && empty) {
+      message3 = `${fileName} declares ${a.name}, whose name says it is a secret, with no value here (${how}). ${template ? "Developers who copy this template" : "A deployment that sets it"} would ship the secret to every visitor. Check what it is meant to hold: if a secret, drop the ${exposed.prefix} prefix and read it in server code only (an API route, a server action, an edge function), and rotate it at its provider if a build already had a value for it.`;
+    } else if (!seen) {
+      message3 = `${fileName} sets ${a.name}, whose name says it is a secret, to a value that does not look like one (it is not shown here), and ${how}. Check what it holds: if it is a secret, every build that set it shipped it to browsers \u2014 rotate it at the provider, drop the ${exposed.prefix} prefix and read it in server code only; if it is not, rename the variable so its name stops saying secret.`;
     } else {
       const aside = kind !== null && !named2 ? " \u2014 whatever its name says" : "";
       message3 = `${fileName} sets ${a.name} to ${what}${aside}, and ${how}. If the app was built with it, the value has already reached the browsers of everyone who opened it: revoke and rotate it at the provider now \u2014 the value is not shown here. Then drop the ${exposed.prefix} prefix and use the secret in server code only.` + (kind?.label === "a Supabase service-role key" ? " The browser needs the anon (publishable) key, with row-level security deciding what it may read." : "");
@@ -60468,7 +60576,7 @@ function checkEnvFile(relPath, text2) {
         severity,
         category: "security",
         subcategory: "client-trust",
-        title: `${a.name}: ${kind !== null ? what : "a secret"} behind the browser prefix ${exposed.prefix}`,
+        title: `${a.name}: ${kind !== null ? what : seen ? "a secret" : "a name that says secret"} behind the browser prefix ${exposed.prefix}`,
         message: message3,
         file_path: relPath,
         line_start: a.line,
@@ -60487,7 +60595,7 @@ var init_publicEnv = __esm({
     init_scannerParsers();
     CLIENT_TRUST_TOOL = "guardian-client-trust";
     ENV_PUBLIC_SECRET_RULE = "client-env-public-secret";
-    PUBLIC_ENV_SECRET_NAME = /^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w*_)?(?:SECRETS?|SERVICE_ROLE|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))(?:_\w*)?$/;
+    PUBLIC_ENV_SECRET_NAME = /^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w+_)?(?:SECRET(?:_KEY|_TOKEN)?|SERVICE_ROLE(?:_KEY)?|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_(?:API_)?KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))$/;
     PUBLIC_PREFIXES = [
       ["NEXT_PUBLIC_", "Next.js"],
       ["VITE_", "Vite"],
@@ -60518,6 +60626,7 @@ function exposedSchemasFrom(configToml) {
     }
     if (inApi) body.push(line.replace(/(^|\s)#.*$/, ""));
   }
+  if (body.some((line) => /^\s*enabled\s*=\s*false\s*$/.test(line))) return [];
   const m = /(?:^|\n)\s*schemas\s*=\s*\[([^\]]*)\]/.exec(body.join("\n"));
   if (m === null) return [...DEFAULT_EXPOSED_SCHEMAS];
   const schemas = [...(m[1] ?? "").matchAll(/"([^"]*)"|'([^']*)'/g)].map((s) => s[1] ?? s[2] ?? "").filter((s) => s.length > 0);
@@ -60927,20 +61036,20 @@ async function runClientTrustChecks(root, opts = {}) {
   const unread = [];
   if (envFiles.length > MAX_ENV_FILES) {
     notes.push(`${envFiles.length - MAX_ENV_FILES} env file(s) past the first ${MAX_ENV_FILES} were not read`);
-    unread.push(...envFiles.slice(MAX_ENV_FILES));
     envFiles = envFiles.slice(0, MAX_ENV_FILES);
   }
   const findings = [];
   let envRead = 0;
+  let hiddenRead = 0;
   for (const rel2 of envFiles) {
     const r = readProjectText(root, rel2, ENV_FILE_MAX_BYTES);
     if (r.status === "absent") continue;
     if (r.status === "refused") {
-      unread.push(rel2);
-      notes.push(`${rel2}: ${describeReadRefusal(r.reason)}`);
+      notes.push(`${rel2} skipped: ${describeReadRefusal(r.reason)}`);
       continue;
     }
     envRead += 1;
+    if (gitIgnored.has(rel2)) hiddenRead += 1;
     findings.push(...checkEnvFile(rel2, r.text));
   }
   let migrationsRead = 0;
@@ -60966,10 +61075,9 @@ async function runClientTrustChecks(root, opts = {}) {
     migrationsRead += files.length;
     findings.push(...checkSupabaseMigrations(files, exposedSchemasFrom(config2.status === "ok" ? config2.text : void 0)));
   }
-  if (envRead === 0 && migrationsRead === 0 && unread.length === 0) return null;
-  const hidden = envFiles.filter((rel2) => gitIgnored.has(rel2)).length;
+  if (envRead === 0 && migrationsRead === 0 && unread.length === 0 && notes.length === 0) return null;
   const parts = [
-    `${envRead} env file(s)${hidden > 0 ? ` (${hidden} ignored by git, read all the same)` : ""}`,
+    `${envRead} env file(s)${hiddenRead > 0 ? ` (${hiddenRead} ignored by git, read all the same)` : ""}`,
     `${migrationsRead} Supabase migration(s)`
   ];
   if (cut) notes.push(`the walk for env files stopped at its bound (depth ${WALK_MAX_DEPTH}, ${WALK_MAX_ENTRIES} entries)`);
@@ -117327,11 +117435,19 @@ function renderEntryPoints(task, ctx) {
   const ids2 = ctx.entry_points !== void 0 && ctx.entry_points.length > 0 ? ctx.entry_points.map((r) => entryPointId(r, ctx.root)) : task.target.entry_points ?? [];
   return renderList((ids2.length > 0 ? ids2 : task.target.files).map((id) => scrubSecrets(id)), "entry points");
 }
+function excerptWithheld(file2, f) {
+  const name = file2.replace(/\\/g, "/").split("/").pop() ?? file2;
+  if (isEnvFileName(name)) return "(not quoted: an environment file holds values, never code to read)";
+  if (isCredentialFinding(f)) return "(not quoted: the finding flags a credential, and its line is the secret)";
+  return null;
+}
 function renderVerifyData(task, ctx) {
   const f = ctx.finding;
   if (f === void 0) throw new Error("a verify brief needs the scanner finding");
   const file2 = task.target.files[0] ?? f.file_path;
   if (file2 === void 0 || file2 === "") return { finding: renderFinding(f, void 0), excerpt: "(the finding names no file)" };
+  const withheld2 = excerptWithheld(file2, f);
+  if (withheld2 !== null) return { finding: renderFinding(f, file2), excerpt: withheld2 };
   const read3 = ctx.reader(ctx.root, file2);
   if (read3.status !== "ok") return { finding: renderFinding(f, file2), excerpt: `(the file could not be read: ${read3.status})` };
   const text2 = read3.text;
@@ -117376,6 +117492,8 @@ var MAX_BRIEF_TOKENS, MAX_EXCERPT_LINES, CURRENT_PROMPT_VERSION, MAX_EXCERPT_CHA
 var init_briefs = __esm({
   "src/llmscan/briefs.ts"() {
     "use strict";
+    init_publicEnv();
+    init_findingIdentity();
     init_configFile();
     init_configsDir();
     init_scrubSecrets();

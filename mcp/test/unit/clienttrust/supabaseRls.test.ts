@@ -173,4 +173,12 @@ describe('exposedSchemasFrom', () => {
     ]);
     expect(exposedSchemasFrom('[api]\nschemas = [\n  "public",\n  \'storage\',\n]\n')).toEqual(['public', 'storage']);
   });
+
+  it('[api] enabled = false: no Data API, nothing exposed, no RLS finding', () => {
+    const config = '[api]\nenabled = false # no REST\nschemas = ["public"]\n[db]\nenabled = true\n';
+    expect(exposedSchemasFrom(config)).toEqual([]);
+    expect(rows([m('1.sql', 'create table public.t (id int);')], exposedSchemasFrom(config))).toEqual([]);
+    // [db] enabled = false says nothing about the API.
+    expect(exposedSchemasFrom('[db]\nenabled = false\n')).toEqual(DEFAULT_EXPOSED_SCHEMAS);
+  });
 });

@@ -68,6 +68,12 @@ describe('the names', () => {
       'NEXT_PUBLIC_RECAPTCHA_SITE_KEY',
       'NEXT_PUBLIC_GOOGLE_MAPS_API_KEY',
       'NEXT_PUBLIC_HAS_SECRETSAUCE',
+      'NEXT_PUBLIC_PASSWORD_MIN_LENGTH',
+      'NEXT_PUBLIC_PASSWORD_RESET_URL',
+      'VITE_AUTH_TOKEN_KEY',
+      'PUBLIC_SECRET_SANTA_MODE',
+      'NEXT_PUBLIC_STRIPE_SECRET_KEY_NAME',
+      'NEXT_PUBLIC_OPENAI_API_KEY_ENABLED',
       'STRIPE_SECRET_KEY',
       'SUPABASE_SERVICE_ROLE_KEY',
       'OPENAI_API_KEY',
@@ -205,6 +211,29 @@ describe('checkEnvFile', () => {
     );
     expect(findings.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 medium', '2 medium', '3 critical']);
     expect(findings[0]?.message).toMatch(/Developers who copy this template/);
+  });
+
+  // Fix round 1, item 2: a name that only PASSES THROUGH a secret word, and a
+  // name-only match whose value is plainly not a secret.
+  it('a name that only passes through a secret word is no finding; a secret name with a non-secret value is a medium "check"', () => {
+    const harmless = [
+      'NEXT_PUBLIC_PASSWORD_MIN_LENGTH=8',
+      'NEXT_PUBLIC_PASSWORD_RESET_URL=https://app.example.com/reset',
+      'VITE_AUTH_TOKEN_KEY=access_token',
+      'PUBLIC_SECRET_SANTA_MODE=true',
+      'NEXT_PUBLIC_SERVICE_ROLE_ENABLED=false',
+      'VITE_DATABASE_URL_LABEL=Primary',
+    ].join('\n');
+    expect(checkEnvFile('.env.local', harmless)).toEqual([]);
+
+    const nameOnly = checkEnvFile('.env.local', ['VITE_ADMIN_KEY=dashboard', 'NEXT_PUBLIC_AUTH_TOKEN=access_token', 'NEXT_PUBLIC_DB_PASSWORD=12345678'].join('\n'));
+    expect(nameOnly.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 medium', '2 medium', '3 medium']);
+    for (const f of nameOnly) {
+      expect(f.message).toMatch(/^.*Check what it holds/);
+      expect(f.message).not.toMatch(/rotate it at the provider now/);
+      expect(f.title).toContain('a name that says secret');
+      expect(JSON.stringify(f).includes('dashboard')).toBe(false);
+    }
   });
 
   it('nothing for server-only variables, public-by-design values, comments and non-env text', () => {

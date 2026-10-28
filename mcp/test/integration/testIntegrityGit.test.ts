@@ -7,7 +7,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { resolveScope } from '../../src/platform/scope.js';
@@ -150,7 +150,10 @@ describe('runTestIntegrityCheck', () => {
     expect(r?.missing).toEqual(['guardian-test-integrity']);
   });
 
-  it('a base with no merge base (unrelated history): compared with the base itself, and said so', async () => {
+  // Fix round 1, item 7: compared with the base's tip, the base's own changes
+  // since the fork read reversed (its new test "deleted", its removed skip
+  // "added") — so no merge base is not judged at all: skipped, said, no gap.
+  it('a base with no merge base (unrelated history, a shallow clone): skipped with the reason, no finding, no gap', async () => {
     const { dir } = repo();
     git(dir, 'checkout', '-q', '--orphan', 'other');
     git(dir, 'rm', '-rq', '--cached', '.');
@@ -158,8 +161,27 @@ describe('runTestIntegrityCheck', () => {
     git(dir, 'add', 'src/sum.test.ts');
     git(dir, 'commit', '-qm', 'orphan');
     const r = await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: false } });
-    expect(r?.toolRun.reason).toMatch(/no merge base of main and HEAD in this clone: compared with main itself/);
-    expect(rows(r?.findings ?? [])).toContain('test-focused src/sum.test.ts:4 high');
+    expect(r?.toolRun.status).toBe('skipped');
+    expect(r?.toolRun.reason).toMatch(/no merge base of main and HEAD in this clone .*not read/);
+    expect(r?.findings).toEqual([]);
+    expect(r?.missing).toEqual([]);
+  });
+
+  // Fix round 1, item 7: a move without `git mv` — the old path deleted, the
+  // new one untracked — is a rename, and only its NEW lines are read.
+  it('an unstaged move of a test file: no deletion, the old skip not re-reported, only the new focus', async () => {
+    const { dir } = repo();
+    write(dir, 'src/legacy.test.ts', SUM_TEST.replace("it('handles zero'", "it.skip('handles zero'"));
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'a legacy suite with a skip');
+    renameSync(join(dir, 'src', 'legacy.test.ts'), join(dir, 'src', 'moved.test.ts'));
+    write(dir, 'src/moved.test.ts', SUM_TEST.replace("it('handles zero'", "it.skip('handles zero'").replace("it('adds'", "it.only('adds'"));
+    const r = await runTestIntegrityCheck(dir, { base: 'HEAD', target: { kind: 'worktree', untracked: true } });
+    expect(rows(r?.findings ?? [])).toEqual(['test-focused src/moved.test.ts:4 high']);
+    // A move to a name no runner picks up is still a deletion.
+    renameSync(join(dir, 'src', 'moved.test.ts'), join(dir, 'src', 'moved.ts.bak'));
+    const out = await runTestIntegrityCheck(dir, { base: 'HEAD', target: { kind: 'worktree', untracked: true } });
+    expect(rows(out?.findings ?? [])).toEqual(['test-file-deleted src/legacy.test.ts:- medium']);
   });
 });
 

@@ -1,58 +1,48 @@
 /**
- * client-webhook-unverified in every handler shape the rule reads: an
- * Express-style route, a function declaration and an arrow function, each
- * deciding by `switch` on the event's field, `switch` on a destructured
- * `type`, or `if` on `type`. None verifies a signature.
+ * client-webhook-unverified in every request-handler shape the rule reads —
+ * a Next.js route function, a Next.js route const, a pages/api default
+ * export, an Express / Hono route callback (arrow or function) — taking the
+ * event from the request (`req.body`, `req.json()`, `c.req.json()`,
+ * `JSON.parse(... text())`) and branching on its type (`switch` on the
+ * field, `switch` on a destructured `type`, a comparison of either). None
+ * verifies a signature.
  */
 
-declare const app: { post(path: string, handler: (req: { body: any }, res: { end(): void }) => unknown): void };
+declare const app: { post(path: string, handler: (...args: any[]) => unknown): void };
+declare const router: { post(path: string, handler: (...args: any[]) => unknown): void };
 declare function grant(x: unknown): Promise<void>;
 
-app.post('/hooks/a', (req, res) => { // BUG: client-webhook-unverified -- route, switch on event.type
-  const event = req.body;
-  switch (event.type) {
-    case 'invoice.paid':
-      void grant(event);
-  }
-  res.end();
-});
-
-app.post('/hooks/b', (req, res) => { // BUG: client-webhook-unverified -- route, switch on a destructured type
-  const { type, data } = req.body;
-  switch (type) {
-    case 'payment_intent.succeeded':
-      void grant(data);
-  }
-  res.end();
-});
-
-app.post('/hooks/c', (req, res) => { // BUG: client-webhook-unverified -- route, if on a destructured type
-  const { type, data } = req.body;
-  if (type === 'subscription_created') void grant(data);
-  res.end();
-});
-
-export async function fn(body: { type: string; data: unknown }) { // BUG: client-webhook-unverified -- function, if on type
-  const { type, data } = body;
-  if (type === 'transaction.completed') await grant(data);
-}
-
-export const arrowSwitchField = async (event: { type: string; data: unknown }) => { // BUG: client-webhook-unverified -- arrow, switch on event.type
-  switch (event.type) {
-    case 'customer.subscription.created':
-      await grant(event.data);
-  }
+export const PATCH = async (req: Request) => { // BUG: client-webhook-unverified -- route const, JSON.parse(req.text()), if on a destructured type
+  const { type, data } = JSON.parse(await req.text());
+  if (type === 'customer.subscription.created') await grant(data);
+  return new Response('ok');
 };
 
-export const arrowSwitchType = async (event: { type: string; data: unknown }) => { // BUG: client-webhook-unverified -- arrow, switch on type
-  const { type, data } = event;
+export default async function handler(req: { body: any }, res: { end(): void }) { // BUG: client-webhook-unverified -- pages/api, req.body, switch on a destructured type
+  const { type, data } = req.body;
   switch (type) {
-    case 'charge.refunded':
+    case 'invoice.payment_succeeded':
       await grant(data);
   }
-};
+  res.end();
+}
 
-export const arrowIfType = async (payload: { eventType: string; data: unknown }) => { // BUG: client-webhook-unverified -- arrow, if on type
-  const { eventType: type, data } = payload;
-  if (type === 'BILLING.SUBSCRIPTION.ACTIVATED') await grant(data);
-};
+app.post('/hono/stripe', async (c: any) => { // BUG: client-webhook-unverified -- Hono, c.req.json(), switch on event.type
+  const event = await c.req.json();
+  switch (event.type) {
+    case 'payment_intent.succeeded':
+      await grant(event);
+  }
+  return c.text('ok');
+});
+
+router.post('/paypal', function (req: { body: any }, res: { end(): void }) { // BUG: client-webhook-unverified -- route function, req.body, event_type comparison
+  if (req.body.event_type === 'PAYMENT.CAPTURE.COMPLETED') void grant(req.body.resource);
+  res.end();
+});
+
+app.post('/hono/lemon', async (c: any) => { // BUG: client-webhook-unverified -- Hono, JSON.parse(c.req.text()), Lemon Squeezy event_name
+  const payload = JSON.parse(await c.req.text());
+  if (payload.meta.event_name === 'subscription_payment_success') await grant(payload.data);
+  return c.text('ok');
+});

@@ -138,6 +138,24 @@ describe('hard negatives', () => {
     expect(rows([f])).toEqual([]);
   });
 
+  // Fix round 1, item 6: `fit` is also xterm's FitAddon and a model's training call.
+  it('a `fit` / `x…` that is no test declaration: a member call, a call with no test name', () => {
+    const f = addedLines('src/terminal.test.ts', [
+      'fitAddon.fit();',
+      'await model.fit(xs, ys, { epochs: 3 });',
+      'const width = fit(container);',
+      'const shape = xdescribe(node);',
+      'suite.test.only = true;',
+      'commit.skip(1);',
+    ]);
+    expect(rows([f])).toEqual([]);
+    // …and the declarations still are, with a template name too.
+    expect(rows([addedLines('src/a.test.ts', ['fit(`renders ${name}`, () => {});', "  xit('later', () => {});"])])).toEqual([
+      'test-focused src/a.test.ts:1 high',
+      'test-skipped src/a.test.ts:2 medium',
+    ]);
+  });
+
   it('application code and fixtures are not tests: a .only or @Disabled there says nothing', () => {
     expect(rows([addedLines('src/app.ts', ["it.only('x', () => {});"])])).toEqual([]);
     expect(rows([addedLines('test/fixtures/a.test.ts', ["it.only('x', () => {});"])])).toEqual([]);

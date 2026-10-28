@@ -20,9 +20,11 @@
  * and only findings in `files` are kept.
  *
  * Nothing to check (no env file, no migration) is no entry at all, as Bandit
- * is none without Python: the pass did not apply. A file it found and could
- * not read (over its cap, a FIFO, a link out of the project) is a named gap:
- * `ok` with its name in `missing`.
+ * is none without Python: the pass did not apply. An env file that is no
+ * regular file of the project (a link out of it, a FIFO, one over its cap) is
+ * skipped with a note — never read, never a gap: it is the developer's
+ * machine. A MIGRATION that cannot be read is a named gap (`ok` with the
+ * pass's name in `missing`): its directory is not judged without it.
  */
 
 import { createHash } from 'node:crypto';
@@ -162,24 +164,30 @@ export async function runClientTrustChecks(
   }
   envFiles = envFiles.filter((rel) => !ignored(rel));
   const notes: string[] = [];
+  // Migrations that could not be read: their directory is not judged, a gap.
   const unread: string[] = [];
   if (envFiles.length > MAX_ENV_FILES) {
     notes.push(`${envFiles.length - MAX_ENV_FILES} env file(s) past the first ${MAX_ENV_FILES} were not read`);
-    unread.push(...envFiles.slice(MAX_ENV_FILES));
     envFiles = envFiles.slice(0, MAX_ENV_FILES);
   }
 
+  // An env file that is not a regular file of the project — a link out of it
+  // (a worktree's `.env.local` linked to the main checkout's), a FIFO (a
+  // secrets manager's mount), one over the cap — is skipped with a note,
+  // never read (a FIFO would block) and never a gap: it is the developer's
+  // machine, not the project, and a gap there would hold every scan at exit 2.
   const findings: Finding[] = [];
   let envRead = 0;
+  let hiddenRead = 0;
   for (const rel of envFiles) {
     const r = readProjectText(root, rel, ENV_FILE_MAX_BYTES);
     if (r.status === 'absent') continue;
     if (r.status === 'refused') {
-      unread.push(rel);
-      notes.push(`${rel}: ${describeReadRefusal(r.reason)}`);
+      notes.push(`${rel} skipped: ${describeReadRefusal(r.reason)}`);
       continue;
     }
     envRead += 1;
+    if (gitIgnored.has(rel)) hiddenRead += 1;
     findings.push(...checkEnvFile(rel, r.text));
   }
 
@@ -214,10 +222,9 @@ export async function runClientTrustChecks(
     findings.push(...checkSupabaseMigrations(files, exposedSchemasFrom(config.status === 'ok' ? config.text : undefined)));
   }
 
-  if (envRead === 0 && migrationsRead === 0 && unread.length === 0) return null;
-  const hidden = envFiles.filter((rel) => gitIgnored.has(rel)).length;
+  if (envRead === 0 && migrationsRead === 0 && unread.length === 0 && notes.length === 0) return null;
   const parts = [
-    `${envRead} env file(s)${hidden > 0 ? ` (${hidden} ignored by git, read all the same)` : ''}`,
+    `${envRead} env file(s)${hiddenRead > 0 ? ` (${hiddenRead} ignored by git, read all the same)` : ''}`,
     `${migrationsRead} Supabase migration(s)`,
   ];
   if (cut) notes.push(`the walk for env files stopped at its bound (depth ${WALK_MAX_DEPTH}, ${WALK_MAX_ENTRIES} entries)`);

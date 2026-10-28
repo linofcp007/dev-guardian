@@ -148,6 +148,7 @@ export async function readChangeSet(
     const u = await git(cwd, ['ls-files', '-z', '--others', '--exclude-standard']);
     if (u.exitCode === 0) for (const path of splitNul(u.stdout)) listed.push({ status: 'added', path, untracked: true });
   }
+  if (target.kind === 'worktree' && target.untracked) await pairUntrackedMoves(cwd, base, listed);
   const relevant = listed.filter(
     (l) => (isRelevantPath(l.path) || (l.oldPath !== undefined && isRelevantPath(l.oldPath))) && (member === undefined || member(l.path) || (l.oldPath !== undefined && member(l.oldPath))),
   );
@@ -161,8 +162,9 @@ export async function readChangeSet(
     const after = await textAfter(cwd, target, l.path);
     let lines: { added: DiffLine[]; removed: DiffLine[] };
     if (l.untracked === true && after !== null) {
-      // Untracked: in no diff, every line is new.
-      lines = { added: after.split(/\r?\n/).map((text, i) => ({ line: i + 1, text })), removed: [] };
+      // Untracked: in no diff. Every line is new — or, for a file moved from a
+      // deleted one (`pairUntrackedMoves`), every line its old text lacks.
+      lines = l.oldPath !== undefined && before !== null ? lineChanges(before, after) : { added: numbered(after), removed: [] };
     } else {
       const paths = l.oldPath !== undefined ? [l.oldPath, l.path] : [l.path];
       const d = await git(cwd, ['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--relative', ...diffRange(base, target), '--', ...paths]);
@@ -180,6 +182,94 @@ export async function readChangeSet(
   return { changes, skipped: Math.max(0, relevant.length - MAX_FILES) };
 }
 
+/** Every line of `text`, numbered from 1. */
+function numbered(text: string): DiffLine[] {
+  return text.split(/\r?\n/).map((line, i) => ({ line: i + 1, text: line }));
+}
+
+/**
+ * The lines `after` adds to `before` and the ones it drops, compared as a
+ * multiset of trimmed lines (a moved block is not new): what a move with
+ * edits changed, without git's own diff of an untracked file.
+ */
+function lineChanges(before: string, after: string): { added: DiffLine[]; removed: DiffLine[] } {
+  const left = new Map<string, number>();
+  for (const l of before.split(/\r?\n/)) left.set(l.trim(), (left.get(l.trim()) ?? 0) + 1);
+  const right = new Map<string, number>();
+  const added: DiffLine[] = [];
+  for (const l of numbered(after)) {
+    const key = l.text.trim();
+    right.set(key, (right.get(key) ?? 0) + 1);
+    const n = left.get(key) ?? 0;
+    if (n > 0) left.set(key, n - 1);
+    else added.push(l);
+  }
+  const removed: DiffLine[] = [];
+  for (const l of numbered(before)) {
+    const key = l.text.trim();
+    const n = right.get(key) ?? 0;
+    if (n > 0) right.set(key, n - 1);
+    else removed.push({ line: 1, text: l.text });
+  }
+  return { added, removed };
+}
+
+/** How much of `a`'s lines `b` holds, 0 to 1 (trimmed, blank lines left out). */
+function similarity(a: string, b: string): number {
+  const count = new Map<string, number>();
+  const linesA = a.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+  for (const l of linesA) count.set(l, (count.get(l) ?? 0) + 1);
+  let shared = 0;
+  const linesB = b.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
+  for (const l of linesB) {
+    const n = count.get(l) ?? 0;
+    if (n > 0) {
+      shared += 1;
+      count.set(l, n - 1);
+    }
+  }
+  return shared / Math.max(1, linesA.length, linesB.length);
+}
+
+/**
+ * An unstaged move — the file deleted from the index's view, its new path
+ * untracked — is in no diff as a rename: it read as a deleted test file plus
+ * an untracked file whose every line, an old `it.skip` included, was new.
+ * Each untracked relevant file is paired with the deleted relevant file whose
+ * base text it shares at least half its lines with (git's own rename
+ * threshold), the best first; the pair becomes one `renamed` entry, in place
+ * of both. Bounded: at most {@link MAX_FILES} of each side are compared.
+ */
+async function pairUntrackedMoves(cwd: string, base: string, listed: Listed[]): Promise<void> {
+  const deleted = listed.filter((l) => l.status === 'deleted' && isRelevantPath(l.path)).slice(0, MAX_FILES);
+  const fresh = listed.filter((l) => l.untracked === true && isRelevantPath(l.path)).slice(0, MAX_FILES);
+  if (deleted.length === 0 || fresh.length === 0) return;
+  const oldTexts = new Map<string, string>();
+  for (const d of deleted) {
+    const text = await showAt(cwd, base, d.path);
+    if (text !== null) oldTexts.set(d.path, text);
+  }
+  const taken = new Set<string>();
+  for (const f of fresh) {
+    const r = readProjectText(cwd, f.path, MAX_TEXT_BYTES);
+    if (r.status !== 'ok') continue;
+    let best: { path: string; score: number } | null = null;
+    for (const [path, text] of oldTexts) {
+      if (taken.has(path)) continue;
+      const score = similarity(text, r.text);
+      if (score >= 0.5 && (best === null || score > best.score)) best = { path, score };
+    }
+    if (best === null) continue;
+    taken.add(best.path);
+    f.status = 'renamed';
+    f.oldPath = best.path;
+  }
+  for (let i = listed.length - 1; i >= 0; i -= 1) {
+    const l = listed[i];
+    if (l !== undefined && l.status === 'deleted' && taken.has(l.path)) listed.splice(i, 1);
+  }
+}
+
 interface TestIntegrityResult {
   toolRun: ToolRun;
   /** The pass's gap (the change set could not be read) as its `missing_tools` name; empty without one. */
@@ -189,12 +279,12 @@ interface TestIntegrityResult {
 
 /**
  * The check over the change from `base` (a ref or commit; its merge base
- * with `head` is what is compared, as `base...head`) to `target` — or
- * `base` itself, said in the reason, when the two share no history git can
- * see (a shallow clone that fetched the base alone): null when
+ * with `head` is what is compared, as `base...head`) to `target`: null when
  * the change touches no test file, package.json or Rust source — the check
- * does not apply. A change set git cannot list is a failed run, never a
- * clean one.
+ * does not apply. When the two share no history git can see (a shallow clone
+ * that fetched the base alone) the run is `skipped` with the reason, never
+ * judged against the base's tip, and no gap. A base that names no commit, or
+ * a change set git cannot list, is a failed run, never a clean one.
  */
 export async function runTestIntegrityCheck(
   cwd: string,
@@ -206,9 +296,23 @@ export async function runTestIntegrityCheck(
     findings: [],
   });
   const label = opts.label ?? opts.base;
-  const merged = await mergeBase(cwd, opts.base, opts.head ?? 'HEAD');
-  const from = merged ?? (await resolveCommit(cwd, opts.base));
-  if (from === null) return fail(`${label} names no commit: the change could not be read`);
+  const from = await mergeBase(cwd, opts.base, opts.head ?? 'HEAD');
+  if (from === null) {
+    if ((await resolveCommit(cwd, opts.base)) === null) return fail(`${label} names no commit: the change could not be read`);
+    // A shallow clone that fetched the base alone: compared with the base's
+    // tip, every change the base made since the fork would read reversed (a
+    // test it added as deleted, a skip it removed as added). Not judged, and
+    // said — no history to read is no gap of the change.
+    return {
+      toolRun: {
+        name: TEST_INTEGRITY_TOOL,
+        status: 'skipped',
+        reason: `no merge base of ${label} and ${opts.head ?? 'HEAD'} in this clone (a shallow fetch?): the change cannot be told from the base's own, so it was not read — fetch the history between them`,
+      },
+      missing: [],
+      findings: [],
+    };
+  }
   let read: ChangeSetRead;
   try {
     read = await readChangeSet(cwd, from, opts.target, opts.member);
@@ -219,10 +323,7 @@ export async function runTestIntegrityCheck(
   const findings = detectTestWeakening(read.changes);
   const where =
     opts.target.kind === 'index' ? 'the staged changes' : opts.target.kind === 'commit' ? opts.target.sha.slice(0, 12) : 'the working tree';
-  const notes = [
-    ...(merged === null ? [`no merge base of ${label} and ${opts.head ?? 'HEAD'} in this clone: compared with ${label} itself`] : []),
-    ...(read.skipped > 0 ? [`${read.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : []),
-  ];
+  const notes = read.skipped > 0 ? [`${read.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : [];
   return {
     toolRun: {
       name: TEST_INTEGRITY_TOOL,

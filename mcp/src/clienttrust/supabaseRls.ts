@@ -63,8 +63,9 @@ const PRIVILEGED_ROLES: ReadonlySet<string> = new Set([
 
 /**
  * `[api] schemas = [...]` of a `supabase/config.toml`, or the default when
- * the file or the key is absent. A minimal reading — the section, then the
- * key's array of strings — never a TOML parser.
+ * the file or the key is absent — and none at all with `[api] enabled =
+ * false`: no Data API, nothing served. A minimal reading — the section, then
+ * the keys — never a TOML parser.
  */
 export function exposedSchemasFrom(configToml: string | undefined): string[] {
   if (configToml === undefined) return [...DEFAULT_EXPOSED_SCHEMAS];
@@ -79,6 +80,7 @@ export function exposedSchemasFrom(configToml: string | undefined): string[] {
     }
     if (inApi) body.push(line.replace(/(^|\s)#.*$/, ''));
   }
+  if (body.some((line) => /^\s*enabled\s*=\s*false\s*$/.test(line))) return [];
   const m = /(?:^|\n)\s*schemas\s*=\s*\[([^\]]*)\]/.exec(body.join('\n'));
   if (m === null) return [...DEFAULT_EXPOSED_SCHEMAS];
   const schemas = [...(m[1] ?? '').matchAll(/"([^"]*)"|'([^']*)'/g)].map((s) => s[1] ?? s[2] ?? '').filter((s) => s.length > 0);

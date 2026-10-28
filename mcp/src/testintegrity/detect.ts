@@ -145,16 +145,31 @@ interface Marker {
   what: string;
 }
 
-const JS_CALLEE = String.raw`\b(?:it|test|describe|context|suite|specify|bench)\b(?:\.\w+)*`;
+/**
+ * A test framework's own callee: `it`, `test`, `describe`… as a bare name,
+ * never a member (`suite.test`, `regex.test`) nor the tail of another
+ * identifier (`commit`, `$it`).
+ */
+const JS_CALLEE = String.raw`(?<![\w$.])(?:it|test|describe|context|suite|specify|bench)\b(?:\.\w+)*`;
+/**
+ * Jasmine's `fit` / `fdescribe` and the `x…` skips, as a test declaration: a
+ * bare call whose first argument is the test's name, a string or a template.
+ * `fitAddon.fit()`, `model.fit(xs, ys)` and `fit(width)` are not.
+ */
+const NAMED_DECLARATION = String.raw`\s*\(\s*['"\x60]`;
 
 const MARKERS: Readonly<Record<Lang, readonly Marker[]>> = {
   js: [
     { rule: 'test-focused', re: new RegExp(String.raw`${JS_CALLEE}\.only\s*[.(\x60]`), what: 'a focused test (.only)' },
-    { rule: 'test-focused', re: /\bf(?:it|describe)\s*\(/, what: 'a focused test (fit / fdescribe)' },
+    { rule: 'test-focused', re: new RegExp(String.raw`(?<![\w$.])f(?:it|describe)${NAMED_DECLARATION}`), what: 'a focused test (fit / fdescribe)' },
     { rule: 'test-skipped', re: new RegExp(String.raw`${JS_CALLEE}\.skip\s*[.(\x60]`), what: 'a skipped test (.skip)' },
-    { rule: 'test-skipped', re: /\bx(?:it|test|describe|context|specify)\s*\(/, what: 'a skipped test (xit / xdescribe / xtest)' },
-    { rule: 'test-skipped', re: /\b(?:test|it)\.fixme\s*\(/, what: 'a skipped test (.fixme)' },
-    { rule: 'test-todo-replaced', re: /\b(?:it|test)\.todo\s*\(/, what: 'a test turned into a todo (.todo)' },
+    {
+      rule: 'test-skipped',
+      re: new RegExp(String.raw`(?<![\w$.])x(?:it|test|describe|context|specify)${NAMED_DECLARATION}`),
+      what: 'a skipped test (xit / xdescribe / xtest)',
+    },
+    { rule: 'test-skipped', re: /(?<![\w$.])(?:test|it)\.fixme\s*\(/, what: 'a skipped test (.fixme)' },
+    { rule: 'test-todo-replaced', re: /(?<![\w$.])(?:it|test)\.todo\s*\(/, what: 'a test turned into a todo (.todo)' },
   ],
   py: [
     { rule: 'test-skipped', re: /@pytest\.mark\.(?:skip|skipif|xfail)\b/, what: 'a skipped test (@pytest.mark.skip / skipif / xfail)' },

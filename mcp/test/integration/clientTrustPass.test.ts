@@ -11,7 +11,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -164,5 +164,46 @@ describe('scan_sast runs the pass', () => {
     expect(everything.includes(SERVICE_ROLE)).toBe(false);
     expect(everything.includes(STRIPE_LIVE)).toBe(false);
     expect(everything.includes(STRIPE_LIVE.slice(0, 14))).toBe(false);
+  });
+});
+
+// Fix round 1, item 4: an env file that is no regular file of the project is
+// skipped with a note — never read (a FIFO would block), never a gap (a gap
+// held every scan, and dev-spec-driven's finish, at exit 2).
+describe('an env file the pass must not read', () => {
+  it('one over the cap: skipped with a note, no gap, and not counted as read', async () => {
+    const dir = project();
+    write(dir, '.env.local', `X=${'y'.repeat(300 * 1024)}\n`);
+    const r = await runClientTrustChecks(dir);
+    expect(r?.missing).toEqual([]);
+    expect(r?.toolRun.reason).toMatch(/^read 2 env file\(s\) \(1 ignored by git, read all the same\) and 2 Supabase migration\(s\); \.env\.local skipped: it is larger than the size cap/);
+  });
+
+  it('a link out of the project (a worktree linked to the main checkout): skipped, no gap', async () => {
+    const dir = project();
+    const outside = makeTempDir('client-trust-outside-');
+    write(outside, 'real.env', `NEXT_PUBLIC_STRIPE_SECRET_KEY=${STRIPE_LIVE}\n`);
+    rmSync(join(dir, '.env.local'));
+    try {
+      symlinkSync(join(outside, 'real.env'), join(dir, '.env.local'), 'file');
+    } catch (e) {
+      // Windows without the symlink privilege: nothing to test here.
+      if ((e as NodeJS.ErrnoException).code === 'EPERM') return;
+      throw e;
+    }
+    const r = await runClientTrustChecks(dir);
+    expect(r?.missing).toEqual([]);
+    expect(r?.toolRun.reason).toMatch(/\.env\.local skipped: it resolves outside the project/);
+    expect(r?.findings.some((f) => f.file_path === '.env.local')).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('a FIFO (a secrets manager mount): never opened for a blocking read, no gap', async () => {
+    const dir = project();
+    rmSync(join(dir, '.env.local'));
+    const made = spawnSync('mkfifo', [join(dir, '.env.local')]);
+    if (made.status !== 0) return;
+    const r = await runClientTrustChecks(dir);
+    expect(r?.missing).toEqual([]);
+    expect(r?.toolRun.reason).toMatch(/\.env\.local skipped: it is not a regular file/);
   });
 });

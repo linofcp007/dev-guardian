@@ -28,7 +28,7 @@
  * Pure: text in, findings out. Finding the files is `clientTrustPass.ts`'s.
  */
 
-import { scanForSecrets } from '../hooks/secretScan.js';
+import { scanForSecrets, shannonEntropy } from '../hooks/secretScan.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import type { Finding, Severity } from '../types.js';
 
@@ -41,10 +41,14 @@ export const ENV_PUBLIC_SECRET_RULE = 'client-env-public-secret';
 /**
  * A browser-exposed variable whose NAME says secret — the same expression as
  * `client-public-env-secret`'s `metavariable-regex` in
- * `configs/semgrep/client-trust.yml` (a test holds the two equal).
+ * `configs/semgrep/client-trust.yml` (a test holds the two equal). The name
+ * must END in a group that says secret (`…_SECRET`, `…_SECRET_KEY`,
+ * `…_SERVICE_ROLE_KEY`, `…_PRIVATE_KEY`, a paid provider's `…_API_KEY`,
+ * `DATABASE_URL`…): `PASSWORD_MIN_LENGTH`, `PASSWORD_RESET_URL`,
+ * `AUTH_TOKEN_KEY` and `SECRET_SANTA_MODE` only pass through one.
  */
 export const PUBLIC_ENV_SECRET_NAME =
-  /^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w*_)?(?:SECRETS?|SERVICE_ROLE|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))(?:_\w*)?$/;
+  /^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w+_)?(?:SECRET(?:_KEY|_TOKEN)?|SERVICE_ROLE(?:_KEY)?|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_(?:API_)?KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))$/;
 
 /** Each browser prefix and the framework that inlines it. */
 const PUBLIC_PREFIXES: ReadonlyArray<readonly [string, string]> = [
@@ -205,15 +209,32 @@ export function classifySecretValue(value: string): SecretValueKind | null {
 }
 
 /**
+ * Whether a value LOOKS like a secret when no provider shape says what it is:
+ * long enough, not words (`access_token`, `my-app`), not a bare number or a
+ * URL without a password, and random enough (Shannon entropy ≥ 3 bits per
+ * character). What lets a name-only match be critical.
+ */
+function looksSecret(value: string): boolean {
+  const v = value.trim();
+  if (v.length < 12) return false;
+  if (/^[A-Za-z]+(?:[\s_.:/-]+[A-Za-z]+)*$/.test(v)) return false;
+  if (/^\d+(?:\.\d+)?$/.test(v)) return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v) && !/:\/\/[^\s/@]+:[^\s/@]+@/.test(v)) return false;
+  return shannonEntropy(v) >= 3;
+}
+
+/**
  * The findings of one env file: every browser-exposed variable whose name
- * says secret, or whose value is one. `relPath` is project-relative.
+ * says secret, or whose value is one. `relPath` is project-relative. Critical
+ * only when the VALUE is seen to be a secret; a name alone is a question.
  *
- *   - critical — a real value: a live secret by its shape, or a non-empty,
- *     non-placeholder value of a variable whose name says secret;
+ *   - critical — a live secret by its shape (Stripe, Supabase, a provider
+ *     token, a URL with a password), or a random-looking value of a variable
+ *     whose name says secret: "rotate it now";
  *   - high — a test-mode secret (Stripe `sk_test_…`);
- *   - medium — the name says secret and the value is empty or a placeholder
- *     (a template, or a file the deployment fills in): whatever value it gets
- *     at build time ships to the browser.
+ *   - medium — the name says secret and the value does not look like one
+ *     (`access_token`, `8`), or is empty or a placeholder (a template, or a
+ *     file the deployment fills in): "check what it holds".
  */
 export function checkEnvFile(relPath: string, text: string): Finding[] {
   const fileName = relPath.split('/').pop() ?? relPath;
@@ -224,20 +245,28 @@ export function checkEnvFile(relPath: string, text: string): Finding[] {
     if (exposed === null) continue;
     const named = publicNameSaysSecret(a.name);
     const kind = classifySecretValue(a.value);
-    const empty = isPlaceholderValue(a.value);
     if (kind === null && !named) continue;
+    const empty = isPlaceholderValue(a.value);
+    const seen = kind !== null || (!empty && looksSecret(a.value));
     let severity: Severity;
     if (kind !== null) severity = kind.live ? 'critical' : 'high';
-    else severity = empty ? 'medium' : 'critical';
+    else severity = seen ? 'critical' : 'medium';
     const what = kind?.label ?? 'a secret';
     const how = `${exposed.framework} writes every ${exposed.prefix} variable into the JavaScript the browser downloads`;
     let message: string;
-    if (kind === null && empty) {
+    if (!seen && empty) {
       message =
         `${fileName} declares ${a.name}, whose name says it is a secret, with no value here (${how}). ` +
-        `${template ? 'Developers who copy this template' : 'A deployment that sets it'} will ship the secret to every ` +
-        `visitor: drop the ${exposed.prefix} prefix and read the secret in server code only (an API route, a server ` +
-        'action, an edge function). If a build already had a value for it, rotate that secret at its provider.';
+        `${template ? 'Developers who copy this template' : 'A deployment that sets it'} would ship the secret to every ` +
+        `visitor. Check what it is meant to hold: if a secret, drop the ${exposed.prefix} prefix and read it in server ` +
+        'code only (an API route, a server action, an edge function), and rotate it at its provider if a build ' +
+        'already had a value for it.';
+    } else if (!seen) {
+      message =
+        `${fileName} sets ${a.name}, whose name says it is a secret, to a value that does not look like one (it is ` +
+        `not shown here), and ${how}. Check what it holds: if it is a secret, every build that set it shipped it to ` +
+        `browsers — rotate it at the provider, drop the ${exposed.prefix} prefix and read it in server code only; if ` +
+        'it is not, rename the variable so its name stops saying secret.';
     } else {
       const aside = kind !== null && !named ? ' — whatever its name says' : '';
       message =
@@ -255,7 +284,7 @@ export function checkEnvFile(relPath: string, text: string): Finding[] {
         severity,
         category: 'security',
         subcategory: 'client-trust',
-        title: `${a.name}: ${kind !== null ? what : 'a secret'} behind the browser prefix ${exposed.prefix}`,
+        title: `${a.name}: ${kind !== null ? what : seen ? 'a secret' : 'a name that says secret'} behind the browser prefix ${exposed.prefix}`,
         message,
         file_path: relPath,
         line_start: a.line,
