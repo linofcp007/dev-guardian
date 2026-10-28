@@ -154,7 +154,9 @@ export function parseEnvFile(text: string): EnvAssignment[] {
  * An empty value, a reference something else fills in (`$VAR`, `${VAR}`,
  * `${VAR:-default}`, `{{ VAR }}`) or a placeholder a person replaces
  * (`<password>`, `your-key`, `REPLACE_WITH_…`, `enter_…`, `example`,
- * `changeme`, `xxx…`): nothing this file ships.
+ * `changeme`, `xxx…`): nothing this file ships. `example`, `dummy` and
+ * `placeholder` count as words only — `example-password`, never the
+ * `myexamplepw` someone chose.
  */
 function isPlaceholderValue(value: string): boolean {
   const v = value.trim();
@@ -164,7 +166,8 @@ function isPlaceholderValue(value: string): boolean {
   if (/^<[^>]*>$/.test(v) || /^\[[^\]]*\]$/.test(v)) return true;
   const lower = v.toLowerCase();
   if (/^x{3,}/.test(lower) || /^(?:\*+|\.{3,}|todo|tbd|none|null|undefined|secret|password)$/.test(lower)) return true;
-  return /your[-_ ]|placeholder|replace[-_ ]?(?:me|with)|change[-_]?me|example|dummy|xxxx|insert[-_ ]|paste[-_ ]|(?:^|[^a-z])enter[-_ ]/.test(lower);
+  if (/(?:^|[^a-z0-9])(?:example|dummy|placeholder)(?:$|[^a-z0-9])/.test(lower)) return true;
+  return /your[-_ ]|replace[-_ ]?(?:me|with)|change[-_]?me|xxxx|insert[-_ ]|paste[-_ ]|(?:^|[^a-z])enter[-_ ]/.test(lower);
 }
 
 interface SecretValueKind {

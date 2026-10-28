@@ -185,6 +185,15 @@ webhook. Semgrep's `metavariable-regex` is anchored at the start of the bound te
 regexes begin with `.*`. `--filter=client-webhook-unverified`: 28/28 live, axis 2 27/28 (the function-name guard),
 axis 3 vacuous; 59 clauses in the pack.
 
+Review round 4: the code-only reading stopped at the first `/*` of a line, inside a string too, and skipped a line
+starting with `*/`, so a verified handler fired (`express.raw({ type: '*/*' })`, a `'/webhooks/*'` route, a
+`/* raw body */` before `constructEvent`). Strings and closed `/* … */` are now units the reading skips whole; only a
+line starting with `*` (not `*/`) or with an unclosed `/*` is comment. The ablation harness sees the
+`pattern-not-regex` as one clause, so each part of the expression was undone by hand instead (a closed comment as a
+unit, a string as a unit, the word inside a string, an open `/*` mid-line, a `*/` line, an open `/*` at a line's
+start): each turns `clientTrustPack.test.ts` red; a `(?<=:)//` unit for a URL outside a string turned nothing red and
+was dropped. Re-ablated: 28/28 live, axis 2 27/28, axis 3 vacuous.
+
 The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
 in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
 code nobody wrote as a fixture; the rows they replace did not record a

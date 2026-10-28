@@ -275,6 +275,13 @@ describe('checkEnvFile', () => {
     }
     // A real password that merely contains a word stays one.
     expect(checkEnvFile('.env.local', 'NEXT_PUBLIC_DB_PASSWORD=Center_Field42').map((f) => f.severity)).toEqual(['critical']);
+    // Fix round 4, item 3: `example` inside a word is no placeholder — in a password or a URL's.
+    const url = ['postgres://app', 'myexamplepw@db.internal:5432/app'].join(':');
+    expect(classifySecretValue(url)?.label).toBe('a connection URL with a password');
+    expect(
+      checkEnvFile('.env.local', ['NEXT_PUBLIC_DB_PASSWORD=myexamplepw', `NEXT_PUBLIC_CONN=${url}`].join('\n')).map((f) => `${f.line_start} ${f.severity}`),
+    ).toEqual(['1 critical', '2 critical']);
+    expect(classifySecretValue(['postgres://app', 'example@db.internal:5432/app'].join(':'))).toBeNull();
   });
 
   // Fix round 1, item 2: a name that only PASSES THROUGH a secret word, and a

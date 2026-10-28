@@ -262,7 +262,7 @@ const baseName = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
  *
  *   1. the same text (its lines, trimmed, in order — a hash, no comparison):
  *      a file moved whole is paired wherever it went and whatever its name,
- *      same-name copies first;
+ *      same-name copies first — never a blank file, which is no one's copy;
  *   2. the deleted files with the same base name (a moved directory) whose
  *      text it shares at least half its lines with (git's own rename
  *      threshold), the best;
@@ -286,12 +286,15 @@ export function pairMoves(
     pairs.set(f.path, o.path);
   };
 
-  // 1. The same text, under the same name first, then under any.
+  // 1. The same text, under the same name first, then under any. Never a
+  // blank one: every empty file has that hash, and none is a move of another
+  // (an empty test file deleted stays deleted). Passes 2 and 3 never pair one
+  // either: it shares no line.
   const byHash = new Map<string, typeof old>();
-  for (const o of old) byHash.set(o.lines.hash, [...(byHash.get(o.lines.hash) ?? []), o]);
+  for (const o of old) if (o.lines.total > 0) byHash.set(o.lines.hash, [...(byHash.get(o.lines.hash) ?? []), o]);
   for (const sameName of [true, false]) {
     for (const f of news) {
-      if (pairs.has(f.path)) continue;
+      if (pairs.has(f.path) || f.lines.total === 0) continue;
       const o = (byHash.get(f.lines.hash) ?? []).find((c) => !taken.has(c.path) && (!sameName || c.name === f.name));
       if (o !== undefined) pair(f, o);
     }

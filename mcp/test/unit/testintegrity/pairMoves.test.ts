@@ -52,6 +52,19 @@ describe('pairMoves', () => {
     expect(pairMoves(old, fresh).pairs.size).toBe(1);
   });
 
+  // Fix round 4, item 2: two blank files share a hash, and are not one file moved.
+  it('an empty or blank file is never paired: a deleted empty test file stays deleted', () => {
+    const old = new Map([
+      ['src/old/empty.test.ts', ''],
+      ['src/old/blank.test.ts', '\n  \n\t\n'],
+    ]);
+    const fresh = [
+      { path: 'src/new/empty.test.ts', text: '' },
+      { path: 'src/new/other.test.ts', text: '\r\n\r\n' },
+    ];
+    expect([...pairMoves(old, fresh).pairs]).toEqual([]);
+  });
+
   it('caps the comparisons, and counts every file whose search the cap cut — the one it cut midway too', () => {
     // 300 new files with no counterpart against 300 deletions of other names:
     // 90 000 comparisons uncapped. The budget runs whole searches of 300 for

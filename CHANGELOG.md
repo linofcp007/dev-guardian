@@ -76,9 +76,9 @@ probes made from their own code, and ablated clause by clause (`docs/maintainers
   `test-assertions-removed` and `test-script-always-passes` (`--passWithNoTests`, `|| true`, `|| exit 0`, or `echo`
   in place of the runner in `package.json`). It shows in `review_pr`'s findings and `tools_run`, in a `scan_sast`
   scoped to a diff (`scope.diff`, `scope.since` a commit) and in `scan`. A file moved without `git mv` is read as a
-  rename — an unchanged copy under any name first, then by the lines it shares, within 20 000 comparisons (past them a
-  note says how many files were not compared with every deletion); a clone with no merge base skips the check and
-  says so.
+  rename — an unchanged copy under any name first (never a blank file), then by the lines it shares, within 20 000
+  comparisons (past them a note says how many files were not compared with every deletion); a clone with no merge
+  base skips the check and says so.
 - **`scan --diff-base <ref>`**: read the change since `<ref>` (its merge base with HEAD, to the working tree, untracked
   files included) for weakened tests; a `<ref>` that names no commit is exit 3. The JSON verdict's keys are unchanged:
   the findings come in `new_findings` and `blocking_findings` with `tool: "guardian-test-integrity"`.
@@ -91,9 +91,10 @@ probes made from their own code, and ablated clause by clause (`docs/maintainers
 
 - `client-webhook-unverified` is a heuristic over the handler's own text: a verification done elsewhere that the
   handler does not name (a middleware mounted with `app.use`) fires, and a handler that hands the request to a helper
-  before reading the event is not seen. It tells code from comments line by line: a `//` inside a string before a
-  verification on the same line hides it, and the inner lines of a `/* … */` block that do not start with `*` count as
-  code.
+  before reading the event is not seen. It tells code from comments line by line, strings and closed `/* … */` skipped
+  whole, and leans to silence when unsure: the inner lines of a `/* … */` block that do not start with `*` count as
+  code, a `/*` left open mid-line hides nothing after it, and an unpaired quote (in a regex) reads as a string to the
+  end of the line — a verification word there still silences the rule.
 - A Next.js `pages/api` `req.body` handed to `constructEvent` without `bodyParser: false` is not seen by
   `client-webhook-parsed-body`.
 - The RLS check does not follow `alter default privileges`, a schema-wide `revoke`, views (`security_invoker`) or

@@ -54297,10 +54297,10 @@ function pairMoves(oldTexts, fresh) {
     pairs.set(f.path, o.path);
   };
   const byHash = /* @__PURE__ */ new Map();
-  for (const o of old) byHash.set(o.lines.hash, [...byHash.get(o.lines.hash) ?? [], o]);
+  for (const o of old) if (o.lines.total > 0) byHash.set(o.lines.hash, [...byHash.get(o.lines.hash) ?? [], o]);
   for (const sameName2 of [true, false]) {
     for (const f of news) {
-      if (pairs.has(f.path)) continue;
+      if (pairs.has(f.path) || f.lines.total === 0) continue;
       const o = (byHash.get(f.lines.hash) ?? []).find((c) => !taken.has(c.path) && (!sameName2 || c.name === f.name));
       if (o !== void 0) pair(f, o);
     }
@@ -60560,7 +60560,8 @@ function isPlaceholderValue(value) {
   if (/^<[^>]*>$/.test(v) || /^\[[^\]]*\]$/.test(v)) return true;
   const lower = v.toLowerCase();
   if (/^x{3,}/.test(lower) || /^(?:\*+|\.{3,}|todo|tbd|none|null|undefined|secret|password)$/.test(lower)) return true;
-  return /your[-_ ]|placeholder|replace[-_ ]?(?:me|with)|change[-_]?me|example|dummy|xxxx|insert[-_ ]|paste[-_ ]|(?:^|[^a-z])enter[-_ ]/.test(lower);
+  if (/(?:^|[^a-z0-9])(?:example|dummy|placeholder)(?:$|[^a-z0-9])/.test(lower)) return true;
+  return /your[-_ ]|replace[-_ ]?(?:me|with)|change[-_]?me|xxxx|insert[-_ ]|paste[-_ ]|(?:^|[^a-z])enter[-_ ]/.test(lower);
 }
 function jwtClaims(value) {
   const m = /^eyJ[A-Za-z0-9_-]{2,4000}\.(eyJ[A-Za-z0-9_-]{2,8000})\.[A-Za-z0-9_-]{0,4000}$/.exec(value.trim());

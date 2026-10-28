@@ -5,7 +5,8 @@
  * `events.get` — and a comment that says "verify" or names the signature.
  * Only Stripe's re-fetch, `stripe.events.retrieve(id)` (case-sensitive), and
  * code, never a comment, silence the rule (fix round 3 of the review, item 1
- * and the comments).
+ * and the comments; round 4: a block comment opened at a line's start, and
+ * a quote inside a line comment).
  */
 
 declare const db: { events: { get(id: string): Promise<unknown> } };
@@ -41,7 +42,10 @@ export const PATCH = async (req: Request) => { // BUG: client-webhook-unverified
 app.post('/webhooks/stripe', async (req: { body: any }, res: { end(): void }) => { // BUG: client-webhook-unverified -- verify and signature only in comments
   // TODO: verify (later), with the Stripe signature
   /* the signature check comes in the next sprint */
-  const event = req.body;
+  /* verifyStripe(req) will be mounted
+     on the router */
+  const note = 'unchecked'; // don't verify (later): the quote in a comment opens no string
+  const event = { ...req.body, note };
   if (event.type === 'customer.subscription.updated') await grant(event.data.object);
   res.end();
 });

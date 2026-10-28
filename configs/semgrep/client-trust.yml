@@ -100,10 +100,14 @@
 #     `verify…` (um middleware `verifyStripe` na rota). Um "unverified", um
 #     `verified: true` numa resposta, um `db.events.get(id)` ou um
 #     `env.EVENTS.get(id)` da própria app, e um comentário (`// TODO: verify`,
-#     ` * signature`) não calam. Código e comentário separam-se linha a linha:
-#     um `//` dentro de uma string antes da palavra, na mesma linha, esconde-a
-#     (um `https://` não conta), e as linhas de um bloco `/* ... */` que não
-#     começam por `*` contam como código.
+#     ` * signature`, um bloco aberto no início da linha) não calam. Código e
+#     comentário separam-se linha a linha, com as strings e os `/* ... */`
+#     fechados saltados inteiros: um `'*/*'`, um `'/webhooks/*'` ou um
+#     `/* raw */` antes do verificador não o escondem. Na dúvida a regra
+#     cala-se: as linhas de um bloco `/* ... */` que não começam por `*`
+#     contam como código, um `/*` sem fecho a meio da linha não esconde o
+#     resto dela, e uma aspa sem par (a de um regex) abre uma string até ao
+#     fim da linha.
 #   - Uma verificação feita noutro sítio que o texto do handler não nomeia
 #     (um middleware montado com `app.use` antes da rota) dispara: falso
 #     positivo; nesse caso a correção é uma supressão com a razão. Um
@@ -193,6 +197,21 @@
 # do revisor (`app.use`, `app.on`, `router.POST`, o calendário, a
 # idempotência) disparam; o `app.get` não; o corpus real e o mcp/src
 # continuam com 0 achados.
+#
+# REVISÃO 4 (2026-10-28). A leitura do código parava no primeiro `/*` da
+# linha, mesmo dentro de uma string, e saltava as linhas que começam por
+# `*/`: um `express.raw({ type: '*/*' })`, uma rota `'/webhooks/*'` ou um
+# `/* raw body */` antes do verificador escondiam-no, e um handler
+# verificado disparava (alto: bloqueia o `--fail-on high`). Agora as
+# strings e os `/* ... */` fechados são unidades saltadas inteiras, e só uma
+# linha que começa por `*` (sem ser `*/`) ou por um `/*` sem fecho é
+# comentário. Sete misses novos (misses/webhook-verified-comment-markers.ts)
+# e dois casos nos hits (um bloco aberto no início da linha, uma aspa
+# dentro de um `//`); cada parte da expressão desfeita põe um teste a
+# vermelho. Ablação da regra (`--filter`): 28/28 vivas, eixo 2 27/28, eixo
+# 3 vazio; o corpus real e o mcp/src continuam com 0 achados, e um ficheiro
+# de 0,9 MB de linhas cheias de aspas e barras corre no mesmo tempo que com
+# a expressão da revisão 3.
 #
 # Fixtures em mcp/test/fixtures/client-trust/{hits,misses}/ (hits/ com uma
 # linha `// BUG: <id-da-regra>` por achado, na linha onde ele começa),
@@ -412,12 +431,18 @@ rules:
       # `signature`: ler o cabeçalho da assinatura é já tentar verificar.
       # `.events.retrieve(id)`, com esta caixa (o Stripe): o evento pedido de
       # novo à API do gateway É a verificação — nunca um `db.events.get` nem
-      # um `env.EVENTS.get` da própria app. Só código: a palavra tem de vir
-      # antes de um `//` na sua linha (um `https://` não conta) e a linha não
-      # pode ser o interior de um bloco `/* ... */` (` * ...`); o `\K` põe o
-      # início da correspondência na palavra, dentro do handler mesmo quando
-      # a rota está indentada.
-      - pattern-not-regex: (?m)^(?![ \t]*\*)(?:(?!(?<!:)//|/\*)[^\n])*?\K(?:(?i:constructEvent|createHmac|timingSafeEqual|unmarshal|webhooks?\.unwrap|svix|\bverif\w*\s*\(|\bverify[a-z_]\w*|signature)|\.events\.retrieve\s*\()
+      # um `env.EVENTS.get` da própria app. Só código, lido linha a linha da
+      # esquerda: uma string inteira (aspa simples, dupla ou crase) e um
+      # `/* ... */` fechado na mesma linha são saltados como uma unidade — um
+      # `'*/*'`, um `'/webhooks/*'` ou um `'https://...'` não abrem
+      # comentário —; um `//` fora de uma string acaba o código da linha; uma
+      # linha que começa por `*` (sem ser `*/`) ou por um `/*` que não fecha
+      # nela é comentário. Na dúvida, calar: um `/*` sem fecho a meio da linha
+      # (o de um regex, `/\/*$/`) não esconde nada, e a palavra conta também
+      # dentro de uma string (`'stripe-signature'`) ou depois de uma aspa sem
+      # par. O `\K` põe o início da correspondência na palavra, dentro do
+      # handler mesmo quando a rota está indentada.
+      - pattern-not-regex: (?m)^(?![ \t]*\*(?!/))(?![ \t]*/\*(?![^\n]*\*/))(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\\n]|\\.)*`|/\*(?:(?!\*/)[^\n])*\*/|/\*(?![^\n]*\*/)|/(?![/*])|[^'"`/\n])*?(?:'(?:[^'\\\n]|\\.)*?|"(?:[^"\\\n]|\\.)*?|`(?:[^`\\\n]|\\.)*?)?\K(?:(?i:constructEvent|createHmac|timingSafeEqual|unmarshal|webhooks?\.unwrap|svix|\bverif\w*\s*\(|\bverify[a-z_]\w*|signature)|\.events\.retrieve\s*\()
 
   - id: client-webhook-parsed-body
     metadata:
