@@ -162,6 +162,14 @@ guard working), axis 3 48/48 and vacuous (0 findings on the corpus, noise floor 
 43 by an edit of the pack's header comment; the parsed-body rule's clauses were re-run on their own
 (`--filter=client-webhook-parsed-body`).
 
+Review round 1 of the same release made `client-webhook-unverified` read only an HTTP request handler whose event
+comes from its own request (it fired on dispatchers, reducers and socket handlers) and ended the secret names on a
+secret group. The two rules were re-ablated with `--filter`: the webhook rule 22/22 live after one more redundant pair
+— a route's arrow and its `function (req, res)` are one lambda to Semgrep (MOVES), one branch kept — and three decoys
+(an exported arrow that is no route, `JSON.parse` of text that is not the request's, a field that is not the type),
+axis 2 21/22 (the function-name guard that keeps dispatchers out); the env-name rule 9/9 live, axis 2 8/9. The pack
+holds 53 clauses now.
+
 The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
 in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
 code nobody wrote as a fixture; the rows they replace did not record a

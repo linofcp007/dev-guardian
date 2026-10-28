@@ -159,7 +159,7 @@ dev-guardian ships **182 rules in 15 packs** under [`configs/semgrep/`](../confi
 | --- | --- | --- | --- |
 | `client-public-env-secret` | ERROR | javascript, typescript | 9 |
 | `client-supabase-service-role` | ERROR | javascript, typescript | 8 |
-| `client-webhook-unverified` | ERROR | javascript, typescript | 21 |
+| `client-webhook-unverified` | ERROR | javascript, typescript | 22 |
 | `client-webhook-parsed-body` | WARNING | javascript, typescript | 14 |
 
 ## llm

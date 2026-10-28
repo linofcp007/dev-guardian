@@ -46,3 +46,10 @@ app.post('/hono/lemon', async (c: any) => { // BUG: client-webhook-unverified --
   if (payload.meta.event_name === 'subscription_payment_success') await grant(payload.data);
   return c.text('ok');
 });
+
+export async function PUT(req: Request) { // BUG: client-webhook-unverified -- the raw body read, then JSON.parse of it (the real starters' shape with the check removed)
+  const body = await req.text();
+  const event = JSON.parse(body);
+  if (event.type === 'charge.refunded') await grant(event.data);
+  return new Response('ok');
+}

@@ -117,10 +117,12 @@
 # (d519bf1, com um template Expo): 193 ficheiros lidos, 0 achados das quatro
 # regras. Os dois webhooks do Stripe que eles têm verificam a assinatura
 # (`constructEvent` sobre `await req.text()`): silêncio certo. Sonda de
-# recall no mesmo código: trocar, em cada um, a linha do `constructEvent`
-# por `event = JSON.parse(body)` faz `client-webhook-unverified` disparar
-# nos dois (a função POST inteira). O mcp/src e o cli/ deste repositório
-# (425 ficheiros): 0 achados. O lado TypeScript (os `.env*` e as
+# recall no mesmo código: tirar, em cada um, o `constructEvent` e a leitura
+# do cabeçalho `stripe-signature` (trocando o primeiro por
+# `event = JSON.parse(body)`) faz `client-webhook-unverified` disparar nos
+# dois (a função POST inteira); com o cabeçalho ainda lido a regra cala-se,
+# de propósito (ler a assinatura é já tentar verificar). O mcp/src, o cli/ e
+# os hooks/ deste repositório (430 ficheiros): 0 achados. O lado TypeScript (os `.env*` e as
 # migrações) no mesmo corpus: 5 ficheiros de ambiente (templates) e 6
 # migrações, 0 achados; sem as linhas `enable row level security`, as 6
 # tabelas dos dois starters com migrações próprias saem como
@@ -138,6 +140,24 @@
 # hits trazem ao lado) e o `pattern-not-inside` da rota (sem ele a arrow
 # dentro de `app.post` sai uma segunda vez) —, eixo 3 vazio (0 achados no
 # corpus real, piso de ruído 0).
+#
+# REVISÃO 1 (2026-10-28). A regra dos webhooks disparava em código comum:
+# um despachante `handleStripeEvent(event)` chamado depois do
+# `constructEvent`, um reducer com `case 'invoice.paid'`, um handler de
+# socket. Passou a só ler handlers de pedidos HTTP cujo evento vem do
+# próprio pedido, sem os nomes genéricos (`order_*`, `subscription.*`,
+# `transaction.*`), e as três regras que decidem por um nome ou por uma
+# heurística passaram de crítico a `high` (`guardian_severity`). Os nomes de
+# segredo têm de acabar num grupo que diz segredo (PASSWORD_MIN_LENGTH,
+# AUTH_TOKEN_KEY, SECRET_SANTA_MODE já não disparam). Ablação das duas
+# regras mudadas (`--filter`): `client-webhook-unverified` 22/22 vivas
+# depois de um par MOVES — a arrow e o `function (req, res)` de uma rota
+# são a mesma lambda para o Semgrep, ficou um ramo — e de três fixtures em
+# falta (o `$M` de um `export const`, o `JSON.parse` de um texto que não é
+# o do pedido, um campo que não é o tipo); eixo 2 21/22, a marca é o
+# `metavariable-regex` do nome da função (a guarda que deixa os
+# despachantes de fora); `client-public-env-secret` 9/9 vivas, eixo 2 8/9
+# (a mesma guarda dos nomes). Eixo 3 vazio nas duas; 53 cláusulas no pack.
 #
 # Fixtures em mcp/test/fixtures/client-trust/{hits,misses}/ (hits/ com uma
 # linha `// BUG: <id-da-regra>` por achado, na linha onde ele começa),
@@ -282,10 +302,11 @@ rules:
                   regex: ^(?:POST|PUT|PATCH)$
           - pattern: |
               export default function $M($REQ, $RES) { $...BODY }
+          # A arrow casa também `function (req, res) { ... }` (o Semgrep lê os
+          # dois como a mesma lambda: um ramo para cada lia-se DEAD e o par
+          # MOVES na ablação); hits/webhook-shapes.ts guarda as duas formas.
           - pattern: |
               $APP.$VERB($PATH, ..., ($REQ, ...) => { $...BODY })
-          - pattern: |
-              $APP.$VERB($PATH, ..., function ($REQ, ...) { $...BODY })
       # O evento vem do pedido deste handler.
       - metavariable-pattern:
           metavariable: $...BODY
@@ -295,6 +316,12 @@ rules:
             - pattern: $REQ.req.json()
             - pattern: JSON.parse(<... $REQ.text() ...>)
             - pattern: JSON.parse(<... $REQ.req.text() ...>)
+            # O corpo cru lido para uma variável e interpretado depois.
+            - patterns:
+                - pattern-inside: |
+                    $RAW = await $REQ.text();
+                    ...
+                - pattern: JSON.parse($RAW)
       # E o handler decide pelo seu tipo, um tipo de pagamento de um gateway.
       - metavariable-pattern:
           metavariable: $...BODY
