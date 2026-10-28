@@ -482,7 +482,7 @@ function describeReadRefusal(reason) {
       return "it was not read: this check's read budget was spent before it";
   }
 }
-function ensureDirsInside(root, dir) {
+function ensureDirsInside(root, dir, create = true) {
   const rootAbs = resolve2(root);
   const rootReal = realRoot(root);
   const parts = relative2(rootAbs, resolve2(dir)).split(/[\\/]+/).filter((p) => p.length > 0);
@@ -495,6 +495,7 @@ function ensureDirsInside(root, dir) {
     } catch {
       st = null;
     }
+    if (st === null && !create) return null;
     if (st === null) {
       try {
         mkdirSync(current);
@@ -584,11 +585,8 @@ function writeProjectFile(root, path3, content, options) {
       return { ok: false, reason: "failed", detail: e.message };
     }
   }
-  if (existing !== null) {
-    if (existing.isSymbolicLink()) return { ok: false, reason: "link" };
-    if (!existing.isFile()) return { ok: false, reason: "not-a-regular-file" };
-    if (options.mode === "create") return { ok: false, reason: "exists" };
-  }
+  const refused2 = existing !== null ? existingEntryRefusal(existing, options.mode) : null;
+  if (refused2 !== null) return { ok: false, reason: refused2 };
   let tmp;
   try {
     tmp = writeTempBeside(target, bytes, existing === null ? void 0 : existing.mode & 511);
@@ -614,6 +612,42 @@ function writeProjectFile(root, path3, content, options) {
   } finally {
     removeQuietly(tmp);
   }
+}
+function existingEntryRefusal(existing, mode) {
+  if (existing.isSymbolicLink()) return "link";
+  if (!existing.isFile()) return "not-a-regular-file";
+  if (mode === "create") return "exists";
+  return null;
+}
+function projectWriteRefusal(root, path3, options) {
+  const target = resolve2(root, path3);
+  if (!isWithinDir(root, target) || caseFold(target) === caseFold(resolve2(root))) return { reason: "outside-project" };
+  const parent = dirname(target);
+  const badDir = options.refuseLinkedDirs === true ? linkedDirOnTheWay(root, parent) : ensureDirsInside(root, parent, false);
+  if (badDir !== null) return { reason: "escaping-directory", detail: relative2(resolve2(root), badDir) };
+  let existing;
+  try {
+    existing = lstatSync2(target);
+  } catch (e) {
+    return e.code === "ENOENT" ? null : { reason: "failed", detail: e.message };
+  }
+  const refused2 = existingEntryRefusal(existing, options.mode);
+  return refused2 !== null ? { reason: refused2 } : null;
+}
+function linkedDirOnTheWay(root, dir) {
+  const rootAbs = resolve2(root);
+  let current = rootAbs;
+  for (const part of relative2(rootAbs, resolve2(dir)).split(/[\\/]+/).filter((p) => p.length > 0)) {
+    current = join2(current, part);
+    let st;
+    try {
+      st = lstatSync2(current);
+    } catch {
+      return null;
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) return current;
+  }
+  return null;
 }
 var PROJECT_FILE_MAX_BYTES, PROJECT_LOCKFILE_MAX_BYTES, OPEN_FLAGS2, caseFold, rootCache, ReadBudget;
 var init_projectFs = __esm({
@@ -123990,6 +124024,7 @@ export {
   loadDbModules,
   loadImportSarifModules,
   previewMcpConfig,
+  projectWriteRefusal,
   readProjectText,
   resolveProjectPath,
   resolveVersion,

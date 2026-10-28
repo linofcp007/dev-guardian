@@ -678,9 +678,11 @@ export class ReadBudget {
 /**
  * Makes every missing directory between `root` and `dir`, one level at a
  * time, and checks every existing one resolves inside `root` and is a
- * directory. `null` on success, else the offending path.
+ * directory. `null` on success, else the offending path. With `create`
+ * false nothing is made: the first missing directory ends the check, as
+ * everything below it would be made by the write.
  */
-function ensureDirsInside(root: string, dir: string): string | null {
+function ensureDirsInside(root: string, dir: string, create = true): string | null {
   const rootAbs = resolve(root);
   const rootReal = realRoot(root);
   const parts = relative(rootAbs, resolve(dir)).split(/[\\/]+/).filter((p) => p.length > 0);
@@ -693,6 +695,7 @@ function ensureDirsInside(root: string, dir: string): string | null {
     } catch {
       st = null;
     }
+    if (st === null && !create) return null;
     if (st === null) {
       try {
         mkdirSync(current);
@@ -812,11 +815,8 @@ export function writeProjectFile(
       return { ok: false, reason: 'failed', detail: (e as Error).message };
     }
   }
-  if (existing !== null) {
-    if (existing.isSymbolicLink()) return { ok: false, reason: 'link' };
-    if (!existing.isFile()) return { ok: false, reason: 'not-a-regular-file' };
-    if (options.mode === 'create') return { ok: false, reason: 'exists' };
-  }
+  const refused = existing !== null ? existingEntryRefusal(existing, options.mode) : null;
+  if (refused !== null) return { ok: false, reason: refused };
 
   let tmp: string;
   try {
@@ -846,4 +846,56 @@ export function writeProjectFile(
   } finally {
     removeQuietly(tmp);
   }
+}
+
+/** Why an entry already at the target refuses the write, `lstat`'s answer for it: never followed. */
+function existingEntryRefusal(existing: Stats, mode: ProjectWriteOptions['mode']): ProjectWriteRefusal | null {
+  if (existing.isSymbolicLink()) return 'link';
+  if (!existing.isFile()) return 'not-a-regular-file';
+  if (mode === 'create') return 'exists';
+  return null;
+}
+
+/**
+ * What {@link writeProjectFile} would refuse at `path`, checked without
+ * writing or making anything — for a caller about to do slow work whose one
+ * product is that file: `baseline update` scanned the whole project, then
+ * found its target was a link and wrote nothing. `null`: nothing there the
+ * write would refuse; it can still fail (a full disk, an entry made since).
+ */
+export function projectWriteRefusal(
+  root: string,
+  path: string,
+  options: ProjectWriteOptions,
+): { reason: ProjectWriteRefusal; detail?: string } | null {
+  const target = resolve(root, path);
+  if (!isWithinDir(root, target) || caseFold(target) === caseFold(resolve(root))) return { reason: 'outside-project' };
+  const parent = dirname(target);
+  const badDir = options.refuseLinkedDirs === true ? linkedDirOnTheWay(root, parent) : ensureDirsInside(root, parent, false);
+  if (badDir !== null) return { reason: 'escaping-directory', detail: relative(resolve(root), badDir) };
+  let existing: Stats;
+  try {
+    existing = lstatSync(target);
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT' ? null : { reason: 'failed', detail: (e as Error).message };
+  }
+  const refused = existingEntryRefusal(existing, options.mode);
+  return refused !== null ? { reason: refused } : null;
+}
+
+/** {@link makeProjectDir}'s rule, checked without making anything: the first component that is a link or not a directory. */
+function linkedDirOnTheWay(root: string, dir: string): string | null {
+  const rootAbs = resolve(root);
+  let current = rootAbs;
+  for (const part of relative(rootAbs, resolve(dir)).split(/[\\/]+/).filter((p) => p.length > 0)) {
+    current = join(current, part);
+    let st: Stats;
+    try {
+      st = lstatSync(current);
+    } catch {
+      return null;
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) return current;
+  }
+  return null;
 }

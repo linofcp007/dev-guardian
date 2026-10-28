@@ -46,6 +46,7 @@ export {
   describeWriteRefusal,
   isWithinDir,
   PROJECT_LOCKFILE_MAX_BYTES,
+  projectWriteRefusal,
   readProjectText,
   writeProjectFile,
 } from './platform/projectFs.js';
