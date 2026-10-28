@@ -207,3 +207,16 @@ describe('an env file the pass must not read', () => {
     expect(r?.toolRun.reason).toMatch(/\.env\.local skipped: it is not a regular file/);
   });
 });
+
+// Fix round 2, item 4: past a few notes the reason counts the rest — never drops them unsaid.
+describe('the reason line', () => {
+  it('names the first notes and counts the rest', async () => {
+    const dir = project();
+    for (let i = 0; i < 8; i += 1) write(dir, `apps/a${i}/.env.local`, `X=${'y'.repeat(300 * 1024)}\n`);
+    const r = await runClientTrustChecks(dir);
+    const reason = r?.toolRun.reason ?? '';
+    expect(reason.split('; ').filter((p) => p.includes('skipped: it is larger than the size cap'))).toHaveLength(5);
+    expect(reason).toMatch(/; \+3 more$/);
+    expect(r?.missing).toEqual([]);
+  });
+});

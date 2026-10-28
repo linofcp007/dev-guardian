@@ -223,14 +223,24 @@ function looksSecret(value: string): boolean {
   return shannonEntropy(v) >= 3;
 }
 
+/** A name for a secret a PERSON chose — a password: whatever it holds is the secret, `hunter2hunter2` too. */
+const HUMAN_SECRET_NAME = /_(?:PASSWORD|PASSWD|PASSPHRASE)$/;
+
+/** A value no password is: a boolean or a lone small number (a flag, a length). */
+const NOT_A_PASSWORD = /^(?:true|false|yes|no|on|off|\d{1,3})$/i;
+
+/** Supabase's public roles: a JWT for one of them is the anon (or a user's) key, public by design. */
+const PUBLIC_JWT_ROLES: ReadonlySet<string> = new Set(['anon', 'authenticated']);
+
 /**
  * The findings of one env file: every browser-exposed variable whose name
  * says secret, or whose value is one. `relPath` is project-relative. Critical
  * only when the VALUE is seen to be a secret; a name alone is a question.
  *
  *   - critical — a live secret by its shape (Stripe, Supabase, a provider
- *     token, a URL with a password), or a random-looking value of a variable
- *     whose name says secret: "rotate it now";
+ *     token, a URL with a password), a random-looking value of a variable
+ *     whose name says secret, or any real value of a password variable
+ *     (`…_PASSWORD=Admin@2024`): "rotate it now";
  *   - high — a test-mode secret (Stripe `sk_test_…`);
  *   - medium — the name says secret and the value does not look like one
  *     (`access_token`, `8`), or is empty or a placeholder (a template, or a
@@ -246,8 +256,13 @@ export function checkEnvFile(relPath: string, text: string): Finding[] {
     const named = publicNameSaysSecret(a.name);
     const kind = classifySecretValue(a.value);
     if (kind === null && !named) continue;
+    // The decoded role says what a JWT is: an anon key under a service-role
+    // name ships nothing secret (the name is wrong, not the bundle).
+    const role = kind === null ? jwtRole(a.value) : null;
+    if (role !== null && PUBLIC_JWT_ROLES.has(role)) continue;
     const empty = isPlaceholderValue(a.value);
-    const seen = kind !== null || (!empty && looksSecret(a.value));
+    const humanSecret = HUMAN_SECRET_NAME.test(a.name) && !NOT_A_PASSWORD.test(a.value.trim());
+    const seen = kind !== null || (!empty && (humanSecret || looksSecret(a.value)));
     let severity: Severity;
     if (kind !== null) severity = kind.live ? 'critical' : 'high';
     else severity = seen ? 'critical' : 'medium';

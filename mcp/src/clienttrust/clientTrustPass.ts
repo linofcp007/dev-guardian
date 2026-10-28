@@ -51,6 +51,8 @@ const MAX_MIGRATIONS = 5000;
 /** The walk outside git: how deep, and how many directory entries in all. */
 const WALK_MAX_DEPTH = 6;
 const WALK_MAX_ENTRIES = 200_000;
+/** The most notes a reason names; the rest are counted. */
+const MAX_NOTES = 6;
 
 const MIGRATION_RE = /(?:^|\/)supabase\/migrations\/[^/]+\.sql$/i;
 const SUPABASE_CONFIG_RE = /(?:^|\/)supabase\/config\.toml$/i;
@@ -227,8 +229,11 @@ export async function runClientTrustChecks(
     `${envRead} env file(s)${hiddenRead > 0 ? ` (${hiddenRead} ignored by git, read all the same)` : ''}`,
     `${migrationsRead} Supabase migration(s)`,
   ];
-  if (cut) notes.push(`the walk for env files stopped at its bound (depth ${WALK_MAX_DEPTH}, ${WALK_MAX_ENTRIES} entries)`);
-  const reason = [`read ${parts.join(' and ')}`, ...notes.slice(0, 6)].join('; ');
+  // The walk's cut first — it says files may be unread at all — then the
+  // skipped files; past a few, the count of the rest, never dropped unsaid.
+  if (cut) notes.unshift(`the walk for env files stopped at its bound (depth ${WALK_MAX_DEPTH}, ${WALK_MAX_ENTRIES} entries)`);
+  const shown = notes.length > MAX_NOTES ? [...notes.slice(0, MAX_NOTES - 1), `+${notes.length - MAX_NOTES + 1} more`] : notes;
+  const reason = [`read ${parts.join(' and ')}`, ...shown].join('; ');
   const kept = opts.files === undefined ? findings : findings.filter((f) => f.file_path !== undefined && opts.files?.includes(f.file_path));
   return {
     toolRun: { name: CLIENT_TRUST_TOOL, status: 'ok', reason },

@@ -54074,7 +54074,7 @@ var init_detect = __esm({
     TEST_INTEGRITY_TOOL = "guardian-test-integrity";
     NOT_TESTS = /(?:^|\/)(?:fixtures?|__fixtures__|__snapshots__|testdata|__mocks__|mocks?|snapshots?)\//i;
     JS_CALLEE = String.raw`(?<![\w$.])(?:it|test|describe|context|suite|specify|bench)\b(?:\.\w+)*`;
-    NAMED_DECLARATION = String.raw`\s*\(\s*['"\x60]`;
+    NAMED_DECLARATION = String.raw`\s*\(\s*(?:['"\x60]|[A-Za-z_$][\w$]*\.name\b)`;
     MARKERS = {
       js: [
         { rule: "test-focused", re: new RegExp(String.raw`${JS_CALLEE}\.only\s*[.(\x60]`), what: "a focused test (.only)" },
@@ -54208,7 +54208,11 @@ async function readChangeSet(cwd, base2, target, member) {
     const u = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]);
     if (u.exitCode === 0) for (const path3 of splitNul(u.stdout)) listed2.push({ status: "added", path: path3, untracked: true });
   }
-  if (target.kind === "worktree" && target.untracked) await pairUntrackedMoves(cwd, base2, listed2);
+  const notes = [];
+  if (target.kind === "worktree" && target.untracked) {
+    const cut = await pairUntrackedMoves(cwd, base2, listed2);
+    if (cut !== null) notes.push(cut);
+  }
   const relevant = listed2.filter(
     (l) => (isRelevantPath(l.path) || l.oldPath !== void 0 && isRelevantPath(l.oldPath)) && (member === void 0 || member(l.path) || l.oldPath !== void 0 && member(l.oldPath))
   );
@@ -54237,7 +54241,7 @@ async function readChangeSet(cwd, base2, target, member) {
       after: after2
     });
   }
-  return { changes, skipped: Math.max(0, relevant.length - MAX_FILES) };
+  return { changes, skipped: Math.max(0, relevant.length - MAX_FILES), notes };
 }
 function numbered(text2) {
   return text2.split(/\r?\n/).map((line, i) => ({ line: i + 1, text: line }));
@@ -54263,49 +54267,89 @@ function lineChanges(before, after2) {
   }
   return { added, removed };
 }
-function similarity(a, b) {
-  const count = /* @__PURE__ */ new Map();
-  const linesA = a.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
-  for (const l of linesA) count.set(l, (count.get(l) ?? 0) + 1);
-  let shared = 0;
-  const linesB = b.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
-  for (const l of linesB) {
-    const n = count.get(l) ?? 0;
-    if (n > 0) {
-      shared += 1;
-      count.set(l, n - 1);
-    }
+function lineCounts(text2) {
+  const counts = /* @__PURE__ */ new Map();
+  let total = 0;
+  for (const raw of text2.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (l === "") continue;
+    counts.set(l, (counts.get(l) ?? 0) + 1);
+    total += 1;
   }
-  return shared / Math.max(1, linesA.length, linesB.length);
+  return { counts, total };
+}
+function similarity(a, b) {
+  const [small, large] = a.counts.size <= b.counts.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const [line, n] of small.counts) shared += Math.min(n, large.counts.get(line) ?? 0);
+  return shared / Math.max(1, a.total, b.total);
+}
+function pairMoves(oldTexts, fresh) {
+  const old = [...oldTexts].map(([path3, text2]) => ({ path: path3, name: baseName(path3), lines: lineCounts(text2) }));
+  const byName = /* @__PURE__ */ new Map();
+  for (const o of old) byName.set(o.name, [...byName.get(o.name) ?? [], o]);
+  const taken = /* @__PURE__ */ new Set();
+  const pairs = /* @__PURE__ */ new Map();
+  let budget = MAX_PAIR_COMPARISONS;
+  let capped = 0;
+  for (const f of fresh) {
+    const name = baseName(f.path);
+    const lines = lineCounts(f.text);
+    const scoreOf = (o) => {
+      if (taken.has(o.path)) return null;
+      if (Math.min(o.lines.total, lines.total) * 2 < Math.max(o.lines.total, lines.total)) return null;
+      return similarity(o.lines, lines);
+    };
+    let best = null;
+    for (const o of byName.get(name) ?? []) {
+      const score = scoreOf(o);
+      if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
+      if (best !== null && best.score >= 1) break;
+    }
+    if (best === null) {
+      if (budget <= 0) capped += 1;
+      for (const o of old) {
+        if (budget <= 0) break;
+        if (o.name === name) continue;
+        budget -= 1;
+        const score = scoreOf(o);
+        if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
+        if (best !== null && best.score >= 1) break;
+      }
+    }
+    if (best === null) continue;
+    taken.add(best.path);
+    pairs.set(f.path, best.path);
+  }
+  return { pairs, capped };
 }
 async function pairUntrackedMoves(cwd, base2, listed2) {
   const deleted = listed2.filter((l) => l.status === "deleted" && isRelevantPath(l.path)).slice(0, MAX_FILES);
   const fresh = listed2.filter((l) => l.untracked === true && isRelevantPath(l.path)).slice(0, MAX_FILES);
-  if (deleted.length === 0 || fresh.length === 0) return;
+  if (deleted.length === 0 || fresh.length === 0) return null;
   const oldTexts = /* @__PURE__ */ new Map();
   for (const d of deleted) {
     const text2 = await showAt(cwd, base2, d.path);
     if (text2 !== null) oldTexts.set(d.path, text2);
   }
-  const taken = /* @__PURE__ */ new Set();
+  const freshTexts = [];
   for (const f of fresh) {
     const r = readProjectText(cwd, f.path, MAX_TEXT_BYTES);
-    if (r.status !== "ok") continue;
-    let best = null;
-    for (const [path3, text2] of oldTexts) {
-      if (taken.has(path3)) continue;
-      const score = similarity(text2, r.text);
-      if (score >= 0.5 && (best === null || score > best.score)) best = { path: path3, score };
-    }
-    if (best === null) continue;
-    taken.add(best.path);
+    if (r.status === "ok") freshTexts.push({ path: f.path, text: r.text });
+  }
+  const { pairs, capped } = pairMoves(oldTexts, freshTexts);
+  const taken = new Set(pairs.values());
+  for (const f of fresh) {
+    const from = pairs.get(f.path);
+    if (from === void 0) continue;
     f.status = "renamed";
-    f.oldPath = best.path;
+    f.oldPath = from;
   }
   for (let i = listed2.length - 1; i >= 0; i -= 1) {
     const l = listed2[i];
     if (l !== void 0 && l.status === "deleted" && taken.has(l.path)) listed2.splice(i, 1);
   }
+  return capped > 0 ? `the search for moved test files stopped after ${MAX_PAIR_COMPARISONS} comparisons: ${capped} untracked file(s) were compared with same-name deletions only` : null;
 }
 async function runTestIntegrityCheck(cwd, opts) {
   const fail6 = (reason) => ({
@@ -54336,7 +54380,10 @@ async function runTestIntegrityCheck(cwd, opts) {
   if (read3.changes.length === 0) return null;
   const findings = detectTestWeakening(read3.changes);
   const where = opts.target.kind === "index" ? "the staged changes" : opts.target.kind === "commit" ? opts.target.sha.slice(0, 12) : "the working tree";
-  const notes = read3.skipped > 0 ? [`${read3.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : [];
+  const notes = [
+    ...read3.notes,
+    ...read3.skipped > 0 ? [`${read3.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : []
+  ];
   return {
     toolRun: {
       name: TEST_INTEGRITY_TOOL,
@@ -54347,7 +54394,7 @@ async function runTestIntegrityCheck(cwd, opts) {
     findings
   };
 }
-var MAX_FILES, MAX_TEXT_BYTES;
+var MAX_FILES, MAX_TEXT_BYTES, MAX_PAIR_COMPARISONS, baseName;
 var init_gitChanges = __esm({
   "src/testintegrity/gitChanges.ts"() {
     "use strict";
@@ -54356,6 +54403,8 @@ var init_gitChanges = __esm({
     init_detect();
     MAX_FILES = 500;
     MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    MAX_PAIR_COMPARISONS = 2e4;
+    baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
   }
 });
 
@@ -60553,8 +60602,11 @@ function checkEnvFile(relPath, text2) {
     const named2 = publicNameSaysSecret(a.name);
     const kind = classifySecretValue(a.value);
     if (kind === null && !named2) continue;
+    const role = kind === null ? jwtRole(a.value) : null;
+    if (role !== null && PUBLIC_JWT_ROLES.has(role)) continue;
     const empty = isPlaceholderValue(a.value);
-    const seen = kind !== null || !empty && looksSecret(a.value);
+    const humanSecret = HUMAN_SECRET_NAME.test(a.name) && !NOT_A_PASSWORD.test(a.value.trim());
+    const seen = kind !== null || !empty && (humanSecret || looksSecret(a.value));
     let severity;
     if (kind !== null) severity = kind.live ? "critical" : "high";
     else severity = seen ? "critical" : "medium";
@@ -60587,7 +60639,7 @@ function checkEnvFile(relPath, text2) {
   }
   return findings;
 }
-var CLIENT_TRUST_TOOL, ENV_PUBLIC_SECRET_RULE, PUBLIC_ENV_SECRET_NAME, PUBLIC_PREFIXES, MAX_NAME_LENGTH, MAX_VALUE_LINES, PUBLIC_BY_DESIGN_RULES;
+var CLIENT_TRUST_TOOL, ENV_PUBLIC_SECRET_RULE, PUBLIC_ENV_SECRET_NAME, PUBLIC_PREFIXES, MAX_NAME_LENGTH, MAX_VALUE_LINES, PUBLIC_BY_DESIGN_RULES, HUMAN_SECRET_NAME, NOT_A_PASSWORD, PUBLIC_JWT_ROLES;
 var init_publicEnv = __esm({
   "src/clienttrust/publicEnv.ts"() {
     "use strict";
@@ -60609,6 +60661,9 @@ var init_publicEnv = __esm({
     MAX_NAME_LENGTH = 256;
     MAX_VALUE_LINES = 200;
     PUBLIC_BY_DESIGN_RULES = /* @__PURE__ */ new Set(["google-api-key", "twilio-account-sid"]);
+    HUMAN_SECRET_NAME = /_(?:PASSWORD|PASSWD|PASSPHRASE)$/;
+    NOT_A_PASSWORD = /^(?:true|false|yes|no|on|off|\d{1,3})$/i;
+    PUBLIC_JWT_ROLES = /* @__PURE__ */ new Set(["anon", "authenticated"]);
   }
 });
 
@@ -61080,8 +61135,9 @@ async function runClientTrustChecks(root, opts = {}) {
     `${envRead} env file(s)${hiddenRead > 0 ? ` (${hiddenRead} ignored by git, read all the same)` : ""}`,
     `${migrationsRead} Supabase migration(s)`
   ];
-  if (cut) notes.push(`the walk for env files stopped at its bound (depth ${WALK_MAX_DEPTH}, ${WALK_MAX_ENTRIES} entries)`);
-  const reason = [`read ${parts.join(" and ")}`, ...notes.slice(0, 6)].join("; ");
+  if (cut) notes.unshift(`the walk for env files stopped at its bound (depth ${WALK_MAX_DEPTH}, ${WALK_MAX_ENTRIES} entries)`);
+  const shown = notes.length > MAX_NOTES ? [...notes.slice(0, MAX_NOTES - 1), `+${notes.length - MAX_NOTES + 1} more`] : notes;
+  const reason = [`read ${parts.join(" and ")}`, ...shown].join("; ");
   const kept = opts.files === void 0 ? findings : findings.filter((f) => f.file_path !== void 0 && opts.files?.includes(f.file_path));
   return {
     toolRun: { name: CLIENT_TRUST_TOOL, status: "ok", reason },
@@ -61096,7 +61152,7 @@ async function envFilesState(root) {
 `);
   return h.digest("hex");
 }
-var ENV_FILE_MAX_BYTES, MIGRATION_MAX_BYTES, MAX_ENV_FILES, MAX_MIGRATIONS, WALK_MAX_DEPTH, WALK_MAX_ENTRIES, MIGRATION_RE, SUPABASE_CONFIG_RE, basenameOf, dirOf3, excludedDir;
+var ENV_FILE_MAX_BYTES, MIGRATION_MAX_BYTES, MAX_ENV_FILES, MAX_MIGRATIONS, WALK_MAX_DEPTH, WALK_MAX_ENTRIES, MAX_NOTES, MIGRATION_RE, SUPABASE_CONFIG_RE, basenameOf, dirOf3, excludedDir;
 var init_clientTrustPass = __esm({
   "src/clienttrust/clientTrustPass.ts"() {
     "use strict";
@@ -61113,6 +61169,7 @@ var init_clientTrustPass = __esm({
     MAX_MIGRATIONS = 5e3;
     WALK_MAX_DEPTH = 6;
     WALK_MAX_ENTRIES = 2e5;
+    MAX_NOTES = 6;
     MIGRATION_RE = /(?:^|\/)supabase\/migrations\/[^/]+\.sql$/i;
     SUPABASE_CONFIG_RE = /(?:^|\/)supabase\/config\.toml$/i;
     basenameOf = (rel2) => rel2.slice(rel2.lastIndexOf("/") + 1);

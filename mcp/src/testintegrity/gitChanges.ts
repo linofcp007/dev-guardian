@@ -126,6 +126,8 @@ interface ChangeSetRead {
   changes: ChangedFile[];
   /** Relevant files past {@link MAX_FILES}, not read. */
   skipped: number;
+  /** What the read left out, said in the run's reason. */
+  notes: string[];
 }
 
 /**
@@ -148,7 +150,11 @@ export async function readChangeSet(
     const u = await git(cwd, ['ls-files', '-z', '--others', '--exclude-standard']);
     if (u.exitCode === 0) for (const path of splitNul(u.stdout)) listed.push({ status: 'added', path, untracked: true });
   }
-  if (target.kind === 'worktree' && target.untracked) await pairUntrackedMoves(cwd, base, listed);
+  const notes: string[] = [];
+  if (target.kind === 'worktree' && target.untracked) {
+    const cut = await pairUntrackedMoves(cwd, base, listed);
+    if (cut !== null) notes.push(cut);
+  }
   const relevant = listed.filter(
     (l) => (isRelevantPath(l.path) || (l.oldPath !== undefined && isRelevantPath(l.oldPath))) && (member === undefined || member(l.path) || (l.oldPath !== undefined && member(l.oldPath))),
   );
@@ -179,7 +185,7 @@ export async function readChangeSet(
       after,
     });
   }
-  return { changes, skipped: Math.max(0, relevant.length - MAX_FILES) };
+  return { changes, skipped: Math.max(0, relevant.length - MAX_FILES), notes };
 }
 
 /** Every line of `text`, numbered from 1. */
@@ -214,60 +220,129 @@ function lineChanges(before: string, after: string): { added: DiffLine[]; remove
   return { added, removed };
 }
 
-/** How much of `a`'s lines `b` holds, 0 to 1 (trimmed, blank lines left out). */
-function similarity(a: string, b: string): number {
-  const count = new Map<string, number>();
-  const linesA = a.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
-  for (const l of linesA) count.set(l, (count.get(l) ?? 0) + 1);
-  let shared = 0;
-  const linesB = b.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== '');
-  for (const l of linesB) {
-    const n = count.get(l) ?? 0;
-    if (n > 0) {
-      shared += 1;
-      count.set(l, n - 1);
-    }
+/** The most candidate pairs one change set compares to find its moves; past it, a note. */
+const MAX_PAIR_COMPARISONS = 20_000;
+
+/** A file's non-blank lines, trimmed, counted once: what a pair compares. */
+interface LineCounts {
+  counts: Map<string, number>;
+  total: number;
+}
+
+function lineCounts(text: string): LineCounts {
+  const counts = new Map<string, number>();
+  let total = 0;
+  for (const raw of text.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (l === '') continue;
+    counts.set(l, (counts.get(l) ?? 0) + 1);
+    total += 1;
   }
-  return shared / Math.max(1, linesA.length, linesB.length);
+  return { counts, total };
+}
+
+/** How much the two share, 0 to 1: shared lines over the longer one's. */
+function similarity(a: LineCounts, b: LineCounts): number {
+  const [small, large] = a.counts.size <= b.counts.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const [line, n] of small.counts) shared += Math.min(n, large.counts.get(line) ?? 0);
+  return shared / Math.max(1, a.total, b.total);
+}
+
+const baseName = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
+
+/**
+ * Which untracked file is a move of which deleted one: the deleted file whose
+ * text it shares at least half its lines with (git's own rename threshold),
+ * the best first — candidates with the same base name tried first (a moved
+ * directory), the search stopped at an identical file, a pair skipped
+ * without a look when the line counts alone rule it out. Each text is counted
+ * once. At most {@link MAX_PAIR_COMPARISONS} pairs of different names are
+ * compared in all; past that only same-name candidates are, and `capped`
+ * says how many files were left to them. Pure: texts in, pairs out.
+ */
+export function pairMoves(
+  oldTexts: ReadonlyMap<string, string>,
+  fresh: ReadonlyArray<{ path: string; text: string }>,
+): { pairs: Map<string, string>; capped: number } {
+  const old = [...oldTexts].map(([path, text]) => ({ path, name: baseName(path), lines: lineCounts(text) }));
+  const byName = new Map<string, typeof old>();
+  for (const o of old) byName.set(o.name, [...(byName.get(o.name) ?? []), o]);
+  const taken = new Set<string>();
+  const pairs = new Map<string, string>();
+  let budget = MAX_PAIR_COMPARISONS;
+  let capped = 0;
+  for (const f of fresh) {
+    const name = baseName(f.path);
+    const lines = lineCounts(f.text);
+    /** The pair's score, or null when it cannot reach the threshold (taken, or the line counts rule it out). */
+    const scoreOf = (o: (typeof old)[number]): number | null => {
+      if (taken.has(o.path)) return null;
+      // At most min/max of the lines can be shared: under half, no look.
+      if (Math.min(o.lines.total, lines.total) * 2 < Math.max(o.lines.total, lines.total)) return null;
+      return similarity(o.lines, lines);
+    };
+    let best: { path: string; score: number } | null = null;
+    for (const o of byName.get(name) ?? []) {
+      const score = scoreOf(o);
+      if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
+      if (best !== null && best.score >= 1) break;
+    }
+    if (best === null) {
+      if (budget <= 0) capped += 1;
+      for (const o of old) {
+        if (budget <= 0) break;
+        if (o.name === name) continue;
+        budget -= 1;
+        const score = scoreOf(o);
+        if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
+        if (best !== null && best.score >= 1) break;
+      }
+    }
+    if (best === null) continue;
+    taken.add(best.path);
+    pairs.set(f.path, best.path);
+  }
+  return { pairs, capped };
 }
 
 /**
  * An unstaged move — the file deleted from the index's view, its new path
  * untracked — is in no diff as a rename: it read as a deleted test file plus
  * an untracked file whose every line, an old `it.skip` included, was new.
- * Each untracked relevant file is paired with the deleted relevant file whose
- * base text it shares at least half its lines with (git's own rename
- * threshold), the best first; the pair becomes one `renamed` entry, in place
- * of both. Bounded: at most {@link MAX_FILES} of each side are compared.
+ * Each untracked relevant file paired with a deleted one ({@link pairMoves})
+ * becomes one `renamed` entry, in place of both. At most {@link MAX_FILES}
+ * of each side are read. Returns the note to give when the pairing was cut.
  */
-async function pairUntrackedMoves(cwd: string, base: string, listed: Listed[]): Promise<void> {
+async function pairUntrackedMoves(cwd: string, base: string, listed: Listed[]): Promise<string | null> {
   const deleted = listed.filter((l) => l.status === 'deleted' && isRelevantPath(l.path)).slice(0, MAX_FILES);
   const fresh = listed.filter((l) => l.untracked === true && isRelevantPath(l.path)).slice(0, MAX_FILES);
-  if (deleted.length === 0 || fresh.length === 0) return;
+  if (deleted.length === 0 || fresh.length === 0) return null;
   const oldTexts = new Map<string, string>();
   for (const d of deleted) {
     const text = await showAt(cwd, base, d.path);
     if (text !== null) oldTexts.set(d.path, text);
   }
-  const taken = new Set<string>();
+  const freshTexts: Array<{ path: string; text: string }> = [];
   for (const f of fresh) {
     const r = readProjectText(cwd, f.path, MAX_TEXT_BYTES);
-    if (r.status !== 'ok') continue;
-    let best: { path: string; score: number } | null = null;
-    for (const [path, text] of oldTexts) {
-      if (taken.has(path)) continue;
-      const score = similarity(text, r.text);
-      if (score >= 0.5 && (best === null || score > best.score)) best = { path, score };
-    }
-    if (best === null) continue;
-    taken.add(best.path);
+    if (r.status === 'ok') freshTexts.push({ path: f.path, text: r.text });
+  }
+  const { pairs, capped } = pairMoves(oldTexts, freshTexts);
+  const taken = new Set(pairs.values());
+  for (const f of fresh) {
+    const from = pairs.get(f.path);
+    if (from === undefined) continue;
     f.status = 'renamed';
-    f.oldPath = best.path;
+    f.oldPath = from;
   }
   for (let i = listed.length - 1; i >= 0; i -= 1) {
     const l = listed[i];
     if (l !== undefined && l.status === 'deleted' && taken.has(l.path)) listed.splice(i, 1);
   }
+  return capped > 0
+    ? `the search for moved test files stopped after ${MAX_PAIR_COMPARISONS} comparisons: ${capped} untracked file(s) were compared with same-name deletions only`
+    : null;
 }
 
 interface TestIntegrityResult {
@@ -323,7 +398,10 @@ export async function runTestIntegrityCheck(
   const findings = detectTestWeakening(read.changes);
   const where =
     opts.target.kind === 'index' ? 'the staged changes' : opts.target.kind === 'commit' ? opts.target.sha.slice(0, 12) : 'the working tree';
-  const notes = read.skipped > 0 ? [`${read.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : [];
+  const notes = [
+    ...read.notes,
+    ...(read.skipped > 0 ? [`${read.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : []),
+  ];
   return {
     toolRun: {
       name: TEST_INTEGRITY_TOOL,

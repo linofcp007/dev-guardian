@@ -226,14 +226,38 @@ describe('checkEnvFile', () => {
     ].join('\n');
     expect(checkEnvFile('.env.local', harmless)).toEqual([]);
 
-    const nameOnly = checkEnvFile('.env.local', ['VITE_ADMIN_KEY=dashboard', 'NEXT_PUBLIC_AUTH_TOKEN=access_token', 'NEXT_PUBLIC_DB_PASSWORD=12345678'].join('\n'));
-    expect(nameOnly.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 medium', '2 medium', '3 medium']);
+    const nameOnly = checkEnvFile(
+      '.env.local',
+      ['VITE_ADMIN_KEY=dashboard', 'NEXT_PUBLIC_AUTH_TOKEN=access_token', 'NEXT_PUBLIC_RESEND_API_KEY=resend_key', 'NEXT_PUBLIC_SMTP_PASSWORD=true'].join('\n'),
+    );
+    expect(nameOnly.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 medium', '2 medium', '3 medium', '4 medium']);
     for (const f of nameOnly) {
       expect(f.message).toMatch(/^.*Check what it holds/);
       expect(f.message).not.toMatch(/rotate it at the provider now/);
       expect(f.title).toContain('a name that says secret');
       expect(JSON.stringify(f).includes('dashboard')).toBe(false);
     }
+  });
+
+  // Fix round 2, item 3a: a password is whatever a person typed — no entropy test.
+  it('a password variable with any real value is critical: hunter2hunter2, Admin@2024, 12345678', () => {
+    const pw = ['hunter2', 'hunter2'].join('');
+    const findings = checkEnvFile(
+      '.env.local',
+      [`NEXT_PUBLIC_ADMIN_PASSWORD=${pw}`, 'VITE_DB_PASSWORD=Admin@2024', 'REACT_APP_ROOT_PASSWD=12345678', 'NEXT_PUBLIC_DB_PASSWORD='].join('\n'),
+    );
+    expect(findings.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 critical', '2 critical', '3 critical', '4 medium']);
+    expect(findings[0]?.message).toMatch(/rotate it at the provider now/);
+    for (const f of findings) {
+      for (const v of [pw, 'Admin@2024', '12345678']) expect(JSON.stringify(f).includes(v)).toBe(false);
+    }
+  });
+
+  // Fix round 2, item 3b: the decoded role says what a JWT is.
+  it('an anon JWT under a service-role name ships no secret: no finding; the real service-role JWT is critical', () => {
+    expect(checkEnvFile('.env.local', [`VITE_SUPABASE_SERVICE_ROLE=${ANON}`, `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY=${jwt('authenticated')}`].join('\n'))).toEqual([]);
+    const real = checkEnvFile('.env.local', `VITE_SUPABASE_SERVICE_ROLE=${SERVICE_ROLE}`);
+    expect(real.map((f) => `${f.severity} ${f.title}`)).toEqual(['critical VITE_SUPABASE_SERVICE_ROLE: a Supabase service-role key behind the browser prefix VITE_']);
   });
 
   it('nothing for server-only variables, public-by-design values, comments and non-env text', () => {

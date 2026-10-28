@@ -150,9 +150,21 @@ describe('hard negatives', () => {
     ]);
     expect(rows([f])).toEqual([]);
     // …and the declarations still are, with a template name too.
-    expect(rows([addedLines('src/a.test.ts', ['fit(`renders ${name}`, () => {});', "  xit('later', () => {});"])])).toEqual([
+    // Fix round 2, item 4: a `Class.name` first argument is a test name too.
+    expect(
+      rows([
+        addedLines('src/a.test.ts', [
+          'fit(`renders ${name}`, () => {});',
+          "  xit('later', () => {});",
+          'fdescribe(UserService.name, () => {});',
+          'xdescribe(Foo.name, () => {});',
+        ]),
+      ]),
+    ).toEqual([
       'test-focused src/a.test.ts:1 high',
       'test-skipped src/a.test.ts:2 medium',
+      'test-focused src/a.test.ts:3 high',
+      'test-skipped src/a.test.ts:4 medium',
     ]);
   });
 

@@ -153,10 +153,11 @@ interface Marker {
 const JS_CALLEE = String.raw`(?<![\w$.])(?:it|test|describe|context|suite|specify|bench)\b(?:\.\w+)*`;
 /**
  * Jasmine's `fit` / `fdescribe` and the `x…` skips, as a test declaration: a
- * bare call whose first argument is the test's name, a string or a template.
- * `fitAddon.fit()`, `model.fit(xs, ys)` and `fit(width)` are not.
+ * bare call whose first argument is the test's name: a string, a template, or
+ * a `Something.name` (`fdescribe(UserService.name, …)`). `fitAddon.fit()`,
+ * `model.fit(xs, ys)` and `fit(width)` are not.
  */
-const NAMED_DECLARATION = String.raw`\s*\(\s*['"\x60]`;
+const NAMED_DECLARATION = String.raw`\s*\(\s*(?:['"\x60]|[A-Za-z_$][\w$]*\.name\b)`;
 
 const MARKERS: Readonly<Record<Lang, readonly Marker[]>> = {
   js: [

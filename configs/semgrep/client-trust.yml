@@ -71,12 +71,14 @@
 #
 # client-webhook-unverified
 #   - Só um HANDLER DE UM PEDIDO HTTP: `function POST|PUT|PATCH(req)` ou
-#     `export const POST = (req) => ...` (rotas do Next.js), `export default
-#     function handler(req, res)` (pages/api), e o callback de
-#     `app.post(path, ..., (req, res) => ...)` ou `function (req, res)`
-#     (Express, Fastify, Hono, um router). O evento tem de vir do pedido
-#     desse handler (`req.body`, `req.json()`, `c.req.json()`,
-#     `JSON.parse(... req.text() ...)`) e o handler compara o seu tipo
+#     `export const POST = (req) => ...` (rotas do Next.js), o mesmo com
+#     `{ request }` (SvelteKit), `export default function handler(req, res)`
+#     (pages/api), e o callback de `app.post|put|patch|all(path, ...,
+#     (req, res) => ...)` ou `function (req, res)` (Express, Fastify, Hono, um
+#     router); um `consumer.on('message', ...)` de uma fila não é uma rota. O
+#     evento tem de vir do pedido desse handler (`req.body`, `req.json()`,
+#     `c.req.json()`, `request.json()`, `JSON.parse(... req.text() ...)`, ou o
+#     texto cru lido para uma variável) e o handler compara o seu tipo
 #     (`.type`, `.event_type`, `.eventType`, `.event_name`, ou a variável
 #     `type`) com um tipo de pagamento PRÓPRIO de um gateway, num `switch` ou
 #     numa comparação: Stripe `checkout.session.*`, `payment_intent.*`,
@@ -89,10 +91,11 @@
 #     nenhum é handler de um pedido, nenhum dispara.
 #   - Calado quando o texto do handler tem `constructEvent`, `createHmac`,
 #     `timingSafeEqual`, `unmarshal`, `unwrap`, `svix`, `signature` (ler o
-#     cabeçalho da assinatura) ou uma palavra que comece por `verif` (uma
-#     função própria `verifyWebhook(req)`, um middleware `verifyStripe` na
-#     rota). Por isso um comentário `// TODO: verify` também cala a regra
-#     (falso negativo aceite); um "unverified" não.
+#     cabeçalho da assinatura), `events.retrieve(` / `events.get(` (o evento
+#     pedido de novo à API do gateway, que É a verificação), uma chamada a
+#     uma função que começa por `verif` (`verifyWebhook(req)`) ou um nome
+#     `verify…` (um middleware `verifyStripe` na rota). Um "unverified", um
+#     `verified: true` numa resposta ou um `// TODO: verify` não calam.
 #   - Uma verificação feita noutro sítio que o texto do handler não nomeia
 #     (um middleware montado com `app.use` antes da rota) dispara: falso
 #     positivo; nesse caso a correção é uma supressão com a razão. Um
@@ -300,13 +303,35 @@ rules:
               - metavariable-regex:
                   metavariable: $M
                   regex: ^(?:POST|PUT|PATCH)$
+          # SvelteKit: `export async function POST({ request })`, ou o
+          # `export const POST: RequestHandler = async ({ request }) => ...`.
+          - patterns:
+              - pattern-either:
+                  - pattern: |
+                      function $M({..., $REQ, ...}) { $...BODY }
+                  - pattern: |
+                      function $M({..., $REQ, ...}: $TYPE) { $...BODY }
+                  - pattern: |
+                      export const $M = ({..., $REQ, ...}) => { $...BODY }
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: ^(?:POST|PUT|PATCH)$
+              - metavariable-regex:
+                  metavariable: $REQ
+                  regex: ^request$
           - pattern: |
               export default function $M($REQ, $RES) { $...BODY }
           # A arrow casa também `function (req, res) { ... }` (o Semgrep lê os
           # dois como a mesma lambda: um ramo para cada lia-se DEAD e o par
           # MOVES na ablação); hits/webhook-shapes.ts guarda as duas formas.
-          - pattern: |
-              $APP.$VERB($PATH, ..., ($REQ, ...) => { $...BODY })
+          # Só os métodos de uma rota que recebe um corpo: um
+          # `consumer.on('message', (msg) => ...)` de uma fila não é uma rota.
+          - patterns:
+              - pattern: |
+                  $APP.$VERB($PATH, ..., ($REQ, ...) => { $...BODY })
+              - metavariable-regex:
+                  metavariable: $VERB
+                  regex: ^(?:post|put|patch|all)$
       # O evento vem do pedido deste handler.
       - metavariable-pattern:
           metavariable: $...BODY
@@ -316,6 +341,9 @@ rules:
             - pattern: $REQ.req.json()
             - pattern: JSON.parse(<... $REQ.text() ...>)
             - pattern: JSON.parse(<... $REQ.req.text() ...>)
+            # SvelteKit's `{ request }` with a type annotation: Semgrep does
+            # not unify that binding with its use, so the name is read as is.
+            - pattern: request.json()
             # O corpo cru lido para uma variável e interpretado depois.
             - patterns:
                 - pattern-inside: |
@@ -339,10 +367,14 @@ rules:
             - metavariable-regex:
                 metavariable: $T
                 regex: ^(?:(?:checkout\.session|payment_intent|setup_intent|invoice|customer\.subscription|charge)\.[a-z_.]+|subscription_payment_[a-z_]+|(?:PAYMENT|CHECKOUT|BILLING)\.[A-Z_.]+)$
-      # `\bverif`: um nome que começa por verif (verifyWebhook, verifySignature,
-      # um middleware verifyStripe); nunca o "unverified" de um comentário.
-      # `signature`: ler o cabeçalho da assinatura é já tentar verificar.
-      - pattern-not-regex: (?i)constructEvent|createHmac|timingSafeEqual|unmarshal|webhooks?\.unwrap|svix|\bverif|signature
+      # Verificar: uma chamada a uma função que começa por verif
+      # (`verifyWebhook(req)`) ou um nome `verify…` (o middleware
+      # `verifyStripe` na rota) — nunca o "unverified" de um comentário nem um
+      # `verified: true` de uma resposta. `signature`: ler o cabeçalho da
+      # assinatura é já tentar verificar. `events.retrieve(id)` (Stripe;
+      # `events.get` noutros SDKs): o evento pedido de novo à API do gateway É
+      # a verificação.
+      - pattern-not-regex: (?i)constructEvent|createHmac|timingSafeEqual|unmarshal|webhooks?\.unwrap|svix|\bverif\w*\s*\(|\bverify[a-z_]\w*|signature|\.events\.(?:retrieve|get)\s*\(
 
   - id: client-webhook-parsed-body
     metadata:
