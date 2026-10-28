@@ -82,7 +82,7 @@ describe("files over Semgrep's size limit are a named gap (real Semgrep)", () =>
     const dir = await project({ 'src/big.py': BIG, 'src/small.py': 'eval(y)\n' });
     const r = await sast(dir);
     const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.reason).toMatch(/1 file over Semgrep's 1 MB target limit was not scanned: src\/big\.py \(1\.2 MB\)/);
     expect(r.missing_tools, JSON.stringify(semgrep)).toContain('semgrep');
     expect(r.coverage).toBe('partial');

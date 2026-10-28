@@ -26,6 +26,7 @@ import {
   readProjectBytes,
   readProjectHead,
   readProjectJson,
+  projectWriteRefusal,
   readProjectText,
   realpathInProject,
   writeProjectFile,
@@ -342,5 +343,54 @@ describe('writeProjectFile', () => {
       ok: false,
       reason: 'not-a-regular-file',
     });
+  });
+});
+
+describe('projectWriteRefusal: what writeProjectFile would refuse, checked without writing', () => {
+  // Each case the write's own answer too: the check and the write never disagree.
+  function both(root: string, path: string, mode: 'create' | 'replace'): [unknown, unknown] {
+    const checked = projectWriteRefusal(root, path, { mode });
+    const written = writeProjectFile(root, path, 'x', { mode });
+    return [checked?.reason ?? null, written.ok ? null : written.reason];
+  }
+
+  it('is null where the write succeeds, and makes nothing on the way', () => {
+    const root = makeTempDir('pfs-check-');
+    expect(projectWriteRefusal(root, '.guardian/deep/baseline.json', { mode: 'replace' })).toBeNull();
+    expect(readdirSync(root)).toEqual([]);
+    expect(both(root, '.guardian/deep/baseline.json', 'replace')).toEqual([null, null]);
+  });
+
+  it('names what the write refuses: outside the project, a directory, an existing file under create', () => {
+    const root = makeTempDir('pfs-check-');
+    const other = makeTempDir('pfs-check-other-');
+    mkdirSync(join(root, 'd'));
+    writeFileSync(join(root, 'a'), 'mine');
+    expect(both(root, join(other, 'x'), 'create')).toEqual(['outside-project', 'outside-project']);
+    expect(both(root, 'd', 'replace')).toEqual(['not-a-regular-file', 'not-a-regular-file']);
+    expect(both(root, 'a', 'create')).toEqual(['exists', 'exists']);
+    expect(readFileSync(join(root, 'a'), 'utf8')).toBe('mine');
+  });
+
+  it.skipIf(!CAN_SYMLINK)('names a link at the target, dangling or not, and a directory on the way that links out', () => {
+    const root = makeTempDir('pfs-check-');
+    const other = makeTempDir('pfs-check-other-');
+    symlinkSync(join(other, 'planted.json'), join(root, 'a'), 'file');
+    expect(both(root, 'a', 'replace')).toEqual(['link', 'link']);
+    symlinkSync(other, join(root, 'out'), POSIX ? 'dir' : 'junction');
+    expect(projectWriteRefusal(root, 'out/sub/b.json', { mode: 'create' })).toEqual({ reason: 'escaping-directory', detail: 'out' });
+    expect(both(root, 'out/sub/b.json', 'create')).toEqual(['escaping-directory', 'escaping-directory']);
+    expect(readdirSync(other)).toEqual([]);
+  });
+
+  it.skipIf(!CAN_SYMLINK)('refuseLinkedDirs: a directory link that stays inside is refused too, as the write refuses it', () => {
+    const root = makeTempDir('pfs-check-');
+    mkdirSync(join(root, 'real'));
+    symlinkSync(join(root, 'real'), join(root, '.guardian'), POSIX ? 'dir' : 'junction');
+    expect(projectWriteRefusal(root, '.guardian/.gitignore', { mode: 'replace' })).toBeNull();
+    const checked = projectWriteRefusal(root, '.guardian/.gitignore', { mode: 'replace', refuseLinkedDirs: true });
+    const written = writeProjectFile(root, '.guardian/.gitignore', '*', { mode: 'replace', refuseLinkedDirs: true });
+    expect(checked?.reason).toBe('escaping-directory');
+    expect(written).toMatchObject({ ok: false, reason: 'escaping-directory' });
   });
 });

@@ -168,7 +168,8 @@ describe("--rules-ref: scan_sast reads the ref's copy of the project's configura
       const ref = tree('rulesref-semgrep-ref-', { '.semgrep.yml': NO_EVAL });
       const fromRef = await sast(project, ref);
       const semgrep = fromRef.findings.filter((f) => f.tool === 'semgrep');
-      expect(semgrep.map((f) => f.rule_id)).toEqual(['guardian-test-no-eval']);
+      // Semgrep's own entry on a failure: an empty list alone says nothing.
+      expect(semgrep.map((f) => f.rule_id), JSON.stringify(fromRef.toolsRun)).toEqual(['guardian-test-no-eval']);
       expect((semgrep[0]?.file_path ?? '').replace(/\\/g, '/')).toMatch(/(^|\/)index\.js$/);
 
       // The same rule read from the tree is stored under the same id.

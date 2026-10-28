@@ -94,6 +94,26 @@ function defaultTimeoutMs(): number {
  * not thrown — see {@link semgrepStdout} for the throwing form.
  */
 export function runSemgrep(args: readonly string[], options: SemgrepOptions = {}): SemgrepRun {
+  const first = runSemgrepOnce(args, options);
+  // pysemgrep writes this placeholder where the report goes when the
+  // semgrep-core child that formats it does not answer — under load, a run in
+  // a few hundred (`src/runners/semgrepRun.ts#lostReport`, which the product
+  // retries the same way): the scan ran, its report is lost. Once more.
+  const at = args.indexOf('--output');
+  const report = at >= 0 ? readIfThere(args[at + 1]) : first.stdout;
+  return /^\s*<ERROR: (?:missing output|no SARIF output)>/.test(report) ? runSemgrepOnce(args, options) : first;
+}
+
+function readIfThere(path: string | undefined): string {
+  if (path === undefined) return '';
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function runSemgrepOnce(args: readonly string[], options: SemgrepOptions): SemgrepRun {
   const timeoutMs = options.timeoutMs ?? defaultTimeoutMs();
   const { file, prefix } = semgrepCommand();
   const io = mkdtempSync(join(tmpdir(), 'guardian-semgrep-io-'));

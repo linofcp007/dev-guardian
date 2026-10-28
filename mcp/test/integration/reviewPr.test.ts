@@ -210,7 +210,7 @@ describe('review_pr — what reaches Semgrep', () => {
     expect(args.indexOf('--')).toBeLessThan(args.indexOf('-dash.py'));
     // Non-ASCII paths reach Semgrep's --output in UTF-8, not the locale codec.
     expect(calls[0]?.env?.['PYTHONUTF8']).toBe('1');
-    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(res.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
   });
 
   it('splits more than 24 000 characters of paths into batches, each with its own report, all merged', async () => {
@@ -287,7 +287,7 @@ describe('review_pr — what reaches Semgrep', () => {
     const semgrep = res.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; partially_parsed?: Array<{ file: string }> }
       | undefined;
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.reason).toMatch(/only partly parsed/);
     expect(semgrep?.partially_parsed?.map((p) => p.file)).toEqual(['app.php']);
     expect(res.missing_tools).toContain('semgrep');
@@ -326,7 +326,7 @@ describe('review_pr — what reaches Semgrep', () => {
     const semgrep = res.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; partially_parsed?: Array<{ file: string; type: string }> }
       | undefined;
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): agent\.py/);
     expect(semgrep?.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['agent.py', 'Fixpoint timeout']]);
     expect(res.missing_tools).toContain('semgrep');
@@ -354,7 +354,7 @@ describe('review_pr — what reaches Semgrep', () => {
     const { r } = await review(dir, { base_ref: 'main' });
     const res = r as unknown as ReviewResult;
     expect(n).toBeGreaterThan(1);
-    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(res.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
   });
 
   it('reports Semgrep failed — not "findings" — when a batch exits 7, and coverage is not full', async () => {

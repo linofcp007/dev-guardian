@@ -65,6 +65,8 @@ describe('dev-guardian CLI — hostile repository files', () => {
       expect(readdirSync(outside)).toEqual([]);
       expect(r.status).toBe(3);
       expect(r.stderr).toMatch(/baseline/i);
+      // Refused before the scan, not after the whole pipeline ran for nothing.
+      expect(r.stderr).toMatch(/the file is a link .* — nothing was scanned/);
     },
     TIMEOUT_MS + 5_000,
   );

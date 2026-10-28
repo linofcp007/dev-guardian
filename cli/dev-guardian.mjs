@@ -263,6 +263,7 @@ const ENGINE_EXPORTS = [
   'loadImportSarifModules',
   'previewMcpConfig',
   'PROJECT_LOCKFILE_MAX_BYTES',
+  'projectWriteRefusal',
   'readProjectText',
   'resolveProjectPath',
   'resolveVersion',
@@ -361,6 +362,7 @@ const {
   loadImportSarifModules: loadImportSarifEngine,
   previewMcpConfig,
   PROJECT_LOCKFILE_MAX_BYTES,
+  projectWriteRefusal,
   readProjectText,
   resolveProjectPath,
   resolveVersion,
@@ -2164,6 +2166,17 @@ async function cmdBaseline(argv) {
   );
   const previousFile = parsedBaseline ? parsedBaseline.file : null;
   ensureGuardianDirIgnored(projectPath);
+  // The write's own refusals, before the scan: a baseline.json that is a
+  // link, or a .guardian that links out, refused the write only after the
+  // whole pipeline had run — minutes of scanning, and nothing written. The
+  // write below still checks (an entry made in the meantime).
+  const cannotWrite = projectWriteRefusal(projectPath, BASELINE_RELATIVE_PATH, { mode: 'replace' });
+  if (cannotWrite !== null) {
+    return usageError(
+      `baseline not written to ${BASELINE_RELATIVE_PATH}: ${describeWriteRefusal(cannotWrite.reason, cannotWrite.detail)} ` +
+        '— nothing was scanned',
+    );
+  }
 
   // Same reasoning, and the same required shape, as cmdScan's own — see the
   // comments there (including `armInterruptTeardown`). `baseline update`

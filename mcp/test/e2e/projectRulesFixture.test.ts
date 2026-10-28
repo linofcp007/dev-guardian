@@ -135,7 +135,7 @@ describe('E2E — the rules init_project installs are the rules scan_sast runs',
       const { path, plugin } = await initialisedProject();
       const r = await scan(path, plugin);
 
-      expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+      expect(r.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(r.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
       const ids = r.top_findings.map((f) => f.rule_id ?? '');
       expect(
         ids.some((id) => id.endsWith('wp-unescaped-output')),
@@ -152,7 +152,7 @@ describe('E2E — the rules init_project installs are the rules scan_sast runs',
       const { path, plugin } = await initialisedProject();
       const r = await scan(path, plugin, { local_only: true });
 
-      expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+      expect(r.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(r.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
       expect(r.top_findings.some((f) => (f.rule_id ?? '').endsWith('wp-unescaped-output'))).toBe(true);
     },
     SLOW,

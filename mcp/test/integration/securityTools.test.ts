@@ -251,7 +251,7 @@ describe('scan_sast (Semgrep)', () => {
 
     expect(r.ok).toBe(true);
     const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.reason).toMatch(/docker/i);
     expect(r.missing_tools).not.toContain('semgrep');
     expect(r.coverage).toBe('full');

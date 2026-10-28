@@ -488,7 +488,7 @@ function describeReadRefusal(reason) {
       return "it was not read: this check's read budget was spent before it";
   }
 }
-function ensureDirsInside(root, dir) {
+function ensureDirsInside(root, dir, create = true) {
   const rootAbs = resolve2(root);
   const rootReal = realRoot(root);
   const parts = relative2(rootAbs, resolve2(dir)).split(/[\\/]+/).filter((p) => p.length > 0);
@@ -501,6 +501,7 @@ function ensureDirsInside(root, dir) {
     } catch {
       st = null;
     }
+    if (st === null && !create) return null;
     if (st === null) {
       try {
         mkdirSync(current);
@@ -590,11 +591,8 @@ function writeProjectFile(root, path3, content, options) {
       return { ok: false, reason: "failed", detail: e.message };
     }
   }
-  if (existing !== null) {
-    if (existing.isSymbolicLink()) return { ok: false, reason: "link" };
-    if (!existing.isFile()) return { ok: false, reason: "not-a-regular-file" };
-    if (options.mode === "create") return { ok: false, reason: "exists" };
-  }
+  const refused2 = existing !== null ? existingEntryRefusal(existing, options.mode) : null;
+  if (refused2 !== null) return { ok: false, reason: refused2 };
   let tmp;
   try {
     tmp = writeTempBeside(target, bytes, existing === null ? void 0 : existing.mode & 511);
@@ -620,6 +618,42 @@ function writeProjectFile(root, path3, content, options) {
   } finally {
     removeQuietly(tmp);
   }
+}
+function existingEntryRefusal(existing, mode) {
+  if (existing.isSymbolicLink()) return "link";
+  if (!existing.isFile()) return "not-a-regular-file";
+  if (mode === "create") return "exists";
+  return null;
+}
+function projectWriteRefusal(root, path3, options) {
+  const target = resolve2(root, path3);
+  if (!isWithinDir(root, target) || caseFold(target) === caseFold(resolve2(root))) return { reason: "outside-project" };
+  const parent = dirname(target);
+  const badDir = options.refuseLinkedDirs === true ? linkedDirOnTheWay(root, parent) : ensureDirsInside(root, parent, false);
+  if (badDir !== null) return { reason: "escaping-directory", detail: relative2(resolve2(root), badDir) };
+  let existing;
+  try {
+    existing = lstatSync2(target);
+  } catch (e) {
+    return e.code === "ENOENT" ? null : { reason: "failed", detail: e.message };
+  }
+  const refused2 = existingEntryRefusal(existing, options.mode);
+  return refused2 !== null ? { reason: refused2 } : null;
+}
+function linkedDirOnTheWay(root, dir) {
+  const rootAbs = resolve2(root);
+  let current = rootAbs;
+  for (const part of relative2(rootAbs, resolve2(dir)).split(/[\\/]+/).filter((p) => p.length > 0)) {
+    current = join2(current, part);
+    let st;
+    try {
+      st = lstatSync2(current);
+    } catch {
+      return null;
+    }
+    if (st.isSymbolicLink() || !st.isDirectory()) return current;
+  }
+  return null;
 }
 var PROJECT_FILE_MAX_BYTES, PROJECT_LOCKFILE_MAX_BYTES, OPEN_FLAGS2, caseFold, rootCache, ReadBudget;
 var init_projectFs = __esm({
@@ -57800,6 +57834,10 @@ function metricsEnvProblem(configs, env) {
   if (meant !== "off" || !configs.some((c) => c === "auto" || c === "--config=auto")) return null;
   return `${shown} is set in the environment (metrics off), and Semgrep cannot build its registry rules (--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI's --local-only)`;
 }
+function lostReport(result, out) {
+  const text2 = out !== void 0 ? readReport(out) : result.stdout;
+  return text2 !== null && LOST_REPORT.test(text2);
+}
 function outputOf(args) {
   const at = args.indexOf("--output");
   return at >= 0 ? args[at + 1] : void 0;
@@ -57823,8 +57861,11 @@ function parsed(text2) {
 }
 async function runSemgrep(opts, run2 = runProcess, platform = process.platform) {
   const deadline = Date.now() + effectiveTimeoutMs(opts.timeoutMs);
-  const first = await run2({ ...opts, ...semgrepSpawn(opts.env) });
   const args = opts.args ?? [];
+  let first = await run2({ ...opts, ...semgrepSpawn(opts.env) });
+  if (first.outcome !== "cancelled" && deadline > Date.now() && lostReport(first, outputOf(args))) {
+    first = { ...await run2({ ...opts, timeoutMs: deadline - Date.now(), ...semgrepSpawn(opts.env) }), reportLostOnce: true };
+  }
   const target = args.at(-1);
   if (platform !== "win32" || target === void 0 || first.exitCode === null || first.outcome === "cancelled") return first;
   const out = outputOf(args);
@@ -57961,7 +58002,7 @@ function longDirsNote(result) {
   if (result.longFilesUnread !== void 0) notes.push(result.longFilesUnread);
   return notes.length > 0 ? notes.join("; ") : null;
 }
-var SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV, METRICS_VAR, listOf;
+var SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV, METRICS_VAR, LOST_REPORT, listOf;
 var init_semgrepRun = __esm({
   "src/runners/semgrepRun.ts"() {
     "use strict";
@@ -57976,6 +58017,7 @@ var init_semgrepRun = __esm({
     SEMGREP_COMMAND = "semgrep";
     SEMGREP_NO_VERSION_CHECK_ENV = { SEMGREP_ENABLE_VERSION_CHECK: "0" };
     METRICS_VAR = "SEMGREP_SEND_METRICS";
+    LOST_REPORT = /^\s*<ERROR: (?:missing output|no SARIF output)>/;
     listOf = (v) => Array.isArray(v) ? v : [];
   }
 });
@@ -125421,6 +125463,7 @@ export {
   loadDbModules,
   loadImportSarifModules,
   previewMcpConfig,
+  projectWriteRefusal,
   readProjectText,
   resolveProjectPath,
   resolveVersion,

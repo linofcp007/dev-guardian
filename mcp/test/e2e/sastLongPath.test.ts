@@ -71,7 +71,7 @@ describe('scan_sast: a file at a path too long for Windows is scanned or named, 
     if (!r.ok) throw new Error(JSON.stringify(r.error));
     const out = r as unknown as { scan_id: string; coverage: string; tools_run: ToolRun[]; missing_tools: string[] };
     const semgrep = out.tools_run.find((t) => t.name === 'semgrep');
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
 
     const findings: Finding[] = storage.findings.listByScan(out.scan_id);
     const files = findings.map((f) => (f.file_path ?? '').split(String.fromCharCode(92)).join('/'));
@@ -102,7 +102,7 @@ describe('scan_sast: a file at a path too long for Windows is scanned or named, 
     if (!r.ok) throw new Error(JSON.stringify(r.error));
     const out = r as unknown as { scan_id: string; tools_run: ToolRun[] };
     const semgrep = out.tools_run.find((t) => t.name === 'semgrep');
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.partially_parsed ?? []).toEqual([]);
     expect(storage.findings.listByScan(out.scan_id).map((f) => (f.file_path ?? '').split(String.fromCharCode(92)).join('/'))).toEqual([longRel]);
   });
@@ -138,7 +138,7 @@ describe('scan_sast: a file at a path too long for Windows is scanned or named, 
     if (!r.ok) throw new Error(JSON.stringify(r.error));
     const out = r as unknown as { scan_id: string; tools_run: ToolRun[]; missing_tools: string[] };
     const semgrep = out.tools_run.find((t) => t.name === 'semgrep');
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     const files = storage.findings.listByScan(out.scan_id).map((f) => (f.file_path ?? '').split(String.fromCharCode(92)).join('/'));
     expect(files.some((f) => f.endsWith('short.js'))).toBe(true);
     const found = files.some((f) => f.endsWith(nearRel));
