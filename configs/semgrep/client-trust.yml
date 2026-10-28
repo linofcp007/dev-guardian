@@ -303,22 +303,11 @@ rules:
               - metavariable-regex:
                   metavariable: $M
                   regex: ^(?:POST|PUT|PATCH)$
-          # SvelteKit: `export async function POST({ request })`, ou o
-          # `export const POST: RequestHandler = async ({ request }) => ...`.
-          - patterns:
-              - pattern-either:
-                  - pattern: |
-                      function $M({..., $REQ, ...}) { $...BODY }
-                  - pattern: |
-                      function $M({..., $REQ, ...}: $TYPE) { $...BODY }
-                  - pattern: |
-                      export const $M = ({..., $REQ, ...}) => { $...BODY }
-              - metavariable-regex:
-                  metavariable: $M
-                  regex: ^(?:POST|PUT|PATCH)$
-              - metavariable-regex:
-                  metavariable: $REQ
-                  regex: ^request$
+          # SvelteKit (`export async function POST({ request })`, o
+          # `export const POST: RequestHandler = async ({ request }) => ...`)
+          # cabe nas duas formas acima: o `$REQ` é o `{ request }` desestruturado,
+          # e a leitura do pedido é o `request.json()` abaixo. Um ramo próprio
+          # lia-se DEAD na ablação (hits/webhook-sveltekit.ts).
           - pattern: |
               export default function $M($REQ, $RES) { $...BODY }
           # A arrow casa também `function (req, res) { ... }` (o Semgrep lê os
@@ -341,8 +330,8 @@ rules:
             - pattern: $REQ.req.json()
             - pattern: JSON.parse(<... $REQ.text() ...>)
             - pattern: JSON.parse(<... $REQ.req.text() ...>)
-            # SvelteKit's `{ request }` with a type annotation: Semgrep does
-            # not unify that binding with its use, so the name is read as is.
+            # O `{ request }` do SvelteKit, lido pelo nome: desestruturado (e
+            # com uma anotação de tipo) o Semgrep não liga o parâmetro ao uso.
             - pattern: request.json()
             # O corpo cru lido para uma variável e interpretado depois.
             - patterns:
