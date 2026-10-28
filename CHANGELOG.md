@@ -8,6 +8,12 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`baseline update` refuses a target it cannot write before it scans.** A `.guardian/baseline.json` that is a link,
+  or a `.guardian` that links out of the project, was refused only after the whole scan pipeline had run — minutes on
+  a real project, then exit 3 and nothing written. It now stops at once (exit 3, "… — nothing was scanned").
+
 ## [3.7.1] - 2026-10-28
 
 The two follow-ups 3.7.0 left open.
