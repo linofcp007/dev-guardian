@@ -61,8 +61,9 @@ probes made from their own code, and ablated clause by clause (`docs/maintainers
     holds", for a name alone or a placeholder (`REPLACE_WITH_…`, `{{…}}`, `${VAR:-x}`, `enter_…`, `example`,
     `changeme`). Only the anon key — role `anon`, no subject — is public by design. A template (`.env.example`,
     `.env.sample`, `.env.template`, `.env.dist`) is never critical: no build ships its values, and its finding
-    (medium) is the browser prefix on a secret name. An env file that is a link out of the project, a FIFO or over
-    256 KiB is skipped with a note, never read and never a gap;
+    (medium) is the browser prefix on a secret name. An env file that is a link out of the project, a FIFO (a secrets
+    manager's mount, found beside the env files git lists — git lists none) or over 256 KiB is skipped with a note,
+    never read — a FIFO never even opened — and never a gap;
   - `supabase/migrations/*.sql`, read in order as one database: `supabase-rls-disabled` (critical — a table of an
     exposed schema no migration enables RLS on), `supabase-policy-open-write` and `supabase-policy-anon-write` (high —
     a write policy whose check is `true`, or granted to `anon`), `supabase-policy-no-auth-check` (low). Quoting, casing
@@ -87,6 +88,13 @@ probes made from their own code, and ablated clause by clause (`docs/maintainers
 - **`metadata.guardian_severity`** (`info` … `critical`): a Semgrep rule — the plugin's or the project's — states its
   severity on dev-guardian's scheme, over Semgrep's three levels (ERROR with `category: security` is always critical).
 
+### Fixed
+
+- **The bounded file reader judges a path by its `stat` before opening it** (project files, hook configs): a FIFO, a
+  socket, a device or a directory is refused unopened. It opened them non-blocking and judged the descriptor — no read
+  ever blocked, but on Linux the open itself woke a writer waiting on a FIFO. The descriptor is still judged after the
+  open.
+
 ### Known gaps
 
 - `client-webhook-unverified` is a heuristic over the handler's own text: a verification done elsewhere that the
@@ -98,7 +106,8 @@ probes made from their own code, and ablated clause by clause (`docs/maintainers
 - A Next.js `pages/api` `req.body` handed to `constructEvent` without `bodyParser: false` is not seen by
   `client-webhook-parsed-body`.
 - The RLS check does not follow `alter default privileges`, a schema-wide `revoke`, views (`security_invoker`) or
-  `security definer` functions; a `.env*` file inside a git-ignored folder is not read.
+  `security definer` functions; a `.env*` file inside a git-ignored folder is not read, and a FIFO env file in a
+  directory that holds no other env file is not named (nor opened).
 - A test file moved with `git mv` and edited, in an uncommitted scope, is read through git's own rename detection.
 
 ## [3.7.1] - 2026-10-28

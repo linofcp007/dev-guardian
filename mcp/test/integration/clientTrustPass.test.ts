@@ -10,7 +10,7 @@
  * scan must not find them.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -205,6 +205,45 @@ describe('an env file the pass must not read', () => {
     const r = await runClientTrustChecks(dir);
     expect(r?.missing).toEqual([]);
     expect(r?.toolRun.reason).toMatch(/\.env\.local skipped: it is not a regular file/);
+  });
+
+  // Fix round 5 (the Linux run of 3.8.0): git lists no FIFO, so the one above
+  // was never named — and judging what was OPENED, the read opened it. A
+  // special file is now found beside the env files git lists, and judged by
+  // its stat before any open.
+  it.skipIf(process.platform === 'win32')('a FIFO is never opened: a writer waiting on it stays blocked', async () => {
+    const dir = project();
+    const fifo = join(dir, '.env.local');
+    rmSync(fifo);
+    if (spawnSync('mkfifo', [fifo]).status !== 0) return;
+    // `sh` blocks in open(2) until a reader opens the FIFO; any open — a
+    // non-blocking one closed at once too — lets it write and exit.
+    const writer = spawn('sh', ['-c', 'printf x > "$0"', fifo], { stdio: 'ignore' });
+    try {
+      await new Promise((done) => setTimeout(done, 300));
+      expect(writer.exitCode, 'the writer is waiting before the pass runs').toBeNull();
+      const r = await runClientTrustChecks(dir);
+      expect(r?.toolRun.reason).toMatch(/\.env\.local skipped: it is not a regular file/);
+      await new Promise((done) => setTimeout(done, 300));
+      expect(writer.exitCode, 'the writer ran: something opened the FIFO').toBeNull();
+      expect(writer.signalCode).toBeNull();
+    } finally {
+      writer.kill('SIGKILL');
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('outside git, the walk names a FIFO and a link out of the project too', async () => {
+    const dir = makeTempDir('client-trust-nogit-');
+    write(dir, '.env.example', 'NEXT_PUBLIC_SUPABASE_URL=\n');
+    if (spawnSync('mkfifo', [join(dir, '.env.local')]).status !== 0) return;
+    const outside = makeTempDir('client-trust-outside-');
+    write(outside, 'real.env', `NEXT_PUBLIC_STRIPE_SECRET_KEY=${STRIPE_LIVE}\n`);
+    symlinkSync(join(outside, 'real.env'), join(dir, '.env.production'), 'file');
+    const r = await runClientTrustChecks(dir);
+    expect(r?.missing).toEqual([]);
+    expect(r?.toolRun.reason).toMatch(/\.env\.local skipped: it is not a regular file/);
+    expect(r?.toolRun.reason).toMatch(/\.env\.production skipped: it resolves outside the project/);
+    expect(r?.findings).toEqual([]);
   });
 });
 

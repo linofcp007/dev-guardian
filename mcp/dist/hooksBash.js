@@ -19,7 +19,7 @@ import { homedir as homedir3 } from "node:os";
 import { homedir as homedir2 } from "node:os";
 
 // src/hooks/configFile.ts
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
 

@@ -48,7 +48,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/configFile.ts
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, parse, relative, resolve } from "node:path";
 function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
@@ -100,6 +100,12 @@ function walkLinksUnder(under, path3) {
   return { ok: true };
 }
 function readBoundedBytes(path3, maxBytes, opts = {}) {
+  try {
+    if (!statSync(path3).isFile()) return { status: "refused", reason: "not-a-regular-file" };
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+  }
   let fd;
   try {
     fd = openSync(path3, OPEN_FLAGS);
@@ -1061,7 +1067,7 @@ var init_mcpConfig = __esm({
 });
 
 // src/platform/binaryPath.ts
-import { accessSync, constants as constants3, lstatSync as lstatSync4, statSync } from "node:fs";
+import { accessSync, constants as constants3, lstatSync as lstatSync4, statSync as statSync2 } from "node:fs";
 import { extname, join as join5 } from "node:path";
 function envValue(env, name, platform) {
   if (platform !== "win32") return env[name];
@@ -1086,7 +1092,7 @@ function extensionsFor(name, env) {
 }
 function runnable(file2, platform) {
   try {
-    const st = statSync(file2);
+    const st = statSync2(file2);
     if (!st.isFile()) return false;
     if (platform === "win32") return true;
     accessSync(file2, constants3.X_OK);
@@ -1128,7 +1134,7 @@ function findFileOnPath(name, env = process.env, platform = process.platform) {
   for (const dir of searchDirs(envValue(env, "PATH", platform) ?? "", platform)) {
     const candidate = join5(dir, name);
     try {
-      if (statSync(candidate).isFile()) return candidate;
+      if (statSync2(candidate).isFile()) return candidate;
     } catch {
     }
   }
@@ -1892,7 +1898,7 @@ var init_osDetect = __esm({
 });
 
 // src/platform/projectPath.ts
-import { existsSync as existsSync2, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
+import { existsSync as existsSync2, realpathSync as realpathSync3, statSync as statSync3 } from "node:fs";
 import { homedir } from "node:os";
 import { parse as parse3, resolve as resolve6 } from "node:path";
 function projectPathErrorCode(e) {
@@ -1925,7 +1931,7 @@ function resolveProjectPath(input2) {
   if (!existsSync2(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
-  if (!statSync2(candidate).isDirectory()) {
+  if (!statSync3(candidate).isDirectory()) {
     throw new InvalidProjectPathError("not_a_directory", candidate);
   }
   const canonical2 = canonicalPath(candidate);
@@ -4575,7 +4581,7 @@ var init_version = __esm({
 });
 
 // src/platform/pathSpelling.ts
-import { lstatSync as lstatSync5, statSync as statSync3 } from "node:fs";
+import { lstatSync as lstatSync5, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join9, parse as parse4, resolve as resolve9, sep as sep2 } from "node:path";
 function isNetworkOrDevicePath(path3) {
   return /^[\\/]{2}/.test(path3) || path3.startsWith("\\??\\");
@@ -4586,7 +4592,7 @@ function isUnresolvablePath(path3) {
 function spellingOnlyCanonical(path3) {
   if (!isAbsolute4(path3) || isUnresolvablePath(path3)) return null;
   try {
-    if (!statSync3(path3).isDirectory()) return null;
+    if (!statSync4(path3).isDirectory()) return null;
   } catch {
     return null;
   }
@@ -4609,7 +4615,7 @@ function storedPathTarget(stored, canonicalProject) {
   if (stored === canonicalProject) return "canonical";
   if (!isAbsolute4(stored) || isUnresolvablePath(stored)) return "unresolved";
   try {
-    if (!statSync3(stored).isDirectory()) return "elsewhere";
+    if (!statSync4(stored).isDirectory()) return "elsewhere";
   } catch {
     return "missing";
   }
@@ -4667,7 +4673,7 @@ var init_dbError = __esm({
 });
 
 // src/storage/userData.ts
-import { chmodSync as chmodSync2, lstatSync as lstatSync6, mkdirSync as mkdirSync3, statSync as statSync4 } from "node:fs";
+import { chmodSync as chmodSync2, lstatSync as lstatSync6, mkdirSync as mkdirSync3, statSync as statSync5 } from "node:fs";
 import { join as join11 } from "node:path";
 function notPrivate(path3, why) {
   return new GuardianDbError("data-dir", path3, `'${path3}' ${why}`);
@@ -4699,7 +4705,7 @@ function assertPrivateDir(path3, st) {
 }
 function statOrNull(path3, follow) {
   try {
-    return follow ? statSync4(path3) : lstatSync6(path3);
+    return follow ? statSync5(path3) : lstatSync6(path3);
   } catch (error62) {
     const code = error62.code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
@@ -14403,7 +14409,7 @@ __export(db_exports, {
   userDataDir: () => userDataDir
 });
 import { createHash as createHash4, randomBytes as randomBytes4 } from "node:crypto";
-import { existsSync as existsSync7, mkdirSync as mkdirSync4, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync4, rmSync as rmSync3, statSync as statSync6, writeFileSync as writeFileSync3 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { dirname as dirname8, join as join16, resolve as resolve11 } from "node:path";
 function loadSqlite() {
@@ -14919,7 +14925,7 @@ function ensureDir(dir) {
 }
 function isDirectory(path3) {
   try {
-    return statSync5(path3).isDirectory();
+    return statSync6(path3).isDirectory();
   } catch {
     return false;
   }
@@ -16084,7 +16090,7 @@ var require_cross_spawn = __commonJS({
 });
 
 // src/runners/npmCmdShim.ts
-import { closeSync as closeSync4, fstatSync as fstatSync4, openSync as openSync4, readSync as readSync4, statSync as statSync6 } from "node:fs";
+import { closeSync as closeSync4, fstatSync as fstatSync4, openSync as openSync4, readSync as readSync4, statSync as statSync7 } from "node:fs";
 import { dirname as dirname9, join as join17 } from "node:path";
 function readShim(file2) {
   let fd;
@@ -16102,7 +16108,7 @@ function readShim(file2) {
 }
 function isFile(path3) {
   try {
-    return statSync6(path3).isFile();
+    return statSync7(path3).isFile();
   } catch {
     return false;
   }
@@ -54415,7 +54421,7 @@ var init_gitChanges = __esm({
 });
 
 // src/platform/customRules.ts
-import { statSync as statSync7 } from "node:fs";
+import { statSync as statSync8 } from "node:fs";
 import { isAbsolute as isAbsolute10, join as join35, relative as relative9, sep as sep8 } from "node:path";
 function customRulesMetaKey(projectPath) {
   return `${CUSTOM_RULES_META_KEY}:${projectPath}`;
@@ -54497,7 +54503,7 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
     }
     let isDir;
     try {
-      isDir = statSync7(entry).isDirectory();
+      isDir = statSync8(entry).isDirectory();
     } catch {
       continue;
     }
@@ -54524,7 +54530,7 @@ function legacyRegistrationNote(paths) {
 }
 function pathExists(p) {
   try {
-    statSync7(p);
+    statSync8(p);
     return true;
   } catch {
     return false;
@@ -55661,7 +55667,7 @@ var init_filter = __esm({
 
 // src/treeHash/cacheKey.ts
 import { createHash as createHash11 } from "node:crypto";
-import { readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
+import { readdirSync as readdirSync10, statSync as statSync9 } from "node:fs";
 import { join as join39, relative as relative11, sep as sep9 } from "node:path";
 function sha2563(text2) {
   return createHash11("sha256").update(text2).digest("hex");
@@ -55702,7 +55708,7 @@ function describePack(entry) {
   let isDir = false;
   let isFile3 = false;
   try {
-    const s = statSync8(entry);
+    const s = statSync9(entry);
     isDir = s.isDirectory();
     isFile3 = s.isFile();
   } catch {
@@ -59435,7 +59441,7 @@ var init_detektRun = __esm({
 });
 
 // src/runners/spotbugsRun.ts
-import { readdirSync as readdirSync13, readFileSync as readFileSync9, statSync as statSync9, writeFileSync as writeFileSync13 } from "node:fs";
+import { readdirSync as readdirSync13, readFileSync as readFileSync9, statSync as statSync10, writeFileSync as writeFileSync13 } from "node:fs";
 import { delimiter as delimiter3, join as join50 } from "node:path";
 function hasJvmSource(files) {
   return files.some((f) => JVM_SOURCE.test(f));
@@ -59444,7 +59450,7 @@ function isProjectDir(root, rel2) {
   const real = realpathInProject(root, rel2);
   if (real === null) return false;
   try {
-    return statSync9(real).isDirectory();
+    return statSync10(real).isDirectory();
   } catch {
     return false;
   }
@@ -59522,7 +59528,7 @@ function classStats(projectPath, dirs) {
       if (e.isDirectory()) stack.push(path3);
       else if (e.isFile() && e.name.endsWith(".class")) {
         try {
-          const st = statSync9(path3);
+          const st = statSync10(path3);
           if (stats.newest === null || st.mtimeMs > stats.newest) stats.newest = st.mtimeMs;
           stats.count++;
           stats.bytes += st.size;
@@ -59540,7 +59546,7 @@ function sourcesNewerThan(projectPath, files, roots, since) {
     const real = realpathInProject(projectPath, f);
     if (real === null) continue;
     try {
-      if (statSync9(real).mtimeMs > since + 1e3) newer.push(f);
+      if (statSync10(real).mtimeMs > since + 1e3) newer.push(f);
     } catch {
     }
   }
@@ -61049,9 +61055,21 @@ async function listEnvFiles(root) {
         ignored.add(rel2);
       }
     }
+    for (const rel2 of specialEnvFilesBeside(root, files)) if (keep(rel2)) files.add(rel2);
     return { files: [...files].sort(), ignored, cut: false };
   }
   return walkEnvFiles(root);
+}
+function specialEnvFilesBeside(root, files) {
+  const dirs = /* @__PURE__ */ new Set([""]);
+  for (const rel2 of files) dirs.add(dirOf3(rel2));
+  const out = [];
+  for (const dir of dirs) {
+    for (const e of listProjectDir(root, dir === "" ? "." : dir)) {
+      if (e.kind === "other" && isEnvFileName(e.name)) out.push(dir === "" ? e.name : `${dir}/${e.name}`);
+    }
+  }
+  return out;
 }
 function walkEnvFiles(root) {
   const files = [];
@@ -61073,7 +61091,7 @@ function walkEnvFiles(root) {
         if (SCANNED_WALK_EXCLUDE.has(e.name) || isGuardianOutput(rel2)) continue;
         if (next.depth + 1 > WALK_MAX_DEPTH) cut = true;
         else queue.push({ rel: rel2, depth: next.depth + 1 });
-      } else if (e.kind === "file" && isEnvFileName(e.name) && !isGuardianOutput(rel2)) {
+      } else if (isEnvFileName(e.name) && !isGuardianOutput(rel2)) {
         files.push(rel2);
       }
     }
@@ -73909,7 +73927,7 @@ var init_syft = __esm({
 });
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync15, readFileSync as readFileSync11, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync11, statSync as statSync11 } from "node:fs";
 import { join as join73 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 async function handler2(inp, ctx) {
@@ -73961,7 +73979,7 @@ async function handler2(inp, ctx) {
       }
     };
   }
-  const stat4 = statSync10(outFile);
+  const stat4 = statSync11(outFile);
   const raw = readFileSync11(outFile, "utf8");
   const summary2 = summarize3(raw);
   ctx.storage.scans.insert({
@@ -81442,7 +81460,7 @@ var init_semgrepValidate = __esm({
 });
 
 // src/tools/registerCustomRules.ts
-import { statSync as statSync11 } from "node:fs";
+import { statSync as statSync12 } from "node:fs";
 import { isAbsolute as isAbsolute16, join as join81, resolve as resolve25 } from "node:path";
 async function handler20(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
@@ -81478,7 +81496,7 @@ async function handler20(inp, ctx) {
 }
 function isDirectory2(path3) {
   try {
-    return statSync11(path3).isDirectory();
+    return statSync12(path3).isDirectory();
   } catch {
     return false;
   }
@@ -81531,7 +81549,7 @@ function consider(path3, registered, rejected) {
   }
   let isDir;
   try {
-    isDir = statSync11(path3).isDirectory();
+    isDir = statSync12(path3).isDirectory();
   } catch {
     rejected.push({ path: path3, reason: "does not exist" });
     return;
@@ -81563,7 +81581,7 @@ function collectExplicit(projectPath, paths) {
       }
       const matches3 = expandGlob(projectPath, raw).filter((p) => {
         try {
-          return statSync11(p).isFile();
+          return statSync12(p).isFile();
         } catch {
           return false;
         }
@@ -91860,7 +91878,7 @@ var init_resources = __esm({
 });
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync19, statSync as statSync12 } from "node:fs";
+import { existsSync as existsSync19, statSync as statSync13 } from "node:fs";
 async function handler21(inp, ctx) {
   const explicit = inp.project_path !== void 0 && inp.project_path.length > 0;
   const projectPath = explicit ? toolProjectPath(inp.project_path) : serverProjectPath();
@@ -91871,7 +91889,7 @@ async function handler21(inp, ctx) {
   let dbSizeBytes = null;
   if (dbPath && dbPath !== ":memory:" && existsSync19(dbPath)) {
     try {
-      dbSizeBytes = statSync12(dbPath).size;
+      dbSizeBytes = statSync13(dbPath).size;
     } catch {
     }
   }
@@ -100987,7 +101005,7 @@ import {
   readlinkSync as readlinkSync2,
   realpathSync as realpathSync6,
   rmSync as rmSync19,
-  statSync as statSync13,
+  statSync as statSync14,
   writeFileSync as writeFileSync26
 } from "node:fs";
 import { tmpdir as tmpdir13 } from "node:os";
@@ -101075,7 +101093,7 @@ async function ingestTarget(targetRaw, options = {}) {
   if (!existsSync22(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
-  const st = statSync13(target);
+  const st = statSync14(target);
   if (st.isDirectory()) {
     const collected = collectDir(target, limits.walk);
     return {
@@ -106887,7 +106905,7 @@ var init_pr = __esm({
 });
 
 // src/fixpr/semgrepFix.ts
-import { mkdirSync as mkdirSync15, mkdtempSync as mkdtempSync14, rmSync as rmSync21, statSync as statSync14, writeFileSync as writeFileSync29 } from "node:fs";
+import { mkdirSync as mkdirSync15, mkdtempSync as mkdtempSync14, rmSync as rmSync21, statSync as statSync15, writeFileSync as writeFileSync29 } from "node:fs";
 import { tmpdir as tmpdir14 } from "node:os";
 import { basename as basename13, dirname as dirname30, join as join105 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
@@ -106958,7 +106976,7 @@ function loadLocalRules(configs) {
   for (const config2 of configs) {
     let isDir;
     try {
-      isDir = statSync14(config2).isDirectory();
+      isDir = statSync15(config2).isDirectory();
     } catch {
       continue;
     }

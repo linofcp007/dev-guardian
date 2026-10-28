@@ -85,9 +85,29 @@ export async function listEnvFiles(root: string): Promise<EnvFileListing> {
         ignored.add(rel);
       }
     }
+    for (const rel of specialEnvFilesBeside(root, files)) if (keep(rel)) files.add(rel);
     return { files: [...files].sort(), ignored, cut: false };
   }
   return walkEnvFiles(root);
+}
+
+/**
+ * Git lists no FIFO, socket or device, so an env file that is one (a secrets
+ * manager's mount) is looked for at the root and beside the env files git
+ * lists: listed, the read names it in a note — "not a regular file", judged
+ * by its stat, never opened. One in a directory that holds no other env file
+ * is not seen, and not read either.
+ */
+function specialEnvFilesBeside(root: string, files: ReadonlySet<string>): string[] {
+  const dirs = new Set<string>(['']);
+  for (const rel of files) dirs.add(dirOf(rel));
+  const out: string[] = [];
+  for (const dir of dirs) {
+    for (const e of listProjectDir(root, dir === '' ? '.' : dir)) {
+      if (e.kind === 'other' && isEnvFileName(e.name)) out.push(dir === '' ? e.name : `${dir}/${e.name}`);
+    }
+  }
+  return out;
 }
 
 function walkEnvFiles(root: string): EnvFileListing {
@@ -110,7 +130,8 @@ function walkEnvFiles(root: string): EnvFileListing {
         if (SCANNED_WALK_EXCLUDE.has(e.name) || isGuardianOutput(rel)) continue;
         if (next.depth + 1 > WALK_MAX_DEPTH) cut = true;
         else queue.push({ rel, depth: next.depth + 1 });
-      } else if (e.kind === 'file' && isEnvFileName(e.name) && !isGuardianOutput(rel)) {
+      } else if (isEnvFileName(e.name) && !isGuardianOutput(rel)) {
+        // A link or a special file too: the read names why it is skipped.
         files.push(rel);
       }
     }
