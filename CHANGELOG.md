@@ -13,6 +13,11 @@ version bump.
 - **`baseline update` refuses a target it cannot write before it scans.** A `.guardian/baseline.json` that is a link,
   or a `.guardian` that links out of the project, was refused only after the whole scan pipeline had run — minutes on
   a real project, then exit 3 and nothing written. It now stops at once (exit 3, "… — nothing was scanned").
+- **A Semgrep report its formatter lost is run once more, not a failed scan.** pysemgrep has semgrep-core format
+  the report through a child process; when that child does not answer (it died, or was slow to exit on a loaded
+  machine) Semgrep writes `<ERROR: missing output>` where the report goes, and the pass read as failed. Every Semgrep
+  pass now runs again once, in what is left of its timeout, when its report is exactly that placeholder (SARIF:
+  `<ERROR: no SARIF output>`).
 
 ## [3.7.1] - 2026-10-28
 
