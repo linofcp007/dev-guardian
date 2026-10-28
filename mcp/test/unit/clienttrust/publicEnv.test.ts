@@ -19,7 +19,7 @@ import {
   ENV_PUBLIC_SECRET_RULE,
   isEnvFileName,
   isEnvTemplateName,
-  jwtRole,
+  jwtClaims,
   parseEnvFile,
   PUBLIC_ENV_SECRET_NAME,
   publicNameSaysSecret,
@@ -30,8 +30,10 @@ const REPO_ROOT = resolve(fileURLToPath(new URL('../../../..', import.meta.url))
 const PACK = resolve(REPO_ROOT, 'configs', 'semgrep', 'client-trust.yml');
 
 const b64 = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('base64url');
-const jwt = (role: string): string =>
-  `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ iss: 'supabase', ref: 'qwertyuiopasdfgh', role, iat: 1700000000, exp: 2000000000 })}.${'Zx9Q'.repeat(10)}`;
+const jwt = (role: string, extra: Record<string, unknown> = {}): string =>
+  `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ iss: 'supabase', ref: 'qwertyuiopasdfgh', role, iat: 1700000000, exp: 2000000000, ...extra })}.${'Zx9Q'.repeat(10)}`;
+/** A signed-in user's access token: role authenticated, a subject, an expiry years away. */
+const USER_TOKEN = jwt('authenticated', { sub: '5f0c1e2a-9b8d-4c7e-a6f5-0e1d2c3b4a59', email: 'someone@example.com', exp: 4102444800 });
 const SERVICE_ROLE = jwt('service_role');
 const ANON = jwt('anon');
 const STRIPE_LIVE = ['sk', 'live', 'Zx9Qw3Er5Ty7Ui9OpAs1Df3Gh5Jk7L'].join('_');
@@ -56,6 +58,7 @@ describe('the names', () => {
       'NEXT_PUBLIC_STRIPE_WEBHOOK_SECRET',
       'VITE_GROQ_KEY',
       'NEXT_PUBLIC_REPLICATE_API_TOKEN',
+      'NEXT_PUBLIC_WALLET_PASSPHRASE',
     ]) {
       expect(publicNameSaysSecret(name), name).toBe(true);
     }
@@ -138,7 +141,7 @@ describe('classifySecretValue', () => {
   });
 
   it('public by design is never a secret: the anon JWT, pk_, a Firebase web key, a URL without a password', () => {
-    expect(jwtRole(ANON)).toBe('anon');
+    expect(jwtClaims(ANON)).toEqual({ role: 'anon', subject: false });
     expect(classifySecretValue(ANON)).toBeNull();
     expect(classifySecretValue(STRIPE_PUBLISHABLE)).toBeNull();
     expect(classifySecretValue(`sb_publishable_${'Ab3dEf5gHi7jKl9m'}`)).toBeNull();
@@ -204,13 +207,74 @@ describe('checkEnvFile', () => {
     }
   });
 
-  it('a template: a secret name with a placeholder is medium; a real key in a template keeps its severity', () => {
-    const findings = checkEnvFile(
-      '.env.example',
-      ['NEXT_PUBLIC_STRIPE_SECRET_KEY=sk_live_your-key-here', 'NEXT_PUBLIC_OPENAI_API_KEY=', `VITE_SERVICE_ROLE=${SERVICE_ROLE}`].join('\n'),
-    );
-    expect(findings.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 medium', '2 medium', '3 critical']);
-    expect(findings[0]?.message).toMatch(/Developers who copy this template/);
+  // Fix round 3, item 3: a template's values are a template's — no build ships
+  // them. What a template exposes is the NAME: whoever fills it in puts the
+  // secret behind the browser prefix.
+  it('a template (.env.example, .sample, .template, .dist) is never critical: the finding is the browser prefix on a secret name', () => {
+    const lines = [
+      'NEXT_PUBLIC_STRIPE_SECRET_KEY=sk_live_your-key-here',
+      'NEXT_PUBLIC_OPENAI_API_KEY=',
+      `VITE_SERVICE_ROLE=${SERVICE_ROLE}`,
+      `NEXT_PUBLIC_STRIPE_KEY=${STRIPE_LIVE}`,
+      'NEXT_PUBLIC_DB_PASSWORD=mypassword',
+      'NEXT_PUBLIC_JWT_SECRET=a-real-looking-value-9f8e7d',
+      `NEXT_PUBLIC_STRIPE_TEST=${STRIPE_TEST}`,
+    ].join('\n');
+    for (const file of ['.env.example', '.env.sample', '.env.template', '.env.dist', 'apps/web/.env.local.example']) {
+      const findings = checkEnvFile(file, lines);
+      expect(findings.map((f) => `${f.line_start} ${f.severity}`), file).toEqual(
+        ['1', '2', '3', '4', '5', '6', '7'].map((l) => `${l} medium`),
+      );
+      for (const f of findings) {
+        expect(f.message, f.title).toMatch(/Developers who copy this template/);
+        expect(f.message, f.title).toMatch(/drop the (?:NEXT_PUBLIC_|VITE_) prefix/);
+        expect(f.message, f.title).not.toMatch(/rotate it at the provider now|already reached the browsers/);
+      }
+      expect(findings[3]?.title).toBe('NEXT_PUBLIC_STRIPE_KEY: a name for a Stripe live secret key behind the browser prefix NEXT_PUBLIC_');
+      expect(findings[4]?.title).toBe('NEXT_PUBLIC_DB_PASSWORD: a name that says secret behind the browser prefix NEXT_PUBLIC_');
+    }
+    // The same lines in the app's own env file are what their values are.
+    expect(checkEnvFile('.env.local', lines).map((f) => `${f.line_start} ${f.severity}`)).toEqual([
+      '1 medium',
+      '2 medium',
+      '3 critical',
+      '4 critical',
+      '5 critical',
+      '6 critical',
+      '7 high',
+    ]);
+  });
+
+  // Fix round 3, item 3: a placeholder is no password, in the app's own file too.
+  it('a placeholder is no value: REPLACE_WITH_…, {{…}}, ${VAR:-x}, enter_…, example, changeme, xxx… are a medium "check"', () => {
+    const values = [
+      'REPLACE_WITH_PASSWORD',
+      'REPLACE_ME',
+      '{{DB_PASSWORD}}',
+      '{{ db_password }}',
+      'enter_password',
+      'Enter-Your-Password',
+      '${DB_PASSWORD}',
+      '${DB_PASSWORD:-postgres}',
+      '$DB_PASSWORD',
+      'example',
+      'example-password',
+      'changeme',
+      'changeme123',
+      'xxxxxxxx',
+      'XXX-XXX',
+      '<password>',
+      'your-password',
+      'your_db_password',
+    ];
+    const findings = checkEnvFile('.env.local', values.map((v, i) => `NEXT_PUBLIC_DB${i}_PASSWORD=${v}`).join('\n'));
+    expect(findings.map((f) => `${f.line_start} ${f.severity}`)).toEqual(values.map((_, i) => `${i + 1} medium`));
+    for (const f of findings) {
+      expect(f.message).toMatch(/no real value here/);
+      expect(f.message).not.toMatch(/rotate it at the provider now/);
+    }
+    // A real password that merely contains a word stays one.
+    expect(checkEnvFile('.env.local', 'NEXT_PUBLIC_DB_PASSWORD=Center_Field42').map((f) => f.severity)).toEqual(['critical']);
   });
 
   // Fix round 1, item 2: a name that only PASSES THROUGH a secret word, and a
@@ -240,13 +304,20 @@ describe('checkEnvFile', () => {
   });
 
   // Fix round 2, item 3a: a password is whatever a person typed — no entropy test.
-  it('a password variable with any real value is critical: hunter2hunter2, Admin@2024, 12345678', () => {
+  it('a password variable with any real value is critical: hunter2hunter2, Admin@2024, 12345678, a passphrase', () => {
     const pw = ['hunter2', 'hunter2'].join('');
     const findings = checkEnvFile(
       '.env.local',
-      [`NEXT_PUBLIC_ADMIN_PASSWORD=${pw}`, 'VITE_DB_PASSWORD=Admin@2024', 'REACT_APP_ROOT_PASSWD=12345678', 'NEXT_PUBLIC_DB_PASSWORD='].join('\n'),
+      [
+        `NEXT_PUBLIC_ADMIN_PASSWORD=${pw}`,
+        'VITE_DB_PASSWORD=Admin@2024',
+        'REACT_APP_ROOT_PASSWD=12345678',
+        'NEXT_PUBLIC_DB_PASSWORD=',
+        // Fix round 3, item 2: PASSPHRASE is a secret name too.
+        `NEXT_PUBLIC_WALLET_PASSPHRASE=${pw}`,
+      ].join('\n'),
     );
-    expect(findings.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 critical', '2 critical', '3 critical', '4 medium']);
+    expect(findings.map((f) => `${f.line_start} ${f.severity}`)).toEqual(['1 critical', '2 critical', '3 critical', '4 medium', '5 critical']);
     expect(findings[0]?.message).toMatch(/rotate it at the provider now/);
     for (const f of findings) {
       for (const v of [pw, 'Admin@2024', '12345678']) expect(JSON.stringify(f).includes(v)).toBe(false);
@@ -255,9 +326,39 @@ describe('checkEnvFile', () => {
 
   // Fix round 2, item 3b: the decoded role says what a JWT is.
   it('an anon JWT under a service-role name ships no secret: no finding; the real service-role JWT is critical', () => {
-    expect(checkEnvFile('.env.local', [`VITE_SUPABASE_SERVICE_ROLE=${ANON}`, `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY=${jwt('authenticated')}`].join('\n'))).toEqual([]);
+    expect(checkEnvFile('.env.local', `VITE_SUPABASE_SERVICE_ROLE=${ANON}`)).toEqual([]);
     const real = checkEnvFile('.env.local', `VITE_SUPABASE_SERVICE_ROLE=${SERVICE_ROLE}`);
     expect(real.map((f) => `${f.severity} ${f.title}`)).toEqual(['critical VITE_SUPABASE_SERVICE_ROLE: a Supabase service-role key behind the browser prefix VITE_']);
+  });
+
+  // Fix round 3, item 4: only the anon key — role anon, no subject — is public by design.
+  it("a user's access token (a subject) or an authenticated JWT is critical under any name; only role anon with no subject is public", () => {
+    expect(jwtClaims(USER_TOKEN)).toEqual({ role: 'authenticated', subject: true });
+    expect(classifySecretValue(USER_TOKEN)).toEqual({ label: "a user's access token", live: true });
+    expect(classifySecretValue(jwt('authenticated'))).toEqual({ label: 'a Supabase JWT for the role authenticated', live: true });
+    const findings = checkEnvFile(
+      '.env.local',
+      [
+        `NEXT_PUBLIC_SUPABASE_AUTH_TOKEN=${USER_TOKEN}`,
+        `NEXT_PUBLIC_SUPABASE_ANON_KEY=${USER_TOKEN}`,
+        `VITE_SUPABASE_ANON_KEY=${jwt('anon', { sub: 'c0ffee00-0000-4000-8000-000000000001' })}`,
+        `NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY=${jwt('authenticated')}`,
+        `PUBLIC_SUPABASE_KEY=${jwt('authenticated')}`,
+        `NEXT_PUBLIC_SUPABASE_URL=https://abcd.supabase.co`,
+        `NEXT_PUBLIC_SUPABASE_KEY=${ANON}`,
+      ].join('\n'),
+    );
+    expect(findings.map((f) => `${f.line_start} ${f.severity} ${f.title.split(': ')[1]}`)).toEqual([
+      "1 critical a user's access token behind the browser prefix NEXT_PUBLIC_",
+      "2 critical a user's access token behind the browser prefix NEXT_PUBLIC_",
+      "3 critical a user's access token behind the browser prefix VITE_",
+      '4 critical a Supabase JWT for the role authenticated behind the browser prefix NEXT_PUBLIC_',
+      '5 critical a Supabase JWT for the role authenticated behind the browser prefix PUBLIC_',
+    ]);
+    expect(findings[0]?.message).toMatch(/acts as that user/);
+    for (const f of findings) {
+      for (const part of USER_TOKEN.split('.')) expect(JSON.stringify(f).includes(part), f.title).toBe(false);
+    }
   });
 
   it('nothing for server-only variables, public-by-design values, comments and non-env text', () => {

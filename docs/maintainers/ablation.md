@@ -176,6 +176,15 @@ name. A SvelteKit branch of its own read DEAD — its handlers already match the
 `request.json()` read by name — and was removed. `--filter=client-webhook-unverified`: 24/24 live, axis 2 23/24 (the
 function-name guard), axis 3 vacuous; 55 clauses in the pack.
 
+Review round 3: the re-fetch exclusion is only a case-sensitive `.events.retrieve(` (the case-insensitive
+`events.(retrieve|get)` silenced unverified webhooks that read the app's own `db.events.get`, a KV `env.EVENTS.get` or a
+calendar API), the exclusion reads code only — a word after a `//` on its line, or on a ` * ` line, no longer counts,
+and `\K` starts the match at the word so a verifier on an indented route's first line still silences it — and three
+route shapes were added: Hono's `app.on('POST', …)`, an upper-case `router.POST`, and `app.use` on a path that names a
+webhook. Semgrep's `metavariable-regex` is anchored at the start of the bound text, quote included: the two new
+regexes begin with `.*`. `--filter=client-webhook-unverified`: 28/28 live, axis 2 27/28 (the function-name guard),
+axis 3 vacuous; 59 clauses in the pack.
+
 The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
 in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
 code nobody wrote as a fixture; the rows they replace did not record a

@@ -16,6 +16,7 @@
  * {@link MAX_TEXT_BYTES}; past either the run says what it left out.
  */
 
+import { createHash } from 'node:crypto';
 import { readProjectText } from '../platform/projectFs.js';
 import { git, resolveCommit, splitNul } from '../runners/git.js';
 import type { Finding, ToolRun } from '../types.js';
@@ -220,25 +221,29 @@ function lineChanges(before: string, after: string): { added: DiffLine[]; remove
   return { added, removed };
 }
 
-/** The most candidate pairs one change set compares to find its moves; past it, a note. */
-const MAX_PAIR_COMPARISONS = 20_000;
+/** The most line-by-line comparisons one change set makes to find its moves; past it, a note. */
+export const MAX_PAIR_COMPARISONS = 20_000;
 
 /** A file's non-blank lines, trimmed, counted once: what a pair compares. */
 interface LineCounts {
   counts: Map<string, number>;
   total: number;
+  /** The hash of those lines in order: two files with the same one are the same file, moved. */
+  hash: string;
 }
 
 function lineCounts(text: string): LineCounts {
   const counts = new Map<string, number>();
+  const digest = createHash('sha256');
   let total = 0;
   for (const raw of text.split(/\r?\n/)) {
     const l = raw.trim();
     if (l === '') continue;
     counts.set(l, (counts.get(l) ?? 0) + 1);
+    digest.update(l).update('\n');
     total += 1;
   }
-  return { counts, total };
+  return { counts, total, hash: digest.digest('hex') };
 }
 
 /** How much the two share, 0 to 1: shared lines over the longer one's. */
@@ -252,58 +257,71 @@ function similarity(a: LineCounts, b: LineCounts): number {
 const baseName = (p: string): string => p.slice(p.lastIndexOf('/') + 1);
 
 /**
- * Which untracked file is a move of which deleted one: the deleted file whose
- * text it shares at least half its lines with (git's own rename threshold),
- * the best first — candidates with the same base name tried first (a moved
- * directory), the search stopped at an identical file, a pair skipped
- * without a look when the line counts alone rule it out. Each text is counted
- * once. At most {@link MAX_PAIR_COMPARISONS} pairs of different names are
- * compared in all; past that only same-name candidates are, and `capped`
- * says how many files were left to them. Pure: texts in, pairs out.
+ * Which untracked file is a move of which deleted one, in three passes over
+ * every file:
+ *
+ *   1. the same text (its lines, trimmed, in order — a hash, no comparison):
+ *      a file moved whole is paired wherever it went and whatever its name,
+ *      same-name copies first;
+ *   2. the deleted files with the same base name (a moved directory) whose
+ *      text it shares at least half its lines with (git's own rename
+ *      threshold), the best;
+ *   3. the same over the deleted files of other names.
+ *
+ * Passes 2 and 3 share one budget of {@link MAX_PAIR_COMPARISONS}
+ * comparisons; a pair the line counts alone rule out costs none. `capped`
+ * counts every file whose search the budget cut — midway or before it began.
+ * Each text is counted once. Pure: texts in, pairs out.
  */
 export function pairMoves(
   oldTexts: ReadonlyMap<string, string>,
   fresh: ReadonlyArray<{ path: string; text: string }>,
 ): { pairs: Map<string, string>; capped: number } {
   const old = [...oldTexts].map(([path, text]) => ({ path, name: baseName(path), lines: lineCounts(text) }));
-  const byName = new Map<string, typeof old>();
-  for (const o of old) byName.set(o.name, [...(byName.get(o.name) ?? []), o]);
+  const news = fresh.map((f) => ({ path: f.path, name: baseName(f.path), lines: lineCounts(f.text) }));
   const taken = new Set<string>();
   const pairs = new Map<string, string>();
+  const pair = (f: (typeof news)[number], o: (typeof old)[number]): void => {
+    taken.add(o.path);
+    pairs.set(f.path, o.path);
+  };
+
+  // 1. The same text, under the same name first, then under any.
+  const byHash = new Map<string, typeof old>();
+  for (const o of old) byHash.set(o.lines.hash, [...(byHash.get(o.lines.hash) ?? []), o]);
+  for (const sameName of [true, false]) {
+    for (const f of news) {
+      if (pairs.has(f.path)) continue;
+      const o = (byHash.get(f.lines.hash) ?? []).find((c) => !taken.has(c.path) && (!sameName || c.name === f.name));
+      if (o !== undefined) pair(f, o);
+    }
+  }
+
+  // 2 and 3. By the lines they share, under one budget.
+  const byName = new Map<string, typeof old>();
+  for (const o of old) byName.set(o.name, [...(byName.get(o.name) ?? []), o]);
   let budget = MAX_PAIR_COMPARISONS;
-  let capped = 0;
-  for (const f of fresh) {
-    const name = baseName(f.path);
-    const lines = lineCounts(f.text);
-    /** The pair's score, or null when it cannot reach the threshold (taken, or the line counts rule it out). */
-    const scoreOf = (o: (typeof old)[number]): number | null => {
-      if (taken.has(o.path)) return null;
+  const cut = new Set<string>();
+  const search = (f: (typeof news)[number], candidates: Iterable<(typeof old)[number]>, skipName: string | null): void => {
+    let best: { o: (typeof old)[number]; score: number } | null = null;
+    for (const o of candidates) {
+      if (taken.has(o.path) || o.name === skipName) continue;
       // At most min/max of the lines can be shared: under half, no look.
-      if (Math.min(o.lines.total, lines.total) * 2 < Math.max(o.lines.total, lines.total)) return null;
-      return similarity(o.lines, lines);
-    };
-    let best: { path: string; score: number } | null = null;
-    for (const o of byName.get(name) ?? []) {
-      const score = scoreOf(o);
-      if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
+      if (Math.min(o.lines.total, f.lines.total) * 2 < Math.max(o.lines.total, f.lines.total)) continue;
+      if (budget <= 0) {
+        cut.add(f.path);
+        break;
+      }
+      budget -= 1;
+      const score = similarity(o.lines, f.lines);
+      if (score >= 0.5 && (best === null || score > best.score)) best = { o, score };
       if (best !== null && best.score >= 1) break;
     }
-    if (best === null) {
-      if (budget <= 0) capped += 1;
-      for (const o of old) {
-        if (budget <= 0) break;
-        if (o.name === name) continue;
-        budget -= 1;
-        const score = scoreOf(o);
-        if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
-        if (best !== null && best.score >= 1) break;
-      }
-    }
-    if (best === null) continue;
-    taken.add(best.path);
-    pairs.set(f.path, best.path);
-  }
-  return { pairs, capped };
+    if (best !== null) pair(f, best.o);
+  };
+  for (const f of news) if (!pairs.has(f.path)) search(f, byName.get(f.name) ?? [], null);
+  for (const f of news) if (!pairs.has(f.path)) search(f, old, f.name);
+  return { pairs, capped: cut.size };
 }
 
 /**
@@ -341,7 +359,7 @@ async function pairUntrackedMoves(cwd: string, base: string, listed: Listed[]): 
     if (l !== undefined && l.status === 'deleted' && taken.has(l.path)) listed.splice(i, 1);
   }
   return capped > 0
-    ? `the search for moved test files stopped after ${MAX_PAIR_COMPARISONS} comparisons: ${capped} untracked file(s) were compared with same-name deletions only`
+    ? `the search for moved test files stopped after ${MAX_PAIR_COMPARISONS} comparisons: ${capped} untracked file(s) were not compared with every deleted one (a file moved unchanged is still paired)`
     : null;
 }
 

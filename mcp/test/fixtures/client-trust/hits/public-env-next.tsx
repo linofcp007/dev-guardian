@@ -15,3 +15,4 @@ const { NEXT_PUBLIC_DATABASE_URL } = process.env; // BUG: client-public-env-secr
 export const db = NEXT_PUBLIC_DATABASE_URL;
 
 export const admin = process.env.NEXT_PUBLIC_SUPABASE_SERVICE_ROLE_KEY; // BUG: client-public-env-secret -- service role
+export const wallet = process.env.NEXT_PUBLIC_WALLET_PASSPHRASE; // BUG: client-public-env-secret -- a passphrase, a secret a person chose

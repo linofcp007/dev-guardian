@@ -54129,6 +54129,7 @@ var init_detect = __esm({
 });
 
 // src/testintegrity/gitChanges.ts
+import { createHash as createHash8 } from "node:crypto";
 function diffRange(base2, target) {
   if (target.kind === "index") return ["--cached", base2];
   if (target.kind === "commit") return [base2, target.sha];
@@ -54269,14 +54270,16 @@ function lineChanges(before, after2) {
 }
 function lineCounts(text2) {
   const counts = /* @__PURE__ */ new Map();
+  const digest = createHash8("sha256");
   let total = 0;
   for (const raw of text2.split(/\r?\n/)) {
     const l = raw.trim();
     if (l === "") continue;
     counts.set(l, (counts.get(l) ?? 0) + 1);
+    digest.update(l).update("\n");
     total += 1;
   }
-  return { counts, total };
+  return { counts, total, hash: digest.digest("hex") };
 }
 function similarity(a, b) {
   const [small, large] = a.counts.size <= b.counts.size ? [a, b] : [b, a];
@@ -54286,42 +54289,45 @@ function similarity(a, b) {
 }
 function pairMoves(oldTexts, fresh) {
   const old = [...oldTexts].map(([path3, text2]) => ({ path: path3, name: baseName(path3), lines: lineCounts(text2) }));
-  const byName = /* @__PURE__ */ new Map();
-  for (const o of old) byName.set(o.name, [...byName.get(o.name) ?? [], o]);
+  const news = fresh.map((f) => ({ path: f.path, name: baseName(f.path), lines: lineCounts(f.text) }));
   const taken = /* @__PURE__ */ new Set();
   const pairs = /* @__PURE__ */ new Map();
+  const pair = (f, o) => {
+    taken.add(o.path);
+    pairs.set(f.path, o.path);
+  };
+  const byHash = /* @__PURE__ */ new Map();
+  for (const o of old) byHash.set(o.lines.hash, [...byHash.get(o.lines.hash) ?? [], o]);
+  for (const sameName2 of [true, false]) {
+    for (const f of news) {
+      if (pairs.has(f.path)) continue;
+      const o = (byHash.get(f.lines.hash) ?? []).find((c) => !taken.has(c.path) && (!sameName2 || c.name === f.name));
+      if (o !== void 0) pair(f, o);
+    }
+  }
+  const byName = /* @__PURE__ */ new Map();
+  for (const o of old) byName.set(o.name, [...byName.get(o.name) ?? [], o]);
   let budget = MAX_PAIR_COMPARISONS;
-  let capped = 0;
-  for (const f of fresh) {
-    const name = baseName(f.path);
-    const lines = lineCounts(f.text);
-    const scoreOf = (o) => {
-      if (taken.has(o.path)) return null;
-      if (Math.min(o.lines.total, lines.total) * 2 < Math.max(o.lines.total, lines.total)) return null;
-      return similarity(o.lines, lines);
-    };
+  const cut = /* @__PURE__ */ new Set();
+  const search2 = (f, candidates2, skipName) => {
     let best = null;
-    for (const o of byName.get(name) ?? []) {
-      const score = scoreOf(o);
-      if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
+    for (const o of candidates2) {
+      if (taken.has(o.path) || o.name === skipName) continue;
+      if (Math.min(o.lines.total, f.lines.total) * 2 < Math.max(o.lines.total, f.lines.total)) continue;
+      if (budget <= 0) {
+        cut.add(f.path);
+        break;
+      }
+      budget -= 1;
+      const score = similarity(o.lines, f.lines);
+      if (score >= 0.5 && (best === null || score > best.score)) best = { o, score };
       if (best !== null && best.score >= 1) break;
     }
-    if (best === null) {
-      if (budget <= 0) capped += 1;
-      for (const o of old) {
-        if (budget <= 0) break;
-        if (o.name === name) continue;
-        budget -= 1;
-        const score = scoreOf(o);
-        if (score !== null && score >= 0.5 && (best === null || score > best.score)) best = { path: o.path, score };
-        if (best !== null && best.score >= 1) break;
-      }
-    }
-    if (best === null) continue;
-    taken.add(best.path);
-    pairs.set(f.path, best.path);
-  }
-  return { pairs, capped };
+    if (best !== null) pair(f, best.o);
+  };
+  for (const f of news) if (!pairs.has(f.path)) search2(f, byName.get(f.name) ?? [], null);
+  for (const f of news) if (!pairs.has(f.path)) search2(f, old, f.name);
+  return { pairs, capped: cut.size };
 }
 async function pairUntrackedMoves(cwd, base2, listed2) {
   const deleted = listed2.filter((l) => l.status === "deleted" && isRelevantPath(l.path)).slice(0, MAX_FILES);
@@ -54349,7 +54355,7 @@ async function pairUntrackedMoves(cwd, base2, listed2) {
     const l = listed2[i];
     if (l !== void 0 && l.status === "deleted" && taken.has(l.path)) listed2.splice(i, 1);
   }
-  return capped > 0 ? `the search for moved test files stopped after ${MAX_PAIR_COMPARISONS} comparisons: ${capped} untracked file(s) were compared with same-name deletions only` : null;
+  return capped > 0 ? `the search for moved test files stopped after ${MAX_PAIR_COMPARISONS} comparisons: ${capped} untracked file(s) were not compared with every deleted one (a file moved unchanged is still paired)` : null;
 }
 async function runTestIntegrityCheck(cwd, opts) {
   const fail6 = (reason) => ({
@@ -54818,14 +54824,14 @@ var init_header = __esm({
 });
 
 // src/configdrift/hash.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 function canonicaliseConfig(text2) {
   const withoutBom = text2.charCodeAt(0) === 65279 ? text2.slice(1) : text2;
   const lf = withoutBom.replace(/\r\n?/g, "\n");
   return stripProvenanceHeader(lf).replace(/\n+$/, "");
 }
 function hashConfigText(text2) {
-  return createHash8("sha256").update(canonicaliseConfig(text2), "utf8").digest("hex");
+  return createHash9("sha256").update(canonicaliseConfig(text2), "utf8").digest("hex");
 }
 function hashConfigFile(root, rel2) {
   const r = readProjectText(root, rel2, MAX_CONFIG_FILE_BYTES);
@@ -54881,7 +54887,7 @@ var init_detect2 = __esm({
 });
 
 // src/platform/scope.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 import { lstatSync as lstatSync10, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname14, isAbsolute as isAbsolute11, join as join37, relative as relative10, resolve as resolve15 } from "node:path";
 function suggestScopeForFile(filePath) {
@@ -54954,13 +54960,13 @@ async function resolveScope(projectPath, scope, opts) {
     files: files.length,
     ...excludedByIgnore > 0 ? { files_excluded_by_guardianignore: excludedByIgnore } : {}
   };
-  const content = createHash9("sha256");
+  const content = createHash10("sha256");
   for (const rel2 of [.../* @__PURE__ */ new Set([...files, ...contentFiles])].sort()) {
     content.update(`${rel2}:${await hashProjectFile(projectPath, rel2)}
 `);
   }
   const cacheState = {
-    scope: createHash9("sha256").update(
+    scope: createHash10("sha256").update(
       JSON.stringify({
         files,
         touched: touched === null ? null : [...touched].sort(),
@@ -55654,11 +55660,11 @@ var init_filter = __esm({
 });
 
 // src/treeHash/cacheKey.ts
-import { createHash as createHash10 } from "node:crypto";
+import { createHash as createHash11 } from "node:crypto";
 import { readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
 import { join as join39, relative as relative11, sep as sep9 } from "node:path";
 function sha2563(text2) {
-  return createHash10("sha256").update(text2).digest("hex");
+  return createHash11("sha256").update(text2).digest("hex");
 }
 function stableStringify(value) {
   if (value === null || typeof value !== "object") {
@@ -55777,7 +55783,7 @@ var init_gitState = __esm({
 });
 
 // src/tools/scanHelpers.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { lstatSync as lstatSync11, mkdtempSync as mkdtempSync3, readdirSync as readdirSync11, rmSync as rmSync6, writeFileSync as writeFileSync7 } from "node:fs";
 import { homedir as homedir6, tmpdir as tmpdir4, userInfo } from "node:os";
 import { dirname as dirname15, join as join40 } from "node:path";
@@ -55837,7 +55843,7 @@ function accountToken() {
     user = userInfo().username;
   } catch {
   }
-  return createHash11("sha256").update(`dev-guardian-owner
+  return createHash12("sha256").update(`dev-guardian-owner
 ${user}
 ${homedir6()}`).digest("hex");
 }
@@ -60549,20 +60555,21 @@ function parseEnvFile(text2) {
 function isPlaceholderValue(value) {
   const v = value.trim();
   if (v.length === 0) return true;
-  if (/^\$\{?[A-Za-z_]\w*\}?$/.test(v)) return true;
+  if (/^\$\{?[A-Za-z_]\w*\}?$/.test(v) || /^\$\{[A-Za-z_]\w*:?[-=?+][^}]*\}$/.test(v)) return true;
+  if (/^\{\{[^{}]*\}\}$/.test(v)) return true;
   if (/^<[^>]*>$/.test(v) || /^\[[^\]]*\]$/.test(v)) return true;
   const lower = v.toLowerCase();
-  if (/^(?:x+|\*+|\.{3,}|changeme|change[-_]me|todo|tbd|none|null|undefined|secret|password)$/.test(lower)) return true;
-  return /your[-_ ]|placeholder|replace[-_ ]?me|dummy|xxxx|insert[-_ ]|paste[-_ ]/.test(lower);
+  if (/^x{3,}/.test(lower) || /^(?:\*+|\.{3,}|todo|tbd|none|null|undefined|secret|password)$/.test(lower)) return true;
+  return /your[-_ ]|placeholder|replace[-_ ]?(?:me|with)|change[-_]?me|example|dummy|xxxx|insert[-_ ]|paste[-_ ]|(?:^|[^a-z])enter[-_ ]/.test(lower);
 }
-function jwtRole(value) {
+function jwtClaims(value) {
   const m = /^eyJ[A-Za-z0-9_-]{2,4000}\.(eyJ[A-Za-z0-9_-]{2,8000})\.[A-Za-z0-9_-]{0,4000}$/.exec(value.trim());
   if (m === null) return null;
   try {
     const payload = JSON.parse(Buffer.from(m[1] ?? "", "base64url").toString("utf8"));
-    if (typeof payload !== "object" || payload === null) return null;
-    const role = payload.role;
-    return typeof role === "string" ? role : null;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+    const { role, sub } = payload;
+    return { role: typeof role === "string" ? role : null, subject: typeof sub === "string" && sub.length > 0 };
   } catch {
     return null;
   }
@@ -60574,9 +60581,13 @@ function classifySecretValue(value) {
   if (/^(?:sk|rk)_test_[0-9A-Za-z]{10,}$/.test(v)) return { label: "a Stripe test-mode secret key", live: false };
   if (/^whsec_[0-9A-Za-z+/=]{10,}$/.test(v)) return { label: "a Stripe webhook signing secret", live: true };
   if (/^sb_secret_[0-9A-Za-z_-]{10,}$/.test(v)) return { label: "a Supabase secret key", live: true };
-  const role = jwtRole(v);
-  if (role === "service_role" || role === "supabase_admin") return { label: "a Supabase service-role key", live: true };
-  if (role !== null) return null;
+  const jwt2 = jwtClaims(v);
+  if (jwt2 !== null) {
+    if (jwt2.role === "service_role" || jwt2.role === "supabase_admin") return { label: "a Supabase service-role key", live: true };
+    if (jwt2.subject) return { label: USER_TOKEN_LABEL, live: true };
+    if (jwt2.role === "authenticated") return { label: "a Supabase JWT for the role authenticated", live: true };
+    if (jwt2.role !== null) return null;
+  }
   const url2 = /^[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]+:([^\s/@]{3,})@/i.exec(v);
   if (url2 !== null && !isPlaceholderValue(url2[1] ?? "")) return { label: "a connection URL with a password", live: true };
   if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(v)) return { label: "a private key", live: true };
@@ -60602,24 +60613,32 @@ function checkEnvFile(relPath, text2) {
     const named2 = publicNameSaysSecret(a.name);
     const kind = classifySecretValue(a.value);
     if (kind === null && !named2) continue;
-    const role = kind === null ? jwtRole(a.value) : null;
-    if (role !== null && PUBLIC_JWT_ROLES.has(role)) continue;
-    const empty = isPlaceholderValue(a.value);
-    const humanSecret = HUMAN_SECRET_NAME.test(a.name) && !NOT_A_PASSWORD.test(a.value.trim());
-    const seen = kind !== null || !empty && (humanSecret || looksSecret(a.value));
-    let severity;
-    if (kind !== null) severity = kind.live ? "critical" : "high";
-    else severity = seen ? "critical" : "medium";
-    const what = kind?.label ?? "a secret";
+    if (kind === null && jwtClaims(a.value)?.role === PUBLIC_JWT_ROLE) continue;
     const how = `${exposed.framework} writes every ${exposed.prefix} variable into the JavaScript the browser downloads`;
+    let severity;
+    let summary2;
     let message3;
-    if (!seen && empty) {
-      message3 = `${fileName} declares ${a.name}, whose name says it is a secret, with no value here (${how}). ${template ? "Developers who copy this template" : "A deployment that sets it"} would ship the secret to every visitor. Check what it is meant to hold: if a secret, drop the ${exposed.prefix} prefix and read it in server code only (an API route, a server action, an edge function), and rotate it at its provider if a build already had a value for it.`;
-    } else if (!seen) {
-      message3 = `${fileName} sets ${a.name}, whose name says it is a secret, to a value that does not look like one (it is not shown here), and ${how}. Check what it holds: if it is a secret, every build that set it shipped it to browsers \u2014 rotate it at the provider, drop the ${exposed.prefix} prefix and read it in server code only; if it is not, rename the variable so its name stops saying secret.`;
+    if (template) {
+      severity = "medium";
+      summary2 = named2 ? "a name that says secret" : `a name for ${kind?.label ?? "a secret"}`;
+      message3 = `${fileName} is a template, and it puts ${a.name} \u2014 ` + (named2 ? "whose name says it is a secret" : `meant, by the value it shows, for ${kind?.label ?? "a secret"}`) + ` \u2014 behind the browser prefix ${exposed.prefix} (${how}). Developers who copy this template would ship that secret to every visitor. A template's values ship nowhere and are not judged here: the name is the fix \u2014 drop the ${exposed.prefix} prefix and read the secret in server code only (an API route, a server action, an edge function).`;
     } else {
-      const aside = kind !== null && !named2 ? " \u2014 whatever its name says" : "";
-      message3 = `${fileName} sets ${a.name} to ${what}${aside}, and ${how}. If the app was built with it, the value has already reached the browsers of everyone who opened it: revoke and rotate it at the provider now \u2014 the value is not shown here. Then drop the ${exposed.prefix} prefix and use the secret in server code only.` + (kind?.label === "a Supabase service-role key" ? " The browser needs the anon (publishable) key, with row-level security deciding what it may read." : "");
+      const empty = isPlaceholderValue(a.value);
+      const humanSecret = HUMAN_SECRET_NAME.test(a.name) && !NOT_A_PASSWORD.test(a.value.trim());
+      const seen = kind !== null || !empty && (humanSecret || looksSecret(a.value));
+      if (kind !== null) severity = kind.live ? "critical" : "high";
+      else severity = seen ? "critical" : "medium";
+      const what = kind?.label ?? "a secret";
+      summary2 = kind !== null ? what : seen ? "a secret" : "a name that says secret";
+      if (!seen && empty) {
+        message3 = `${fileName} declares ${a.name}, whose name says it is a secret, with no real value here (it is empty or a placeholder; ${how}). A deployment that sets it would ship the secret to every visitor. Check what it is meant to hold: if a secret, drop the ${exposed.prefix} prefix and read it in server code only (an API route, a server action, an edge function), and rotate it at its provider if a build already had a value for it.`;
+      } else if (!seen) {
+        message3 = `${fileName} sets ${a.name}, whose name says it is a secret, to a value that does not look like one (it is not shown here), and ${how}. Check what it holds: if it is a secret, every build that set it shipped it to browsers \u2014 rotate it at the provider, drop the ${exposed.prefix} prefix and read it in server code only; if it is not, rename the variable so its name stops saying secret.`;
+      } else {
+        const aside = kind !== null && !named2 ? " \u2014 whatever its name says" : "";
+        const act = kind?.label === USER_TOKEN_LABEL ? "anyone who has it acts as that user until the token expires \u2014 revoke that session now (sign the user out everywhere)" : "revoke and rotate it at the provider now";
+        message3 = `${fileName} sets ${a.name} to ${what}${aside}, and ${how}. If the app was built with it, the value has already reached the browsers of everyone who opened it: ${act} \u2014 the value is not shown here. Then drop the ${exposed.prefix} prefix and use the secret in server code only.` + (kind?.label === "a Supabase service-role key" ? " The browser needs the anon (publishable) key, with row-level security deciding what it may read." : "");
+      }
     }
     findings.push(
       makeFinding({
@@ -60628,7 +60647,7 @@ function checkEnvFile(relPath, text2) {
         severity,
         category: "security",
         subcategory: "client-trust",
-        title: `${a.name}: ${kind !== null ? what : seen ? "a secret" : "a name that says secret"} behind the browser prefix ${exposed.prefix}`,
+        title: `${a.name}: ${summary2} behind the browser prefix ${exposed.prefix}`,
         message: message3,
         file_path: relPath,
         line_start: a.line,
@@ -60639,7 +60658,7 @@ function checkEnvFile(relPath, text2) {
   }
   return findings;
 }
-var CLIENT_TRUST_TOOL, ENV_PUBLIC_SECRET_RULE, PUBLIC_ENV_SECRET_NAME, PUBLIC_PREFIXES, MAX_NAME_LENGTH, MAX_VALUE_LINES, PUBLIC_BY_DESIGN_RULES, HUMAN_SECRET_NAME, NOT_A_PASSWORD, PUBLIC_JWT_ROLES;
+var CLIENT_TRUST_TOOL, ENV_PUBLIC_SECRET_RULE, PUBLIC_ENV_SECRET_NAME, PUBLIC_PREFIXES, MAX_NAME_LENGTH, MAX_VALUE_LINES, USER_TOKEN_LABEL, PUBLIC_BY_DESIGN_RULES, HUMAN_SECRET_NAME, NOT_A_PASSWORD, PUBLIC_JWT_ROLE;
 var init_publicEnv = __esm({
   "src/clienttrust/publicEnv.ts"() {
     "use strict";
@@ -60647,7 +60666,7 @@ var init_publicEnv = __esm({
     init_scannerParsers();
     CLIENT_TRUST_TOOL = "guardian-client-trust";
     ENV_PUBLIC_SECRET_RULE = "client-env-public-secret";
-    PUBLIC_ENV_SECRET_NAME = /^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w+_)?(?:SECRET(?:_KEY|_TOKEN)?|SERVICE_ROLE(?:_KEY)?|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_(?:API_)?KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))$/;
+    PUBLIC_ENV_SECRET_NAME = /^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w+_)?(?:SECRET(?:_KEY|_TOKEN)?|SERVICE_ROLE(?:_KEY)?|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|PASSPHRASE|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_(?:API_)?KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))$/;
     PUBLIC_PREFIXES = [
       ["NEXT_PUBLIC_", "Next.js"],
       ["VITE_", "Vite"],
@@ -60660,10 +60679,11 @@ var init_publicEnv = __esm({
     ];
     MAX_NAME_LENGTH = 256;
     MAX_VALUE_LINES = 200;
+    USER_TOKEN_LABEL = "a user's access token";
     PUBLIC_BY_DESIGN_RULES = /* @__PURE__ */ new Set(["google-api-key", "twilio-account-sid"]);
     HUMAN_SECRET_NAME = /_(?:PASSWORD|PASSWD|PASSPHRASE)$/;
     NOT_A_PASSWORD = /^(?:true|false|yes|no|on|off|\d{1,3})$/i;
-    PUBLIC_JWT_ROLES = /* @__PURE__ */ new Set(["anon", "authenticated"]);
+    PUBLIC_JWT_ROLE = "anon";
   }
 });
 
@@ -61013,7 +61033,7 @@ var init_supabaseRls = __esm({
 });
 
 // src/clienttrust/clientTrustPass.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash13 } from "node:crypto";
 async function listEnvFiles(root) {
   const keep = (rel2) => isEnvFileName(basenameOf(rel2)) && !excludedDir(rel2) && !isGuardianOutput(rel2);
   const visible = await git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
@@ -61147,7 +61167,7 @@ async function runClientTrustChecks(root, opts = {}) {
 }
 async function envFilesState(root) {
   const listing = await listEnvFiles(root);
-  const h = createHash12("sha256");
+  const h = createHash13("sha256");
   for (const rel2 of listing.files.slice(0, MAX_ENV_FILES)) h.update(`${rel2}:${await hashProjectFile(root, rel2)}
 `);
   return h.digest("hex");
@@ -92719,7 +92739,7 @@ var init_reportExport = __esm({
 });
 
 // src/sarif/importSarif.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { isAbsolute as isAbsolute17, relative as relative27, resolve as resolve26 } from "node:path";
 import { fileURLToPath as fileURLToPath10 } from "node:url";
 function importSarif(text2, ctx) {
@@ -92819,7 +92839,7 @@ function separateSharedFingerprints(findings, keys) {
   for (const f of findings) uses.set(f.fingerprint, (uses.get(f.fingerprint) ?? 0) + 1);
   findings.forEach((f, i) => {
     if ((uses.get(f.fingerprint) ?? 0) < 2) return;
-    f.fingerprint = createHash13("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
+    f.fingerprint = createHash14("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
   });
 }
 function resolveRule(result, rc) {
@@ -92965,7 +92985,7 @@ function identityOf(result, tool54, ruleId) {
   let key = usableFingerprints(partial3);
   if (key.length === 0) key = usableFingerprints(getProp(result, "fingerprints"));
   if (key.length === 0) return void 0;
-  return createHash13("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
+  return createHash14("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
 }
 function locate5(result, rc) {
   const physical = getProp(asArray(getProp(result, "locations"))[0], "physicalLocation");
@@ -95441,7 +95461,7 @@ var init_vulnFeed = __esm({
 
 // src/tools/wpVulnCheck.ts
 import { existsSync as existsSync21, mkdirSync as mkdirSync14, readdirSync as readdirSync16, readFileSync as readFileSync14, rmSync as rmSync18, writeFileSync as writeFileSync25 } from "node:fs";
-import { createHash as createHash14, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID10 } from "node:crypto";
 import { dirname as dirname27, join as join88 } from "node:path";
 async function handler27(inp, ctx) {
   if (!inp.target_url && !inp.wp_install_path) {
@@ -95612,7 +95632,7 @@ function urlReportsDir(url2) {
     host = new URL(key).host.replace(/[^A-Za-z0-9.-]/g, "_") || "site";
   } catch {
   }
-  const hash2 = createHash14("sha256").update(key).digest("hex").slice(0, 12);
+  const hash2 = createHash15("sha256").update(key).digest("hex").slice(0, 12);
   return join88(defaultWordfenceCacheDir(), "wp-vuln-check", `${host}-${hash2}`);
 }
 function pruneUrlReports(siteDir, current) {
@@ -101584,7 +101604,7 @@ var init_ingest = __esm({
 });
 
 // src/tools/scanSkill.ts
-import { createHash as createHash15, randomUUID as randomUUID17 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID17 } from "node:crypto";
 import { writeFileSync as writeFileSync27 } from "node:fs";
 import { join as join96 } from "node:path";
 async function handler39(inp, ctx, callMeta) {
@@ -101772,7 +101792,7 @@ function nonZeroBreakdown(breakdown) {
   return out.sort((a, b) => b.count - a.count);
 }
 function hashFiles(parts) {
-  const h = createHash15("sha256");
+  const h = createHash16("sha256");
   for (const p of [...parts].sort()) h.update(p).update("\n");
   return h.digest("hex").slice(0, 32);
 }
@@ -104826,7 +104846,7 @@ var init_normalizeNuclei = __esm({
 });
 
 // src/dast/probe.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 async function executeProbe(req, opts) {
   const started = Date.now();
   const controller = new AbortController();
@@ -104859,7 +104879,7 @@ async function executeProbe(req, opts) {
       status: res.status,
       headers,
       body_prefix: text2.slice(0, BODY_PREFIX_BYTES),
-      body_hash: createHash16("sha256").update(text2).digest("hex"),
+      body_hash: createHash17("sha256").update(text2).digest("hex"),
       elapsed_ms: Date.now() - started,
       error: null
     };
@@ -106339,7 +106359,7 @@ var init_apply2 = __esm({
 });
 
 // src/fixpr/candidates.ts
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 function buildGroups(input2) {
   const rescannable = input2.rescannable ?? (() => true);
   const eligible = input2.findings.filter(
@@ -106477,7 +106497,7 @@ function makeGroup(source, key, candidates2) {
     if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
   }
   const fingerprints = candidates2.flatMap((candidate) => candidate.fingerprints);
-  const hash2 = createHash17("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
+  const hash2 = createHash18("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
   return { source, key, candidates: candidates2, severity, hash: hash2 };
 }
 function countFingerprints(group) {
@@ -108458,7 +108478,7 @@ var init_configSources = __esm({
 });
 
 // src/agentaudit/hash.ts
-import { createHash as createHash18 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 function omitted(v) {
   return v === void 0 || typeof v === "function" || typeof v === "symbol";
 }
@@ -108499,7 +108519,7 @@ function stableStringify2(value) {
   return parts.join("");
 }
 function hashConfigValue(value) {
-  return createHash18("sha256").update(stableStringify2(value)).digest("hex");
+  return createHash19("sha256").update(stableStringify2(value)).digest("hex");
 }
 var Literal;
 var init_hash2 = __esm({
@@ -117747,7 +117767,7 @@ var init_report2 = __esm({
 });
 
 // src/llmscan/service.ts
-import { createHash as createHash19, randomUUID as randomUUID22 } from "node:crypto";
+import { createHash as createHash20, randomUUID as randomUUID22 } from "node:crypto";
 import { posix as posix5, relative as relative40, isAbsolute as isAbsolute27 } from "node:path";
 function listed(items) {
   return { items: items.slice(0, MAX_LISTED2), total: items.length };
@@ -117758,7 +117778,7 @@ function relPosix(project, file2) {
 }
 function fileHash(project, rel2) {
   const read3 = readProjectBytes(project, rel2);
-  return read3.status === "ok" ? createHash19("sha256").update(read3.bytes).digest("hex") : "unreadable";
+  return read3.status === "ok" ? createHash20("sha256").update(read3.bytes).digest("hex") : "unreadable";
 }
 function isStale(project, task) {
   return Object.entries(task.file_hashes).some(([file2, hash2]) => fileHash(project, file2) !== hash2);
