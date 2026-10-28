@@ -72,7 +72,7 @@ async function scan(plugin: PluginContext, dir: string): Promise<{ scan_id: stri
   const r = okResult<{ scan_id: string; tools_run: Array<{ name: string; status: string }> }>(
     await getTool('scan_sast').handler({ project_path: dir, local_only: true, force: true }, plugin),
   );
-  expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+  expect(r.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(r.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
   const findings = plugin.storage.findings
     .listByScan(r.scan_id)
     .filter((f) => (f.rule_id ?? '').endsWith('identity-e2e-eval'));

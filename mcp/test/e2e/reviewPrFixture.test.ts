@@ -111,7 +111,7 @@ describe('review_pr with real Semgrep', () => {
       );
       expect(again.ok, JSON.stringify(again)).toBe(true);
       const res2 = again as unknown as { scan_id: string; tools_run: ToolRun[]; missing_tools: string[] };
-      expect(res2.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+      expect(res2.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(res2.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
       expect(res2.missing_tools).not.toContain('semgrep');
       const paths2 = plugin.storage.findings
         .listByScan(res2.scan_id)

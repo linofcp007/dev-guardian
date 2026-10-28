@@ -210,7 +210,7 @@ describe('review_pr — what reaches Semgrep', () => {
     expect(args.indexOf('--')).toBeLessThan(args.indexOf('-dash.py'));
     // Non-ASCII paths reach Semgrep's --output in UTF-8, not the locale codec.
     expect(calls[0]?.env?.['PYTHONUTF8']).toBe('1');
-    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(res.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
   });
 
   it('splits more than 24 000 characters of paths into batches, each with its own report, all merged', async () => {
@@ -354,7 +354,7 @@ describe('review_pr — what reaches Semgrep', () => {
     const { r } = await review(dir, { base_ref: 'main' });
     const res = r as unknown as ReviewResult;
     expect(n).toBeGreaterThan(1);
-    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(res.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(res.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
   });
 
   it('reports Semgrep failed — not "findings" — when a batch exits 7, and coverage is not full', async () => {

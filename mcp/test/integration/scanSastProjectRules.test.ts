@@ -497,7 +497,7 @@ describe('scan_sast applies Global Constraint 3 to every Semgrep run', () => {
     writeFileSync(join(project, '.semgrep.yml'), RULES, 'utf8');
     mockSemgrepOnPath(2, ALL_FAILED);
     const r = await runSast(project, makePlugin(project));
-    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(r.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
     expect((r as unknown as { coverage: string }).coverage).toBe('partial');
   });
 
@@ -981,7 +981,7 @@ describe('scan_sast local_only mode', () => {
     const args = semgrepArgs();
     expect(args).toContain('--config=auto');
     expect(args.some((a) => a.startsWith('--config=') && a.includes('semgrep.y'))).toBe(false);
-    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status).toBe('ok');
+    expect(r.tools_run.find((t) => t.name === 'semgrep')?.status, JSON.stringify(r.tools_run.find((t) => t.name === 'semgrep'))).toBe('ok');
     expect(r.status).toBe('completed');
   });
 
