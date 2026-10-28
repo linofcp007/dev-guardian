@@ -17,6 +17,15 @@ export default defineConfig({
     // override is why those files can run long without needing this default
     // raised for everything else.
     testTimeout: 10_000,
+    // Half the cores, not vitest's one worker per core: the integration and
+    // e2e files each start real git, Semgrep, gitleaks or Trivy — several
+    // processes apiece — and on Windows process creation under that
+    // oversubscription is what failed the suite, a different test each run
+    // (a git-spawning test past its 10 s, a fixture's `git submodule update`,
+    // a Semgrep whose report-formatting child did not answer). Measured on a
+    // 24-core Windows machine after 3.8.0's files: 23 workers, 539 s and two
+    // to five such failures a run; 12 workers, 551 s and none.
+    maxWorkers: '50%',
     // Hooks, unlike tests, get 30 s (review 3.0, R7). Sixty files load the
     // tool under test in a `beforeAll(async () => { await import(...) })`,
     // and in the first wave of a coverage run — every worker starting at
