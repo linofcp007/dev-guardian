@@ -208,6 +208,25 @@ interface SemgrepRunResult extends ProcessRunResult {
   longFilesRead?: number;
   /** Why some of those were not read (the time ran out, a run wrote no report). Absent: none was left. */
   longFilesUnread?: string;
+  /** The first run lost its report ({@link lostReport}) and this is the second. Absent: the first stood. */
+  reportLostOnce?: true;
+}
+
+/**
+ * pysemgrep has semgrep-core format its report, through an RPC child
+ * (`semgrep/rpc_call.py#format`, 1.182.0); a child that does not answer —
+ * it died, or did not exit within the second Semgrep gives it — leaves the
+ * placeholder `<ERROR: missing output>` (SARIF: `<ERROR: no SARIF output>`)
+ * where the report goes, and a scan that ran is lost. Seen under the test
+ * suite's load, a run in a few hundred, a different scan each time: once
+ * as "unparseable output: Unexpected token '<', \"<ERROR: mi\"…".
+ */
+const LOST_REPORT = /^\s*<ERROR: (?:missing output|no SARIF output)>/;
+
+/** Whether `result` is a run whose report is Semgrep's placeholder: the `--output` file, else stdout. */
+function lostReport(result: ProcessRunResult, out: string | undefined): boolean {
+  const text = out !== undefined ? readReport(out) : result.stdout;
+  return text !== null && LOST_REPORT.test(text);
 }
 
 /** The `--output` file the arguments name, if any. */
@@ -255,8 +274,13 @@ export async function runSemgrep(
   // One timeout for the whole call: the retry and the long files' runs get
   // what the first left of it, never the caller's whole budget again.
   const deadline = Date.now() + effectiveTimeoutMs(opts.timeoutMs);
-  const first = await run({ ...opts, ...semgrepSpawn(opts.env) });
   const args = opts.args ?? [];
+  let first: SemgrepRunResult = await run({ ...opts, ...semgrepSpawn(opts.env) });
+  // Once, in what is left of the timeout: a report the formatter lost says
+  // nothing about the scan, and a second run is the only way to get it.
+  if (first.outcome !== 'cancelled' && deadline > Date.now() && lostReport(first, outputOf(args))) {
+    first = { ...(await run({ ...opts, timeoutMs: deadline - Date.now(), ...semgrepSpawn(opts.env) })), reportLostOnce: true };
+  }
   const target = args.at(-1);
   if (platform !== 'win32' || target === undefined || first.exitCode === null || first.outcome === 'cancelled') return first;
   const out = outputOf(args);

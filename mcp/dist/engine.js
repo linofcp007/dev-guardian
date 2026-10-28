@@ -57223,6 +57223,10 @@ function metricsEnvProblem(configs, env) {
   if (meant !== "off" || !configs.some((c) => c === "auto" || c === "--config=auto")) return null;
   return `${shown} is set in the environment (metrics off), and Semgrep cannot build its registry rules (--config=auto) with metrics off: unset it for the scan, or scan local-only (local_only: true, the CLI's --local-only)`;
 }
+function lostReport(result, out) {
+  const text2 = out !== void 0 ? readReport(out) : result.stdout;
+  return text2 !== null && LOST_REPORT.test(text2);
+}
 function outputOf(args) {
   const at = args.indexOf("--output");
   return at >= 0 ? args[at + 1] : void 0;
@@ -57246,8 +57250,11 @@ function parsed(text2) {
 }
 async function runSemgrep(opts, run2 = runProcess, platform = process.platform) {
   const deadline = Date.now() + effectiveTimeoutMs(opts.timeoutMs);
-  const first = await run2({ ...opts, ...semgrepSpawn(opts.env) });
   const args = opts.args ?? [];
+  let first = await run2({ ...opts, ...semgrepSpawn(opts.env) });
+  if (first.outcome !== "cancelled" && deadline > Date.now() && lostReport(first, outputOf(args))) {
+    first = { ...await run2({ ...opts, timeoutMs: deadline - Date.now(), ...semgrepSpawn(opts.env) }), reportLostOnce: true };
+  }
   const target = args.at(-1);
   if (platform !== "win32" || target === void 0 || first.exitCode === null || first.outcome === "cancelled") return first;
   const out = outputOf(args);
@@ -57384,7 +57391,7 @@ function longDirsNote(result) {
   if (result.longFilesUnread !== void 0) notes.push(result.longFilesUnread);
   return notes.length > 0 ? notes.join("; ") : null;
 }
-var SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV, METRICS_VAR, listOf;
+var SEMGREP_COMMAND, SEMGREP_NO_VERSION_CHECK_ENV, METRICS_VAR, LOST_REPORT, listOf;
 var init_semgrepRun = __esm({
   "src/runners/semgrepRun.ts"() {
     "use strict";
@@ -57399,6 +57406,7 @@ var init_semgrepRun = __esm({
     SEMGREP_COMMAND = "semgrep";
     SEMGREP_NO_VERSION_CHECK_ENV = { SEMGREP_ENABLE_VERSION_CHECK: "0" };
     METRICS_VAR = "SEMGREP_SEND_METRICS";
+    LOST_REPORT = /^\s*<ERROR: (?:missing output|no SARIF output)>/;
     listOf = (v) => Array.isArray(v) ? v : [];
   }
 });
