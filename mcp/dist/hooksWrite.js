@@ -642,7 +642,7 @@ import { homedir as homedir2 } from "node:os";
 import { isAbsolute as isAbsolute3, join as join4, parse as parse3, relative as relative2, resolve as resolve3 } from "node:path";
 
 // src/hooks/configFile.ts
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, parse, relative, resolve } from "node:path";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
@@ -707,7 +707,7 @@ function walkLinksUnder(under, path) {
 }
 
 // src/hooks/guardedPath.ts
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync as statSync2 } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, join as join2, parse as parse2 } from "node:path";
 function safeHostname() {
@@ -757,7 +757,7 @@ function fileIdentity(abs) {
   try {
     const root = parse2(abs).root;
     if (root === "" || !walkLinksUnder(root, abs).ok) return void 0;
-    const s = statSync(abs, { bigint: true });
+    const s = statSync2(abs, { bigint: true });
     return s.isFile() ? { dev: s.dev, ino: s.ino, nlink: s.nlink } : void 0;
   } catch {
     return void 0;

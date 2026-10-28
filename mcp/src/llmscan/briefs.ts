@@ -19,6 +19,8 @@
 
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
+import { isEnvFileName } from '../clienttrust/publicEnv.js';
+import { isCredentialFinding } from '../fingerprint/findingIdentity.js';
 import { readSmallText } from '../hooks/configFile.js';
 import { resolveConfigsDir } from '../platform/configsDir.js';
 import { scrubSecrets } from '../redaction/scrubSecrets.js';
@@ -320,11 +322,27 @@ interface VerifyData {
   excerptWithin?: (maxChars: number) => string;
 }
 
+/**
+ * Why no code is quoted for `f` in `file`, or null when it may be. Never a
+ * `.env*` file — every line of it is a value, and `scrubSecrets` knows a
+ * provider's token, not `NEXT_PUBLIC_ADMIN_KEY=adm_8f7d6s5a4` — and never the
+ * file of a credential finding (`isCredentialFinding`, as `suggest_fix`
+ * withholds its surrounding source): the line is the secret.
+ */
+function excerptWithheld(file: string, f: Finding): string | null {
+  const name = file.replace(/\\/g, '/').split('/').pop() ?? file;
+  if (isEnvFileName(name)) return '(not quoted: an environment file holds values, never code to read)';
+  if (isCredentialFinding(f)) return '(not quoted: the finding flags a credential, and its line is the secret)';
+  return null;
+}
+
 function renderVerifyData(task: LlmScanTask, ctx: BriefContext): VerifyData {
   const f = ctx.finding;
   if (f === undefined) throw new Error('a verify brief needs the scanner finding');
   const file = task.target.files[0] ?? f.file_path;
   if (file === undefined || file === '') return { finding: renderFinding(f, undefined), excerpt: '(the finding names no file)' };
+  const withheld = excerptWithheld(file, f);
+  if (withheld !== null) return { finding: renderFinding(f, file), excerpt: withheld };
   const read = ctx.reader(ctx.root, file);
   if (read.status !== 'ok') return { finding: renderFinding(f, file), excerpt: `(the file could not be read: ${read.status})` };
   const text = read.text;

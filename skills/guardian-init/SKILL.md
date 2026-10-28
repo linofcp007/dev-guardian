@@ -120,6 +120,7 @@ Próximos passos sugeridos:
 | Stack | Coberto pelas tools MCP | Recomendação manual (as tools não instalam nem correm) |
 | --- | --- | --- |
 | JS / TS | Semgrep, `bugfix-js.yml`, Trivy nos lock files, jscpd, ESLint se já estiver em `node_modules` | ESLint + `@typescript-eslint` configurados no projeto |
+| Next.js / Vite / Expo + Supabase / Stripe | Semgrep (`client-trust.yml`: segredos atrás de um prefixo público, a chave service-role no browser, webhooks de pagamento sem assinatura), os `.env*` (também os ignorados pelo git) e as migrações do Supabase (`scan_sast`), testes enfraquecidos num diff (`review_pr`) | Rodar no fornecedor qualquer segredo que já tenha ido para o browser |
 | Python | Semgrep, `bugfix-py.yml`, Bandit, ruff, radon, Trivy, pip-audit (`deps_audit`) | — |
 | PHP / WordPress | Semgrep, `bugfix-php.yml`, Psalm em modo taint (`scan_sast`, `scan_wordpress`; com o `$wpdb` modelado), Trivy em `composer.lock`, PHPCS-WPCS (`scan_wordpress`) | PHPStan, para os tipos |
 | Go | Semgrep, `bugfix-go.yml`, gosec (`scan_sast`, através do toolchain do Go), staticcheck (`quality_check`), Trivy em `go.sum`, govulncheck (`deps_audit`) | — |

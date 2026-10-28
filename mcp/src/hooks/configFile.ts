@@ -56,7 +56,7 @@
  * compiled copy from `mcp/dist/hooks/` in an install with no `node_modules`.
  */
 
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from 'node:fs';
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from 'node:fs';
 import { isAbsolute, join, parse, relative, resolve } from 'node:path';
 
 /** The largest hook configuration file the hooks will read. */
@@ -195,14 +195,24 @@ export type BytesRead =
 
 /**
  * The one bounded read (review 8, finding 14: the hooks' and
- * `platform/projectFs.ts`'s two were copies of it): open `path` non-blocking
- * — a FIFO opens at once — judge what was OPENED with `fstat`, never the path,
- * and read a regular file of at most `maxBytes`, reading cap + 1 bytes at
- * most, so a file that grew after the `fstat` is still refused. With `head`,
- * a longer file is not refused: its first `maxBytes` bytes are read and the
- * rest is left unread.
+ * `platform/projectFs.ts`'s two were copies of it): `stat` the path first —
+ * anything but a regular file (a FIFO, a socket, a device, a directory) is
+ * refused without being opened: an open of a FIFO, even a non-blocking one,
+ * wakes a writer waiting on it (3.8.0, on Linux) —, then open it
+ * non-blocking, judge what was OPENED with `fstat` (the path may have changed
+ * in between), and read a regular file of at most `maxBytes`, reading cap + 1
+ * bytes at most, so a file that grew after the `fstat` is still refused.
+ * With `head`, a longer file is not refused: its first `maxBytes` bytes are
+ * read and the rest is left unread.
  */
 export function readBoundedBytes(path: string, maxBytes: number, opts: { head?: boolean } = {}): BytesRead {
+  try {
+    if (!statSync(path).isFile()) return { status: 'refused', reason: 'not-a-regular-file' };
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { status: 'absent' };
+    // Anything else: the open below decides.
+  }
   let fd: number;
   try {
     fd = openSync(path, OPEN_FLAGS);

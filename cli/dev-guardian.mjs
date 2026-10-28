@@ -28,6 +28,9 @@
  *                                                      from that commit, never the tree
  *                             --rules-ref <ref>        read the project's Semgrep rules
  *                                                      and ignore files from that commit
+ *                             --diff-base <ref>        also read the change since <ref>
+ *                                                      for weakened tests (default: the
+ *                                                      --baseline-ref / --rules-ref ref)
  *                             --reset-exclusions-from <ref>  CI only (CI=true), clean checkout:
  *                                                      put .semgrepignore, .gitleaksignore
  *                                                      and .gitleaks.toml back to that commit's
@@ -585,6 +588,17 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          and zizmor configuration and the .NET build's files are
                          still read from the tree — each one the tree changes
                          against <ref> is named in the report. See docs/ci.md.
+  --diff-base <ref>     Also read the CHANGE since <ref> (its merge base with HEAD,
+                         to the working tree, untracked files included) for
+                         weakened tests: an added .skip / xit / pytest skip /
+                         t.Skip / @Disabled (medium), a focused .only / fit
+                         (high: it silently disables the rest of the suite), a
+                         deleted test file, a test file with fewer assertions,
+                         a test script given --passWithNoTests or || true
+                         (medium). They gate like any finding (tool
+                         guardian-test-integrity). Without it, the --baseline-ref
+                         ref (else --rules-ref) is the base; with neither, the
+                         check does not run. A <ref> that names no commit is exit 3.
   --reset-exclusions-from <ref>
                          In CI only (CI=true, or GITHUB_ACTIONS / GITLAB_CI /
                          BITBUCKET_BUILD_NUMBER; exit 3 elsewhere — it would
@@ -1422,6 +1436,7 @@ function takeProject(argv, i, a) {
  *   baselineRef: string | undefined,
  *   rulesRef: string | undefined,
  *   resetExclusionsFrom: string | undefined,
+ *   diffBase: string | undefined,
  *   compact: boolean,
  * }} ScanArgs
  * @typedef {{
@@ -1454,6 +1469,7 @@ function parseScanArgs(argv) {
     baselineRef: undefined,
     rulesRef: undefined,
     resetExclusionsFrom: undefined,
+    diffBase: undefined,
     compact: false,
   };
   for (let i = 0; i < argv.length; i++) {
@@ -1532,14 +1548,15 @@ function parseScanArgs(argv) {
  * repository (`mcp/src/ci/refConfig.ts`).
  *
  * @param {string} a
- * @returns {{ flag: string, key: 'baselineRef' | 'rulesRef' | 'resetExclusionsFrom' } | null}
+ * @returns {{ flag: string, key: 'baselineRef' | 'rulesRef' | 'resetExclusionsFrom' | 'diffBase' } | null}
  */
 function refFlag(a) {
-  /** @type {ReadonlyArray<readonly [string, 'baselineRef' | 'rulesRef' | 'resetExclusionsFrom']>} */
+  /** @type {ReadonlyArray<readonly [string, 'baselineRef' | 'rulesRef' | 'resetExclusionsFrom' | 'diffBase']>} */
   const refFlags = [
     ['--baseline-ref', 'baselineRef'],
     ['--rules-ref', 'rulesRef'],
     ['--reset-exclusions-from', 'resetExclusionsFrom'],
+    ['--diff-base', 'diffBase'],
   ];
   for (const [flag, key] of refFlags) {
     if (a === flag || a.startsWith(`${flag}=`)) return { flag, key };
@@ -1876,12 +1893,14 @@ async function cmdScan(argv) {
   let rulesRef = null;
   let baselineAtRef = null;
   let exclusionsReset = null;
+  let diffBase = null;
   try {
     if (opts.baselineRef !== undefined) {
       baselineRef = await resolveCiRef(projectPath, opts.baselineRef, '--baseline-ref');
       baselineAtRef = await readBaselineAtRef(projectPath, baselineRef);
     }
     if (opts.rulesRef !== undefined) rulesRef = await resolveCiRef(projectPath, opts.rulesRef, '--rules-ref');
+    if (opts.diffBase !== undefined) diffBase = await resolveCiRef(projectPath, opts.diffBase, '--diff-base');
     // Last: it rewrites the checkout, so only once every other flag resolved.
     if (opts.resetExclusionsFrom !== undefined) {
       const resetRef = await resolveCiRef(projectPath, opts.resetExclusionsFrom, '--reset-exclusions-from');
@@ -1949,6 +1968,9 @@ async function cmdScan(argv) {
       app = await startingApp;
     }
     const buildRefused = buildRefusedFor(baselineRef ?? rulesRef, opts.buildPr);
+    // The change read for weakened tests: --diff-base, else the ref a pull
+    // request is judged against (mcp/src/testintegrity/); none without either.
+    const changeBase = diffBase ?? baselineRef ?? rulesRef;
     result = await runScans({
       projectPath,
       baseUrl: opts.baseUrl,
@@ -1961,6 +1983,7 @@ async function cmdScan(argv) {
       ...(baselineRef !== null ? { changedSince: baselineRef } : rulesRef !== null ? { changedSince: rulesRef } : {}),
       // Nor is a pull request's own build run here, unless --build-pr trusts it.
       ...(buildRefused !== undefined ? { buildRefused } : {}),
+      ...(changeBase !== null ? { diffBase: changeBase } : {}),
     });
   } catch (e) {
     pipelineFailure = { error: e };
@@ -3954,6 +3977,7 @@ const VALUE_FLAGS = new Set([
   '--baseline-ref',
   '--rules-ref',
   '--reset-exclusions-from',
+  '--diff-base',
   '--scope',
   '--file',
   '--bash',

@@ -734,3 +734,70 @@ describe('review_pr — secrets, Python, dependencies', () => {
     expect(res.tools_run.find((t) => t.name === 'gitleaks')?.reason).toMatch(/no commits/);
   });
 });
+
+// The diff's own checks: weakened tests (testintegrity/) and the client-trust
+// pass over the changed env files and migrations (clienttrust/). Both reach the
+// review's findings, so every view of review_pr's results shows them.
+describe('review_pr — weakened tests and client trust in the diff', () => {
+  const TEST = "describe('sum', () => {\n  it('adds', () => {\n    expect(1 + 1).toBe(2);\n    expect(2 + 2).toBe(4);\n  });\n});\n";
+  const b64 = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const serviceRole = `${b64({ alg: 'HS256' })}.${b64({ role: 'service_role' })}.${'Qw9Z'.repeat(10)}`;
+
+  const rowsOf = (p: PluginContext, scanId: string, tool: string): string[] =>
+    p.storage.findings
+      .listByScan(scanId)
+      .filter((f) => f.tool === tool)
+      .map((f) => `${f.rule_id} ${f.file_path}:${f.line_start ?? '-'} ${f.severity}`)
+      .sort();
+
+  async function weakenedBranch(): Promise<string> {
+    const dir = await repo('main', { 'src/sum.test.ts': TEST, 'src/old.test.ts': "it('x', () => { expect(1).toBe(1); });\n", 'src/sum.ts': 'export {};\n' });
+    write(dir, 'src/sum.test.ts', TEST.replace("it('adds'", "it.only('adds'"));
+    rmSync(join(dir, 'src/old.test.ts'));
+    write(dir, '.env.production', `NEXT_PUBLIC_SUPABASE_ANON_KEY=${serviceRole}\n`);
+    write(dir, 'supabase/migrations/20240101_init.sql', 'create table public.orders (id int);\n');
+    await commitAll(dir, 'make it green');
+    return dir;
+  }
+
+  it('head checked out: the focused test, the deleted file, the browser secret and the open table are findings of the review', async () => {
+    const dir = await weakenedBranch();
+    const { r, p } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    expect(res.tools_run.find((t) => t.name === 'guardian-test-integrity')).toMatchObject({ status: 'ok' });
+    expect(res.tools_run.find((t) => t.name === 'guardian-client-trust')).toMatchObject({ status: 'ok' });
+    expect(rowsOf(p, res.scan_id, 'guardian-test-integrity')).toEqual([
+      'test-file-deleted src/old.test.ts:- medium',
+      'test-focused src/sum.test.ts:2 high',
+    ]);
+    expect(rowsOf(p, res.scan_id, 'guardian-client-trust')).toEqual([
+      'client-env-public-secret .env.production:1 critical',
+      'supabase-rls-disabled supabase/migrations/20240101_init.sql:1 critical',
+    ]);
+    expect(res.findings_count_by_severity['high']).toBeGreaterThanOrEqual(1);
+    expect(JSON.stringify(p.storage.findings.listByScan(res.scan_id)).includes(serviceRole)).toBe(false);
+  });
+
+  it('head not checked out: the same weakening read from the head commit', async () => {
+    const dir = await weakenedBranch();
+    await git(dir, 'checkout', '-q', 'main');
+    const { r, p } = await review(dir, { base_ref: 'main', head_ref: 'feature' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    expect(rowsOf(p, res.scan_id, 'guardian-test-integrity')).toEqual([
+      'test-file-deleted src/old.test.ts:- medium',
+      'test-focused src/sum.test.ts:2 high',
+    ]);
+  });
+
+  it('a diff that touches no test, env file or migration: neither pass has an entry', async () => {
+    const dir = await repo('main', { 'src/sum.ts': 'export {};\n', 'src/sum.test.ts': TEST });
+    write(dir, 'src/sum.ts', 'export const x = 1;\n');
+    await commitAll(dir);
+    const { r } = await review(dir, { base_ref: 'main' });
+    const res = r as unknown as ReviewResult;
+    expect(res.tools_run.some((t) => t.name === 'guardian-test-integrity')).toBe(false);
+    expect(res.tools_run.some((t) => t.name === 'guardian-client-trust')).toBe(false);
+  });
+});

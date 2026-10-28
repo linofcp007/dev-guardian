@@ -3,7 +3,9 @@
  *
  * Maps each entry in `results[]` to a single Finding:
  *   - severity:    extra.severity (INFO/WARNING/ERROR) → info/medium/high,
- *                  bumped to `critical` for security rules.
+ *                  bumped to `critical` for security rules — unless the rule
+ *                  states its severity on dev-guardian's scheme in
+ *                  `metadata.guardian_severity` (info … critical), which wins.
  *   - category:    extra.metadata.category when present, else heuristic on
  *                  the check_id; falls back to 'quality'.
  *   - subcategory: extra.metadata.subcategory or heuristic
@@ -18,7 +20,7 @@
  *                  OWASP labels count; a 2017/2021 one is never renumbered.
  */
 
-import type { Category, Finding, Severity } from '../../types.js';
+import { SEVERITIES, type Category, type Finding, type Severity } from '../../types.js';
 import { CONTAINER_PROJECT_ROOT } from '../dockerScanner.js';
 import { redactCredentialSnippet } from '../../redaction/secretFindingRedaction.js';
 import { localRuleIdNormalizer, type RuleIdContext } from '../semgrepRuleIds.js';
@@ -141,6 +143,12 @@ function relativePath(filePath: string, projectPath: string | undefined): string
 }
 
 function mapSeverity(rawSeverity: string | undefined, metadata: unknown): Severity {
+  // A rule may say where it sits on dev-guardian's scheme: a heuristic
+  // security rule is `high`, which ERROR + category security (critical) and
+  // WARNING (medium) cannot express (configs/semgrep/client-trust.yml).
+  const stated = getString(metadata, 'guardian_severity')?.trim().toLowerCase();
+  const declared = SEVERITIES.find((s) => s === stated);
+  if (declared !== undefined) return declared;
   // Semgrep's three-level severity is too coarse for security rules; if the
   // rule self-identifies as security, bump ERROR → critical so it actually
   // shows up in the critical bucket.

@@ -400,14 +400,14 @@ Write a scan report as markdown (default), html (self-contained, light/dark), sa
 
 ### `review_pr`
 
-Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never "no files changed". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the project's gap, not the review's.
+Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed, changed .env files and Supabase migrations, and weakened tests (a skip, a focused .only, a deleted test file, fewer assertions). An unresolvable ref is an error, never "no files changed". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the project's gap, not the review's.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `project_path` | string | no | — | Project root. Default: the server's working directory. |
 | `base_ref` | string | no | — | Base ref for the diff. Defaults to origin/HEAD, then main, then master. |
 | `head_ref` | string | no | — | Head ref. Defaults to HEAD. |
-| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy may still go out. |
+| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS, client-trust and mobile packs). Trivy may still go out. |
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Response floor only; every finding is still recorded (`severity_filter`). |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache. |
 
@@ -488,7 +488,7 @@ Trivy config over Terraform, Kubernetes, CloudFormation and Helm; with .github/w
 
 ### `scan_sast`
 
-Semgrep (registry rules, the project's own, register\_custom\_rules' and the plugin's web-JS, mobile and LLM packs; `tools_run[].plugin_packs`: one that ran in part) plus, by language: Bandit (Python), gosec (Go, via the Go toolchain, which may download modules), cppcheck (C/C++), Psalm taint analysis (PHP), SpotBugs with FindSecBugs (Java/Kotlin bytecode), the .NET SDK analyzers (a locked restore and `dotnet build`: runs the project's MSBuild). Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a run. local\_only: no registry, no metrics.
+Semgrep (registry, the project's, register\_custom\_rules' and the plugin's packs; `tools_run[].plugin_packs`: one that ran in part), Bandit (Python), gosec (Go; may download modules), cppcheck (C/C++), Psalm taint (PHP), SpotBugs+FindSecBugs (JVM bytecode), the .NET SDK analyzers (`dotnet build` runs the project's MSBuild); browser-exposed secrets in .env files (git-ignored too), Supabase RLS; a diff scope adds weakened tests. Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a run. local\_only: no registry, no metrics.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
@@ -561,7 +561,7 @@ scan\_sast, scan\_secrets, scan\_deps and scan\_iac as one scan: each runs as it
 | `severity_min` | one of "info", "low", "medium", "high", "critical" | no | — | Response floor only; every finding is still recorded (`severity_filter`). |
 | `auto_fix` | boolean | no | `false` | Apply Semgrep's autofixes to the source (a clean tree, unless allow\_dirty). |
 | `allow_dirty` | boolean | no | `false` | With auto\_fix: allow uncommitted changes in the tree. |
-| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy still goes out. |
+| `local_only` | boolean | no | — | Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS, client-trust and mobile packs). Trivy still goes out. |
 | `force` | boolean | no | `false` | Bypass the tree-hash cache. |
 
 ### `set_baseline`

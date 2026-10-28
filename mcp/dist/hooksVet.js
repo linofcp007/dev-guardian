@@ -15,12 +15,12 @@ __export(hookDecision_exports, {
   escapeHatch: () => escapeHatch,
   vetDeadlineMs: () => vetDeadlineMs
 });
-import { lstatSync as lstatSync3, realpathSync, statSync } from "node:fs";
+import { lstatSync as lstatSync3, realpathSync, statSync as statSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { dirname as dirname3, isAbsolute as isAbsolute3, join as join5, parse as parse4, resolve as resolve3 } from "node:path";
 
 // src/hooks/configFile.ts
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, parse, relative, resolve } from "node:path";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
@@ -75,6 +75,12 @@ function walkLinksUnder(under, path) {
   return { ok: true };
 }
 function readBoundedBytes(path, maxBytes, opts = {}) {
+  try {
+    if (!statSync(path).isFile()) return { status: "refused", reason: "not-a-regular-file" };
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+  }
   let fd;
   try {
     fd = openSync(path, OPEN_FLAGS);
@@ -4317,7 +4323,7 @@ function presentBelow(under, path) {
 function fileBelow(under, path) {
   if (!walkLinksUnder(under, path).ok) return false;
   try {
-    return statSync(path).isFile();
+    return statSync2(path).isFile();
   } catch {
     return false;
   }

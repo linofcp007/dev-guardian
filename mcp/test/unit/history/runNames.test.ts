@@ -106,6 +106,8 @@ function bookkeepingNames(): string[] {
     // gosec's, govulncheck's, shellcheck's, cppcheck's, Psalm's, detekt's, RuboCop's and SpotBugs' passes, and the
     // Go, PHP, Java and Ruby runtimes' gaps.
     ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK|PSALM|PHP_RUNTIME|DETEKT|RUBOCOP|SPOTBUGS|JAVA_RUNTIME|RUBY_RUNTIME)\s*=\s*'([^']+)'/g),
+    // dev-guardian's own in-process passes: the client-trust checks and the test-integrity check.
+    ...collect(/export const (?:CLIENT_TRUST_TOOL|TEST_INTEGRITY_TOOL)\s*=\s*'([^']+)'/g),
     // A staged scope's files changed again since `git add`: `export const STAGED_CONTENT_GAP = 'staged-content'`.
     ...collect(/export const STAGED_CONTENT_GAP\s*=\s*'([^']+)'/g),
     // judgeTrivyFs' walk gap: `export const TRIVY_MANIFEST_WALK_GAP = 'trivy:manifest-walk'`.
@@ -178,6 +180,11 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'tools/reviewPr.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',
   'tools/reviewPr.ts:name': "runners/gosecRun.ts#gosecOnPackages' `missing`: GOSEC or GO_TOOLCHAIN",
   'tools/qualityCheck.ts:name': "notInstalled's and record's name argument",
+  'clienttrust/clientTrustPass.ts:CLIENT_TRUST_TOOL': 'the CLIENT_TRUST_TOOL constant (clienttrust/publicEnv.ts)',
+  'testintegrity/gitChanges.ts:TEST_INTEGRITY_TOOL': 'the TEST_INTEGRITY_TOOL constant (testintegrity/detect.ts)',
+  'tools/reviewPr.ts:...result.missing': "runClientTrustChecks' `missing`: CLIENT_TRUST_TOOL",
+  'tools/reviewPr.ts:...integrity.missing': "runTestIntegrityCheck's `missing`: TEST_INTEGRITY_TOOL",
+  'tools/scanSast.ts:...result.missing': "runClientTrustChecks' and runTestIntegrityCheck's `missing`: CLIENT_TRUST_TOOL, TEST_INTEGRITY_TOOL",
   'tools/qualityCheck.ts:opts.name': "runOnFileBatches' `name: '…'` (ruff, radon, eslint)",
   'tools/auditExecutive.ts:name': 'the *SUB_TOOLS arrays',
   'tools/securityScanFull.ts:name': 'FIRST_CHILD and OTHER_CHILDREN',
