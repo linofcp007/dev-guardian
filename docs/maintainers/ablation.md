@@ -170,6 +170,12 @@ secret group. The two rules were re-ablated with `--filter`: the webhook rule 22
 axis 2 21/22 (the function-name guard that keeps dispatchers out); the env-name rule 9/9 live, axis 2 8/9. The pack
 holds 53 clauses now.
 
+Review round 2: a gateway re-fetch (`stripe.events.retrieve`) silences the webhook rule, a route callback counts only
+on `post|put|patch|all`, SvelteKit's `{ request }` handlers are read, and `verif` silences only a call or a `verify…`
+name. A SvelteKit branch of its own read DEAD — its handlers already match the function and const shapes, with
+`request.json()` read by name — and was removed. `--filter=client-webhook-unverified`: 24/24 live, axis 2 23/24 (the
+function-name guard), axis 3 vacuous; 55 clauses in the pack.
+
 The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
 in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
 code nobody wrote as a fixture; the rows they replace did not record a

@@ -162,6 +162,17 @@
 # despachantes de fora); `client-public-env-secret` 9/9 vivas, eixo 2 8/9
 # (a mesma guarda dos nomes). Eixo 3 vazio nas duas; 53 cláusulas no pack.
 #
+# REVISÃO 2 (2026-10-28). O evento pedido de novo à API do gateway
+# (`stripe.events.retrieve(id)`) é verificação e cala a regra; o callback de
+# uma rota só conta em post/put/patch/all (um `consumer.on('message')` de
+# uma fila disparava); os handlers do SvelteKit (`{ request }`, com ou sem
+# tipo) são lidos — cabem nas formas que já existiam, um ramo próprio lia-se
+# DEAD e saiu —; a palavra `verif` só cala como chamada (`verifyX(`) ou nome
+# `verify…`, nunca num `verified: true`. Ablação da regra: 24/24 vivas,
+# eixo 2 23/24 (a guarda do nome da função), eixo 3 vazio; 55 cláusulas no
+# pack. As sondas do revisor (Express, Hono, SvelteKit sem verificação)
+# disparam todas; o corpus real continua com 0 achados.
+#
 # Fixtures em mcp/test/fixtures/client-trust/{hits,misses}/ (hits/ com uma
 # linha `// BUG: <id-da-regra>` por achado, na linha onde ele começa),
 # `mcp/test/e2e/clientTrustPack.test.ts`.
