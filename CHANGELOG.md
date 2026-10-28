@@ -8,7 +8,7 @@ version bump.
 
 ## [Unreleased]
 
-## [3.7.1] - 2026-10-27
+## [3.7.1] - 2026-10-28
 
 The two follow-ups 3.7.0 left open.
 
