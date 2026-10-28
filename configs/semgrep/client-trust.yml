@@ -91,6 +91,35 @@
 #     e a "correção" habitual é desligar a verificação. Um `req.body` de uma
 #     rota de API do Next.js (pages/) sem `bodyParser: false` não é visto.
 #
+# CORPUS REAL (2026-10-28, Semgrep 1.182.0): três starters públicos de
+# Next.js + Supabase + Stripe, clonados com --depth 1 —
+# vercel/nextjs-subscription-payments (bdd0813), KolbySisk/
+# next-supabase-stripe-starter (9839fd4) e Razikus/supabase-nextjs-template
+# (d519bf1, com um template Expo): 193 ficheiros lidos, 0 achados das quatro
+# regras. Os dois webhooks do Stripe que eles têm verificam a assinatura
+# (`constructEvent` sobre `await req.text()`): silêncio certo. Sonda de
+# recall no mesmo código: trocar, em cada um, a linha do `constructEvent`
+# por `event = JSON.parse(body)` faz `client-webhook-unverified` disparar
+# nos dois (a função POST inteira). O mcp/src e o cli/ deste repositório
+# (425 ficheiros): 0 achados. O lado TypeScript (os `.env*` e as
+# migrações) no mesmo corpus: 5 ficheiros de ambiente (templates) e 6
+# migrações, 0 achados; sem as linhas `enable row level security`, as 6
+# tabelas dos dois starters com migrações próprias saem como
+# `supabase-rls-disabled`.
+#
+# ABLAÇÃO (`npm run ablate -- client-trust`, GUARDIAN_CLIENT_TRUST_SRC no
+# corpus acima). A primeira corrida (50 cláusulas) deu 16 DEAD, todos
+# fixtures em falta (formas de handler, `constructEventAsync`, um `env`
+# local) menos um par: o ramo `"use client";` e o `'use client';` liam-se
+# DEAD cada um e MOVES juntos — o Semgrep normaliza a aspa do literal —, e
+# ficou um ramo só, com hits/service-role-use-client-double.tsx. A segunda
+# (48 cláusulas, ver docs/maintainers/ablation.md): eixo 0 4/4, eixo 1
+# 48/48 vivas, eixo 2 46/48 — as duas marcas são guardas a funcionar: o
+# `metavariable-regex` dos nomes (sem ele disparam os nomes públicos que os
+# hits trazem ao lado) e o `pattern-not-inside` da rota (sem ele a arrow
+# dentro de `app.post` sai uma segunda vez) —, eixo 3 vazio (0 achados no
+# corpus real, piso de ruído 0).
+#
 # Fixtures em mcp/test/fixtures/client-trust/{hits,misses}/ (hits/ com uma
 # linha `// BUG: <id-da-regra>` por achado, na linha onde ele começa),
 # `mcp/test/e2e/clientTrustPack.test.ts`.

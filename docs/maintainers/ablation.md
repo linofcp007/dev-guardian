@@ -148,7 +148,19 @@ precision evidence it does have). Measured with the corpora below:
 | `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 | `web-js` | uptime-kuma, actual and outline (Node apps) | 4933 | 15 (14 comparable) | 3, all working positive branches |
 | `wordpress` | WooCommerce 11.2.1, wp-statistics 13.0.7, Contact Form 7 6.2.3 | 4176 | 7 (5 comparable) | 0 |
+| `client-trust` | three Next.js + Supabase + Stripe starters (`vercel/nextjs-subscription-payments` `bdd0813`, `KolbySisk/next-supabase-stripe-starter` `9839fd4`, `Razikus/supabase-nextjs-template` `d519bf1`) | 193 | 0 | 0 (vacuous: nothing to compare; a hand probe removing `constructEvent` from both real webhooks fires the rule on both) |
 | `mobile` | Nextcloud Android 35.0.1 and iOS 35.2.1, Gotify Android 2.10.1, Syncthing Android 1.28.1 | 1403 | 20 | 0 |
+
+**`client-trust`, 3.8.0** (Semgrep 1.182.0). The first run of the new pack, 50 clauses, read 16 DEAD: fifteen were
+fixtures not yet written (Express, function and arrow handlers in each `switch` / `if` shape, `constructEventAsync`, an
+`env` that is not SvelteKit's, a job queue whose names look like payment events) and one a mutually redundant pair —
+`'use client';` and `"use client";`, each DEAD and MOVES together: Semgrep normalises a string literal's quote, so
+one branch was deleted and a double-quoted fixture keeps it honest. With the fixtures, 48 clauses: axis 0 4/4, axis 1
+48/48 live, axis 2 46/48 (the name `metavariable-regex`, without which the public names the hits carry beside their
+bugs fire, and the route `pattern-not-inside`, without which an arrow inside `app.post` is reported twice — both the
+guard working), axis 3 48/48 and vacuous (0 findings on the corpus, noise floor 0). The second run was cut at clause
+43 by an edit of the pack's header comment; the parsed-body rule's clauses were re-run on their own
+(`--filter=client-webhook-parsed-body`).
 
 The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
 in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
