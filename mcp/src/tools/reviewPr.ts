@@ -19,7 +19,14 @@
  *   - cppcheck over the changed C and C++ translation units — a changed
  *     header is read through the changed files that include it
  *     (`runners/cppcheckRun.ts`);
- *   - Trivy over the project when a dependency manifest or lockfile changed.
+ *   - Trivy over the project when a dependency manifest or lockfile changed;
+ *   - dev-guardian's client-trust checks over the changed `.env*` files and
+ *     the Supabase migrations of a changed migration directory
+ *     (`clienttrust/clientTrustPass.ts`), their findings kept to the diff;
+ *   - the test-integrity check over the diff itself (`testintegrity/`): a
+ *     skipped or focused test, a deleted test file, fewer assertions, a test
+ *     script made to pass regardless — from the merge base to head, and to
+ *     the working tree (untracked files included) when head is checked out.
  *
  * It used to hand a space-joined file list to `scripts/scan/review-scan.sh`,
  * which lost every one of: deleted files (one aborted the whole Semgrep run),
@@ -42,6 +49,7 @@ import {
 import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { z } from 'zod';
+import { clientTrustParser, runClientTrustChecks } from '../clienttrust/clientTrustPass.js';
 import { makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
 import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
@@ -83,6 +91,8 @@ import { semgrepEngineOf } from '../runners/semgrepReport.js';
 import { mayHoldTaintRules, pluginPackCheckIds } from '../runners/semgrepRuleIds.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
+import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
+import { runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
 import { defineTool, registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
 import {
@@ -202,6 +212,22 @@ const reviewPr = makeScanTool({
         if (!out.cancelled) await runGosec(ctx, out, { scanRoot, reportDir, files: present.filter(isGoSource) });
         if (!out.cancelled) await runCppcheck(ctx, out, { scanRoot, reportDir, files: cppSources(present) });
         if (!out.cancelled && touched.some(isManifest)) await runTrivy(ctx, out, { scanRoot, reportDir, touched });
+        if (!out.cancelled) await runClientTrust(out, { scanRoot, files: present });
+      }
+
+      // The diff itself, for weakened tests: git reads it, whichever tree the scanners read.
+      if (!out.cancelled) {
+        const integrity = await runTestIntegrityCheck(ctx.projectPath, {
+          base,
+          head,
+          target: headIsCheckedOut ? { kind: 'worktree', untracked: true } : { kind: 'commit', sha: head },
+        });
+        if (integrity !== null) {
+          out.tools_run.push(integrity.toolRun);
+          out.missing_tools.push(...integrity.missing);
+          const findings = integrity.findings;
+          out.parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
+        }
       }
 
       // gitleaks over the PR's commits — and, when head is what is checked
@@ -483,6 +509,15 @@ async function runCppcheck(
   if (pass.toolRun !== null) out.tools_run.push(pass.toolRun);
   for (const name of pass.missing) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
   out.cancelled ||= pass.cancelled;
+}
+
+/** The client-trust checks over the changed files present in `scanRoot` (findings kept to them). */
+async function runClientTrust(out: Collected, args: { scanRoot: string; files: readonly string[] }): Promise<void> {
+  const result = await runClientTrustChecks(args.scanRoot, { files: args.files });
+  if (result === null) return;
+  out.tools_run.push(result.toolRun);
+  out.missing_tools.push(...result.missing);
+  out.parser_inputs.push({ parser: clientTrustParser(result.findings), input: null });
 }
 
 /** Trivy over the head's dependency manifests, when one of them changed. */

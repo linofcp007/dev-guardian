@@ -178,6 +178,9 @@ import {
   withPluginPackFixpoint,
 } from '../runners/semgrepReport.js';
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
+import { CLIENT_TRUST_TOOL, clientTrustParser, envFilesState, runClientTrustChecks } from '../clienttrust/clientTrustPass.js';
+import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
+import { runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { listProjectDir, presentInProject, readProjectTextOrUndefined, realpathInProject } from '../platform/projectFs.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
@@ -230,10 +233,15 @@ registerToolModule(
     // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds (the
     // factory keys that file for every tool); the class directories SpotBugs
     // reads are under `target/` and `build/`, which the tree hash leaves out.
+    // The client-trust pass reads the env files git ignores, which the tree hash leaves out.
     cacheState: async (_input, { plugin, projectPath }) => {
       const flags = semgrepScanFlags(plugin.repoConfigFromRef?.root ?? projectPath);
       const classes = classDirsState(projectPath);
-      return { semgrep_flags: flags.args.join(' '), ...(classes !== null ? { class_dirs: classes } : {}) };
+      return {
+        semgrep_flags: flags.args.join(' '),
+        ...(classes !== null ? { class_dirs: classes } : {}),
+        env_files: await envFilesState(projectPath),
+      };
     },
     // 2.0.x custom rules outside the project are not run any more: say so on
     // every response, cached or not, not only in tools_run.
@@ -294,6 +302,8 @@ registerToolModule(
             },
           },
           { name: 'dotnet-analyzers', run: async (c) => dotnetNotApplicableToScope({ ctx, files, ...c }) },
+          { name: CLIENT_TRUST_TOOL, run: (c) => runClientTrust({ ctx, files, ...c }) },
+          { name: TEST_INTEGRITY_TOOL, run: (c) => runTestIntegrity({ ctx, ...c }) },
         ];
       } else {
         passes = [
@@ -324,6 +334,7 @@ registerToolModule(
           },
           { name: SPOTBUGS, after: afterSemgrep, run: async (c) => runSpotbugs({ ctx, reportDir, files: await scanned(), ...c }) },
           { name: 'dotnet-analyzers', after: ['semgrep'], run: (c) => runDotnetAnalyzers({ ctx, ...c }) },
+          { name: CLIENT_TRUST_TOOL, run: (c) => runClientTrust({ ctx, ...c }) },
         ];
       }
       const { tools_run, missing_tools, parser_inputs } = await runScannerPasses(passes, maxParallelScanners());
@@ -1126,6 +1137,49 @@ async function runGosec(args: Collect & { ctx: InvokeContext; reportDir: string;
  * and never reported as covering it; when the scope holds .NET sources that
  * only they would have read, that is a named gap (`missing_tools`).
  */
+/**
+ * The client-trust checks (`clienttrust/clientTrustPass.ts`): the project's
+ * `.env*` files — the git-ignored ones too — for a secret behind a browser
+ * prefix, and its Supabase migrations for tables without RLS and open write
+ * policies. With a scope, only its files (and the migrations of a Supabase
+ * directory one of them is in). Nothing to check is no entry.
+ */
+async function runClientTrust(args: Collect & { ctx: InvokeContext; files?: readonly string[] }): Promise<void> {
+  const { ctx, tools_run, missing_tools, parser_inputs } = args;
+  const exclusions = ctx.exclusions;
+  const result = await runClientTrustChecks(ctx.projectPath, {
+    ...(args.files !== undefined ? { files: args.files } : {}),
+    ...(exclusions !== null ? { ignores: (rel: string) => exclusions.ignores(rel) } : {}),
+  });
+  if (result === null) return;
+  tools_run.push(result.toolRun);
+  missing_tools.push(...result.missing);
+  parser_inputs.push({ parser: clientTrustParser(result.findings), input: null });
+}
+
+/**
+ * Weakened tests in a scope's change set (`testintegrity/`): a scope over a
+ * diff or since a commit compares its base with the working tree (or the
+ * index, for a staged scope) — a `paths` scope or a `since` date has no
+ * change to read. The factory keeps the scope's findings.
+ */
+async function runTestIntegrity(args: Collect & { ctx: InvokeContext }): Promise<void> {
+  const { ctx, tools_run, missing_tools, parser_inputs } = args;
+  const changes = ctx.scope?.changes ?? null;
+  if (changes === null) return;
+  const scope = ctx.scope;
+  const result = await runTestIntegrityCheck(ctx.projectPath, {
+    base: changes.base,
+    target: changes.target === 'index' ? { kind: 'index' } : { kind: 'worktree', untracked: changes.untracked },
+    ...(scope !== null ? { member: (p: string) => scope.member(p) } : {}),
+  });
+  if (result === null) return;
+  tools_run.push(result.toolRun);
+  missing_tools.push(...result.missing);
+  const findings = result.findings;
+  parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
+}
+
 function dotnetNotApplicableToScope(args: Collect & { ctx: InvokeContext; files: readonly string[] }): void {
   const { ctx, files, tools_run, missing_tools } = args;
   if (!hasRootDotnetSignal(ctx.projectPath)) return;

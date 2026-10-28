@@ -129,6 +129,20 @@ export interface ResolvedScope {
    * them: a named gap ({@link STAGED_CONTENT_GAP}). Empty otherwise.
    */
   notAsStaged: string[];
+  /**
+   * The change a diff-reading check compares (`testintegrity/`): from a
+   * base commit to the working tree or the index. Null for `paths`, for a
+   * `since` date (no single base commit), and before the first commit.
+   */
+  changes: ScopeChanges | null;
+}
+
+/** See {@link ResolvedScope.changes}. `base` is a commit id; a check compares from its merge base with HEAD. */
+export interface ScopeChanges {
+  base: string;
+  target: 'worktree' | 'index';
+  /** Untracked files are part of the change (`include_untracked`). */
+  untracked: boolean;
 }
 
 /** The `tools_run` / `missing_tools` name of the gap `ResolvedScope.notAsStaged` makes. */
@@ -178,6 +192,7 @@ export async function resolveScope(
   let history: ScopeHistory | null = null;
   let contentFiles: string[];
   let notAsStaged: string[] = [];
+  let changes: ScopeChanges | null = null;
   const meta: Record<string, unknown> = {};
 
   if (diff !== undefined || since !== undefined) {
@@ -189,6 +204,7 @@ export async function resolveScope(
     notAsStaged = (change.notAsStaged ?? []).filter(inPaths);
     touched = new Set([...change.touched, ...change.files].filter(inPaths));
     history = change.history;
+    changes = change.changes;
     Object.assign(meta, change.meta);
   } else if (pathPart !== null) {
     files = pathPart.files;
@@ -241,7 +257,7 @@ export async function resolveScope(
       )
       .digest('hex'),
   };
-  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore, notAsStaged };
+  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore, notAsStaged, changes };
 }
 
 // ---- paths ------------------------------------------------------------
@@ -426,6 +442,8 @@ interface ChangeSet {
   history: ScopeHistory | null;
   /** `staged` only: see `ResolvedScope.notAsStaged`. */
   notAsStaged?: string[];
+  /** See `ResolvedScope.changes`. */
+  changes: ScopeChanges | null;
   meta: Record<string, unknown>;
 }
 
@@ -530,6 +548,7 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
       touched,
       contentFiles: extra,
       history: { base: baseSha, head: headSha },
+      changes: { base: baseSha, target: 'worktree', untracked: diff.include_untracked === true },
       meta: {
         diff: {
           base: diff.base,
@@ -543,6 +562,7 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
   }
 
   const includeUntracked = diff.include_untracked ?? diff.staged !== true;
+  const headSha = hasCommits ? await resolveCommit(projectPath, 'HEAD') : null;
   let tracked: string[];
   let notAsStaged: string[] = [];
   if (diff.staged === true) {
@@ -584,6 +604,10 @@ async function resolveDiff(projectPath: string, diff: NonNullable<ScanScope['dif
     contentFiles: files,
     history: null,
     notAsStaged,
+    changes:
+      hasCommits && headSha !== null
+        ? { base: headSha, target: diff.staged === true ? 'index' : 'worktree', untracked: includeUntracked }
+        : null,
     meta: { diff: { staged: diff.staged === true, include_untracked: includeUntracked } },
   };
 }
@@ -631,6 +655,7 @@ async function resolveSince(projectPath: string, since: string): Promise<ChangeS
       touched,
       contentFiles: [],
       history: { base: sinceSha, head: headSha },
+      changes: { base: sinceSha, target: 'worktree', untracked: false },
       meta: { since, since_sha: sinceSha, head_sha: headSha },
     };
   }
@@ -650,6 +675,7 @@ async function resolveSince(projectPath: string, since: string): Promise<ChangeS
     touched,
     contentFiles: [],
     history: { logOpts: `--since=${date}` },
+    changes: null,
     meta: { since, since_date: date, head_sha: headSha },
   };
 }

@@ -41,6 +41,13 @@
  * what was copied and which configuration files the tree changes
  * (`rulesSource`). A file the ref has but that cannot be copied stops the run
  * before any step, with `CiRefError`.
+ *
+ * `diffBase` (`--diff-base`, else the `--baseline-ref` / `--rules-ref`
+ * ref): one more step reads the CHANGE from that ref's merge base to the
+ * working tree, untracked files included, for weakened tests
+ * (`testintegrity/`, {@link TEST_INTEGRITY_STEP}) — a whole-project scan has
+ * no diff of its own to read them from. Its findings join the scan's, so the
+ * gate judges them like any other: a focused `.only` is high, the rest medium.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -63,6 +70,8 @@ import { configDifferences, copyConfigFromRef, type ResolvedRef } from './refCon
 import { filesChangedFrom } from './changedSince.js';
 import { acceptedByHistoryIgnores } from './gitleaksIgnore.js';
 import { readInHistoryHunks } from './historyHunks.js';
+import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
+import { runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
 import { rememberSecretValues, secretValueOf } from './secretValues.js';
 import type { PartialParseRef, RulesSource, ScanStepResult } from './types.js';
 
@@ -119,7 +128,12 @@ export interface RunScansOptions {
    * it when it judges a pull request against a ref without `--build-pr`.
    */
   buildRefused?: string;
+  /** The ref whose change is read for weakened tests — see the module comment. */
+  diffBase?: ResolvedRef;
 }
+
+/** The step that reads the change since {@link RunScansOptions.diffBase} for weakened tests: its pass's own name. */
+export const TEST_INTEGRITY_STEP = TEST_INTEGRITY_TOOL;
 
 /**
  * The extra step under a ref: `scan_secrets` with `scope.paths` — the files
@@ -195,10 +209,13 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
         }
       }
 
+      const integrity = opts.diffBase !== undefined ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
+      if (integrity !== null) steps.push(integrity.step);
+
       const read = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read);
       const wholeFiles = read.filter((f) => !accepted.has(f));
-      const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles]);
+      const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles, ...(integrity?.findings ?? [])]);
       // The gate keys secrets by their values, read in memory from where
       // gitleaks' reports of this run locate them (ci/secretValues.ts): a
       // secret replaced in place, or added above another, is new.
@@ -224,6 +241,24 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
       /* best-effort cleanup; a stray temp dir is a leak, not a correctness bug */
     }
   }
+}
+
+/**
+ * {@link TEST_INTEGRITY_STEP} over the change since `ref` — null when the
+ * change touches no test file (nothing to record, as for a scanner that does
+ * not apply). A change git cannot read is a step that ran and failed: a gap.
+ */
+async function testIntegrityStep(projectPath: string, ref: ResolvedRef): Promise<{ step: ScanStepResult; findings: Finding[] } | null> {
+  const result = await runTestIntegrityCheck(projectPath, {
+    base: ref.commit,
+    target: { kind: 'worktree', untracked: true },
+    label: ref.ref,
+  });
+  if (result === null) return null;
+  return {
+    step: { tool: TEST_INTEGRITY_STEP, ran: true, tools_run: [result.toolRun], missing_tools: result.missing },
+    findings: result.findings,
+  };
 }
 
 /** `SCAN_SEQUENCE`, minus `scan_dast` when the caller gave no base url. */
