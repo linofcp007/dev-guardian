@@ -84,7 +84,7 @@ describe("files over Semgrep's size limit are a named gap (real Semgrep)", () =>
     const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
     expect(semgrep?.status).toBe('ok');
     expect(semgrep?.reason).toMatch(/1 file over Semgrep's 1 MB target limit was not scanned: src\/big\.py \(1\.2 MB\)/);
-    expect(r.missing_tools).toContain('semgrep');
+    expect(r.missing_tools, JSON.stringify(semgrep)).toContain('semgrep');
     expect(r.coverage).toBe('partial');
   });
 
@@ -94,7 +94,7 @@ describe("files over Semgrep's size limit are a named gap (real Semgrep)", () =>
     const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
     expect(semgrep?.reason ?? '').not.toMatch(/nothing here is a language its rules cover/);
     expect(semgrep?.reason).toMatch(/over Semgrep's 1 MB target limit.*big\.py/);
-    expect(r.missing_tools).toContain('semgrep');
+    expect(r.missing_tools, JSON.stringify(semgrep)).toContain('semgrep');
   });
 
   it.skipIf(!SEMGREP_INSTALLED)('a scoped scan names the scoped file over the limit too', async () => {
@@ -118,8 +118,9 @@ describe("files over Semgrep's size limit are a named gap (real Semgrep)", () =>
 
   it.skipIf(!SEMGREP_INSTALLED)('bug_hunt names it', async () => {
     const r = await tool('bug_hunt', await project({ 'src/big.py': BIG, 'src/small.py': 'x = 1\n' }));
-    expect(r.tools_run.find((t) => t.name === 'semgrep')?.reason).toMatch(/target limit was not scanned: src\/big\.py/);
-    expect(r.missing_tools).toContain('semgrep');
+    const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
+    expect(semgrep?.reason).toMatch(/target limit was not scanned: src\/big\.py/);
+    expect(r.missing_tools, JSON.stringify(semgrep)).toContain('semgrep');
   });
 
   it.skipIf(!SEMGREP_INSTALLED)('scan_wordpress names it', async () => {
@@ -152,7 +153,7 @@ describe("files over Semgrep's size limit are a named gap (real Semgrep)", () =>
     const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
     expect(semgrep?.reason).toMatch(/target limit was not scanned: new_big\.py/);
     expect(semgrep?.reason ?? '').not.toMatch(/old\/big\.py/);
-    expect(r.missing_tools).toContain('semgrep');
+    expect(r.missing_tools, JSON.stringify(semgrep)).toContain('semgrep');
   });
 
   it.skipIf(!SEMGREP_INSTALLED)('a file over the limit that .guardianignore excludes is no gap', async () => {

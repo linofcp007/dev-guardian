@@ -8,6 +8,23 @@ version bump.
 
 ## [Unreleased]
 
+## [3.7.1] - 2026-10-28
+
+The two follow-ups 3.7.0 left open.
+
+### Fixed
+
+- **`register_custom_rules` no longer calls a valid rule refused when Semgrep broke.** Every non-zero `semgrep
+  --validate` read as a refusal, and the exit code cannot tell them apart (measured on 1.182.0: a broken pattern, a rule
+  missing a key and a missing config all exit 2). A refusal is now Semgrep's verdict in its output; a run whose engine stopped, or that crashed
+  with no verdict, validates nothing — the file keeps its shape check and `semgrep_validated: false` says why.
+- **`web-js-sql-template` recognises three more safe shapes**: the variable of a `for … of` over an array of string
+  literals (inline, or a `const` of the same file that is never mutated, the loop body never assigning it), a `Math`
+  function as a number, and `Array.from({ length: n }, () => '?').join(…)` placeholders. Each has a near-miss and an
+  unsafe twin that still fires (a loop over an array from input, a `MathLike`, a callback returning values); over
+  dev-guardian's own `mcp/src` the rule goes from 26 findings to 22, the rest constant SQL fragments built by helpers,
+  which only interprocedural propagation could see.
+
 ## [3.7.0] - 2026-10-27
 
 What the 3.6.1 review left open, each measured before it was closed: a scanned repository's package-manager config

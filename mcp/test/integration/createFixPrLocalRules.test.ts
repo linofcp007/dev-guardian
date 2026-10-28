@@ -77,7 +77,8 @@ describe('create_fix_pr', () => {
     const reg = await TOOLS.find((t) => t.name === 'register_custom_rules')?.handler(
       { project_path: repo, paths: [rulesFile] }, c as never,
     );
-    expect(reg).toMatchObject({ ok: true, registered: [rulesFile] });
+    // The whole answer on a failure: `rejected` and the note say why.
+    expect(reg, JSON.stringify(reg)).toMatchObject({ ok: true, registered: [rulesFile] });
 
     const sast = await TOOLS.find((t) => t.name === 'scan_sast')?.handler(
       { project_path: repo, local_only: true, force: true }, c as never,

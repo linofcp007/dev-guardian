@@ -139,14 +139,14 @@ describe('Semgrep reads every .guardian folder but the root one’s generated ou
     // `/.guardian` into a Windows path and it excludes nothing anywhere).
     const atRoot = await repo('guardian-dir-quirk-', LAYOUT);
     const r = runSemgrep(['scan', '--metrics=off', '--config', join(atRoot, 'rule.yml'), '--exclude=/.guardian', '--json', '--quiet', atRoot], { cwd: atRoot });
-    expect(r.status).toBe(0);
+    expect(r.status, r.stderr.slice(-2000)).toBe(0);
     expect(resultPaths(r.stdout, atRoot)).toEqual(['index.js', 'lib/.guardian/handler.js', 'lib/.guardian/reports/old.js']);
 
     // One level down, the same flag names `<repo>/.guardian`: nothing here.
     const top = await repo('guardian-dir-quirk-mono-', Object.fromEntries(Object.entries(LAYOUT).map(([k, v]) => [`pkg/${k}`, v])));
     const sub = join(top, 'pkg');
     const s = runSemgrep(['scan', '--metrics=off', '--config', join(sub, 'rule.yml'), '--exclude=/.guardian', '--json', '--quiet', sub], { cwd: sub });
-    expect(s.status).toBe(0);
+    expect(s.status, s.stderr.slice(-2000)).toBe(0);
     expect(resultPaths(s.stdout, sub)).toContain('.guardian/reports/sast-1/old.js');
   });
 
@@ -156,7 +156,7 @@ describe('Semgrep reads every .guardian folder but the root one’s generated ou
       const flags = semgrepScanFlags(dir).args;
       expect(flags).not.toContain('--exclude=.guardian');
       const r = runSemgrep(['scan', '--metrics=off', '--config', join(dir, 'rule.yml'), ...flags, '--json', '--quiet', dir], { cwd: dir });
-      expect(r.status).toBe(0);
+      expect(r.status, r.stderr.slice(-2000)).toBe(0);
       expect(resultPaths(r.stdout, dir)).toEqual([
         '.guardian/handler.js',
         'index.js',

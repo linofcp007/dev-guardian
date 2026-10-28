@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-10-27T20:04:47.066Z",
+  "generated_at": "2026-10-27T23:15:18.470Z",
   "entries": [
     {
       "identity": "0231d64e102c4a2862fd78839c9cb9fc6001c745c8a4f39f9bb533a0dbc44f0d",
@@ -201,15 +201,6 @@
       "added": "2026-10-27T19:08:54.914Z"
     },
     {
-      "identity": "265d85a883a6d97046eecc6fd1fdf8596381178e6bdb615a73974ee66318fb5f",
-      "match_id": "833f6bb0f398f8530465d26b73279794e8b46dabd6c01a878f0a9406cab738a1",
-      "fingerprint": "bb68b91bd90c15c0c9577f321418301038e57b8b79c484792cb65c8a8d43b5be",
-      "severity": "high",
-      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
-      "file_path": "mcp/src/storage/db.ts",
-      "added": "2026-10-27T19:08:54.914Z"
-    },
-    {
       "identity": "26b309ce206f6e30a644c413e612265ef601dd1c7cd7697625fbc24d06763f5d",
       "match_id": "303c2ca48161745ca7122c2d096f5ae7d8e0dcc115d58247a401cbcd84f9dab5",
       "fingerprint": "4edb73acb5be5d00431842077362eb4091a678f7651a8cfb6c8124104070041a",
@@ -288,15 +279,6 @@
       "severity": "low",
       "title": "License 'ISC' on setprototypeof",
       "file_path": "mcp/package-lock.json",
-      "added": "2026-10-27T19:08:54.914Z"
-    },
-    {
-      "identity": "2d0022e9d42eb35fe456c859c4d39ef74623fd0d578a9554c569d3716f99120b",
-      "match_id": "73063abd1984f442de716b903ac8611d6a1dc036206c431d96685fc0188b68b2",
-      "fingerprint": "d23770fac0706f4a9e9e5aef0a656678b83f532dbf86c2dbd966db8ce941154c",
-      "severity": "high",
-      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
-      "file_path": "mcp/src/storage/dbProvenance.ts",
       "added": "2026-10-27T19:08:54.914Z"
     },
     {
@@ -1224,15 +1206,6 @@
       "severity": "low",
       "title": "License 'MIT' on send",
       "file_path": "mcp/package-lock.json",
-      "added": "2026-10-27T19:08:54.914Z"
-    },
-    {
-      "identity": "dbf591f8b9a0df82cb12a3fab67756b119b14da477248bf9a9df27b0c83bc98c",
-      "match_id": "d609f0afa259ebbffe6eb99a89541ec9955d05fbe413ca07ae1400f17142b87f",
-      "fingerprint": "e54f085be08ee30b93d200b0a93e93b34760651c172cd896ab38c35dbfe75519",
-      "severity": "high",
-      "title": "O texto SQL entregue ao driver é construído por interpolação ou concatenação com um valor que não é um literal: o que esse valor contiver…",
-      "file_path": "mcp/src/storage/maintenance.ts",
       "added": "2026-10-27T19:08:54.914Z"
     },
     {

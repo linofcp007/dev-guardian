@@ -80018,6 +80018,11 @@ async function validateOnce(files, cwd) {
     return { answered: false, reason: `semgrep --validate did not finish (${run2.outcome})` };
   }
   if (run2.exitCode === 0) return { answered: true, ok: true, message: "" };
+  const said = `${run2.stderr}
+${run2.stdout}`.replace(ANSI3, "");
+  if (ENGINE_STOPPED.test(said) || !REFUSAL.test(said)) {
+    return { answered: false, reason: `semgrep --validate failed (exit ${String(run2.exitCode)}): ${validateMessage(run2.stderr, run2.stdout)}` };
+  }
   return { answered: true, ok: false, message: validateMessage(run2.stderr, run2.stdout) };
 }
 async function validateRuleFiles(files, cwd) {
@@ -80038,7 +80043,7 @@ async function validateRuleFiles(files, cwd) {
   }
   return { validated: true, invalid: invalid2 };
 }
-var SEMGREP_VALIDATE_TIMEOUT_MS, ANSI3, MAX_MESSAGE2;
+var SEMGREP_VALIDATE_TIMEOUT_MS, ANSI3, MAX_MESSAGE2, REFUSAL, ENGINE_STOPPED;
 var init_semgrepValidate = __esm({
   "src/runners/semgrepValidate.ts"() {
     "use strict";
@@ -80046,6 +80051,8 @@ var init_semgrepValidate = __esm({
     SEMGREP_VALIDATE_TIMEOUT_MS = 6e4;
     ANSI3 = /\u001b\[[0-9;]*m/g;
     MAX_MESSAGE2 = 400;
+    REFUSAL = /Configuration is invalid|^\s*semgrep error:/im;
+    ENGINE_STOPPED = /semgrep-core exited with|the engine was killed/i;
   }
 });
 
