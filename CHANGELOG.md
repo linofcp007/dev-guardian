@@ -8,6 +8,11 @@ version bump.
 
 ## [Unreleased]
 
+## [3.8.1] - 2026-10-28
+
+Two failures that waste a run: a baseline that could never be written, found only after the scan, and a Semgrep
+report its own formatter lost.
+
 ### Fixed
 
 - **`baseline update` refuses a target it cannot write before it scans.** A `.guardian/baseline.json` that is a link,
