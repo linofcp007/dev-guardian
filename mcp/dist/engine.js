@@ -48,7 +48,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/configFile.ts
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, parse, relative, resolve } from "node:path";
 function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
@@ -100,6 +100,12 @@ function walkLinksUnder(under, path3) {
   return { ok: true };
 }
 function readBoundedBytes(path3, maxBytes, opts = {}) {
+  try {
+    if (!statSync(path3).isFile()) return { status: "refused", reason: "not-a-regular-file" };
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+  }
   let fd;
   try {
     fd = openSync(path3, OPEN_FLAGS);
@@ -1061,7 +1067,7 @@ var init_mcpConfig = __esm({
 });
 
 // src/platform/binaryPath.ts
-import { accessSync, constants as constants3, lstatSync as lstatSync4, statSync } from "node:fs";
+import { accessSync, constants as constants3, lstatSync as lstatSync4, statSync as statSync2 } from "node:fs";
 import { extname, join as join5 } from "node:path";
 function envValue(env, name, platform) {
   if (platform !== "win32") return env[name];
@@ -1086,7 +1092,7 @@ function extensionsFor(name, env) {
 }
 function runnable(file2, platform) {
   try {
-    const st = statSync(file2);
+    const st = statSync2(file2);
     if (!st.isFile()) return false;
     if (platform === "win32") return true;
     accessSync(file2, constants3.X_OK);
@@ -1128,7 +1134,7 @@ function findFileOnPath(name, env = process.env, platform = process.platform) {
   for (const dir of searchDirs(envValue(env, "PATH", platform) ?? "", platform)) {
     const candidate = join5(dir, name);
     try {
-      if (statSync(candidate).isFile()) return candidate;
+      if (statSync2(candidate).isFile()) return candidate;
     } catch {
     }
   }
@@ -1892,7 +1898,7 @@ var init_osDetect = __esm({
 });
 
 // src/platform/projectPath.ts
-import { existsSync as existsSync2, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
+import { existsSync as existsSync2, realpathSync as realpathSync3, statSync as statSync3 } from "node:fs";
 import { homedir } from "node:os";
 import { parse as parse3, resolve as resolve6 } from "node:path";
 function projectPathErrorCode(e) {
@@ -1925,7 +1931,7 @@ function resolveProjectPath(input2) {
   if (!existsSync2(candidate)) {
     throw new InvalidProjectPathError("not_found", candidate);
   }
-  if (!statSync2(candidate).isDirectory()) {
+  if (!statSync3(candidate).isDirectory()) {
     throw new InvalidProjectPathError("not_a_directory", candidate);
   }
   const canonical2 = canonicalPath(candidate);
@@ -4575,7 +4581,7 @@ var init_version = __esm({
 });
 
 // src/platform/pathSpelling.ts
-import { lstatSync as lstatSync5, statSync as statSync3 } from "node:fs";
+import { lstatSync as lstatSync5, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join9, parse as parse4, resolve as resolve9, sep as sep2 } from "node:path";
 function isNetworkOrDevicePath(path3) {
   return /^[\\/]{2}/.test(path3) || path3.startsWith("\\??\\");
@@ -4586,7 +4592,7 @@ function isUnresolvablePath(path3) {
 function spellingOnlyCanonical(path3) {
   if (!isAbsolute4(path3) || isUnresolvablePath(path3)) return null;
   try {
-    if (!statSync3(path3).isDirectory()) return null;
+    if (!statSync4(path3).isDirectory()) return null;
   } catch {
     return null;
   }
@@ -4609,7 +4615,7 @@ function storedPathTarget(stored, canonicalProject) {
   if (stored === canonicalProject) return "canonical";
   if (!isAbsolute4(stored) || isUnresolvablePath(stored)) return "unresolved";
   try {
-    if (!statSync3(stored).isDirectory()) return "elsewhere";
+    if (!statSync4(stored).isDirectory()) return "elsewhere";
   } catch {
     return "missing";
   }
@@ -4667,7 +4673,7 @@ var init_dbError = __esm({
 });
 
 // src/storage/userData.ts
-import { chmodSync as chmodSync2, lstatSync as lstatSync6, mkdirSync as mkdirSync3, statSync as statSync4 } from "node:fs";
+import { chmodSync as chmodSync2, lstatSync as lstatSync6, mkdirSync as mkdirSync3, statSync as statSync5 } from "node:fs";
 import { join as join11 } from "node:path";
 function notPrivate(path3, why) {
   return new GuardianDbError("data-dir", path3, `'${path3}' ${why}`);
@@ -4699,7 +4705,7 @@ function assertPrivateDir(path3, st) {
 }
 function statOrNull(path3, follow) {
   try {
-    return follow ? statSync4(path3) : lstatSync6(path3);
+    return follow ? statSync5(path3) : lstatSync6(path3);
   } catch (error62) {
     const code = error62.code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;
@@ -5171,10 +5177,10 @@ import { createHash as createHash3 } from "node:crypto";
 import { realpathSync as realpathSync4 } from "node:fs";
 import { isAbsolute as isAbsolute6, relative as relative5, resolve as resolve10, sep as sep3 } from "node:path";
 function assignIdentities(findings, opts = {}) {
-  const located = findings.map((finding4, index) => ({
-    finding: finding4,
+  const located = findings.map((finding5, index) => ({
+    finding: finding5,
     index,
-    location: locate3(finding4.file_path, opts.projectPath)
+    location: locate3(finding5.file_path, opts.projectPath)
   }));
   const contentKeys = /* @__PURE__ */ new Map();
   let currentPath = null;
@@ -5190,14 +5196,14 @@ function assignIdentities(findings, opts = {}) {
   const byPath2 = [...located].sort(
     (a, b) => compareStrings(a.location.readable ?? "", b.location.readable ?? "")
   );
-  for (const { finding: finding4, index, location } of byPath2) {
-    contentKeys.set(index, sha2562(contentSource(finding4, location.readable, linesOf2)));
+  for (const { finding: finding5, index, location } of byPath2) {
+    contentKeys.set(index, sha2562(contentSource(finding5, location.readable, linesOf2)));
   }
-  const keyed = located.map(({ finding: finding4, index, location }) => ({
-    finding: finding4,
+  const keyed = located.map(({ finding: finding5, index, location }) => ({
+    finding: finding5,
     index,
-    tool: finding4.tool.toLowerCase(),
-    rule: finding4.rule_id ?? "",
+    tool: finding5.tool.toLowerCase(),
+    rule: finding5.rule_id ?? "",
     path: location.key,
     contentKey: contentKeys.get(index) ?? sha2562("none")
   }));
@@ -5246,16 +5252,16 @@ function sharedSecretCount(group) {
   return secrets > 1 ? secrets : null;
 }
 function rekeyStoredIdentities(rows, projectPath) {
-  const keyed = rows.flatMap((finding4, index) => {
-    if (finding4.content_key === void 0) return [];
-    const contentKey = isCredentialFinding(finding4) && finding4.tool.toLowerCase() !== "gitleaks" ? sha2562(`secret
-${finding4.rule_id ?? ""}`) : finding4.content_key;
+  const keyed = rows.flatMap((finding5, index) => {
+    if (finding5.content_key === void 0) return [];
+    const contentKey = isCredentialFinding(finding5) && finding5.tool.toLowerCase() !== "gitleaks" ? sha2562(`secret
+${finding5.rule_id ?? ""}`) : finding5.content_key;
     return [{
-      finding: finding4,
+      finding: finding5,
       index,
-      tool: finding4.tool.toLowerCase(),
-      rule: finding4.rule_id ?? "",
-      path: locate3(finding4.file_path, projectPath).key,
+      tool: finding5.tool.toLowerCase(),
+      rule: finding5.rule_id ?? "",
+      path: locate3(finding5.file_path, projectPath).key,
       contentKey
     }];
   });
@@ -5326,11 +5332,11 @@ function gateMatchKeys(findings, opts = {}) {
   const renamed = opts.renamedFrom ?? /* @__PURE__ */ new Map();
   const out = findings.map(() => ({}));
   const byValue = opts.secretValue;
-  const moved2 = findings.flatMap((finding4, index) => {
-    const path3 = locate3(finding4.file_path, void 0).key;
+  const moved2 = findings.flatMap((finding5, index) => {
+    const path3 = locate3(finding5.file_path, void 0).key;
     const from = renamed.get(path3);
-    if (from === void 0 || finding4.content_key === void 0) return [];
-    return [{ finding: finding4, index, tool: finding4.tool.toLowerCase(), rule: finding4.rule_id ?? "", path: from, contentKey: finding4.content_key }];
+    if (from === void 0 || finding5.content_key === void 0) return [];
+    return [{ finding: finding5, index, tool: finding5.tool.toLowerCase(), rule: finding5.rule_id ?? "", path: from, contentKey: finding5.content_key }];
   });
   for (const [index, identity] of identitiesOf(moved2)) {
     const slot = out[index];
@@ -5338,23 +5344,23 @@ function gateMatchKeys(findings, opts = {}) {
   }
   const valued = /* @__PURE__ */ new Map();
   const groups = /* @__PURE__ */ new Map();
-  findings.forEach((finding4, index) => {
-    const content = matchContentKey(finding4);
+  findings.forEach((finding5, index) => {
+    const content = matchContentKey(finding5);
     if (content === null) return;
-    const current = locate3(finding4.file_path, void 0).key;
+    const current = locate3(finding5.file_path, void 0).key;
     const path3 = renamed.get(current) ?? current;
-    const head = JSON.stringify([MATCH_KEY_VERSION, finding4.tool.toLowerCase(), finding4.rule_id ?? "", path3, content]);
-    if (byValue !== void 0 && isGitleaksSecret(finding4)) {
+    const head = JSON.stringify([MATCH_KEY_VERSION, finding5.tool.toLowerCase(), finding5.rule_id ?? "", path3, content]);
+    if (byValue !== void 0 && isGitleaksSecret(finding5)) {
       const members3 = valued.get(head);
-      if (members3 === void 0) valued.set(head, [{ index, finding: finding4 }]);
-      else members3.push({ index, finding: finding4 });
+      if (members3 === void 0) valued.set(head, [{ index, finding: finding5 }]);
+      else members3.push({ index, finding: finding5 });
       return;
     }
-    const pass2 = isGitleaksSecret(finding4) ? isHistoryLocator(finding4) ? "history" : "files" : "";
+    const pass2 = isGitleaksSecret(finding5) ? isHistoryLocator(finding5) ? "history" : "files" : "";
     const key = `${head}
 ${pass2}`;
     const members2 = groups.get(key);
-    const member = { index, finding: finding4, pass: pass2, head };
+    const member = { index, finding: finding5, pass: pass2, head };
     if (members2 === void 0) groups.set(key, [member]);
     else members2.push(member);
   });
@@ -5397,12 +5403,12 @@ ${occurrence}`);
 function valueSlots(members2, secretValue, introducedAt) {
   const first = /* @__PURE__ */ new Map();
   const valueOf = /* @__PURE__ */ new Map();
-  for (const { index, finding: finding4 } of members2) {
-    const value = secretValue(finding4);
+  for (const { index, finding: finding5 } of members2) {
+    const value = secretValue(finding5);
     if (value === void 0) continue;
     valueOf.set(index, value);
-    const at = introducedAt?.(finding4) ?? (isHistoryLocator(finding4) ? Number.MAX_SAFE_INTEGER : Number.POSITIVE_INFINITY);
-    const here = { at, line: finding4.line_start ?? 0, end: finding4.line_end ?? 0, fingerprint: finding4.fingerprint };
+    const at = introducedAt?.(finding5) ?? (isHistoryLocator(finding5) ? Number.MAX_SAFE_INTEGER : Number.POSITIVE_INFINITY);
+    const here = { at, line: finding5.line_start ?? 0, end: finding5.line_end ?? 0, fingerprint: finding5.fingerprint };
     const seen = first.get(value);
     if (seen === void 0 || earlier(here, seen)) first.set(value, here);
   }
@@ -12994,7 +13000,7 @@ function yamlDocumentValue(doc) {
   return doc.toJS({ maxAliasCount: -1 });
 }
 function duplicateYamlKey(doc) {
-  const keyOf = (key) => {
+  const keyOf2 = (key) => {
     const node2 = (0, import_yaml.isAlias)(key) ? key.resolve(doc) : key;
     return (0, import_yaml.isScalar)(node2) ? String(node2.value) : String(node2);
   };
@@ -13004,7 +13010,7 @@ function duplicateYamlKey(doc) {
     if ((0, import_yaml.isMap)(node2)) {
       const seen = /* @__PURE__ */ new Set();
       for (const pair of node2.items) {
-        const key = keyOf(pair.key);
+        const key = keyOf2(pair.key);
         if (seen.has(key)) return key;
         seen.add(key);
         stack.push(pair.value);
@@ -14403,7 +14409,7 @@ __export(db_exports, {
   userDataDir: () => userDataDir
 });
 import { createHash as createHash4, randomBytes as randomBytes4 } from "node:crypto";
-import { existsSync as existsSync7, mkdirSync as mkdirSync4, rmSync as rmSync3, statSync as statSync5, writeFileSync as writeFileSync3 } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync4, rmSync as rmSync3, statSync as statSync6, writeFileSync as writeFileSync3 } from "node:fs";
 import { createRequire as createRequire2 } from "node:module";
 import { dirname as dirname8, join as join16, resolve as resolve11 } from "node:path";
 function loadSqlite() {
@@ -14919,7 +14925,7 @@ function ensureDir(dir) {
 }
 function isDirectory(path3) {
   try {
-    return statSync5(path3).isDirectory();
+    return statSync6(path3).isDirectory();
   } catch {
     return false;
   }
@@ -16084,7 +16090,7 @@ var require_cross_spawn = __commonJS({
 });
 
 // src/runners/npmCmdShim.ts
-import { closeSync as closeSync4, fstatSync as fstatSync4, openSync as openSync4, readSync as readSync4, statSync as statSync6 } from "node:fs";
+import { closeSync as closeSync4, fstatSync as fstatSync4, openSync as openSync4, readSync as readSync4, statSync as statSync7 } from "node:fs";
 import { dirname as dirname9, join as join17 } from "node:path";
 function readShim(file2) {
   let fd;
@@ -16102,7 +16108,7 @@ function readShim(file2) {
 }
 function isFile(path3) {
   try {
-    return statSync6(path3).isFile();
+    return statSync7(path3).isFile();
   } catch {
     return false;
   }
@@ -16990,11 +16996,11 @@ var init_historyView = __esm({
 // src/ci/secretValues.ts
 import { createHmac, randomBytes as randomBytes5 } from "node:crypto";
 import { isAbsolute as isAbsolute8, join as join21 } from "node:path";
-function secretValueOf(finding4) {
-  return values.get(finding4);
+function secretValueOf(finding5) {
+  return values.get(finding5);
 }
-function secretIntroducedAt(finding4) {
-  return introduced.get(finding4);
+function secretIntroducedAt(finding5) {
+  return introduced.get(finding5);
 }
 function secretValuesRead(findings) {
   return findings.some((f) => attempted.has(f));
@@ -17302,22 +17308,22 @@ function buildBaseline(findings, previous, now, renamedFrom) {
   const match = baselineMatcher(previous, findings, renamedFrom);
   const byKey = /* @__PURE__ */ new Map();
   const keyOfFingerprint = /* @__PURE__ */ new Map();
-  findings.forEach((finding4, index) => {
-    const added = match.entryFor(finding4, index)?.added ?? now;
+  findings.forEach((finding5, index) => {
+    const added = match.entryFor(finding5, index)?.added ?? now;
     const matchKey = match.keys[index]?.matchKey;
     const entry = {
-      ...finding4.identity !== void 0 ? { identity: finding4.identity } : {},
+      ...finding5.identity !== void 0 ? { identity: finding5.identity } : {},
       ...matchKey !== void 0 ? { match_id: matchKey } : {},
       // A credential's, over its redacted snippet: a row stored before that
       // holds one hashed over the plaintext, which this file is committed with.
-      fingerprint: credentialSafeFingerprint(finding4),
-      severity: finding4.severity,
-      title: finding4.title,
-      file_path: finding4.file_path,
+      fingerprint: credentialSafeFingerprint(finding5),
+      severity: finding5.severity,
+      title: finding5.title,
+      file_path: finding5.file_path,
       added
     };
-    const key = keyOfFingerprint.get(finding4.fingerprint) ?? entryKey(entry);
-    keyOfFingerprint.set(finding4.fingerprint, key);
+    const key = keyOfFingerprint.get(finding5.fingerprint) ?? entryKey(entry);
+    keyOfFingerprint.set(finding5.fingerprint, key);
     byKey.set(key, entry);
   });
   const entries3 = [...byKey.values()].sort(
@@ -17331,7 +17337,7 @@ function entryKey(entry) {
 function newFindings(findings, baseline, renamedFrom) {
   if (baseline === null) return [...findings];
   const match = baselineMatcher(baseline, findings, renamedFrom);
-  return findings.filter((finding4, index) => match.entryFor(finding4, index) === void 0);
+  return findings.filter((finding5, index) => match.entryFor(finding5, index) === void 0);
 }
 function baselineMatcher(baseline, findings, renamedFrom) {
   const entries3 = baseline?.entries ?? [];
@@ -17350,11 +17356,11 @@ function baselineMatcher(baseline, findings, renamedFrom) {
   });
   const takenBy = /* @__PURE__ */ new Map();
   const slotOf = (index) => keys[index]?.matchKey ?? `#${index}`;
-  const exact = findings.map((finding4, index) => {
-    const direct = known.find(finding4);
+  const exact = findings.map((finding5, index) => {
+    const direct = known.find(finding5);
     if (direct !== void 0) return direct;
     const renamedIdentity = keys[index]?.renamedIdentity;
-    return renamedIdentity !== void 0 ? known.find({ fingerprint: finding4.fingerprint, identity: renamedIdentity }) : void 0;
+    return renamedIdentity !== void 0 ? known.find({ fingerprint: finding5.fingerprint, identity: renamedIdentity }) : void 0;
   });
   exact.forEach((entry, index) => {
     if (entry !== void 0 && !takenBy.has(entry)) takenBy.set(entry, slotOf(index));
@@ -18177,7 +18183,7 @@ function makeFinding(input2) {
   if (input2.line_end !== void 0) fingerprintInput.line_end = input2.line_end;
   if (snippet !== void 0) fingerprintInput.snippet = snippet;
   const fingerprint = computeFingerprint(fingerprintInput);
-  const finding4 = {
+  const finding5 = {
     fingerprint,
     tool: input2.tool,
     severity: input2.severity,
@@ -18185,21 +18191,21 @@ function makeFinding(input2) {
     title: input2.title,
     fix_available: input2.fix_available ?? false
   };
-  if (input2.rule_id !== void 0) finding4.rule_id = input2.rule_id;
-  if (input2.subcategory !== void 0) finding4.subcategory = input2.subcategory;
-  if (input2.message !== void 0) finding4.message = input2.message;
-  if (input2.file_path !== void 0) finding4.file_path = input2.file_path;
-  if (input2.line_start !== void 0) finding4.line_start = input2.line_start;
-  if (input2.line_end !== void 0) finding4.line_end = input2.line_end;
-  if (snippet !== void 0) finding4.snippet = snippet;
+  if (input2.rule_id !== void 0) finding5.rule_id = input2.rule_id;
+  if (input2.subcategory !== void 0) finding5.subcategory = input2.subcategory;
+  if (input2.message !== void 0) finding5.message = input2.message;
+  if (input2.file_path !== void 0) finding5.file_path = input2.file_path;
+  if (input2.line_start !== void 0) finding5.line_start = input2.line_start;
+  if (input2.line_end !== void 0) finding5.line_end = input2.line_end;
+  if (snippet !== void 0) finding5.snippet = snippet;
   if (input2.taxonomy !== void 0) {
     const { cwe, owasp } = classifyTaxonomy(input2.taxonomy);
-    if (cwe !== void 0) finding4.cwe = cwe;
-    if (owasp !== void 0) finding4.owasp = owasp;
+    if (cwe !== void 0) finding5.cwe = cwe;
+    if (owasp !== void 0) finding5.owasp = owasp;
   }
   const aliases = cleanAliases(input2.vuln_aliases, input2.rule_id);
-  if (aliases.length > 0) finding4.vuln_aliases = aliases;
-  return finding4;
+  if (aliases.length > 0) finding5.vuln_aliases = aliases;
+  return finding5;
 }
 function cleanAliases(raw, ruleId) {
   const seen = new Set(ruleId === void 0 ? [] : [ruleId.trim().toUpperCase()]);
@@ -18791,22 +18797,22 @@ var init_trivy = __esm({
         for (const result of asArray(getProp(root, "Results"))) {
           const target = getString(result, "Target") ?? "";
           for (const v of asArray(getProp(result, "Vulnerabilities"))) {
-            const finding4 = mapVulnerability(v, target, ctx);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapVulnerability(v, target, ctx);
+            if (finding5) findings.push(finding5);
             const cve = mapVulnerabilityCve(v);
             if (cve) cves.push(cve);
           }
           for (const l of asArray(getProp(result, "Licenses"))) {
-            const finding4 = mapLicense(l, target, ctx);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapLicense(l, target, ctx);
+            if (finding5) findings.push(finding5);
           }
           for (const m of asArray(getProp(result, "Misconfigurations"))) {
-            const finding4 = mapMisconfiguration(m, target, ctx);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapMisconfiguration(m, target, ctx);
+            if (finding5) findings.push(finding5);
           }
           for (const s of asArray(getProp(result, "Secrets"))) {
-            const finding4 = mapSecret(s, target, ctx);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapSecret(s, target, ctx);
+            if (finding5) findings.push(finding5);
           }
         }
         return { findings, cves };
@@ -19567,15 +19573,15 @@ function repoSuppressionFrom(raw, projectPath) {
     const modified = asArray(getProp(result, "ExperimentalModifiedFindings"));
     for (const entry of modified) {
       count += 1;
-      const finding4 = getProp(entry, "Finding");
-      const id = getString(finding4, "VulnerabilityID") ?? getString(finding4, "ID") ?? getString(finding4, "AVDID") ?? getString(finding4, "RuleID") ?? getString(finding4, "Name");
+      const finding5 = getProp(entry, "Finding");
+      const id = getString(finding5, "VulnerabilityID") ?? getString(finding5, "ID") ?? getString(finding5, "AVDID") ?? getString(finding5, "RuleID") ?? getString(finding5, "Name");
       if (id !== void 0 && !distinct.has(id)) {
         distinct.add(id);
         if (ids2.length < MAX_SUPPRESSED_IDS) ids2.push(id);
       }
       const key = FINDING_ARRAY[getString(entry, "Type") ?? ""];
       if (key === void 0 || findings.length >= MAX_SUPPRESSED_FINDINGS) continue;
-      const one = { Results: [{ Target: getString(result, "Target") ?? "", [key]: [finding4] }] };
+      const one = { Results: [{ Target: getString(result, "Target") ?? "", [key]: [finding5] }] };
       for (const f of trivyParser.parse(one, { project_path: projectPath }).findings) {
         const { message: _description, ...bounded2 } = f;
         findings.push(bounded2);
@@ -19937,10 +19943,10 @@ function assessCoverage(scanType, toolsRun, missingTools, context = {}) {
   if (ranWithGaps.length > 0) {
     clauses.push(`${ranWithGaps.join(", ")} ran with reduced coverage (see its tools_run reason)`);
   }
-  const clause = clauses.length > 0 ? clauses.join("; ") : `${list2} did not run`;
+  const clause2 = clauses.length > 0 ? clauses.join("; ") : `${list2} did not run`;
   return {
     coverage,
-    warning: `\u26A0\uFE0F ${scanType}: partial coverage \u2014 ${clause}; findings may be incomplete.`
+    warning: `\u26A0\uFE0F ${scanType}: partial coverage \u2014 ${clause2}; findings may be incomplete.`
   };
 }
 var NO_SUPPORTED_MANIFEST, NOT_SHIPPED_ADVICE;
@@ -22502,7 +22508,7 @@ function evaluateGate(input2) {
   const gatingCoverage = computeCoverage(t.allToolsRun, t.gatingMissingTools);
   const newlyFound = newFindings(findings, baseline, input2.renamedFrom);
   const blocking = newlyFound.filter(
-    (finding4) => SEVERITY_ORDER[finding4.severity] >= SEVERITY_ORDER[failOn]
+    (finding5) => SEVERITY_ORDER[finding5.severity] >= SEVERITY_ORDER[failOn]
   );
   const exitCode = blocking.length > 0 ? CI_EXIT.GATE_FAILED : exitCodeForCoverage(gatingCoverage);
   return {
@@ -22920,10 +22926,10 @@ function sourceTypesOf(slot) {
 function runSlotOf(tool54) {
   return SCRIPT_ERA_RUN_SLOTS[tool54] ?? "security_full";
 }
-function findingInSlot(scan2, finding4, slot) {
+function findingInSlot(scan2, finding5, slot) {
   if (scan2.scan_type === "sarif_import") return isSarifSlot(slot);
   if (scan2.scan_type !== "security_full") return scan2.scan_type === slot;
-  return scriptEraSlotOfFinding(finding4) === slot;
+  return scriptEraSlotOfFinding(finding5) === slot;
 }
 function slotView(scan2, slot) {
   if (scan2.scan_type !== "security_full") {
@@ -23530,7 +23536,7 @@ function insertGapMs(heldMs) {
   return Math.min(FINDINGS_INSERT_GAP_MS, Math.max(20, Math.ceil(heldMs / 2) + 5));
 }
 function rowToFinding(row) {
-  const finding4 = {
+  const finding5 = {
     fingerprint: row.fingerprint,
     tool: row.tool,
     severity: row.severity,
@@ -23539,22 +23545,22 @@ function rowToFinding(row) {
     fix_available: intToBool(row.fix_available),
     fix_applied: intToBool(row.fix_applied)
   };
-  if (row.rule_id !== null) finding4.rule_id = row.rule_id;
-  if (row.subcategory !== null) finding4.subcategory = row.subcategory;
-  if (row.message !== null) finding4.message = row.message;
-  if (row.file_path !== null) finding4.file_path = row.file_path;
-  if (row.line_start !== null) finding4.line_start = row.line_start;
-  if (row.line_end !== null) finding4.line_end = row.line_end;
-  if (row.snippet !== null) finding4.snippet = row.snippet;
-  if (row.identity !== null) finding4.identity = row.identity;
-  if (row.content_key !== null) finding4.content_key = row.content_key;
+  if (row.rule_id !== null) finding5.rule_id = row.rule_id;
+  if (row.subcategory !== null) finding5.subcategory = row.subcategory;
+  if (row.message !== null) finding5.message = row.message;
+  if (row.file_path !== null) finding5.file_path = row.file_path;
+  if (row.line_start !== null) finding5.line_start = row.line_start;
+  if (row.line_end !== null) finding5.line_end = row.line_end;
+  if (row.snippet !== null) finding5.snippet = row.snippet;
+  if (row.identity !== null) finding5.identity = row.identity;
+  if (row.content_key !== null) finding5.content_key = row.content_key;
   const cwe = readTaxonomyColumn(row.cwe, STORED_CWE);
-  if (cwe !== null) finding4.cwe = cwe;
+  if (cwe !== null) finding5.cwe = cwe;
   const owasp = readTaxonomyColumn(row.owasp, STORED_OWASP);
-  if (owasp !== null) finding4.owasp = owasp;
+  if (owasp !== null) finding5.owasp = owasp;
   const aliases = parseAliases(row.vuln_aliases);
-  if (aliases.length > 0) finding4.vuln_aliases = aliases;
-  return finding4;
+  if (aliases.length > 0) finding5.vuln_aliases = aliases;
+  return finding5;
 }
 function taxonomyColumn(values2) {
   return values2 === void 0 || values2.length === 0 ? null : JSON.stringify(values2);
@@ -23789,8 +23795,8 @@ var init_findingsRepo = __esm({
             if (skip2 === void 0) {
               const sql2 = `SELECT * FROM findings WHERE scan_id = ? AND ${column} IN (${inList(chunk)})`;
               for (const row of this.db.prepare(sql2).all(scanId, ...chunk)) {
-                const finding4 = rowToFinding(row);
-                byFingerprint.set(finding4.fingerprint, finding4);
+                const finding5 = rowToFinding(row);
+                byFingerprint.set(finding5.fingerprint, finding5);
               }
               continue;
             }
@@ -25677,7 +25683,7 @@ function defineLazyInternal(inst, key, compute) {
     }
   });
 }
-function installLazyProp(inst, key, make, enumerable) {
+function installLazyProp(inst, key, make2, enumerable) {
   const proto = claim(inst, key);
   if (!proto)
     return;
@@ -25686,7 +25692,7 @@ function installLazyProp(inst, key, make, enumerable) {
     get() {
       const desc = { configurable: true, writable: true, enumerable, value: void 0 };
       Object.defineProperty(this, key, desc);
-      desc.value = make(this);
+      desc.value = make2(this);
       Object.defineProperty(this, key, desc);
       return desc.value;
     },
@@ -25953,12 +25959,12 @@ function _getMessage() {
 function _setMessage(value) {
   this._zod.message = value;
 }
-function node(obj, key, make) {
+function node(obj, key, make2) {
   if (!Object.prototype.hasOwnProperty.call(obj, key)) {
     if (key === "__proto__") {
-      Object.defineProperty(obj, key, { value: make(), writable: true, enumerable: true, configurable: true });
+      Object.defineProperty(obj, key, { value: make2(), writable: true, enumerable: true, configurable: true });
     } else {
-      obj[key] = make();
+      obj[key] = make2();
     }
   }
   return obj[key];
@@ -26400,8 +26406,8 @@ function datetime(args) {
   const opts = ["Z"];
   if (args.offset)
     opts.push(`([+-](?:[01]\\d|2[0-3]):[0-5]\\d)`);
-  const qualified2 = `${timeSource({ precision: args.precision, seconds: true })}(?:${opts.join("|")})`;
-  const timeRegex2 = args.local ? `${qualified2}|${timeSource({ precision: args.precision })}` : qualified2;
+  const qualified3 = `${timeSource({ precision: args.precision, seconds: true })}(?:${opts.join("|")})`;
+  const timeRegex2 = args.local ? `${qualified3}|${timeSource({ precision: args.precision })}` : qualified3;
   return new RegExp(`^${dateSource}T(?:${timeRegex2})$`);
 }
 function fixedBase64(bodyLength, padding) {
@@ -48319,12 +48325,12 @@ var init_checks3 = __esm({
 });
 
 // node_modules/zod/v4/classic/errors.js
-function _lazyMethod(proto, key, make) {
+function _lazyMethod(proto, key, make2) {
   Object.defineProperty(proto, key, {
     configurable: true,
     enumerable: false,
     get() {
-      const value = make(this);
+      const value = make2(this);
       Object.defineProperty(this, key, { value, configurable: true, writable: true });
       return value;
     },
@@ -53835,8 +53841,587 @@ var init_historyHunks = __esm({
   }
 });
 
+// src/testintegrity/detect.ts
+function languageOf(path3) {
+  const ext = /\.([A-Za-z0-9]+)$/.exec(path3)?.[1]?.toLowerCase();
+  switch (ext) {
+    case "js":
+    case "jsx":
+    case "mjs":
+    case "cjs":
+    case "ts":
+    case "tsx":
+    case "mts":
+    case "cts":
+      return "js";
+    case "py":
+      return "py";
+    case "go":
+      return "go";
+    case "java":
+    case "kt":
+    case "kts":
+    case "groovy":
+      return "jvm";
+    case "cs":
+      return "cs";
+    case "rs":
+      return "rs";
+    case "php":
+      return "php";
+    case "rb":
+      return "rb";
+    default:
+      return null;
+  }
+}
+function isTestFile(path3) {
+  const p = path3.replace(/\\/g, "/");
+  if (NOT_TESTS.test(p)) return false;
+  const lang = languageOf(p);
+  if (lang === null) return false;
+  const name = p.slice(p.lastIndexOf("/") + 1);
+  const inDir = (re) => re.test(p);
+  switch (lang) {
+    case "js":
+      return /\.(?:test|spec|e2e|cy)\.[A-Za-z]+$/.test(name) || inDir(/(?:^|\/)(?:__tests__|tests?|specs?|e2e|cypress)\//);
+    case "py":
+      return /^test_.*\.py$/.test(name) || /_tests?\.py$/.test(name) || name === "conftest.py" || inDir(/(?:^|\/)tests?\//);
+    case "go":
+      return name.endsWith("_test.go");
+    case "jvm":
+      return /(?:Test|Tests|IT|Spec)\.(?:java|kt|kts|groovy)$/.test(name) || inDir(/(?:^|\/)src\/(?:test|androidTest|integrationTest)\//);
+    case "cs":
+      return /Tests?\.cs$/.test(name) || inDir(/(?:^|\/)[^/]*\.?Tests?\//);
+    case "rs":
+      return inDir(/(?:^|\/)tests\//);
+    case "php":
+      return /Test\.php$/.test(name) || inDir(/(?:^|\/)tests?\//);
+    case "rb":
+      return /_(?:spec|test)\.rb$/.test(name) || inDir(/(?:^|\/)(?:spec|test)\//);
+  }
+}
+function isRelevantPath(path3) {
+  const name = path3.slice(path3.lastIndexOf("/") + 1);
+  return isTestFile(path3) || name === "package.json" || languageOf(path3) === "rs" && !NOT_TESTS.test(path3);
+}
+function isComment(text2, lang) {
+  const t = text2.trim();
+  if (t.startsWith("//") || t.startsWith("/*") || t.startsWith("*")) return true;
+  if ((lang === "py" || lang === "rb" || lang === "php") && t.startsWith("#") && !t.startsWith("#[")) return true;
+  return false;
+}
+function countAssertions(text2, lang) {
+  let n = 0;
+  for (const line of text2.split(/\r?\n/)) {
+    if (isComment(line, lang)) continue;
+    const re = ASSERTIONS[lang];
+    re.lastIndex = 0;
+    n += [...line.matchAll(re)].length;
+  }
+  return n;
+}
+function scriptsOf(text2) {
+  if (text2 === null || text2 === void 0) return null;
+  const parsed2 = parseJsonBounded(text2);
+  if (!parsed2.ok || typeof parsed2.value !== "object" || parsed2.value === null) return null;
+  const scripts = parsed2.value.scripts;
+  if (typeof scripts !== "object" || scripts === null) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(scripts)) if (typeof v === "string") out[k] = v;
+  return out;
+}
+function lineOfKey(text2, name) {
+  const needle = JSON.stringify(name);
+  const lines = text2.split(/\r?\n/);
+  const i = lines.findIndex((l) => new RegExp(`${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:`).test(l));
+  return i < 0 ? void 0 : i + 1;
+}
+function make(rule, severity, path3, line, title, message3) {
+  return makeFinding({
+    tool: TEST_INTEGRITY_TOOL,
+    rule_id: rule,
+    severity,
+    category: "quality",
+    subcategory: "test-integrity",
+    title,
+    message: message3,
+    file_path: path3,
+    ...line !== void 0 ? { line_start: line, line_end: line } : {}
+  });
+}
+function detectTestWeakening(changes) {
+  const findings = [];
+  for (const c of changes) {
+    const name = c.path.slice(c.path.lastIndexOf("/") + 1);
+    if (name === "package.json") {
+      findings.push(...scriptFindings(c));
+      continue;
+    }
+    const wasTest = isTestFile(c.oldPath ?? c.path);
+    const isTest = c.status !== "deleted" && isTestFile(c.path);
+    if (c.status === "deleted" && wasTest || c.status === "renamed" && wasTest && !isTest) {
+      const oldLang = languageOf(c.oldPath ?? c.path);
+      const lost = typeof c.before === "string" && oldLang !== null ? countAssertions(c.before, oldLang) : null;
+      const what = c.status === "deleted" ? "deletes" : `renames to ${c.path}, a name no test runner picks up,`;
+      findings.push(
+        make(
+          "test-file-deleted",
+          "medium",
+          c.oldPath ?? c.path,
+          void 0,
+          `Test file ${c.status === "deleted" ? "deleted" : "renamed out of the suite"}: ${c.oldPath ?? c.path}`,
+          `This change ${what} the test file ${c.oldPath ?? c.path}${lost !== null ? ` and its ${lost} assertion(s)` : ""}: whatever it checked is no longer checked. If the code it tested is gone too, say so in the change; if not, restore it, or move its cases to the file that replaces it.`
+        )
+      );
+      continue;
+    }
+    const lang = languageOf(c.path);
+    if (lang === null) continue;
+    if (!isTest && lang !== "rs") continue;
+    const removedTest = c.removed.some((l) => !isComment(l.text, lang) && JS_TEST_DECL.test(l.text));
+    for (const added of c.added) {
+      if (isComment(added.text, lang)) continue;
+      const marker = MARKERS[lang].find((m) => m.re.test(added.text));
+      if (marker === void 0) continue;
+      if (lang === "rs" && !isTest && marker.rule !== "test-skipped") continue;
+      if (marker.rule === "test-todo-replaced" && !removedTest) continue;
+      if (marker.rule === "test-focused") {
+        findings.push(
+          make(
+            "test-focused",
+            "high",
+            c.path,
+            added.line,
+            `${c.path}:${added.line} adds ${marker.what}`,
+            `This change adds ${marker.what}: the runner then runs only the focused tests and silently skips every other test of the file or the run \u2014 the suite goes green without testing the rest. Remove the focus before committing (most runners can fail on it: Jest/Vitest \`--forbid-only\`/\`allowOnly: false\`, Mocha \`--forbid-only\`).`
+          )
+        );
+      } else if (marker.rule === "test-todo-replaced") {
+        findings.push(
+          make(
+            "test-todo-replaced",
+            "medium",
+            c.path,
+            added.line,
+            `${c.path}:${added.line} turns a test into a todo`,
+            `This change removes a test and adds ${marker.what} in its place: the behaviour it checked is no longer checked, and the run stays green. ${ASK}`
+          )
+        );
+      } else {
+        findings.push(
+          make(
+            "test-skipped",
+            "medium",
+            c.path,
+            added.line,
+            `${c.path}:${added.line} adds ${marker.what}`,
+            `This change adds ${marker.what}: the test no longer runs, and the suite passes without it. ${ASK}`
+          )
+        );
+      }
+    }
+    if (isTest && wasTest && (c.status === "modified" || c.status === "renamed") && typeof c.before === "string" && typeof c.after === "string") {
+      const before = countAssertions(c.before, lang);
+      const after2 = countAssertions(c.after, lang);
+      if (after2 < before) {
+        const re = ASSERTIONS[lang];
+        const first = c.removed.find((l) => {
+          re.lastIndex = 0;
+          return !isComment(l.text, lang) && re.test(l.text);
+        });
+        findings.push(
+          make(
+            "test-assertions-removed",
+            "medium",
+            c.path,
+            first?.line ?? c.removed[0]?.line,
+            `${c.path}: assertions dropped from ${before} to ${after2}`,
+            `This change leaves ${c.path} with ${after2} assertion(s) where it had ${before}: the tests still run, and check less. Deleting or loosening an assertion is how a failing test is made to pass without fixing the code; if the checks moved elsewhere or the behaviour is gone, say so in the change.`
+          )
+        );
+      }
+    }
+  }
+  return findings;
+}
+function scriptFindings(c) {
+  if (c.status === "deleted") return [];
+  const before = scriptsOf(c.before) ?? {};
+  const after2 = scriptsOf(c.after);
+  if (after2 === null || typeof c.after !== "string") return [];
+  const out = [];
+  for (const [name, command] of Object.entries(after2)) {
+    if (!TEST_SCRIPT.test(name)) continue;
+    const old = before[name];
+    if (old === command) continue;
+    const loosened = ALWAYS_PASSES.test(command) && (old === void 0 || !ALWAYS_PASSES.test(old));
+    const emptied = NO_OP.test(command) && old !== void 0 && !NO_OP.test(old);
+    if (!loosened && !emptied) continue;
+    out.push(
+      make(
+        "test-script-always-passes",
+        "medium",
+        c.path,
+        lineOfKey(c.after, name),
+        `${c.path}: the "${name}" script now passes whatever the tests do`,
+        `This change makes the "${name}" script ${emptied ? "a no-op" : "pass regardless"} (${emptied ? `it was "${old ?? ""}"` : "`--passWithNoTests`, `|| true`, `|| exit 0` or the like"}): a CI step or a pre-merge check that runs it is green whether or not a single test runs or passes. Restore the command; if no test exists yet, say so instead of hiding it.`
+      )
+    );
+  }
+  return out;
+}
+var TEST_INTEGRITY_TOOL, NOT_TESTS, JS_CALLEE, NAMED_DECLARATION, MARKERS, ASSERTIONS, JS_TEST_DECL, TEST_SCRIPT, ALWAYS_PASSES, NO_OP, ASK;
+var init_detect = __esm({
+  "src/testintegrity/detect.ts"() {
+    "use strict";
+    init_boundedJson();
+    init_scannerParsers();
+    TEST_INTEGRITY_TOOL = "guardian-test-integrity";
+    NOT_TESTS = /(?:^|\/)(?:fixtures?|__fixtures__|__snapshots__|testdata|__mocks__|mocks?|snapshots?)\//i;
+    JS_CALLEE = String.raw`(?<![\w$.])(?:it|test|describe|context|suite|specify|bench)\b(?:\.\w+)*`;
+    NAMED_DECLARATION = String.raw`\s*\(\s*(?:['"\x60]|[A-Za-z_$][\w$]*\.name\b)`;
+    MARKERS = {
+      js: [
+        { rule: "test-focused", re: new RegExp(String.raw`${JS_CALLEE}\.only\s*[.(\x60]`), what: "a focused test (.only)" },
+        { rule: "test-focused", re: new RegExp(String.raw`(?<![\w$.])f(?:it|describe)${NAMED_DECLARATION}`), what: "a focused test (fit / fdescribe)" },
+        { rule: "test-skipped", re: new RegExp(String.raw`${JS_CALLEE}\.skip\s*[.(\x60]`), what: "a skipped test (.skip)" },
+        {
+          rule: "test-skipped",
+          re: new RegExp(String.raw`(?<![\w$.])x(?:it|test|describe|context|specify)${NAMED_DECLARATION}`),
+          what: "a skipped test (xit / xdescribe / xtest)"
+        },
+        { rule: "test-skipped", re: /(?<![\w$.])(?:test|it)\.fixme\s*\(/, what: "a skipped test (.fixme)" },
+        { rule: "test-todo-replaced", re: /(?<![\w$.])(?:it|test)\.todo\s*\(/, what: "a test turned into a todo (.todo)" }
+      ],
+      py: [
+        { rule: "test-skipped", re: /@pytest\.mark\.(?:skip|skipif|xfail)\b/, what: "a skipped test (@pytest.mark.skip / skipif / xfail)" },
+        { rule: "test-skipped", re: /\bpytest\.(?:skip|xfail)\s*\(/, what: "a skipped test (pytest.skip / pytest.xfail)" },
+        { rule: "test-skipped", re: /@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)\b/, what: "a skipped test (@unittest.skip)" },
+        { rule: "test-skipped", re: /\bself\.skipTest\s*\(|\braise\s+(?:unittest\.)?SkipTest\b/, what: "a skipped test (skipTest)" }
+      ],
+      go: [{ rule: "test-skipped", re: /\b\w+(?:\(\))?\.Skip(?:f|Now)?\s*\(/, what: "a skipped test (t.Skip)" }],
+      jvm: [{ rule: "test-skipped", re: /@(?:Disabled|Ignore)\b/, what: "a disabled test (@Disabled / @Ignore)" }],
+      cs: [
+        { rule: "test-skipped", re: /\[\s*(?:Fact|Theory|Test|TestMethod|TestCase)\b[^\]]*\bSkip\s*=/, what: "a skipped test (Skip =)" },
+        { rule: "test-skipped", re: /\[\s*Ignore\b/, what: "an ignored test ([Ignore])" }
+      ],
+      rs: [{ rule: "test-skipped", re: /#\[\s*ignore\b/, what: "an ignored test (#[ignore])" }],
+      php: [{ rule: "test-skipped", re: /\bmarkTest(?:Skipped|Incomplete)\s*\(/, what: "a skipped test (markTestSkipped)" }],
+      rb: [
+        { rule: "test-focused", re: /^\s*f(?:it|describe|context|specify)\b/, what: "a focused example (fit / fdescribe)" },
+        { rule: "test-focused", re: /\bfocus:\s*true\b/, what: "a focused example (focus: true)" },
+        { rule: "test-skipped", re: /^\s*x(?:it|describe|context|specify|scenario|feature)\b/, what: "a skipped example (xit)" },
+        { rule: "test-skipped", re: /^\s*(?:skip|pending)\b(?!\s*[=:])/, what: "a skipped example (skip / pending)" },
+        { rule: "test-skipped", re: /\bskip:\s*true\b/, what: "a skipped example (skip: true)" }
+      ]
+    };
+    ASSERTIONS = {
+      js: /\bexpect(?:TypeOf)?\s*\(|\bassert(?:\.\w+)*\s*\(|\.should\b|\bt\.(?:is|not|deepEqual|notDeepEqual|true|false|truthy|falsy|throws|throwsAsync|equal|ok|assert)\s*\(/g,
+      py: /\bassert\b|\bself\.assert\w*\s*\(|\bpytest\.raises\s*\(|\bpytest\.approx\s*\(/g,
+      go: /\b\w+\.(?:Error|Errorf|Fatal|Fatalf|Fail|FailNow)\s*\(|\b(?:assert|require)\.\w+\s*\(/g,
+      jvm: /\bassert\w*\s*\(|\bAssert\w*\.\w+\s*\(|\bverify\s*\(|\bexpect\w*\s*\(/g,
+      cs: /\bAssert\.\w+\s*\(|\.Should\w*\s*\(|\bVerify\s*\(/g,
+      rs: /\b(?:debug_)?assert(?:_eq|_ne|_matches)?!\s*\(/g,
+      php: /(?:\$this->|self::|static::)(?:assert\w*|expect\w*)\s*\(/g,
+      rb: /\bexpect\s*[({]|\.should\b|\bassert\w*\b|\brefute\w*\b/g
+    };
+    JS_TEST_DECL = /\b(?:it|test)\s*\(/;
+    TEST_SCRIPT = /^(?:tests?|ci|check|verify)(?:[:._-].*)?$|^.*[:._-]tests?(?:[:._-].*)?$/i;
+    ALWAYS_PASSES = /--pass-?with-?no-?tests\b|\|\|\s*(?:true\b|exit\s+0\b|:|echo\b)|;\s*exit\s+0\b/i;
+    NO_OP = /^\s*(?:echo\b[^|&;]*|exit\s+0|true|:)\s*$/;
+    ASK = "A test can be skipped for a reason \u2014 a quarantined flaky test with a ticket, a platform it cannot run on \u2014 so say which in the change (a comment with the ticket, the condition), or restore the test and fix what it caught.";
+  }
+});
+
+// src/testintegrity/gitChanges.ts
+import { createHash as createHash8 } from "node:crypto";
+function diffRange(base2, target) {
+  if (target.kind === "index") return ["--cached", base2];
+  if (target.kind === "commit") return [base2, target.sha];
+  return [base2];
+}
+async function mergeBase(cwd, a, b) {
+  const r = await git(cwd, ["merge-base", "--end-of-options", a, b]);
+  if (r.exitCode !== 0) return null;
+  const sha = r.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+function parseNameStatus(stdout) {
+  const parts = splitNul(stdout);
+  const out = [];
+  for (let i = 0; i < parts.length; ) {
+    const code = parts[i] ?? "";
+    const letter = code.charAt(0);
+    if (letter === "R" || letter === "C") {
+      const oldPath = parts[i + 1] ?? "";
+      const path4 = parts[i + 2] ?? "";
+      i += 3;
+      out.push(letter === "R" ? { status: "renamed", path: path4, oldPath } : { status: "added", path: path4 });
+      continue;
+    }
+    const path3 = parts[i + 1] ?? "";
+    i += 2;
+    if (letter === "A") out.push({ status: "added", path: path3 });
+    else if (letter === "D") out.push({ status: "deleted", path: path3 });
+    else if (letter === "M" || letter === "T") out.push({ status: "modified", path: path3 });
+  }
+  return out;
+}
+function parseUnifiedZero(diff) {
+  const added = [];
+  const removed = [];
+  let newLine = 0;
+  let inHunk = false;
+  for (const raw of diff.split("\n")) {
+    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (hunk !== null) {
+      const start = Number(hunk[1]);
+      newLine = hunk[2] === "0" ? start + 1 : start;
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith("+")) {
+      added.push({ line: newLine, text: line.slice(1) });
+      newLine += 1;
+    } else if (line.startsWith("-")) {
+      removed.push({ line: Math.max(1, newLine), text: line.slice(1) });
+    } else if (line.startsWith("diff --git")) {
+      inHunk = false;
+    }
+  }
+  return { added, removed };
+}
+async function showAt(cwd, rev, path3) {
+  const r = await git(cwd, ["show", "--no-textconv", `${rev}:./${path3}`]);
+  if (r.exitCode !== 0 || r.stdout.length > MAX_TEXT_BYTES) return null;
+  return r.stdout;
+}
+async function textAfter(cwd, target, path3) {
+  if (target.kind === "commit") return showAt(cwd, target.sha, path3);
+  if (target.kind === "index") return showAt(cwd, "", path3);
+  const r = readProjectText(cwd, path3, MAX_TEXT_BYTES);
+  return r.status === "ok" ? r.text : null;
+}
+async function readChangeSet(cwd, base2, target, member) {
+  const r = await git(cwd, ["diff", "-z", "--name-status", "-M", "--relative", "--no-ext-diff", ...diffRange(base2, target), "--"]);
+  if (r.exitCode !== 0) {
+    throw new Error(`git diff could not list the changes: ${r.stderr.split(/\r?\n/).find((l) => l.trim() !== "") ?? `exit ${r.exitCode}`}`);
+  }
+  const listed2 = parseNameStatus(r.stdout);
+  if (target.kind === "worktree" && target.untracked) {
+    const u = await git(cwd, ["ls-files", "-z", "--others", "--exclude-standard"]);
+    if (u.exitCode === 0) for (const path3 of splitNul(u.stdout)) listed2.push({ status: "added", path: path3, untracked: true });
+  }
+  const notes = [];
+  if (target.kind === "worktree" && target.untracked) {
+    const cut = await pairUntrackedMoves(cwd, base2, listed2);
+    if (cut !== null) notes.push(cut);
+  }
+  const relevant = listed2.filter(
+    (l) => (isRelevantPath(l.path) || l.oldPath !== void 0 && isRelevantPath(l.oldPath)) && (member === void 0 || member(l.path) || l.oldPath !== void 0 && member(l.oldPath))
+  );
+  const changes = [];
+  for (const l of relevant.slice(0, MAX_FILES)) {
+    const before = l.status === "added" ? null : await showAt(cwd, base2, l.oldPath ?? l.path);
+    if (l.status === "deleted") {
+      changes.push({ status: "deleted", path: l.path, added: [], removed: [], before, after: null });
+      continue;
+    }
+    const after2 = await textAfter(cwd, target, l.path);
+    let lines;
+    if (l.untracked === true && after2 !== null) {
+      lines = l.oldPath !== void 0 && before !== null ? lineChanges(before, after2) : { added: numbered(after2), removed: [] };
+    } else {
+      const paths = l.oldPath !== void 0 ? [l.oldPath, l.path] : [l.path];
+      const d = await git(cwd, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--relative", ...diffRange(base2, target), "--", ...paths]);
+      lines = d.exitCode === 0 ? parseUnifiedZero(d.stdout) : { added: [], removed: [] };
+    }
+    changes.push({
+      status: l.status,
+      path: l.path,
+      ...l.oldPath !== void 0 ? { oldPath: l.oldPath } : {},
+      ...lines,
+      before,
+      after: after2
+    });
+  }
+  return { changes, skipped: Math.max(0, relevant.length - MAX_FILES), notes };
+}
+function numbered(text2) {
+  return text2.split(/\r?\n/).map((line, i) => ({ line: i + 1, text: line }));
+}
+function lineChanges(before, after2) {
+  const left = /* @__PURE__ */ new Map();
+  for (const l of before.split(/\r?\n/)) left.set(l.trim(), (left.get(l.trim()) ?? 0) + 1);
+  const right = /* @__PURE__ */ new Map();
+  const added = [];
+  for (const l of numbered(after2)) {
+    const key = l.text.trim();
+    right.set(key, (right.get(key) ?? 0) + 1);
+    const n = left.get(key) ?? 0;
+    if (n > 0) left.set(key, n - 1);
+    else added.push(l);
+  }
+  const removed = [];
+  for (const l of numbered(before)) {
+    const key = l.text.trim();
+    const n = right.get(key) ?? 0;
+    if (n > 0) right.set(key, n - 1);
+    else removed.push({ line: 1, text: l.text });
+  }
+  return { added, removed };
+}
+function lineCounts(text2) {
+  const counts = /* @__PURE__ */ new Map();
+  const digest = createHash8("sha256");
+  let total = 0;
+  for (const raw of text2.split(/\r?\n/)) {
+    const l = raw.trim();
+    if (l === "") continue;
+    counts.set(l, (counts.get(l) ?? 0) + 1);
+    digest.update(l).update("\n");
+    total += 1;
+  }
+  return { counts, total, hash: digest.digest("hex") };
+}
+function similarity(a, b) {
+  const [small, large] = a.counts.size <= b.counts.size ? [a, b] : [b, a];
+  let shared = 0;
+  for (const [line, n] of small.counts) shared += Math.min(n, large.counts.get(line) ?? 0);
+  return shared / Math.max(1, a.total, b.total);
+}
+function pairMoves(oldTexts, fresh) {
+  const old = [...oldTexts].map(([path3, text2]) => ({ path: path3, name: baseName(path3), lines: lineCounts(text2) }));
+  const news = fresh.map((f) => ({ path: f.path, name: baseName(f.path), lines: lineCounts(f.text) }));
+  const taken = /* @__PURE__ */ new Set();
+  const pairs = /* @__PURE__ */ new Map();
+  const pair = (f, o) => {
+    taken.add(o.path);
+    pairs.set(f.path, o.path);
+  };
+  const byHash = /* @__PURE__ */ new Map();
+  for (const o of old) if (o.lines.total > 0) byHash.set(o.lines.hash, [...byHash.get(o.lines.hash) ?? [], o]);
+  for (const sameName2 of [true, false]) {
+    for (const f of news) {
+      if (pairs.has(f.path) || f.lines.total === 0) continue;
+      const o = (byHash.get(f.lines.hash) ?? []).find((c) => !taken.has(c.path) && (!sameName2 || c.name === f.name));
+      if (o !== void 0) pair(f, o);
+    }
+  }
+  const byName = /* @__PURE__ */ new Map();
+  for (const o of old) byName.set(o.name, [...byName.get(o.name) ?? [], o]);
+  let budget = MAX_PAIR_COMPARISONS;
+  const cut = /* @__PURE__ */ new Set();
+  const search2 = (f, candidates2, skipName) => {
+    let best = null;
+    for (const o of candidates2) {
+      if (taken.has(o.path) || o.name === skipName) continue;
+      if (Math.min(o.lines.total, f.lines.total) * 2 < Math.max(o.lines.total, f.lines.total)) continue;
+      if (budget <= 0) {
+        cut.add(f.path);
+        break;
+      }
+      budget -= 1;
+      const score = similarity(o.lines, f.lines);
+      if (score >= 0.5 && (best === null || score > best.score)) best = { o, score };
+      if (best !== null && best.score >= 1) break;
+    }
+    if (best !== null) pair(f, best.o);
+  };
+  for (const f of news) if (!pairs.has(f.path)) search2(f, byName.get(f.name) ?? [], null);
+  for (const f of news) if (!pairs.has(f.path)) search2(f, old, f.name);
+  return { pairs, capped: cut.size };
+}
+async function pairUntrackedMoves(cwd, base2, listed2) {
+  const deleted = listed2.filter((l) => l.status === "deleted" && isRelevantPath(l.path)).slice(0, MAX_FILES);
+  const fresh = listed2.filter((l) => l.untracked === true && isRelevantPath(l.path)).slice(0, MAX_FILES);
+  if (deleted.length === 0 || fresh.length === 0) return null;
+  const oldTexts = /* @__PURE__ */ new Map();
+  for (const d of deleted) {
+    const text2 = await showAt(cwd, base2, d.path);
+    if (text2 !== null) oldTexts.set(d.path, text2);
+  }
+  const freshTexts = [];
+  for (const f of fresh) {
+    const r = readProjectText(cwd, f.path, MAX_TEXT_BYTES);
+    if (r.status === "ok") freshTexts.push({ path: f.path, text: r.text });
+  }
+  const { pairs, capped } = pairMoves(oldTexts, freshTexts);
+  const taken = new Set(pairs.values());
+  for (const f of fresh) {
+    const from = pairs.get(f.path);
+    if (from === void 0) continue;
+    f.status = "renamed";
+    f.oldPath = from;
+  }
+  for (let i = listed2.length - 1; i >= 0; i -= 1) {
+    const l = listed2[i];
+    if (l !== void 0 && l.status === "deleted" && taken.has(l.path)) listed2.splice(i, 1);
+  }
+  return capped > 0 ? `the search for moved test files stopped after ${MAX_PAIR_COMPARISONS} comparisons: ${capped} untracked file(s) were not compared with every deleted one (a file moved unchanged is still paired)` : null;
+}
+async function runTestIntegrityCheck(cwd, opts) {
+  const fail6 = (reason) => ({
+    toolRun: { name: TEST_INTEGRITY_TOOL, status: "failed", reason },
+    missing: [TEST_INTEGRITY_TOOL],
+    findings: []
+  });
+  const label = opts.label ?? opts.base;
+  const from = await mergeBase(cwd, opts.base, opts.head ?? "HEAD");
+  if (from === null) {
+    if (await resolveCommit(cwd, opts.base) === null) return fail6(`${label} names no commit: the change could not be read`);
+    return {
+      toolRun: {
+        name: TEST_INTEGRITY_TOOL,
+        status: "skipped",
+        reason: `no merge base of ${label} and ${opts.head ?? "HEAD"} in this clone (a shallow fetch?): the change cannot be told from the base's own, so it was not read \u2014 fetch the history between them`
+      },
+      missing: [],
+      findings: []
+    };
+  }
+  let read3;
+  try {
+    read3 = await readChangeSet(cwd, from, opts.target, opts.member);
+  } catch (e) {
+    return fail6(e instanceof Error ? e.message : String(e));
+  }
+  if (read3.changes.length === 0) return null;
+  const findings = detectTestWeakening(read3.changes);
+  const where = opts.target.kind === "index" ? "the staged changes" : opts.target.kind === "commit" ? opts.target.sha.slice(0, 12) : "the working tree";
+  const notes = [
+    ...read3.notes,
+    ...read3.skipped > 0 ? [`${read3.skipped} more changed test file(s) past the first ${MAX_FILES} were not read`] : []
+  ];
+  return {
+    toolRun: {
+      name: TEST_INTEGRITY_TOOL,
+      status: "ok",
+      reason: [`compared ${read3.changes.length} changed test file(s) and manifest(s) from ${from.slice(0, 12)} to ${where}`, ...notes].join("; ")
+    },
+    missing: read3.skipped > 0 ? [TEST_INTEGRITY_TOOL] : [],
+    findings
+  };
+}
+var MAX_FILES, MAX_TEXT_BYTES, MAX_PAIR_COMPARISONS, baseName;
+var init_gitChanges = __esm({
+  "src/testintegrity/gitChanges.ts"() {
+    "use strict";
+    init_projectFs();
+    init_git();
+    init_detect();
+    MAX_FILES = 500;
+    MAX_TEXT_BYTES = 2 * 1024 * 1024;
+    MAX_PAIR_COMPARISONS = 2e4;
+    baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
+  }
+});
+
 // src/platform/customRules.ts
-import { statSync as statSync7 } from "node:fs";
+import { statSync as statSync8 } from "node:fs";
 import { isAbsolute as isAbsolute10, join as join35, relative as relative9, sep as sep8 } from "node:path";
 function customRulesMetaKey(projectPath) {
   return `${CUSTOM_RULES_META_KEY}:${projectPath}`;
@@ -53918,7 +54503,7 @@ function inspectCustomSemgrepConfigs(ctx, projectPath) {
     }
     let isDir;
     try {
-      isDir = statSync7(entry).isDirectory();
+      isDir = statSync8(entry).isDirectory();
     } catch {
       continue;
     }
@@ -53945,7 +54530,7 @@ function legacyRegistrationNote(paths) {
 }
 function pathExists(p) {
   try {
-    statSync7(p);
+    statSync8(p);
     return true;
   } catch {
     return false;
@@ -54078,7 +54663,7 @@ function hasDotnetProject(projectPath) {
     return false;
   }
 }
-var LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT, LLM_PACK_MEASURED_SEMGREP;
+var LLM_RULES_FILE, WEBJS_RULES_FILE, CLIENT_TRUST_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT, LLM_PACK_MEASURED_SEMGREP;
 var init_semgrepConfigs = __esm({
   "src/runners/semgrepConfigs.ts"() {
     "use strict";
@@ -54088,9 +54673,16 @@ var init_semgrepConfigs = __esm({
     init_semgrepRuleIds();
     LLM_RULES_FILE = "llm.yml";
     WEBJS_RULES_FILE = "web-js.yml";
+    CLIENT_TRUST_RULES_FILE = "client-trust.yml";
     MOBILE_RULES_FILE = "mobile.yml";
     WORDPRESS_RULES_FILE = "wordpress.yml";
-    PLUGIN_PACK_FILES = [LLM_RULES_FILE, WEBJS_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE];
+    PLUGIN_PACK_FILES = [
+      LLM_RULES_FILE,
+      WEBJS_RULES_FILE,
+      CLIENT_TRUST_RULES_FILE,
+      MOBILE_RULES_FILE,
+      WORDPRESS_RULES_FILE
+    ];
     CONTAINER_PACKS_ROOT = "/guardian-packs";
     LLM_PACK_MEASURED_SEMGREP = "1.176.1";
   }
@@ -54238,14 +54830,14 @@ var init_header = __esm({
 });
 
 // src/configdrift/hash.ts
-import { createHash as createHash8 } from "node:crypto";
+import { createHash as createHash9 } from "node:crypto";
 function canonicaliseConfig(text2) {
   const withoutBom = text2.charCodeAt(0) === 65279 ? text2.slice(1) : text2;
   const lf = withoutBom.replace(/\r\n?/g, "\n");
   return stripProvenanceHeader(lf).replace(/\n+$/, "");
 }
 function hashConfigText(text2) {
-  return createHash8("sha256").update(canonicaliseConfig(text2), "utf8").digest("hex");
+  return createHash9("sha256").update(canonicaliseConfig(text2), "utf8").digest("hex");
 }
 function hashConfigFile(root, rel2) {
   const r = readProjectText(root, rel2, MAX_CONFIG_FILE_BYTES);
@@ -54291,7 +54883,7 @@ function classify2(entry, input2) {
   if (theirsMoved) return { ...base2, state: "local_edit" };
   return { ...base2, state: "in_sync" };
 }
-var init_detect = __esm({
+var init_detect2 = __esm({
   "src/configdrift/detect.ts"() {
     "use strict";
     init_projectFs();
@@ -54301,7 +54893,7 @@ var init_detect = __esm({
 });
 
 // src/platform/scope.ts
-import { createHash as createHash9 } from "node:crypto";
+import { createHash as createHash10 } from "node:crypto";
 import { lstatSync as lstatSync10, realpathSync as realpathSync5 } from "node:fs";
 import { dirname as dirname14, isAbsolute as isAbsolute11, join as join37, relative as relative10, resolve as resolve15 } from "node:path";
 function suggestScopeForFile(filePath) {
@@ -54334,6 +54926,7 @@ async function resolveScope(projectPath, scope, opts) {
   let history = null;
   let contentFiles;
   let notAsStaged = [];
+  let changes = null;
   const meta3 = {};
   if (diff !== void 0 || since !== void 0) {
     const change = diff !== void 0 ? await resolveDiff(projectPath, diff) : await resolveSince(projectPath, since ?? "");
@@ -54344,6 +54937,7 @@ async function resolveScope(projectPath, scope, opts) {
     notAsStaged = (change.notAsStaged ?? []).filter(inPaths);
     touched = new Set([...change.touched, ...change.files].filter(inPaths));
     history = change.history;
+    changes = change.changes;
     Object.assign(meta3, change.meta);
   } else if (pathPart !== null) {
     files = pathPart.files;
@@ -54372,13 +54966,13 @@ async function resolveScope(projectPath, scope, opts) {
     files: files.length,
     ...excludedByIgnore > 0 ? { files_excluded_by_guardianignore: excludedByIgnore } : {}
   };
-  const content = createHash9("sha256");
+  const content = createHash10("sha256");
   for (const rel2 of [.../* @__PURE__ */ new Set([...files, ...contentFiles])].sort()) {
     content.update(`${rel2}:${await hashProjectFile(projectPath, rel2)}
 `);
   }
   const cacheState = {
-    scope: createHash9("sha256").update(
+    scope: createHash10("sha256").update(
       JSON.stringify({
         files,
         touched: touched === null ? null : [...touched].sort(),
@@ -54387,7 +54981,7 @@ async function resolveScope(projectPath, scope, opts) {
       })
     ).digest("hex")
   };
-  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore, notAsStaged };
+  return { kind, files, member, history, contentFiles, meta: describedMeta, cacheState, excludedByIgnore, notAsStaged, changes };
 }
 function resolvePaths(projectPath, entries3) {
   const root = realOrSelf(projectPath);
@@ -54561,16 +55155,16 @@ async function resolveDiff(projectPath, diff) {
     const baseSha = await resolveCommit(projectPath, diff.base);
     if (baseSha === null) throw new ScopeError(`scope.diff.base "${diff.base}" does not name a commit`, "target_not_found");
     const headLabel = diff.head ?? "HEAD";
-    const headSha = await resolveCommit(projectPath, headLabel);
-    if (headSha === null) throw new ScopeError(`scope.diff.head "${headLabel}" does not name a commit`, "target_not_found");
+    const headSha2 = await resolveCommit(projectPath, headLabel);
+    if (headSha2 === null) throw new ScopeError(`scope.diff.head "${headLabel}" does not name a commit`, "target_not_found");
     const checkedOut = await resolveCommit(projectPath, "HEAD");
-    if (headSha !== checkedOut) {
+    if (headSha2 !== checkedOut) {
       throw new ScopeError(
         `scope.diff.head "${headLabel}" is not the checked-out commit \u2014 a scoped scan reads files from the working tree. Check it out first, or use review_pr, which checks out another head.`,
         "unsupported_target"
       );
     }
-    const committed = onDisk(projectPath, await changedFilesOrThrow(projectPath, baseSha, headSha));
+    const committed = onDisk(projectPath, await changedFilesOrThrow(projectPath, baseSha, headSha2));
     const touched = await listZ(projectPath, [
       "log",
       "-z",
@@ -54578,7 +55172,7 @@ async function resolveDiff(projectPath, diff) {
       "--format=",
       "--relative",
       "--no-renames",
-      `${baseSha}..${headSha}`,
+      `${baseSha}..${headSha2}`,
       "--"
     ]);
     const extra2 = diff.include_untracked === true ? onDisk(projectPath, await untracked(projectPath), true) : [];
@@ -54586,19 +55180,21 @@ async function resolveDiff(projectPath, diff) {
       files: [.../* @__PURE__ */ new Set([...committed, ...extra2])].sort(),
       touched,
       contentFiles: extra2,
-      history: { base: baseSha, head: headSha },
+      history: { base: baseSha, head: headSha2 },
+      changes: { base: baseSha, target: "worktree", untracked: diff.include_untracked === true },
       meta: {
         diff: {
           base: diff.base,
           head: headLabel,
           base_sha: baseSha,
-          head_sha: headSha,
+          head_sha: headSha2,
           include_untracked: diff.include_untracked === true
         }
       }
     };
   }
   const includeUntracked = diff.include_untracked ?? diff.staged !== true;
+  const headSha = hasCommits ? await resolveCommit(projectPath, "HEAD") : null;
   let tracked;
   let notAsStaged = [];
   if (diff.staged === true) {
@@ -54622,12 +55218,25 @@ async function resolveDiff(projectPath, diff) {
   }
   const extra = includeUntracked ? onDisk(projectPath, await untracked(projectPath), true) : [];
   const files = [.../* @__PURE__ */ new Set([...onDisk(projectPath, tracked), ...extra])].sort();
+  const deleted = hasCommits ? await listZ(projectPath, [
+    "diff",
+    "-z",
+    "--name-only",
+    "--relative",
+    "--diff-filter=D",
+    "--no-renames",
+    "--ignore-submodules=dirty",
+    ...diff.staged === true ? ["--cached"] : [],
+    "HEAD",
+    "--"
+  ]) : [];
   return {
     files,
-    touched: [],
+    touched: deleted,
     contentFiles: files,
     history: null,
     notAsStaged,
+    changes: hasCommits && headSha !== null ? { base: headSha, target: diff.staged === true ? "index" : "worktree", untracked: includeUntracked } : null,
     meta: { diff: { staged: diff.staged === true, include_untracked: includeUntracked } }
   };
 }
@@ -54659,6 +55268,7 @@ async function resolveSince(projectPath, since) {
       touched: touched2,
       contentFiles: [],
       history: { base: sinceSha, head: headSha },
+      changes: { base: sinceSha, target: "worktree", untracked: false },
       meta: { since, since_sha: sinceSha, head_sha: headSha }
     };
   }
@@ -54678,6 +55288,7 @@ async function resolveSince(projectPath, since) {
     touched,
     contentFiles: [],
     history: { logOpts: `--since=${date5}` },
+    changes: null,
     meta: { since, since_date: date5, head_sha: headSha }
   };
 }
@@ -55055,11 +55666,11 @@ var init_filter = __esm({
 });
 
 // src/treeHash/cacheKey.ts
-import { createHash as createHash10 } from "node:crypto";
-import { readdirSync as readdirSync10, statSync as statSync8 } from "node:fs";
+import { createHash as createHash11 } from "node:crypto";
+import { readdirSync as readdirSync10, statSync as statSync9 } from "node:fs";
 import { join as join39, relative as relative11, sep as sep9 } from "node:path";
 function sha2563(text2) {
-  return createHash10("sha256").update(text2).digest("hex");
+  return createHash11("sha256").update(text2).digest("hex");
 }
 function stableStringify(value) {
   if (value === null || typeof value !== "object") {
@@ -55097,7 +55708,7 @@ function describePack(entry) {
   let isDir = false;
   let isFile3 = false;
   try {
-    const s = statSync8(entry);
+    const s = statSync9(entry);
     isDir = s.isDirectory();
     isFile3 = s.isFile();
   } catch {
@@ -55178,7 +55789,7 @@ var init_gitState = __esm({
 });
 
 // src/tools/scanHelpers.ts
-import { createHash as createHash11 } from "node:crypto";
+import { createHash as createHash12 } from "node:crypto";
 import { lstatSync as lstatSync11, mkdtempSync as mkdtempSync3, readdirSync as readdirSync11, rmSync as rmSync6, writeFileSync as writeFileSync7 } from "node:fs";
 import { homedir as homedir6, tmpdir as tmpdir4, userInfo } from "node:os";
 import { dirname as dirname15, join as join40 } from "node:path";
@@ -55238,7 +55849,7 @@ function accountToken() {
     user = userInfo().username;
   } catch {
   }
-  return createHash11("sha256").update(`dev-guardian-owner
+  return createHash12("sha256").update(`dev-guardian-owner
 ${user}
 ${homedir6()}`).digest("hex");
 }
@@ -55954,7 +56565,7 @@ var init_scanToolFactory = __esm({
     init_projectLanguages();
     init_zod();
     init_advisory();
-    init_detect();
+    init_detect2();
     init_findingIdentity();
     init_secretFindingRedaction();
     init_configsDir();
@@ -56093,9 +56704,9 @@ function* logicalLines(text2) {
   };
   for (let i = 0; i < physical.length; i++) {
     let line = physical[i] ?? "";
-    const isComment = COMMENT_START.test(line);
-    if (!line.endsWith("\\") || isComment) {
-      if (isComment) line = ` ${line}`;
+    const isComment2 = COMMENT_START.test(line);
+    if (!line.endsWith("\\") || isComment2) {
+      if (isComment2) line = ` ${line}`;
       if (joined.length > 0) {
         joined.push(line);
         yield* finish(first, joined.join(""));
@@ -58204,8 +58815,8 @@ var init_cppcheck = __esm({
         const findings = [];
         for (const e of parseCppcheckXml(input2).errors) {
           if (CPPCHECK_COVERAGE_IDS.has(e.id) || e.severity === "information") continue;
-          const finding4 = mapError(e, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapError(e, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -58543,8 +59154,8 @@ var init_psalm = __esm({
           const key = `${type}\0${file2}\0${String(getNumber(raw, "line_from"))}\0${String(getNumber(raw, "column_from"))}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          const finding4 = mapIssue(raw, type, file2, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapIssue(raw, type, file2, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -58563,8 +59174,8 @@ function spotbugsParserFor(projectFiles) {
         const rules2 = ruleInfo(run2);
         const bases = baseUris(run2);
         for (const result of asArray(getProp(run2, "results"))) {
-          const finding4 = mapResult(result, rules2, bases, projectFiles, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapResult(result, rules2, bases, projectFiles, ctx);
+          if (finding5) findings.push(finding5);
         }
       }
       return { findings, cves: [] };
@@ -58830,7 +59441,7 @@ var init_detektRun = __esm({
 });
 
 // src/runners/spotbugsRun.ts
-import { readdirSync as readdirSync13, readFileSync as readFileSync9, statSync as statSync9, writeFileSync as writeFileSync13 } from "node:fs";
+import { readdirSync as readdirSync13, readFileSync as readFileSync9, statSync as statSync10, writeFileSync as writeFileSync13 } from "node:fs";
 import { delimiter as delimiter3, join as join50 } from "node:path";
 function hasJvmSource(files) {
   return files.some((f) => JVM_SOURCE.test(f));
@@ -58839,7 +59450,7 @@ function isProjectDir(root, rel2) {
   const real = realpathInProject(root, rel2);
   if (real === null) return false;
   try {
-    return statSync9(real).isDirectory();
+    return statSync10(real).isDirectory();
   } catch {
     return false;
   }
@@ -58917,7 +59528,7 @@ function classStats(projectPath, dirs) {
       if (e.isDirectory()) stack.push(path3);
       else if (e.isFile() && e.name.endsWith(".class")) {
         try {
-          const st = statSync9(path3);
+          const st = statSync10(path3);
           if (stats.newest === null || st.mtimeMs > stats.newest) stats.newest = st.mtimeMs;
           stats.count++;
           stats.bytes += st.size;
@@ -58935,7 +59546,7 @@ function sourcesNewerThan(projectPath, files, roots, since) {
     const real = realpathInProject(projectPath, f);
     if (real === null) continue;
     try {
-      if (statSync9(real).mtimeMs > since + 1e3) newer.push(f);
+      if (statSync10(real).mtimeMs > since + 1e3) newer.push(f);
     } catch {
     }
   }
@@ -59510,8 +60121,8 @@ var init_bandit = __esm({
         const results = asArray(getProp(root, "results"));
         const findings = [];
         for (const raw of results) {
-          const finding4 = mapResult2(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapResult2(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -59570,8 +60181,8 @@ var init_gosec = __esm({
         const root = parseInputAsJson(input2);
         const findings = [];
         for (const raw of asArray(getProp(root, "Issues"))) {
-          const finding4 = mapIssue2(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapIssue2(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -59698,8 +60309,8 @@ var init_dotnetSarif = __esm({
               const key = resultKey(result);
               if (seen.has(key)) continue;
               seen.add(key);
-              const finding4 = mapResult3(result, categories, ctx);
-              if (finding4) findings.push(finding4);
+              const finding5 = mapResult3(result, categories, ctx);
+              if (finding5) findings.push(finding5);
             }
           }
         }
@@ -59820,6 +60431,9 @@ function relativePath2(filePath, projectPath) {
   return rel2.startsWith(mount) ? rel2.slice(mount.length) : rel2;
 }
 function mapSeverity(rawSeverity, metadata) {
+  const stated = getString(metadata, "guardian_severity")?.trim().toLowerCase();
+  const declared = SEVERITIES.find((s) => s === stated);
+  if (declared !== void 0) return declared;
   const base2 = normalizeSeverity(rawSeverity);
   const cat = getString(metadata, "category")?.toLowerCase();
   if (base2 === "high" && (cat === "security" || cat === "vulnerability")) return "critical";
@@ -59863,6 +60477,7 @@ var SEMGREP_TOOL_NAME, semgrepParser;
 var init_semgrep = __esm({
   "src/runners/scannerParsers/semgrep.ts"() {
     "use strict";
+    init_types2();
     init_dockerScanner();
     init_secretFindingRedaction();
     init_semgrepRuleIds();
@@ -59875,12 +60490,730 @@ var init_semgrep = __esm({
         const results = asArray(getProp(root, "results"));
         const findings = [];
         for (const raw of results) {
-          const finding4 = mapResult4(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapResult4(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
     };
+  }
+});
+
+// src/clienttrust/publicEnv.ts
+function publicPrefixOf(name) {
+  for (const [prefix, framework] of PUBLIC_PREFIXES) {
+    if (name.startsWith(prefix) && name.length > prefix.length) return { prefix, framework };
+  }
+  return null;
+}
+function publicNameSaysSecret(name) {
+  return name.length <= MAX_NAME_LENGTH && PUBLIC_ENV_SECRET_NAME.test(name);
+}
+function isEnvFileName(name) {
+  return /^\.env(?:\.[\w.-]+)?$/.test(name);
+}
+function isEnvTemplateName(name) {
+  return /\.(?:example|sample|template|tmpl|dist|defaults?|schema)(?:\.|$)/i.test(name.slice(4));
+}
+function parseEnvFile(text2) {
+  const lines = text2.split(/\r?\n/);
+  const out = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    const raw = lines[i] ?? "";
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s?(.*)$/.exec(raw);
+    if (m === null) continue;
+    const name = m[1] ?? "";
+    let rest = (m[2] ?? "").trim();
+    const line = i + 1;
+    const quote = rest.charAt(0);
+    if (quote === '"' || quote === "'" || quote === "`") {
+      const close = rest.indexOf(quote, 1);
+      if (close > 0) {
+        out.push({ name, value: rest.slice(1, close), line });
+        continue;
+      }
+      if (quote !== '"') {
+        out.push({ name, value: rest.slice(1), line });
+        continue;
+      }
+      const parts = [rest.slice(1)];
+      let j = i + 1;
+      for (; j < lines.length && j <= i + MAX_VALUE_LINES; j += 1) {
+        const next = lines[j] ?? "";
+        const end = next.indexOf('"');
+        if (end >= 0) {
+          parts.push(next.slice(0, end));
+          break;
+        }
+        parts.push(next);
+      }
+      out.push({ name, value: parts.join("\n"), line });
+      i = Math.min(j, lines.length - 1);
+      continue;
+    }
+    const hash2 = rest.search(/\s#/);
+    if (hash2 >= 0) rest = rest.slice(0, hash2).trim();
+    if (rest.startsWith("#")) rest = "";
+    out.push({ name, value: rest, line });
+  }
+  return out;
+}
+function isPlaceholderValue(value) {
+  const v = value.trim();
+  if (v.length === 0) return true;
+  if (/^\$\{?[A-Za-z_]\w*\}?$/.test(v) || /^\$\{[A-Za-z_]\w*:?[-=?+][^}]*\}$/.test(v)) return true;
+  if (/^\{\{[^{}]*\}\}$/.test(v)) return true;
+  if (/^<[^>]*>$/.test(v) || /^\[[^\]]*\]$/.test(v)) return true;
+  const lower = v.toLowerCase();
+  if (/^x{3,}/.test(lower) || /^(?:\*+|\.{3,}|todo|tbd|none|null|undefined|secret|password)$/.test(lower)) return true;
+  if (/(?:^|[^a-z0-9])(?:example|dummy|placeholder)(?:$|[^a-z0-9])/.test(lower)) return true;
+  return /your[-_ ]|replace[-_ ]?(?:me|with)|change[-_]?me|xxxx|insert[-_ ]|paste[-_ ]|(?:^|[^a-z])enter[-_ ]/.test(lower);
+}
+function jwtClaims(value) {
+  const m = /^eyJ[A-Za-z0-9_-]{2,4000}\.(eyJ[A-Za-z0-9_-]{2,8000})\.[A-Za-z0-9_-]{0,4000}$/.exec(value.trim());
+  if (m === null) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(m[1] ?? "", "base64url").toString("utf8"));
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return null;
+    const { role, sub } = payload;
+    return { role: typeof role === "string" ? role : null, subject: typeof sub === "string" && sub.length > 0 };
+  } catch {
+    return null;
+  }
+}
+function classifySecretValue(value) {
+  const v = value.trim();
+  if (v.length === 0 || v.length > 16 * 1024) return null;
+  if (/^(?:sk|rk)_live_[0-9A-Za-z]{10,}$/.test(v)) return { label: "a Stripe live secret key", live: true };
+  if (/^(?:sk|rk)_test_[0-9A-Za-z]{10,}$/.test(v)) return { label: "a Stripe test-mode secret key", live: false };
+  if (/^whsec_[0-9A-Za-z+/=]{10,}$/.test(v)) return { label: "a Stripe webhook signing secret", live: true };
+  if (/^sb_secret_[0-9A-Za-z_-]{10,}$/.test(v)) return { label: "a Supabase secret key", live: true };
+  const jwt2 = jwtClaims(v);
+  if (jwt2 !== null) {
+    if (jwt2.role === "service_role" || jwt2.role === "supabase_admin") return { label: "a Supabase service-role key", live: true };
+    if (jwt2.subject) return { label: USER_TOKEN_LABEL, live: true };
+    if (jwt2.role === "authenticated") return { label: "a Supabase JWT for the role authenticated", live: true };
+    if (jwt2.role !== null) return null;
+  }
+  const url2 = /^[a-z][a-z0-9+.-]{0,31}:\/\/[^\s/:@]+:([^\s/@]{3,})@/i.exec(v);
+  if (url2 !== null && !isPlaceholderValue(url2[1] ?? "")) return { label: "a connection URL with a password", live: true };
+  if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(v)) return { label: "a private key", live: true };
+  const hit = scanForSecrets(v, { minConfidence: "high" }).find((h) => !PUBLIC_BY_DESIGN_RULES.has(h.ruleId));
+  if (hit !== void 0) return { label: `${/^[aeiou]/i.test(hit.title) ? "an" : "a"} ${hit.title}`, live: true };
+  return null;
+}
+function looksSecret(value) {
+  const v = value.trim();
+  if (v.length < 12) return false;
+  if (/^[A-Za-z]+(?:[\s_.:/-]+[A-Za-z]+)*$/.test(v)) return false;
+  if (/^\d+(?:\.\d+)?$/.test(v)) return false;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(v) && !/:\/\/[^\s/@]+:[^\s/@]+@/.test(v)) return false;
+  return shannonEntropy(v) >= 3;
+}
+function checkEnvFile(relPath, text2) {
+  const fileName = relPath.split("/").pop() ?? relPath;
+  const template = isEnvTemplateName(fileName);
+  const findings = [];
+  for (const a of parseEnvFile(text2)) {
+    const exposed = publicPrefixOf(a.name);
+    if (exposed === null) continue;
+    const named2 = publicNameSaysSecret(a.name);
+    const kind = classifySecretValue(a.value);
+    if (kind === null && !named2) continue;
+    if (kind === null && jwtClaims(a.value)?.role === PUBLIC_JWT_ROLE) continue;
+    const how = `${exposed.framework} writes every ${exposed.prefix} variable into the JavaScript the browser downloads`;
+    let severity;
+    let summary2;
+    let message3;
+    if (template) {
+      severity = "medium";
+      summary2 = named2 ? "a name that says secret" : `a name for ${kind?.label ?? "a secret"}`;
+      message3 = `${fileName} is a template, and it puts ${a.name} \u2014 ` + (named2 ? "whose name says it is a secret" : `meant, by the value it shows, for ${kind?.label ?? "a secret"}`) + ` \u2014 behind the browser prefix ${exposed.prefix} (${how}). Developers who copy this template would ship that secret to every visitor. A template's values ship nowhere and are not judged here: the name is the fix \u2014 drop the ${exposed.prefix} prefix and read the secret in server code only (an API route, a server action, an edge function).`;
+    } else {
+      const empty = isPlaceholderValue(a.value);
+      const humanSecret = HUMAN_SECRET_NAME.test(a.name) && !NOT_A_PASSWORD.test(a.value.trim());
+      const seen = kind !== null || !empty && (humanSecret || looksSecret(a.value));
+      if (kind !== null) severity = kind.live ? "critical" : "high";
+      else severity = seen ? "critical" : "medium";
+      const what = kind?.label ?? "a secret";
+      summary2 = kind !== null ? what : seen ? "a secret" : "a name that says secret";
+      if (!seen && empty) {
+        message3 = `${fileName} declares ${a.name}, whose name says it is a secret, with no real value here (it is empty or a placeholder; ${how}). A deployment that sets it would ship the secret to every visitor. Check what it is meant to hold: if a secret, drop the ${exposed.prefix} prefix and read it in server code only (an API route, a server action, an edge function), and rotate it at its provider if a build already had a value for it.`;
+      } else if (!seen) {
+        message3 = `${fileName} sets ${a.name}, whose name says it is a secret, to a value that does not look like one (it is not shown here), and ${how}. Check what it holds: if it is a secret, every build that set it shipped it to browsers \u2014 rotate it at the provider, drop the ${exposed.prefix} prefix and read it in server code only; if it is not, rename the variable so its name stops saying secret.`;
+      } else {
+        const aside = kind !== null && !named2 ? " \u2014 whatever its name says" : "";
+        const act = kind?.label === USER_TOKEN_LABEL ? "anyone who has it acts as that user until the token expires \u2014 revoke that session now (sign the user out everywhere)" : "revoke and rotate it at the provider now";
+        message3 = `${fileName} sets ${a.name} to ${what}${aside}, and ${how}. If the app was built with it, the value has already reached the browsers of everyone who opened it: ${act} \u2014 the value is not shown here. Then drop the ${exposed.prefix} prefix and use the secret in server code only.` + (kind?.label === "a Supabase service-role key" ? " The browser needs the anon (publishable) key, with row-level security deciding what it may read." : "");
+      }
+    }
+    findings.push(
+      makeFinding({
+        tool: CLIENT_TRUST_TOOL,
+        rule_id: ENV_PUBLIC_SECRET_RULE,
+        severity,
+        category: "security",
+        subcategory: "client-trust",
+        title: `${a.name}: ${summary2} behind the browser prefix ${exposed.prefix}`,
+        message: message3,
+        file_path: relPath,
+        line_start: a.line,
+        line_end: a.line,
+        taxonomy: { cwe: ["CWE-798"] }
+      })
+    );
+  }
+  return findings;
+}
+var CLIENT_TRUST_TOOL, ENV_PUBLIC_SECRET_RULE, PUBLIC_ENV_SECRET_NAME, PUBLIC_PREFIXES, MAX_NAME_LENGTH, MAX_VALUE_LINES, USER_TOKEN_LABEL, PUBLIC_BY_DESIGN_RULES, HUMAN_SECRET_NAME, NOT_A_PASSWORD, PUBLIC_JWT_ROLE;
+var init_publicEnv = __esm({
+  "src/clienttrust/publicEnv.ts"() {
+    "use strict";
+    init_secretScan();
+    init_scannerParsers();
+    CLIENT_TRUST_TOOL = "guardian-client-trust";
+    ENV_PUBLIC_SECRET_RULE = "client-env-public-secret";
+    PUBLIC_ENV_SECRET_NAME = /^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w+_)?(?:SECRET(?:_KEY|_TOKEN)?|SERVICE_ROLE(?:_KEY)?|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|PASSPHRASE|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_(?:API_)?KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))$/;
+    PUBLIC_PREFIXES = [
+      ["NEXT_PUBLIC_", "Next.js"],
+      ["VITE_", "Vite"],
+      ["EXPO_PUBLIC_", "Expo"],
+      ["REACT_APP_", "Create React App"],
+      ["NUXT_PUBLIC_", "Nuxt"],
+      ["GATSBY_", "Gatsby"],
+      ["VUE_APP_", "Vue CLI"],
+      ["PUBLIC_", "SvelteKit and Astro"]
+    ];
+    MAX_NAME_LENGTH = 256;
+    MAX_VALUE_LINES = 200;
+    USER_TOKEN_LABEL = "a user's access token";
+    PUBLIC_BY_DESIGN_RULES = /* @__PURE__ */ new Set(["google-api-key", "twilio-account-sid"]);
+    HUMAN_SECRET_NAME = /_(?:PASSWORD|PASSWD|PASSPHRASE)$/;
+    NOT_A_PASSWORD = /^(?:true|false|yes|no|on|off|\d{1,3})$/i;
+    PUBLIC_JWT_ROLE = "anon";
+  }
+});
+
+// src/clienttrust/supabaseRls.ts
+function exposedSchemasFrom(configToml) {
+  if (configToml === void 0) return [...DEFAULT_EXPOSED_SCHEMAS];
+  const lines = configToml.split(/\r?\n/);
+  let inApi = false;
+  const body = [];
+  for (const line of lines) {
+    const header = /^\s*\[([^\]]+)\]\s*(?:#.*)?$/.exec(line);
+    if (header !== null) {
+      inApi = (header[1] ?? "").trim() === "api";
+      continue;
+    }
+    if (inApi) body.push(line.replace(/(^|\s)#.*$/, ""));
+  }
+  if (body.some((line) => /^\s*enabled\s*=\s*false\s*$/.test(line))) return [];
+  const m = /(?:^|\n)\s*schemas\s*=\s*\[([^\]]*)\]/.exec(body.join("\n"));
+  if (m === null) return [...DEFAULT_EXPOSED_SCHEMAS];
+  const schemas = [...(m[1] ?? "").matchAll(/"([^"]*)"|'([^']*)'/g)].map((s) => s[1] ?? s[2] ?? "").filter((s) => s.length > 0);
+  return schemas;
+}
+function blankSqlNoise(text2) {
+  const out = [];
+  const n = text2.length;
+  let i = 0;
+  const blank = (from, to) => {
+    for (let k = from; k < to; k += 1) out.push(text2[k] === "\n" ? "\n" : " ");
+  };
+  while (i < n) {
+    const c = text2[i];
+    const next = text2[i + 1];
+    if (c === "-" && next === "-") {
+      const end = text2.indexOf("\n", i);
+      const stop = end < 0 ? n : end;
+      blank(i, stop);
+      i = stop;
+    } else if (c === "/" && next === "*") {
+      const end = text2.indexOf("*/", i + 2);
+      const stop = end < 0 ? n : end + 2;
+      blank(i, stop);
+      i = stop;
+    } else if (c === "'") {
+      let k = i + 1;
+      while (k < n) {
+        if (text2[k] === "\\" && text2[i - 1] === "E") {
+          k += 2;
+          continue;
+        }
+        if (text2[k] === "'") {
+          if (text2[k + 1] === "'") {
+            k += 2;
+            continue;
+          }
+          break;
+        }
+        k += 1;
+      }
+      const stop = Math.min(n, k + 1);
+      out.push("'");
+      blank(i + 1, stop - 1);
+      if (stop - 1 > i) out.push("'");
+      i = stop;
+    } else if (c === '"') {
+      const end = text2.indexOf('"', i + 1);
+      const stop = end < 0 ? n : end + 1;
+      out.push(text2.slice(i, stop));
+      i = stop;
+    } else if (c === "$") {
+      const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(text2.slice(i, i + 64));
+      if (tag === null) {
+        out.push(c);
+        i += 1;
+        continue;
+      }
+      const end = text2.indexOf(tag[0], i + tag[0].length);
+      const stop = end < 0 ? n : end + tag[0].length;
+      blank(i, stop);
+      i = stop;
+    } else {
+      out.push(c ?? "");
+      i += 1;
+    }
+  }
+  return out.join("");
+}
+function statementsOf(file2) {
+  const blanked = blankSqlNoise(file2.text);
+  const out = [];
+  let start = 0;
+  let line = 1;
+  let startLine = 1;
+  let seenText = false;
+  for (let i = 0; i <= blanked.length; i += 1) {
+    const c = blanked[i];
+    if (i === blanked.length || c === ";") {
+      const sql = blanked.slice(start, i).replace(/\s+/g, " ").trim();
+      if (sql.length > 0) out.push({ sql, file: file2.path, line: startLine });
+      start = i + 1;
+      seenText = false;
+      continue;
+    }
+    if (c === "\n") line += 1;
+    else if (!seenText && c !== void 0 && !/\s/.test(c)) {
+      seenText = true;
+      startLine = line;
+    }
+  }
+  return out;
+}
+function identName(raw) {
+  const t = raw.trim();
+  if (t.startsWith('"') && t.endsWith('"') && t.length >= 2) return t.slice(1, -1).replace(/""/g, '"');
+  return t.toLowerCase();
+}
+function qualified(raw) {
+  const parts = [...raw.matchAll(new RegExp(IDENT, "g"))].map((m) => identName(m[0]));
+  if (parts.length >= 2) return { schema: parts[0] ?? "public", name: parts[1] ?? "" };
+  return { schema: "public", name: parts[0] ?? "" };
+}
+function balanced(sql, open2) {
+  let depth = 0;
+  for (let i = open2; i < sql.length; i += 1) {
+    const c = sql[i];
+    if (c === "(") depth += 1;
+    else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) return sql.slice(open2 + 1, i).trim();
+    }
+  }
+  return null;
+}
+function clause(sql, keyword) {
+  const m = keyword.exec(sql);
+  if (m === null) return void 0;
+  const open2 = m.index + m[0].length - 1;
+  return balanced(sql, open2) ?? void 0;
+}
+function rolesOf(rest) {
+  const head = rest.split(/\busing\s*\(|\bwith\s+check\s*\(/i)[0] ?? "";
+  const m = /\bto\s+(.+)$/i.exec(head.trim());
+  if (m === null) return void 0;
+  return (m[1] ?? "").split(",").map((r) => identName(r.trim())).filter((r) => r.length > 0);
+}
+function checkSupabaseMigrations(files, exposedSchemas = DEFAULT_EXPOSED_SCHEMAS) {
+  const tables = /* @__PURE__ */ new Map();
+  const policies = /* @__PURE__ */ new Map();
+  const policyKey = (t, name) => `${keyOf(t)}\0${name}`;
+  for (const file2 of [...files].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0)) {
+    for (const st of statementsOf(file2)) {
+      const sql = st.sql;
+      let m;
+      if ((m = CREATE_TABLE2.exec(sql)) !== null) {
+        if (m[1] !== void 0) continue;
+        const t = qualified(m[2] ?? "");
+        const existing = tables.get(keyOf(t));
+        if (existing !== void 0 && /\bif\s+not\s+exists\b/i.test(sql)) continue;
+        tables.set(keyOf(t), { ...t, file: st.file, line: st.line, rls: false, revokedAnon: false, revokedAuthenticated: false });
+      } else if ((m = ALTER_TABLE.exec(sql)) !== null) {
+        const t = qualified(m[1] ?? "");
+        const rest = m[2] ?? "";
+        const state = tables.get(keyOf(t));
+        if (state === void 0) continue;
+        if (/\benable\s+row\s+level\s+security\b/i.test(rest)) {
+          state.rls = true;
+          delete state.disabled;
+        }
+        if (/\bdisable\s+row\s+level\s+security\b/i.test(rest)) {
+          state.rls = false;
+          state.disabled = { file: st.file, line: st.line };
+        }
+        const renamed = new RegExp(String.raw`\brename\s+to\s+(${IDENT})`, "i").exec(rest);
+        const moved2 = new RegExp(String.raw`\bset\s+schema\s+(${IDENT})`, "i").exec(rest);
+        if (renamed !== null || moved2 !== null) {
+          const next = {
+            schema: moved2 !== null ? identName(moved2[1] ?? "") : state.schema,
+            name: renamed !== null ? identName(renamed[1] ?? "") : state.name
+          };
+          tables.delete(keyOf(t));
+          tables.set(keyOf(next), { ...state, ...next });
+          for (const [k, p] of [...policies]) {
+            if (keyOf(p.table) !== keyOf(t)) continue;
+            policies.delete(k);
+            policies.set(policyKey(next, p.name), { ...p, table: next });
+          }
+        }
+      } else if ((m = DROP_TABLE.exec(sql)) !== null) {
+        for (const part of (m[1] ?? "").split(",")) {
+          const t = qualified(part);
+          tables.delete(keyOf(t));
+          for (const [k, p] of [...policies]) if (keyOf(p.table) === keyOf(t)) policies.delete(k);
+        }
+      } else if ((m = CREATE_POLICY.exec(sql)) !== null) {
+        const name = identName(m[1] ?? "");
+        const table = qualified(m[2] ?? "");
+        const rest = m[3] ?? "";
+        const command = (/\bfor\s+(all|select|insert|update|delete)\b/i.exec(rest)?.[1] ?? "all").toLowerCase();
+        const using = clause(rest, /\busing\s*\(/i);
+        const check2 = clause(rest, /\bwith\s+check\s*\(/i);
+        policies.set(policyKey(table, name), {
+          table,
+          name,
+          command,
+          roles: rolesOf(rest) ?? ["public"],
+          ...using !== void 0 ? { using } : {},
+          ...check2 !== void 0 ? { check: check2 } : {},
+          file: st.file,
+          line: st.line
+        });
+      } else if ((m = ALTER_POLICY.exec(sql)) !== null) {
+        const name = identName(m[1] ?? "");
+        const table = qualified(m[2] ?? "");
+        const rest = m[3] ?? "";
+        const p = policies.get(policyKey(table, name));
+        if (p === void 0) continue;
+        const renamed = new RegExp(String.raw`^\s*rename\s+to\s+(${IDENT})`, "i").exec(rest);
+        if (renamed !== null) {
+          policies.delete(policyKey(table, name));
+          const next = identName(renamed[1] ?? "");
+          policies.set(policyKey(table, next), { ...p, name: next });
+          continue;
+        }
+        const roles = rolesOf(rest);
+        const using = clause(rest, /\busing\s*\(/i);
+        const check2 = clause(rest, /\bwith\s+check\s*\(/i);
+        if (roles !== void 0) p.roles = roles;
+        if (using !== void 0) p.using = using;
+        if (check2 !== void 0) p.check = check2;
+        p.file = st.file;
+        p.line = st.line;
+      } else if ((m = DROP_POLICY.exec(sql)) !== null) {
+        policies.delete(policyKey(qualified(m[2] ?? ""), identName(m[1] ?? "")));
+      } else if ((m = REVOKE.exec(sql)) !== null) {
+        const privileges = (m[1] ?? "").toLowerCase();
+        if (!/\ball\b|\bselect\b/.test(privileges)) continue;
+        const grantees = (m[3] ?? "").split(",").map((g) => identName(g.replace(/\b(?:cascade|restrict)\b/gi, "").trim()));
+        for (const part of (m[2] ?? "").split(",")) {
+          const state = tables.get(keyOf(qualified(part)));
+          if (state === void 0) continue;
+          if (grantees.includes("anon")) state.revokedAnon = true;
+          if (grantees.includes("authenticated")) state.revokedAuthenticated = true;
+        }
+      }
+    }
+  }
+  const exposed = new Set(exposedSchemas.map((s) => s.toLowerCase()));
+  const isExposed = (schema) => exposed.has(schema.toLowerCase());
+  const findings = [];
+  for (const t of tables.values()) {
+    if (!isExposed(t.schema) || t.rls) continue;
+    if (t.revokedAnon && t.revokedAuthenticated) continue;
+    const at = t.disabled ?? { file: t.file, line: t.line };
+    const how = t.disabled !== void 0 ? `Row-level security is disabled on ${display(t)} again here` : `The table ${display(t)} is created here and no migration enables row-level security on it`;
+    findings.push(
+      finding("supabase-rls-disabled", "critical", at, {
+        title: `${display(t)} has no row-level security`,
+        message: `${how}. The ${t.schema} schema is served by Supabase's Data API to anyone holding the anon key \u2014 which is in the browser by design \u2014 so every visitor can read and write every row (CWE-284). Add \`alter table ${display(t)} enable row level security;\` in a migration, then a policy per operation that compares the row with \`auth.uid()\`; for a table the API must never serve, revoke it from anon and authenticated or move it to an unexposed schema.`
+      })
+    );
+  }
+  for (const p of policies.values()) {
+    if (!isExposed(p.table.schema)) continue;
+    if (p.command === "select") continue;
+    if (p.roles.length > 0 && p.roles.every((r) => PRIVILEGED_ROLES.has(r))) continue;
+    const exprs = p.command === "insert" ? [p.check] : p.command === "delete" ? [p.using] : [p.using, p.check];
+    const open2 = exprs.some(isTrue);
+    const anon = p.roles.includes("anon");
+    const where = { file: p.file, line: p.line };
+    const label = `policy "${p.name}" on ${display(p.table)} (for ${p.command}, to ${p.roles.join(", ")})`;
+    if (open2) {
+      findings.push(
+        finding("supabase-policy-open-write", "high", where, {
+          title: `${display(p.table)}: a ${p.command} policy whose check is \`true\``,
+          message: `The ${label} lets ${anon || p.roles.includes("public") ? "anyone, logged in or not," : "every user it names"} ${p.command === "all" ? "write" : p.command} any row: a condition of \`true\` checks nothing (CWE-284). Compare the row with the caller \u2014 \`using ((select auth.uid()) = user_id)\` and the same \`with check\` \u2014 or keep writes to server code holding the service-role key.`
+        })
+      );
+    } else if (anon) {
+      findings.push(
+        finding("supabase-policy-anon-write", "high", where, {
+          title: `${display(p.table)}: a ${p.command} policy granted to anon`,
+          message: `The ${label} grants writes to anon \u2014 every visitor, with no account (CWE-284). A visitor has no \`auth.uid()\`, so whatever the condition allows, it allows to anyone holding the public anon key. Grant writes \`to authenticated\` with a condition on \`auth.uid()\`, or keep them in server code.`
+        })
+      );
+    } else if (!exprs.some(readsAuth) && !exprs.every((e) => e === void 0 || isFalse(e))) {
+      findings.push(
+        finding("supabase-policy-no-auth-check", "low", where, {
+          title: `${display(p.table)}: a ${p.command} policy that never reads the caller`,
+          message: `The ${label} decides without \`auth.uid()\`, \`auth.jwt()\` or \`auth.role()\`: whoever its roles include may write the rows its condition allows, whose they are. That can be right (a helper function that reads the caller itself); if not, compare the row with \`auth.uid()\`.`
+        })
+      );
+    }
+  }
+  return findings;
+}
+function finding(ruleId, severity, at, text2) {
+  return makeFinding({
+    tool: CLIENT_TRUST_TOOL,
+    rule_id: ruleId,
+    severity,
+    category: "security",
+    subcategory: "client-trust",
+    title: text2.title,
+    message: text2.message,
+    file_path: at.file,
+    line_start: at.line,
+    line_end: at.line,
+    taxonomy: { cwe: ["CWE-284"] }
+  });
+}
+var DEFAULT_EXPOSED_SCHEMAS, PRIVILEGED_ROLES, IDENT, QNAME, keyOf, display, CREATE_TABLE2, ALTER_TABLE, DROP_TABLE, CREATE_POLICY, ALTER_POLICY, DROP_POLICY, REVOKE, isTrue, isFalse, readsAuth;
+var init_supabaseRls = __esm({
+  "src/clienttrust/supabaseRls.ts"() {
+    "use strict";
+    init_scannerParsers();
+    init_publicEnv();
+    DEFAULT_EXPOSED_SCHEMAS = ["public", "graphql_public"];
+    PRIVILEGED_ROLES = /* @__PURE__ */ new Set([
+      "service_role",
+      "postgres",
+      "supabase_admin",
+      "supabase_auth_admin",
+      "supabase_storage_admin",
+      "dashboard_user"
+    ]);
+    IDENT = String.raw`(?:"(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_$]*)`;
+    QNAME = String.raw`${IDENT}(?:\s*\.\s*${IDENT})?`;
+    keyOf = (t) => `${t.schema}\0${t.name}`;
+    display = (t) => `${t.schema}.${t.name}`;
+    CREATE_TABLE2 = new RegExp(
+      String.raw`^create\s+(?:or\s+replace\s+)?(?:(?:global|local)\s+)?(?:(temp|temporary)\s+)?(?:unlogged\s+)?table\s+(?:if\s+not\s+exists\s+)?(${QNAME})`,
+      "i"
+    );
+    ALTER_TABLE = new RegExp(String.raw`^alter\s+table\s+(?:if\s+exists\s+)?(?:only\s+)?(${QNAME})\s+(.*)$`, "i");
+    DROP_TABLE = new RegExp(String.raw`^drop\s+table\s+(?:if\s+exists\s+)?((?:${QNAME})(?:\s*,\s*${QNAME})*)`, "i");
+    CREATE_POLICY = new RegExp(String.raw`^create\s+policy\s+(${IDENT})\s+on\s+(?:table\s+)?(${QNAME})(.*)$`, "i");
+    ALTER_POLICY = new RegExp(String.raw`^alter\s+policy\s+(${IDENT})\s+on\s+(?:table\s+)?(${QNAME})(.*)$`, "i");
+    DROP_POLICY = new RegExp(String.raw`^drop\s+policy\s+(?:if\s+exists\s+)?(${IDENT})\s+on\s+(?:table\s+)?(${QNAME})`, "i");
+    REVOKE = new RegExp(
+      String.raw`^revoke\s+(?:grant\s+option\s+for\s+)?(.+?)\s+on\s+(?:table\s+)?((?:${QNAME})(?:\s*,\s*${QNAME})*)\s+from\s+(.+)$`,
+      "i"
+    );
+    isTrue = (expr) => expr !== void 0 && /^\(*\s*true\s*\)*$/i.test(expr.trim());
+    isFalse = (expr) => expr !== void 0 && /^\(*\s*false\s*\)*$/i.test(expr.trim());
+    readsAuth = (expr) => expr !== void 0 && /\bauth\s*\.\s*(?:uid|jwt|role|email)\s*\(|\bcurrent_user\b|\bcurrent_setting\s*\(/i.test(expr);
+  }
+});
+
+// src/clienttrust/clientTrustPass.ts
+import { createHash as createHash13 } from "node:crypto";
+async function listEnvFiles(root) {
+  const keep = (rel2) => isEnvFileName(basenameOf(rel2)) && !excludedDir(rel2) && !isGuardianOutput(rel2);
+  const visible = await git(root, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+  if (visible.exitCode === 0) {
+    const files = new Set(splitNul(visible.stdout).filter(keep));
+    const ignored = /* @__PURE__ */ new Set();
+    const hidden = await git(root, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"]);
+    if (hidden.exitCode === 0) {
+      for (const rel2 of splitNul(hidden.stdout)) {
+        if (rel2.endsWith("/") || !keep(rel2)) continue;
+        files.add(rel2);
+        ignored.add(rel2);
+      }
+    }
+    for (const rel2 of specialEnvFilesBeside(root, files)) if (keep(rel2)) files.add(rel2);
+    return { files: [...files].sort(), ignored, cut: false };
+  }
+  return walkEnvFiles(root);
+}
+function specialEnvFilesBeside(root, files) {
+  const dirs = /* @__PURE__ */ new Set([""]);
+  for (const rel2 of files) dirs.add(dirOf3(rel2));
+  const out = [];
+  for (const dir of dirs) {
+    for (const e of listProjectDir(root, dir === "" ? "." : dir)) {
+      if (e.kind === "other" && isEnvFileName(e.name)) out.push(dir === "" ? e.name : `${dir}/${e.name}`);
+    }
+  }
+  return out;
+}
+function walkEnvFiles(root) {
+  const files = [];
+  let entries3 = 0;
+  let cut = false;
+  const queue = [{ rel: "", depth: 0 }];
+  while (queue.length > 0) {
+    const next = queue.shift();
+    if (next === void 0) break;
+    const listed2 = listProjectDir(root, next.rel === "" ? "." : next.rel);
+    entries3 += listed2.length;
+    if (entries3 > WALK_MAX_ENTRIES) {
+      cut = true;
+      break;
+    }
+    for (const e of listed2) {
+      const rel2 = next.rel === "" ? e.name : `${next.rel}/${e.name}`;
+      if (e.kind === "directory") {
+        if (SCANNED_WALK_EXCLUDE.has(e.name) || isGuardianOutput(rel2)) continue;
+        if (next.depth + 1 > WALK_MAX_DEPTH) cut = true;
+        else queue.push({ rel: rel2, depth: next.depth + 1 });
+      } else if (isEnvFileName(e.name) && !isGuardianOutput(rel2)) {
+        files.push(rel2);
+      }
+    }
+  }
+  return { files: files.sort(), ignored: /* @__PURE__ */ new Set(), cut };
+}
+function migrationDirsOf(files) {
+  const dirs = /* @__PURE__ */ new Set();
+  for (const rel2 of files) {
+    if (MIGRATION_RE.test(rel2)) dirs.add(dirOf3(rel2));
+    else if (SUPABASE_CONFIG_RE.test(rel2)) dirs.add(`${dirOf3(rel2)}/migrations`.replace(/^\//, ""));
+  }
+  return [...dirs].sort();
+}
+function clientTrustParser(findings) {
+  return { name: CLIENT_TRUST_TOOL, parse: () => ({ findings: [...findings], cves: [] }) };
+}
+async function runClientTrustChecks(root, opts = {}) {
+  const ignored = (rel2) => opts.ignores?.(rel2) === true;
+  let envFiles;
+  let gitIgnored = /* @__PURE__ */ new Set();
+  let cut = false;
+  let migrationDirs;
+  if (opts.files !== void 0) {
+    envFiles = opts.files.filter((rel2) => isEnvFileName(basenameOf(rel2)) && !excludedDir(rel2));
+    migrationDirs = migrationDirsOf(opts.files);
+  } else {
+    const listing = await listEnvFiles(root);
+    envFiles = listing.files;
+    gitIgnored = listing.ignored;
+    cut = listing.cut;
+    migrationDirs = migrationDirsOf(await listScannedFiles(root));
+  }
+  envFiles = envFiles.filter((rel2) => !ignored(rel2));
+  const notes = [];
+  const unread = [];
+  if (envFiles.length > MAX_ENV_FILES) {
+    notes.push(`${envFiles.length - MAX_ENV_FILES} env file(s) past the first ${MAX_ENV_FILES} were not read`);
+    envFiles = envFiles.slice(0, MAX_ENV_FILES);
+  }
+  const findings = [];
+  let envRead = 0;
+  let hiddenRead = 0;
+  for (const rel2 of envFiles) {
+    const r = readProjectText(root, rel2, ENV_FILE_MAX_BYTES);
+    if (r.status === "absent") continue;
+    if (r.status === "refused") {
+      notes.push(`${rel2} skipped: ${describeReadRefusal(r.reason)}`);
+      continue;
+    }
+    envRead += 1;
+    if (gitIgnored.has(rel2)) hiddenRead += 1;
+    findings.push(...checkEnvFile(rel2, r.text));
+  }
+  let migrationsRead = 0;
+  for (const dir of migrationDirs) {
+    const sql = listProjectDir(root, dir).filter((e) => (e.kind === "file" || e.kind === "link") && /\.sql$/i.test(e.name)).map((e) => dir === "" ? e.name : `${dir}/${e.name}`).filter((rel2) => !ignored(rel2)).sort().slice(0, MAX_MIGRATIONS);
+    if (sql.length === 0) continue;
+    const files = [];
+    const before = unread.length;
+    for (const rel2 of sql) {
+      const r = readProjectText(root, rel2, MIGRATION_MAX_BYTES);
+      if (r.status === "ok") files.push({ path: rel2, text: r.text });
+      else if (r.status === "refused") {
+        unread.push(rel2);
+        notes.push(`${rel2}: ${describeReadRefusal(r.reason)}`);
+      }
+    }
+    if (unread.length > before) {
+      notes.push(`the migrations of ${dir} were not checked: one of them could not be read`);
+      continue;
+    }
+    const supabaseDir = dirOf3(dir);
+    const config2 = readProjectText(root, supabaseDir === "" ? "config.toml" : `${supabaseDir}/config.toml`, 256 * 1024);
+    migrationsRead += files.length;
+    findings.push(...checkSupabaseMigrations(files, exposedSchemasFrom(config2.status === "ok" ? config2.text : void 0)));
+  }
+  if (envRead === 0 && migrationsRead === 0 && unread.length === 0 && notes.length === 0) return null;
+  const parts = [
+    `${envRead} env file(s)${hiddenRead > 0 ? ` (${hiddenRead} ignored by git, read all the same)` : ""}`,
+    `${migrationsRead} Supabase migration(s)`
+  ];
+  if (cut) notes.unshift(`the walk for env files stopped at its bound (depth ${WALK_MAX_DEPTH}, ${WALK_MAX_ENTRIES} entries)`);
+  const shown = notes.length > MAX_NOTES ? [...notes.slice(0, MAX_NOTES - 1), `+${notes.length - MAX_NOTES + 1} more`] : notes;
+  const reason = [`read ${parts.join(" and ")}`, ...shown].join("; ");
+  const kept = opts.files === void 0 ? findings : findings.filter((f) => f.file_path !== void 0 && opts.files?.includes(f.file_path));
+  return {
+    toolRun: { name: CLIENT_TRUST_TOOL, status: "ok", reason },
+    missing: unread.length > 0 ? [CLIENT_TRUST_TOOL] : [],
+    findings: kept
+  };
+}
+async function envFilesState(root) {
+  const listing = await listEnvFiles(root);
+  const h = createHash13("sha256");
+  for (const rel2 of listing.files.slice(0, MAX_ENV_FILES)) h.update(`${rel2}:${await hashProjectFile(root, rel2)}
+`);
+  return h.digest("hex");
+}
+var ENV_FILE_MAX_BYTES, MIGRATION_MAX_BYTES, MAX_ENV_FILES, MAX_MIGRATIONS, WALK_MAX_DEPTH, WALK_MAX_ENTRIES, MAX_NOTES, MIGRATION_RE, SUPABASE_CONFIG_RE, basenameOf, dirOf3, excludedDir;
+var init_clientTrustPass = __esm({
+  "src/clienttrust/clientTrustPass.ts"() {
+    "use strict";
+    init_guardianIgnore();
+    init_guardianOutput();
+    init_projectFs();
+    init_git();
+    init_projectFiles();
+    init_publicEnv();
+    init_supabaseRls();
+    ENV_FILE_MAX_BYTES = 256 * 1024;
+    MIGRATION_MAX_BYTES = 4 * 1024 * 1024;
+    MAX_ENV_FILES = 200;
+    MAX_MIGRATIONS = 5e3;
+    WALK_MAX_DEPTH = 6;
+    WALK_MAX_ENTRIES = 2e5;
+    MAX_NOTES = 6;
+    MIGRATION_RE = /(?:^|\/)supabase\/migrations\/[^/]+\.sql$/i;
+    SUPABASE_CONFIG_RE = /(?:^|\/)supabase\/config\.toml$/i;
+    basenameOf = (rel2) => rel2.slice(rel2.lastIndexOf("/") + 1);
+    dirOf3 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    excludedDir = (rel2) => rel2.split("/").slice(0, -1).some((s) => SCANNED_WALK_EXCLUDE.has(s));
   }
 });
 
@@ -60408,6 +61741,34 @@ async function runGosec(args) {
   if (pass2.toolRun !== null) tools_run.push(pass2.toolRun);
   for (const name of pass2.missing) markMissing(missing_tools, name);
 }
+async function runClientTrust(args) {
+  const { ctx, tools_run, missing_tools, parser_inputs } = args;
+  const exclusions = ctx.exclusions;
+  const result = await runClientTrustChecks(ctx.projectPath, {
+    ...args.files !== void 0 ? { files: args.files } : {},
+    ...exclusions !== null ? { ignores: (rel2) => exclusions.ignores(rel2) } : {}
+  });
+  if (result === null) return;
+  tools_run.push(result.toolRun);
+  missing_tools.push(...result.missing);
+  parser_inputs.push({ parser: clientTrustParser(result.findings), input: null });
+}
+async function runTestIntegrity(args) {
+  const { ctx, tools_run, missing_tools, parser_inputs } = args;
+  const changes = ctx.scope?.changes ?? null;
+  if (changes === null) return;
+  const scope = ctx.scope;
+  const result = await runTestIntegrityCheck(ctx.projectPath, {
+    base: changes.base,
+    target: changes.target === "index" ? { kind: "index" } : { kind: "worktree", untracked: changes.untracked },
+    ...scope !== null ? { member: (p) => scope.member(p) } : {}
+  });
+  if (result === null) return;
+  tools_run.push(result.toolRun);
+  missing_tools.push(...result.missing);
+  const findings = result.findings;
+  parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
+}
 function dotnetNotApplicableToScope(args) {
   const { ctx, files, tools_run, missing_tools } = args;
   if (!hasRootDotnetSignal(ctx.projectPath)) return;
@@ -60630,6 +61991,9 @@ var init_scanSast = __esm({
     init_semgrepConfigs();
     init_semgrepReport();
     init_customRules();
+    init_clientTrustPass();
+    init_detect();
+    init_gitChanges();
     init_projectSemgrepConfig();
     init_projectFs();
     init_configFile();
@@ -60643,7 +62007,7 @@ var init_scanSast = __esm({
       makeScanTool({
         name: "scan_sast",
         title: "SAST scan (Semgrep)",
-        description: "Semgrep (registry rules, the project's own, register_custom_rules' and the plugin's web-JS, mobile and LLM packs; `tools_run[].plugin_packs`: one that ran in part) plus, by language: Bandit (Python), gosec (Go, via the Go toolchain, which may download modules), cppcheck (C/C++), Psalm taint analysis (PHP), SpotBugs with FindSecBugs (Java/Kotlin bytecode), the .NET SDK analyzers (a locked restore and `dotnet build`: runs the project's MSBuild). Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a run. local_only: no registry, no metrics.",
+        description: "Semgrep (registry, the project's, register_custom_rules' and the plugin's packs; `tools_run[].plugin_packs`: one that ran in part), Bandit (Python), gosec (Go; may download modules), cppcheck (C/C++), Psalm taint (PHP), SpotBugs+FindSecBugs (JVM bytecode), the .NET SDK analyzers (`dotnet build` runs the project's MSBuild); browser-exposed secrets in .env files (git-ignored too), Supabase RLS; a diff scope adds weakened tests. Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a run. local_only: no registry, no metrics.",
         scan_type: "sast",
         category: "security",
         supportsScope: true,
@@ -60654,10 +62018,15 @@ var init_scanSast = __esm({
         // `.guardian/scan.yml`'s Semgrep timeouts change what a run finds (the
         // factory keys that file for every tool); the class directories SpotBugs
         // reads are under `target/` and `build/`, which the tree hash leaves out.
+        // The client-trust pass reads the env files git ignores, which the tree hash leaves out.
         cacheState: async (_input, { plugin, projectPath }) => {
           const flags = semgrepScanFlags(plugin.repoConfigFromRef?.root ?? projectPath);
           const classes = classDirsState(projectPath);
-          return { semgrep_flags: flags.args.join(" "), ...classes !== null ? { class_dirs: classes } : {} };
+          return {
+            semgrep_flags: flags.args.join(" "),
+            ...classes !== null ? { class_dirs: classes } : {},
+            env_files: await envFilesState(projectPath)
+          };
         },
         // 2.0.x custom rules outside the project are not run any more: say so on
         // every response, cached or not, not only in tools_run.
@@ -60707,7 +62076,9 @@ var init_scanSast = __esm({
                   if (hasJvmSource(files)) await runSpotbugs({ ctx, reportDir, files: await scanned(), ...c });
                 }
               },
-              { name: "dotnet-analyzers", run: async (c) => dotnetNotApplicableToScope({ ctx, files, ...c }) }
+              { name: "dotnet-analyzers", run: async (c) => dotnetNotApplicableToScope({ ctx, files, ...c }) },
+              { name: CLIENT_TRUST_TOOL, run: (c) => runClientTrust({ ctx, files, ...c }) },
+              { name: TEST_INTEGRITY_TOOL, run: (c) => runTestIntegrity({ ctx, ...c }) }
             ];
           } else {
             passes2 = [
@@ -60737,7 +62108,8 @@ var init_scanSast = __esm({
                 }
               },
               { name: SPOTBUGS, after: afterSemgrep, run: async (c) => runSpotbugs({ ctx, reportDir, files: await scanned(), ...c }) },
-              { name: "dotnet-analyzers", after: ["semgrep"], run: (c) => runDotnetAnalyzers({ ctx, ...c }) }
+              { name: "dotnet-analyzers", after: ["semgrep"], run: (c) => runDotnetAnalyzers({ ctx, ...c }) },
+              { name: CLIENT_TRUST_TOOL, run: (c) => runClientTrust({ ctx, ...c }) }
             ];
           }
           const { tools_run, missing_tools, parser_inputs } = await runScannerPasses(passes2, maxParallelScanners());
@@ -61115,8 +62487,8 @@ var init_gitleaks = __esm({
         const items = Array.isArray(root) ? root : asArray(getProp(root, "findings"));
         const findings = [];
         for (const item of items) {
-          const finding4 = mapItem(item, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapItem(item, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -62255,28 +63627,28 @@ async function verifyGitleaksFindings(input2) {
       const items = [];
       if (Array.isArray(root)) {
         root.forEach((raw, i) => {
-          const finding4 = task.parser.parse([raw], ctx).findings[0];
-          if (finding4 === void 0) {
+          const finding5 = task.parser.parse([raw], ctx).findings[0];
+          if (finding5 === void 0) {
             items.push({ finding: null, check: null });
             return;
           }
-          const rule = finding4.rule_id;
-          if (rule === void 0 || !input2.keep(finding4)) {
-            items.push({ finding: finding4, check: null });
+          const rule = finding5.rule_id;
+          if (rule === void 0 || !input2.keep(finding5)) {
+            items.push({ finding: finding5, check: null });
             return;
           }
           if (input2.unavailable !== null) {
-            items.push({ finding: finding4, check: unsentCheck(rule, `not verified: ${input2.unavailable}`) });
+            items.push({ finding: finding5, check: unsentCheck(rule, `not verified: ${input2.unavailable}`) });
             return;
           }
           const value = values2?.[i] ?? null;
           if (value === null) {
-            items.push({ finding: finding4, check: unsentCheck(rule, "not verified: gitleaks reported no value for it") });
+            items.push({ finding: finding5, check: unsentCheck(rule, "not verified: gitleaks reported no value for it") });
             return;
           }
           pending.push({ entry: e, item: i, candidate: candidates2.length });
           candidates2.push({ rule, secret: value });
-          items.push({ finding: finding4, check: null });
+          items.push({ finding: finding5, check: null });
         });
       }
       perEntry.push({ task, items });
@@ -62310,18 +63682,18 @@ function summarize(checked) {
   const count = (v) => checked.filter((c) => c.check.verdict === v).length;
   const sent = checked.filter((c) => c.check.sent);
   const records2 = [];
-  for (const { finding: finding4, check: check2 } of checked) {
+  for (const { finding: finding5, check: check2 } of checked) {
     if (check2.verdict === "skipped") continue;
     const record8 = {
-      fingerprint: finding4.fingerprint,
-      rule_id: finding4.rule_id ?? "",
+      fingerprint: finding5.fingerprint,
+      rule_id: finding5.rule_id ?? "",
       provider: check2.provider,
       host: check2.host,
       verified: check2.verdict,
       reason: check2.reason
     };
-    if (finding4.file_path !== void 0) record8.file_path = finding4.file_path;
-    if (finding4.line_start !== void 0) record8.line_start = finding4.line_start;
+    if (finding5.file_path !== void 0) record8.file_path = finding5.file_path;
+    if (finding5.line_start !== void 0) record8.line_start = finding5.line_start;
     records2.push(record8);
   }
   const summary2 = {
@@ -62700,8 +64072,8 @@ var init_actionlint = __esm({
         const root = parseInputAsJson(input2);
         const findings = [];
         for (const raw of asArray(root)) {
-          const finding4 = mapEntry(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapEntry(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -62774,8 +64146,8 @@ var init_zizmor = __esm({
         const root = parseInputAsJson(input2);
         const findings = [];
         for (const raw of asArray(root)) {
-          const finding4 = mapFinding(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapFinding(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -63329,7 +64701,7 @@ var init_securityScanFull = __esm({
           auto_fix: AutoFix,
           allow_dirty: AllowDirty,
           local_only: external_exports.boolean().optional().describe(
-            "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy still goes out."
+            "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS, client-trust and mobile packs). Trivy still goes out."
           ),
           force: Force
         },
@@ -63387,7 +64759,7 @@ function checkService(name, service, filePath) {
   const findings = [];
   if (service["privileged"] === true) {
     findings.push(
-      finding({
+      finding2({
         ruleId: "compose-privileged",
         severity: "critical",
         title: `Service "${name}" runs privileged`,
@@ -63398,7 +64770,7 @@ function checkService(name, service, filePath) {
   }
   if (service["network_mode"] === "host") {
     findings.push(
-      finding({
+      finding2({
         ruleId: "compose-host-network",
         severity: "high",
         title: `Service "${name}" uses host networking`,
@@ -63409,7 +64781,7 @@ function checkService(name, service, filePath) {
   }
   if (mountsDockerSock(service["volumes"])) {
     findings.push(
-      finding({
+      finding2({
         ruleId: "compose-docker-sock",
         severity: "critical",
         title: `Service "${name}" mounts the Docker socket`,
@@ -63421,7 +64793,7 @@ function checkService(name, service, filePath) {
   const image = service["image"];
   if (typeof image === "string" && isUnpinnedTag(image)) {
     findings.push(
-      finding({
+      finding2({
         ruleId: "compose-latest-tag",
         severity: "medium",
         title: `Service "${name}" does not pin its image tag`,
@@ -63458,7 +64830,7 @@ function isUnpinnedTag(image) {
 function isRecord6(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
-function finding(opts) {
+function finding2(opts) {
   return makeFinding({
     tool: COMPOSE_TOOL_NAME,
     rule_id: opts.ruleId,
@@ -64129,7 +65501,7 @@ async function verifyImage(image, policy, ctx) {
     no_certificate: `Image ${image}'s signature has no certificate to verify`,
     invalid_signature: `Image ${image}'s signature does not verify`
   };
-  const finding4 = makeFinding({
+  const finding5 = makeFinding({
     tool: COSIGN_VERIFY_TOOL_NAME,
     rule_id: "image-signature-not-verified",
     severity: "high",
@@ -64150,7 +65522,7 @@ async function verifyImage(image, policy, ctx) {
   });
   return {
     run: result("ok", `NOT verified for ${who} \u2014 ${v.detail}`),
-    findings: [finding4],
+    findings: [finding5],
     summary: { image, checked: pinned.checked, check: "verify", signature: "rejected", provenance: "not_checked", note: note(`Rejected: ${v.detail}.`) },
     cancelled
   };
@@ -64424,8 +65796,8 @@ var init_hadolint = __esm({
         const root = parseInputAsJson(input2);
         const findings = [];
         for (const raw of asArray(root)) {
-          const finding4 = mapEntry2(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapEntry2(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -65398,8 +66770,8 @@ var init_eslint = __esm({
           const filePath = getString(file2, "filePath");
           if (!filePath) continue;
           for (const msg of asArray(getProp(file2, "messages"))) {
-            const finding4 = mapMessage(msg, filePath, ctx);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapMessage(msg, filePath, ctx);
+            if (finding5) findings.push(finding5);
           }
         }
         return { findings, cves: [] };
@@ -65457,8 +66829,8 @@ var init_jscpd = __esm({
         const root = parseInputAsJson(input2);
         const findings = [];
         for (const dup of asArray(getProp(root, "duplicates"))) {
-          const finding4 = mapDuplicate(dup, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapDuplicate(dup, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -65488,13 +66860,13 @@ function mapBlock(raw, file2, ctx, seen) {
   if (severity === void 0) return null;
   const name = getString(raw, "name") ?? "(anonymous)";
   const className = getString(raw, "classname");
-  const qualified2 = className ? `${className}.${name}` : name;
+  const qualified3 = className ? `${className}.${name}` : name;
   const line = getNumber(raw, "lineno");
-  const key = `${qualified2}:${String(line)}`;
+  const key = `${qualified3}:${String(line)}`;
   if (seen.has(key)) return null;
   seen.add(key);
   const complexity = getNumber(raw, "complexity");
-  const title = `Cyclomatic complexity ${String(complexity ?? "?")} (rank ${rank2}) in ${type} ${qualified2}`;
+  const title = `Cyclomatic complexity ${String(complexity ?? "?")} (rank ${rank2}) in ${type} ${qualified3}`;
   const input2 = {
     tool: RADON_TOOL_NAME,
     rule_id: "cyclomatic-complexity",
@@ -65525,8 +66897,8 @@ var init_radon = __esm({
         for (const [file2, blocks] of fileEntries2(input2)) {
           const seen = /* @__PURE__ */ new Set();
           for (const block of asArray(blocks)) {
-            const finding4 = mapBlock(block, file2, ctx, seen);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapBlock(block, file2, ctx, seen);
+            if (finding5) findings.push(finding5);
           }
         }
         return { findings, cves: [] };
@@ -65600,8 +66972,8 @@ var init_ruff = __esm({
       parse(input2, ctx = {}) {
         const findings = [];
         for (const raw of entries(input2)) {
-          const finding4 = mapItem2(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapItem2(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -65647,8 +67019,8 @@ var init_shellcheck = __esm({
       parse(input2, ctx = {}) {
         const findings = [];
         for (const raw of asArray(getProp(parseInputAsJson(input2), "comments"))) {
-          const finding4 = mapComment(raw, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapComment(raw, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -65715,8 +67087,8 @@ var init_detekt = __esm({
         const findings = [];
         for (const run2 of asArray(getProp(parseInputAsJson(input2), "runs"))) {
           for (const result of asArray(getProp(run2, "results"))) {
-            const finding4 = mapResult5(result, ctx);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapResult5(result, ctx);
+            if (finding5) findings.push(finding5);
           }
         }
         return { findings, cves: [] };
@@ -65775,8 +67147,8 @@ var init_rubocop = __esm({
           const path3 = getString(file2, "path");
           if (!path3) continue;
           for (const offense of asArray(getProp(file2, "offenses"))) {
-            const finding4 = mapOffense(offense, path3, ctx);
-            if (finding4) findings.push(finding4);
+            const finding5 = mapOffense(offense, path3, ctx);
+            if (finding5) findings.push(finding5);
           }
         }
         return { findings, cves: [] };
@@ -66046,8 +67418,8 @@ var init_staticcheck = __esm({
       parse(input2, ctx = {}) {
         const findings = [];
         for (const entry of entries2(input2)) {
-          const finding4 = mapEntry3(entry, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapEntry3(entry, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -66923,6 +68295,13 @@ async function runCppcheck2(ctx, out, args) {
   for (const name of pass2.missing) if (!out.missing_tools.includes(name)) out.missing_tools.push(name);
   out.cancelled ||= pass2.cancelled;
 }
+async function runClientTrust2(out, args) {
+  const result = await runClientTrustChecks(args.scanRoot, { files: args.files });
+  if (result === null) return;
+  out.tools_run.push(result.toolRun);
+  out.missing_tools.push(...result.missing);
+  out.parser_inputs.push({ parser: clientTrustParser(result.findings), input: null });
+}
 async function runTrivy2(ctx, out, args) {
   if (!await scannerAvailable("trivy")) {
     out.tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
@@ -67035,6 +68414,7 @@ var init_reviewPr = __esm({
     "use strict";
     init_projectLanguages();
     init_zod();
+    init_clientTrustPass();
     init_findingIdentity();
     init_gitSafety();
     init_guardianIgnore();
@@ -67056,6 +68436,8 @@ var init_reviewPr = __esm({
     init_semgrepReport();
     init_semgrepRuleIds();
     init_schemas4();
+    init_detect();
+    init_gitChanges();
     init_tools();
     init_scanHelpers();
     init_scanToolFactory();
@@ -67065,7 +68447,7 @@ var init_reviewPr = __esm({
       base_ref: external_exports.string().optional().describe("Base ref for the diff. Defaults to origin/HEAD, then main, then master."),
       head_ref: external_exports.string().optional().describe("Head ref. Defaults to HEAD."),
       local_only: external_exports.boolean().optional().describe(
-        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). Trivy may still go out."
+        "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS, client-trust and mobile packs). Trivy may still go out."
       ),
       severity_min: SeverityMin,
       force: Force
@@ -67073,7 +68455,7 @@ var init_reviewPr = __esm({
     reviewPr = makeScanTool({
       name: "review_pr",
       title: "Pre-PR diff review",
-      description: "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed. An unresolvable ref is an error, never \"no files changed\". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch \u2014 the project's gap, not the review's.",
+      description: "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed, changed .env files and Supabase migrations, and weakened tests (a skip, a focused .only, a deleted test file, fewer assertions). An unresolvable ref is an error, never \"no files changed\". `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch \u2014 the project's gap, not the review's.",
       scan_type: "review_pr",
       category: "security",
       supportsAutoFix: false,
@@ -67120,6 +68502,20 @@ var init_reviewPr = __esm({
             if (!out.cancelled) await runGosec2(ctx, out, { scanRoot, reportDir, files: present5.filter(isGoSource) });
             if (!out.cancelled) await runCppcheck2(ctx, out, { scanRoot, reportDir, files: cppSources(present5) });
             if (!out.cancelled && touched.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir, touched });
+            if (!out.cancelled) await runClientTrust2(out, { scanRoot, files: present5 });
+          }
+          if (!out.cancelled) {
+            const integrity = await runTestIntegrityCheck(ctx.projectPath, {
+              base: base2,
+              head,
+              target: headIsCheckedOut ? { kind: "worktree", untracked: true } : { kind: "commit", sha: head }
+            });
+            if (integrity !== null) {
+              out.tools_run.push(integrity.toolRun);
+              out.missing_tools.push(...integrity.missing);
+              const findings = integrity.findings;
+              out.parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
+            }
           }
           if (!out.cancelled) {
             const secrets = await runGitleaksScan({
@@ -67880,10 +69276,10 @@ function judgeGovulncheck(run2) {
   const imported = /* @__PURE__ */ new Set();
   const required2 = /* @__PURE__ */ new Set();
   for (const m of messages) {
-    const finding4 = getProp(m, "finding");
-    const osv = getString(finding4, "osv");
+    const finding5 = getProp(m, "finding");
+    const osv = getString(finding5, "osv");
     if (osv === void 0) continue;
-    const first = asArray(getProp(finding4, "trace"))[0];
+    const first = asArray(getProp(finding5, "trace"))[0];
     if (getString(first, "function") !== void 0) called.add(osv);
     else if (getString(first, "package") !== void 0) imported.add(osv);
     else required2.add(osv);
@@ -67974,17 +69370,17 @@ var init_govulncheckRun = __esm({
 });
 
 // src/runners/scannerParsers/govulncheck.ts
-function qualified(frame) {
+function qualified2(frame) {
   const pkg = getString(frame, "package") ?? "";
   const fn = getString(frame, "function") ?? "";
   const receiver = getString(frame, "receiver");
   const name = receiver !== void 0 ? `${receiver}.${fn}` : fn;
   return pkg !== "" ? `${pkg}.${name}` : name;
 }
-function mapFinding2(id, entry, finding4, symbol2, site, path3, line) {
+function mapFinding2(id, entry, finding5, symbol2, site, path3, line) {
   const module = getString(symbol2, "module") ?? "a dependency";
   const version2 = getString(symbol2, "version") ?? "";
-  const fixed = getString(finding4, "fixed_version");
+  const fixed = getString(finding5, "fixed_version");
   const url2 = getString(getProp(entry, "database_specific"), "url") ?? `https://pkg.go.dev/vuln/${id}`;
   const summary2 = getString(entry, "summary") ?? `${id} in ${module}`;
   const input2 = {
@@ -67994,7 +69390,7 @@ function mapFinding2(id, entry, finding4, symbol2, site, path3, line) {
     category: "security",
     subcategory: "dependency",
     title: summary2,
-    message: `${module}${version2 !== "" ? `@${version2}` : ""}: ${qualified(site)} calls ${qualified(symbol2)}, which is vulnerable (${id}); ${fixed !== void 0 ? `fixed in ${fixed}` : "no fixed version yet"} \u2014 ${url2}`,
+    message: `${module}${version2 !== "" ? `@${version2}` : ""}: ${qualified2(site)} calls ${qualified2(symbol2)}, which is vulnerable (${id}); ${fixed !== void 0 ? `fixed in ${fixed}` : "no fixed version yet"} \u2014 ${url2}`,
     file_path: path3,
     fix_available: fixed !== void 0,
     snippet: `${module}@${version2}`,
@@ -68028,9 +69424,9 @@ var init_govulncheck = __esm({
         const findings = [];
         const seen = /* @__PURE__ */ new Set();
         for (const m of messages) {
-          const finding4 = getProp(m, "finding");
-          const id = getString(finding4, "osv");
-          const trace = asArray(getProp(finding4, "trace"));
+          const finding5 = getProp(m, "finding");
+          const id = getString(finding5, "osv");
+          const trace = asArray(getProp(finding5, "trace"));
           const symbol2 = trace[0];
           if (id === void 0 || getString(symbol2, "function") === void 0) continue;
           const own2 = getString(trace.at(-1), "module");
@@ -68042,7 +69438,7 @@ var init_govulncheck = __esm({
           const key = `${id}|${path3}|${String(line)}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          findings.push(mapFinding2(id, osv.get(id), finding4, symbol2, site, path3, line));
+          findings.push(mapFinding2(id, osv.get(id), finding5, symbol2, site, path3, line));
         }
         return { findings, cves: [] };
       }
@@ -68061,7 +69457,7 @@ function vulnIdKey(id) {
 function isCveId(id) {
   return /^CVE-\d{4}-\d+$/i.test(id.trim());
 }
-function findingVulnIds(finding4) {
+function findingVulnIds(finding5) {
   const ids2 = [];
   const seen = /* @__PURE__ */ new Set();
   const add = (id) => {
@@ -68069,10 +69465,10 @@ function findingVulnIds(finding4) {
     seen.add(vulnIdKey(id));
     ids2.push(id);
   };
-  if (finding4.rule_id !== void 0) {
-    add(ownIdOf(finding4.rule_id, dependencyCoordinates(finding4) !== null));
+  if (finding5.rule_id !== void 0) {
+    add(ownIdOf(finding5.rule_id, dependencyCoordinates(finding5) !== null));
   }
-  for (const alias of finding4.vuln_aliases ?? []) add(ownIdOf(alias, true));
+  for (const alias of finding5.vuln_aliases ?? []) add(ownIdOf(alias, true));
   return ids2;
 }
 function ownIdOf(raw, advisoryContext) {
@@ -68209,8 +69605,8 @@ var init_npmAudit = __esm({
             const fixAvailable = fixIsAvailable(getProp(entry, "fixAvailable"));
             for (const via of asArray(getProp(entry, "via"))) {
               if (typeof via !== "object" || via === null) continue;
-              const finding4 = mapV2Advisory(via, fixAvailable, seen, ctx);
-              if (finding4) findings.push(finding4);
+              const finding5 = mapV2Advisory(via, fixAvailable, seen, ctx);
+              if (finding5) findings.push(finding5);
             }
           }
         }
@@ -69496,6 +70892,13 @@ var init_runNames = __esm({
       "security-code-scan": scanner("security-code-scan"),
       // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
       "dotnet-analyzers": scanner("dotnet-analyzers"),
+      // scan_sast's and review_pr's client-trust pass (clienttrust/clientTrustPass.ts): env
+      // files (the git-ignored ones too) and Supabase migrations. Absent when the project
+      // has neither: its target is gone, as Bandit's is without Python.
+      "guardian-client-trust": scanner("guardian-client-trust"),
+      // review_pr's and a diff-scoped scan_sast's check of the change for weakened tests
+      // (testintegrity/): absent when the change touches no test file.
+      "guardian-test-integrity": scanner("guardian-test-integrity"),
       // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
       "dotnet-sdk": scanner("security-code-scan", "dotnet-analyzers"),
       // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
@@ -70573,7 +71976,7 @@ function carryForward(storage, projectPath, slot, source, sourceRows, isSuppress
       const carried = carriedFrom({ storage, scan: scan2, slot, holder, index, isSuppressed, known });
       if (carried.length > 0) {
         out.push({ slot, scan: scan2, coverage, findings: carried });
-        for (const { finding: finding4 } of carried) known.add(finding4);
+        for (const { finding: finding5 } of carried) known.add(finding5);
       }
       index.push(holder);
       if (!stillCarry.check()) return out;
@@ -70623,19 +72026,19 @@ function carriedFrom(args) {
   const newest = index.bookAt(0);
   const labels = /* @__PURE__ */ new Map();
   const carried = [];
-  for (const finding4 of rows) {
-    if (!findingInSlot(scan2, finding4, slot) || isSuppressed(finding4)) continue;
-    const key = findingKey(finding4);
-    const file2 = finding4.file_path === void 0 ? void 0 : finding4.file_path.replace(/\\/g, "/");
-    if (!scopeAdmits(scopeOf(key), file2, finding4.rule_id)) continue;
-    const memo2 = JSON.stringify([key, file2 ?? null, finding4.rule_id ?? null]);
+  for (const finding5 of rows) {
+    if (!findingInSlot(scan2, finding5, slot) || isSuppressed(finding5)) continue;
+    const key = findingKey(finding5);
+    const file2 = finding5.file_path === void 0 ? void 0 : finding5.file_path.replace(/\\/g, "/");
+    if (!scopeAdmits(scopeOf(key), file2, finding5.rule_id)) continue;
+    const memo2 = JSON.stringify([key, file2 ?? null, finding5.rule_id ?? null]);
     let gap = labels.get(memo2);
     if (gap === void 0) {
-      gap = newest === void 0 ? null : openGapFor(holder, newest, finding4);
+      gap = newest === void 0 ? null : openGapFor(holder, newest, finding5);
       labels.set(memo2, gap);
     }
     if (gap === null) continue;
-    carried.push({ finding: finding4, gap });
+    carried.push({ finding: finding5, gap });
   }
   return carried;
 }
@@ -70767,11 +72170,11 @@ function openSetForProject(storage, projectPath, opts = {}) {
   for (const { slot, scan: scan2, coverage: coverage2, findings: rows } of carried) {
     const gaps = /* @__PURE__ */ new Set();
     const batch = [];
-    for (const { finding: finding4, gap } of rows) {
-      if (seen.has(finding4)) continue;
-      const { marker, show } = admitted(finding4);
+    for (const { finding: finding5, gap } of rows) {
+      if (seen.has(finding5)) continue;
+      const { marker, show } = admitted(finding5);
       if (!show) continue;
-      batch.push({ ...finding4, scan_id: scan2.scan_id, not_remeasured: true, ...marker !== void 0 ? { llm: marker } : {} });
+      batch.push({ ...finding5, scan_id: scan2.scan_id, not_remeasured: true, ...marker !== void 0 ? { llm: marker } : {} });
       gaps.add(gap);
     }
     admit(batch);
@@ -72524,7 +73927,7 @@ var init_syft = __esm({
 });
 
 // src/tools/generateSbom.ts
-import { existsSync as existsSync15, readFileSync as readFileSync11, statSync as statSync10 } from "node:fs";
+import { existsSync as existsSync15, readFileSync as readFileSync11, statSync as statSync11 } from "node:fs";
 import { join as join73 } from "node:path";
 import { randomUUID as randomUUID3 } from "node:crypto";
 async function handler2(inp, ctx) {
@@ -72576,7 +73979,7 @@ async function handler2(inp, ctx) {
       }
     };
   }
-  const stat4 = statSync10(outFile);
+  const stat4 = statSync11(outFile);
   const raw = readFileSync11(outFile, "utf8");
   const summary2 = summarize3(raw);
   ctx.storage.scans.insert({
@@ -74607,7 +76010,7 @@ function atMostOne(hit) {
 }
 function resolveJsTs(importingFile, specifier, byPosixPath) {
   if (!specifier.startsWith(".")) return void 0;
-  const base2 = stripJsTsExtension(joinAndNormalize(dirOf3(importingFile), specifier));
+  const base2 = stripJsTsExtension(joinAndNormalize(dirOf4(importingFile), specifier));
   return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base2}${suffix}`));
 }
 function stripJsTsExtension(path3) {
@@ -74626,7 +76029,7 @@ function resolveRust(importingFile, specifier, byPosixPath) {
     root = "src";
     tail2 = specifier.slice("crate::".length);
   } else if (specifier.startsWith("self::")) {
-    root = dirOf3(importingFile);
+    root = dirOf4(importingFile);
     tail2 = specifier.slice("self::".length);
   } else {
     return void 0;
@@ -74658,7 +76061,7 @@ function buildResolutionIndex(projectFiles) {
     const posix6 = toPosix2(file2);
     byPosixPath.set(posix6, file2);
     if (!posix6.endsWith(".go")) continue;
-    const dir = dirOf3(posix6);
+    const dir = dirOf4(posix6);
     if (dir === "" || dir === "/") continue;
     const existing = goPackages.get(dir);
     if (existing === void 0) goPackages.set(dir, [file2]);
@@ -74676,7 +76079,7 @@ function lookupCandidates(byPosixPath, candidates2) {
 function toPosix2(path3) {
   return path3.replace(/\\/g, "/");
 }
-function dirOf3(file2) {
+function dirOf4(file2) {
   const posix6 = toPosix2(file2);
   const parts = posix6.split("/");
   parts.pop();
@@ -74808,7 +76211,7 @@ function validateStatically(input2) {
     familiesWithRoots,
     run: run2
   };
-  return input2.findings.map((finding4) => validateOne(finding4, input2, context));
+  return input2.findings.map((finding5) => validateOne(finding5, input2, context));
 }
 function familyOf(language) {
   return RESOLUTION_FAMILIES.get(language) ?? language;
@@ -74871,21 +76274,21 @@ function groupRoutesByRelFile(routes, projectPath) {
   }
   return byFile;
 }
-function makeEnvelope(finding4, input2) {
+function makeEnvelope(finding5, input2) {
   return {
-    fingerprint: finding4.fingerprint,
+    fingerprint: finding5.fingerprint,
     provider: "static",
     snapshot_id: input2.snapshotId,
     tree_hash: input2.treeHash,
     computed_at: input2.computedAt
   };
 }
-function validateOne(finding4, input2, context) {
-  const envelope = makeEnvelope(finding4, input2);
-  if (finding4.file_path === void 0) {
+function validateOne(finding5, input2, context) {
+  const envelope = makeEnvelope(finding5, input2);
+  if (finding5.file_path === void 0) {
     return unknownVerdict(envelope, ["finding has no file_path; nothing to evaluate"]);
   }
-  const relFile = toRelativeIfPossible(finding4.file_path, input2.projectPath);
+  const relFile = toRelativeIfPossible(finding5.file_path, input2.projectPath);
   const { language, entry, gaps } = resolveLanguageContext(relFile, input2);
   const reach = cachedReachFrom(input2.graph, context.roots, relFile, context.reachCache);
   if (reach.hops !== null) {
@@ -75070,7 +76473,7 @@ function assessDependency(subject, index) {
   if (index.external === void 0) return unknown2([PREDATES_GAP]);
   const matcher = matcherFor(subject);
   if ("gap" in matcher) return unknown2([matcher.gap]);
-  const scopeDir = subject.ecosystem === "npm" && subject.manifest !== null ? dirOf4(subject.manifest) : null;
+  const scopeDir = subject.ecosystem === "npm" && subject.manifest !== null ? dirOf5(subject.manifest) : null;
   const matching = index.external.entries.filter(
     (entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier) && !outsideProjectCode(entry.file)
   );
@@ -75111,7 +76514,7 @@ function assessDependency(subject, index) {
         unverified.push(file2);
         continue;
       }
-      const resolved = index.npmResolver?.(dirOf4(file2), scopeDir ?? "", name) ?? {
+      const resolved = index.npmResolver?.(dirOf5(file2), scopeDir ?? "", name) ?? {
         version: null,
         reason: "no lockfile or installed tree was read"
       };
@@ -75216,7 +76619,7 @@ function sample(files) {
 function unique2(values2) {
   return [...new Set(values2)].sort();
 }
-function dirOf4(path3) {
+function dirOf5(path3) {
   const posix6 = path3.replace(/\\/g, "/");
   const at = posix6.lastIndexOf("/");
   return at === -1 ? "" : posix6.slice(0, at);
@@ -75281,13 +76684,13 @@ function npmSpecifierMatches(specifier, name) {
 function normalizePypiName(name) {
   return name.toLowerCase().replace(/[-_.]+/g, "-");
 }
-function dependencySubjectOf(finding4) {
-  const coordinates = dependencyCoordinates(finding4);
+function dependencySubjectOf(finding5) {
+  const coordinates = dependencyCoordinates(finding5);
   if (coordinates === null || coordinates.name === "") return null;
-  const manifest = finding4.file_path !== void 0 && ecosystemOfManifest(finding4.file_path) !== null ? finding4.file_path.replace(/\\/g, "/") : null;
+  const manifest = finding5.file_path !== void 0 && ecosystemOfManifest(finding5.file_path) !== null ? finding5.file_path.replace(/\\/g, "/") : null;
   return {
     package_name: coordinates.name,
-    ecosystem: ecosystemOf(finding4),
+    ecosystem: ecosystemOf(finding5),
     version: isExactVersion2(coordinates.version) ? coordinates.version : null,
     manifest
   };
@@ -75295,10 +76698,10 @@ function dependencySubjectOf(finding4) {
 function isExactVersion2(version2) {
   return /^v?\d[\w.+-]*$/.test(version2) && !/(^|\.)[xX*](\.|$)/.test(version2);
 }
-function ecosystemOf(finding4) {
-  const byTool = TOOL_ECOSYSTEMS[finding4.tool.toLowerCase()];
+function ecosystemOf(finding5) {
+  const byTool = TOOL_ECOSYSTEMS[finding5.tool.toLowerCase()];
   if (byTool !== void 0) return byTool;
-  return finding4.file_path === void 0 ? null : ecosystemOfManifest(finding4.file_path);
+  return finding5.file_path === void 0 ? null : ecosystemOfManifest(finding5.file_path);
 }
 function ecosystemOfManifest(path3) {
   const posix6 = path3.replace(/\\/g, "/").toLowerCase();
@@ -75314,12 +76717,12 @@ function ecosystemOfManifest(path3) {
 function validateDependencies(input2) {
   const index = prepareDependencyIndex(input2);
   const out = [];
-  for (const finding4 of input2.findings) {
-    const subject = dependencySubjectOf(finding4);
+  for (const finding5 of input2.findings) {
+    const subject = dependencySubjectOf(finding5);
     if (subject === null) continue;
     const assessment = assessDependency(subject, index);
     out.push({
-      fingerprint: finding4.fingerprint,
+      fingerprint: finding5.fingerprint,
       provider: "dependency",
       verdict: assessment.verdict,
       confidence: assessment.confidence,
@@ -75613,26 +77016,26 @@ function memberOfRow(row) {
     row
   };
 }
-function memberOfFinding(finding4) {
-  const coordinates = dependencyCoordinates(finding4);
-  const subject = dependencySubjectOf(finding4);
-  const ids2 = findingVulnIds(finding4);
+function memberOfFinding(finding5) {
+  const coordinates = dependencyCoordinates(finding5);
+  const subject = dependencySubjectOf(finding5);
+  const ids2 = findingVulnIds(finding5);
   if (coordinates === null || subject === null || ids2.length === 0) return null;
   return {
     ids: ids2,
     keys: new Set(ids2.map(vulnIdKey)),
-    ruleId: findingVulnIds({ ...finding4, vuln_aliases: [] })[0] ?? null,
+    ruleId: findingVulnIds({ ...finding5, vuln_aliases: [] })[0] ?? null,
     pkg: coordinates.name.toLowerCase(),
     name: coordinates.name,
     version: subject.version,
-    finding: finding4
+    finding: finding5
   };
 }
 function isMemberOf(member, key) {
   return member.pkg === key.pkg && (member.version === null || key.version === null || member.version === key.version) && member.keys.has(vulnIdKey(key.name));
 }
-function isVexCopyIn(finding4, key) {
-  const member = memberOfFinding(finding4);
+function isVexCopyIn(finding5, key) {
+  const member = memberOfFinding(finding5);
   return member !== null && isMemberOf(member, key);
 }
 function vexStatementKeys(scan2) {
@@ -79037,11 +80440,11 @@ var init_enrich = __esm({
 });
 
 // src/intel/rank.ts
-function findingCveIds(finding4) {
-  return findingVulnIds(finding4).filter(isCveId).map((id) => id.toUpperCase());
+function findingCveIds(finding5) {
+  return findingVulnIds(finding5).filter(isCveId).map((id) => id.toUpperCase());
 }
-function isUncorrelatedFinding(finding4) {
-  return CVE_CAPABLE_TOOLS.includes(finding4.tool) && findingCveIds(finding4).length === 0;
+function isUncorrelatedFinding(finding5) {
+  return CVE_CAPABLE_TOOLS.includes(finding5.tool) && findingCveIds(finding5).length === 0;
 }
 function exploitabilitySignal(cveIds, intel) {
   let kev = false;
@@ -79596,27 +80999,27 @@ async function handler17(inp, ctx) {
       `Finding ${inp.finding_fingerprint} is not in any completed scan of ${projectPath}.`
     );
   }
-  const finding4 = located.finding;
-  const credential = isCredentialFinding(finding4);
+  const finding5 = located.finding;
+  const credential = isCredentialFinding(finding5);
   let surrounding_source = null;
   let source_start_line = 0;
   let source_end_line = 0;
   const redactedLines = [];
-  if (!credential && finding4.file_path) {
-    const raw = readProjectTextOrUndefined(projectPath, finding4.file_path);
+  if (!credential && finding5.file_path) {
+    const raw = readProjectTextOrUndefined(projectPath, finding5.file_path);
     if (raw !== void 0) {
       try {
         const lines = raw.split(/\r?\n/);
-        const start = Math.max(0, (finding4.line_start ?? 1) - 1 - contextLines);
-        const end = Math.min(lines.length, (finding4.line_end ?? finding4.line_start ?? 1) + contextLines);
+        const start = Math.max(0, (finding5.line_start ?? 1) - 1 - contextLines);
+        const end = Math.min(lines.length, (finding5.line_end ?? finding5.line_start ?? 1) + contextLines);
         source_start_line = start + 1;
         source_end_line = end;
         const slice = lines.slice(start, end);
-        const flagged = credentialLines(ctx, projectPath, finding4.file_path, located.scan_id, start + 1, end);
+        const flagged = credentialLines(ctx, projectPath, finding5.file_path, located.scan_id, start + 1, end);
         const scrubbed = scrubSecrets(slice.join("\n"), start + 1).split("\n");
         surrounding_source = slice.map((l, i) => {
           const lineNo = start + 1 + i;
-          const marker = lineNo >= (finding4.line_start ?? -1) && lineNo <= (finding4.line_end ?? -1) ? ">>" : "  ";
+          const marker = lineNo >= (finding5.line_start ?? -1) && lineNo <= (finding5.line_end ?? -1) ? ">>" : "  ";
           const rule = flagged.get(lineNo);
           const shown = rule !== void 0 ? `${/^\s*/.exec(l)?.[0] ?? ""}\u2039redacted: a credential finding (${rule}) is on this line\u203A` : scrubbed[i] ?? l;
           if (shown !== l) redactedLines.push(lineNo);
@@ -79626,23 +81029,23 @@ async function handler17(inp, ctx) {
       }
     }
   }
-  const priorSuppressions = finding4.rule_id ? ctx.storage.suppressions.listActiveForRule(finding4.tool, finding4.rule_id, 20, projectPath).filter(
-    (s) => s.finding_fingerprint !== finding4.fingerprint && (finding4.identity === void 0 || s.finding_identity !== finding4.identity)
+  const priorSuppressions = finding5.rule_id ? ctx.storage.suppressions.listActiveForRule(finding5.tool, finding5.rule_id, 20, projectPath).filter(
+    (s) => s.finding_fingerprint !== finding5.fingerprint && (finding5.identity === void 0 || s.finding_identity !== finding5.identity)
   ).slice(0, 10) : [];
   return {
     ok: true,
     scan_id: located.scan_id,
     finding: {
-      fingerprint: finding4.fingerprint,
-      tool: finding4.tool,
-      rule_id: finding4.rule_id ?? null,
-      severity: finding4.severity,
-      category: finding4.category,
-      subcategory: finding4.subcategory ?? null,
-      title: finding4.title,
-      message: finding4.message ?? null,
-      file_path: finding4.file_path ?? null,
-      line_range: finding4.line_start !== void 0 ? { start: finding4.line_start, end: finding4.line_end ?? finding4.line_start } : null
+      fingerprint: finding5.fingerprint,
+      tool: finding5.tool,
+      rule_id: finding5.rule_id ?? null,
+      severity: finding5.severity,
+      category: finding5.category,
+      subcategory: finding5.subcategory ?? null,
+      title: finding5.title,
+      message: finding5.message ?? null,
+      file_path: finding5.file_path ?? null,
+      line_range: finding5.line_start !== void 0 ? { start: finding5.line_start, end: finding5.line_end ?? finding5.line_start } : null
     },
     surrounding_source,
     source_start_line,
@@ -80057,7 +81460,7 @@ var init_semgrepValidate = __esm({
 });
 
 // src/tools/registerCustomRules.ts
-import { statSync as statSync11 } from "node:fs";
+import { statSync as statSync12 } from "node:fs";
 import { isAbsolute as isAbsolute16, join as join81, resolve as resolve25 } from "node:path";
 async function handler20(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
@@ -80093,7 +81496,7 @@ async function handler20(inp, ctx) {
 }
 function isDirectory2(path3) {
   try {
-    return statSync11(path3).isDirectory();
+    return statSync12(path3).isDirectory();
   } catch {
     return false;
   }
@@ -80146,7 +81549,7 @@ function consider(path3, registered, rejected) {
   }
   let isDir;
   try {
-    isDir = statSync11(path3).isDirectory();
+    isDir = statSync12(path3).isDirectory();
   } catch {
     rejected.push({ path: path3, reason: "does not exist" });
     return;
@@ -80178,7 +81581,7 @@ function collectExplicit(projectPath, paths) {
       }
       const matches3 = expandGlob(projectPath, raw).filter((p) => {
         try {
-          return statSync11(p).isFile();
+          return statSync12(p).isFile();
         } catch {
           return false;
         }
@@ -90475,7 +91878,7 @@ var init_resources = __esm({
 });
 
 // src/tools/healthStatus.ts
-import { existsSync as existsSync19, statSync as statSync12 } from "node:fs";
+import { existsSync as existsSync19, statSync as statSync13 } from "node:fs";
 async function handler21(inp, ctx) {
   const explicit = inp.project_path !== void 0 && inp.project_path.length > 0;
   const projectPath = explicit ? toolProjectPath(inp.project_path) : serverProjectPath();
@@ -90486,7 +91889,7 @@ async function handler21(inp, ctx) {
   let dbSizeBytes = null;
   if (dbPath && dbPath !== ":memory:" && existsSync19(dbPath)) {
     try {
-      dbSizeBytes = statSync12(dbPath).size;
+      dbSizeBytes = statSync13(dbPath).size;
     } catch {
     }
   }
@@ -91355,7 +92758,7 @@ var init_reportExport = __esm({
 });
 
 // src/sarif/importSarif.ts
-import { createHash as createHash12 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 import { isAbsolute as isAbsolute17, relative as relative27, resolve as resolve26 } from "node:path";
 import { fileURLToPath as fileURLToPath10 } from "node:url";
 function importSarif(text2, ctx) {
@@ -91435,15 +92838,15 @@ function readRun(run2, projectPath, maxResults) {
       counts.skipped.push({ index, reason: built.skip });
       continue;
     }
-    const { finding: finding4, dedupeKey } = built;
+    const { finding: finding5, dedupeKey } = built;
     if (seen.has(dedupeKey)) {
       counts.duplicates += 1;
       continue;
     }
     seen.add(dedupeKey);
-    if (finding4.file_path === void 0) counts.without_location += 1;
-    if (finding4.identity === void 0) counts.identity_computed += 1;
-    findings.push(finding4);
+    if (finding5.file_path === void 0) counts.without_location += 1;
+    if (finding5.identity === void 0) counts.identity_computed += 1;
+    findings.push(finding5);
     keys.push(dedupeKey);
     counts.imported += 1;
   }
@@ -91455,7 +92858,7 @@ function separateSharedFingerprints(findings, keys) {
   for (const f of findings) uses.set(f.fingerprint, (uses.get(f.fingerprint) ?? 0) + 1);
   findings.forEach((f, i) => {
     if ((uses.get(f.fingerprint) ?? 0) < 2) return;
-    f.fingerprint = createHash12("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
+    f.fingerprint = createHash14("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
   });
 }
 function resolveRule(result, rc) {
@@ -91518,11 +92921,11 @@ function buildFinding(result, rc) {
   }
   if (!secret && where.snippet !== void 0) input2.snippet = where.snippet;
   if (cwe.length > 0) input2.taxonomy = { cwe };
-  const finding4 = makeFinding(input2);
+  const finding5 = makeFinding(input2);
   const identity = identityOf(result, rc.tool, ruleId);
-  if (identity !== void 0) finding4.identity = identity;
+  if (identity !== void 0) finding5.identity = identity;
   const dedupeKey = identity !== void 0 ? `i:${identity}` : `l:${JSON.stringify([ruleId ?? null, where.file ?? null, where.startLine ?? null, where.endLine ?? null, where.columns ?? null, message3 ?? null])}`;
-  return { finding: finding4, dedupeKey };
+  return { finding: finding5, dedupeKey };
 }
 function textOf2(message3) {
   const t = getString(message3, "text") ?? getString(message3, "markdown");
@@ -91601,7 +93004,7 @@ function identityOf(result, tool54, ruleId) {
   let key = usableFingerprints(partial3);
   if (key.length === 0) key = usableFingerprints(getProp(result, "fingerprints"));
   if (key.length === 0) return void 0;
-  return createHash12("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
+  return createHash14("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
 }
 function locate5(result, rc) {
   const physical = getProp(asArray(getProp(result, "locations"))[0], "physicalLocation");
@@ -92716,8 +94119,8 @@ var init_phpcs = __esm({
       parse(input2, ctx = {}) {
         const findings = [];
         for (const [filePath, m] of messagesOf(input2)) {
-          const finding4 = mapMessage2(filePath, m, ctx);
-          if (finding4) findings.push(finding4);
+          const finding5 = mapMessage2(filePath, m, ctx);
+          if (finding5) findings.push(finding5);
         }
         return { findings, cves: [] };
       }
@@ -93663,7 +95066,7 @@ function pushVuln(raw, subcategory, componentLabel, findings, cves) {
   const fixedIn = getString(raw, "fixed_in");
   const severity = severityFromVuln(raw);
   const cveForRule = cveList[0] ?? title.slice(0, 64);
-  const finding4 = makeFinding({
+  const finding5 = makeFinding({
     tool: WPSCAN_TOOL_NAME,
     rule_id: cveForRule,
     severity,
@@ -93679,7 +95082,7 @@ function pushVuln(raw, subcategory, componentLabel, findings, cves) {
     // classified as every other one: CWE-1395, A03:2025 only.
     taxonomy: dependencyTaxonomy()
   });
-  findings.push(finding4);
+  findings.push(finding5);
   for (const cveId of cveList) {
     const [pkgName, installedVersion] = componentLabel.split("@");
     const cveEntry = {
@@ -94032,7 +95435,7 @@ function severityOf3(cvss) {
 function wordfenceMatchToFindingAndCve(match) {
   const componentLabel = `${match.slug}@${match.installedVersion}`;
   const subcategory = match.componentType === "core" ? "wordpress-core" : match.componentType === "plugin" ? "wordpress-plugin" : "wordpress-theme";
-  const finding4 = makeFinding({
+  const finding5 = makeFinding({
     tool: WORDFENCE_TOOL_NAME,
     rule_id: match.cve ?? match.vulnId.slice(0, 64),
     severity: match.severity,
@@ -94051,7 +95454,7 @@ function wordfenceMatchToFindingAndCve(match) {
     ...match.fixedVersion !== null ? { fixed_version: match.fixedVersion } : {},
     severity: match.severity
   };
-  return { finding: finding4, cve };
+  return { finding: finding5, cve };
 }
 var WORDFENCE_TOOL_NAME, WORDFENCE_BASE_URL, WORDFENCE_PRODUCTION_PATH, WORDFENCE_FEED_TTL_MS, DEFAULT_FEED_TIMEOUT_MS, VERSION_ANY, TIER_UNRECOGNIZED, TIER_NUMBER, LOWER_TIERS, HIGHER_TIERS, DEFAULT_COMPONENT, CACHE_FILE_NAME, CORE_SLUG, CORE_NAME;
 var init_vulnFeed = __esm({
@@ -94077,7 +95480,7 @@ var init_vulnFeed = __esm({
 
 // src/tools/wpVulnCheck.ts
 import { existsSync as existsSync21, mkdirSync as mkdirSync14, readdirSync as readdirSync16, readFileSync as readFileSync14, rmSync as rmSync18, writeFileSync as writeFileSync25 } from "node:fs";
-import { createHash as createHash13, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash15, randomUUID as randomUUID10 } from "node:crypto";
 import { dirname as dirname27, join as join88 } from "node:path";
 async function handler27(inp, ctx) {
   if (!inp.target_url && !inp.wp_install_path) {
@@ -94248,7 +95651,7 @@ function urlReportsDir(url2) {
     host = new URL(key).host.replace(/[^A-Za-z0-9.-]/g, "_") || "site";
   } catch {
   }
-  const hash2 = createHash13("sha256").update(key).digest("hex").slice(0, 12);
+  const hash2 = createHash15("sha256").update(key).digest("hex").slice(0, 12);
   return join88(defaultWordfenceCacheDir(), "wp-vuln-check", `${host}-${hash2}`);
 }
 function pruneUrlReports(siteDir, current) {
@@ -94867,8 +96270,8 @@ var init_wpVulnCheckSource = __esm({
             }
             tools_run.push(entry);
             for (const match of matches3) {
-              const { finding: finding4, cve } = wordfenceMatchToFindingAndCve(match);
-              findings.push(finding4);
+              const { finding: finding5, cve } = wordfenceMatchToFindingAndCve(match);
+              findings.push(finding5);
               if (cve !== null) cves.push(cve);
             }
           } else {
@@ -94928,7 +96331,7 @@ var init_wpVulnCheckSource = __esm({
             if (r.plugin_status === "closed") {
               closedCount += 1;
               const severity = r.closure_reason === "security-issue" ? "high" : "medium";
-              const finding4 = makeFinding({
+              const finding5 = makeFinding({
                 tool: WP_ORG_TOOL_NAME,
                 severity,
                 category: "security",
@@ -94938,8 +96341,8 @@ var init_wpVulnCheckSource = __esm({
                 file_path: componentLabel,
                 snippet: `component:${componentLabel}`
               });
-              if (r.closed_date !== void 0) finding4.message = `Closed ${r.closed_date}.`;
-              findings.push(finding4);
+              if (r.closed_date !== void 0) finding5.message = `Closed ${r.closed_date}.`;
+              findings.push(finding5);
             } else if (r.plugin_status === "found" && r.last_updated !== void 0 && isStalePlugin(r.last_updated, now)) {
               staleCount += 1;
               findings.push(
@@ -96833,19 +98236,19 @@ function ssvcAssessor(ctx, projectPath, intel, missionWellbeing, scanTrees) {
     missionGiven: missionWellbeing !== void 0,
     surfaceSnapshotId: surface?.id ?? null,
     surfaceStale: false,
-    assess(finding4, cveIds) {
+    assess(finding5, cveIds) {
       if (cveIds.length === 0) return null;
-      const findingTree = scanTrees.get(finding4.scan_id);
+      const findingTree = scanTrees.get(finding5.scan_id);
       const stale = surface !== null && findingTree !== void 0 && findingTree !== "" && findingTree !== surface.tree_hash ? `the attack-surface snapshot maps another tree (${surface.tree_hash}) than this finding's scan (${findingTree})` : null;
       if (stale !== null) assessor.surfaceStale = true;
-      const subject = dependencySubjectOf(finding4);
+      const subject = dependencySubjectOf(finding5);
       const dependency = subject !== null && index !== null ? assessDependency(subject, index) : null;
       const whyNone = index === null ? "no attack-surface snapshot for this project (run map_attack_surface)" : subject === null ? "the finding names no package to look for in the imports" : null;
       return {
         ...assessSsvc({
           exploitation: exploitationPoint(cveIds, intel),
           automatable: automatablePoint(dependency, whyNone, stale),
-          technical_impact: technicalImpactPoint(finding4.severity),
+          technical_impact: technicalImpactPoint(finding5.severity),
           mission_wellbeing: mission
         }),
         cve_ids: [...cveIds]
@@ -98246,7 +99649,7 @@ function isWholeCommand(span2) {
 function downloadsIn(unit) {
   const out = [];
   const add = (end, file2) => {
-    const base2 = basenameOf(file2 ?? "");
+    const base2 = basenameOf2(file2 ?? "");
     if (base2 !== "") out.push({ unit, end, file: base2 });
   };
   for (const [client, tail2] of [
@@ -98263,7 +99666,7 @@ function downloadsIn(unit) {
   }
   return out;
 }
-function basenameOf(path3) {
+function basenameOf2(path3) {
   const base2 = (path3.split(/[/\\]/).pop() ?? "").replace(/[.,;:!?)\]}]+$/, "");
   return /[A-Za-z0-9]/.test(base2) ? base2 : "";
 }
@@ -99506,7 +100909,7 @@ function analyzeMcpManifest(file2) {
   }
   if (grantsWildcard(file2.content)) {
     out.push(
-      finding2(
+      finding3(
         file2,
         "mcp-wildcard-scope",
         "medium",
@@ -99520,7 +100923,7 @@ function analyzeMcpManifest(file2) {
   for (const d of desc) {
     if (MCP_DESCRIPTION_POISONING.test(d) || MCP_DESCRIPTION_POISONING.test(asTheModelReads(d))) {
       out.push(
-        finding2(
+        finding3(
           file2,
           "mcp-tool-description-poisoning",
           "high",
@@ -99551,7 +100954,7 @@ function collectDescriptions(json2) {
   }
   return acc;
 }
-function finding2(file2, ruleId, severity, subcategory, title, message3) {
+function finding3(file2, ruleId, severity, subcategory, title, message3) {
   return makeFinding({
     tool: TOOL,
     rule_id: ruleId,
@@ -99602,7 +101005,7 @@ import {
   readlinkSync as readlinkSync2,
   realpathSync as realpathSync6,
   rmSync as rmSync19,
-  statSync as statSync13,
+  statSync as statSync14,
   writeFileSync as writeFileSync26
 } from "node:fs";
 import { tmpdir as tmpdir13 } from "node:os";
@@ -99690,7 +101093,7 @@ async function ingestTarget(targetRaw, options = {}) {
   if (!existsSync22(target)) {
     return { ok: false, code: "target_not_found", message: `Path does not exist: ${target}` };
   }
-  const st = statSync13(target);
+  const st = statSync14(target);
   if (st.isDirectory()) {
     const collected = collectDir(target, limits.walk);
     return {
@@ -100220,7 +101623,7 @@ var init_ingest = __esm({
 });
 
 // src/tools/scanSkill.ts
-import { createHash as createHash14, randomUUID as randomUUID17 } from "node:crypto";
+import { createHash as createHash16, randomUUID as randomUUID17 } from "node:crypto";
 import { writeFileSync as writeFileSync27 } from "node:fs";
 import { join as join96 } from "node:path";
 async function handler39(inp, ctx, callMeta) {
@@ -100408,7 +101811,7 @@ function nonZeroBreakdown(breakdown) {
   return out.sort((a, b) => b.count - a.count);
 }
 function hashFiles(parts) {
-  const h = createHash14("sha256");
+  const h = createHash16("sha256");
   for (const p of [...parts].sort()) h.update(p).update("\n");
   return h.digest("hex").slice(0, 32);
 }
@@ -102588,7 +103991,7 @@ function originFingerprint(check2, origin, parts = []) {
 function buildFinding2(args) {
   const { check: check2, severity, title, message: message3, route, request, origin, identityParts } = args;
   const path3 = route?.path_resolved ?? request.path;
-  const finding4 = {
+  const finding5 = {
     fingerprint: origin === void 0 ? dastFingerprint(check2, request.method, path3, route?.file) : originFingerprint(check2, origin, identityParts),
     tool: "dast",
     rule_id: origin === void 0 ? dastRuleId(check2, request.method, path3) : originRuleId(check2, origin, identityParts),
@@ -102602,10 +104005,10 @@ function buildFinding2(args) {
     evidence_id: request.id
   };
   if (route !== void 0) {
-    finding4.file_path = route.file;
-    finding4.line_start = route.line;
+    finding5.file_path = route.file;
+    finding5.line_start = route.line;
   }
-  return finding4;
+  return finding5;
 }
 function routeFor(routes, routeIndex) {
   return routeIndex === null ? void 0 : routes[routeIndex];
@@ -103146,16 +104549,16 @@ function responsePart(result) {
     error: result.error
   };
 }
-function buildEvidence(finding4, origin, results) {
-  const primary = results.find((r) => r.request.id === finding4.evidence_id);
+function buildEvidence(finding5, origin, results) {
+  const primary = results.find((r) => r.request.id === finding5.evidence_id);
   const record8 = {
-    fingerprint: finding4.fingerprint,
-    check: finding4.check,
-    evidence_id: finding4.evidence_id,
+    fingerprint: finding5.fingerprint,
+    check: finding5.check,
+    evidence_id: finding5.evidence_id,
     origin,
     exchanges: []
   };
-  if (finding4.rule_id !== void 0) record8.rule_id = finding4.rule_id;
+  if (finding5.rule_id !== void 0) record8.rule_id = finding5.rule_id;
   if (primary === void 0) {
     record8.note = "No probe exchange recorded for this finding; it was reported by an external engine. See nuclei.jsonl in this directory for the raw output.";
     return record8;
@@ -103169,12 +104572,12 @@ function buildEvidence(finding4, origin, results) {
   }
   return record8;
 }
-function buildBurstEvidence(finding4, origin, burst, planned, observed) {
+function buildBurstEvidence(finding5, origin, burst, planned, observed) {
   const first = burst[0];
   const record8 = {
-    fingerprint: finding4.fingerprint,
-    check: finding4.check,
-    evidence_id: finding4.evidence_id,
+    fingerprint: finding5.fingerprint,
+    check: finding5.check,
+    evidence_id: finding5.evidence_id,
     origin,
     exchanges: first === void 0 ? [] : [toExchange(first)],
     burst: {
@@ -103184,7 +104587,7 @@ function buildBurstEvidence(finding4, origin, burst, planned, observed) {
       observed
     }
   };
-  if (finding4.rule_id !== void 0) record8.rule_id = finding4.rule_id;
+  if (finding5.rule_id !== void 0) record8.rule_id = finding5.rule_id;
   if (first === void 0) record8.note = "The burst produced no results at all.";
   return record8;
 }
@@ -103403,7 +104806,7 @@ function normalizeLine(line, routes) {
   const matchedAt = typeof matchedAtValue === "string" ? matchedAtValue : "";
   const pathname = pathnameOf(matchedAt);
   const route = matchRoute(pathname, routes);
-  const finding4 = {
+  const finding5 = {
     // `dastFingerprint`'s `method` slot plays the role of "the specific
     // signal at this path" — an HTTP verb for the own engine's checks, the
     // template-id here. Two different templates matching the SAME path must
@@ -103430,18 +104833,18 @@ function normalizeLine(line, routes) {
     evidence_id: `nuclei ${templateId} ${matchedAt}`
   };
   if (route !== void 0) {
-    finding4.file_path = route.file;
-    finding4.line_start = route.line;
+    finding5.file_path = route.file;
+    finding5.line_start = route.line;
   }
-  return finding4;
+  return finding5;
 }
 function normalizeNucleiJsonl(jsonl, routes) {
   const findings = [];
   for (const line of jsonl.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed === "") continue;
-    const finding4 = normalizeLine(trimmed, routes);
-    if (finding4 !== null) findings.push(finding4);
+    const finding5 = normalizeLine(trimmed, routes);
+    if (finding5 !== null) findings.push(finding5);
   }
   return findings;
 }
@@ -103462,7 +104865,7 @@ var init_normalizeNuclei = __esm({
 });
 
 // src/dast/probe.ts
-import { createHash as createHash15 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 async function executeProbe(req, opts) {
   const started = Date.now();
   const controller = new AbortController();
@@ -103495,7 +104898,7 @@ async function executeProbe(req, opts) {
       status: res.status,
       headers,
       body_prefix: text2.slice(0, BODY_PREFIX_BYTES),
-      body_hash: createHash15("sha256").update(text2).digest("hex"),
+      body_hash: createHash17("sha256").update(text2).digest("hex"),
       elapsed_ms: Date.now() - started,
       error: null
     };
@@ -103721,7 +105124,7 @@ async function runRateLimitBurst(opts) {
     };
   }
   const path3 = substituteParams(selected.route.path_resolved).path;
-  const finding4 = noRateLimitObservedFinding({
+  const finding5 = noRateLimitObservedFinding({
     route: selected.route,
     path: path3,
     // Every burst request shares one id by design (see `buildBurst`), which
@@ -103734,12 +105137,12 @@ async function runRateLimitBurst(opts) {
   });
   return {
     outcome: "ran",
-    finding: finding4,
+    finding: finding5,
     summary: { ...base2, sent: verdict.sent, observed: false },
     evidence: /* @__PURE__ */ new Map([
       [
-        finding4.fingerprint,
-        buildBurstEvidence(finding4, opts.origin, burstResults, RATE_LIMIT_BURST, false)
+        finding5.fingerprint,
+        buildBurstEvidence(finding5, opts.origin, burstResults, RATE_LIMIT_BURST, false)
       ]
     ])
   };
@@ -104294,15 +105697,15 @@ function specPaths(snapshot, side) {
   }
   return out;
 }
-function toInsertInput(finding4, scanId, evidenceDir) {
-  const { check: check2, evidence_id, ...rest } = finding4;
+function toInsertInput(finding5, scanId, evidenceDir) {
+  const { check: check2, evidence_id, ...rest } = finding5;
   return {
     ...rest,
     scan_id: scanId,
     raw: {
       check: check2,
       evidence_id,
-      evidence_file: evidenceDir === null ? null : join103(evidenceDir, `${finding4.fingerprint}.json`)
+      evidence_file: evidenceDir === null ? null : join103(evidenceDir, `${finding5.fingerprint}.json`)
     }
   };
 }
@@ -104975,11 +106378,11 @@ var init_apply2 = __esm({
 });
 
 // src/fixpr/candidates.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash18 } from "node:crypto";
 function buildGroups(input2) {
   const rescannable = input2.rescannable ?? (() => true);
   const eligible = input2.findings.filter(
-    (finding4) => finding4.fix_available && passes(finding4.severity, input2.severityMin) && rescannable(finding4)
+    (finding5) => finding5.fix_available && passes(finding5.severity, input2.severityMin) && rescannable(finding5)
   );
   const groups = [];
   if (input2.sources.includes("deps")) {
@@ -105021,20 +106424,20 @@ function selectGroups(groups, maxPrs, exploitability) {
 }
 function buildDepsGroups(findings, upgradeSteps) {
   const buckets = /* @__PURE__ */ new Map();
-  for (const finding4 of findings) {
-    if (!DEP_SCANNER_TOOLS.includes(finding4.tool)) continue;
-    const steps = stepsFor(finding4, upgradeSteps);
+  for (const finding5 of findings) {
+    if (!DEP_SCANNER_TOOLS.includes(finding5.tool)) continue;
+    const steps = stepsFor(finding5, upgradeSteps);
     if (steps.length === 0) continue;
     const first = steps[0];
     if (first === void 0) continue;
     const bucketKey = `${first.ecosystem}::${normalisePackageName(first.ecosystem, first.package_name)}`;
     const bucket = buckets.get(bucketKey);
     if (bucket === void 0) {
-      buckets.set(bucketKey, { steps, fingerprints: [finding4.fingerprint], severity: finding4.severity });
+      buckets.set(bucketKey, { steps, fingerprints: [finding5.fingerprint], severity: finding5.severity });
     } else {
-      bucket.fingerprints.push(finding4.fingerprint);
-      if (SEVERITY_ORDER[finding4.severity] > SEVERITY_ORDER[bucket.severity]) {
-        bucket.severity = finding4.severity;
+      bucket.fingerprints.push(finding5.fingerprint);
+      if (SEVERITY_ORDER[finding5.severity] > SEVERITY_ORDER[bucket.severity]) {
+        bucket.severity = finding5.severity;
       }
     }
   }
@@ -105058,21 +106461,21 @@ function buildDepsGroups(findings, upgradeSteps) {
     ([ecosystem, candidates2]) => makeGroup("deps", ecosystem, candidates2)
   );
 }
-function stepsFor(finding4, upgradeSteps) {
-  const coordinates = dependencyCoordinates(finding4);
+function stepsFor(finding5, upgradeSteps) {
+  const coordinates = dependencyCoordinates(finding5);
   if (coordinates === null) return [];
-  const ecosystem = findingEcosystem(finding4);
+  const ecosystem = findingEcosystem(finding5);
   if (ecosystem === null) return [];
   const name = normalisePackageName(ecosystem, coordinates.name);
   return upgradeSteps.filter(
     (step2) => step2.ecosystem === ecosystem && normalisePackageName(ecosystem, step2.package_name) === name
   );
 }
-function findingEcosystem(finding4) {
-  const byTool = TOOL_ECOSYSTEM[finding4.tool];
+function findingEcosystem(finding5) {
+  const byTool = TOOL_ECOSYSTEM[finding5.tool];
   if (byTool !== void 0) return byTool;
-  if (finding4.tool !== "trivy") return null;
-  const base2 = (finding4.file_path ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  if (finding5.tool !== "trivy") return null;
+  const base2 = (finding5.file_path ?? "").replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
   if (["package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock.yaml", "package.json", "bun.lock"].includes(base2)) {
     return "npm";
   }
@@ -105093,17 +106496,17 @@ function normalisePackageName(ecosystem, name) {
   return ecosystem === "pip" ? lower.replace(/[-_.]+/g, "-") : lower;
 }
 function buildSemgrepGroup(findings) {
-  const candidates2 = findings.filter((finding4) => finding4.tool === "semgrep").map((finding4) => ({
+  const candidates2 = findings.filter((finding5) => finding5.tool === "semgrep").map((finding5) => ({
     source: "semgrep",
-    fingerprints: [finding4.fingerprint],
-    severity: finding4.severity,
+    fingerprints: [finding5.fingerprint],
+    severity: finding5.severity,
     command: null,
     // `||`, not `??`: an empty-string rule_id is exactly as unusable a
     // label as a missing one, and `??` would let '' straight through.
-    label: finding4.rule_id || finding4.title,
+    label: finding5.rule_id || finding5.title,
     // The fix pass applies exactly this rule to exactly this file.
-    ...finding4.rule_id ? { rule_id: finding4.rule_id } : {},
-    ...finding4.file_path ? { file_path: finding4.file_path } : {}
+    ...finding5.rule_id ? { rule_id: finding5.rule_id } : {},
+    ...finding5.file_path ? { file_path: finding5.file_path } : {}
   }));
   return candidates2.length === 0 ? null : makeGroup("semgrep", "semgrep", candidates2);
 }
@@ -105113,7 +106516,7 @@ function makeGroup(source, key, candidates2) {
     if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
   }
   const fingerprints = candidates2.flatMap((candidate) => candidate.fingerprints);
-  const hash2 = createHash16("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
+  const hash2 = createHash18("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
   return { source, key, candidates: candidates2, severity, hash: hash2 };
 }
 function countFingerprints(group) {
@@ -105150,17 +106553,17 @@ function summariseExclusions(input2) {
   };
   const belowFloor = [];
   let candidates2 = 0;
-  for (const finding4 of input2.findings) {
-    if (covered.has(finding4.fingerprint)) {
+  for (const finding5 of input2.findings) {
+    if (covered.has(finding5.fingerprint)) {
       candidates2 += 1;
-    } else if (!finding4.fix_available) {
+    } else if (!finding5.fix_available) {
       by_reason.no_fix_available += 1;
-    } else if (!passes(finding4.severity, input2.severityMin)) {
+    } else if (!passes(finding5.severity, input2.severityMin)) {
       by_reason.below_severity_min += 1;
-      belowFloor.push(finding4);
-    } else if (input2.uncommitted?.(finding4) === true) {
+      belowFloor.push(finding5);
+    } else if (input2.uncommitted?.(finding5) === true) {
       by_reason.uncommitted_changes += 1;
-    } else if (input2.planFailed?.(finding4) === true) {
+    } else if (input2.planFailed?.(finding5) === true) {
       by_reason.upgrade_plan_failed += 1;
     } else {
       by_reason.no_fix_source += 1;
@@ -105502,7 +106905,7 @@ var init_pr = __esm({
 });
 
 // src/fixpr/semgrepFix.ts
-import { mkdirSync as mkdirSync15, mkdtempSync as mkdtempSync14, rmSync as rmSync21, statSync as statSync14, writeFileSync as writeFileSync29 } from "node:fs";
+import { mkdirSync as mkdirSync15, mkdtempSync as mkdtempSync14, rmSync as rmSync21, statSync as statSync15, writeFileSync as writeFileSync29 } from "node:fs";
 import { tmpdir as tmpdir14 } from "node:os";
 import { basename as basename13, dirname as dirname30, join as join105 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
@@ -105573,7 +106976,7 @@ function loadLocalRules(configs) {
   for (const config2 of configs) {
     let isDir;
     try {
-      isDir = statSync14(config2).isDirectory();
+      isDir = statSync15(config2).isDirectory();
     } catch {
       continue;
     }
@@ -105879,11 +107282,11 @@ var init_rescan = __esm({
 
 // src/fixpr/verify.ts
 function judgeScan(targets, before, after2) {
-  const beforeByFingerprint = new Map(before.findings.map((finding4) => [finding4.fingerprint, finding4]));
-  const afterFingerprints = new Set(after2.findings.map((finding4) => finding4.fingerprint));
+  const beforeByFingerprint = new Map(before.findings.map((finding5) => [finding5.fingerprint, finding5]));
+  const afterFingerprints = new Set(after2.findings.map((finding5) => finding5.fingerprint));
   const afterKeys = /* @__PURE__ */ new Set();
-  for (const finding4 of after2.findings) {
-    const key = resolutionKey(finding4);
+  for (const finding5 of after2.findings) {
+    const key = resolutionKey(finding5);
     if (key !== null) afterKeys.add(key);
   }
   const resolved = [];
@@ -105896,10 +107299,10 @@ function judgeScan(targets, before, after2) {
     else resolved.push(target);
   }
   const newFindings2 = newByRuleAndFile(before.findings, after2.findings);
-  const new_findings = newFindings2.map((finding4) => ({
-    fingerprint: finding4.fingerprint,
-    severity: finding4.severity,
-    title: finding4.title
+  const new_findings = newFindings2.map((finding5) => ({
+    fingerprint: finding5.fingerprint,
+    severity: finding5.severity,
+    title: finding5.title
   }));
   return {
     passed: still_present.length === 0 && newFindings2.length === 0,
@@ -105912,17 +107315,17 @@ function newByRuleAndFile(before, after2) {
   const beforeKeys = new Set(before.map(ruleFileKey));
   const seenNew = /* @__PURE__ */ new Set();
   const result = [];
-  for (const finding4 of after2) {
-    const key = ruleFileKey(finding4);
+  for (const finding5 of after2) {
+    const key = ruleFileKey(finding5);
     if (beforeKeys.has(key)) continue;
     if (seenNew.has(key)) continue;
     seenNew.add(key);
-    result.push(finding4);
+    result.push(finding5);
   }
   return result;
 }
-function ruleFileKey(finding4) {
-  return JSON.stringify([finding4.rule_id ?? null, finding4.file_path ?? null]);
+function ruleFileKey(finding5) {
+  return JSON.stringify([finding5.rule_id ?? null, finding5.file_path ?? null]);
 }
 async function judgeTests(opts) {
   const { derived: derived2, worktreePath, timeoutMs } = opts;
@@ -107094,7 +108497,7 @@ var init_configSources = __esm({
 });
 
 // src/agentaudit/hash.ts
-import { createHash as createHash17 } from "node:crypto";
+import { createHash as createHash19 } from "node:crypto";
 function omitted(v) {
   return v === void 0 || typeof v === "function" || typeof v === "symbol";
 }
@@ -107135,7 +108538,7 @@ function stableStringify2(value) {
   return parts.join("");
 }
 function hashConfigValue(value) {
-  return createHash17("sha256").update(stableStringify2(value)).digest("hex");
+  return createHash19("sha256").update(stableStringify2(value)).digest("hex");
 }
 var Literal;
 var init_hash2 = __esm({
@@ -107253,7 +108656,7 @@ var init_maskSecrets = __esm({
 });
 
 // src/agentaudit/rules.ts
-function finding3(input2) {
+function finding4(input2) {
   return makeFinding({
     tool: TOOL2,
     rule_id: input2.rule_id,
@@ -107315,7 +108718,7 @@ function checkUnpinnedLaunchers(entries3) {
     const spec = launchSpecFor(entry);
     if (!spec || isPinned(spec.launcher, spec.packageSpec)) continue;
     out.push(
-      finding3({
+      finding4({
         rule_id: "agent-audit-unpinned-launcher",
         severity: "medium",
         category: "security",
@@ -107346,7 +108749,7 @@ function checkPlainHttpRemotes(entries3) {
     if (parsed2.protocol !== "http:" || isLoopbackHost(parsed2.hostname)) continue;
     const shown = maskSecrets(entry.url);
     out.push(
-      finding3({
+      finding4({
         rule_id: "agent-audit-http-remote",
         severity: "high",
         category: "security",
@@ -107384,7 +108787,7 @@ function checkInlineSecrets(entries3) {
       const best = hits.find((h) => h.confidence === "high") ?? hits[0];
       for (const hit of best === void 0 ? [] : [best]) {
         out.push(
-          finding3({
+          finding4({
             rule_id: "agent-audit-inline-secret",
             severity: hit.confidence === "high" ? "critical" : "medium",
             category: "security",
@@ -107433,7 +108836,7 @@ function checkWildcardPermissions(source) {
     if (specifier === void 0) continue;
     if (specifier === "*") {
       out.push(
-        finding3({
+        finding4({
           rule_id: "agent-audit-wildcard-permission",
           severity: "critical",
           category: "security",
@@ -107451,7 +108854,7 @@ function checkWildcardPermissions(source) {
     if (matchesPrefixList(lowerPrefix, SAFE_WILDCARD_PREFIXES)) continue;
     const severity = matchesPrefixList(lowerPrefix, HIGH_RISK_BASH_PREFIXES) ? "high" : "medium";
     out.push(
-      finding3({
+      finding4({
         rule_id: "agent-audit-wildcard-permission",
         severity,
         category: "security",
@@ -107471,7 +108874,7 @@ function checkBypassPermissions(source) {
   const mode = permissions?.["defaultMode"] ?? root["defaultMode"];
   if (mode !== "bypassPermissions") return [];
   return [
-    finding3({
+    finding4({
       rule_id: "agent-audit-bypass-permissions",
       severity: "critical",
       category: "security",
@@ -107485,7 +108888,7 @@ function checkEnableAllProjectMcpServers(source) {
   const root = asObject(source.json);
   if (!root || root["enableAllProjectMcpServers"] !== true) return [];
   return [
-    finding3({
+    finding4({
       rule_id: "agent-audit-enable-all-mcp-servers",
       severity: "medium",
       category: "security",
@@ -107517,7 +108920,7 @@ function checkHookRisks(source) {
         const egress = NETWORK_EGRESS_RE.exec(command);
         if (egress !== null) {
           out.push(
-            finding3({
+            finding4({
               rule_id: "agent-audit-hook-network-egress",
               severity: "high",
               category: "security",
@@ -107530,7 +108933,7 @@ function checkHookRisks(source) {
         }
         if (WRITE_OUTSIDE_RE.test(command)) {
           out.push(
-            finding3({
+            finding4({
               rule_id: "agent-audit-hook-write-outside-project",
               severity: "high",
               category: "security",
@@ -107553,7 +108956,7 @@ function dangerousCommandFindings(source, command, shown) {
     ...matchSignatures(command).map((m) => ({ id: m.signature.id, title: m.signature.title, severity: m.signature.severity }))
   ];
   return hits.map(
-    (hit) => finding3({
+    (hit) => finding4({
       rule_id: "agent-audit-hook-dangerous-command",
       severity: hit.severity,
       category: "security",
@@ -107582,7 +108985,7 @@ function checkUnexpandedVars(source) {
     for (const [field2, value_] of fields) {
       if (typeof value_ !== "string" || !TEMPLATE_VAR_RE.test(value_)) continue;
       out.push(
-        finding3({
+        finding4({
           rule_id: "agent-audit-unexpanded-var",
           severity: "medium",
           category: "quality",
@@ -108938,7 +110341,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
   const items = /* @__PURE__ */ new Map();
   for (const item of pinnedItems(listing)) items.set(item.key, item);
   const server = escapeInvisible(listing.serverName);
-  const finding4 = (ruleId, severity, what, title, message3) => makeFinding({
+  const finding5 = (ruleId, severity, what, title, message3) => makeFinding({
     tool: MCP_AUDIT_TOOL_NAME,
     rule_id: ruleId,
     severity,
@@ -108957,7 +110360,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     const shown = distinct.slice(0, 5).map((n) => `'${n.length > 80 ? `${n.slice(0, 80)}\u2026` : n}'`);
     const alike = distinct.length > 1;
     findings.push(
-      finding4(
+      finding5(
         "mcp-tool-duplicate-name",
         "high",
         `tool '${first}'`,
@@ -109011,7 +110414,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     const what = `${KIND_WORD[item.kind]} '${item.label}'`;
     if (item.kind === "tool") {
       findings.push(
-        finding4(
+        finding5(
           "mcp-tool-definition-changed",
           "high",
           what,
@@ -109021,7 +110424,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
       );
     } else if (item.kind === "instructions") {
       findings.push(
-        finding4(
+        finding5(
           "mcp-server-instructions-changed",
           "high",
           "instructions",
@@ -109031,7 +110434,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
       );
     } else {
       findings.push(
-        finding4(
+        finding5(
           `mcp-${item.kind}-definition-changed`,
           CHANGED_SEVERITY[item.kind],
           what,
@@ -109045,7 +110448,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     if (item.kind === "resource") continue;
     if (item.kind === "instructions") {
       findings.push(
-        finding4(
+        finding5(
           "mcp-server-instructions-changed",
           "high",
           "instructions",
@@ -109057,7 +110460,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     }
     const what = `${KIND_WORD[item.kind]} '${item.label}'`;
     findings.push(
-      finding4(
+      finding5(
         `mcp-${item.kind}-added`,
         "low",
         what,
@@ -109070,7 +110473,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     const { kind, id } = parsePinKey(key);
     if (kind === "instructions") {
       findings.push(
-        finding4(
+        finding5(
           "mcp-server-instructions-removed",
           "info",
           "instructions",
@@ -109082,7 +110485,7 @@ function comparePins(listing, previous, auditedBefore, options = {}) {
     }
     const what = `${KIND_WORD[kind]} '${id}'`;
     findings.push(
-      finding4(
+      finding5(
         `mcp-${kind}-removed`,
         "info",
         what,
@@ -112872,8 +114275,8 @@ function planTargets(requested, entries3) {
   const plan = [];
   const started = /* @__PURE__ */ new Map();
   for (const name of requested) {
-    const qualified2 = entries3.filter((e) => qualifiedName(e) === name);
-    let candidates2 = qualified2.length > 0 ? qualified2 : entries3.filter((e) => e.name === name);
+    const qualified3 = entries3.filter((e) => qualifiedName(e) === name);
+    let candidates2 = qualified3.length > 0 ? qualified3 : entries3.filter((e) => e.name === name);
     if (candidates2.length === 0) {
       plan.push({ requested: name, kind: "missing" });
       continue;
@@ -113026,9 +114429,9 @@ async function runAudit(ctx, run2, callMeta) {
       continue;
     }
     const entry = target.entry;
-    const qualified2 = escapeInvisible(qualifiedName(entry));
+    const qualified3 = escapeInvisible(qualifiedName(entry));
     const base2 = {
-      server_key: qualified2,
+      server_key: qualified3,
       source: escapeInvisible(entry.sourceLabel),
       ...target.alsoDeclaredIn.length > 0 ? { also_declared_in: reportList(target.alsoDeclaredIn) } : {}
     };
@@ -113116,7 +114519,7 @@ async function runAudit(ctx, run2, callMeta) {
         }
       }
     };
-    const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified2}`;
+    const runName = `${MCP_AUDIT_TOOL_NAME}:${qualified3}`;
     if (reason === void 0) {
       toolsRun.push({ name: runName, status: "ok" });
     } else {
@@ -116128,11 +117531,19 @@ function renderEntryPoints(task, ctx) {
   const ids2 = ctx.entry_points !== void 0 && ctx.entry_points.length > 0 ? ctx.entry_points.map((r) => entryPointId(r, ctx.root)) : task.target.entry_points ?? [];
   return renderList((ids2.length > 0 ? ids2 : task.target.files).map((id) => scrubSecrets(id)), "entry points");
 }
+function excerptWithheld(file2, f) {
+  const name = file2.replace(/\\/g, "/").split("/").pop() ?? file2;
+  if (isEnvFileName(name)) return "(not quoted: an environment file holds values, never code to read)";
+  if (isCredentialFinding(f)) return "(not quoted: the finding flags a credential, and its line is the secret)";
+  return null;
+}
 function renderVerifyData(task, ctx) {
   const f = ctx.finding;
   if (f === void 0) throw new Error("a verify brief needs the scanner finding");
   const file2 = task.target.files[0] ?? f.file_path;
   if (file2 === void 0 || file2 === "") return { finding: renderFinding(f, void 0), excerpt: "(the finding names no file)" };
+  const withheld2 = excerptWithheld(file2, f);
+  if (withheld2 !== null) return { finding: renderFinding(f, file2), excerpt: withheld2 };
   const read3 = ctx.reader(ctx.root, file2);
   if (read3.status !== "ok") return { finding: renderFinding(f, file2), excerpt: `(the file could not be read: ${read3.status})` };
   const text2 = read3.text;
@@ -116177,6 +117588,8 @@ var MAX_BRIEF_TOKENS, MAX_EXCERPT_LINES, CURRENT_PROMPT_VERSION, MAX_EXCERPT_CHA
 var init_briefs = __esm({
   "src/llmscan/briefs.ts"() {
     "use strict";
+    init_publicEnv();
+    init_findingIdentity();
     init_configFile();
     init_configsDir();
     init_scrubSecrets();
@@ -116373,7 +117786,7 @@ var init_report2 = __esm({
 });
 
 // src/llmscan/service.ts
-import { createHash as createHash18, randomUUID as randomUUID22 } from "node:crypto";
+import { createHash as createHash20, randomUUID as randomUUID22 } from "node:crypto";
 import { posix as posix5, relative as relative40, isAbsolute as isAbsolute27 } from "node:path";
 function listed(items) {
   return { items: items.slice(0, MAX_LISTED2), total: items.length };
@@ -116384,7 +117797,7 @@ function relPosix(project, file2) {
 }
 function fileHash(project, rel2) {
   const read3 = readProjectBytes(project, rel2);
-  return read3.status === "ok" ? createHash18("sha256").update(read3.bytes).digest("hex") : "unreadable";
+  return read3.status === "ok" ? createHash20("sha256").update(read3.bytes).digest("hex") : "unreadable";
 }
 function isStale(project, task) {
   return Object.entries(task.file_hashes).some(([file2, hash2]) => fileHash(project, file2) !== hash2);
@@ -117869,6 +119282,7 @@ var init_registerAll = __esm({
 var runScans_exports = {};
 __export(runScans_exports, {
   SCAN_SEQUENCE: () => SCAN_SEQUENCE,
+  TEST_INTEGRITY_STEP: () => TEST_INTEGRITY_STEP,
   runScans: () => runScans
 });
 import { mkdtemp, rm } from "node:fs/promises";
@@ -117914,10 +119328,12 @@ async function runScans(opts) {
           steps.push(...await fullContentSteps(opts.projectPath, opts.changedSince, ctx));
         }
       }
+      const integrity = opts.diffBase !== void 0 ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
+      if (integrity !== null) steps.push(integrity.step);
       const read3 = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read3);
       const wholeFiles = read3.filter((f) => !accepted.has(f));
-      const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles]);
+      const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles, ...integrity?.findings ?? []]);
       await rememberSecretValues(scannedProject(opts.projectPath), all, {
         reportDirs: reportDirsOf(storage, opts.projectPath)
       });
@@ -117937,6 +119353,18 @@ async function runScans(opts) {
     } catch {
     }
   }
+}
+async function testIntegrityStep(projectPath, ref) {
+  const result = await runTestIntegrityCheck(projectPath, {
+    base: ref.commit,
+    target: { kind: "worktree", untracked: true },
+    label: ref.ref
+  });
+  if (result === null) return null;
+  return {
+    step: { tool: TEST_INTEGRITY_STEP, ran: true, tools_run: [result.toolRun], missing_tools: result.missing },
+    findings: result.findings
+  };
 }
 function buildSequence(opts) {
   if (opts.baseUrl !== void 0) return SCAN_SEQUENCE;
@@ -118076,7 +119504,7 @@ function scannedProject(projectPath) {
     return canonicalPath(projectPath);
   }
 }
-var SCAN_SEQUENCE, TEMP_DIR_PREFIX, FULL_CONTENT_STEP, FULL_CONTENT_BATCH, DAST_PARTIAL_SURFACE;
+var SCAN_SEQUENCE, TEMP_DIR_PREFIX, TEST_INTEGRITY_STEP, FULL_CONTENT_STEP, FULL_CONTENT_BATCH, DAST_PARTIAL_SURFACE;
 var init_runScans = __esm({
   "src/ci/runScans.ts"() {
     "use strict";
@@ -118095,6 +119523,8 @@ var init_runScans = __esm({
     init_changedSince();
     init_gitleaksIgnore();
     init_historyHunks();
+    init_detect();
+    init_gitChanges();
     init_secretValues();
     init_registerAll();
     SCAN_SEQUENCE = [
@@ -118106,6 +119536,7 @@ var init_runScans = __esm({
       "validate_finding"
     ];
     TEMP_DIR_PREFIX = "dev-guardian-ci-";
+    TEST_INTEGRITY_STEP = TEST_INTEGRITY_TOOL;
     FULL_CONTENT_STEP = "scan_secrets";
     FULL_CONTENT_BATCH = 1e3;
     DAST_PARTIAL_SURFACE = "guardian-dast:partial-surface";
@@ -118294,18 +119725,18 @@ function compareFindings(from, to, cap) {
   let unchangedCount = 0;
   let resolvedCount = 0;
   const seenFrom = indexFindings([]);
-  for (const finding4 of from.findings) {
-    if (seenFrom.has(finding4)) continue;
-    seenFrom.add(finding4);
-    if (toIndex.has(finding4)) unchangedCount += 1;
+  for (const finding5 of from.findings) {
+    if (seenFrom.has(finding5)) continue;
+    seenFrom.add(finding5);
+    if (toIndex.has(finding5)) unchangedCount += 1;
     else resolvedCount += 1;
   }
   const seenNew = indexFindings([]);
   const newFindings2 = [];
-  for (const finding4 of to.findings) {
-    if (fromIndex.has(finding4) || seenNew.has(finding4)) continue;
-    seenNew.add(finding4);
-    newFindings2.push(finding4);
+  for (const finding5 of to.findings) {
+    if (fromIndex.has(finding5) || seenNew.has(finding5)) continue;
+    seenNew.add(finding5);
+    newFindings2.push(finding5);
   }
   const shownNewFindings = newFindings2.slice(0, cap);
   const truncation = shownNewFindings.length < newFindings2.length ? {
@@ -118336,8 +119767,8 @@ var init_delta = __esm({
 // src/dashboard/hotspots.ts
 function rankFiles(findings, limit) {
   const counts = /* @__PURE__ */ new Map();
-  for (const finding4 of findings) {
-    const key = finding4.file_path || NO_FILE;
+  for (const finding5 of findings) {
+    const key = finding5.file_path || NO_FILE;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   const ranked = [...counts.entries()].map(([file_path, count]) => ({ file_path, count })).sort((a, b) => {
@@ -118630,10 +120061,10 @@ function noScanRisk() {
     coverage_caveat: true
   };
 }
-function groupBy(findings, keyOf) {
+function groupBy(findings, keyOf2) {
   const out = {};
   for (const f of findings) {
-    const key = keyOf(f);
+    const key = keyOf2(f);
     out[key] = (out[key] ?? 0) + 1;
   }
   return out;
@@ -123555,7 +124986,7 @@ function collect(command, depth, out, scope, source) {
   const startDir = scope.dir;
   let memoSteps;
   let memoDir;
-  const dirOf5 = (steps) => {
+  const dirOf6 = (steps) => {
     if (steps !== memoSteps) {
       memoSteps = steps;
       memoDir = dirAfter(startDir, steps, { homePath: scope.homePath, vars: scope.vars, bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true });
@@ -123600,7 +125031,7 @@ function collect(command, depth, out, scope, source) {
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const here = dirOf5(dirs[s]?.[c]?.may ?? null);
+      const here = dirOf6(dirs[s]?.[c]?.may ?? null);
       const deleting = {
         dir: here,
         vars: scope.vars,
@@ -123663,7 +125094,7 @@ function collect(command, depth, out, scope, source) {
       moveCwd(scope, words, resolved.index);
     }
     const fed = fedScripts(statement, readsScript, scope.powershell === true);
-    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf5(dirs[s]?.[0]?.may ?? null) });
+    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf6(dirs[s]?.[0]?.may ?? null) });
     for (const { text: text2, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });

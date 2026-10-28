@@ -39,7 +39,9 @@ git diff <last-tag>..HEAD       # pre-release
    `main`, then `master`; `head_ref` to `HEAD`. It runs Semgrep (`scan_sast`'s rules) on every added, modified or
    renamed file, gitleaks on the PR's commits (`base..head`), Bandit on changed `.py` files, gosec on the packages
    of changed `.go` files (its findings kept to those files), cppcheck on changed C/C++ files, and Trivy when a
-   dependency manifest changed. Files
+   dependency manifest changed. It also reads the changed `.env*` files and Supabase migrations
+   (`guardian-client-trust`: a secret behind a browser prefix such as `NEXT_PUBLIC_`, a table without RLS, a
+   write policy open to anyone) and the diff itself for weakened tests (`guardian-test-integrity`). Files
    are read at `head` — the working tree when it is checked out, otherwise a temporary checkout. An unknown ref is an error, never "no changed files". `local_only: true` avoids Semgrep's
    registry.
 2. Bugs and quality on **the diff's files only** (`review_pr` does not run them), with `head` checked out:
@@ -57,7 +59,10 @@ git diff <last-tag>..HEAD       # pre-release
 - **Security** — no secret in the diff (key, password, token, URL with credentials); user input validated
   before the database, a shell or HTML; authentication / authorisation where needed; no CSP / CORS / other
   defence disabled without a reason; no sensitive data (PII, tokens) logged.
-- **Tests** — the new behaviour is tested; the existing tests pass; reasonable coverage of the new code; a
+- **Tests** — every `guardian-test-integrity` finding is answered: a focused `.only` / `fit` is a blocker (it
+  silently disables the rest of the suite); an added skip, a deleted test file, fewer assertions or a test
+  script made to always pass needs its reason in the diff (a ticket, the platform) — none is a blocker. The
+  new behaviour is tested; the existing tests pass; reasonable coverage of the new code; a
   regression test for each bug the diff fixes.
 - **Quality** — small functions, clear names; no commented-out code or leftover debug prints; imports used;
   consistent with the project's style.

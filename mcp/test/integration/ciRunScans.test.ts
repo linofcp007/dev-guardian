@@ -651,4 +651,42 @@ describe('runScans', () => {
     const verdict = evaluateGate({ findings: [], baseline: null, failOn: 'high', steps: result.steps, droppedBaselineEntries: 0 });
     expect(verdict.exitCode).toBe(CI_EXIT.INCOMPLETE_SCAN);
   });
+
+  // The test-integrity step (mcp/src/testintegrity/): under a diff base the
+  // change since it is read for weakened tests, and its findings gate like any
+  // other — a focused `.only` blocks at --fail-on high. No diff base, no step.
+  it('with diffBase: the change since it is read for weakened tests, and a focused test blocks the gate', async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git('init', '-q');
+    mkdirSync(join(projectPath, 'src'), { recursive: true });
+    const lines = (...l: string[]): string => `${l.join('\n')}\n`;
+    writeFileSync(join(projectPath, 'src', 'a.test.js'), lines("it('a', () => { expect(1).toBe(1); });", "it('b', () => { expect(2).toBe(2); });"));
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    writeFileSync(join(projectPath, 'src', 'a.test.js'), lines("it.only('a', () => { expect(1).toBe(1); });", "it.skip('b', () => { expect(2).toBe(2); });"));
+
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    const step = result.steps.find((s) => s.tool === 'guardian-test-integrity');
+    expect(step).toMatchObject({ ran: true, missing_tools: [] });
+    expect(step?.tools_run[0]).toMatchObject({ name: 'guardian-test-integrity', status: 'ok' });
+    const weakened = result.findings.filter((f) => f.tool === 'guardian-test-integrity');
+    expect(weakened.map((f) => `${f.rule_id} ${f.file_path}:${f.line_start} ${f.severity}`).sort()).toEqual([
+      'test-focused src/a.test.js:1 high',
+      'test-skipped src/a.test.js:2 medium',
+    ]);
+    const verdict = evaluateGate({ findings: result.findings, baseline: null, failOn: 'high', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
+    expect(verdict.blocking.map((f) => f.rule_id)).toEqual(['test-focused']);
+
+    // No diff base: no step, no finding of the check.
+    const plain = await runScans({ projectPath });
+    expect(plain.steps.some((s) => s.tool === 'guardian-test-integrity')).toBe(false);
+    expect(plain.findings.some((f) => f.tool === 'guardian-test-integrity')).toBe(false);
+  });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);

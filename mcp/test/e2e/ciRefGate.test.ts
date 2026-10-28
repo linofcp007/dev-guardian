@@ -39,6 +39,8 @@ describe('scan --baseline-ref / --rules-ref — usage (no scanner reached)', () 
     [['--baseline-ref'], /--baseline-ref requires a value/],
     [['--baseline-ref='], /--baseline-ref requires a value/],
     [['--rules-ref', ''], /--rules-ref requires a value/],
+    [['--diff-base'], /--diff-base requires a value/],
+    [['--diff-base='], /--diff-base requires a value/],
   ])('an empty or missing ref (an unset CI variable) is exit 3, never the tree\'s own copy: %j', (args, message) => {
     const r = runCli(['scan', ...args], FAST_TIMEOUT_MS);
     expect(r.status).toBe(3);
@@ -53,6 +55,9 @@ describe('scan --baseline-ref / --rules-ref — usage (no scanner reached)', () 
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/--baseline-ref origin\/never-fetched: names no commit in this repository/);
     expect(r.stdout).toBe('');
+    const diff = runCli(['scan', '--project', repo, '--diff-base', 'origin/never-fetched'], FAST_TIMEOUT_MS);
+    expect(diff.status).toBe(3);
+    expect(diff.stderr).toMatch(/--diff-base origin\/never-fetched: names no commit in this repository/);
   });
 
   // Review M-1: help used to be looked for in every argument, so a flag whose
@@ -76,6 +81,7 @@ describe('scan --baseline-ref / --rules-ref — usage (no scanner reached)', () 
     const r = runCli(['scan', '--local-only', '--help'], FAST_TIMEOUT_MS);
     expect(r.status).toBe(0);
     expect(r.stdout).toMatch(/--baseline-ref <ref>/);
+    expect(r.stdout).toMatch(/--diff-base <ref>/);
     // What --rules-ref reads from the ref names .guardian/scan.yml too (it does since 3.3.0).
     const rulesRef = r.stdout.slice(r.stdout.indexOf('--rules-ref <ref>'), r.stdout.indexOf('--reset-exclusions-from'));
     expect(rulesRef.replace(/\s+/g, ' ')).toMatch(/\.trivyignore, \.bandit and \.guardian\/scan\.yml from <ref>/);

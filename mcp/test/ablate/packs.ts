@@ -262,6 +262,14 @@
  * S06) and three decoys among them -- so it is neither `hits/` nor a decoy
  * tree: axis 1 sees it as part of the fixture corpus, axis 0 and 2 do not.
  *
+ * **`client-trust.yml`, `GUARDIAN_CLIENT_TRUST_SRC`.** The client-trust pack (a
+ * secret behind a browser-exposed env prefix, the Supabase service-role key in
+ * browser code, a payment webhook without signature verification), run by
+ * scan_sast. Unset, axis 3 is `N/A`: this repo is no web app (its own
+ * `mcp/src` and `cli/` read 0 findings, measured). Point it at a tree of real
+ * Next.js / Vite apps with Supabase and Stripe; the pack header records the
+ * three starters it was measured on.
+ *
  * **`mobile.yml`, `GUARDIAN_MOBILE_SRC`.** The mobile configuration pack (the
  * Android manifest, its network security config, the iOS Info.plist), run by
  * scan_sast. Unset, axis 3 is `N/A`: this repo holds none of those files.
@@ -314,6 +322,9 @@ export const LLM_SRC_ENV = 'GUARDIAN_LLM_SRC';
 
 /** Env var naming a tree of real Node/Express application code (JS/TS, raw SQL), for axis 3. */
 export const WEBJS_SRC_ENV = 'GUARDIAN_WEBJS_SRC';
+
+/** Env var naming a tree of real web apps using Supabase and Stripe, for axis 3. */
+export const CLIENT_TRUST_SRC_ENV = 'GUARDIAN_CLIENT_TRUST_SRC';
 
 /** Env var naming a tree of real Android and iOS app sources, for axis 3. */
 export const MOBILE_SRC_ENV = 'GUARDIAN_MOBILE_SRC';
@@ -402,6 +413,18 @@ export function webJsCorpus(): RealCorpus | undefined {
 }
 
 /**
+ * Axis-3 corpus for the client-trust pack. Unset, axis 3 is `N/A`: this repo
+ * is no web app. See the file header.
+ */
+export function clientTrustCorpus(): RealCorpus | undefined {
+  return envCorpus(
+    CLIENT_TRUST_SRC_ENV,
+    'client-trust corpus (GUARDIAN_CLIENT_TRUST_SRC)',
+    'a tree of real web apps (Next.js, Vite, SvelteKit) using Supabase and Stripe',
+  );
+}
+
+/**
  * Axis-3 corpus for the mobile configuration pack. Unset, axis 3 is `N/A`:
  * this repo holds no Android manifest, network security config or Info.plist.
  */
@@ -422,6 +445,7 @@ const PHP_SRC = phpCorpus();
 const RGPD_SRC = rgpdCorpus();
 const LLM_SRC = llmCorpus();
 const WEBJS_SRC = webJsCorpus();
+const CLIENT_TRUST_SRC = clientTrustCorpus();
 const MOBILE_SRC = mobileCorpus();
 
 export const PACKS: readonly PackSpec[] = [
@@ -517,6 +541,16 @@ export const PACKS: readonly PackSpec[] = [
     fixtures: fixtures('web-js'),
     hitsSubdir: 'hits',
     realCode: WEBJS_SRC,
+  },
+  // The client-trust pack (browser-exposed secrets, the Supabase service-role
+  // key in browser code, payment webhooks), run by scan_sast. See
+  // `test/e2e/clientTrustPack.test.ts`.
+  {
+    name: 'client-trust',
+    config: config('client-trust'),
+    fixtures: fixtures('client-trust'),
+    hitsSubdir: 'hits',
+    realCode: CLIENT_TRUST_SRC,
   },
   // The mobile configuration pack (Android manifest, network security config,
   // Info.plist), run by scan_sast. See `test/e2e/mobilePack.test.ts`.

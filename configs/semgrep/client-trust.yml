@@ -1,0 +1,486 @@
+# dev-guardian Semgrep config client-trust.
+# Confiar no cliente: o que uma app web (Next.js, Vite, Expo, SvelteKit,
+# Astro, Nuxt, Gatsby, CRA) entrega ao browser e o que um webhook de
+# pagamentos aceita sem provar de onde veio. Em JS e TS. Corre dentro do
+# `scan_sast` como o `web-js.yml` (ficheiro do plugin, também no
+# `local_only`), e por isso também no `security_scan_full` e no `review_pr`.
+#
+#   | regra                          | CWE     | como decide                         |
+#   | ------------------------------ | ------- | ----------------------------------- |
+#   | client-public-env-secret       | CWE-798 | o nome de uma variável de ambiente  |
+#   |                                |         | com prefixo público (o bundler a    |
+#   |                                |         | escreve no JS do browser) diz       |
+#   |                                |         | segredo                             |
+#   | client-supabase-service-role   | CWE-284 | `createClient` com a chave          |
+#   |                                |         | service-role num ficheiro           |
+#   |                                |         | `'use client'`, ou                  |
+#   |                                |         | `createBrowserClient` com ela       |
+#   | client-webhook-unverified      | CWE-345 | um handler de um pedido HTTP que lê |
+#   |                                |         | um evento de pagamento do corpo e   |
+#   |                                |         | decide pelo tipo sem verificar      |
+#   | client-webhook-parsed-body     | CWE-347 | `constructEvent` com o corpo já     |
+#   |                                |         | interpretado como JSON              |
+#
+# Os ficheiros `.env*` (também os que o git ignora, como o `.env.local`,
+# onde estes segredos costumam estar) não são lidos aqui: o Semgrep não lê
+# ficheiros ignorados e não descodifica um JWT. Esse lado é do próprio
+# `scan_sast`, em TypeScript (`mcp/src/clienttrust/publicEnv.ts`, ferramenta
+# `guardian-client-trust`), com a MESMA lista de prefixos e de nomes que a
+# regra abaixo; `clientTrustPack.test.ts` mantém as duas iguais.
+#
+# O QUE CADA REGRA NAO VÊ (lacunas conhecidas, desenhadas):
+#
+# Severidades no esquema do repositório por `metadata.guardian_severity`
+# (mcp/src/runners/scannerParsers/semgrep.ts): as três primeiras decidem pelo
+# NOME ou por uma heurística, nunca pelo valor, e são `high`; a última é
+# `medium` (WARNING). O crítico de um segredo exposto fica para o lado
+# TypeScript, que vê o valor.
+#
+# client-public-env-secret
+#   - Decide pelo NOME da variável, nunca pelo valor (que no código não
+#     está). Prefixos: NEXT_PUBLIC_, VITE_, EXPO_PUBLIC_, REACT_APP_,
+#     NUXT_PUBLIC_, GATSBY_, VUE_APP_ e o PUBLIC_ do SvelteKit e do Astro.
+#     O nome tem de ACABAR num grupo que diz segredo: SECRET, SECRET_KEY,
+#     SECRET_TOKEN (WEBHOOK_SECRET, CLIENT_SECRET, JWT_SECRET...),
+#     SERVICE_ROLE(_KEY), SERVICE_KEY, PRIVATE_KEY, PASSWORD, PASSPHRASE, os URLs de
+#     bases de dados (DATABASE_URL, POSTGRES_URL, MONGODB_URI, REDIS_URL...),
+#     ADMIN_KEY, ADMIN_API_KEY, MASTER_KEY, AUTH_TOKEN e a chave de APIs
+#     pagas (OPENAI, ANTHROPIC, GROQ, MISTRAL, COHERE, REPLICATE, GEMINI,
+#     RESEND, SENDGRID, TWILIO...) em `_API_KEY`, `_KEY` ou `_TOKEN`. Um
+#     nome que só passa por um destes (PASSWORD_MIN_LENGTH,
+#     PASSWORD_RESET_URL, AUTH_TOKEN_KEY, SECRET_SANTA_MODE) não dispara.
+#   - Públicos por desenho, nunca disparam: a chave anon e a publishable do
+#     Supabase, a `pk_` do Stripe, a configuração web do Firebase
+#     (FIREBASE_API_KEY), o DSN do Sentry, a site key do reCAPTCHA. Uma
+#     chave de API de um serviço que a lista não nomeia não dispara.
+#   - Lê `process.env.X`, `process.env['X']`, `import.meta.env.X`, a
+#     desestruturação de `process.env`, os imports de `$env/static/public` e
+#     `env.X` de `$env/dynamic/public` (SvelteKit). Um nome montado em tempo
+#     de execução (`process.env[nome]`) não é visto.
+#
+# client-supabase-service-role
+#   - "Código do browser" é um ficheiro com a diretiva `'use client'` (Next.js)
+#     ou uma chamada a `createBrowserClient` (`@supabase/ssr`, só existe no
+#     browser). Um módulo de uma SPA Vite ou de uma app Expo não tem marca:
+#     aí a chave só chega ao browser com um prefixo público, e isso é a regra
+#     anterior.
+#   - A chave é reconhecida pelo nome: `process.env.X` ou
+#     `import.meta.env.X` com SERVICE_ROLE, SERVICE_KEY ou SECRET no nome, ou
+#     um identificador como `serviceRoleKey`. Uma chave literal no código não
+#     é vista aqui (é um segredo no código: o gitleaks).
+#
+# client-webhook-unverified
+#   - Só um HANDLER DE UM PEDIDO HTTP: `function POST|PUT|PATCH(req)` ou
+#     `export const POST = (req) => ...` (rotas do Next.js), o mesmo com
+#     `{ request }` (SvelteKit), `export default function handler(req, res)`
+#     (pages/api), e o callback de `app.post|put|patch|all(path, ...,
+#     (req, res) => ...)` ou `function (req, res)` (Express, Fastify, Hono, um
+#     router; também em maiúsculas, `router.POST`), de `app.on('POST', path,
+#     ...)` (Hono, um método ou uma lista) e de `app.use(path, ...)` quando o
+#     caminho diz webhook; um `consumer.on('message', ...)` de uma fila, um
+#     `app.get` ou um `app.use('/api', ...)` não são uma rota de webhook. O
+#     evento tem de vir do pedido desse handler (`req.body`, `req.json()`,
+#     `c.req.json()`, `request.json()`, `JSON.parse(... req.text() ...)`, ou o
+#     texto cru lido para uma variável) e o handler compara o seu tipo
+#     (`.type`, `.event_type`, `.eventType`, `.event_name`, ou a variável
+#     `type`) com um tipo de pagamento PRÓPRIO de um gateway, num `switch` ou
+#     numa comparação: Stripe `checkout.session.*`, `payment_intent.*`,
+#     `setup_intent.*`, `invoice.*`, `customer.subscription.*`, `charge.*`;
+#     Lemon Squeezy `subscription_payment_*`; PayPal `PAYMENT.*`,
+#     `CHECKOUT.*`, `BILLING.*`. Nomes genéricos (`order_*`,
+#     `subscription.*`, `transaction.*`) não contam: são também os de filas,
+#     reducers e eventos de UI. Um despachante (`handleStripeEvent(event)`
+#     chamado depois do `constructEvent`), um reducer, um handler de socket:
+#     nenhum é handler de um pedido, nenhum dispara.
+#   - Calado quando o CÓDIGO do handler tem `constructEvent`, `createHmac`,
+#     `timingSafeEqual`, `unmarshal`, `unwrap`, `svix`, `signature` (ler o
+#     cabeçalho da assinatura), `.events.retrieve(` com esta caixa (o evento
+#     pedido de novo à API do Stripe, que É a verificação), uma chamada a
+#     uma função que começa por `verif` (`verifyWebhook(req)`) ou um nome
+#     `verify…` (um middleware `verifyStripe` na rota). Um "unverified", um
+#     `verified: true` numa resposta, um `db.events.get(id)` ou um
+#     `env.EVENTS.get(id)` da própria app, e um comentário (`// TODO: verify`,
+#     ` * signature`, um bloco aberto no início da linha) não calam. Código e
+#     comentário separam-se linha a linha, com as strings e os `/* ... */`
+#     fechados saltados inteiros: um `'*/*'`, um `'/webhooks/*'` ou um
+#     `/* raw */` antes do verificador não o escondem. Na dúvida a regra
+#     cala-se: as linhas de um bloco `/* ... */` que não começam por `*`
+#     contam como código, um `/*` sem fecho a meio da linha não esconde o
+#     resto dela, e uma aspa sem par (a de um regex) abre uma string até ao
+#     fim da linha.
+#   - Uma verificação feita noutro sítio que o texto do handler não nomeia
+#     (um middleware montado com `app.use` antes da rota) dispara: falso
+#     positivo; nesse caso a correção é uma supressão com a razão. Um
+#     handler que passa o pedido a uma função própria antes de ler o evento
+#     não é visto (falso negativo).
+#   - O achado cobre o handler inteiro (a linha é a do início).
+#
+# client-webhook-parsed-body
+#   - Dispara quando o 1.º argumento de `constructEvent` (ou
+#     `constructEventAsync`) é `JSON.stringify(...)`, a variável de um
+#     `await x.json()`, ou `req.body` numa rota com `express.json()` /
+#     `bodyParser.json()` como middleware ou depois de um
+#     `app.use(express.json())` no mesmo ficheiro. A assinatura do Stripe é
+#     sobre os bytes exatos do pedido: um corpo reinterpretado nunca bate,
+#     e a "correção" habitual é desligar a verificação. Um `req.body` de uma
+#     rota de API do Next.js (pages/) sem `bodyParser: false` não é visto.
+#
+# CORPUS REAL (2026-10-28, Semgrep 1.182.0): três starters públicos de
+# Next.js + Supabase + Stripe, clonados com --depth 1 —
+# vercel/nextjs-subscription-payments (bdd0813), KolbySisk/
+# next-supabase-stripe-starter (9839fd4) e Razikus/supabase-nextjs-template
+# (d519bf1, com um template Expo): 193 ficheiros lidos, 0 achados das quatro
+# regras. Os dois webhooks do Stripe que eles têm verificam a assinatura
+# (`constructEvent` sobre `await req.text()`): silêncio certo. Sonda de
+# recall no mesmo código: tirar, em cada um, o `constructEvent` e a leitura
+# do cabeçalho `stripe-signature` (trocando o primeiro por
+# `event = JSON.parse(body)`) faz `client-webhook-unverified` disparar nos
+# dois (a função POST inteira); com o cabeçalho ainda lido a regra cala-se,
+# de propósito (ler a assinatura é já tentar verificar). O mcp/src, o cli/ e
+# os hooks/ deste repositório (430 ficheiros): 0 achados. O lado TypeScript (os `.env*` e as
+# migrações) no mesmo corpus: 5 ficheiros de ambiente (templates) e 6
+# migrações, 0 achados; sem as linhas `enable row level security`, as 6
+# tabelas dos dois starters com migrações próprias saem como
+# `supabase-rls-disabled`.
+#
+# ABLAÇÃO (`npm run ablate -- client-trust`, GUARDIAN_CLIENT_TRUST_SRC no
+# corpus acima). A primeira corrida (50 cláusulas) deu 16 DEAD, todos
+# fixtures em falta (formas de handler, `constructEventAsync`, um `env`
+# local) menos um par: o ramo `"use client";` e o `'use client';` liam-se
+# DEAD cada um e MOVES juntos — o Semgrep normaliza a aspa do literal —, e
+# ficou um ramo só, com hits/service-role-use-client-double.tsx. A segunda
+# (48 cláusulas, ver docs/maintainers/ablation.md): eixo 0 4/4, eixo 1
+# 48/48 vivas, eixo 2 46/48 — as duas marcas são guardas a funcionar: o
+# `metavariable-regex` dos nomes (sem ele disparam os nomes públicos que os
+# hits trazem ao lado) e o `pattern-not-inside` da rota (sem ele a arrow
+# dentro de `app.post` sai uma segunda vez) —, eixo 3 vazio (0 achados no
+# corpus real, piso de ruído 0).
+#
+# REVISÃO 1 (2026-10-28). A regra dos webhooks disparava em código comum:
+# um despachante `handleStripeEvent(event)` chamado depois do
+# `constructEvent`, um reducer com `case 'invoice.paid'`, um handler de
+# socket. Passou a só ler handlers de pedidos HTTP cujo evento vem do
+# próprio pedido, sem os nomes genéricos (`order_*`, `subscription.*`,
+# `transaction.*`), e as três regras que decidem por um nome ou por uma
+# heurística passaram de crítico a `high` (`guardian_severity`). Os nomes de
+# segredo têm de acabar num grupo que diz segredo (PASSWORD_MIN_LENGTH,
+# AUTH_TOKEN_KEY, SECRET_SANTA_MODE já não disparam). Ablação das duas
+# regras mudadas (`--filter`): `client-webhook-unverified` 22/22 vivas
+# depois de um par MOVES — a arrow e o `function (req, res)` de uma rota
+# são a mesma lambda para o Semgrep, ficou um ramo — e de três fixtures em
+# falta (o `$M` de um `export const`, o `JSON.parse` de um texto que não é
+# o do pedido, um campo que não é o tipo); eixo 2 21/22, a marca é o
+# `metavariable-regex` do nome da função (a guarda que deixa os
+# despachantes de fora); `client-public-env-secret` 9/9 vivas, eixo 2 8/9
+# (a mesma guarda dos nomes). Eixo 3 vazio nas duas; 53 cláusulas no pack.
+#
+# REVISÃO 2 (2026-10-28). O evento pedido de novo à API do gateway
+# (`stripe.events.retrieve(id)`) é verificação e cala a regra; o callback de
+# uma rota só conta em post/put/patch/all (um `consumer.on('message')` de
+# uma fila disparava); os handlers do SvelteKit (`{ request }`, com ou sem
+# tipo) são lidos — cabem nas formas que já existiam, um ramo próprio lia-se
+# DEAD e saiu —; a palavra `verif` só cala como chamada (`verifyX(`) ou nome
+# `verify…`, nunca num `verified: true`. Ablação da regra: 24/24 vivas,
+# eixo 2 23/24 (a guarda do nome da função), eixo 3 vazio; 55 cláusulas no
+# pack. As sondas do revisor (Express, Hono, SvelteKit sem verificação)
+# disparam todas; o corpus real continua com 0 achados.
+#
+# REVISÃO 3 (2026-10-28). O `\.events\.(?:retrieve|get)` sem caixa calava
+# webhooks reais sem verificação (`db.events.get(event.id)`,
+# `env.EVENTS.get(id)`, `calendar.events.get(...)`): ficou só
+# `.events.retrieve(` com esta caixa. A exclusão lê só código (um
+# `// TODO: verify (later)` calava a regra). Rotas que não disparavam:
+# `app.on('POST', ...)` do Hono, `router.POST(...)`, `app.use` num caminho
+# de webhook. `PASSPHRASE` entra nos nomes de segredo (aqui e no lado
+# TypeScript). Ablação da regra (`--filter`): 28/28 vivas, eixo 2 27/28 (a
+# guarda do nome da função), eixo 3 vazio; 59 cláusulas no pack. As sondas
+# do revisor (`app.use`, `app.on`, `router.POST`, o calendário, a
+# idempotência) disparam; o `app.get` não; o corpus real e o mcp/src
+# continuam com 0 achados.
+#
+# REVISÃO 4 (2026-10-28). A leitura do código parava no primeiro `/*` da
+# linha, mesmo dentro de uma string, e saltava as linhas que começam por
+# `*/`: um `express.raw({ type: '*/*' })`, uma rota `'/webhooks/*'` ou um
+# `/* raw body */` antes do verificador escondiam-no, e um handler
+# verificado disparava (alto: bloqueia o `--fail-on high`). Agora as
+# strings e os `/* ... */` fechados são unidades saltadas inteiras, e só uma
+# linha que começa por `*` (sem ser `*/`) ou por um `/*` sem fecho é
+# comentário. Sete misses novos (misses/webhook-verified-comment-markers.ts)
+# e dois casos nos hits (um bloco aberto no início da linha, uma aspa
+# dentro de um `//`); cada parte da expressão desfeita põe um teste a
+# vermelho. Ablação da regra (`--filter`): 28/28 vivas, eixo 2 27/28, eixo
+# 3 vazio; o corpus real e o mcp/src continuam com 0 achados, e um ficheiro
+# de 0,9 MB de linhas cheias de aspas e barras corre no mesmo tempo que com
+# a expressão da revisão 3.
+#
+# Fixtures em mcp/test/fixtures/client-trust/{hits,misses}/ (hits/ com uma
+# linha `// BUG: <id-da-regra>` por achado, na linha onde ele começa),
+# `mcp/test/e2e/clientTrustPack.test.ts`.
+#
+# Comentários e mensagens em português; nunca os caracteres que um locale
+# cp1252 não decodifica (U+00C1, U+00CD, U+00CF, U+00D0, U+00DD) — CLAUDE.md.
+
+rules:
+  - id: client-public-env-secret
+    metadata:
+      category: security
+      subcategory: client-trust
+      # O nome diz segredo; o valor (definido no build) não se vê: alto, não
+      # crítico. O crítico fica para o lado TypeScript, que vê o valor.
+      guardian_severity: high
+      cwe:
+        - "CWE-798: Use of Hard-coded Credentials"
+      owasp:
+        - "A07:2025 - Authentication Failures"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      A variável `$NAME` tem um prefixo público: o bundler escreve o seu valor
+      no JavaScript que vai para o browser, e o nome diz que é um segredo
+      (CWE-798). Verificar o que ela contém nos builds: se é um segredo real,
+      cada build que a definiu já o entregou aos browsers — revogá-lo e rodá-lo
+      no fornecedor. Depois, tirar o prefixo (`NEXT_PUBLIC_`, `VITE_`,
+      `EXPO_PUBLIC_`...) e usar o segredo só no servidor (uma rota de API, uma
+      server action, uma edge function).
+    patterns:
+      - pattern-either:
+          - pattern: process.env.$NAME
+          - pattern: process.env["$NAME"]
+          - pattern: import.meta.env.$NAME
+          - pattern: import.meta.env["$NAME"]
+          - pattern: |
+              const { ..., $NAME, ... } = process.env
+          - pattern: |
+              import { ..., $NAME, ... } from '$env/static/public'
+          - patterns:
+              - pattern-inside: |
+                  import { env } from '$env/dynamic/public';
+                  ...
+              - pattern: env.$NAME
+      # A mesma expressão que mcp/src/clienttrust/publicEnv.ts (PUBLIC_ENV_SECRET_NAME):
+      # o nome tem de ACABAR num grupo que diz segredo — nunca um
+      # PASSWORD_MIN_LENGTH, um PASSWORD_RESET_URL, um AUTH_TOKEN_KEY.
+      - metavariable-regex:
+          metavariable: $NAME
+          regex: ^(?:NEXT_PUBLIC|VITE|EXPO_PUBLIC|REACT_APP|NUXT_PUBLIC|GATSBY|VUE_APP|PUBLIC)_(?:\w+_)?(?:SECRET(?:_KEY|_TOKEN)?|SERVICE_ROLE(?:_KEY)?|SERVICE_KEY|PRIVATE_KEY|PASSWORD|PASSWD|PASSPHRASE|DATABASE_URL|DB_URL|POSTGRES(?:QL)?_URL|MONGO(?:DB)?_UR[IL]|REDIS_URL|ADMIN_(?:API_)?KEY|MASTER_KEY|AUTH_TOKEN|(?:OPENAI|ANTHROPIC|CLAUDE|GROQ|MISTRAL|COHERE|REPLICATE|HUGGINGFACE|HF|TOGETHER|FIREWORKS|PERPLEXITY|DEEPSEEK|XAI|OPENROUTER|ELEVENLABS|DEEPGRAM|ASSEMBLYAI|GEMINI|PINECONE|RESEND|SENDGRID|MAILGUN|POSTMARK|TWILIO)(?:_API)?_(?:KEY|TOKEN))$
+
+  - id: client-supabase-service-role
+    metadata:
+      category: security
+      subcategory: client-trust
+      # Decide pelo nome da chave, não pelo valor: alto.
+      guardian_severity: high
+      cwe:
+        - "CWE-284: Improper Access Control"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Um cliente Supabase com a chave service-role em código do browser
+      (`'use client'` ou `createBrowserClient`): essa chave ignora todas as
+      políticas de row-level security, e quem a tiver lê e escreve a base
+      inteira (CWE-284). No browser usar só a chave anon (ou publishable) e
+      deixar a RLS decidir; o trabalho que precisa da service-role vai para um
+      módulo só de servidor (`import 'server-only'`, uma rota de API, uma
+      edge function). Se a chave já chegou a um browser, rodá-la no painel do
+      Supabase.
+    # `'use client';` casa também a diretiva com aspas duplas (o Semgrep
+    # normaliza a aspa do literal: um segundo ramo com `"use client";` lia-se
+    # DEAD e o par MOVES na ablação; hits/service-role-use-client-double.tsx
+    # guarda essa forma).
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-inside: |
+                  'use client';
+                  ...
+              - pattern: createClient($URL, $KEY, ...)
+          - pattern: createBrowserClient($URL, $KEY, ...)
+      - metavariable-pattern:
+          metavariable: $KEY
+          patterns:
+            - pattern-either:
+                - pattern: process.env.$K
+                - pattern: import.meta.env.$K
+                - pattern: $K
+            - metavariable-regex:
+                metavariable: $K
+                regex: (?i)^\w*(?:service_?role|service_?key|secret)\w*$
+
+  # Só um handler de um pedido HTTP: uma rota do Next.js (`export async
+  # function POST(req)`, `export const POST = async (req) => ...`), um
+  # handler de pages/api (`export default function handler(req, res)`), o
+  # callback de uma rota Express / Fastify / Hono (`app.post(path, ...,
+  # (req, res) => ...)`). O evento tem de vir do PEDIDO desse handler
+  # (`req.body`, `req.json()`, `c.req.json()`, `JSON.parse(... req.text() ...)`)
+  # e o handler decide pelo seu tipo; um despachante
+  # `handleStripeEvent(event)` chamado depois do `constructEvent`, um reducer
+  # ou um handler de socket não são handlers de pedidos. Reporta o handler
+  # inteiro: o texto que a exclusão lê (`pattern-not-regex`) é o dele.
+  - id: client-webhook-unverified
+    metadata:
+      category: security
+      subcategory: client-trust
+      # Uma heurística: alto, nunca crítico.
+      guardian_severity: high
+      cwe:
+        - "CWE-345: Insufficient Verification of Data Authenticity"
+      owasp:
+        - "A08:2025 - Software or Data Integrity Failures"
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >-
+      Este handler lê um evento de pagamento do corpo do pedido e decide pelo
+      seu tipo sem verificar a assinatura do webhook: qualquer pessoa pode
+      enviar um POST com "pagamento concluído" e receber o que ele concede
+      (CWE-345). Verificar antes de ler o evento, sobre o corpo cru: com o
+      Stripe,
+      `stripe.webhooks.constructEvent(await req.text(), req.headers.get('stripe-signature'), segredo)`
+      (no Express, a rota com `express.raw({ type: 'application/json' })`);
+      com outro gateway, o verificador do seu SDK, ou um HMAC do corpo cru
+      comparado com `crypto.timingSafeEqual`.
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: |
+                  function $M($REQ, ...) { $...BODY }
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: ^(?:POST|PUT|PATCH)$
+          - patterns:
+              - pattern: |
+                  export const $M = ($REQ, ...) => { $...BODY }
+              - metavariable-regex:
+                  metavariable: $M
+                  regex: ^(?:POST|PUT|PATCH)$
+          # SvelteKit (`export async function POST({ request })`, o
+          # `export const POST: RequestHandler = async ({ request }) => ...`)
+          # cabe nas duas formas acima: o `$REQ` é o `{ request }` desestruturado,
+          # e a leitura do pedido é o `request.json()` abaixo. Um ramo próprio
+          # lia-se DEAD na ablação (hits/webhook-sveltekit.ts).
+          - pattern: |
+              export default function $M($REQ, $RES) { $...BODY }
+          # A arrow casa também `function (req, res) { ... }` (o Semgrep lê os
+          # dois como a mesma lambda: um ramo para cada lia-se DEAD e o par
+          # MOVES na ablação); hits/webhook-shapes.ts guarda as duas formas.
+          # Só os métodos de uma rota que recebe um corpo: um
+          # `consumer.on('message', (msg) => ...)` de uma fila não é uma rota.
+          - patterns:
+              - pattern: |
+                  $APP.$VERB($PATH, ..., ($REQ, ...) => { $...BODY })
+              - metavariable-regex:
+                  metavariable: $VERB
+                  regex: ^(?:post|put|patch|all|POST|PUT|PATCH|ALL)$
+          # O Hono `app.on('POST', caminho, h)` (um método ou uma lista): três
+          # argumentos ou mais, nunca o `on('evento', h)` de um emissor. (O
+          # `metavariable-regex` ancora no início do texto, aspa incluída: daí
+          # o `.*`.)
+          - patterns:
+              - pattern: |
+                  $APP.on($METHOD, $PATH, ..., ($REQ, ...) => { $...BODY })
+              - metavariable-regex:
+                  metavariable: $METHOD
+                  regex: (?i).*\b(?:post|put|patch)\b
+          # Um `app.use(caminho, h)` só quando o caminho diz webhook: um
+          # middleware de `/api` não é o handler de um gateway.
+          - patterns:
+              - pattern: |
+                  $APP.use($PATH, ..., ($REQ, ...) => { $...BODY })
+              - metavariable-regex:
+                  metavariable: $PATH
+                  regex: (?i).*web[-_]?hook
+      # O evento vem do pedido deste handler.
+      - metavariable-pattern:
+          metavariable: $...BODY
+          pattern-either:
+            - pattern: $REQ.body
+            - pattern: $REQ.json()
+            - pattern: $REQ.req.json()
+            - pattern: JSON.parse(<... $REQ.text() ...>)
+            - pattern: JSON.parse(<... $REQ.req.text() ...>)
+            # O `{ request }` do SvelteKit, lido pelo nome: desestruturado (e
+            # com uma anotação de tipo) o Semgrep não liga o parâmetro ao uso.
+            - pattern: request.json()
+            # O corpo cru lido para uma variável e interpretado depois.
+            - patterns:
+                - pattern-inside: |
+                    $RAW = await $REQ.text();
+                    ...
+                - pattern: JSON.parse($RAW)
+      # E o handler decide pelo seu tipo, um tipo de pagamento de um gateway.
+      - metavariable-pattern:
+          metavariable: $...BODY
+          patterns:
+            - pattern-either:
+                - pattern: |
+                    switch ($E.$FIELD) { case "$T": ... }
+                - pattern: |
+                    switch ($FIELD) { case "$T": ... }
+                - pattern: $E.$FIELD === "$T"
+                - pattern: $FIELD === "$T"
+            - metavariable-regex:
+                metavariable: $FIELD
+                regex: ^(?:type|event_type|eventType|event_name|eventName)$
+            - metavariable-regex:
+                metavariable: $T
+                regex: ^(?:(?:checkout\.session|payment_intent|setup_intent|invoice|customer\.subscription|charge)\.[a-z_.]+|subscription_payment_[a-z_]+|(?:PAYMENT|CHECKOUT|BILLING)\.[A-Z_.]+)$
+      # Verificar: uma chamada a uma função que começa por verif
+      # (`verifyWebhook(req)`) ou um nome `verify…` (o middleware
+      # `verifyStripe` na rota) — nunca um `verified: true` de uma resposta.
+      # `signature`: ler o cabeçalho da assinatura é já tentar verificar.
+      # `.events.retrieve(id)`, com esta caixa (o Stripe): o evento pedido de
+      # novo à API do gateway É a verificação — nunca um `db.events.get` nem
+      # um `env.EVENTS.get` da própria app. Só código, lido linha a linha da
+      # esquerda: uma string inteira (aspa simples, dupla ou crase) e um
+      # `/* ... */` fechado na mesma linha são saltados como uma unidade — um
+      # `'*/*'`, um `'/webhooks/*'` ou um `'https://...'` não abrem
+      # comentário —; um `//` fora de uma string acaba o código da linha; uma
+      # linha que começa por `*` (sem ser `*/`) ou por um `/*` que não fecha
+      # nela é comentário. Na dúvida, calar: um `/*` sem fecho a meio da linha
+      # (o de um regex, `/\/*$/`) não esconde nada, e a palavra conta também
+      # dentro de uma string (`'stripe-signature'`) ou depois de uma aspa sem
+      # par. O `\K` põe o início da correspondência na palavra, dentro do
+      # handler mesmo quando a rota está indentada.
+      - pattern-not-regex: (?m)^(?![ \t]*\*(?!/))(?![ \t]*/\*(?![^\n]*\*/))(?:'(?:[^'\\\n]|\\.)*'|"(?:[^"\\\n]|\\.)*"|`(?:[^`\\\n]|\\.)*`|/\*(?:(?!\*/)[^\n])*\*/|/\*(?![^\n]*\*/)|/(?![/*])|[^'"`/\n])*?(?:'(?:[^'\\\n]|\\.)*?|"(?:[^"\\\n]|\\.)*?|`(?:[^`\\\n]|\\.)*?)?\K(?:(?i:constructEvent|createHmac|timingSafeEqual|unmarshal|webhooks?\.unwrap|svix|\bverif\w*\s*\(|\bverify[a-z_]\w*|signature)|\.events\.retrieve\s*\()
+
+  - id: client-webhook-parsed-body
+    metadata:
+      category: security
+      subcategory: client-trust
+      cwe:
+        - "CWE-347: Improper Verification of Cryptographic Signature"
+      owasp:
+        - "A04:2025 - Cryptographic Failures"
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      `constructEvent` recebe um corpo já interpretado como JSON: a assinatura
+      do Stripe é sobre os bytes exatos do pedido, e um corpo reinterpretado
+      nunca bate, por isso todos os eventos falham e a saída habitual é
+      desligar a verificação (CWE-347). Passar o corpo cru: `await req.text()`
+      (Next.js, Hono), ou `req.body` de uma rota com
+      `express.raw({ type: 'application/json' })` registada antes de qualquer
+      `app.use(express.json())`.
+    pattern-either:
+      - pattern: $S.constructEvent(JSON.stringify(...), ...)
+      - pattern: $S.constructEventAsync(JSON.stringify(...), ...)
+      - patterns:
+          - pattern-inside: |
+              $BODY = await $R.json();
+              ...
+          - pattern-either:
+              - pattern: $S.constructEvent($BODY, ...)
+              - pattern: $S.constructEventAsync($BODY, ...)
+      - patterns:
+          - pattern-inside: $APP.$VERB($PATH, ..., $MW.json(...), ...)
+          - pattern-either:
+              - pattern: $S.constructEvent($REQ.body, ...)
+              - pattern: $S.constructEventAsync($REQ.body, ...)
+      - patterns:
+          - pattern-inside: |
+              $APP.use($MW.json(...));
+              ...
+          - pattern-either:
+              - pattern: $S.constructEvent($REQ.body, ...)
+              - pattern: $S.constructEventAsync($REQ.body, ...)

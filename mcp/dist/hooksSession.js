@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 4961295, sha256: "29cc1920974213b7d5d2885bf759e32fb5553e4b5cd522fc75d03f889173d2f7" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 5026479, sha256: "a1ad478284497e330a2c5a41bfe9e706f5cfaef55491b740a4c645f883c5f850" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -123,7 +123,7 @@ import {
 import { dirname, isAbsolute as isAbsolute2, join as join3, parse as parse2, relative as relative2, resolve as resolve2, sep } from "node:path";
 
 // src/hooks/configFile.ts
-import { closeSync, constants as constants2, fstatSync, lstatSync as lstatSync2, openSync, readlinkSync, readSync } from "node:fs";
+import { closeSync, constants as constants2, fstatSync, lstatSync as lstatSync2, openSync, readlinkSync, readSync, statSync as statSync2 } from "node:fs";
 import { isAbsolute, join as join2, parse, relative, resolve } from "node:path";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants2.O_RDONLY | (constants2.O_NONBLOCK ?? 0);
@@ -940,7 +940,7 @@ import {
 import { join as join7 } from "node:path";
 
 // src/platform/projectPath.ts
-import { existsSync, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
+import { existsSync, realpathSync as realpathSync2, statSync as statSync3 } from "node:fs";
 import { parse as parse3, resolve as resolve4 } from "node:path";
 function canonicalPath(p) {
   const resolved = resolve4(p);
@@ -957,7 +957,7 @@ function canonicalPath(p) {
 }
 
 // src/storage/userData.ts
-import { chmodSync, lstatSync as lstatSync4, mkdirSync as mkdirSync2, statSync as statSync3 } from "node:fs";
+import { chmodSync, lstatSync as lstatSync4, mkdirSync as mkdirSync2, statSync as statSync4 } from "node:fs";
 import { join as join6 } from "node:path";
 
 // src/hooks/userDataDir.ts
@@ -1018,7 +1018,7 @@ function assertPrivateDir(path, st) {
 }
 function statOrNull(path, follow) {
   try {
-    return follow ? statSync3(path) : lstatSync4(path);
+    return follow ? statSync4(path) : lstatSync4(path);
   } catch (error) {
     const code = error.code;
     if (code === "ENOENT" || code === "ENOTDIR") return null;

@@ -252,8 +252,10 @@ describe('T-13 a detected secret never reaches a brief: a marker with the rule a
   const AWS_KEY = ['AKIA', 'IOSFODNN7', 'EXAMPLE'].join('');
   const markerFor = (rule: string, line: number): RegExp => new RegExp(`‹[^›\\n]*\\b${rule}\\b[^›\\n]*\\b${line}\\b[^›\\n]*›`);
 
+  // A finding about something else on the secret's line: a credential finding's
+  // file is not quoted at all (briefsWithheld.test.ts).
   it('T-13 the secret on the quoted line is replaced by ‹…rule…line…›', () => {
-    const f = finding({ rule_id: 'guardian-hardcoded-aws-key', message: 'Hard-coded AWS access key id.', file: 'src/config.ts', line: 6 });
+    const f = finding({ rule_id: 'guardian-config-in-source', message: 'Cloud configuration kept in source.', file: 'src/config.ts', line: 6 });
     const b = boundaries(13);
     const r = renderBrief(task('verify', { fingerprint: f.fingerprint, files: ['src/config.ts'] }), {
       root: PROJECT,

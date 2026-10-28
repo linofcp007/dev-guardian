@@ -8,6 +8,108 @@ version bump.
 
 ## [Unreleased]
 
+## [3.8.0] - 2026-10-28
+
+Two failure classes of a vibe-coded SaaS app (Next.js / Vite / Expo + Supabase + Stripe) that a static scan can catch:
+trusting the client — a secret shipped to every browser, a Supabase table any visitor can read and write, a payment
+webhook nobody verifies — and an agent that makes a red suite green by weakening the tests. Each rule was proved
+red-first on fixtures, measured on three public Next.js + Supabase + Stripe starters (0 findings) and on recall
+probes made from their own code, and ablated clause by clause (`docs/maintainers/ablation.md`).
+
+### Upgrading from 3.7.1
+
+- **New findings can appear**, in `scan_sast` (so `security_scan_full` and the CI gate) and `review_pr`: the
+  client-trust pack and checks below run on every scan. A secret behind `NEXT_PUBLIC_` in a `.env.local`, or a
+  Supabase table no migration enables row-level security on, is critical and blocks `--fail-on high` — dev-spec-driven's
+  finish gate too. Fix them, or suppress one you have reviewed with its reason; record a baseline only on the base
+  branch, and only if you accept every current finding.
+- **`scan_sast` reads git-ignored `.env*` files** (`.env.local`, `apps/web/.env.production.local`): a value is judged in
+  memory and never reported, stored, fingerprinted or quoted. `tools_run` gains a `guardian-client-trust` entry when
+  the project has env files or Supabase migrations, and the scan's cache key holds the env files' content.
+- **A pull-request gate reads the change for weakened tests.** Under `--baseline-ref` (else `--rules-ref`), `scan` adds
+  a `guardian-test-integrity` step over the change since that ref; a focused `.only` is high and blocks at the default
+  `--fail-on high`. `--diff-base <ref>` (below) asks for it without either.
+- **Uncommitted and staged scopes** (`scope.diff: {}`, `{ staged: true }`) now count the files they delete as theirs:
+  a scoped scan of such a change is a new cache entry once.
+- **`llm_scan` verify briefs no longer quote a `.env*` file or the file of a credential finding** (`suggest_fix`'s
+  rule): the brief says why instead.
+
+### Added
+
+- **The client-trust Semgrep pack**, `configs/semgrep/client-trust.yml` (4 rules, JS / TS), on every Semgrep run of
+  `scan_sast`, `security_scan_full` and `review_pr`, the Docker fallback included:
+  - `client-public-env-secret` (high) — a variable with a browser prefix (`NEXT_PUBLIC_`, `VITE_`, `EXPO_PUBLIC_`,
+    `REACT_APP_`, `NUXT_PUBLIC_`, `GATSBY_`, `VUE_APP_`, SvelteKit / Astro `PUBLIC_`) whose name ends in a secret
+    (`…_SECRET`, `…_SERVICE_ROLE_KEY`, `…_PRIVATE_KEY`, `…_PASSWORD`, `…_PASSPHRASE`, `DATABASE_URL`, a paid API's
+    `…_API_KEY` — OpenAI, Anthropic, Groq, Gemini, Resend, Twilio…), read through `process.env`, `import.meta.env` or
+    `$env/*/public`. `PASSWORD_MIN_LENGTH`, `AUTH_TOKEN_KEY`, the anon / publishable key, `pk_…` and a Firebase web
+    config never fire;
+  - `client-supabase-service-role` (high) — the service-role key in a `'use client'` file or `createBrowserClient`;
+  - `client-webhook-unverified` (high) — an HTTP request handler (a Next.js or SvelteKit route, a pages/api handler,
+    an Express / Fastify / Hono route — `app.post`, `router.POST`, Hono's `app.on('POST', …)`, an `app.use` on a path
+    that names a webhook) that reads a payment event from its own request and branches on a gateway-specific type
+    (Stripe, Lemon Squeezy, PayPal) with no `constructEvent`, SDK verifier, HMAC compare, signature-header read or
+    Stripe `events.retrieve` re-fetch in its code — a comment never counts. A dispatcher called after
+    `constructEvent`, a reducer, a socket handler or the app's own `db.events.get(id)` never decides it;
+  - `client-webhook-parsed-body` (medium) — `constructEvent` fed `JSON.stringify(…)`, an `await req.json()` value or
+    `req.body` behind `express.json()`, which never verifies.
+- **The client-trust checks** (tool `guardian-client-trust`, in `scan_sast` and over the changed files in `review_pr`):
+  - `client-env-public-secret` in every `.env*` file, git-ignored ones included: critical when the value is a secret
+    by its shape (a Stripe live or webhook-signing key, a Supabase service-role JWT — under `…_ANON_KEY` too — or
+    `sb_secret_…`, a user's access token or an `authenticated` JWT, a URL with a password, a provider token), a
+    random-looking value or any real password under a secret name; high for a Stripe test key; medium, "check what it
+    holds", for a name alone or a placeholder (`REPLACE_WITH_…`, `{{…}}`, `${VAR:-x}`, `enter_…`, `example`,
+    `changeme`). Only the anon key — role `anon`, no subject — is public by design. A template (`.env.example`,
+    `.env.sample`, `.env.template`, `.env.dist`) is never critical: no build ships its values, and its finding
+    (medium) is the browser prefix on a secret name. An env file that is a link out of the project, a FIFO (a secrets
+    manager's mount, found beside the env files git lists — git lists none) or over 256 KiB is skipped with a note,
+    never read — a FIFO never even opened — and never a gap;
+  - `supabase/migrations/*.sql`, read in order as one database: `supabase-rls-disabled` (critical — a table of an
+    exposed schema no migration enables RLS on), `supabase-policy-open-write` and `supabase-policy-anon-write` (high —
+    a write policy whose check is `true`, or granted to `anon`), `supabase-policy-no-auth-check` (low). Quoting, casing
+    and schema-qualified names are read as Postgres reads them; comments, strings and function bodies are not SQL;
+    `supabase/config.toml`'s `[api] schemas` and `enabled = false` decide what is exposed.
+- **The test-integrity check** (tool `guardian-test-integrity`), over the ADDED lines of the test files a change
+  touches: `test-focused` (high — `.only`, `fit`, `fdescribe`, RSpec `focus: true`: the rest of the suite silently
+  stops running) and, medium, asking for the reason, `test-skipped` (`.skip`, `xit`, pytest `skip` / `skipif` /
+  `xfail`, `@unittest.skip`, Go `t.Skip`, JUnit `@Disabled` / `@Ignore`, xUnit `Skip =`, NUnit `[Ignore]`, Rust
+  `#[ignore]`, PHPUnit `markTestSkipped`, RSpec `xit` / `skip` / `pending`), `test-todo-replaced`, `test-file-deleted`,
+  `test-assertions-removed` and `test-script-always-passes` (`--passWithNoTests`, `|| true`, `|| exit 0`, or `echo`
+  in place of the runner in `package.json`). It shows in `review_pr`'s findings and `tools_run`, in a `scan_sast`
+  scoped to a diff (`scope.diff`, `scope.since` a commit) and in `scan`. A file moved without `git mv` is read as a
+  rename — an unchanged copy under any name first (never a blank file), then by the lines it shares, within 20 000
+  comparisons (past them a note says how many files were not compared with every deletion); a clone with no merge
+  base skips the check and says so.
+- **`scan --diff-base <ref>`**: read the change since `<ref>` (its merge base with HEAD, to the working tree, untracked
+  files included) for weakened tests; a `<ref>` that names no commit is exit 3. The JSON verdict's keys are unchanged:
+  the findings come in `new_findings` and `blocking_findings` with `tool: "guardian-test-integrity"`.
+  **dev-spec-driven 1.33.0**, released alongside, passes `--diff-base` from its finish gate, so `/spec-finish` reports
+  a feature that focused or skipped a test, deleted one or dropped assertions.
+- **`metadata.guardian_severity`** (`info` … `critical`): a Semgrep rule — the plugin's or the project's — states its
+  severity on dev-guardian's scheme, over Semgrep's three levels (ERROR with `category: security` is always critical).
+
+### Fixed
+
+- **The bounded file reader judges a path by its `stat` before opening it** (project files, hook configs): a FIFO, a
+  socket, a device or a directory is refused unopened. It opened them non-blocking and judged the descriptor — no read
+  ever blocked, but on Linux the open itself woke a writer waiting on a FIFO. The descriptor is still judged after the
+  open.
+
+### Known gaps
+
+- `client-webhook-unverified` is a heuristic over the handler's own text: a verification done elsewhere that the
+  handler does not name (a middleware mounted with `app.use`) fires, and a handler that hands the request to a helper
+  before reading the event is not seen. It tells code from comments line by line, strings and closed `/* … */` skipped
+  whole, and leans to silence when unsure: the inner lines of a `/* … */` block that do not start with `*` count as
+  code, a `/*` left open mid-line hides nothing after it, and an unpaired quote (in a regex) reads as a string to the
+  end of the line — a verification word there still silences the rule.
+- A Next.js `pages/api` `req.body` handed to `constructEvent` without `bodyParser: false` is not seen by
+  `client-webhook-parsed-body`.
+- The RLS check does not follow `alter default privileges`, a schema-wide `revoke`, views (`security_invoker`) or
+  `security definer` functions; a `.env*` file inside a git-ignored folder is not read, and a FIFO env file in a
+  directory that holds no other env file is not named (nor opened).
+- A test file moved with `git mv` and edited, in an uncommitted scope, is read through git's own rename detection.
+
 ## [3.7.1] - 2026-10-28
 
 The two follow-ups 3.7.0 left open.

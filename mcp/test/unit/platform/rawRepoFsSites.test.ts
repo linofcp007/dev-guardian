@@ -106,6 +106,14 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'repo-safe',
     reason: "hooks/ (another reviewer's): a stat of an already-opened path's identity; opens nothing",
   },
+  'src/hooks/configFile.ts': {
+    apis: { statSync: 1 },
+    kind: 'repo-safe',
+    reason:
+      "the bounded reader's stat before its open: a FIFO, socket, device or directory is refused without being " +
+      'opened (an open of a FIFO wakes a writer waiting on it); the stat opens nothing, and a path read for the ' +
+      'project was located (links walked) first',
+  },
   'src/hooks/distCheck.ts': {
     apis: { readFileSync: 1 },
     kind: 'own',

@@ -20,7 +20,7 @@ __export(configFile_exports, {
   textOf: () => textOf,
   walkLinksUnder: () => walkLinksUnder
 });
-import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
 import { isAbsolute, join, parse, relative, resolve } from "node:path";
 var MAX_HOOK_CONFIG_BYTES = 64 * 1024;
 var OPEN_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
@@ -84,6 +84,12 @@ function walkLinksUnder(under, path) {
   return { ok: true };
 }
 function readBoundedBytes(path, maxBytes, opts = {}) {
+  try {
+    if (!statSync(path).isFile()) return { status: "refused", reason: "not-a-regular-file" };
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+  }
   let fd;
   try {
     fd = openSync(path, OPEN_FLAGS);
@@ -172,7 +178,7 @@ __export(guardedPath_exports, {
   hardLinkedTo: () => hardLinkedTo,
   windowsName: () => windowsName
 });
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync, statSync as statSync2 } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, join as join2, parse as parse2 } from "node:path";
 function safeHostname() {
@@ -222,7 +228,7 @@ function fileIdentity(abs) {
   try {
     const root = parse2(abs).root;
     if (root === "" || !walkLinksUnder(root, abs).ok) return void 0;
-    const s = statSync(abs, { bigint: true });
+    const s = statSync2(abs, { bigint: true });
     return s.isFile() ? { dev: s.dev, ino: s.ino, nlink: s.nlink } : void 0;
   } catch {
     return void 0;

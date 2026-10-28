@@ -157,6 +157,13 @@ export const RUN_NAMES = {
   'security-code-scan': scanner('security-code-scan'),
   // scan_sast's .NET build pass: the SDK's own security analyzers, read from SARIF.
   'dotnet-analyzers': scanner('dotnet-analyzers'),
+  // scan_sast's and review_pr's client-trust pass (clienttrust/clientTrustPass.ts): env
+  // files (the git-ignored ones too) and Supabase migrations. Absent when the project
+  // has neither: its target is gone, as Bandit's is without Python.
+  'guardian-client-trust': scanner('guardian-client-trust'),
+  // review_pr's and a diff-scoped scan_sast's check of the change for weakened tests
+  // (testintegrity/): absent when the change touches no test file.
+  'guardian-test-integrity': scanner('guardian-test-integrity'),
   // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
   'dotnet-sdk': scanner('security-code-scan', 'dotnet-analyzers'),
 

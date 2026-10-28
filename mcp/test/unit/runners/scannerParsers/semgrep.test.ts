@@ -165,3 +165,30 @@ describe('semgrepParser — category mapping', () => {
     expect(semgrepParser.parse(oneResult({ category })).findings[0]?.category).toBe(expected);
   });
 });
+
+// A rule may state its severity on dev-guardian's scheme (`metadata.guardian_severity`):
+// a heuristic security rule is `high`, which ERROR + category security (always
+// critical) and WARNING (medium) cannot express — the client-trust pack's case.
+describe('semgrepParser — metadata.guardian_severity', () => {
+  const withMeta = (severity: string, metadata: Record<string, unknown>): string =>
+    JSON.stringify({
+      results: [{ check_id: 'rules.r', path: 'a.js', start: { line: 1 }, end: { line: 1 }, extra: { severity, message: 'm', lines: 'x', metadata } }],
+      errors: [],
+    });
+
+  it('wins over the ERROR + security bump', () => {
+    const f = semgrepParser.parse(withMeta('ERROR', { category: 'security', guardian_severity: 'high' })).findings[0];
+    expect(f?.severity).toBe('high');
+    expect(f?.category).toBe('security');
+  });
+
+  it.each(['info', 'low', 'medium', 'high', 'critical', ' HIGH '])('takes %j', (stated) => {
+    const f = semgrepParser.parse(withMeta('WARNING', { guardian_severity: stated })).findings[0];
+    expect(f?.severity).toBe(stated.trim().toLowerCase());
+  });
+
+  it('an unknown value is ignored: the usual mapping applies', () => {
+    expect(semgrepParser.parse(withMeta('ERROR', { category: 'security', guardian_severity: 'severe' })).findings[0]?.severity).toBe('critical');
+    expect(semgrepParser.parse(withMeta('WARNING', { guardian_severity: 7 })).findings[0]?.severity).toBe('medium');
+  });
+});

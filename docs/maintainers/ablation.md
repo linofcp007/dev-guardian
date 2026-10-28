@@ -60,7 +60,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **42 of the 178 rules** across the fourteen packs are
+nothing but positive terms. **42 of the 182 rules** across the fifteen packs are
 one of those — 36 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -82,6 +82,7 @@ prints `N/A`.
 | `rgpd` | 8 | 8 | 0 |
 | `llm` | 9 | 8 | 1 |
 | `web-js` | 3 | 3 | 0 |
+| `client-trust` | 4 | 4 | 0 |
 | `mobile` | 14 | 2 | 12 |
 | `wordpress` | 1 | 1 | 0 |
 
@@ -126,11 +127,11 @@ property of the invocation — registered per pack in
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
 skipped) where none exists. **Every pack but `base` has one.** `bugfix-js` and
 `routes` use this repo's `mcp/src`; `rgpd` reads `GUARDIAN_RGPD_SRC` and falls
-back to `mcp/src`; the other nine read a path from an environment variable,
+back to `mcp/src`; the other ten read a path from an environment variable,
 because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC`,
 `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`, `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`,
 `GUARDIAN_PHP_SRC`, `GUARDIAN_LLM_SRC`, `GUARDIAN_WEBJS_SRC`,
-`GUARDIAN_MOBILE_SRC`; unset means `N/A`, set-but-missing **throws**. `base` has
+`GUARDIAN_CLIENT_TRUST_SRC`, `GUARDIAN_MOBILE_SRC`; unset means `N/A`, set-but-missing **throws**. `base` has
 no real-code corpus registered and always prints `N/A` for axis 3. `rgpd` finds
 nothing in `mcp/src`, so its axis 3 is vacuous there (its header records the
 precision evidence it does have). Measured with the corpora below:
@@ -147,7 +148,51 @@ precision evidence it does have). Measured with the corpora below:
 | `llm` | 29 LLM applications (a tree of their source) | 1914 | 235 (226 comparable) | 14, none a noise-adding clause |
 | `web-js` | uptime-kuma, actual and outline (Node apps) | 4933 | 15 (14 comparable) | 3, all working positive branches |
 | `wordpress` | WooCommerce 11.2.1, wp-statistics 13.0.7, Contact Form 7 6.2.3 | 4176 | 7 (5 comparable) | 0 |
+| `client-trust` | three Next.js + Supabase + Stripe starters (`vercel/nextjs-subscription-payments` `bdd0813`, `KolbySisk/next-supabase-stripe-starter` `9839fd4`, `Razikus/supabase-nextjs-template` `d519bf1`) | 193 | 0 | 0 (vacuous: nothing to compare; a hand probe removing `constructEvent` from both real webhooks fires the rule on both) |
 | `mobile` | Nextcloud Android 35.0.1 and iOS 35.2.1, Gotify Android 2.10.1, Syncthing Android 1.28.1 | 1403 | 20 | 0 |
+
+**`client-trust`, 3.8.0** (Semgrep 1.182.0). The first run of the new pack, 50 clauses, read 16 DEAD: fifteen were
+fixtures not yet written (Express, function and arrow handlers in each `switch` / `if` shape, `constructEventAsync`, an
+`env` that is not SvelteKit's, a job queue whose names look like payment events) and one a mutually redundant pair —
+`'use client';` and `"use client";`, each DEAD and MOVES together: Semgrep normalises a string literal's quote, so
+one branch was deleted and a double-quoted fixture keeps it honest. With the fixtures, 48 clauses: axis 0 4/4, axis 1
+48/48 live, axis 2 46/48 (the name `metavariable-regex`, without which the public names the hits carry beside their
+bugs fire, and the route `pattern-not-inside`, without which an arrow inside `app.post` is reported twice — both the
+guard working), axis 3 48/48 and vacuous (0 findings on the corpus, noise floor 0). The second run was cut at clause
+43 by an edit of the pack's header comment; the parsed-body rule's clauses were re-run on their own
+(`--filter=client-webhook-parsed-body`).
+
+Review round 1 of the same release made `client-webhook-unverified` read only an HTTP request handler whose event
+comes from its own request (it fired on dispatchers, reducers and socket handlers) and ended the secret names on a
+secret group. The two rules were re-ablated with `--filter`: the webhook rule 22/22 live after one more redundant pair
+— a route's arrow and its `function (req, res)` are one lambda to Semgrep (MOVES), one branch kept — and three decoys
+(an exported arrow that is no route, `JSON.parse` of text that is not the request's, a field that is not the type),
+axis 2 21/22 (the function-name guard that keeps dispatchers out); the env-name rule 9/9 live, axis 2 8/9. The pack
+holds 53 clauses now.
+
+Review round 2: a gateway re-fetch (`stripe.events.retrieve`) silences the webhook rule, a route callback counts only
+on `post|put|patch|all`, SvelteKit's `{ request }` handlers are read, and `verif` silences only a call or a `verify…`
+name. A SvelteKit branch of its own read DEAD — its handlers already match the function and const shapes, with
+`request.json()` read by name — and was removed. `--filter=client-webhook-unverified`: 24/24 live, axis 2 23/24 (the
+function-name guard), axis 3 vacuous; 55 clauses in the pack.
+
+Review round 3: the re-fetch exclusion is only a case-sensitive `.events.retrieve(` (the case-insensitive
+`events.(retrieve|get)` silenced unverified webhooks that read the app's own `db.events.get`, a KV `env.EVENTS.get` or a
+calendar API), the exclusion reads code only — a word after a `//` on its line, or on a ` * ` line, no longer counts,
+and `\K` starts the match at the word so a verifier on an indented route's first line still silences it — and three
+route shapes were added: Hono's `app.on('POST', …)`, an upper-case `router.POST`, and `app.use` on a path that names a
+webhook. Semgrep's `metavariable-regex` is anchored at the start of the bound text, quote included: the two new
+regexes begin with `.*`. `--filter=client-webhook-unverified`: 28/28 live, axis 2 27/28 (the function-name guard),
+axis 3 vacuous; 59 clauses in the pack.
+
+Review round 4: the code-only reading stopped at the first `/*` of a line, inside a string too, and skipped a line
+starting with `*/`, so a verified handler fired (`express.raw({ type: '*/*' })`, a `'/webhooks/*'` route, a
+`/* raw body */` before `constructEvent`). Strings and closed `/* … */` are now units the reading skips whole; only a
+line starting with `*` (not `*/`) or with an unclosed `/*` is comment. The ablation harness sees the
+`pattern-not-regex` as one clause, so each part of the expression was undone by hand instead (a closed comment as a
+unit, a string as a unit, the word inside a string, an open `/*` mid-line, a `*/` line, an open `/*` at a line's
+start): each turns `clientTrustPack.test.ts` red; a `(?<=:)//` unit for a URL outside a string turned nothing red and
+was dropped. Re-ablated: 28/28 live, axis 2 27/28, axis 3 vacuous.
 
 The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
 in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on
