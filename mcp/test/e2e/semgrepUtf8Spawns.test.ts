@@ -59,6 +59,6 @@ describe('Semgrep spawns run in UTF-8 mode (real Semgrep)', () => {
     const out = r as unknown as { tools_run: ToolRun[]; coverage: string };
     const semgrep = out.tools_run.find((t) => t.name === 'semgrep');
     expect(semgrep?.reason ?? '').not.toMatch(/not valid JSON/);
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
   });
 });

@@ -94,7 +94,7 @@ describe('initialised submodules are a named gap (real scanners)', () => {
     const top = await superproject();
     const r = await run('scan_sast', top, { local_only: true });
     const semgrep = r.tools_run.find((t) => t.name === 'semgrep');
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.reason).toMatch(/submodule contents not scanned: vendor\/lib/);
     expect(r.missing_tools).toContain('semgrep');
     expect(r.coverage).toBe('partial');

@@ -77,7 +77,7 @@ describe('scan_sast: a file per scanner read only in part is a partial gap, not 
     expect(out.coverage).toBe('partial');
     const semgrep = out.tools_run.find((t) => t.name === 'semgrep');
     const bandit = out.tools_run.find((t) => t.name === 'bandit');
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(bandit?.status).toBe('ok');
     expect(out.missing_tools).toEqual(expect.arrayContaining(['semgrep', 'bandit']));
     expect(semgrep?.partially_parsed?.map((x) => x.file)).toContain('.github/workflows/ci.yml');

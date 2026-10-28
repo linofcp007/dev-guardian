@@ -287,7 +287,7 @@ describe('review_pr — what reaches Semgrep', () => {
     const semgrep = res.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; partially_parsed?: Array<{ file: string }> }
       | undefined;
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.reason).toMatch(/only partly parsed/);
     expect(semgrep?.partially_parsed?.map((p) => p.file)).toEqual(['app.php']);
     expect(res.missing_tools).toContain('semgrep');
@@ -326,7 +326,7 @@ describe('review_pr — what reaches Semgrep', () => {
     const semgrep = res.tools_run.find((t) => t.name === 'semgrep') as
       | { status: string; reason?: string; partially_parsed?: Array<{ file: string; type: string }> }
       | undefined;
-    expect(semgrep?.status).toBe('ok');
+    expect(semgrep?.status, JSON.stringify(semgrep)).toBe('ok');
     expect(semgrep?.reason).toMatch(/taint analysis incomplete \(Semgrep fixpoint timeout\) in 1 function\(s\) across 1 file\(s\): agent\.py/);
     expect(semgrep?.partially_parsed?.map((p) => [p.file, p.type])).toEqual([['agent.py', 'Fixpoint timeout']]);
     expect(res.missing_tools).toContain('semgrep');
