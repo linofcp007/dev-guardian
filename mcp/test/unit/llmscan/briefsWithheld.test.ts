@@ -69,7 +69,7 @@ function brief(file: string, text: string, rule: string, line: number): { text: 
 }
 
 describe('a verify brief withholds what is a secret', () => {
-  it('an env file (a git-ignored .env.local too) is never read nor quoted', () => {
+  it('T-35 an env file (a git-ignored .env.local too) is never read nor quoted', () => {
     const text = ['NEXT_PUBLIC_SUPABASE_URL=https://abcd.supabase.co', `NEXT_PUBLIC_ADMIN_KEY=${ADMIN}`, `DB_PASSWORD=${DB_PASSWORD}`].join('\n');
     for (const file of ['.env.local', 'apps/web/.env', 'apps/web/.env.production.local']) {
       const out = brief(file, text, 'client-env-public-secret', 2);
@@ -80,14 +80,14 @@ describe('a verify brief withholds what is a secret', () => {
     }
   });
 
-  it("a credential finding's file is not quoted either, whatever the file", () => {
+  it("T-35 a credential finding's file is not quoted either, whatever the file", () => {
     const text = ['export const config = {', `  password: '${DB_PASSWORD}',`, '};'].join('\n');
     const out = brief('src/config.ts', text, 'hardcoded-password', 2);
     expect(out.text).not.toContain(DB_PASSWORD);
     expect(out.text).toContain('(not quoted: the finding flags a credential, and its line is the secret)');
   });
 
-  it('any other finding still gets its code quoted', () => {
+  it('T-35 any other finding still gets its code quoted', () => {
     const text = ['export function roll() {', '  return Math.random();', '}'].join('\n');
     const out = brief('src/roll.ts', text, 'insecure-random', 2);
     expect(out.text).toContain('return Math.random();');
