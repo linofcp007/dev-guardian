@@ -94,7 +94,7 @@ registerToolModule(
         .boolean()
         .optional()
         .describe(
-          "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). " +
+          "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS, client-trust and mobile packs). " +
             'Trivy still goes out.',
         ),
       force: Force,

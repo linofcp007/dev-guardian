@@ -60,7 +60,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **42 of the 178 rules** across the fourteen packs are
+nothing but positive terms. **42 of the 182 rules** across the fifteen packs are
 one of those — 36 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -82,6 +82,7 @@ prints `N/A`.
 | `rgpd` | 8 | 8 | 0 |
 | `llm` | 9 | 8 | 1 |
 | `web-js` | 3 | 3 | 0 |
+| `client-trust` | 4 | 4 | 0 |
 | `mobile` | 14 | 2 | 12 |
 | `wordpress` | 1 | 1 | 0 |
 
@@ -126,11 +127,11 @@ property of the invocation — registered per pack in
 `--real-code=<dir>` / `--no-real-code`, and reported as `N/A` (never silently
 skipped) where none exists. **Every pack but `base` has one.** `bugfix-js` and
 `routes` use this repo's `mcp/src`; `rgpd` reads `GUARDIAN_RGPD_SRC` and falls
-back to `mcp/src`; the other nine read a path from an environment variable,
+back to `mcp/src`; the other ten read a path from an environment variable,
 because the corpus cannot live in this tree — `GUARDIAN_RUST_SRC`,
 `GUARDIAN_CS_SRC`, `GUARDIAN_JAVA_SRC`, `GUARDIAN_PY_SRC`, `GUARDIAN_GO_SRC`,
 `GUARDIAN_PHP_SRC`, `GUARDIAN_LLM_SRC`, `GUARDIAN_WEBJS_SRC`,
-`GUARDIAN_MOBILE_SRC`; unset means `N/A`, set-but-missing **throws**. `base` has
+`GUARDIAN_CLIENT_TRUST_SRC`, `GUARDIAN_MOBILE_SRC`; unset means `N/A`, set-but-missing **throws**. `base` has
 no real-code corpus registered and always prints `N/A` for axis 3. `rgpd` finds
 nothing in `mcp/src`, so its axis 3 is vacuous there (its header records the
 precision evidence it does have). Measured with the corpora below:

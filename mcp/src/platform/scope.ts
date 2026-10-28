@@ -138,7 +138,7 @@ export interface ResolvedScope {
 }
 
 /** See {@link ResolvedScope.changes}. `base` is a commit id; a check compares from its merge base with HEAD. */
-export interface ScopeChanges {
+interface ScopeChanges {
   base: string;
   target: 'worktree' | 'index';
   /** Untracked files are part of the change (`include_untracked`). */

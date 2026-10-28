@@ -62,7 +62,7 @@ const PUBLIC_PREFIXES: ReadonlyArray<readonly [string, string]> = [
 const MAX_NAME_LENGTH = 256;
 
 /** The browser prefix of `name` and its framework, or null. */
-export function publicPrefixOf(name: string): { prefix: string; framework: string } | null {
+function publicPrefixOf(name: string): { prefix: string; framework: string } | null {
   for (const [prefix, framework] of PUBLIC_PREFIXES) {
     if (name.startsWith(prefix) && name.length > prefix.length) return { prefix, framework };
   }
@@ -84,7 +84,7 @@ export function isEnvTemplateName(name: string): boolean {
   return /\.(?:example|sample|template|tmpl|dist|defaults?|schema)(?:\.|$)/i.test(name.slice(4));
 }
 
-export interface EnvAssignment {
+interface EnvAssignment {
   name: string;
   value: string;
   /** 1-based line of the assignment. */
@@ -146,7 +146,7 @@ export function parseEnvFile(text: string): EnvAssignment[] {
 }
 
 /** An empty value, a `${VAR}` reference or a placeholder: nothing this file ships. */
-export function isPlaceholderValue(value: string): boolean {
+function isPlaceholderValue(value: string): boolean {
   const v = value.trim();
   if (v.length === 0) return true;
   if (/^\$\{?[A-Za-z_]\w*\}?$/.test(v)) return true;
@@ -156,7 +156,7 @@ export function isPlaceholderValue(value: string): boolean {
   return /your[-_ ]|placeholder|replace[-_ ]?me|dummy|xxxx|insert[-_ ]|paste[-_ ]/.test(lower);
 }
 
-export interface SecretValueKind {
+interface SecretValueKind {
   /** What the value is, as a finding says it ("a Stripe live secret key"). */
   label: string;
   /** A live credential (critical); false for a test-mode one (high). */

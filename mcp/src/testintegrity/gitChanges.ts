@@ -22,7 +22,7 @@ import type { Finding, ToolRun } from '../types.js';
 import { detectTestWeakening, isRelevantPath, TEST_INTEGRITY_TOOL, type ChangedFile, type DiffLine } from './detect.js';
 
 /** What the base is compared with. */
-export type ChangeTarget =
+type ChangeTarget =
   | { kind: 'worktree'; untracked: boolean }
   | { kind: 'index' }
   | { kind: 'commit'; sha: string };
@@ -40,7 +40,7 @@ function diffRange(base: string, target: ChangeTarget): string[] {
 }
 
 /** The merge base of `a` and `b`, or null. */
-export async function mergeBase(cwd: string, a: string, b: string): Promise<string | null> {
+async function mergeBase(cwd: string, a: string, b: string): Promise<string | null> {
   const r = await git(cwd, ['merge-base', '--end-of-options', a, b]);
   if (r.exitCode !== 0) return null;
   const sha = r.stdout.trim();
@@ -122,7 +122,7 @@ async function textAfter(cwd: string, target: ChangeTarget, path: string): Promi
   return r.status === 'ok' ? r.text : null;
 }
 
-export interface ChangeSetRead {
+interface ChangeSetRead {
   changes: ChangedFile[];
   /** Relevant files past {@link MAX_FILES}, not read. */
   skipped: number;
@@ -180,7 +180,7 @@ export async function readChangeSet(
   return { changes, skipped: Math.max(0, relevant.length - MAX_FILES) };
 }
 
-export interface TestIntegrityResult {
+interface TestIntegrityResult {
   toolRun: ToolRun;
   /** The pass's gap (the change set could not be read) as its `missing_tools` name; empty without one. */
   missing: string[];

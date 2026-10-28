@@ -156,16 +156,15 @@ rules:
       módulo só de servidor (`import 'server-only'`, uma rota de API, uma
       edge function). Se a chave já chegou a um browser, rodá-la no painel do
       Supabase.
+    # `'use client';` casa também a diretiva com aspas duplas (o Semgrep
+    # normaliza a aspa do literal: um segundo ramo com `"use client";` lia-se
+    # DEAD e o par MOVES na ablação; hits/service-role-use-client-double.tsx
+    # guarda essa forma).
     patterns:
       - pattern-either:
           - patterns:
               - pattern-inside: |
                   'use client';
-                  ...
-              - pattern: createClient($URL, $KEY, ...)
-          - patterns:
-              - pattern-inside: |
-                  "use client";
                   ...
               - pattern: createClient($URL, $KEY, ...)
           - pattern: createBrowserClient($URL, $KEY, ...)

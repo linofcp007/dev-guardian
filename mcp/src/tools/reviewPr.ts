@@ -123,7 +123,7 @@ const inputSchema = {
     .boolean()
     .optional()
     .describe(
-      "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS and mobile packs). " +
+      "Semgrep with rules on disk only (the project's, registered, the plugin's LLM, web-JS, client-trust and mobile packs). " +
         'Trivy may still go out.',
     ),
   severity_min: SeverityMin,
@@ -136,7 +136,8 @@ const reviewPr = makeScanTool({
   description:
     "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit, gosec and cppcheck on " +
     'changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy ' +
-    'when a manifest changed. An unresolvable ref is an error, never "no files changed". ' +
+    'when a manifest changed, changed .env files and Supabase migrations, and weakened tests (a skip, a focused .only, ' +
+    'a deleted test file, fewer assertions). An unresolvable ref is an error, never "no files changed". ' +
     '`preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch — the ' +
     "project's gap, not the review's.",
   scan_type: 'review_pr',

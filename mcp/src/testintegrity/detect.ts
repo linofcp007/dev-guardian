@@ -66,7 +66,7 @@ type Lang = 'js' | 'py' | 'go' | 'jvm' | 'cs' | 'rs' | 'php' | 'rb';
 const NOT_TESTS = /(?:^|\/)(?:fixtures?|__fixtures__|__snapshots__|testdata|__mocks__|mocks?|snapshots?)\//i;
 
 /** The language of a source file by its extension, or null. */
-export function languageOf(path: string): Lang | null {
+function languageOf(path: string): Lang | null {
   const ext = /\.([A-Za-z0-9]+)$/.exec(path)?.[1]?.toLowerCase();
   switch (ext) {
     case 'js':
@@ -274,13 +274,12 @@ export function detectTestWeakening(changes: readonly ChangedFile[]): Finding[] 
       findings.push(...scriptFindings(c));
       continue;
     }
-    const lang = languageOf(c.path);
     const wasTest = isTestFile(c.oldPath ?? c.path);
     const isTest = c.status !== 'deleted' && isTestFile(c.path);
-    if (lang === null) continue;
 
     if ((c.status === 'deleted' && wasTest) || (c.status === 'renamed' && wasTest && !isTest)) {
-      const lost = c.before !== null && c.before !== undefined ? countAssertions(c.before, languageOf(c.oldPath ?? c.path) ?? lang) : null;
+      const oldLang = languageOf(c.oldPath ?? c.path);
+      const lost = typeof c.before === 'string' && oldLang !== null ? countAssertions(c.before, oldLang) : null;
       const what = c.status === 'deleted' ? 'deletes' : `renames to ${c.path}, a name no test runner picks up,`;
       findings.push(
         make(
@@ -297,6 +296,8 @@ export function detectTestWeakening(changes: readonly ChangedFile[]): Finding[] 
       continue;
     }
 
+    const lang = languageOf(c.path);
+    if (lang === null) continue;
     // `#[ignore]` marks a test wherever it is written; every other marker only in a test file.
     if (!isTest && lang !== 'rs') continue;
     const removedTest = c.removed.some((l) => !isComment(l.text, lang) && JS_TEST_DECL.test(l.text));

@@ -57,7 +57,7 @@ const basenameOf = (rel: string): string => rel.slice(rel.lastIndexOf('/') + 1);
 const dirOf = (rel: string): string => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
 const excludedDir = (rel: string): boolean => rel.split('/').slice(0, -1).some((s) => SCANNED_WALK_EXCLUDE.has(s));
 
-export interface EnvFileListing {
+interface EnvFileListing {
   /** Project-relative, `/`-separated, sorted. */
   files: string[];
   /** Of `files`, those git ignores. */
@@ -124,7 +124,7 @@ function migrationDirsOf(files: readonly string[]): string[] {
   return [...dirs].sort();
 }
 
-export interface ClientTrustResult {
+interface ClientTrustResult {
   toolRun: ToolRun;
   /** The pass's gap — a file it found and could not read — as its `missing_tools` name; empty without one. */
   missing: string[];

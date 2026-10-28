@@ -1966,6 +1966,9 @@ async function cmdScan(argv) {
       app = await startingApp;
     }
     const buildRefused = buildRefusedFor(baselineRef ?? rulesRef, opts.buildPr);
+    // The change read for weakened tests: --diff-base, else the ref a pull
+    // request is judged against (mcp/src/testintegrity/); none without either.
+    const changeBase = diffBase ?? baselineRef ?? rulesRef;
     result = await runScans({
       projectPath,
       baseUrl: opts.baseUrl,
@@ -1978,8 +1981,7 @@ async function cmdScan(argv) {
       ...(baselineRef !== null ? { changedSince: baselineRef } : rulesRef !== null ? { changedSince: rulesRef } : {}),
       // Nor is a pull request's own build run here, unless --build-pr trusts it.
       ...(buildRefused !== undefined ? { buildRefused } : {}),
-      // The change since that ref, read for weakened tests (mcp/src/testintegrity/).
-      ...((diffBase ?? baselineRef ?? rulesRef) !== null ? { diffBase: diffBase ?? baselineRef ?? rulesRef } : {}),
+      ...(changeBase !== null ? { diffBase: changeBase } : {}),
     });
   } catch (e) {
     pipelineFailure = { error: e };

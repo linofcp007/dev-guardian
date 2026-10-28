@@ -216,12 +216,12 @@ registerToolModule(
     name: 'scan_sast',
     title: 'SAST scan (Semgrep)',
     description:
-      "Semgrep (registry rules, the project's own, register_custom_rules' and the plugin's web-JS, mobile and LLM " +
-      'packs; `tools_run[].plugin_packs`: one that ran in part) plus, by language: Bandit (Python), gosec (Go, via the ' +
-      'Go toolchain, which may download modules), cppcheck (C/C++), Psalm taint analysis (PHP), SpotBugs with ' +
-      "FindSecBugs (Java/Kotlin bytecode), the .NET SDK analyzers (a locked restore and `dotnet build`: runs the project's " +
-      'MSBuild). Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a ' +
-      'run. local_only: no registry, no metrics.',
+      "Semgrep (registry, the project's, register_custom_rules' and the plugin's packs; `tools_run[].plugin_packs`: " +
+      'one that ran in part), Bandit (Python), gosec (Go; may download modules), cppcheck (C/C++), Psalm taint (PHP), ' +
+      "SpotBugs+FindSecBugs (JVM bytecode), the .NET SDK analyzers (`dotnet build` runs the project's MSBuild); " +
+      'browser-exposed secrets in .env files (git-ignored too), Supabase RLS; a diff scope adds weakened tests. ' +
+      'Unprocessed files are partial coverage. `tools_run[].honoured_config`: project files that decided a run. ' +
+      'local_only: no registry, no metrics.',
     scan_type: 'sast',
     category: 'security',
     supportsScope: true,
