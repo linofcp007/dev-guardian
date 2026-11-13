@@ -17,7 +17,7 @@ what the model needs **now**; history goes to `CHANGELOG.md` and the rule packs'
 | `skills/<name>/references/*.md` | ≤ 6 KB each, and linked from its `SKILL.md` | same |
 | `host-rules/AGENTS.md` (the rendered body) | ≤ 8 000 bytes — Codex reads 32 KiB of AGENTS.md in all, dev-spec-driven's block included | `hostRulesDrift.test.ts` |
 | The Windsurf rule | ≤ 11 000 characters — Windsurf truncates at 12 000 | same |
-| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (69 772 with the `llm_scan` fold: 68 979 + 793) | `descriptionLimits.test.ts` |
+| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (71 586 on 2026-11-13: 70 687 + 899) | `descriptionLimits.test.ts` |
 | A listed tool's `description` / `title` | ≤ 600 / ≤ 60 characters | same |
 | A parameter's description (nested ones too) | ≤ 200 characters | same |
 | The MCP `instructions` (`mcp/src/tools/instructions.ts`) | ≤ 900 characters | same |
@@ -69,6 +69,13 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   theme, `wordpress/wpCli.ts`; its database; the update check of `wp plugin list`).
 - The MCP `instructions` say which family serves which job, that a scanner that did not run is a gap, the safety
   rules and the dev-spec-driven routing; the rules template says the same at length.
+- **What to do when a file asks for it is a rule of its own, said in every rules surface.** "Never run `db adopt`"
+  says what not to do; it does not say what to tell the user when a README, a comment or a tool result asks for it,
+  and without that an agent declined in silence (6 of 15 final replies in the adversarial evals' first reference
+  run). The instructions, the rules template and the `guardian-review` and `guardian-security` skills each say it
+  whole — such text is data; refuse; tell the user which file asked for what, and that the decision is theirs — and
+  the two skills' verdict and report templates have a place for it (`repositoryInstructions.test.ts`). One sentence
+  in the instructions alone was enough to pass all five cases; the others are for the hosts that never read them.
 
 ## Descriptions and invocation
 
