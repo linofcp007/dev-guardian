@@ -1,4 +1,3 @@
-// @ts-nocheck -- Phase 4 scaffold (dev-spec-driven): the failing tests come first; the implementation replaces these bodies.
 /**
  * Where a selftest's result lives, and how it is read back.
  *
@@ -106,7 +105,8 @@ const runSchema = z.strictObject({
 
 /** A stored run, or `undefined` for anything that is not exactly the shape written here. */
 export function parseRun(value: unknown): SelftestRun | undefined {
-  throw new Error('selftest: not implemented');
+  const r = runSchema.safeParse(value);
+  return r.success ? (r.data as SelftestRun) : undefined;
 }
 
 export const selftestDir = (dataDir: string): string => join(dataDir, SELFTEST_DIR);
@@ -119,7 +119,17 @@ export type LastRead =
 
 /** The newest saved run. `now` is what "dated in the future" is measured against. */
 export function readLast(dataDir: string, now: number = Date.now()): LastRead {
-  throw new Error('selftest: not implemented');
+  const file = join(selftestDir(dataDir), LAST_FILE);
+  const read = readSmallJsonFile(file, LAST_MAX_BYTES, dataDir);
+  if (read.status === 'absent') return { state: 'none' };
+  if (read.status === 'refused') return { state: 'invalid', note: `the saved selftest result was not read (${read.reason})` };
+  if (read.status === 'invalid') return { state: 'invalid', note: 'the saved selftest result is not JSON' };
+  const run = parseRun(read.value);
+  if (run === undefined) return { state: 'invalid', note: 'the saved selftest result is not in the shape dev-guardian writes' };
+  if (Date.parse(run.ran_at) > now + FUTURE_TOLERANCE_MS) {
+    return { state: 'invalid', note: 'the saved selftest result is dated in the future' };
+  }
+  return { state: 'ok', run };
 }
 
 export interface HistoryRead {
@@ -131,7 +141,14 @@ export interface HistoryRead {
 
 /** The saved runs, newest first. A history that is there and is not valid is a `problem`, with no runs. */
 export function readHistory(dataDir: string): HistoryRead {
-  throw new Error('selftest: not implemented');
+  const file = join(selftestDir(dataDir), HISTORY_FILE);
+  const read = readSmallJsonFile(file, HISTORY_MAX_BYTES, dataDir);
+  if (read.status === 'absent') return { runs: [] };
+  if (read.status === 'refused') return { runs: [], problem: `the selftest history was not read (${read.reason})` };
+  if (read.status === 'invalid') return { runs: [], problem: 'the selftest history is not JSON' };
+  const parsed = z.strictObject({ schema: z.literal(SELFTEST_SCHEMA), runs: z.array(runSchema).max(HISTORY_MAX * 4) }).safeParse(read.value);
+  if (!parsed.success) return { runs: [], problem: 'the selftest history is not in the shape dev-guardian writes' };
+  return { runs: parsed.data.runs as SelftestRun[] };
 }
 
 /** The verdicts a control that used to detect has regressed to. */
@@ -144,7 +161,20 @@ const REGRESSED_TO: ReadonlySet<Verdict> = new Set<Verdict>(['silent', 'unverifi
  * in it, nothing is marked: a first run has nothing to regress from.
  */
 export function markRegressions(run: SelftestRun, previous: SelftestRun | undefined): SelftestRun {
-  throw new Error('selftest: not implemented');
+  if (previous === undefined) return run;
+  const before = new Map(previous.controls.map((c) => [c.id, c]));
+  const controls = run.controls.map((c): ControlResult => {
+    const was = before.get(c.id);
+    if (was === undefined || was.verdict !== 'detected' || !REGRESSED_TO.has(c.verdict)) return c;
+    const changed: string[] = [];
+    if (previous.plugin_version !== run.plugin_version) changed.push(`plugin ${previous.plugin_version} → ${run.plugin_version}`);
+    if (was.scanner_version !== c.scanner_version) {
+      changed.push(`${c.scanner} ${was.scanner_version ?? 'unknown'} → ${c.scanner_version ?? 'unknown'}`);
+    }
+    if (previous.platform !== run.platform) changed.push(`platform ${previous.platform} → ${run.platform}`);
+    return { ...c, regressed: true, changed };
+  });
+  return { ...run, controls };
 }
 
 export interface SaveResult {
@@ -181,7 +211,27 @@ function writeAtomic(file: string, data: string): void {
  * reason — the result was reported all the same.
  */
 export function saveRun(dataDir: string, run: SelftestRun, now: number = Date.now()): SaveResult {
-  throw new Error('selftest: not implemented');
+  const dir = selftestDir(dataDir);
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const history = readHistory(dataDir);
+    let historyNote: string | undefined;
+    if (history.problem !== undefined) {
+      const aside = join(dir, `history.unreadable-${new Date(now).toISOString().replace(/[:.]/g, '-')}.json`);
+      try {
+        renameSync(join(dir, HISTORY_FILE), aside);
+        historyNote = `${history.problem}: it was put aside as ${aside} and a new history begun`;
+      } catch (error) {
+        historyNote = `${history.problem}, and it could not be put aside (${messageOf(error)}): a new history replaces it`;
+      }
+    }
+    const runs = [run, ...history.runs].slice(0, HISTORY_MAX);
+    writeAtomic(join(dir, HISTORY_FILE), `${JSON.stringify({ schema: SELFTEST_SCHEMA, runs })}\n`);
+    writeAtomic(join(dir, LAST_FILE), `${JSON.stringify(run, null, 2)}\n`);
+    return { saved: true, dir, ...(historyNote !== undefined ? { history_note: historyNote } : {}) };
+  } catch (error) {
+    return { saved: false, note: `the result was not saved in ${dir}: ${messageOf(error)}` };
+  }
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -219,7 +269,36 @@ export interface SelftestStatusOptions {
  * install as it is.
  */
 export function selftestStatus(opts: SelftestStatusOptions): { selftest: SelftestStatus; warning: string | null } {
-  throw new Error('selftest: not implemented');
+  const now = opts.now ?? Date.now();
+  const last = readLast(opts.dataDir, now);
+  if (last.state !== 'ok') {
+    return {
+      selftest: { state: 'never_run', command: opts.command, ...(last.state === 'invalid' ? { note: last.note } : {}) },
+      warning: null,
+    };
+  }
+  const run = last.run;
+  const ageDays = Math.max(0, Math.floor((now - Date.parse(run.ran_at)) / DAY_MS));
+  const staleBecause: string[] = [];
+  if (run.plugin_version !== opts.pluginVersion) {
+    staleBecause.push(`it verified dev-guardian ${run.plugin_version}; this is ${opts.pluginVersion}`);
+  }
+  if (ageDays > STALE_AFTER_DAYS) staleBecause.push(`it is ${ageDays} days old (more than ${STALE_AFTER_DAYS})`);
+  const silent = run.controls.filter((c) => c.verdict === 'silent').map((c) => c.id);
+  const regressed = run.controls.filter((c) => c.regressed === true).map((c) => c.id);
+  const stale = staleBecause.length > 0;
+  const selftest: SelftestStatus = {
+    state: stale ? 'stale' : 'ok',
+    ran_at: run.ran_at,
+    age_days: ageDays,
+    plugin_version: run.plugin_version,
+    counts: countVerdicts(run.controls.map((c) => c.verdict)),
+    silent,
+    regressed,
+    ...(stale ? { stale_because: staleBecause } : {}),
+    command: opts.command,
+  };
+  return { selftest, warning: warningFor(run, silent, regressed, stale, opts.command) };
 }
 
 function warningFor(run: SelftestRun, silent: string[], regressed: string[], stale: boolean, command: string): string | null {
@@ -255,5 +334,16 @@ export type ScannerSelftest =
  * was verified.
  */
 export function scannerSelftest(last: LastRead, scanner: string, installedVersion: string): ScannerSelftest {
-  throw new Error('selftest: not implemented');
+  if (last.state !== 'ok') return 'never_verified';
+  const controls = last.run.controls.filter((c) => c.scanner === scanner);
+  const verdict = worstVerdict(controls.map((c) => c.verdict));
+  if (verdict === undefined) return 'never_verified';
+  const silent = controls.filter((c) => c.verdict === 'silent').map((c) => c.id);
+  const verified = controls.map((c) => c.scanner_version).find((v) => v !== null);
+  return {
+    verdict,
+    ran_at: last.run.ran_at,
+    stale: verified !== undefined && installedVersion !== '' && verified !== installedVersion,
+    ...(silent.length > 0 ? { silent } : {}),
+  };
 }

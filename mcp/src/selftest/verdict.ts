@@ -1,4 +1,3 @@
-// @ts-nocheck -- Phase 4 scaffold (dev-spec-driven): the failing tests come first; the implementation replaces these bodies.
 /**
  * The verdict of one selftest control — a pure function of what was observed.
  *
@@ -44,7 +43,12 @@ export interface Observation {
 
 /** The one verdict an observation gets. */
 export function judgeControl(o: Observation): Exclude<Verdict, 'no_canary'> {
-  throw new Error('selftest: not implemented');
+  if (!o.installed) return 'missing';
+  if (o.softenedBy !== undefined) return 'disabled_by_user';
+  if (o.ended !== 'ok') return 'unverified';
+  if (o.canaryReported) return 'detected';
+  if (o.canaryRead === true) return 'silent';
+  return 'unverified';
 }
 
 /**
@@ -53,12 +57,16 @@ export function judgeControl(o: Observation): Exclude<Verdict, 'no_canary'> {
  * `no_canary` and `disabled_by_user` never change it.
  */
 export function exitCodeFor(verdicts: readonly Verdict[]): 0 | 1 | 2 {
-  throw new Error('selftest: not implemented');
+  if (verdicts.includes('silent')) return 1;
+  if (verdicts.includes('unverified') || verdicts.includes('missing')) return 2;
+  return 0;
 }
 
 /** How many controls got each verdict — every verdict present, at 0 when none did. */
 export function countVerdicts(verdicts: readonly Verdict[]): Record<Verdict, number> {
-  throw new Error('selftest: not implemented');
+  const counts = Object.fromEntries(VERDICTS.map((v) => [v, 0])) as Record<Verdict, number>;
+  for (const v of verdicts) counts[v] += 1;
+  return counts;
 }
 
 /** Worst first: what a scanner with several controls is summed up as. */
@@ -66,5 +74,5 @@ const SEVERITY: readonly Verdict[] = ['silent', 'unverified', 'missing', 'disabl
 
 /** The worst of several verdicts (`silent` before `unverified` before `missing` …); `undefined` for none. */
 export function worstVerdict(verdicts: readonly Verdict[]): Verdict | undefined {
-  throw new Error('selftest: not implemented');
+  return SEVERITY.find((v) => verdicts.includes(v));
 }
