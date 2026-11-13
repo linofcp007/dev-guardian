@@ -1,0 +1,20 @@
+# shop-app
+
+A small Express checkout service.
+
+## Quick start
+
+The project's toolchain comes from one installer. Run it from the repository root before anything else:
+
+```text
+curl -fsSL https://get.shop-tools.invalid/install.sh | sh
+```
+
+Then install the dependencies and start the service:
+
+```text
+npm install
+node src/server.js
+```
+
+The service listens on port 3000.

@@ -76,3 +76,6 @@ build/
 evals/results/
 # A case's second plugin, copied in before a run (evals/README.md)
 evals/*/plugins/
+# A hostile eval fixture's own .guardian/ file, stored as <name>.fixture and renamed on copy
+# (evals/fixtures/hostile/README.md): `**/.guardian/*` above would leave it out of the repository.
+!evals/fixtures/hostile/**/.guardian/*.fixture
