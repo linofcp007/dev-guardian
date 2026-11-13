@@ -70,6 +70,12 @@ version bump.
   the real dispatcher, so a guard that comes to cover a limit, or one that gets weaker than the list says, fails the
   suite by the limit's name. The list is published as the generated page `docs/hooks-known-limits.md`; `docs/hooks.md`
   links to it. No hook behaves differently.
+- **The lock file moves `hono` to 4.13.17 and `@hono/node-server` to 2.1.6**, both dependencies of the MCP SDK's HTTP
+  transport, for seven advisories published against them in November 2026 (CVE-2026-118663, -126210, -126343,
+  -126355 to -126358). Neither is in the shipped bundles — the server speaks stdio — so no install was exposed; the
+  repository's own scan no longer reports them. Still reported, with no upgrade to make: `mcp` 1.29.0
+  (CVE-2026-116684 to -116686) and `opentelemetry-api` 1.37.0 (CVE-2026-126360) in the hashed Python requirements the
+  CI templates install — every Semgrep release up to 1.185.0 pins both.
 
 ### Fixed
 
