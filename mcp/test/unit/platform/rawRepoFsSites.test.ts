@@ -114,6 +114,15 @@ const ALLOWED: Record<string, Allowed> = {
       'opened (an open of a FIFO wakes a writer waiting on it); the stat opens nothing, and a path read for the ' +
       'project was located (links walked) first',
   },
+  'src/hooks/heartbeat.ts': {
+    apis: { readdirSync: 1, statSync: 1, accessSync: 1 },
+    kind: 'own',
+    reason:
+      "the per-user data directory's session marks, for health_status: the listing of hooks-heartbeat/ and the " +
+      'probe of whether a mark could have been written there. Never the project: a data directory inside the ' +
+      'project is not looked at at all, and one on the network, or reached through a link that leaves for it, is ' +
+      'not asked about (isNetworkPath, walkLinksUnder); each mark is then read through the bounded reader',
+  },
   'src/hooks/distCheck.ts': {
     apis: { readFileSync: 1 },
     kind: 'own',

@@ -8,6 +8,22 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **`health_status` says whether the guardrail hooks started in this session.** A Claude Code older than 2.1.139
+  starts no plugin hook at all, and none can say so — not even SessionStart, which never runs — while the MCP server
+  goes on answering as if the session were guarded. SessionStart now leaves a small session mark in the per-user data
+  directory (`hooks-heartbeat/`), the one thing any hook writes, and `health_status` returns `hooks.state` —
+  `running`, `pending`, `not_observed`, `disabled_by_user`, `not_applicable` or `unknown` — and `hooks_warning`, which
+  says when no hook started, what is then unguarded and what to check. The mark holds a date, the plugin's version,
+  how the session began, the Claude Code process and a 16-character key of the project: no path, no content. It only
+  informs — nothing decides a guard, a database's trust or a scan by it — it cannot hold the session, and it is
+  cleaned up at each SessionStart. With the hooks switched off by the user, SessionStart still writes it, saying so.
+  Details: `docs/hooks.md`, "The session mark". Its cost, measured on Windows 11 with 30 interleaved runs of the
+  dispatcher with and without it: SessionStart's median goes from 146 to 171 ms outside a git repository and from 319
+  to 337 ms inside one — about 20 ms, once per session, below the run-to-run spread of either version (interquartile
+  range 34 and 90 ms).
+
 ### Changed
 
 - **The hooks' known limits are data, each pinned by a test.** The 22 limits `docs/hooks.md` listed by hand are now

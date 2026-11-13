@@ -46,6 +46,7 @@ const USED: Readonly<Record<string, readonly string[]>> = {
   loadGitSafety: ['execGit'],
   loadDbRegistry: ['databaseRegistration'],
   loadDistCheck: ['engineDamage'],
+  loadHeartbeat: ['writeHeartbeat', 'pruneHeartbeats'],
 };
 
 /** Every loader the dispatcher names: `detector('loadX')` calls and the `GUARD_MODULES` table. */
@@ -125,5 +126,27 @@ describe('the hooks bundle has what the dispatcher loads', () => {
     expect(builtins.filter((b) => b === 'node:crypto' || b === 'node:child_process')).toEqual([]);
     // SessionStart's part is where they are.
     expect(output('hooksSession').builtins).toEqual(expect.arrayContaining(['node:crypto', 'node:child_process']));
+  });
+
+  // The session mark is the one thing a hook writes, and only SessionStart
+  // writes it: no other event may even parse the module (hooks-heartbeat).
+  it('T-25 the session mark lives in the session part alone, and brings no package', async () => {
+    const meta = await hooksBuild();
+    const sources = (entry: string): string[] =>
+      Object.keys(Object.values(meta.outputs).find((x) => x.entryPoint === `src/${entry}.ts`)?.inputs ?? {});
+    expect(sources('hooksSession')).toContain('src/hooks/heartbeat.ts');
+    for (const part of ['hooksEntry', 'hooksBash', 'hooksWrite', 'hooksVet']) {
+      expect(sources(part), part).not.toContain('src/hooks/heartbeat.ts');
+    }
+    expect(Object.keys(meta.inputs).filter((p) => !p.startsWith('src/') && p !== '<define:__GUARDIAN_ENGINE_DIGEST__>')).toEqual([]);
+    // What the module itself reaches for: Node, the bounded reader and the data directory's path — no storage.
+    const reaches = (meta.inputs['src/hooks/heartbeat.ts']?.imports ?? []).map((i) => i.path);
+    expect(reaches.length).toBeGreaterThan(0);
+    // (`<define:…>` is the build's own injection, listed against every input.)
+    expect(
+      reaches.filter((p) => !p.startsWith('node:') && !p.startsWith('<define:') && !/^src\/hooks\/(?:configFile|userDataDir)\.ts$/.test(p)),
+    ).toEqual([]);
+    // The dispatcher takes it through its loader, as it takes every detector.
+    expect(dispatcherLoaders()).toContain('loadHeartbeat');
   });
 });

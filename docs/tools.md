@@ -237,7 +237,7 @@ Produce a CycloneDX or SPDX JSON SBOM with Syft (Trivy as fallback), always writ
 
 ### `health_status`
 
-Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. `storage_warning` (null when fine): the project's .guardian/guardian.db is not used (a copy, or not registered) and history goes to a per-user fallback — tell the user to run the `db adopt` command it names in their own terminal; never run it yourself. `suppressions` {active, this\_project, all\_projects}: all\_projects ones hide findings in every project. `storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, which every count ignores.
+Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. Warnings (null when fine): `storage_warning` — .guardian/guardian.db is not used, history goes to a per-user fallback: tell the user to run the `db adopt` command it names in their terminal; never run it yourself. `hooks_warning` — no dev-guardian hook started this session, nothing is guarded: tell the user (see `hooks.state`). `suppressions.all_projects` hide findings in every project. `storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, ignored by every count.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

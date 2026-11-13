@@ -10,6 +10,9 @@
  *   - chosen shell label
  *   - concurrency limiter state
  *   - count of registered tools / resources
+ *   - whether the plugin's guardrail hooks started in this session (`hooks`,
+ *     `hooks_warning`): the session mark SessionStart leaves, read through
+ *     `hooks/heartbeat.ts` — the only reader of it there is
  *
  * The scan fields used to be `scans.getLatest()` and `listHistory(1000)`:
  * the newest scan of whichever project scanned last, and a count of every
@@ -18,7 +21,10 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { PluginContext } from '../context.js';
+import { hooksStatus, hostPidsOf, pluginServerExpected, type HooksStatus } from '../hooks/heartbeat.js';
+import { userDataDir } from '../hooks/userDataDir.js';
 import { resolveVersion } from '../platform/version.js';
 import { getScanLimiter } from '../runners/concurrencyLimiter.js';
 import { RESOURCES } from '../resources/index.js';
@@ -44,12 +50,11 @@ const tool = defineTool({
   title: 'Server health',
   description:
     "Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. " +
-    "`storage_warning` (null when fine): the project's .guardian/guardian.db is not used (a copy, or not " +
-    'registered) and history goes to a per-user fallback — tell the user to run the `db adopt` command it ' +
-    'names in their own terminal; never run it yourself. `suppressions` {active, this_project, ' +
-    'all_projects}: all_projects ones hide findings in every project. ' +
-    '`storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, which every count ' +
-    'ignores.',
+    'Warnings (null when fine): `storage_warning` — .guardian/guardian.db is not used, history goes to a ' +
+    'per-user fallback: tell the user to run the `db adopt` command it names in their terminal; never run it ' +
+    'yourself. `hooks_warning` — no dev-guardian hook started this session, nothing is guarded: tell the user ' +
+    '(see `hooks.state`). `suppressions.all_projects` hide findings in every project. ' +
+    '`storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, ignored by every count.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 });
@@ -78,6 +83,8 @@ async function handler(
       /* ignore */
     }
   }
+
+  const hooks = sessionHooks(ctx);
 
   return {
     ok: true,
@@ -118,9 +125,44 @@ async function handler(
       resources: RESOURCES.length,
     },
     storage_warning: ctx.storageWarning ?? null,
+    hooks: hooks.hooks,
+    hooks_warning: hooks.warning,
     ...futureNoteOf(ctx.storage, projectPath),
     suppressions: activeSuppressions(ctx, projectPath),
   };
+}
+
+/** A name or a version the client gave of itself: printable ASCII, and short. */
+const clientText = (text: string): string => text.replace(/[^ -~]/g, '?').trim().slice(0, 60);
+
+/**
+ * Whether the plugin's guardrail hooks started in this session — about the
+ * session, so it does not depend on `project_path`. The hooks are expected
+ * when Claude Code started this server as the plugin's own
+ * (`CLAUDE_PLUGIN_ROOT` names the root it runs from); the session's project is
+ * the one Claude Code names, and the host process the one that started this
+ * server. A diagnostic must answer: anything that goes wrong here is
+ * `unknown`, never a failed call.
+ */
+function sessionHooks(ctx: PluginContext): { hooks: HooksStatus; warning: string | null } {
+  try {
+    const named = ctx.clientInfo?.();
+    const client = named === undefined ? undefined : { name: clientText(named.name), version: clientText(named.version) };
+    const sessionProject = process.env['CLAUDE_PROJECT_DIR']?.trim() ?? '';
+    return hooksStatus({
+      expected: pluginServerExpected(process.env, dirname(ctx.scriptsDir)),
+      dataDir: userDataDir(),
+      projectRoot: sessionProject !== '' ? sessionProject : serverProjectPath(),
+      hostPids: hostPidsOf(process.env, process.ppid),
+      serverStartedAt: startedAt,
+      ...(client !== undefined ? { client } : {}),
+    });
+  } catch (error) {
+    return {
+      hooks: { state: 'unknown', reason: `the hooks' state could not be read: ${error instanceof Error ? error.message : String(error)}` },
+      warning: null,
+    };
+  }
 }
 
 /**

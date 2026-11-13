@@ -20,7 +20,9 @@ quality, deps, observability, performance and compliance. Two halves:
   `--experimental-sqlite`.
 - **Guardrail hooks** — `hooks/hooks.json` (auto-discovered at the plugin root)
   with the `hooks/guardian-hook.mjs` dispatcher. Dependency-free and fail-open:
-  SessionStart posture briefing; PostToolUse secret warning on writes;
+  SessionStart posture briefing, and the session mark it leaves in the user's
+  data directory for `health_status` (`mcp/src/hooks/heartbeat.ts` — the one
+  thing a hook writes, and only SessionStart does); PostToolUse secret warning on writes;
   PreToolUse on `Bash|PowerShell` — the catastrophic-command block, then
   install-time package vetting (`mcp/src/pkgvet/hookDecision.ts`, 3 s network
   budget, `GUARDIAN_PKG_VET=0` opts out); PreToolUse on writes — an assistant's

@@ -23,6 +23,12 @@ export interface PluginContext {
   /** Sends `notifications/progress` over the active transport. */
   progressNotifier: ProgressNotifier;
   /**
+   * The MCP client that connected, as it named itself at `initialize` — or
+   * undefined before that, or when it gave no name. `health_status` shows it
+   * beside the hooks' state; nothing decides anything by it.
+   */
+  clientInfo?: () => { name: string; version: string } | undefined;
+  /**
    * Set when the project's database was not used (foreign, not writable,
    * untrusted schema, or no usable per-user data directory): why, and where
    * the history goes. `health_status.storage_warning` and every scan's

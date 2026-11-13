@@ -153,7 +153,20 @@ async function main(): Promise<void> {
     shell,
     scriptsDir: resolveScriptsDir(),
     progressNotifier,
+    // The client names itself at `initialize`: undefined until then.
+    clientInfo: () => {
+      const client = mcp.server.getClientVersion();
+      return client === undefined ? undefined : { name: client.name, version: client.version };
+    },
     ...(storageWarning ? { storageWarning } : {}),
+  };
+
+  // Which host connected, in the log: health_status shows it beside the hooks' state, and it is what
+  // tells a session with no hooks (a Claude Code older than 2.1.139) from a host that has none.
+  mcp.server.oninitialized = (): void => {
+    const client = mcp.server.getClientVersion();
+    const named = client === undefined ? 'unnamed' : `${client.name} ${client.version}`;
+    logErr(`client: ${named.replace(/[^ -~]/g, '?').slice(0, 120)}`);
   };
 
   attachAllTools(mcp, ctx);

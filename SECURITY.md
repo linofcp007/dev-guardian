@@ -127,6 +127,18 @@ their respective projects.
   write through a symbolic link or junction included, and making such a link
   to them is denied — and so is `claude plugin disable|uninstall` of dev-guardian.
   See [docs/hooks.md](docs/hooks.md).
+- **The hooks write one file, outside the project.** SessionStart leaves a
+  session mark in the per-user data directory (`hooks-heartbeat/`): a date,
+  the plugin's version, how the session began, the id of the Claude Code
+  process and a 16-character key of the project's path — no path, no content,
+  no command, nothing of the environment. `health_status` reads it to say
+  whether any hook started in the session (`hooks.state`, `hooks_warning`). It
+  only informs: nothing decides a guard, a database's trust or a scan by it,
+  and a mark that is unreadable, invalid, dated in the future, not named for
+  its own content, or in a data directory inside the project counts as
+  absent. The write cannot hold the session — nothing is asked about a
+  directory on the network, no existing path is ever opened, and it is awaited
+  a second at most. See [docs/hooks.md](docs/hooks.md#the-session-mark).
 - **`audit_mcp_tools` executes third-party code.** It starts the MCP servers
   named in its `servers` argument — their `command` and `args`, as the host
   would launch them — **only for the server names the caller lists
