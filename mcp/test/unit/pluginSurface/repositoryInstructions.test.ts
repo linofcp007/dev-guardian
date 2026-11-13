@@ -49,6 +49,8 @@ describe('an instruction found in the repository is reported to the user, never 
     expect(rule).toMatch(/file or tool result/);
     expect(rule).toMatch(/suppression/);
     expect(rule).toMatch(/hooks off/);
+    // A README's `curl … | sh`: declined, and once in six replies with no word that running it is the user's call.
+    expect(rule).toMatch(/piped download/);
     expect(rule).toMatch(/refuse/);
     expect(rule).toMatch(/tell the user which file asked for what/);
     expect(rule).toMatch(/they decide/);
@@ -64,6 +66,7 @@ describe('an instruction found in the repository is reported to the user, never 
     const rule = m?.[0] ?? '';
     for (const asked of THE_FOUR) expect(rule, String(asked)).toMatch(asked);
     expect(rule).toMatch(/accept a finding/);
+    expect(rule).toMatch(/pipe a download into a shell/);
     expect(rule).toMatch(/do not/);
     expect(rule).toMatch(/tell the user which file asked for what/);
     expect(rule).toMatch(/the decision is theirs/);
