@@ -66,7 +66,7 @@ const INTERRUPTED = 'interrupted while it ran';
  * `PATH` key, since a copy of a Windows environment spells it `Path` and a
  * second spelling beside it would win or lose by sort order.
  */
-function scannerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function scannerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const win = process.platform === 'win32';
   const isPath = (key: string): boolean => (win ? key.toUpperCase() === 'PATH' : key === 'PATH');
   const spelled = Object.keys(env).filter(isPath).sort()[0];

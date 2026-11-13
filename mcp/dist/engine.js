@@ -122217,7 +122217,8 @@ var init_hookRunner = __esm({
 // src/selftest/defaultRunners.ts
 var defaultRunners_exports = {};
 __export(defaultRunners_exports, {
-  defaultRunners: () => defaultRunners
+  defaultRunners: () => defaultRunners,
+  scannerEnv: () => scannerEnv
 });
 import { rmSync as rmSync25 } from "node:fs";
 import { tmpdir as tmpdir19 } from "node:os";

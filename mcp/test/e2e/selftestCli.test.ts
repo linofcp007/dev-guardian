@@ -17,7 +17,7 @@
  */
 
 import { cpSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { CORE_CONTROLS } from '../../src/selftest/controls.js';
@@ -53,13 +53,15 @@ function cli(args: string[], env: NodeJS.ProcessEnv, timeout = FAST_MS): Run {
 }
 
 /**
- * An environment in which no scanner can be found: a PATH that holds Node
- * alone, and a home that has no `~/.local/bin`. The hooks' dispatcher needs
- * neither.
+ * An environment in which no scanner can be found: a PATH that is one empty
+ * directory, and a home that has no `~/.local/bin`. Not Node's own directory —
+ * on Linux that is `/usr/local/bin`, where the scanners are installed too
+ * (measured in the toolchain container: gitleaks was found there). The CLI and
+ * the hooks' dispatcher are started by Node's absolute path and need neither.
  */
 function noScanners(dataDir: string): NodeJS.ProcessEnv {
   const home = makeTempDir('selftest-nohome-');
-  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1', GUARDIAN_DATA_DIR: dataDir, HOME: home, USERPROFILE: home, PATH: dirname(process.execPath) };
+  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1', GUARDIAN_DATA_DIR: dataDir, HOME: home, USERPROFILE: home, PATH: makeTempDir('selftest-nopath-') };
   for (const key of ['Path', 'GUARDIAN_OFFLINE', 'GUARDIAN_HOOKS', 'GUARDIAN_HOOKS_BASH_BLOCK', 'LOCALAPPDATA', 'APPDATA', 'XDG_DATA_HOME']) delete env[key];
   return env;
 }
@@ -198,6 +200,31 @@ describe('dev-guardian selftest — the real scanners', () => {
       expect(r.status, r.stderr).toBe(0);
       expect(doc.saved).toMatchObject({ saved: true });
       expect(readdirSync(join(dataDir, 'selftest')).sort()).toEqual(['history.json', 'last.json']);
+    },
+    timeoutAbove(FULL_MS),
+  );
+
+  it(
+    'T-22 the real gitleaks and Trivy runners, in this process: each reports its canary, with the version that ran',
+    async (ctx) => {
+      if (!scannersHere) return ctx.skip();
+      const paths = installPaths();
+      const r = await runSelftest({
+        ...paths,
+        runners: defaultRunners(),
+        dataDir: makeTempDir('selftest-real-data-'),
+        // A copy of the environment, as any caller may hand one: the scanners must still be found.
+        env: realEnv(''),
+        controls: CORE_CONTROLS.filter((c) => c.scanner === 'gitleaks' || c.scanner === 'trivy'),
+        save: false,
+      });
+      const controls = r.report.run.controls;
+      expect(controls.map((c) => c.id).sort()).toEqual(['gitleaks', 'trivy:deps', 'trivy:iac']);
+      for (const c of controls) {
+        expect(`${c.id}: ${c.verdict} ${c.reason ?? ''}`.trim(), c.id).toBe(`${c.id}: detected`);
+        expect(c.scanner_version, c.id).toEqual(expect.stringMatching(/\d+\.\d+/));
+      }
+      expect(r.exitCode).toBe(0);
     },
     timeoutAbove(FULL_MS),
   );

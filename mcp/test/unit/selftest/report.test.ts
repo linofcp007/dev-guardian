@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { HOOKS_NOTE, nextStepFor, renderJson, renderTable, type SelftestReport } from '../../../src/selftest/report.js';
+import { HOOKS_NOTE, nextStepFor, renderHistory, renderHistoryJson, renderJson, renderTable, type SelftestReport } from '../../../src/selftest/report.js';
 import type { ControlResult, SelftestRun } from '../../../src/selftest/store.js';
 import { countVerdicts } from '../../../src/selftest/verdict.js';
 
@@ -77,5 +77,51 @@ describe('the selftest report', () => {
     // One document: nothing before or after it.
     expect(renderJson(report()).trim().startsWith('{')).toBe(true);
     expect(renderJson(report()).trim().endsWith('}')).toBe(true);
+  });
+
+  it('T-09 says what happened around the run: interrupted, kept, not removed, left behind, not saved', () => {
+    const base = report();
+    const interrupted = renderTable({ ...base, interrupted: true, saved: { saved: false, skipped: 'interrupted' } });
+    expect(interrupted).toMatch(/Interrupted: the controls not reached are unverified, and nothing was saved/);
+    expect(interrupted).not.toMatch(/Not saved:/);
+    expect(renderTable({ ...base, workspace: { path: '/tmp/dev-guardian-selftest-abc', kept: true } })).toContain('Kept, as asked: /tmp/dev-guardian-selftest-abc');
+    const left = renderTable({ ...base, workspace: { path: '/tmp/dev-guardian-selftest-abc', kept: false, note: 'EBUSY' } });
+    expect(left).toMatch(/NOT REMOVED — the temporary directory is still there: \/tmp\/dev-guardian-selftest-abc \(EBUSY\)/);
+    expect(renderTable({ ...base, leftovers: ['/tmp/dev-guardian-selftest-old'] })).toMatch(/An earlier selftest left its temporary directory behind.*dev-guardian-selftest-old/);
+    expect(renderTable({ ...base, saved: { saved: false, note: 'the result was not saved in X: EACCES' } })).toContain('Not saved: the result was not saved in X: EACCES.');
+    expect(renderTable({ ...base, saved: { saved: true, dir: 'D', history_note: 'the selftest history is not JSON' } })).toContain('History: the selftest history is not JSON.');
+    // A regressed control says so, with what changed — or that nothing recorded did.
+    const regressed = report([
+      { id: 'gitleaks', scanner: 'gitleaks', scanner_version: '8.31.0', verdict: 'silent', regressed: true, changed: ['gitleaks 8.30.1 → 8.31.0'] },
+      { id: 'trivy:deps', scanner: 'trivy', scanner_version: '0.74.0', verdict: 'unverified', regressed: true, changed: [], reason: 'offline' },
+    ]);
+    const table = renderTable(regressed);
+    expect(table).toMatch(/gitleaks +silent +8\.31\.0 +REGRESSED — detected in the run before this one; changed: gitleaks 8\.30\.1 → 8\.31\.0/);
+    expect(table).toMatch(/trivy:deps +unverified +0\.74\.0 +REGRESSED — detected in the run before this one; nothing recorded changed — offline/);
+    // What to check next, for the hooks too.
+    expect(nextStepFor({ id: 'hooks:bash-block', scanner: 'hooks', verdict: 'missing' })).toMatch(/dispatcher.*reinstall the plugin/);
+    expect(nextStepFor({ id: 'hooks:bash-block', scanner: 'hooks', verdict: 'silent' })).toMatch(/GUARDIAN_HOOKS_DEBUG=1/);
+    expect(nextStepFor({ id: 'hooks:bash-block', scanner: 'hooks', verdict: 'unverified' })).toMatch(/run the selftest again/);
+    expect(nextStepFor({ id: 'gitleaks', scanner: 'gitleaks', verdict: 'missing' })).toMatch(/install gitleaks.*check_toolchain/);
+    expect(nextStepFor({ id: 'gitleaks', scanner: 'gitleaks', verdict: 'silent' })).toMatch(/gitleaks read the canary and reported nothing/);
+  });
+
+  it('T-37 the saved runs are printed newest first as they are given, a line per control, and as one JSON document', () => {
+    const newer = report().run;
+    const older: SelftestRun = { ...newer, ran_at: '2026-11-12T10:00:00.000Z', exit_code: 0, controls: newer.controls.map((c) => ({ ...c, verdict: 'detected' as const })) };
+    const marked: SelftestRun = { ...newer, controls: newer.controls.map((c) => (c.id === 'gitleaks' ? { ...c, verdict: 'silent' as const, regressed: true as const } : c)) };
+    const text = renderHistory([marked, older]);
+    expect(text.indexOf(newer.ran_at)).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf(newer.ran_at)).toBeLessThan(text.indexOf(older.ran_at));
+    expect(text).toMatch(/gitleaks +silent +8\.30\.1 +REGRESSED/);
+    expect(text).toMatch(/\(exit 1\)/);
+    expect(text).toMatch(/\(exit 0\)/);
+    for (const c of newer.controls) expect(text, c.id).toContain(c.id);
+    expect(renderHistory([])).toMatch(/No selftest has been saved on this machine/);
+    expect(renderHistory([], 'the selftest history is not JSON')).toMatch(/^the selftest history is not JSON\.\n\nNo selftest has been saved/);
+    const json = JSON.parse(renderHistoryJson([marked, older], 'a problem')) as { schema: number; problem?: string; runs: SelftestRun[] };
+    expect(json).toMatchObject({ schema: 1, problem: 'a problem' });
+    expect(json.runs.map((r) => r.ran_at)).toEqual([newer.ran_at, older.ran_at]);
+    expect(JSON.parse(renderHistoryJson([]))).toEqual({ schema: 1, runs: [] });
   });
 });

@@ -470,6 +470,27 @@ describe('a selftest run', () => {
     const none = await selftest(fakes({ hook: realHook }).runners, { dispatcherPath: join(makeTempDir('selftest-nodisp-'), 'guardian-hook.mjs') });
     expect(HOOK_IDS.map((id) => none.verdict(id))).toEqual(['missing', 'missing', 'missing', 'missing']);
     expect(none.result.exitCode).toBe(2);
+
+    // A dispatcher that never answers is stopped at the control's time: unverified — it said nothing, so
+    // nothing is known of the guard — never silent, and never a selftest that hangs.
+    const hanging = join(makeTempDir('selftest-hang-'), 'hanging-dispatcher.mjs');
+    writeFileSync(hanging, 'setTimeout(() => {}, 600000);\n');
+    const quick: Control[] = CORE_CONTROLS.map((c) => (c.kind === 'hook' ? { ...c, timeoutMs: 400 } : c));
+    const hung = await selftest(fakes({ hook: realHook }).runners, { dispatcherPath: hanging, controls: quick, timeoutGraceMs: 2000 });
+    expect(HOOK_IDS.map((id) => hung.verdict(id))).toEqual(['unverified', 'unverified', 'unverified', 'unverified']);
+    for (const id of HOOK_IDS) expect(hung.reason(id), id).toMatch(/did not answer/);
+    // A launcher that fails is its control's failure, with what it said.
+    const broken = await selftest(
+      fakes({
+        hook: async (args) => {
+          if (args.event === 'PostToolUse') throw new Error('EMFILE: too many open files');
+          return { exitCode: null, stdout: '', timedOut: false, spawnError: 'spawn node ENOENT' };
+        },
+      }).runners,
+    );
+    expect(HOOK_IDS.map((id) => broken.verdict(id))).toEqual(['unverified', 'unverified', 'unverified', 'unverified']);
+    expect(broken.reason('hooks:bash-block')).toContain('could not be started: spawn node ENOENT');
+    expect(broken.reason('hooks:secret-warning')).toContain('EMFILE');
   });
 
   it('T-10 the temporary directory is gone after a full run, a control that throws, a run that cannot begin and an interrupted one; kept only on request', async () => {
