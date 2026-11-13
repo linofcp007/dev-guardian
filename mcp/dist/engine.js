@@ -15334,6 +15334,9 @@ function isGuardianOutput(rel2) {
 function semgrepGuardianOutputExcludes() {
   return ROOT_OUTPUT_PATHS.map((p) => `--exclude=${p}`);
 }
+function trivyGuardianOutputSkips() {
+  return [...OUTPUT_DIRS.flatMap((dir) => ["--skip-dirs", dir]), ...OUTPUT_FILES.flatMap((file2) => ["--skip-files", file2])];
+}
 var DOT_GUARDIAN, OUTPUT_DIRS, OUTPUT_FILES, ROOT_OUTPUT_PATHS;
 var init_guardianOutput = __esm({
   "src/platform/guardianOutput.ts"() {
@@ -19576,9 +19579,11 @@ function projectTrivyIgnore(projectPath) {
 }
 function trivyArgv(inv, configPath, ignoreFile, version2 = null) {
   const offline = OFFLINE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? "") ? ["--offline-scan"] : [];
+  const ownOutput = TREE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? "") ? trivyGuardianOutputSkips() : [];
   return [
     ...inv.args,
     ...offline,
+    ...ownOutput,
     ...acceptsNoPhoneHomeFlags(version2) ? NO_PHONE_HOME_FLAGS : [],
     "--config",
     configPath,
@@ -19793,11 +19798,12 @@ function judgeTrivyFs(args) {
   }
   return { toolRun: withNote2({ name: "trivy", status: "ok" }), missing: [...walkGap, ...mavenGap], gaps: [] };
 }
-var PROJECT_TRIVYIGNORE, NEUTRAL_TRIVY_CONFIG, NEUTRAL_CONFIG_TEXT, OFFLINE_SCAN_SUBCOMMANDS, SHOW_SUPPRESSED_SINCE, SHOW_SUPPRESSED_COMMANDS, MAX_SUPPRESSED_IDS, MAX_SUPPRESSED_FINDINGS, NOTE_IDS, FINDING_ARRAY, TRIVY_NO_PHONE_HOME_ENV, NO_PHONE_HOME_FLAGS, NO_PHONE_HOME_FLAGS_SINCE, versionProbe, ERROR_LINE_MAX, TRIVY_MANIFEST_WALK_GAP, TRIVY_MAVEN_OFFLINE_GAP;
+var PROJECT_TRIVYIGNORE, NEUTRAL_TRIVY_CONFIG, NEUTRAL_CONFIG_TEXT, OFFLINE_SCAN_SUBCOMMANDS, TREE_SCAN_SUBCOMMANDS, SHOW_SUPPRESSED_SINCE, SHOW_SUPPRESSED_COMMANDS, MAX_SUPPRESSED_IDS, MAX_SUPPRESSED_FINDINGS, NOTE_IDS, FINDING_ARRAY, TRIVY_NO_PHONE_HOME_ENV, NO_PHONE_HOME_FLAGS, NO_PHONE_HOME_FLAGS_SINCE, versionProbe, ERROR_LINE_MAX, TRIVY_MANIFEST_WALK_GAP, TRIVY_MAVEN_OFFLINE_GAP;
 var init_trivyRun = __esm({
   "src/runners/trivyRun.ts"() {
     "use strict";
     init_binaryPath();
+    init_guardianOutput();
     init_semverCompare();
     init_projectFs();
     init_toolProbe();
@@ -19810,6 +19816,7 @@ var init_trivyRun = __esm({
     NEUTRAL_TRIVY_CONFIG = "trivy-neutral-config.yaml";
     NEUTRAL_CONFIG_TEXT = "# Written by dev-guardian: an empty Trivy configuration, passed as --config so that the\n# scanned repository's own trivy.yaml is never read.\n";
     OFFLINE_SCAN_SUBCOMMANDS = /* @__PURE__ */ new Set(["fs", "filesystem", "repo", "repository", "rootfs"]);
+    TREE_SCAN_SUBCOMMANDS = /* @__PURE__ */ new Set([...OFFLINE_SCAN_SUBCOMMANDS, "config"]);
     SHOW_SUPPRESSED_SINCE = "0.50.0";
     SHOW_SUPPRESSED_COMMANDS = /* @__PURE__ */ new Set([
       "fs",

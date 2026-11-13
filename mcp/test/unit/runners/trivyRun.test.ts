@@ -19,6 +19,7 @@ vi.mock('../../../src/runners/spawn.js', async () => {
   return { ...actual, captureOutput: vi.fn() };
 });
 
+import { ROOT_OUTPUT_PATHS } from '../../../src/platform/guardianOutput.js';
 import { captureOutput } from '../../../src/runners/spawn.js';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import {
@@ -49,6 +50,9 @@ beforeEach(() => {
   resetTrivyVersionCache();
 });
 
+/** What every tree scan is told to skip: dev-guardian's own output at the target's root `.guardian/` (T-01 below). */
+const OWN_OUTPUT = ROOT_OUTPUT_PATHS.flatMap((p) => [p === '.guardian/reports' ? '--skip-dirs' : '--skip-files', p]);
+
 describe('trivyArgv', () => {
   it('puts --offline-scan on a filesystem scan, then --config before the target, and the target last', () => {
     // A repository's pom.xml must not choose where Trivy fetches, or send the user's ~/.m2 credentials there.
@@ -58,6 +62,7 @@ describe('trivyArgv', () => {
       'vuln',
       '--quiet',
       '--offline-scan',
+      ...OWN_OUTPUT,
       '--config',
       '/r/cfg.yaml',
       '/p',
@@ -67,9 +72,30 @@ describe('trivyArgv', () => {
     expect(trivyArgv({ args: ['image'], target: 'alpine' }, '/r/c.yaml', null)).not.toContain('--offline-scan');
   });
 
+  // The root `.guardian/reports/` is where the sibling scans of one security_scan_full create and remove their
+  // report directories while Trivy walks the tree: 9 of 20 `trivy config` runs failed on an entry that vanished
+  // ("walk dir: range error: GetFileAttributesEx …"), 0 of 20 once it was told to skip that directory.
+  it("T-01 the argv of a tree scan skips dev-guardian's generated output at the root .guardian/, and an image scan gets none of it", () => {
+    for (const sub of ['fs', 'filesystem', 'repo', 'repository', 'rootfs', 'config']) {
+      const argv = trivyArgv({ args: [sub], target: '/p' }, '/r/c.yaml', null);
+      for (const path of ROOT_OUTPUT_PATHS) {
+        const at = argv.indexOf(path);
+        expect(at, `${sub}: ${path}`).toBeGreaterThan(0);
+        expect(argv[at - 1], `${sub}: ${path}`).toBe(path === '.guardian/reports' ? '--skip-dirs' : '--skip-files');
+      }
+      // Anchored at the target, as Trivy reads them: never a bare `.guardian`, which would hide the shared files.
+      expect(argv, sub).not.toContain('.guardian');
+      expect(argv.at(-1), sub).toBe('/p');
+    }
+    const image = trivyArgv({ args: ['image'], target: 'alpine' }, '/r/c.yaml', null);
+    expect(image).not.toContain('--skip-dirs');
+    expect(image).not.toContain('--skip-files');
+  });
+
   it('adds --ignorefile when the project has a .trivyignore, and no --offline-scan on a config scan', () => {
     expect(trivyArgv({ args: ['config'], target: '/p' }, '/r/cfg.yaml', '/p/.trivyignore')).toEqual([
       'config',
+      ...OWN_OUTPUT,
       '--config',
       '/r/cfg.yaml',
       '--ignorefile',
@@ -91,7 +117,7 @@ describe('runTrivy', () => {
     expect(call?.command).toBe('trivy');
     expect(call?.cwd).toBe(work);
     const config = join(work, NEUTRAL_TRIVY_CONFIG);
-    expect(call?.args).toEqual(['fs', '--format', 'json', '--offline-scan', '--config', config, project]);
+    expect(call?.args).toEqual(['fs', '--format', 'json', '--offline-scan', ...OWN_OUTPUT, '--config', config, project]);
     // Comments only: YAML with no key, which Trivy reads as no configuration.
     const text = readFileSync(config, 'utf8');
     expect(text.split('\n').every((l) => l === '' || l.startsWith('#'))).toBe(true);
@@ -184,6 +210,7 @@ describe('Trivy never phones home', () => {
       'fs',
       '--quiet',
       '--offline-scan',
+      ...OWN_OUTPUT,
       '--skip-version-check',
       '--disable-telemetry',
       '--config',
