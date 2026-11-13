@@ -82,6 +82,7 @@
  */
 
 import { commandFor } from '../platform/binaryPath.js';
+import { trivyGuardianOutputSkips } from '../platform/guardianOutput.js';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { compareSemver } from '../platform/semverCompare.js';
@@ -150,6 +151,9 @@ function projectTrivyIgnore(projectPath: string): string | null {
  */
 const OFFLINE_SCAN_SUBCOMMANDS: ReadonlySet<string> = new Set(['fs', 'filesystem', 'repo', 'repository', 'rootfs']);
 
+/** Subcommands that walk a directory tree, and so take `--skip-dirs` / `--skip-files`: those and `config`. Never `image`. */
+const TREE_SCAN_SUBCOMMANDS: ReadonlySet<string> = new Set([...OFFLINE_SCAN_SUBCOMMANDS, 'config']);
+
 /** The argv of one run — pure, for the tests. */
 export function trivyArgv(
   inv: Pick<TrivyInvocation, 'args' | 'target'>,
@@ -158,9 +162,13 @@ export function trivyArgv(
   version: string | null = null,
 ): string[] {
   const offline = OFFLINE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? '') ? ['--offline-scan'] : [];
+  // dev-guardian's own output at the target's root `.guardian/`: never the project's, and written to by the
+  // sibling scans while this one walks the tree (`platform/guardianOutput.ts#trivyGuardianOutputSkips`).
+  const ownOutput = TREE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? '') ? trivyGuardianOutputSkips() : [];
   return [
     ...inv.args,
     ...offline,
+    ...ownOutput,
     ...(acceptsNoPhoneHomeFlags(version) ? NO_PHONE_HOME_FLAGS : []),
     '--config',
     configPath,

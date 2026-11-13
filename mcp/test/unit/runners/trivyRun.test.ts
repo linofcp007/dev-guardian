@@ -50,6 +50,9 @@ beforeEach(() => {
   resetTrivyVersionCache();
 });
 
+/** What every tree scan is told to skip: dev-guardian's own output at the target's root `.guardian/` (T-01 below). */
+const OWN_OUTPUT = ROOT_OUTPUT_PATHS.flatMap((p) => [p === '.guardian/reports' ? '--skip-dirs' : '--skip-files', p]);
+
 describe('trivyArgv', () => {
   it('puts --offline-scan on a filesystem scan, then --config before the target, and the target last', () => {
     // A repository's pom.xml must not choose where Trivy fetches, or send the user's ~/.m2 credentials there.
@@ -59,6 +62,7 @@ describe('trivyArgv', () => {
       'vuln',
       '--quiet',
       '--offline-scan',
+      ...OWN_OUTPUT,
       '--config',
       '/r/cfg.yaml',
       '/p',
@@ -91,6 +95,7 @@ describe('trivyArgv', () => {
   it('adds --ignorefile when the project has a .trivyignore, and no --offline-scan on a config scan', () => {
     expect(trivyArgv({ args: ['config'], target: '/p' }, '/r/cfg.yaml', '/p/.trivyignore')).toEqual([
       'config',
+      ...OWN_OUTPUT,
       '--config',
       '/r/cfg.yaml',
       '--ignorefile',
@@ -112,7 +117,7 @@ describe('runTrivy', () => {
     expect(call?.command).toBe('trivy');
     expect(call?.cwd).toBe(work);
     const config = join(work, NEUTRAL_TRIVY_CONFIG);
-    expect(call?.args).toEqual(['fs', '--format', 'json', '--offline-scan', '--config', config, project]);
+    expect(call?.args).toEqual(['fs', '--format', 'json', '--offline-scan', ...OWN_OUTPUT, '--config', config, project]);
     // Comments only: YAML with no key, which Trivy reads as no configuration.
     const text = readFileSync(config, 'utf8');
     expect(text.split('\n').every((l) => l === '' || l.startsWith('#'))).toBe(true);
@@ -205,6 +210,7 @@ describe('Trivy never phones home', () => {
       'fs',
       '--quiet',
       '--offline-scan',
+      ...OWN_OUTPUT,
       '--skip-version-check',
       '--disable-telemetry',
       '--config',

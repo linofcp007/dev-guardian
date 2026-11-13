@@ -100,6 +100,17 @@ version bump.
   differently, and no tool or eval case changes; the instructions stay within 900 characters and
   `host-rules/AGENTS.md` within 8 000 bytes (the introduction's list of areas, which the intent map repeats, made the
   room).
+- **Trivy no longer walks dev-guardian's own reports, where a sibling scan writes while it reads.**
+  `security_scan_full` runs its secrets, dependency and IaC scans at once, each with a report directory of its own
+  under the project's `.guardian/reports/`, and Trivy walked that directory like any other. An entry that appeared or
+  vanished mid-walk failed the run ("walk dir: range error: GetFileAttributesEx …", "walk error open …"): the pass
+  read `failed`, the coverage `partial`, and the CI gate exited 2 — incomplete — on a project with nothing wrong.
+  Every Trivy run over a tree (`fs`, `config`, …; never `image`) is now told to skip what dev-guardian generates at
+  the root `.guardian/` — `--skip-dirs .guardian/reports` and `--skip-files` for the database files, the dashboard
+  and the folder's `.gitignore` — the list Semgrep and Syft already left out. Trivy anchors both flags at its
+  target, so a `.guardian` below the root, and the root's shared files (`baseline.json`, `scan.yml`), are read as
+  before. Measured on Trivy 0.74.0 with that directory changing under it: 9 of 20 `trivy config` runs failed, 0 of
+  20 with the flags.
 - **A checks bundle Trivy could not download is not a file it could not parse.** When `trivy config` cannot fetch its
   checks bundle (no network, a proxy that refuses, a registry that is down) it logs `Falling back to embedded checks`
   at ERROR level and checks every file with the checks built into it. Every ERROR line of its log was counted as a

@@ -88,3 +88,21 @@ export function isGuardianOutput(rel: string): boolean {
 export function semgrepGuardianOutputExcludes(): string[] {
   return ROOT_OUTPUT_PATHS.map((p) => `--exclude=${p}`);
 }
+
+/**
+ * Trivy's flags for the generated output: `--skip-dirs` for the directories,
+ * `--skip-files` for the files. Trivy anchors both at its target (measured,
+ * `platform/guardianIgnore.ts#trivySkipArgs`), so only the root's are left
+ * out — a `lib/.guardian/reports/` is read.
+ *
+ * Not only wasted reading. The sibling scans of one `security_scan_full` run
+ * concurrently, each creating and removing its own directory under
+ * `.guardian/reports/` while Trivy walks the tree, and Trivy fails on an entry
+ * that vanishes ("walk dir: range error: GetFileAttributesEx …", "walk error
+ * open …") — the pass read `failed` and the CI gate incomplete, on a project
+ * with nothing wrong. Measured on 0.74.0 with that directory changing under
+ * it: 9 of 20 `trivy config` runs failed, 0 of 20 with these flags.
+ */
+export function trivyGuardianOutputSkips(): string[] {
+  return [...OUTPUT_DIRS.flatMap((dir) => ['--skip-dirs', dir]), ...OUTPUT_FILES.flatMap((file) => ['--skip-files', file])];
+}
