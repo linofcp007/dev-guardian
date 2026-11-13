@@ -97,7 +97,7 @@ their respective projects.
   `~/.config/dev-guardian`, or name it in program text on the command line
   (`node -e`, `python -c`, a heredoc fed to `python`), relative paths resolved
   after a `cd`. A program run from a file is not seen, which matters only for
-  the user-level file ([docs/hooks.md](docs/hooks.md) lists what else is not).
+  the user-level file ([docs/hooks-known-limits.md](docs/hooks-known-limits.md) lists what else is not).
   A project's `ignorePaths` and `.guardian/hooks-allowlist.json` narrow the
   secret warning only, never a secret block the user enabled. Each hook
   configuration file is first checked, component by component with `lstat` +

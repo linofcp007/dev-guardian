@@ -22,6 +22,19 @@ import type { ResourceModule } from '../../src/resources/index.js';
 import type { FoldRecord } from '../../src/tools/fold.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { RuleInventory } from '../ablate/clauses.js';
+import {
+  AREA_TITLES,
+  buildInput,
+  describeAnswer,
+  executableCounts,
+  KNOWN_LIMITS_SOURCE,
+  LIMIT_AREAS,
+  platformOf,
+  recordedAnswer,
+  type KnownLimit,
+  type LimitExample,
+  type ShellExample,
+} from './knownLimits.js';
 
 /** The line every generated page starts with, after its title. */
 export const GENERATED_NOTICE =
@@ -402,4 +415,97 @@ export function renderRulePacksDoc(packs: readonly PackInput[]): string {
     out.push('');
   }
   return out.join('\n');
+}
+
+// ------------------------------------------------------- hooks' known limits
+
+/** The generated page's title. */
+export const KNOWN_LIMITS_TITLE = '# Guardrail hooks: known limits';
+
+/**
+ * `docs/hooks-known-limits.md`: one section per area, each limit with its text
+ * and its examples — the input and the verdict a test pins — or the reason it
+ * has none. Rendered from `test/fixtures/hooks/known-limits.yml`.
+ */
+export function renderKnownLimitsDoc(limits: readonly KnownLimit[]): string {
+  const counts = executableCounts(limits);
+  const out: string[] = [];
+
+  out.push(KNOWN_LIMITS_TITLE, '', GENERATED_NOTICE, '');
+  out.push(
+    'What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as ' +
+      'covering it. Each of these can change what the hooks do, and switching the guardrails off stays the ' +
+      "user's decision.",
+    '',
+    `This page is rendered from [\`${KNOWN_LIMITS_SOURCE}\`](../${KNOWN_LIMITS_SOURCE}): **${String(counts.total)} limits**, ` +
+      `${String(counts.withExample)} with at least one example and ${String(counts.without)} with none, which says why. ` +
+      'An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, ' +
+      'a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a ' +
+      'test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher ' +
+      '(`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record ' +
+      'leaves this list. An example given for contrast says so.',
+    '',
+  );
+
+  for (const area of LIMIT_AREAS) {
+    const inArea = limits.filter((l) => l.area === area);
+    if (inArea.length === 0) continue;
+    out.push(`## ${AREA_TITLES[area]}`, '');
+    for (const limit of inArea) {
+      out.push(`- ${limit.doc.trim()}`);
+      for (const example of limit.examples) out.push(`  - ${exampleLine(example)}`);
+      if (limit.not_executable !== undefined) {
+        out.push(`  - ${limit.examples.length === 0 ? 'No test runs it' : 'What no test runs'}: ${limit.not_executable.trim()}.`);
+      }
+    }
+    out.push('');
+  }
+  return out.join('\n');
+}
+
+/**
+ * `text` as a Markdown code span, verbatim: delimited by one backtick more
+ * than its longest run of them, and padded when it starts or ends with one.
+ */
+function codeSpan(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length));
+  const fence = '`'.repeat(longest + 1);
+  const pad = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+/** An input by construction, described: never written out. */
+function builtInputMd(build: NonNullable<ShellExample['build']>): string {
+  const start = build.start !== undefined ? `${codeSpan(build.start)}, then ` : '';
+  return `${start}${codeSpan(build.repeat)} × ${String(build.times)}, then ${codeSpan(build.then)}`;
+}
+
+/** The verdict as the page states it: the recorded value as code, then what it means. */
+function verdictMd(example: LimitExample): string {
+  const answer = recordedAnswer(example);
+  if (answer.detector === 'secret') return describeAnswer(answer);
+  const value = answer.detector === 'shell' ? answer.level : answer.decision;
+  return `\`${value}\`${describeAnswer(answer).slice(value.length)}`;
+}
+
+/** One example: its input, where it runs, the verdict, and its note. */
+function exampleLine(example: LimitExample): string {
+  const note = example.note !== undefined ? ` — ${example.note}` : '';
+  if (example.detector === 'hook') {
+    const files = Object.keys(example.files ?? {});
+    const present = files.length > 0 ? `, with ${files.map((f) => codeSpan(f)).join(', ')} present` : '';
+    return `${codeSpan(example.tool)} on ${example.event}, input ${codeSpan(JSON.stringify(example.input))}${present} → ${verdictMd(example)}${note}`;
+  }
+  if (example.detector === 'secret') {
+    const input =
+      example.build !== undefined
+        ? builtInputMd(example.build)
+        : example.parts !== undefined
+          ? `${example.parts.map((p) => codeSpan(p)).join(' + ')}, joined`
+          : codeSpan(example.text ?? '');
+    return `${input} → ${verdictMd(example)}${note}`;
+  }
+  const input = example.build !== undefined ? builtInputMd(example.build) : codeSpan(buildInput(example));
+  const shell = example.shell === 'powershell' ? 'PowerShell' : platformOf(example) === 'win32' ? 'bash, on Windows' : 'bash';
+  return `${input} (${shell}) → ${verdictMd(example)}${note}`;
 }

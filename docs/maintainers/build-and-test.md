@@ -83,13 +83,26 @@ change a bundle: rebuild after every `src/` change, and let
 
 `npm run build` ends by regenerating the committed, generated files: every
 `host-rules/*` template and the in-repo rules copies (from
-`mcp/src/hostsetup/rulesTemplate.ts`), then `docs/tools.md` and
-`docs/rule-packs.md` (`npm run docs`, i.e. `tsx test/docs/generate.ts`, from the
-registry and the pack files). Drift tests fail when a committed copy differs, and
+`mcp/src/hostsetup/rulesTemplate.ts`), then `docs/tools.md`,
+`docs/rule-packs.md` and `docs/hooks-known-limits.md` (`npm run docs`, i.e.
+`tsx test/docs/generate.ts`, from the registry, the pack files and
+`test/fixtures/hooks/known-limits.yml`). Drift tests fail when a committed copy differs, and
 `mcp/test/docs/docs.test.ts` also holds every tool, resource, skill and command
 count in the READMEs, this file and `mcp/README.md` — and the pack table below —
 to the code. The fix for any of those failures is `npm run build` or correcting
 the number, never editing a generated file.
+
+**The hooks' known limits are data.** `test/fixtures/hooks/known-limits.yml`
+holds one record per limit — its published text, and examples with the verdict
+the guard gives each today, measured with the platform, the home and the
+working directory injected. `test/unit/hooks/knownLimits.test.ts` runs the
+shell and secret examples through the real detectors and
+`test/e2e/knownLimitsHook.test.ts` the hook examples through the real
+dispatcher. A failure names the limit and the direction: a guard that answers
+more strictly has closed the limit, and its record leaves the file (or its
+example is corrected) in the same commit; one that answers less strictly got
+weaker — fix the guard, never the record. A new limit is a new record, never a
+line of prose in `docs/hooks.md`, which the docs test refuses.
 
 On Windows, run the full suite from **Git Bash**. From PowerShell, `bash` can
 resolve to the WSL launcher stub, and the `ci-init` e2e fails for that reason

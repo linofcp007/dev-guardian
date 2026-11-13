@@ -38,8 +38,9 @@ performance and compliance:
   and `mcp/dist/engine.js` only, the dispatcher `mcp/dist/hooks.js` only (which loads its parts); `git add` a new
   file an install needs (`pluginInstall.test.ts`).
 - **Generated files are never edited by hand**: `host-rules/*` and the in-repo rules copies (from
-  `mcp/src/hostsetup/rulesTemplate.ts`), `docs/tools.md`, `docs/rule-packs.md`. `npm run build` writes them; drift
-  tests fail otherwise.
+  `mcp/src/hostsetup/rulesTemplate.ts`), `docs/tools.md`, `docs/rule-packs.md`, `docs/hooks-known-limits.md` (from
+  `mcp/test/fixtures/hooks/known-limits.yml`: a hook's known limit is a record there, with examples a test runs,
+  never a line of prose). `npm run build` writes them; drift tests fail otherwise.
 - **Never `U+00C1` or `U+00CD` (nor `U+00CF`, `U+00D0`, `U+00DD`) in `configs/semgrep/*.yml`**, comments included:
   Semgrep reads a pack with the locale codec, and on cp1252 one such character makes the pack scan nothing with
   zero errors. Pack comments are in Portuguese.

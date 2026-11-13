@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HOOK, HOOK_TIMEOUT_MS, runHook, type HookResult } from '../helpers/runHook.js';
 import { spawnSyncCapped, timeoutAbove } from '../helpers/spawnCap.js';
 import { hangBound, PERF_STRICT } from '../helpers/timing.js';
 
@@ -29,11 +30,11 @@ const FAKE_AWS_KEY = ['AKIA', 'Q7XZ2M9KDP4RWT3B'].join('');
 const here = dirname(fileURLToPath(import.meta.url));
 // mcp/test/e2e -> mcp/test -> mcp -> repo root
 const REPO_ROOT = resolve(here, '..', '..', '..');
-const HOOK = resolve(REPO_ROOT, 'hooks', 'guardian-hook.mjs');
 
 /** Hang-breaker only; nothing here asserts by reaching it — every case is a
- *  fast, dependency-free regex pass with no real scanner involved. */
-const TIMEOUT_MS = 15_000;
+ *  fast, dependency-free regex pass with no real scanner involved. The hook's
+ *  path, this bound and `runHook` live in `test/helpers/runHook.ts`. */
+const TIMEOUT_MS = HOOK_TIMEOUT_MS;
 // Above the cap, so a hung child is reported by the cap — naming it — and
 // not by vitest's 10 s default failing the test after the fact (R7-I1).
 vi.setConfig({ testTimeout: timeoutAbove(TIMEOUT_MS) });
@@ -63,51 +64,6 @@ const CAN_SYMLINK = ((): boolean => {
     rmSync(probe, { recursive: true, force: true });
   }
 })();
-
-interface HookResult {
-  status: number | null;
-  stdout: unknown;
-  stderr: string;
-}
-
-function runHook(
-  payload: Record<string, unknown>,
-  opts: { cwd: string; env?: Record<string, string>; homeDir?: string; projectDir?: string; hook?: string } = {
-    cwd: process.cwd(),
-  },
-): HookResult {
-  const home = opts.homeDir ?? opts.cwd;
-  const r = spawnSyncCapped(process.execPath, [opts.hook ?? HOOK], {
-    cwd: opts.cwd,
-    input: JSON.stringify(payload),
-    encoding: 'utf8',
-    timeout: TIMEOUT_MS,
-    env: {
-      ...process.env,
-      // Isolates the user-level config lookup (~/.config/dev-guardian/…)
-      // from whatever the machine actually running this suite has.
-      HOME: home,
-      USERPROFILE: home,
-      CLAUDE_CONFIG_DIR: '',
-      GUARDIAN_HOOKS_BASH_BLOCK: '',
-      GUARDIAN_HOOKS: '',
-      // Claude Code sets it for every hook: the project the session opened.
-      // `''` leaves it unset, and the hook finds the root from the cwd.
-      CLAUDE_PROJECT_DIR: opts.projectDir ?? opts.cwd,
-      ...opts.env,
-    },
-  });
-  let stdout: unknown = undefined;
-  const trimmed = (r.stdout ?? '').trim();
-  if (trimmed) {
-    try {
-      stdout = JSON.parse(trimmed);
-    } catch {
-      stdout = trimmed;
-    }
-  }
-  return { status: r.status, stdout, stderr: r.stderr ?? '' };
-}
 
 function preToolUse(toolName: string, toolInput: Record<string, unknown>, cwd: string) {
   return { hook_event_name: 'PreToolUse', tool_name: toolName, tool_input: toolInput, cwd };
