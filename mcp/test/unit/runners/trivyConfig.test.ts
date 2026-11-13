@@ -28,6 +28,17 @@ const DOCKERFILE_BROKEN_LOG = [
   '2026-09-29T11:19:28+01:00\tERROR\t[dockerfile scanner] Failed to parse file\tfile_path="Dockerfile" err="parse dockerfile instruction: parse instruction \\"healthcheck\\": time: invalid duration \\"bogus\\""',
   '2026-09-29T11:19:28+01:00\tINFO\tDetected config files\tnum=0',
 ].join('\n');
+// Verbatim from Trivy 0.74.0 (2026-11-13), an empty cache and the registry unreachable: the checks bundle could
+// not be downloaded — Trivy says so at ERROR level, names no file, and goes on with the checks built into it
+// (the report of that run lists the Dockerfile: 25 checks passed, 2 failed).
+const CHECKS_FALLBACK_LOG = [
+  '2026-11-13T20:28:33Z\tINFO\t[misconfig] Misconfiguration scanning is enabled',
+  '2026-11-13T20:28:33Z\tINFO\t[checks-client] Need to update the checks bundle',
+  '2026-11-13T20:28:33Z\tINFO\t[checks-client] Downloading the checks bundle...',
+  '2026-11-13T20:28:33Z\tERROR\t[misconfig] Falling back to embedded checks\terr="failed to download checks bundle: download error: OCI repository error: 1 error occurred:\\n\\t* Get \\"https://mirror.gcr.io/v2/\\": proxyconnect tcp: dial tcp 127.0.0.1:9: connectex: No connection could be made because the target machine actively refused it.\\n\\n"',
+  '2026-11-13T20:28:34Z\tINFO\tDetected config files\tnum=1',
+].join('\n');
+const UNNAMED_ERROR_LOG = '2026-09-29T11:00:00+01:00\tERROR\t[misconfig] Something broke\terr="boom"\n';
 const NOTHING_DETECTED_LOG = '2026-09-29T11:19:25+01:00\tINFO\tDetected config files\tnum=0\n';
 const TWO_DETECTED_LOG = '2026-09-29T11:19:16+01:00\tINFO\tDetected config files\tnum=2\n';
 
@@ -324,5 +335,80 @@ describe('judgeTrivyConfig', () => {
     });
     expect(j.toolRun.status).toBe('failed');
     expect(j.missing).toEqual([]);
+  });
+});
+
+/**
+ * An ERROR line is not, by its level, a file Trivy could not parse. When the
+ * checks bundle cannot be downloaded Trivy logs `Falling back to embedded
+ * checks` at ERROR level and then checks every file with the checks built
+ * into it: the pass read `ok` but partial, "could not parse 1 file: Falling
+ * back to embedded checks: … — its misconfigurations were not checked" —
+ * about a file that does not exist — and the selftest's `trivy:iac` control
+ * read `unverified`.
+ */
+describe('judgeTrivyConfig — the checks bundle Trivy could not download', () => {
+  const completed = (stderr: string): TrivyRunResult => ({ outcome: 'completed', exitCode: 0, stdout: '', stderr, truncated: false, honoured: [] });
+  const DOCKERFILE_READ = JSON.stringify({
+    Results: [{ Target: 'Dockerfile', Type: 'dockerfile', MisconfSummary: { Successes: 25, Failures: 2 } }],
+  });
+
+  it('T-01 the fallback to the built-in checks is a note on a complete pass, never a file Trivy could not parse', () => {
+    const log = parseTrivyConfigLog(CHECKS_FALLBACK_LOG);
+    expect(log.parseErrors).toEqual([]);
+    expect(log.detected).toBe(1);
+
+    const j = judgeTrivyConfig({ name: 'trivy-config', run: completed(CHECKS_FALLBACK_LOG), raw: DOCKERFILE_READ, iacFiles: ['Dockerfile'] });
+    expect(j.missing).toEqual([]);
+    expect(j.toolRun.status).toBe('ok');
+    expect(j.toolRun.reason).toMatch(/^Trivy could not download its checks bundle and used the checks built into it: failed to download checks bundle: /);
+    // Trivy's error, readable: the log's `\n\t` are spaces, never the letters `nt`.
+    expect(j.toolRun.reason).toContain('1 error occurred: * Get "https://mirror.gcr.io/v2/": proxyconnect tcp');
+    expect(j.toolRun.reason).not.toMatch(/could not parse|not checked|names no file/);
+
+    // The same line with no `err` (EC-2), on scan_containers' pass: the note alone.
+    const bare = judgeTrivyConfig({
+      name: 'trivy-dockerfile',
+      run: completed('2026-11-13T20:28:33Z\tERROR\t[misconfig] Falling back to embedded checks\n'),
+      raw: DOCKERFILE_READ,
+      iacFiles: ['Dockerfile'],
+      singleFile: true,
+    });
+    expect(bare.toolRun).toEqual({
+      name: 'trivy-dockerfile',
+      status: 'ok',
+      reason: 'Trivy could not download its checks bundle and used the checks built into it',
+    });
+    expect(bare.missing).toEqual([]);
+  });
+
+  it('T-02 a file Trivy could not parse stays partial and named, and so does an error that names no file', () => {
+    const tf = judgeTrivyConfig({ name: 'trivy-config', run: completed(TF_BROKEN_LOG), raw: null, iacFiles: ['main.tf'] });
+    expect(tf.missing).toEqual(['trivy-config']);
+    expect(tf.toolRun.reason).toMatch(/could not parse 1 file: main\.tf \(.*Unclosed configuration block.* — its misconfigurations were not checked/);
+    const dockerfile = judgeTrivyConfig({ name: 'trivy-dockerfile', run: completed(DOCKERFILE_BROKEN_LOG), raw: null, iacFiles: ['Dockerfile'] });
+    expect(dockerfile.missing).toEqual(['trivy-dockerfile']);
+    expect(dockerfile.toolRun.reason).toMatch(/could not parse 1 file: Dockerfile \(.*invalid duration/);
+    // An error Trivy ties to no file is still a gap: what it left unchecked is not known.
+    const unnamed = judgeTrivyConfig({ name: 'trivy-config', run: completed(UNNAMED_ERROR_LOG), raw: null, iacFiles: [] });
+    expect(unnamed.toolRun.status).toBe('ok');
+    expect(unnamed.missing).toEqual(['trivy-config']);
+    expect(unnamed.toolRun.reason).toContain('Something broke: boom');
+  });
+
+  it('T-04 an error that names no file is not counted as a file, and the fallback beside a broken file leaves that file alone as the gap', () => {
+    const unnamed = judgeTrivyConfig({ name: 'trivy-config', run: completed(UNNAMED_ERROR_LOG), raw: null, iacFiles: [] });
+    expect(unnamed.toolRun.reason).toBe('Trivy reported 1 error that names no file: Something broke: boom — what it left unchecked is not known');
+
+    const both = judgeTrivyConfig({
+      name: 'trivy-config',
+      run: completed(`${CHECKS_FALLBACK_LOG}\n${TF_BROKEN_LOG}`),
+      raw: null,
+      iacFiles: ['main.tf'],
+    });
+    expect(both.missing).toEqual(['trivy-config']);
+    expect(both.toolRun.reason).toMatch(/Trivy could not parse 1 file: main\.tf \(.*Unclosed configuration block/);
+    expect(both.toolRun.reason).toMatch(/; Trivy could not download its checks bundle and used the checks built into it: /);
+    expect(both.toolRun.reason).not.toMatch(/2 files|names no file/);
   });
 });

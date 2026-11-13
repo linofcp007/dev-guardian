@@ -71,6 +71,22 @@
  * What this keeps catching is the I3 case: a manifest Trivy could not parse
  * — `name: {{ name }}` outside a chart, core kind or custom — has all three
  * keys at column 0 and was num=0 with no error.
+ *
+ * ---- An ERROR line is not, by its level, a file -----------------------------
+ *
+ * Every ERROR line used to be counted as "a file Trivy could not parse". Trivy
+ * also logs at that level what is about no file: `[misconfig] Falling back to
+ * embedded checks` when it cannot download its checks bundle — and then checks
+ * every file with the checks built into it (measured on 0.74.0, an empty
+ * cache and the registry unreachable: exit 0, `Detected config files num=1`,
+ * the Dockerfile in the report with 25 checks passed and 2 failed). That pass
+ * read partial, "could not parse 1 file: Falling back to embedded checks: … —
+ * its misconfigurations were not checked", and the selftest's IaC control read
+ * unverified. It is a note on a complete pass: the files were read and checked,
+ * with the checks of the binary — the mode the selftest asks for on purpose
+ * offline (`--skip-check-update`) — and they may be older than the published
+ * bundle, so it is said. Any other ERROR line that names no file stays a gap,
+ * and is never counted as a file.
  */
 
 import { join } from 'node:path';
@@ -92,6 +108,12 @@ interface TrivyConfigLog {
   detected: number | null;
   /** One per file (Trivy repeats a Terraform file's error per pass). */
   parseErrors: TrivyConfigParseError[];
+  /**
+   * Trivy could not download its checks bundle and went on with the checks
+   * built into it: its own error, `''` when it gave none. Absent when it did
+   * not say so.
+   */
+  checksFallback?: string;
 }
 
 /** An ANSI colour sequence (ESC [ … letter), in case a log is ever coloured. */
@@ -104,14 +126,19 @@ function logFields(text: string): Map<string, string> {
     const key = m[1];
     if (key === undefined) continue;
     const quoted = m[2];
-    out.set(key, quoted !== undefined ? quoted.replace(/\\(.)/g, '$1') : (m[3] ?? ''));
+    // Go's `%q`: an escaped n, t or r is whitespace (a space here), every other escape the character itself.
+    out.set(key, quoted !== undefined ? quoted.replace(/\\(.)/g, (_, c: string) => ('ntr'.includes(c) ? ' ' : c)) : (m[3] ?? ''));
   }
   return out;
 }
 
+/** What Trivy logs, at ERROR level, when its checks bundle could not be downloaded (0.74.0). */
+const CHECKS_FALLBACK = 'Falling back to embedded checks';
+
 /** Trivy's log (stderr, tab-separated: time, level, message, fields). */
 export function parseTrivyConfigLog(stderr: string): TrivyConfigLog {
   let detected: number | null = null;
+  let checksFallback: string | undefined;
   const parseErrors: TrivyConfigParseError[] = [];
   const seen = new Set<string>();
   for (const rawLine of stderr.split(/\r?\n/)) {
@@ -127,14 +154,19 @@ export function parseTrivyConfigLog(stderr: string): TrivyConfigLog {
     }
     if (level !== 'ERROR') continue;
     const what = message.replace(/^\[[^\]]*\]\s*/, '');
-    const err = fields.get('err');
+    const err = fields.get('err')?.replace(/\s+/g, ' ').trim();
     const file = fields.get('file_path') ?? null;
+    if (file === null && what === CHECKS_FALLBACK) {
+      // About no file: every file is still checked, with the checks built into Trivy.
+      checksFallback = err ?? '';
+      continue;
+    }
     const key = file ?? `?${what}${err ?? ''}`;
     if (seen.has(key)) continue;
     seen.add(key);
     parseErrors.push({ file, message: err !== undefined ? `${what}: ${err}` : what });
   }
-  return { detected, parseErrors };
+  return { detected, parseErrors, ...(checksFallback !== undefined ? { checksFallback } : {}) };
 }
 
 // ---------------------------------------------------------------- what looks like IaC
@@ -400,11 +432,19 @@ export function judgeTrivyConfig(args: {
   }
   const log = parseTrivyConfigLog(run.stderr);
   const gaps: string[] = [];
-  if (log.parseErrors.length > 0) {
-    const items = log.parseErrors.map((e) => (e.file !== null ? `${e.file} (${clip(e.message)})` : clip(e.message)));
+  // An ERROR line is a file only when Trivy names one (module comment).
+  const unparsed = log.parseErrors.flatMap((e) => (e.file !== null ? [`${e.file} (${clip(e.message)})`] : []));
+  const unnamed = log.parseErrors.flatMap((e) => (e.file === null ? [clip(e.message)] : []));
+  if (unparsed.length > 0) {
     gaps.push(
-      `Trivy could not parse ${log.parseErrors.length} file${log.parseErrors.length === 1 ? '' : 's'}: ${named(items)} — ` +
+      `Trivy could not parse ${unparsed.length} file${unparsed.length === 1 ? '' : 's'}: ${named(unparsed)} — ` +
         'its misconfigurations were not checked',
+    );
+  }
+  if (unnamed.length > 0) {
+    gaps.push(
+      `Trivy reported ${unnamed.length} error${unnamed.length === 1 ? ' that names' : 's that name'} no file: ${named(unnamed)} — ` +
+        'what it left unchecked is not known',
     );
   }
   // Per file, never only when Trivy detected nothing (round 4, item 1): a
@@ -425,8 +465,13 @@ export function judgeTrivyConfig(args: {
             `${named(unrecognised)} (a templated manifest or a layout Trivy does not read) — not checked`,
     );
   }
-  const note =
-    args.iacIncomplete !== undefined ? [`the check for IaC-looking files Trivy did not read is incomplete: ${args.iacIncomplete}`] : [];
+  // Notes, not gaps: the files were read and checked — with the checks of the binary, which may be older.
+  const note: string[] = [];
+  if (log.checksFallback !== undefined) {
+    const why = log.checksFallback !== '' ? `: ${clip(log.checksFallback)}` : '';
+    note.push(`Trivy could not download its checks bundle and used the checks built into it${why}`);
+  }
+  if (args.iacIncomplete !== undefined) note.push(`the check for IaC-looking files Trivy did not read is incomplete: ${args.iacIncomplete}`);
   if (gaps.length === 0) {
     const reason = note.length > 0 ? { reason: note.join('; ') } : {};
     return { toolRun: withHonoured({ name, status: 'ok', ...reason }, run), missing: [] };
