@@ -64,10 +64,17 @@ function decisionOf(stdout: unknown): HookDecision {
   return 'none';
 }
 
-/** The example's input with the test's directories in place of its placeholders. */
+/**
+ * A fake AWS key the secret scan reports on a write (AWS's own `…EXAMPLE` key
+ * is a placeholder it skips). Joined here, so it never stands whole in the
+ * data file — which must itself hold no secret.
+ */
+const FAKE_AWS_KEY = ['AKIA', 'Q7XZ2M9KDP4RWT3B'].join('');
+
+/** The example's input with the test's directories and its fake key in place of the placeholders. */
 function substituted(value: unknown, dirs: Readonly<Record<string, string>>): unknown {
   if (typeof value === 'string') {
-    return value.replace(/\$\{(PROJECT|HOME|PLUGIN)\}/g, (_all, name: string) => dirs[name] ?? '');
+    return value.replace(/\$\{(PROJECT|HOME|PLUGIN|FAKE_AWS_KEY)\}/g, (_all, name: string) => dirs[name] ?? '');
   }
   if (Array.isArray(value)) return value.map((v) => substituted(v, dirs));
   if (value !== null && typeof value === 'object') {
@@ -92,7 +99,7 @@ function answer(example: HookExample): Actual {
     {
       hook_event_name: example.event,
       tool_name: example.tool,
-      tool_input: substituted(example.input, { PROJECT: project, HOME: home, PLUGIN: PLUGIN_ROOT }),
+      tool_input: substituted(example.input, { PROJECT: project, HOME: home, PLUGIN: PLUGIN_ROOT, FAKE_AWS_KEY }),
       cwd: project,
     },
     { cwd: project, homeDir: home },
@@ -104,6 +111,20 @@ function answer(example: HookExample): Actual {
 describe("the hooks' known limits that live in the dispatcher", () => {
   it('T-04 the data file holds hook examples to run', () => {
     expect(HOOKS.all).toBeGreaterThan(0);
+  });
+
+  // Most hook examples record `none`. A dispatcher whose bundle is missing
+  // also answers nothing (it fails open), so "none" only means something
+  // while the same launch still denies what it must.
+  it('T-04 the dispatcher these examples run through is answering: a write of the hook configuration is denied', () => {
+    const control: HookExample = {
+      detector: 'hook',
+      event: 'PreToolUse',
+      tool: 'Write',
+      input: { file_path: '${PROJECT}/.guardian/hooks.config.json', content: '{ "enabled": false }\n' },
+      expect: { decision: 'deny' },
+    };
+    expect(answer(control)).toEqual({ detector: 'hook', decision: 'deny' });
   });
 
   if (HOOKS.run.length > 0) {

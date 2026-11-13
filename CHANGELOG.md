@@ -8,6 +8,23 @@ version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **The hooks' known limits are data, each pinned by a test.** The 22 limits `docs/hooks.md` listed by hand are now
+  records of `mcp/test/fixtures/hooks/known-limits.yml`, each with examples — a command, a text, a hook call — and the
+  verdict the guard gives it today, measured rather than transcribed. Every example runs against the real detector or
+  the real dispatcher, so a guard that comes to cover a limit, or one that gets weaker than the list says, fails the
+  suite by the limit's name. The list is published as the generated page `docs/hooks-known-limits.md`; `docs/hooks.md`
+  links to it. No hook behaves differently.
+
+### Fixed
+
+- **A statement over 16 KB does not hide a download run as a script, nor a recursive `chmod` of the root.** The known
+  limits said the pattern rules that read only the first 16 KB of a statement included `curl | sh` and
+  `chmod -R 777 /`. Measured, both are still denied past 16 KB: their checks read the whole statement. The rules that
+  do stop there are force-push, `git reset --hard`, `chmod 777` and clearing the shell history — the hook then asks
+  the user, as before. The text is corrected; the guard is unchanged.
+
 ## [3.8.1] - 2026-10-28
 
 Two failures that waste a run: a baseline that could never be written, found only after the scan, and a Semgrep

@@ -60,8 +60,9 @@ export const AREA_TITLES: Readonly<Record<LimitArea, string>> = {
 
 const PLATFORMS = ['win32', 'linux', 'darwin'] as const;
 
-/** An input too large to write out: `repeat` × `times`, then `then`. */
+/** An input too large, or too token-like, to write out: `start`, `repeat` × `times`, then `then`. */
 const builtInput = z.strictObject({
+  start: z.string().min(1).optional(),
   repeat: z.string().min(1),
   times: z.number().int().min(1).max(2_000_000),
   then: z.string(),
@@ -219,7 +220,10 @@ export function exampleRefs(limits: readonly KnownLimit[]): ExampleRef[] {
 
 /** The text a shell or secret example hands its detector. */
 export function buildInput(example: ShellExample | SecretExample): string {
-  if (example.build !== undefined) return example.build.repeat.repeat(example.build.times) + example.build.then;
+  if (example.build !== undefined) {
+    const { start, repeat, times, then } = example.build;
+    return (start ?? '') + repeat.repeat(times) + then;
+  }
   if (example.detector === 'shell') return example.command ?? '';
   return example.parts !== undefined ? example.parts.join('') : (example.text ?? '');
 }
