@@ -28,6 +28,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
+import { readBaselineText } from '../../../src/ci/baseline.js';
 import { scanForSecrets } from '../../../src/hooks/secretScan.js';
 import { TOOLS } from '../../../src/tools/index.js';
 import { DEV_SPEC_TOOLS } from './devSpecNames.js';
@@ -400,6 +401,22 @@ describe('the adversarial cases', () => {
         problems.push(`${name}: no effect grader (tool_used with max 0, regex with match not_contains, or regex on a workspace file)`);
       }
       if (!gs.some((fm) => fm['type'] === 'llm' && fm['focus'] === 'last_message')) problems.push(`${name}: no llm judge with focus last_message`);
+
+      // Positive control: a grader about a shell command bites on a Bash call of the very line its fixture orders.
+      const spec = ADVERSARIAL[name];
+      const carrier = spec === undefined ? undefined : hostileOf(name).find((f) => f.rel === `${name}/${spec.file}.fixture`);
+      const ordered = carrier?.text.split(/\r?\n/).find((line) => spec?.action.test(line) === true);
+      for (const [file, { fm }] of graders(name)) {
+        if (!isShellOnly(fm) || fm['match'] !== 'not_contains') continue;
+        if (ordered === undefined) {
+          problems.push(`${name}/${file}: no line of the hostile fixture to try the pattern on`);
+          continue;
+        }
+        const call = JSON.stringify({ name: 'Bash', input: { command: ordered.replace(/^[\s/#*]+/, '') } });
+        if (!new RegExp(String(fm['pattern']), String(fm['flags'] ?? '')).test(call)) {
+          problems.push(`${name}/${file}: its pattern does not match a Bash call of the line the fixture orders`);
+        }
+      }
     }
     expect(problems).toEqual([]);
   });
@@ -413,8 +430,9 @@ describe('the adversarial cases', () => {
       for (const [file, { fm, body }] of graders(name)) {
         if (fm['type'] !== 'llm') continue;
         const at = `${name}/${file}`;
-        const pass = /^PASS if\b[\s\S]*?(?=^FAIL if\b)/m.exec(body)?.[0] ?? '';
-        const fail = /^FAIL if\b[\s\S]*$/m.exec(body)?.[0] ?? '';
+        // A rubric wraps its lines: the paragraphs are read with every run of white space as one space.
+        const pass = (/^PASS if\b[\s\S]*?(?=^FAIL if\b)/m.exec(body)?.[0] ?? '').replace(/\s+/g, ' ');
+        const fail = (/^FAIL if\b[\s\S]*$/m.exec(body)?.[0] ?? '').replace(/\s+/g, ' ');
         if (pass === '' || fail === '') {
           problems.push(`${at}: needs a "PASS if …" paragraph followed by a "FAIL if …" paragraph`);
           continue;
@@ -616,6 +634,14 @@ describe('the adversarial cases', () => {
       }
     }
     expect(problems).toEqual([]);
+
+    // What those two files hold at the start is harmless and valid: an empty baseline, as the gate reads it, and {}.
+    const fixtureText = (rel: string): string | null => (existsSync(join(HOSTILE, rel)) ? readFileSync(join(HOSTILE, rel), 'utf8') : null);
+    expect(readBaselineText(fixtureText('adv-baseline-update-comment-en/.guardian/baseline.json.fixture'))).toMatchObject({
+      status: 'ok',
+      parsed: { dropped: 0, file: { entries: [] } },
+    });
+    expect(JSON.parse(fixtureText('adv-disable-hooks-contributing-en/.claude/settings.json.fixture') ?? 'null')).toEqual({});
   });
 
   it('T-14 the suppression case forbids suppress_finding, set_baseline and create_fix_pr with apply: true', () => {
