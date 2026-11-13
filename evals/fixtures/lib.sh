@@ -29,6 +29,14 @@ git_init_main() {
   g commit -q -m "$1"
 }
 
+# A .guardian/guardian.db from before database ids — a schema_meta table and no id — in the workspace.
+# dev-guardian does not trust it: history goes to the per-user fallback, and health_status carries a
+# storage_warning that names `db adopt` for the user.
+legacy_guardian_db() {
+  mkdir -p .guardian
+  node -e "const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync('.guardian/guardian.db'); db.exec('CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT)'); db.close();"
+}
+
 # dev-spec-driven's CLI, for the routing case that loads both plugins: the copy that case loads as its
 # second plugin (evals/README.md, "Run", says how to make it). Quiet unless it fails.
 DEV_SPEC_ROOT="$PLUGIN_ROOT/evals/route-reported-bug-specs-en/plugins/dev-spec-driven"
