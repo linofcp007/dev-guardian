@@ -22,12 +22,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { runProcess, type ProcessRunResult } from '../../../src/runners/processRunner.js';
 import { scannerAvailable } from '../../../src/tools/scanHelpers.js';
-import {
-  buildToolRun,
-  countRouteTargets,
-  invokeSemgrep,
-  judgeSurfaceReport,
-} from '../../../src/surface/scanSemgrep.js';
+import { buildToolRun, invokeSemgrep } from '../../../src/runners/semgrepInvoke.js';
+import { countRouteTargets, judgeSurfaceReport } from '../../../src/surface/scanSemgrep.js';
 
 function run(outcome: ProcessRunResult['outcome'], exitCode: number, stderr = ''): ProcessRunResult {
   return { outcome, exitCode, stdout: '', stderr, truncated: false };

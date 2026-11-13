@@ -75754,15 +75754,15 @@ function extractSurface(semgrepJson) {
   }
   if (joins.length > 0) {
     const index = indexScopes(facts);
-    for (const join115 of joins) {
-      const route = routes[join115.at];
-      const served = classRoutePath(join115.route, index);
+    for (const join116 of joins) {
+      const route = routes[join116.at];
+      const served = classRoutePath(join116.route, index);
       if (route === void 0 || served === void 0 || !isLiteralPath(served)) continue;
-      routes[join115.at] = {
+      routes[join116.at] = {
         ...route,
         path_resolved: served,
         path_partial: false,
-        confidence: join115.confidence,
+        confidence: join116.confidence,
         // From the served path: a `{tenant}` in the prefix is a parameter too.
         params: extractParams(served)
       };
@@ -102891,29 +102891,34 @@ var init_wordpress = __esm({
   }
 });
 
-// src/surface/scanSemgrep.ts
-import { copyFileSync, lstatSync as lstatSync18 } from "node:fs";
-import { join as join99 } from "node:path";
+// src/runners/semgrepInvoke.ts
+import { copyFileSync } from "node:fs";
+import { basename as basename13, join as join99 } from "node:path";
 async function invokeSemgrep(options) {
   const { projectPath, rulesPath, outFile, reportDir } = options;
+  const limits = {
+    ...options.timeoutMs !== void 0 ? { timeoutMs: options.timeoutMs } : {},
+    ...options.signal !== void 0 ? { signal: options.signal } : {}
+  };
   const semgrepBin = await scannerAvailable("semgrep");
   if (semgrepBin !== null) {
     const run3 = await runSemgrep({
       args: ["--config", rulesPath, ...options.extraArgs ?? [], "--json", "--output", outFile, "--quiet", projectPath],
       cwd: projectPath,
-      env: process.env
+      env: options.env ?? process.env,
+      ...limits
     });
-    return { toolRun: buildToolRun(run3), run: run3, via: null };
+    return { toolRun: buildToolRun(run3), run: run3, via: null, rules: { config: rulesPath, cwd: projectPath } };
   }
   const dockerBin = await scannerAvailable("docker");
   if (dockerBin === null) return null;
-  const image = process.env["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
+  const image = (options.env ?? process.env)["GUARDIAN_SEMGREP_IMAGE"] || DEFAULT_SEMGREP_IMAGE;
   const via = `docker (${image})`;
-  let containerRules;
+  const stagedRules = join99(reportDir, basename13(rulesPath));
+  const containerRules = toContainerPath(projectPath, stagedRules);
+  const rules2 = { config: containerRules, cwd: CONTAINER_PROJECT_ROOT };
   try {
-    const stagedRules = join99(reportDir, "routes.yml");
     copyFileSync(rulesPath, stagedRules);
-    containerRules = toContainerPath(projectPath, stagedRules);
   } catch (e) {
     return {
       toolRun: {
@@ -102922,7 +102927,8 @@ async function invokeSemgrep(options) {
         reason: `docker: could not stage rule pack: ${e.message}`
       },
       run: null,
-      via
+      via,
+      rules: rules2
     };
   }
   const run2 = await runProcess({
@@ -102935,9 +102941,11 @@ async function invokeSemgrep(options) {
       ...options.extraArgs !== void 0 ? { extraArgs: options.extraArgs } : {},
       git: await gitSafetyFor([projectPath])
     }),
-    cwd: projectPath
+    cwd: projectPath,
+    ...options.env !== void 0 ? { env: options.env } : {},
+    ...limits
   });
-  return { toolRun: buildToolRun(run2, via), run: run2, via };
+  return { toolRun: buildToolRun(run2, via), run: run2, via, rules: rules2 };
 }
 function buildToolRun(run2, via) {
   const ok = run2.outcome === "completed" || run2.exitCode === 1;
@@ -102953,6 +102961,20 @@ function failureCause(stderr) {
   const metrics = metricsEnvProblem([], void 0);
   return said === null ? metrics : metrics === null ? said : `${said} \u2014 ${metrics}`;
 }
+var init_semgrepInvoke = __esm({
+  "src/runners/semgrepInvoke.ts"() {
+    "use strict";
+    init_gitSafety();
+    init_scanHelpers();
+    init_dockerScanner();
+    init_processRunner();
+    init_semgrepRun();
+  }
+});
+
+// src/surface/scanSemgrep.ts
+import { lstatSync as lstatSync18 } from "node:fs";
+import { join as join100 } from "node:path";
 async function countRouteTargets(projectPath) {
   const ownIgnore = presentInProject(projectPath, ".semgrepignore");
   const listed2 = await gitListedFiles(projectPath);
@@ -102981,7 +103003,7 @@ function countListedRouteTargets(projectPath, files, ownIgnore) {
     if (segments.some((dir) => skipDirs.has(dir) || dir.startsWith("."))) continue;
     if (!ownIgnore && SEMGREP_DEFAULT_IGNORED_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue;
     try {
-      if (!lstatSync18(join99(projectPath, file2)).isFile()) continue;
+      if (!lstatSync18(join100(projectPath, file2)).isFile()) continue;
     } catch {
       continue;
     }
@@ -103032,14 +103054,10 @@ var init_scanSemgrep = __esm({
   "src/surface/scanSemgrep.ts"() {
     "use strict";
     init_projectFs();
-    init_dockerScanner();
-    init_gitSafety();
     init_git();
-    init_processRunner();
     init_projectFiles();
+    init_semgrepInvoke();
     init_semgrepReport();
-    init_semgrepRun();
-    init_scanHelpers();
     init_extract();
     SEMGREP_DEFAULT_IGNORED_DIRS = [
       "node_modules",
@@ -103055,7 +103073,7 @@ var init_scanSemgrep = __esm({
 
 // src/surface/specDiscover.ts
 import { readdirSync as readdirSync19 } from "node:fs";
-import { join as join100, relative as relative34, resolve as resolve31, sep as sep20 } from "node:path";
+import { join as join101, relative as relative34, resolve as resolve31, sep as sep20 } from "node:path";
 function discoverSpecs(projectPath, explicit) {
   const root = resolve31(projectPath);
   const isExplicit = explicit !== void 0 && explicit.length > 0;
@@ -103101,12 +103119,12 @@ function walk4(root, dir) {
   for (const entry of entries3) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      const sub = walk4(root, join100(dir, entry.name));
+      const sub = walk4(root, join101(dir, entry.name));
       out.exact.push(...sub.exact);
       out.widened.push(...sub.widened);
     } else if (entry.isFile()) {
       const tier = specCandidateTier(root, dir, entry.name);
-      if (tier !== null) out[tier].push(join100(dir, entry.name));
+      if (tier !== null) out[tier].push(join101(dir, entry.name));
     }
   }
   return out;
@@ -103500,13 +103518,13 @@ var init_specImport = __esm({
 });
 
 // src/tools/mapAttackSurface.ts
-import { isAbsolute as isAbsolute20, join as join101, resolve as resolve32 } from "node:path";
+import { isAbsolute as isAbsolute20, join as join102, resolve as resolve32 } from "node:path";
 async function handler40(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
   const treeHash = await computeTreeHash(projectPath);
   const includeEnvVars = inp.include_env_vars !== false;
-  const rulesPath = join101(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
+  const rulesPath = join102(ctx.scriptsDir, "..", "configs", "semgrep", "routes.yml");
   const cacheKey = surfaceCacheKey({
     projectPath,
     treeHash,
@@ -103542,7 +103560,7 @@ async function handler40(inp, ctx) {
     return persistAndSummarize(snapshot2, toolsRun2);
   }
   const reportDir = ensureReportDir(projectPath, treeHash, "surface");
-  const outFile = join101(reportDir, "surface.json");
+  const outFile = join102(reportDir, "surface.json");
   const extraArgs = semgrepScanFlags(ctx.repoConfigFromRef?.root ?? projectPath).args;
   const invocation = await invokeSemgrep({ projectPath, rulesPath, outFile, reportDir, extraArgs });
   if (invocation === null) {
@@ -103668,7 +103686,7 @@ async function handler40(inp, ctx) {
 function readSources(parsed2, projectPath) {
   const sources = /* @__PURE__ */ new Map();
   for (const path3 of collectAllFiles(parsed2)) {
-    const read3 = readProjectBytes(projectPath, isAbsolute20(path3) ? path3 : join101(projectPath, path3));
+    const read3 = readProjectBytes(projectPath, isAbsolute20(path3) ? path3 : join102(projectPath, path3));
     if (read3.status !== "ok") continue;
     const buffer = read3.bytes;
     const text2 = buffer.toString("utf8");
@@ -103828,7 +103846,7 @@ function importSpecs(projectPath, specPaths2) {
   return { specRoutes, specFiles, specsParsed };
 }
 function resolveExplicitSpecPath(projectPath, path3) {
-  return resolve32(isAbsolute20(path3) ? path3 : join101(projectPath, path3));
+  return resolve32(isAbsolute20(path3) ? path3 : join102(projectPath, path3));
 }
 function resultsArrayOf(parsed2) {
   const results = parsed2.results;
@@ -104033,6 +104051,7 @@ var init_mapAttackSurface = __esm({
     init_node();
     init_wordpress();
     init_scanSemgrep();
+    init_semgrepInvoke();
     init_specDiscover();
     init_specDiff();
     init_specImport();
@@ -104813,7 +104832,7 @@ var init_redact = __esm({
 
 // src/dast/evidence.ts
 import { writeFileSync as writeFileSync28 } from "node:fs";
-import { join as join102 } from "node:path";
+import { join as join103 } from "node:path";
 function toExchange(result) {
   return { ...requestPart(result.request), response: responsePart(result) };
 }
@@ -104890,7 +104909,7 @@ function writeEvidenceFiles(dir, records2, redact2) {
     }
     try {
       writeFileSync28(
-        join102(dir, `${record8.fingerprint}.json`),
+        join103(dir, `${record8.fingerprint}.json`),
         redact2(JSON.stringify(record8, null, 2)),
         "utf8"
       );
@@ -105369,7 +105388,7 @@ var init_rateLimitFinding = __esm({
 });
 
 // src/dast/passes.ts
-import { join as join103 } from "node:path";
+import { join as join104 } from "node:path";
 async function runRateLimitBurst(opts) {
   const empty = {
     outcome: "not_requested",
@@ -105465,7 +105484,7 @@ async function runNuclei(opts) {
       missing: true
     };
   }
-  const outputPath = join103(opts.outputDir, "nuclei.jsonl");
+  const outputPath = join104(opts.outputDir, "nuclei.jsonl");
   const run2 = await invokeNuclei({
     binaryPath: opts.binaryPath,
     targetUrl: opts.origin,
@@ -105596,7 +105615,7 @@ var init_target = __esm({
 
 // src/tools/scanDast.ts
 import { randomUUID as randomUUID18 } from "node:crypto";
-import { join as join104 } from "node:path";
+import { join as join105 } from "node:path";
 function fail2(code, message3, retryWith) {
   return {
     ok: false,
@@ -105995,7 +106014,7 @@ function toInsertInput(finding5, scanId, evidenceDir) {
     raw: {
       check: check2,
       evidence_id,
-      evidence_file: evidenceDir === null ? null : join104(evidenceDir, `${finding5.fingerprint}.json`)
+      evidence_file: evidenceDir === null ? null : join105(evidenceDir, `${finding5.fingerprint}.json`)
     }
   };
 }
@@ -106437,7 +106456,7 @@ var init_validateFinding = __esm({
 
 // src/fixpr/apply.ts
 import { rmSync as rmSync20 } from "node:fs";
-import { isAbsolute as isAbsolute21, join as join105, relative as relative35, resolve as resolve33, sep as sep21 } from "node:path";
+import { isAbsolute as isAbsolute21, join as join106, relative as relative35, resolve as resolve33, sep as sep21 } from "node:path";
 async function applyGroup(opts) {
   const run2 = opts.run ?? runProcess;
   if (opts.group.source === "semgrep") {
@@ -106470,12 +106489,12 @@ async function applySemgrepPass(run2, worktreePath, timeoutMs, plan) {
   const fixed = ["--metrics=off", ...plan.configs.map((c) => `--config=${c}`), "--autofix", "--json", "--quiet"];
   const batches = batchArgs(plan.files, {
     command: SEMGREP_COMMAND,
-    fixedArgs: [...fixed, "--output", join105(plan.dir, "fix-000.json"), "--"]
+    fixedArgs: [...fixed, "--output", join106(plan.dir, "fix-000.json"), "--"]
   });
   const commands = [];
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i] ?? [];
-    const report = join105(plan.dir, `fix-${String(i).padStart(3, "0")}.json`);
+    const report = join106(plan.dir, `fix-${String(i).padStart(3, "0")}.json`);
     rmSync20(report, { force: true });
     const result = await runSemgrep(
       {
@@ -107197,12 +107216,12 @@ var init_pr = __esm({
 // src/fixpr/semgrepFix.ts
 import { mkdirSync as mkdirSync15, mkdtempSync as mkdtempSync14, rmSync as rmSync21, statSync as statSync16, writeFileSync as writeFileSync29 } from "node:fs";
 import { tmpdir as tmpdir14 } from "node:os";
-import { basename as basename13, dirname as dirname32, join as join106 } from "node:path";
+import { basename as basename14, dirname as dirname32, join as join107 } from "node:path";
 function checkIdMatches(checkId, ruleFile, id) {
   if (checkId === id) return true;
   if (!checkId.endsWith(`.${id}`)) return false;
   const prefix = checkId.slice(0, checkId.length - id.length - 1);
-  const tail2 = basename13(dirname32(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
+  const tail2 = basename14(dirname32(ruleFile)).replace(/[^A-Za-z0-9._-]/g, "");
   return tail2.length > 0 && (prefix === tail2 || prefix.endsWith(`.${tail2}`));
 }
 function planSemgrepFix(sources, tmpRoot = tmpdir14()) {
@@ -107237,17 +107256,17 @@ function planSemgrepFix(sources, tmpRoot = tmpdir14()) {
       reason: `rule(s) ${[...new Set(unresolved)].join(", ")} are in no local rule file the originating scan loaded, and that scan did not use the Semgrep registry \u2014 refusing to guess where the fix comes from`
     };
   }
-  const dir = mkdtempSync14(join106(tmpRoot, "guardian-fixpr-sg-"));
+  const dir = mkdtempSync14(join107(tmpRoot, "guardian-fixpr-sg-"));
   const configs = [];
   const configLabels = [];
   let n = 0;
   for (const [file2, picked] of byFile) {
-    const sub = join106(dir, `rules-${String(n++).padStart(3, "0")}`);
+    const sub = join107(dir, `rules-${String(n++).padStart(3, "0")}`);
     mkdirSync15(sub);
-    const copy = join106(sub, basename13(file2));
+    const copy = join107(sub, basename14(file2));
     writeFileSync29(copy, (0, import_yaml3.stringify)({ rules: [...picked.values()] }), "utf8");
     configs.push(copy);
-    configLabels.push(`${[...picked.keys()].join(", ")} from ${basename13(file2)}`);
+    configLabels.push(`${[...picked.keys()].join(", ")} from ${basename14(file2)}`);
   }
   for (const id of [...registry2].sort()) {
     configs.push(`r/${id}`);
@@ -107717,11 +107736,11 @@ var init_verify3 = __esm({
 // src/fixpr/worktree.ts
 import { existsSync as existsSync23, mkdtempSync as mkdtempSync15, realpathSync as realpathSync8, rmSync as rmSync22 } from "node:fs";
 import { tmpdir as tmpdir15 } from "node:os";
-import { join as join107, resolve as resolve35 } from "node:path";
+import { join as join108, resolve as resolve35 } from "node:path";
 async function createWorktree(opts) {
   let dir;
   try {
-    dir = mkdtempSync15(join107(tmpdir15(), WORKTREE_DIR_PREFIX));
+    dir = mkdtempSync15(join108(tmpdir15(), WORKTREE_DIR_PREFIX));
   } catch (e) {
     return { ok: false, reason: `could not create a temp directory: ${errorMessage3(e)}` };
   }
@@ -107885,7 +107904,7 @@ var init_worktree = __esm({
 
 // src/tools/createFixPr.ts
 import { rmSync as rmSync23 } from "node:fs";
-import { isAbsolute as isAbsolute22, join as join108, relative as relative36 } from "node:path";
+import { isAbsolute as isAbsolute22, join as join109, relative as relative36 } from "node:path";
 async function handler43(inp, ctx, callMeta) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
@@ -108027,12 +108046,12 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
     const composerRefused = composerChoosesRepository(planDir);
     const planFailures = [];
     if (composerRefused !== null) {
-      rmSync23(join108(planDir, "composer.json"), { force: true });
+      rmSync23(join109(planDir, "composer.json"), { force: true });
       planFailures.push({ ecosystem: "composer", code: "repository_chosen_by_project", reason: composerRefused });
     }
     const npmRefused = npmSourcesRefusal(checkNpmSources(planDir, created.worktree.path));
     if (npmRefused !== null) {
-      rmSync23(join108(planDir, "package.json"), { force: true });
+      rmSync23(join109(planDir, "package.json"), { force: true });
       planFailures.push({ ecosystem: "npm", code: "network_path_chosen_by_project", reason: npmRefused });
     }
     const result = await withPackageManagerEnv(
@@ -108062,7 +108081,7 @@ function isRunnerFailure(v) {
   return typeof o["ecosystem"] === "string" && typeof o["code"] === "string" && typeof o["reason"] === "string";
 }
 function inWorktree(root, prefix) {
-  return join108(root, ...prefix.split("/").filter((segment) => segment.length > 0));
+  return join109(root, ...prefix.split("/").filter((segment) => segment.length > 0));
 }
 function projectRelative(projectPath, filePath) {
   const rel2 = isAbsolute22(filePath) ? relative36(projectPath, filePath) : filePath;
@@ -108627,7 +108646,7 @@ var init_jsonc = __esm({
 
 // src/agentaudit/configSources.ts
 import { homedir as homedir11 } from "node:os";
-import { dirname as dirname33, isAbsolute as isAbsolute23, join as join109, relative as relative37 } from "node:path";
+import { dirname as dirname33, isAbsolute as isAbsolute23, join as join110, relative as relative37 } from "node:path";
 function hostPathEnv() {
   return { os: detectOs(), home: homedir11(), appData: process.env["APPDATA"], projectPath: "" };
 }
@@ -108642,7 +108661,7 @@ function claudeCodeDescriptors() {
       label: custom2 ? "$CLAUDE_CONFIG_DIR/.claude.json" : "~/.claude.json",
       kind: "user",
       mcpServersField: "mcpServers",
-      resolve: () => custom2 ? join109(dir, ".claude.json") : join109(homedir11(), ".claude.json"),
+      resolve: () => custom2 ? join110(dir, ".claude.json") : join110(homedir11(), ".claude.json"),
       maxBytes: MAX_CLAUDE_JSON_BYTES,
       nestedProjects: true
     },
@@ -108650,7 +108669,7 @@ function claudeCodeDescriptors() {
       label: custom2 ? "$CLAUDE_CONFIG_DIR/settings.json" : "~/.claude/settings.json",
       kind: "user",
       mcpServersField: null,
-      resolve: () => custom2 ? join109(dir, "settings.json") : join109(homedir11(), ".claude", "settings.json")
+      resolve: () => custom2 ? join110(dir, "settings.json") : join110(homedir11(), ".claude", "settings.json")
     }
   ];
 }
@@ -108722,36 +108741,36 @@ var init_configSources = __esm({
     init_jsonc();
     PLUGIN_HOOKS_LABEL = "hooks/hooks.json";
     PROJECT_DESCRIPTORS = [
-      { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join109(p, ".mcp.json") },
+      { label: ".mcp.json", kind: "project", mcpServersField: "mcpServers", resolve: (p) => join110(p, ".mcp.json") },
       {
         label: ".claude/settings.json",
         kind: "project",
         mcpServersField: null,
-        resolve: (p) => join109(p, ".claude", "settings.json")
+        resolve: (p) => join110(p, ".claude", "settings.json")
       },
       {
         label: ".claude/settings.local.json",
         kind: "project",
         mcpServersField: null,
-        resolve: (p) => join109(p, ".claude", "settings.local.json")
+        resolve: (p) => join110(p, ".claude", "settings.local.json")
       },
       {
         label: ".cursor/mcp.json",
         kind: "project",
         mcpServersField: "mcpServers",
-        resolve: (p) => join109(p, ".cursor", "mcp.json")
+        resolve: (p) => join110(p, ".cursor", "mcp.json")
       },
       {
         label: ".vscode/mcp.json",
         kind: "project",
         mcpServersField: "servers",
-        resolve: (p) => join109(p, ".vscode", "mcp.json")
+        resolve: (p) => join110(p, ".vscode", "mcp.json")
       },
       {
         label: ".gemini/settings.json",
         kind: "project",
         mcpServersField: "mcpServers",
-        resolve: (p) => join109(p, ".gemini", "settings.json")
+        resolve: (p) => join110(p, ".gemini", "settings.json")
       },
       // A Claude Code plugin declares its own servers here, launched with
       // `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's root (this directory).
@@ -108759,11 +108778,11 @@ var init_configSources = __esm({
         label: ".claude-plugin/plugin.json",
         kind: "project",
         mcpServersField: "mcpServers",
-        resolve: (p) => join109(p, ".claude-plugin", "plugin.json")
+        resolve: (p) => join110(p, ".claude-plugin", "plugin.json")
       },
       // The hooks a plugin ships: Claude Code loads this file from the plugin's
       // root by itself. It was never read (review of 3.6.0).
-      { label: PLUGIN_HOOKS_LABEL, kind: "project", mcpServersField: null, resolve: (p) => join109(p, "hooks", "hooks.json") }
+      { label: PLUGIN_HOOKS_LABEL, kind: "project", mcpServersField: null, resolve: (p) => join110(p, "hooks", "hooks.json") }
     ];
     OTHER_USER_DESCRIPTORS = [
       {
@@ -115963,15 +115982,15 @@ var init_typosquat = __esm({
 
 // src/pkgvet/popular.ts
 import { readFileSync as readFileSync15 } from "node:fs";
-import { join as join110 } from "node:path";
+import { join as join111 } from "node:path";
 function defaultPopularDir() {
-  return join110(resolveConfigsDir(), "popular-packages");
+  return join111(resolveConfigsDir(), "popular-packages");
 }
 function parsePopularList(text2) {
   return text2.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "" && !l.startsWith("#"));
 }
 function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
-  const path3 = join110(dir, `${ecosystem}.txt`);
+  const path3 = join111(dir, `${ecosystem}.txt`);
   const hit = cache.get(path3);
   if (hit !== void 0) return hit;
   let index = null;
@@ -115997,7 +116016,7 @@ var init_popular = __esm({
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync19, readdirSync as readdirSync20 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
-import { dirname as dirname34, isAbsolute as isAbsolute25, join as join111, parse as parse10, relative as relative38, resolve as resolve37 } from "node:path";
+import { dirname as dirname34, isAbsolute as isAbsolute25, join as join112, parse as parse10, relative as relative38, resolve as resolve37 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -116083,7 +116102,7 @@ function ancestors2(ctx) {
   for (let i = 0; i < 16; i += 1) {
     if (stops.some((s) => samePath3(s, dir))) break;
     out.push(dir);
-    if (present4(join111(dir, ".git"))) break;
+    if (present4(join112(dir, ".git"))) break;
     const parent = dirname34(dir);
     if (parent === dir) break;
     dir = parent;
@@ -116183,35 +116202,35 @@ function npmConfigFiles(ctx) {
   const near = ancestors2(ctx);
   for (const dir of near) {
     files.push(
-      { path: join111(dir, ".npmrc"), parse: fromNpmrc },
-      { path: join111(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
-      { path: join111(dir, ".yarnrc"), parse: fromYarnrc },
-      { path: join111(dir, "bunfig.toml"), parse: fromBunfig }
+      { path: join112(dir, ".npmrc"), parse: fromNpmrc },
+      { path: join112(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
+      { path: join112(dir, ".yarnrc"), parse: fromYarnrc },
+      { path: join112(dir, "bunfig.toml"), parse: fromBunfig }
     );
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
     for (let dir = dirname34(top), i = 0; i < 64; dir = dirname34(dir), i += 1) {
-      files.push({ path: join111(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      files.push({ path: join112(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
       if (dirname34(dir) === dir) break;
     }
   }
-  const xdg = envValue6(env, "XDG_CONFIG_HOME") ?? join111(home, ".config");
-  const localAppData = envValue6(env, "LOCALAPPDATA") ?? join111(home, "AppData", "Local");
+  const xdg = envValue6(env, "XDG_CONFIG_HOME") ?? join112(home, ".config");
+  const localAppData = envValue6(env, "LOCALAPPDATA") ?? join112(home, "AppData", "Local");
   files.push(
-    { path: envValue6(env, "NPM_CONFIG_USERCONFIG") ?? join111(home, ".npmrc"), parse: fromNpmrc },
-    { path: join111(home, ".yarnrc.yml"), parse: fromYarnrcYml },
-    { path: join111(home, ".yarnrc"), parse: fromYarnrc },
-    { path: join111(home, ".bunfig.toml"), parse: fromBunfig },
-    { path: join111(xdg, ".bunfig.toml"), parse: fromBunfig },
-    { path: join111(xdg, "pnpm", "rc"), parse: fromNpmrc },
-    { path: join111(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
-    { path: join111(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+    { path: envValue6(env, "NPM_CONFIG_USERCONFIG") ?? join112(home, ".npmrc"), parse: fromNpmrc },
+    { path: join112(home, ".yarnrc.yml"), parse: fromYarnrcYml },
+    { path: join112(home, ".yarnrc"), parse: fromYarnrc },
+    { path: join112(home, ".bunfig.toml"), parse: fromBunfig },
+    { path: join112(xdg, ".bunfig.toml"), parse: fromBunfig },
+    { path: join112(xdg, "pnpm", "rc"), parse: fromNpmrc },
+    { path: join112(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
+    { path: join112(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
   );
   const globalConfig2 = envValue6(env, "NPM_CONFIG_GLOBALCONFIG");
   if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
-  const prefix = envValue6(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join111(envValue6(env, "APPDATA") ?? join111(home, "AppData", "Roaming"), "npm") : dirname34(dirname34(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join111(prefix, "etc", "npmrc"), parse: fromNpmrc });
+  const prefix = envValue6(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join112(envValue6(env, "APPDATA") ?? join112(home, "AppData", "Roaming"), "npm") : dirname34(dirname34(ctx.nodeExecPath ?? process.execPath)));
+  files.push({ path: join112(prefix, "etc", "npmrc"), parse: fromNpmrc });
   return files;
 }
 function envRegistry(ecosystem, ctx) {
@@ -116261,7 +116280,7 @@ function workspaceIndex(root, file2, nameOf2, ctx) {
     }
     const next = queue[at];
     if (next === void 0) break;
-    const manifest = join111(next.dir, file2);
+    const manifest = join112(next.dir, file2);
     const r = readSmallText(manifest, MAX_REGISTRY_CONFIG_BYTES, walkRoot2(manifest, ctx, root));
     if (r.status === "refused") index.unread = index.unread ?? { path: manifest, what: "workspace manifest" };
     else if (r.status === "ok") {
@@ -116275,7 +116294,7 @@ function workspaceIndex(root, file2, nameOf2, ctx) {
     } catch {
       continue;
     }
-    for (const e of entries3) queue.push({ dir: join111(next.dir, e), depth: next.depth + 1 });
+    for (const e of entries3) queue.push({ dir: join112(next.dir, e), depth: next.depth + 1 });
   }
   ctx.cache?.workspaces.set(key, index);
   return index;
@@ -116313,7 +116332,7 @@ function hasWorkspaces(packageJson) {
 }
 function npmWorkspacePackage(name, ctx) {
   for (const dir of ancestors2(ctx)) {
-    const isRoot = hasWorkspaces(read2(join111(dir, "package.json"), ctx, void 0, "workspace manifest")) || present4(join111(dir, "pnpm-workspace.yaml"));
+    const isRoot = hasWorkspaces(read2(join112(dir, "package.json"), ctx, void 0, "workspace manifest")) || present4(join112(dir, "pnpm-workspace.yaml"));
     if (!isRoot) continue;
     const hit = findManifest(dir, "package.json", npmManifestName, name, ctx);
     if (hit !== void 0) return hit;
@@ -116323,7 +116342,7 @@ function npmWorkspacePackage(name, ctx) {
 function uvWorkspacePackage(name, ctx) {
   const wanted = pep503(name);
   for (const dir of ancestors2(ctx)) {
-    const path3 = join111(dir, "pyproject.toml");
+    const path3 = join112(dir, "pyproject.toml");
     const text2 = read2(path3, ctx);
     if (text2 === void 0) continue;
     const sources = /^\s*\[tool\.uv\.sources\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text2)?.[1] ?? "";
@@ -116370,22 +116389,22 @@ function pypiRegistry(name, ctx) {
   const confs = [];
   const explicit = envValue6(env, "PIP_CONFIG_FILE");
   if (explicit !== void 0) confs.push(explicit);
-  const xdg = envValue6(env, "XDG_CONFIG_HOME") ?? join111(home, ".config");
+  const xdg = envValue6(env, "XDG_CONFIG_HOME") ?? join112(home, ".config");
   confs.push(
-    join111(xdg, "pip", "pip.conf"),
-    join111(home, ".pip", "pip.conf"),
-    join111(home, "Library", "Application Support", "pip", "pip.conf")
+    join112(xdg, "pip", "pip.conf"),
+    join112(home, ".pip", "pip.conf"),
+    join112(home, "Library", "Application Support", "pip", "pip.conf")
   );
-  const appdata = envValue6(env, "APPDATA") ?? join111(home, "AppData", "Roaming");
-  confs.push(join111(appdata, "pip", "pip.ini"), join111(home, "pip", "pip.ini"));
+  const appdata = envValue6(env, "APPDATA") ?? join112(home, "AppData", "Roaming");
+  confs.push(join112(appdata, "pip", "pip.ini"), join112(home, "pip", "pip.ini"));
   for (const prefix of [envValue6(env, "VIRTUAL_ENV"), envValue6(env, "CONDA_PREFIX")]) {
-    if (prefix !== void 0) confs.push(join111(prefix, "pip.conf"), join111(prefix, "pip.ini"));
+    if (prefix !== void 0) confs.push(join112(prefix, "pip.conf"), join112(prefix, "pip.ini"));
   }
-  confs.push(join111(etc, "pip.conf"), join111(etc, "xdg", "pip", "pip.conf"));
-  confs.push(join111(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
-  for (const d of (envValue6(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join111(d, "pip", "pip.conf"));
+  confs.push(join112(etc, "pip.conf"), join112(etc, "xdg", "pip", "pip.conf"));
+  confs.push(join112(ctx.systemLibraryDir ?? "/Library", "Application Support", "pip", "pip.conf"));
+  for (const d of (envValue6(env, "XDG_CONFIG_DIRS") ?? "").split(":").filter(Boolean)) confs.push(join112(d, "pip", "pip.conf"));
   const programData = envValue6(env, "ProgramData") ?? envValue6(env, "PROGRAMDATA");
-  if (programData !== void 0) confs.push(join111(programData, "pip", "pip.ini"));
+  if (programData !== void 0) confs.push(join112(programData, "pip", "pip.ini"));
   for (const path3 of confs) {
     const text2 = read2(path3, ctx);
     const url2 = text2 === void 0 ? void 0 : fromPipConf(text2);
@@ -116394,18 +116413,18 @@ function pypiRegistry(name, ctx) {
   const uvConfs = [];
   const uvExplicit = envValue6(env, "UV_CONFIG_FILE");
   if (uvExplicit !== void 0) uvConfs.push(uvExplicit);
-  uvConfs.push(join111(xdg, "uv", "uv.toml"), join111(appdata, "uv", "uv.toml"), join111(etc, "uv", "uv.toml"));
+  uvConfs.push(join112(xdg, "uv", "uv.toml"), join112(appdata, "uv", "uv.toml"), join112(etc, "uv", "uv.toml"));
   for (const path3 of uvConfs) {
     const text2 = read2(path3, ctx);
     const url2 = text2 === void 0 ? void 0 : fromUvToml(text2);
     if (url2 !== void 0) return { kind: "registry", source: path3, url: url2 };
   }
   for (const dir of ancestors2(ctx)) {
-    const uvToml = join111(dir, "uv.toml");
+    const uvToml = join112(dir, "uv.toml");
     const uvText = read2(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
     if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
-    const pyproject = join111(dir, "pyproject.toml");
+    const pyproject = join112(dir, "pyproject.toml");
     const text2 = read2(pyproject, ctx);
     if (text2 === void 0) continue;
     const url2 = fromPyproject(text2);
@@ -116428,7 +116447,7 @@ function hasRepositories(text2) {
 }
 function composerRegistry(ctx) {
   for (const dir of ancestors2(ctx)) {
-    const path3 = join111(dir, "composer.json");
+    const path3 = join112(dir, "composer.json");
     const text2 = read2(path3, ctx);
     if (text2 === void 0) continue;
     if (hasRepositories(text2)) return { kind: "registry", source: path3 };
@@ -116437,13 +116456,13 @@ function composerRegistry(ctx) {
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const composerHome = envValue6(env, "COMPOSER_HOME");
-  const globals = composerHome !== void 0 ? [join111(composerHome, "config.json")] : [join111(home, ".composer", "config.json"), join111(home, ".config", "composer", "config.json"), join111(envValue6(env, "APPDATA") ?? join111(home, "AppData", "Roaming"), "Composer", "config.json")];
+  const globals = composerHome !== void 0 ? [join112(composerHome, "config.json")] : [join112(home, ".composer", "config.json"), join112(home, ".config", "composer", "config.json"), join112(envValue6(env, "APPDATA") ?? join112(home, "AppData", "Roaming"), "Composer", "config.json")];
   for (const path3 of globals) if (hasRepositories(read2(path3, ctx))) return { kind: "registry", source: path3 };
   return null;
 }
 function nugetConfigIn(dir, ctx) {
   const hit = listDir3(dir, ctx).find((f) => f.toLowerCase() === "nuget.config");
-  return hit === void 0 ? void 0 : join111(dir, hit);
+  return hit === void 0 ? void 0 : join112(dir, hit);
 }
 function customNugetSources(text2) {
   const sources = /<packageSources>([\s\S]*?)<\/packageSources>/i.exec(text2)?.[1] ?? "";
@@ -116494,23 +116513,23 @@ function nugetRegistry(name, ctx) {
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const appdata = envValue6(env, "APPDATA") ?? join111(home, "AppData", "Roaming");
-  for (const dir of [join111(appdata, "NuGet"), join111(home, ".nuget", "NuGet"), join111(home, ".config", "NuGet")]) {
+  const appdata = envValue6(env, "APPDATA") ?? join112(home, "AppData", "Roaming");
+  for (const dir of [join112(appdata, "NuGet"), join112(home, ".nuget", "NuGet"), join112(home, ".config", "NuGet")]) {
     const f = nugetConfigIn(dir, ctx);
     if (f !== void 0) files.push(f);
   }
-  const userDirs = [join111(appdata, "NuGet", "config"), join111(home, ".nuget", "config"), join111(home, ".config", "NuGet", "config")];
+  const userDirs = [join112(appdata, "NuGet", "config"), join112(home, ".nuget", "config"), join112(home, ".config", "NuGet", "config")];
   const machineDirs = [
-    join111(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
-    join111(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
+    join112(ctx.etcDir ?? "/etc", "opt", "NuGet", "Config"),
+    join112(ctx.systemLibraryDir ?? "/Library", "Application Support", "NuGet", "Config")
   ];
   const programFilesX86 = envValue6(env, "ProgramFiles(x86)");
-  if (programFilesX86 !== void 0) machineDirs.push(join111(programFilesX86, "NuGet", "Config"));
+  if (programFilesX86 !== void 0) machineDirs.push(join112(programFilesX86, "NuGet", "Config"));
   const machineWide = /* @__PURE__ */ new Set();
   for (const dir of [...userDirs, ...machineDirs]) {
     for (const f of listDir3(dir, ctx).filter((e) => /\.config$/i.test(e)).sort()) {
-      files.push(join111(dir, f));
-      if (machineDirs.includes(dir)) machineWide.add(join111(dir, f));
+      files.push(join112(dir, f));
+      if (machineDirs.includes(dir)) machineWide.add(join112(dir, f));
     }
   }
   for (const path3 of files) {
@@ -117303,7 +117322,7 @@ var init_render = __esm({
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
 import { existsSync as existsSync24, readFileSync as readFileSync16, writeFileSync as writeFileSync30 } from "node:fs";
-import { basename as basename14, join as join112, posix as posix4, win32 as win325 } from "node:path";
+import { basename as basename15, join as join113, posix as posix4, win32 as win325 } from "node:path";
 async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
   const projectPath = toolProjectPath(inp.project_path);
@@ -117371,7 +117390,7 @@ async function handler47(inp, ctx) {
   };
   const document = format === "openvex" ? renderOpenVex(statements, meta3) : renderCycloneDxVex(statements, meta3);
   const dir = ensureReportDir(projectPath, documentId, "vex");
-  const filePath = join112(dir, format === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
+  const filePath = join113(dir, format === "openvex" ? "vex.openvex.json" : "vex.cdx.json");
   writeFileSync30(filePath, `${JSON.stringify(document, null, 2)}
 `, "utf8");
   return {
@@ -117483,7 +117502,7 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
   };
 }
 function productOf(projectPath, sbom) {
-  const directory = basename14(projectPath);
+  const directory = basename15(projectPath);
   const sbomName = sbom?.product_name ?? null;
   const name = sbomName === null ? directory : isAbsolutePath2(sbomName) ? win325.basename(sbomName) || directory : sbomName;
   const productPurl = sbom?.product_purl ?? null;
@@ -117698,7 +117717,7 @@ var init_plan2 = __esm({
 
 // src/llmscan/briefs.ts
 import { randomBytes as randomBytes7 } from "node:crypto";
-import { join as join113 } from "node:path";
+import { join as join114 } from "node:path";
 function randomBoundary() {
   return `BOUNDARY-${randomBytes7(12).toString("hex")}`;
 }
@@ -117713,7 +117732,7 @@ function loadTemplate(version2, name) {
   const cached2 = templateCache.get(key);
   if (cached2 !== void 0) return cached2;
   if (!/^v[0-9]+$/.test(version2)) throw new Error("llm-scan prompt version is not of the form vN");
-  const read3 = readSmallText(join113(resolveConfigsDir(), "llm-scan", "prompts", version2, `${name}.md`), 256 * 1024);
+  const read3 = readSmallText(join114(resolveConfigsDir(), "llm-scan", "prompts", version2, `${name}.md`), 256 * 1024);
   if (read3.status !== "ok") throw new Error(`llm-scan prompt template ${key}.md is not available (${read3.status}); the plugin install is incomplete`);
   const text2 = read3.text.replace(/^<!--[^\n]*-->\r?\n+/, "");
   templateCache.set(key, text2);
@@ -119577,11 +119596,11 @@ __export(runScans_exports, {
 });
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir as tmpdir16 } from "node:os";
-import { join as join114 } from "node:path";
+import { join as join115 } from "node:path";
 async function runScans(opts) {
-  const tmpDir = await mkdtemp(join114(tmpdir16(), TEMP_DIR_PREFIX));
+  const tmpDir = await mkdtemp(join115(tmpdir16(), TEMP_DIR_PREFIX));
   try {
-    const db = new GuardianDatabase(join114(tmpDir, "guardian.db"));
+    const db = new GuardianDatabase(join115(tmpDir, "guardian.db"));
     try {
       runMigrations(db);
       const storage = new Storage(db);
@@ -119599,7 +119618,7 @@ async function runScans(opts) {
       let rulesSource = { from: "tree" };
       const at = opts.rulesRef;
       if (at !== void 0) {
-        const copy = await copyConfigFromRef(opts.projectPath, at, join114(tmpDir, "config-from-ref"));
+        const copy = await copyConfigFromRef(opts.projectPath, at, join115(tmpDir, "config-from-ref"));
         ctx.repoConfigFromRef = { root: copy.root, ref: at.ref, commit: at.commit };
         rulesSource = {
           from: "ref",

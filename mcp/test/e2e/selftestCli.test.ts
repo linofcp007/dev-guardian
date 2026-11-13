@@ -193,7 +193,8 @@ describe('dev-guardian selftest — the real scanners', () => {
       expect(notDetected).toEqual([]);
       expect(doc.controls).toHaveLength(CORE_CONTROLS.length);
       expect(doc.controls.length).toBeGreaterThanOrEqual(22);
-      for (const c of doc.controls) expect(c.scanner_version, c.id).toEqual(expect.stringMatching(/\d+\.\d+/));
+      // A version, or — for a Semgrep that only exists as its Docker image — the image's name.
+      for (const c of doc.controls) expect(c.scanner_version, c.id).toEqual(expect.stringMatching(/\d+\.\d+|^docker \(/));
       expect(r.status, r.stderr).toBe(0);
       expect(doc.saved).toMatchObject({ saved: true });
       expect(readdirSync(join(dataDir, 'selftest')).sort()).toEqual(['history.json', 'last.json']);

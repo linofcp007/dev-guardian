@@ -55,6 +55,8 @@ export interface Workspace {
   reports: string;
   /** The probe rule's directory, outside the scanned tree. */
   rules: string;
+  /** Where a scanner's own state goes instead of the user's home: Semgrep's settings and log files, one pair per run. */
+  state: string;
   /** The directory's identity when it was made, checked before it is removed. */
   ino: number;
 }
@@ -66,8 +68,9 @@ export function createWorkspace(tmpRoot: string = tmpdir()): Workspace {
   const project = join(dir, 'project');
   const reports = join(project, '.guardian', 'reports');
   const rules = join(dir, 'rules');
-  for (const d of [project, reports, rules]) mkdirSync(d, { recursive: true, mode: 0o700 });
-  return { dir, project, reports, rules, ino: lstatSync(dir).ino };
+  const state = join(dir, 'state');
+  for (const d of [project, reports, rules, state]) mkdirSync(d, { recursive: true, mode: 0o700 });
+  return { dir, project, reports, rules, state, ino: lstatSync(dir).ino };
 }
 
 /** Every file below `dir`, relative, with forward slashes. Links are listed, never followed. */
@@ -84,36 +87,43 @@ function filesBelow(dir: string, base: string = dir): string[] {
 /**
  * Copy the shipped canaries into the workspace: `project/**` with the suffix
  * dropped and the secret put where its placeholder is, and the probe rule
- * beside the project. Returns the seeded paths, relative to the project, with
- * forward slashes. Throws when the canaries are not there: an install without
- * them cannot be tested, and that is not a verdict of any control.
+ * beside the project. Returns what was seeded: each path, relative to the project
+ * with forward slashes, and the text written there. Throws when the canaries
+ * are not there: an install without them cannot be tested, and that is not a
+ * verdict of any control.
  */
-export function seedCanaries(canariesDir: string, ws: Workspace): string[] {
+export function seedCanaries(canariesDir: string, ws: Workspace): Map<string, string> {
   const source = join(canariesDir, 'project');
   if (!existsSync(source)) throw new Error(`the selftest canaries are not in this install (${source})`);
   const token = canaryToken();
-  const seeded: string[] = [];
+  const seeded = new Map<string, string>();
   for (const rel of filesBelow(source)) {
     if (!rel.endsWith(CANARY_SUFFIX)) continue;
     const target = rel.slice(0, -CANARY_SUFFIX.length);
     const to = join(ws.project, ...target.split('/'));
     mkdirSync(dirname(to), { recursive: true });
-    const text = readFileSync(join(source, ...rel.split('/')), 'utf8');
-    writeFileSync(to, text.includes(TOKEN_PLACEHOLDER) ? text.split(TOKEN_PLACEHOLDER).join(token) : text, { flag: 'wx' });
-    seeded.push(target);
+    const shipped = readFileSync(join(source, ...rel.split('/')), 'utf8');
+    const text = shipped.includes(TOKEN_PLACEHOLDER) ? shipped.split(TOKEN_PLACEHOLDER).join(token) : shipped;
+    writeFileSync(to, text, { flag: 'wx' });
+    seeded.set(target, text);
   }
   const probe = join(canariesDir, PROBE_RULE_SOURCE);
   if (existsSync(probe)) cpSync(probe, join(ws.rules, PROBE_RULE_FILE));
   return seeded;
 }
 
-/** Whether `rel` (relative to the project, forward slashes) is a file in the seeded project now. */
-export function canaryPresent(ws: Workspace, rel: string): boolean {
+/** Whether `path` is a regular file now — never a link to one. Opens nothing. */
+export function isRegularFile(path: string): boolean {
   try {
-    return lstatSync(join(ws.project, ...rel.split('/'))).isFile();
+    return lstatSync(path).isFile();
   } catch {
     return false;
   }
+}
+
+/** Whether `rel` (relative to the project, forward slashes) is a file in the seeded project now. */
+export function canaryPresent(ws: Workspace, rel: string): boolean {
+  return isRegularFile(join(ws.project, ...rel.split('/')));
 }
 
 /**

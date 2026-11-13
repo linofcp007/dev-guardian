@@ -231,6 +231,17 @@ describe('a selftest run', () => {
       CORE_CONTROLS.filter((c) => c.kind === 'semgrep-pack').map((c) => join(PACKS_DIR, c.pack ?? '')).sort(),
     );
     for (const c of packRuns) expect(c.canaryThere, c.rulesPath).toBe(true);
+    // Semgrep's own settings and log files: one pair per run, in the selftest's directory — nothing of the
+    // user's `~/.semgrep` is written, and no two runs at a time share a file.
+    const workspace = dirname(project);
+    const settings = calls.semgrep.map((c) => c.env['SEMGREP_SETTINGS_FILE'] ?? '');
+    const logs = calls.semgrep.map((c) => c.env['SEMGREP_LOG_FILE'] ?? '');
+    expect(new Set(settings).size).toBe(calls.semgrep.length);
+    expect(new Set(logs).size).toBe(calls.semgrep.length);
+    for (const file of [...settings, ...logs]) {
+      expect(relative(workspace, file).startsWith('..'), file).toBe(false);
+      expect(relative(project, file).startsWith('..'), `${file} is outside the scanned tree`).toBe(true);
+    }
     expect(calls.gitleaks).toHaveLength(1);
     expect(calls.trivy.map((c) => c.mode)).toEqual(['deps', 'iac']);
     expect(calls.hook).toHaveLength(4);
@@ -253,9 +264,13 @@ describe('a selftest run', () => {
       // The user's own configuration is what is tested: their home is the one the dispatcher sees.
       expect(s.home).toBe(process.env['HOME'] ?? null);
       expect(s.userprofile).toBe(process.env['USERPROFILE'] ?? null);
-      // The project is the temporary one — never the directory the command was run from.
+      // The project is the temporary one — never the directory the command was run from. (It is gone by
+      // now, so the two are compared as they were spelled.)
       expect(basename(s.project)).toBe('project');
-      expect(realpathSync.native(s.cwd)).not.toBe(realpathSync.native(process.cwd()));
+      expect(basename(dirname(s.project)).startsWith(WORKSPACE_PREFIX)).toBe(true);
+      expect(s.cwd.toLowerCase()).toBe(s.project.toLowerCase());
+      expect(s.cwd.toLowerCase()).not.toBe(process.cwd().toLowerCase());
+      expect(existsSync(s.cwd)).toBe(false);
     }
   });
 

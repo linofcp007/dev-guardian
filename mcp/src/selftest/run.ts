@@ -27,10 +27,10 @@
  * `defaultRunners.ts`.
  */
 
-import { readFileSync, realpathSync } from 'node:fs';
+import { realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { canaryPresent, canaryToken, createWorkspace, leftoverWorkspaces, PROBE_RULE_FILE, removeWorkspace, seedCanaries, type Workspace } from './canaries.js';
+import { canaryPresent, canaryToken, createWorkspace, isRegularFile, leftoverWorkspaces, PROBE_RULE_FILE, removeWorkspace, seedCanaries, type Workspace } from './canaries.js';
 import { CORE_CONTROLS, PROBE_RULE_ID, SCANNERS_WITH_CONTROLS, type Control, type ScannerName } from './controls.js';
 import { answersAsExpected, HOOK_CHECKS, SECRET_CANARY, softenedBy } from './hookChecks.js';
 import { HOOKS_NOTE, nextStepFor, type SelftestReport } from './report.js';
@@ -322,13 +322,11 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
       };
       const paths: Array<readonly [string, string]> = [];
       if (ws !== undefined) paths.push(['<selftest directory>', ws.dir], ['<selftest directory>', basename(ws.dir)]);
-      const named: ReadonlyArray<readonly [string, string]> = [
-        ['<temporary directory>', tmpRoot],
-        ['<data directory>', opts.dataDir],
-        ['<current directory>', process.cwd()],
-        ['~', home],
-      ];
-      for (const [label, path] of named) paths.push([label, path], [label, real(path)]);
+      // The temporary root and the data directory, also as the filesystem spells them; the others as given.
+      for (const [label, path] of [['<temporary directory>', tmpRoot], ['<data directory>', opts.dataDir]] as const) {
+        paths.push([label, path], [label, real(path)]);
+      }
+      paths.push(['<current directory>', process.cwd()], ['~', home]);
       scrub = scrubberFor(paths, env);
     }
     return scrub(text);
@@ -357,7 +355,7 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
     ws = createWorkspace(tmpRoot);
     const workspace = ws;
     leftovers = leftoverWorkspaces(tmpRoot, workspace.dir, now().getTime());
-    seedCanaries(opts.canariesDir, workspace);
+    const seeded = seedCanaries(opts.canariesDir, workspace);
     const scanArgs = (control: Pick<Control, 'timeoutMs'>): ScanArgs => ({
       project: workspace.project,
       reportDir: workspace.reports,
@@ -413,18 +411,36 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
       return true;
     };
 
+    /**
+     * A Semgrep run's environment: its own settings file and its own log, in
+     * the selftest's directory. Every Semgrep run rewrites its settings file
+     * and truncates its log — in the user's `~/.semgrep` unless told
+     * otherwise — and two runs at a time race on that one file (measured on
+     * Windows, 1.182.0: about one run in a hundred dies of a permission
+     * error, and each collision leaves a stray `settings<random>.yml` in the
+     * user's directory). One pair per run: nothing of the user's is written,
+     * and no run can meet another's file.
+     */
+    const semgrepEnv = (run: string): NodeJS.ProcessEnv => ({
+      ...env,
+      SEMGREP_SETTINGS_FILE: join(workspace.state, `semgrep-${run}.settings.yml`),
+      SEMGREP_LOG_FILE: join(workspace.state, `semgrep-${run}.log`),
+    });
+
     // --- Semgrep: the probe, then one run per pack -------------------------------------------
     const packs = controls.filter((c) => c.kind === 'semgrep-pack').filter(usable);
     if (packs.length > 0) {
       progress('semgrep: the probe run (which canaries can it read here?)');
       const probeRun = await scan({ timeoutMs: PROBE_RUN_TIMEOUT_MS }, () =>
-        runners.semgrep({ ...scanArgs({ timeoutMs: PROBE_RUN_TIMEOUT_MS }), rulesPath: join(workspace.rules, PROBE_RULE_FILE) }),
+        runners.semgrep({ ...scanArgs({ timeoutMs: PROBE_RUN_TIMEOUT_MS }), env: semgrepEnv('probe'), rulesPath: join(workspace.rules, PROBE_RULE_FILE) }),
       );
       const readByProbe = probeRun.ended === 'ok' ? probeRun.findings.filter((f) => f.rule === PROBE_RULE_ID).map((f) => f.file) : null;
       await mapLimited(packs, SEMGREP_CONCURRENCY, async (control) => {
         if (gone(control)) return;
         const pack = control.pack ?? '';
-        const outcome = await scan(control, () => runners.semgrep({ ...scanArgs(control), rulesPath: join(opts.packsDir, pack) }));
+        const outcome = await scan(control, () =>
+          runners.semgrep({ ...scanArgs(control), env: semgrepEnv(pack.replace(/\.ya?ml$/i, '')), rulesPath: join(opts.packsDir, pack) }),
+        );
         const canary = control.canary ?? '';
         const read = readByProbe === null ? null : readByProbe.some((f) => sameFile(f, canary));
         const observation = observe(control, outcome, read);
@@ -468,19 +484,9 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
     // --- the hooks -----------------------------------------------------------------------------
     const hookControls = controls.filter((c) => c.kind === 'hook');
     if (hookControls.length > 0) {
-      let dispatcherThere = false;
-      try {
-        readFileSync(opts.dispatcherPath);
-        dispatcherThere = true;
-      } catch {
-        dispatcherThere = false;
-      }
-      let secretText = '';
-      try {
-        secretText = readFileSync(join(workspace.project, ...SECRET_CANARY.split('/')), 'utf8');
-      } catch {
-        secretText = '';
-      }
+      const dispatcherThere = isRegularFile(opts.dispatcherPath);
+      // What the secret check "writes" is what was seeded: the same text gitleaks is pointed at.
+      const secretText = seeded.get(SECRET_CANARY) ?? '';
       for (const control of hookControls) {
         const check = HOOK_CHECKS.find((h) => h.id === control.id);
         if (check === undefined) continue;

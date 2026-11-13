@@ -57,7 +57,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
 import { languageFromPath } from '../../src/surface/extract.js';
-import { invokeSemgrep } from '../../src/surface/scanSemgrep.js';
+import { invokeSemgrep } from '../../src/runners/semgrepInvoke.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { Storage } from '../../src/storage/index.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';

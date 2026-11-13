@@ -21,9 +21,9 @@ import { join } from 'node:path';
 import { readSmallJsonFile } from '../hooks/configFile.js';
 import type { Workspace } from './canaries.js';
 
-export type HookCheckId = 'hooks:bash-block' | 'hooks:powershell-block' | 'hooks:settings-guard' | 'hooks:secret-warning';
+type HookCheckId = 'hooks:bash-block' | 'hooks:powershell-block' | 'hooks:settings-guard' | 'hooks:secret-warning';
 
-export interface HookCheck {
+interface HookCheck {
   id: HookCheckId;
   /** The event the dispatcher is started for (its one argument). */
   event: 'PreToolUse' | 'PostToolUse';
@@ -99,7 +99,7 @@ export function answersAsExpected(check: Pick<HookCheck, 'expect'>, stdout: stri
 }
 
 /** The user-level hooks configuration: the one file besides the environment that may switch a guard off. */
-export const userHooksConfigPath = (home: string): string => join(home, '.config', 'dev-guardian', 'hooks.json');
+const userHooksConfigPath = (home: string): string => join(home, '.config', 'dev-guardian', 'hooks.json');
 
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 

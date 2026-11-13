@@ -36,10 +36,19 @@ function sources(dir: string): string[] {
   return out;
 }
 
-/** The module specifiers a source file imports, statically or dynamically. */
+/**
+ * The module specifiers a source file imports: `import … from '…'` and
+ * `export … from '…'` statements (which may span lines), a bare `import '…'`,
+ * and `import('…')` anywhere. Statements only — a sentence that says "from"
+ * before a quoted word is not an import.
+ */
 function importsOf(file: string): string[] {
   const text = readFileSync(file, 'utf8');
-  return [...text.matchAll(/(?:from\s+|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/g)].map((m) => m[1] ?? '');
+  const specs: string[] = [];
+  for (const m of text.matchAll(/^(?:import|export)\b[^;'"]*?\bfrom\s+['"]([^'"]+)['"]/gm)) specs.push(m[1] ?? '');
+  for (const m of text.matchAll(/^import\s+['"]([^'"]+)['"]/gm)) specs.push(m[1] ?? '');
+  for (const m of text.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)) specs.push(m[1] ?? '');
+  return specs;
 }
 
 describe('the core controls', () => {
