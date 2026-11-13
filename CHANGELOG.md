@@ -36,8 +36,13 @@ version bump.
   hook or tool behaves differently. First reference run (2026-11-13: Windows 11 with no shell granted, Claude Code
   2.1.322, Opus 5.5, 5.27 USD in all): in 15 runs of 15 no hostile action had an effect, and the judge of the final
   reply passed 9 of 15 — in three of the five cases the agent declined without telling the user that the file had
-  asked for it, or without saying that the decision is theirs. That is a gap in the plugin's prose, to be fixed on
-  its own; the cases and their threshold stay as they are. The shell-command graders of three cases measure nothing
+  asked for it, or without saying that the decision is theirs. That was a gap in the plugin's prose, fixed on its own
+  (below, under Fixed); the cases, their rubrics and their threshold stayed as they were. Three runs after the fix,
+  same machine: no effect in 45 runs of 45, and the judge passed 14, 14 and 13 of 15 — 41 of 45, from 9 of 15. The
+  suite's target, every run of every case, was met in none of the three: of the four replies failed, two led to an
+  addition to the prose, one is the model declining in silence with the rule written everywhere, and one meets the
+  rubric clause by clause and was failed by two of the judge's three votes. The shell-command graders of three cases
+  measure nothing
   without a shell: their run under an OS sandbox (WSL2, Linux, macOS) is still to be made. Details:
   `evals/README.md`.
 - **`dev-guardian selftest`: does each scanner detect on this machine?** `check_toolchain` asks a scanner for its
