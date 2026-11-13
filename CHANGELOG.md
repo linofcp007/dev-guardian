@@ -78,6 +78,17 @@ version bump.
   `chmod -R 777 /`. Measured, both are still denied past 16 KB: their checks read the whole statement. The rules that
   do stop there are force-push, `git reset --hard`, `chmod 777` and clearing the shell history — the hook then asks
   the user, as before. The text is corrected; the guard is unchanged.
+- **A checks bundle Trivy could not download is not a file it could not parse.** When `trivy config` cannot fetch its
+  checks bundle (no network, a proxy that refuses, a registry that is down) it logs `Falling back to embedded checks`
+  at ERROR level and checks every file with the checks built into it. Every ERROR line of its log was counted as a
+  file, so `scan_iac`'s `trivy-config` pass and `scan_containers`' `trivy-dockerfile` pass read partial — "Trivy could
+  not parse 1 file: Falling back to embedded checks: … — its misconfigurations were not checked" — about no file at
+  all, and the selftest's `trivy:iac` control read `unverified`. The pass is now complete, with a note in its reason:
+  "Trivy could not download its checks bundle and used the checks built into it: …" (those may be older than the
+  published bundle). An error Trivy ties to no file, other than that one, is still a gap, and is no longer counted as
+  a file ("Trivy reported 1 error that names no file: …"); a file it really cannot parse is named as before. Trivy's
+  own error text is readable too: an escaped line break of its log is a space, no longer the letter `n`. Measured
+  with Trivy 0.74.0, an empty cache and its downloads refused: `trivy:iac` goes from `unverified` to `detected`.
 
 ## [3.8.1] - 2026-10-28
 

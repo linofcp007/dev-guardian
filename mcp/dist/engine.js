@@ -64218,12 +64218,13 @@ function logFields(text3) {
     const key = m[1];
     if (key === void 0) continue;
     const quoted = m[2];
-    out.set(key, quoted !== void 0 ? quoted.replace(/\\(.)/g, "$1") : m[3] ?? "");
+    out.set(key, quoted !== void 0 ? quoted.replace(/\\(.)/g, (_, c) => "ntr".includes(c) ? " " : c) : m[3] ?? "");
   }
   return out;
 }
 function parseTrivyConfigLog(stderr) {
   let detected = null;
+  let checksFallback;
   const parseErrors = [];
   const seen = /* @__PURE__ */ new Set();
   for (const rawLine of stderr.split(/\r?\n/)) {
@@ -64239,14 +64240,18 @@ function parseTrivyConfigLog(stderr) {
     }
     if (level !== "ERROR") continue;
     const what = message3.replace(/^\[[^\]]*\]\s*/, "");
-    const err = fields.get("err");
+    const err = fields.get("err")?.replace(/\s+/g, " ").trim();
     const file2 = fields.get("file_path") ?? null;
+    if (file2 === null && what === CHECKS_FALLBACK) {
+      checksFallback = err ?? "";
+      continue;
+    }
     const key = file2 ?? `?${what}${err ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     parseErrors.push({ file: file2, message: err !== void 0 ? `${what}: ${err}` : what });
   }
-  return { detected, parseErrors };
+  return { detected, parseErrors, ...checksFallback !== void 0 ? { checksFallback } : {} };
 }
 function isDockerfileName(name) {
   const dot = name.lastIndexOf(".");
@@ -64397,10 +64402,16 @@ function judgeTrivyConfig(args) {
   }
   const log = parseTrivyConfigLog(run2.stderr);
   const gaps = [];
-  if (log.parseErrors.length > 0) {
-    const items = log.parseErrors.map((e) => e.file !== null ? `${e.file} (${clip2(e.message)})` : clip2(e.message));
+  const unparsed = log.parseErrors.flatMap((e) => e.file !== null ? [`${e.file} (${clip2(e.message)})`] : []);
+  const unnamed = log.parseErrors.flatMap((e) => e.file === null ? [clip2(e.message)] : []);
+  if (unparsed.length > 0) {
     gaps.push(
-      `Trivy could not parse ${log.parseErrors.length} file${log.parseErrors.length === 1 ? "" : "s"}: ${named(items)} \u2014 its misconfigurations were not checked`
+      `Trivy could not parse ${unparsed.length} file${unparsed.length === 1 ? "" : "s"}: ${named(unparsed)} \u2014 its misconfigurations were not checked`
+    );
+  }
+  if (unnamed.length > 0) {
+    gaps.push(
+      `Trivy reported ${unnamed.length} error${unnamed.length === 1 ? " that names" : "s that name"} no file: ${named(unnamed)} \u2014 what it left unchecked is not known`
     );
   }
   const errored = new Set(log.parseErrors.map((e) => e.file).filter((f) => f !== null));
@@ -64414,14 +64425,19 @@ function judgeTrivyConfig(args) {
       detected === 0 ? `no config file recognised: Trivy detected 0 config files, but ${named(unrecognised)} look like infrastructure-as-code (a templated manifest or a layout Trivy does not read) \u2014 not checked` : `Trivy read nothing from ${unrecognised.length} IaC-looking file${unrecognised.length === 1 ? "" : "s"}: ${named(unrecognised)} (a templated manifest or a layout Trivy does not read) \u2014 not checked`
     );
   }
-  const note = args.iacIncomplete !== void 0 ? [`the check for IaC-looking files Trivy did not read is incomplete: ${args.iacIncomplete}`] : [];
+  const note = [];
+  if (log.checksFallback !== void 0) {
+    const why = log.checksFallback !== "" ? `: ${clip2(log.checksFallback)}` : "";
+    note.push(`Trivy could not download its checks bundle and used the checks built into it${why}`);
+  }
+  if (args.iacIncomplete !== void 0) note.push(`the check for IaC-looking files Trivy did not read is incomplete: ${args.iacIncomplete}`);
   if (gaps.length === 0) {
     const reason = note.length > 0 ? { reason: note.join("; ") } : {};
     return { toolRun: withHonoured({ name, status: "ok", ...reason }, run2), missing: [] };
   }
   return { toolRun: withHonoured({ name, status: "ok", reason: [...gaps, ...note].join("; ") }, run2), missing: [name] };
 }
-var ANSI2, MAX_WALK_DIRS2, MAX_SNIFFED, SNIFF_BYTES, TERRAFORM, MAX_JSON_BYTES, IAC_BUDGET_BYTES, IAC_JSON_PARSE_BUDGET, MAX_NAMED2, MAX_MESSAGE, TERRAFORM_FILE;
+var ANSI2, CHECKS_FALLBACK, MAX_WALK_DIRS2, MAX_SNIFFED, SNIFF_BYTES, TERRAFORM, MAX_JSON_BYTES, IAC_BUDGET_BYTES, IAC_JSON_PARSE_BUDGET, MAX_NAMED2, MAX_MESSAGE, TERRAFORM_FILE;
 var init_trivyConfig = __esm({
   "src/runners/trivyConfig.ts"() {
     "use strict";
@@ -64430,6 +64446,7 @@ var init_trivyConfig = __esm({
     init_scannerParsers();
     init_trivyRun();
     ANSI2 = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, "g");
+    CHECKS_FALLBACK = "Falling back to embedded checks";
     MAX_WALK_DIRS2 = 2e4;
     MAX_SNIFFED = 2e3;
     SNIFF_BYTES = 64 * 1024;
