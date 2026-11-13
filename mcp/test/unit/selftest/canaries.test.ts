@@ -48,8 +48,9 @@ describe('the secret canary', () => {
     expect(places.some((f) => f.endsWith(join('dist', 'engine.js')))).toBe(true);
     const holding = places.filter((f) => readFileSync(f, 'utf8').includes(token));
     expect(holding).toEqual([]);
-    // The seeded secret file is a template: the placeholder, never the token.
-    const templates = filesBelow(join(REPO_ROOT, 'configs', 'selftest')).filter((f) => readFileSync(f, 'utf8').includes(TOKEN_PLACEHOLDER));
+    // The seeded secret file is a template: the placeholder, never the token. One seeded file holds it.
+    const templates = filesBelow(join(REPO_ROOT, 'configs', 'selftest', 'project')).filter((f) => readFileSync(f, 'utf8').includes(TOKEN_PLACEHOLDER));
     expect(templates).toHaveLength(1);
+    expect(templates[0]).toMatch(/secrets[\\/]app\.properties\.canary$/);
   });
 });

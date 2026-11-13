@@ -1,0 +1,6 @@
+// dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+use std::time::Duration;
+
+pub async fn selftest_canary() {
+    std::thread::sleep(Duration::from_millis(50));
+}

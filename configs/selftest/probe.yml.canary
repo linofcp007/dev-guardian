@@ -1,0 +1,6 @@
+rules:
+  - id: dev-guardian-selftest-probe
+    languages: [generic]
+    severity: INFO
+    message: dev-guardian selftest probe - Semgrep read this canary file
+    pattern-regex: dev-guardian-selftest-canary

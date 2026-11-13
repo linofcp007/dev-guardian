@@ -1,0 +1,2 @@
+// dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+export const selftestCanary = process.env.NEXT_PUBLIC_SELFTEST_SECRET;

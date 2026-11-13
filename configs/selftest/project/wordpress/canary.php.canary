@@ -1,0 +1,5 @@
+<?php
+// dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+function selftest_canary_delete($wpdb) {
+    $wpdb->query('DELETE FROM t WHERE id = ' . esc_sql($_GET['id']));
+}

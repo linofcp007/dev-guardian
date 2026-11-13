@@ -1,4 +1,3 @@
-// @ts-nocheck -- Phase 4 scaffold (dev-spec-driven): the failing tests come first; the implementation replaces these bodies.
 /**
  * The selftest's temporary project: made, seeded with the canaries, removed.
  *
@@ -40,11 +39,11 @@ export const CANARY_MARKER = 'dev-guardian-selftest-canary';
 const LEFTOVER_AFTER_MS = 60 * 60 * 1000;
 
 // The two halves of the secret canary. Joined only by `canaryToken()`.
-const TOKEN_HALVES: readonly string[] = ['@@TOKEN_HEAD@@', '@@TOKEN_TAIL@@'];
+const CANARY_HALVES: readonly string[] = ['AKIA', 'DGSELFCANARY2357'];
 
 /** The synthetic secret: valid for the rules that look for an AWS access key id, issued to no one. */
 export function canaryToken(): string {
-  throw new Error('selftest: not implemented');
+  return CANARY_HALVES.join('');
 }
 
 export interface Workspace {
@@ -62,7 +61,13 @@ export interface Workspace {
 
 /** A new, empty, private directory under `tmpRoot`. Throws when it cannot be made. */
 export function createWorkspace(tmpRoot: string = tmpdir()): Workspace {
-  throw new Error('selftest: not implemented');
+  // The long, link-free spelling: a scanner handed `C:\Users\ADMINI~1\…` reports other paths than it was given.
+  const dir = realpathSync.native(mkdtempSync(join(tmpRoot, WORKSPACE_PREFIX)));
+  const project = join(dir, 'project');
+  const reports = join(project, '.guardian', 'reports');
+  const rules = join(dir, 'rules');
+  for (const d of [project, reports, rules]) mkdirSync(d, { recursive: true, mode: 0o700 });
+  return { dir, project, reports, rules, ino: lstatSync(dir).ino };
 }
 
 /** Every file below `dir`, relative, with forward slashes. Links are listed, never followed. */
@@ -84,12 +89,31 @@ function filesBelow(dir: string, base: string = dir): string[] {
  * them cannot be tested, and that is not a verdict of any control.
  */
 export function seedCanaries(canariesDir: string, ws: Workspace): string[] {
-  throw new Error('selftest: not implemented');
+  const source = join(canariesDir, 'project');
+  if (!existsSync(source)) throw new Error(`the selftest canaries are not in this install (${source})`);
+  const token = canaryToken();
+  const seeded: string[] = [];
+  for (const rel of filesBelow(source)) {
+    if (!rel.endsWith(CANARY_SUFFIX)) continue;
+    const target = rel.slice(0, -CANARY_SUFFIX.length);
+    const to = join(ws.project, ...target.split('/'));
+    mkdirSync(dirname(to), { recursive: true });
+    const text = readFileSync(join(source, ...rel.split('/')), 'utf8');
+    writeFileSync(to, text.includes(TOKEN_PLACEHOLDER) ? text.split(TOKEN_PLACEHOLDER).join(token) : text, { flag: 'wx' });
+    seeded.push(target);
+  }
+  const probe = join(canariesDir, PROBE_RULE_SOURCE);
+  if (existsSync(probe)) cpSync(probe, join(ws.rules, PROBE_RULE_FILE));
+  return seeded;
 }
 
 /** Whether `rel` (relative to the project, forward slashes) is a file in the seeded project now. */
 export function canaryPresent(ws: Workspace, rel: string): boolean {
-  throw new Error('selftest: not implemented');
+  try {
+    return lstatSync(join(ws.project, ...rel.split('/'))).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -98,10 +122,38 @@ export function canaryPresent(ws: Workspace, rel: string): boolean {
  * directory this run made. Throws when anything is left.
  */
 export function removeWorkspace(ws: Workspace): void {
-  throw new Error('selftest: not implemented');
+  let st;
+  try {
+    st = lstatSync(ws.dir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  if (st.isSymbolicLink() || !st.isDirectory() || (ws.ino !== 0 && st.ino !== 0 && st.ino !== ws.ino)) {
+    throw new Error(`${ws.dir} is no longer the directory this selftest created: not removed`);
+  }
+  rmSync(ws.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  if (existsSync(ws.dir)) throw new Error(`${ws.dir} could not be removed`);
 }
 
 /** Directories of earlier selftests still under `tmpRoot`, old enough not to be a run in progress. Never removed here. */
 export function leftoverWorkspaces(tmpRoot: string, own: string, now: number = Date.now()): string[] {
-  throw new Error('selftest: not implemented');
+  let names: string[];
+  try {
+    names = readdirSync(tmpRoot);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  for (const name of names) {
+    if (!name.startsWith(WORKSPACE_PREFIX) || name === basename(own)) continue;
+    const path = join(tmpRoot, name);
+    try {
+      const st = lstatSync(path);
+      if (st.isDirectory() && now - st.mtimeMs > LEFTOVER_AFTER_MS) out.push(path);
+    } catch {
+      /* gone meanwhile */
+    }
+  }
+  return out.sort();
 }

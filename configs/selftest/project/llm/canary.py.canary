@@ -1,0 +1,6 @@
+# dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+import torch
+
+
+def checkpoint(path):
+    return torch.load(path, weights_only=False)

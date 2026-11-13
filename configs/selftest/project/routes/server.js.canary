@@ -1,0 +1,8 @@
+// dev-guardian-selftest-canary: one known route, seeded by "dev-guardian selftest". Never executed.
+import express from 'express';
+
+const app = express();
+
+app.get('/selftest', (req, res) => res.json({ ok: true }));
+
+export default app;

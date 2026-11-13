@@ -1,4 +1,3 @@
-// @ts-nocheck -- Phase 4 scaffold (dev-spec-driven): the failing tests come first; the implementation replaces these bodies.
 /**
  * The four checks of the guardrail hooks: what each one hands the installed
  * dispatcher, what a working guard answers, and which of the user's own
@@ -85,7 +84,18 @@ export const HOOK_CHECKS: readonly HookCheck[] = [
 
 /** Whether the dispatcher's standard output is the answer a working guard gives. */
 export function answersAsExpected(check: Pick<HookCheck, 'expect'>, stdout: string): boolean {
-  throw new Error('selftest: not implemented');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return false;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return false;
+  const out = (parsed as { hookSpecificOutput?: unknown }).hookSpecificOutput;
+  if (typeof out !== 'object' || out === null) return false;
+  const answer = out as { permissionDecision?: unknown; additionalContext?: unknown };
+  if (check.expect === 'deny') return answer.permissionDecision === 'deny';
+  return typeof answer.additionalContext === 'string' && /secret/i.test(answer.additionalContext);
 }
 
 /** The user-level hooks configuration: the one file besides the environment that may switch a guard off. */
@@ -105,5 +115,21 @@ const USER_CONFIG_LABEL = '~/.config/dev-guardian/hooks.json';
  * environment wins); the secret warning by `"secrets": {"warn": false}`.
  */
 export function softenedBy(check: Pick<HookCheck, 'id'>, env: NodeJS.ProcessEnv, home: string): string | undefined {
-  throw new Error('selftest: not implemented');
+  if (env['GUARDIAN_HOOKS'] === 'off') return 'GUARDIAN_HOOKS=off';
+  const file = USER_CONFIG_LABEL;
+  const read = readSmallJsonFile(userHooksConfigPath(home));
+  const user = read.status === 'ok' && isObject(read.value) ? read.value : {};
+  if (user['enabled'] === false) return `"enabled": false in ${file}`;
+  if (check.id === 'hooks:bash-block' || check.id === 'hooks:powershell-block') {
+    const envBlock = env['GUARDIAN_HOOKS_BASH_BLOCK'];
+    if (envBlock === '0' || envBlock === 'false') return `GUARDIAN_HOOKS_BASH_BLOCK=${envBlock}`;
+    if (envBlock === '1' || envBlock === 'true') return undefined;
+    const bash = user['bash'];
+    if (isObject(bash) && bash['block'] === false) return `"bash": {"block": false} in ${file}`;
+  }
+  if (check.id === 'hooks:secret-warning') {
+    const secrets = user['secrets'];
+    if (isObject(secrets) && secrets['warn'] === false) return `"secrets": {"warn": false} in ${file}`;
+  }
+  return undefined;
 }

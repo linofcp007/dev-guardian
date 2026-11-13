@@ -262,7 +262,12 @@ describe('dev-guardian selftest — the real scanners', () => {
         probe: async () => ({ installed: true, version: '0.0.0' }),
         // An empty report with exit 0 — from a scanner that has stopped seeing.
         gitleaks: nothing,
-        trivy: async (args) => ({ ended: 'ok', findings: [], read: [args.mode === 'deps' ? 'deps/package-lock.json' : 'iac/Dockerfile'] }),
+        // Trivy read the file and found nothing in it.
+        trivy: async (args) => ({
+          ended: 'ok',
+          findings: [],
+          read: [CORE_CONTROLS.find((c) => c.id === (args.mode === 'deps' ? 'trivy:deps' : 'trivy:iac'))?.canary ?? ''],
+        }),
         installedTools: async () => [],
       },
     });

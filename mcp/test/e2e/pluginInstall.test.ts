@@ -188,7 +188,9 @@ describe.skipIf(!IN_CHECKOUT)('a plugin install — a git archive, at a path wit
     }
     expect(shipped).toContain('configs/selftest/probe.yml.canary');
     expect(shipped).toContain('configs/selftest/project/deps/package-lock.json.canary');
-    expect(shipped).toContain('configs/selftest/project/iac/Dockerfile.canary');
+    // Not `Dockerfile.canary`: Trivy reads `Dockerfile.<anything>` as a Dockerfile, in this repository too.
+    expect(shipped).toContain('configs/selftest/project/iac/Dockerfile.selftest.canary');
+    expect(shipped.filter((f) => /(^|\/)Dockerfile\.canary$/.test(f))).toEqual([]);
     // The repository's own scans leave them alone too.
     expect(readFileSync(join(REPO_ROOT, '.guardianignore'), 'utf8')).toMatch(/^configs\/selftest\/$/m);
     // And the command is there, on the bundle alone: the history of a machine that has run none.

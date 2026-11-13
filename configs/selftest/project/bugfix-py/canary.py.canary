@@ -1,0 +1,6 @@
+# dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+def total(values):
+    acc = 0
+    for i in range(len(values) + 1):
+        acc += values[i]
+    return acc

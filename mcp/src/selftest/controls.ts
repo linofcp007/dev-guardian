@@ -1,4 +1,3 @@
-// @ts-nocheck -- Phase 4 scaffold (dev-spec-driven): the failing tests come first; the implementation replaces these bodies.
 /**
  * The selftest's core controls: what is run, on which canary, and what has to
  * come back.
@@ -58,7 +57,21 @@ const HOOK_TIMEOUT_MS = 20_000;
 
 /** Each pack's canary, and the rule of that pack it must fire (measured — see `configs/selftest/README.md`). */
 const PACK_CANARIES: Readonly<Record<string, readonly [canary: string, rule: string]>> = {
-  // @@PACK_CANARIES@@
+  'base.yml': ['base/canary.js', 'js-insecure-randomness'],
+  'bugfix-cs.yml': ['bugfix-cs/Canary.cs', 'bugfix-cs-race-condition-static-random'],
+  'bugfix-go.yml': ['bugfix-go/canary.go', 'bugfix-go-off-by-one-loop-lte-len'],
+  'bugfix-java.yml': ['bugfix-java/Canary.java', 'bugfix-java-race-condition-static-dateformat'],
+  'bugfix-js.yml': ['bugfix-js/canary.js', 'bugfix-js-edge-case-parseint-without-radix'],
+  'bugfix-php.yml': ['bugfix-php/canary.php', 'bugfix-php-null-safety-loose-null-compare'],
+  'bugfix-py.yml': ['bugfix-py/canary.py', 'bugfix-py-off-by-one-range-len-plus-one'],
+  'bugfix-rs.yml': ['bugfix-rs/canary.rs', 'bugfix-rs-race-condition-blocking-sleep-in-async'],
+  'client-trust.yml': ['client-trust/canary.js', 'client-public-env-secret'],
+  'llm.yml': ['llm/canary.py', 'llm-torch-load-weights-only-false'],
+  'mobile.yml': ['mobile/res/xml/network_security_config.xml', 'mobile-android-nsc-cleartext'],
+  'rgpd.yml': ['rgpd/canary.js', 'rgpd-pii-in-log-js'],
+  'routes.yml': ['routes/server.js', 'guardian-route-express'],
+  'web-js.yml': ['web-js/canary.js', 'web-js-sql-template'],
+  'wordpress.yml': ['wordpress/canary.php', 'wordpress-esc-sql-unquoted'],
 };
 
 const packControls: Control[] = Object.entries(PACK_CANARIES).map(([pack, [canary, rule]]) => ({
@@ -71,7 +84,16 @@ const packControls: Control[] = Object.entries(PACK_CANARIES).map(([pack, [canar
   timeoutMs: PACK_TIMEOUT_MS,
 }));
 
-export const CORE_CONTROLS: readonly Control[] = [];
+export const CORE_CONTROLS: readonly Control[] = [
+  ...packControls,
+  { id: 'gitleaks', kind: 'gitleaks', scanner: 'gitleaks', canary: SECRET_CANARY, expect: '*', timeoutMs: SCANNER_TIMEOUT_MS },
+  { id: 'trivy:deps', kind: 'trivy-deps', scanner: 'trivy', canary: 'deps/package-lock.json', expect: 'minimist', timeoutMs: SCANNER_TIMEOUT_MS },
+  { id: 'trivy:iac', kind: 'trivy-iac', scanner: 'trivy', canary: 'iac/Dockerfile.selftest', expect: '*', timeoutMs: SCANNER_TIMEOUT_MS },
+  { id: 'hooks:bash-block', kind: 'hook', scanner: 'hooks', canary: null, expect: 'deny', timeoutMs: HOOK_TIMEOUT_MS },
+  { id: 'hooks:powershell-block', kind: 'hook', scanner: 'hooks', canary: null, expect: 'deny', timeoutMs: HOOK_TIMEOUT_MS },
+  { id: 'hooks:settings-guard', kind: 'hook', scanner: 'hooks', canary: null, expect: 'deny', timeoutMs: HOOK_TIMEOUT_MS },
+  { id: 'hooks:secret-warning', kind: 'hook', scanner: 'hooks', canary: SECRET_CANARY, expect: 'secret-warning', timeoutMs: HOOK_TIMEOUT_MS },
+];
 
 export interface ControlsCheck {
   /** `configs/semgrep/`. */
@@ -88,5 +110,40 @@ export interface ControlsCheck {
  * a control names is shipped; no two controls share an id.
  */
 export function controlsProblems(check: ControlsCheck): string[] {
-  throw new Error('selftest: not implemented');
+  const controls = check.controls ?? CORE_CONTROLS;
+  const problems: string[] = [];
+  const ids = new Set<string>();
+  for (const c of controls) {
+    if (ids.has(c.id)) problems.push(`two controls are named ${c.id}`);
+    ids.add(c.id);
+  }
+  let packs: string[];
+  try {
+    packs = readdirSync(check.packsDir).filter((name) => /\.ya?ml$/.test(name)).sort();
+  } catch {
+    return [...problems, `the rule packs' directory could not be read: ${check.packsDir}`];
+  }
+  const packControlsOf = (pack: string): Control[] => controls.filter((c) => c.kind === 'semgrep-pack' && c.pack === pack);
+  for (const pack of packs) {
+    const n = packControlsOf(pack).length;
+    if (n === 0) problems.push(`${pack} has no selftest control: add its canary to configs/selftest/ and its entry to selftest/controls.ts`);
+    else if (n > 1) problems.push(`${pack} has ${n} selftest controls`);
+  }
+  for (const c of controls) {
+    if (c.kind === 'semgrep-pack') {
+      const pack = c.pack ?? '';
+      if (!packs.includes(pack)) {
+        problems.push(`${c.id} names the pack ${pack}, which is not in ${check.packsDir}`);
+        continue;
+      }
+      if (!ruleIdsInFile(join(check.packsDir, pack)).includes(c.expect)) {
+        problems.push(`${c.id} expects the rule ${c.expect}, which ${pack} does not hold`);
+      }
+    }
+    // The secret canary's file is a template too; every seeded file is shipped under its name plus the suffix.
+    if (c.canary !== null && !existsSync(join(check.canariesDir, 'project', ...`${c.canary}${CANARY_SUFFIX}`.split('/')))) {
+      problems.push(`${c.id}'s canary is not shipped: configs/selftest/project/${c.canary}${CANARY_SUFFIX}`);
+    }
+  }
+  return problems;
 }
