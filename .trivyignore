@@ -1,0 +1,24 @@
+# Risks this repository accepts in its own scan, each with its reason and an expiry: after that date Trivy
+# reports the finding again. Reviewed like code — `review_pr` warns when a diff edits this file — and never
+# silent: every scan names what this file suppressed (`suppressed_by_repo_config`, docs/ci.md).
+#
+# All four are in dependencies of Semgrep, in configs/ci/python/<X.Y>/requirements.txt: the hashed
+# requirements the ci-init pipelines install to run `semgrep scan`, Bandit and zizmor. No upgrade exists:
+# every Semgrep release up to 1.185.0 (checked 2026-11-13) pins `mcp==1.29.0` and
+# `opentelemetry-api>=1.37.0,<1.38`. When Semgrep moves either pin, bump it (docs/maintainers/conventions.md,
+# "Pinned versions") and delete the entry.
+
+# mcp 1.29.0, fixed in 1.30.0 — the Python MCP SDK. In Semgrep 1.182.0 it is imported only by
+# semgrep/commands/mcp.py and semgrep/mcp/**: the `semgrep mcp` subcommand, Semgrep's own MCP server, which no
+# pipeline of ours starts. The three flaws are in an MCP server's bearer authentication (116684), an MCP client
+# following a redirect (116685) and an MCP client validating a tool's output schema (116686): none of that
+# code runs in `semgrep scan`.
+CVE-2026-116684 exp:2027-02-13
+CVE-2026-116685 exp:2027-02-13
+CVE-2026-116686 exp:2027-02-13
+
+# opentelemetry-api 1.37.0, fixed in 1.45.2 — quadratic-time parsing of a malformed `traceparent` in
+# TraceContextTextMapPropagator.extract(), which needs a carrier an attacker controls. Semgrep's one call
+# (semgrep/telemetry.py) builds the carrier from two environment variables of its own process, set by whoever
+# starts it and never by the scanned repository, and only when tracing is switched on.
+CVE-2026-126360 exp:2027-02-13

@@ -78,9 +78,14 @@ version bump.
 - **The lock file moves `hono` to 4.13.17 and `@hono/node-server` to 2.1.6**, both dependencies of the MCP SDK's HTTP
   transport, for seven advisories published against them in November 2026 (CVE-2026-118663, -126210, -126343,
   -126355 to -126358). Neither is in the shipped bundles — the server speaks stdio — so no install was exposed; the
-  repository's own scan no longer reports them. Still reported, with no upgrade to make: `mcp` 1.29.0
-  (CVE-2026-116684 to -116686) and `opentelemetry-api` 1.37.0 (CVE-2026-126360) in the hashed Python requirements the
-  CI templates install — every Semgrep release up to 1.185.0 pins both.
+  repository's own scan no longer reports them.
+- **The repository's `.trivyignore` accepts four advisories that have no upgrade**, each with its reason and an
+  expiry (2027-02-13, after which Trivy reports it again): `mcp` 1.29.0 (CVE-2026-116684 to -116686) and
+  `opentelemetry-api` 1.37.0 (CVE-2026-126360), in the hashed Python requirements the CI templates install. Every
+  Semgrep release up to 1.185.0 pins both. In Semgrep, `mcp` is imported only by the `semgrep mcp` subcommand, which
+  no pipeline starts, and the one trace-context extraction builds its carrier from the process's own environment.
+  The file is the repository's own: it decides nothing in a project dev-guardian scans, and every scan here names
+  what it suppressed (`suppressed_by_repo_config`).
 
 ### Fixed
 
