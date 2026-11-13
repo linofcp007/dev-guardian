@@ -13,6 +13,9 @@
  *   - whether the plugin's guardrail hooks started in this session (`hooks`,
  *     `hooks_warning`): the session mark SessionStart leaves, read through
  *     `hooks/heartbeat.ts` — the only reader of it there is
+ *   - what the last `dev-guardian selftest` of this install found (`selftest`,
+ *     `selftest_warning`): the saved result, validated as it is read
+ *     (`selftest/store.ts`) — installed is not detecting
  *
  * The scan fields used to be `scans.getLatest()` and `listHistory(1000)`:
  * the newest scan of whichever project scanned last, and a count of every
@@ -31,6 +34,8 @@ import { RESOURCES } from '../resources/index.js';
 import { serverProjectPath } from '../resources/paging.js';
 import { futureNoteOf } from '../history/openSet.js';
 import { ProjectPath } from '../schemas.js';
+import { installPaths, selftestCommand } from '../selftest/paths.js';
+import { selftestStatus, type SelftestStatus } from '../selftest/store.js';
 import type { ToolResult } from '../types.js';
 import { defineTool, listedTools, registerToolModule, type ToolInput } from './index.js';
 import { toolProjectPath } from './projectArg.js';
@@ -49,12 +54,12 @@ const tool = defineTool({
   name: 'health_status',
   title: 'Server health',
   description:
-    "Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. " +
-    'Warnings (null when fine): `storage_warning` — .guardian/guardian.db is not used, history goes to a ' +
-    'per-user fallback: tell the user to run the `db adopt` command it names in their terminal; never run it ' +
-    'yourself. `hooks_warning` — no dev-guardian hook started this session, nothing is guarded: tell the user ' +
-    '(see `hooks.state`). `suppressions.all_projects` hide findings in every project. ' +
-    '`storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, ignored by every count.',
+    "Server uptime, database, shell, in-flight scans, tool counts, one project's last scan. " +
+    'Warnings (or null): `storage_warning` — a per-user fallback is used, not .guardian/guardian.db: the user ' +
+    'runs the `db adopt` command it names; never run it yourself. `hooks_warning` — no hook started this ' +
+    'session, nothing is guarded (`hooks.state`). `selftest_warning` — a scanner read its canary and reported ' +
+    'nothing, 0 findings prove nothing. Tell the user. `suppressions.all_projects` hide findings in every ' +
+    'project. `storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, in no count.',
   inputSchema,
   handler: async (input, ctx) => handler(input, ctx),
 });
@@ -85,6 +90,7 @@ async function handler(
   }
 
   const hooks = sessionHooks(ctx);
+  const selftest = lastSelftest();
 
   return {
     ok: true,
@@ -127,6 +133,8 @@ async function handler(
     storage_warning: ctx.storageWarning ?? null,
     hooks: hooks.hooks,
     hooks_warning: hooks.warning,
+    selftest: selftest.selftest,
+    selftest_warning: selftest.warning,
     ...futureNoteOf(ctx.storage, projectPath),
     suppressions: activeSuppressions(ctx, projectPath),
   };
@@ -160,6 +168,34 @@ function sessionHooks(ctx: PluginContext): { hooks: HooksStatus; warning: string
   } catch (error) {
     return {
       hooks: { state: 'unknown', reason: `the hooks' state could not be read: ${error instanceof Error ? error.message : String(error)}` },
+      warning: null,
+    };
+  }
+}
+
+/**
+ * What the last `dev-guardian selftest` of this install found — about the
+ * machine, so it does not depend on `project_path`. Read from the data
+ * directory, validated as it is read (`selftest/store.ts`): no result, or a
+ * file that is not one, is `never_run` — with the command line the user runs,
+ * this install's own. A result of another plugin version, or an old one, is
+ * `stale`. The warning is for a control that read its canary and reported
+ * nothing, or that detected in the run before and does not now. A diagnostic
+ * must answer: anything that goes wrong here is `never_run` with a note.
+ */
+function lastSelftest(): { selftest: SelftestStatus; warning: string | null } {
+  let command = 'node cli/dev-guardian.mjs selftest';
+  try {
+    const paths = installPaths();
+    command = selftestCommand(paths.cliPath);
+    return selftestStatus({ dataDir: userDataDir(), pluginVersion: SERVER_VERSION, command });
+  } catch (error) {
+    return {
+      selftest: {
+        state: 'never_run',
+        command,
+        note: `the saved selftest result could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      },
       warning: null,
     };
   }

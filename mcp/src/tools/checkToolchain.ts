@@ -11,6 +11,9 @@
  *   - `compromised` (+ `advisory`) for a known-malicious release
  *   - `provided_by` when another entry satisfies it (dotnet-format ← SDK)
  *   - `probe_error` when the binary exists but could not report a version
+ *   - `selftest` on the scanners `dev-guardian selftest` has controls for:
+ *     the scanner's verdict in the last saved run, or `never_verified` — a
+ *     version proves a scanner is installed, not that it detects
  *
  * It used to run `scripts/scan/check-tools.sh`, which knew 11 of the 17
  * catalogue entries — nine were ALWAYS "not installed", including a .NET SDK
@@ -22,6 +25,7 @@
  */
 
 import type { PluginContext } from '../context.js';
+import { userDataDir } from '../hooks/userDataDir.js';
 import { detectOs } from '../platform/osDetect.js';
 import { compareSemver, meetsFloor } from '../platform/semverCompare.js';
 import {
@@ -30,6 +34,7 @@ import {
   suggestedInstallCommandString,
 } from '../runners/installCatalog.js';
 import { runVersionProbe, type ProbeResult, type VersionProbe } from '../runners/toolProbe.js';
+import { readLast, scannerSelftest, SELFTEST_SCANNERS, type LastRead, type ScannerSelftest } from '../selftest/store.js';
 import type { ToolResult } from '../types.js';
 import { registerToolModule, type ToolModule } from './index.js';
 
@@ -53,6 +58,12 @@ interface ToolStatus {
   provided_by?: string;
   /** Why a binary that exists could not report its version. */
   probe_error?: string;
+  /**
+   * A scanner the selftest has controls for: what the last `dev-guardian
+   * selftest` said of it — installed is not detecting — or `never_verified`.
+   * Absent on every other tool.
+   */
+  selftest?: ScannerSelftest;
 }
 
 /**
@@ -84,7 +95,9 @@ const tool: ToolModule = {
     'Probe every catalogued scanner directly (its binary and version command; no bash needed) and ' +
     'report per-scanner status: installed, version, expected version floor, known-compromised ' +
     'releases (with the advisory id), the MCP tools that depend on it, and the suggested install ' +
-    'command for this OS.',
+    'command for this OS. Installed is not detecting: `selftest` (semgrep, gitleaks, trivy) is that ' +
+    "scanner's verdict in the last `dev-guardian selftest` — `silent`: it read its canary and reported " +
+    'nothing; `stale`: another version is installed now — or `never_verified`.',
   inputSchema: {},
   handler: async (_input, ctx) => handler(ctx),
 };
@@ -106,6 +119,14 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
     const r = probed[i];
     if (r !== undefined) byName.set(meta.name, r);
   });
+
+  // The last selftest, read once. A file that cannot be read, or is not a result, verifies nothing.
+  let lastSelftest: LastRead = { state: 'none' };
+  try {
+    lastSelftest = readLast(userDataDir());
+  } catch {
+    lastSelftest = { state: 'none' };
+  }
 
   const tools: ToolStatus[] = [];
   for (const meta of catalogue) {
@@ -141,6 +162,7 @@ async function handler(ctx: PluginContext): Promise<ToolResult<Record<string, un
     }
     if (providedBy) status.provided_by = providedBy;
     if (result.error && !result.installed) status.probe_error = result.error;
+    if ((SELFTEST_SCANNERS as readonly string[]).includes(meta.name)) status.selftest = scannerSelftest(lastSelftest, meta.name, result.version);
     tools.push(status);
   }
   INFORMATIONAL.forEach((x, i) => {

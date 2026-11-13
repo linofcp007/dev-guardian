@@ -48,6 +48,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** The schema's version: what `--json` prints and what is stored. */
 export const SELFTEST_SCHEMA = 1;
 
+/**
+ * The scanners a selftest has controls for — the ones a saved result can say
+ * something about. Here, on the read side, because `check_toolchain` needs
+ * the list and reads nothing else of the selftest; the registry of controls
+ * (`controls.ts`) takes it from here.
+ */
+export const SELFTEST_SCANNERS = ['semgrep', 'gitleaks', 'trivy'] as const;
+export type SelftestScanner = (typeof SELFTEST_SCANNERS)[number];
+
 export interface ControlResult {
   id: string;
   /** The scanner's name in the catalogue, or `hooks`. */

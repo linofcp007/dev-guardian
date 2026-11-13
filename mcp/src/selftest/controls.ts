@@ -24,15 +24,16 @@ import { join } from 'node:path';
 import { ruleIdsInFile } from '../runners/semgrepRuleIds.js';
 import { CANARY_SUFFIX } from './canaries.js';
 import { SECRET_CANARY } from './hookChecks.js';
+import { SELFTEST_SCANNERS, type SelftestScanner } from './store.js';
 
 /** The scanners that have a control: every other catalogued one is `no_canary` when installed. */
-export type ScannerName = 'semgrep' | 'gitleaks' | 'trivy';
-export const SCANNERS_WITH_CONTROLS: readonly ScannerName[] = ['semgrep', 'gitleaks', 'trivy'];
+export type ScannerName = SelftestScanner;
+export const SCANNERS_WITH_CONTROLS: readonly ScannerName[] = SELFTEST_SCANNERS;
 
 /** The id of the selftest's own Semgrep rule, which matches the marker every Semgrep canary carries. */
 export const PROBE_RULE_ID = 'dev-guardian-selftest-probe';
 
-export type ControlKind = 'semgrep-pack' | 'gitleaks' | 'trivy-deps' | 'trivy-iac' | 'hook';
+type ControlKind = 'semgrep-pack' | 'gitleaks' | 'trivy-deps' | 'trivy-iac' | 'hook';
 
 export interface Control {
   /** `semgrep:<pack>`, `gitleaks`, `trivy:deps`, `trivy:iac`, `hooks:<check>`. */
@@ -95,7 +96,7 @@ export const CORE_CONTROLS: readonly Control[] = [
   { id: 'hooks:secret-warning', kind: 'hook', scanner: 'hooks', canary: SECRET_CANARY, expect: 'secret-warning', timeoutMs: HOOK_TIMEOUT_MS },
 ];
 
-export interface ControlsCheck {
+interface ControlsCheck {
   /** `configs/semgrep/`. */
   packsDir: string;
   /** `configs/selftest/`. */
