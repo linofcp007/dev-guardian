@@ -60,12 +60,22 @@ export const AREA_TITLES: Readonly<Record<LimitArea, string>> = {
 
 const PLATFORMS = ['win32', 'linux', 'darwin'] as const;
 
+/**
+ * A piece of a built input. The page shows each piece as code, and Markdown
+ * has no way to show a space at the edge of a code span, so a piece carries
+ * none: put the space inside the neighbouring piece, or use a separator.
+ */
+const builtPiece = z
+  .string()
+  .min(1)
+  .refine((s) => s === s.trim(), 'starts or ends with white space, which the page cannot show');
+
 /** An input too large, or too token-like, to write out: `start`, `repeat` × `times`, then `then`. */
 const builtInput = z.strictObject({
-  start: z.string().min(1).optional(),
-  repeat: z.string().min(1),
+  start: builtPiece.optional(),
+  repeat: builtPiece,
   times: z.number().int().min(1).max(2_000_000),
-  then: z.string(),
+  then: builtPiece,
 });
 
 const note = z.string().trim().min(1).optional();

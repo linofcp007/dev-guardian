@@ -211,7 +211,7 @@ describe("the hooks' known-limits page", () => {
     expect(counts.total).toBe(limits.length);
     expect(counts.withExample + counts.without).toBe(counts.total);
     expect(counts.withExample).toBe(limits.filter((l) => l.examples.length > 0).length);
-    for (const n of [counts.total, counts.withExample, counts.without]) expect(intro).toMatch(new RegExp(`\b${String(n)}\b`));
+    for (const n of [counts.total, counts.withExample, counts.without]) expect(intro).toMatch(new RegExp(`\\b${String(n)}\\b`));
   });
 
   it('T-13 docs/hooks.md points at the page where the list was, and lists no limit by hand', () => {
