@@ -22,6 +22,7 @@ import type { ResourceModule } from '../../src/resources/index.js';
 import type { FoldRecord } from '../../src/tools/fold.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { RuleInventory } from '../ablate/clauses.js';
+import type { KnownLimit } from './knownLimits.js';
 
 /** The line every generated page starts with, after its title. */
 export const GENERATED_NOTICE =
@@ -402,4 +403,18 @@ export function renderRulePacksDoc(packs: readonly PackInput[]): string {
     out.push('');
   }
   return out.join('\n');
+}
+
+// ------------------------------------------------------- hooks' known limits
+
+/** The generated page's title. */
+export const KNOWN_LIMITS_TITLE = '# Guardrail hooks: known limits';
+
+/**
+ * `docs/hooks-known-limits.md`: one section per area, each limit with its text
+ * and its examples — the input and the verdict a test pins — or the reason it
+ * has none. Rendered from `test/fixtures/hooks/known-limits.yml`.
+ */
+export function renderKnownLimitsDoc(_limits: readonly KnownLimit[]): string {
+  throw new Error('not implemented: renderKnownLimitsDoc (hook-known-limits)');
 }

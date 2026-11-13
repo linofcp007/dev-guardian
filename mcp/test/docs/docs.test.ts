@@ -28,7 +28,26 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { ResourceModule } from '../../src/resources/index.js';
 import type { FoldRecord } from '../../src/tools/fold.js';
 import { listedTools, type ToolModule } from '../../src/tools/index.js';
-import { noClauseKind, PACK_CONSUMERS, packTotals, renderRulePacksDoc, renderToolsDoc, type PackInput } from './renderDocs.js';
+import {
+  AREA_TITLES,
+  buildInput,
+  exampleRefs,
+  executableCounts,
+  KNOWN_LIMITS_SOURCE,
+  LIMIT_AREAS,
+  loadKnownLimits,
+} from './knownLimits.js';
+import {
+  GENERATED_NOTICE,
+  KNOWN_LIMITS_TITLE,
+  noClauseKind,
+  PACK_CONSUMERS,
+  packTotals,
+  renderKnownLimitsDoc,
+  renderRulePacksDoc,
+  renderToolsDoc,
+  type PackInput,
+} from './renderDocs.js';
 import { DOCS_DIR, loadPacks, loadRegistry, REPO_ROOT } from './sources.js';
 
 /** The listed tools — what a host sees, and what the docs count and name. */
@@ -132,6 +151,86 @@ function statedCounts(text: string, c: CountSpec): number[] {
     [...text.matchAll(re)].map((m) => Number(m[1])),
   );
 }
+
+describe("the hooks' known-limits page", () => {
+  const PAGE = 'docs/hooks-known-limits.md';
+
+  it('T-10 renders a section per area, each limit with its text and each example with its input and its verdict', () => {
+    const limits = loadKnownLimits();
+    const page = renderKnownLimitsDoc(limits);
+    const lines = page.split('\n');
+
+    // One section per area that has a limit, in the fixed order.
+    const used = LIMIT_AREAS.filter((area) => limits.some((l) => l.area === area));
+    const at = used.map((area) => lines.indexOf(`## ${AREA_TITLES[area]}`));
+    expect(at.every((i) => i >= 0), `a section is missing: ${JSON.stringify(at)}`).toBe(true);
+    expect([...at].sort((x, y) => x - y)).toEqual(at);
+
+    for (const l of limits) {
+      expect(page, l.id).toContain(l.doc.trim());
+      if (l.examples.length === 0) expect(page, l.id).toContain((l.not_executable ?? '').trim());
+    }
+    for (const { limit, index, example } of exampleRefs(limits)) {
+      const what = `${limit.id} #${String(index + 1)}`;
+      if (example.detector === 'hook') {
+        expect(lines.some((line) => line.includes(example.tool) && line.includes(example.expect.decision)), what).toBe(true);
+        continue;
+      }
+      const verdict = example.detector === 'shell' ? example.expect.level : String(example.expect.hits);
+      if (example.build !== undefined) {
+        // An input by construction is described, never written out.
+        const { repeat, times, then } = example.build;
+        expect(
+          lines.some((line) => line.includes(repeat) && line.includes(String(times)) && line.includes(then) && line.includes(verdict)),
+          what,
+        ).toBe(true);
+        if (repeat.length * times > 200) expect(page, what).not.toContain(buildInput(example));
+        continue;
+      }
+      // A token is published as its parts are written, never joined.
+      const shown = example.detector === 'secret' && example.parts !== undefined ? (example.parts[0] ?? '') : buildInput(example);
+      expect(lines.some((line) => line.includes(shown) && line.includes(verdict)), what).toBe(true);
+      if (example.detector === 'shell' && example.expect.ask === true) {
+        expect(lines.some((line) => line.includes(shown) && /ask/i.test(line)), what).toBe(true);
+      }
+    }
+  });
+
+  it('T-11 docs/hooks-known-limits.md is what the data file renders to', () => {
+    expect(existsSync(resolve(REPO_ROOT, PAGE)), `${PAGE} is missing: ${REGENERATE}`).toBe(true);
+    expect(read(PAGE), REGENERATE).toBe(renderKnownLimitsDoc(loadKnownLimits()));
+  });
+
+  it('T-12 the page says it is generated, from which file, and how many limits have an example a test runs', () => {
+    const limits = loadKnownLimits();
+    const page = renderKnownLimitsDoc(limits);
+    expect(page.startsWith(`${KNOWN_LIMITS_TITLE}\n\n${GENERATED_NOTICE}\n`)).toBe(true);
+    const intro = page.slice(0, page.indexOf('\n## '));
+    expect(intro).toContain(KNOWN_LIMITS_SOURCE);
+    const counts = executableCounts(limits);
+    expect(counts.total).toBe(limits.length);
+    expect(counts.withExample + counts.without).toBe(counts.total);
+    expect(counts.withExample).toBe(limits.filter((l) => l.examples.length > 0).length);
+    for (const n of [counts.total, counts.withExample, counts.without]) expect(intro).toMatch(new RegExp(`\b${String(n)}\b`));
+  });
+
+  it('T-13 docs/hooks.md points at the page where the list was, and lists no limit by hand', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('**Known limits.**');
+    expect(at, 'the "Known limits." paragraph of docs/hooks.md').toBeGreaterThan(-1);
+    const rest = hooks.slice(at);
+    const next = rest.search(/\r?\n## /);
+    const paragraph = next === -1 ? rest : rest.slice(0, next);
+    expect(paragraph).toContain('](hooks-known-limits.md)');
+    // A limit is a record of the data file: nothing is listed here by hand.
+    expect(paragraph.split(/\r?\n/).filter((line) => /^\s*[-*] /.test(line))).toEqual([]);
+  });
+
+  it('T-14 the page is listed among the generated files that are never edited by hand', () => {
+    expect(read('CLAUDE.md')).toContain(PAGE);
+    expect(read('docs/maintainers/build-and-test.md')).toContain(PAGE);
+  });
+});
 
 describe('counts the docs state equal the code', () => {
   it.each(COUNTED_FILES)('%s states each count, and every statement of it is right', (rel, required) => {
