@@ -139,6 +139,22 @@ their respective projects.
   absent. The write cannot hold the session — nothing is asked about a
   directory on the network, no existing path is ever opened, and it is awaited
   a second at most. See [docs/hooks.md](docs/hooks.md#the-session-mark).
+- **The selftest runs nothing it seeds, and keeps nothing of yours.**
+  `node cli/dev-guardian.mjs selftest` seeds canaries — small files with one
+  known defect each — in a temporary directory it creates exclusively
+  (`mkdtemp`, private to the user) and removes afterwards without following a
+  link out of it, also when it is interrupted. No canary is executed, built or
+  installed; the hook checks hand the dispatcher a command as text on its
+  standard input; scanners are started with no shell. It opens no database
+  and reads no project, baseline or suppression. The secret canary is
+  synthetic (the format of an AWS access key id, put together at run time, in
+  no file of the plugin) and is in nothing printed or saved. The result is
+  kept per install in the data directory (`selftest/`): ids, verdicts,
+  versions and reasons from which paths, environment values and the canary
+  have been taken out. `health_status` and `check_toolchain` show it; a file
+  that is unreadable, not the shape dev-guardian writes or dated in the
+  future counts as no result, and nothing in a scan reads it. See
+  [docs/selftest.md](docs/selftest.md).
 - **`audit_mcp_tools` executes third-party code.** It starts the MCP servers
   named in its `servers` argument — their `command` and `args`, as the host
   would launch them — **only for the server names the caller lists

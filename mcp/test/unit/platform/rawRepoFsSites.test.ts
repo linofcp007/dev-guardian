@@ -307,15 +307,45 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "storage/ (another reviewer's): the plugin's shipped migrations",
   },
+  'src/selftest/canaries.ts': {
+    apis: { realpathSync: 1, readdirSync: 2, existsSync: 3, readFileSync: 1, writeFileSync: 1, cpSync: 1 },
+    kind: 'own',
+    reason:
+      "the selftest's temporary project and the plugin's shipped canaries (configs/selftest/): the canaries listed and " +
+      'read, their copies written with flag wx into the mkdtemp directory just created, that directory spelled as the ' +
+      'filesystem spells it, whether it is gone after its removal, and the temporary root listed for an earlier ' +
+      "selftest's leftover; never a project, and nothing a project names",
+  },
+  'src/selftest/controls.ts': {
+    apis: { readdirSync: 1, existsSync: 1 },
+    kind: 'own',
+    reason: "the plugin's shipped rule packs and canaries, held against the registry of controls (controlsProblems)",
+  },
+  'src/selftest/run.ts': {
+    apis: { realpathSync: 1 },
+    kind: 'own',
+    reason:
+      'how the filesystem spells the temporary root and the data directory, so that both spellings are taken out of a ' +
+      'reason before it is printed or saved; opens no file',
+  },
+  'src/selftest/store.ts': {
+    apis: { writeFileSync: 1 },
+    kind: 'own',
+    reason:
+      'the selftest result, written with flag wx under a temporary name in <data directory>/selftest/ and renamed; ' +
+      'read back through the bounded reader, validated',
+  },
   'src/storage/userData.ts': {
     apis: { statSync: 1 },
     kind: 'own',
     reason: "the per-user data directory's own ownership and mode check",
   },
-  'src/surface/scanSemgrep.ts': {
+  'src/runners/semgrepInvoke.ts': {
     apis: { copyFileSync: 1 },
     kind: 'own',
-    reason: "the plugin's route rule pack, staged into its own temp directory",
+    reason:
+      "the Docker fallback's copy of a rule file the caller named (the plugin's route pack; a selftest's pack or probe rule), " +
+      "staged into the caller's own report directory, inside the mount",
   },
   'src/surface/specDiscover.ts': {
     apis: { readdirSync: 1 },

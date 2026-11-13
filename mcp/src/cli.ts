@@ -135,6 +135,31 @@ export async function loadImportSarifModules() {
   return { openDatabase: storage.openDatabase, Storage: storage.Storage, TOOLS: tools.TOOLS };
 }
 
+/**
+ * `selftest`: the orchestrator, its real runners, this install's paths, the
+ * report's renderers and the saved history. It opens no database — there is
+ * no `node:sqlite` to check for.
+ */
+export async function loadSelftestModules() {
+  const [run, runners, paths, report, store] = await Promise.all([
+    import('./selftest/run.js'),
+    import('./selftest/defaultRunners.js'),
+    import('./selftest/paths.js'),
+    import('./selftest/report.js'),
+    import('./selftest/store.js'),
+  ]);
+  return {
+    runSelftest: run.runSelftest,
+    defaultRunners: runners.defaultRunners,
+    installPaths: paths.installPaths,
+    renderTable: report.renderTable,
+    renderJson: report.renderJson,
+    renderHistory: report.renderHistory,
+    renderHistoryJson: report.renderHistoryJson,
+    readHistory: store.readHistory,
+  };
+}
+
 /** `db adopt`: inspecting and registering a project's database. */
 export async function loadDbModules() {
   const db = await import('./storage/db.js');

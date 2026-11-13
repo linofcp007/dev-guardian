@@ -16,3 +16,5 @@ evals/fixtures/
 # only): the llm-scan spike's apps are vulnerable on purpose, and one has a
 # package.json with no lock, which read as an npm coverage gap of this project.
 .specs/*/evals/
+# The selftest canaries: each is one known defect, seeded into a temporary project by `dev-guardian selftest`.
+configs/selftest/

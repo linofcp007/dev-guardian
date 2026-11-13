@@ -182,7 +182,9 @@ const EXEMPT: Readonly<Record<string, string>> = {
   'runners/dockerScanner.ts': 'defines buildSemgrepDockerArgs',
   'runners/semgrepValidate.ts': '`semgrep --validate` of rule files: it scans no target',
   'fixpr/apply.ts': "create_fix_pr's autofix of named files; the fix is verified by re-running a scan tool",
-  'surface/scanSemgrep.ts': "defines invokeSemgrep; tools/mapAttackSurface.ts builds the surface's result",
+  'runners/semgrepInvoke.ts': "defines invokeSemgrep; tools/mapAttackSurface.ts builds the surface's result",
+  'selftest/defaultRunners.ts':
+    "dev-guardian selftest: one pack over the selftest's own seeded canaries, for a verdict per control — no scan result, no project of the user's",
 };
 
 describe('every Semgrep result applies the shared coverage gaps', () => {

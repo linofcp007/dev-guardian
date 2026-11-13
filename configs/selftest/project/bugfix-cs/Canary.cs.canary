@@ -1,0 +1,9 @@
+// dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+using System;
+
+public sealed class SelftestCanary
+{
+    private static readonly Random Rng = new Random();
+
+    public int Roll() => Rng.Next(1, 7);
+}

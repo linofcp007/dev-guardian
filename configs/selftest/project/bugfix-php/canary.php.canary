@@ -1,0 +1,3 @@
+<?php
+// dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+function selftest_canary_missing(?string $s): bool { return $s == null; }

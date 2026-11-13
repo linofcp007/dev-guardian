@@ -133,6 +133,24 @@ describe('the tools/list budget (a real handshake)', () => {
     expect(description.length).toBeLessThanOrEqual(LISTED_DESCRIPTION_MAX);
   });
 
+  it('T-39 health_status and check_toolchain say what the selftest fields mean, inside the listed limit, and the selftest added no tool', () => {
+    const health = tools.find((t) => t.name === 'health_status');
+    const toolchain = tools.find((t) => t.name === 'check_toolchain');
+    expect(health, 'health_status is listed').toBeDefined();
+    expect(toolchain, 'check_toolchain is listed').toBeDefined();
+    // A silent control changes what "0 findings" means: the model has to know the field and whose it is to hear.
+    expect(health?.description ?? '').toContain('selftest_warning');
+    expect(health?.description ?? '').toContain('hooks_warning');
+    expect(toolchain?.description ?? '').toMatch(/`selftest`/);
+    expect(toolchain?.description ?? '').toMatch(/installed is not/i);
+    for (const t of [health, toolchain]) expect((t?.description ?? '').length, t?.name).toBeLessThanOrEqual(LISTED_DESCRIPTION_MAX);
+    // The selftest is a CLI command — a whole run does not fit a tool call. The server shows its result and gained no tool.
+    expect(tools.map((t) => t.name).filter((name) => /self.?test/i.test(name))).toEqual([]);
+    expect(tools).toHaveLength(50);
+    const listJson = JSON.stringify({ tools });
+    expect(listJson.length + SERVER_INSTRUCTIONS.length).toBeLessThanOrEqual(TOTAL_MAX);
+  });
+
   it(`every parameter description, nested ones included, is at most ${PARAM_DESCRIPTION_MAX} characters`, () => {
     const over: string[] = [];
     const walk = (node: unknown, path: string): void => {

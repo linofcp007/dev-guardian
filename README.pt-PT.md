@@ -21,6 +21,7 @@ Trilingue: as skills e os comandos respondem em inglês, português ou espanhol,
 - **git.**
 - **Claude Code 2.1.139 ou posterior, para os hooks de proteção.** O `hooks/hooks.json` corre-os em forma exec (`"command": "node"`, o dispatcher em `"args"`). Um Claude Code mais antigo não passa os `"args"`, e nenhum hook arranca — e um hook que nunca arranca não to pode dizer. As ferramentas MCP e a CLI não dependem disto.
 - **Os scanners que quiseres usar**, instalados à parte. `check_toolchain` diz o que está presente (e assinala o Trivy comprometido 0.69.4–0.69.6); `install_toolchain` ou `/guardian-init` instalam o resto. Um scanner em falta é reportado como lacuna de cobertura, nunca como resultado limpo.
+- **Instalado não é o mesmo que a detetar.** `node cli/dev-guardian.mjs selftest` semeia num projeto temporário um defeito conhecido por controlo do núcleo — cada pack Semgrep do próprio dev-guardian, o gitleaks, a auditoria de dependências e a análise de IaC do Trivy, os hooks de proteção — e diz quais deles são encontrados nesta máquina: `detected`, `silent` (leu o canário e não reportou nada: 0 achados dele não provam nada aqui), `missing` ou `unverified`. O `health_status` e o `check_toolchain` mostram o último resultado. Ver [docs/selftest.md](docs/selftest.md).
 - **Opcional: Docker.** Sem um `semgrep` nativo, `scan_sast` e `map_attack_surface` recorrem à imagem `semgrep/semgrep`.
 - **Windows:** todos os scans correm nativamente, sem shell. Só é preciso um bash para o relatório de estado inicial do `init_project` e para o recurso ao WSL do `install_toolchain` quando não há winget, scoop nem choco. O dev-guardian procura primeiro o Git Bash, depois o WSL, depois qualquer `bash` no `PATH`.
 
@@ -177,7 +178,7 @@ O dev-guardian não envia telemetria própria. Algumas ferramentas acedem à red
 commands/         os 10 comandos slash
 skills/           as 13 skills
 hooks/            hooks.json + guardian-hook.mjs
-cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt, import-sarif)
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt, import-sarif, selftest)
 mcp/              o servidor MCP: src/, test/, dist/ (no repositório)
 configs/          packs Semgrep, modelos de CI, configurações gitleaks/Renovate/pre-commit, modelos de compliance
 host-rules/       modelos de regras para outros hosts

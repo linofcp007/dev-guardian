@@ -91,6 +91,14 @@ const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string
   'mcp/src/platform/shellProbe.ts': { count: 1, kind: 'no-repository', reason: "a shell's own version probe" },
   'mcp/src/mcpaudit/launch.ts': { count: 1, kind: 'no-repository', reason: '`node -e statSync`: is a command path a file' },
   'mcp/src/tools/installToolchain.ts': { count: 1, kind: 'no-repository', reason: '`wsl -l`: the installer, in no project' },
+  'mcp/src/selftest/hookRunner.ts': {
+    count: 1,
+    kind: 'no-repository',
+    reason:
+      "the plugin's own hook dispatcher, started by Node's path for a selftest check: a PreToolUse or PostToolUse " +
+      'payload on its standard input, in the temporary directory the selftest created — no scanned project, and ' +
+      'those two events start no git (the one SessionStart runs goes through gitSafety inside the dispatcher)',
+  },
   'mcp/src/ci/appRunner.ts': {
     count: 1,
     kind: 'project-code',

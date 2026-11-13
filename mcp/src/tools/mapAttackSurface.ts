@@ -69,7 +69,8 @@ import {
 } from '../surface/recoverMetavars.js';
 import { resolveNodeMounts, type ImportRecord } from '../surface/resolvers/node.js';
 import { resolveWordpressRoutes } from '../surface/resolvers/wordpress.js';
-import { countRouteTargets, invokeSemgrep, judgeSurfaceReport } from '../surface/scanSemgrep.js';
+import { countRouteTargets, judgeSurfaceReport } from '../surface/scanSemgrep.js';
+import { invokeSemgrep } from '../runners/semgrepInvoke.js';
 import {
   dedupeResolved,
   discoverSpecs,

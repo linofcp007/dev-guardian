@@ -46,7 +46,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
-import { copyFileSync, cpSync, existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -171,6 +171,32 @@ describe.skipIf(!IN_CHECKOUT)('a plugin install — a git archive, at a path wit
       shipped.filter((f) => !bundles.includes(f) && !declarations.includes(f) && !/^storage\/migrations\/\d{3}_\w+\.sql$|^hostsetup\/legacyRulesTemplates\//.test(f)),
     ).toEqual([]);
     expect(bundles.every((b) => existsSync(join(dist, b)))).toBe(true);
+  });
+
+  it('T-40 the selftest canaries are in an install, and none of them is a file anything reads as code or as a manifest', () => {
+    const shipped = gitIn(['ls-files', '-z', '--', 'configs/selftest'])
+      .stdout.toString('utf8')
+      .split('\0')
+      .filter((f) => f !== '');
+    // One per rule pack, the secret template, the lockfile, the Dockerfile, the probe rule and the README.
+    const packs = readdirSync(join(REPO_ROOT, 'configs', 'semgrep')).filter((f) => f.endsWith('.yml'));
+    expect(shipped.length).toBeGreaterThanOrEqual(packs.length + 5);
+    for (const file of shipped) {
+      expect(existsSync(join(install, ...file.split('/'))), `${file} is in the install`).toBe(true);
+      // `.canary` is no language and no manifest: neither a scanner of this repository nor a host that indexes it opens one.
+      expect(file === 'configs/selftest/README.md' || file.endsWith('.canary'), file).toBe(true);
+    }
+    expect(shipped).toContain('configs/selftest/probe.yml.canary');
+    expect(shipped).toContain('configs/selftest/project/deps/package-lock.json.canary');
+    // Not `Dockerfile.canary`: Trivy reads `Dockerfile.<anything>` as a Dockerfile, in this repository too.
+    expect(shipped).toContain('configs/selftest/project/iac/Dockerfile.selftest.canary');
+    expect(shipped.filter((f) => /(^|\/)Dockerfile\.canary$/.test(f))).toEqual([]);
+    // The repository's own scans leave them alone too.
+    expect(readFileSync(join(REPO_ROOT, '.guardianignore'), 'utf8')).toMatch(/^configs\/selftest\/$/m);
+    // And the command is there, on the bundle alone: the history of a machine that has run none.
+    const history = run(['selftest', '--history', '--json'], { env: { GUARDIAN_DATA_DIR: makeTempDir('guardian-install-selftest-') } });
+    loaded(history, 0);
+    expect(JSON.parse(history.stdout)).toMatchObject({ schema: 1, runs: [] });
   });
 
   it('positive control: the copy is an install — none of mcp/package.json’s dependencies resolves from it', () => {

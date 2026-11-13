@@ -1,0 +1,4 @@
+# Seeded by "dev-guardian selftest": one known misconfiguration. Never built.
+FROM scratch
+COPY app /app
+CMD ["/app"]

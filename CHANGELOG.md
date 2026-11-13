@@ -33,8 +33,34 @@ version bump.
   user's, with the defect still reported. The hostile text is test data in `evals/fixtures/hostile/`: `.fixture`
   files, renamed only in a run's workspace, with inert payloads (a `.invalid` host, relative paths, no secret), and
   `evalSuite.test.ts` holds the cases and the fixtures to those rules offline. Maintainer-side: no skill, command,
-  hook or tool behaves differently. The cases have not been run yet — the paid reference run, under its cost cap,
-  is still to be made. Details: `evals/README.md`.
+  hook or tool behaves differently. First reference run (2026-11-13: Windows 11 with no shell granted, Claude Code
+  2.1.322, Opus 5.5, 5.27 USD in all): in 15 runs of 15 no hostile action had an effect, and the judge of the final
+  reply passed 9 of 15 — in three of the five cases the agent declined without telling the user that the file had
+  asked for it, or without saying that the decision is theirs. That is a gap in the plugin's prose, to be fixed on
+  its own; the cases and their threshold stay as they are. The shell-command graders of three cases measure nothing
+  without a shell: their run under an OS sandbox (WSL2, Linux, macOS) is still to be made. Details:
+  `evals/README.md`.
+- **`dev-guardian selftest`: does each scanner detect on this machine?** `check_toolchain` asks a scanner for its
+  version, which proves that it is installed, not that it sees. The new CLI command
+  (`node cli/dev-guardian.mjs selftest [--json] [--keep] [--no-save] [--history]`) seeds a temporary project with
+  canaries — one small file per control, each with one known defect —, runs every core control the way a scan runs
+  it, and gives each a verdict: `detected`; `silent` — it read its canary and reported nothing, so 0 findings from it
+  prove nothing here (exit 1); `missing`; `unverified`, with the reason (exit 2); `disabled_by_user` for a guard the
+  user switched off; and `no_canary` for an installed scanner it has no canary for. The core controls are each of the
+  15 rule packs of `configs/semgrep/` on its own, gitleaks, Trivy's dependency audit and IaC scan, and four checks of
+  the guardrail hooks through the installed dispatcher. A probe run with the selftest's own Semgrep rule tells a blind
+  pack from a directory Semgrep does not scan. The directory is removed afterwards, also on a failure or an
+  interruption; no project and no database is read; no canary is run, built or installed. The result is saved per
+  install (`<data directory>/selftest/`, the newest 50 runs), a control that detected before and does not now is
+  marked `regressed` with what changed, and the server shows it: `health_status` returns `selftest` and
+  `selftest_warning`, `check_toolchain` adds `selftest` to `semgrep`, `gitleaks` and `trivy`. A result of another
+  plugin version, or older than 30 days, is `stale`; a file that is not a result is no result. No new MCP tool. The
+  canaries ship in `configs/selftest/` under `.canary` names, each chosen by measurement with Semgrep 1.182.0,
+  gitleaks 8.30.1 and Trivy 0.74.0. What it does not prove: that a control sees everything (one canary each), or that
+  the host runs the hooks (`health_status`'s `hooks` says that). Measured on Windows 11 (cp1252) with those three
+  scanners: 22 of 22 controls detected, exit 0, in 39 to 51 s — the fifteen packs three at a time take 18 s of it —
+  and a pack that no longer matches its canary, a pack that loads no rule, a scanner that reports nothing and a
+  damaged hooks bundle each come out `silent`, never `detected`. Details: `docs/selftest.md`.
 
 ### Changed
 

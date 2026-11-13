@@ -1,135 +1,15 @@
-import { copyFileSync, lstatSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { presentInProject } from '../platform/projectFs.js';
 import { join } from 'node:path';
-import {
-  buildSemgrepDockerArgs,
-  DEFAULT_SEMGREP_IMAGE,
-  toContainerPath,
-} from '../runners/dockerScanner.js';
-import { gitSafetyFor } from '../platform/gitSafety.js';
 import { git, splitNul } from '../runners/git.js';
-import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import type { ProcessRunResult } from '../runners/processRunner.js';
 import { countFilesWithExtension, PROJECT_WALK_EXCLUDE } from '../runners/projectFiles.js';
+// The run itself — native Semgrep or its Docker fallback — is `runners/semgrepInvoke.ts#invokeSemgrep`,
+// which `dev-guardian selftest` shares; what is here is the surface's reading of it.
+import { buildToolRun, failureCause } from '../runners/semgrepInvoke.js';
 import { checkSemgrepReport, describePartialParse, type SemgrepVerdict } from '../runners/semgrepReport.js';
-import { metricsEnvProblem, runSemgrep, semgrepErrorLine } from '../runners/semgrepRun.js';
-import { scannerAvailable } from '../tools/scanHelpers.js';
 import type { PartialParse, ToolRun } from '../types.js';
 import { ROUTE_PACK_EXTENSIONS } from './extract.js';
-
-interface SemgrepRunOptions {
-  projectPath: string;
-  rulesPath: string;
-  outFile: string;
-  reportDir: string;
-  /** Flags after the config: the per-file timeouts and the root `.guardian/` output excluded (`runners/semgrepRun.ts#semgrepScanFlags`). */
-  extraArgs?: readonly string[];
-}
-
-interface SemgrepInvocation {
-  /** The PROCESS verdict alone (exit code, outcome) — never the report's; see {@link judgeSurfaceReport}. */
-  toolRun: ToolRun;
-  /** The process that ran, or null when the Docker fallback could not even stage the rules. */
-  run: ProcessRunResult | null;
-  /** `docker (<image>)` when the Docker fallback ran it, else null. */
-  via: string | null;
-}
-
-/**
- * Run Semgrep against the routes rule pack, natively if it's on PATH,
- * otherwise via Docker. Returns null only when neither is available — the
- * caller treats that as "cannot run at all" and persists nothing.
- *
- * Mirrors scan_sast's Docker fallback: probe `docker`, bind the project at
- * `/src`, run the container, and check for real output. The argv comes from
- * the shared `buildSemgrepDockerArgs` — this tool only differs in
- * `--config`, which the builder takes as an option, so the mount shape, the
- * output rewriting and anything added there later apply here too. The rule
- * pack lives outside the project tree (in the dev-guardian install), so we
- * stage a copy inside the report dir — already inside the project, already
- * inside the bind mount — instead of adding a second `--mount`.
- */
-export async function invokeSemgrep(options: SemgrepRunOptions): Promise<SemgrepInvocation | null> {
-  const { projectPath, rulesPath, outFile, reportDir } = options;
-  const semgrepBin = await scannerAvailable('semgrep');
-  if (semgrepBin !== null) {
-    // UTF-8 mode, like every other Semgrep call site: otherwise the locale
-    // codec reads the rule pack and writes `--output` (runners/semgrepRun.ts).
-    const run = await runSemgrep({
-      args: ['--config', rulesPath, ...(options.extraArgs ?? []), '--json', '--output', outFile, '--quiet', projectPath],
-      cwd: projectPath,
-      env: process.env,
-    });
-    return { toolRun: buildToolRun(run), run, via: null };
-  }
-
-  const dockerBin = await scannerAvailable('docker');
-  if (dockerBin === null) return null;
-
-  const image = process.env['GUARDIAN_SEMGREP_IMAGE'] || DEFAULT_SEMGREP_IMAGE;
-  const via = `docker (${image})`;
-  let containerRules: string;
-  try {
-    const stagedRules = join(reportDir, 'routes.yml');
-    copyFileSync(rulesPath, stagedRules);
-    containerRules = toContainerPath(projectPath, stagedRules);
-  } catch (e) {
-    return {
-      toolRun: {
-        name: 'semgrep',
-        status: 'failed',
-        reason: `docker: could not stage rule pack: ${(e as Error).message}`,
-      },
-      run: null,
-      via,
-    };
-  }
-
-  const run = await runProcess({
-    command: 'docker',
-    args: buildSemgrepDockerArgs({
-      projectPath,
-      outFileHost: outFile,
-      image,
-      configs: [containerRules],
-      ...(options.extraArgs !== undefined ? { extraArgs: options.extraArgs } : {}),
-      git: await gitSafetyFor([projectPath]),
-    }),
-    cwd: projectPath,
-  });
-  return { toolRun: buildToolRun(run, via), run, via };
-}
-
-/**
- * The PROCESS half of the verdict. Semgrep exits 1 when it *finds* matches —
- * that is success, not failure; scan_sast, bug_hunt and scan_wordpress all
- * treat `outcome === 'completed' || exitCode === 1` as a clean exit. Reading
- * the raw outcome alone (as an earlier version of this tool did) reported
- * every successful route-finding run as `failed`.
- *
- * A clean exit is necessary and never sufficient: {@link judgeSurfaceReport}
- * decides whether the run actually scanned.
- */
-export function buildToolRun(run: ProcessRunResult, via?: string): ToolRun {
-  const ok = run.outcome === 'completed' || run.exitCode === 1;
-  if (ok) {
-    return via ? { name: 'semgrep', status: 'ok', reason: `ran via ${via}` } : { name: 'semgrep', status: 'ok' };
-  }
-  const firstLine = failureCause(run.stderr) ?? undefined;
-  const reason = via ? `${via}: ${firstLine ?? 'fallback failed'}` : (firstLine ?? 'unknown');
-  return { name: 'semgrep', status: 'failed', reason };
-}
-
-/**
- * Why a Semgrep run failed, from its stderr: Semgrep's own message where it
- * printed one (`[ERROR]`, a command-line error, a network error — the first
- * line is often only `Usage: …`), and a `SEMGREP_SEND_METRICS` it refuses
- * (review 12, finding 13); else the first line, as before.
- */
-function failureCause(stderr: string): string | null {
-  const said = semgrepErrorLine(stderr) ?? stderr.split(/\r?\n/).find((l) => l.trim().length > 0) ?? null;
-  const metrics = metricsEnvProblem([], undefined);
-  return said === null ? metrics : metrics === null ? said : `${said} — ${metrics}`;
-}
 
 /**
  * Semgrep's built-in default ignore, applied when the scan root has NO

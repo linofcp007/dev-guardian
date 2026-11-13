@@ -117,7 +117,7 @@ Semgrep bug hunt: p/r2c-bug-scan, p/security-audit and local packs (race conditi
 
 ### `check_toolchain`
 
-Probe every catalogued scanner directly (its binary and version command; no bash needed) and report per-scanner status: installed, version, expected version floor, known-compromised releases (with the advisory id), the MCP tools that depend on it, and the suggested install command for this OS.
+Probe every catalogued scanner directly (its binary and version command; no bash needed) and report per-scanner status: installed, version, expected version floor, known-compromised releases (with the advisory id), the MCP tools that depend on it, and the suggested install command for this OS. Installed is not detecting: `selftest` (semgrep, gitleaks, trivy) is that scanner's verdict in the last `dev-guardian selftest` — `silent`: it read its canary and reported nothing; `stale`: another version is installed now — or `never_verified`.
 
 No parameters.
 
@@ -237,7 +237,7 @@ Produce a CycloneDX or SPDX JSON SBOM with Syft (Trivy as fallback), always writ
 
 ### `health_status`
 
-Server uptime, database, shell, in-flight scans, tool counts and one project's last scan. Warnings (null when fine): `storage_warning` — .guardian/guardian.db is not used, history goes to a per-user fallback: tell the user to run the `db adopt` command it names in their terminal; never run it yourself. `hooks_warning` — no dev-guardian hook started this session, nothing is guarded: tell the user (see `hooks.state`). `suppressions.all_projects` hide findings in every project. `storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, ignored by every count.
+Server uptime, database, shell, in-flight scans, tool counts, one project's last scan. Warnings (or null): `storage_warning` — a per-user fallback is used, not .guardian/guardian.db: the user runs the `db adopt` command it names; never run it yourself. `hooks_warning` — no hook started this session, nothing is guarded (`hooks.state`). `selftest_warning` — a scanner read its canary and reported nothing, 0 findings prove nothing. Tell the user. `suppressions.all_projects` hide findings in every project. `storage.future_dated_scans_ignored`, `future_dated_note`: future-dated scans, in no count.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

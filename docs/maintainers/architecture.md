@@ -68,6 +68,27 @@ quality, deps, observability, performance and compliance. Two halves:
   [`docs/hooks-known-limits.md`](../../docs/hooks-known-limits.md)
   ([build-and-test.md](build-and-test.md)).
 
+## The selftest
+
+`node cli/dev-guardian.mjs selftest` ([`docs/selftest.md`](../selftest.md)) lives in `mcp/src/selftest/` and is a
+leaf: nothing under `runners/`, `ci/`, `history/` or the scan tools imports it, and `health_status` and
+`check_toolchain` import only its read side (`store.ts`, `paths.ts`) — `controls.test.ts` holds both.
+
+- `controls.ts` — the registry: one control per file of `configs/semgrep/`, gitleaks, the two Trivy scans, four
+  hook checks, and the rule each pack's canary must fire. `controlsProblems` fails the suite, by name, on a pack
+  with no control or no canary.
+- `canaries.ts` — the temporary directory (`mkdtemp`, removed without following a link) and the seeding of
+  `configs/selftest/**.canary`; the secret canary is put together there from two halves.
+- `run.ts` — the orchestrator. One probe run with the selftest's own Semgrep rule, then one run per pack: a pack
+  that does not report a canary the probe read is `silent`, one the probe never read is `unverified`. Everything
+  that starts a process is behind `SelftestRunners`; the real ones (`defaultRunners.ts`) are the scan tools' own
+  functions, and the dispatcher is started by `hookRunner.ts` with no shell.
+- `verdict.ts`, `report.ts` — pure. `store.ts` — the result, per install, as two JSON files in the data directory,
+  validated when read back; never the project's database.
+
+It opens no database and reads no project. A new raw `node:fs` call there goes in `rawRepoFsSites.test.ts` like any
+other, and a new rule pack needs a canary (`configs/selftest/README.md`).
+
 ## What a scan of the project's own files leaves out
 
 Only the ROOT `.guardian/`'s generated output — `reports/`, the database,

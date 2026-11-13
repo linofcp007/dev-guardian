@@ -179,7 +179,7 @@ const SPAWNS: Readonly<Record<string, RepoConfigRunner | 'none' | `reads none he
   'tools/depsAudit.ts|pip-audit': 'pip-audit',
   'tools/scanSast.ts|dotnet': 'dotnet-analyzers',
   'tools/scanSast.ts|docker': 'none',
-  'surface/scanSemgrep.ts|docker': 'none',
+  'runners/semgrepInvoke.ts|docker': 'none',
   'tools/qualityCheck.ts|ruff': 'ruff',
   'tools/qualityCheck.ts|jscpd': 'jscpd',
   'tools/qualityCheck.ts|radon': 'radon',

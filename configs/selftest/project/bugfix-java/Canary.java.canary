@@ -1,0 +1,6 @@
+// dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+import java.text.SimpleDateFormat;
+
+public class Canary {
+    static final SimpleDateFormat SHARED = new SimpleDateFormat("yyyy-MM-dd");
+}

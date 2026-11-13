@@ -44,7 +44,10 @@ const DOCUMENTED: Record<string, readonly string[]> = {
     'future_dated_note',
     'hooks_warning',
     'hooks.state',
+    'selftest_warning',
   ],
+  // What the last `dev-guardian selftest` said of a scanner: installed is not detecting.
+  check_toolchain: ['selftest', 'never_verified', 'silent', 'stale'],
   risk_score: ['suppressed_count', 'future_dated_note'],
   report_export: ['retry_with', 'still running'],
   review_pr: ['preexisting_manifest_gaps'],

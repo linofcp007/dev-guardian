@@ -1,0 +1,4 @@
+// dev-guardian-selftest-canary: one known defect, seeded by "dev-guardian selftest". Never executed.
+export function onboard(customer) {
+  console.info(customer.email);
+}

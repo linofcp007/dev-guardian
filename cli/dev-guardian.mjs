@@ -261,6 +261,7 @@ const ENGINE_EXPORTS = [
   'loadDashboardModules',
   'loadDbModules',
   'loadImportSarifModules',
+  'loadSelftestModules',
   'previewMcpConfig',
   'PROJECT_LOCKFILE_MAX_BYTES',
   'projectWriteRefusal',
@@ -360,6 +361,7 @@ const {
   loadDashboardModules: loadDashboardEngine,
   loadDbModules: loadDbEngine,
   loadImportSarifModules: loadImportSarifEngine,
+  loadSelftestModules: loadSelftestEngine,
   previewMcpConfig,
   PROJECT_LOCKFILE_MAX_BYTES,
   projectWriteRefusal,
@@ -474,6 +476,7 @@ Usage:
   node cli/dev-guardian.mjs dashboard [--project <path>] [--out <path>] [--no-open]
   node cli/dev-guardian.mjs db adopt [--project <path>] [--yes [--rehome]]
   node cli/dev-guardian.mjs import-sarif <file> [--project <path>] [--allow-outside-project] [--max-results <n>]
+  node cli/dev-guardian.mjs selftest [--json] [--keep] [--no-save] [--history]
   node cli/dev-guardian.mjs --version
 
 mcp-config — wire the MCP server into an AI host
@@ -753,6 +756,29 @@ db adopt — decide yourself whether the project's .guardian/guardian.db is your
   Exit codes: 0 report printed (registered with --yes, or already yours),
               1 no database, or it cannot be registered, 3 usage error.
 
+selftest — does each core control DETECT on this machine? (installed is not that)
+  Seeds a temporary project with canaries — one small file per control, each
+  with one known defect — runs every core control the way a scan runs it, and
+  gives each a verdict: detected; silent (it read its canary and reported
+  nothing: a scan of that area with 0 findings proves nothing here); missing;
+  unverified (with the reason); disabled_by_user (a guard you switched off).
+  Core controls: each rule pack of configs/semgrep/, gitleaks, Trivy's
+  dependency audit and IaC scan, and four checks of the guardrail hooks. Any
+  other installed scanner is listed as no_canary: installed, not verified.
+  The temporary directory is removed afterwards, also when interrupted.
+  --json                One JSON document on stdout (schema 1); progress on stderr
+  --keep                Keep the temporary directory and print its path
+  --no-save             Do not save the result. By default it is saved per
+                         install, in dev-guardian's data directory, where
+                         health_status and check_toolchain read it
+  --history             Print the saved runs, newest first; runs nothing
+                         (with --json: as JSON)
+  The hook checks prove that the installed detectors answer; they do not prove
+  that the host runs them — health_status's \`hooks\` says that.
+  Exit codes: 0 every core control detected, 1 a control is silent,
+              2 none is silent and one is unverified or missing (or the
+              temporary directory could not be removed), 3 usage error.
+
 Examples:
   node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
   node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
@@ -764,7 +790,91 @@ Examples:
   node cli/dev-guardian.mjs status --project .
   node cli/dev-guardian.mjs dashboard --project . --no-open
   node cli/dev-guardian.mjs db adopt --project .          # show; add --yes to register
+  node cli/dev-guardian.mjs selftest                      # do the scanners detect here?
 `);
+}
+
+// ---------------------------------------------------------------------------
+// selftest — does each core control DETECT on this machine?
+// ---------------------------------------------------------------------------
+// `check_toolchain` asks a scanner for its version; this seeds canaries in a
+// temporary project and says, control by control, whether dev-guardian finds
+// them here (mcp/src/selftest/). A CLI command and never an MCP tool: a whole
+// run does not fit a tool call's time, and the server only shows the result.
+
+const SELFTEST_USAGE = 'node cli/dev-guardian.mjs selftest [--json] [--keep] [--no-save] [--history]';
+
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<{ json: boolean, keep: boolean, save: boolean, history: boolean }>}
+ */
+function parseSelftestArgs(argv) {
+  const out = { json: false, keep: false, save: true, history: false };
+  for (const a of argv) {
+    if (a === '--json') out.json = true;
+    else if (a === '--keep') out.keep = true;
+    else if (a === '--no-save') out.save = false;
+    else if (a === '--history') out.history = true;
+    else return { error: `selftest: unknown argument: ${a}` };
+  }
+  if (out.history && (out.keep || !out.save)) {
+    return { error: 'selftest: --history only prints what was saved; it takes --json and nothing else' };
+  }
+  return { value: out };
+}
+
+/** @param {string[]} argv */
+async function cmdSelftest(argv) {
+  const parsed = parseSelftestArgs(argv);
+  if (parsed.error !== undefined) return usageError(`${parsed.error} (usage: ${SELFTEST_USAGE})`);
+  const opts = parsed.value;
+  const mods = await loadSelftestEngine();
+  const paths = mods.installPaths();
+
+  if (opts.history) {
+    const history = mods.readHistory(paths.dataDir);
+    process.stdout.write(
+      opts.json ? mods.renderHistoryJson(history.runs, history.problem) : mods.renderHistory(history.runs, history.problem),
+    );
+    process.exitCode = 0;
+    return;
+  }
+
+  // Ctrl-C, or a CI job's SIGTERM: the run starts no further control, removes
+  // its directory and saves nothing. The conventional shell codes, as `scan`.
+  const stop = new AbortController();
+  /** @type {number | undefined} */
+  let signalled;
+  const onSigint = () => {
+    signalled = 130;
+    stop.abort();
+  };
+  const onSigterm = () => {
+    signalled = 143;
+    stop.abort();
+  };
+  process.once('SIGINT', onSigint);
+  process.once('SIGTERM', onSigterm);
+  let result;
+  try {
+    result = await mods.runSelftest({
+      ...paths,
+      runners: mods.defaultRunners(),
+      signal: stop.signal,
+      keep: opts.keep,
+      save: opts.save,
+      onProgress: (line) => {
+        process.stderr.write(`selftest: ${line}\n`);
+      },
+    });
+  } finally {
+    process.off('SIGINT', onSigint);
+    process.off('SIGTERM', onSigterm);
+  }
+  process.stdout.write(opts.json ? mods.renderJson(result.report) : mods.renderTable(result.report));
+  // `process.exitCode = ...; return;`, never `process.exit(...)`: the report
+  // may still be on its way to a pipe.
+  process.exitCode = signalled ?? result.exitCode;
 }
 
 /**
@@ -4026,6 +4136,7 @@ function main() {
   if (cmd === 'dashboard') return void cmdDashboard(argv.slice(1)).catch(fatal);
   if (cmd === 'db') return void cmdDb(argv.slice(1)).catch(fatal);
   if (cmd === 'import-sarif') return void cmdImportSarif(argv.slice(1)).catch(fatal);
+  if (cmd === 'selftest') return void cmdSelftest(argv.slice(1)).catch(fatal);
 
   process.stderr.write(`Unknown command: ${cmd}\n\n`);
   usage();
