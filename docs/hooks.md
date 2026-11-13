@@ -44,6 +44,8 @@ It is there because a hook that never starts cannot say so. A Claude Code older 
 - **It is cleaned up.** Each SessionStart removes the marks older than 30 days and those of a Claude Code process that no longer exists, 64 at most, and nothing else. Deleting the `hooks-heartbeat` directory removes them all; the next session recreates it.
 - **Both sides must look in the same place.** A `GUARDIAN_DATA_DIR` set for the server and not for the shell that launches Claude Code (or the reverse) leaves the server with no mark to find, and it reports `not_observed`.
 
+The mark says that the host started the hooks. Whether the detectors behind them answer — a catastrophic command denied, a write that switches the hooks off refused, a secret warned about — is the other half, and `dev-guardian selftest` checks it by handing the installed dispatcher each of those as text: see [selftest.md](selftest.md).
+
 ## The shell guard
 
 The same detector serves `Bash` and `PowerShell` and the CLI's `check --bash`. It splits a command line into statements and also reads text that is fed to a shell (`bash <<EOF … EOF`, `echo '…' | sh`); a heredoc handed to a non-shell command (`git commit -F - <<EOF`) stays inert.

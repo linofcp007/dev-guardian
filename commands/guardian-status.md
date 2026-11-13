@@ -19,7 +19,7 @@ Run `node "${CLAUDE_PLUGIN_ROOT}/cli/dev-guardian.mjs" status --project .` and s
 
 Add, on top of that verbatim output:
 
-- **Guardrails** — call `health_status { project_path: "<project>" }`. When `hooks_warning` is not null, show it before anything else: no dev-guardian hook started in this session, so commands and writes are not being assessed — say what it tells the user to check. When `storage_warning` is not null, show it too, with the command it names for the user to run.
+- **Guardrails** — call `health_status { project_path: "<project>" }`. When `hooks_warning` is not null, show it before anything else: no dev-guardian hook started in this session, so commands and writes are not being assessed — say what it tells the user to check. When `storage_warning` is not null, show it too, with the command it names for the user to run. When `selftest_warning` is not null, show it as well: a scanner read its canary and reported nothing, so 0 findings from it prove nothing on this machine. When `selftest.state` is `never_run` or `stale`, say so in one line with `selftest.command`.
 - **Interpretation** — which hotspot to fix first, whether the deltas are trending the right way, how much less a "looks clean" read is worth when a scanner is missing.
 - **Understanding gate** — read `.guardian/last-grill.md` (written by `guardian-grill`) directly; it's a file, not something `status` reports. Show its latest verdict 🟢 / 🟡 / 🔴 with scope and gap count — missing, or older than the current diff, show ⚪ "not run for current changes". A full gate needs both code metrics *and* understanding.
 
