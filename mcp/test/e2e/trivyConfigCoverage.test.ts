@@ -254,4 +254,31 @@ describe('trivy config parse errors and unrecognised IaC (real Trivy)', () => {
     expect(r.out.missing_tools).toContain('trivy-dockerfile');
     expect(r.out.coverage).not.toBe('full');
   });
+
+  /**
+   * The checks bundle Trivy cannot download (an empty cache, the registry
+   * unreachable): it logs `ERROR [misconfig] Falling back to embedded checks`,
+   * names no file, and checks every file with the checks built into it.
+   * Measured on 0.74.0 (2026-11-13): exit 0, `Detected config files num=1`,
+   * the Dockerfile in the report with 25 checks passed and 2 failed. The pass
+   * read partial — "could not parse 1 file: Falling back to embedded checks:
+   * … — its misconfigurations were not checked" — about no file at all.
+   */
+  it.skipIf(!TRIVY_INSTALLED)("T-03 scan_iac: a checks bundle Trivy could not download is a note on a complete pass, with the built-in checks' findings", async () => {
+    vi.stubEnv('TRIVY_CACHE_DIR', makeTempDir('trivy-empty-cache-'));
+    // Nothing listens on the discard port: the download is refused at once, whatever the network.
+    for (const name of ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy']) vi.stubEnv(name, 'http://127.0.0.1:9');
+    for (const name of ['NO_PROXY', 'no_proxy']) vi.stubEnv(name, '');
+    try {
+      const r = await run('scan_iac', project({ Dockerfile: 'FROM alpine:3.19\nUSER root\nCMD ["sh"]\n' }));
+      const trivy = r.out.tools_run.find((t) => t.name === 'trivy-config');
+      expect(trivy?.status).toBe('ok');
+      expect(trivy?.reason).toMatch(/could not download its checks bundle and used the checks built into it/);
+      expect(trivy?.reason).not.toMatch(/could not parse/);
+      expect(r.out.missing_tools).not.toContain('trivy-config');
+      expect(r.findings).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });
