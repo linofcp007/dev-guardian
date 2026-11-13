@@ -252,7 +252,13 @@ function scriptsOf(text: string | null | undefined): Record<string, string> | nu
 function lineOfKey(text: string, name: string): number | undefined {
   const needle = JSON.stringify(name);
   const lines = text.split(/\r?\n/);
-  const i = lines.findIndex((l) => new RegExp(`${needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*:`).test(l));
+  // The quoted name followed by a colon, whitespace between them or not — by string search: no pattern is built from the name.
+  const i = lines.findIndex((l) => {
+    for (let at = l.indexOf(needle); at >= 0; at = l.indexOf(needle, at + 1)) {
+      if (l.slice(at + needle.length).trimStart().startsWith(':')) return true;
+    }
+    return false;
+  });
   return i < 0 ? undefined : i + 1;
 }
 
