@@ -45,7 +45,8 @@ export const loadSecretScan = async () => (await import('./hooksWrite.js')).secr
 export const loadSettingsGuard = async () => (await import('./hooksWrite.js')).settingsGuard;
 export const loadDataRegistry = async () => (await import('./hooksWrite.js')).dataRegistry;
 
-/** SessionStart: hardened git for the briefing, whether the project's database is registered, and whether the engine bundle is whole. */
+/** SessionStart: hardened git for the briefing, whether the project's database is registered, whether the engine bundle is whole, and the session mark. */
 export const loadGitSafety = async () => (await import('./hooksSession.js')).gitSafety;
 export const loadDbRegistry = async () => (await import('./hooksSession.js')).dbRegistry;
 export const loadDistCheck = async () => (await import('./hooksSession.js')).distCheck;
+export const loadHeartbeat = async () => (await import('./hooksSession.js')).heartbeat;

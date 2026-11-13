@@ -139,7 +139,13 @@ describe('the hooks bundle has what the dispatcher loads', () => {
       expect(sources(part), part).not.toContain('src/hooks/heartbeat.ts');
     }
     expect(Object.keys(meta.inputs).filter((p) => !p.startsWith('src/') && p !== '<define:__GUARDIAN_ENGINE_DIGEST__>')).toEqual([]);
-    expect(Object.keys(meta.inputs).filter((p) => /^src\/storage\//.test(p) && !/dbRegistry|userData/.test(p)), 'the storage layer').toEqual([]);
+    // What the module itself reaches for: Node, the bounded reader and the data directory's path — no storage.
+    const reaches = (meta.inputs['src/hooks/heartbeat.ts']?.imports ?? []).map((i) => i.path);
+    expect(reaches.length).toBeGreaterThan(0);
+    // (`<define:…>` is the build's own injection, listed against every input.)
+    expect(
+      reaches.filter((p) => !p.startsWith('node:') && !p.startsWith('<define:') && !/^src\/hooks\/(?:configFile|userDataDir)\.ts$/.test(p)),
+    ).toEqual([]);
     // The dispatcher takes it through its loader, as it takes every detector.
     expect(dispatcherLoaders()).toContain('loadHeartbeat');
   });

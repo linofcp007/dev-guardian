@@ -131,6 +131,10 @@ var MAX_LINK_HOPS = 32;
 function isRemoteOrDeviceTarget(target) {
   return /^(?:[\\/]{2}|\\\?\?\\)/.test(target);
 }
+function isNetworkPath(path) {
+  if (!/^(?:[\\/]{2}|\\\?\?\\)/.test(path)) return false;
+  return !/^(?:[\\/]{2}[?.]|\\\?\?)[\\/][A-Za-z]:(?:[\\/]|$)/.test(path);
+}
 function climbsOut(rel) {
   return rel === ".." || rel.startsWith("../") || rel.startsWith("..\\");
 }
@@ -172,6 +176,75 @@ function walkLinksUnder(under, path) {
     current = root;
   }
   return { ok: true };
+}
+function readBoundedBytes(path, maxBytes, opts = {}) {
+  try {
+    if (!statSync2(path).isFile()) return { status: "refused", reason: "not-a-regular-file" };
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+  }
+  let fd;
+  try {
+    fd = openSync(path, OPEN_FLAGS);
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return { status: "absent" };
+    if (code === "EISDIR") return { status: "refused", reason: "not-a-regular-file" };
+    return { status: "refused", reason: "unreadable" };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { status: "refused", reason: "not-a-regular-file" };
+    if (opts.head === true) {
+      const buf2 = Buffer.allocUnsafe(Math.max(0, Math.min(maxBytes, st.size)));
+      let total2 = 0;
+      while (total2 < buf2.length) {
+        const n = readSync(fd, buf2, total2, buf2.length - total2, null);
+        if (n === 0) break;
+        total2 += n;
+      }
+      return { status: "ok", bytes: buf2.subarray(0, total2) };
+    }
+    if (st.size > maxBytes) return { status: "refused", reason: "too-large" };
+    let buf = Buffer.allocUnsafe(st.size + 1);
+    let total = 0;
+    for (; ; ) {
+      if (total === buf.length) {
+        if (buf.length > maxBytes) break;
+        const bigger = Buffer.allocUnsafe(Math.min(buf.length * 2, maxBytes + 1));
+        buf.copy(bigger, 0, 0, total);
+        buf = bigger;
+      }
+      const n = readSync(fd, buf, total, buf.length - total, null);
+      if (n === 0) break;
+      total += n;
+    }
+    if (total > maxBytes) return { status: "refused", reason: "too-large" };
+    return { status: "ok", bytes: buf.subarray(0, total) };
+  } catch {
+    return { status: "refused", reason: "unreadable" };
+  } finally {
+    try {
+      closeSync(fd);
+    } catch {
+    }
+  }
+}
+function textOf(bytes) {
+  const text = bytes.toString("utf8");
+  return text.charCodeAt(0) === 65279 ? text.slice(1) : text;
+}
+function readText(path, maxBytes) {
+  const r = readBoundedBytes(path, maxBytes);
+  return r.status === "ok" ? { status: "ok", text: textOf(r.bytes) } : r;
+}
+function readSmallText(path, maxBytes, under) {
+  if (under !== void 0) {
+    const walk = walkLinksUnder(under, path);
+    if (!walk.ok) return { status: "refused", reason: walk.reason };
+  }
+  return readText(path, maxBytes);
 }
 
 // src/platform/projectFs.ts
@@ -1203,8 +1276,364 @@ function engineDamage(distDir, expected = builtDigest()) {
   if (createHash("sha256").update(bytes).digest("hex") !== expected.sha256) return "damaged (its content is not what the build wrote)";
   return null;
 }
+
+// src/hooks/heartbeat.ts
+var heartbeat_exports = {};
+__export(heartbeat_exports, {
+  GRACE_MS: () => GRACE_MS,
+  HEARTBEAT_DIR: () => HEARTBEAT_DIR,
+  MARK_MAX_BYTES: () => MARK_MAX_BYTES,
+  MAX_AGE_MS: () => MAX_AGE_MS,
+  PRUNE_MAX: () => PRUNE_MAX,
+  TOLERANCE_MS: () => TOLERANCE_MS,
+  hooksStatus: () => hooksStatus,
+  hostPidsOf: () => hostPidsOf,
+  markFileName: () => markFileName,
+  pluginServerExpected: () => pluginServerExpected,
+  projectKey: () => projectKey,
+  pruneHeartbeats: () => pruneHeartbeats,
+  serializeMark: () => serializeMark,
+  writeHeartbeat: () => writeHeartbeat
+});
+import { createHash as createHash2, randomBytes as randomBytes2 } from "node:crypto";
+import { accessSync as accessSync2, constants as constants5, readdirSync as readdirSync3, statSync as statSync5 } from "node:fs";
+import * as nodeFs from "node:fs/promises";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname3, join as join9, resolve as resolve6 } from "node:path";
+var HEARTBEAT_DIR = "hooks-heartbeat";
+var GRACE_MS = 3e4;
+var TOLERANCE_MS = 12e4;
+var MAX_AGE_MS = 30 * 24 * 60 * 60 * 1e3;
+var PRUNE_MAX = 64;
+var LIST_MAX = 512;
+var READ_MAX = 32;
+var MARK_MAX_BYTES = 1024;
+var HOOKS_MIN_CLAUDE_CODE = [2, 1, 139];
+var SOURCES = ["startup", "resume", "clear", "compact", "fork"];
+var MARK_NAME = /^p([0-9a-f]{16})\.h(\d{1,10})\.json$/;
+var TEMP_NAME = /^p[0-9a-f]{16}\.h\d{1,10}\.json\.\d+\.[0-9a-f]{8}\.tmp$/;
+function comparablePath(path, platform) {
+  let p = platform === process.platform ? resolve6(path) : path;
+  if (platform === "win32") p = p.replace(/\\/g, "/");
+  p = p.replace(/\/+$/, "");
+  return platform === "win32" || platform === "darwin" ? p.toLowerCase() : p;
+}
+function projectKey(root, platform = process.platform) {
+  return createHash2("sha256").update(comparablePath(root, platform)).digest("hex").slice(0, 16);
+}
+var isPid = (n) => typeof n === "number" && Number.isInteger(n) && n > 0 && n <= 4294967295;
+function hostPidsOf(env, ppid) {
+  const given = env["CLAUDE_PID"]?.trim() ?? "";
+  const claude = /^\d{1,10}$/.test(given) ? Number(given) : void 0;
+  const out = [];
+  for (const pid of [claude, ppid]) if (isPid(pid) && !out.includes(pid)) out.push(pid);
+  return out;
+}
+function markFileName(project, hostPid) {
+  return `p${project}.h${String(hostPid)}.json`;
+}
+function serializeMark(mark) {
+  const out = {
+    v: 1,
+    at: mark.at,
+    plugin_version: mark.plugin_version.slice(0, 40),
+    ...mark.source !== void 0 ? { source: mark.source } : {},
+    host_pids: mark.host_pids.slice(0, 2),
+    project: mark.project,
+    state: mark.state,
+    ...mark.disabled_by !== void 0 ? { disabled_by: mark.disabled_by } : {}
+  };
+  return `${JSON.stringify(out)}
+`;
+}
+function parseMark(text, opts) {
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw;
+  if (r["v"] !== 1) return null;
+  const at = r["at"];
+  if (typeof at !== "string") return null;
+  const when = Date.parse(at);
+  if (!Number.isFinite(when) || when > opts.now + TOLERANCE_MS) return null;
+  const version = r["plugin_version"];
+  if (typeof version !== "string" || version.length > 64) return null;
+  const pids = r["host_pids"];
+  if (!Array.isArray(pids) || pids.length < 1 || pids.length > 2 || !pids.every(isPid)) return null;
+  const project = r["project"];
+  if (typeof project !== "string" || !/^[0-9a-f]{16}$/.test(project)) return null;
+  const state = r["state"];
+  if (state !== "active" && state !== "disabled") return null;
+  const by = r["disabled_by"];
+  if (by !== void 0 && by !== "GUARDIAN_HOOKS" && by !== "user-config") return null;
+  const first = pids[0];
+  if (first === void 0) return null;
+  if (opts.fileName !== void 0 && opts.fileName !== markFileName(project, first)) return null;
+  const source = SOURCES.find((s) => s === r["source"]);
+  return {
+    v: 1,
+    at,
+    plugin_version: version,
+    ...source !== void 0 ? { source } : {},
+    host_pids: pids,
+    project,
+    state,
+    ...by !== void 0 ? { disabled_by: by } : {}
+  };
+}
+function safeHome() {
+  try {
+    return homedir2();
+  } catch {
+    return void 0;
+  }
+}
+function within(work, ms, fallback) {
+  return new Promise((done) => {
+    const timer = setTimeout(() => done(fallback), ms);
+    timer.unref?.();
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        done(value);
+      },
+      () => {
+        clearTimeout(timer);
+        done(fallback);
+      }
+    );
+  });
+}
+var reasonOf = (error) => {
+  const code = error?.code;
+  return code !== void 0 ? code : error instanceof Error ? error.message : String(error);
+};
+async function writeMark(opts) {
+  const fs = opts.fs ?? nodeFs;
+  const dataDir = opts.dataDir ?? userDataDir(opts.env !== void 0 ? { env: opts.env } : {});
+  if (isNetworkPath(dataDir)) return { written: false, reason: "the data directory is on the network" };
+  const home = opts.home ?? safeHome();
+  if (home !== void 0) {
+    const walk = walkLinksUnder(home, dataDir);
+    if (!walk.ok) {
+      return {
+        written: false,
+        reason: walk.reason === "remote-link" ? "a link on the way to the data directory leaves for the network" : "a link on the way to the data directory could not be read"
+      };
+    }
+  }
+  const pids = hostPidsOf(opts.env ?? process.env, opts.ppid ?? process.ppid);
+  const first = pids[0];
+  if (first === void 0) return { written: false, reason: "there is no host process to name" };
+  const source = SOURCES.find((s) => s === opts.source);
+  const mark = {
+    v: 1,
+    at: new Date(opts.now ?? Date.now()).toISOString(),
+    plugin_version: opts.pluginVersion,
+    ...source !== void 0 ? { source } : {},
+    host_pids: pids,
+    project: projectKey(opts.projectRoot, opts.platform ?? process.platform),
+    state: opts.state,
+    ...opts.state === "disabled" && opts.disabledBy !== void 0 ? { disabled_by: opts.disabledBy } : {}
+  };
+  const dir = join9(dataDir, HEARTBEAT_DIR);
+  const final = join9(dir, markFileName(mark.project, first));
+  const temp = `${final}.${String(process.pid)}.${randomBytes2(4).toString("hex")}.tmp`;
+  await fs.mkdir(dir, { recursive: true, mode: 448 });
+  await fs.writeFile(temp, serializeMark(mark), { flag: "wx", mode: 384 });
+  try {
+    await fs.rename(temp, final);
+  } catch (error) {
+    await fs.rm(temp, { force: true }).catch(() => void 0);
+    throw error;
+  }
+  return { written: true, file: final };
+}
+async function writeHeartbeat(opts) {
+  const say = opts.debug ?? (() => {
+  });
+  let work;
+  try {
+    work = writeMark(opts).catch((error) => ({ written: false, reason: reasonOf(error) }));
+  } catch (error) {
+    work = Promise.resolve({ written: false, reason: reasonOf(error) });
+  }
+  const result = await within(work, opts.timeoutMs ?? 1e3, { written: false, reason: "the write did not finish in time" });
+  say(result.written ? "heartbeat: written" : `heartbeat: not written \u2014 ${result.reason ?? "unknown reason"}`);
+  return result;
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+async function prune(dir, opts) {
+  const fs = opts.fs ?? nodeFs;
+  const now = opts.now ?? Date.now();
+  const alive = opts.isAlive ?? processAlive;
+  let names;
+  try {
+    names = await fs.readdir(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names.slice(0, LIST_MAX)) {
+    if (removed >= PRUNE_MAX) break;
+    const named = MARK_NAME.exec(name);
+    if (named === null && !TEMP_NAME.test(name)) continue;
+    const path = join9(dir, name);
+    if (path === opts.keep) continue;
+    try {
+      const st = await fs.lstat(path);
+      if (!st.isFile()) continue;
+      const old = now - st.mtimeMs > MAX_AGE_MS;
+      const orphan = named !== null && !alive(Number(named[2]));
+      if (!old && !orphan) continue;
+      await fs.unlink(path);
+      removed += 1;
+    } catch {
+    }
+  }
+  return removed;
+}
+function pruneHeartbeats(dir, opts = {}) {
+  return within(prune(dir, opts), opts.timeoutMs ?? 1e3, 0);
+}
+function pluginServerExpected(env, serverRoot, platform = process.platform) {
+  const given = env["CLAUDE_PLUGIN_ROOT"]?.trim() ?? "";
+  if (given === "") {
+    return { expected: false, reason: "this server was not started as a Claude Code plugin's server, so no dev-guardian hook is expected here" };
+  }
+  if (comparablePath(given, platform) !== comparablePath(serverRoot, platform)) {
+    return { expected: false, reason: "this server runs from another directory than the plugin Claude Code started, so its hooks are not this session's" };
+  }
+  return { expected: true, reason: "started as the plugin's own server" };
+}
+function probeWritable(dataDir) {
+  let dir = resolve6(dataDir);
+  for (let i = 0; i < 64; i += 1) {
+    let st;
+    try {
+      st = statSync5(dir);
+    } catch {
+      const parent = dirname3(dir);
+      if (parent === dir) return "it does not exist";
+      dir = parent;
+      continue;
+    }
+    if (!st.isDirectory()) return "it is not a directory";
+    try {
+      accessSync2(dir, constants5.W_OK);
+      return null;
+    } catch (error) {
+      return `it is not writable (${reasonOf(error)})`;
+    }
+  }
+  return "it does not exist";
+}
+function candidateMarks(dir, hostPids, project, now) {
+  let names;
+  try {
+    names = readdirSync3(dir);
+  } catch {
+    return [];
+  }
+  const out = [];
+  for (const name of names.slice(0, LIST_MAX)) {
+    if (out.length >= READ_MAX) break;
+    const named = MARK_NAME.exec(name);
+    if (named === null) continue;
+    if (named[1] !== project && !hostPids.includes(Number(named[2]))) continue;
+    const read = readSmallText(join9(dir, name), MAX_HOOK_CONFIG_BYTES);
+    if (read.status !== "ok") continue;
+    const mark = parseMark(read.text, { now, fileName: name });
+    if (mark !== null) out.push({ mark, at: Date.parse(mark.at) });
+  }
+  return out;
+}
+var newest = (marks) => [...marks].sort((a, b) => b.at - a.at)[0];
+function clientLabel(client) {
+  const label = [client?.name, client?.version].filter((s) => typeof s === "string" && s.trim() !== "").join(" ");
+  return label === "" ? void 0 : label;
+}
+function tooOld(client) {
+  if (!/claude/i.test(client?.name ?? "")) return void 0;
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(client?.version ?? "");
+  if (m === null) return void 0;
+  const got = [Number(m[1]), Number(m[2]), Number(m[3])];
+  for (let i = 0; i < 3; i += 1) {
+    const a = got[i] ?? 0;
+    const b = HOOKS_MIN_CLAUDE_CODE[i] ?? 0;
+    if (a !== b) return a < b ? client?.version : void 0;
+  }
+  return void 0;
+}
+var MIN_VERSION = HOOKS_MIN_CLAUDE_CODE.join(".");
+function notObservedWarning(client) {
+  const old = tooOld(client);
+  return "No dev-guardian hook has started in this Claude Code session: shell commands, file writes and package installs are not being assessed, and there was no session briefing. Tell the user. " + (old !== void 0 ? `This Claude Code reports ${old}, older than ${MIN_VERSION}, which starts no plugin hook: updating it is the likely fix. ` : "") + `To check: the Claude Code version (the hooks need ${MIN_VERSION} or later), that the hooks find \`node\` on their PATH, and the hook settings of Claude Code itself.`;
+}
+var DISABLED_BY = {
+  GUARDIAN_HOOKS: "the GUARDIAN_HOOKS environment variable",
+  "user-config": "the user's own hooks configuration"
+};
+function hooksStatus(opts) {
+  const now = opts.now ?? Date.now();
+  const host = clientLabel(opts.client);
+  const withHost = host !== void 0 ? { host } : {};
+  if (!opts.expected.expected) {
+    return { hooks: { state: "not_applicable", reason: opts.expected.reason, ...withHost }, warning: null };
+  }
+  const platform = opts.platform ?? process.platform;
+  const onNetwork = isNetworkPath(opts.dataDir);
+  const project = projectKey(opts.projectRoot, platform);
+  const inProject = isInside(opts.dataDir, opts.projectRoot, platform);
+  const marks = onNetwork || inProject ? [] : candidateMarks(join9(opts.dataDir, HEARTBEAT_DIR), opts.hostPids, project, now);
+  const byProcess = newest(marks.filter((m) => m.mark.host_pids.some((pid) => opts.hostPids.includes(pid))));
+  const byTime = byProcess ?? newest(marks.filter((m) => m.mark.project === project && m.at >= opts.serverStartedAt - TOLERANCE_MS));
+  if (byTime !== void 0) {
+    const { mark, at } = byTime;
+    const disabled = mark.state === "disabled";
+    return {
+      hooks: {
+        state: disabled ? "disabled_by_user" : "running",
+        matched_by: byProcess !== void 0 ? "host_process" : "time",
+        last_seen_at: mark.at,
+        age_seconds: Math.max(0, Math.floor((now - at) / 1e3)),
+        plugin_version: mark.plugin_version,
+        ...mark.source !== void 0 ? { source: mark.source } : {},
+        ...withHost,
+        ...disabled ? { disabled_by: DISABLED_BY[mark.disabled_by ?? "user-config"] } : {}
+      },
+      warning: null
+    };
+  }
+  const why = onNetwork ? "it is on the network, where no mark is written" : (opts.writable ?? probeWritable)(opts.dataDir);
+  if (why !== null) {
+    return { hooks: { state: "unknown", reason: `the data directory cannot hold a session mark: ${why}`, ...withHost }, warning: null };
+  }
+  if (now - opts.serverStartedAt < GRACE_MS) return { hooks: { state: "pending", ...withHost }, warning: null };
+  return {
+    hooks: { state: "not_observed", ...withHost },
+    warning: notObservedWarning(opts.client) + (inProject ? " (The data directory is inside the project, so a session mark there is not taken as proof.)" : "")
+  };
+}
+function isInside(path, dir, platform) {
+  const child = comparablePath(path, platform);
+  const parent = comparablePath(dir, platform);
+  return child === parent || child.startsWith(`${parent}/`);
+}
 export {
   dbRegistry_exports as dbRegistry,
   distCheck_exports as distCheck,
-  gitSafety_exports as gitSafety
+  gitSafety_exports as gitSafety,
+  heartbeat_exports as heartbeat
 };

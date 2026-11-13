@@ -1123,11 +1123,50 @@ async function engineNotice() {
 }
 
 /**
+ * SessionStart's mark for `health_status` (`mcp/src/hooks/heartbeat.ts`): that
+ * a hook started in this session, written to the user's data directory —
+ * never the project — and the one thing a hook writes. A Claude Code older
+ * than 2.1.139 starts no hook, and none can say so; the MCP server, which
+ * still answers, looks for this mark. It holds a date, the plugin's version,
+ * the event's source, the host process and a key of the project: no path, no
+ * content. Then the old marks are removed.
+ *
+ * Fail-open like everything here: the write never throws, never waits more
+ * than a second, and says why it failed only under GUARDIAN_HOOKS_DEBUG=1.
+ *
+ * @param {string} root
+ * @param {Record<string, unknown>} payload
+ * @param {'active' | 'disabled'} state
+ * @param {'GUARDIAN_HOOKS' | 'user-config'} [disabledBy] what switched the hooks off, when they are
+ * @returns {Promise<void>}
+ */
+async function sessionMark(root, payload, state, disabledBy) {
+  debug('heartbeat: start');
+  try {
+    const heartbeat = await detector('loadHeartbeat');
+    const written = await heartbeat.writeHeartbeat({
+      projectRoot: root,
+      pluginVersion: pluginVersion(),
+      source: payload.source,
+      state,
+      ...(disabledBy !== undefined ? { disabledBy } : {}),
+      debug,
+    });
+    if (written.written && written.file !== undefined) {
+      await heartbeat.pruneHeartbeats(dirname(written.file), { keep: written.file });
+    }
+  } catch (err) {
+    debug(`heartbeat: not written — ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * @param {string} root
  * @param {HookConfig} cfg
+ * @param {Promise<void>} marked the session mark being written ({@link sessionMark})
  * @returns {Promise<never>}
  */
-async function handleSessionStart(root, cfg) {
+async function handleSessionStart(root, cfg, marked) {
   // git runs in processes of its own: started first, its three — the
   // configuration read and the submodule listing side by side, then `status`
   // — overlap the modules loading below (3.4.0). One git call for the branch
@@ -1137,14 +1176,17 @@ async function handleSessionStart(root, cfg) {
   // drivers would run (they are also neutralised by gitSafety); a submodule
   // whose commit moved still counts. Not in a folder git finds no repository
   // for, nor when the project turned the briefing off.
-  const status =
-    cfg.sessionStart && inGitRepository(root)
-      ? git(root, ['status', '--porcelain=v2', '--branch', '--ignore-submodules=dirty'])
-      : Promise.resolve('');
+  const wantsStatus = cfg.sessionStart && inGitRepository(root);
+  if (wantsStatus) debug('session: git status');
+  const status = wantsStatus
+    ? git(root, ['status', '--porcelain=v2', '--branch', '--ignore-submodules=dirty'])
+    : Promise.resolve('');
   // What the model must hear even when the project turned the briefing off:
   // settings it asked for that were ignored, guards that are not running, and
   // the briefing's own checks when they could not run.
   const [off, engine, session] = await Promise.all([unloadableGuardsNotice(), engineNotice(), sessionPartNotice()]);
+  // Before any answer: the hook exits with it, and the mark must be whole by then.
+  await marked;
   const guardsOff = off !== null;
   const notice = [ignoredSettingsNotice(cfg), off, engine, session].filter(Boolean).join('\n') || null;
   if (!cfg.sessionStart) {
@@ -2191,11 +2233,18 @@ async function claudeSettingsRemoveAsk(rawPath, cwd, toolName) {
 // ─────────────────────────────────── main ──────────────────────────────────
 
 async function main() {
-  if (process.env.GUARDIAN_HOOKS === 'off') noop();
+  // Switched off, a hook does nothing — except that SessionStart still leaves
+  // its mark, saying so: without it health_status could not tell "switched off
+  // by the user" from "never started".
+  const off = process.env.GUARDIAN_HOOKS === 'off';
+  // The event is in the arguments (hooks.json) or, failing that, in the payload: an event
+  // named there and not SessionStart ends here, before anything is read.
+  if (off && process.argv[2] !== undefined && process.argv[2] !== 'SessionStart') noop();
 
   const payload = await readStdin();
   const named = payload.hook_event_name ?? process.argv[2] ?? '';
   const event = typeof named === 'string' ? named : '';
+  if (off && event !== 'SessionStart') noop();
   const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : '';
   /** @type {ToolInput} */
   const input = isPlainObject(payload.tool_input) ? payload.tool_input : {};
@@ -2206,8 +2255,15 @@ async function main() {
   const unread = [];
   // The project is its root, not wherever the session has cd-ed to (review I5).
   const root = projectRootOf(cwd);
+  if (off) {
+    await sessionMark(root, payload, 'disabled', 'GUARDIAN_HOOKS');
+    noop();
+  }
   const cfg = loadConfig(root, unread);
-  if (!cfg.enabled) noop();
+  if (!cfg.enabled) {
+    if (event === 'SessionStart') await sessionMark(root, payload, 'disabled', 'user-config');
+    noop();
+  }
   /** @type {string[]} */
   const shortEntries = [];
   const allowlist = loadAllowlist(root, unread, shortEntries);
@@ -2217,9 +2273,13 @@ async function main() {
   debug(`event=${event} tool=${toolName} cwd=${cwd} root=${root}`);
 
   switch (event) {
-    case 'SessionStart':
+    case 'SessionStart': {
+      // The mark first: it is what says a hook started at all, so it does not
+      // wait for git or for the checks — it runs beside them.
+      const marked = sessionMark(root, payload, 'active');
       await loadRegistryReader();
-      return handleSessionStart(root, cfg);
+      return handleSessionStart(root, cfg, marked);
+    }
     case 'PostToolUse': {
       const write = describeWrite(toolName, input);
       return write === null ? noop() : handlePostToolUse(write, cwd, root, cfg, allowlist);

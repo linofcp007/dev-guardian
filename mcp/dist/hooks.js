@@ -269,6 +269,7 @@ var loadDataRegistry = async () => (await import("./hooksWrite.js")).dataRegistr
 var loadGitSafety = async () => (await import("./hooksSession.js")).gitSafety;
 var loadDbRegistry = async () => (await import("./hooksSession.js")).dbRegistry;
 var loadDistCheck = async () => (await import("./hooksSession.js")).distCheck;
+var loadHeartbeat = async () => (await import("./hooksSession.js")).heartbeat;
 export {
   loadBashGuard,
   loadConfigFile,
@@ -277,6 +278,7 @@ export {
   loadDistCheck,
   loadGitSafety,
   loadGuardedPath,
+  loadHeartbeat,
   loadInstallGate,
   loadInstallVetting,
   loadSecretScan,
