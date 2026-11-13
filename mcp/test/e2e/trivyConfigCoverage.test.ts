@@ -14,11 +14,12 @@
  * Trivy into a failure, as elsewhere.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PluginContext } from '../../src/context.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
+import { runTrivy } from '../../src/runners/trivyRun.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
@@ -280,5 +281,46 @@ describe('trivy config parse errors and unrecognised IaC (real Trivy)', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+/**
+ * The root `.guardian/reports/` is dev-guardian's own output — and where the
+ * sibling scans of one security_scan_full create and remove their report
+ * directories while Trivy walks the tree. Measured on 0.74.0 with that
+ * directory changing under it: 9 of 20 `trivy config` runs failed ("walk dir:
+ * range error: GetFileAttributesEx …", "walk error open …"), 0 of 20 with
+ * `--skip-dirs .guardian/reports`. A race is not asserted here; what Trivy
+ * read is: every file it reads is a Target of its report.
+ */
+describe("Trivy and dev-guardian's own output at the root .guardian/ (real Trivy)", () => {
+  const ROOT_USER = 'FROM alpine:3.19\nUSER root\nCMD ["sh"]\n';
+
+  /** The Targets of a `trivy config` run over `target`, `/`-separated. */
+  async function configTargets(target: string): Promise<string[]> {
+    const work = makeTempDir('trivy-own-output-');
+    const out = join(work, 'report.json');
+    const run = await runTrivy({ args: ['config', '--format', 'json', '--output', out], target, workDir: work });
+    expect(run.outcome, run.stderr.slice(-400)).toBe('completed');
+    expect(run.exitCode).toBe(0);
+    const report = JSON.parse(readFileSync(out, 'utf8')) as { Results?: Array<{ Target?: string }> };
+    return (report.Results ?? []).map((r) => (r.Target ?? '').split('\\').join('/'));
+  }
+
+  it.skipIf(!TRIVY_INSTALLED)("T-03 runTrivy: Trivy does not read dev-guardian's own reports at the root .guardian/", async () => {
+    const dir = project({ Dockerfile: ROOT_USER, '.guardian/reports/old/Dockerfile': ROOT_USER });
+    const targets = await configTargets(dir);
+    expect(targets).toContain('Dockerfile');
+    expect(targets.filter((t) => t.startsWith('.guardian/reports/'))).toEqual([]);
+  });
+
+  it.skipIf(!TRIVY_INSTALLED)("T-02 runTrivy: a .guardian below the root and the root's shared files are the project's, and a single file is a target", async () => {
+    const dir = project({
+      Dockerfile: ROOT_USER,
+      'lib/.guardian/reports/x/Dockerfile': ROOT_USER,
+      '.guardian/Dockerfile': ROOT_USER,
+    });
+    expect(await configTargets(dir)).toEqual(expect.arrayContaining(['Dockerfile', 'lib/.guardian/reports/x/Dockerfile', '.guardian/Dockerfile']));
+    expect(await configTargets(join(dir, 'Dockerfile'))).toEqual(['Dockerfile']);
   });
 });

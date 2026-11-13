@@ -19,6 +19,7 @@ vi.mock('../../../src/runners/spawn.js', async () => {
   return { ...actual, captureOutput: vi.fn() };
 });
 
+import { ROOT_OUTPUT_PATHS } from '../../../src/platform/guardianOutput.js';
 import { captureOutput } from '../../../src/runners/spawn.js';
 import { runProcess } from '../../../src/runners/processRunner.js';
 import {
@@ -65,6 +66,26 @@ describe('trivyArgv', () => {
     // repo/rootfs resolve a tree too; config/image do not take it.
     expect(trivyArgv({ args: ['rootfs'], target: '/p' }, '/r/c.yaml', null)).toContain('--offline-scan');
     expect(trivyArgv({ args: ['image'], target: 'alpine' }, '/r/c.yaml', null)).not.toContain('--offline-scan');
+  });
+
+  // The root `.guardian/reports/` is where the sibling scans of one security_scan_full create and remove their
+  // report directories while Trivy walks the tree: 9 of 20 `trivy config` runs failed on an entry that vanished
+  // ("walk dir: range error: GetFileAttributesEx …"), 0 of 20 once it was told to skip that directory.
+  it("T-01 the argv of a tree scan skips dev-guardian's generated output at the root .guardian/, and an image scan gets none of it", () => {
+    for (const sub of ['fs', 'filesystem', 'repo', 'repository', 'rootfs', 'config']) {
+      const argv = trivyArgv({ args: [sub], target: '/p' }, '/r/c.yaml', null);
+      for (const path of ROOT_OUTPUT_PATHS) {
+        const at = argv.indexOf(path);
+        expect(at, `${sub}: ${path}`).toBeGreaterThan(0);
+        expect(argv[at - 1], `${sub}: ${path}`).toBe(path === '.guardian/reports' ? '--skip-dirs' : '--skip-files');
+      }
+      // Anchored at the target, as Trivy reads them: never a bare `.guardian`, which would hide the shared files.
+      expect(argv, sub).not.toContain('.guardian');
+      expect(argv.at(-1), sub).toBe('/p');
+    }
+    const image = trivyArgv({ args: ['image'], target: 'alpine' }, '/r/c.yaml', null);
+    expect(image).not.toContain('--skip-dirs');
+    expect(image).not.toContain('--skip-files');
   });
 
   it('adds --ignorefile when the project has a .trivyignore, and no --offline-scan on a config scan', () => {
