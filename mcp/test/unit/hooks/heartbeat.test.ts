@@ -364,6 +364,20 @@ describe('the session mark: what health_status concludes', () => {
     expect(redirected.hooks.state).toBe('not_observed');
     expect(redirected.hooks.matched_by).toBeUndefined();
     expect(redirected.warning).toMatch(/inside the project/);
+    // Nor can what the project put in the data directory's place change the answer: pointed at a FILE of
+    // the project it is not even probed — "unknown" would be the quiet state, and this one must warn.
+    const decoy = join(project, 'not-a-directory');
+    writeFileSync(decoy, 'x');
+    const probed = hooksStatus({
+      expected: { expected: true, reason: "started as the plugin's server" },
+      dataDir: decoy,
+      projectRoot: project,
+      hostPids: [HOST],
+      serverStartedAt: NOW - 60_000,
+      now: NOW,
+    });
+    expect(probed.hooks.state).toBe('not_observed');
+    expect(probed.warning).toMatch(/inside the project/);
     // The same marks in a data directory outside the project do count: the refusal is about where they are.
     const outside = makeTempDir('guardian-hb-');
     seed(outside, mark({ project: projectKey(project) }));

@@ -533,10 +533,13 @@ export function hooksStatus(opts: HooksStatusOptions): { hooks: HooksStatus; war
   }
 
   const platform = opts.platform ?? process.platform;
-  const onNetwork = isNetworkPath(opts.dataDir);
+  // Nothing is asked of the filesystem about a directory on the network, nor about one a link on the way
+  // sends there: the server would wait on the host, as a hook once did.
+  const onNetwork = isNetworkPath(opts.dataDir) || leavesForTheNetwork(opts.dataDir);
   const project = projectKey(opts.projectRoot, platform);
   // A data directory inside the project is one the project's own files can fill: a repository could ship
-  // a mark for every plausible process id. Nothing there is proof, whatever it says.
+  // a mark for every plausible process id. Nothing there is proof, whatever it says — and nothing there
+  // is even looked at, so that what the project put in its place cannot change the answer.
   const inProject = isInside(opts.dataDir, opts.projectRoot, platform);
   const marks = onNetwork || inProject ? [] : candidateMarks(join(opts.dataDir, HEARTBEAT_DIR), opts.hostPids, project, now);
 
@@ -563,7 +566,11 @@ export function hooksStatus(opts: HooksStatusOptions): { hooks: HooksStatus; war
   }
 
   // No mark. Could one have been written at all?
-  const why = onNetwork ? 'it is on the network, where no mark is written' : (opts.writable ?? probeWritable)(opts.dataDir);
+  const why = onNetwork
+    ? 'it is on the network, where no mark is written'
+    : inProject
+      ? null
+      : (opts.writable ?? probeWritable)(opts.dataDir);
   if (why !== null) {
     return { hooks: { state: 'unknown', reason: `the data directory cannot hold a session mark: ${why}`, ...withHost }, warning: null };
   }
@@ -574,6 +581,12 @@ export function hooksStatus(opts: HooksStatusOptions): { hooks: HooksStatus; war
       notObservedWarning(opts.client) +
       (inProject ? ' (The data directory is inside the project, so a session mark there is not taken as proof.)' : ''),
   };
+}
+
+/** Whether a link on the way from the home directory to `dataDir` points at the network (lstat and readlink only). */
+function leavesForTheNetwork(dataDir: string): boolean {
+  const home = safeHome();
+  return home !== undefined && !walkLinksUnder(home, dataDir).ok;
 }
 
 /** Whether `path` is `dir` or lies below it, compared as the filesystem compares them. */

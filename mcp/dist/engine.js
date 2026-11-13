@@ -81685,6 +81685,7 @@ var init_registerCustomRules = __esm({
 // src/hooks/heartbeat.ts
 import { createHash as createHash14, randomBytes as randomBytes6 } from "node:crypto";
 import { accessSync as accessSync2, constants as constants5, readdirSync as readdirSync16, statSync as statSync13 } from "node:fs";
+import { homedir as homedir9 } from "node:os";
 import { dirname as dirname26, join as join82, resolve as resolve26 } from "node:path";
 function comparablePath(path3, platform) {
   let p = platform === process.platform ? resolve26(path3) : path3;
@@ -81743,6 +81744,13 @@ function parseMark(text2, opts) {
     state,
     ...by !== void 0 ? { disabled_by: by } : {}
   };
+}
+function safeHome2() {
+  try {
+    return homedir9();
+  } catch {
+    return void 0;
+  }
 }
 function pluginServerExpected(env, serverRoot, platform = process.platform) {
   const given = env["CLAUDE_PLUGIN_ROOT"]?.trim() ?? "";
@@ -81824,7 +81832,7 @@ function hooksStatus(opts) {
     return { hooks: { state: "not_applicable", reason: opts.expected.reason, ...withHost }, warning: null };
   }
   const platform = opts.platform ?? process.platform;
-  const onNetwork = isNetworkPath(opts.dataDir);
+  const onNetwork = isNetworkPath(opts.dataDir) || leavesForTheNetwork(opts.dataDir);
   const project = projectKey(opts.projectRoot, platform);
   const inProject = isInside3(opts.dataDir, opts.projectRoot, platform);
   const marks = onNetwork || inProject ? [] : candidateMarks(join82(opts.dataDir, HEARTBEAT_DIR), opts.hostPids, project, now);
@@ -81847,7 +81855,7 @@ function hooksStatus(opts) {
       warning: null
     };
   }
-  const why = onNetwork ? "it is on the network, where no mark is written" : (opts.writable ?? probeWritable)(opts.dataDir);
+  const why = onNetwork ? "it is on the network, where no mark is written" : inProject ? null : (opts.writable ?? probeWritable)(opts.dataDir);
   if (why !== null) {
     return { hooks: { state: "unknown", reason: `the data directory cannot hold a session mark: ${why}`, ...withHost }, warning: null };
   }
@@ -81856,6 +81864,10 @@ function hooksStatus(opts) {
     hooks: { state: "not_observed", ...withHost },
     warning: notObservedWarning(opts.client) + (inProject ? " (The data directory is inside the project, so a session mark there is not taken as proof.)" : "")
   };
+}
+function leavesForTheNetwork(dataDir) {
+  const home = safeHome2();
+  return home !== void 0 && !walkLinksUnder(home, dataDir).ok;
 }
 function isInside3(path3, dir, platform) {
   const child = comparablePath(path3, platform);
@@ -95491,7 +95503,7 @@ var init_siteKeys = __esm({
 // src/wordpress/vulnFeed.ts
 import { mkdirSync as mkdirSync13, renameSync as renameSync5, writeFileSync as writeFileSync24 } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { homedir as homedir9 } from "node:os";
+import { homedir as homedir10 } from "node:os";
 import { join as join88 } from "node:path";
 import { randomUUID as randomUUID9 } from "node:crypto";
 function comparePhpVersions(a, b) {
@@ -95577,14 +95589,14 @@ function defaultWordfenceCacheDir(env = process.env) {
   const override = env["GUARDIAN_CACHE_DIR"];
   if (override !== void 0 && override.length > 0) return override;
   if (process.platform === "win32") {
-    const base3 = env["LOCALAPPDATA"] ?? join88(homedir9(), "AppData", "Local");
+    const base3 = env["LOCALAPPDATA"] ?? join88(homedir10(), "AppData", "Local");
     return join88(base3, "dev-guardian", "cache");
   }
   if (process.platform === "darwin") {
-    const base3 = env["XDG_CACHE_HOME"] ?? join88(homedir9(), "Library", "Caches");
+    const base3 = env["XDG_CACHE_HOME"] ?? join88(homedir10(), "Library", "Caches");
     return join88(base3, "dev-guardian");
   }
-  const base2 = env["XDG_CACHE_HOME"] ?? join88(homedir9(), ".cache");
+  const base2 = env["XDG_CACHE_HOME"] ?? join88(homedir10(), ".cache");
   return join88(base2, "dev-guardian");
 }
 async function getWordfenceFeed(opts = {}) {
@@ -108614,10 +108626,10 @@ var init_jsonc = __esm({
 });
 
 // src/agentaudit/configSources.ts
-import { homedir as homedir10 } from "node:os";
+import { homedir as homedir11 } from "node:os";
 import { dirname as dirname33, isAbsolute as isAbsolute23, join as join109, relative as relative37 } from "node:path";
 function hostPathEnv() {
-  return { os: detectOs(), home: homedir10(), appData: process.env["APPDATA"], projectPath: "" };
+  return { os: detectOs(), home: homedir11(), appData: process.env["APPDATA"], projectPath: "" };
 }
 function hostConfigPath(host) {
   return resolveMcpConfigPath(host, "global", hostPathEnv()) ?? "";
@@ -108630,7 +108642,7 @@ function claudeCodeDescriptors() {
       label: custom2 ? "$CLAUDE_CONFIG_DIR/.claude.json" : "~/.claude.json",
       kind: "user",
       mcpServersField: "mcpServers",
-      resolve: () => custom2 ? join109(dir, ".claude.json") : join109(homedir10(), ".claude.json"),
+      resolve: () => custom2 ? join109(dir, ".claude.json") : join109(homedir11(), ".claude.json"),
       maxBytes: MAX_CLAUDE_JSON_BYTES,
       nestedProjects: true
     },
@@ -108638,7 +108650,7 @@ function claudeCodeDescriptors() {
       label: custom2 ? "$CLAUDE_CONFIG_DIR/settings.json" : "~/.claude/settings.json",
       kind: "user",
       mcpServersField: null,
-      resolve: () => custom2 ? join109(dir, "settings.json") : join109(homedir10(), ".claude", "settings.json")
+      resolve: () => custom2 ? join109(dir, "settings.json") : join109(homedir11(), ".claude", "settings.json")
     }
   ];
 }
@@ -108673,7 +108685,7 @@ function isWithin(root, path3) {
 }
 function walkRoot(kind, projectPath, path3) {
   if (kind === "project") return projectPath;
-  const home = homedir10();
+  const home = homedir11();
   return isWithin(home, path3) ? home : dirname33(dirname33(path3));
 }
 function readOne2(descriptor, projectPath) {
@@ -115984,7 +115996,7 @@ var init_popular = __esm({
 
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync19, readdirSync as readdirSync20 } from "node:fs";
-import { homedir as homedir11 } from "node:os";
+import { homedir as homedir12 } from "node:os";
 import { dirname as dirname34, isAbsolute as isAbsolute25, join as join111, parse as parse10, relative as relative38, resolve as resolve37 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
@@ -116065,7 +116077,7 @@ function samePath3(a, b) {
 }
 function ancestors2(ctx) {
   if (ctx.projectDir === void 0) return [];
-  const stops = [ctx.homeDir, homedir11()].filter((x) => typeof x === "string");
+  const stops = [ctx.homeDir, homedir12()].filter((x) => typeof x === "string");
   const out = [];
   let dir = resolve37(ctx.projectDir);
   for (let i = 0; i < 16; i += 1) {
@@ -116082,7 +116094,7 @@ function envOf(ctx) {
   return ctx.env ?? process.env;
 }
 function homeOf(ctx) {
-  return ctx.homeDir ?? homedir11();
+  return ctx.homeDir ?? homedir12();
 }
 function envValue6(env, name) {
   const v = env[name] ?? env[name.toLowerCase()];

@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 5039125, sha256: "49938454b2041e8b320bddad1a9734389f85a3f459eaf93f0f2eb0eb70525271" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 5039456, sha256: "946a588b5311cfe47dce3833ea65636cc6440c3541b8b2faa05e9f7e9e65da16" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -1593,7 +1593,7 @@ function hooksStatus(opts) {
     return { hooks: { state: "not_applicable", reason: opts.expected.reason, ...withHost }, warning: null };
   }
   const platform = opts.platform ?? process.platform;
-  const onNetwork = isNetworkPath(opts.dataDir);
+  const onNetwork = isNetworkPath(opts.dataDir) || leavesForTheNetwork(opts.dataDir);
   const project = projectKey(opts.projectRoot, platform);
   const inProject = isInside(opts.dataDir, opts.projectRoot, platform);
   const marks = onNetwork || inProject ? [] : candidateMarks(join9(opts.dataDir, HEARTBEAT_DIR), opts.hostPids, project, now);
@@ -1616,7 +1616,7 @@ function hooksStatus(opts) {
       warning: null
     };
   }
-  const why = onNetwork ? "it is on the network, where no mark is written" : (opts.writable ?? probeWritable)(opts.dataDir);
+  const why = onNetwork ? "it is on the network, where no mark is written" : inProject ? null : (opts.writable ?? probeWritable)(opts.dataDir);
   if (why !== null) {
     return { hooks: { state: "unknown", reason: `the data directory cannot hold a session mark: ${why}`, ...withHost }, warning: null };
   }
@@ -1625,6 +1625,10 @@ function hooksStatus(opts) {
     hooks: { state: "not_observed", ...withHost },
     warning: notObservedWarning(opts.client) + (inProject ? " (The data directory is inside the project, so a session mark there is not taken as proof.)" : "")
   };
+}
+function leavesForTheNetwork(dataDir) {
+  const home = safeHome();
+  return home !== void 0 && !walkLinksUnder(home, dataDir).ok;
 }
 function isInside(path, dir, platform) {
   const child = comparablePath(path, platform);
