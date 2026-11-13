@@ -53981,7 +53981,12 @@ function scriptsOf(text3) {
 function lineOfKey(text3, name) {
   const needle = JSON.stringify(name);
   const lines = text3.split(/\r?\n/);
-  const i = lines.findIndex((l) => new RegExp(`${needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:`).test(l));
+  const i = lines.findIndex((l) => {
+    for (let at = l.indexOf(needle); at >= 0; at = l.indexOf(needle, at + 1)) {
+      if (l.slice(at + needle.length).trimStart().startsWith(":")) return true;
+    }
+    return false;
+  });
   return i < 0 ? void 0 : i + 1;
 }
 function make(rule, severity, path3, line, title, message3) {
