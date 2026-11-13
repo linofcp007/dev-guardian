@@ -128,7 +128,6 @@ function writeOptions(dataDir: string, over: Partial<WriteHeartbeatOptions> = {}
     env: {},
     ppid: HOST,
     now: NOW,
-    isAlive: () => true,
     ...over,
   };
 }
@@ -357,10 +356,18 @@ describe('the session mark: what health_status concludes', () => {
     seed(shipped, mark({ project: projectKey(project) }));
     expect(status(makeTempDir('guardian-hb-'), { projectRoot: project }).hooks.state).toBe('not_observed');
 
-    // The data directory redirected into the project, where a mark was waiting: it has neither this
-    // session's host process nor a date inside the tolerance.
+    // The data directory redirected INTO the project, where marks were waiting — one of them, written a
+    // moment ago, even names this session's host process (a repository can ship one for every plausible
+    // id). Nothing inside the project is proof: the state is what it would be with no mark, warning included.
     seed(shipped, mark({ project: projectKey(project), host_pids: [777], at: iso(NOW - 24 * 60 * 60 * 1000) }));
-    expect(status(shipped, { projectRoot: project }).hooks.state).toBe('not_observed');
+    const redirected = status(shipped, { projectRoot: project });
+    expect(redirected.hooks.state).toBe('not_observed');
+    expect(redirected.hooks.matched_by).toBeUndefined();
+    expect(redirected.warning).toMatch(/inside the project/);
+    // The same marks in a data directory outside the project do count: the refusal is about where they are.
+    const outside = makeTempDir('guardian-hb-');
+    seed(outside, mark({ project: projectKey(project) }));
+    expect(status(outside, { projectRoot: project }).hooks.state).toBe('running');
   });
 });
 
