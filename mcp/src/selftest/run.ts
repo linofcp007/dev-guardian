@@ -1,4 +1,3 @@
-// @ts-nocheck -- Phase 4 scaffold (dev-spec-driven): the failing tests come first; the implementation replaces these bodies.
 /**
  * `dev-guardian selftest` — does each core control DETECT on this machine?
  *
@@ -28,10 +27,10 @@
  * `defaultRunners.ts`.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { canaryPresent, createWorkspace, leftoverWorkspaces, PROBE_RULE_FILE, removeWorkspace, seedCanaries, type Workspace } from './canaries.js';
+import { basename, join } from 'node:path';
+import { canaryPresent, canaryToken, createWorkspace, leftoverWorkspaces, PROBE_RULE_FILE, removeWorkspace, seedCanaries, type Workspace } from './canaries.js';
 import { CORE_CONTROLS, PROBE_RULE_ID, SCANNERS_WITH_CONTROLS, type Control, type ScannerName } from './controls.js';
 import { answersAsExpected, HOOK_CHECKS, SECRET_CANARY, softenedBy } from './hookChecks.js';
 import { HOOKS_NOTE, nextStepFor, type SelftestReport } from './report.js';
@@ -162,14 +161,14 @@ interface Observed {
 }
 
 /**
- * `run`'s result, or a `timeout` outcome when it has not settled
- * {@link TIMEOUT_GRACE_MS} after its own time: a runner that ignores its
- * timeout does not hold the whole selftest.
+ * `run`'s result, or a `timeout` outcome when it has not settled `graceMs`
+ * after its own time: a runner that ignores its timeout does not hold the
+ * whole selftest.
  */
-async function within<T>(run: Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
+async function within<T>(run: Promise<T>, timeoutMs: number, graceMs: number, onTimeout: () => T): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<T>((resolve) => {
-    timer = setTimeout(() => resolve(onTimeout()), timeoutMs + TIMEOUT_GRACE_MS);
+    timer = setTimeout(() => resolve(onTimeout()), timeoutMs + graceMs);
     timer.unref();
   });
   try {
@@ -206,8 +205,59 @@ function observe(control: Control, outcome: ScanOutcome, canaryRead: boolean | n
     installed: true,
     ended: outcome.ended,
     canaryRead,
-    canaryReported: outcome.ended === 'ok' && reported,
+    // What was seen, as it was seen: whether a run that did not end well may count is the verdict's to say.
+    canaryReported: reported,
     ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
+  };
+}
+
+/** The longest reason kept: the stored schema's own bound. */
+const REASON_MAX = 600;
+/** An environment value shorter than this is a word, not something to hide. */
+const ENV_VALUE_MIN = 8;
+
+/**
+ * What takes this machine out of a reason before it is printed or kept: the
+ * secret canary, the paths (in either separator, and without regard to case
+ * where the filesystem has none), and every value of the environment — a
+ * scanner's own error may quote any of them. The reason stays readable: each
+ * is replaced by its name, the text is one line, and it is bounded.
+ */
+function scrubberFor(paths: ReadonlyArray<readonly [label: string, path: string]>, env: NodeJS.ProcessEnv): (text: string) => string {
+  const fold = process.platform !== 'linux';
+  const swaps: Array<{ what: string; label: string; isPath: boolean }> = [{ what: canaryToken(), label: '<canary>', isPath: false }];
+  for (const [label, path] of paths) {
+    if (path.length >= 4) swaps.push({ what: path, label, isPath: true });
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && value.length >= ENV_VALUE_MIN) swaps.push({ what: value, label: `$${key}`, isPath: false });
+  }
+  // Longest first: a path inside a longer one is not what gets named. The canary before everything.
+  swaps.sort((a, b) => Number(b.label === '<canary>') - Number(a.label === '<canary>') || b.what.length - a.what.length);
+  /** `text` with every occurrence of `what` replaced — for a path, in either separator and, where case does not count, in any case. */
+  const swap = (text: string, what: string, label: string, isPath: boolean): string => {
+    if (!isPath) return text.split(what).join(label);
+    // Character for character, so that an index in the folded text is an index in the text itself.
+    const norm = (s: string): string => {
+      const slashed = s.replace(/\\/g, '/');
+      const lowered = fold ? slashed.toLowerCase() : slashed;
+      return lowered.length === slashed.length ? lowered : slashed;
+    };
+    const needle = norm(what);
+    let out = '';
+    let rest = text;
+    for (;;) {
+      const at = norm(rest).indexOf(needle);
+      if (at < 0) return out + rest;
+      out += rest.slice(0, at) + label;
+      rest = rest.slice(at + what.length);
+    }
+  };
+  return (text) => {
+    let out = text;
+    for (const s of swaps) out = swap(out, s.what, s.label, s.isPath);
+    out = out.replace(/\s+/g, ' ').trim();
+    return out.length > REASON_MAX ? `${out.slice(0, REASON_MAX - 1)}…` : out;
   };
 }
 
@@ -242,5 +292,317 @@ function resultOf(o: Observed): ControlResult {
 
 /** Run the selftest. Rejects only when it could not even begin (no temporary directory, no canaries): the directory is removed first. */
 export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult> {
-  throw new Error('selftest: not implemented');
+  const env = opts.env ?? process.env;
+  const now = opts.now ?? ((): Date => new Date());
+  const signal = opts.signal ?? new AbortController().signal;
+  const progress = opts.onProgress ?? ((): void => undefined);
+  const controls = opts.controls ?? CORE_CONTROLS;
+  const tmpRoot = opts.tmpRoot ?? tmpdir();
+  const offline = env['GUARDIAN_OFFLINE'] === '1';
+  const runners = opts.runners;
+  const graceMs = opts.timeoutGraceMs ?? TIMEOUT_GRACE_MS;
+  const home = opts.homeDir ?? homedir();
+  const observed: Observed[] = [];
+  let noCanary: string[] = [];
+  let ws: Workspace | undefined;
+  let workspaceLeft: SelftestReport['workspace'];
+  let leftovers: string[] = [];
+
+  const interrupted = (): boolean => signal.aborted;
+  /** Built when the first reason needs it: by then the workspace exists. */
+  let scrub: ((text: string) => string) | undefined;
+  const clean = (text: string): string => {
+    if (scrub === undefined) {
+      const real = (path: string): string => {
+        try {
+          return realpathSync.native(path);
+        } catch {
+          return path;
+        }
+      };
+      const paths: Array<readonly [string, string]> = [];
+      if (ws !== undefined) paths.push(['<selftest directory>', ws.dir], ['<selftest directory>', basename(ws.dir)]);
+      const named: ReadonlyArray<readonly [string, string]> = [
+        ['<temporary directory>', tmpRoot],
+        ['<data directory>', opts.dataDir],
+        ['<current directory>', process.cwd()],
+        ['~', home],
+      ];
+      for (const [label, path] of named) paths.push([label, path], [label, real(path)]);
+      scrub = scrubberFor(paths, env);
+    }
+    return scrub(text);
+  };
+  const record = (control: Control, seen: Observation, version: string | null, installCommand?: string | null): void => {
+    const observation: Observation = seen.reason !== undefined ? { ...seen, reason: clean(seen.reason) } : seen;
+    observed.push({ control, observation, version, ...(installCommand !== undefined ? { installCommand } : {}) });
+    progress(`${control.id}: ${judgeControl(observation)}`);
+  };
+  /** One scanner run for one control: never throws, never outlives its time by much. */
+  const scan = async (control: Pick<Control, 'timeoutMs'>, run: () => Promise<ScanOutcome>): Promise<ScanOutcome> => {
+    if (interrupted()) return NOT_RUN('interrupted before this control ran');
+    try {
+      return await within(run(), control.timeoutMs, graceMs, () => ({
+        ended: 'timeout',
+        reason: `did not finish in ${Math.round(control.timeoutMs / 1000)} s`,
+        findings: [],
+        read: null,
+      }));
+    } catch (error) {
+      return { ended: 'failed', reason: `the control failed: ${messageOf(error)}`, findings: [], read: null };
+    }
+  };
+
+  try {
+    ws = createWorkspace(tmpRoot);
+    const workspace = ws;
+    leftovers = leftoverWorkspaces(tmpRoot, workspace.dir, now().getTime());
+    seedCanaries(opts.canariesDir, workspace);
+    const scanArgs = (control: Pick<Control, 'timeoutMs'>): ScanArgs => ({
+      project: workspace.project,
+      reportDir: workspace.reports,
+      timeoutMs: control.timeoutMs,
+      signal,
+      env,
+    });
+
+    progress('checking which scanners are installed');
+    const probes = new Map<ScannerName, ScannerProbe>();
+    await Promise.all(
+      SCANNERS_WITH_CONTROLS.map(async (name) => {
+        try {
+          probes.set(name, await runners.probe(name));
+        } catch (error) {
+          probes.set(name, { installed: true, version: null, problem: `its version could not be asked: ${messageOf(error)}` });
+        }
+      }),
+    );
+    /** The scanner cannot be run at all: every control of it gets the same answer. Returns whether it can. */
+    const usable = (control: Control): boolean => {
+      const probe = probes.get(control.scanner as ScannerName);
+      if (probe === undefined) return true;
+      if (!probe.installed) {
+        record(control, { installed: false, ended: 'not_run', canaryRead: null, canaryReported: false }, null, probe.installCommand ?? null);
+        return false;
+      }
+      if (probe.problem !== undefined) {
+        record(
+          control,
+          { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `${control.scanner} is there and could not say its version: ${probe.problem}` },
+          null,
+        );
+        return false;
+      }
+      return true;
+    };
+    const versionOf = (control: Control): string | null => probes.get(control.scanner as ScannerName)?.version ?? null;
+    /** A canary that is not there cannot be found: said, never called silent. */
+    const gone = (control: Control): boolean => {
+      if (control.canary === null || canaryPresent(workspace, control.canary)) return false;
+      record(
+        control,
+        {
+          installed: true,
+          ended: 'not_run',
+          canaryRead: false,
+          canaryReported: false,
+          reason: `the canary ${control.canary} was not in the temporary project when its scan began (removed by something else on this machine — an antivirus quarantine?)`,
+        },
+        versionOf(control),
+      );
+      return true;
+    };
+
+    // --- Semgrep: the probe, then one run per pack -------------------------------------------
+    const packs = controls.filter((c) => c.kind === 'semgrep-pack').filter(usable);
+    if (packs.length > 0) {
+      progress('semgrep: the probe run (which canaries can it read here?)');
+      const probeRun = await scan({ timeoutMs: PROBE_RUN_TIMEOUT_MS }, () =>
+        runners.semgrep({ ...scanArgs({ timeoutMs: PROBE_RUN_TIMEOUT_MS }), rulesPath: join(workspace.rules, PROBE_RULE_FILE) }),
+      );
+      const readByProbe = probeRun.ended === 'ok' ? probeRun.findings.filter((f) => f.rule === PROBE_RULE_ID).map((f) => f.file) : null;
+      await mapLimited(packs, SEMGREP_CONCURRENCY, async (control) => {
+        if (gone(control)) return;
+        const pack = control.pack ?? '';
+        const outcome = await scan(control, () => runners.semgrep({ ...scanArgs(control), rulesPath: join(opts.packsDir, pack) }));
+        const canary = control.canary ?? '';
+        const read = readByProbe === null ? null : readByProbe.some((f) => sameFile(f, canary));
+        const observation = observe(control, outcome, read);
+        if (outcome.ended === 'ok' && !observation.canaryReported && read !== true) {
+          observation.reason =
+            readByProbe === null
+              ? `the pack did not report its canary, and the probe run did not end well (${probeRun.reason ?? probeRun.ended}): whether Semgrep can read the canary here is not known`
+              : 'neither the pack nor the probe rule read the canary: Semgrep does not scan this temporary directory (an ignored path?)';
+        }
+        record(control, observation, versionOf(control));
+      });
+    }
+
+    // --- gitleaks, Trivy ----------------------------------------------------------------------
+    for (const control of controls.filter((c) => c.kind === 'gitleaks' || c.kind === 'trivy-deps' || c.kind === 'trivy-iac')) {
+      if (!usable(control) || gone(control)) continue;
+      const canary = control.canary ?? '';
+      if (control.kind === 'trivy-deps' && offline) {
+        record(
+          control,
+          { installed: true, ended: 'not_run', canaryRead: null, canaryReported: false, reason: 'GUARDIAN_OFFLINE=1: the dependency audit needs the vulnerability database, and nothing is fetched offline' },
+          versionOf(control),
+        );
+        continue;
+      }
+      progress(`${control.id}: running`);
+      const outcome = await scan(control, () =>
+        control.kind === 'gitleaks'
+          ? runners.gitleaks(scanArgs(control))
+          : runners.trivy({ ...scanArgs(control), mode: control.kind === 'trivy-deps' ? 'deps' : 'iac', offline }),
+      );
+      // A scanner that names what it read is believed; one that does not read every file it is pointed at.
+      const read = outcome.ended !== 'ok' ? null : outcome.read !== null ? outcome.read.some((f) => sameFile(f, canary)) : canaryPresent(workspace, canary);
+      const observation = observe(control, outcome, read);
+      if (outcome.ended === 'ok' && !observation.canaryReported && read === false) {
+        observation.reason = outcome.read !== null ? `${control.scanner} did not read ${canary}` : `the canary ${canary} was gone when the scan ended`;
+      }
+      record(control, observation, versionOf(control));
+    }
+
+    // --- the hooks -----------------------------------------------------------------------------
+    const hookControls = controls.filter((c) => c.kind === 'hook');
+    if (hookControls.length > 0) {
+      let dispatcherThere = false;
+      try {
+        readFileSync(opts.dispatcherPath);
+        dispatcherThere = true;
+      } catch {
+        dispatcherThere = false;
+      }
+      let secretText = '';
+      try {
+        secretText = readFileSync(join(workspace.project, ...SECRET_CANARY.split('/')), 'utf8');
+      } catch {
+        secretText = '';
+      }
+      for (const control of hookControls) {
+        const check = HOOK_CHECKS.find((h) => h.id === control.id);
+        if (check === undefined) continue;
+        if (!dispatcherThere) {
+          record(control, { installed: false, ended: 'not_run', canaryRead: null, canaryReported: false, reason: "the hooks' dispatcher is not in this install" }, null);
+          continue;
+        }
+        if (interrupted()) {
+          record(control, { installed: true, ended: 'not_run', canaryRead: null, canaryReported: false, reason: 'interrupted before this control ran' }, opts.pluginVersion);
+          continue;
+        }
+        let observation: Observation;
+        try {
+          const answer = await within(
+            runners.hook({
+              dispatcher: opts.dispatcherPath,
+              event: check.event,
+              payload: check.payload(workspace, secretText),
+              cwd: workspace.project,
+              env: { ...env, CLAUDE_PROJECT_DIR: workspace.project },
+              timeoutMs: control.timeoutMs,
+              signal,
+            }),
+            control.timeoutMs,
+            graceMs,
+            (): HookAnswer => ({ exitCode: null, stdout: '', timedOut: true }),
+          );
+          if (answer.spawnError !== undefined) {
+            observation = { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `the dispatcher could not be started: ${answer.spawnError}` };
+          } else if (answer.timedOut) {
+            observation = { installed: true, ended: 'timeout', canaryRead: null, canaryReported: false, reason: `the dispatcher did not answer in ${Math.round(control.timeoutMs / 1000)} s` };
+          } else if (answersAsExpected(check, answer.stdout)) {
+            observation = { installed: true, ended: 'ok', canaryRead: true, canaryReported: true };
+          } else {
+            // The dispatcher fails open: a blank answer is what this install's guard does with that command.
+            const soft = softenedBy(check, env, home);
+            observation = {
+              installed: true,
+              ended: 'ok',
+              canaryRead: true,
+              canaryReported: false,
+              ...(soft !== undefined ? { softenedBy: soft } : {}),
+              reason:
+                check.expect === 'deny'
+                  ? 'the dispatcher ran and did not deny it: on this install the guard lets it through'
+                  : 'the dispatcher ran and gave no secret warning for a write that holds one',
+            };
+          }
+        } catch (error) {
+          observation = { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf(error)}` };
+        }
+        record(control, observation, opts.pluginVersion);
+      }
+    }
+
+    // --- installed scanners the selftest has no canary for -------------------------------------
+    if (!interrupted()) {
+      try {
+        const covered = new Set<string>(SCANNERS_WITH_CONTROLS);
+        noCanary = (await runners.installedTools()).filter((name) => !covered.has(name)).sort();
+      } catch {
+        noCanary = [];
+      }
+    }
+  } finally {
+    if (ws !== undefined) {
+      if (opts.keep === true) workspaceLeft = { path: ws.dir, kept: true };
+      else {
+        try {
+          (opts.remove ?? removeWorkspace)(ws);
+        } catch (error) {
+          workspaceLeft = { path: ws.dir, kept: false, note: messageOf(error) };
+        }
+      }
+    }
+  }
+
+  // A control the run never reached (interrupted) is unverified, never absent from the report.
+  const reached = new Set(observed.map((o) => o.control.id));
+  for (const control of controls) {
+    if (reached.has(control.id)) continue;
+    observed.push({
+      control,
+      observation: { installed: true, ended: 'not_run', canaryRead: null, canaryReported: false, reason: 'interrupted before this control ran' },
+      version: null,
+    });
+  }
+
+  const results = observed.map(resultOf).sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const verdicts = results.map((r) => r.verdict);
+  let exitCode = exitCodeFor(verdicts);
+  // A directory that could not be removed is never a clean exit.
+  if (exitCode === 0 && workspaceLeft !== undefined && !workspaceLeft.kept) exitCode = 2;
+  let run: SelftestRun = {
+    schema: SELFTEST_SCHEMA,
+    ran_at: now().toISOString(),
+    plugin_version: opts.pluginVersion,
+    platform: opts.platform ?? `${process.platform}-${process.arch}`,
+    controls: results,
+    no_canary: noCanary,
+    summary: { ...countVerdicts(verdicts), no_canary: noCanary.length },
+    exit_code: exitCode,
+    hooks_note: HOOKS_NOTE,
+  };
+
+  const wasInterrupted = interrupted();
+  const history = readHistory(opts.dataDir);
+  if (history.problem === undefined) run = markRegressions(run, history.runs[0]);
+  let saved: SaveResult & { skipped?: 'no-save' | 'interrupted' };
+  if (wasInterrupted) saved = { saved: false, skipped: 'interrupted' };
+  else if (opts.save === false) saved = { saved: false, skipped: 'no-save' };
+  else saved = saveRun(opts.dataDir, run, now().getTime());
+  if (!saved.saved && saved.history_note === undefined && history.problem !== undefined) saved.history_note = history.problem;
+
+  return {
+    report: {
+      run,
+      ...(workspaceLeft !== undefined ? { workspace: workspaceLeft } : {}),
+      saved,
+      ...(wasInterrupted ? { interrupted: true } : {}),
+      ...(leftovers.length > 0 ? { leftovers } : {}),
+    },
+    exitCode,
+  };
 }

@@ -642,7 +642,9 @@ describe('a selftest run', () => {
       const text = readFileSync(join(dir, name), 'utf8');
       expect(text, name).not.toMatch(/shell:\s*true|\bexecSync\(|\bexec\(|child_process/);
     }
-    expect(readFileSync(join(dir, 'defaultRunners.ts'), 'utf8')).toMatch(/spawnNoShell\(/);
+    // The dispatcher's launcher is the repository's no-shell spawn, and the real runners use it.
+    expect(readFileSync(join(dir, 'hookRunner.ts'), 'utf8')).toMatch(/spawnNoShell\(/);
+    expect(readFileSync(join(dir, 'defaultRunners.ts'), 'utf8')).toMatch(/hook: runDispatcher/);
   });
 
   it('T-20 abuse case: two runs at once get two directories, private to the user; a link inside one is removed as a link', async () => {
@@ -775,7 +777,9 @@ describe('a selftest run', () => {
     expect(absent(r.dataDir), 'the data directory').toBe(true);
     // The reason is still there to be read — with the paths taken out, not thrown away whole.
     expect(r.reason('gitleaks')).toMatch(/could not open/);
-    // An environment value reaches a result only through a scanner's own words, and those are cut to a line.
+    // Nor a value of the environment: a scanner's error may quote one, and it is named instead ($SELFTEST_MARK).
+    expect(saved.includes(mark), 'a value of the environment').toBe(false);
+    expect(r.reason('gitleaks')).toContain('$SELFTEST_MARK');
     expect(r.reason('gitleaks').length).toBeLessThanOrEqual(600);
     expect(saved.includes(JSON.stringify(process.env['PATH'] ?? 'no PATH').slice(1, -1))).toBe(false);
   });
