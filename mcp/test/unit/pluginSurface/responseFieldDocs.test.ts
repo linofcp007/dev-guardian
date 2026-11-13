@@ -35,7 +35,16 @@ afterAll(cleanupTempDirs);
 const DOCUMENTED: Record<string, readonly string[]> = {
   // Both modes: diff (default) and regression (the hidden alias regression_alert).
   diff_scans: ['summary.suppressed', 'suppressed_findings', 'unknown_scan_id', 'suppressed_by_severity', 'not_remeasured_by_severity'],
-  health_status: ['storage_warning', 'db adopt', 'suppressions', 'all_projects', 'future_dated_scans_ignored', 'future_dated_note'],
+  health_status: [
+    'storage_warning',
+    'db adopt',
+    'suppressions',
+    'all_projects',
+    'future_dated_scans_ignored',
+    'future_dated_note',
+    'hooks_warning',
+    'hooks.state',
+  ],
   risk_score: ['suppressed_count', 'future_dated_note'],
   report_export: ['retry_with', 'still running'],
   review_pr: ['preexisting_manifest_gaps'],

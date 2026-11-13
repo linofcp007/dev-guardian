@@ -10,6 +10,7 @@
  */
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -25,7 +26,19 @@ import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 vi.setConfig({ testTimeout: timeoutAbove(HOOK_TIMEOUT_MS) });
 
-afterAll(cleanupTempDirs);
+/**
+ * Two host processes that really exist: this one, and a child that only waits.
+ * A made-up id would not do — SessionStart removes the mark of a host process
+ * that is gone, so the next session's start would take the first one's away.
+ */
+const HOST_A = process.pid;
+let second: ChildProcess;
+let HOST_B = 0;
+
+afterAll(() => {
+  second?.kill();
+  cleanupTempDirs();
+});
 
 const REPO_ROOT = fileURLToPath(new URL('../../..', import.meta.url));
 
@@ -35,6 +48,9 @@ let saved: Record<string, string | undefined>;
 
 beforeAll(async () => {
   await import('../../src/tools/healthStatus.js');
+  second = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 120000)'], { stdio: 'ignore' });
+  HOST_B = second.pid ?? 0;
+  expect(HOST_B).toBeGreaterThan(0);
 });
 
 beforeEach(() => {
@@ -107,27 +123,27 @@ describe('health_status says whether the hooks started in this session', () => {
     expect(elsewhere.hooks_warning).toBeNull();
 
     // The plugin's server, moments after it started and before any hook: pending, no warning yet.
-    asPluginServer(project, dataDir, 880_001);
+    asPluginServer(project, dataDir, HOST_A);
     const early = await health(plugin({ name: 'claude-code', version: '2.1.322' }));
     expect(early.hooks.state).toBe('pending');
     expect(early.hooks_warning).toBeNull();
 
     // The real dispatcher, started by the same host process.
-    sessionStart(project, dataDir, 880_001);
+    sessionStart(project, dataDir, HOST_A);
     const after = await health(plugin({ name: 'claude-code', version: '2.1.322' }));
     expect(after.hooks).toMatchObject({ state: 'running', matched_by: 'host_process', host: 'claude-code 2.1.322' });
     expect(after.hooks.age_seconds).toBeGreaterThanOrEqual(0);
     expect(after.hooks_warning).toBeNull();
 
     // EC-1: a second session of the same project, in another host process — each server finds its own mark.
-    sessionStart(project, dataDir, 880_002);
+    sessionStart(project, dataDir, HOST_B);
     expect((await health(plugin())).hooks).toMatchObject({ state: 'running', matched_by: 'host_process' });
-    asPluginServer(project, dataDir, 880_002);
+    asPluginServer(project, dataDir, HOST_B);
     expect((await health(plugin())).hooks).toMatchObject({ state: 'running', matched_by: 'host_process' });
 
     // EC-6: the server looking in another data directory finds no mark there. Inside the grace period that
     // reads `pending`; `hooksStatus` past it is the unit file's T-05.
-    asPluginServer(project, join(makeTempDir('guardian-hs-data-'), 'dev-guardian'), 880_001);
+    asPluginServer(project, join(makeTempDir('guardian-hs-data-'), 'dev-guardian'), HOST_A);
     const other = await health(plugin());
     expect(['pending', 'not_observed']).toContain(other.hooks.state);
     expect(other.hooks.matched_by).toBeUndefined();
