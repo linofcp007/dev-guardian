@@ -123,6 +123,16 @@ describe('the tools/list budget (a real handshake)', () => {
     expect(over).toEqual([]);
   });
 
+  it('T-26 health_status says what hooks_warning means, inside the listed limit', () => {
+    const health = tools.find((t) => t.name === 'health_status');
+    expect(health, 'health_status is listed').toBeDefined();
+    const description = health?.description ?? '';
+    // The model has to know the field is there and that it is the user's to hear.
+    expect(description).toContain('hooks_warning');
+    expect(description).toMatch(/tell the user/i);
+    expect(description.length).toBeLessThanOrEqual(LISTED_DESCRIPTION_MAX);
+  });
+
   it(`every parameter description, nested ones included, is at most ${PARAM_DESCRIPTION_MAX} characters`, () => {
     const over: string[] = [];
     const walk = (node: unknown, path: string): void => {
