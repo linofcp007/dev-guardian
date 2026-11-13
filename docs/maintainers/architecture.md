@@ -59,7 +59,12 @@ quality, deps, observability, performance and compliance. Two halves:
   `parseInstallCommands` by its test) — the hook runs on every Bash call. The
   shell guard can also return `ask` (`BashAssessment.ask`, an agent-run
   `baseline update`), which the hook sends as `permissionDecision: "ask"`.
-  User-facing detail: [`docs/hooks.md`](../../docs/hooks.md).
+  User-facing detail: [`docs/hooks.md`](../../docs/hooks.md). What the guards
+  do not cover is data, not prose: one record per limit in
+  `mcp/test/fixtures/hooks/known-limits.yml`, each with examples the suite
+  runs against the real detector and dispatcher, rendered to
+  [`docs/hooks-known-limits.md`](../../docs/hooks-known-limits.md)
+  ([build-and-test.md](build-and-test.md)).
 
 ## What a scan of the project's own files leaves out
 
