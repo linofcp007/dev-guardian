@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **22 limits**, 21 with at least one example and 1 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **24 limits**, 22 with at least one example and 2 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -34,6 +34,10 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
 - The `baseline update` question needs Claude Code to ask: where nobody can answer (a headless run), it is whatever Claude Code does with an unanswered `ask`. A write of `.guardian/baseline.json` by the write tools is not asked about.
   - `node cli/dev-guardian.mjs baseline update` (bash) → `warn`, and the user is asked — asked; in a headless run the answer is whatever Claude Code does with an unanswered question
   - `Write` on PreToolUse, input `{"file_path":"${PROJECT}/.guardian/baseline.json","content":"{ \"version\": 1, \"findings\": [] }\n"}` → `none` (no answer)
+- The session mark `health_status` reads is not a guarded file: any process of the same user — a script, or an assistant's own write in a session where no hook is running — can put a file in `hooks-heartbeat/` that names the Claude Code process, and `health_status` then reads `running`. The mark only informs: nothing decides a guard, a database's trust or a scan by it, a mark in a data directory inside the project is never taken as proof, and in a session where the hooks do run the real mark is there anyway.
+  - `Write` on PreToolUse, input `{"file_path":"${HOME}/.local/share/dev-guardian/hooks-heartbeat/p0123456789abcdef.h4242.json","content":"{}"}` → `none` (no answer)
+- A session mark outlives its session until the next SessionStart of any session removes it — its Claude Code process no longer exists — or for 30 days. In between, a new Claude Code process that the operating system gives the same process id, and that starts no hook, finds the old mark under its own id: `health_status` reads `running` for a session with no guardrails.
+  - No test runs it: needs the operating system to give a new process the id of one that ended.
 
 ## The shell guard
 
