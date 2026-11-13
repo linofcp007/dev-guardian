@@ -19,7 +19,10 @@ version bump.
   how the session began, the Claude Code process and a 16-character key of the project: no path, no content. It only
   informs — nothing decides a guard, a database's trust or a scan by it — it cannot hold the session, and it is
   cleaned up at each SessionStart. With the hooks switched off by the user, SessionStart still writes it, saying so.
-  Details: `docs/hooks.md`, "The session mark".
+  Details: `docs/hooks.md`, "The session mark". Its cost, measured on Windows 11 with 30 interleaved runs of the
+  dispatcher with and without it: SessionStart's median goes from 146 to 171 ms outside a git repository and from 319
+  to 337 ms inside one — about 20 ms, once per session, below the run-to-run spread of either version (interquartile
+  range 34 and 90 ms).
 
 ### Changed
 
