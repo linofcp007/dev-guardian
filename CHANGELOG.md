@@ -8,6 +8,23 @@ version bump.
 
 ## [Unreleased]
 
+## [3.9.3] - 2026-11-14
+
+One fix to a rule pack, and the run that found it. The whole suite had never been run in the Linux containers with
+the scanners installed and required; doing it once failed ten tests. One was a defect of the product — on Linux,
+`llm-output-to-interpreter-js` found half of what it finds on Windows — and the others were tests that assumed
+Windows, a recent git or a scanner the image does not carry, some of them hidden behind a skip on every machine.
+That run is the release gate from now on.
+
+### Upgrading from 3.9.2
+
+- **A scan on Linux may report findings it did not report before.** `scan_sast`, `review_pr` and the CI gate now
+  find a model's output handed to a `child_process` function that the file imports with the `node:` prefix — and,
+  on every platform, through a default import or a `require` of `node:child_process`. They were always there. They
+  are new to a baseline taken before, so a gate that passed can fail on them: read them — a model's text reaching a
+  shell is what the rule is for — and fix them or, once reviewed, accept them as you would any finding.
+- Nothing else changes for a project. The other entries are for whoever maintains dev-guardian.
+
 ### Fixed
 
 - **On Linux, `llm-output-to-interpreter-js` missed every `child_process` sink imported with the `node:` prefix** —
