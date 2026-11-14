@@ -8,6 +8,27 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The test suite no longer adds dead entries to the PATH of whoever runs it** (maintainers, Windows).
+  `nugetCredentialBinding.test.ts` gives the .NET SDK a faked home, and the SDK's first run in a home it has never
+  seen appends `<home>\.dotnet\tools` to the user's `PATH` in the registry of the real account — up to three
+  `nuget-e2e-home-*` entries a run, of directories the test then removes; 28 had piled up on one machine. The faked
+  home now carries the SDK's own switches (`DOTNET_ADD_GLOBAL_TOOLS_TO_PATH=0`,
+  `DOTNET_GENERATE_ASPNET_CERTIFICATE=0`), and the file's last test fails if a faked home leaves anything in the
+  account. Entries already there are yours to remove. The product never redirects the SDK's home and is unchanged.
+- **Two `create_fix_pr` tests had been failing behind a skip** (maintainers). With a real Trivy,
+  `createFixPrOpenPr.test.ts` read `not_verified` where it expected a pull request: its fixture, `lodash@4.17.20`,
+  now upgrades to 4.18.0 (CVE-2026-4800), and 4.18.0 has a CVE of its own (CVE-2026-2950), so the scan differential
+  refuses the pull request — rightly. The two tests use `lodash@4.18.0` with `severity_min: "medium"`, whose fix
+  verifies, and a fixture the advisories have moved under now fails saying so.
+- **A scanner the product finds is no longer a skipped test** (maintainers). The tests' "is it installed?" probe
+  ran `where` / `which` alone, while the server also looks in the per-user tools directory `install_toolchain`
+  writes to (`~/.local/bin`). On a machine set up by the product, every real-Trivy and real-gitleaks test was
+  skipped in the everyday suite — which is how the failure above went unseen. The probe looks where the server
+  looks; `GUARDIAN_REQUIRE_SEMGREP=1` (Semgrep and Trivy) and `GUARDIAN_REQUIRE_GITLEAKS=1` still turn a missing
+  scanner into a failure.
+
 ## [3.9.2] - 2026-11-14
 
 Two fixes, both to what 3.9.0 added or announced, and both found by running the released plugin for real: on a
