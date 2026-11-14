@@ -60,6 +60,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 // helpers/semgrep.ts's 120 s cap on each call.
 vi.setConfig({ testTimeout: 180_000 });
 import { Buffer } from 'node:buffer';
+import { spawnSync } from 'node:child_process';
 import { copyFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -265,7 +266,23 @@ describe('every Semgrep rule pack', () => {
  * a comment there. Nothing under `configs/` is touched: poisoning a tracked file
  * to see a test go red is how a poisoned file gets committed.
  */
-describe('the encoding check can actually fail', () => {
+/**
+ * Whether the codec Python hands Semgrep for a rule file, outside UTF-8 mode,
+ * is one byte wide — Windows' ANSI code page, unless the machine was set to
+ * UTF-8 (65001). Not on POSIX: there it is UTF-8. A code page that cannot be
+ * read is taken for the usual one-byte page.
+ */
+function oneByteLocaleCodec(): boolean {
+  if (process.platform !== 'win32') return false;
+  const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '[System.Text.Encoding]::Default.CodePage'], {
+    encoding: 'utf8',
+    timeout: 30_000,
+  });
+  const page = Number.parseInt(String(r.stdout ?? '').trim(), 10);
+  return Number.isNaN(page) || page !== 65001;
+}
+
+describe('the encoding check can actually fail (its three Semgrep runs: only where the locale codec is one byte wide)', () => {
   const POISON = String.fromCodePoint(0xc1); // A-acute. Written by codepoint —
   // spelling it literally here would put the offending byte in this file, and
   // while a `.ts` file is always read as UTF-8 and would survive it, the habit
@@ -302,7 +319,16 @@ describe('the encoding check can actually fail', () => {
   // measured a setting instead of the hazard, so they pin UTF-8 mode off.
   const LOCALE_CODEC = { env: { PYTHONUTF8: '0' } };
 
-  it.skipIf(!AVAILABLE)('and semgrep --validate refuses the poisoned pack', () => {
+  // And only where that codec is ONE BYTE wide, which is what makes the bytes
+  // above undefined: Windows, with its ANSI code page (cp1252 and its like).
+  // On Linux and macOS the locale codec is UTF-8 — a C / POSIX locale too,
+  // which Python reads as UTF-8 — the poisoned pack loads, and these three
+  // had it backwards there: red in the first whole-suite run in the Linux
+  // toolchain containers, where nothing had run them before. Skipped, in
+  // sight, with the reason in the block's name.
+  const ONE_BYTE_LOCALE_CODEC = oneByteLocaleCodec();
+
+  it.skipIf(!AVAILABLE || !ONE_BYTE_LOCALE_CODEC)('T-01 and semgrep --validate refuses the poisoned pack', () => {
     const target = poisonedCopy();
     const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', target], LOCALE_CODEC);
     expect(run.status).not.toBe(0);
@@ -310,7 +336,7 @@ describe('the encoding check can actually fail', () => {
 
   // The cross-pack test validates every pack in ONE call: that call must not
   // pass because the other packs are fine.
-  it.skipIf(!AVAILABLE)('and one --validate over every real pack plus the poisoned one refuses them all', () => {
+  it.skipIf(!AVAILABLE || !ONE_BYTE_LOCALE_CODEC)('T-01 and one --validate over every real pack plus the poisoned one refuses them all', () => {
     const validate = (configs: readonly string[]): number | null =>
       runSemgrep(['--validate', '--quiet', '--disable-version-check', ...configs.flatMap((c) => ['--config', c])], LOCALE_CODEC)
         .status;
@@ -320,7 +346,7 @@ describe('the encoding check can actually fail', () => {
     expect(validate([...real, poisonedCopy()])).not.toBe(0);
   });
 
-  it.skipIf(!AVAILABLE)('and a SCAN with it reports nothing at all, with no error', () => {
+  it.skipIf(!AVAILABLE || !ONE_BYTE_LOCALE_CODEC)('T-01 and a SCAN with it reports nothing at all, with no error', () => {
     // The measurement that makes this trap worth a test rather than a comment.
     // A broken pack does not fail the scan — it produces a clean-looking result
     // with zero findings, zero files scanned and zero errors. This is the

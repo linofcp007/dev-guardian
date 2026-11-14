@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildPrBody } from '../../src/tools/createFixPr.js';
@@ -22,8 +22,8 @@ import { rmDirOrDefer } from '../helpers/tempDir.js';
 import {
   ctx,
   DOTNET_INSTALLED,
-  ghLog,
   ghLogContents,
+  ghPrCalls,
   REGISTRY_BACKED_TIMEOUT_MS,
   repo,
   seedFinding,
@@ -57,12 +57,13 @@ describe('create_fix_pr', () => {
       .trim().split('\n')).toHaveLength(1);
   });
 
-  it('apply:false never invokes gh for push or pr create', async () => {
+  it('T-04 apply:false never invokes gh for push or pr create', async () => {
     // The safety story. If this ever regresses, a dry run starts publishing.
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
     await mod?.handler({ project_path: repo, apply: false }, ctx() as never);
-    const log = existsSync(ghLog) ? readFileSync(ghLog, 'utf8') : '';
-    expect(log).not.toMatch(/pr create/);
+    // In either spelling of the stub's log: the Windows stub quotes each token
+    // (`"pr" "create"`), so `/pr create/` could never have matched there.
+    expect(ghPrCalls('create')).toBe(0);
   });
 
   it('leaves no worktree behind on any path', async () => {
@@ -224,7 +225,7 @@ describe('create_fix_pr', () => {
     expect(ghLogContents()).toBe('');
   }, REGISTRY_BACKED_TIMEOUT_MS);
 
-  it('never lets gh create a PR with apply:true either, and still cleans up, whatever the fix outcome', async () => {
+  it('T-04 never lets gh create a PR with apply:true either, and still cleans up, whatever the fix outcome', async () => {
     // Complements the apply:false test above with the orthogonal gate:
     // even asked to publish, `gh pr create` is reached only after the fix
     // verifies AND (if it does) after a successful push — and this
@@ -244,7 +245,7 @@ describe('create_fix_pr', () => {
     expect(groups).toHaveLength(1);
 
     expect(worktreeCount()).toBe(1);
-    expect(ghLogContents()).not.toMatch(/pr create/);
+    expect(ghPrCalls('create')).toBe(0);
   }, REGISTRY_BACKED_TIMEOUT_MS);
 
   it('refuses cleanly when project_path does not exist at all (a different code path from "exists but is not a git repo")', async () => {

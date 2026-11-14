@@ -174,7 +174,7 @@ dev-guardian ships **182 rules in 15 packs** under [`configs/semgrep/`](../confi
 | `llm-torch-load-weights-only-false` | WARNING | python | 0 (bare) |
 | `llm-torch-load-no-weights-only` | LOW | python | 1 |
 | `llm-openai-no-max-tokens-py` | LOW | python | 10 |
-| `llm-output-to-interpreter-js` | WARNING | javascript, typescript | 46 |
+| `llm-output-to-interpreter-js` | WARNING | javascript, typescript | 69 |
 | `llm-request-in-system-prompt-js` | LOW | javascript, typescript | 23 |
 | `llm-openai-no-max-tokens-js` | LOW | javascript, typescript | 10 |
 

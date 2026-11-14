@@ -13402,19 +13402,19 @@ function runningScanIsOrphan(row, options = {}) {
 }
 function reapReason(row, ctx) {
   const started = Date.parse(row.started_at);
-  const olderThan2 = (ms) => Number.isNaN(started) || ctx.now - started > ms;
+  const olderThan = (ms) => Number.isNaN(started) || ctx.now - started > ms;
   const pid = row.owner_pid;
   if (pid !== null && Number.isInteger(pid) && pid > 0 && row.owner_host === ctx.host) {
     if (pid === ctx.ownPid) {
       return `owner pid ${pid} is this process's own pid, and this process has not started a scan yet`;
     }
     if (!ctx.isAlive(pid)) return `owner process ${pid} is no longer running`;
-    if (olderThan2(LIVE_OWNER_REAP_AFTER_MS)) {
+    if (olderThan(LIVE_OWNER_REAP_AFTER_MS)) {
       return `owner pid ${pid} still exists, but the scan started more than 24 h ago: the pid was reused`;
     }
     return null;
   }
-  if (olderThan2(UNKNOWN_OWNER_REAP_AFTER_MS)) {
+  if (olderThan(UNKNOWN_OWNER_REAP_AFTER_MS)) {
     return "owner unknown on this host and the scan started more than 6 h ago";
   }
   return null;
@@ -54658,33 +54658,14 @@ import { basename as basename5, join as join37 } from "node:path";
 function pluginPackPath(file2) {
   return join37(pluginPacksDir(), file2);
 }
-function olderThan(version2, than) {
-  const parse12 = (v) => v.split(/[.+-]/).slice(0, 3).map((p) => Number.parseInt(p, 10));
-  const have = parse12(version2);
-  const need = parse12(than);
-  if (have.some((n) => Number.isNaN(n)) || need.some((n) => Number.isNaN(n))) return false;
-  for (let i = 0; i < 3; i += 1) {
-    const a = have[i] ?? 0;
-    const b = need[i] ?? 0;
-    if (a !== b) return a < b;
-  }
-  return false;
-}
-function semgrepEngineNote(engine, opts) {
+function semgrepEngineNote(engine) {
   const version2 = engine.version;
-  if (version2 === void 0) return null;
-  const fixpoint = engine.fixpointTimeoutsReported === false;
-  const llm = opts.llmPack && olderThan(version2, LLM_PACK_MEASURED_SEMGREP);
-  const childProcess = `resolve \`import \u2026 from 'node:child_process'\` in taint mode \u2014 ${LLM_RULES_FILE} was measured on Semgrep ${LLM_PACK_MEASURED_SEMGREP}, and its child_process coverage is reduced (160 of 184 fixture findings on 1.86.0, 1.120.1 and 1.170.1; all 24 missing are node:child_process sinks)`;
-  const fixpointNote = "does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected";
-  if (fixpoint && llm) return `this Semgrep (${version2}) ${fixpointNote}; nor does it ${childProcess}`;
-  if (fixpoint) return `this Semgrep (${version2}) ${fixpointNote}`;
-  if (llm) return `this Semgrep (${version2}) does not ${childProcess}`;
-  return null;
+  if (version2 === void 0 || engine.fixpointTimeoutsReported !== false) return null;
+  return `this Semgrep (${version2}) does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected`;
 }
 function withSemgrepEngineNote(run2, raw) {
   if (run2.status !== "ok") return run2;
-  const note = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: false });
+  const note = semgrepEngineNote(semgrepEngineOf(raw));
   if (note === null) return run2;
   return { ...run2, reason: [run2.reason, note].filter((s) => s !== void 0).join("; ") };
 }
@@ -54724,7 +54705,7 @@ function hasDotnetProject(projectPath) {
     return false;
   }
 }
-var LLM_RULES_FILE, WEBJS_RULES_FILE, CLIENT_TRUST_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT, LLM_PACK_MEASURED_SEMGREP;
+var LLM_RULES_FILE, WEBJS_RULES_FILE, CLIENT_TRUST_RULES_FILE, MOBILE_RULES_FILE, WORDPRESS_RULES_FILE, PLUGIN_PACK_FILES, CONTAINER_PACKS_ROOT;
 var init_semgrepConfigs = __esm({
   "src/runners/semgrepConfigs.ts"() {
     "use strict";
@@ -54745,7 +54726,6 @@ var init_semgrepConfigs = __esm({
       WORDPRESS_RULES_FILE
     ];
     CONTAINER_PACKS_ROOT = "/guardian-packs";
-    LLM_PACK_MEASURED_SEMGREP = "1.176.1";
   }
 });
 
@@ -61469,7 +61449,7 @@ function judgeSemgrepRun(args) {
     nonPackTaintRules: mayHoldTaintRules(loadedFrom, readAt)
   });
   const packGap = check2.plugin_pack_fixpoint;
-  const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
+  const engineNote = semgrepEngineNote(semgrepEngineOf(raw));
   const reasons = [...via !== null ? [`ran via ${via}`] : [], ...notes, ...engineNote !== null ? [engineNote] : []];
   if (check2.verdict === "ok") {
     const run2 = { name: "semgrep", status: "ok" };
@@ -61704,7 +61684,7 @@ async function runSemgrepOnScope(args) {
   const parser4 = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run2.reports) parser_inputs.push({ parser: parser4, input: raw });
   const entry = { ...run2.toolRun };
-  const engineNote = semgrepEngineNote(semgrepEngineOf(run2.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run2.reports[0] ?? null));
   const scopeNotes = [...plan.notes, ...flags.warning !== null ? [flags.warning] : [], ...engineNote !== null ? [engineNote] : []];
   if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== void 0).join("; ");
   if (entry.status === "failed" && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run2.failedRules)) {
@@ -68319,7 +68299,7 @@ async function runSemgrep3(ctx, input2, out, args) {
   });
   const parser4 = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: args.scanRoot });
   for (const raw of run2.reports) out.parser_inputs.push({ parser: parser4, input: raw });
-  const engineNote = semgrepEngineNote(semgrepEngineOf(run2.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run2.reports[0] ?? null));
   out.tools_run.push(
     withNotes(run2.toolRun, [...plan.notes, ...gap !== null ? [gap] : [], ...engineNote !== null ? [engineNote] : []])
   );

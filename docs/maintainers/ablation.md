@@ -268,6 +268,37 @@ corpus, which holds none of the three shapes. With `--real-code=src` they do: th
 regex, whose removal would silence the two loops over `PROJECT_KEYED_TABLES` in `db.ts`. That array is imported
 from `dbProvenance.ts`, and an unproven array is supposed to fire.
 
+**`llm-output-to-interpreter-js`, 3.9.3** (Semgrep 1.182.0, pack sha256 `7bc5c9c0…`). The rule's `child_process`
+sinks read the import as the file writes it now — the Linux build of Semgrep resolves no `node:`-prefixed import,
+the pack's comment has the measurement. `npm run ablate -- llm --filter=llm-output-to-interpreter-js`, three runs:
+
+- The first had the written forms BESIDE the two clauses that rely on the engine (`child_process.$F`,
+  `util.promisify(child_process.$F)`). It was cut at clause 49 of 64 by an edit of the pack's comment, and had
+  already read both engine clauses and most of the new ones DEAD: on Windows each half finds what the other does.
+  Probed by hand for anything only the engine reads — TypeScript's `import x = require()`, the module copied to
+  another name, the function copied, a computed member: the first is read by the written forms too, the others
+  by nothing. The engine clauses were deleted, not kept as a redundant pair: they were the dependence that made
+  the rule's findings differ by platform.
+- The second, 66 clauses, read three INERT: the plain destructured `require` (`{ $ORIG: $FN }` matches the
+  shorthand `{ exec }` too) and the expression-body spelling of the two arrow-function exclusions
+  (`(…) => { ... }` matches both). Deleted. And the `promisify` name regex DEAD for want of a fixture: `misses/`
+  has a wrapper that is not `promisify` now.
+- The third: **63/63 live, 0 DEAD**; axis 2 62/63 — the module regex, without which a function imported by name
+  from ANY module fires: four lines of `hits/`, the AI SDK's `generateText` and its siblings beside their own
+  bugs; axis 3 N/A (`GUARDIAN_LLM_SRC` unset).
+
+The real-code check was made by hand, on Linux, over the fifteen JS/TS applications of the pack's header, fetched
+as tarballs of its commits (11 005 files, 10 750 read): 0 findings with the released rule, 0 with the new one.
+Cost, as the product runs Semgrep (`--timeout 30 --timeout-threshold 0`) on an otherwise idle machine: no file
+times out with either rule; 108 s against 95 s for the corpus, the slowest file 7.3 s against 6.6 s. At Semgrep's
+own 5 s the same large files time out with both — 14 with the new rule and 31 with the old in one run, 9 and 1
+in a run on a loaded machine: at that limit the count is the machine's, not the rule's.
+
+The fixtures are one file per import spelling (`interpreterImportAlias.ts`, `interpreterImportDefault.ts`,
+`interpreterImportNamespace.ts`, `interpreterRequire.js`, `interpreterRequireDestructured.js`), because clauses
+cross-fire inside one file: with a `$CP = require(…)` of the module anywhere in it, Semgrep reads the file's named
+imports of that module through `$CP.$F` as well, and a clause looks dead that is the only one for another file.
+
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
 by a different method. The C# one was added after the fact and immediately deleted a rule:

@@ -29,7 +29,14 @@ more to an already long run on every commit, and the floor is a release
 question. `--toolchain` adds Semgrep and Bandit (pip-pinned) and gitleaks and
 Trivy (the release archives `src/runners/installCatalog.ts` pins, sha256-
 checked) and sets `GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`, so a missing scanner
-fails instead of skipping. The toolchain image's tag ends in a digest of its own
+fails instead of skipping. It is the run a release makes (CONTRIBUTING, Releases,
+step 0): without it every test of a real scanner is skipped on Linux, and the
+suite had never been green with it until 3.9.3 — ten tests, among them a rule
+pack that found half of its fixture on Linux. The image is Debian 12, whose git
+is 2.39.5: older than `GIT_ATTR_SOURCE` (2.40), which is why two secret-history
+tests assert the limit the pass names there (`test/helpers/gitVersion.ts`), and
+the locale is UTF-8, which is why the pack-encoding tests' Semgrep runs are for
+Windows alone. The toolchain image's tag ends in a digest of its own
 recipe, so a pin that moved builds a new image: named by its base alone, the
 image built once went on being used, and the run after a bump tested the old
 scanner. Logs: `<tmpdir>/dev-guardian-docker/`. `@types/node`
@@ -144,7 +151,8 @@ directory on `PATH`), and `GUARDIAN_REQUIRE_DETEKT=1`, `GUARDIAN_REQUIRE_RUBOCOP
 `GUARDIAN_REQUIRE_SPOTBUGS=1` for detekt, RuboCop and SpotBugs (`test/e2e/detektQuality.test.ts`,
 `rubocopQuality.test.ts`, `spotbugsSast.test.ts`: `detekt-cli.jar` and the `rubocop` script in a
 directory on `PATH`, SpotBugs where install_toolchain puts it or in `SPOTBUGS_HOME`, with Java,
-`javac` and Ruby; a portable Temurin and RubyInstaller unpacked anywhere will do). The
+`javac` and Ruby; a portable Temurin and RubyInstaller unpacked anywhere will do), and
+`GUARDIAN_REQUIRE_WPSCAN=1` for WPScan (`test/e2e/wpscanNoDatabase.test.ts`; not in `--toolchain`). The
 suite keeps Semgrep's settings, log and version cache out of your home
 directory (`test/setup/semgrepHome.ts`). Timing tests assert a shape, not a
 number of milliseconds (`test/helpers/timing.ts`): a ratio of 8x the input,

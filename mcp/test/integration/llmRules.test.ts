@@ -141,6 +141,17 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // Fifteen sources into eval (one each), thirteen sinks (one each).
   // Review round 2 (I-B): eleven argv shapes of interpreters, wrappers and shells.
   'outputToInterpreter.ts': { [INTERPRETER_JS]: 48 },
+  // The same sinks through every way a file names `child_process`, ONE
+  // spelling a file so that no clause can fire for another's lines: an alias,
+  // a default import (with and without `node:`), a namespace, a `require`
+  // assigned, and one destructured (as is, and renamed) — and `promisify` of
+  // three of them. The rule reads the import as written: on Linux, Semgrep
+  // 1.182.0 resolves no `node:` import, and no build resolves a default one.
+  'interpreterImportAlias.ts': { [INTERPRETER_JS]: 3 },
+  'interpreterImportDefault.ts': { [INTERPRETER_JS]: 4 },
+  'interpreterImportNamespace.ts': { [INTERPRETER_JS]: 2 },
+  'interpreterRequire.js': { [INTERPRETER_JS]: 1 },
+  'interpreterRequireDestructured.js': { [INTERPRETER_JS]: 2 },
   // Four request sources; four sink shapes — the message object (one pattern
   // covers both key orders: Semgrep's object pattern ignores order, which the
   // ablation measured), a top-level `system`, `instructions`, a SystemMessage —
@@ -235,6 +246,16 @@ describe('llm rules', () => {
     expect(filesIn(resolve(FIXTURES, 'hits'))).toEqual(Object.keys(EXPECTED_HITS).sort());
   });
 
+  // The header is where the next person learns what the JS interpreter rule
+  // does not read. It said for two releases that a Semgrep VERSION was why
+  // `node:child_process` imports went unseen; it was the platform.
+  it('T-05 the pack names what its child_process recognition still leaves out, and no longer blames a Semgrep version', () => {
+    const text = readFileSync(RULES, 'utf8');
+    expect(text).toMatch(/FORA DE ALCANCE[^]*`import\(\)` dinamico/);
+    expect(text).toMatch(/FALSO POSITIVO CONHECIDO[^]*DECLARAÇÃO local/);
+    expect(text).not.toMatch(/so sao resolvidos a partir do Semgrep|llmPackVersionNote|anterior ao 1\.176\.1/);
+  });
+
   it('every hits/ fixture has a misses/ twin', () => {
     expect(filesIn(resolve(FIXTURES, 'misses'))).toEqual(filesIn(resolve(FIXTURES, 'hits')));
   });
@@ -258,14 +279,14 @@ describe('llm rules', () => {
     }
   });
 
-  it.skipIf(!AVAILABLE)('fires exactly the expected rules, exactly the expected number of times, in EACH hit fixture', () => {
+  it.skipIf(!AVAILABLE)('T-01 T-02 fires exactly the expected rules, exactly the expected number of times, in EACH hit fixture', () => {
     const result = hits();
     expect(result.errors).toBe(0);
     expect(result.scanned).toBe(filesIn(resolve(FIXTURES, 'hits')).length);
     expect(countsByFile(result)).toEqual(EXPECTED_HITS);
   });
 
-  it.skipIf(!AVAILABLE)('fires on exactly the marked lines of every hit fixture', () => {
+  it.skipIf(!AVAILABLE)('T-01 T-02 fires on exactly the marked lines of every hit fixture', () => {
     const { rows } = hits();
     for (const file of Object.keys(EXPECTED_HITS)) {
       const got = rows.filter((r) => basename(r.path) === file).map((r) => r.start.line).sort((a, b) => a - b);
@@ -273,7 +294,7 @@ describe('llm rules', () => {
     }
   });
 
-  it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture', () => {
+  it.skipIf(!AVAILABLE)('T-03 fires NOTHING in EACH near-miss fixture', () => {
     const { rows, scanned, errors } = misses();
     expect(errors).toBe(0);
     // Every misses/ file must actually have been looked at, or "nothing" is

@@ -24,6 +24,7 @@ import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TEXT_LIMIT_BYTES, unspecifiedDiff } from '../../src/runners/historyView.js';
 import { TOOLS, type ToolModule } from '../../src/tools/index.js';
 import type { Finding } from '../../src/types.js';
+import { GIT_SETS_TREE_ATTRIBUTES_ASIDE, TREE_ATTRIBUTES_LIMIT } from '../helpers/gitVersion.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
@@ -131,13 +132,24 @@ describe.skipIf(!GITLEAKS)('a push run: the history pass reads what `git log -p`
     expect(where(findings)).toEqual([['aws-access-token', 'blob.js', 2, at]]);
   });
 
-  it('a NUL byte AND the tree marking the file binary: still found (the tree decides nothing since 3.6.1)', async () => {
+  // What the tree's `.gitattributes` decides depends on the git: from 2.40 the
+  // pass sets it aside (GIT_ATTR_SOURCE) and the key is found; before that the
+  // tree marks the file binary, the key is in no hunk, and the pass NAMES it.
+  // Both are asserted, each where it is true — Debian 12 has git 2.39.5.
+  it('T-03 a NUL byte AND the tree marking the file binary: found from git 2.40 (the tree decides nothing); on an older git not found, and the pass names the limit', async () => {
     const dir = repo();
     write(dir, '.gitattributes', 'blob.js binary\n');
     write(dir, 'blob.js', `\0const AWS_KEY = "${aws('both')}";\n`);
     commit(dir, 'nul, marked binary');
-    const { findings } = await push(dir);
-    expect(where(findings)).toEqual([['aws-access-token', 'blob.js', 1, git(dir, 'rev-parse', 'HEAD').slice(0, 12)]]);
+    const { findings, reason, failed } = await push(dir);
+    expect(failed).toEqual([]);
+    if (GIT_SETS_TREE_ATTRIBUTES_ASIDE) {
+      expect(where(findings)).toEqual([['aws-access-token', 'blob.js', 1, git(dir, 'rev-parse', 'HEAD').slice(0, 12)]]);
+      expect(reason).not.toMatch(TREE_ATTRIBUTES_LIMIT);
+    } else {
+      expect(where(findings)).toEqual([]);
+      expect(reason).toMatch(TREE_ATTRIBUTES_LIMIT);
+    }
   });
 
   it('a key only the merge commit adds (an evil merge) is found, at the merge', async () => {
