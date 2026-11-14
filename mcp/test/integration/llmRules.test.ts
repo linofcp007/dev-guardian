@@ -141,6 +141,12 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // Fifteen sources into eval (one each), thirteen sinks (one each).
   // Review round 2 (I-B): eleven argv shapes of interpreters, wrappers and shells.
   'outputToInterpreter.ts': { [INTERPRETER_JS]: 48 },
+  // The same sinks through every way a file names `child_process` — a default
+  // import, a namespace, an alias, a `require` assigned or destructured, with
+  // and without `node:`, and `promisify` of each: seven spellings, two argv
+  // shapes, three promisified. The rule may not depend on which of them the
+  // engine resolves — on Linux, Semgrep 1.182.0 resolves none with `node:`.
+  'interpreterImports.ts': { [INTERPRETER_JS]: 12 },
   // Four request sources; four sink shapes — the message object (one pattern
   // covers both key orders: Semgrep's object pattern ignores order, which the
   // ablation measured), a top-level `system`, `instructions`, a SystemMessage —
@@ -258,14 +264,14 @@ describe('llm rules', () => {
     }
   });
 
-  it.skipIf(!AVAILABLE)('fires exactly the expected rules, exactly the expected number of times, in EACH hit fixture', () => {
+  it.skipIf(!AVAILABLE)('T-01 T-02 fires exactly the expected rules, exactly the expected number of times, in EACH hit fixture', () => {
     const result = hits();
     expect(result.errors).toBe(0);
     expect(result.scanned).toBe(filesIn(resolve(FIXTURES, 'hits')).length);
     expect(countsByFile(result)).toEqual(EXPECTED_HITS);
   });
 
-  it.skipIf(!AVAILABLE)('fires on exactly the marked lines of every hit fixture', () => {
+  it.skipIf(!AVAILABLE)('T-01 T-02 fires on exactly the marked lines of every hit fixture', () => {
     const { rows } = hits();
     for (const file of Object.keys(EXPECTED_HITS)) {
       const got = rows.filter((r) => basename(r.path) === file).map((r) => r.start.line).sort((a, b) => a - b);
@@ -273,7 +279,7 @@ describe('llm rules', () => {
     }
   });
 
-  it.skipIf(!AVAILABLE)('fires NOTHING in EACH near-miss fixture', () => {
+  it.skipIf(!AVAILABLE)('T-03 fires NOTHING in EACH near-miss fixture', () => {
     const { rows, scanned, errors } = misses();
     expect(errors).toBe(0);
     // Every misses/ file must actually have been looked at, or "nothing" is
