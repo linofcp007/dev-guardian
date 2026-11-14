@@ -42,7 +42,7 @@ const WPSCAN_INSTALLED = await isInstalled('wpscan');
 const REQUIRE_TOOLCHAIN = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
 
 describe('wp_vuln_check with a real WPScan and no database', () => {
-  it.runIf(REQUIRE_TOOLCHAIN)('GUARDIAN_REQUIRE_SEMGREP=1 — WPScan must be on PATH', () => {
+  it.runIf(REQUIRE_TOOLCHAIN)('T-02 GUARDIAN_REQUIRE_SEMGREP=1 — WPScan must be on PATH', () => {
     expect(WPSCAN_INSTALLED).toBe(true);
   });
 

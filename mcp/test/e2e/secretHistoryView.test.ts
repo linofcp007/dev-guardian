@@ -131,7 +131,7 @@ describe.skipIf(!GITLEAKS)('a push run: the history pass reads what `git log -p`
     expect(where(findings)).toEqual([['aws-access-token', 'blob.js', 2, at]]);
   });
 
-  it('a NUL byte AND the tree marking the file binary: still found (the tree decides nothing since 3.6.1)', async () => {
+  it('T-03 a NUL byte AND the tree marking the file binary: still found (the tree decides nothing since 3.6.1)', async () => {
     const dir = repo();
     write(dir, '.gitattributes', 'blob.js binary\n');
     write(dir, 'blob.js', `\0const AWS_KEY = "${aws('both')}";\n`);

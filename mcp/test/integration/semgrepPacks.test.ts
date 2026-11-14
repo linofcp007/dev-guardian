@@ -302,7 +302,7 @@ describe('the encoding check can actually fail', () => {
   // measured a setting instead of the hazard, so they pin UTF-8 mode off.
   const LOCALE_CODEC = { env: { PYTHONUTF8: '0' } };
 
-  it.skipIf(!AVAILABLE)('and semgrep --validate refuses the poisoned pack', () => {
+  it.skipIf(!AVAILABLE)('T-01 and semgrep --validate refuses the poisoned pack', () => {
     const target = poisonedCopy();
     const run = runSemgrep(['--validate', '--quiet', '--disable-version-check', '--config', target], LOCALE_CODEC);
     expect(run.status).not.toBe(0);
@@ -310,7 +310,7 @@ describe('the encoding check can actually fail', () => {
 
   // The cross-pack test validates every pack in ONE call: that call must not
   // pass because the other packs are fine.
-  it.skipIf(!AVAILABLE)('and one --validate over every real pack plus the poisoned one refuses them all', () => {
+  it.skipIf(!AVAILABLE)('T-01 and one --validate over every real pack plus the poisoned one refuses them all', () => {
     const validate = (configs: readonly string[]): number | null =>
       runSemgrep(['--validate', '--quiet', '--disable-version-check', ...configs.flatMap((c) => ['--config', c])], LOCALE_CODEC)
         .status;
@@ -320,7 +320,7 @@ describe('the encoding check can actually fail', () => {
     expect(validate([...real, poisonedCopy()])).not.toBe(0);
   });
 
-  it.skipIf(!AVAILABLE)('and a SCAN with it reports nothing at all, with no error', () => {
+  it.skipIf(!AVAILABLE)('T-01 and a SCAN with it reports nothing at all, with no error', () => {
     // The measurement that makes this trap worth a test rather than a comment.
     // A broken pack does not fail the scan — it produces a clean-looking result
     // with zero findings, zero files scanned and zero errors. This is the

@@ -212,7 +212,7 @@ describe.skipIf(!GITLEAKS)('a renamed file with an edit is read where gitleaks r
 describe.skipIf(!GITLEAKS)('a one-line secret the history pass read in no hunk is new', () => {
   const BASE = { 'a.js': ['console.log(1)'], 'key.pem': pem('b1') };
 
-  it('a .gitattributes the commit adds no longer hides its key from the history pass (a push: no ref, no full-content pass)', async () => {
+  it('T-03 a .gitattributes the commit adds no longer hides its key from the history pass (a push: no ref, no full-content pass)', async () => {
     for (const attributes of [['config.js binary'], ['* -diff', 'README.md diff']]) {
       const dir = resolveProjectPath(makeTempDir('secret-attributes-')).path;
       git(dir, 'init', '-q');

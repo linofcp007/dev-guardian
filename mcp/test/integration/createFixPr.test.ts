@@ -57,7 +57,7 @@ describe('create_fix_pr', () => {
       .trim().split('\n')).toHaveLength(1);
   });
 
-  it('apply:false never invokes gh for push or pr create', async () => {
+  it('T-04 apply:false never invokes gh for push or pr create', async () => {
     // The safety story. If this ever regresses, a dry run starts publishing.
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
     await mod?.handler({ project_path: repo, apply: false }, ctx() as never);
@@ -224,7 +224,7 @@ describe('create_fix_pr', () => {
     expect(ghLogContents()).toBe('');
   }, REGISTRY_BACKED_TIMEOUT_MS);
 
-  it('never lets gh create a PR with apply:true either, and still cleans up, whatever the fix outcome', async () => {
+  it('T-04 never lets gh create a PR with apply:true either, and still cleans up, whatever the fix outcome', async () => {
     // Complements the apply:false test above with the orthogonal gate:
     // even asked to publish, `gh pr create` is reached only after the fix
     // verifies AND (if it does) after a successful push — and this
