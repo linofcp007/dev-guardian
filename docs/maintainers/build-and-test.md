@@ -114,7 +114,17 @@ alone.
 Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
 skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
 when you need to know the rule pack was actually exercised. Only absence skips:
-a Semgrep on `PATH` that fails `--version` fails the rule-pack tests.
+a Semgrep on `PATH` that fails `--version` fails the rule-pack tests. The same
+switch requires Trivy in the tests that need a real one, and
+`GUARDIAN_REQUIRE_GITLEAKS=1` gitleaks.
+
+"Installed" is asked the way the server asks it (`test/helpers/toolchain.ts`):
+on `PATH`, or in the per-user tools directory `install_toolchain` writes to
+(`~/.local/bin`, `%USERPROFILE%\.local\bin`), which the probe appends to the
+test process's `PATH` as the server appends it to its own. A scanner the
+product would run is never a skipped test: with `where` / `which` alone, every
+real-Trivy and real-gitleaks test was skipped on a machine the product itself
+had set up, and two `create_fix_pr` tests stayed red behind the skip.
 
 A test that gives the .NET SDK a faked home (`DOTNET_CLI_HOME`) sets
 `DOTNET_ADD_GLOBAL_TOOLS_TO_PATH=0` and `DOTNET_GENERATE_ASPNET_CERTIFICATE=0`

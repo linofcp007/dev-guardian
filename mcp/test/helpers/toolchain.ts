@@ -1,6 +1,17 @@
 /**
- * "Is this binary on PATH?", answered once at collection time so `it.skipIf`
- * can report a skip as a skip.
+ * "Is this binary installed?", answered once at collection time so `it.skipIf`
+ * can report a skip as a skip — and answered the way the SERVER answers it.
+ *
+ * `install_toolchain` puts Trivy, gitleaks, Syft and cosign in the per-user
+ * tools directory (`~/.local/bin`, `%USERPROFILE%\.local\bin`) and leaves PATH
+ * alone; the server appends that directory to its own PATH before every
+ * lookup (`src/platform/userBin.ts`). This probe used to run `where` /
+ * `which` without that step, so on a machine the product itself had set up
+ * every test of a real Trivy or gitleaks was skipped, in silence, for a
+ * scanner the product runs — and two `create_fix_pr` tests stayed red behind
+ * the skip for as long as nobody put that directory on PATH by hand. The
+ * probe now takes the same step: appended, never prepended, so a binary on
+ * the user's own PATH is still the one that runs.
  *
  * ---- Why this is shared, and why the timeout is what it is ----------------
  *
@@ -25,16 +36,20 @@
  */
 import { execa } from 'execa';
 import { detectOs } from '../../src/platform/osDetect.js';
+import { ensureUserBinOnPath } from '../../src/platform/userBin.js';
 import { highestDotnetSdk } from '../../src/runners/toolProbe.js';
 
-/** Resolves `true` when `bin` is on PATH. Never throws — a probe that fails
- *  to run reports "not installed", which is the safe direction: the caller
- *  skips, and `GUARDIAN_REQUIRE_SEMGREP=1` turns that skip into a hard
- *  failure for anyone who needs to know. */
 export const PROBE_TIMEOUT_MS = 30_000;
 
-export async function isInstalled(bin: string): Promise<boolean> {
+/** Resolves `true` when `bin` is on PATH or in the per-user tools directory
+ *  of `home` (the user's own, by default), which this call appends to the
+ *  process's PATH as the server does. Never throws — a probe that fails to
+ *  run reports "not installed", which is the safe direction: the caller
+ *  skips, and `GUARDIAN_REQUIRE_SEMGREP=1` turns that skip into a hard
+ *  failure for anyone who needs to know. */
+export async function isInstalled(bin: string, home?: string): Promise<boolean> {
   try {
+    ensureUserBinOnPath(process.env, home);
     const r = await execa(detectOs() === 'win32' ? 'where' : 'which', [bin], {
       reject: false,
       timeout: PROBE_TIMEOUT_MS,
