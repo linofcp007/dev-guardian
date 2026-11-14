@@ -113,7 +113,7 @@ describe('install_toolchain on Windows: pinned release archives first', () => {
       ['gitleaks', 'release'],
       ['syft', 'release'],
     ]);
-    expect(r.would_install[0]?.command).toMatch(/trivy v0\.76\.1 release archive \(windows, sha256-checked\)/);
+    expect(r.would_install[0]?.command).toMatch(/trivy v0\.76\.2 release archive \(windows, sha256-checked\)/);
   });
 
   it('gosec through its pinned archive; the Go toolchain it needs is a manual step, never installed', async () => {
@@ -135,7 +135,7 @@ describe('install_toolchain on Windows: pinned release archives first', () => {
   it('without PowerShell, scoop installs the pinned version — never latest', async () => {
     vi.mocked(resolveBinary).mockImplementation(async (name) => (name === 'scoop' ? 'C:\\scoop.cmd' : null));
     const r = (await tool('install_toolchain').handler({ tools: ['trivy'], dry_run: true }, plugin())) as unknown as DryRun;
-    expect(r.would_install).toEqual([expect.objectContaining({ tool: 'trivy', manager: 'scoop', command: 'scoop install trivy@0.76.1' })]);
+    expect(r.would_install).toEqual([expect.objectContaining({ tool: 'trivy', manager: 'scoop', command: 'scoop install trivy@0.76.2' })]);
   });
 });
 

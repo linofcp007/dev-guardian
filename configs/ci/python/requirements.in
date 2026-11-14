@@ -5,4 +5,4 @@
 # installs them with --require-hashes --only-binary :all: (configs/ci/pinned.json).
 bandit[toml]==1.9.4
 semgrep==1.182.0
-zizmor==1.31.1
+zizmor==1.32.0

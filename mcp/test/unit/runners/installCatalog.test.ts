@@ -630,7 +630,7 @@ describe('detekt, SpotBugs and RuboCop: pinned, checked before installed; Java a
     for (const os of ['win32', 'linux', 'darwin'] as const) {
       const spec = TOOL_CATALOG['rubocop']?.install[os].gem;
       expect(spec?.command).toBe('ruby');
-      expect(spec?.args.slice(0, 10)).toEqual(['-S', 'gem', 'install', 'rubocop', '-v', '1.92.1', '--user-install', '--conservative', '--no-document', '--bindir']);
+      expect(spec?.args.slice(0, 10)).toEqual(['-S', 'gem', 'install', 'rubocop', '-v', '1.92.2', '--user-install', '--conservative', '--no-document', '--bindir']);
       expect(spec?.user_bin).toBe('rubocop');
     }
     expect(TOOL_CATALOG['rubocop']?.probe).toEqual({ command: 'rubocop', args: ['--version'], interpreter: 'ruby' });

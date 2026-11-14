@@ -325,7 +325,7 @@ their respective projects.
   `scripts/install/install-linux.sh`, which runs for the Linux defaults and
   the Windows WSL fallback), scoop and choco on Windows — the route the
   credential-stealing Trivy v0.69.4 took on 2026-03-19. Every install of
-  them now fetches one release (Syft 1.55.0, Trivy 0.76.1, gitleaks 8.30.1)
+  them now fetches one release (Syft 1.57.1, Trivy 0.76.2, gitleaks 8.30.1)
   and checks the archive against a sha256 dev-guardian pins
   (`PINNED_RELEASES` in `mcp/src/runners/installCatalog.ts`, each checked
   against the release's checksums file, GitHub's asset digest and an

@@ -86,12 +86,12 @@ interface ToolMeta {
  * the version winget, scoop and choco are asked for. Pinned because the
  * installer used to be piped from the `main` branch into `sh` and then
  * install "latest": on 2026-03-19 "latest" WAS the malicious v0.69.4 (see
- * `compromised` on the trivy entry). v0.76.1 was published 2026-10-21 as an
+ * `compromised` on the trivy entry). v0.76.2 was published 2026-11-05 as an
  * immutable release (enabled on aquasecurity/trivy since 2026-03-03), built
- * with Go 1.27.3 (the eMudhra CA distrust, GO-2026-6809). Bump it and its sums
- * together, deliberately.
+ * with Go 1.27.3 (the eMudhra CA distrust, GO-2026-6809; read from the binary
+ * with `go version`). Bump it and its sums together, deliberately.
  */
-export const TRIVY_INSTALL_TAG = 'v0.76.1';
+export const TRIVY_INSTALL_TAG = 'v0.76.2';
 
 /**
  * The cosign release every pinned installer below fetches (winget, scoop and
@@ -132,7 +132,7 @@ interface PinnedRelease {
   assets: Readonly<Record<ReleasePlatform, { file: string; sha256: string; member?: string }>>;
 }
 
-const SYFT_VERSION = '1.55.0';
+const SYFT_VERSION = '1.57.1';
 const TRIVY_VERSION = TRIVY_INSTALL_TAG.slice(1);
 const GITLEAKS_VERSION = '8.30.1';
 
@@ -140,16 +140,22 @@ const GITLEAKS_VERSION = '8.30.1';
 const CPPCHECK_VERSION = '2.22.0';
 
 /**
- * The Psalm release PHAR every Psalm install fetches. 6.20.1 was published
- * 2026-10-20; checked on 2026-10-24: the sum matches GitHub's asset digest
+ * The Psalm release PHAR every Psalm install fetches. 6.20.10 was published
+ * 2026-11-07; checked on 2026-11-13: the sum matches GitHub's asset digest
  * and the psalm/phar repository's copy of the same tag, and `psalm.phar.asc`
  * verifies with the ed25519 key `bin/ci/build-phar.sh` signs with at that tag
  * (54F5DF0E979A94C40DEDE5E599BF4D9A33D65E1E). Assets of older releases were
  * re-signed after their release: pinned by sum, never by tag. Bump the
  * version and the sum together, deliberately.
+ *
+ * Not 7.x yet: a new major whose first release is of 2026-11-05 and which
+ * has had one almost every day since (7.4.0 is of 2026-11-13, under 72 hours
+ * old when this was written). The taint pass was measured on 6.20.1
+ * (`runners/psalmRun.ts`); its real-Psalm tests (`psalmSast.test.ts`) pass on
+ * 6.20.10 too, run with PHP 8.4.4 on Windows.
  */
-export const PSALM_VERSION = '6.20.1';
-export const PSALM_PHAR_SHA256 = 'f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51';
+export const PSALM_VERSION = '6.20.10';
+export const PSALM_PHAR_SHA256 = '4cebb4d62910800e8ee55153a39c60002e46fe036d13ba897eeea9c848b4e6b3';
 const PSALM_PHAR_URL = `https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`;
 const GOSEC_VERSION = '2.30.0';
 const SHELLCHECK_VERSION = '0.11.0';
@@ -185,8 +191,16 @@ const FINDSECBUGS_VERSION = '1.14.0';
 const FINDSECBUGS_JAR_URL = `https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/${FINDSECBUGS_VERSION}/findsecbugs-plugin-${FINDSECBUGS_VERSION}.jar`;
 const FINDSECBUGS_JAR_SHA256 = '6fa340344fa433ff46c2985dab1010e8bc739f9395c983594a5240095e92abc8';
 
-/** RuboCop, the version quality_check's Ruby pass was measured on (2026-10-22's 1.92.1, the latest). */
-const RUBOCOP_VERSION = '1.92.1';
+/**
+ * RuboCop. quality_check's Ruby pass was measured on 1.92.1 (2026-10-22's);
+ * 1.92.2 (2026-10-29) was run beside it on 2026-11-13 — Ruby 3.3.8, the same
+ * seeded project, the runner's own arguments — and answered the same on
+ * everything the pass relies on: no project `.rubocop.yml` or `.rubocop` read
+ * from the report directory with `--config`, the same JSON keys, cops and
+ * severities, exit 1 for offenses and 2 for a missing file or an unknown
+ * target Ruby.
+ */
+const RUBOCOP_VERSION = '1.92.2';
 
 /**
  * WP-CLI's release PHAR on Linux. The entry used to be wp-cli.org's
@@ -214,7 +228,7 @@ export const ACTIONLINT_VERSION = '1.7.12';
 
 /** One pinned file a tool is: where it comes from, its sha256, and the name it takes in the per-user tools directory. */
 interface PinnedFile {
-  /** For the description: `Psalm 6.20.1 release PHAR`. */
+  /** For the description: `Psalm 6.20.10 release PHAR`. */
   label: string;
   url: string;
   sha256: string;
@@ -289,9 +303,10 @@ const GOVULNCHECK_MODULE = 'golang.org/x/vuln/cmd/govulncheck@v1.9.0';
  * `<tool>_<version>_checksums.txt` (itself matching its GitHub asset
  * digest); and the digest GitHub records for the asset. The Windows ZIPs
  * also match scoop's Main bucket (all three) and winget-pkgs (Trivy,
- * gitleaks). Syft 1.55.0 (2026-10-19) and Trivy 0.76.1 (2026-10-21) are
- * immutable releases, their sums checked the same three ways on 2026-10-24
- * (scoop and winget carry the same Windows ZIPs); gitleaks 8.30.1 (2026-03-21)
+ * gitleaks). Syft 1.57.1 (2026-11-09) and Trivy 0.76.2 (2026-11-05) are
+ * immutable releases, their sums checked the same three ways on 2026-11-13
+ * (scoop's Main bucket carries the same Windows ZIPs, winget-pkgs Trivy's,
+ * and Chocolatey has both versions); gitleaks 8.30.1 (2026-03-21)
  * is not — its assets could be replaced, which the pinned sums catch.
  *
  * gosec 2.30.0 (2026-10-23) was checked on 2026-10-24: each archive hashed
@@ -314,22 +329,22 @@ export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'g
     version: SYFT_VERSION,
     base: `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}`,
     assets: {
-      'linux-amd64': { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: 'bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d' },
-      'linux-arm64': { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: '929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304' },
-      'darwin-amd64': { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: 'e2e5831cbabaec9a36fe65c34755c1113982c842a685edce3ce0b54a0ded8003' },
-      'darwin-arm64': { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: '1217c258bd5eb91ef3189cf22a82e02f9cac07e4ce934350f428e93aff674625' },
-      'windows-amd64': { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: 'ada4c9b93af575f479ce80fce6629897272a2d41f300a14bc49bace020767ca2' },
+      'linux-amd64': { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: 'bf52519eb57f675d47c07d43213cb6dff6449f3d6d1147ff6701ed91f44eef0c' },
+      'linux-arm64': { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: 'aa3d3e07344f590bcce8d31043b752daa76c8a56c2aa34ceeee63c6168152582' },
+      'darwin-amd64': { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: '2355758c1142982a67b309604c5d75effdbe638a57c771979ea8fd1a16656abc' },
+      'darwin-arm64': { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: 'e0a74a5d2688d1254b4e17b71f068a83215e3625f846265bf6614c7ba06f3a96' },
+      'windows-amd64': { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: '3a01fe865076bb548352195b77e88fa4649277861ea458efe165c3a810b6dcc7' },
     },
   },
   trivy: {
     version: TRIVY_VERSION,
     base: `https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}`,
     assets: {
-      'linux-amd64': { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: 'c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0' },
-      'linux-arm64': { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: 'e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f' },
-      'darwin-amd64': { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: '7aa762eacd582052d053b62dcf972a1ab058abe39a57ccae234ed8894945b6b7' },
-      'darwin-arm64': { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: '11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5' },
-      'windows-amd64': { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: '1051f49cb22d5284f43425f72aad9cda63ca12ceb92e7caa06903490c82dc9bf' },
+      'linux-amd64': { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: 'bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf' },
+      'linux-arm64': { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: 'ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3' },
+      'darwin-amd64': { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: 'e08bb9ea449ecf66c6bfb03cbb8697c503ff33d35fc585c9747e3eaeb7ed4c7b' },
+      'darwin-arm64': { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: 'ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8' },
+      'windows-amd64': { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: '691f737a7e5566a673c3a74dab9160552ec32101e953b659e5c77443d16dddb6' },
     },
   },
   gitleaks: {
@@ -695,7 +710,7 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
   rubocop: {
     name: 'rubocop',
     // 1.60: the configuration keys quality_check passes (NewCops, SuggestExtensions,
-    // Metrics/BlockLength's AllowedMethods); measured on 1.92.1.
+    // Metrics/BlockLength's AllowedMethods); measured on 1.92.1, and 1.92.2 beside it.
     version_floor: '1.60.0',
     probe: { command: 'rubocop', args: ['--version'], interpreter: 'ruby' },
     required_by: ['quality_check'],

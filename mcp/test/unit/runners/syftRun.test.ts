@@ -41,7 +41,7 @@ describe('syftArgv', () => {
     ]);
   });
 
-  // 3.6.1, measured on Syft 1.55.0 (the pinned release, 2026-10-25): a
+  // 3.6.1, measured on Syft 1.55.0 (2026-10-25) and on 1.57.1 (the pinned release, 2026-11-13): a
   // package-lock.json under the root `.guardian/reports/` became components
   // of the project's SBOM; `--exclude ./.guardian/reports` left it out and
   // kept `lib/.guardian/reports/` and the root `.guardian/` itself, and the
