@@ -144,7 +144,8 @@ directory on `PATH`), and `GUARDIAN_REQUIRE_DETEKT=1`, `GUARDIAN_REQUIRE_RUBOCOP
 `GUARDIAN_REQUIRE_SPOTBUGS=1` for detekt, RuboCop and SpotBugs (`test/e2e/detektQuality.test.ts`,
 `rubocopQuality.test.ts`, `spotbugsSast.test.ts`: `detekt-cli.jar` and the `rubocop` script in a
 directory on `PATH`, SpotBugs where install_toolchain puts it or in `SPOTBUGS_HOME`, with Java,
-`javac` and Ruby; a portable Temurin and RubyInstaller unpacked anywhere will do). The
+`javac` and Ruby; a portable Temurin and RubyInstaller unpacked anywhere will do), and
+`GUARDIAN_REQUIRE_WPSCAN=1` for WPScan (`test/e2e/wpscanNoDatabase.test.ts`; not in `--toolchain`). The
 suite keeps Semgrep's settings, log and version cache out of your home
 directory (`test/setup/semgrepHome.ts`). Timing tests assert a shape, not a
 number of milliseconds (`test/helpers/timing.ts`): a ratio of 8x the input,

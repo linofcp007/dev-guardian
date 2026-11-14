@@ -39,10 +39,14 @@ afterEach(() => {
 });
 
 const WPSCAN_INSTALLED = await isInstalled('wpscan');
-const REQUIRE_TOOLCHAIN = process.env['GUARDIAN_REQUIRE_SEMGREP'] === '1';
+const REQUIRE_WPSCAN = process.env['GUARDIAN_REQUIRE_WPSCAN'] === '1';
 
 describe('wp_vuln_check with a real WPScan and no database', () => {
-  it.runIf(REQUIRE_TOOLCHAIN)('T-02 GUARDIAN_REQUIRE_SEMGREP=1 — WPScan must be on PATH', () => {
+  // Its own switch, like every scanner the `--toolchain` image does not carry
+  // (gosec, cppcheck, Psalm, …). It hung on GUARDIAN_REQUIRE_SEMGREP, which
+  // that image sets — and the image has never had a WPScan, so the first
+  // whole-suite run there failed on this line.
+  it.runIf(REQUIRE_WPSCAN)('T-02 GUARDIAN_REQUIRE_WPSCAN=1 — WPScan must be on PATH', () => {
     expect(WPSCAN_INSTALLED).toBe(true);
   });
 
