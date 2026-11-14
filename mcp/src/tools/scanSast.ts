@@ -603,7 +603,7 @@ function judgeSemgrepRun(args: SemgrepRunRecord): void {
   const packGap = check.plugin_pack_fixpoint;
   // What the engine that ran cannot do — report fixpoint timeouts, resolve
   // the pack's node: imports — said once (runners/semgrepConfigs.ts).
-  const engineNote = semgrepEngineNote(semgrepEngineOf(raw), { llmPack: configs.length > loadedFrom.length });
+  const engineNote = semgrepEngineNote(semgrepEngineOf(raw));
   const reasons = [...(via !== null ? [`ran via ${via}`] : []), ...notes, ...(engineNote !== null ? [engineNote] : [])];
 
   if (check.verdict === 'ok') {
@@ -974,7 +974,7 @@ async function runSemgrepOnScope(args: Collect & {
   const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.rulesProjectPath, cwd: ctx.projectPath });
   for (const raw of run.reports) parser_inputs.push({ parser, input: raw });
   const entry: ToolRun = { ...run.toolRun };
-  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null));
   const scopeNotes = [...plan.notes, ...(flags.warning !== null ? [flags.warning] : []), ...(engineNote !== null ? [engineNote] : [])];
   if (scopeNotes.length > 0) entry.reason = [entry.reason, ...scopeNotes].filter((s) => s !== undefined).join('; ');
   if (entry.status === 'failed' && entry.rule_config_error === true && onlyPluginPackRan(plan.pluginPacks, run.failedRules)) {

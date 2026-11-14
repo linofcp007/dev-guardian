@@ -752,35 +752,33 @@ describe('semgrepEngineOf', () => {
 
 /**
  * The one note a run carries about its engine: an engine that cannot report
- * fixpoint timeouts, and one older than the LLM pack was measured on, said
- * once — never two sentences each starting "this Semgrep (x.y.z)".
+ * fixpoint timeouts. It says nothing about the LLM pack any more — the pack
+ * gives the same findings on every engine it was measured on.
  */
 describe('semgrepEngineNote', () => {
   const FIXPOINT = 'does not report taint fixpoint timeouts; incomplete taint analysis cannot be detected';
 
-  it('an engine without the field: the named note, pack or no pack', () => {
-    expect(semgrepEngineNote({ version: '1.120.1', fixpointTimeoutsReported: false }, { llmPack: false })).toBe(
-      `this Semgrep (1.120.1) ${FIXPOINT}`,
-    );
+  it('an engine without the field: the named note, the engine named once', () => {
+    const note = semgrepEngineNote({ version: '1.120.1', fixpointTimeoutsReported: false });
+    expect(note).toBe(`this Semgrep (1.120.1) ${FIXPOINT}`);
+    expect(note?.match(/this Semgrep/g)).toHaveLength(1);
   });
 
-  it('with the pack on an engine older than it was measured on: one note, the engine named once', () => {
-    const both = semgrepEngineNote({ version: '1.86.0', fixpointTimeoutsReported: false }, { llmPack: true }) ?? '';
-    expect(both.startsWith(`this Semgrep (1.86.0) ${FIXPOINT}; nor does it resolve`)).toBe(true);
-    expect(both).toMatch(/llm\.yml was measured on Semgrep 1\.176\.1, and its child_process coverage is reduced \(160 of 184/);
-    expect(both.match(/this Semgrep/g)).toHaveLength(1);
-    const llmOnly = semgrepEngineNote({ version: '1.170.1', fixpointTimeoutsReported: true }, { llmPack: true }) ?? '';
-    expect(llmOnly).toMatch(/^this Semgrep \(1\.170\.1\) does not resolve `import … from 'node:child_process'` in taint mode — llm\.yml/);
-    expect(llmOnly).not.toMatch(/fixpoint/);
+  it('T-04 no engine is said to miss child_process sinks: no version, no count, on the oldest measured or the pinned', () => {
+    for (const version of ['1.86.0', '1.120.1', '1.170.1', '1.176.1', '1.182.0']) {
+      for (const fixpointTimeoutsReported of [true, false]) {
+        const note = semgrepEngineNote({ version, fixpointTimeoutsReported }) ?? '';
+        expect([version, /child_process|llm\.yml|160 of 184|measured on Semgrep/.test(note)]).toEqual([version, false]);
+      }
+    }
   });
 
-  it('nothing to say: a current engine, an unknown one, or the pack not run on a new-enough engine', () => {
-    expect(semgrepEngineNote({ version: '1.176.1', fixpointTimeoutsReported: true }, { llmPack: true })).toBeNull();
-    expect(semgrepEngineNote({ version: '1.180.0', fixpointTimeoutsReported: true }, { llmPack: true })).toBeNull();
-    expect(semgrepEngineNote({ version: '1.170.1', fixpointTimeoutsReported: true }, { llmPack: false })).toBeNull();
-    expect(semgrepEngineNote({}, { llmPack: true })).toBeNull();
-    // A version but no word on the field (nothing scanned): only the pack's half.
-    expect(semgrepEngineNote({ version: '1.86.0' }, { llmPack: false })).toBeNull();
+  it('nothing to say: an engine that reports them, an unknown one, or no word on the field', () => {
+    expect(semgrepEngineNote({ version: '1.176.1', fixpointTimeoutsReported: true })).toBeNull();
+    expect(semgrepEngineNote({ version: '1.170.1', fixpointTimeoutsReported: true })).toBeNull();
+    expect(semgrepEngineNote({})).toBeNull();
+    // A version but no word on the field (nothing scanned).
+    expect(semgrepEngineNote({ version: '1.86.0' })).toBeNull();
   });
 });
 

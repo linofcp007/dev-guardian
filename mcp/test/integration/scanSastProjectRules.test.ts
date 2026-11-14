@@ -885,21 +885,22 @@ describe("scan_sast runs the plugin's LLM-application pack (configs/semgrep/llm.
     expect(set.findings.map((f) => [f.rule_id, f.file_path])).toEqual([['llm-trust-remote-code', 'a.py']]);
   });
 
-  // Review round 2: the pack was measured on Semgrep 1.176.1; older engines
-  // do not resolve `node:child_process` imports in taint mode.
-  it('a Semgrep older than the pack was measured on: a named note that its child_process coverage is reduced', async () => {
+  // Until 3.9.3 a Semgrep older than 1.176.1 got a note that the pack's
+  // child_process coverage was reduced. The rule reads the import as written
+  // now and gives the same findings on every engine measured (1.86.0 to
+  // 1.182.0): the only thing left to say about an old engine is that it
+  // cannot report fixpoint timeouts.
+  it('T-04 no Semgrep version is told its child_process coverage is reduced; an engine without fixpoint timeouts is still named, once', async () => {
     const project = makeTempDir('sast-llm-oldsemgrep-');
-    for (const [version, noted] of [['1.170.1', true], ['1.86.0', true], ['1.176.1', false], ['1.180.0', false]] as const) {
+    for (const version of ['1.170.1', '1.86.0', '1.176.1', '1.182.0'] as const) {
       captured.length = 0;
       // As each engine writes it: 1.170 and later always carry `time.fixpoint_timeouts`.
       mockSemgrepOnPath(0, { ...CLEAN_REPORT, version, ...(version === '1.86.0' ? {} : { time: { fixpoint_timeouts: [] } }) });
       const r = await runSast(project, makePlugin(project));
       const reason = r.tools_run.find((t) => t.name === 'semgrep')?.reason ?? '';
-      expect([version, /llm\.yml.*measured on Semgrep 1\.176\.1.*child_process/.test(reason)]).toEqual([version, noted]);
-      // 1.86.0 also cannot report fixpoint timeouts: one note, the engine named once.
-      expect([version, (reason.match(/this Semgrep/g) ?? []).length]).toEqual([version, noted ? 1 : 0]);
+      expect([version, /child_process|measured on Semgrep/.test(reason)]).toEqual([version, false]);
+      expect([version, (reason.match(/this Semgrep/g) ?? []).length]).toEqual([version, version === '1.86.0' ? 1 : 0]);
     }
-    expect(true).toBe(true);
   });
 
   it('local_only in the Docker fallback with no project rules is still no scan — the pack alone is not a SAST ruleset', async () => {

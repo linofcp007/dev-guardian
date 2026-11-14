@@ -10,6 +10,21 @@ version bump.
 
 ### Fixed
 
+- **On Linux, `llm-output-to-interpreter-js` missed every `child_process` sink imported with the `node:` prefix** —
+  `import { exec } from 'node:child_process'`, the spelling Node's own documentation uses. The rule knew the module
+  by what Semgrep's engine resolves, and the Linux build of Semgrep 1.182.0 does not resolve a `node:`-prefixed
+  import where the Windows build of the same version does: 24 of the pack's 48 JavaScript fixture findings were
+  silent on Linux, exit 0 and no error, and nothing in `scan_sast`'s result said so — its note keyed on the Semgrep
+  *version*, which is what the difference had been taken for (Linux images of older releases compared with a
+  Windows install of a newer one). The rule now reads the import or `require` as the file writes it, with or
+  without the prefix: a named import, an alias, a namespace, a default import, a `require` assigned or
+  destructured, and `promisify` of any of them. A default import, and a `require` of `node:child_process`, were
+  found on no platform before. The pack gives the same 196 fixture findings on Semgrep 1.86.0, 1.120.1, 1.170.1 and
+  1.182.0 on Linux and on 1.182.0 on Windows, and the version note is gone, with nothing left to support it. Two
+  things to know. A parameter named like the import (`function f(spawn) { spawn(text) }`) is excluded, but a local
+  *declaration* of that name (`const spawn = …` inside the function) is not, and fires. And these are still read by
+  no platform: `const exec = require('child_process').exec`, `promisify` of that, a name destructured from a
+  namespace, and a dynamic `import()`.
 - **The test suite no longer adds dead entries to the PATH of whoever runs it** (maintainers, Windows).
   `nugetCredentialBinding.test.ts` gives the .NET SDK a faked home, and the SDK's first run in a home it has never
   seen appends `<home>\.dotnet\tools` to the user's `PATH` in the registry of the real account — up to three

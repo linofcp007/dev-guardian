@@ -58,13 +58,18 @@
 # tokens, que descrevem uma superficie ou um custo, nao um caminho de
 # execução.
 #
-# VERSÃO DO SEMGREP. Medido com o 1.176.1 (o do PATH desta maquina). Nas
-# imagens 1.86.0, 1.120.1 e 1.170.1 o pack da 160 dos 184 resultados de hits/
-# (revisao 3): as vinte e quatro linhas cuja função vem de um `import ... from
-# 'node:child_process'` ficam mudas, porque essas versões nao resolvem o
-# prefixo `node:` em modo taint (ver a regra JS). Tudo o resto dispara nas
-# quatro. O `scan_sast` junta uma nota com o nome disto a qualquer corrida
-# num Semgrep anterior ao 1.176.1 (`llmPackVersionNote`).
+# VERSÃO E PLATAFORMA DO SEMGREP. O pack da os mesmos 196 resultados em hits/
+# e zero em misses/ no 1.86.0, no 1.120.1, no 1.170.1 e no 1.182.0 em Linux e
+# no 1.182.0 em Windows (medido a 2026-11-14, para o 3.9.3). Ate ao 3.9.2 nao
+# dava: a regra JS do interpretador reconhecia o `child_process` so pelo que o
+# MOTOR resolve, e a compilação Linux do Semgrep nao resolve um `import ...
+# from 'node:child_process'` em nenhuma das versões medidas, a 1.182.0
+# incluida -- vinte e quatro das quarenta e oito linhas de hits/ ficavam
+# mudas, sem erro nenhum. Este cabeçalho dizia que era a VERSÃO ("so a partir
+# do 1.176.1"): a medição tinha comparado imagens Linux de versões antigas com
+# o 1.176.1 de uma maquina Windows, e a variavel era a plataforma. A regra le
+# agora o import como esta escrito (ver a regra JS), e o `scan_sast` deixou de
+# juntar uma nota de versão, que ja nada sustenta.
 #
 # ---------------------------------------------------------------------------
 # POR QUE TAINT, E O QUE O TAINT DESTE SEMGREP NAO VE. As regras de fluxo usam
@@ -1054,14 +1059,41 @@ rules:
   # A qualificação deixa de fora o `RegExp.prototype.exec` e um `exec`
   # importado de outro modulo. O `vm` nao é um sandbox.
   #
-  # VERSÃO DO SEMGREP (revisao, medido): os `import` de `'node:child_process'`
-  # so sao resolvidos a partir do Semgrep 1.176.1 (a versão medida); o 1.86.0,
-  # o 1.99.0, o 1.120.1 e o 1.170.1 nao os resolvem, e as vinte e quatro linhas de
-  # hits/ com um import `node:` ficam mudas neles (160 de 184, revisao 3) (o
-  # `'child_process'` sem prefixo,
-  # o `require` e os namespaces resolvem em todos). Tentou-se uma forma
-  # alternativa (`$CP = require($MOD)` com o `$MOD` num regex): casa esses
-  # imports em modo de pesquisa, mas nao em modo taint, nas mesmas versões.
+  # COMO O `child_process` É RECONHECIDO (3.9.3): pelo import ou `require` do
+  # ficheiro lido como esta escrito -- um `pattern-inside` da propria
+  # instrução, com o nome do modulo num regex que aceita o prefixo `node:`.
+  # Ate ao 3.9.2 era pelo que o MOTOR resolve (`child_process.$F`), e isso
+  # varia com a PLATAFORMA. Medido com o Semgrep 1.182.0: a compilação Linux
+  # nao resolve nenhum import com `node:` (nomeado, com alias, de namespace), a
+  # de Windows resolve esses tres, e nenhuma das duas resolve o import por
+  # omissão nem o `require` de `node:child_process` atribuido ou
+  # desestruturado. As duas clausulas do motor sairam: com as formas escritas
+  # ao lado, nao acrescentavam uma unica linha em nenhuma plataforma nem
+  # versão medida (a ablação lia-as mortas), e hits/ da as mesmas sessenta
+  # linhas em Linux e em Windows, e no 1.86.0, no 1.120.1 e no 1.170.1. (Este
+  # comentario dizia que era a versão do Semgrep: ver o cabeçalho.)
+  #
+  # O QUE O MOTOR FAZIA MELHOR: saber que um nome local tapa o importado. O
+  # padrao do import casa pelo NOME, por isso um PARAMETRO com o nome do
+  # import (`function f(spawn) { spawn(texto) }`) disparava; esta excluido nas
+  # formas medidas -- função, metodo, arrow com bloco e com expressão (misses/,
+  # as linhas `shadowed`). FALSO POSITIVO CONHECIDO, medido nas duas
+  # plataformas: uma DECLARAÇÃO local com esse nome (`const spawn = ...` dentro
+  # da função, a variavel de um `catch` ou de um `for ... of`) nao esta
+  # excluida e dispara.
+  #
+  # O padrao do import nomeado casa tambem um import com alias, pelo nome
+  # ORIGINAL (`exec as run` da `$FN = exec`): sem a exclusão que o acompanha,
+  # um `exec` de OUTRO modulo no mesmo ficheiro disparava (medido; esta em
+  # misses/interpreterImportAlias.ts). O do `require` desestruturado nao casa
+  # a propriedade renomeada pelo nome original (medido, o mesmo ficheiro de
+  # misses/ para o `require`).
+  #
+  # FORA DE ALCANCE, medido nas duas plataformas, com e sem prefixo: a função
+  # tirada de um `require` na propria atribuição (`const exec =
+  # require('child_process').exec`), o `promisify` disso, a desestruturação de
+  # um namespace (`const { exec } = cp`) e o `import()` dinamico.
+  #
   # O fallback de Docker usa a imagem `semgrep/semgrep` que estiver na
   # maquina.
   #
@@ -1124,56 +1156,111 @@ rules:
               - pattern: vm.runInThisContext($X, ...)
               - pattern: new vm.Script($X, ...)
               - patterns:
+                  # COMO a chamada é reconhecida como sendo do child_process: pelo
+                  # que o ficheiro ESCREVE, nunca pelo que o motor resolve.
                   - pattern-either:
-                      - pattern: child_process.$F($X, ...)
-                      - pattern: child_process.$F($PROG, $X, ...)
+                      # (a) O `require` escrito na propria chamada.
+                      - patterns:
+                          - pattern-either:
+                              - pattern: require($MOD).$F($X, ...)
+                              - pattern: require($MOD).$F($PROG, $X, ...)
+                          - metavariable-regex:
+                              metavariable: $MOD
+                              regex: ^['"`](?:node:)?child_process['"`]$
+                      # (b) A FUNÇÃO importada pelo nome: o import nomeado, com
+                      # alias, e o `require` desestruturado.
+                      - patterns:
+                          - pattern-either:
+                              - patterns:
+                                  - pattern-inside: |
+                                      import { ..., $FN, ... } from "$CPMOD"
+                                      ...
+                                  # O padrao acima casa tambem `exec as run`, com o
+                                  # $FN no nome ORIGINAL -- e ai o `exec` do ficheiro
+                                  # é de outro modulo (misses/interpreterImportAlias.ts).
+                                  - pattern-not-inside: |
+                                      import { ..., $FN as $ALIAS, ... } from "$CPMOD"
+                                      ...
+                              - pattern-inside: |
+                                  import { ..., $ORIG as $FN, ... } from "$CPMOD"
+                                  ...
+                              # Uma so forma para o `require` desestruturado: o padrao
+                              # com a propriedade renomeada casa tambem `{ exec }`, que
+                              # é `{ exec: exec }` (a ablação leu a forma simples morta).
+                              - pattern-inside: |
+                                  const { ..., $ORIG: $FN, ... } = require("$CPMOD")
+                                  ...
+                          - metavariable-regex:
+                              metavariable: $CPMOD
+                              regex: ^(?:node:)?child_process$
+                          - pattern-either:
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern: $FN($X, ...)
+                                      - pattern: $FN($PROG, $X, ...)
+                                  # Um parametro com o nome do import tapa-o.
+                                  - pattern-not-inside: |
+                                      function $SHADOW(..., $FN, ...) { ... }
+                                  # (o padrao com bloco casa tambem a arrow de expressão)
+                                  - pattern-not-inside: |
+                                      (..., $FN, ...) => { ... }
+                              - patterns:
+                                  - pattern-inside: |
+                                      $E = $PFY($FN)
+                                      ...
+                                  - metavariable-regex:
+                                      metavariable: $PFY
+                                      regex: ^(?:\w+\.)?promisify$
+                                  - pattern-either:
+                                      - pattern: $E($X, ...)
+                                      - pattern: $E($PROG, $X, ...)
+                      # (c) O MODULO num nome: o import de namespace, o import por
+                      # omissão e o `require` atribuido.
+                      - patterns:
+                          - pattern-either:
+                              - pattern-inside: |
+                                  import * as $CP from "$CPMOD"
+                                  ...
+                              - pattern-inside: |
+                                  import $CP from "$CPMOD"
+                                  ...
+                              - pattern-inside: |
+                                  $CP = require("$CPMOD")
+                                  ...
+                          - metavariable-regex:
+                              metavariable: $CPMOD
+                              regex: ^(?:node:)?child_process$
+                          - pattern-either:
+                              - patterns:
+                                  - pattern-either:
+                                      - pattern: $CP.$F($X, ...)
+                                      - pattern: $CP.$F($PROG, $X, ...)
+                                  # Um parametro com o nome do modulo tapa-o.
+                                  - pattern-not-inside: |
+                                      function $SHADOW(..., $CP, ...) { ... }
+                                  # (o padrao com bloco casa tambem a arrow de expressão)
+                                  - pattern-not-inside: |
+                                      (..., $CP, ...) => { ... }
+                              - patterns:
+                                  - pattern-inside: |
+                                      $E = $PFY($CP.$F)
+                                      ...
+                                  - metavariable-regex:
+                                      metavariable: $PFY
+                                      regex: ^(?:\w+\.)?promisify$
+                                  - pattern-either:
+                                      - pattern: $E($X, ...)
+                                      - pattern: $E($PROG, $X, ...)
+                  # A exclusão do programa fixo, UMA vez, para todas as formas acima.
                   - pattern-not:
                       patterns:
-                        - pattern: child_process.$F($PROG, $ARGS, ...)
+                        - pattern: $CALLEE($PROG, $ARGS, ...)
                         - metavariable-regex:
                             metavariable: $PROG
                             regex: (?i)^['"`](?!(?:[^'"`]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta|docker|podman|nerdctl|kubectl|oc|find|nsenter)(?:\.exe)?['"`])[^'"`]+['"`]$
                         - pattern-not:
                             patterns:
-                              - pattern: 'child_process.$F($PROG, $ARGS, {..., shell: $SHELL, ...}, ...)'
-                              - metavariable-regex:
-                                  metavariable: $SHELL
-                                  regex: ^(?!false$)
-              - patterns:
-                  - pattern-either:
-                      - pattern: require($MOD).$F($X, ...)
-                      - pattern: require($MOD).$F($PROG, $X, ...)
-                  - metavariable-regex:
-                      metavariable: $MOD
-                      regex: ^['"`](?:node:)?child_process['"`]$
-                  - pattern-not:
-                      patterns:
-                        - pattern: require($MOD).$F($PROG, $ARGS, ...)
-                        - metavariable-regex:
-                            metavariable: $PROG
-                            regex: (?i)^['"`](?!(?:[^'"`]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta|docker|podman|nerdctl|kubectl|oc|find|nsenter)(?:\.exe)?['"`])[^'"`]+['"`]$
-                        - pattern-not:
-                            patterns:
-                              - pattern: 'require($MOD).$F($PROG, $ARGS, {..., shell: $SHELL, ...}, ...)'
-                              - metavariable-regex:
-                                  metavariable: $SHELL
-                                  regex: ^(?!false$)
-              - patterns:
-                  - pattern-inside: |
-                      $E = util.promisify(child_process.$F);
-                      ...
-                  - pattern-either:
-                      - pattern: $E($X, ...)
-                      - pattern: $E($PROG, $X, ...)
-                  - pattern-not:
-                      patterns:
-                        - pattern: $E($PROG, $ARGS, ...)
-                        - metavariable-regex:
-                            metavariable: $PROG
-                            regex: (?i)^['"`](?!(?:[^'"`]*[/\\])?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd|powershell|pwsh|python[\d.]*w?|py|node|nodejs|deno|bun|perl|ruby|php|lua|env|xargs|timeout|nice|nohup|sudo|su|doas|ssh|time|stdbuf|setsid|busybox|npx|bunx|uvx|pipx|awk|gawk|mawk|nawk|osascript|rscript|tclsh|expect|watch|script|flock|chroot|ionice|taskset|runuser|pkexec|wsl|cscript|wscript|mshta|docker|podman|nerdctl|kubectl|oc|find|nsenter)(?:\.exe)?['"`])[^'"`]+['"`]$
-                        - pattern-not:
-                            patterns:
-                              - pattern: '$E($PROG, $ARGS, {..., shell: $SHELL, ...}, ...)'
+                              - pattern: '$CALLEE($PROG, $ARGS, {..., shell: $SHELL, ...}, ...)'
                               - metavariable-regex:
                                   metavariable: $SHELL
                                   regex: ^(?!false$)

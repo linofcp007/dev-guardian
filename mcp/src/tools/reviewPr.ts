@@ -423,7 +423,7 @@ async function runSemgrep(
   for (const raw of run.reports) out.parser_inputs.push({ parser, input: raw });
   // What the engine cannot do — report taint fixpoint timeouts, resolve the
   // LLM pack's node: imports — said once, as scan_sast says it.
-  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null), { llmPack: plan.pluginPacks.length > 0 });
+  const engineNote = semgrepEngineNote(semgrepEngineOf(run.reports[0] ?? null));
   out.tools_run.push(
     withNotes(run.toolRun, [...plan.notes, ...(gap !== null ? [gap] : []), ...(engineNote !== null ? [engineNote] : [])]),
   );

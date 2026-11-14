@@ -141,12 +141,17 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // Fifteen sources into eval (one each), thirteen sinks (one each).
   // Review round 2 (I-B): eleven argv shapes of interpreters, wrappers and shells.
   'outputToInterpreter.ts': { [INTERPRETER_JS]: 48 },
-  // The same sinks through every way a file names `child_process` — a default
-  // import, a namespace, an alias, a `require` assigned or destructured, with
-  // and without `node:`, and `promisify` of each: seven spellings, two argv
-  // shapes, three promisified. The rule may not depend on which of them the
-  // engine resolves — on Linux, Semgrep 1.182.0 resolves none with `node:`.
-  'interpreterImports.ts': { [INTERPRETER_JS]: 12 },
+  // The same sinks through every way a file names `child_process`, ONE
+  // spelling a file so that no clause can fire for another's lines: an alias,
+  // a default import (with and without `node:`), a namespace, a `require`
+  // assigned, and one destructured (as is, and renamed) — and `promisify` of
+  // three of them. The rule reads the import as written: on Linux, Semgrep
+  // 1.182.0 resolves no `node:` import, and no build resolves a default one.
+  'interpreterImportAlias.ts': { [INTERPRETER_JS]: 3 },
+  'interpreterImportDefault.ts': { [INTERPRETER_JS]: 4 },
+  'interpreterImportNamespace.ts': { [INTERPRETER_JS]: 2 },
+  'interpreterRequire.js': { [INTERPRETER_JS]: 1 },
+  'interpreterRequireDestructured.js': { [INTERPRETER_JS]: 2 },
   // Four request sources; four sink shapes — the message object (one pattern
   // covers both key orders: Semgrep's object pattern ignores order, which the
   // ablation measured), a top-level `system`, `instructions`, a SystemMessage —
@@ -239,6 +244,16 @@ describe('llm rules', () => {
 
   it('Step 0: every hits/ fixture on disk has a registered expectation, and vice versa', () => {
     expect(filesIn(resolve(FIXTURES, 'hits'))).toEqual(Object.keys(EXPECTED_HITS).sort());
+  });
+
+  // The header is where the next person learns what the JS interpreter rule
+  // does not read. It said for two releases that a Semgrep VERSION was why
+  // `node:child_process` imports went unseen; it was the platform.
+  it('T-05 the pack names what its child_process recognition still leaves out, and no longer blames a Semgrep version', () => {
+    const text = readFileSync(RULES, 'utf8');
+    expect(text).toMatch(/FORA DE ALCANCE[^]*`import\(\)` dinamico/);
+    expect(text).toMatch(/FALSO POSITIVO CONHECIDO[^]*DECLARAÇÃO local/);
+    expect(text).not.toMatch(/so sao resolvidos a partir do Semgrep|llmPackVersionNote|anterior ao 1\.176\.1/);
   });
 
   it('every hits/ fixture has a misses/ twin', () => {
