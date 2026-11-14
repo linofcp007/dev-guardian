@@ -574,3 +574,83 @@ describe('guardian-hook PreToolUse — install-time package vetting (real subpro
     });
   });
 });
+
+// ───────────────── install-vet-manifest-install — manifest installs through the real hook process
+
+describe('guardian-hook PreToolUse — a manifest install is vetted (real subprocess)', () => {
+  const manifest = (deps: Record<string, string>, extra: Record<string, unknown> = {}): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps, ...extra }));
+  const pypi = (version: string): Route => ({
+    body: { info: { version }, releases: { [version]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+  });
+  const WITH_PLACEHOLDER: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+
+  it('T-21 `npm ci` in a project whose package.json names a malicious package is DENIED, naming the file and the package', () => {
+    manifest({ express: '^4.21.0', crossenv: '*' });
+    const r = runHook('npm ci', WITH_PLACEHOLDER);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/the user's decision/);
+  });
+
+  it('T-21 `pip install -r requirements.txt` with a malicious version in the file is DENIED the same way; from the PowerShell tool too', () => {
+    writeFileSync(join(project, 'requirements.txt'), 'requests==2.31.0\nevil-lib==1.0.0\n');
+    const routes: Record<string, Route> = {
+      'https://pypi.org/pypi/requests/json': pypi('2.31.0'),
+      'https://pypi.org/pypi/evil-lib/json': pypi('1.0.0'),
+      [OSV]: { osv: { 'evil-lib@1.0.0': ['MAL-2026-0001'] } },
+    };
+    for (const tool of ['Bash', 'PowerShell']) {
+      const r = runHook('pip install -r requirements.txt', routes, { tool });
+      expect({ tool, decision: r.output?.hookSpecificOutput?.permissionDecision }).toEqual({ tool, decision: 'deny' });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/requirements\.txt.*evil-lib.*MAL-2026-0001/s);
+    }
+  });
+
+  it('T-21 a clean manifest: no output, and one lookup per package', () => {
+    manifest({ express: '^4.21.0' });
+    const r = runHook('npm install', { 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.output).toBeUndefined();
+    expect(r.requests).toEqual(['https://registry.npmjs.org/express', OSV]);
+  });
+
+  it("T-22 `bash -c 'npm ci'` is vetted too; GUARDIAN_OFFLINE=1 says what was not verified and asks nothing of the network", () => {
+    manifest({ express: '^4.21.0', crossenv: '*' });
+    const nested = runHook("bash -c 'npm ci'", WITH_PLACEHOLDER);
+    expect(nested.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(nested.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv/);
+
+    manifest({ express: '^4.21.0', 'left-pad': '^1.3.0' });
+    const off = runHook('npm ci', {}, { env: { GUARDIAN_OFFLINE: '1' } });
+    expect(off.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(off.output?.hookSpecificOutput?.additionalContext).toMatch(/2 packages of package\.json.*not verified/s);
+    expect(off.requests).toEqual([]);
+  });
+
+  it('T-23 GUARDIAN_PKG_VET=0, and the hooks switched off by the user: the manifest is not vetted, nothing is asked, nothing is said', () => {
+    manifest({ crossenv: '*' });
+    for (const env of [{ GUARDIAN_PKG_VET: '0' }, { GUARDIAN_HOOKS: 'off' }]) {
+      const r = runHook('npm ci', {}, { env });
+      expect({ env, output: r.output, requests: r.requests }).toEqual({ env, output: undefined, requests: [] });
+    }
+  });
+
+  it('T-24 abuse: nothing in the project switches it off — not .guardian/hooks.config.json, not fields of the manifest, not its .npmrc', () => {
+    mkdirSync(join(project, '.guardian'), { recursive: true });
+    writeFileSync(
+      join(project, '.guardian', 'hooks.config.json'),
+      JSON.stringify({ enabled: false, pkgVet: false, packages: { vet: false, block: false }, bash: { block: false, warn: false } }),
+    );
+    writeFileSync(join(project, '.npmrc'), 'GUARDIAN_PKG_VET=0\nignore-scripts=false\n');
+    manifest({ crossenv: '*' }, { 'dev-guardian': { pkgVet: false, enabled: false }, config: { GUARDIAN_PKG_VET: '0' } });
+    const r = runHook('npm ci', { 'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'), [OSV]: { osv: {} } });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+  });
+});

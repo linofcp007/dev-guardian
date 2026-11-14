@@ -1111,3 +1111,277 @@ describe('decideInstallCommand — a large monorepo stays inside the vetting dea
     expect(d?.deny).toMatch(/MAL-2026-9/);
   }, 60_000);
 });
+
+// ───────────────── install-vet-manifest-install — what a manifest tells the installer to fetch
+
+const pypiDoc = (v: string): Answer => ({
+  body: { info: { version: v }, releases: { [v]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+});
+
+/** OSV answering a `MAL-` advisory for the named packages, nothing for the others. */
+const osvMalFor =
+  (...bad: string[]) =>
+  (body: unknown): Answer => ({
+    body: {
+      results: (body as { queries: Array<{ package?: { name?: string } }> }).queries.map((q) =>
+        bad.includes(q.package?.name ?? '') ? { vulns: [{ id: 'MAL-2026-77' }] } : {},
+      ),
+    },
+  });
+
+/**
+ * A public registry by URL shape, for manifests of many names: `exists` are published (1.0.0, old, clean),
+ * `placeholder` are npm's security placeholder, `malicious` have a `MAL-` advisory, everything else is a 404.
+ * `calls` and `bodies` are everything that left.
+ */
+function registry(spec: { exists?: string[]; malicious?: string[]; placeholder?: string[] } = {}): {
+  fetchImpl: typeof fetch;
+  calls: string[];
+  bodies: string[];
+} {
+  const exists = new Set(spec.exists ?? []);
+  const calls: string[] = [];
+  const bodies: string[] = [];
+  const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    calls.push(url);
+    if (typeof init?.body === 'string') bodies.push(init.body);
+    if (url === OSV) return json(osvMalFor(...(spec.malicious ?? []))(JSON.parse(String(init?.body))).body);
+    let m = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+    if (m !== null) {
+      const name = decodeURIComponent(m[1] ?? '');
+      if (spec.placeholder?.includes(name) === true) return json(npmDoc('0.0.1-security').body);
+      return exists.has(name) ? json(npmDoc('1.0.0').body) : json({ error: 'Not found' }, 404);
+    }
+    m = /^https:\/\/pypi\.org\/pypi\/([^/]+)\/json$/.exec(url);
+    if (m !== null) return exists.has(decodeURIComponent(m[1] ?? '')) ? json(pypiDoc('1.0.0').body) : json({}, 404);
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+  return { fetchImpl, calls, bodies };
+}
+
+describe('manifest installs — the packages a manifest names are vetted', () => {
+  const pkgJson = (deps: Record<string, string>, extra: Record<string, unknown> = {}): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps, ...extra }));
+  const notVerified = (context: string | undefined): string[] => (context ?? '').split('\n').filter((l) => /not verified/.test(l));
+
+  it.each(['npm install', 'npm ci', 'pnpm install', 'yarn', 'bun install'])(
+    'T-11 %s: a package npm replaced with its security placeholder is DENIED, naming the file and the package',
+    async (command) => {
+      pkgJson({ express: '^4.21.0', crossenv: '*' });
+      const reg = registry({ exists: ['express'], placeholder: ['crossenv'] });
+      const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+      expect(d?.deny).toMatch(/package\.json/);
+      expect(d?.deny).toMatch(/crossenv/);
+      expect(d?.deny).toMatch(/security placeholder/);
+      expect(d?.deny).toMatch(/the user's decision/);
+      // No way round it is named, and a clean package of the same manifest is not accused.
+      expect(d?.deny).not.toMatch(/GUARDIAN_PKG_VET|--registry|prefix the command|express/);
+    },
+  );
+
+  it('T-11 a version OSV lists as malicious is DENIED — in package.json, and in a requirements file', async () => {
+    pkgJson({ 'evil-pkg': '^1.0.0', express: '^4' });
+    const npm = registry({ exists: ['evil-pkg', 'express'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm ci', opts(npm.fetchImpl));
+    expect(d?.deny).toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+
+    writeFileSync(join(project, 'requirements.txt'), 'requests\nevil-lib\n');
+    const pypi = registry({ exists: ['requests', 'evil-lib'], malicious: ['evil-lib'] });
+    const e = await decideInstallCommand('pip install -r requirements.txt', opts(pypi.fetchImpl));
+    expect(e?.deny).toMatch(/requirements\.txt.*evil-lib.*MAL-2026-77/s);
+    expect(e?.deny).toMatch(/the user's decision/);
+    expect(e?.deny).not.toMatch(/GUARDIAN_PKG_VET|--index-url|prefix the command/);
+  });
+
+  it('T-12 a typosquat in the manifest warns with the file, the package and the name it resembles — no deny', async () => {
+    pkgJson({ lodahs: '^1.0.0' });
+    const reg = registry({ exists: ['lodahs'] });
+    const d = await decideInstallCommand('npm install', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/package\.json/);
+    expect(d?.context).toMatch(/lodahs/);
+    expect(d?.context).toMatch(/lodash/);
+  });
+
+  it('T-13 a name the public registry does not have warns ("private or local") and never denies — even for a plain `npm ci`', async () => {
+    pkgJson({ 'acme-internal-thing': '^2.0.0', express: '^4' });
+    const reg = registry({ exists: ['express'] });
+    const d = await decideInstallCommand('npm ci', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/package\.json/);
+    expect(d?.context).toMatch(/acme-internal-thing.*not found on the public registry — if it is private or local, ignore this/s);
+    expect(d?.context).not.toMatch(/express/);
+  });
+
+  it('T-13 an index the requirements file names itself explains a missing name', async () => {
+    writeFileSync(join(project, 'requirements.txt'), '--index-url https://pypi.corp.example/simple\ncorp-lib\n');
+    const reg = registry({});
+    const d = await decideInstallCommand('pip install -r requirements.txt', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/requirements\.txt/);
+    expect(d?.context).toMatch(/corp-lib.*not found on the public registry/s);
+    expect(d?.context).toMatch(/pypi\.corp\.example|custom registry|index/);
+  });
+
+  it('T-14 sixty popular names and one malicious last: the malicious one is looked up all the same, and denied', async () => {
+    const popular = Array.from({ length: 60 }, (_, i) => `pop-${i}`);
+    pkgJson(Object.fromEntries([...popular, 'zz-evil'].map((n) => [n, '^1.0.0'])));
+    const reg = registry({ exists: [...popular, 'zz-evil'], malicious: ['zz-evil'] });
+    const d = await decideInstallCommand('npm ci', opts(reg.fetchImpl, { popular: { npm: popular } }));
+    expect(reg.calls).toContain('https://registry.npmjs.org/zz-evil');
+    expect(d?.deny).toMatch(/package\.json.*zz-evil/s);
+  });
+
+  it('T-14 sixty clean names: fifty are looked up and the note says ten were not; two installs on one line share the fifty', async () => {
+    const names = Array.from({ length: 60 }, (_, i) => `dep-${i}`);
+    pkgJson(Object.fromEntries(names.map((n) => [n, '^1.0.0'])));
+    const one = registry({ exists: names });
+    const d = await decideInstallCommand('npm ci', opts(one.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    expect(one.calls.filter((u) => u !== OSV)).toHaveLength(50);
+    expect(d?.context).toContain('10 more packages');
+    expect(d?.context).toMatch(/not vetted/);
+
+    const py = Array.from({ length: 20 }, (_, i) => `py-${i}`);
+    pkgJson(Object.fromEntries(names.slice(0, 40).map((n) => [n, '^1.0.0'])));
+    writeFileSync(join(project, 'requirements.txt'), `${py.join('\n')}\n`);
+    const two = registry({ exists: [...names, ...py] });
+    const e = await decideInstallCommand('npm ci && pip install -r requirements.txt', opts(two.fetchImpl, { popular: {} }));
+    expect(two.calls.filter((u) => u !== OSV)).toHaveLength(50);
+    expect(e?.context).toContain('10 more packages');
+  });
+
+  it('T-15 offline, a timeout and a registry error: ONE line with the count and the file, "not verified", and no deny', async () => {
+    pkgJson({ alpha: '^1', beta: '^1', gamma: '^1' });
+    const off = fakeFetch({});
+    const offline = await decideInstallCommand('npm ci', opts(off.fetchImpl, { env: { GUARDIAN_OFFLINE: '1' }, popular: {} }));
+    expect(off.calls).toEqual([]);
+    expect(offline?.deny).toBeUndefined();
+    expect(notVerified(offline?.context)).toHaveLength(1);
+    expect(notVerified(offline?.context)[0]).toMatch(/3 packages of package\.json/);
+
+    const urls = ['alpha', 'beta', 'gamma'].map((n) => `https://registry.npmjs.org/${n}`);
+    const hung = fakeFetch({ ...Object.fromEntries(urls.map((u) => [u, { hang: true }])), [OSV]: { hang: true } });
+    const timedOut = await decideInstallCommand('npm ci', opts(hung.fetchImpl, { budgetMs: 80, popular: {} }));
+    expect(timedOut?.deny).toBeUndefined();
+    expect(notVerified(timedOut?.context)).toHaveLength(1);
+    expect(notVerified(timedOut?.context)[0]).toMatch(/3 packages of package\.json/);
+
+    const broken = fakeFetch({ ...Object.fromEntries(urls.map((u) => [u, { status: 500 }])), [OSV]: { status: 500 } });
+    const failed = await decideInstallCommand('npm ci', opts(broken.fetchImpl, { popular: {} }));
+    expect(failed?.deny).toBeUndefined();
+    expect(notVerified(failed?.context)).toHaveLength(1);
+    expect(notVerified(failed?.context)[0]).toMatch(/3 packages of package\.json/);
+  });
+
+  it('T-16 a manifest that is not there is silence; one that cannot be read, or whose directory is not known, is said in one line', async () => {
+    const f = fakeFetch({});
+    expect(await decideInstallCommand('npm ci', opts(f.fetchImpl))).toBeNull();
+    expect(await decideInstallCommand('pip install -r missing.txt', opts(f.fetchImpl))).toBeNull();
+
+    writeFileSync(join(project, 'package.json'), '{ "dependencies": ');
+    const bad = await decideInstallCommand('npm ci', opts(f.fetchImpl));
+    expect(bad?.deny).toBeUndefined();
+    expect(bad?.context).toMatch(/package\.json was not read \(not valid JSON\).*not vetted/);
+    expect((bad?.context ?? '').split('\n')).toHaveLength(1);
+
+    pkgJson({ crossenv: '*' });
+    mkdirSync(join(project, 'web'));
+    writeFileSync(join(project, 'web', 'package.json'), JSON.stringify({ dependencies: { crossenv: '*' } }));
+    const unknownDir = [
+      'cd "$WHERE" && npm ci',
+      'npm --prefix web ci',
+      'npm ci --prefix web',
+      'pnpm -C web install',
+      'pnpm --dir web install',
+      'yarn --cwd web install',
+      'bun install --cwd web',
+    ];
+    for (const command of unknownDir) {
+      const d = await decideInstallCommand(command, opts(f.fetchImpl));
+      const said = /was not read \(where the command runs could not be determined\).*not vetted/.test(d?.context ?? '');
+      expect({ command, deny: d?.deny, said }).toEqual({ command, deny: undefined, said: true });
+    }
+    expect(f.calls).toEqual([]);
+  });
+
+  it('T-17 a clean manifest is silence — and so are install scripts and a known vulnerability, which the same package warns about by name', async () => {
+    const routes: Record<string, Answer | ((body: unknown) => Answer)> = {
+      'https://registry.npmjs.org/native-thing': npmDoc('2.0.0', { hasInstallScript: true }),
+      'https://registry.npmjs.org/native-thing/2.0.0': { body: { scripts: { install: 'node-gyp rebuild' } } },
+      [OSV]: (body) => ({
+        body: { results: (body as { queries: unknown[] }).queries.map(() => ({ vulns: [{ id: 'GHSA-aaaa-bbbb-cccc' }] })) },
+      }),
+    };
+    const byName = await decideInstallCommand('npm install native-thing@2.0.0', opts(fakeFetch(routes).fetchImpl));
+    expect(byName?.context).toMatch(/native-thing/);
+
+    pkgJson({ 'native-thing': '2.0.0' });
+    const f = fakeFetch(routes);
+    expect(await decideInstallCommand('npm ci', opts(f.fetchImpl))).toBeNull();
+    expect(f.calls).toContain('https://registry.npmjs.org/native-thing');
+
+    pkgJson({ express: '^4.21.0', lodash: '^4.17.21' });
+    expect(await decideInstallCommand('npm ci', opts(registry({ exists: ['express', 'lodash'] }).fetchImpl))).toBeNull();
+  });
+
+  it('T-18 a by-name install does not read the manifest beside it', async () => {
+    pkgJson({ crossenv: '*' });
+    const f = fakeFetch({ 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: osvClean });
+    expect(await decideInstallCommand('npm install express', opts(f.fetchImpl))).toBeNull();
+    expect(f.calls).toEqual(['https://registry.npmjs.org/express', OSV]);
+  });
+
+  it('T-19 abuse: only package names and versions leave, and only for the public registry and OSV', async () => {
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({
+        name: 'secret-project-codename',
+        version: '9.9.9',
+        description: 'CONFIDENTIAL roadmap',
+        repository: 'git+https://git.corp.example/secret.git',
+        scripts: { postinstall: 'echo TOPSECRETSCRIPT' },
+        author: 'someone@corp.example',
+        dependencies: { express: '^4.21.0', lodash: '4.17.21', viagit: 'git+https://git.corp.example/internal.git' },
+      }),
+    );
+    writeFileSync(
+      join(project, 'requirements.txt'),
+      '# INTERNALCOMMENT do not share\nrequests\n-e git+https://git.corp.example/tool.git#egg=tool\n',
+    );
+    const reg = registry({ exists: ['express', 'lodash', 'requests'] });
+    await decideInstallCommand('npm ci && pip install -r requirements.txt', opts(reg.fetchImpl));
+    for (const url of reg.calls) expect(url).toMatch(/^https:\/\/(?:registry\.npmjs\.org|pypi\.org|api\.osv\.dev)\//);
+    const sent = [...reg.calls, ...reg.bodies].join('\n');
+    const secrets = ['secret-project-codename', '9.9.9', 'CONFIDENTIAL', 'corp.example', 'TOPSECRETSCRIPT', 'INTERNALCOMMENT', 'viagit', 'postinstall'];
+    for (const secret of secrets) {
+      expect({ secret, sent: sent.includes(secret) }).toEqual({ secret, sent: false });
+    }
+    expect(sent).toContain('express');
+    expect(sent).toContain('requests');
+  });
+
+  it('T-20 abuse: a package of a scope the USER’s .npmrc gives its own registry is not sent to the public one, and nothing is said', async () => {
+    writeFileSync(join(home, '.npmrc'), '@acme:registry=https://npm.acme.example/\n');
+    pkgJson({ '@acme/billing': '^3.0.0', '@types/node': '^22.0.0', express: '^4.21.0' });
+    const reg = registry({ exists: ['@types/node', 'express'] });
+    expect(await decideInstallCommand('npm ci', opts(reg.fetchImpl))).toBeNull();
+    expect([...reg.calls, ...reg.bodies].some((s) => /acme/i.test(s))).toBe(false);
+    expect(reg.calls.some((u) => /types/.test(u))).toBe(true);
+    expect(reg.calls).toContain('https://registry.npmjs.org/express');
+  });
+
+  it('T-20 abuse: when it is the PROJECT’s .npmrc that names the scope’s registry, the name still does not leave — and one line says it was not vetted', async () => {
+    writeFileSync(join(project, '.npmrc'), '@acme:registry=https://npm.acme.example/\n');
+    pkgJson({ '@acme/billing': '^3.0.0', '@types/node': '^22.0.0', express: '^4.21.0' });
+    const reg = registry({ exists: ['@types/node', 'express'] });
+    const d = await decideInstallCommand('npm ci', opts(reg.fetchImpl));
+    expect([...reg.calls, ...reg.bodies].some((s) => /acme/i.test(s))).toBe(false);
+    expect(reg.calls).toContain('https://registry.npmjs.org/express');
+    expect(d?.deny).toBeUndefined();
+    expect((d?.context ?? '').split('\n')).toHaveLength(1);
+    expect(d?.context).toMatch(/1 package of package\.json.*@acme.*the project's \.npmrc.*not vetted/s);
+  });
+});

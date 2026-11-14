@@ -17,9 +17,11 @@ import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-/** Whether the parser finds a package to vet in `command`, read by either shell. */
+/** Whether the parser finds something to vet in `command` — a package it names, or a manifest it installs — read by either shell. */
 const installs = (command: string): boolean =>
-  (['bash', 'powershell'] as const).some((shell) => parseInstallCommands(command, { shell }).some((c) => c.packages.length > 0));
+  (['bash', 'powershell'] as const).some((shell) =>
+    parseInstallCommands(command, { shell }).some((c) => c.packages.length > 0 || c.manifest !== undefined),
+  );
 
 /** The string literals of a test file — '…', "…" and `…` without interpolation — as a corpus of commands. */
 function literalsOf(file: string): string[] {
@@ -97,6 +99,17 @@ describe('mayInstall', () => {
       }
     }
     expect(installing).toBeGreaterThanOrEqual(outer.length);
+  });
+
+  it('T-05 says yes to every manifest install the parser reads, and the parser reads a manifest from each', () => {
+    const forms = [
+      'npm install', 'npm ci', 'npm it', 'npm cit', 'pnpm install', 'pnpm i', 'yarn', 'yarn install', 'bun install', 'bun i',
+      'pip install -r requirements.txt', 'python -m pip install -r a.txt', 'uv pip install -r a.txt',
+    ];
+    for (const command of forms) {
+      expect({ command, manifest: installs(command), gate: mayInstall(command) }).toEqual({ command, manifest: true, gate: true });
+    }
+    expect(mayInstall("bash -c 'npm ci'")).toBe(true);
   });
 
   it.each(['git status', 'ls -la src', 'echo "npm-ish" > notes.txt', 'node dist/server.js', 'cat package-lock.json', 'rm -rf node_modules'])(

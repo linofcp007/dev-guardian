@@ -140,3 +140,35 @@ describe("the hooks' known limits that live in the dispatcher", () => {
     it.skip(`T-04 ${label(ref)} answers as recorded (not on ${process.platform})`, () => {});
   }
 });
+
+// ───────────────── install-vet-manifest-install — the manifest vetting's limits, through the dispatcher
+
+describe('the limits of the manifest vetting run through the dispatcher', () => {
+  it('T-26 the hook examples of the install-vetting area are among those this file runs', () => {
+    const ids = new Set(
+      [...HOOKS.run, ...HOOKS.skip].filter((r) => (r.limit.area as string) === 'install-vetting').map((r) => r.limit.id),
+    );
+    expect([...ids].sort()).toEqual([
+      'manifest-lockfile-and-transitive',
+      'manifest-not-from-a-registry',
+      'manifest-other-managers',
+      'manifest-private-scope',
+      'manifest-workspace-members',
+    ]);
+  });
+
+  // Those examples mostly record `none`. So would a dispatcher that never read a manifest: the control is a
+  // manifest install it must answer — offline, so nothing is asked of a registry, it says what it did not verify.
+  it('T-26 the dispatcher these examples run through does read a manifest: offline, it says what it could not verify', () => {
+    const project = makeTempDir('guardian-limit-project-');
+    const home = makeTempDir('guardian-limit-home-');
+    writeFileSync(resolve(project, 'package.json'), JSON.stringify({ dependencies: { express: '^4.21.0', 'left-pad': '^1.3.0' } }), 'utf8');
+    const r = runHook(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm ci' }, cwd: project },
+      { cwd: project, homeDir: home, env: { GUARDIAN_OFFLINE: '1' } },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    expect(decisionOf(r.stdout)).toBe('warn');
+    expect(JSON.stringify(r.stdout)).toMatch(/2 packages of package\.json.*not verified/);
+  });
+});
