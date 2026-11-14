@@ -8,6 +8,21 @@ version bump.
 
 ## [Unreleased]
 
+## [3.9.2] - 2026-11-14
+
+Two fixes, both to what 3.9.0 added or announced, and both found by running the released plugin for real: on a
+machine whose plugin directory is reached through a link, `health_status` could not say whether the hooks had
+started; and Trivy honoured none of the paths it was told to skip, so the fix 3.9.0 announced for it did nothing.
+
+### Upgrading from 3.9.1
+
+- **Nothing to change.** Where the plugin directory is a link — several Claude Code accounts sharing one `plugins`
+  directory, a `~/.claude` kept in a dotfiles repository — `health_status` now answers `running` (or warns that no
+  hook started) where it answered `not_applicable`. Everywhere else it answers as before.
+- **Trivy passes are faster on a project with a `.guardianignore`**, and no longer fail now and then with
+  `trivy-config failed … .guardian\reports\…`: Trivy stops reading the excluded trees and dev-guardian's own
+  reports. What a scan reports does not change — excluded findings were already filtered out of every result.
+
 ### Fixed
 
 - **`health_status` said `hooks: not_applicable` in a session whose plugin directory is reached through a link**
