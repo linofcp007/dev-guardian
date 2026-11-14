@@ -215,7 +215,7 @@ jobs:
 
       - name: Set up .NET SDK
         if: steps.dotnet_probe.outputs.found == 'true'
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
 
@@ -263,8 +263,8 @@ jobs:
           set -euo pipefail
           dir="$RUNNER_TEMP/dev-guardian-scanners"
           mkdir -p "$dir"
-          curl -sSfL -o "$dir/psalm.phar" "https://github.com/vimeo/psalm/releases/download/6.20.1/psalm.phar"
-          echo "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51  $dir/psalm.phar" | sha256sum -c -
+          curl -sSfL -o "$dir/psalm.phar" "https://github.com/vimeo/psalm/releases/download/6.20.10/psalm.phar"
+          echo "4cebb4d62910800e8ee55153a39c60002e46fe036d13ba897eeea9c848b4e6b3  $dir/psalm.phar" | sha256sum -c -
           sudo install -m 0755 "$dir/psalm.phar" /usr/local/bin/psalm.phar
           php --version
 
@@ -293,11 +293,11 @@ jobs:
             tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
             sudo install -m 0755 "$dir/$member" "/usr/local/bin/$name"
           }
-          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
+          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz" "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf" "trivy"
           install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
           install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
           install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
-          # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+          # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.32.0, each dependency
           # pinned by version and sha256 in the verified clone's lock (header, step 7).
           # \`-I\` everywhere: this step runs in the checkout, and \`python3 -m venv\`
           # would otherwise import a \`venv\` package the checkout holds.
@@ -365,7 +365,7 @@ jobs:
       - name: Upload SARIF to code scanning
         if: \${{ always() && steps.scan.outputs.upload-sarif == 'true' }}
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: dev-guardian-results.sarif
 
@@ -574,7 +574,7 @@ definitions:
               tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
               install -m 0755 "$dir/$member" "/usr/local/bin/$name"
             }
-            install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
+            install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz" "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf" "trivy"
             install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
             install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
             install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
@@ -583,12 +583,12 @@ definitions:
             fi
             if find . -path './.*' -prune -o -name vendor -prune -o -name node_modules -prune -o -type f \\( -iname '*.php' -o -iname '*.phtml' \\) -print -quit | grep -q .; then
               apt-get install -y --no-install-recommends php-cli php-xml php-mbstring
-              curl -sSfL -o /tmp/dev-guardian-scanners/psalm.phar "https://github.com/vimeo/psalm/releases/download/6.20.1/psalm.phar"
-              echo "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51  /tmp/dev-guardian-scanners/psalm.phar" | sha256sum -c -
+              curl -sSfL -o /tmp/dev-guardian-scanners/psalm.phar "https://github.com/vimeo/psalm/releases/download/6.20.10/psalm.phar"
+              echo "4cebb4d62910800e8ee55153a39c60002e46fe036d13ba897eeea9c848b4e6b3  /tmp/dev-guardian-scanners/psalm.phar" | sha256sum -c -
               install -m 0755 /tmp/dev-guardian-scanners/psalm.phar /usr/local/bin/psalm.phar
             fi
           - |
-            # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+            # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.32.0, each dependency
             # pinned by version and sha256 in the verified clone's lock (header, step 5).
             # \`-I\` everywhere: the build runs in the checkout, and \`python3 -m venv\`
             # would otherwise import a \`venv\` package the checkout holds.
@@ -809,7 +809,7 @@ jobs:
 
       - name: Set up .NET SDK
         if: steps.dotnet_probe.outputs.found == 'true'
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
 
@@ -857,8 +857,8 @@ jobs:
           set -euo pipefail
           dir="$RUNNER_TEMP/dev-guardian-scanners"
           mkdir -p "$dir"
-          curl -sSfL -o "$dir/psalm.phar" "https://github.com/vimeo/psalm/releases/download/6.20.1/psalm.phar"
-          echo "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51  $dir/psalm.phar" | sha256sum -c -
+          curl -sSfL -o "$dir/psalm.phar" "https://github.com/vimeo/psalm/releases/download/6.20.10/psalm.phar"
+          echo "4cebb4d62910800e8ee55153a39c60002e46fe036d13ba897eeea9c848b4e6b3  $dir/psalm.phar" | sha256sum -c -
           sudo install -m 0755 "$dir/psalm.phar" /usr/local/bin/psalm.phar
           php --version
 
@@ -887,11 +887,11 @@ jobs:
             tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
             sudo install -m 0755 "$dir/$member" "/usr/local/bin/$name"
           }
-          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
+          install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz" "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf" "trivy"
           install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
           install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
           install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
-          # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+          # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.32.0, each dependency
           # pinned by version and sha256 in the verified clone's lock (header, step 7).
           # \`-I\` everywhere: this step runs in the checkout, and \`python3 -m venv\`
           # would otherwise import a \`venv\` package the checkout holds.
@@ -957,7 +957,7 @@ jobs:
       - name: Upload SARIF to code scanning
         if: \${{ always() && steps.scan.outputs.upload-sarif == 'true' }}
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           sarif_file: dev-guardian-results.sarif
 
@@ -1114,7 +1114,7 @@ dev-guardian:
         tar -xzf "$dir/$name.tar.gz" -C "$dir" "$member"
         install -m 0755 "$dir/$member" "/usr/local/bin/$name"
       }
-      install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.1/trivy_0.76.1_Linux-64bit.tar.gz" "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" "trivy"
+      install_checked trivy "https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz" "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf" "trivy"
       install_checked gitleaks "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "gitleaks"
       install_checked actionlint "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8" "actionlint"
       install_checked gosec "https://github.com/securego/gosec/releases/download/v2.30.0/gosec_2.30.0_linux_amd64.tar.gz" "3fcce2c4e802ff4169217874602a7df355e9a37bcb6ffaa34b08f3d5f336cdfb" "gosec"
@@ -1123,12 +1123,12 @@ dev-guardian:
       fi
       if find . -path './.*' -prune -o -name vendor -prune -o -name node_modules -prune -o -type f \\( -iname '*.php' -o -iname '*.phtml' \\) -print -quit | grep -q .; then
         apt-get install -y --no-install-recommends php-cli php-xml php-mbstring
-        curl -sSfL -o /tmp/dev-guardian-scanners/psalm.phar "https://github.com/vimeo/psalm/releases/download/6.20.1/psalm.phar"
-        echo "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51  /tmp/dev-guardian-scanners/psalm.phar" | sha256sum -c -
+        curl -sSfL -o /tmp/dev-guardian-scanners/psalm.phar "https://github.com/vimeo/psalm/releases/download/6.20.10/psalm.phar"
+        echo "4cebb4d62910800e8ee55153a39c60002e46fe036d13ba897eeea9c848b4e6b3  /tmp/dev-guardian-scanners/psalm.phar" | sha256sum -c -
         install -m 0755 /tmp/dev-guardian-scanners/psalm.phar /usr/local/bin/psalm.phar
       fi
     - |
-      # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.31.1, each dependency
+      # bandit 1.9.4, semgrep 1.182.0 and zizmor 1.32.0, each dependency
       # pinned by version and sha256 in the verified clone's lock (header, step 5).
       # \`-I\` everywhere: the job runs in the checkout, and \`python3 -m venv\`
       # would otherwise import a \`venv\` package the checkout holds.

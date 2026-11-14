@@ -33,6 +33,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -149,12 +150,19 @@ function pinnedReleases(arch) {
 }
 
 /**
+ * The tag of the image a run uses. With --toolchain it ends in a digest of the
+ * image's own recipe — the pinned scanners, by version and sha256 — so a pin
+ * that moved builds a new image: by name alone, the image built once went on
+ * being used, and a run after a bump tested the old scanner without a word.
+ *
  * @param {string} image
  * @param {boolean} toolchain
+ * @param {string} recipe the Dockerfile the image is built from
  */
-function imageTag(image, toolchain) {
+function imageTag(image, toolchain, recipe) {
   const t = image.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^[.-]+/, '').slice(0, 100);
-  return `dev-guardian-test:${t}${toolchain ? '-toolchain' : ''}`;
+  if (!toolchain) return `dev-guardian-test:${t}`;
+  return `dev-guardian-test:${t}-toolchain-${createHash('sha256').update(recipe).digest('hex').slice(0, 10)}`;
 }
 
 /**
@@ -170,7 +178,6 @@ function prepare(image, o, arch) {
     console.log(`  pulling ${image} (needs network)…`);
     if (docker(['pull', image], { stdio: ['ignore', 'inherit', 'inherit'] }).status !== 0) return { error: `could not pull ${image}` };
   }
-  const tag = imageTag(image, o.toolchain);
   const lines = [
     `FROM ${image}`,
     'RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates' +
@@ -194,9 +201,11 @@ function prepare(image, o, arch) {
     );
   }
   lines.push(`LABEL dev-guardian-test.base="${image}"`, '');
+  const recipe = lines.join('\n');
+  const tag = imageTag(image, o.toolchain, recipe);
   if (docker(['image', 'inspect', tag]).status !== 0) {
     console.log(`  building ${tag} (once, cached — needs network)…`);
-    const b = docker(['build', '-q', '-t', tag, '-'], { input: lines.join('\n') });
+    const b = docker(['build', '-q', '-t', tag, '-'], { input: recipe });
     if (b.status !== 0) {
       `${String(b.stderr)}${String(b.stdout)}`.trim().split(/\r?\n/).slice(-8).forEach((l) => console.log(`    ${l}`));
       return { error: `could not build ${tag}` };

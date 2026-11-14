@@ -78506,7 +78506,7 @@ var init_installCatalog = __esm({
     init_semverCompare();
     init_userBin();
     init_semgrepRun();
-    TRIVY_INSTALL_TAG = "v0.76.1";
+    TRIVY_INSTALL_TAG = "v0.76.2";
     COSIGN_VERSION = "3.1.4";
     COSIGN_RELEASE_SHA256 = {
       "linux-amd64": "424e2c97d0b45fd7a6b608a87f090f35633f4c23ece5f092d48bba11aaf4bbfa",
@@ -78514,12 +78514,12 @@ var init_installCatalog = __esm({
       "darwin-amd64": "9d1e4abe2b6be279ed0d2ff706fde1ccd738747c834e3e6d44039c238867334f",
       "darwin-arm64": "9f9b8cd557cf2e5b3df3373a00baa005a86b02391e3e06dd0ce37b3a1533d3a4"
     };
-    SYFT_VERSION = "1.55.0";
+    SYFT_VERSION = "1.57.1";
     TRIVY_VERSION = TRIVY_INSTALL_TAG.slice(1);
     GITLEAKS_VERSION = "8.30.1";
     CPPCHECK_VERSION = "2.22.0";
-    PSALM_VERSION = "6.20.1";
-    PSALM_PHAR_SHA256 = "f0f01ef4d78361d3a2e188fd0eba25bfbd634c2c49b321021a25f64a4e684c51";
+    PSALM_VERSION = "6.20.10";
+    PSALM_PHAR_SHA256 = "4cebb4d62910800e8ee55153a39c60002e46fe036d13ba897eeea9c848b4e6b3";
     PSALM_PHAR_URL = `https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`;
     GOSEC_VERSION = "2.30.0";
     SHELLCHECK_VERSION = "0.11.0";
@@ -78534,7 +78534,7 @@ var init_installCatalog = __esm({
     FINDSECBUGS_VERSION = "1.14.0";
     FINDSECBUGS_JAR_URL = `https://repo1.maven.org/maven2/com/h3xstream/findsecbugs/findsecbugs-plugin/${FINDSECBUGS_VERSION}/findsecbugs-plugin-${FINDSECBUGS_VERSION}.jar`;
     FINDSECBUGS_JAR_SHA256 = "6fa340344fa433ff46c2985dab1010e8bc739f9395c983594a5240095e92abc8";
-    RUBOCOP_VERSION = "1.92.1";
+    RUBOCOP_VERSION = "1.92.2";
     WP_CLI_VERSION = "2.12.0";
     WP_CLI_PHAR_SHA256 = "ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c";
     ACTIONLINT_VERSION = "1.7.12";
@@ -78572,22 +78572,22 @@ var init_installCatalog = __esm({
         version: SYFT_VERSION,
         base: `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}`,
         assets: {
-          "linux-amd64": { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: "bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d" },
-          "linux-arm64": { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: "929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304" },
-          "darwin-amd64": { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: "e2e5831cbabaec9a36fe65c34755c1113982c842a685edce3ce0b54a0ded8003" },
-          "darwin-arm64": { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: "1217c258bd5eb91ef3189cf22a82e02f9cac07e4ce934350f428e93aff674625" },
-          "windows-amd64": { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: "ada4c9b93af575f479ce80fce6629897272a2d41f300a14bc49bace020767ca2" }
+          "linux-amd64": { file: `syft_${SYFT_VERSION}_linux_amd64.tar.gz`, sha256: "bf52519eb57f675d47c07d43213cb6dff6449f3d6d1147ff6701ed91f44eef0c" },
+          "linux-arm64": { file: `syft_${SYFT_VERSION}_linux_arm64.tar.gz`, sha256: "aa3d3e07344f590bcce8d31043b752daa76c8a56c2aa34ceeee63c6168152582" },
+          "darwin-amd64": { file: `syft_${SYFT_VERSION}_darwin_amd64.tar.gz`, sha256: "2355758c1142982a67b309604c5d75effdbe638a57c771979ea8fd1a16656abc" },
+          "darwin-arm64": { file: `syft_${SYFT_VERSION}_darwin_arm64.tar.gz`, sha256: "e0a74a5d2688d1254b4e17b71f068a83215e3625f846265bf6614c7ba06f3a96" },
+          "windows-amd64": { file: `syft_${SYFT_VERSION}_windows_amd64.zip`, sha256: "3a01fe865076bb548352195b77e88fa4649277861ea458efe165c3a810b6dcc7" }
         }
       },
       trivy: {
         version: TRIVY_VERSION,
         base: `https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}`,
         assets: {
-          "linux-amd64": { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: "c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0" },
-          "linux-arm64": { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: "e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f" },
-          "darwin-amd64": { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: "7aa762eacd582052d053b62dcf972a1ab058abe39a57ccae234ed8894945b6b7" },
-          "darwin-arm64": { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: "11a9b6cd2752011b54f01ea4bd0dbfa9f0c41dc6538d5a3f9d23955f471bf4e5" },
-          "windows-amd64": { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: "1051f49cb22d5284f43425f72aad9cda63ca12ceb92e7caa06903490c82dc9bf" }
+          "linux-amd64": { file: `trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz`, sha256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf" },
+          "linux-arm64": { file: `trivy_${TRIVY_VERSION}_Linux-ARM64.tar.gz`, sha256: "ab9d51f86e6a5fb936f605faff6b593ac51bc378fff4d3e8b9d58358b9c367c3" },
+          "darwin-amd64": { file: `trivy_${TRIVY_VERSION}_macOS-64bit.tar.gz`, sha256: "e08bb9ea449ecf66c6bfb03cbb8697c503ff33d35fc585c9747e3eaeb7ed4c7b" },
+          "darwin-arm64": { file: `trivy_${TRIVY_VERSION}_macOS-ARM64.tar.gz`, sha256: "ae7ea358326960406b703c77b2ac490190797d80b306b5b50c2a27221da0a5b8" },
+          "windows-amd64": { file: `trivy_${TRIVY_VERSION}_windows-64bit.zip`, sha256: "691f737a7e5566a673c3a74dab9160552ec32101e953b659e5c77443d16dddb6" }
         }
       },
       gitleaks: {
@@ -78959,7 +78959,7 @@ var init_installCatalog = __esm({
       rubocop: {
         name: "rubocop",
         // 1.60: the configuration keys quality_check passes (NewCops, SuggestExtensions,
-        // Metrics/BlockLength's AllowedMethods); measured on 1.92.1.
+        // Metrics/BlockLength's AllowedMethods); measured on 1.92.1, and 1.92.2 beside it.
         version_floor: "1.60.0",
         probe: { command: "rubocop", args: ["--version"], interpreter: "ruby" },
         required_by: ["quality_check"],

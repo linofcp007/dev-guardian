@@ -29,7 +29,10 @@ more to an already long run on every commit, and the floor is a release
 question. `--toolchain` adds Semgrep and Bandit (pip-pinned) and gitleaks and
 Trivy (the release archives `src/runners/installCatalog.ts` pins, sha256-
 checked) and sets `GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`, so a missing scanner
-fails instead of skipping. Logs: `<tmpdir>/dev-guardian-docker/`. `@types/node`
+fails instead of skipping. The toolchain image's tag ends in a digest of its own
+recipe, so a pin that moved builds a new image: named by its base alone, the
+image built once went on being used, and the run after a bump tested the old
+scanner. Logs: `<tmpdir>/dev-guardian-docker/`. `@types/node`
 is held to `~22.13` for the same reason: an API newer than the floor does not
 type-check.
 

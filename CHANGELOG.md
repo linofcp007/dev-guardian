@@ -8,6 +8,26 @@ version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **Seven pinned versions moved to releases that are at least 72 hours old, each checked before it was taken.**
+  - Trivy 0.76.1 → 0.76.2 and syft 1.55.0 → 1.57.1 (`install_toolchain` on every OS; Trivy in the CI templates too):
+    every archive hashed here and matched against the release's own checksums file and the digest GitHub records;
+    the Windows ZIPs are the ones scoop's Main bucket carries (and winget-pkgs, for Trivy). Both are immutable
+    releases built with Go 1.27.3. Syft's exclusion of the generated `.guardian/reports/` was measured again on
+    1.57.1, and its real tests pass on it.
+  - Psalm 6.20.1 → 6.20.10: the PHAR's sum matches GitHub's digest and the psalm/phar repository's copy, its
+    signature verifies with the project's key, and the real-Psalm tests pass on it. Not 7.x: a new major, first
+    released on 2026-11-05, with a release almost every day since (7.4.0 was under 72 hours old).
+  - RuboCop 1.92.1 → 1.92.2: run beside 1.92.1 on the same project with the runner's own arguments, it answered the
+    same on everything the Ruby pass relies on (no project configuration read, the same report, the same exit codes).
+  - zizmor 1.31.1 → 1.32.0 in the hashed Python requirements of the CI templates (the three locks recompiled with
+    uv; nothing else in them changed): the rendered GitHub templates still pass it with zero findings.
+  - `github/codeql-action` v4.39.1 → v4.39.3 and `actions/setup-dotnet` v6.0.0 → v6.1.0 in the GitHub template, each
+    pinned by the commit its tag resolves to, read two ways.
+  - Semgrep stays at 1.182.0 in those requirements, on purpose: 1.183.0 to 1.185.0 still require `mcp==1.29.0` and
+    `opentelemetry-api<1.38`, so none of them allows the fixes the pin is waiting for.
+
 ## [3.9.0] - 2026-11-13
 
 Proof that a control fires on this machine, not only that it is installed: a selftest that seeds one known defect per

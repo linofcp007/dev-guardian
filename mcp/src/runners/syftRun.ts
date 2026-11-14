@@ -26,7 +26,7 @@
  *   - `SYFT_CHECK_FOR_APP_UPDATE=false` in every run's environment.
  *   - The root `.guardian/`'s generated output (`platform/guardianOutput.ts`)
  *     is left out, `--exclude ./<path>` each: measured on Syft 1.55.0
- *     (2026-10-25), a `package-lock.json` under `.guardian/reports/` became
+ *     (2026-10-25) and again on 1.57.1 (2026-11-13), a `package-lock.json` under `.guardian/reports/` became
  *     components of the project's SBOM, and `./.guardian/reports` left it
  *     out while `lib/.guardian/reports/` and the root `.guardian/` itself
  *     were still read; a pattern without `./` is refused on a directory
