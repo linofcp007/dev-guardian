@@ -341,7 +341,7 @@ describe('loadProjectExclusions', () => {
     const ex = await loadProjectExclusions(root);
     if (ex === null || 'error' in ex) throw new Error('expected exclusions');
     expect(semgrepExcludeArgs(ex)).toEqual(['--exclude=/mcp/test/fixtures', '--exclude=/secret.env']);
-    expect(trivySkipArgs(ex)).toEqual(['--skip-dirs', 'mcp/test/fixtures', '--skip-files', 'secret.env']);
+    expect(trivySkipArgs(ex, root)).toEqual(['--skip-dirs', join(root, 'mcp', 'test', 'fixtures'), '--skip-files', join(root, 'secret.env')]);
     const bandit = banditExcludeArgs(ex, root);
     expect(bandit[0]).toBe('-x');
     const list = (bandit[1] ?? '').split(',');
@@ -365,8 +365,8 @@ describe('loadProjectExclusions', () => {
     if (ex === null || 'error' in ex) throw new Error('expected exclusions');
     expect(ex.excludedDirs).toEqual(['fixtures', 'sub/lib']);
     expect(semgrepExcludeArgs(ex)).toEqual(['--exclude=/sub/fixtures', '--exclude=/sub/sub/lib']);
-    // Trivy anchors at its own target, the project.
-    expect(trivySkipArgs(ex)).toEqual(['--skip-dirs', 'fixtures', '--skip-dirs', 'sub/lib']);
+    // Trivy anchors at its own target, the project — given by absolute path (T-04 below).
+    expect(trivySkipArgs(ex, project)).toEqual(['--skip-dirs', join(project, 'fixtures'), '--skip-dirs', join(project, 'sub', 'lib')]);
   });
 
   it('withholds a native flag whose path holds glob syntax — `[id]` is a character class to every scanner', async () => {
@@ -379,7 +379,7 @@ describe('loadProjectExclusions', () => {
     if (ex === null || 'error' in ex) throw new Error('expected exclusions');
     expect(ex.excludedFiles).toEqual(['pages/[id].test.js', 'pages/a.test.js']);
     expect(semgrepExcludeArgs(ex)).toEqual(['--exclude=/pages/a.test.js']);
-    expect(trivySkipArgs(ex)).toEqual(['--skip-files', 'pages/a.test.js']);
+    expect(trivySkipArgs(ex, root)).toEqual(['--skip-files', join(root, 'pages', 'a.test.js')]);
     const bandit = (banditExcludeArgs(ex, root)[1] ?? '').split(',');
     expect(bandit).toContain(join(root, 'pages', 'a.test.js'));
     expect(bandit.some((b) => b.includes('[id]'))).toBe(false);
@@ -398,7 +398,7 @@ describe('loadProjectExclusions', () => {
     if (ex === null || 'error' in ex) throw new Error('expected exclusions');
     expect(ex.excludedDirs).toEqual(['data']);
     expect(semgrepExcludeArgs(ex)).toEqual([]);
-    expect(trivySkipArgs(ex)).toEqual(['--skip-dirs', 'data']);
+    expect(trivySkipArgs(ex, root)).toEqual(['--skip-dirs', join(root, 'data')]);
     // The result filter still honours it exactly.
     expect(ex.ignores('data/new.py')).toBe(true);
     expect(ex.ignores('x/data/keep.py')).toBe(false);
@@ -427,5 +427,46 @@ describe('submodulesNotIgnored', () => {
 
   it('no .guardianignore excludes nothing', () => {
     expect(submodulesNotIgnored(project(null), ['libs/core'])).toEqual(['libs/core']);
+  });
+});
+
+// trivy-skips-from-report-dir: Trivy resolves a relative --skip-dirs / --skip-files against its working
+// directory — the scan's report directory, inside the target — and skipped nothing (measured on 0.74.0 and
+// 0.76.2). An absolute path below the target is skipped from any working directory.
+describe('trivySkipArgs for a Trivy run from the report directory', () => {
+  it('T-04 the paths are absolute and below the target, counted as such in the budget; a path with glob syntax is still withheld', async () => {
+    const root = makeTempDir('ignore-trivy-abs-');
+    write(root, GUARDIAN_IGNORE_FILE, 'legacy/\nsecret.env\n*.test.js\n');
+    write(root, 'legacy/lib/a.py');
+    write(root, 'secret.env');
+    write(root, 'pages/[id].test.js');
+    write(root, 'app.py');
+    const ex = await loadProjectExclusions(root);
+    if (ex === null || 'error' in ex) throw new Error('expected exclusions');
+    expect(ex.excludedFiles).toContain('pages/[id].test.js');
+    expect(trivySkipArgs(ex, root)).toEqual(['--skip-dirs', join(root, 'legacy'), '--skip-files', join(root, 'secret.env')]);
+
+    // The target Trivy is given, not where the ignore file was read: review_pr's scan root, the CI gate's ref copy.
+    const elsewhere = join(root, 'snapshot of [head]');
+    expect(trivySkipArgs(ex, elsewhere)).toEqual(['--skip-dirs', join(elsewhere, 'legacy'), '--skip-files', join(elsewhere, 'secret.env')]);
+    expect(trivySkipArgs(null, root)).toEqual([]);
+
+    // The budget counts what is passed: under a long target fewer entries fit, and the rest are the result filter's.
+    const many = makeTempDir('ignore-trivy-budget-');
+    const names = Array.from({ length: 150 }, (_, i) => `d${String(i).padStart(3, '0')}`);
+    write(many, GUARDIAN_IGNORE_FILE, names.map((n) => `/${n}/\n`).join(''));
+    for (const n of names) write(many, `${n}/a.txt`);
+    write(many, 'app.py');
+    const wide = await loadProjectExclusions(many);
+    if (wide === null || 'error' in wide) throw new Error('expected exclusions');
+    const chars = (args: string[]): number => args.filter((a) => !a.startsWith('--')).reduce((n, a) => n + a.length + 16, 0);
+    const short = trivySkipArgs(wide, process.platform === 'win32' ? 'C:\\p' : '/p');
+    const long = trivySkipArgs(wide, join(many, 'x'.repeat(180)));
+    expect(short.length / 2).toBe(150);
+    expect(long.length / 2).toBeGreaterThan(0);
+    expect(long.length / 2).toBeLessThan(150);
+    expect(chars(short)).toBeLessThanOrEqual(8_000);
+    expect(chars(long)).toBeLessThanOrEqual(8_000);
+    for (const n of names) expect(wide.ignores(`${n}/a.txt`), n).toBe(true);
   });
 });

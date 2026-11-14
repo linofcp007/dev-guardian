@@ -215,7 +215,7 @@ registerToolModule(
         const outFile = join(reportDir, 'deps.json');
         // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
         const result = await runTrivy({
-          args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+          args: ['fs', '--scanners', 'vuln,license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions, ctx.projectPath)],
           target: ctx.projectPath,
           workDir: reportDir,
           ignoreFrom: ctx.projectPath,

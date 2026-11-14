@@ -27,7 +27,11 @@
  *      the anchor is the project's `git rev-parse --show-prefix` (the target
  *      itself outside git), and no Semgrep flag at all when that cannot be
  *      known. Trivy anchors `--skip-dirs` / `--skip-files` at its target (a
- *      single segment too). Bandit's `-x` is a SUBSTRING test on the path as
+ *      single segment too) — but only an ABSOLUTE one, or a relative one when
+ *      its working directory is outside the target: run from a directory
+ *      inside it, as every scan here runs it, a relative path is read against
+ *      that directory and skips nothing (`trivySkipArgs`). Bandit's `-x` is a
+ *      SUBSTRING test on the path as
  *      it walks it (plus `fnmatch`), so only an absolute native path works — a
  *      relative `data/fx` excluded nothing on Windows. A path holding glob
  *      syntax (`pages/[id].test.js`) is a pattern to all three — `--exclude`
@@ -800,18 +804,34 @@ export function semgrepExcludeArgs(ex: ProjectExclusions | null): string[] {
 }
 
 /**
- * `--skip-dirs <dir>` / `--skip-files <file>`, project-relative: Trivy
- * matches them against the path relative to the scan target, anchored
+ * `--skip-dirs <dir>` / `--skip-files <file>`, each an ABSOLUTE path below
+ * `target` — the directory Trivy is given to scan.
+ *
+ * Trivy matches a skip path against the path relative to its target, anchored
  * (measured — `data/fx` skips `data/fx`, not `x/data/fx`; `data` skips only
- * the top-level one). They are doublestar patterns: a path with glob syntax
- * is left to the result filter.
+ * the top-level one). But a RELATIVE one it first resolves against its working
+ * directory, and when the result lies inside the target it uses that instead
+ * (aquasecurity/trivy#3331, since 0.36). dev-guardian runs Trivy in the scan's
+ * report directory, `<target>/.guardian/reports/<type>-<id>/` — inside the
+ * target — so a relative `legacy` named `.guardian/reports/<type>-<id>/legacy`
+ * and nothing was skipped, in every scan up to 3.9.1 (measured on 0.74.0 and
+ * 0.76.2: all five planted files read; with absolute paths, the two kept
+ * ones). An absolute path below the target is made relative to it whatever
+ * the working directory, and the target's own text is stripped before
+ * anything is matched, so a `[` in the project's path is never a pattern.
+ *
+ * The paths are doublestar patterns: an entry with glob syntax is left to the
+ * result filter. The budget counts what is passed, so under a long target
+ * fewer entries fit — the rest are the result filter's too.
  */
-export function trivySkipArgs(ex: ProjectExclusions | null): string[] {
+export function trivySkipArgs(ex: ProjectExclusions | null, target: string): string[] {
   if (ex === null) return [];
   const args: string[] = [];
-  const plain = nativeEntries(ex).filter((e) => !GLOB_SYNTAX.test(e.rel));
-  for (const e of withinBudget(plain, (entry) => entry.rel.length + 16)) {
-    args.push(e.dir ? '--skip-dirs' : '--skip-files', e.rel);
+  const plain = nativeEntries(ex)
+    .filter((e) => !GLOB_SYNTAX.test(e.rel))
+    .map((e) => ({ dir: e.dir, abs: join(target, ...e.rel.split('/')) }));
+  for (const e of withinBudget(plain, (entry) => entry.abs.length + 16)) {
+    args.push(e.dir ? '--skip-dirs' : '--skip-files', e.abs);
   }
   return args;
 }

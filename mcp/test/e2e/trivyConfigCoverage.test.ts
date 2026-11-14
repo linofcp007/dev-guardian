@@ -14,17 +14,19 @@
  * Trivy into a failure, as elsewhere.
  */
 
+import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { PluginContext } from '../../src/context.js';
+import { GUARDIAN_IGNORE_FILE, loadProjectExclusions, trivySkipArgs } from '../../src/platform/guardianIgnore.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { runTrivy } from '../../src/runners/trivyRun.js';
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
-import { resetScannerCache } from '../../src/tools/scanHelpers.js';
+import { ensureReportDir, resetScannerCache } from '../../src/tools/scanHelpers.js';
 import type { ToolRun } from '../../src/types.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { isInstalled } from '../helpers/toolchain.js';
@@ -296,15 +298,14 @@ describe('trivy config parse errors and unrecognised IaC (real Trivy)', () => {
 describe("Trivy and dev-guardian's own output at the root .guardian/ (real Trivy)", () => {
   const ROOT_USER = 'FROM alpine:3.19\nUSER root\nCMD ["sh"]\n';
 
-  /** The Targets of a `trivy config` run over `target`, `/`-separated. */
-  async function configTargets(target: string): Promise<string[]> {
-    const work = makeTempDir('trivy-own-output-');
-    const out = join(work, 'report.json');
-    const run = await runTrivy({ args: ['config', '--format', 'json', '--output', out], target, workDir: work });
-    expect(run.outcome, run.stderr.slice(-400)).toBe('completed');
-    expect(run.exitCode).toBe(0);
-    const report = JSON.parse(readFileSync(out, 'utf8')) as { Results?: Array<{ Target?: string }> };
-    return (report.Results ?? []).map((r) => (r.Target ?? '').split('\\').join('/'));
+  /**
+   * The Targets of a `trivy config` run over `target`, `/`-separated — started where the product starts it: in
+   * the report directory its scan creates INSIDE the project. Until 3.9.2 this helper ran Trivy from a temp
+   * directory beside the project, where a relative `--skip-dirs` is anchored at the target; from the product's
+   * own directory it is not, and these tests passed over a fix that did nothing (trivy-skips-from-report-dir).
+   */
+  async function configTargets(dir: string, target: string = dir): Promise<string[]> {
+    return targetsFrom(ensureReportDir(dir, randomUUID(), 'iac'), target);
   }
 
   it.skipIf(!TRIVY_INSTALLED)("T-03 runTrivy: Trivy does not read dev-guardian's own reports at the root .guardian/", async () => {
@@ -321,6 +322,82 @@ describe("Trivy and dev-guardian's own output at the root .guardian/ (real Trivy
       '.guardian/Dockerfile': ROOT_USER,
     });
     expect(await configTargets(dir)).toEqual(expect.arrayContaining(['Dockerfile', 'lib/.guardian/reports/x/Dockerfile', '.guardian/Dockerfile']));
-    expect(await configTargets(join(dir, 'Dockerfile'))).toEqual(['Dockerfile']);
+    expect(await configTargets(dir, join(dir, 'Dockerfile'))).toEqual(['Dockerfile']);
+  });
+});
+
+/** The Targets of a `trivy config` run over `target` started in `workDir`, `/`-separated and sorted. */
+async function targetsFrom(workDir: string, target: string, extra: readonly string[] = []): Promise<string[]> {
+  const out = join(workDir, 'iac.json');
+  const run = await runTrivy({ args: ['config', '--format', 'json', '--output', out, ...extra], target, workDir });
+  expect(run.outcome, run.stderr.slice(-400)).toBe('completed');
+  expect(run.exitCode).toBe(0);
+  const report = JSON.parse(readFileSync(out, 'utf8')) as { Results?: Array<{ Target?: string }> };
+  return (report.Results ?? []).map((r) => (r.Target ?? '').split('\\').join('/')).sort();
+}
+
+/**
+ * trivy-skips-from-report-dir. Trivy resolves a relative `--skip-dirs` / `--skip-files` against its WORKING
+ * DIRECTORY and, when the result lies inside the target, uses that (aquasecurity/trivy#3331, since 0.36). The
+ * product runs Trivy in `<project>/.guardian/reports/<type>-<id>/` — inside the target — so every relative path
+ * it passed named something below that directory and nothing was skipped: not its own reports, which sibling
+ * scans create and remove while Trivy walks (the scan gate's `trivy-config failed … GetFileAttributesEx
+ * …\.guardian\reports\secrets-…`), and not what `.guardianignore` excludes. Measured on Trivy 0.74.0 and 0.76.2.
+ *
+ * Every run below starts in a directory `ensureReportDir` made — the product's own, never one of the test's.
+ */
+describe('Trivy run from the report directory of its scan (real Trivy)', () => {
+  const ROOT_USER = 'FROM alpine:3.19\nUSER root\nCMD ["sh"]\n';
+
+  /** A project whose path has spaces and brackets (EC-1): the absolute prefix of a skip path is never a pattern. */
+  function oddProject(files: Record<string, string>): string {
+    const dir = resolveProjectPath(makeTempDir('trivy skip [a] b-')).path;
+    for (const [rel, body] of Object.entries(files)) {
+      mkdirSync(dirname(join(dir, rel)), { recursive: true });
+      writeFileSync(join(dir, rel), body);
+    }
+    return dir;
+  }
+
+  /** The directory a scan of `dir` runs Trivy in — and the premise of every test here: it is inside the project. */
+  function reportDirOf(dir: string): string {
+    const reportDir = ensureReportDir(dir, randomUUID(), 'iac');
+    expect(reportDir.startsWith(join(dir, '.guardian', 'reports')), reportDir).toBe(true);
+    return reportDir;
+  }
+
+  it.skipIf(!TRIVY_INSTALLED)("T-01 from the report directory its scan made inside the project, Trivy does not read dev-guardian's own reports", async () => {
+    const dir = oddProject({ 'app/Dockerfile': ROOT_USER, '.guardian/reports/secrets-11111111/Dockerfile': ROOT_USER });
+    const targets = await targetsFrom(reportDirOf(dir), dir);
+    expect(targets).toContain('app/Dockerfile');
+    expect(targets.filter((t) => t.startsWith('.guardian/reports/'))).toEqual([]);
+  });
+
+  it.skipIf(!TRIVY_INSTALLED)("T-02 from the report directory, what the project's .guardianignore excludes is not read — nor from a report directory outside the project", async () => {
+    const dir = oddProject({
+      'app/Dockerfile': ROOT_USER,
+      'legacy/lib/Dockerfile': ROOT_USER,
+      'deploy/old.Dockerfile': ROOT_USER,
+      [GUARDIAN_IGNORE_FILE]: 'legacy/\ndeploy/old.Dockerfile\n',
+    });
+    const ex = await loadProjectExclusions(dir);
+    if (ex === null || 'error' in ex) throw new Error('expected exclusions');
+    const skips = trivySkipArgs(ex, dir);
+    expect(skips.filter((a) => a.startsWith('--'))).toEqual(['--skip-dirs', '--skip-files']);
+    // Unskipped, Trivy reads all three: the two below are absent because they were skipped, not unseen.
+    expect(await targetsFrom(reportDirOf(dir), dir)).toEqual(expect.arrayContaining(['app/Dockerfile', 'deploy/old.Dockerfile', 'legacy/lib/Dockerfile']));
+    expect(await targetsFrom(reportDirOf(dir), dir, skips)).toEqual(['app/Dockerfile']);
+    // EC-2: reports sent to the temp directory (the project's .guardian/reports is a link).
+    expect(await targetsFrom(makeTempDir('trivy-report-outside-'), dir, skips)).toEqual(['app/Dockerfile']);
+  });
+
+  it.skipIf(!TRIVY_INSTALLED)("T-05 from the report directory, a .guardian below the root and the root's shared files are still the project's, and a single file is still a target", async () => {
+    const dir = oddProject({
+      Dockerfile: ROOT_USER,
+      'lib/.guardian/reports/x/Dockerfile': ROOT_USER,
+      '.guardian/Dockerfile': ROOT_USER,
+    });
+    expect(await targetsFrom(reportDirOf(dir), dir)).toEqual(expect.arrayContaining(['.guardian/Dockerfile', 'Dockerfile', 'lib/.guardian/reports/x/Dockerfile']));
+    expect(await targetsFrom(reportDirOf(dir), join(dir, 'Dockerfile'))).toEqual(['Dockerfile']);
   });
 });

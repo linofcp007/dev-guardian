@@ -53,6 +53,8 @@
  * a finding missed.
  */
 
+import { join } from 'node:path';
+
 /** The directory's name. */
 export const DOT_GUARDIAN = '.guardian';
 
@@ -90,19 +92,26 @@ export function semgrepGuardianOutputExcludes(): string[] {
 }
 
 /**
- * Trivy's flags for the generated output: `--skip-dirs` for the directories,
- * `--skip-files` for the files. Trivy anchors both at its target (measured,
- * `platform/guardianIgnore.ts#trivySkipArgs`), so only the root's are left
- * out — a `lib/.guardian/reports/` is read.
+ * Trivy's flags for the generated output of the project at `target`:
+ * `--skip-dirs` for the directories, `--skip-files` for the files, each an
+ * absolute path below the target, so only the root's are left out — a
+ * `lib/.guardian/reports/` is read.
+ *
+ * Absolute, because Trivy resolves a relative skip path against its working
+ * directory, and that is the scan's report directory — inside the target
+ * (`platform/guardianIgnore.ts#trivySkipArgs`). 3.9.0 passed them relative,
+ * and they skipped nothing in any scan: the fix had been measured with Trivy
+ * started beside the project, where a relative path is anchored at the
+ * target.
  *
  * Not only wasted reading. The sibling scans of one `security_scan_full` run
  * concurrently, each creating and removing its own directory under
  * `.guardian/reports/` while Trivy walks the tree, and Trivy fails on an entry
  * that vanishes ("walk dir: range error: GetFileAttributesEx …", "walk error
  * open …") — the pass read `failed` and the CI gate incomplete, on a project
- * with nothing wrong. Measured on 0.74.0 with that directory changing under
- * it: 9 of 20 `trivy config` runs failed, 0 of 20 with these flags.
+ * with nothing wrong.
  */
-export function trivyGuardianOutputSkips(): string[] {
-  return [...OUTPUT_DIRS.flatMap((dir) => ['--skip-dirs', dir]), ...OUTPUT_FILES.flatMap((file) => ['--skip-files', file])];
+export function trivyGuardianOutputSkips(target: string): string[] {
+  const below = (rel: string): string => join(target, ...rel.split('/'));
+  return [...OUTPUT_DIRS.flatMap((dir) => ['--skip-dirs', below(dir)]), ...OUTPUT_FILES.flatMap((file) => ['--skip-files', below(file)])];
 }

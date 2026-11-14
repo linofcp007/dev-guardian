@@ -43,10 +43,22 @@
  * Measured on Trivy 0.69.3: the project's `trivy.yaml` above takes the scan
  * from 7 findings to 0 when Trivy runs in the project; run from a report
  * directory with `--config` pointing at an empty file, the same project
- * reports all 7. `--skip-dirs` / `--skip-files` stay anchored at the target
- * (not the working directory), so `.guardianignore`'s native flags keep
- * working. `test/unit/runners/trivyRun.test.ts` fails when any spawn in
- * `src/` names Trivy outside this file.
+ * reports all 7.
+ *
+ * What running in a report directory costs: that directory is INSIDE the
+ * target (`<project>/.guardian/reports/<type>-<id>/`), and Trivy resolves a
+ * relative `--skip-dirs` / `--skip-files` against its working directory,
+ * using the result when it lies inside the target (aquasecurity/trivy#3331,
+ * since 0.36). Up to 3.9.1 every skip path was passed relative and skipped
+ * nothing — this comment said they "stay anchored at the target", which had
+ * been measured from a directory beside the project. Measured on 0.74.0 and
+ * 0.76.2 from the report directory itself: relative, all five planted files
+ * read; absolute, the two kept ones. So every skip path is absolute, below
+ * the target (`platform/guardianIgnore.ts#trivySkipArgs`,
+ * `platform/guardianOutput.ts#trivyGuardianOutputSkips`).
+ *
+ * `test/unit/runners/trivyRun.test.ts` fails when any spawn in `src/` names
+ * Trivy outside this file.
  *
  * ---- A pom.xml does not choose where Trivy fetches, or your credentials ----
  *
@@ -163,8 +175,9 @@ export function trivyArgv(
 ): string[] {
   const offline = OFFLINE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? '') ? ['--offline-scan'] : [];
   // dev-guardian's own output at the target's root `.guardian/`: never the project's, and written to by the
-  // sibling scans while this one walks the tree (`platform/guardianOutput.ts#trivyGuardianOutputSkips`).
-  const ownOutput = TREE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? '') ? trivyGuardianOutputSkips() : [];
+  // sibling scans while this one walks the tree (`platform/guardianOutput.ts#trivyGuardianOutputSkips`). By
+  // absolute path: Trivy runs in a directory inside the target, where a relative one skips nothing.
+  const ownOutput = TREE_SCAN_SUBCOMMANDS.has(inv.args[0] ?? '') ? trivyGuardianOutputSkips(inv.target) : [];
   return [
     ...inv.args,
     ...offline,

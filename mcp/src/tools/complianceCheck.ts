@@ -418,7 +418,7 @@ registerToolModule(
         // Never in the project, never its trivy.yaml (runners/trivyRun.ts).
         // `.guardianignore`'s plain paths skipped natively, as scan_deps does.
         const result = await runTrivy({
-          args: ['fs', '--scanners', 'license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions)],
+          args: ['fs', '--scanners', 'license', '--format', 'json', '--output', outFile, '--quiet', ...trivySkipArgs(ctx.exclusions, ctx.projectPath)],
           target: ctx.projectPath,
           workDir: reportDir,
           ignoreFrom: ctx.projectPath,
