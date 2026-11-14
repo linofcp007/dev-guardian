@@ -8,6 +8,18 @@ version bump.
 
 ## [Unreleased]
 
+## [3.9.1] - 2026-11-14
+
+The pinned scanners and actions, moved to newer releases that were each checked first. No rule, tool or hook
+changes.
+
+### Upgrading from 3.9.0
+
+- **`install_toolchain` installs newer versions** of Trivy, syft, Psalm and RuboCop; what is already installed
+  stays as it is until it is installed again. Nothing a scan reports depends on the difference.
+- **A pipeline written by `ci-init` keeps the versions it was written with**: run `ci-init` again to take the new
+  pins (Trivy, Psalm, zizmor, two actions) and the new release tag.
+
 ### Changed
 
 - **Seven pinned versions moved to releases that are at least 72 hours old, each checked before it was taken.**
@@ -27,6 +39,12 @@ version bump.
     pinned by the commit its tag resolves to, read two ways.
   - Semgrep stays at 1.182.0 in those requirements, on purpose: 1.183.0 to 1.185.0 still require `mcp==1.29.0` and
     `opentelemetry-api<1.38`, so none of them allows the fixes the pin is waiting for.
+
+### Fixed
+
+- **The container tests' scanner image follows the pins.** `scripts/test-docker.mjs --toolchain` named its image by
+  the base alone and built it once, so the run after a pin moved went on testing the old scanner without a word. The
+  image's tag now ends in a digest of its own recipe: a pin that moved builds a new image. Maintainer-side.
 
 ## [3.9.0] - 2026-11-13
 
