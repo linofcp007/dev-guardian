@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 5104289, sha256: "9047f0c6dc27707b28f0d4a13025c0d0b0ef52b56a9dd9ac9a47873a80a7fb5d" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 5104837, sha256: "df75f00a5157e2b53ad3d7f3360b95d40c45f5278269941e77e6177760807dc2" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};
@@ -1296,10 +1296,10 @@ __export(heartbeat_exports, {
   writeHeartbeat: () => writeHeartbeat
 });
 import { createHash as createHash2, randomBytes as randomBytes2 } from "node:crypto";
-import { accessSync as accessSync2, constants as constants5, readdirSync as readdirSync3, statSync as statSync5 } from "node:fs";
+import { accessSync as accessSync2, constants as constants5, readdirSync as readdirSync3, realpathSync as realpathSync3, statSync as statSync5 } from "node:fs";
 import * as nodeFs from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
-import { dirname as dirname3, join as join9, resolve as resolve6 } from "node:path";
+import { dirname as dirname3, join as join9, parse as parse4, resolve as resolve6 } from "node:path";
 var HEARTBEAT_DIR = "hooks-heartbeat";
 var GRACE_MS = 3e4;
 var TOLERANCE_MS = 12e4;
@@ -1507,15 +1507,24 @@ async function prune(dir, opts) {
 function pruneHeartbeats(dir, opts = {}) {
   return within(prune(dir, opts), opts.timeoutMs ?? 1e3, 0);
 }
-function pluginServerExpected(env, serverRoot, platform = process.platform) {
+function resolvesLocally(path) {
+  const full = resolve6(path);
+  return !isNetworkPath(path) && !isNetworkPath(full) && walkLinksUnder(parse4(full).root, full).ok;
+}
+function pluginServerExpected(env, serverRoot, platform = process.platform, realpath = realpathSync3.native) {
   const given = env["CLAUDE_PLUGIN_ROOT"]?.trim() ?? "";
   if (given === "") {
     return { expected: false, reason: "this server was not started as a Claude Code plugin's server, so no dev-guardian hook is expected here" };
   }
-  if (comparablePath(given, platform) !== comparablePath(serverRoot, platform)) {
-    return { expected: false, reason: "this server runs from another directory than the plugin Claude Code started, so its hooks are not this session's" };
+  const expected = { expected: true, reason: "started as the plugin's own server" };
+  if (comparablePath(given, platform) === comparablePath(serverRoot, platform)) return expected;
+  if (platform === process.platform && resolvesLocally(given) && resolvesLocally(serverRoot)) {
+    try {
+      if (comparablePath(realpath(resolve6(given)), platform) === comparablePath(realpath(resolve6(serverRoot)), platform)) return expected;
+    } catch {
+    }
   }
-  return { expected: true, reason: "started as the plugin's own server" };
+  return { expected: false, reason: "this server runs from another directory than the plugin Claude Code started, so its hooks are not this session's" };
 }
 function probeWritable(dataDir) {
   let dir = resolve6(dataDir);

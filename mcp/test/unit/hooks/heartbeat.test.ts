@@ -582,3 +582,100 @@ describe('the session mark: cleaning up', () => {
     expect(readdirSync(join(failing, HEARTBEAT_DIR))).toEqual([markFileName(projectKey(ROOT), 7001)]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The plugin's root reached through a link (hooks-state-linked-plugin-root).
+//
+// Claude Code names the root as it reaches it — `<its config directory>/plugins/
+// cache/…` — and Node names the server's own file with every link resolved. On
+// a machine whose `plugins` directory is a junction to a shared one, the two
+// texts differed, the server took itself for another server, and
+// `health_status` answered `not_applicable`: the state that silences "no hook
+// started". Found in a real session of 3.9.1; the 20 real starts the feature
+// was measured with used `--plugin-dir`, a path with no link in it.
+// ---------------------------------------------------------------------------
+
+const DIR_LINK = POSIX ? 'dir' : 'junction';
+
+describe("the plugin's root reached through a link", () => {
+  it('T-02 a link to the directory the server runs from names that directory: the hooks are expected', () => {
+    // An install as Claude Code lays it out: <config directory>/plugins, here a link to a shared directory.
+    const shared = makeTempDir('guardian-hb-plugins-');
+    const root = join(shared, 'cache', 'dev-guardian', '3.9.1');
+    mkdirSync(root, { recursive: true });
+    const plugins = join(makeTempDir('guardian-hb-account-'), 'plugins');
+    symlinkSync(shared, plugins, DIR_LINK);
+    const given = join(plugins, 'cache', 'dev-guardian', '3.9.1');
+
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: given }, root)).toMatchObject({ expected: true });
+    // The link itself, and either side being the one that carries it.
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: plugins }, shared).expected).toBe(true);
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: root }, given).expected).toBe(true);
+  });
+
+  it('T-03 another directory stays another directory however it is reached, and one that cannot be resolved is not this one', () => {
+    const real = makeTempDir('guardian-hb-root-');
+    const other = makeTempDir('guardian-hb-other-');
+    const holder = makeTempDir('guardian-hb-account-');
+    const toOther = join(holder, 'other');
+    symlinkSync(other, toOther, DIR_LINK);
+
+    expect(pluginServerExpected({}, real).expected).toBe(false);
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: '  ' }, real).expected).toBe(false);
+    for (const given of [other, toOther, join(holder, 'missing'), join(toOther, 'missing')]) {
+      const r = pluginServerExpected({ CLAUDE_PLUGIN_ROOT: given }, real);
+      expect(r.expected, given).toBe(false);
+      expect(r.reason, given).toMatch(/another directory/);
+    }
+
+    // EC-2: a link that leads to another copy of the plugin — the directory of another version.
+    const older = join(real, '3.9.0');
+    const newer = join(real, '3.9.1');
+    mkdirSync(older);
+    mkdirSync(newer);
+    const current = join(holder, 'current');
+    symlinkSync(older, current, DIR_LINK);
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: current }, newer).expected).toBe(false);
+
+    // A root that cannot be resolved is an answer, never an error …
+    const refusing = (): string => {
+      throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+    };
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: toOther }, real, process.platform, refusing).expected).toBe(false);
+    // … and where the text alone already decided, it still does (EC-1): nothing has to be resolved.
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: `${real}${POSIX ? '/' : '\\'}` }, real, process.platform, refusing).expected).toBe(true);
+  });
+
+  it('T-04 a root on the network or a device, and a path of another platform, are compared as text: nothing is asked of the filesystem', () => {
+    const asked: string[] = [];
+    const resolver = (path: string): string => {
+      asked.push(path);
+      return path;
+    };
+    const here = makeTempDir('guardian-hb-root-');
+    const remote = POSIX
+      ? ['//192.0.2.1/share/plugin']
+      : ['\\\\192.0.2.1\\share\\plugin', '//192.0.2.1/share/plugin', '\\\\?\\UNC\\192.0.2.1\\share\\plugin', '\\\\.\\pipe\\plugin'];
+    const started = Date.now();
+    for (const away of remote) {
+      expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: away }, here, process.platform, resolver).expected, away).toBe(false);
+      // … and the other way round: a server that runs from there.
+      expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: here }, away, process.platform, resolver).expected, away).toBe(false);
+    }
+
+    // EC-3: a path of another platform than this process's cannot be resolved here.
+    const foreign: NodeJS.Platform = POSIX ? 'win32' : 'linux';
+    const [a, b] = POSIX ? ['C:\\plugins\\a', 'C:\\plugins\\b'] : ['/plugins/a', '/plugins/b'];
+    expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: a }, b, foreign, resolver).expected).toBe(false);
+
+    // A local link whose target is on the network is not followed either (needs symlink rights).
+    if (CAN_SYMLINK) {
+      const away = join(makeTempDir('guardian-hb-account-'), 'plugins');
+      symlinkSync(POSIX ? '//192.0.2.1/share/plugins' : '\\\\192.0.2.1\\share\\plugins', away, 'dir');
+      expect(pluginServerExpected({ CLAUDE_PLUGIN_ROOT: join(away, 'dev-guardian') }, here, process.platform, resolver).expected).toBe(false);
+    }
+
+    expect(asked).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(hangBound(1_000));
+  });
+});

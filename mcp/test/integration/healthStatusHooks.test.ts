@@ -11,8 +11,9 @@
 
 import { GuardianDatabase as Database } from '../../src/storage/db.js';
 import { spawn, type ChildProcess } from 'node:child_process';
+import { symlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PluginContext } from '../../src/context.js';
@@ -147,5 +148,36 @@ describe('health_status says whether the hooks started in this session', () => {
     const other = await health(plugin());
     expect(['pending', 'not_observed']).toContain(other.hooks.state);
     expect(other.hooks.matched_by).toBeUndefined();
+  });
+});
+
+/**
+ * hooks-state-linked-plugin-root. Claude Code names the plugin's root as it
+ * reaches it (`<its config directory>/plugins/cache/…`); Node names the
+ * server's own file with every link resolved. With several accounts sharing
+ * one `plugins` directory through a junction, the server took itself for
+ * another server and answered `not_applicable` in a session whose hooks had
+ * started — and would have, the same, in one where they had not.
+ */
+describe("the plugin's root reached through a link", () => {
+  it("T-01 a server whose root Claude Code names through a link is still the plugin's: pending, then running once the hook has started", async () => {
+    const project = makeTempDir('guardian-hs-project-');
+    const dataDir = join(makeTempDir('guardian-hs-data-'), 'dev-guardian');
+    // As an account's config directory reaches a shared install: a link to the root this server runs from.
+    const linked = join(makeTempDir('guardian-hs-account-'), 'dev-guardian');
+    symlinkSync(resolve(REPO_ROOT), linked, process.platform === 'win32' ? 'junction' : 'dir');
+
+    asPluginServer(project, dataDir, HOST_A);
+    process.env['CLAUDE_PLUGIN_ROOT'] = linked;
+    const early = await health(plugin({ name: 'claude-code', version: '2.1.323' }));
+    expect(early.hooks.reason, 'the server took itself for another one').toBeUndefined();
+    expect(early.hooks.state).toBe('pending');
+    expect(early.hooks_warning).toBeNull();
+
+    // The real dispatcher, started by the same host process.
+    sessionStart(project, dataDir, HOST_A);
+    const after = await health(plugin({ name: 'claude-code', version: '2.1.323' }));
+    expect(after.hooks).toMatchObject({ state: 'running', matched_by: 'host_process', host: 'claude-code 2.1.323' });
+    expect(after.hooks_warning).toBeNull();
   });
 });
