@@ -115,6 +115,14 @@ Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
 skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
 when you need to know the rule pack was actually exercised. Only absence skips:
 a Semgrep on `PATH` that fails `--version` fails the rule-pack tests.
+
+A test that gives the .NET SDK a faked home (`DOTNET_CLI_HOME`) sets
+`DOTNET_ADD_GLOBAL_TOOLS_TO_PATH=0` and `DOTNET_GENERATE_ASPNET_CERTIFICATE=0`
+with it. A home the SDK has never seen gets its first run, and two steps of a
+first run write to the real account, not to the home: on Windows
+`<home>\.dotnet\tools` is appended to the user's `PATH` in the registry, and
+the account's certificate store is consulted and, when empty, filled. The last
+test of `test/e2e/nugetCredentialBinding.test.ts` holds it.
 `GUARDIAN_REQUIRE_LINTERS=1` does the same for actionlint, zizmor and shellcheck, and
 `GUARDIAN_REQUIRE_GOSEC=1` for gosec, govulncheck and the Go toolchain (`test/e2e/gosecSast.test.ts`,
 `test/e2e/govulncheckDeps.test.ts`;
