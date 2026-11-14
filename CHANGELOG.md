@@ -20,6 +20,26 @@ version bump.
   session of 3.9.1 on Windows: the twenty real starts 3.9.0 was measured with used `--plugin-dir`, a path with no
   link in it. The session marks themselves were right all along — each matched the Claude Code process that had
   started its server.
+- **Trivy skipped nothing it was told to skip — neither dev-guardian's own reports nor what `.guardianignore`
+  excludes.** Every Trivy pass runs in the scan's report directory, `<project>/.guardian/reports/<type>-<id>/`, so
+  that a `trivy.yaml` in the repository cannot steer it; and Trivy resolves a relative `--skip-dirs` / `--skip-files`
+  against its working directory, using the result when it lies inside the target. So `--skip-dirs legacy` named
+  `.guardian/reports/<type>-<id>/legacy`, and nothing was left out. Two effects:
+  - **The fix 3.9.0 announced for Trivy walking dev-guardian's own reports did nothing in the product.** It had been
+    tested and measured with Trivy started beside the project, where a relative path is anchored at the target.
+    Measured again from the report directory, with a sibling scan's directory appearing and going under it: 11 of 20
+    `trivy config` runs fail with no flag, 11 of 20 with 3.9.0's relative one, 0 of 20 with an absolute path. A scan
+    could still read `trivy-config failed … GetFileAttributesEx …\.guardian\reports\secrets-…` and the CI gate
+    incomplete, on a project with nothing wrong — this repository's own gate did, on this release.
+  - **Trivy read the trees `.guardianignore` excludes** in `scan_deps`, `scan_iac`, `deps_audit`, `compliance_check`
+    and `scan_wordpress`. Their findings never reached a result — the result filter is the guarantee, and it held —
+    but the time was spent, and "its entries are not scanned" was not true of Trivy.
+
+  Every skip path is now absolute, below the target: Trivy makes such a path relative to its target whatever its
+  working directory (measured on 0.74.0 and 0.76.2, from the report directory, in a project whose path has spaces
+  and brackets). The character budget counts the absolute path, so under a very long project path fewer entries
+  fit and the rest are left to the result filter, as before. Syft and Semgrep were measured too and are not
+  affected. The real-Trivy tests now start Trivy in the directory the product creates, never in one of their own.
 
 ## [3.9.1] - 2026-11-14
 

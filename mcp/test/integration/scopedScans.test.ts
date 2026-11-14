@@ -646,7 +646,7 @@ describe('scan_deps — packages and .guardianignore', () => {
     if (!r.ok) throw new Error(JSON.stringify(r.error));
     const res = r as unknown as ScanPayload;
     const trivy = byCommand('trivy')[0]?.args ?? [];
-    expect(after(trivy, '--skip-dirs')).toBe('mcp/test/fixtures');
+    expect(after(trivy, '--skip-dirs')).toBe(join(dir, 'mcp', 'test', 'fixtures'));
     expect(p.storage.findings.listByScan(res.scan_id).map((f) => f.rule_id)).toEqual(['CVE-1']);
     expect(p.storage.cves.listActive(res.scan_id).map((c) => c.cve_id)).toEqual(['CVE-1']);
     expect(res.exclusions).toMatchObject({ findings_excluded: 1 });

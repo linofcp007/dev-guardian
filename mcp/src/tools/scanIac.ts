@@ -299,7 +299,7 @@ registerToolModule(
         // No --quiet: a file Trivy cannot parse is one ERROR line in its log,
         // and --quiet hides it (runners/trivyConfig.ts, review I3).
         const result = await runTrivy({
-          args: ['config', '--format', 'json', '--output', outFile, ...trivySkipArgs(ctx.exclusions)],
+          args: ['config', '--format', 'json', '--output', outFile, ...trivySkipArgs(ctx.exclusions, ctx.projectPath)],
           target: ctx.projectPath,
           workDir: reportDir,
           ignoreFrom: ctx.projectPath,

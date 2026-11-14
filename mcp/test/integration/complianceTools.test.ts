@@ -196,7 +196,7 @@ describe('compliance_check', () => {
       await getTool('compliance_check').handler({ project_path: project }, makePlugin(project)),
     );
     const trivy = calls.find((a) => a.includes('license'));
-    expect(trivy?.join(' ')).toContain('--skip-dirs vendored');
+    expect(trivy?.join(' ')).toContain(`--skip-dirs ${join(project, 'vendored')}`);
     expect(r.licenses_summary.map((e) => e.license)).toEqual(['MIT']);
     expect(r.risky_licenses).toEqual([]);
   });
