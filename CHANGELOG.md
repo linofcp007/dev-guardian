@@ -25,6 +25,16 @@ version bump.
   *declaration* of that name (`const spawn = …` inside the function) is not, and fires. And these are still read by
   no platform: `const exec = require('child_process').exec`, `promisify` of that, a name destructured from a
   namespace, and a dynamic `import()`.
+- **The whole suite passes in the Linux containers with the pinned scanners required, and that is the release run
+  now** (maintainers). `npm run test:docker -- --toolchain` had been an option of the release gate, and failed ten
+  tests the first time it was run whole. Beside the rule above and the two `create_fix_pr` tests below: three
+  pack-encoding tests prove a failure that only a one-byte locale codec has, and run on Windows alone now, skipped
+  in sight elsewhere; the WPScan test's gate hung on `GUARDIAN_REQUIRE_SEMGREP`, which the image sets without
+  carrying a WPScan, and has its own `GUARDIAN_REQUIRE_WPSCAN`; and two secret-history tests expected what only git
+  2.40 and later can do — on Debian 12's git 2.39.5 they now assert what the product promises there, that a file
+  its tree marks `binary` is not read by the history pass and that the pass says so. Two assertions that `gh` was
+  not asked to create a pull request could never fail on Windows, and can. CONTRIBUTING's release step 0 names the
+  run.
 - **The test suite no longer adds dead entries to the PATH of whoever runs it** (maintainers, Windows).
   `nugetCredentialBinding.test.ts` gives the .NET SDK a faked home, and the SDK's first run in a home it has never
   seen appends `<home>\.dotnet\tools` to the user's `PATH` in the registry of the real account — up to three

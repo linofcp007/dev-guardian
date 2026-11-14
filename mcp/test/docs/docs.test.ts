@@ -453,3 +453,16 @@ describe('docs/env.md', () => {
     expect(undocumented).toEqual([]);
   });
 });
+
+// The container run WITHOUT --toolchain skips every test of a real scanner.
+// It was the release gate, with the scanners "an option", and ten tests were
+// red on Linux for as long as nobody took the option — one of them a rule
+// pack that found half of its fixture there.
+describe('the release gate, as CONTRIBUTING states it', () => {
+  it('T-05 step 0 of a release is the container run with the pinned scanners required, and the WPScan switch is documented', () => {
+    const contributing = read('CONTRIBUTING.md').replace(/\r\n/g, '\n');
+    const step0 = /^0\. [^]*?(?=^1\. )/m.exec(contributing)?.[0] ?? '';
+    expect(step0).toMatch(/`npm run test:docker -- --toolchain`/);
+    expect(read('docs/env.md')).toMatch(/^\| `GUARDIAN_REQUIRE_WPSCAN` \| test suite \|/m);
+  });
+});

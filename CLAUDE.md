@@ -61,7 +61,8 @@ npm run lint          # tsc over src/ AND test/ (one pass), then the CLI, hook a
 npm run build         # type-check, esbuild bundles -> dist, copy-assets, host-rules, docs
 npm test              # vitest (full suite) — the gate before a commit
 npm run test:fast     # unit tests minus the slowest files — the inner loop
-npm run test:docker   # Linux containers: Node 22.13 floor (coverage enforced) + LTS — before a release
+npm run test:docker   # Linux containers: Node 22.13 floor (coverage enforced) + LTS; `-- --toolchain` (the
+                      # pinned scanners, required) before a release
 npm run ablate -- <pack>   # rule-pack ablation harness (not a vitest test)
 npm run pins          # every pinned scanner / action version against upstream's latest (network)
 ```

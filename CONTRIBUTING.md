@@ -61,11 +61,15 @@ Conventional Commits: `feat(scope): …`, `fix(scope): …`, `chore(release): �
 
 ## Releases
 
-0. Run `npm run test:docker` from `mcp/` on the commit to be released (Docker
-   with Linux containers; the first run needs the network): the Node 22.13
-   floor, with the coverage thresholds enforced, and the current LTS. Add
-   `--toolchain` to require the pinned scanners. There is no CI: this is the
-   one run on Linux, on the floor and against the coverage floor.
+0. Run `npm run test:docker -- --toolchain` from `mcp/` on the commit to be
+   released (Docker with Linux containers; the first run needs the network):
+   the Node 22.13 floor, with the coverage thresholds enforced, and the current
+   LTS, both with the pinned scanners installed and required — a missing one
+   fails instead of skipping. There is no CI: this is the one run on Linux, on
+   the floor, against the coverage floor, and the only one that runs the real
+   scanners there. Until 3.9.3 `--toolchain` was an option, and the whole suite
+   had never been green with it: ten tests were red on Linux, one of them a
+   rule that found half of what it finds on Windows.
 1. Bump the version in all three: [`.claude-plugin/plugin.json`](.claude-plugin/plugin.json),
    [`.claude-plugin/marketplace.json`](.claude-plugin/marketplace.json) and
    [`mcp/package.json`](mcp/package.json). The server reports the `plugin.json`

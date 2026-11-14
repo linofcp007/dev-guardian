@@ -29,7 +29,14 @@ more to an already long run on every commit, and the floor is a release
 question. `--toolchain` adds Semgrep and Bandit (pip-pinned) and gitleaks and
 Trivy (the release archives `src/runners/installCatalog.ts` pins, sha256-
 checked) and sets `GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`, so a missing scanner
-fails instead of skipping. The toolchain image's tag ends in a digest of its own
+fails instead of skipping. It is the run a release makes (CONTRIBUTING, Releases,
+step 0): without it every test of a real scanner is skipped on Linux, and the
+suite had never been green with it until 3.9.3 — ten tests, among them a rule
+pack that found half of its fixture on Linux. The image is Debian 12, whose git
+is 2.39.5: older than `GIT_ATTR_SOURCE` (2.40), which is why two secret-history
+tests assert the limit the pass names there (`test/helpers/gitVersion.ts`), and
+the locale is UTF-8, which is why the pack-encoding tests' Semgrep runs are for
+Windows alone. The toolchain image's tag ends in a digest of its own
 recipe, so a pin that moved builds a new image: named by its base alone, the
 image built once went on being used, and the run after a bump tested the old
 scanner. Logs: `<tmpdir>/dev-guardian-docker/`. `@types/node`
