@@ -51,7 +51,7 @@ describe('create_fix_pr', () => {
   // instead (see setupLodashRepo's own comment).
   // ------------------------------------------------------------------
 
-  it('C2: a dry run leaves no local branch behind either, not just no worktree', async () => {
+  it('T-04 C2: a dry run leaves no local branch behind either, not just no worktree', async () => {
     const c = ctx();
     setupLodashRepo();
     await seedRealDepsBefore(c);
