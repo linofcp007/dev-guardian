@@ -302,6 +302,19 @@ export function ghLogContents(): string {
   return existsSync(ghLog) ? readFileSync(ghLog, 'utf8') : '';
 }
 
+/**
+ * How many times the stub `gh` was called with `pr <sub>`, in either
+ * spelling of its log. The Windows stub's `echo %*` keeps the quotes
+ * cross-spawn puts around each argv token (`"pr" "create" …`), and so does
+ * the Node-backed stub below, on purpose; the POSIX stub's `echo "$@"` has
+ * none (`pr create …`). The tests that reach a real pull request used to
+ * match the quoted spelling alone — true on Windows, never on Linux, where
+ * for a long time nothing ran them.
+ */
+export function ghPrCalls(sub: 'create' | 'list'): number {
+  return (ghLogContents().match(new RegExp(`^\\s*"?pr"?\\s+"?${sub}"?(?=\\s|$)`, 'gm')) ?? []).length;
+}
+
 export function worktreeCount(): number {
   return execFileSync('git', ['-C', repo, 'worktree', 'list'], { encoding: 'utf8' })
     .trim()

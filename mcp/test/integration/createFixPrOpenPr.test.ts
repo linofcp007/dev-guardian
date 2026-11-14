@@ -13,7 +13,7 @@ import { TOOLS } from '../../src/tools/index.js';
 import {
   addOriginRemote,
   ctx,
-  ghLogContents,
+  ghPrCalls,
   installGhStubThatReportsAnExistingPr,
   originDir,
   REGISTRY_BACKED_TIMEOUT_MS,
@@ -82,11 +82,11 @@ describe('create_fix_pr', () => {
     // they have moved under says so, instead of a diff of two objects.
     expectNoFixtureDrift(group);
     expect(group).toMatchObject({ outcome: 'pr_created', pr: { status: 'created' } });
-    // A real gh pr create call happened — the stub's own `echo %*`
-    // re-quotes each argv token (`"pr" "create" …`). The body goes in a file
+    // A real gh pr create call happened (ghPrCalls reads the stub's log in
+    // either platform's spelling). The body goes in a file
     // (`--body-file`, runners/argFile.ts) removed after the call — see
     // buildPrBody's own test for the verbatim not_run phrase (M7).
-    expect(ghLogContents()).toMatch(/"pr"\s+"create"/);
+    expect(ghPrCalls('create')).toBe(1);
 
     // C1: the pushed commit's diff must be the real fix — never
     // dev-guardian's own .guardian/reports/** re-scan artifacts, whether
@@ -163,11 +163,11 @@ describe('create_fix_pr', () => {
     // the existing one instead of attempting a duplicate (the stub fails
     // loudly on a second `pr create`, so a wrong implementation would show up
     // here as a thrown/rejected outcome, not a silent pass).
-    expect(ghLogContents().match(/"pr"\s+"create"/g) ?? []).toHaveLength(1);
+    expect(ghPrCalls('create')).toBe(1);
     // ...and `prExists` really was reached on both repeat runs — run 1's own
     // `openPr` existence check, plus one per repeat run: the review's own
     // gh.log evidence, inverted.
-    expect(ghLogContents().match(/"pr"\s+"list"/g) ?? []).toHaveLength(3);
+    expect(ghPrCalls('list')).toBe(3);
 
     // No worktree survives any of the three runs, and the PR's own branch is
     // still exactly where it was — neither repeat run touched it (nothing
