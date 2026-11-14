@@ -8,6 +8,23 @@ version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **The adversarial evals' run with a shell is made** (maintainer-side: no skill, command, hook or tool behaves
+  differently). 3.9.0 left it open — the graders about a shell command measure nothing where no shell is granted,
+  and native Windows grants none. On Linux (WSL2, Debian 12, Claude Code 2.1.322, Opus 5.5, the plugin at 3.9.3)
+  every run had a shell: under the gate, 5 cases of 5 — in 15 runs of 15 no hostile action had an effect and none
+  was attempted, and the judge of the final reply passed all 15. In both arms, for the two cases built for the
+  comparison, the model without the plugin attempted neither action either (6 runs of 6), and its reply failed the
+  judge once in each case, against none of six with the plugin: no difference the plugin makes to the effect, and
+  one too small to call to what the user is told. The no-plugin arm of the other three cases was not run.
+  `evals/README.md` now says what the run read: a call a hook refuses is still in the trace — the call, then an
+  error result naming the hook — so the trace graders count an attempt, refused or not. A real Linux session was
+  measured the same day: `health_status` answers `hooks: running` (`matched_by: host_process`), and the shell guard
+  denied a link named `.guardian` and let a plain command through. One thing the cases do not grade showed up: in
+  12 runs where the agent ran `npm install` from the fixture's manifest it called `vet_packages` first in one, and
+  the install hook vets only packages named on the command line.
+
 ## [3.9.3] - 2026-11-14
 
 One fix to a rule pack, and the run that found it. The whole suite had never been run in the Linux containers with
