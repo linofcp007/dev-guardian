@@ -172,11 +172,19 @@ export function addOriginRemote(): void {
  * session (several candidates probed — eval/md5/csurf/f-string/yaml.load —
  * none carried a `fix`), while lodash@4.17.20 carries several genuine, real
  * CVEs (CVE-2021-23337 among them) that `npm outdated`/`trivy fs` both
- * confirm reachable and fast (~1-3s each) from this environment. Verified
- * lodash@4.18.1 (the version `npm outdated` resolves "latest" to) is itself
- * trivy-clean (no CVE, only the expected MIT license notice) before relying
- * on it here, so the fix is expected to genuinely resolve every target with
- * nothing new appearing.
+ * confirm reachable and fast (~1-3s each) from this environment.
+ *
+ * WHICH VERSION, and why it is a parameter. The default, 4.17.20, is what a
+ * test needs that only wants active CVEs (the dry runs, `risk_score`). It is
+ * NOT a fixture whose fix verifies any more: the plan installs the minimum
+ * version that clears every active CVE — 4.18.0 since CVE-2026-4800 — and
+ * 4.18.0 has a CVE of its own (CVE-2026-2950), so `create_fix_pr` answers
+ * `not_verified`, rightly (measured 2026-11-14 with the real Trivy).
+ * This comment used to say the target version had been verified clean; that
+ * was true of the version the plan chose when it was written. A test that
+ * needs a pull request takes {@link VERIFIABLE_LODASH} instead, and asks
+ * `expectNoFixtureDrift` (`fixPrFixtureDrift.ts`) before it asserts
+ * `pr_created`, so the next advisory that moves the ground says so.
  *
  * A FULL `npm install`, not `--package-lock-only`: `deps_update_plan`'s own
  * npm-outdated parsing reads npm's `current` field (installed version),
@@ -189,9 +197,9 @@ export function addOriginRemote(): void {
  * `package.json`/`package-lock.json` are, which is all `applyGroup`'s own
  * `--package-lock-only` fix needs inside the worktree.
  */
-export function setupLodashRepo(): void {
+export function setupLodashRepo(version = '4.17.20'): void {
   writeFileSync(join(repo, 'package.json'), JSON.stringify({
-    name: 'x', version: '1.0.0', dependencies: { lodash: '4.17.20' },
+    name: 'x', version: '1.0.0', dependencies: { lodash: version },
   }));
   // shell: true — Windows's npm.cmd is not directly spawnable (EINVAL)
   // without going through a shell; this file's own runtime code never does
@@ -202,6 +210,17 @@ export function setupLodashRepo(): void {
   execFileSync('git', ['-C', repo, 'add', 'package.json', 'package-lock.json', '.gitignore']);
   execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'add lodash']);
 }
+
+/**
+ * A lodash whose fix `create_fix_pr` verifies with today's advisories, and the
+ * `severity_min` that makes its one fixable CVE a candidate. Measured
+ * 2026-11-14 with the real Trivy: the target is CVE-2026-2950 (medium), the
+ * plan runs `npm install lodash@4.18.1`, nothing new appears, `pr_created`.
+ * One CVE, fixed by the next release — far less to go stale than an old
+ * version whose set of CVEs and of fix versions moves with every advisory.
+ */
+export const VERIFIABLE_LODASH = '4.18.0';
+export const VERIFIABLE_SEVERITY_MIN = 'medium';
 
 /**
  * Runs the REAL `deps_audit` tool (real Trivy) against `repo` as test setup,

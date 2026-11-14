@@ -23,8 +23,11 @@ import {
   setupLodashRepo,
   TRIVY_INSTALLED,
   useFixPrRepo,
+  VERIFIABLE_LODASH,
+  VERIFIABLE_SEVERITY_MIN,
   worktreeCount,
 } from '../helpers/createFixPrHarness.js';
+import { expectNoFixtureDrift, type FixGroupOutcome } from '../helpers/fixPrFixtureDrift.js';
 
 useFixPrRepo();
 
@@ -54,17 +57,17 @@ describe('create_fix_pr', () => {
   // instead (see setupLodashRepo's own comment).
   // ------------------------------------------------------------------
 
-  it.skipIf(!TRIVY_INSTALLED)('C1/I5: opens a real pull request whose diff excludes dev-guardian\'s own scan report', async () => {
+  it.skipIf(!TRIVY_INSTALLED)('T-01 C1/I5: opens a real pull request whose diff excludes dev-guardian\'s own scan report', async () => {
     const c = ctx();
-    setupLodashRepo();
+    setupLodashRepo(VERIFIABLE_LODASH);
     addOriginRemote();
     await seedRealDepsBefore(c);
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
     const res = await mod?.handler(
-      { project_path: repo, sources: ['deps'], apply: true },
+      { project_path: repo, sources: ['deps'], severity_min: VERIFIABLE_SEVERITY_MIN, apply: true },
       c as never,
-    ) as { ok: true; groups: Array<{
-      outcome: string; pr: { status: string; url: string | null } | null; branch: string;
+    ) as { ok: true; groups: Array<FixGroupOutcome & {
+      pr: { status: string; url: string | null } | null; branch: string;
     }> };
 
     expect(res.ok).toBe(true);
@@ -75,7 +78,9 @@ describe('create_fix_pr', () => {
     // opened — not a status this test assumes, one it measures. Reaching
     // this also confirms I5 did not spuriously block a target that WAS
     // genuinely re-checked (trivy did run) — I5's own dedicated test below
-    // covers the negative (wpscan) side.
+    // covers the negative (wpscan) side. Live advisories decide it: a fixture
+    // they have moved under says so, instead of a diff of two objects.
+    expectNoFixtureDrift(group);
     expect(group).toMatchObject({ outcome: 'pr_created', pr: { status: 'created' } });
     // A real gh pr create call happened — the stub's own `echo %*`
     // re-quotes each argv token (`"pr" "create" …`). The body goes in a file
@@ -95,7 +100,7 @@ describe('create_fix_pr', () => {
     expect(changed.some((f) => f.startsWith('.guardian'))).toBe(false);
   }, REGISTRY_BACKED_TIMEOUT_MS);
 
-  it.skipIf(!TRIVY_INSTALLED)('final review I1: a repeat run after a PR was created reports pr_exists, not worktree_failed', async () => {
+  it.skipIf(!TRIVY_INSTALLED)('T-02 final review I1: a repeat run after a PR was created reports pr_exists, not worktree_failed', async () => {
     // Same fixture as C1/I5 above, continued past `pr_created`: KEEPS_BRANCH
     // deliberately leaves the branch behind once a PR exists — correctly, it
     // is what the PR points at — so a repeat run's `createWorktree` collides
@@ -105,20 +110,21 @@ describe('create_fix_pr', () => {
     // `--state all` idempotency search — built for exactly this moment —
     // was unreachable for the entire life of the open PR.
     const c = ctx();
-    setupLodashRepo();
+    setupLodashRepo(VERIFIABLE_LODASH);
     addOriginRemote();
     await seedRealDepsBefore(c);
     const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
-    type Result = { ok: true; groups: Array<{
-      outcome: string; branch: string; note: string;
+    type Result = { ok: true; groups: Array<FixGroupOutcome & {
+      branch: string; note: string;
       pr: { status: string; url: string | null } | null;
     }> };
 
     // RUN 1 — apply:true, genuinely reaches a created PR.
     const first = await mod?.handler(
-      { project_path: repo, sources: ['deps'], apply: true },
+      { project_path: repo, sources: ['deps'], severity_min: VERIFIABLE_SEVERITY_MIN, apply: true },
       c as never,
     ) as Result;
+    expectNoFixtureDrift(first.groups[0]);
     expect(first.groups[0]).toMatchObject({ outcome: 'pr_created', pr: { status: 'created' } });
     const branch = first.groups[0]?.branch as string;
     expect(
@@ -133,7 +139,7 @@ describe('create_fix_pr', () => {
     // RUN 2 — apply:true again, same findings, therefore the SAME
     // deterministic branch (design §5).
     const second = await mod?.handler(
-      { project_path: repo, sources: ['deps'], apply: true },
+      { project_path: repo, sources: ['deps'], severity_min: VERIFIABLE_SEVERITY_MIN, apply: true },
       c as never,
     ) as Result;
     expect(second.groups[0]).toMatchObject({
@@ -146,7 +152,7 @@ describe('create_fix_pr', () => {
     // create`), not in terms of `gh` being touched at all, so a cautious
     // preview must be told the truth too, not just an `apply:true` retry.
     const third = await mod?.handler(
-      { project_path: repo, sources: ['deps'], apply: false },
+      { project_path: repo, sources: ['deps'], severity_min: VERIFIABLE_SEVERITY_MIN, apply: false },
       c as never,
     ) as Result;
     expect(third.groups[0]).toMatchObject({
