@@ -12813,7 +12813,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse11(src, reviver, options) {
+    function parse12(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -12854,7 +12854,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse11;
+    exports.parse = parse12;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument;
     exports.stringify = stringify;
@@ -16039,7 +16039,7 @@ var require_parse = __commonJS({
       }
       return parsed2;
     }
-    function parse11(command, args, options) {
+    function parse12(command, args, options) {
       if (args && !Array.isArray(args)) {
         options = args;
         args = null;
@@ -16058,7 +16058,7 @@ var require_parse = __commonJS({
       };
       return options.shell ? parsed2 : parseNonShell(parsed2);
     }
-    module.exports = parse11;
+    module.exports = parse12;
   }
 });
 
@@ -16117,16 +16117,16 @@ var require_cross_spawn = __commonJS({
   "node_modules/cross-spawn/index.js"(exports, module) {
     "use strict";
     var cp = __require("child_process");
-    var parse11 = require_parse();
+    var parse12 = require_parse();
     var enoent = require_enoent();
     function spawn5(command, args, options) {
-      const parsed2 = parse11(command, args, options);
+      const parsed2 = parse12(command, args, options);
       const spawned = cp.spawn(parsed2.command, parsed2.args, parsed2.options);
       enoent.hookChildProcess(spawned, parsed2);
       return spawned;
     }
     function spawnSync2(command, args, options) {
-      const parsed2 = parse11(command, args, options);
+      const parsed2 = parse12(command, args, options);
       const result = cp.spawnSync(parsed2.command, parsed2.args, parsed2.options);
       result.error = result.error || enoent.verifyENOENTSync(result.status, parsed2);
       return result;
@@ -16134,7 +16134,7 @@ var require_cross_spawn = __commonJS({
     module.exports = spawn5;
     module.exports.spawn = spawn5;
     module.exports.sync = spawnSync2;
-    module.exports._parse = parse11;
+    module.exports._parse = parse12;
     module.exports._enoent = enoent;
   }
 });
@@ -22359,9 +22359,9 @@ function kindOfRefs(refs) {
   return "other";
 }
 function notAcceptedNote(refs, accept) {
-  const parse11 = refs.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type));
-  if (parse11.length > 0) {
-    return ` \u2014 not accepted: ${uniqueFiles(parse11).join(", ")} (--accept-partial-parse <path> accepts one file, matched exactly)`;
+  const parse12 = refs.filter((r) => ACCEPTABLE_PARSE_TYPES.includes(r.type));
+  if (parse12.length > 0) {
+    return ` \u2014 not accepted: ${uniqueFiles(parse12).join(", ")} (--accept-partial-parse <path> accepts one file, matched exactly)`;
   }
   const at = accept.timeoutRef;
   const listed2 = refs.filter((r) => r.type === ACCEPTABLE_TIMEOUT_TYPE && accept.timeouts.has(r.file));
@@ -26317,18 +26317,18 @@ var init_parse = __esm({
       return result.issues.length === 0;
     };
     _encode = (_Err) => {
-      const parse11 = _parse(_Err);
+      const parse12 = _parse(_Err);
       const fn = (schema, value, _ctx, _params) => {
         const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
-        return parse11(schema, value, ctx, finalizeParams(fn, _params));
+        return parse12(schema, value, ctx, finalizeParams(fn, _params));
       };
       return fn;
     };
     encode = /* @__PURE__ */ _encode($ZodRealError);
     _decode = (_Err) => {
-      const parse11 = _parse(_Err);
+      const parse12 = _parse(_Err);
       const fn = (schema, value, _ctx, _params) => {
-        return parse11(schema, value, _ctx, finalizeParams(fn, _params));
+        return parse12(schema, value, _ctx, finalizeParams(fn, _params));
       };
       return fn;
     };
@@ -27253,7 +27253,7 @@ function capSize(inst, size) {
   if (!caps.length)
     return;
   const cap = Math.min(...caps.map((c) => c[0]));
-  const parse11 = inst._zod.parse;
+  const parse12 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
     const n = size(payload.value);
     if (n > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
@@ -27267,7 +27267,7 @@ function capSize(inst, size) {
         }
       }
     }
-    return parse11(payload, ctx);
+    return parse12(payload, ctx);
   };
 }
 function handleArrayResult(result, final, index) {
@@ -54657,9 +54657,9 @@ function pluginPackPath(file2) {
   return join36(pluginPacksDir(), file2);
 }
 function olderThan(version2, than) {
-  const parse11 = (v) => v.split(/[.+-]/).slice(0, 3).map((p) => Number.parseInt(p, 10));
-  const have = parse11(version2);
-  const need = parse11(than);
+  const parse12 = (v) => v.split(/[.+-]/).slice(0, 3).map((p) => Number.parseInt(p, 10));
+  const have = parse12(version2);
+  const need = parse12(than);
   if (have.some((n) => Number.isNaN(n)) || need.some((n) => Number.isNaN(n))) return false;
   for (let i = 0; i < 3; i += 1) {
     const a = have[i] ?? 0;
@@ -81971,9 +81971,9 @@ var init_registerCustomRules = __esm({
 
 // src/hooks/heartbeat.ts
 import { createHash as createHash14, randomBytes as randomBytes7 } from "node:crypto";
-import { accessSync as accessSync2, constants as constants5, readdirSync as readdirSync16, statSync as statSync13 } from "node:fs";
+import { accessSync as accessSync2, constants as constants5, readdirSync as readdirSync16, realpathSync as realpathSync6, statSync as statSync13 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
-import { dirname as dirname26, join as join83, resolve as resolve26 } from "node:path";
+import { dirname as dirname26, join as join83, parse as parse10, resolve as resolve26 } from "node:path";
 function comparablePath(path3, platform) {
   let p = platform === process.platform ? resolve26(path3) : path3;
   if (platform === "win32") p = p.replace(/\\/g, "/");
@@ -82039,15 +82039,24 @@ function safeHome2() {
     return void 0;
   }
 }
-function pluginServerExpected(env, serverRoot, platform = process.platform) {
+function resolvesLocally(path3) {
+  const full = resolve26(path3);
+  return !isNetworkPath(path3) && !isNetworkPath(full) && walkLinksUnder(parse10(full).root, full).ok;
+}
+function pluginServerExpected(env, serverRoot, platform = process.platform, realpath = realpathSync6.native) {
   const given = env["CLAUDE_PLUGIN_ROOT"]?.trim() ?? "";
   if (given === "") {
     return { expected: false, reason: "this server was not started as a Claude Code plugin's server, so no dev-guardian hook is expected here" };
   }
-  if (comparablePath(given, platform) !== comparablePath(serverRoot, platform)) {
-    return { expected: false, reason: "this server runs from another directory than the plugin Claude Code started, so its hooks are not this session's" };
+  const expected = { expected: true, reason: "started as the plugin's own server" };
+  if (comparablePath(given, platform) === comparablePath(serverRoot, platform)) return expected;
+  if (platform === process.platform && resolvesLocally(given) && resolvesLocally(serverRoot)) {
+    try {
+      if (comparablePath(realpath(resolve26(given)), platform) === comparablePath(realpath(resolve26(serverRoot)), platform)) return expected;
+    } catch {
+    }
   }
-  return { expected: true, reason: "started as the plugin's own server" };
+  return { expected: false, reason: "this server runs from another directory than the plugin Claude Code started, so its hooks are not this session's" };
 }
 function probeWritable(dataDir) {
   let dir = resolve26(dataDir);
@@ -87023,7 +87032,7 @@ var require_fast_uri = __commonJS({
         normalizeString(uri, options);
       } else if (typeof uri === "object") {
         uri = /** @type {T} */
-        parse11(serialize(uri, options), options);
+        parse12(serialize(uri, options), options);
       }
       return uri;
     }
@@ -87066,8 +87075,8 @@ var require_fast_uri = __commonJS({
     function resolveComponent(base2, relative42, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
-        base2 = parse11(serialize(base2, options), options);
-        relative42 = parse11(serialize(relative42, options), options);
+        base2 = parse12(serialize(base2, options), options);
+        relative42 = parse12(serialize(relative42, options), options);
       }
       options = options || {};
       if (!options.tolerant && relative42.scheme) {
@@ -87385,7 +87394,7 @@ var require_fast_uri = __commonJS({
       }
       return { parsed: parsed2, malformedAuthorityOrPort, malformedPercentEncoding, malformedSchemeSpecific, malformedHost, malformedScheme };
     }
-    function parse11(uri, opts) {
+    function parse12(uri, opts) {
       return parseWithStatus(uri, opts).parsed;
     }
     function normalizeString(uri, opts) {
@@ -87422,7 +87431,7 @@ var require_fast_uri = __commonJS({
       resolveComponent,
       equal,
       serialize,
-      parse: parse11
+      parse: parse12
     };
     module.exports = fastUri;
     module.exports.default = fastUri;
@@ -101634,7 +101643,7 @@ import {
   mkdtempSync as mkdtempSync13,
   readdirSync as readdirSync18,
   readlinkSync as readlinkSync2,
-  realpathSync as realpathSync6,
+  realpathSync as realpathSync7,
   rmSync as rmSync19,
   statSync as statSync15,
   writeFileSync as writeFileSync27
@@ -101987,7 +101996,7 @@ function collectDir(root, limits = DEFAULT_WALK_LIMITS) {
   };
   let rootReal;
   try {
-    rootReal = realpathSync6(root);
+    rootReal = realpathSync7(root);
   } catch {
     rootReal = root;
   }
@@ -102086,7 +102095,7 @@ function readLinkTargetSafely(abs) {
 }
 function safeRealpath(abs) {
   try {
-    return realpathSync6(abs);
+    return realpathSync7(abs);
   } catch {
     return null;
   }
@@ -102537,7 +102546,7 @@ var init_envVars = __esm({
 });
 
 // src/surface/collectors/ports.ts
-import { realpathSync as realpathSync7 } from "node:fs";
+import { realpathSync as realpathSync8 } from "node:fs";
 import { basename as basename12, join as join100 } from "node:path";
 function collectPorts(projectPath) {
   const out = [];
@@ -102590,7 +102599,7 @@ function readLines(projectPath, path3) {
 function canonicalPath2(projectPath, path3) {
   if (projectPathKind(projectPath, path3) !== "file") return void 0;
   try {
-    return realpathSync7.native(path3);
+    return realpathSync8.native(path3);
   } catch {
     return void 0;
   }
@@ -108075,7 +108084,7 @@ var init_verify3 = __esm({
 });
 
 // src/fixpr/worktree.ts
-import { existsSync as existsSync23, mkdtempSync as mkdtempSync15, realpathSync as realpathSync8, rmSync as rmSync22 } from "node:fs";
+import { existsSync as existsSync23, mkdtempSync as mkdtempSync15, realpathSync as realpathSync9, rmSync as rmSync22 } from "node:fs";
 import { tmpdir as tmpdir15 } from "node:os";
 import { join as join110, resolve as resolve35 } from "node:path";
 async function createWorktree(opts) {
@@ -108176,7 +108185,7 @@ async function resolveRegisteredPath(projectPath, branch, dir, timeoutMs) {
 function samePathKey(path3) {
   let real;
   try {
-    real = realpathSync8.native(path3);
+    real = realpathSync9.native(path3);
   } catch {
     real = resolve35(path3);
   }
@@ -113580,7 +113589,7 @@ var require_content_type = __commonJS({
     var QUOTE_REGEXP = /([\\"])/g;
     var TYPE_REGEXP = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+\/[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
     exports.format = format;
-    exports.parse = parse11;
+    exports.parse = parse12;
     function format(obj) {
       if (!obj || typeof obj !== "object") {
         throw new TypeError("argument obj is required");
@@ -113604,7 +113613,7 @@ var require_content_type = __commonJS({
       }
       return string4;
     }
-    function parse11(string4) {
+    function parse12(string4) {
       if (!string4) {
         throw new TypeError("argument string is required");
       }
@@ -116357,7 +116366,7 @@ var init_popular = __esm({
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync19, readdirSync as readdirSync20 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
-import { dirname as dirname35, isAbsolute as isAbsolute25, join as join114, parse as parse10, relative as relative38, resolve as resolve37 } from "node:path";
+import { dirname as dirname35, isAbsolute as isAbsolute25, join as join114, parse as parse11, relative as relative38, resolve as resolve37 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -116383,7 +116392,7 @@ function walkRoot2(path3, ctx, under) {
   const dir = dirname35(abs);
   if (project !== void 0 && holds(dir, project)) return dir;
   if (isInside4(home, abs)) return home;
-  return parse10(abs).root;
+  return parse11(abs).root;
 }
 function noteUnread3(path3, what) {
   firstUnread = firstUnread ?? { path: path3, what };
@@ -116593,10 +116602,10 @@ function npmRegistry(name, ctx) {
   const fromEnv = envRegistry("npm", ctx);
   if (fromEnv !== null) return fromEnv;
   let authSource;
-  for (const { path: path3, parse: parse11 } of npmConfigFiles(ctx)) {
+  for (const { path: path3, parse: parse12 } of npmConfigFiles(ctx)) {
     const text3 = read2(path3, ctx);
     if (text3 === void 0) continue;
-    const url2 = parse11(text3, scope);
+    const url2 = parse12(text3, scope);
     if (url2 !== void 0 && !isPublic("npm", url2)) return { kind: "registry", source: path3, url: url2 };
     if (authSource === void 0 && NPM_AUTH.test(text3)) authSource = path3;
   }
@@ -121433,14 +121442,14 @@ var init_renderHtml = __esm({
 });
 
 // src/selftest/canaries.ts
-import { cpSync, existsSync as existsSync25, lstatSync as lstatSync20, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync16, readdirSync as readdirSync21, readFileSync as readFileSync17, realpathSync as realpathSync9, rmSync as rmSync24, writeFileSync as writeFileSync32 } from "node:fs";
+import { cpSync, existsSync as existsSync25, lstatSync as lstatSync20, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync16, readdirSync as readdirSync21, readFileSync as readFileSync17, realpathSync as realpathSync10, rmSync as rmSync24, writeFileSync as writeFileSync32 } from "node:fs";
 import { tmpdir as tmpdir17 } from "node:os";
 import { basename as basename16, dirname as dirname36, join as join118, relative as relative41, sep as sep22 } from "node:path";
 function canaryToken() {
   return CANARY_HALVES.join("");
 }
 function createWorkspace(tmpRoot = tmpdir17()) {
-  const dir = realpathSync9.native(mkdtempSync16(join118(tmpRoot, WORKSPACE_PREFIX)));
+  const dir = realpathSync10.native(mkdtempSync16(join118(tmpRoot, WORKSPACE_PREFIX)));
   const project = join118(dir, "project");
   const reports = join118(project, ".guardian", "reports");
   const rules2 = join118(dir, "rules");
@@ -121795,7 +121804,7 @@ var run_exports = {};
 __export(run_exports, {
   runSelftest: () => runSelftest
 });
-import { realpathSync as realpathSync10 } from "node:fs";
+import { realpathSync as realpathSync11 } from "node:fs";
 import { homedir as homedir13, tmpdir as tmpdir18 } from "node:os";
 import { basename as basename17, join as join120 } from "node:path";
 async function within(run2, timeoutMs, graceMs, onTimeout) {
@@ -121912,7 +121921,7 @@ async function runSelftest(opts) {
     if (scrub === void 0) {
       const real = (path3) => {
         try {
-          return realpathSync10.native(path3);
+          return realpathSync11.native(path3);
         } catch {
           return path3;
         }

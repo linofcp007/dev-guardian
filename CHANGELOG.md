@@ -8,6 +8,19 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`health_status` said `hooks: not_applicable` in a session whose plugin directory is reached through a link**
+  — and so never warned that no hook had started there. Claude Code names the plugin's root as it reaches it
+  (`<its config directory>/plugins/cache/…`), Node names the server's own file with every link resolved, and the
+  two were compared as text. With several accounts sharing one `plugins` directory through a junction (or a
+  `~/.claude` that is a symlink), the plugin's own server took itself for another one. Where the text differs, what
+  the two paths lead to is now compared — only when both are local: nothing is asked of a path on the network, nor
+  of one a link sends there, and a root that cannot be resolved is another directory, as before. Found in a real
+  session of 3.9.1 on Windows: the twenty real starts 3.9.0 was measured with used `--plugin-dir`, a path with no
+  link in it. The session marks themselves were right all along — each matched the Claude Code process that had
+  started its server.
+
 ## [3.9.1] - 2026-11-14
 
 The pinned scanners and actions, moved to newer releases that were each checked first. No rule, tool or hook

@@ -35,10 +35,10 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { accessSync, constants, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, readdirSync, realpathSync, statSync } from 'node:fs';
 import * as nodeFs from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 
 import { isNetworkPath, MAX_HOOK_CONFIG_BYTES, readSmallText, walkLinksUnder } from './configFile.js';
 import { userDataDir } from './userDataDir.js';
@@ -414,20 +414,48 @@ export function pruneHeartbeats(dir: string, opts: PruneOptions = {}): Promise<n
 
 // --------------------------------------------------------------- reading
 
-/** Whether this server was started as the plugin's own server, whose hooks should then be running. */
+/**
+ * Whether a path can be resolved without asking a host on the network: it is not there itself, and no
+ * link on the way to it points there (lstat and readlink only, from the volume's root down — nothing
+ * is followed before every link is known to be local).
+ */
+function resolvesLocally(path: string): boolean {
+  const full = resolve(path);
+  return !isNetworkPath(path) && !isNetworkPath(full) && walkLinksUnder(parse(full).root, full).ok;
+}
+
+/**
+ * Whether this server was started as the plugin's own server, whose hooks should then be running.
+ *
+ * Claude Code names the root as it reaches it (`<its config directory>/plugins/cache/…`), and Node
+ * named this server's own file with every link resolved. So the text is compared first, and where it
+ * differs, what the two paths lead to: with several accounts sharing one `plugins` directory through
+ * a junction, the text alone made the plugin's own server answer `not_applicable` — the state that
+ * silences "no hook started" — in every session of that machine (3.9.0, 3.9.1). Resolving can only
+ * make the hooks expected where the text did not; a root that cannot be resolved is another
+ * directory, as before, and nothing on the network is asked.
+ */
 export function pluginServerExpected(
   env: Env,
   serverRoot: string,
   platform: NodeJS.Platform = process.platform,
+  realpath: (path: string) => string = realpathSync.native,
 ): { expected: boolean; reason: string } {
   const given = env['CLAUDE_PLUGIN_ROOT']?.trim() ?? '';
   if (given === '') {
     return { expected: false, reason: "this server was not started as a Claude Code plugin's server, so no dev-guardian hook is expected here" };
   }
-  if (comparablePath(given, platform) !== comparablePath(serverRoot, platform)) {
-    return { expected: false, reason: 'this server runs from another directory than the plugin Claude Code started, so its hooks are not this session\'s' };
+  const expected = { expected: true, reason: "started as the plugin's own server" };
+  if (comparablePath(given, platform) === comparablePath(serverRoot, platform)) return expected;
+  // A path of another platform than this process's (the tests') cannot be resolved here.
+  if (platform === process.platform && resolvesLocally(given) && resolvesLocally(serverRoot)) {
+    try {
+      if (comparablePath(realpath(resolve(given)), platform) === comparablePath(realpath(resolve(serverRoot)), platform)) return expected;
+    } catch {
+      /* one that does not exist, or may not be read: not this server's root */
+    }
   }
-  return { expected: true, reason: "started as the plugin's own server" };
+  return { expected: false, reason: 'this server runs from another directory than the plugin Claude Code started, so its hooks are not this session\'s' };
 }
 
 /** Why a mark could not be written to `dataDir`, or null. Looks at the directory, or at the nearest one that exists. */
