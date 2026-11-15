@@ -153,6 +153,15 @@ export const MAX_VETTED_PACKAGES = 50;
  * 0.9 to 3.3 s — and all 16 were vetted whole, in silence.
  */
 export const MAX_MANIFEST_PACKAGES = 150;
+/**
+ * The two checks {@link decideManifestOne} never reads: said once at `npm
+ * install <name>`, they would be said at every install of a manifest. Named
+ * to the vetting so that it does not fetch for them either — the full
+ * registry document and the version document were half of what a manifest
+ * install read (3.10.0, measured), and in two of 15 real manifests ran into
+ * the 3 s budget.
+ */
+const MANIFEST_UNREPORTED: ReadonlySet<'publish_age' | 'install_scripts'> = new Set(['publish_age', 'install_scripts'] as const);
 /** How much of a command is read for installs — the shell guard reads the same 512 KB. */
 const MAX_PARSED_LENGTH = 512 * 1024;
 
@@ -575,6 +584,9 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         now: opts.now ?? Date.now(),
         registry,
         commandRegistries: c.registries,
+        // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
+        // what only those two checks need is not asked of the registry.
+        ...(c.fromManifest !== undefined ? { unreported: MANIFEST_UNREPORTED } : {}),
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
         ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
         ...(opts.popular !== undefined ? { popular: opts.popular } : {}),

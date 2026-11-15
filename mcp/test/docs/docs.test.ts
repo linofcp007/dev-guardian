@@ -491,3 +491,18 @@ describe('the docs of the manifest vetting', () => {
     expect(description).toMatch(/manifest/);
   });
 });
+
+// ───────────────── install-vet-pnpm-install-named — the docs name `pnpm install <pkg>` as a by-name install
+
+describe('the docs of `pnpm install <package>`', () => {
+  it('T-04 docs/hooks.md lists pnpm add|i|install among the by-name installs, and no known limit names `pnpm install <package>`', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end);
+    expect(section).toContain('`pnpm add|i|install`');
+    for (const page of ['docs/hooks-known-limits.md', 'mcp/test/fixtures/hooks/known-limits.yml']) {
+      expect({ page, namesIt: read(page).includes('pnpm install <package>') }).toEqual({ page, namesIt: false });
+    }
+  });
+});

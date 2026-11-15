@@ -111,10 +111,25 @@ export interface VetOptions {
    * when it passes reads `unknown` ("time budget"), never ok.
    */
   deadlineAt?: number | undefined;
+  /**
+   * Checks whose answer the caller will not report — the hook, for the
+   * packages a manifest names (`hookDecision.ts#decideManifestOne` reads
+   * neither). Each reads `not_applicable`, never `pass`: it was not made.
+   * And when BOTH are named, what only they need is not fetched at all —
+   * npm's full document (megabytes, for one publish time) and a version's
+   * own document (for the names of its install scripts). Measured on 15
+   * real manifests, 3.10.0: those were 3 to 19 requests and 10 to 152 MB of
+   * each `npm ci`, half of everything read, for an answer nobody was given.
+   */
+  unreported?: ReadonlySet<UnreportedCheck> | undefined;
 }
+
+type UnreportedCheck = 'publish_age' | 'install_scripts';
 
 /** The reason a check did not run because the vetting deadline had passed. */
 const TIME_BUDGET = 'vetting time budget exhausted';
+/** The detail of a check the caller said it does not report. */
+const NOT_REPORTED = 'not checked: the caller does not report it';
 
 function popularIndexFor(ecosystem: PkgEcosystem, opts: VetOptions): PopularIndex | null {
   const override = opts.popular?.[ecosystem];
@@ -167,7 +182,12 @@ interface Work {
   osvVersioned?: boolean;
   /** The name the OSV query used (see `osvNameFor`). */
   osvName?: string;
+  /** The checks the caller does not report ({@link VetOptions.unreported}). */
+  unreported?: ReadonlySet<UnreportedCheck>;
 }
+
+/** Both checks that need a second request are unreported: no full document, no version document. */
+const needsNoExtras = (w: Work): boolean => w.unreported?.has('publish_age') === true && w.unreported.has('install_scripts');
 
 function customFor(spec: PackageSpec, opts: VetOptions): CustomRegistry | null {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
@@ -385,6 +405,9 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
         installScripts = warn(`${v ?? ''} runs install scripts on install: ${names}`);
       } else installScripts = pass();
     }
+    // A check nobody will be told of was not made (and, with both, not fetched for): never a pass.
+    if (w.unreported?.has('publish_age') === true) publishAge = na(NOT_REPORTED);
+    if (eco === 'npm' && w.unreported?.has('install_scripts') === true) installScripts = na(NOT_REPORTED);
   }
 
   const checks: PackageChecks = {
@@ -442,6 +465,7 @@ export async function vetPackages(specs: readonly PackageSpec[], opts: VetOption
       spec,
       typo: index === null ? null : findTyposquatTarget(index, spec.name),
       popularLoaded: index !== null,
+      ...(opts.unreported !== undefined ? { unreported: opts.unreported } : {}),
     };
   });
 
@@ -552,7 +576,7 @@ async function networkRounds(
     return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
   });
   const extras = work.map((w) =>
-    w.lookup?.kind === 'found' ? extrasFor(w, w.lookup.info, http, now).catch(() => undefined) : Promise.resolve(),
+    w.lookup?.kind === 'found' && !needsNoExtras(w) ? extrasFor(w, w.lookup.info, http, now).catch(() => undefined) : Promise.resolve(),
   );
   const [osv] = await Promise.all([osvPromise, ...extras]);
   if (signal.aborted && osv.online === false && osvError === undefined) {

@@ -498,3 +498,55 @@ describe('vetPackages — PyPI, Packagist, NuGet', () => {
     expect(s?.verdict).toBe('unknown');
   });
 });
+
+// ───────────────── install-vet-manifest-unreported-lookups — checks the caller will not report are not fetched for
+
+describe('vetPackages — checks the caller does not report (install-vet-manifest-unreported-lookups)', () => {
+  const NPM = 'https://registry.npmjs.org/fresh-pkg';
+  const hourAgo = iso(3600 * 1000);
+  /** Abbreviated when asked with npm's install-v1 Accept, the full document otherwise; `asked` says which. */
+  const routes = (asked: string[]): Record<string, Route> => ({
+    [NPM]: (init) => {
+      const abbreviated = (new Headers(init?.headers).get('accept') ?? '').includes('install-v1');
+      asked.push(abbreviated ? 'abbreviated' : 'full');
+      return abbreviated
+        ? { body: { 'dist-tags': { latest: '2.0.0' }, modified: hourAgo, versions: { '2.0.0': { hasInstallScript: true } } } }
+        : { body: { time: { '2.0.0': hourAgo }, versions: { '2.0.0': { scripts: { postinstall: 'node build.js' } } } } };
+    },
+    [OSV]: osvRoute(),
+  });
+  const fresh = spec('npm', 'fresh-pkg');
+
+  it('T-03 with both checks named as unreported: the abbreviated document and OSV only, each check not_applicable with its reason, and the verdict is not unknown for them', async () => {
+    const asked: string[] = [];
+    const f = fakeFetch(routes(asked));
+    const [r] = await vetPackages([fresh], opts(f, { unreported: new Set(['publish_age', 'install_scripts'] as const) }));
+    expect(asked).toEqual(['abbreviated']);
+    expect(f.calls.map((c) => c.url)).toEqual([NPM, OSV]);
+    expect(r?.checks.publish_age).toEqual({ status: 'not_applicable', detail: expect.stringMatching(/not checked/) });
+    expect(r?.checks.install_scripts).toEqual({ status: 'not_applicable', detail: expect.stringMatching(/not checked/) });
+    expect(r?.checks.exists.status).toBe('pass');
+    expect(r?.checks.malicious.status).toBe('pass');
+    expect(r?.verdict).toBe('ok');
+    expect(r?.version).toBe('2.0.0');
+  });
+
+  it('T-03 without the option the result is the one of before: the full document is asked, and the fresh version and its install scripts warn', async () => {
+    const asked: string[] = [];
+    const f = fakeFetch(routes(asked));
+    const [r] = await vetPackages([fresh], opts(f));
+    expect(asked).toEqual(['abbreviated', 'full']);
+    expect(r?.checks.publish_age.status).toBe('warn');
+    expect(r?.checks.install_scripts).toEqual({ status: 'warn', detail: expect.stringMatching(/runs install scripts on install: postinstall/) });
+    expect(r?.verdict).toBe('warn');
+  });
+
+  it('T-03 with only one of the two named, what the other needs is still asked, and only the named one is not_applicable', async () => {
+    const asked: string[] = [];
+    const f = fakeFetch(routes(asked));
+    const [r] = await vetPackages([fresh], opts(f, { unreported: new Set(['publish_age'] as const) }));
+    expect(asked).toEqual(['abbreviated', 'full']);
+    expect(r?.checks.publish_age.status).toBe('not_applicable');
+    expect(r?.checks.install_scripts.status).toBe('warn');
+  });
+});

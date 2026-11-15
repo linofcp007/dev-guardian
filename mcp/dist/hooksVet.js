@@ -1939,6 +1939,7 @@ var NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
 ]);
 var COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
 var BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
+var PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
 var YARN_PRINTS = /* @__PURE__ */ new Set(["--version", "-v", "-V", "--help", "-h"]);
 var REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement", "--requirements"]);
 var isGlobalFlag = (f) => f.flag === "-g" || f.flag === "--global" || f.flag === "--location" && f.value === "global";
@@ -2024,9 +2025,7 @@ function detect(words) {
       return null;
     case "pnpm":
       if (subWord === "add") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [] };
-      if ((subWord === "install" || subWord === "i") && nextPositional(words, sub + 1, table) < 0) {
-        return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
-      }
+      if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
       return null;
     case "bun": {
       if (!BUN_ADD.has(subWord)) return null;
@@ -2558,7 +2557,7 @@ function confidentShape(text) {
         [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
         break;
       }
-      if (at(0) !== "add") return notPlain(`'${tool} ${at(0)}'`);
+      if (at(0) !== "add" && !(tool === "pnpm" && PNPM_INSTALL.has(at(0)))) return notPlain(`'${tool} ${at(0)}'`);
       [key, args] = [tool, rest.slice(1)];
       break;
     case "bun":
@@ -4241,6 +4240,7 @@ var REGISTRY_NAME = {
   nuget: "nuget.org"
 };
 var TIME_BUDGET = "vetting time budget exhausted";
+var NOT_REPORTED = "not checked: the caller does not report it";
 function popularIndexFor(ecosystem, opts) {
   const override = opts.popular?.[ecosystem];
   if (override === null) return null;
@@ -4261,6 +4261,7 @@ function ageText(hours) {
   const days = hours / 24;
   return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;
 }
+var needsNoExtras = (w) => w.unreported?.has("publish_age") === true && w.unreported.has("install_scripts");
 function customFor(spec2, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec2.ecosystem, u));
   if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine };
@@ -4405,6 +4406,8 @@ function buildResult(w, osv, osvError, now, offlineReason) {
         installScripts = warn(`${v ?? ""} runs install scripts on install: ${names}`);
       } else installScripts = pass();
     }
+    if (w.unreported?.has("publish_age") === true) publishAge = na(NOT_REPORTED);
+    if (eco === "npm" && w.unreported?.has("install_scripts") === true) installScripts = na(NOT_REPORTED);
   }
   const checks = {
     exists,
@@ -4449,7 +4452,8 @@ async function vetPackages(specs, opts = {}) {
     return {
       spec: spec2,
       typo: index === null ? null : findTyposquatTarget(index, spec2.name),
-      popularLoaded: index !== null
+      popularLoaded: index !== null,
+      ...opts.unreported !== void 0 ? { unreported: opts.unreported } : {}
     };
   });
   if (offline) {
@@ -4529,7 +4533,7 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
     return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
   });
   const extras = work.map(
-    (w) => w.lookup?.kind === "found" ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
+    (w) => w.lookup?.kind === "found" && !needsNoExtras(w) ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
   );
   const [osv] = await Promise.all([osvPromise, ...extras]);
   if (signal.aborted && osv.online === false && osvError === void 0) {
@@ -4555,6 +4559,7 @@ function firstLine(r) {
 }
 var MAX_VETTED_PACKAGES = 50;
 var MAX_MANIFEST_PACKAGES = 150;
+var MANIFEST_UNREPORTED = /* @__PURE__ */ new Set(["publish_age", "install_scripts"]);
 var MAX_PARSED_LENGTH = 512 * 1024;
 function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed]) {
   const cut = command.length > MAX_PARSED_LENGTH;
@@ -4829,6 +4834,9 @@ async function decideInstallCommand(command, opts) {
         now: opts.now ?? Date.now(),
         registry,
         commandRegistries: c.registries,
+        // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
+        // what only those two checks need is not asked of the registry.
+        ...c.fromManifest !== void 0 ? { unreported: MANIFEST_UNREPORTED } : {},
         ...opts.fetchImpl !== void 0 ? { fetchImpl: opts.fetchImpl } : {},
         ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
         ...opts.popular !== void 0 ? { popular: opts.popular } : {}

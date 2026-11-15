@@ -656,3 +656,75 @@ describe('guardian-hook PreToolUse — a manifest install is vetted (real subpro
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
   });
 });
+
+// ───────────────── install-vet-pnpm-install-named — `pnpm install <pkg>` through the real hook process
+
+describe('guardian-hook PreToolUse — `pnpm install <package>` is vetted as `pnpm add` (real subprocess)', () => {
+  const PLACEHOLDER: Record<string, Route> = { 'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'), [OSV]: { osv: {} } };
+
+  it.each(['pnpm install crossenv', 'pnpm i crossenv', 'pnpm i -D crossenv'])('T-03 %s is DENIED, naming the package', (command) => {
+    const r = runHook(command, PLACEHOLDER);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv.*security placeholder/s);
+  });
+
+  it('T-03 beside a package.json that names another malicious package: only the package of the command line is looked up and named', () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'evil-in-manifest': '*' } }));
+    const r = runHook('pnpm install crossenv', { ...PLACEHOLDER, 'https://registry.npmjs.org/evil-in-manifest': npmDoc('0.0.1-security') });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv/);
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).not.toMatch(/evil-in-manifest|package\.json/);
+    expect(r.requests.filter((u) => u.includes('evil-in-manifest'))).toEqual([]);
+  });
+
+  it('T-03 a name the registry does not have is denied as missing for `pnpm install <name>`, as it is for `pnpm add <name>`', () => {
+    const routes: Record<string, Route> = { 'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 }, [OSV]: { osv: {} } };
+    for (const command of ['pnpm add react-form-autopilot-helperz', 'pnpm install react-form-autopilot-helperz']) {
+      const r = runHook(command, routes);
+      expect({ command, decision: r.output?.hookSpecificOutput?.permissionDecision }).toEqual({ command, decision: 'deny' });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/does not exist/);
+    }
+  });
+});
+
+// ───────────────── install-vet-manifest-unreported-lookups — what a manifest install asks of the registry, through the real hook
+
+describe('guardian-hook PreToolUse — a manifest install asks only what it reports (real subprocess)', () => {
+  const hourAgo = (): string => new Date(Date.now() - 3600 * 1000).toISOString();
+  /** `fresh-pkg` changed an hour ago and runs install scripts; `scripted-old` is old and runs install scripts. */
+  const routes = (): Record<string, Route | Route[]> => ({
+    'https://registry.npmjs.org/fresh-pkg': [
+      { accept: 'install-v1', body: { 'dist-tags': { latest: '2.0.0' }, modified: hourAgo(), versions: { '2.0.0': { hasInstallScript: true } } } },
+      { body: { time: { '2.0.0': hourAgo() }, versions: { '2.0.0': { scripts: { postinstall: 'node build.js' } } } } },
+    ],
+    'https://registry.npmjs.org/scripted-old': npmDoc('1.0.0', { hasInstallScript: true }),
+    'https://registry.npmjs.org/scripted-old/1.0.0': { body: { scripts: { install: 'node-gyp rebuild' } } },
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  });
+  const manifest = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+
+  it('T-06 `npm ci`: one request per package and the OSV batch — no second request for the full document, none for a version document — and nothing said', () => {
+    manifest({ 'fresh-pkg': '^2.0.0', 'scripted-old': '^1.0.0' });
+    const r = runHook('npm ci', routes());
+    expect(r.status).toBe(0);
+    expect(r.output).toBeUndefined();
+    expect([...r.requests].sort()).toEqual([OSV, 'https://registry.npmjs.org/fresh-pkg', 'https://registry.npmjs.org/scripted-old'].sort());
+  });
+
+  it('T-06 a manifest that names a malicious package is still denied, and the same packages named on the command line are still asked in full', () => {
+    manifest({ 'fresh-pkg': '^2.0.0', crossenv: '*' });
+    const denied = runHook('npm ci', routes());
+    expect(denied.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(denied.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+
+    // The request log is one file for the whole test: what the second run added comes after the first run's lines.
+    const named = runHook('npm install fresh-pkg scripted-old', routes());
+    const added = named.requests.slice(denied.requests.length);
+    expect(added.filter((u) => u === 'https://registry.npmjs.org/fresh-pkg')).toHaveLength(2);
+    expect(added).toContain('https://registry.npmjs.org/scripted-old/1.0.0');
+    expect(named.output?.hookSpecificOutput?.additionalContext).toMatch(/fresh-pkg.*published 1 h ago/s);
+  });
+});

@@ -8,6 +8,43 @@ version bump.
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-11-15
+
+Two fixes to the install hook, both found by running 3.10.0 against the real registry the day it was released. One
+closes a way round the vetting — the short spelling of a pnpm install was read as no install at all. The other
+halves what a manifest install downloads, which on a slower network was the difference between a manifest that is
+vetted and one that says it could not be.
+
+### Upgrading from 3.10.0
+
+- **`pnpm install <package>` and `pnpm i <package>` can be denied now.** They were not read, so the assistant's
+  `pnpm i <name>` installed a malicious or a non-existent package without a word. They are answered as `pnpm add`
+  is: a malicious package is denied; a name the registry does not have is denied too, and that message says how to
+  go on when the package is private or local (`--registry`, or `GUARDIAN_PKG_VET=0` in front of the command).
+- **A manifest install is faster and reads half as much.** Nothing to do. If an `npm ci` in a large project used to
+  end with "could not vet N packages … not verified", it is less likely to: measured in a container on a slow
+  network, four of 15 real manifests said so with 3.10.0 and two still do — those two because the registry's own
+  documents for a few very large packages take most of the 3 s by themselves.
+
+### Fixed
+
+- **`pnpm install <package>` and `pnpm i <package>` are vetted.** pnpm reads both as `pnpm add` — it resolves the
+  name as a direct dependency — and the install hook read neither: `pnpm i crossenv` passed in silence, in the
+  100 ms of a command that installs nothing, while `pnpm add crossenv` was denied. They are now the same by-name
+  install to the hook: the same lookups, the same answers (a malicious package is denied, a name the registry does
+  not have is denied as missing, a typosquat warns), the same cap of 50 packages, and the manifest beside them is
+  not read. `pnpm install` with no package is still the manifest install 3.10.0 made it. The known-limit record
+  that named this spelling no longer does.
+- **A manifest install no longer downloads what it does not report.** For every package of a manifest whose
+  registry document had changed in the last 72 hours — `next`, `prisma`, `typescript` and `playwright` publish
+  daily — the hook fetched npm's FULL document, and for a version with install scripts that version's own, to
+  work out the two checks a manifest install never reports: the age of the version and the names of its scripts.
+  Measured on 15 real `package.json` files with 3.10.0: 3 to 19 such requests and 10 to 152 MB at each `npm ci`,
+  half of everything the hook read, up to 0.8 s of waiting after OSV had answered — and in two of the 15 they ran
+  into the 3 s network budget. The hook now asks the registry for one abbreviated document per package and OSV
+  for the batch. What it answers is unchanged: a malicious package is denied, a typosquat and a missing name
+  warn. A package named on the command line, the `vet_packages` tool and the CLI ask what they asked before.
+
 ## [3.10.0] - 2026-11-15
 
 The install hook reads what a manifest install fetches. `npm install crossenv` was denied while the same package in

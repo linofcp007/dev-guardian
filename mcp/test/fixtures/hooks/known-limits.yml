@@ -433,7 +433,7 @@
 - id: manifest-other-managers
   area: install-vetting
   doc: |-
-    A manifest install is vetted for the npm family (`npm install` with no package, `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`) and for `pip install -r` / `uv pip install -r`. The manifest installs of the other tools are not read: `poetry install`, `uv sync`, `pipenv install`, `composer install`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test`, `yarn workspaces focus` and a `pnpm install <package>`. Their manifest is installed without a lookup; `deps_audit` reads it.
+    A manifest install is vetted for the npm family (`npm install` with no package, `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`) and for `pip install -r` / `uv pip install -r`. The manifest installs of the other tools are not read: `poetry install`, `uv sync`, `pipenv install`, `composer install`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it.
   examples:
     - detector: hook
       event: PreToolUse

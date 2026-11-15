@@ -117274,6 +117274,8 @@ function buildResult(w, osv, osvError, now, offlineReason) {
         installScripts = warn(`${v ?? ""} runs install scripts on install: ${names}`);
       } else installScripts = pass();
     }
+    if (w.unreported?.has("publish_age") === true) publishAge = na(NOT_REPORTED);
+    if (eco === "npm" && w.unreported?.has("install_scripts") === true) installScripts = na(NOT_REPORTED);
   }
   const checks = {
     exists,
@@ -117318,7 +117320,8 @@ async function vetPackages(specs, opts = {}) {
     return {
       spec,
       typo: index === null ? null : findTyposquatTarget(index, spec.name),
-      popularLoaded: index !== null
+      popularLoaded: index !== null,
+      ...opts.unreported !== void 0 ? { unreported: opts.unreported } : {}
     };
   });
   if (offline) {
@@ -117398,7 +117401,7 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
     return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
   });
   const extras = work.map(
-    (w) => w.lookup?.kind === "found" ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
+    (w) => w.lookup?.kind === "found" && !needsNoExtras(w) ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
   );
   const [osv] = await Promise.all([osvPromise, ...extras]);
   if (signal.aborted && osv.online === false && osvError === void 0) {
@@ -117413,7 +117416,7 @@ function worstVerdict2(results) {
   for (const r of results) if (rank2[r.verdict] > rank2[worst2]) worst2 = r.verdict;
   return worst2;
 }
-var FRESH_HOURS, TOOL_BUDGET_MS, HOUR, NPM_PLACEHOLDER, INSTALL_SCRIPTS, REGISTRY_NAME, TIME_BUDGET, pass, warn, fail4, unknown3, na;
+var FRESH_HOURS, TOOL_BUDGET_MS, HOUR, NPM_PLACEHOLDER, INSTALL_SCRIPTS, REGISTRY_NAME, TIME_BUDGET, NOT_REPORTED, pass, warn, fail4, unknown3, na, needsNoExtras;
 var init_vet = __esm({
   "src/pkgvet/vet.ts"() {
     "use strict";
@@ -117436,11 +117439,13 @@ var init_vet = __esm({
       nuget: "nuget.org"
     };
     TIME_BUDGET = "vetting time budget exhausted";
+    NOT_REPORTED = "not checked: the caller does not report it";
     pass = (detail) => detail === void 0 ? { status: "pass" } : { status: "pass", detail };
     warn = (detail) => ({ status: "warn", detail });
     fail4 = (detail) => ({ status: "fail", detail });
     unknown3 = (detail) => ({ status: "unknown", detail });
     na = (detail) => detail === void 0 ? { status: "not_applicable" } : { status: "not_applicable", detail };
+    needsNoExtras = (w) => w.unreported?.has("publish_age") === true && w.unreported.has("install_scripts");
   }
 });
 
