@@ -451,7 +451,7 @@ describe("submodules: each one's OWN drivers â€” absorbed, nested and in-tree â€
 
     it.skipIf(!GITLEAKS)("scan_secrets: gitleaks' git log -p stays out of the submodule", async () => {
       const out = await runTool('scan_secrets', { project_path: s.root, force: true });
-      expect(out.tools_run.find((t) => t.name === 'gitleaks')?.status).toBe('ok');
+      expect(out.tools_run.find((t) => t.name === 'gitleaks')).toMatchObject({ status: 'ok' });
     });
 
     it("with the user's own submodule.recurse=true, review_pr's head checkout and create_fix_pr's worktree still work", async () => {
