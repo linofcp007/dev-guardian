@@ -156,7 +156,7 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   // assignment (and `promisify` of one), a function destructured from the module's name, a dynamic `import()` —
   // and the controls of the local-name exclusion: the import itself, and a `require` made inside a function.
   'interpreterRequireMember.js': { [INTERPRETER_JS]: 5 },
-  'interpreterModuleDestructured.js': { [INTERPRETER_JS]: 2 },
+  'interpreterModuleDestructured.js': { [INTERPRETER_JS]: 3 },
   'interpreterModuleDestructured.ts': { [INTERPRETER_JS]: 2 },
   'interpreterDynamicImport.ts': { [INTERPRETER_JS]: 3 },
   'interpreterLocalShadow.ts': { [INTERPRETER_JS]: 4 },
@@ -423,8 +423,8 @@ describe('the JS interpreter rule: more spellings of child_process, and local na
   });
 
   it.skipIf(!AVAILABLE)('T-02 a function destructured from a name that is the module — a require assigned, a namespace import, a default import: the marked lines, and none in the twins', () => {
-    for (const file of ['interpreterModuleDestructured.js', 'interpreterModuleDestructured.ts']) {
-      expect([file, expectedLines(file).length]).toEqual([file, 2]);
+    for (const [file, lines] of [['interpreterModuleDestructured.js', 3], ['interpreterModuleDestructured.ts', 2]] as const) {
+      expect([file, expectedLines(file).length]).toEqual([file, lines]);
       expect([file, linesOf(hits(), file)]).toEqual([file, expectedLines(file)]);
       expect([file, linesOf(misses(), file)]).toEqual([file, []]);
     }
@@ -437,9 +437,9 @@ describe('the JS interpreter rule: more spellings of child_process, and local na
     expect(linesOf(misses(), file)).toEqual([]);
   });
 
-  it.skipIf(!AVAILABLE)('T-04 a local name that shadows the import fires nothing — seven ways of declaring one — while the import itself, and a require made inside a function, still fire', () => {
-    // The seven shadows: const, let, a destructuring, a loop variable, a catch variable, a function declaration, and
-    // a const of the MODULE's name in an inner block.
+  it.skipIf(!AVAILABLE)('T-04 a local name that shadows the import fires nothing — eighteen ways of declaring one — while the import itself, and a require made inside a function, still fire', () => {
+    // Nine for the name of an imported function and nine for the name of the module: const, let and var, plain and
+    // by destructuring, a loop variable, a catch variable and a function declaration.
     expect(linesOf(misses(), 'interpreterLocalShadow.ts')).toEqual([]);
     expect(linesOf(hits(), 'interpreterLocalShadow.ts')).toEqual(expectedLines('interpreterLocalShadow.ts'));
     expect(expectedLines('interpreterLocalShadow.ts')).toHaveLength(4);
