@@ -770,7 +770,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
     case 'pnpm':
       if (subWord === 'add') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] };
       // `pnpm install <pkg>` / `pnpm i <pkg>` is pnpm's `add` (measured, pnpm 10.33: it resolves the name as a direct
-      // dependency); with no package it installs the manifest. Until 3.10.0 the form with a package was not read at all.
+      // dependency); with no package it installs the manifest. Up to and including 3.10.0 the form with a package was not read at all.
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       return null;
     case 'bun': {

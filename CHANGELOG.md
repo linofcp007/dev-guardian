@@ -8,6 +8,24 @@ version bump.
 
 ## [Unreleased]
 
+## [3.10.1] - 2026-11-15
+
+Two fixes to the install hook, both found by running 3.10.0 against the real registry the day it was released. One
+closes a way round the vetting — the short spelling of a pnpm install was read as no install at all. The other
+halves what a manifest install downloads, which on a slower network was the difference between a manifest that is
+vetted and one that says it could not be.
+
+### Upgrading from 3.10.0
+
+- **`pnpm install <package>` and `pnpm i <package>` can be denied now.** They were not read, so the assistant's
+  `pnpm i <name>` installed a malicious or a non-existent package without a word. They are answered as `pnpm add`
+  is: a malicious package is denied; a name the registry does not have is denied too, and that message says how to
+  go on when the package is private or local (`--registry`, or `GUARDIAN_PKG_VET=0` in front of the command).
+- **A manifest install is faster and reads half as much.** Nothing to do. If an `npm ci` in a large project used to
+  end with "could not vet N packages … not verified", it is less likely to: measured in a container on a slow
+  network, four of 15 real manifests said so with 3.10.0 and two still do — those two because the registry's own
+  documents for a few very large packages take most of the 3 s by themselves.
+
 ### Fixed
 
 - **`pnpm install <package>` and `pnpm i <package>` are vetted.** pnpm reads both as `pnpm add` — it resolves the
