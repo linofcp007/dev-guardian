@@ -1089,7 +1089,9 @@ rules:
   # `pattern-not-inside` simples tirava tres acertos (medido). Por isso a
   # exclusão de `const` / `let` / `var` é uma formula negativa com um regex
   # sobre o valor dado, que so casa quando esse valor NAO começa por
-  # `require(`, `import(` nem o `await` de um deles. Um `require` feito
+  # `require(`, `import(` nem o `await` de um deles. Esta escrita so com
+  # `var`: no Semgrep esse padrao casa as tres palavras (a ablação leu os
+  # ramos `const` e `let` mortos, aos pares; retirados). Um `require` feito
   # DENTRO de uma função continua a disparar
   # (hits/interpreterRequireInFunction.js).
   # LIMITE MEDIDO (Semgrep 1.182.0, as duas plataformas): num ficheiro onde o
@@ -1255,19 +1257,9 @@ rules:
                                   - pattern-not:
                                       patterns:
                                         - pattern: $FN(...)
+                                        # So `var`: o padrao casa tambem `const` e `let` (a ablação leu
+                                        # esses ramos mortos, e as linhas de misses/ continuam caladas).
                                         - pattern-either:
-                                            - pattern-inside: |
-                                                const $FN = $SHADOWINIT
-                                                ...
-                                            - pattern-inside: |
-                                                const { ..., $SHADOWKEY: $FN, ... } = $SHADOWINIT
-                                                ...
-                                            - pattern-inside: |
-                                                let $FN = $SHADOWINIT
-                                                ...
-                                            - pattern-inside: |
-                                                let { ..., $SHADOWKEY: $FN, ... } = $SHADOWINIT
-                                                ...
                                             - pattern-inside: |
                                                 var $FN = $SHADOWINIT
                                                 ...
@@ -1330,18 +1322,6 @@ rules:
                                       patterns:
                                         - pattern: $CP.$F(...)
                                         - pattern-either:
-                                            - pattern-inside: |
-                                                const $CP = $SHADOWINIT
-                                                ...
-                                            - pattern-inside: |
-                                                const { ..., $SHADOWKEY: $CP, ... } = $SHADOWINIT
-                                                ...
-                                            - pattern-inside: |
-                                                let $CP = $SHADOWINIT
-                                                ...
-                                            - pattern-inside: |
-                                                let { ..., $SHADOWKEY: $CP, ... } = $SHADOWINIT
-                                                ...
                                             - pattern-inside: |
                                                 var $CP = $SHADOWINIT
                                                 ...
