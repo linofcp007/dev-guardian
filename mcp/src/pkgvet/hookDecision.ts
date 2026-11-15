@@ -140,8 +140,19 @@ function firstLine(r: PackageVetResult): string {
   return r.reasons[0] ?? 'no reason recorded';
 }
 
-/** The most packages one hook call looks up; the rest are named as not vetted. */
+/** The most packages NAMED ON THE COMMAND LINE one hook call looks up; the rest are named as not vetted. */
 export const MAX_VETTED_PACKAGES = 50;
+/**
+ * The most packages of MANIFESTS one hook call looks up, beside those the
+ * command names. Nobody types fifty names, but real applications declare more
+ * direct dependencies than that: of 16 manifests measured (2026-11-15: 15
+ * open-source LLM applications and this repository's), 11 had from 57 to 97,
+ * and under a cap of 50 each of their installs would have said "N more
+ * packages were not vetted". The lookups run in parallel under one budget,
+ * so the wider cap cost nothing measurable — 0.9 to 3.5 s over the 16, against
+ * 0.9 to 3.3 s — and all 16 were vetted whole, in silence.
+ */
+export const MAX_MANIFEST_PACKAGES = 150;
 /** How much of a command is read for installs — the shell guard reads the same 512 KB. */
 const MAX_PARSED_LENGTH = 512 * 1024;
 
@@ -152,6 +163,10 @@ const MAX_PARSED_LENGTH = 512 * 1024;
  * of `npm i x; ` once took ~57 s through the hook, past its 15 s timeout. A
  * command over 512 KB is read from its start only, and then no command may be
  * denied for a missing name: its last word may have been cut in half.
+ *
+ * The packages a manifest names have a cap of their own,
+ * {@link MAX_MANIFEST_PACKAGES}, counted apart: a package the command names
+ * and the manifest repeats is the command's.
  */
 function boundedInstalls(
   command: string,
@@ -161,7 +176,7 @@ function boundedInstalls(
   nested: ReadonlyArray<{ text: string; shell: CommandShell }> = [],
   cdpath = false,
   withManifests: (parsed: readonly InstallCommand[]) => VetCommand[] = (parsed) => [...parsed],
-): { commands: VetCommand[]; notVetted: number; cut: boolean } {
+): { commands: VetCommand[]; notVetted: number; manifestNotVetted: number; cut: boolean } {
   const cut = command.length > MAX_PARSED_LENGTH;
   const parsed = withManifests(
     parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) =>
@@ -172,19 +187,20 @@ function boundedInstalls(
   );
   const key = (pkg: PackageSpec): string => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
   const seen = new Set<string>();
-  const unique: PackageSpec[] = [];
+  const named: PackageSpec[] = [];
+  const ofManifests: PackageSpec[] = [];
   for (const c of parsed) {
     for (const pkg of c.packages) {
       if (seen.has(key(pkg))) continue;
       seen.add(key(pkg));
-      unique.push(pkg);
+      (c.fromManifest === undefined ? named : ofManifests).push(pkg);
     }
   }
   // The names NOT on the popular list first (fix round 3): 50 popular names
   // in front of a malicious one must not push it past the cap.
-  const chosen = new Set(
-    [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, MAX_VETTED_PACKAGES).map(key),
-  );
+  const firstOf = (unique: readonly PackageSpec[], cap: number): string[] =>
+    [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, cap).map(key);
+  const chosen = new Set([...firstOf(named, MAX_VETTED_PACKAGES), ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
   const commands: VetCommand[] = [];
   for (const c of parsed) {
     const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
@@ -192,7 +208,12 @@ function boundedInstalls(
     const uncertain = cut ? [...c.uncertain, 'the command is over 512 KB and only its start was read'] : c.uncertain;
     commands.push({ ...c, packages, uncertain });
   }
-  return { commands, notVetted: Math.max(0, unique.length - MAX_VETTED_PACKAGES), cut };
+  return {
+    commands,
+    notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES),
+    manifestNotVetted: Math.max(0, ofManifests.length - MAX_MANIFEST_PACKAGES),
+    cut,
+  };
 }
 
 /** An install command as it is vetted: the packages a manifest names carry the file that names them. */
@@ -526,7 +547,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   };
   // What a manifest could not tell: one line each, said whatever else happens.
   const manifestNotes: string[] = [];
-  const { commands, notVetted, cut } = boundedInstalls(
+  const { commands, notVetted, manifestNotVetted, cut } = boundedInstalls(
     command,
     shell,
     popularTest(opts),
@@ -625,6 +646,11 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`,
+    );
+  }
+  if (manifestNotVetted > 0) {
+    lines.push(
+      `dev-guardian: ${manifestNotVetted} more packages of the manifest were not vetted (only the first ${MAX_MANIFEST_PACKAGES} are) — not verified.`,
     );
   }
   if (cut) lines.push(CUT_NOTE);

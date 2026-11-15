@@ -16,7 +16,7 @@ version bump.
   command line alone. It now reads what such a command installs — the `dependencies`, `devDependencies`,
   `optionalDependencies` and `peerDependencies` of the `package.json` where the command runs, or the requirements
   files given to `-r` (and the files they include, three levels deep, eight files) — and looks those packages up
-  with the ones the command names, under the same cap of 50 and the same 3 s budget. A package the manifest names
+  with the ones the command names, under the same 3 s budget and a cap of their own — 150 packages of manifests, beside the 50 a command line may name. A package the manifest names
   that is **malicious** (an OSV `MAL-` advisory on the version its range resolves to, or npm's security
   placeholder) denies the command, naming the file and saying that installing it or removing the dependency is the
   user's decision; a typosquat suspicion and a name the public registry does not have warn, and never deny — in a
@@ -26,7 +26,10 @@ version bump.
   directory the command line does not tell (`--prefix`, `-C`, `--dir`, `--cwd`). `npm ci`, `npm install-test`,
   `npm install-ci-test`, `pnpm install`, `yarn install` and a bare `yarn` are install commands to the hook for the
   first time. Measured with the live registry on Windows, in a project whose `package.json` names `crossenv`:
-  `npm install`, `npm ci`, `pnpm install` and `yarn` went from silence to a deny, in about 0.7 s. A PyPI name with a
+  `npm install`, `npm ci`, `pnpm install` and `yarn` went from silence to a deny, in about 0.7 s — on Linux
+  too. Over 16 real manifests (15 open-source LLM applications and this repository's; 8 to 97 direct dependencies,
+  11 of them over 50) nothing was denied and nothing was said, in 0.9 to 3.5 s each; a manifest of 20 popular
+  dependencies took 0.9 s, and a command that installs nothing answers as before (0.1 s). A PyPI name with a
   malware advisory is no longer published, so a requirements file that names one now warns ("not found … did you
   mean") where the hook said nothing; the deny for PyPI is held by the tests, with a registry stand-in. **What
   leaves the machine:** at every manifest install, the names and ranges of the manifest's direct dependencies go to

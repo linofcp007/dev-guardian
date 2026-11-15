@@ -10,6 +10,7 @@ var hookDecision_exports = {};
 __export(hookDecision_exports, {
   DEFAULT_DEADLINE_MS: () => DEFAULT_DEADLINE_MS,
   MAX_DEADLINE_MS: () => MAX_DEADLINE_MS,
+  MAX_MANIFEST_PACKAGES: () => MAX_MANIFEST_PACKAGES,
   MAX_VETTED_PACKAGES: () => MAX_VETTED_PACKAGES,
   decideInstallCommand: () => decideInstallCommand,
   escapeHatch: () => escapeHatch,
@@ -4553,6 +4554,7 @@ function firstLine(r) {
   return r.reasons[0] ?? "no reason recorded";
 }
 var MAX_VETTED_PACKAGES = 50;
+var MAX_MANIFEST_PACKAGES = 150;
 var MAX_PARSED_LENGTH = 512 * 1024;
 function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed]) {
   const cut = command.length > MAX_PARSED_LENGTH;
@@ -4567,17 +4569,17 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
   );
   const key = (pkg) => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ""}`;
   const seen = /* @__PURE__ */ new Set();
-  const unique = [];
+  const named = [];
+  const ofManifests = [];
   for (const c of parsed) {
     for (const pkg of c.packages) {
       if (seen.has(key(pkg))) continue;
       seen.add(key(pkg));
-      unique.push(pkg);
+      (c.fromManifest === void 0 ? named : ofManifests).push(pkg);
     }
   }
-  const chosen = new Set(
-    [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, MAX_VETTED_PACKAGES).map(key)
-  );
+  const firstOf = (unique, cap) => [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, cap).map(key);
+  const chosen = /* @__PURE__ */ new Set([...firstOf(named, MAX_VETTED_PACKAGES), ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
   const commands = [];
   for (const c of parsed) {
     const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
@@ -4585,7 +4587,12 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
     const uncertain = cut ? [...c.uncertain, "the command is over 512 KB and only its start was read"] : c.uncertain;
     commands.push({ ...c, packages, uncertain });
   }
-  return { commands, notVetted: Math.max(0, unique.length - MAX_VETTED_PACKAGES), cut };
+  return {
+    commands,
+    notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES),
+    manifestNotVetted: Math.max(0, ofManifests.length - MAX_MANIFEST_PACKAGES),
+    cut
+  };
 }
 var NAMED_BY_MANIFEST = "it is named by a manifest, where a missing name is usually a private or a workspace package";
 var plural = (n) => n === 1 ? "1 package" : `${String(n)} packages`;
@@ -4797,7 +4804,7 @@ async function decideInstallCommand(command, opts) {
     cache: registryCache()
   };
   const manifestNotes = [];
-  const { commands, notVetted, cut } = boundedInstalls(
+  const { commands, notVetted, manifestNotVetted, cut } = boundedInstalls(
     command,
     shell,
     popularTest(opts),
@@ -4886,6 +4893,11 @@ async function decideInstallCommand(command, opts) {
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) \u2014 not verified.`
+    );
+  }
+  if (manifestNotVetted > 0) {
+    lines.push(
+      `dev-guardian: ${manifestNotVetted} more packages of the manifest were not vetted (only the first ${MAX_MANIFEST_PACKAGES} are) \u2014 not verified.`
     );
   }
   if (cut) lines.push(CUT_NOTE);

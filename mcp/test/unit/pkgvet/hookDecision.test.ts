@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { decideInstallCommand, MAX_DEADLINE_MS, vetDeadlineMs, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
+import {
+  decideInstallCommand,
+  MAX_DEADLINE_MS,
+  MAX_MANIFEST_PACKAGES,
+  vetDeadlineMs,
+  type HookVetOptions,
+} from '../../../src/pkgvet/hookDecision.js';
 import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -1225,8 +1231,8 @@ describe('manifest installs — the packages a manifest names are vetted', () =>
     expect(d?.context).toMatch(/pypi\.corp\.example|custom registry|index/);
   });
 
-  it('T-14 sixty popular names and one malicious last: the malicious one is looked up all the same, and denied', async () => {
-    const popular = Array.from({ length: 60 }, (_, i) => `pop-${i}`);
+  it('T-14 more popular names than a manifest’s cap and one malicious last: the malicious one is looked up all the same, and denied', async () => {
+    const popular = Array.from({ length: MAX_MANIFEST_PACKAGES + 10 }, (_, i) => `pop-${i}`);
     pkgJson(Object.fromEntries([...popular, 'zz-evil'].map((n) => [n, '^1.0.0'])));
     const reg = registry({ exists: [...popular, 'zz-evil'], malicious: ['zz-evil'] });
     const d = await decideInstallCommand('npm ci', opts(reg.fetchImpl, { popular: { npm: popular } }));
@@ -1234,23 +1240,40 @@ describe('manifest installs — the packages a manifest names are vetted', () =>
     expect(d?.deny).toMatch(/package\.json.*zz-evil/s);
   });
 
-  it('T-14 sixty clean names: fifty are looked up and the note says ten were not; two installs on one line share the fifty', async () => {
-    const names = Array.from({ length: 60 }, (_, i) => `dep-${i}`);
+  it('T-14 a manifest’s cap is 150: past it the note says how many were not looked up, two installs on one line share it, and a real application’s 97 are vetted whole', async () => {
+    expect(MAX_MANIFEST_PACKAGES).toBe(150);
+    const names = Array.from({ length: MAX_MANIFEST_PACKAGES + 10 }, (_, i) => `dep-${i}`);
     pkgJson(Object.fromEntries(names.map((n) => [n, '^1.0.0'])));
     const one = registry({ exists: names });
     const d = await decideInstallCommand('npm ci', opts(one.fetchImpl, { popular: {} }));
     expect(d?.deny).toBeUndefined();
-    expect(one.calls.filter((u) => u !== OSV)).toHaveLength(50);
-    expect(d?.context).toContain('10 more packages');
-    expect(d?.context).toMatch(/not vetted/);
+    expect(one.calls.filter((u) => u !== OSV)).toHaveLength(MAX_MANIFEST_PACKAGES);
+    expect(d?.context).toContain('10 more packages of the manifest were not vetted (only the first 150 are) — not verified.');
 
-    const py = Array.from({ length: 20 }, (_, i) => `py-${i}`);
-    pkgJson(Object.fromEntries(names.slice(0, 40).map((n) => [n, '^1.0.0'])));
+    const py = Array.from({ length: 60 }, (_, i) => `py-${i}`);
+    pkgJson(Object.fromEntries(names.slice(0, 100).map((n) => [n, '^1.0.0'])));
     writeFileSync(join(project, 'requirements.txt'), `${py.join('\n')}\n`);
     const two = registry({ exists: [...names, ...py] });
     const e = await decideInstallCommand('npm ci && pip install -r requirements.txt', opts(two.fetchImpl, { popular: {} }));
-    expect(two.calls.filter((u) => u !== OSV)).toHaveLength(50);
-    expect(e?.context).toContain('10 more packages');
+    expect(two.calls.filter((u) => u !== OSV)).toHaveLength(MAX_MANIFEST_PACKAGES);
+    expect(e?.context).toContain('10 more packages of the manifest');
+
+    // 97 direct dependencies: the most of the 16 real manifests measured. Nothing is left out, and nothing is said.
+    rmSync(join(project, 'requirements.txt'));
+    pkgJson(Object.fromEntries(names.slice(0, 97).map((n) => [n, '^1.0.0'])));
+    const real = registry({ exists: names });
+    expect(await decideInstallCommand('npm ci', opts(real.fetchImpl, { popular: {} }))).toBeNull();
+    expect(real.calls.filter((u) => u !== OSV)).toHaveLength(97);
+  });
+
+  it('T-14 the names on the command line keep their own cap of fifty, beside a manifest’s', async () => {
+    const typed = Array.from({ length: 55 }, (_, i) => `typed-${i}`);
+    writeFileSync(join(project, 'requirements.txt'), 'in-file-a\nin-file-b\n');
+    const reg = registry({ exists: [...typed, 'in-file-a', 'in-file-b'] });
+    const d = await decideInstallCommand(`pip install -r requirements.txt ${typed.join(' ')}`, opts(reg.fetchImpl, { popular: {} }));
+    expect(reg.calls.filter((u) => u !== OSV)).toHaveLength(50 + 2);
+    expect(d?.context).toContain('5 more packages in this command were not vetted (only the first 50 are)');
+    expect(d?.context).not.toContain('of the manifest');
   });
 
   it('T-15 offline, a timeout and a registry error: ONE line with the count and the file, "not verified", and no deny', async () => {
