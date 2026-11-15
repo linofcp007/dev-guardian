@@ -4,7 +4,7 @@ const db = require('./db');
 const { exec: run, execSync } = db;
 
 async function handle(client) {
-  const completion = await client.chat.completions.create({ model: 'm', messages: [] });
+  const completion = await client.chat.completions.create({ model: 'm', max_tokens: 64, messages: [] });
   const text = completion.choices[0].message.content;
   run(text); // the exec of ./db
   execSync(text); // the execSync of ./db

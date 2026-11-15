@@ -260,8 +260,10 @@ describe('llm rules', () => {
   // `node:child_process` imports went unseen; it was the platform.
   it('T-05 the pack names what its child_process recognition still leaves out, and no longer blames a Semgrep version', () => {
     const text = readFileSync(RULES, 'utf8');
-    expect(text).toMatch(/FORA DE ALCANCE[^]*`import\(\)` dinamico/);
-    expect(text).toMatch(/FALSO POSITIVO CONHECIDO[^]*DECLARAÇÃO local/);
+    // What it leaves out changed with llm-js-more-spellings (T-07 below reads the paragraph itself): the four
+    // spellings it used to name are recognised, and a local declaration is excluded — no longer a known false positive.
+    expect(text).toMatch(/FORA DE ALCANCE[^]*`import\(\)` consumido por `\.then\(/);
+    expect(text).toMatch(/NOMES LOCAIS[^]*declaração local/);
     expect(text).not.toMatch(/so sao resolvidos a partir do Semgrep|llmPackVersionNote|anterior ao 1\.176\.1/);
   });
 

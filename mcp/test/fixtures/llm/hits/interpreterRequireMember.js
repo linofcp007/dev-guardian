@@ -11,7 +11,7 @@ const execAsync = promisify(require('child_process').exec);
 const execFileAsync = util.promisify(require('node:child_process').execFile);
 
 async function run(client) {
-  const completion = await client.chat.completions.create({ model: 'm', messages: [] });
+  const completion = await client.chat.completions.create({ model: 'm', max_tokens: 64, messages: [] });
   const text = completion.choices[0].message.content;
   exec(text); // BUG: the function taken from require('child_process').exec
   execNode(text); // BUG: the same, node:

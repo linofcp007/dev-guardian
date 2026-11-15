@@ -1077,10 +1077,20 @@ rules:
   # padrao do import casa pelo NOME, por isso um PARAMETRO com o nome do
   # import (`function f(spawn) { spawn(texto) }`) disparava; esta excluido nas
   # formas medidas -- função, metodo, arrow com bloco e com expressão (misses/,
-  # as linhas `shadowed`). FALSO POSITIVO CONHECIDO, medido nas duas
-  # plataformas: uma DECLARAÇÃO local com esse nome (`const spawn = ...` dentro
-  # da função, a variavel de um `catch` ou de um `for ... of`) nao esta
-  # excluida e dispara.
+  # as linhas `shadowed`).
+  #
+  # NOMES LOCAIS (3.11.0): uma declaração local com o nome do import tambem
+  # o tapa e esta excluida -- `const`, `let` e `var` (simples ou por
+  # desestruturação), a variavel de um `for ... of`, a de um `catch` e uma
+  # declaração de função (misses/interpreterLocalShadow.ts, sete formas).
+  # Mas o `require` do proprio child_process É uma declaração `const` desse
+  # nome (`const cp = require(...)`, `const exec = require(...).exec`): um
+  # `pattern-not-inside` simples tirava tres acertos (medido). Por isso a
+  # exclusão de `const` / `let` / `var` é uma formula negativa com um regex
+  # sobre o valor dado, que so casa quando esse valor NAO começa por
+  # `require(`, `import(` nem o `await` de um deles. Um `require` feito
+  # DENTRO de uma função continua a disparar
+  # (hits/interpreterRequireInFunction.js).
   #
   # O padrao do import nomeado casa tambem um import com alias, pelo nome
   # ORIGINAL (`exec as run` da `$FN = exec`): sem a exclusão que o acompanha,
@@ -1089,10 +1099,16 @@ rules:
   # a propriedade renomeada pelo nome original (medido, o mesmo ficheiro de
   # misses/ para o `require`).
   #
-  # FORA DE ALCANCE, medido nas duas plataformas, com e sem prefixo: a função
-  # tirada de um `require` na propria atribuição (`const exec =
-  # require('child_process').exec`), o `promisify` disso, a desestruturação de
-  # um namespace (`const { exec } = cp`) e o `import()` dinamico.
+  # MAIS QUATRO FORMAS (3.11.0), medidas nas duas plataformas, com e sem
+  # prefixo, cada uma com a sua clausula abaixo e o seu ficheiro em hits/: a
+  # função tirada de um `require` na propria atribuição, o `promisify` de um
+  # `require`, a função desestruturada de um nome que é o modulo (namespace,
+  # omissão ou `require` atribuido) e o `import()` dinamico aguardado para um
+  # nome ou desestruturado.
+  #
+  # FORA DE ALCANCE: o `import()` consumido por `.then(cp => ...)` em vez de
+  # `await`, o `createRequire`, e as bibliotecas que embrulham o
+  # child_process (`execa`, `cross-spawn`).
   #
   # O fallback de Docker usa a imagem `semgrep/semgrep` que estiver na
   # maquina.
@@ -1167,6 +1183,21 @@ rules:
                           - metavariable-regex:
                               metavariable: $MOD
                               regex: ^['"`](?:node:)?child_process['"`]$
+                      # (a') O `promisify` de um `require` escrito ali, guardado num nome:
+                      # `const run = promisify(require('child_process').exec)`.
+                      - patterns:
+                          - pattern-inside: |
+                              $E = $PFY(require("$MOD").$F)
+                              ...
+                          - metavariable-regex:
+                              metavariable: $PFY
+                              regex: ^(?:\w+\.)?promisify$
+                          - metavariable-regex:
+                              metavariable: $MOD
+                              regex: ^['"`]?(?:node:)?child_process['"`]?$
+                          - pattern-either:
+                              - pattern: $E($X, ...)
+                              - pattern: $E($PROG, $X, ...)
                       # (b) A FUNÇÃO importada pelo nome: o import nomeado, com
                       # alias, e o `require` desestruturado.
                       - patterns:
@@ -1190,6 +1221,15 @@ rules:
                               - pattern-inside: |
                                   const { ..., $ORIG: $FN, ... } = require("$CPMOD")
                                   ...
+                              # A função tirada de um `require` na propria atribuição (CommonJS):
+                              # `const exec = require('child_process').exec`.
+                              - pattern-inside: |
+                                  $FN = require("$CPMOD").$ORIG
+                                  ...
+                              # O `import()` dinamico, aguardado e desestruturado.
+                              - pattern-inside: |
+                                  const { ..., $ORIG: $FN, ... } = await import("$CPMOD")
+                                  ...
                           - metavariable-regex:
                               metavariable: $CPMOD
                               regex: ^(?:node:)?child_process$
@@ -1204,6 +1244,41 @@ rules:
                                   # (o padrao com bloco casa tambem a arrow de expressão)
                                   - pattern-not-inside: |
                                       (..., $FN, ...) => { ... }
+                                  # Uma declaração local com o nome do import tambem o tapa. O valor dado
+                                  # nao pode ser um `require` nem um `import`: esses SAO o child_process
+                                  # (ver o cabeçalho, NOMES LOCAIS).
+                                  - pattern-not:
+                                      patterns:
+                                        - pattern: $FN(...)
+                                        - pattern-either:
+                                            - pattern-inside: |
+                                                const $FN = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                const { ..., $SHADOWKEY: $FN, ... } = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                let $FN = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                let { ..., $SHADOWKEY: $FN, ... } = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                var $FN = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                var { ..., $SHADOWKEY: $FN, ... } = $SHADOWINIT
+                                                ...
+                                        - metavariable-regex:
+                                            metavariable: $SHADOWINIT
+                                            regex: (?s)^(?!\s*(?:await\s+)?(?:require|import)\s*\().*$
+                                  - pattern-not-inside: |
+                                      function $FN(...) { ... }
+                                      ...
+                                  - pattern-not-inside: |
+                                      for (const $FN of $ITER) $BODY
+                                  - pattern-not-inside: |
+                                      try { ... } catch ($FN) { ... }
                               - patterns:
                                   - pattern-inside: |
                                       $E = $PFY($FN)
@@ -1227,6 +1302,10 @@ rules:
                               - pattern-inside: |
                                   $CP = require("$CPMOD")
                                   ...
+                              # O `import()` dinamico, aguardado para um nome.
+                              - pattern-inside: |
+                                  $CP = await import("$CPMOD")
+                                  ...
                           - metavariable-regex:
                               metavariable: $CPMOD
                               regex: ^(?:node:)?child_process$
@@ -1241,6 +1320,48 @@ rules:
                                   # (o padrao com bloco casa tambem a arrow de expressão)
                                   - pattern-not-inside: |
                                       (..., $CP, ...) => { ... }
+                                  # Uma declaração local com o nome do modulo tambem o tapa (idem).
+                                  - pattern-not:
+                                      patterns:
+                                        - pattern: $CP.$F(...)
+                                        - pattern-either:
+                                            - pattern-inside: |
+                                                const $CP = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                const { ..., $SHADOWKEY: $CP, ... } = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                let $CP = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                let { ..., $SHADOWKEY: $CP, ... } = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                var $CP = $SHADOWINIT
+                                                ...
+                                            - pattern-inside: |
+                                                var { ..., $SHADOWKEY: $CP, ... } = $SHADOWINIT
+                                                ...
+                                        - metavariable-regex:
+                                            metavariable: $SHADOWINIT
+                                            regex: (?s)^(?!\s*(?:await\s+)?(?:require|import)\s*\().*$
+                                  - pattern-not-inside: |
+                                      function $CP(...) { ... }
+                                      ...
+                                  - pattern-not-inside: |
+                                      for (const $CP of $ITER) $BODY
+                                  - pattern-not-inside: |
+                                      try { ... } catch ($CP) { ... }
+                              # Uma função desestruturada do nome do modulo: `const { exec } = cp`,
+                              # tambem com a propriedade renomeada.
+                              - patterns:
+                                  - pattern-inside: |
+                                      const { ..., $ORIG: $DFN, ... } = $CP
+                                      ...
+                                  - pattern-either:
+                                      - pattern: $DFN($X, ...)
+                                      - pattern: $DFN($PROG, $X, ...)
                               - patterns:
                                   - pattern-inside: |
                                       $E = $PFY($CP.$F)
