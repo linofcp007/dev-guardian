@@ -436,7 +436,7 @@ async function commitsPass(
   view: HistoryView,
 ): Promise<void> {
   const outFile = join(opts.reportDir, HISTORY_REPORT);
-  const { run, report } = await gitleaksLog(opts, outFile, own, view.env);
+  const { run, report } = await gitleaksLog(opts, outFile, own, view.env, view.source);
   if (run.outcome === 'cancelled') result.cancelled = true;
   const raw = report.text;
   const commits = commitsScanned(run.stderr);
@@ -493,7 +493,7 @@ async function commitsPass(
   const notApplied = describeNotApplied(run.gitNotApplied ?? []);
   if (notApplied !== null) reasons.push(notApplied);
   if (problems.length === 0 && !result.cancelled && view.merges !== null) {
-    const merges = await mergesPass(opts, result, view.merges, own, projectPrefix);
+    const merges = await mergesPass(opts, result, view.merges, view.source, own, projectPrefix);
     reasons.push(merges);
   }
   // What the view could not show is named, never a gap of its own: the pass
@@ -513,13 +513,21 @@ const MERGES_REPORT = 'secrets-history-merges.json';
 /**
  * One `gitleaks detect` over git history into `outFile` (or the private
  * directory's file of that name), with `logOptions` as `--log-opts` — none,
- * gitleaks' own walk — and `env` for its git.
+ * gitleaks' own walk — and `env` for its git, started where the view says
+ * (`source`): the project, or — on a git that cannot set the tree's
+ * `.gitattributes` aside — an empty directory, with the repository named by
+ * the environment. Started away from the project, gitleaks no longer finds
+ * what it read there on its own, so it is handed the project's
+ * `.gitleaksignore` and `.gitleaks.toml` as the files pass already is
+ * ({@link scanCopy}); measured on 8.30.1: without them an accepted
+ * fingerprint and an allowlisted path came back as findings.
  */
 async function gitleaksLog(
   opts: ScanRun,
   outFile: string,
   logOptions: readonly string[] | null,
   env: NodeJS.ProcessEnv,
+  source: HistoryView['source'],
 ): Promise<{ run: ProcessRunResult; report: TakenReport }> {
   rmSync(outFile, { force: true });
   const target = reportTarget(opts, outFile);
@@ -531,10 +539,14 @@ async function gitleaksLog(
     `--report-path=${target.path}`,
     ...target.redact,
     '-s',
-    opts.projectPath,
+    source.dir,
   ];
+  if (source.detached) {
+    args.push(`--gitleaks-ignore-path=${opts.projectPath}`);
+    if (presentInProject(opts.projectPath, '.gitleaks.toml')) args.push(`--config=${join(opts.projectPath, '.gitleaks.toml')}`);
+  }
   if (logOptions !== null) args.push(`--log-opts=${logOptions.join(' ')}`);
-  const run = await runProcess({ command: 'gitleaks', args, cwd: opts.projectPath, env, signal: opts.signal, onLog: opts.onLog });
+  const run = await runProcess({ command: 'gitleaks', args, cwd: source.dir, env, signal: opts.signal, onLog: opts.onLog });
   return { run, report: takeReport(opts, target.path, outFile) };
 }
 
@@ -551,11 +563,12 @@ async function mergesPass(
   opts: ScanRun,
   result: GitleaksScanResult,
   merges: { env: NodeJS.ProcessEnv; count: number | null },
+  source: HistoryView['source'],
   own: readonly string[] | null,
   projectPrefix: string,
 ): Promise<string> {
   const outFile = join(opts.reportDir, MERGES_REPORT);
-  const { run, report } = await gitleaksLog(opts, outFile, [...(own ?? GITLEAKS_LOG_OPTS), '--merges', REMERGE_DIFF], merges.env);
+  const { run, report } = await gitleaksLog(opts, outFile, [...(own ?? GITLEAKS_LOG_OPTS), '--merges', REMERGE_DIFF], merges.env, source);
   if (run.outcome === 'cancelled') result.cancelled = true;
   const raw = report.text === null ? null : await withRemergePaths(opts.projectPath, report.text, outFile);
   const problems = runProblems(run, raw);

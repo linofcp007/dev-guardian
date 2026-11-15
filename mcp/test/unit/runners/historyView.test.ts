@@ -104,16 +104,15 @@ describe('the history view (runners/historyView.ts)', () => {
   it.each([
     ['2.34.1', ["1 merge commit(s)' own changes were not read (--diff-merges=remerge needs git 2.36; this git is 2.34)"]],
     ['2.39.5 (Apple Git-154)', []],
-  ])('git %s: no merges pass on a git without remerge-diff, and the tree\'s attributes named below 2.40', async (version, mergeLimits) => {
+  ])('git %s: no merges pass on a git without remerge-diff, named; below 2.40 the tree\'s attributes are read past, so no limit of theirs is named', async (version, mergeLimits) => {
     fake.version = version;
     const dir = withMerge();
     const view = await openHistoryView(dir, process.env, ['--all']);
     view.remove();
     expect(view.merges === null).toBe(mergeLimits.length > 0);
-    expect(view.limits).toEqual([
-      expect.stringContaining('GIT_ATTR_SOURCE needs git 2.40'),
-      ...mergeLimits,
-    ]);
+    // Until 3.10.1 the first limit here was "GIT_ATTR_SOURCE needs git 2.40": the pass now starts git from an empty
+    // directory on such a git (the tests of secrets-history-old-git, below), and names that limit only when it cannot.
+    expect(view.limits).toEqual([...mergeLimits]);
   });
 });
 

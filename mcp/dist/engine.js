@@ -16875,17 +16875,18 @@ async function openHistoryView(cwd, env, walk5) {
   const base2 = await withoutTreeAttributes(cwd, env);
   const version2 = await gitVersion(cwd, base2);
   const shown = version2 === null ? "its version could not be read" : `this git is ${version2.join(".")}`;
-  if (version2 === null || !atLeast(version2, 2, 40)) {
-    limits.push(`the working tree's .gitattributes applied to every commit's change \u2014 a binary or -diff there hides it (GIT_ATTR_SOURCE needs git 2.40; ${shown})`);
-  }
+  const setsTreeAttributesAside = version2 !== null && atLeast(version2, 2, 40);
+  const treeAttributesApply = `the working tree's .gitattributes applied to every commit's change \u2014 a binary or -diff there hides it (GIT_ATTR_SOURCE needs git 2.40; ${shown})`;
+  const inProject2 = { dir: cwd, detached: false };
   let scratch;
   try {
     scratch = mkdtempSync2(join21(tmpdir3(), "guardian-history-"));
   } catch (e) {
+    if (!setsTreeAttributesAside) limits.push(treeAttributesApply);
     limits.push(
       `files git reads as binary by their content, and merge commits' own changes, were not read (no scratch directory: ${message(e)})`
     );
-    return { env: base2, merges: null, limits, remove: () => null };
+    return { env: base2, merges: null, limits, source: inProject2, remove: () => null };
   }
   const remove = () => {
     try {
@@ -16895,6 +16896,16 @@ async function openHistoryView(cwd, env, walk5) {
       return `the history pass's scratch directory ${scratch} could not be removed (${message(e)})`;
     }
   };
+  let source = inProject2;
+  let away = {};
+  if (!setsTreeAttributesAside) {
+    const empty = await emptyWorkTree(cwd, base2, scratch);
+    if (empty === null) limits.push(treeAttributesApply);
+    else {
+      source = { dir: empty.dir, detached: true };
+      away = empty.vars;
+    }
+  }
   const config2 = [];
   const large = await largeBlobPaths(cwd, base2, walk5);
   if ("why" in large) {
@@ -16913,27 +16924,39 @@ async function openHistoryView(cwd, env, walk5) {
       limits.push(`files git reads as binary by their content (a NUL byte) were not read (${message(e)})`);
     }
   }
-  const commitsEnv = config2.length === 0 ? base2 : applyGitSafety({ config: config2, vars: {}, notApplied: [], refused: null }, base2);
+  const commitsEnv = config2.length === 0 && !source.detached ? base2 : applyGitSafety({ config: config2, vars: away, notApplied: [], refused: null }, base2);
   const count = await countWalk(cwd, base2, walk5, "--merges");
-  if (count === 0) return { env: commitsEnv, merges: null, limits, remove };
+  if (count === 0) return { env: commitsEnv, merges: null, limits, source, remove };
   const some = count === null ? "merge commits" : `${count} merge commit(s)`;
   if (version2 === null || !atLeast(version2, 2, 36)) {
     limits.push(`${some}' own changes were not read (--diff-merges=remerge needs git 2.36; ${shown})`);
-    return { env: commitsEnv, merges: null, limits, remove };
+    return { env: commitsEnv, merges: null, limits, source, remove };
   }
   let vars;
   try {
     vars = await scratchObjects(cwd, base2, env, join21(scratch, "objects"));
   } catch (e) {
     limits.push(`${some}' own changes were not read (git's object directory: ${message(e)})`);
-    return { env: commitsEnv, merges: null, limits, remove };
+    return { env: commitsEnv, merges: null, limits, source, remove };
   }
   const octopus = await countWalk(cwd, base2, walk5, "--min-parents=3");
   if (octopus !== 0) {
     limits.push(`${octopus === null ? "octopus merges" : `${octopus} octopus merge(s)`}' own changes were not read (remerge-diff shows none for a merge of three or more parents)`);
   }
-  const mergesEnv = applyGitSafety({ config: config2, vars, notApplied: [], refused: null }, base2);
-  return { env: commitsEnv, merges: { env: mergesEnv, count }, limits, remove };
+  const mergesEnv = applyGitSafety({ config: config2, vars: { ...away, ...vars }, notApplied: [], refused: null }, base2);
+  return { env: commitsEnv, merges: { env: mergesEnv, count }, limits, source, remove };
+}
+async function emptyWorkTree(cwd, base2, scratch) {
+  const resolved = await git(cwd, ["rev-parse", "--absolute-git-dir"], void 0, base2);
+  const gitDir = resolved.stdout.trim();
+  if (resolved.exitCode !== 0 || gitDir === "") return null;
+  const dir = join21(scratch, "worktree");
+  try {
+    mkdirSync5(dir);
+  } catch {
+    return null;
+  }
+  return { dir, vars: { GIT_DIR: gitDir, GIT_WORK_TREE: dir, GIT_INDEX_FILE: join21(scratch, "no-index") } };
 }
 async function openRemergeEnv(cwd, env) {
   const base2 = await withoutTreeAttributes(cwd, env);
@@ -62707,7 +62730,7 @@ async function historyPass(opts, result, logOpts, expectedCommits, projectPrefix
 }
 async function commitsPass(opts, result, logOpts, own2, expectedCommits, projectPrefix, view) {
   const outFile = join56(opts.reportDir, HISTORY_REPORT);
-  const { run: run2, report } = await gitleaksLog(opts, outFile, own2, view.env);
+  const { run: run2, report } = await gitleaksLog(opts, outFile, own2, view.env, view.source);
   if (run2.outcome === "cancelled") result.cancelled = true;
   const raw = report.text;
   const commits = commitsScanned(run2.stderr);
@@ -62742,7 +62765,7 @@ async function commitsPass(opts, result, logOpts, own2, expectedCommits, project
   const notApplied = describeNotApplied(run2.gitNotApplied ?? []);
   if (notApplied !== null) reasons.push(notApplied);
   if (problems.length === 0 && !result.cancelled && view.merges !== null) {
-    const merges = await mergesPass(opts, result, view.merges, own2, projectPrefix);
+    const merges = await mergesPass(opts, result, view.merges, view.source, own2, projectPrefix);
     reasons.push(merges);
   }
   if (problems.length === 0) reasons.push(...view.limits);
@@ -62752,7 +62775,7 @@ async function commitsPass(opts, result, logOpts, own2, expectedCommits, project
     reason: reasons.join("; ")
   });
 }
-async function gitleaksLog(opts, outFile, logOptions, env) {
+async function gitleaksLog(opts, outFile, logOptions, env, source) {
   rmSync13(outFile, { force: true });
   const target = reportTarget(opts, outFile);
   const args = [
@@ -62763,15 +62786,19 @@ async function gitleaksLog(opts, outFile, logOptions, env) {
     `--report-path=${target.path}`,
     ...target.redact,
     "-s",
-    opts.projectPath
+    source.dir
   ];
+  if (source.detached) {
+    args.push(`--gitleaks-ignore-path=${opts.projectPath}`);
+    if (presentInProject(opts.projectPath, ".gitleaks.toml")) args.push(`--config=${join56(opts.projectPath, ".gitleaks.toml")}`);
+  }
   if (logOptions !== null) args.push(`--log-opts=${logOptions.join(" ")}`);
-  const run2 = await runProcess({ command: "gitleaks", args, cwd: opts.projectPath, env, signal: opts.signal, onLog: opts.onLog });
+  const run2 = await runProcess({ command: "gitleaks", args, cwd: source.dir, env, signal: opts.signal, onLog: opts.onLog });
   return { run: run2, report: takeReport(opts, target.path, outFile) };
 }
-async function mergesPass(opts, result, merges, own2, projectPrefix) {
+async function mergesPass(opts, result, merges, source, own2, projectPrefix) {
   const outFile = join56(opts.reportDir, MERGES_REPORT);
-  const { run: run2, report } = await gitleaksLog(opts, outFile, [...own2 ?? GITLEAKS_LOG_OPTS, "--merges", REMERGE_DIFF], merges.env);
+  const { run: run2, report } = await gitleaksLog(opts, outFile, [...own2 ?? GITLEAKS_LOG_OPTS, "--merges", REMERGE_DIFF], merges.env, source);
   if (run2.outcome === "cancelled") result.cancelled = true;
   const raw = report.text === null ? null : await withRemergePaths(opts.projectPath, report.text, outFile);
   const problems = runProblems(run2, raw);
