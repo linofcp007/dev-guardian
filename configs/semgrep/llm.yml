@@ -58,9 +58,10 @@
 # tokens, que descrevem uma superficie ou um custo, nao um caminho de
 # execução.
 #
-# VERSÃO E PLATAFORMA DO SEMGREP. O pack da os mesmos 196 resultados em hits/
+# VERSÃO E PLATAFORMA DO SEMGREP. O pack da os mesmos 215 resultados em hits/
 # e zero em misses/ no 1.86.0, no 1.120.1, no 1.170.1 e no 1.182.0 em Linux e
-# no 1.182.0 em Windows (medido a 2026-11-14, para o 3.9.3). Ate ao 3.9.2 nao
+# no 1.182.0 em Windows (medido a 2026-11-15, para o 3.11.0; eram 196 a
+# 2026-11-14, para o 3.9.3, antes das formas novas da regra JS). Ate ao 3.9.2 nao
 # dava: a regra JS do interpretador reconhecia o `child_process` so pelo que o
 # MOTOR resolve, e a compilação Linux do Semgrep nao resolve um `import ...
 # from 'node:child_process'` em nenhuma das versões medidas, a 1.182.0
@@ -1069,8 +1070,9 @@ rules:
   # omissão nem o `require` de `node:child_process` atribuido ou
   # desestruturado. As duas clausulas do motor sairam: com as formas escritas
   # ao lado, nao acrescentavam uma unica linha em nenhuma plataforma nem
-  # versão medida (a ablação lia-as mortas), e hits/ da as mesmas sessenta
-  # linhas em Linux e em Windows, e no 1.86.0, no 1.120.1 e no 1.170.1. (Este
+  # versão medida (a ablação lia-as mortas), e hits/ da as mesmas linhas
+  # desta regra em Linux e em Windows, e no 1.86.0, no 1.120.1 e no 1.170.1
+  # (sessenta no 3.9.3, setenta e nove com as formas do 3.11.0). (Este
   # comentario dizia que era a versão do Semgrep: ver o cabeçalho.)
   #
   # O QUE O MOTOR FAZIA MELHOR: saber que um nome local tapa o importado. O

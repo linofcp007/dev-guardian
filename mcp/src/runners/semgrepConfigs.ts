@@ -104,9 +104,10 @@ export const CONTAINER_PACKS_ROOT = '/guardian-packs';
  * against a Windows install of 1.176.1, and the Linux build of 1.182.0 does
  * not resolve those imports either. The rule no longer depends on what the
  * engine resolves: it reads the import as written, and the pack gives the
- * same 196 fixture findings on 1.86.0, 1.120.1, 1.170.1 and 1.182.0 on Linux
- * and on 1.182.0 on Windows (measured 2026-11-14). Nothing is left for a
- * version to say about it.
+ * same fixture findings on 1.86.0, 1.120.1, 1.170.1 and 1.182.0 on Linux and
+ * on 1.182.0 on Windows (196 of them measured 2026-11-14; 215 on 2026-11-15,
+ * with the spellings 3.11.0 added). Nothing is left for a version to say
+ * about it.
  */
 export function semgrepEngineNote(engine: { version?: string; fixpointTimeoutsReported?: boolean }): string | null {
   const version = engine.version;
