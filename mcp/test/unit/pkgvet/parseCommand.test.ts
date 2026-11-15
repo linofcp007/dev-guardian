@@ -811,3 +811,57 @@ describe('manifest installs — a command that installs what a manifest says', (
     expect(moved.map((c) => [c.manifest, c.workdir])).toEqual([[{ kind: 'package-json' }, null]]);
   });
 });
+
+// ───────────────── install-vet-pnpm-install-named — `pnpm install <pkg>` is a by-name install
+
+describe('pnpm install with a package name is a `pnpm add` (install-vet-pnpm-install-named)', () => {
+  it.each<[string, Array<[string, string | undefined]>]>([
+    ['pnpm install crossenv', [['crossenv', undefined]]],
+    ['pnpm i crossenv', [['crossenv', undefined]]],
+    ['pnpm i -D crossenv@1', [['crossenv', '1']]],
+    ['pnpm --filter web install left-pad', [['left-pad', undefined]]],
+    ['pnpm install left-pad is-number', [['left-pad', undefined], ['is-number', undefined]]],
+  ])('T-01 %s names its packages and reads no manifest', (command, packages) => {
+    const found = parseInstallCommands(command);
+    expect(found).toHaveLength(1);
+    expect(vetted(command)).toEqual(packages);
+    expect(found[0]?.manifest).toBeUndefined();
+    expect(found[0]?.ecosystem).toBe('npm');
+    expect(found[0]?.manager).toBe('pnpm');
+  });
+
+  it.each([
+    ['pnpm install foo', 'pnpm add foo'],
+    ['pnpm i foo@1.2.3', 'pnpm add foo@1.2.3'],
+    ['pnpm -C ./web install foo', 'pnpm -C ./web add foo'],
+    ['pnpm install --dir ./web foo', 'pnpm add --dir ./web foo'],
+    ['pnpm --filter web i @acme/ui', 'pnpm --filter web add @acme/ui'],
+    ['pnpm install -w @acme/ui', 'pnpm add -w @acme/ui'],
+    ['pnpm i --registry https://npm.example.test foo', 'pnpm add --registry https://npm.example.test foo'],
+    ['pnpm install ./local.tgz', 'pnpm add ./local.tgz'],
+  ])('T-01 %s is read exactly as %s', (install, add) => {
+    // Everything the decision reads — the packages, what was skipped, the registries, and above all `uncertain`:
+    // empty for both, or a missing name would be denied for `pnpm add` and only warned of for `pnpm install`.
+    expect(parseInstallCommands(install)).toHaveLength(1);
+    expect(parseInstallCommands(install)).toEqual(parseInstallCommands(add));
+  });
+
+  it.each(['pnpm install', 'pnpm i', 'pnpm install --frozen-lockfile', 'pnpm i -D', 'pnpm install --filter web', 'pnpm i --ignore-scripts', 'pnpm -C ./web install'])(
+    'T-02 %s is still the manifest install, with no package',
+    (command) => {
+      const found = parseInstallCommands(command);
+      expect(found.map((c) => c.manifest)).toEqual([{ kind: 'package-json' }]);
+      expect(found.flatMap((c) => c.packages)).toEqual([]);
+    },
+  );
+
+  it('T-02 pnpm add is read as before; pnpm install-test and pnpm update are still no install command', () => {
+    expect(vetted('pnpm add left-pad')).toEqual([['left-pad', undefined]]);
+    expect(manifests('pnpm add left-pad')).toEqual([undefined]);
+    expect(parseInstallCommands('pnpm install-test left-pad')).toEqual([]);
+    expect(parseInstallCommands('pnpm it left-pad')).toEqual([]);
+    expect(parseInstallCommands('pnpm update left-pad')).toEqual([]);
+    expect(parseInstallCommands('pnpm install -g')).toHaveLength(1);
+    expect(manifests('pnpm install -g')).toEqual([undefined]);
+  });
+});

@@ -656,3 +656,34 @@ describe('guardian-hook PreToolUse — a manifest install is vetted (real subpro
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
   });
 });
+
+// ───────────────── install-vet-pnpm-install-named — `pnpm install <pkg>` through the real hook process
+
+describe('guardian-hook PreToolUse — `pnpm install <package>` is vetted as `pnpm add` (real subprocess)', () => {
+  const PLACEHOLDER: Record<string, Route> = { 'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'), [OSV]: { osv: {} } };
+
+  it.each(['pnpm install crossenv', 'pnpm i crossenv', 'pnpm i -D crossenv'])('T-03 %s is DENIED, naming the package', (command) => {
+    const r = runHook(command, PLACEHOLDER);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv.*security placeholder/s);
+  });
+
+  it('T-03 beside a package.json that names another malicious package: only the package of the command line is looked up and named', () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'evil-in-manifest': '*' } }));
+    const r = runHook('pnpm install crossenv', { ...PLACEHOLDER, 'https://registry.npmjs.org/evil-in-manifest': npmDoc('0.0.1-security') });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv/);
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).not.toMatch(/evil-in-manifest|package\.json/);
+    expect(r.requests.filter((u) => u.includes('evil-in-manifest'))).toEqual([]);
+  });
+
+  it('T-03 a name the registry does not have is denied as missing for `pnpm install <name>`, as it is for `pnpm add <name>`', () => {
+    const routes: Record<string, Route> = { 'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 }, [OSV]: { osv: {} } };
+    for (const command of ['pnpm add react-form-autopilot-helperz', 'pnpm install react-form-autopilot-helperz']) {
+      const r = runHook(command, routes);
+      expect({ command, decision: r.output?.hookSpecificOutput?.permissionDecision }).toEqual({ command, decision: 'deny' });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/does not exist/);
+    }
+  });
+});
