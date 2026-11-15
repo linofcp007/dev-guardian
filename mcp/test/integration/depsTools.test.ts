@@ -102,6 +102,8 @@ beforeAll(async () => {
   await import('../../src/tools/reviewPr.js');
   await import('../../src/tools/depsAudit.js');
   await import('../../src/tools/depsUpdatePlan.js');
+  // Registered for its input schema alone (T-06): the plan's internal meta field is no parameter of it either.
+  await import('../../src/tools/createFixPr.js');
 });
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -53,7 +53,8 @@ async function dryRun(input: Record<string, unknown>): Promise<Group[]> {
   const c = ctx();
   await seedRealDepsBefore(c);
   const mod = TOOLS.find((t) => t.name === 'create_fix_pr');
-  const res = await mod?.handler({ project_path: repo, sources: ['deps'], apply: false, ...input }, c as never);
+  if (mod === undefined) throw new Error('create_fix_pr is not registered');
+  const res = await mod.handler({ project_path: repo, sources: ['deps'], apply: false, ...input }, c as never);
   return okResult<{ groups: Group[] }>(res).groups;
 }
 

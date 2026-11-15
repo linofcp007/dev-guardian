@@ -141,7 +141,7 @@ A Markdown evidence document from one project's recorded state: latest complianc
 
 ### `create_fix_pr`
 
-Apply scanner-made fixes — deps\_update\_plan upgrades, the rules' own Semgrep autofixes — in a disposable worktree, verify them by re-running the scan and a test differential, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the project's own test command — the project's code, run as you. The repo's .npmrc/.yarnrc and like configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository refuses the fix. `filtered` explains the rest.
+Apply scanner-made fixes — deps\_update\_plan upgrades, the rules' own Semgrep autofixes — in a disposable worktree, verify them by re-running the scan and a test differential, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the project's own test command — the project's code, run as you. The repo's .npmrc/.yarnrc and like configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository refuses the fix. `raised`: a version installed above a fix with its own advisory. `filtered` explains the rest.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |

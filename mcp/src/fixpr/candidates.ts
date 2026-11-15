@@ -261,7 +261,7 @@ export function findingEcosystem(finding: Pick<Finding, 'tool' | 'file_path'>): 
 
 /** Names as the ecosystem compares them: PEP 503 for pip (case-insensitive,
  *  runs of `-`, `_`, `.` equal), case-insensitive everywhere else. */
-function normalisePackageName(ecosystem: UpgradeStep['ecosystem'], name: string): string {
+export function normalisePackageName(ecosystem: UpgradeStep['ecosystem'], name: string): string {
   const lower = name.toLowerCase();
   return ecosystem === 'pip' ? lower.replace(/[-_.]+/g, '-') : lower;
 }

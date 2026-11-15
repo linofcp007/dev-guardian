@@ -72393,7 +72393,7 @@ import { dirname as dirname24, join as join71, relative as relative25, sep as se
 async function handler(inp, ctx, callMeta) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
-  const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath);
+  const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath, callMeta?.extraFixedVersions);
   const ecosystems = detectEcosystems(projectPath);
   const plansByEcosystem = await Promise.all(
     ecosystems.map(async (eco) => {
@@ -72616,7 +72616,7 @@ function readDependencyEvidence(projectPath) {
   }
   return out;
 }
-function listActiveCves(ctx, projectPath) {
+function listActiveCves(ctx, projectPath, extra) {
   const latest = findLatestUsable(ctx.storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: "deps" }).scan;
   const out = /* @__PURE__ */ new Map();
   if (!latest) return out;
@@ -72638,6 +72638,16 @@ function listActiveCves(ctx, projectPath) {
         installedVersion: installedForThisCve,
         displayName: cve.package_name
       });
+    }
+  }
+  for (const [name, versions] of extra ?? []) {
+    const info = out.get(name.toLowerCase());
+    if (info === void 0) continue;
+    for (const version2 of versions) {
+      const candidate = minCleanVersionAbove(info.installedVersion, [version2]);
+      if (candidate !== void 0 && (info.fixedVersion === void 0 || compareVersions(candidate, info.fixedVersion) > 0)) {
+        info.fixedVersion = candidate;
+      }
     }
   }
   return out;
@@ -80978,10 +80988,10 @@ async function handler15(inp, ctx) {
   const fromLoaded = fromRead;
   const toLoaded = toRead;
   if (fromLoaded.source !== toLoaded.source) {
-    const describe4 = (s) => s === "full_file" ? "its full SBOM file" : "a capped summary (its SBOM file no longer exists on disk)";
+    const describe5 = (s) => s === "full_file" ? "its full SBOM file" : "a capped summary (its SBOM file no longer exists on disk)";
     return failDomain7(
       "unknown_scan_id",
-      `Refusing to compare: '${fromId}' was read from ${describe4(fromLoaded.source)}, while '${toId}' was read from ${describe4(toLoaded.source)}. Comparing a full component list against a capped, ecosystem-untagged summary would report every component as spuriously removed and re-added. Re-run generate_sbom for whichever scan lost its file, or pass two scan ids whose files are both still on disk.`
+      `Refusing to compare: '${fromId}' was read from ${describe5(fromLoaded.source)}, while '${toId}' was read from ${describe5(toLoaded.source)}. Comparing a full component list against a capped, ecosystem-untagged summary would report every component as spuriously removed and re-added. Re-run generate_sbom for whichever scan lost its file, or pass two scan ids whose files are both still on disk.`
     );
   }
   const source = fromLoaded.source;
@@ -81213,9 +81223,9 @@ async function handler16(inp, ctx) {
   const d = classifyDiff(check2, prev.visible, cur.visible);
   const suppressed = suppressedOfEither(cur.suppressed, prev.suppressed);
   const gaps = measurementGaps(check2, d);
-  const newFindings2 = d.new;
+  const newFindings3 = d.new;
   const resolvedFindings = d.resolved;
-  const score = weightedScore(newFindings2) - weightedScore(resolvedFindings);
+  const score = weightedScore(newFindings3) - weightedScore(resolvedFindings);
   const regressed = score > threshold;
   const measuredNote = baselineScan === null ? null : describeMeasurementGaps(baselineScan, latest, gaps);
   return {
@@ -81228,7 +81238,7 @@ async function handler16(inp, ctx) {
     reference,
     baseline_scan_id: baselineId,
     current_scan_id: latest.scan_id,
-    new_findings_by_severity: countBySeverity(newFindings2),
+    new_findings_by_severity: countBySeverity(newFindings3),
     resolved_findings_by_severity: countBySeverity(resolvedFindings),
     not_remeasured_by_severity: countBySeverity(d.notRemeasured),
     not_previously_measured_by_severity: countBySeverity(d.notPreviouslyMeasured),
@@ -107893,6 +107903,174 @@ var init_treeState = __esm({
   }
 });
 
+// src/fixpr/raise.ts
+function stepTargets(group) {
+  return group.candidates.flatMap(
+    (c) => (c.steps ?? []).map((step2) => ({ step: step2, key: `${step2.ecosystem}::${normalisePackageName(step2.ecosystem, step2.package_name)}` }))
+  );
+}
+function majorOf(version2) {
+  return Number.parseInt(version2.trim().replace(/^v/i, ""), 10);
+}
+function newFindings2(verdict, after2) {
+  const byFingerprint = new Map(after2.map((f) => [f.fingerprint, f]));
+  return verdict.new_findings.map((n) => ({ title: n.title, finding: byFingerprint.get(n.fingerprint) }));
+}
+function fixedVersionOf(f) {
+  const snippet = f.snippet ?? "";
+  const arrow = snippet.indexOf("->");
+  return arrow < 0 ? "" : snippet.slice(arrow + 2).trim();
+}
+function describe4(f, coordinates) {
+  return { package_name: coordinates.name, version: coordinates.version, advisory: f.rule_id ?? f.title, fixed_version: fixedVersionOf(f) };
+}
+function newDependencyFindings(verdict, after2) {
+  return newFindings2(verdict, after2).flatMap(({ finding: finding5 }) => {
+    const coordinates = finding5 === void 0 ? null : dependencyCoordinates(finding5);
+    return finding5 === void 0 || coordinates === null ? [] : [describe4(finding5, coordinates)];
+  });
+}
+function decideRaise(opts) {
+  const { group, verdict, after: after2 } = opts;
+  const blocking = newDependencyFindings(verdict, after2);
+  const stop = (reason) => ({ kind: "stop", reason, blocking });
+  if (verdict.still_present.length > 0) {
+    return stop(`${verdict.still_present.length} target(s) are still present: a higher version is no answer to a fix that did not take`);
+  }
+  const fresh = newFindings2(verdict, after2);
+  if (fresh.length === 0) return stop("the verification reported no new finding to raise a target for");
+  const targets = stepTargets(group);
+  const raises = /* @__PURE__ */ new Map();
+  const reasons = [];
+  for (const { title, finding: finding5 } of fresh) {
+    const coordinates = finding5 === void 0 ? null : dependencyCoordinates(finding5);
+    if (finding5 === void 0 || coordinates === null) {
+      reasons.push(`a new finding is not a dependency advisory (${title})`);
+      continue;
+    }
+    const advisory = finding5.rule_id ?? finding5.title;
+    const at = `${coordinates.name}@${coordinates.version}`;
+    const ecosystem = findingEcosystem(finding5);
+    const key = ecosystem === null ? null : `${ecosystem}::${normalisePackageName(ecosystem, coordinates.name)}`;
+    const ofPackage = targets.filter((t) => t.key === key);
+    if (ofPackage.length === 0) {
+      reasons.push(`${advisory} is on ${at}, a package that is not one this fix upgraded`);
+      continue;
+    }
+    const applied = ofPackage.find((t) => sameVersion(t.step.latest_version, coordinates.version));
+    if (applied === void 0) {
+      const planned2 = [...new Set(ofPackage.map((t) => t.step.latest_version))].join(", ");
+      reasons.push(`${advisory} is on ${at}, which is not the version this fix applied (${planned2})`);
+      continue;
+    }
+    const planned = applied.step.latest_version;
+    const fixed = fixedVersionOf(finding5);
+    if (fixed === "") {
+      reasons.push(`${advisory} on ${at} has no fixed version`);
+      continue;
+    }
+    const target = minCleanVersionAbove(planned, [fixed]);
+    if (target === void 0) {
+      reasons.push(`${advisory} on ${at} names no single version to install above it ('${fixed}')`);
+      continue;
+    }
+    if (majorOf(target) > majorOf(planned)) {
+      reasons.push(`${advisory} on ${at} is fixed in ${target}, a major above the ${planned} this fix planned for ${coordinates.name} \u2014 not raised`);
+      continue;
+    }
+    const raise = raises.get(applied.key) ?? { package_name: applied.step.package_name, planned_version: planned, fixed_versions: [], advisories: [] };
+    if (!raise.fixed_versions.includes(target)) raise.fixed_versions.push(target);
+    if (!raise.advisories.includes(advisory)) raise.advisories.push(advisory);
+    raises.set(applied.key, raise);
+  }
+  if (reasons.length > 0) return stop(reasons.join("; "));
+  return { kind: "raise", raises: [...raises.values()] };
+}
+function raisedIn(group, tried) {
+  const targets = stepTargets(group);
+  return [...tried.entries()].map(([key, t]) => ({
+    package_name: t.package_name,
+    planned_version: t.planned_version,
+    applied_version: targets.find((s) => s.key === key)?.step.latest_version ?? t.planned_version,
+    advisories: [...t.advisories]
+  }));
+}
+function describeRaised(raised) {
+  return raised.map((r) => `${r.package_name} ${r.planned_version} -> ${r.applied_version} (${r.advisories.join(", ")})`).join("; ");
+}
+function describeStop(cycle, reachedDifferential) {
+  if (cycle.blocking.length > 0) {
+    const named2 = cycle.blocking.map(
+      (b) => `${b.package_name}@${b.version}: ${b.advisory}${b.fixed_version !== "" ? ` (fixed in ${b.fixed_version})` : ""}`
+    );
+    return `. New: ${named2.join("; ")}${cycle.stopped !== null ? `. Target not raised: ${cycle.stopped}` : ""}`;
+  }
+  return cycle.stopped !== null && !reachedDifferential ? ` (${cycle.stopped})` : "";
+}
+async function verifyWithRaises(opts) {
+  let group = opts.group;
+  let rounds = 0;
+  let raises = 0;
+  const learned = /* @__PURE__ */ new Map();
+  const tried = /* @__PURE__ */ new Map();
+  for (; ; ) {
+    const trying = raises === 0 ? [] : raisedIn(group, tried);
+    const round = await opts.runRound(group, trying);
+    rounds += 1;
+    const answer = (extra) => ({
+      result: round.result,
+      raised: extra.raised ?? [],
+      stopped: extra.stopped ?? null,
+      blocking: extra.blocking ?? [],
+      rounds
+    });
+    if (round.verdict === null) {
+      return answer(raises === 0 ? {} : { stopped: `the round that raised ${describeRaised(trying)} ended before its verification` });
+    }
+    if (round.verdict.passed) return answer({ raised: trying });
+    const blocking = newDependencyFindings(round.verdict, round.after);
+    const decision = decideRaise({ group, verdict: round.verdict, after: round.after });
+    if (decision.kind === "stop") return answer({ stopped: decision.reason, blocking: decision.blocking });
+    if (raises >= MAX_RAISES) {
+      return answer({ stopped: `the limit of ${MAX_RAISES} raises per group was reached, and the version it reached has an advisory of its own`, blocking });
+    }
+    for (const raise of decision.raises) {
+      const name = raise.package_name.toLowerCase();
+      const known = learned.get(name) ?? [];
+      learned.set(name, [...known, ...raise.fixed_versions.filter((v) => !known.includes(v))]);
+    }
+    const wanted = decision.raises.map((r) => `${r.package_name} above ${r.planned_version} (${r.advisories.join(", ")})`).join("; ");
+    const next = await opts.replan(learned);
+    if ("failed" in next) return answer({ stopped: `could not plan again to raise ${wanted}: ${next.failed}`, blocking });
+    if (next.hash !== opts.group.hash) {
+      return answer({ stopped: `planning again to raise ${wanted} gave a group that is not the same group (other targets): not applied`, blocking });
+    }
+    const keys = new Map(stepTargets(group).map((t) => [`${t.step.package_name}
+${t.step.latest_version}`, t.key]));
+    for (const raise of decision.raises) {
+      const key = keys.get(`${raise.package_name}
+${raise.planned_version}`);
+      if (key === void 0) continue;
+      const seen = tried.get(key) ?? { package_name: raise.package_name, planned_version: raise.planned_version, advisories: [] };
+      for (const a of raise.advisories) if (!seen.advisories.includes(a)) seen.advisories.push(a);
+      tried.set(key, seen);
+    }
+    raises += 1;
+    group = next;
+  }
+}
+var MAX_RAISES, sameVersion;
+var init_raise = __esm({
+  "src/fixpr/raise.ts"() {
+    "use strict";
+    init_versionCompare();
+    init_findingIdentity();
+    init_candidates();
+    MAX_RAISES = 2;
+    sameVersion = (a, b) => a.trim() === b.trim() || isCleanVersion(a) && isCleanVersion(b) && compareVersions(a.trim(), b.trim()) === 0;
+  }
+});
+
 // src/fixpr/rescan.ts
 function rescanOriginOf(f, scan2) {
   if (f.tool === "semgrep") {
@@ -107966,14 +108144,14 @@ function judgeScan(targets, before, after2) {
     if (present5) still_present.push(target);
     else resolved.push(target);
   }
-  const newFindings2 = newByRuleAndFile(before.findings, after2.findings);
-  const new_findings = newFindings2.map((finding5) => ({
+  const newFindings3 = newByRuleAndFile(before.findings, after2.findings);
+  const new_findings = newFindings3.map((finding5) => ({
     fingerprint: finding5.fingerprint,
     severity: finding5.severity,
     title: finding5.title
   }));
   return {
-    passed: still_present.length === 0 && newFindings2.length === 0,
+    passed: still_present.length === 0 && newFindings3.length === 0,
     resolved,
     still_present,
     new_findings
@@ -108059,6 +108237,10 @@ ${head}` : ""}`
     // that needs explaining; the base run only exists to assign blame for it.
     output_head: failureHead()
   };
+}
+async function testsAfterScan(scan2, run2) {
+  if (!scan2.passed) return { outcome: "not_run", command: null, origin: null, output_head: null };
+  return run2();
 }
 function mayOpenPr(scan2, tests) {
   return scan2.passed && tests.outcome !== "broken_by_fix" && tests.outcome !== "unattributed";
@@ -108334,9 +108516,39 @@ async function handler43(inp, ctx, callMeta) {
       continue;
     }
     try {
-      results.push(
-        await processGroup({ group, allFindings, origins, projectPath, prefix: tree.prefix, apply, ctx, callMeta })
-      );
+      let commands = [];
+      const cycle = await verifyWithRaises({
+        group,
+        runRound: async (current, trying) => {
+          let after2 = [];
+          const result = await processGroup({
+            group: current,
+            allFindings,
+            origins,
+            projectPath,
+            prefix: tree.prefix,
+            apply,
+            ctx,
+            callMeta,
+            earlierCommands: commands,
+            trying,
+            onRescan: (found2) => {
+              after2 = found2;
+            }
+          });
+          commands = result.commands;
+          return { result, verdict: result.scan, after: after2 };
+        },
+        replan: async (extra) => {
+          const again = await fetchUpgradeSteps(projectPath, tree.prefix, ctx, callMeta, extra);
+          if (again.error !== null) return { failed: again.error };
+          const failure2 = again.runnerFailures.find((f) => f.ecosystem === group.key);
+          if (failure2 !== void 0) return { failed: `${failure2.ecosystem}: ${failure2.reason}` };
+          const same = buildGroups({ findings: allFindings, upgradeSteps: again.steps, sources, severityMin, rescannable: verifiable }).find((g) => g.source === group.source && g.key === group.key);
+          return same === void 0 ? { failed: `the new plan has no ${group.key} steps for these findings` } : rankCandidates(same, exploitability);
+        }
+      });
+      results.push({ ...cycle.result, note: `${cycle.result.note}${describeStop(cycle, cycle.result.scan !== null)}` });
     } catch (e) {
       results.push({
         key: group.key,
@@ -108384,7 +108596,7 @@ async function exploitabilityOf(groups, allFindings, ctx, callMeta) {
   );
   return { cveIdsOf: (fingerprint) => cveIds.get(fingerprint) ?? [], intel };
 }
-async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
+async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta, extraFixedVersions) {
   const depsPlanTool = TOOLS.find((t) => t.name === "deps_update_plan");
   if (depsPlanTool === void 0) {
     return { steps: [], error: "the 'deps_update_plan' tool is not registered", runnerFailures: [] };
@@ -108398,7 +108610,8 @@ async function fetchUpgradeSteps(projectPath, prefix, ctx, callMeta) {
     const meta3 = {
       ...callMeta?.signal !== void 0 ? { signal: callMeta.signal } : {},
       ...callMeta?.progressToken !== void 0 ? { progressToken: callMeta.progressToken } : {},
-      originProjectPath: projectPath
+      originProjectPath: projectPath,
+      ...extraFixedVersions !== void 0 ? { extraFixedVersions } : {}
     };
     const planDir = inWorktree(created.worktree.path, prefix);
     setAside = setAsidePackageConfig(created.worktree.path, planDir);
@@ -108448,6 +108661,10 @@ function projectRelative(projectPath, filePath) {
 }
 async function processGroup(opts) {
   const { group, allFindings, origins, projectPath, prefix, apply, ctx, callMeta } = opts;
+  const earlier2 = [...opts.earlierCommands ?? []];
+  const trying = opts.trying ?? [];
+  const raised = trying.length > 0 ? { raised: [...trying] } : {};
+  const raisedNote = trying.length > 0 ? `; target raised: ${describeRaised(trying)}` : "";
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c) => c.fingerprints);
   const findings = findingsForGroup(allFindings, group);
@@ -108456,11 +108673,11 @@ async function processGroup(opts) {
     const existing = await prExists({ projectPath, branch });
     if (existing.known && existing.exists) {
       const pr = existsOutcome(branch);
-      return { ...base2, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
+      return { ...base2, commands: earlier2, outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
     }
     return {
       ...base2,
-      commands: [],
+      commands: earlier2,
       outcome: "worktree_failed",
       scan: null,
       tests: null,
@@ -108475,7 +108692,7 @@ async function processGroup(opts) {
       const pr = existsOutcome(branch);
       return {
         ...base2,
-        commands: [],
+        commands: earlier2,
         outcome: PR_STATUS_OUTCOME[pr.status],
         scan: null,
         tests: null,
@@ -108485,7 +108702,7 @@ async function processGroup(opts) {
     }
     return {
       ...base2,
-      commands: [],
+      commands: earlier2,
       outcome: "worktree_failed",
       scan: null,
       tests: null,
@@ -108500,7 +108717,7 @@ async function processGroup(opts) {
   let setAside = null;
   try {
     const projectDir = inWorktree(worktree.path, prefix);
-    const commands = [];
+    const commands = [...earlier2];
     setAside = setAsidePackageConfig(worktree.path, projectDir);
     if (setAside.moved.length > 0) base2.package_config_set_aside = setAside.moved;
     const derivedTest = deriveTestCommand(readManifests(projectDir));
@@ -108585,6 +108802,7 @@ async function processGroup(opts) {
         note: `verification_failed: could not verify the fix \u2014 ${rescan.reason}`
       };
     }
+    opts.onRescan?.(rescan.findings);
     const sourceScanIds = [...new Set(findings.map((f) => f.scan_id))].sort();
     const before = sourceScanIds.flatMap((id) => ctx.storage.findings.listByScan(id));
     const scanVerdict = judgeScan(
@@ -108592,12 +108810,15 @@ async function processGroup(opts) {
       { scan_id: sourceScanIds.join(","), findings: before },
       { scan_id: rescan.scanIds.join(","), findings: rescan.findings }
     );
-    const testVerdict = await judgeTests({
-      derived: derivedTest,
-      worktreePath: projectDir,
-      baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
-      ...env.ok && env.unprepared !== void 0 ? { unprepared: env.unprepared } : {}
-    });
+    const testVerdict = await testsAfterScan(
+      scanVerdict,
+      () => judgeTests({
+        derived: derivedTest,
+        worktreePath: projectDir,
+        baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
+        ...env.ok && env.unprepared !== void 0 ? { unprepared: env.unprepared } : {}
+      })
+    );
     if (!mayOpenPr(scanVerdict, testVerdict)) {
       const why = !scanVerdict.passed ? `the scan differential did not pass (${scanVerdict.still_present.length} target(s) still present, ${scanVerdict.new_findings.length} new finding(s))` : testVerdict.outcome === "unattributed" ? "the test suite failed after the fix and the failure could not be attributed (the tree was not prepared, or the base-commit comparison could not be run \u2014 see tests.output_head)" : "the fix broke the test suite";
       return {
@@ -108607,7 +108828,7 @@ async function processGroup(opts) {
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
-        note: `not_verified: ${why} \u2014 no pull request opened`
+        note: `not_verified: ${why} \u2014 no pull request opened${trying.length > 0 ? ` (after raising ${describeRaised(trying)})` : ""}`
       };
     }
     if (!apply) {
@@ -108618,12 +108839,13 @@ async function processGroup(opts) {
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
-        note: "verified: dry run (apply=false) \u2014 re-run with apply=true to open a pull request"
+        note: `verified: dry run (apply=false) \u2014 re-run with apply=true to open a pull request${raisedNote}`,
+        ...raised
       };
     }
     setAside.restore();
     const title = buildPrTitle(group, targets.length);
-    const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
+    const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict, raised: trying });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body, scope: commitScopeFor(group, prefix) });
     keepBranch = KEEPS_BRANCH.has(pr.status);
     return {
@@ -108633,7 +108855,8 @@ async function processGroup(opts) {
       scan: scanVerdict,
       tests: testVerdict,
       pr,
-      note: prNote(pr)
+      note: `${prNote(pr)}${raisedNote}`,
+      ...raised
     };
   } finally {
     await worktree.remove();
@@ -108772,6 +108995,7 @@ function buildPrTitle(group, findingCount) {
 }
 function buildPrBody(opts) {
   const { group, findings, commands, scan: scan2, tests } = opts;
+  const raised = opts.raised ?? [];
   const lines = [];
   lines.push(
     `Automated fix opened by dev-guardian's \`create_fix_pr\` for the **${group.key}** (${group.source}) group.`
@@ -108783,6 +109007,16 @@ function buildPrBody(opts) {
   }
   lines.push("", "## Commands run");
   for (const c of commands) lines.push(`- \`${c}\``);
+  if (raised.length > 0) {
+    lines.push(
+      "",
+      "## Target raised",
+      "The lowest version that resolves the findings above has an advisory of its own, so a first attempt at it did not verify. This pull request installs the version that clears that one too; the commands above are every attempt, each made from the base commit."
+    );
+    for (const r of raised) {
+      lines.push(`- \`${r.package_name}\`: planned ${r.planned_version}, applied ${r.applied_version} \u2014 ${r.advisories.join(", ")}`);
+    }
+  }
   lines.push(
     "",
     "## Scan differential",
@@ -108848,6 +109082,7 @@ var init_createFixPr = __esm({
     init_repoPackageConfig();
     init_testCommandEnv();
     init_treeState();
+    init_raise();
     init_rescan();
     init_verify3();
     init_worktree();
@@ -108904,7 +109139,7 @@ var init_createFixPr = __esm({
     tool46 = defineTool({
       name: "create_fix_pr",
       title: "Apply scanner fixes as pull requests",
-      description: "Apply scanner-made fixes \u2014 deps_update_plan upgrades, the rules' own Semgrep autofixes \u2014 in a disposable worktree, verify them by re-running the scan and a test differential, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the project's own test command \u2014 the project's code, run as you. The repo's .npmrc/.yarnrc and like configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository refuses the fix. `filtered` explains the rest.",
+      description: "Apply scanner-made fixes \u2014 deps_update_plan upgrades, the rules' own Semgrep autofixes \u2014 in a disposable worktree, verify them by re-running the scan and a test differential, and open one pull request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the project's own test command \u2014 the project's code, run as you. The repo's .npmrc/.yarnrc and like configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository refuses the fix. `raised`: a version installed above a fix with its own advisory. `filtered` explains the rest.",
       inputSchema: inputSchema45,
       handler: async (input2, ctx, callMeta) => handler43(input2, ctx, callMeta)
     });
@@ -120408,24 +120643,24 @@ function compareFindings(from, to, cap) {
     else resolvedCount += 1;
   }
   const seenNew = indexFindings([]);
-  const newFindings2 = [];
+  const newFindings3 = [];
   for (const finding5 of to.findings) {
     if (fromIndex.has(finding5) || seenNew.has(finding5)) continue;
     seenNew.add(finding5);
-    newFindings2.push(finding5);
+    newFindings3.push(finding5);
   }
-  const shownNewFindings = newFindings2.slice(0, cap);
-  const truncation = shownNewFindings.length < newFindings2.length ? {
+  const shownNewFindings = newFindings3.slice(0, cap);
+  const truncation = shownNewFindings.length < newFindings3.length ? {
     what: "new_findings",
     shown: shownNewFindings.length,
-    total: newFindings2.length,
-    reason: `new_findings exceeds the cap of ${cap}; showing the first ${shownNewFindings.length} of ${newFindings2.length}`
+    total: newFindings3.length,
+    reason: `new_findings exceeds the cap of ${cap}; showing the first ${shownNewFindings.length} of ${newFindings3.length}`
   } : null;
   return {
     delta: {
       from_scan_id: from.scan_id,
       to_scan_id: to.scan_id,
-      new_count: newFindings2.length,
+      new_count: newFindings3.length,
       resolved_count: resolvedCount,
       unchanged_count: unchangedCount,
       new_findings: shownNewFindings

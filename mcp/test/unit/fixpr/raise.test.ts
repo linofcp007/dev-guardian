@@ -18,7 +18,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { decideRaise, MAX_RAISES, verifyWithRaises, type Round } from '../../../src/fixpr/raise.js';
+import { decideRaise, describeStop, MAX_RAISES, verifyWithRaises, type Round } from '../../../src/fixpr/raise.js';
 import type { FixGroup, ScanVerdict, UpgradeStep } from '../../../src/fixpr/types.js';
 import type { Finding } from '../../../src/types.js';
 
@@ -230,6 +230,8 @@ describe('verifyWithRaises — the cycle: at most two raises, and the last round
     // Each re-plan is told everything learned so far, not only the last round's.
     expect(plan.asked).toEqual([{ lodash: ['4.18.1'] }, { lodash: ['4.18.1', '4.18.2'] }]);
     expect(out.raised).toEqual([]);
+    // What the group's note adds: the finding by package, version, advisory and fixed version, then why it stopped.
+    expect(describeStop(out, true)).toBe(`. New: lodash@4.18.2: CVE-2026-8888 (fixed in 4.18.3). Target not raised: ${out.stopped ?? ''}`);
   });
 
   it('T-09 a new finding that cannot be raised, and the major boundary: one round, no re-plan, and the reason and the finding are handed back', async () => {
@@ -245,7 +247,19 @@ describe('verifyWithRaises — the cycle: at most two raises, and the last round
       expect(out.stopped).not.toBeNull();
       expect(out.blocking).toHaveLength(1);
       expect(out.blocking[0]?.advisory).toBe(finding.rule_id);
+      const said = describeStop(out, true);
+      expect(said).toContain(finding === other ? 'minimist@1.2.5: CVE-2026-1111 (fixed in 1.2.6)' : 'lodash@4.18.0: CVE-2026-4444 (fixed in 5.0.1)');
+      expect(said).toContain(`Target not raised: ${out.stopped ?? ''}`);
+      if (finding === major) expect(said).toMatch(/major/);
     }
+    // An advisory with no fix is named without one.
+    const noFix = dep('fp-new-4', 'CVE-2026-3333', 'lodash', '4.18.0', '');
+    const out = await verifyWithRaises({
+      group: LODASH_4180,
+      runRound: rounds([{ result: 'round 1', verdict: failed([noFix]), after: [noFix] }]).run,
+      replan: replanner(LODASH_4180).replan,
+    });
+    expect(describeStop(out, true).startsWith('. New: lodash@4.18.0: CVE-2026-3333. Target not raised: ')).toBe(true);
   });
 
   it('T-10 the re-planned group must be the same group — same hash, which is a function of the fingerprints and not of the steps: another one is refused', async () => {
@@ -273,6 +287,7 @@ describe('verifyWithRaises — the cycle: at most two raises, and the last round
     expect(a.result).toBe('round 2: apply_failed');
     expect(a.stopped).toMatch(/lodash.*4\.18\.1/);
     expect(a.raised).toEqual([]);
+    expect(describeStop(a, false)).toBe(` (${a.stopped ?? ''})`);
 
     // The plan could not be made again: the round before stands, with why.
     const noPlan = rounds([{ result: 'round 1', verdict: failed([NEW_IN_4180]), after: [NEW_IN_4180] }]);
@@ -300,6 +315,7 @@ describe('verifyWithRaises — the cycle: at most two raises, and the last round
     const plan = replanner(LODASH_4180);
     const out = await verifyWithRaises({ group: LODASH_4180, runRound: script.run, replan: plan.replan });
     expect(out).toEqual({ result: 'round 1: verified', raised: [], stopped: null, blocking: [], rounds: 1 });
+    expect(describeStop(out, true)).toBe('');
     expect(plan.asked).toEqual([]);
     expect(script.seen).toEqual([LODASH_4180]);
   });
@@ -308,5 +324,6 @@ describe('verifyWithRaises — the cycle: at most two raises, and the last round
     const script = rounds([{ result: 'round 1: refused', verdict: null, after: [] }]);
     const out = await verifyWithRaises({ group: LODASH_4180, runRound: script.run, replan: replanner(LODASH_4180).replan });
     expect(out).toEqual({ result: 'round 1: refused', raised: [], stopped: null, blocking: [], rounds: 1 });
+    expect(describeStop(out, false)).toBe('');
   });
 });
