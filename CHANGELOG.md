@@ -20,6 +20,33 @@ version bump.
   consumed by `.then(…)`, `createRequire`, and libraries that wrap `child_process` (`execa`, `cross-spawn`). The
   pack gives the same 215 fixture findings on Semgrep 1.86.0, 1.120.1, 1.170.1 and 1.182.0 on Linux and on 1.182.0
   on Windows, and over the fifteen JS/TS applications it was measured on before, the rule still reports nothing.
+- **`create_fix_pr` raises a target whose minimum fix has an advisory of its own.** `deps_update_plan` installs the
+  lowest version that clears the advisories active on what is installed. When that version has an advisory of its
+  own, the verification finds it and refuses the pull request — rightly: trading one CVE for another is no fix —
+  and the answer was `not_verified` with two counts, though the new finding names the version that clears it.
+  Measured with the real Trivy: `lodash@4.17.20` went to 4.18.0 (CVE-2026-4800), 4.18.0 has CVE-2026-2950, fixed in
+  4.18.1, and there was no pull request and no hint. The tool now plans again knowing that version, applies the
+  group afresh from the base commit — never an install on top of the last — and verifies again: the same command
+  ends `verified_dry_run` at 4.18.1. A group's `raised` says, per package, the version planned, the version
+  applied and the advisories that stood between them; `commands` holds every round's, in order; the pull request
+  has a "Target raised" section. A target is raised only when nothing else is left to explain — no target still
+  present, and every new finding a dependency advisory with one fixed version, on a package the group upgraded, at
+  the version it applied — at most twice per group, and never across a major: a fix in the next major is said,
+  with the package, the version and the advisory, and left to you. The branch and the group's identity do not
+  change, so a repeated run finds the pull request it opened. The fixed versions reach the plan through the call's
+  internal metadata: neither tool has a parameter that names a version to raise to, and `deps_update_plan` called
+  by you answers as before. On Windows, with npm and Trivy for real, a group with one raise took 2.1 times a group
+  with none (16.7 s against 8.0 s).
+
+### Changed
+
+- **A `not_verified` group of `create_fix_pr` names what stands in the way.** Beside the two counts, its `note` now
+  lists each new dependency finding — `lodash@4.18.2: CVE-… (fixed in 4.18.3)` — and, when a target could have been
+  raised and was not, why: the next major, the limit of two raises, a plan that could not be made again.
+- **`create_fix_pr` runs the project's tests only on a tree that passed the scan differential.** No pull request
+  opens on a failed scan differential whatever the tests say, and a group may now take more than one round: the
+  suite — the project's own code, and often the slowest step — runs once, on the tree that is the candidate. A
+  `not_verified` by the scan used to carry the tests' verdict; its `tests.outcome` is now `not_run`.
 
 ### Fixed
 

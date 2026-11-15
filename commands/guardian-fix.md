@@ -35,7 +35,7 @@ Load the `guardian-bugfix` skill (Skill tool, `dev-guardian:guardian-bugfix`) an
 `create_fix_pr` applies only fixes a scanner itself produced: dependency upgrades from `deps_update_plan` and Semgrep autofixes. It applies them in an isolated git worktree, re-runs the same scanner and the test suite to prove each one, and opens one pull request per ecosystem or scanner.
 
 1. Always start with the dry run: `create_fix_pr { project_path: "<project>", apply: false }`. Narrow with `sources: ["deps"]` or `sources: ["semgrep"]`, `severity_min` (default `high`) and `max_prs` (default 3).
-2. Show `groups` (what would change and how it verified), `deferred`, and `filtered` / `filtered_reason` — every open finding that did not become a candidate, and why. Findings from the local `bugfix-*.yml` packs carry no autofix, so they appear as `no_fix_available` at any `severity_min`: fix those in the default mode instead.
+2. Show `groups` (what would change and how it verified), `deferred`, and `filtered` / `filtered_reason` — every open finding that did not become a candidate, and why. A group's `raised` names a package installed above the version the plan chose, because that version has an advisory of its own: say both versions and the advisory. A `not_verified` group's `note` names each new dependency finding and the version that clears it; a fix in the next major is the user's decision. Findings from the local `bugfix-*.yml` packs carry no autofix, so they appear as `no_fix_available` at any `severity_min`: fix those in the default mode instead.
 3. Only after an explicit yes: `create_fix_pr { project_path: "<project>", apply: true }` — that is what commits, pushes and runs `gh pr create`.
 
 ## `--verify` — prove the fix
