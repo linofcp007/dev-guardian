@@ -8,6 +8,35 @@ version bump.
 
 ## [Unreleased]
 
+## [3.10.0] - 2026-11-15
+
+The install hook reads what a manifest install fetches. `npm install crossenv` was denied while the same package in
+`package.json` installed in silence: the hook judged the command line, and `npm install`, `npm ci`, `pnpm install`,
+`yarn`, `bun install` and `pip install -r` name nothing on it. The gap showed where the plugin's evals finally ran
+with a shell — on Linux, where the agent ran `npm install` from a fixture's manifest twelve times and vetted its
+packages first once. That run, and what it measured, is the other entry.
+
+### Upgrading from 3.9.3
+
+- **A manifest install can be denied now.** When a project's `package.json` — or a requirements file given to
+  `pip install -r` — names a package with an OSV malware advisory, or one npm replaced with its security
+  placeholder, the assistant's `npm install`, `npm ci`, `pnpm install`, `yarn`, `bun install` or `pip install -r`
+  is denied, with the file and the package named. The decision is yours: remove the dependency, or run the install
+  yourself in a terminal — the hook judges only the commands the assistant runs.
+- **More goes to the network.** At every such install the names and ranges of the manifest's direct dependencies
+  are sent to the public registry (npm or PyPI) and to OSV; until now only the names on a command line were. A
+  package of a scope that your npm configuration gives a registry of its own is not sent. `GUARDIAN_PKG_VET=0`
+  switches the install vetting off altogether; with `GUARDIAN_OFFLINE=1` nothing is looked up and each install says
+  how many packages it did not verify.
+- **A manifest install takes about a second longer** in the assistant's shell: 0.9 s for 20 direct dependencies
+  and up to 3.5 s for 97, measured. A command that installs nothing answers as before.
+- **Lines the assistant may now be given** — context, not errors: a typosquat suspicion, or a name the public
+  registry does not have, in the manifest; "could not vet N packages of package.json" when the registry did not
+  answer in time; "package.json was not read" for a manifest that is not valid JSON, or when the command runs
+  elsewhere (`--prefix`, `-C`, `--dir`, `--cwd`); and, when the project's own `.npmrc` gives a scope a registry,
+  how many packages were not vetted for it.
+- Nothing changes for an install that names its packages, nor for any MCP tool.
+
 ### Added
 
 - **The install hook vets a manifest install, not only a package named on the command line.** `npm install
