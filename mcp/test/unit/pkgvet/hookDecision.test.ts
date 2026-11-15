@@ -1408,3 +1408,126 @@ describe('manifest installs — the packages a manifest names are vetted', () =>
     expect(d?.context).toMatch(/1 package of package\.json.*@acme.*the project's \.npmrc.*not vetted/s);
   });
 });
+
+// ───────────────── install-vet-manifest-unreported-lookups — a manifest's packages are asked only what a manifest reports
+
+type RequestKind = 'abbreviated' | 'full' | 'version' | 'osv' | 'pypi';
+
+/**
+ * A registry with two packages that make the vetting ask for more than the abbreviated document: `fresh-pkg`, whose
+ * document changed an hour ago (the publish time is only in the FULL document) and whose version runs install
+ * scripts; and `scripted-old`, unchanged since 2020, whose version runs install scripts (their names are in the
+ * VERSION document). `express` and `requests` are old and plain. `seen` is every request, by kind.
+ */
+function lookupRegistry(extra: { malicious?: string[]; osvHangs?: boolean } = {}): { fetchImpl: typeof fetch; seen: Array<{ kind: RequestKind; url: string }> } {
+  const seen: Array<{ kind: RequestKind; url: string }> = [];
+  const hourAgo = new Date(NOW - 3600 * 1000).toISOString();
+  const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+  const abbreviated: Record<string, unknown> = {
+    'fresh-pkg': { 'dist-tags': { latest: '2.0.0' }, modified: hourAgo, versions: { '2.0.0': { hasInstallScript: true } } },
+    'other-fresh': { 'dist-tags': { latest: '3.1.0' }, modified: hourAgo, versions: { '3.1.0': {} } },
+    'scripted-old': { 'dist-tags': { latest: '1.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.0.0': { hasInstallScript: true } } },
+    express: npmDoc('4.21.2').body,
+    'evil-pkg': npmDoc('1.0.0').body,
+  };
+  const full: Record<string, unknown> = {
+    'fresh-pkg': { time: { '2.0.0': hourAgo }, versions: { '2.0.0': { scripts: { postinstall: 'node build.js' } } } },
+    'other-fresh': { time: { '3.1.0': hourAgo }, versions: { '3.1.0': {} } },
+  };
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const accept = new Headers(init?.headers).get('accept') ?? '';
+    if (url === OSV) {
+      seen.push({ kind: 'osv', url });
+      if (extra.osvHangs === true) {
+        return new Promise<Response>((_res, reject) => {
+          if (init?.signal?.aborted === true) reject(new DOMException('aborted', 'AbortError'));
+          init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        });
+      }
+      return json(osvMalFor(...(extra.malicious ?? []))(JSON.parse(String(init?.body))).body);
+    }
+    const doc = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+    if (doc !== null) {
+      const name = decodeURIComponent(doc[1] ?? '');
+      if (accept.includes('install-v1')) {
+        seen.push({ kind: 'abbreviated', url });
+        return name in abbreviated ? json(abbreviated[name]) : json({ error: 'Not found' }, 404);
+      }
+      seen.push({ kind: 'full', url });
+      return name in full ? json(full[name]) : json({ error: 'Not found' }, 404);
+    }
+    if (/^https:\/\/registry\.npmjs\.org\/[^/]+\/[^/]+$/.test(url)) {
+      seen.push({ kind: 'version', url });
+      return json({ scripts: { install: 'node-gyp rebuild' } });
+    }
+    if (url === 'https://pypi.org/pypi/requests/json') {
+      seen.push({ kind: 'pypi', url });
+      return json(pypiDoc('2.31.0').body);
+    }
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+  return { fetchImpl, seen };
+}
+
+describe('manifest installs — only what a manifest reports is asked of the registry (install-vet-manifest-unreported-lookups)', () => {
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const kinds = (seen: ReadonlyArray<{ kind: RequestKind }>): RequestKind[] => seen.map((s) => s.kind).sort();
+  const of = (seen: ReadonlyArray<{ kind: RequestKind; url: string }>, kind: RequestKind): string[] => seen.filter((s) => s.kind === kind).map((s) => s.url);
+
+  it('T-01 `npm ci`: a package whose document changed an hour ago and one whose version runs install scripts — the abbreviated documents and the OSV batch, no full document, no version document, and no word said', async () => {
+    pkgJson({ 'fresh-pkg': '^2.0.0', 'scripted-old': '^1.0.0', express: '^4.21.0' });
+    const reg = lookupRegistry();
+    expect(await decideInstallCommand('npm ci', opts(reg.fetchImpl))).toBeNull();
+    expect(kinds(reg.seen)).toEqual(['abbreviated', 'abbreviated', 'abbreviated', 'osv']);
+    expect(of(reg.seen, 'full')).toEqual([]);
+    expect(of(reg.seen, 'version')).toEqual([]);
+  });
+
+  it('T-02 the same packages NAMED on the command line are asked as before: the full document for the fresh one, the version document for the scripted one, and both warnings', async () => {
+    const reg = lookupRegistry();
+    const d = await decideInstallCommand('npm install fresh-pkg scripted-old', opts(reg.fetchImpl));
+    expect(of(reg.seen, 'full')).toEqual(['https://registry.npmjs.org/fresh-pkg']);
+    expect(of(reg.seen, 'version')).toEqual(['https://registry.npmjs.org/scripted-old/1.0.0']);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/fresh-pkg.*published 1 h ago/s);
+    expect(d?.context).toMatch(/fresh-pkg.*runs install scripts on install: postinstall/s);
+    expect(d?.context).toMatch(/scripted-old.*runs install scripts on install: install/s);
+  });
+
+  it('T-04 `npm install fresh-pkg && npm ci`: the full document is asked for the package of the command line and not for the fresh one the manifest names', async () => {
+    pkgJson({ 'other-fresh': '^3.0.0', express: '^4.21.0' });
+    const reg = lookupRegistry();
+    const d = await decideInstallCommand('npm install fresh-pkg && npm ci', opts(reg.fetchImpl));
+    expect(of(reg.seen, 'full')).toEqual(['https://registry.npmjs.org/fresh-pkg']);
+    expect(of(reg.seen, 'abbreviated').sort()).toEqual([
+      'https://registry.npmjs.org/express',
+      'https://registry.npmjs.org/fresh-pkg',
+      'https://registry.npmjs.org/other-fresh',
+    ]);
+    expect(d?.context).toMatch(/fresh-pkg.*published 1 h ago/s);
+    expect(d?.context).not.toMatch(/other-fresh/);
+  });
+
+  it('T-04 the answers of a manifest are the ones of before: a malicious package is denied with the file, and an OSV that does not answer leaves the not-verified line', async () => {
+    pkgJson({ 'fresh-pkg': '^2.0.0', 'evil-pkg': '1.0.0' });
+    const bad = lookupRegistry({ malicious: ['evil-pkg'] });
+    const denied = await decideInstallCommand('npm ci', opts(bad.fetchImpl));
+    expect(denied?.deny).toMatch(/package\.json names 'evil-pkg@1\.0\.0'/);
+    expect(of(bad.seen, 'full')).toEqual([]);
+
+    const slow = lookupRegistry({ osvHangs: true });
+    const unverified = await decideInstallCommand('npm ci', opts(slow.fetchImpl, { budgetMs: 150 }));
+    expect(unverified?.deny).toBeUndefined();
+    expect(unverified?.context).toMatch(/could not vet 2 packages of package\.json .*not verified/);
+    expect(of(slow.seen, 'full')).toEqual([]);
+  });
+
+  it('T-05 `pip install -r requirements.txt` asks what it asked before: one document per package and the OSV batch', async () => {
+    writeFileSync(join(project, 'requirements.txt'), 'requests==2.31.0\n');
+    const reg = lookupRegistry();
+    expect(await decideInstallCommand('pip install -r requirements.txt', opts(reg.fetchImpl))).toBeNull();
+    expect(kinds(reg.seen)).toEqual(['osv', 'pypi']);
+  });
+});
