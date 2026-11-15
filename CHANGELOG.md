@@ -8,6 +8,30 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **`llm-output-to-interpreter-js` reads four more ways a file gets to `child_process`.** The rule knows the module
+  by the import or `require` a file writes, and four spellings reached no clause — measured on Linux and Windows
+  with Semgrep 1.182.0, and listed as out of reach since 3.9.3: the function taken from a `require` in the
+  assignment itself (`const exec = require('child_process').exec`, the common CommonJS form), `promisify` of such a
+  `require` (the idiom of Node's own documentation), a function destructured from a name that is the module
+  (`const { exec } = cp`), and a dynamic `import()` awaited into a name or destructured. Each has a clause and a
+  fixture of its own, with and without the `node:` prefix. Still out of reach, and said in the pack: an `import()`
+  consumed by `.then(…)`, `createRequire`, and libraries that wrap `child_process` (`execa`, `cross-spawn`).
+
+### Fixed
+
+- **A local name that shadows the import no longer fires `llm-output-to-interpreter-js`.** The rule matches the
+  imported name by name, so `const spawn = (job) => job.length; spawn(text)` inside a function fired as if it were
+  `child_process.spawn` — a false positive known since 3.9.3, when only a parameter was excluded. A local
+  declaration now shadows the name as a parameter does: `const`, `let` and `var`, plain and by destructuring, a
+  loop variable, a catch variable and a function declaration, for the name of an imported function and for the
+  name of the module. A `require` of `child_process` is itself such a declaration (`const cp =
+  require('child_process')`), so the exclusion reads what the name is given: a `require(` or an `import(` is no
+  shadow, and a `require` made inside a function still fires. One measured limit, said in the pack: in a file where
+  the same name is also declared by a destructuring in another function, Semgrep does not apply the
+  function-declaration exclusion to it, and that call fires as it did before.
+
 ## [3.10.1] - 2026-11-15
 
 Two fixes to the install hook, both found by running 3.10.0 against the real registry the day it was released. One
