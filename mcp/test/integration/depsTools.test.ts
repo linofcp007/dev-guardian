@@ -2103,6 +2103,61 @@ describe('deps_update_plan', () => {
     expect(r.plan[0]?.upgrade_command).toBe('npm install lodash@4.17.19 --ignore-scripts');
   });
 
+  // fixpr-clean-target-version: `create_fix_pr` plans again with the fixed versions its own verification found on
+  // the version it applied. They reach the plan through the call's internal meta, never through the tool's input.
+  it("T-06 fixed versions a verification learned raise that package's target and no other; without them the plan is the one of before", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"my-app","dependencies":{"lodash":"4.17.20","minimist":"1.2.0"}}', 'utf8');
+    const plugin = makePlugin(project);
+    seedCves(plugin, project, 'scan1', [
+      { cve_id: 'CVE-2026-4800', package_name: 'lodash', installed_version: '4.17.20', fixed_version: '4.18.0' },
+      { cve_id: 'CVE-2026-0001', package_name: 'minimist', installed_version: '1.2.0', fixed_version: '1.2.6' },
+    ]);
+    vi.mocked(runProcess).mockImplementation(pm(async (cmd: string, args: string[]) => {
+      if (bare(cmd) === 'npm' && args[0] === 'outdated') {
+        return {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            lodash: { current: '4.17.20', latest: '4.18.3', dependent: 'my-app' },
+            minimist: { current: '1.2.0', latest: '1.2.8', dependent: 'my-app' },
+          }),
+          stderr: '',
+        };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }));
+    const planWith = async (meta?: Parameters<ReturnType<typeof getTool>['handler']>[2]): Promise<string[]> =>
+      okResult<{ plan: Array<{ package_name: string; latest_version: string; upgrade_command: string }> }>(
+        await getTool('deps_update_plan').handler({ project_path: project }, plugin, meta),
+      )
+        .plan.map((s) => `${s.package_name} -> ${s.latest_version}: ${s.upgrade_command}`)
+        .sort();
+
+    const before = await planWith();
+    expect(before).toEqual([
+      'lodash -> 4.18.0: npm install lodash@4.18.0 --ignore-scripts',
+      'minimist -> 1.2.6: npm install minimist@1.2.6 --ignore-scripts',
+    ]);
+
+    // What the verification of lodash@4.18.0 found: an advisory fixed in 4.18.1.
+    expect(await planWith({ extraFixedVersions: new Map([['lodash', ['4.18.1']]]) })).toEqual([
+      'lodash -> 4.18.1: npm install lodash@4.18.1 --ignore-scripts',
+      'minimist -> 1.2.6: npm install minimist@1.2.6 --ignore-scripts',
+    ]);
+    // Two of them: the higher one decides. A messy one is ignored, as a stored advisory's is.
+    expect(await planWith({ extraFixedVersions: new Map([['lodash', ['4.18.1', '4.18.2', '>=4.18.9']]]) })).toContain(
+      'lodash -> 4.18.2: npm install lodash@4.18.2 --ignore-scripts',
+    );
+    // Nothing learned, and a package the project has no advisory for: the plan of before.
+    expect(await planWith({ extraFixedVersions: new Map() })).toEqual(before);
+    expect(await planWith({ extraFixedVersions: new Map([['left-pad', ['9.9.9']]]) })).toEqual(before);
+
+    // It is no parameter of either tool: nothing a caller of the tool can pass names a version to raise to.
+    for (const name of ['deps_update_plan', 'create_fix_pr']) {
+      expect({ name, keys: Object.keys(getTool(name).inputSchema).filter((k) => /fixed|raise|extra/i.test(k)) }).toEqual({ name, keys: [] });
+    }
+  });
+
   it('falls back to npm outdated\'s "latest" when every active CVE\'s fixed_version is unusable', async () => {
     const project = tempProject();
     writeFileSync(join(project, 'package.json'), '{"name":"my-app","dependencies":{"lodash":"3.10.1"}}', 'utf8');

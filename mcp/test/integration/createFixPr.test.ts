@@ -463,4 +463,24 @@ describe('buildPrBody (task-7-review.md M7)', () => {
     expect(body).toContain('new CVE');
     expect(body).toContain('Passed: `npm test --silent`');
   });
+
+  // fixpr-clean-target-version: a pull request for a version above the one first planned says so, and why.
+  it('T-10 a raised target is named in the body — the version planned, the version applied and the advisory that stood on the first — and a body with nothing raised has no such section', () => {
+    const base = {
+      group, findings: [finding], commands: ['npm install lodash@4.18.0', 'npm install lodash@4.18.1'],
+      scan: { passed: true, resolved: [finding.fingerprint], still_present: [], new_findings: [] },
+      tests: { outcome: 'not_run' as const, command: null, origin: null, output_head: null },
+    };
+    const raised = buildPrBody({
+      ...base,
+      raised: [{ package_name: 'lodash', planned_version: '4.18.0', applied_version: '4.18.1', advisories: ['CVE-2026-2950'] }],
+    });
+    expect(raised).toContain('## Target raised');
+    expect(raised).toMatch(/`lodash`.*4\.18\.0.*4\.18\.1.*CVE-2026-2950/);
+    // Both installs are in the commands, in the order they ran.
+    expect(raised.indexOf('npm install lodash@4.18.0')).toBeLessThan(raised.indexOf('npm install lodash@4.18.1'));
+
+    expect(buildPrBody(base)).not.toContain('## Target raised');
+    expect(buildPrBody({ ...base, raised: [] })).not.toContain('## Target raised');
+  });
 });

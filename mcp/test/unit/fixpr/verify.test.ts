@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { judgeScan, judgeTests, mayOpenPr } from '../../../src/fixpr/verify.js';
+import { judgeScan, judgeTests, mayOpenPr, testsAfterScan } from '../../../src/fixpr/verify.js';
+import type { ScanVerdict, TestVerdict } from '../../../src/fixpr/types.js';
 import type { Finding } from '../../../src/types.js';
 
 function f(fingerprint: string, over: Partial<Finding> = {}): Finding {
@@ -434,5 +435,28 @@ describe('mayOpenPr', () => {
   it('never opens when the scan failed AND the tests broke, whatever order you check them in', () => {
     expect(mayOpenPr(badScan, t('broken_by_fix'))).toBe(false);
     expect(mayOpenPr(badScan, t('already_failing'))).toBe(false);
+  });
+});
+
+// ───────────────── fixpr-clean-target-version — the project's tests run on the tree that passed the scan differential
+
+describe("the project's tests are run only after the scan differential passed (fixpr-clean-target-version)", () => {
+  const ran: TestVerdict = { outcome: 'passed', command: 'npm test --silent', origin: 'package.json scripts.test', output_head: null };
+
+  it('T-14 a failed differential: the tests are not run at all, and the verdict is not_run; a passed one: the run, once, and its verdict', async () => {
+    let calls = 0;
+    const run = async (): Promise<TestVerdict> => {
+      calls += 1;
+      return ran;
+    };
+    const failed: ScanVerdict = { passed: false, resolved: ['a'], still_present: [], new_findings: [{ fingerprint: 'n', severity: 'medium', title: 'a new advisory' }] };
+    expect(await testsAfterScan(failed, run)).toEqual({ outcome: 'not_run', command: null, origin: null, output_head: null });
+    expect(calls).toBe(0);
+    // No pull request either way: a not_run verdict never opens one on a failed differential.
+    expect(mayOpenPr(failed, await testsAfterScan(failed, run))).toBe(false);
+
+    const passed: ScanVerdict = { passed: true, resolved: ['a'], still_present: [], new_findings: [] };
+    expect(await testsAfterScan(passed, run)).toEqual(ran);
+    expect(calls).toBe(1);
   });
 });
