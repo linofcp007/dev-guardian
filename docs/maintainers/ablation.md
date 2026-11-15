@@ -299,6 +299,30 @@ The fixtures are one file per import spelling (`interpreterImportAlias.ts`, `int
 cross-fire inside one file: with a `$CP = require(…)` of the module anywhere in it, Semgrep reads the file's named
 imports of that module through `$CP.$F` as well, and a clause looks dead that is the only one for another file.
 
+**`llm-output-to-interpreter-js`, 3.11.0** (Semgrep 1.182.0, pack sha256 `685d21bc…`). Five clauses for four more
+spellings of `child_process` — a function taken from a `require` in the assignment, `promisify` of one, a function
+destructured from the module's name, an awaited `import()` — and the exclusion of a local name that shadows the
+import. `npm run ablate -- llm --filter=llm-output-to-interpreter-js`, three runs:
+
+- The first, 98 clauses, read eight DEAD, and INERT in every pair: the `const` and `let` branches of the
+  local-name exclusion, plain and by destructuring, for the function's name and for the module's. Semgrep's
+  `var $X = …` pattern matches the three keywords, so the `var` branch already excluded each line the others did.
+  Deleted; `misses/interpreterLocalShadow.ts` keeps its `const` and `let` functions, silent on both platforms.
+- The second, 90 clauses: **90/90 live, 0 DEAD**. The third is the second on the pack as it ships (its comment had
+  changed): the same.
+- Axis 2 88/90, both read. The module regex, as in 3.9.3 — the same four lines. And the clause of the function
+  destructured from the module's name (`const { …: $DFN } = $CP`): without it the first argument of any call
+  below the import is a sink, and one line of `hits/` appears, the argument of the completion call itself. Axis 3
+  N/A.
+
+The pack gives the same 215 fixture findings (79 of them this rule's) and none in `misses/` on Semgrep 1.86.0,
+1.120.1, 1.170.1 and 1.182.0 on Linux and on 1.182.0 on Windows. The real-code check, by hand again, on Linux over
+the same fifteen applications (10 750 files read of 11 005): 0 findings with the released rule, 0 with this one, no
+file timing out with either at the product's `--timeout 30`; 96 s for the released rule and 108 s for this one in
+the second of two interleaved rounds, on a machine another project's tests were also using. Copy the corpus into
+the container first: over a Windows bind mount Semgrep's walk of those files had not finished one run in twelve
+minutes.
+
 The PHP number is a cross-check worth keeping: **40** is exactly the
 10 + 26 + 2 + 2 the PHP probe measured by hand, rule by rule, weeks earlier and
 by a different method. The C# one was added after the fact and immediately deleted a rule:

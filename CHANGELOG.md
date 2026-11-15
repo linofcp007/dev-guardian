@@ -17,7 +17,9 @@ version bump.
   `require` (the idiom of Node's own documentation), a function destructured from a name that is the module
   (`const { exec } = cp`), and a dynamic `import()` awaited into a name or destructured. Each has a clause and a
   fixture of its own, with and without the `node:` prefix. Still out of reach, and said in the pack: an `import()`
-  consumed by `.then(…)`, `createRequire`, and libraries that wrap `child_process` (`execa`, `cross-spawn`).
+  consumed by `.then(…)`, `createRequire`, and libraries that wrap `child_process` (`execa`, `cross-spawn`). The
+  pack gives the same 215 fixture findings on Semgrep 1.86.0, 1.120.1, 1.170.1 and 1.182.0 on Linux and on 1.182.0
+  on Windows, and over the fifteen JS/TS applications it was measured on before, the rule still reports nothing.
 
 ### Fixed
 
