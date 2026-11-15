@@ -706,3 +706,108 @@ describe('parseInstallCommands — launchers that download and run a package (re
     }
   });
 });
+
+// ───────────────── install-vet-manifest-install — the command installs what a manifest says
+
+/** The manifest each install command of the line reads, in order (`undefined` for a by-name install). */
+function manifests(command: string, shell: 'bash' | 'powershell' = 'bash'): unknown[] {
+  return parseInstallCommands(command, { shell }).map((c) => c.manifest);
+}
+
+describe('manifest installs — a command that installs what a manifest says', () => {
+  it.each([
+    'npm install',
+    'npm i',
+    'npm in',
+    'npm ci',
+    'npm clean-install',
+    'npm ic',
+    'npm install-clean',
+    'npm install-test',
+    'npm it',
+    'npm install-ci-test',
+    'npm cit',
+    'pnpm install',
+    'pnpm i',
+    'yarn',
+    'yarn install',
+    'yarn install --immutable',
+    'yarn --frozen-lockfile',
+    'bun install',
+    'bun i',
+    'npm ci --ignore-scripts',
+    'npm install --no-audit --no-fund',
+    'sudo npm ci',
+    'env CI=1 npm ci',
+  ])('T-01 %s reads the package.json where it runs and names no package', (command) => {
+    const found = parseInstallCommands(command);
+    expect(found.map((c) => c.manifest)).toEqual([{ kind: 'package-json' }]);
+    expect(found.flatMap((c) => c.packages)).toEqual([]);
+    expect(found[0]?.ecosystem).toBe('npm');
+  });
+
+  it('T-01 from the PowerShell tool too, once; two of them on one line; and the directory a cd moved it to', () => {
+    expect(manifests('npm ci', 'powershell')).toEqual([{ kind: 'package-json' }]);
+    expect(manifests('npm ci; pnpm install')).toEqual([{ kind: 'package-json' }, { kind: 'package-json' }]);
+    const [moved] = parseInstallCommands('cd web && pnpm install --frozen-lockfile');
+    expect(moved?.manifest).toEqual({ kind: 'package-json' });
+    expect(moved?.workdir).toEqual(['web']);
+  });
+
+  it('T-02 pip -r names its requirement files, in order, beside the packages on the line', () => {
+    const [c] = parseInstallCommands('pip install -r a.txt -r reqs/b.txt requests');
+    expect(c?.manifest).toEqual({ kind: 'requirements', files: ['a.txt', 'reqs/b.txt'] });
+    expect(c?.packages.map((p) => p.name)).toEqual(['requests']);
+    expect(c?.ecosystem).toBe('pypi');
+  });
+
+  it.each<[string, string[]]>([
+    ['pip install -r requirements.txt', ['requirements.txt']],
+    ['pip install --requirement a.txt', ['a.txt']],
+    ['pip install --requirement=a.txt', ['a.txt']],
+    ['pip3 install -r a.txt', ['a.txt']],
+    ['python -m pip install -r a.txt', ['a.txt']],
+    ['uv pip install -r a.txt -r b.txt', ['a.txt', 'b.txt']],
+    ['pip install --upgrade -r "my reqs.txt"', ['my reqs.txt']],
+  ])('T-02 %s', (command, files) => {
+    expect(manifests(command)).toEqual([{ kind: 'requirements', files }]);
+  });
+
+  it.each([
+    'npm i ./pkg.tgz',
+    'npm install express',
+    'npm install -g',
+    'npm i --global',
+    'yarn global add serve',
+    'yarn build',
+    'yarn --version',
+    'yarn -v',
+    'yarn --help',
+    'npm run install',
+    'npm test',
+    'pnpm add left-pad',
+    'bun add left-pad',
+    'bun install left-pad',
+    'pip install requests',
+    'pip install -c constraints.txt requests',
+    'pip download -r a.txt',
+    'echo npm ci',
+    'git commit -m "npm ci"',
+  ])('T-03 %s is no manifest install', (command) => {
+    expect(manifests(command).filter((m) => m !== undefined)).toEqual([]);
+  });
+
+  it('T-04 a manifest install in a script the command hands a shell is one too', () => {
+    const script = (text: string): Array<{ text: string; shell: 'bash' }> => [{ text, shell: 'bash' }];
+    expect(parseInstallCommands("bash -c 'npm ci'", { nested: script('npm ci') }).map((c) => c.manifest)).toEqual([{ kind: 'package-json' }]);
+    expect(
+      parseInstallCommands('cmd /c "pip install -r r.txt"', { nested: script('pip install -r r.txt') }).map((c) => c.manifest),
+    ).toEqual([{ kind: 'requirements', files: ['r.txt'] }]);
+    expect(parseInstallCommands("echo 'yarn install' | sh", { nested: script('yarn install') }).map((c) => c.manifest)).toEqual([
+      { kind: 'package-json' },
+    ]);
+    // Where a nested install runs is not known once the outer command moved.
+    const moved = parseInstallCommands("cd web && bash -c 'npm ci'", { nested: script('npm ci') });
+    expect(moved.map((c) => [c.manifest, c.workdir])).toEqual([[{ kind: 'package-json' }, null]]);
+  });
+});

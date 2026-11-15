@@ -466,3 +466,28 @@ describe('the release gate, as CONTRIBUTING states it', () => {
     expect(read('docs/env.md')).toMatch(/^\| `GUARDIAN_REQUIRE_WPSCAN` \| test suite \|/m);
   });
 });
+
+// ───────────────── install-vet-manifest-install — the docs say a manifest install is vetted
+
+describe('the docs of the manifest vetting', () => {
+  it('T-27 the known-limits page has the install-vetting section; docs/hooks.md and hooks.json say what is vetted and what leaves the machine', () => {
+    const title = (AREA_TITLES as Readonly<Record<string, string | undefined>>)['install-vetting'];
+    expect(title, 'the install-vetting area has a section title').toBeDefined();
+    expect(read('docs/hooks-known-limits.md')).toContain(`## ${String(title)}`);
+
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at).toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end);
+    for (const said of ['installs from a manifest', '`npm ci`', '`pnpm install`', '`pip install -r`', '`package.json`']) {
+      expect({ said, found: section.includes(said) }).toEqual({ said, found: true });
+    }
+    // What leaves the machine is declared, and what stays.
+    expect(section).toContain('are sent to the public registry and to OSV');
+    expect(section).toMatch(/scope[^.]*registry of its own[^.]*not sent/s);
+
+    const description = String((JSON.parse(read('hooks/hooks.json')) as { description?: unknown }).description ?? '');
+    expect(description).toMatch(/manifest/);
+  });
+});

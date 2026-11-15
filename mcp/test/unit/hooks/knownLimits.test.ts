@@ -381,3 +381,29 @@ describe("the hooks' known limits, as data", () => {
     expect(fastLane).not.toContain('knownLimits.test.ts');
   });
 });
+
+// ───────────────── install-vet-manifest-install — what the manifest vetting does not cover is a record
+
+describe('the limits of the manifest vetting, as data', () => {
+  const WANTED = [
+    'manifest-lockfile-and-transitive',
+    'manifest-not-from-a-registry',
+    'manifest-other-managers',
+    'manifest-private-scope',
+    'manifest-quiet-checks',
+    'manifest-workspace-members',
+  ];
+
+  it('T-25 the install-vetting area has a record for each limit, with an example the hook runs — or the reason none can', () => {
+    expect(LIMIT_AREAS as readonly string[]).toContain('install-vetting');
+    const records = loadKnownLimits().filter((l) => (l.area as string) === 'install-vetting');
+    expect(records.map((l) => l.id).sort()).toEqual(WANTED);
+    for (const l of records) {
+      const hooks = l.examples.filter((e) => e.detector === 'hook');
+      const shown = hooks.length > 0 || (l.not_executable ?? '').trim() !== '';
+      expect({ id: l.id, shown }).toEqual({ id: l.id, shown: true });
+    }
+    // Only the limit that needs a registry's answer goes without an example the suite can run.
+    expect(records.filter((l) => l.examples.length === 0).map((l) => l.id)).toEqual(['manifest-quiet-checks']);
+  });
+});

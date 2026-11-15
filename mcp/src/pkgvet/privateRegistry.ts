@@ -543,6 +543,49 @@ function npmRegistry(name: string, ctx: RegistryContext): CustomRegistry | null 
   return local === undefined ? null : { kind: 'workspace', source: local };
 }
 
+/**
+ * The registry the npm-family configuration gives `name`'s SCOPE in
+ * particular — `@scope:registry=` in an npmrc, `npmScopes` in `.yarnrc.yml`,
+ * `[install.scopes]` in `bunfig.toml`, `npm_config_@scope:registry` — when it
+ * is not the public one, and whose word that is: the `project`'s (a file in
+ * one of its directories, up to the repository root) or the `user`'s (the
+ * home directory, the machine, the environment). `null` for an unscoped name
+ * and for a scope with no registry of its own: the default registry
+ * (`registry=`) is every name's, not a scope's.
+ *
+ * The install hook asks before it looks up a scoped name a MANIFEST gives it:
+ * the package manager fetches such a package from that registry and never
+ * asks the public one for it, so neither does the hook — the names of a
+ * project's private packages stay where the package manager keeps them.
+ * Never throws: a configuration that cannot be read answers `null`.
+ */
+export function npmScopeRegistry(
+  name: string,
+  ctx: RegistryContext = {},
+): { scope: string; source: string; url: string; from: 'project' | 'user' } | null {
+  const scope = npmScope(name);
+  if (scope === undefined) return null;
+  try {
+    const wanted = `npm_config_@${scope.toLowerCase()}:registry`;
+    for (const [key, raw] of Object.entries(envOf(ctx))) {
+      const value = raw?.trim() ?? '';
+      if (value !== '' && key.toLowerCase() === wanted && !isPublic('npm', value)) return { scope, source: key, url: value, from: 'user' };
+    }
+    const near = ancestors(ctx);
+    for (const { path, parse } of npmConfigFiles(ctx)) {
+      const text = read(path, ctx);
+      if (text === undefined) continue;
+      const url = parse(text, scope);
+      // The scope's own line — not the default registry, which every name gets.
+      if (url === undefined || url === parse(text, undefined) || isPublic('npm', url)) continue;
+      return { scope, source: path, url, from: near.some((dir) => samePath(dir, dirname(path))) ? 'project' : 'user' };
+    }
+  } catch {
+    // unknown reads as none: the name is then looked up like any other
+  }
+  return null;
+}
+
 // ─────────────────────────────────────────────────────── workspaces
 
 const SKIP_DIRS = new Set(['node_modules', '.git', '.venv', 'venv', '__pycache__', 'vendor', 'dist', 'build', 'target']);

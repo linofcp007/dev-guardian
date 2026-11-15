@@ -8,6 +8,42 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **The install hook vets a manifest install, not only a package named on the command line.** `npm install
+  crossenv` was denied, and the same package in `package.json` was installed in silence: `npm install` with no
+  package, `npm ci`, `pnpm install`, `yarn`, `bun install` and `pip install -r` name nothing, and the hook read the
+  command line alone. It now reads what such a command installs — the `dependencies`, `devDependencies`,
+  `optionalDependencies` and `peerDependencies` of the `package.json` where the command runs, or the requirements
+  files given to `-r` (and the files they include, three levels deep, eight files) — and looks those packages up
+  with the ones the command names, under the same 3 s budget and a cap of their own — 150 packages of manifests, beside the 50 a command line may name. A package the manifest names
+  that is **malicious** (an OSV `MAL-` advisory on the version its range resolves to, or npm's security
+  placeholder) denies the command, naming the file and saying that installing it or removing the dependency is the
+  user's decision; a typosquat suspicion and a name the public registry does not have warn, and never deny — in a
+  manifest a missing name is usually a private or a workspace package. A fresh version, install scripts and known
+  vulnerabilities are not reported for a manifest, where they would be repeated at every install. What could not
+  be verified is one line with the count and the file; so is a manifest that is there and was not read, and a
+  directory the command line does not tell (`--prefix`, `-C`, `--dir`, `--cwd`). `npm ci`, `npm install-test`,
+  `npm install-ci-test`, `pnpm install`, `yarn install` and a bare `yarn` are install commands to the hook for the
+  first time. Measured with the live registry on Windows, in a project whose `package.json` names `crossenv`:
+  `npm install`, `npm ci`, `pnpm install` and `yarn` went from silence to a deny, in about 0.7 s — on Linux
+  too. Over 16 real manifests (15 open-source LLM applications and this repository's; 8 to 97 direct dependencies,
+  11 of them over 50) nothing was denied and nothing was said, in 0.9 to 3.5 s each; a manifest of 20 popular
+  dependencies took 0.9 s, and a command that installs nothing answers as before (0.1 s). A PyPI name with a
+  malware advisory is no longer published, so a requirements file that names one now warns ("not found … did you
+  mean") where the hook said nothing; the deny for PyPI is held by the tests, with a registry stand-in. **What
+  leaves the machine:** at every manifest install, the names and ranges of the manifest's direct dependencies go to
+  the public registry and to OSV — until now only the names on a command line did — and nothing else of the file. A
+  package of a scope that the npm configuration gives a registry of its own is not sent: in silence when the user's
+  configuration names that registry, with one line when a file of the project does. Only a valid registry name
+  with a valid range is taken from a manifest, by a stricter rule than a command line gets, so no other text of the
+  file reaches a message. `GUARDIAN_PKG_VET=0` switches the vetting off, the manifest's with it. What it does not
+  cover is recorded with the hooks' other known limits, each with an example the suite runs: the lockfile and
+  transitive dependencies, workspace members, the manifests of poetry, `uv sync`, pipenv, composer and `dotnet
+  restore`, dependencies that come from no registry, a scope with a registry of its own, and the checks a manifest
+  install is not told about. The gap showed in the adversarial evals' run with a shell (below): in 12 runs where
+  the agent ran `npm install` from the fixture's manifest, it called `vet_packages` first in one.
+
 ### Changed
 
 - **The adversarial evals' run with a shell is made** (maintainer-side: no skill, command, hook or tool behaves

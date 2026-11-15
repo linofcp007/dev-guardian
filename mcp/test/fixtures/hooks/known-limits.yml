@@ -8,8 +8,8 @@
 #
 # A record:
 #   id              kebab-case, stable, unique
-#   area            config-files | shell-guard | download-run | write-guard |
-#                   secret-scan | mcp-tools | caps
+#   area            config-files | shell-guard | download-run | install-vetting |
+#                   write-guard | secret-scan | mcp-tools | caps
 #   doc             the published text (English, inline Markdown)
 #   examples        what the guard answers TODAY: measured, never transcribed
 #   not_executable  why no test can run it; required when there is no example
@@ -429,3 +429,153 @@
   doc: |-
     A session mark outlives its session until the next SessionStart of any session removes it — its Claude Code process no longer exists — or for 30 days. In between, a new Claude Code process that the operating system gives the same process id, and that starts no hook, finds the old mark under its own id: `health_status` reads `running` for a session with no guardrails.
   not_executable: needs the operating system to give a new process the id of one that ended
+
+- id: manifest-other-managers
+  area: install-vetting
+  doc: |-
+    A manifest install is vetted for the npm family (`npm install` with no package, `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`) and for `pip install -r` / `uv pip install -r`. The manifest installs of the other tools are not read: `poetry install`, `uv sync`, `pipenv install`, `composer install`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test`, `yarn workspaces focus` and a `pnpm install <package>`. Their manifest is installed without a lookup; `deps_audit` reads it.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: poetry install
+      files:
+        pyproject.toml: |
+          [tool.poetry.dependencies]
+          crossenv = "*"
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: uv sync
+      files:
+        pyproject.toml: |
+          [project]
+          name = "app"
+          version = "1.0.0"
+          dependencies = ["crossenv"]
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: composer install
+      files:
+        composer.json: |
+          { "require": { "vendor/unvetted": "*" } }
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dotnet restore
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipenv install
+      expect: { decision: none }
+
+- id: manifest-lockfile-and-transitive
+  area: install-vetting
+  doc: |-
+    Only the manifest's direct dependencies are looked up, at the version its range resolves to on the registry today. The lockfile is not read: a version it pins (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), a `resolved` URL that points somewhere else, and every transitive dependency are installed without a lookup — thousands of packages do not fit the hook's 3 s. `scan_deps` and `deps_audit` read the lockfile.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm ci
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0" }
+        package-lock.json: |
+          {
+            "name": "app",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "packages": {
+              "": { "name": "app", "version": "1.0.0" },
+              "node_modules/crossenv": { "version": "1.0.1", "resolved": "https://example.invalid/crossenv-1.0.1.tgz" }
+            }
+          }
+      expect: { decision: none }
+
+- id: manifest-workspace-members
+  area: install-vetting
+  doc: |-
+    In a workspace, only the `package.json` of the directory the command runs in is read. The manifests of the workspace's members (`workspaces`, `pnpm-workspace.yaml`) are installed by the same command and are not looked up.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm install
+      files:
+        package.json: |
+          { "name": "root", "version": "1.0.0", "private": true, "workspaces": ["packages/*"] }
+        packages/a/package.json: |
+          { "name": "a", "version": "1.0.0", "dependencies": { "crossenv": "*" } }
+      expect: { decision: none }
+
+- id: manifest-not-from-a-registry
+  area: install-vetting
+  doc: |-
+    A dependency that does not come from a registry is not looked up, because there is nothing to look up: a git repository, a URL, a tarball, a path, `file:`, `link:`, `workspace:`, `catalog:` in a `package.json`; `-e`, a path, a URL or `name @ url` in a requirements file. What such a dependency holds is whatever its source serves.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm install
+      files:
+        package.json: |
+          {
+            "name": "app",
+            "version": "1.0.0",
+            "dependencies": {
+              "tool": "git+https://example.invalid/tool.git",
+              "local": "file:../local",
+              "archive": "https://example.invalid/archive.tgz"
+            }
+          }
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pip install -r requirements.txt
+      files:
+        requirements.txt: |
+          -e git+https://example.invalid/tool.git#egg=tool
+          ./vendor/pkg
+          other @ https://example.invalid/other.zip
+      expect: { decision: none }
+
+- id: manifest-private-scope
+  area: install-vetting
+  doc: |-
+    A package of a scope that the npm configuration gives a registry of its own (`@scope:registry=` in an `.npmrc`, `npmScopes` in `.yarnrc.yml`, `[install.scopes]` in `bunfig.toml`) is not looked up: the package manager fetches it from that registry, and its name is not sent to the public one. When the user's configuration names the registry, nothing is said. When a file of the project does, one line says how many packages were not vetted — the file is the repository's, and what that registry serves cannot be checked from here.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm ci
+      files:
+        .npmrc: |
+          @acme:registry=https://npm.example.invalid/
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": { "@acme/billing": "^1.0.0" } }
+      expect: { decision: warn }
+
+- id: manifest-quiet-checks
+  area: install-vetting
+  doc: |-
+    A manifest install is told less than `npm install <name>` is. A package the manifest names is denied when it is malicious and warned about when it looks like a typosquat or the public registry does not have it. It is not warned about a version published under 72 hours ago, install scripts or known vulnerabilities: a manifest is installed again and again, and each of those would be repeated every time. So a fresh, compromised release of a legitimate dependency is installed from a manifest in silence until an advisory names it. A missing name never denies a manifest install either — in a manifest it is usually a private or a workspace package.
+  examples: []
+  not_executable: |-
+    Each of these shows only in what a registry answers — a publish date, a version's scripts, an advisory — and the suite asks nothing of the network. `hookDecision.test.ts` (T-17) holds it with a registry stand-in: the same package warns by name and is silent from a manifest.

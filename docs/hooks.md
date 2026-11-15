@@ -70,9 +70,25 @@ When the command installs packages by name — `npm i|install|add`, `pnpm add`, 
 | Published less than 72 h ago, npm install scripts, typosquat suspicion, an unpublished exact version | warning |
 | Known vulnerabilities | warning, only for an exact version pin (for a range the installed version is unknown) |
 | A check could not run (offline, timeout, HTTP error, rate limit, `GUARDIAN_OFFLINE=1`) | one line saying the package was **not** verified; the command runs |
-| Every package clean, or nothing installed by name | silent, and no network request at all |
+| Every package clean | silent |
+| A command that installs nothing | silent, and no network request at all |
 
 A missing-name deny carries its own escape hatch, named for the tool: re-run the install with an explicit `--registry <url>` (npm, `npx`, pnpm, bun), `--index-url <url>` (pip, `uv pip`, pipx), `--index <url>` (`uv add`, `uvx`, `uv tool`) or `--source` (poetry, dotnet), or prefix the command with `GUARDIAN_PKG_VET=0` — from the PowerShell tool, `$env:GUARDIAN_PKG_VET = '0'` first in the same command. Composer and Yarn Berry have no registry flag, so theirs names only the prefix. Either way the command is no longer one plain install statement; the hook's own switch is untouched, and a malicious version is still denied. A malicious-package deny has no escape hatch.
+
+### A manifest install
+
+A command that installs from a manifest names no package — the manifest does. `npm install` with no package, `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install` and `bun install` install the `package.json` of the directory they run in; `pip install -r` (also `uv pip install -r`) installs the requirements files it is given. The hook reads that manifest — the `dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies` of the `package.json`; the packages each requirements file names, and those of the files it includes with `-r`, three levels deep and eight files in all — and looks its packages up with the ones the command names, under the same budget and a cap of their own: 150 packages of manifests, names not on the popular list first, beside the 50 a command line may name (a note says how many more were not vetted). Real applications declare more direct dependencies than anyone types: of 16 manifests measured, 11 had from 57 to 97. An npm alias (`"x": "npm:real@^1"`) is looked up as the package it installs. A manifest is read only for such a command, never for a by-name install beside one, and only a valid registry name with a valid range is taken from it. The answers are fewer than for a package named on the command line, because a manifest is installed again and again:
+
+| Finding, for a package the manifest names | Hook answer |
+| --- | --- |
+| **Malicious** (OSV `MAL-` on the version its range resolves to, or npm's security placeholder) | **deny**, naming the file and the package; the message says that installing it or removing the dependency is the user's decision, and names no way round |
+| Typosquat suspicion; a name the public registry does not have | warning, naming the file — a missing name never denies a manifest install, where it is usually a private or a workspace package |
+| Published less than 72 h ago, npm install scripts, known vulnerabilities | not reported: each would be repeated at every install (`deps_audit` reads the manifest and the lockfile) |
+| A check could not run | one line: how many packages of which file were **not** verified |
+| The manifest is there and was not read (not a regular file, over 1 MiB, not valid JSON, on a network path), a file it includes was not, or where the command runs is not known (`--prefix`, `-C`, `--dir`, `--cwd`, a `cd` that may not have run) | one line: what was not read, and that its packages were not vetted |
+| The manifest is not there; every package clean | silent |
+
+**What leaves the machine.** The names of the manifest's direct dependencies, with their ranges, are sent to the public registry and to OSV at every manifest install — as the names on a command line are — and nothing else of the file. A package of a scope that the npm configuration gives a registry of its own is not sent: in silence when the user's configuration names that registry, with one line when a file of the project does. `GUARDIAN_PKG_VET=0` switches the vetting off, the manifest's with it. The lockfile, transitive dependencies, workspace members and the other package managers' manifests are not read: see [the known limits](hooks-known-limits.md#install-time-package-vetting).
 
 From the **PowerShell tool** the command is also read the way PowerShell reads it: `npm i a,b` hands npm two packages, a backtick at the end of a line continues it, a backslash before a closing `"` is literal, `''` inside `'…'` is one quote, and a no-break space separates words. A package only that reading finds can be denied as malicious, never as missing.
 
