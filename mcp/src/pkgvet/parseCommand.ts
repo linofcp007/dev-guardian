@@ -90,9 +90,20 @@ export interface InstallCommand {
   /**
    * The launcher was given npm's `--prefix` (`-C`): it looks for the project
    * there, not where the command runs — so nothing is taken as installed
-   * (review of 3.4.0, finding 5).
+   * (review of 3.4.0, finding 5). Set for an install command too, by any of
+   * its manager's directory flags (`--prefix`, `-C`, `--dir`, `--cwd`): the
+   * manifest it installs is then not the one where the command runs.
    */
   prefixed?: boolean;
+  /**
+   * The command installs what a manifest says: the `package.json` of the
+   * directory it runs in (`npm install` with no package, `npm ci`, `pnpm
+   * install`, `yarn`, `bun install`), or the requirement files given to `pip
+   * install -r`, as written and in order. Present also when `packages` is
+   * empty; absent for an install that names everything it fetches. Reading
+   * the file is the hook's (`pkgvet/manifest.ts`): this module does no I/O.
+   */
+  manifest?: { kind: 'package-json' } | { kind: 'requirements'; files: readonly string[] };
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -341,7 +352,7 @@ const FLAGS: Record<string, FlagTable> = {
       '--proxy', '--retries', '--timeout', '--exists-action', '--cert', '--client-cert', '--cache-dir',
       '--no-binary', '--only-binary', '--config-settings', '-C', '--global-option', '--report', '--python',
       '--root-user-action', '--keyring-provider', '--group', '--index-strategy', '--extra', '--override',
-      '-p', '--prerelease', '--resolution'),
+      '-p', '--prerelease', '--resolution', '--requirements'),
     bool: set('-U', '--upgrade', '--user', '--no-deps', '--pre', '--force-reinstall', '-I', '--ignore-installed',
       '--no-cache-dir', '--no-cache', '-q', '-v', '--quiet', '--verbose', '--break-system-packages', '--dry-run',
       '--no-build-isolation', '--require-hashes', '--isolated', '--disable-pip-version-check', '--no-input',
@@ -351,8 +362,10 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('-i', '--index-url', '--extra-index-url', '-f', '--find-links', '--index', '--default-index'),
     registryBool: set('--no-index'),
     reported: new Map([
-      ['-r', 'requirements file (-r) — its contents are not vetted'],
-      ['--requirement', 'requirements file (-r) — its contents are not vetted'],
+      ['-r', 'requirements file (-r) — read as a manifest, not as a package name'],
+      ['--requirement', 'requirements file (-r) — read as a manifest, not as a package name'],
+      // `uv pip install` spells it in the plural.
+      ['--requirements', 'requirements file (-r) — read as a manifest, not as a package name'],
       ['-c', 'constraints file (-c) — not vetted'],
       ['--constraint', 'constraints file (-c) — not vetted'],
       ['-e', 'editable install (-e) — local or VCS source, not looked up'],
@@ -613,8 +626,19 @@ function commandStart(words: readonly ShellWord[]): number {
 }
 
 const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall']);
+/** npm's subcommands that install the manifest and take no package: `ci`, `install-test`, `install-ci-test` and their aliases. */
+const NPM_MANIFEST_INSTALL = new Set([
+  'ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean', 'install-test', 'it', 'install-ci-test', 'cit', 'clean-install-test', 'sit',
+]);
 const COMPOSER_REQUIRE = new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
 const BUN_ADD = new Set(['add', 'a', 'install', 'i']);
+/** Flags after which a bare `yarn` installs nothing: it prints and leaves. */
+const YARN_PRINTS = new Set(['--version', '-v', '-V', '--help', '-h']);
+/** The flags of pip and `uv pip` that name a requirements file. */
+const REQUIREMENT_FLAGS = new Set(['-r', '--requirement', '--requirements']);
+/** The flags that make an npm-family install a global one: no project manifest is installed. */
+const isGlobalFlag = (f: { flag: string; value?: string }): boolean =>
+  f.flag === '-g' || f.flag === '--global' || (f.flag === '--location' && f.value === 'global');
 
 interface Detected {
   manager: string;
@@ -632,6 +656,14 @@ interface Detected {
    * positional word, as an install command does.
    */
   launch?: { style: 'run' | 'install'; flags: string; localFirst?: boolean };
+  /**
+   * An install of the project's `package.json`: `always` for a subcommand
+   * that takes no package (`npm ci`, `pnpm install`, `yarn install`, a bare
+   * `yarn`), whose positional words are then no packages; `bare` for one that
+   * installs the manifest only when it names nothing (`npm install`, `bun
+   * install`).
+   */
+  manifest?: 'always' | 'bare';
 }
 
 /** A launcher as `detect` returns it. */
@@ -698,7 +730,13 @@ function detect(words: readonly ShellWord[]): Detected | null {
   const table = FLAGS[head];
   if (table === undefined) return null;
   const sub = nextPositional(words, i, table);
-  if (sub < 0) return null;
+  if (sub < 0) {
+    // A bare `yarn` — flags only — installs the project's manifest, unless a flag only prints.
+    if (head === 'yarn' && !rest.some((w) => YARN_PRINTS.has(w.value))) {
+      return { manager: head, ecosystem: 'npm', args: rest, pre: [], uncertain: [], manifest: 'always' };
+    }
+    return null;
+  }
   // The launchers that are a package manager's subcommand (review P1).
   const subName = words[sub]?.value ?? '';
   const after = words.slice(sub + 1);
@@ -723,13 +761,25 @@ function detect(words: readonly ShellWord[]): Detected | null {
 
   switch (head) {
     case 'npm':
-      return NPM_INSTALL.has(subWord) ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] } : null;
+      // A bare `npm install` installs the manifest; `npm ci` and its kin always do.
+      if (NPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
+      if (NPM_MANIFEST_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      return null;
     case 'pnpm':
-      return subWord === 'add' ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] } : null;
-    case 'bun':
-      // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too; a bare `bun install` names nothing.
-      return BUN_ADD.has(subWord) ? { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] } : null;
+      if (subWord === 'add') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] };
+      // `pnpm install` / `pnpm i` with no word after it installs the manifest; with one, it is read as it was: not at all.
+      if ((subWord === 'install' || subWord === 'i') && nextPositional(words, sub + 1, table) < 0) {
+        return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      }
+      return null;
+    case 'bun': {
+      // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too; a bare `bun install` installs the manifest.
+      if (!BUN_ADD.has(subWord)) return null;
+      const d: Detected = { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] };
+      return subWord === 'install' || subWord === 'i' ? { ...d, manifest: 'bare' } : d;
+    }
     case 'yarn': {
+      if (subWord === 'install') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
       let at = sub;
       const uncertain: string[] = [];
       if (subWord === 'global') at = nextPositional(words, sub + 1, table);
@@ -843,7 +893,11 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   const table = FLAGS[d.manager === 'uv-pip' ? 'pip' : d.manager] ?? FLAGS['npm'];
   const flagTable = table ?? { value: set(), bool: set(), registry: set() };
   const preWalk = walk(d.pre, flagTable);
-  const { positionals, skipped, customRegistry, uncertain, registries } = walk(d.args, flagTable);
+  const walked = walk(d.args, flagTable);
+  const { skipped, customRegistry, uncertain, registries } = walked;
+  // A subcommand that takes no package names none: its positional words are not looked up.
+  const positionals = d.manifest === 'always' ? [] : walked.positionals;
+  const allFlags = [...preWalk.flags, ...walked.flags];
   const packages: PackageSpec[] = [];
   const out: InstallCommand = {
     ecosystem: d.ecosystem,
@@ -895,6 +949,16 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     const first = packages[0];
     const version = flagValue(d.args, ['-v', '--version']);
     if (first !== undefined && version !== undefined) first.range = version;
+  }
+
+  // What the command installs from a manifest, beside what it names.
+  if (allFlags.some((f) => flagTable.dir?.has(f.flag) === true)) out.prefixed = true;
+  if (d.manager === 'pip' || d.manager === 'uv-pip') {
+    const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
+    if (files.length > 0) out.manifest = { kind: 'requirements', files };
+  } else if (d.manifest !== undefined && !allFlags.some(isGlobalFlag)) {
+    // `npm i ./pkg.tgz` installs that, not the manifest: a word that was skipped counts as a thing named.
+    if (d.manifest === 'always' || (packages.length === 0 && skipped.length === 0)) out.manifest = { kind: 'package-json' };
   }
   return out;
 }
@@ -955,12 +1019,21 @@ export function parseInstallCommands(
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0) continue;
+      if (packages.length === 0 && c.manifest === undefined) continue;
       for (const p of packages) seen.add(packageKey(p));
-      out.push({ ...c, packages, ...(moved && c.localFirst === true ? { workdir: null } : {}) });
+      // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest read.
+      const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined);
+      out.push({ ...c, packages, ...(unknownDir ? { workdir: null } : {}) });
     }
   }
   return out;
+}
+
+/** What tells two manifest installs of one line apart: the kind, the files, and where each runs. */
+function manifestKey(c: InstallCommand): string {
+  const m = c.manifest;
+  if (m === undefined) return '';
+  return JSON.stringify([m.kind, m.kind === 'requirements' ? m.files : [], c.workdir ?? null, c.prefixed === true]);
 }
 
 /** Why a package found in a script the command hands a shell is never denied as missing. */
@@ -974,11 +1047,16 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
   const asPowerShell = powershellAsPosix(text);
   if (asPowerShell === text) return out;
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
+  const seenManifests = new Set(out.map(manifestKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-    if (packages.length === 0) continue;
+    // A manifest install only this reading finds is kept; one both readings find is the same install.
+    const newManifest = c.manifest !== undefined && !seenManifests.has(manifestKey(c));
+    if (packages.length === 0 && !newManifest) continue;
     for (const p of packages) seen.add(packageKey(p));
-    out.push({ ...c, packages, skipped: [] });
+    seenManifests.add(manifestKey(c));
+    const { manifest: _same, ...withoutManifest } = c;
+    out.push({ ...(newManifest ? c : withoutManifest), packages, skipped: [] });
   }
   return out;
 }

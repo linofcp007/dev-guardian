@@ -630,12 +630,14 @@ describe('guardian-hook PreToolUse — a manifest install is vetted (real subpro
     const off = runHook('npm ci', {}, { env: { GUARDIAN_OFFLINE: '1' } });
     expect(off.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
     expect(off.output?.hookSpecificOutput?.additionalContext).toMatch(/2 packages of package\.json.*not verified/s);
-    expect(off.requests).toEqual([]);
+    // The request log is one file per test: what the offline run added to it is nothing.
+    expect(off.requests.slice(nested.requests.length)).toEqual([]);
   });
 
   it('T-23 GUARDIAN_PKG_VET=0, and the hooks switched off by the user: the manifest is not vetted, nothing is asked, nothing is said', () => {
     manifest({ crossenv: '*' });
-    for (const env of [{ GUARDIAN_PKG_VET: '0' }, { GUARDIAN_HOOKS: 'off' }]) {
+    const switchedOff: Array<Record<string, string>> = [{ GUARDIAN_PKG_VET: '0' }, { GUARDIAN_HOOKS: 'off' }];
+    for (const env of switchedOff) {
       const r = runHook('npm ci', {}, { env });
       expect({ env, output: r.output, requests: r.requests }).toEqual({ env, output: undefined, requests: [] });
     }

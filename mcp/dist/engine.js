@@ -115658,7 +115658,8 @@ var init_parseCommand = __esm({
           "--override",
           "-p",
           "--prerelease",
-          "--resolution"
+          "--resolution",
+          "--requirements"
         ),
         bool: set2(
           "-U",
@@ -115698,8 +115699,10 @@ var init_parseCommand = __esm({
         registry: set2("-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--index", "--default-index"),
         registryBool: set2("--no-index"),
         reported: /* @__PURE__ */ new Map([
-          ["-r", "requirements file (-r) \u2014 its contents are not vetted"],
-          ["--requirement", "requirements file (-r) \u2014 its contents are not vetted"],
+          ["-r", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
+          ["--requirement", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
+          // `uv pip install` spells it in the plural.
+          ["--requirements", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
           ["-c", "constraints file (-c) \u2014 not vetted"],
           ["--constraint", "constraints file (-c) \u2014 not vetted"],
           ["-e", "editable install (-e) \u2014 local or VCS source, not looked up"],

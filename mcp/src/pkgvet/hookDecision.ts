@@ -23,7 +23,28 @@
  *     timeout, HTTP error, rate limit). The command runs; the note says it
  *     was NOT verified, never that it was;
  *   - **silent** when every package came back `ok`, and for every command
- *     that installs nothing by name — which never touches the network.
+ *     that installs nothing — which never touches the network.
+ *
+ * **A manifest install** — `npm install` with no package, `npm ci`, `pnpm
+ * install`, `yarn`, `bun install`, `pip install -r` — names nothing on the
+ * command line: the manifest does. Its direct dependencies (`manifest.ts`)
+ * join the same lookups, under the same cap and budget, and answer by a rule
+ * of their own ({@link decideManifestOne}), because a manifest is installed
+ * again and again and a missing name in one is usually a private package:
+ *
+ *   - **deny** a malicious package, naming the file — nothing else denies;
+ *   - **warn** on a typosquat suspicion and on a name the public registry
+ *     does not have (never a deny);
+ *   - nothing about a fresh version, install scripts or known
+ *     vulnerabilities, which would be repeated at every install;
+ *   - **one line** for what was not verified, with the count and the file,
+ *     and one for a manifest that is there and was not read. A manifest that
+ *     is not there is silence: the install has nothing to read either.
+ *
+ * A scoped name whose scope has a registry of its own is not sent to the
+ * public one (`npmScopeRegistry`): in silence when the user's configuration
+ * says so, in one line when a file of the project does — a project file may
+ * not take a check away unseen.
  *
  * All network work shares one budget ({@link HOOK_BUDGET_MS}, 3 s): the
  * install commands of a compound line are vetted in parallel under it.
@@ -31,11 +52,12 @@
 
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path';
 import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
+import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { loadPopularIndex } from './popular.js';
-import { registryCache } from './privateRegistry.js';
+import { npmScopeRegistry, registryCache, type RegistryContext } from './privateRegistry.js';
 import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
 import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from './types.js';
 import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
@@ -138,12 +160,15 @@ function boundedInstalls(
   runsLocally: (pkg: PackageSpec, c: InstallCommand) => boolean,
   nested: ReadonlyArray<{ text: string; shell: CommandShell }> = [],
   cdpath = false,
-): { commands: InstallCommand[]; notVetted: number; cut: boolean } {
+  withManifests: (parsed: readonly InstallCommand[]) => VetCommand[] = (parsed) => [...parsed],
+): { commands: VetCommand[]; notVetted: number; cut: boolean } {
   const cut = command.length > MAX_PARSED_LENGTH;
-  const parsed = parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) =>
-    // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
-    // fetch nothing: there is nothing to vet (review P1).
-    c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c,
+  const parsed = withManifests(
+    parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) =>
+      // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
+      // fetch nothing: there is nothing to vet (review P1).
+      c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c,
+    ),
   );
   const key = (pkg: PackageSpec): string => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
   const seen = new Set<string>();
@@ -160,7 +185,7 @@ function boundedInstalls(
   const chosen = new Set(
     [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, MAX_VETTED_PACKAGES).map(key),
   );
-  const commands: InstallCommand[] = [];
+  const commands: VetCommand[] = [];
   for (const c of parsed) {
     const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
     if (packages.length === 0) continue;
@@ -168,6 +193,106 @@ function boundedInstalls(
     commands.push({ ...c, packages, uncertain });
   }
   return { commands, notVetted: Math.max(0, unique.length - MAX_VETTED_PACKAGES), cut };
+}
+
+/** An install command as it is vetted: the packages a manifest names carry the file that names them. */
+type VetCommand = InstallCommand & { fromManifest?: string };
+
+/** Why a package a manifest names is never denied as missing. */
+const NAMED_BY_MANIFEST = 'it is named by a manifest, where a missing name is usually a private or a workspace package';
+
+const plural = (n: number): string => (n === 1 ? '1 package' : `${String(n)} packages`);
+
+/**
+ * The commands to vet, with what each manifest install reads beside what it
+ * names: one more command per manifest, holding the packages the file names
+ * (`fromManifest`), after the command itself. `notes` gets a line for every
+ * manifest that is there and was not read, and for the packages a project
+ * file keeps from the lookup.
+ *
+ * A manifest is read only for a command the parser marked as installing one
+ * — never for a by-name install beside a `package.json`. It is read where the
+ * command runs ({@link commandDir}); a directory flag (`--prefix`, `-C`,
+ * `--dir`, `--cwd`) or a `cd` that may not have run leaves that unknown, and
+ * the manifest unread — said, not guessed.
+ */
+function withManifestPackages(parsed: readonly InstallCommand[], opts: HookVetOptions, registry: RegistryContext, notes: string[]): VetCommand[] {
+  const out: VetCommand[] = [];
+  for (const c of parsed) {
+    out.push(c);
+    const manifest = c.manifest;
+    if (manifest === undefined) continue;
+    const dir = c.prefixed === true ? null : commandDir(c, opts);
+    if (dir === null) {
+      const what = manifest.kind === 'package-json' ? 'package.json' : 'the requirements file';
+      notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) — its packages were not vetted.`);
+      continue;
+    }
+    let reads: ManifestRead[];
+    try {
+      reads = manifest.kind === 'package-json' ? [readNpmManifest(dir)] : readRequirements(dir, manifest.files);
+    } catch {
+      // Fail-open, and said: nothing of the manifest was vetted.
+      notes.push('dev-guardian: the manifest was not read (could not be read) — its packages were not vetted.');
+      continue;
+    }
+    for (const read of reads) {
+      if (read.status === 'absent') continue;
+      if (read.status === 'unreadable') {
+        notes.push(`dev-guardian: ${read.file} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
+        continue;
+      }
+      if (read.incomplete !== undefined) {
+        notes.push(`dev-guardian: a file ${read.file} includes was not read (${read.incomplete}) — its packages were not vetted.`);
+      }
+      const packages = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: dir }, notes) : read.packages;
+      if (packages.length === 0) continue;
+      const registries = [...c.registries, ...read.registries];
+      const custom = c.customRegistry ?? read.registries[0];
+      out.push({
+        ...c,
+        packages,
+        skipped: [],
+        uncertain: [NAMED_BY_MANIFEST],
+        registries,
+        ...(custom !== undefined ? { customRegistry: custom } : {}),
+        fromManifest: read.file,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * A manifest's packages less those of a scope with a registry of its own
+ * ({@link npmScopeRegistry}): the package manager fetches them there and never
+ * asks the public registry, so their names are not sent to it. When the
+ * user's configuration says so, nothing is said. When a file of the PROJECT
+ * does, one line says how many were not vetted: a project file may only make
+ * the hooks stricter, never take a check away unseen.
+ */
+function withoutOwnRegistryScopes(read: ManifestRead, registry: RegistryContext, notes: string[]): PackageSpec[] {
+  const kept: PackageSpec[] = [];
+  const byProject = new Set<string>();
+  let held = 0;
+  let source = '';
+  for (const pkg of read.packages) {
+    const own = pkg.name.startsWith('@') ? npmScopeRegistry(pkg.name, registry) : null;
+    if (own === null) {
+      kept.push(pkg);
+      continue;
+    }
+    if (own.from !== 'project') continue;
+    held += 1;
+    byProject.add(`@${own.scope}`);
+    if (source === '') source = basename(own.source);
+  }
+  if (held > 0) {
+    notes.push(
+      `dev-guardian: ${plural(held)} of ${read.file} ${held === 1 ? 'is' : 'are'} in a scope (${[...byProject].join(', ')}) the project's ${source} gives a registry of its own — not vetted.`,
+    );
+  }
+  return kept;
 }
 
 /** Whether a package is on its ecosystem's popular list — the lists `vet_packages` itself uses. */
@@ -385,18 +510,41 @@ const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command w
 export async function decideInstallCommand(command: string, opts: HookVetOptions): Promise<HookDecision | null> {
   const shell = opts.shell ?? 'bash';
   // A `CDPATH` in the environment: a bare `cd name` may go elsewhere.
-  const cdpath = ((opts.env ?? process.env)['CDPATH'] ?? '').trim() !== '';
-  const { commands, notVetted, cut } = boundedInstalls(command, shell, popularTest(opts), (pkg, c) => runsInstalledCopy(pkg, c, opts), opts.nested, cdpath);
-  // A cut command whose start installs nothing still says what was not read.
-  if (commands.length === 0) return cut ? { context: CUT_NOTE } : null;
-
   const env = opts.env ?? process.env;
+  const cdpath = (env['CDPATH'] ?? '').trim() !== '';
+  // One cache, shared by every command of the line and by the manifests'
+  // scope lookups (review I4): each configuration file is read once.
+  const registry: RegistryContext = {
+    projectDir: opts.cwd,
+    homeDir: opts.homeDir,
+    env,
+    etcDir: opts.etcDir,
+    platform: opts.platform,
+    nodeExecPath: opts.nodeExecPath,
+    systemLibraryDir: opts.systemLibraryDir,
+    cache: registryCache(),
+  };
+  // What a manifest could not tell: one line each, said whatever else happens.
+  const manifestNotes: string[] = [];
+  const { commands, notVetted, cut } = boundedInstalls(
+    command,
+    shell,
+    popularTest(opts),
+    (pkg, c) => runsInstalledCopy(pkg, c, opts),
+    opts.nested,
+    cdpath,
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes),
+  );
+  // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
+  if (commands.length === 0) {
+    const said = [...manifestNotes, ...(cut ? [CUT_NOTE] : [])];
+    return said.length > 0 ? { context: said.join('\n') } : null;
+  }
+
   const offline = env['GUARDIAN_OFFLINE'] === '1';
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
-  // One deadline for the whole call, and one cache, shared by every command
-  // of the line (review I4).
+  // One deadline for the whole call (review I4).
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
-  const cache = registryCache();
   const batches = await Promise.all(
     commands.map((c) =>
       vetPackages(c.packages, {
@@ -404,16 +552,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         offline,
         deadlineAt,
         now: opts.now ?? Date.now(),
-        registry: {
-          projectDir: opts.cwd,
-          homeDir: opts.homeDir,
-          env,
-          etcDir: opts.etcDir,
-          platform: opts.platform,
-          nodeExecPath: opts.nodeExecPath,
-          systemLibraryDir: opts.systemLibraryDir,
-          cache,
-        },
+        registry,
         commandRegistries: c.registries,
         ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
         ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
@@ -422,12 +561,25 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     ),
   );
   const denies: string[] = [];
+  const manifestDenies: string[] = [];
   const warnings: string[] = [];
   const unverified: string[] = [];
+  /** Per manifest file: how many of its packages could not be vetted, and the first reason. */
+  const unverifiedIn = new Map<string, { count: number; why: string }>();
   let malicious = false;
   let missingIn: string | undefined;
   commands.forEach((cmd, i) => {
     for (const r of batches[i] ?? []) {
+      if (cmd.fromManifest !== undefined) {
+        const d = decideManifestOne(r, cmd.fromManifest);
+        if (d.deny !== undefined) manifestDenies.push(d.deny);
+        if (d.warn !== undefined) warnings.push(d.warn);
+        if (d.unverified !== undefined) {
+          const sofar = unverifiedIn.get(cmd.fromManifest);
+          unverifiedIn.set(cmd.fromManifest, { count: (sofar?.count ?? 0) + 1, why: sofar?.why ?? d.unverified });
+        }
+        continue;
+      }
       const d = decideOne(r, cmd.uncertain);
       if (d.deny !== undefined) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
@@ -437,17 +589,28 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     }
   });
 
-  if (denies.length > 0) {
-    return {
-      deny:
-        `dev-guardian blocked this install: ${denies.join(' ')} ` +
-        'Check the package name against the project documentation or the registry before installing anything. ' +
-        // Controller ruling (round 2): a missing-name deny carries its own
-        // escape hatch — a registry flag, or an inline prefix, takes the
-        // command out of the confident shape, so the agent can always
-        // proceed. A MALICIOUS package gets no such hint.
-        (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : escapeHatch(missingIn ?? '', shell)),
-    };
+  if (denies.length > 0 || manifestDenies.length > 0) {
+    const parts: string[] = [];
+    if (denies.length > 0) {
+      parts.push(
+        `${denies.join(' ')} ` +
+          'Check the package name against the project documentation or the registry before installing anything. ' +
+          // Controller ruling (round 2): a missing-name deny carries its own
+          // escape hatch — a registry flag, or an inline prefix, takes the
+          // command out of the confident shape, so the agent can always
+          // proceed. A MALICIOUS package gets no such hint.
+          (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : escapeHatch(missingIn ?? '', shell)),
+      );
+    }
+    if (manifestDenies.length > 0) {
+      // A manifest names it, so the command names nothing to correct: no hint
+      // of a way round, and the decision is handed to the user with the file.
+      parts.push(
+        `${manifestDenies.join(' ')} ` +
+          "Installing it or removing the dependency is the user's decision: tell them which file names it, and install nothing from that manifest until they have decided.",
+      );
+    }
+    return { deny: `dev-guardian blocked this install: ${parts.join(' ')}` };
   }
   const lines: string[] = [];
   if (warnings.length > 0) {
@@ -455,6 +618,10 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     for (const w of warnings) lines.push(`  • ${w}`);
   }
   if (unverified.length > 0) lines.push(`dev-guardian could not vet ${unverified.join(', ')} — not verified.`);
+  for (const [file, { count, why }] of unverifiedIn) {
+    lines.push(`dev-guardian could not vet ${plural(count)} of ${file} (${why}) — not verified.`);
+  }
+  lines.push(...manifestNotes);
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`,
@@ -516,6 +683,48 @@ const CHECK_KEYS: ReadonlyArray<keyof PackageChecks> = [
 
 function sentence(text: string): string {
   return /[.?!]$/.test(text) ? text : `${text}.`;
+}
+
+/**
+ * One package a MANIFEST names, in the hook's answer — a narrower rule than
+ * {@link decideOne}'s, because a manifest is installed at every `npm
+ * install` and what it names was not typed by anyone just now:
+ *
+ *   - malicious (OSV `MAL-` on the version its range resolves to, npm's
+ *     takedown placeholder) → deny, with the file that names it;
+ *   - missing from the public registry → a warning, never a deny: a missing
+ *     name in a manifest is usually a private or a workspace package, and a
+ *     deny would stop every install of the project;
+ *   - a typosquat suspicion → a warning;
+ *   - a fresh version, install scripts, known vulnerabilities, an exact
+ *     version nobody published → nothing: said once at `npm install <name>`,
+ *     they would be said at every install here (`deps_audit` reads the
+ *     manifest and the lockfile for vulnerabilities);
+ *   - the lookup or the malware check could not run → counted, for the one
+ *     line that says how many packages of the file were not verified.
+ *
+ * Nothing of the manifest is in the text but the file's name, the package's
+ * name and a version: `manifest.ts` lets nothing else through.
+ */
+function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; warn?: string; unverified?: string } {
+  if (r.checks.malicious.status === 'fail') {
+    const why = Object.values(r.checks)
+      .filter((c) => c.status === 'fail' && c.detail !== undefined)
+      .map((c) => c.detail ?? '')
+      .join('; ');
+    return { deny: `${file} names '${label(r)}': ${sentence(why)}` };
+  }
+  if (r.not_on_public_registry === true) {
+    const didYouMean = r.similar_to !== undefined ? ` Did you mean '${r.similar_to}'?` : '';
+    const why = r.verdict === 'block' ? `not denied: ${NAMED_BY_MANIFEST}` : (r.checks.exists.detail ?? '');
+    return { warn: `${file}: '${label(r)}': ${NOT_FOUND}${didYouMean} (${why})` };
+  }
+  const out: { warn?: string; unverified?: string } = {};
+  const typo = r.checks.typosquat;
+  if (typo.status === 'warn' && typo.detail !== undefined) out.warn = `${file}: ${label(r)}: ${typo.detail}`;
+  const unknown = [r.checks.exists, r.checks.malicious].find((c) => c.status === 'unknown' && c.detail !== undefined);
+  if (unknown !== undefined) out.unverified = unknown.detail ?? '';
+  return out;
 }
 
 /**
