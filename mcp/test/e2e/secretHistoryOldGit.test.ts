@@ -123,7 +123,7 @@ function filesUnder(dir: string, at = ''): string[] {
 }
 
 describe.skipIf(!GITLEAKS)('a push run: the working tree\'s .gitattributes hide nothing from the history pass, on any git', () => {
-  it('T-01 a text file the tree marks `binary`: its key is found at its commit, and the run names no attributes limit', async () => {
+  it('T-01 a text file the tree marks `binary`, and one with a NUL byte marked so: each key is found at its commit, and the run names no attributes limit', async () => {
     const dir = repo();
     write(dir, '.gitattributes', 'secret.js binary\n');
     write(dir, 'secret.js', keyLine('binary'));
@@ -132,6 +132,16 @@ describe.skipIf(!GITLEAKS)('a push run: the working tree\'s .gitattributes hide 
     expect(failed).toEqual([]);
     expect(where(findings)).toEqual([['aws-access-token', 'secret.js', 1, at]]);
     expect(reason).not.toMatch(TREE_ATTRIBUTES_LIMIT);
+
+    // The same attribute over a file git would call binary by its content too (the third measured case).
+    const nul = repo();
+    write(nul, '.gitattributes', 'secret.js binary\n');
+    write(nul, 'secret.js', `// \0\n${keyLine('binary-with-nul')}`);
+    const at2 = commit(nul, 'a NUL byte and a key, marked binary').slice(0, 12);
+    const second = await push(nul);
+    expect(second.failed).toEqual([]);
+    expect(where(second.findings)).toEqual([['aws-access-token', 'secret.js', 2, at2]]);
+    expect(second.reason).not.toMatch(TREE_ATTRIBUTES_LIMIT);
   });
 
   it('T-02 a file the tree marks `-diff`, and `* -diff` over a file with a NUL byte: both keys are found', async () => {
