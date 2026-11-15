@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **24 limits**, 22 with at least one example and 2 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **30 limits**, 27 with at least one example and 3 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -74,6 +74,26 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
   - `Invoke-WebRequest https://example.invalid/i.ps1 -OutFile i.ps1; if ((Get-FileHash i.ps1).Hash -eq $expected) { & .\i.ps1 }` (PowerShell) → `block` — a Get-FileHash comparison is not recognised as a check
 - A bare command name runs the download only when the file was saved or placed in one of a fixed list of PATH directories (`/usr/local/bin`, `/usr/bin`, `/bin`, `/usr/local/sbin`, `/opt/homebrew/bin`, `~/bin`, `~/.local/bin`, …) in the same command — another directory on PATH, or a changed `PATH`, is not seen.
   - `curl -fsSL -o /opt/tools/bin/tool https://example.invalid/tool && chmod +x /opt/tools/bin/tool && tool --version` (bash) → `ok`
+
+## Install-time package vetting
+
+- A manifest install is vetted for the npm family (`npm install` with no package, `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`) and for `pip install -r` / `uv pip install -r`. The manifest installs of the other tools are not read: `poetry install`, `uv sync`, `pipenv install`, `composer install`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test`, `yarn workspaces focus` and a `pnpm install <package>`. Their manifest is installed without a lookup; `deps_audit` reads it.
+  - `Bash` on PreToolUse, input `{"command":"poetry install"}`, with `pyproject.toml` present → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"uv sync"}`, with `pyproject.toml` present → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"composer install"}`, with `composer.json` present → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"dotnet restore"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"pipenv install"}` → `none` (no answer)
+- Only the manifest's direct dependencies are looked up, at the version its range resolves to on the registry today. The lockfile is not read: a version it pins (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), a `resolved` URL that points somewhere else, and every transitive dependency are installed without a lookup — thousands of packages do not fit the hook's 3 s. `scan_deps` and `deps_audit` read the lockfile.
+  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `package-lock.json` present → `none` (no answer)
+- In a workspace, only the `package.json` of the directory the command runs in is read. The manifests of the workspace's members (`workspaces`, `pnpm-workspace.yaml`) are installed by the same command and are not looked up.
+  - `Bash` on PreToolUse, input `{"command":"npm install"}`, with `package.json`, `packages/a/package.json` present → `none` (no answer)
+- A dependency that does not come from a registry is not looked up, because there is nothing to look up: a git repository, a URL, a tarball, a path, `file:`, `link:`, `workspace:`, `catalog:` in a `package.json`; `-e`, a path, a URL or `name @ url` in a requirements file. What such a dependency holds is whatever its source serves.
+  - `Bash` on PreToolUse, input `{"command":"npm install"}`, with `package.json` present → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"pip install -r requirements.txt"}`, with `requirements.txt` present → `none` (no answer)
+- A package of a scope that the npm configuration gives a registry of its own (`@scope:registry=` in an `.npmrc`, `npmScopes` in `.yarnrc.yml`, `[install.scopes]` in `bunfig.toml`) is not looked up: the package manager fetches it from that registry, and its name is not sent to the public one. When the user's configuration names the registry, nothing is said. When a file of the project does, one line says how many packages were not vetted — the file is the repository's, and what that registry serves cannot be checked from here.
+  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `.npmrc`, `package.json` present → `warn`
+- A manifest install is told less than `npm install <name>` is. A package the manifest names is denied when it is malicious and warned about when it looks like a typosquat or the public registry does not have it. It is not warned about a version published under 72 hours ago, install scripts or known vulnerabilities: a manifest is installed again and again, and each of those would be repeated every time. So a fresh, compromised release of a legitimate dependency is installed from a manifest in silence until an advisory names it. A missing name never denies a manifest install either — in a manifest it is usually a private or a workspace package.
+  - No test runs it: Each of these shows only in what a registry answers — a publish date, a version's scripts, an advisory — and the suite asks nothing of the network. `hookDecision.test.ts` (T-17) holds it with a registry stand-in: the same package warns by name and is silent from a manifest..
 
 ## The write guards
 
