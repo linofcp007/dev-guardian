@@ -632,6 +632,8 @@ const NPM_MANIFEST_INSTALL = new Set([
 ]);
 const COMPOSER_REQUIRE = new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
 const BUN_ADD = new Set(['add', 'a', 'install', 'i']);
+/** pnpm's install subcommand: with a package it adds it, with none it installs the manifest. */
+const PNPM_INSTALL = new Set(['install', 'i']);
 /** Flags after which a bare `yarn` installs nothing: it prints and leaves. */
 const YARN_PRINTS = new Set(['--version', '-v', '-V', '--help', '-h']);
 /** The flags of pip and `uv pip` that name a requirements file. */
@@ -767,10 +769,9 @@ function detect(words: readonly ShellWord[]): Detected | null {
       return null;
     case 'pnpm':
       if (subWord === 'add') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] };
-      // `pnpm install` / `pnpm i` with no word after it installs the manifest; with one, it is read as it was: not at all.
-      if ((subWord === 'install' || subWord === 'i') && nextPositional(words, sub + 1, table) < 0) {
-        return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
-      }
+      // `pnpm install <pkg>` / `pnpm i <pkg>` is pnpm's `add` (measured, pnpm 10.33: it resolves the name as a direct
+      // dependency); with no package it installs the manifest. Until 3.10.0 the form with a package was not read at all.
+      if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       return null;
     case 'bun': {
       // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too; a bare `bun install` installs the manifest.
@@ -1355,7 +1356,8 @@ function confidentShape(text: string): string | null {
         [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
         break;
       }
-      if (at(0) !== 'add') return notPlain(`'${tool} ${at(0)}'`);
+      // `pnpm install <pkg>` is as plain an install statement as `pnpm add <pkg>`; yarn's `install` takes no package.
+      if (at(0) !== 'add' && !(tool === 'pnpm' && PNPM_INSTALL.has(at(0)))) return notPlain(`'${tool} ${at(0)}'`);
       [key, args] = [tool, rest.slice(1)];
       break;
     case 'bun':

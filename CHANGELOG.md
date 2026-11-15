@@ -8,6 +8,16 @@ version bump.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`pnpm install <package>` and `pnpm i <package>` are vetted.** pnpm reads both as `pnpm add` — it resolves the
+  name as a direct dependency — and the install hook read neither: `pnpm i crossenv` passed in silence, in the
+  100 ms of a command that installs nothing, while `pnpm add crossenv` was denied. They are now the same by-name
+  install to the hook: the same lookups, the same answers (a malicious package is denied, a name the registry does
+  not have is denied as missing, a typosquat warns), the same cap of 50 packages, and the manifest beside them is
+  not read. `pnpm install` with no package is still the manifest install 3.10.0 made it. The known-limit record
+  that named this spelling no longer does.
+
 ## [3.10.0] - 2026-11-15
 
 The install hook reads what a manifest install fetches. `npm install crossenv` was denied while the same package in

@@ -77,7 +77,7 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
 
 ## Install-time package vetting
 
-- A manifest install is vetted for the npm family (`npm install` with no package, `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`) and for `pip install -r` / `uv pip install -r`. The manifest installs of the other tools are not read: `poetry install`, `uv sync`, `pipenv install`, `composer install`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test`, `yarn workspaces focus` and a `pnpm install <package>`. Their manifest is installed without a lookup; `deps_audit` reads it.
+- A manifest install is vetted for the npm family (`npm install` with no package, `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`) and for `pip install -r` / `uv pip install -r`. The manifest installs of the other tools are not read: `poetry install`, `uv sync`, `pipenv install`, `composer install`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it.
   - `Bash` on PreToolUse, input `{"command":"poetry install"}`, with `pyproject.toml` present → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"uv sync"}`, with `pyproject.toml` present → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"composer install"}`, with `composer.json` present → `none` (no answer)

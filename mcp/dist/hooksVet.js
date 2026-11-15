@@ -1939,6 +1939,7 @@ var NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
 ]);
 var COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
 var BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
+var PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
 var YARN_PRINTS = /* @__PURE__ */ new Set(["--version", "-v", "-V", "--help", "-h"]);
 var REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement", "--requirements"]);
 var isGlobalFlag = (f) => f.flag === "-g" || f.flag === "--global" || f.flag === "--location" && f.value === "global";
@@ -2024,9 +2025,7 @@ function detect(words) {
       return null;
     case "pnpm":
       if (subWord === "add") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [] };
-      if ((subWord === "install" || subWord === "i") && nextPositional(words, sub + 1, table) < 0) {
-        return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
-      }
+      if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
       return null;
     case "bun": {
       if (!BUN_ADD.has(subWord)) return null;
@@ -2558,7 +2557,7 @@ function confidentShape(text) {
         [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
         break;
       }
-      if (at(0) !== "add") return notPlain(`'${tool} ${at(0)}'`);
+      if (at(0) !== "add" && !(tool === "pnpm" && PNPM_INSTALL.has(at(0)))) return notPlain(`'${tool} ${at(0)}'`);
       [key, args] = [tool, rest.slice(1)];
       break;
     case "bun":
