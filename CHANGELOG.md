@@ -17,6 +17,15 @@ version bump.
   not have is denied as missing, a typosquat warns), the same cap of 50 packages, and the manifest beside them is
   not read. `pnpm install` with no package is still the manifest install 3.10.0 made it. The known-limit record
   that named this spelling no longer does.
+- **A manifest install no longer downloads what it does not report.** For every package of a manifest whose
+  registry document had changed in the last 72 hours — `next`, `prisma`, `typescript` and `playwright` publish
+  daily — the hook fetched npm's FULL document, and for a version with install scripts that version's own, to
+  work out the two checks a manifest install never reports: the age of the version and the names of its scripts.
+  Measured on 15 real `package.json` files with 3.10.0: 3 to 19 such requests and 10 to 152 MB at each `npm ci`,
+  half of everything the hook read, up to 0.8 s of waiting after OSV had answered — and in two of the 15 they ran
+  into the 3 s network budget. The hook now asks the registry for one abbreviated document per package and OSV
+  for the batch. What it answers is unchanged: a malicious package is denied, a typosquat and a missing name
+  warn. A package named on the command line, the `vet_packages` tool and the CLI ask what they asked before.
 
 ## [3.10.0] - 2026-11-15
 

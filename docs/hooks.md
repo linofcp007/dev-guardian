@@ -83,7 +83,7 @@ A command that installs from a manifest names no package — the manifest does. 
 | --- | --- |
 | **Malicious** (OSV `MAL-` on the version its range resolves to, or npm's security placeholder) | **deny**, naming the file and the package; the message says that installing it or removing the dependency is the user's decision, and names no way round |
 | Typosquat suspicion; a name the public registry does not have | warning, naming the file — a missing name never denies a manifest install, where it is usually a private or a workspace package |
-| Published less than 72 h ago, npm install scripts, known vulnerabilities | not reported: each would be repeated at every install (`deps_audit` reads the manifest and the lockfile) |
+| Published less than 72 h ago, npm install scripts, known vulnerabilities | not reported: each would be repeated at every install (`deps_audit` reads the manifest and the lockfile). The first two are not looked up either: for a package of a manifest the hook asks the registry for one document — npm's abbreviated one — and OSV for the batch, never npm's full document or a version's own, which only those two checks need |
 | A check could not run | one line: how many packages of which file were **not** verified |
 | The manifest is there and was not read (not a regular file, over 1 MiB, not valid JSON, on a network path), a file it includes was not, or where the command runs is not known (`--prefix`, `-C`, `--dir`, `--cwd`, a `cd` that may not have run) | one line: what was not read, and that its packages were not vetted |
 | The manifest is not there; every package clean | silent |
