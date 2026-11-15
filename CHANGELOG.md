@@ -33,6 +33,20 @@ version bump.
   shadow, and a `require` made inside a function still fires. One measured limit, said in the pack: in a file where
   the same name is also declared by a destructuring in another function, Semgrep does not apply the
   function-declaration exclusion to it, and that call fires as it did before.
+- **The secrets history pass reads past the working tree's `.gitattributes` on a git older than 2.40.** git applies
+  the tree's `.gitattributes` to every commit's diff, so a file the tree marks `binary` or `-diff` is in no hunk of
+  `git log -p` — and a push that added such a line beside a key had the key read in no commit. From git 2.40 the
+  pass sets them aside with `GIT_ATTR_SOURCE`. An older git has no such variable — Debian 12 and the
+  `node:*-bookworm` images ship 2.39.5, Ubuntu 22.04 ships 2.34 — and there the pass named the limit and ended
+  `ok`, exit 0, with the key unread. It now starts gitleaks from an empty scratch directory, with `GIT_DIR`,
+  `GIT_WORK_TREE` and `GIT_INDEX_FILE` naming the repository, an empty work tree and an index that does not exist:
+  git reads the tree's attributes from the files of the directory it runs in, and finds none. Measured on git
+  2.39.5 and 2.34.1 with gitleaks 8.30.1: `binary`, `-diff`, `* -diff` over a NUL byte, attributes never
+  committed, a submodule and — from 2.36 — a merge's own change went from no finding to the finding, at its commit.
+  Started away from the project, gitleaks is handed the project's `.gitleaks.toml` and `.gitleaksignore`. Nothing
+  is written in the repository; a git 2.40 or later is started exactly as before; and where the repository's git
+  directory cannot be resolved the limit is still named. What the repository itself chose — its
+  `$GIT_DIR/info/attributes` — still applies.
 
 ## [3.10.1] - 2026-11-15
 

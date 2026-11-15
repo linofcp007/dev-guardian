@@ -38,6 +38,11 @@ afterEach(() => {
   fake.gitDir = null;
 });
 
+// Every test here builds a repository with a merge — a dozen real `git` processes — and the view starts as many
+// again. On an idle machine a test takes 1 to 2 s; with the machine busy (a rule-pack ablation beside it) one crossed
+// vitest's 10 s default once in sixteen runs, 2026-11-15. The bound is for a hang: no test asserts by reaching it.
+vi.setConfig({ testTimeout: 60_000 });
+
 function git(dir: string, ...args: string[]): void {
   const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
