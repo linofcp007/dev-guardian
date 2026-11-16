@@ -10,6 +10,17 @@
  * re-scan inside the worktree, judge the scan and test differentials, and —
  * only when the fix verifies AND `apply` is true — open a pull request.
  *
+ * **A group may take more than one round (3.11.0, `fixpr/raise.ts`).** The
+ * plan installs the minimum version that clears the active advisories; when
+ * that version has an advisory of its own, the scan differential fails on
+ * the new finding — which names the version that clears it. The plan is then
+ * made again with that version (`ToolCallMeta.extraFixedVersions`, never a
+ * tool parameter) and the group runs again in a fresh worktree of the base
+ * commit: at most two raises, never across a major, the same group hash and
+ * branch. The answer is the last round's, `commands` every round's, and
+ * `raised` what was lifted and why. The project's tests run only on the tree
+ * that passed the scan differential (`verify.ts#testsAfterScan`).
+ *
  * **`apply` defaults to `false`, and that is the whole safety story** (design
  * §6). Everything expensive and everything verifiable still runs — the
  * worktree is created, the fix is applied, both differentials execute. What
@@ -152,9 +163,10 @@ import {
 } from '../fixpr/repoPackageConfig.js';
 import { packageManagerEnv } from '../fixpr/testCommandEnv.js';
 import { projectTreeState } from '../fixpr/treeState.js';
+import { describeRaised, describeStop, verifyWithRaises } from '../fixpr/raise.js';
 import { rescanOriginOf, scannerNotVerified, type RescanOrigin } from '../fixpr/rescan.js';
-import type { FixGroup, FixSource, ScanVerdict, TestVerdict, UpgradeStep } from '../fixpr/types.js';
-import { judgeScan, judgeTests, mayOpenPr, type BaseTreeProvider } from '../fixpr/verify.js';
+import type { FixGroup, FixSource, Raised, ScanVerdict, TestVerdict, UpgradeStep } from '../fixpr/types.js';
+import { judgeScan, judgeTests, mayOpenPr, testsAfterScan, type BaseTreeProvider } from '../fixpr/verify.js';
 import { createWorktree } from '../fixpr/worktree.js';
 import { openSetForProject, type OpenFinding } from '../history/openSet.js';
 import { enrichCveIntel } from '../intel/enrich.js';
@@ -246,6 +258,13 @@ interface GroupResult {
   pr: PrOutcome | null;
   note: string;
   /**
+   * Packages whose target was raised above the first plan's, and verified
+   * there: the minimum version had an advisory of its own (`fixpr/raise.ts`).
+   * Present only on a verified group that was raised; `commands` then holds
+   * every round's, in the order they ran.
+   */
+  raised?: Raised[];
+  /**
    * The repository's own package-manager configuration moved out of the
    * worktree while the fix was applied, verified and tested — put back
    * before anything was committed. Absent when there was none.
@@ -305,7 +324,8 @@ const tool = defineTool({
     'request per ecosystem or scanner. apply defaults to false: a dry run pushes nothing, but runs the ' +
     "project's own test command — the project's code, run as you. The repo's .npmrc/.yarnrc and like " +
     'configs are set aside; a non-plain pip requirement, an npm network path or a Composer repository ' +
-    'refuses the fix. `filtered` explains the rest.',
+    'refuses the fix. `raised`: a version installed above a fix with its own advisory. `filtered` explains ' +
+    'the rest.',
   inputSchema,
   handler: async (input, ctx, callMeta) => handler(input, ctx, callMeta),
 });
@@ -428,9 +448,37 @@ async function handler(
       continue;
     }
     try {
-      results.push(
-        await processGroup({ group, allFindings, origins, projectPath, prefix: tree.prefix, apply, ctx, callMeta }),
-      );
+      // A round is one `processGroup` — a fresh worktree of the base commit,
+      // the group's steps, the re-scan, the verdicts. Usually there is one.
+      // When the version a round applied brings an advisory of its own, with
+      // a fixed version, the plan is made again knowing it and the group is
+      // run again from the base (`fixpr/raise.ts`): the answer is the last
+      // round's, and its commands are every round's.
+      let commands: string[] = [];
+      const cycle = await verifyWithRaises({
+        group,
+        runRound: async (current, trying) => {
+          let after: readonly Finding[] = [];
+          const result = await processGroup({
+            group: current, allFindings, origins, projectPath, prefix: tree.prefix, apply, ctx, callMeta,
+            earlierCommands: commands,
+            trying,
+            onRescan: (found) => { after = found; },
+          });
+          commands = result.commands;
+          return { result, verdict: result.scan, after };
+        },
+        replan: async (extra) => {
+          const again = await fetchUpgradeSteps(projectPath, tree.prefix, ctx, callMeta, extra);
+          if (again.error !== null) return { failed: again.error };
+          const failure = again.runnerFailures.find((f) => f.ecosystem === group.key);
+          if (failure !== undefined) return { failed: `${failure.ecosystem}: ${failure.reason}` };
+          const same = buildGroups({ findings: allFindings, upgradeSteps: again.steps, sources, severityMin, rescannable: verifiable })
+            .find((g) => g.source === group.source && g.key === group.key);
+          return same === undefined ? { failed: `the new plan has no ${group.key} steps for these findings` } : rankCandidates(same, exploitability);
+        },
+      });
+      results.push({ ...cycle.result, note: `${cycle.result.note}${describeStop(cycle, cycle.result.scan !== null)}` });
     } catch (e) {
       // Every ANTICIPATED failure mode (worktree creation, apply, re-scan,
       // push, gh pr create) is reported by processGroup as a normal return,
@@ -519,12 +567,17 @@ async function exploitabilityOf(
  * plan's installed versions and pip `file`s are HEAD's, which is exactly
  * what the fix edits. The CVE history it plans against is the project's own
  * (`ToolCallMeta.originProjectPath`).
+ *
+ * `extraFixedVersions`: what a verification of this run found on a version
+ * the first plan applied (`fixpr/raise.ts`) — handed to the plan through the
+ * call's internal meta, the one way a target is raised.
  */
 async function fetchUpgradeSteps(
   projectPath: string,
   prefix: string,
   ctx: PluginContext,
   callMeta: ToolCallMeta | undefined,
+  extraFixedVersions?: ReadonlyMap<string, readonly string[]>,
 ): Promise<PlanResult> {
   const depsPlanTool = TOOLS.find((t) => t.name === 'deps_update_plan');
   if (depsPlanTool === undefined) {
@@ -540,6 +593,7 @@ async function fetchUpgradeSteps(
       ...(callMeta?.signal !== undefined ? { signal: callMeta.signal } : {}),
       ...(callMeta?.progressToken !== undefined ? { progressToken: callMeta.progressToken } : {}),
       originProjectPath: projectPath,
+      ...(extraFixedVersions !== undefined ? { extraFixedVersions } : {}),
     };
     // The planner runs `npm outdated`, `composer outdated`, `cargo outdated`,
     // `go list -m -u` and `dotnet restore` in this tree (never Bundler):
@@ -629,8 +683,18 @@ async function processGroup(opts: {
   ctx: PluginContext;
   /** The host's, handed to the re-scan so cancelling this call aborts it. */
   callMeta: ToolCallMeta | undefined;
+  /** The commands of this group's earlier rounds (`fixpr/raise.ts`): this round's follow them in `commands`. */
+  earlierCommands?: readonly string[];
+  /** What this round is trying, when it is a raised one: said in the result and the pull request if it verifies. */
+  trying?: readonly Raised[];
+  /** Handed the re-scan's findings once it ran: what the scan verdict was judged on. */
+  onRescan?: (findings: readonly Finding[]) => void;
 }): Promise<GroupResult> {
   const { group, allFindings, origins, projectPath, prefix, apply, ctx, callMeta } = opts;
+  const earlier = [...(opts.earlierCommands ?? [])];
+  const trying = opts.trying ?? [];
+  const raised = trying.length > 0 ? { raised: [...trying] } : {};
+  const raisedNote = trying.length > 0 ? `; target raised: ${describeRaised(trying)}` : '';
   const branch = branchName(group.source, group.key, group.hash);
   const targets = group.candidates.flatMap((c) => c.fingerprints);
   const findings = findingsForGroup(allFindings, group);
@@ -652,11 +716,11 @@ async function processGroup(opts: {
     const existing = await prExists({ projectPath, branch });
     if (existing.known && existing.exists) {
       const pr = existsOutcome(branch);
-      return { ...base, commands: [], outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
+      return { ...base, commands: earlier, outcome: PR_STATUS_OUTCOME[pr.status], scan: null, tests: null, pr, note: prNote(pr) };
     }
     return {
       ...base,
-      commands: [],
+      commands: earlier,
       outcome: 'worktree_failed',
       scan: null,
       tests: null,
@@ -681,7 +745,7 @@ async function processGroup(opts: {
       const pr = existsOutcome(branch);
       return {
         ...base,
-        commands: [],
+        commands: earlier,
         outcome: PR_STATUS_OUTCOME[pr.status],
         scan: null,
         tests: null,
@@ -691,7 +755,7 @@ async function processGroup(opts: {
     }
     return {
       ...base,
-      commands: [],
+      commands: earlier,
       outcome: 'worktree_failed',
       scan: null,
       tests: null,
@@ -719,7 +783,7 @@ async function processGroup(opts: {
     // whole repository): where the fix, the test run and the re-scan happen.
     // Git operations (openPr) use the worktree root.
     const projectDir = inWorktree(worktree.path, prefix);
-    const commands: string[] = [];
+    const commands: string[] = [...earlier];
 
     // Before any package manager runs here: the repository's own
     // package-manager configuration (`.npmrc`, `.yarnrc*`, pip's, Cargo's,
@@ -814,6 +878,7 @@ async function processGroup(opts: {
         note: `verification_failed: could not verify the fix — ${rescan.reason}`,
       };
     }
+    opts.onRescan?.(rescan.findings);
 
     // "Before" is exactly the scans that produced the targets — the same
     // tools and packs the re-scan just ran (Task 11 item 2) — never "the
@@ -825,12 +890,16 @@ async function processGroup(opts: {
       { scan_id: sourceScanIds.join(','), findings: before },
       { scan_id: rescan.scanIds.join(','), findings: rescan.findings },
     );
-    const testVerdict = await judgeTests({
-      derived: derivedTest,
-      worktreePath: projectDir,
-      baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
-      ...(env.ok && env.unprepared !== undefined ? { unprepared: env.unprepared } : {}),
-    });
+    // The project's suite runs on the tree that passed the scan differential, and on no other: a group may now
+    // take more than one round, and no pull request opens on a failed scan whatever the tests say.
+    const testVerdict = await testsAfterScan(scanVerdict, () =>
+      judgeTests({
+        derived: derivedTest,
+        worktreePath: projectDir,
+        baseTree: baseTreeProvider(projectPath, prefix, derivedTest),
+        ...(env.ok && env.unprepared !== undefined ? { unprepared: env.unprepared } : {}),
+      }),
+    );
 
     if (!mayOpenPr(scanVerdict, testVerdict)) {
       const why = !scanVerdict.passed
@@ -847,7 +916,7 @@ async function processGroup(opts: {
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
-        note: `not_verified: ${why} — no pull request opened`,
+        note: `not_verified: ${why} — no pull request opened${trying.length > 0 ? ` (after raising ${describeRaised(trying)})` : ''}`,
       };
     }
 
@@ -859,7 +928,8 @@ async function processGroup(opts: {
         scan: scanVerdict,
         tests: testVerdict,
         pr: null,
-        note: 'verified: dry run (apply=false) — re-run with apply=true to open a pull request',
+        note: `verified: dry run (apply=false) — re-run with apply=true to open a pull request${raisedNote}`,
+        ...raised,
       };
     }
 
@@ -867,7 +937,7 @@ async function processGroup(opts: {
     // back first, so the commit neither deletes nor changes it.
     setAside.restore();
     const title = buildPrTitle(group, targets.length);
-    const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict });
+    const body = buildPrBody({ group, findings, commands, scan: scanVerdict, tests: testVerdict, raised: trying });
     const pr = await openPr({ projectPath, worktreePath: worktree.path, branch, title, body, scope: commitScopeFor(group, prefix) });
     keepBranch = KEEPS_BRANCH.has(pr.status);
     return {
@@ -877,7 +947,8 @@ async function processGroup(opts: {
       scan: scanVerdict,
       tests: testVerdict,
       pr,
-      note: prNote(pr),
+      note: `${prNote(pr)}${raisedNote}`,
+      ...raised,
     };
   } finally {
     // Per group, on every path above — success, every early return, and any
@@ -1128,8 +1199,11 @@ export function buildPrBody(opts: {
   commands: string[];
   scan: ScanVerdict;
   tests: TestVerdict;
+  /** Packages installed above the first plan's version, and why (`fixpr/raise.ts`). */
+  raised?: readonly Raised[];
 }): string {
   const { group, findings, commands, scan, tests } = opts;
+  const raised = opts.raised ?? [];
   const lines: string[] = [];
 
   lines.push(
@@ -1145,6 +1219,19 @@ export function buildPrBody(opts: {
 
   lines.push('', '## Commands run');
   for (const c of commands) lines.push(`- \`${c}\``);
+
+  if (raised.length > 0) {
+    lines.push(
+      '',
+      '## Target raised',
+      'The lowest version that resolves the findings above has an advisory of its own, so a first attempt at it ' +
+        'did not verify. This pull request installs the version that clears that one too; the commands above are ' +
+        'every attempt, each made from the base commit.',
+    );
+    for (const r of raised) {
+      lines.push(`- \`${r.package_name}\`: planned ${r.planned_version}, applied ${r.applied_version} — ${r.advisories.join(', ')}`);
+    }
+  }
 
   lines.push(
     '',

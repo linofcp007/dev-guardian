@@ -3,13 +3,14 @@
  * on it.
  *
  * The secrets history pass reads every commit's change with the working
- * tree's `.gitattributes` set aside, through `GIT_ATTR_SOURCE`, which git has
- * from 2.40 (`src/runners/historyView.ts`). On an older git the tree's
- * attributes apply, a file it marks `binary` is in no hunk, and the pass says
- * so in a sentence of its own. Debian 12 ships git 2.39.5 — the image this
- * suite runs on in containers, and the base of a great deal of real CI — so
- * a test that expected the key found on every git was a test that had only
- * ever run on a newer one.
+ * tree's `.gitattributes` set aside (`src/runners/historyView.ts`): through
+ * `GIT_ATTR_SOURCE` from git 2.40, and on an older git by starting git from
+ * an empty directory. Until that second half existed, the tree's attributes
+ * applied on an older git and the pass said so in a sentence of its own —
+ * which the tests of that time asserted where it was true: Debian 12 ships
+ * git 2.39.5, the image this suite runs on in containers and the base of a
+ * great deal of real CI. What still depends on the git is a merge's own
+ * change (`--diff-merges=remerge`, 2.36).
  */
 
 import { spawnSync } from 'node:child_process';
@@ -28,8 +29,8 @@ export function gitAtLeast(major: number, minor: number): boolean {
   return a > major || (a === major && b >= minor);
 }
 
-/** The first git with `GIT_ATTR_SOURCE`: the history pass sets the tree's `.gitattributes` aside from here on. */
-export const GIT_SETS_TREE_ATTRIBUTES_ASIDE = gitAtLeast(2, 40);
-
-/** What the history pass says of itself on an older git — the limit it names, never a silent gap. */
+/**
+ * What the history pass says when it could NOT set the tree's `.gitattributes` aside — only on a git older than 2.40
+ * whose git directory could not be resolved. On a run that read the history as committed it must not be there.
+ */
 export const TREE_ATTRIBUTES_LIMIT = /the working tree's \.gitattributes applied to every commit's change .*GIT_ATTR_SOURCE needs git 2\.40/;

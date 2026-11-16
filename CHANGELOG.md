@@ -8,6 +8,102 @@ version bump.
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-11-16
+
+Three places where the tool already knew more than it said or did. `create_fix_pr` learned from its own verification
+which version clears a new advisory and still answered `not_verified`; it now plans again with that version. The
+secrets history pass named, on a git older than 2.40, a limit it can work round — and reads those files now. And the
+JavaScript rule for model output reaching `child_process` had four spellings and one false positive written down as
+known; they are clauses and an exclusion.
+
+### Upgrading from 3.10.1
+
+- **A pull request of `create_fix_pr` may install a version above the one `deps_update_plan` names.** When the
+  plan's version has an advisory of its own and a later version of the same major clears it, the dry run and the
+  pull request are for that later version. The group's `raised` — and a "Target raised" section in the pull request
+  — say the version planned, the version applied and the advisory. Such a group takes about twice as long. Nothing
+  to do; `deps_update_plan` itself answers as before.
+- **A `not_verified` group reads differently.** When the scan differential failed, its `tests.outcome` is `not_run`
+  — the project's tests used to run on that tree too — and its `note` goes on after the counts, naming each new
+  dependency finding. Look at anything of yours that compares that note as a whole, or reads the test verdict of a
+  group that failed its scan.
+- **A push on a git older than 2.40 can find a secret it did not find before.** Debian 12 and the
+  `node:*-bookworm` images have git 2.39.5, Ubuntu 22.04 has 2.34. There the history pass now reads a file the
+  working tree's `.gitattributes` mark `binary` or `-diff`, as it already did on a newer git: a gate on such an
+  image may start failing on a key that was in the pushed commits all along. Rotate the key; the finding is right.
+  The run no longer carries the sentence about the tree's `.gitattributes`. Reading what was hidden cost 6 % more
+  time on a repository of 5 000 commits with fifty such files, and nothing measurable where none were hidden.
+- **`llm-output-to-interpreter-js` reports more code, and less.** A project that reaches `child_process` through a
+  `require` taken apart in the assignment, a destructuring of the module's name or an awaited `import()` may show
+  new findings of this rule; one where a local name shadowed the import loses findings that were wrong.
+
+### Added
+
+- **`llm-output-to-interpreter-js` reads four more ways a file gets to `child_process`.** The rule knows the module
+  by the import or `require` a file writes, and four spellings reached no clause — measured on Linux and Windows
+  with Semgrep 1.182.0, and listed as out of reach since 3.9.3: the function taken from a `require` in the
+  assignment itself (`const exec = require('child_process').exec`, the common CommonJS form), `promisify` of such a
+  `require` (the idiom of Node's own documentation), a function destructured from a name that is the module
+  (`const { exec } = cp`), and a dynamic `import()` awaited into a name or destructured. Each has a clause and a
+  fixture of its own, with and without the `node:` prefix. Still out of reach, and said in the pack: an `import()`
+  consumed by `.then(…)`, `createRequire`, and libraries that wrap `child_process` (`execa`, `cross-spawn`). The
+  pack gives the same 215 fixture findings on Semgrep 1.86.0, 1.120.1, 1.170.1 and 1.182.0 on Linux and on 1.182.0
+  on Windows, and over the fifteen JS/TS applications it was measured on before, the rule still reports nothing.
+- **`create_fix_pr` raises a target whose minimum fix has an advisory of its own.** `deps_update_plan` installs the
+  lowest version that clears the advisories active on what is installed. When that version has an advisory of its
+  own, the verification finds it and refuses the pull request — rightly: trading one CVE for another is no fix —
+  and the answer was `not_verified` with two counts, though the new finding names the version that clears it.
+  Measured with the real Trivy: `lodash@4.17.20` went to 4.18.0 (CVE-2026-4800), 4.18.0 has CVE-2026-2950, fixed in
+  4.18.1, and there was no pull request and no hint. The tool now plans again knowing that version, applies the
+  group afresh from the base commit — never an install on top of the last — and verifies again: the same command
+  ends `verified_dry_run` at 4.18.1. A group's `raised` says, per package, the version planned, the version
+  applied and the advisories that stood between them; `commands` holds every round's, in order; the pull request
+  has a "Target raised" section. A target is raised only when nothing else is left to explain — no target still
+  present, and every new finding a dependency advisory with one fixed version, on a package the group upgraded, at
+  the version it applied — at most twice per group, and never across a major: a fix in the next major is said,
+  with the package, the version and the advisory, and left to you. The branch and the group's identity do not
+  change, so a repeated run finds the pull request it opened. The fixed versions reach the plan through the call's
+  internal metadata: neither tool has a parameter that names a version to raise to, and `deps_update_plan` called
+  by you answers as before. On Windows, with npm and Trivy for real, a group with one raise took 2.1 times a group
+  with none (16.7 s against 8.0 s).
+
+### Changed
+
+- **A `not_verified` group of `create_fix_pr` names what stands in the way.** Beside the two counts, its `note` now
+  lists each new dependency finding — `lodash@4.18.2: CVE-… (fixed in 4.18.3)` — and, when a target could have been
+  raised and was not, why: the next major, the limit of two raises, a plan that could not be made again.
+- **`create_fix_pr` runs the project's tests only on a tree that passed the scan differential.** No pull request
+  opens on a failed scan differential whatever the tests say, and a group may now take more than one round: the
+  suite — the project's own code, and often the slowest step — runs once, on the tree that is the candidate. A
+  `not_verified` by the scan used to carry the tests' verdict; its `tests.outcome` is now `not_run`.
+
+### Fixed
+
+- **A local name that shadows the import no longer fires `llm-output-to-interpreter-js`.** The rule matches the
+  imported name by name, so `const spawn = (job) => job.length; spawn(text)` inside a function fired as if it were
+  `child_process.spawn` — a false positive known since 3.9.3, when only a parameter was excluded. A local
+  declaration now shadows the name as a parameter does: `const`, `let` and `var`, plain and by destructuring, a
+  loop variable, a catch variable and a function declaration, for the name of an imported function and for the
+  name of the module. A `require` of `child_process` is itself such a declaration (`const cp =
+  require('child_process')`), so the exclusion reads what the name is given: a `require(` or an `import(` is no
+  shadow, and a `require` made inside a function still fires. One measured limit, said in the pack: in a file where
+  the same name is also declared by a destructuring in another function, Semgrep does not apply the
+  function-declaration exclusion to it, and that call fires as it did before.
+- **The secrets history pass reads past the working tree's `.gitattributes` on a git older than 2.40.** git applies
+  the tree's `.gitattributes` to every commit's diff, so a file the tree marks `binary` or `-diff` is in no hunk of
+  `git log -p` — and a push that added such a line beside a key had the key read in no commit. From git 2.40 the
+  pass sets them aside with `GIT_ATTR_SOURCE`. An older git has no such variable — Debian 12 and the
+  `node:*-bookworm` images ship 2.39.5, Ubuntu 22.04 ships 2.34 — and there the pass named the limit and ended
+  `ok`, exit 0, with the key unread. It now starts gitleaks from an empty scratch directory, with `GIT_DIR`,
+  `GIT_WORK_TREE` and `GIT_INDEX_FILE` naming the repository, an empty work tree and an index that does not exist:
+  git reads the tree's attributes from the files of the directory it runs in, and finds none. Measured on git
+  2.39.5 and 2.34.1 with gitleaks 8.30.1: `binary`, `-diff`, `* -diff` over a NUL byte, attributes never
+  committed, a submodule and — from 2.36 — a merge's own change went from no finding to the finding, at its commit.
+  Started away from the project, gitleaks is handed the project's `.gitleaks.toml` and `.gitleaksignore`. Nothing
+  is written in the repository; a git 2.40 or later is started exactly as before; and where the repository's git
+  directory cannot be resolved the limit is still named. What the repository itself chose — its
+  `$GIT_DIR/info/attributes` — still applies.
+
 ## [3.10.1] - 2026-11-15
 
 Two fixes to the install hook, both found by running 3.10.0 against the real registry the day it was released. One

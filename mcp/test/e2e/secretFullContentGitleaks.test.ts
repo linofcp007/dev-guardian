@@ -29,7 +29,7 @@ import { runScans } from '../../src/ci/runScans.js';
 import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TOOLS, type ToolModule } from '../../src/tools/index.js';
 import type { Finding } from '../../src/types.js';
-import { GIT_SETS_TREE_ATTRIBUTES_ASIDE, TREE_ATTRIBUTES_LIMIT } from '../helpers/gitVersion.js';
+import { TREE_ATTRIBUTES_LIMIT } from '../helpers/gitVersion.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 import { isInstalled } from '../helpers/toolchain.js';
 
@@ -213,9 +213,11 @@ describe.skipIf(!GITLEAKS)('a renamed file with an edit is read where gitleaks r
 describe.skipIf(!GITLEAKS)('a one-line secret the history pass read in no hunk is new', () => {
   const BASE = { 'a.js': ['console.log(1)'], 'key.pem': pem('b1') };
 
-  // From git 2.40. On an older git (Debian 12: 2.39.5) the tree's attributes
-  // apply to every commit, the key is in no hunk, and the pass names the limit.
-  it('T-03 a .gitattributes the commit adds no longer hides its key from the history pass, from git 2.40; on an older git it does, and the pass names the limit (a push: no ref, no full-content pass)', async () => {
+  // On any git: from 2.40 through GIT_ATTR_SOURCE, on an older one (Debian 12:
+  // 2.39.5) because the pass starts git from an empty directory. Until that
+  // existed this test asserted, there, that the key was in no hunk and that
+  // the pass named the limit.
+  it('T-03 a .gitattributes the commit adds does not hide its key from the history pass, on any git, and no limit is named (a push: no ref, no full-content pass)', async () => {
     for (const attributes of [['config.js binary'], ['* -diff', 'README.md diff']]) {
       const dir = resolveProjectPath(makeTempDir('secret-attributes-')).path;
       git(dir, 'init', '-q');
@@ -229,13 +231,8 @@ describe.skipIf(!GITLEAKS)('a one-line secret the history pass read in no hunk i
       const result = await gate(dir);
       const history = result.steps.flatMap((step) => step.tools_run).find((run) => run.name === 'gitleaks');
       expect([attributes.join(' / '), history?.status]).toEqual([attributes.join(' / '), 'ok']);
-      if (GIT_SETS_TREE_ATTRIBUTES_ASIDE) {
-        expect(where(result.findings), attributes.join(' / ')).toEqual([['aws-access-token', 'config.js', 1, expect.stringContaining(';commit=')]]);
-        expect(history?.reason ?? '', attributes.join(' / ')).not.toMatch(TREE_ATTRIBUTES_LIMIT);
-      } else {
-        expect(where(result.findings), attributes.join(' / ')).toEqual([]);
-        expect(history?.reason ?? '', attributes.join(' / ')).toMatch(TREE_ATTRIBUTES_LIMIT);
-      }
+      expect(where(result.findings), attributes.join(' / ')).toEqual([['aws-access-token', 'config.js', 1, expect.stringContaining(';commit=')]]);
+      expect(history?.reason ?? '', attributes.join(' / ')).not.toMatch(TREE_ATTRIBUTES_LIMIT);
     }
   });
 

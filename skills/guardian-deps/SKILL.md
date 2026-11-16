@@ -45,7 +45,7 @@ Vulnerabilidades de dependências — N findings
 1. `deps_update_plan { project_path: "<project>", prefer: "security" }` — plano ordenado por ecossistema (`package_name`, `installed_version`, `latest_version`, `cve_ids`, `upgrade_command`), classificado como security / patch / minor / major. Lê também:
    - `unplanned` — cada CVE que não ganhou passo, e porquê. Projetos **pnpm e yarn** caem aqui: não há comandos npm para eles, e o fix (`pnpm.overrides` / `resolutions`) aplica-se à mão;
    - `runner_failures` — cada comando de ecossistema que falhou, com o código (por exemplo NU1004, lock desatualizado, versus NU1301, feed inacessível).
-2. Para aplicar os upgrades com prova: `create_fix_pr { project_path: "<project>", sources: ["deps"], apply: false }` — dry run numa worktree isolada (npm com `--ignore-scripts`, pins de pip editados no sítio), re-scan e diferencial de testes. Só com um "sim" explícito, `apply: true` abre o PR. Maven e gradle ficam de fora (o plano não os cobre).
+2. Para aplicar os upgrades com prova: `create_fix_pr { project_path: "<project>", sources: ["deps"], apply: false }` — dry run numa worktree isolada (npm com `--ignore-scripts`, pins de pip editados no sítio), re-scan e diferencial de testes. Se a versão mínima tiver um aviso próprio já corrigido, o alvo sobe (no máximo duas vezes, nunca de major) e o grupo di-lo em `raised`. Só com um "sim" explícito, `apply: true` abre o PR. Maven e gradle ficam de fora (o plano não os cobre).
 3. Aplicação à mão, quando o utilizador prefere: usa o `upgrade_command` de cada entrada, mostra o que vai mudar, pede confirmação, corre os testes. Depois, `scan_deps { project_path: "<project>", force: true }` confirma que o CVE desapareceu.
 
 ## 3. Antes de instalar um package

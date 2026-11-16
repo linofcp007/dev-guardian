@@ -90,6 +90,20 @@ export interface ScanVerdict {
   new_findings: { fingerprint: string; severity: string; title: string }[];
 }
 
+/**
+ * A package whose target `create_fix_pr` raised above the first plan's and
+ * verified (`raise.ts`): what the group's result and the pull request say.
+ */
+export interface Raised {
+  package_name: string;
+  /** What the first plan chose: the minimum version clearing the active advisories. */
+  planned_version: string;
+  /** What the verified round installed. */
+  applied_version: string;
+  /** Every advisory that stood on a version tried before it. */
+  advisories: string[];
+}
+
 /** The test differential's outcome (the design of record's three-verdict table,
  *  plus `not_run` for a project with no derivable test command, and
  *  `unattributed` when the fix's run failed and the base-commit tree to

@@ -51,6 +51,8 @@ const DOCUMENTED: Record<string, readonly string[]> = {
   risk_score: ['suppressed_count', 'future_dated_note'],
   report_export: ['retry_with', 'still running'],
   review_pr: ['preexisting_manifest_gaps'],
+  // The pull request may install a version above the plan's: the minimum fix had an advisory of its own.
+  create_fix_pr: ['raised', 'filtered'],
   scan_sast: ['honoured_config', 'plugin_packs'],
   scan_secrets: ['honoured_config'],
   scan_deps: ['honoured_config', 'suppressed_by_repo_config'],

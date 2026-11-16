@@ -8,11 +8,11 @@
  * `remove()`.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
-const fake = vi.hoisted(() => ({ version: null as string | null }));
+const fake = vi.hoisted(() => ({ version: null as string | null, gitDir: null as 'fails' | 'empty' | null }));
 vi.mock('../../../src/runners/git.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/runners/git.js')>();
   return {
@@ -20,6 +20,10 @@ vi.mock('../../../src/runners/git.js', async (importOriginal) => {
     git: async (...args: Parameters<typeof actual.git>) => {
       const [, gitArgs] = args;
       if (fake.version !== null && gitArgs[0] === 'version') return { exitCode: 0, stdout: `git version ${fake.version}\n`, stderr: '' };
+      // The call that resolves the repository's git directory, made to fail or to answer nothing.
+      if (fake.gitDir !== null && gitArgs[0] === 'rev-parse' && gitArgs.includes('--absolute-git-dir')) {
+        return fake.gitDir === 'fails' ? { exitCode: 128, stdout: '', stderr: 'fatal: not a git repository\n' } : { exitCode: 0, stdout: '\n', stderr: '' };
+      }
       return actual.git(...args);
     },
   };
@@ -31,7 +35,13 @@ import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 afterAll(cleanupTempDirs);
 afterEach(() => {
   fake.version = null;
+  fake.gitDir = null;
 });
+
+// Every test here builds a repository with a merge — a dozen real `git` processes — and the view starts as many
+// again. On an idle machine a test takes 1 to 2 s; with the machine busy (a rule-pack ablation beside it) one crossed
+// vitest's 10 s default once in sixteen runs, 2026-11-15. The bound is for a hang: no test asserts by reaching it.
+vi.setConfig({ testTimeout: 60_000 });
 
 function git(dir: string, ...args: string[]): void {
   const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'core.autocrlf=false', '-c', 'commit.gpgsign=false', ...args], { cwd: dir, encoding: 'utf8' });
@@ -99,15 +109,96 @@ describe('the history view (runners/historyView.ts)', () => {
   it.each([
     ['2.34.1', ["1 merge commit(s)' own changes were not read (--diff-merges=remerge needs git 2.36; this git is 2.34)"]],
     ['2.39.5 (Apple Git-154)', []],
-  ])('git %s: no merges pass on a git without remerge-diff, and the tree\'s attributes named below 2.40', async (version, mergeLimits) => {
+  ])('git %s: no merges pass on a git without remerge-diff, named; below 2.40 the tree\'s attributes are read past, so no limit of theirs is named', async (version, mergeLimits) => {
     fake.version = version;
     const dir = withMerge();
     const view = await openHistoryView(dir, process.env, ['--all']);
     view.remove();
     expect(view.merges === null).toBe(mergeLimits.length > 0);
-    expect(view.limits).toEqual([
-      expect.stringContaining('GIT_ATTR_SOURCE needs git 2.40'),
-      ...mergeLimits,
-    ]);
+    // Up to and including 3.10.1 the first limit here was "GIT_ATTR_SOURCE needs git 2.40": the pass now starts git from an empty
+    // directory on such a git (the tests of secrets-history-old-git, below), and names that limit only when it cannot.
+    expect(view.limits).toEqual([...mergeLimits]);
+  });
+});
+
+// ───────────────── secrets-history-old-git — a git with no GIT_ATTR_SOURCE reads the history from an empty directory
+
+describe('the history view on a git with no GIT_ATTR_SOURCE (secrets-history-old-git)', () => {
+  const ATTRIBUTES_LIMIT = /the working tree's \.gitattributes applied to every commit's change/;
+  const realGitDir = (dir: string): string => spawnSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: dir, encoding: 'utf8' }).stdout.trim();
+  /** The same directory, however the path is spelled (git prints `/` on Windows, and the drive letter's case varies). */
+  const same = (a: string, b: string): boolean => realpathSync(a).toLowerCase() === realpathSync(b).toLowerCase();
+  const THREE = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE'] as const;
+
+  it.each(['2.39.5', '2.34.1'])(
+    'T-10 git %s: gitleaks is to run from an empty directory of the scratch, with GIT_DIR, GIT_WORK_TREE and GIT_INDEX_FILE in both passes, and no attributes limit is named',
+    async (version) => {
+      fake.version = version;
+      const dir = withMerge();
+      const view = await openHistoryView(dir, process.env, ['--all']);
+      let source = '';
+      try {
+        expect(view.source.detached).toBe(true);
+        source = view.source.dir;
+        expect(same(source, dir)).toBe(false);
+        expect(readdirSync(source)).toEqual([]);
+        for (const env of [view.env, ...(view.merges === null ? [] : [view.merges.env])]) {
+          expect(same(env['GIT_DIR'] ?? '', realGitDir(dir))).toBe(true);
+          expect(env['GIT_WORK_TREE']).toBe(source);
+          // An index that is not there is an empty index; it lives in the scratch, beside the empty work tree.
+          expect(existsSync(env['GIT_INDEX_FILE'] ?? dir)).toBe(false);
+          expect(dirname(env['GIT_INDEX_FILE'] ?? '')).toBe(dirname(source));
+        }
+        expect(view.limits.filter((l) => ATTRIBUTES_LIMIT.test(l))).toEqual([]);
+        // 2.39 has remerge-diff and 2.34 has not: the merges' pass is there on the first only, as before.
+        expect(view.merges === null).toBe(version === '2.34.1');
+      } finally {
+        expect(view.remove()).toBeNull();
+      }
+      expect(existsSync(source)).toBe(false);
+      // Nothing of it in the repository: one more git call (the one that resolves the git directory), no file.
+      expect(spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout).toBe('');
+    },
+  );
+
+  it('T-11 a git 2.40 or later: gitleaks runs in the project, as before, with none of the three variables; a version that cannot be read is treated as an old git', async () => {
+    fake.version = MODERN_GIT;
+    const dir = withMerge();
+    const modern = await openHistoryView(dir, process.env, ['--all']);
+    modern.remove();
+    expect(modern.source).toEqual({ dir, detached: false });
+    for (const env of [modern.env, modern.merges?.env ?? {}]) {
+      for (const name of THREE) expect([name, env[name]]).toEqual([name, process.env[name]]);
+    }
+
+    fake.version = 'unreadable';
+    const unknown = await openHistoryView(dir, process.env, ['--all']);
+    unknown.remove();
+    expect(unknown.source.detached).toBe(true);
+    expect(unknown.limits.filter((l) => ATTRIBUTES_LIMIT.test(l))).toEqual([]);
+  });
+
+  it.each(['fails', 'empty'] as const)(
+    'T-12 an old git whose git directory cannot be resolved (rev-parse %s): gitleaks runs in the project, no variable is set, and the attributes limit is named as before',
+    async (how) => {
+      fake.version = '2.39.5';
+      fake.gitDir = how;
+      const dir = withMerge();
+      const view = await openHistoryView(dir, process.env, ['--all']);
+      view.remove();
+      expect(view.source).toEqual({ dir, detached: false });
+      for (const name of THREE) expect([name, view.env[name]]).toEqual([name, process.env[name]]);
+      expect(view.limits.filter((l) => ATTRIBUTES_LIMIT.test(l))).toEqual([expect.stringContaining('GIT_ATTR_SOURCE needs git 2.40')]);
+    },
+  );
+
+  it('T-12 a GIT_DIR the caller already has is what the resolution runs with, and what gitleaks is given', async () => {
+    fake.version = '2.39.5';
+    const dir = withMerge();
+    const elsewhere = makeTempDir('history-view-cwd-');
+    const view = await openHistoryView(elsewhere, { ...process.env, GIT_DIR: join(dir, '.git') }, ['--all']);
+    view.remove();
+    expect(view.source.detached).toBe(true);
+    expect(same(view.env['GIT_DIR'] ?? '', join(dir, '.git'))).toBe(true);
   });
 });

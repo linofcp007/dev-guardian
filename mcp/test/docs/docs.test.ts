@@ -506,3 +506,17 @@ describe('the docs of `pnpm install <package>`', () => {
     }
   });
 });
+
+// ───────────────── secrets-history-old-git — the docs say what each git reads
+
+describe('the docs of the secrets history pass on an older git (secrets-history-old-git)', () => {
+  it("T-13 docs/ci.md and SECURITY.md no longer list the tree's .gitattributes as a limit of a git older than 2.40, and keep the merges of one older than 2.36", () => {
+    for (const page of ['docs/ci.md', 'SECURITY.md']) {
+      const text = read(page).replace(/\s+/g, ' ');
+      expect({ page, listsTheOldLimit: /older than 2\.40/.test(text) }).toEqual({ page, listsTheOldLimit: false });
+      expect({ page, keepsTheMerges: /older than 2\.36/.test(text) }).toEqual({ page, keepsTheMerges: true });
+      // And says, once, that the tree's attributes are set aside whatever the git.
+      expect({ page, saysSo: /working tree's `\.gitattributes` are set aside on any git/.test(text) }).toEqual({ page, saysSo: true });
+    }
+  });
+});

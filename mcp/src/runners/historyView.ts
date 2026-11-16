@@ -60,9 +60,13 @@
  * What stays out of the log is named on the run ({@link HistoryView.limits}),
  * when the walk has it: an octopus merge's own change (remerge-diff shows
  * none — measured, a key only an octopus merge added was read by no pass);
- * what a git older than 2.36 (no remerge-diff: merges) or 2.40 (no
- * `GIT_ATTR_SOURCE`: the tree's attributes apply) cannot show; the paths
- * left to git's judgement. Not named, because the repository chose it:
+ * what a git older than 2.36 cannot show (no remerge-diff: merges); the paths
+ * left to git's judgement. A git older than 2.40 has no `GIT_ATTR_SOURCE`,
+ * and up to and including 3.10.1 the tree's attributes applied there and the run said so,
+ * ending `ok` with the key unread: it is started from an empty directory
+ * instead ({@link emptyWorkTree}, {@link HistoryView.source}), and the limit
+ * is named only where that could not be set up. Not named, because the
+ * repository chose it:
  * `$GIT_DIR/info/attributes`, which outranks the attributes file (measured:
  * its `* -diff` made the NUL file binary again) — never in a fresh clone, but
  * in a repository delivered with its `.git/`. The user's own attributes file
@@ -100,6 +104,14 @@ export interface HistoryView {
   merges: { env: NodeJS.ProcessEnv; count: number | null } | null;
   /** What git still leaves out of the log here, one sentence each; empty when nothing. */
   limits: readonly string[];
+  /**
+   * Where gitleaks — and the git it starts — is to run: the project, or, on a
+   * git with no `GIT_ATTR_SOURCE`, an empty directory of the scratch (see the
+   * module comment). `detached` tells the caller that gitleaks no longer
+   * finds on its own what it read from the project's directory — its
+   * `.gitleaks.toml` and `.gitleaksignore` — and must be handed them.
+   */
+  source: { dir: string; detached: boolean };
   /** Removes the scratch directory. Never throws: what it could not remove, or null. */
   remove: () => string | null;
 }
@@ -115,17 +127,20 @@ export async function openHistoryView(cwd: string, env: NodeJS.ProcessEnv, walk:
   const base = await withoutTreeAttributes(cwd, env);
   const version = await gitVersion(cwd, base);
   const shown = version === null ? 'its version could not be read' : `this git is ${version.join('.')}`;
-  if (version === null || !atLeast(version, 2, 40)) {
-    limits.push(`the working tree's .gitattributes applied to every commit's change — a binary or -diff there hides it (GIT_ATTR_SOURCE needs git 2.40; ${shown})`);
-  }
+  // `GIT_ATTR_SOURCE` (in `base`) does the work from 2.40. An older git — or one whose version could not be read —
+  // ignores it, and is started from an empty directory instead; where that cannot be set up, the limit is named.
+  const setsTreeAttributesAside = version !== null && atLeast(version, 2, 40);
+  const treeAttributesApply = `the working tree's .gitattributes applied to every commit's change — a binary or -diff there hides it (GIT_ATTR_SOURCE needs git 2.40; ${shown})`;
+  const inProject = { dir: cwd, detached: false };
   let scratch: string;
   try {
     scratch = mkdtempSync(join(tmpdir(), 'guardian-history-'));
   } catch (e) {
+    if (!setsTreeAttributesAside) limits.push(treeAttributesApply);
     limits.push(
       `files git reads as binary by their content, and merge commits' own changes, were not read (no scratch directory: ${message(e)})`,
     );
-    return { env: base, merges: null, limits, remove: () => null };
+    return { env: base, merges: null, limits, source: inProject, remove: () => null };
   }
   const remove = (): string | null => {
     try {
@@ -135,6 +150,17 @@ export async function openHistoryView(cwd: string, env: NodeJS.ProcessEnv, walk:
       return `the history pass's scratch directory ${scratch} could not be removed (${message(e)})`;
     }
   };
+
+  let source = inProject;
+  let away: Record<string, string> = {};
+  if (!setsTreeAttributesAside) {
+    const empty = await emptyWorkTree(cwd, base, scratch);
+    if (empty === null) limits.push(treeAttributesApply);
+    else {
+      source = { dir: empty.dir, detached: true };
+      away = empty.vars;
+    }
+  }
 
   const config: Array<readonly [string, string]> = [];
   const large = await largeBlobPaths(cwd, base, walk);
@@ -155,29 +181,64 @@ export async function openHistoryView(cwd: string, env: NodeJS.ProcessEnv, walk:
     }
   }
 
-  const commitsEnv = config.length === 0 ? base : applyGitSafety({ config, vars: {}, notApplied: [], refused: null }, base);
+  const commitsEnv =
+    config.length === 0 && !source.detached ? base : applyGitSafety({ config, vars: away, notApplied: [], refused: null }, base);
 
   // A count git cannot make reads as "some": the merges' pass runs, and says what it read.
   const count = await countWalk(cwd, base, walk, '--merges');
-  if (count === 0) return { env: commitsEnv, merges: null, limits, remove };
+  if (count === 0) return { env: commitsEnv, merges: null, limits, source, remove };
   const some = count === null ? 'merge commits' : `${count} merge commit(s)`;
   if (version === null || !atLeast(version, 2, 36)) {
     limits.push(`${some}' own changes were not read (--diff-merges=remerge needs git 2.36; ${shown})`);
-    return { env: commitsEnv, merges: null, limits, remove };
+    return { env: commitsEnv, merges: null, limits, source, remove };
   }
   let vars: Record<string, string>;
   try {
     vars = await scratchObjects(cwd, base, env, join(scratch, 'objects'));
   } catch (e) {
     limits.push(`${some}' own changes were not read (git's object directory: ${message(e)})`);
-    return { env: commitsEnv, merges: null, limits, remove };
+    return { env: commitsEnv, merges: null, limits, source, remove };
   }
   const octopus = await countWalk(cwd, base, walk, '--min-parents=3');
   if (octopus !== 0) {
     limits.push(`${octopus === null ? 'octopus merges' : `${octopus} octopus merge(s)`}' own changes were not read (remerge-diff shows none for a merge of three or more parents)`);
   }
-  const mergesEnv = applyGitSafety({ config, vars, notApplied: [], refused: null }, base);
-  return { env: commitsEnv, merges: { env: mergesEnv, count }, limits, remove };
+  const mergesEnv = applyGitSafety({ config, vars: { ...away, ...vars }, notApplied: [], refused: null }, base);
+  return { env: commitsEnv, merges: { env: mergesEnv, count }, limits, source, remove };
+}
+
+/**
+ * For a git with no `GIT_ATTR_SOURCE`: an empty directory in `scratch` to
+ * start git from, and the variables that make the repository at `cwd` its
+ * repository there — or null when the repository's git directory cannot be
+ * resolved or the directory cannot be made (the caller names the limit).
+ *
+ * git reads the tree's `.gitattributes` from the FILES of the work tree, by
+ * the path relative to the directory it runs in, and from the index when it
+ * has loaded one. Started in an empty directory that is its work tree, with
+ * an index that does not exist, it has none to read and shows every commit
+ * as committed (measured, git 2.39.5 and gitleaks 8.30.1: five ways a tree
+ * hides a key, and an evil merge, each read; nothing written anywhere).
+ *
+ *   - `GIT_DIR` is what git itself resolves for `cwd`, by discovery, under
+ *     the pass's own environment: a repository git would refuse is refused
+ *     here too, and never opened by a path of our making.
+ *   - `GIT_WORK_TREE` is set, not left to default: a `core.worktree` in the
+ *     repository's configuration — every submodule has one — would otherwise
+ *     name the real tree again.
+ *   - `GIT_INDEX_FILE` names a file that is never created: an empty index.
+ */
+async function emptyWorkTree(cwd: string, base: NodeJS.ProcessEnv, scratch: string): Promise<{ dir: string; vars: Record<string, string> } | null> {
+  const resolved = await git(cwd, ['rev-parse', '--absolute-git-dir'], undefined, base);
+  const gitDir = resolved.stdout.trim();
+  if (resolved.exitCode !== 0 || gitDir === '') return null;
+  const dir = join(scratch, 'worktree');
+  try {
+    mkdirSync(dir);
+  } catch {
+    return null;
+  }
+  return { dir, vars: { GIT_DIR: gitDir, GIT_WORK_TREE: dir, GIT_INDEX_FILE: join(scratch, 'no-index') } };
 }
 
 /**

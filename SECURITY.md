@@ -9,8 +9,8 @@ upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 3.10.x  | ✅        |
-| < 3.10  | ❌        |
+| 3.11.x  | ✅        |
+| < 3.11  | ❌        |
 
 ## Reporting a vulnerability
 
@@ -309,9 +309,13 @@ their respective projects.
   environment (`mcp/src/runners/historyView.ts`), and each two-parent merge's
   own change is read by a second run, `git log --merges
   --diff-merges=remerge`, whose temporary objects git writes to a scratch
-  directory, never the repository. Named limits, said on the run: an
-  octopus merge's own change; with a git older than 2.36 every merge's, and
-  with one older than 2.40 what the working tree's `.gitattributes` hide; a file git
+  directory, never the repository. The working tree's `.gitattributes` are
+  set aside on any git — through `GIT_ATTR_SOURCE` from 2.40, and on an older
+  one (Debian 12: 2.39.5) by starting gitleaks from an empty directory with
+  `GIT_DIR` naming the repository — so a file the tree marks `binary` or
+  `-diff` hides nothing; up to 3.10.1 an older git only named that limit and
+  the run ended `ok`. Named limits, said on the run: an
+  octopus merge's own change; with a git older than 2.36 every merge's; a file git
   reads as binary at a path that holds a file over 1 MiB in some commit (a
   text read of large binaries holds them whole: 110 MB took gitleaks to 1 GB);
   the repository's own `$GIT_DIR/info/attributes`, which outranks the

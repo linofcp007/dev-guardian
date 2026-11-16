@@ -317,7 +317,7 @@ async function handler(
 
   // create_fix_pr plans on a disposable checkout of HEAD (Task 11): the
   // files are the checkout's, the CVE history is the origin project's.
-  const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath);
+  const cves = listActiveCves(ctx, callMeta?.originProjectPath ?? projectPath, callMeta?.extraFixedVersions);
   const ecosystems = detectEcosystems(projectPath);
   const plansByEcosystem = await Promise.all(
     ecosystems.map(async (eco): Promise<EcosystemPlan> => {
@@ -687,8 +687,18 @@ function readDependencyEvidence(projectPath: string): Map<string, DependencyEvid
  * row in a 50-row window let a scoped `deps` run, or a security_full whose
  * Trivy failed, answer "nothing to update" while risk_score still counted
  * the CVE.
+ *
+ * `extra` (3.11.0) is `ToolCallMeta.extraFixedVersions`: fixed versions
+ * `create_fix_pr`'s verification found on the version a first plan applied
+ * (`fixpr/raise.ts`). Each is read exactly as a stored advisory's is — one
+ * clean version above what is installed, or nothing — and only for a package
+ * that already has an active advisory: it raises a target, it never makes one.
  */
-function listActiveCves(ctx: PluginContext, projectPath: string): Map<string, CveInfo> {
+function listActiveCves(
+  ctx: PluginContext,
+  projectPath: string,
+  extra?: ReadonlyMap<string, readonly string[]>,
+): Map<string, CveInfo> {
   const latest = findLatestUsable(ctx.storage, projectPath, CVE_SOURCE_SCAN_TYPES, { slot: 'deps' }).scan;
   const out = new Map<string, CveInfo>();
   if (!latest) return out;
@@ -725,6 +735,16 @@ function listActiveCves(ctx: PluginContext, projectPath: string): Map<string, Cv
         installedVersion: installedForThisCve,
         displayName: cve.package_name,
       });
+    }
+  }
+  for (const [name, versions] of extra ?? []) {
+    const info = out.get(name.toLowerCase());
+    if (info === undefined) continue;
+    for (const version of versions) {
+      const candidate = minCleanVersionAbove(info.installedVersion, [version]);
+      if (candidate !== undefined && (info.fixedVersion === undefined || compareVersions(candidate, info.fixedVersion) > 0)) {
+        info.fixedVersion = candidate;
+      }
     }
   }
   return out;

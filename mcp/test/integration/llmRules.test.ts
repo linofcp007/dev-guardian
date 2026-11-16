@@ -152,6 +152,15 @@ const EXPECTED_HITS: Readonly<Record<string, Readonly<Record<string, number>>>> 
   'interpreterImportNamespace.ts': { [INTERPRETER_JS]: 2 },
   'interpreterRequire.js': { [INTERPRETER_JS]: 1 },
   'interpreterRequireDestructured.js': { [INTERPRETER_JS]: 2 },
+  // llm-js-more-spellings: four more ways a file gets to child_process — the function taken from a `require` in the
+  // assignment (and `promisify` of one), a function destructured from the module's name, a dynamic `import()` —
+  // and the controls of the local-name exclusion: the import itself, and a `require` made inside a function.
+  'interpreterRequireMember.js': { [INTERPRETER_JS]: 5 },
+  'interpreterModuleDestructured.js': { [INTERPRETER_JS]: 3 },
+  'interpreterModuleDestructured.ts': { [INTERPRETER_JS]: 2 },
+  'interpreterDynamicImport.ts': { [INTERPRETER_JS]: 3 },
+  'interpreterLocalShadow.ts': { [INTERPRETER_JS]: 4 },
+  'interpreterRequireInFunction.js': { [INTERPRETER_JS]: 2 },
   // Four request sources; four sink shapes — the message object (one pattern
   // covers both key orders: Semgrep's object pattern ignores order, which the
   // ablation measured), a top-level `system`, `instructions`, a SystemMessage —
@@ -251,8 +260,10 @@ describe('llm rules', () => {
   // `node:child_process` imports went unseen; it was the platform.
   it('T-05 the pack names what its child_process recognition still leaves out, and no longer blames a Semgrep version', () => {
     const text = readFileSync(RULES, 'utf8');
-    expect(text).toMatch(/FORA DE ALCANCE[^]*`import\(\)` dinamico/);
-    expect(text).toMatch(/FALSO POSITIVO CONHECIDO[^]*DECLARAÇÃO local/);
+    // What it leaves out changed with llm-js-more-spellings (T-07 below reads the paragraph itself): the four
+    // spellings it used to name are recognised, and a local declaration is excluded — no longer a known false positive.
+    expect(text).toMatch(/FORA DE ALCANCE[^]*`import\(\)` consumido por `\.then\(/);
+    expect(text).toMatch(/NOMES LOCAIS[^]*declaração local/);
     expect(text).not.toMatch(/so sao resolvidos a partir do Semgrep|llmPackVersionNote|anterior ao 1\.176\.1/);
   });
 
@@ -383,5 +394,84 @@ describe('the retrieval sanitizer of the system-prompt rule', () => {
 
   it.each(NOT_RETRIEVALS)('%s is not', (name) => {
     expect(sanitizerRegex().test(name)).toBe(false);
+  });
+});
+
+// ───────────────── llm-js-more-spellings — child_process by the forms a file writes, and the local names that shadow it
+
+describe('the JS interpreter rule: more spellings of child_process, and local names (llm-js-more-spellings)', () => {
+  const linesOf = (result: SemgrepRun, file: string): number[] =>
+    result.rows
+      .filter((r) => basename(r.path) === file && ruleOf(r) === INTERPRETER_JS)
+      .map((r) => r.start.line)
+      .sort((a, b) => a - b);
+  /** The fixtures the rule had before this spec: 48 + 3 + 4 + 2 + 1 + 2 lines. */
+  const BEFORE = [
+    'outputToInterpreter.ts',
+    'interpreterImportAlias.ts',
+    'interpreterImportDefault.ts',
+    'interpreterImportNamespace.ts',
+    'interpreterRequire.js',
+    'interpreterRequireDestructured.js',
+  ];
+
+  it.skipIf(!AVAILABLE)('T-01 a function taken from a require in the assignment, and promisify of such a require: the five marked lines, and none in the twin', () => {
+    const file = 'interpreterRequireMember.js';
+    expect(expectedLines(file)).toHaveLength(5);
+    expect(linesOf(hits(), file)).toEqual(expectedLines(file));
+    expect(linesOf(misses(), file)).toEqual([]);
+  });
+
+  it.skipIf(!AVAILABLE)('T-02 a function destructured from a name that is the module — a require assigned, a namespace import, a default import: the marked lines, and none in the twins', () => {
+    for (const [file, lines] of [['interpreterModuleDestructured.js', 3], ['interpreterModuleDestructured.ts', 2]] as const) {
+      expect([file, expectedLines(file).length]).toEqual([file, lines]);
+      expect([file, linesOf(hits(), file)]).toEqual([file, expectedLines(file)]);
+      expect([file, linesOf(misses(), file)]).toEqual([file, []]);
+    }
+  });
+
+  it.skipIf(!AVAILABLE)('T-03 a dynamic import() awaited into a name and destructured, with and without node: — the three marked lines, and none in the twin', () => {
+    const file = 'interpreterDynamicImport.ts';
+    expect(expectedLines(file)).toHaveLength(3);
+    expect(linesOf(hits(), file)).toEqual(expectedLines(file));
+    expect(linesOf(misses(), file)).toEqual([]);
+  });
+
+  it.skipIf(!AVAILABLE)('T-04 a local name that shadows the import fires nothing — eighteen ways of declaring one — while the import itself, and a require made inside a function, still fire', () => {
+    // Nine for the name of an imported function and nine for the name of the module: const, let and var, plain and
+    // by destructuring, a loop variable, a catch variable and a function declaration.
+    expect(linesOf(misses(), 'interpreterLocalShadow.ts')).toEqual([]);
+    expect(linesOf(hits(), 'interpreterLocalShadow.ts')).toEqual(expectedLines('interpreterLocalShadow.ts'));
+    expect(expectedLines('interpreterLocalShadow.ts')).toHaveLength(4);
+    // A lazy require is a `const` declaration of the name too: the exclusion must not take it.
+    expect(linesOf(hits(), 'interpreterRequireInFunction.js')).toEqual(expectedLines('interpreterRequireInFunction.js'));
+    expect(expectedLines('interpreterRequireInFunction.js')).toHaveLength(2);
+    expect(linesOf(misses(), 'interpreterRequireInFunction.js')).toEqual([]);
+  });
+
+  it.skipIf(!AVAILABLE)('T-06 the fixtures the rule had before report the sixty lines they reported, and their twins none', () => {
+    for (const file of BEFORE) {
+      expect([file, linesOf(hits(), file)]).toEqual([file, expectedLines(file)]);
+      expect([file, linesOf(misses(), file)]).toEqual([file, []]);
+    }
+    expect(BEFORE.reduce((n, file) => n + linesOf(hits(), file).length, 0)).toBe(60);
+  });
+
+  it('T-07 the pack says what the rule recognises now and what stays out of reach', () => {
+    const text = readFileSync(RULES, 'utf8');
+    const at = text.indexOf('FORA DE ALCANCE');
+    expect(at).toBeGreaterThan(-1);
+    // The paragraph: from the heading to the next empty comment line.
+    const outOfReach = text.slice(at, text.indexOf('\n  #\n', at));
+    // No longer out of reach.
+    expect(outOfReach).not.toMatch(/require\('child_process'\)\.exec/);
+    expect(outOfReach).not.toMatch(/promisify/);
+    expect(outOfReach).not.toMatch(/const \{ exec \} = cp/);
+    // Still out of reach, and said.
+    expect(outOfReach).toMatch(/\.then\(/);
+    expect(outOfReach).toMatch(/execa/);
+    // A local declaration is no longer a known false positive: it is excluded, and the pack says how.
+    expect(text).not.toMatch(/FALSO POSITIVO CONHECIDO[^]*DECLARAÇÃO local/);
+    expect(text).toMatch(/NOMES LOCAIS/);
   });
 });

@@ -275,6 +275,20 @@ export async function judgeTests(opts: {
   };
 }
 
+/**
+ * The test differential, only for a tree that passed the scan differential
+ * (3.11.0). No pull request opens on a failed scan differential whatever the
+ * tests say, and `create_fix_pr` may now run a group more than once
+ * (`raise.ts`): the project's suite — its own code, and often the slowest
+ * step — runs once per group, on the tree that is the candidate. Until 3.11.0
+ * it ran on every tree, and a `not_verified` by the scan carried its verdict;
+ * it now carries `not_run`.
+ */
+export async function testsAfterScan(scan: ScanVerdict, run: () => Promise<TestVerdict>): Promise<TestVerdict> {
+  if (!scan.passed) return { outcome: 'not_run', command: null, origin: null, output_head: null };
+  return run();
+}
+
 /** A PR may be opened only when this is true. */
 export function mayOpenPr(scan: ScanVerdict, tests: TestVerdict): boolean {
   return scan.passed && tests.outcome !== 'broken_by_fix' && tests.outcome !== 'unattributed';

@@ -83,6 +83,15 @@ export interface ToolCallMeta {
    * path is its own origin. Never set by the MCP host.
    */
   originProjectPath?: string;
+  /**
+   * Set only by `create_fix_pr`, when it plans again: fixed versions its own
+   * verification found on the version it applied, by package name
+   * (lowercased) — `fixpr/raise.ts`. `deps_update_plan` reads them beside the
+   * package's stored advisories, so the target rises by the path every other
+   * target takes. No tool's input has such a parameter: a caller of the tool
+   * cannot name a version to raise to. Never set by the MCP host.
+   */
+  extraFixedVersions?: ReadonlyMap<string, readonly string[]>;
 }
 
 export interface ToolModule {
