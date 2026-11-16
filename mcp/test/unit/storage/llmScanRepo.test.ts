@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { LlmScanPlan, LlmScanTask } from '../../../src/llmscan/types.js';
 import { GuardianDatabase } from '../../../src/storage/db.js';
 import { Storage } from '../../../src/storage/index.js';
@@ -7,6 +7,14 @@ import { PLAN_ABANDON_DAYS, PLAN_INACTIVE_DAYS, type TaskOutcome } from '../../.
 import { deletePrunableScans, listPrunableScans, pruneScans } from '../../../src/storage/maintenance.js';
 import { runMigrations } from '../../../src/storage/migrations/runner.js';
 import { makeTempDir } from '../../helpers/tempDir.js';
+
+// The "two servers" tests open a database FILE twice and run every migration on it: dozens of commits, each one
+// synced to disk. They take about 0.1 s each — and took 9.8, 13.5 and 10.5 s once, in the Linux Node 24 image of the
+// 3.11.0 release verification (2026-11-16), while the in-memory tests beside them took milliseconds and a Semgrep test
+// in the same container ran 2.4 times slower: a disk that stalled for half a minute, and vitest's 10 s default failed
+// two of them. Not reproduced in a full rerun nor in 57 repetitions of this file (1.2 to 4.1 s). The bound is for a
+// hang: no test here asserts by reaching it.
+vi.setConfig({ testTimeout: 60_000 });
 
 const T0 = '2026-10-02T00:00:00.000Z';
 const DAY = 86_400_000;
