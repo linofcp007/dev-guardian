@@ -62,7 +62,7 @@
  * none — measured, a key only an octopus merge added was read by no pass);
  * what a git older than 2.36 cannot show (no remerge-diff: merges); the paths
  * left to git's judgement. A git older than 2.40 has no `GIT_ATTR_SOURCE`,
- * and until 3.10.1 the tree's attributes applied there and the run said so,
+ * and up to and including 3.10.1 the tree's attributes applied there and the run said so,
  * ending `ok` with the key unread: it is started from an empty directory
  * instead ({@link emptyWorkTree}, {@link HistoryView.source}), and the limit
  * is named only where that could not be set up. Not named, because the

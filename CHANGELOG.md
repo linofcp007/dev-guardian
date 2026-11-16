@@ -8,6 +8,35 @@ version bump.
 
 ## [Unreleased]
 
+## [3.11.0] - 2026-11-16
+
+Three places where the tool already knew more than it said or did. `create_fix_pr` learned from its own verification
+which version clears a new advisory and still answered `not_verified`; it now plans again with that version. The
+secrets history pass named, on a git older than 2.40, a limit it can work round — and reads those files now. And the
+JavaScript rule for model output reaching `child_process` had four spellings and one false positive written down as
+known; they are clauses and an exclusion.
+
+### Upgrading from 3.10.1
+
+- **A pull request of `create_fix_pr` may install a version above the one `deps_update_plan` names.** When the
+  plan's version has an advisory of its own and a later version of the same major clears it, the dry run and the
+  pull request are for that later version. The group's `raised` — and a "Target raised" section in the pull request
+  — say the version planned, the version applied and the advisory. Such a group takes about twice as long. Nothing
+  to do; `deps_update_plan` itself answers as before.
+- **A `not_verified` group reads differently.** When the scan differential failed, its `tests.outcome` is `not_run`
+  — the project's tests used to run on that tree too — and its `note` goes on after the counts, naming each new
+  dependency finding. Look at anything of yours that compares that note as a whole, or reads the test verdict of a
+  group that failed its scan.
+- **A push on a git older than 2.40 can find a secret it did not find before.** Debian 12 and the
+  `node:*-bookworm` images have git 2.39.5, Ubuntu 22.04 has 2.34. There the history pass now reads a file the
+  working tree's `.gitattributes` mark `binary` or `-diff`, as it already did on a newer git: a gate on such an
+  image may start failing on a key that was in the pushed commits all along. Rotate the key; the finding is right.
+  The run no longer carries the sentence about the tree's `.gitattributes`. Reading what was hidden cost 6 % more
+  time on a repository of 5 000 commits with fifty such files, and nothing measurable where none were hidden.
+- **`llm-output-to-interpreter-js` reports more code, and less.** A project that reaches `child_process` through a
+  `require` taken apart in the assignment, a destructuring of the module's name or an awaited `import()` may show
+  new findings of this rule; one where a local name shadowed the import loses findings that were wrong.
+
 ### Added
 
 - **`llm-output-to-interpreter-js` reads four more ways a file gets to `child_process`.** The rule knows the module

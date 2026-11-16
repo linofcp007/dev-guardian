@@ -115,7 +115,7 @@ describe('the history view (runners/historyView.ts)', () => {
     const view = await openHistoryView(dir, process.env, ['--all']);
     view.remove();
     expect(view.merges === null).toBe(mergeLimits.length > 0);
-    // Until 3.10.1 the first limit here was "GIT_ATTR_SOURCE needs git 2.40": the pass now starts git from an empty
+    // Up to and including 3.10.1 the first limit here was "GIT_ATTR_SOURCE needs git 2.40": the pass now starts git from an empty
     // directory on such a git (the tests of secrets-history-old-git, below), and names that limit only when it cannot.
     expect(view.limits).toEqual([...mergeLimits]);
   });
