@@ -520,3 +520,73 @@ describe('the docs of the secrets history pass on an older git (secrets-history-
     }
   });
 });
+
+// ───────────────── install-vet-lockfile-pins — the docs say what a lockfile changes
+
+describe('install-vet-lockfile-pins', () => {
+  /**
+   * The sentences of a passage, each on one line. A dot ends one only before white space — not inside
+   * `package-lock.json` or a link — and so do a line break and the bar between two cells of a table.
+   */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/(?<=[.!?])\s+|\n+|\s\|\s/)
+      .map((s) => s.replace(/\s+/g, ' ').trim())
+      .filter((s) => s !== '');
+
+  // The two things US-2.AC-2 wants said, each looked for as ONE sentence that holds its words — in English or, for
+  // the skill, in Portuguese — whatever the phrasing around them. The words alone are already in docs/hooks.md,
+  // which says the lockfile is NOT read: only a sentence that joins them says the new thing.
+  const STATEMENTS: Array<[what: string, words: RegExp[]]> = [
+    [
+      'with a lockfile, the pairs it pins — of every dependency, the transitive ones too — go to OSV',
+      [/lockfile/i, /\bOSV\b/, /transitiv/i],
+    ],
+    [
+      'the registry is asked only for the direct dependencies the lockfile does not cover',
+      [/lockfile/i, /regist(?:r(?:y|ies)|os?)\b/i, /\bdirec?t/i],
+    ],
+  ];
+  const notSaid = (passage: string): string[] =>
+    STATEMENTS.filter(([, words]) => !sentences(passage).some((s) => words.every((w) => w.test(s)))).map(([what]) => what);
+
+  it('T-33 docs/hooks.md, the description in hooks.json and the guardian-deps skill say what a lockfile changes: its pinned pairs go to OSV, and the registry is asked only for the direct dependencies it does not cover', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at).toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end);
+
+    const description = String((JSON.parse(read('hooks/hooks.json')) as { description?: unknown }).description ?? '');
+
+    const skill = read('skills/guardian-deps/SKILL.md');
+    const from = skill.indexOf('## 3.');
+    const to = skill.indexOf('## 4.');
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const beforeInstalling = skill.slice(from, to);
+
+    // US-2.AC-3: the skill says it inside the budget it already has.
+    expect(Buffer.byteLength(skill, 'utf8')).toBeLessThanOrEqual(12 * 1024);
+
+    // What was true before must no longer be said: that the lockfile and the transitive dependencies are not read
+    // (docs/hooks.md), and that the hook's silence says nothing of the lockfile (the skill).
+    const stillSaid = [
+      ...(/lockfile, transitive dependencies[^.]*\bnot read\b/i.test(section.replace(/\s+/g, ' ')) ? ['docs/hooks.md: the lockfile and the transitive dependencies are not read'] : []),
+      ...(/nem do lockfile/i.test(beforeInstalling.replace(/\s+/g, ' ')) ? ['the skill: the hook\'s silence does not speak of the lockfile'] : []),
+    ];
+
+    expect({
+      'docs/hooks.md, "Install-time package vetting"': notSaid(section),
+      'hooks/hooks.json, description': notSaid(description),
+      'skills/guardian-deps/SKILL.md, section 3': notSaid(beforeInstalling),
+      stillSaid,
+    }).toEqual({
+      'docs/hooks.md, "Install-time package vetting"': [],
+      'hooks/hooks.json, description': [],
+      'skills/guardian-deps/SKILL.md, section 3': [],
+      stillSaid: [],
+    });
+  });
+});

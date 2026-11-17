@@ -30,6 +30,8 @@ const SLOW_UNIT_FILES = [
   'test/unit/testHelpers/timing.test.ts',
   'test/unit/sarif/importSarif.test.ts',
   'test/unit/fixpr/semgrepFix.test.ts',
+  // the lockfile readers' bounded-time and layout tests: 16 MiB inputs and about 250 rewritten lockfiles
+  'test/unit/pkgvet/lockfile.test.ts',
 ];
 
 export default defineConfig({
