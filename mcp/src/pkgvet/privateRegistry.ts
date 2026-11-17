@@ -582,27 +582,71 @@ export function npmScopeRegistry(
   name: string,
   ctx: RegistryContext = {},
 ): { scope: string; source: string; url: string; from: 'project' | 'user' } | null {
-  const scope = npmScope(name);
-  if (scope === undefined) return null;
-  try {
-    const wanted = `npm_config_@${scope.toLowerCase()}:registry`;
-    for (const [key, raw] of Object.entries(envOf(ctx))) {
-      const value = raw?.trim() ?? '';
-      if (value !== '' && key.toLowerCase() === wanted && !isPublic('npm', value)) return { scope, source: key, url: value, from: 'user' };
-    }
-    const near = ancestors(ctx);
-    for (const { path, parse } of npmConfigFiles(ctx)) {
-      const text = read(path, ctx);
-      if (text === undefined) continue;
-      const url = parse(text, scope);
-      // The scope's own line — not the default registry, which every name gets.
-      if (url === undefined || url === parse(text, undefined) || isPublic('npm', url)) continue;
-      return { scope, source: path, url, from: near.some((dir) => samePath(dir, dirname(path))) ? 'project' : 'user' };
-    }
-  } catch {
-    // unknown reads as none: the name is then looked up like any other
+  return npmScopeRegistryOf(ctx)(name);
+}
+
+type ScopeRegistry = { scope: string; source: string; url: string; from: 'project' | 'user' } | null;
+
+/**
+ * {@link npmScopeRegistry} prepared for many names: what a call costs apart
+ * from the name — the environment, the list of configuration files with whose
+ * word each is, and their texts — is done ONCE, on the first scoped name, and
+ * each scope is answered from it once. A lockfile names hundreds of scopes, and
+ * the preparation (file-system calls, a read and a parse per file) cost about a
+ * millisecond a scope. The answers are those of the one-name function: the
+ * environment first, then the first file that names the scope; never throws.
+ */
+export function npmScopeRegistryOf(ctx: RegistryContext = {}): (name: string) => ScopeRegistry {
+  interface Prepared {
+    env: Array<{ key: string; lower: string; value: string }>;
+    files: Array<{ path: string; text: string; parse: (text: string, scope: string | undefined) => string | undefined; project: boolean }>;
   }
-  return null;
+  let prepared: Prepared | null | undefined;
+  const prepare = (): Prepared | null => {
+    try {
+      const env = Object.entries(envOf(ctx)).map(([key, raw]) => ({ key, lower: key.toLowerCase(), value: raw?.trim() ?? '' }));
+      const near = ancestors(ctx);
+      const files: Prepared['files'] = [];
+      for (const { path, parse } of npmConfigFiles(ctx)) {
+        const text = read(path, ctx);
+        if (text === undefined) continue;
+        files.push({ path, text, parse, project: near.some((dir) => samePath(dir, dirname(path))) });
+      }
+      return { env, files };
+    } catch {
+      // unknown reads as none: the name is then looked up like any other
+      return null;
+    }
+  };
+  const answers = new Map<string, ScopeRegistry>();
+  return (name) => {
+    const scope = npmScope(name);
+    if (scope === undefined) return null;
+    const known = answers.get(scope);
+    if (known !== undefined) return known;
+    if (prepared === undefined) prepared = prepare();
+    const answer = prepared === null ? null : answerFor(scope, prepared);
+    answers.set(scope, answer);
+    return answer;
+  };
+
+  function answerFor(scope: string, from: Prepared): ScopeRegistry {
+    try {
+      const wanted = `npm_config_@${scope.toLowerCase()}:registry`;
+      for (const { key, lower, value } of from.env) {
+        if (value !== '' && lower === wanted && !isPublic('npm', value)) return { scope, source: key, url: value, from: 'user' };
+      }
+      for (const file of from.files) {
+        const url = file.parse(file.text, scope);
+        // The scope's own line — not the default registry, which every name gets.
+        if (url === undefined || url === file.parse(file.text, undefined) || isPublic('npm', url)) continue;
+        return { scope, source: file.path, url, from: file.project ? 'project' : 'user' };
+      }
+    } catch {
+      // unknown reads as none
+    }
+    return null;
+  }
 }
 
 /**

@@ -4810,26 +4810,49 @@ function npmRegistry(name, ctx) {
   const local = npmWorkspacePackage(name, ctx);
   return local === void 0 ? null : { kind: "workspace", source: local };
 }
-function npmScopeRegistry(name, ctx = {}) {
-  const scope = npmScope(name);
-  if (scope === void 0) return null;
-  try {
-    const wanted = `npm_config_@${scope.toLowerCase()}:registry`;
-    for (const [key, raw] of Object.entries(envOf(ctx))) {
-      const value = raw?.trim() ?? "";
-      if (value !== "" && key.toLowerCase() === wanted && !isPublic("npm", value)) return { scope, source: key, url: value, from: "user" };
+function npmScopeRegistryOf(ctx = {}) {
+  let prepared;
+  const prepare = () => {
+    try {
+      const env = Object.entries(envOf(ctx)).map(([key, raw]) => ({ key, lower: key.toLowerCase(), value: raw?.trim() ?? "" }));
+      const near = ancestors(ctx);
+      const files = [];
+      for (const { path, parse: parse5 } of npmConfigFiles(ctx)) {
+        const text = read(path, ctx);
+        if (text === void 0) continue;
+        files.push({ path, text, parse: parse5, project: near.some((dir) => samePath(dir, dirname3(path))) });
+      }
+      return { env, files };
+    } catch {
+      return null;
     }
-    const near = ancestors(ctx);
-    for (const { path, parse: parse5 } of npmConfigFiles(ctx)) {
-      const text = read(path, ctx);
-      if (text === void 0) continue;
-      const url = parse5(text, scope);
-      if (url === void 0 || url === parse5(text, void 0) || isPublic("npm", url)) continue;
-      return { scope, source: path, url, from: near.some((dir) => samePath(dir, dirname3(path))) ? "project" : "user" };
+  };
+  const answers = /* @__PURE__ */ new Map();
+  return (name) => {
+    const scope = npmScope(name);
+    if (scope === void 0) return null;
+    const known = answers.get(scope);
+    if (known !== void 0) return known;
+    if (prepared === void 0) prepared = prepare();
+    const answer = prepared === null ? null : answerFor(scope, prepared);
+    answers.set(scope, answer);
+    return answer;
+  };
+  function answerFor(scope, from) {
+    try {
+      const wanted = `npm_config_@${scope.toLowerCase()}:registry`;
+      for (const { key, lower, value } of from.env) {
+        if (value !== "" && lower === wanted && !isPublic("npm", value)) return { scope, source: key, url: value, from: "user" };
+      }
+      for (const file of from.files) {
+        const url = file.parse(file.text, scope);
+        if (url === void 0 || url === file.parse(file.text, void 0) || isPublic("npm", url)) continue;
+        return { scope, source: file.path, url, from: file.project ? "project" : "user" };
+      }
+    } catch {
     }
-  } catch {
+    return null;
   }
-  return null;
 }
 function userRegistryUrl(raw) {
   let u;
@@ -5872,11 +5895,12 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
 }
 function withoutOwnRegistryScopes(read2, registry, notes) {
   const kept = [];
+  const scopeRegistry = npmScopeRegistryOf(registry);
   const byProject = /* @__PURE__ */ new Set();
   let held = 0;
   let source = "";
   for (const pkg of read2.packages) {
-    const own = pkg.name.startsWith("@") ? npmScopeRegistry(pkg.name, registry) : null;
+    const own = pkg.name.startsWith("@") ? scopeRegistry(pkg.name) : null;
     if (own === null) {
       kept.push(pkg);
       continue;
@@ -5890,15 +5914,27 @@ function withoutOwnRegistryScopes(read2, registry, notes) {
   return kept;
 }
 function ownScopeLine(held, file, scopes, source) {
-  return `dev-guardian: ${plural(held)} of ${file} ${held === 1 ? "is" : "are"} in a scope (${[...scopes].join(", ")}) the project's ${source} gives a registry of its own \u2014 not vetted.`;
+  const named = [...scopes].slice(0, MAX_NAMED_HOSTS).join(", ");
+  const more = scopes.size > MAX_NAMED_HOSTS ? ` and ${scopes.size - MAX_NAMED_HOSTS} more` : "";
+  return `dev-guardian: ${plural(held)} of ${file} ${held === 1 ? "is" : "are"} in a scope (${named}${more}) the project's ${source} gives a registry of its own \u2014 not vetted.`;
 }
 var MAX_LOCKFILE_BYTES = 16 * 1024 * 1024;
 var MAX_NAMED_HOSTS = 3;
+var MAX_NAMED_IDS = 5;
+var MAX_NAMED_DENIES = 20;
 var MAX_REASON_LENGTH = 120;
 var pairKey = (p) => `${p.name}@${p.version}`;
 function said(text) {
   const clean = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
   return clean === "" ? "no reason recorded" : clean.length > MAX_REASON_LENGTH ? `${clean.slice(0, MAX_REASON_LENGTH)}\u2026` : clean;
+}
+function pinReason(unknown2) {
+  const text = unknown2 ?? "";
+  if (/^(?:network disabled (GUARDIAN_OFFLINE=1)|no fetch implementation available|vetting time budget exhausted|network budget exhausted before OSV answered)$/.test(text)) return text;
+  const http = /^osv http (d{3})$/.exec(text);
+  if (http !== null) return `OSV answered HTTP ${http[1] ?? ""}`;
+  if (/^osv (?:answered|left) /.test(text) || /^osv answer over /.test(text)) return "OSV gave an incomplete answer";
+  return "OSV lookup failed";
 }
 var notReadLine = (file, why) => `dev-guardian: ${file} was not read (${said(why)}) \u2014 its packages were not vetted.`;
 function isWithin(root, dir) {
@@ -5952,22 +5988,26 @@ function fromUserRegistry(url, registries) {
   return registries.some((registry) => normal.startsWith(registry));
 }
 function otherSources(read2, userRegistries) {
-  const hosts = [];
+  const hosts = /* @__PURE__ */ new Set();
+  const named = [];
   let count = 0;
   for (const { source } of read2.entries) {
     if (!isOtherSource(source, userRegistries)) continue;
     count += 1;
-    if ("host" in source && source.host !== "" && !hosts.includes(source.host)) hosts.push(source.host);
+    if ("host" in source && source.host !== "" && !hosts.has(source.host)) {
+      hosts.add(source.host);
+      if (named.length < MAX_NAMED_HOSTS) named.push(source.host);
+    }
   }
-  return { count, hosts };
+  return { count, named, distinct: hosts.size };
 }
 function isOtherSource(source, userRegistries) {
   if (source.kind === "git") return true;
   return source.kind === "elsewhere" && !fromUserRegistry(source.url, userRegistries());
 }
-function otherSourceLine(count, file, hosts) {
-  const named = hosts.length === 0 ? "" : ` (${hosts.slice(0, MAX_NAMED_HOSTS).join(", ")}${hosts.length > MAX_NAMED_HOSTS ? ` and ${hosts.length - MAX_NAMED_HOSTS} more` : ""})`;
-  return `dev-guardian: ${plural(count)} of ${file} ${count === 1 ? "comes" : "come"} from another source${named} \u2014 what it serves was not vetted.`;
+function otherSourceLine(count, file, named, distinct) {
+  const hosts = named.length === 0 ? "" : ` (${named.join(", ")}${distinct > named.length ? ` and ${distinct - named.length} more` : ""})`;
+  return `dev-guardian: ${plural(count)} of ${file} ${count === 1 ? "comes" : "come"} from another source${hosts} \u2014 what it serves was not vetted.`;
 }
 function pairsToAsk(read2, registry) {
   const asked = [];
@@ -5975,17 +6015,7 @@ function pairsToAsk(read2, registry) {
   const heldKeys = /* @__PURE__ */ new Set();
   const scopes = /* @__PURE__ */ new Set();
   let source = "";
-  const scopeRegistries = /* @__PURE__ */ new Map();
-  const ownRegistry = (name) => {
-    if (!name.startsWith("@")) return null;
-    const scope = name.split("/")[0] ?? name;
-    let own = scopeRegistries.get(scope);
-    if (own === void 0) {
-      own = npmScopeRegistry(name, registry);
-      scopeRegistries.set(scope, own);
-    }
-    return own;
-  };
+  const ownRegistry = npmScopeRegistryOf(registry);
   for (const entry of read2.entries) {
     if (entry.source.kind === "git") continue;
     for (const pin of [entry.pin, entry.fetched]) {
@@ -6028,7 +6058,7 @@ function lockedProject(c, dir, manifest, opts, registry, notes) {
     const lines = [];
     if (plan.heldByProject > 0) lines.push(ownScopeLine(plan.heldByProject, found.file, plan.scopes, plan.source));
     const other = otherSources(read2, user);
-    if (other.count > 0) lines.push(otherSourceLine(other.count, found.file, other.hosts));
+    if (other.count > 0) lines.push(otherSourceLine(other.count, found.file, other.named, other.distinct));
     const divergent = read2.entries.filter((e) => e.fetched !== void 0).length;
     if (divergent > 0) {
       lines.push(
@@ -6064,7 +6094,8 @@ function withoutCovered(packages, lock) {
 }
 function advisoryIds(ids) {
   const clean = ids.map((id) => id.trim()).filter((id) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(id));
-  return clean.length > 0 ? clean.join(", ") : "a MAL- advisory";
+  if (clean.length === 0) return "a MAL- advisory";
+  return clean.length > MAX_NAMED_IDS ? `${clean.slice(0, MAX_NAMED_IDS).join(", ")} and ${clean.length - MAX_NAMED_IDS} more` : clean.join(", ");
 }
 function lockOutcome(lock, verdicts, counted) {
   const denies = /* @__PURE__ */ new Set();
@@ -6098,7 +6129,7 @@ function lockOutcome(lock, verdicts, counted) {
       if (why === "") why = v.unknown ?? "";
     }
   }
-  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${said(why)}) \u2014 not verified.`);
+  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${pinReason(why)}) \u2014 not verified.`);
   if (left > 0) {
     lines.push(
       `dev-guardian: ${left} more ${left === 1 ? "package" : "packages"} of ${lock.file} ${left === 1 ? "was" : "were"} not vetted (only the first ${MAX_PINS} are) \u2014 not verified.`
@@ -6306,6 +6337,7 @@ async function decideInstallCommand(command, opts) {
   const unverified = [];
   const unverifiedIn = /* @__PURE__ */ new Map();
   const lockLines = [];
+  const lockDenies = /* @__PURE__ */ new Set();
   let malicious = false;
   let missingIn;
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v]));
@@ -6320,11 +6352,16 @@ async function decideInstallCommand(command, opts) {
         if (d.warn !== void 0) warnings.push(d.warn);
       }
       const outcome = lockOutcome(lock, verdictOf, counted);
-      manifestDenies.push(...outcome.denies);
+      for (const text of outcome.denies) lockDenies.add(text);
       lockLines.push(...outcome.lines);
     } catch {
       lockLines.push(notReadLine(lock.file, "could not be read"));
     }
+  }
+  if (lockDenies.size > 0) {
+    manifestDenies.push(...[...lockDenies].slice(0, MAX_NAMED_DENIES));
+    const more = lockDenies.size - MAX_NAMED_DENIES;
+    if (more > 0) manifestDenies.push(`and ${more} more pair${more === 1 ? "" : "s"} of the lockfiles have a malicious-package advisory.`);
   }
   commands.forEach((cmd, i) => {
     for (const r of batches[i] ?? []) {

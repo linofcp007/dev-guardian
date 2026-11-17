@@ -890,4 +890,41 @@ describe('install-vet-lockfile-pins', () => {
     writeFileSync(join(home, '.npmrc'), 'registry=${NPM_REGISTRY_URL}\n');
     expect(await listed(ctx({ npm_config_replace_registry_host: 'never' }))).toEqual([]);
   });
+  it('T-24 (US-1.AC-12, US-1.AC-22) the prepared scope lookup answers as `npmScopeRegistry` does, and reads the configuration once however many scopes it is asked', async () => {
+    const mod = await import('../../../src/pkgvet/privateRegistry.js');
+    const { npmScopeRegistry, npmScopeRegistryOf, registryCache } = mod;
+    writeFileSync(join(home, '.npmrc'), '@mine:registry=https://npm.user.example/\n@npmjs:registry=https://registry.npmjs.org/\nregistry=https://npm.default.example/\n');
+    writeFileSync(join(project, '.npmrc'), '@team:registry=https://npm.team.example/\n');
+    const names = ['@mine/a', '@team/b', '@plain/c', 'unscoped', '@npmjs/d', '@mine/other', '@env/e'];
+    const withEnv = ctx({ 'npm_config_@env:registry': 'https://npm.env.example/' });
+    const expected = names.map((n) => npmScopeRegistry(n, withEnv));
+    expect(expected.map((r) => r?.from ?? null)).toEqual(['user', 'project', null, null, null, 'user', 'user']);
+
+    // Reads of a configuration file, counted at the cache the lookups share.
+    let gets = 0;
+    const cache = registryCache();
+    const reads = cache.reads;
+    cache.reads = new Proxy(reads, {
+      get(target, prop) {
+        if (prop === 'get') {
+          return (key: string) => {
+            gets += 1;
+            return target.get(key);
+          };
+        }
+        const value: unknown = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const lookup = npmScopeRegistryOf({ ...withEnv, cache });
+    expect(lookup('unscoped')).toBeNull();
+    expect(gets).toBe(0);
+    expect(lookup('@mine/a')).toEqual(expected[0]);
+    const afterOne = gets;
+    expect(afterOne).toBeGreaterThan(0);
+    expect(names.map((n) => lookup(n))).toEqual(expected);
+    expect(names.map((n) => lookup(n))).toEqual(expected);
+    expect(gets).toBe(afterOne);
+  });
+
 });

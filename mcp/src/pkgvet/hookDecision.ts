@@ -72,7 +72,7 @@ import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
-import { npmScopeRegistry, npmUserRegistries, registryCache, type RegistryContext } from './privateRegistry.js';
+import { npmScopeRegistryOf, npmUserRegistries, registryCache, type RegistryContext } from './privateRegistry.js';
 import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
 import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from './types.js';
 import { HOOK_BUDGET_MS, vetPackages, vetTyposquatOnly } from './vet.js';
@@ -336,11 +336,12 @@ function withManifestPackages(
  */
 function withoutOwnRegistryScopes(read: ManifestRead, registry: RegistryContext, notes: string[]): PackageSpec[] {
   const kept: PackageSpec[] = [];
+  const scopeRegistry = npmScopeRegistryOf(registry);
   const byProject = new Set<string>();
   let held = 0;
   let source = '';
   for (const pkg of read.packages) {
-    const own = pkg.name.startsWith('@') ? npmScopeRegistry(pkg.name, registry) : null;
+    const own = pkg.name.startsWith('@') ? scopeRegistry(pkg.name) : null;
     if (own === null) {
       kept.push(pkg);
       continue;
@@ -355,8 +356,11 @@ function withoutOwnRegistryScopes(read: ManifestRead, registry: RegistryContext,
 }
 
 /** The line for packages of a scope a file of the project gives a registry of its own: counted and said, never dropped unseen. */
-function ownScopeLine(held: number, file: string, scopes: Iterable<string>, source: string): string {
-  return `dev-guardian: ${plural(held)} of ${file} ${held === 1 ? 'is' : 'are'} in a scope (${[...scopes].join(', ')}) the project's ${source} gives a registry of its own — not vetted.`;
+function ownScopeLine(held: number, file: string, scopes: ReadonlySet<string>, source: string): string {
+  // Three scopes are named, the rest counted: a hostile lockfile may hold hundreds.
+  const named = [...scopes].slice(0, MAX_NAMED_HOSTS).join(', ');
+  const more = scopes.size > MAX_NAMED_HOSTS ? ` and ${scopes.size - MAX_NAMED_HOSTS} more` : '';
+  return `dev-guardian: ${plural(held)} of ${file} ${held === 1 ? 'is' : 'are'} in a scope (${named}${more}) the project's ${source} gives a registry of its own — not vetted.`;
 }
 
 // ───────────────────────────────────────────────────────────────────── lockfiles
@@ -365,6 +369,9 @@ function ownScopeLine(held: number, file: string, scopes: Iterable<string>, sour
 const MAX_LOCKFILE_BYTES = 16 * 1024 * 1024;
 /** The most distinct hosts a line names. */
 const MAX_NAMED_HOSTS = 3;
+/** The most advisory ids named for one pair, and the most pairs a deny names: the deny is read by the model, and a lockfile can hold thousands of malicious pairs. */
+const MAX_NAMED_IDS = 5;
+const MAX_NAMED_DENIES = 20;
 /** The most of a reason repeated in a line. */
 const MAX_REASON_LENGTH = 120;
 
@@ -391,6 +398,20 @@ const pairKey = (p: Pin): string => `${p.name}@${p.version}`;
 function said(text: string): string {
   const clean = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim();
   return clean === '' ? 'no reason recorded' : clean.length > MAX_REASON_LENGTH ? `${clean.slice(0, MAX_REASON_LENGTH)}…` : clean;
+}
+
+/**
+ * Why a pair has no answer, as a fixed phrase per class of failure: `PinVerdict.unknown`
+ * can hold an error's own message, and a JSON parse error quotes the answer it
+ * could not read — text of the network, which the model must not be given.
+ */
+function pinReason(unknown: string | undefined): string {
+  const text = unknown ?? '';
+  if (/^(?:network disabled (GUARDIAN_OFFLINE=1)|no fetch implementation available|vetting time budget exhausted|network budget exhausted before OSV answered)$/.test(text)) return text;
+  const http = /^osv http (d{3})$/.exec(text);
+  if (http !== null) return `OSV answered HTTP ${http[1] ?? ''}`;
+  if (/^osv (?:answered|left) /.test(text) || /^osv answer over /.test(text)) return 'OSV gave an incomplete answer';
+  return 'OSV lookup failed';
 }
 
 const notReadLine = (file: string, why: string): string => `dev-guardian: ${file} was not read (${said(why)}) — its packages were not vetted.`;
@@ -466,15 +487,20 @@ function fromUserRegistry(url: string, registries: readonly string[]): boolean {
 }
 
 /** Where the entries of a lockfile are fetched from, if not the public registry: how many, and from which hosts the lockfile names. */
-function otherSources(read: LockRead, userRegistries: () => readonly string[]): { count: number; hosts: string[] } {
-  const hosts: string[] = [];
+function otherSources(read: LockRead, userRegistries: () => readonly string[]): { count: number; named: string[]; distinct: number } {
+  // A Set, not a list searched at every entry: a hostile lockfile can name a host per entry.
+  const hosts = new Set<string>();
+  const named: string[] = [];
   let count = 0;
   for (const { source } of read.entries) {
     if (!isOtherSource(source, userRegistries)) continue;
     count += 1;
-    if ('host' in source && source.host !== '' && !hosts.includes(source.host)) hosts.push(source.host);
+    if ('host' in source && source.host !== '' && !hosts.has(source.host)) {
+      hosts.add(source.host);
+      if (named.length < MAX_NAMED_HOSTS) named.push(source.host);
+    }
   }
-  return { count, hosts };
+  return { count, named, distinct: hosts.size };
 }
 
 function isOtherSource(source: Source, userRegistries: () => readonly string[]): boolean {
@@ -483,9 +509,9 @@ function isOtherSource(source: Source, userRegistries: () => readonly string[]):
   return source.kind === 'elsewhere' && !fromUserRegistry(source.url, userRegistries());
 }
 
-function otherSourceLine(count: number, file: string, hosts: readonly string[]): string {
-  const named = hosts.length === 0 ? '' : ` (${hosts.slice(0, MAX_NAMED_HOSTS).join(', ')}${hosts.length > MAX_NAMED_HOSTS ? ` and ${hosts.length - MAX_NAMED_HOSTS} more` : ''})`;
-  return `dev-guardian: ${plural(count)} of ${file} ${count === 1 ? 'comes' : 'come'} from another source${named} — what it serves was not vetted.`;
+function otherSourceLine(count: number, file: string, named: readonly string[], distinct: number): string {
+  const hosts = named.length === 0 ? '' : ` (${named.join(', ')}${distinct > named.length ? ` and ${distinct - named.length} more` : ''})`;
+  return `dev-guardian: ${plural(count)} of ${file} ${count === 1 ? 'comes' : 'come'} from another source${hosts} — what it serves was not vetted.`;
 }
 
 /**
@@ -495,23 +521,17 @@ function otherSourceLine(count: number, file: string, hosts: readonly string[]):
  * fetches them — unless the lockfile itself gives the public registry's URL for
  * the entry. What a PROJECT file keeps out is counted for a line.
  */
-function pairsToAsk(read: LockRead, registry: RegistryContext): { asked: Pin[]; heldByProject: number; scopes: Set<string>; source: string } {
+function pairsToAsk(
+  read: LockRead,
+  registry: RegistryContext,
+): { asked: Pin[]; heldByProject: number; scopes: Set<string>; source: string } {
   const asked: Pin[] = [];
   const askedKeys = new Set<string>();
   const heldKeys = new Set<string>();
   const scopes = new Set<string>();
   let source = '';
-  const scopeRegistries = new Map<string, ReturnType<typeof npmScopeRegistry>>();
-  const ownRegistry = (name: string): ReturnType<typeof npmScopeRegistry> => {
-    if (!name.startsWith('@')) return null;
-    const scope = name.split('/')[0] ?? name;
-    let own = scopeRegistries.get(scope);
-    if (own === undefined) {
-      own = npmScopeRegistry(name, registry);
-      scopeRegistries.set(scope, own);
-    }
-    return own;
-  };
+  // One prepared lookup: the configuration is read once, however many scopes the lockfile names.
+  const ownRegistry = npmScopeRegistryOf(registry);
   for (const entry of read.entries) {
     if (entry.source.kind === 'git') continue;
     for (const pin of [entry.pin, entry.fetched]) {
@@ -568,7 +588,7 @@ function lockedProject(
     const lines: string[] = [];
     if (plan.heldByProject > 0) lines.push(ownScopeLine(plan.heldByProject, found.file, plan.scopes, plan.source));
     const other = otherSources(read, user);
-    if (other.count > 0) lines.push(otherSourceLine(other.count, found.file, other.hosts));
+    if (other.count > 0) lines.push(otherSourceLine(other.count, found.file, other.named, other.distinct));
     const divergent = read.entries.filter((e) => e.fetched !== undefined).length;
     if (divergent > 0) {
       lines.push(
@@ -614,7 +634,9 @@ function withoutCovered(packages: readonly PackageSpec[], lock: LockedProject): 
 /** The advisory ids of a verdict as a line may repeat them: ids of the shape OSV writes, nothing else. */
 function advisoryIds(ids: readonly string[]): string {
   const clean = ids.map((id) => id.trim()).filter((id) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(id));
-  return clean.length > 0 ? clean.join(', ') : 'a MAL- advisory';
+  if (clean.length === 0) return 'a MAL- advisory';
+  // A pair of a hostile lockfile may carry hundreds of advisories: five are named, the rest counted.
+  return clean.length > MAX_NAMED_IDS ? `${clean.slice(0, MAX_NAMED_IDS).join(', ')} and ${clean.length - MAX_NAMED_IDS} more` : clean.join(', ');
 }
 
 /** What the answers of OSV say of one lockfile: the denials, and the lines for what was left or not answered. */
@@ -655,7 +677,7 @@ function lockOutcome(
       if (why === '') why = v.unknown ?? '';
     }
   }
-  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${said(why)}) — not verified.`);
+  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${pinReason(why)}) — not verified.`);
   if (left > 0) {
     lines.push(
       `dev-guardian: ${left} more ${left === 1 ? 'package' : 'packages'} of ${lock.file} ${left === 1 ? 'was' : 'were'} not vetted (only the first ${MAX_PINS} are) — not verified.`,
@@ -961,6 +983,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   /** Per manifest file: how many of its packages could not be vetted, and the first reason. */
   const unverifiedIn = new Map<string, { count: number; why: string }>();
   const lockLines: string[] = [];
+  const lockDenies = new Set<string>();
   let malicious = false;
   let missingIn: string | undefined;
   // What the lockfiles say. An exception here is one more lockfile not read — the hook stays fail-open.
@@ -976,11 +999,16 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         if (d.warn !== undefined) warnings.push(d.warn);
       }
       const outcome = lockOutcome(lock, verdictOf, counted);
-      manifestDenies.push(...outcome.denies);
+      for (const text of outcome.denies) lockDenies.add(text);
       lockLines.push(...outcome.lines);
     } catch {
       lockLines.push(notReadLine(lock.file, 'could not be read'));
     }
+  }
+  if (lockDenies.size > 0) {
+    manifestDenies.push(...[...lockDenies].slice(0, MAX_NAMED_DENIES));
+    const more = lockDenies.size - MAX_NAMED_DENIES;
+    if (more > 0) manifestDenies.push(`and ${more} more pair${more === 1 ? '' : 's'} of the lockfiles have a malicious-package advisory.`);
   }
   commands.forEach((cmd, i) => {
     for (const r of batches[i] ?? []) {
