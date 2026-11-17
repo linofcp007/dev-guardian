@@ -1880,4 +1880,96 @@ describe('install-vet-lockfile-pins', () => {
       expect(odd.resolutionOf('', 'left-pad', '^1.3.0')).toBeNull();
     });
   });
+  // ─────────────────────────────────────────────────────── fix round 1: line breaks and JSONC decoys
+  describe('abuse: what the manager reads as a line break, or as a comment, and the reader does not', () => {
+    /** What the reader did: read the pair, counted something, did not read the file — or said nothing and returned fewer pairs. */
+    function outcome(format: LockFormat, text: string, pair: string): string {
+      const r = readLock(format, text);
+      if ('unread' in r) return 'unread';
+      if (asked(r).includes(pair)) return 'read';
+      return r.unrecognised > 0 ? 'counted' : `SILENT: ${JSON.stringify(asked(r))}`;
+    }
+    const NOT_SILENT = ['unread', 'read', 'counted'];
+
+    it('T-09 a lone `\\r` is a line break to YAML and to yarn: the entry after it is read', () => {
+      const pnpmPackages = `lockfileVersion: '9.0'\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n    engines: {node: '>=1'}\r  evil@2.0.0:\r    resolution: {integrity: sha512-y}\n`;
+      const pnpmSnapshots = `lockfileVersion: '9.0'\n\nsnapshots:\n\n  a@1.0.0:\n    dependencies: {x: 1}\r  evil@2.0.0: {}\n`;
+      const yarnClassic = `${YARN1_HEAD}a@^1.0.0:\n  version "1.0.0"\n  dependencies:\n    x "1"\revil@^2.0.0:\r  version "2.0.0"\r  resolved "https://registry.yarnpkg.com/evil/-/evil-2.0.0.tgz#h"\n`;
+      const yarnBerry = `${BERRY_HEAD}"a@npm:^1.0.0":\n  version: 1.0.0\n  resolution: "a@npm:1.0.0"\n  languageName: node\r"evil@npm:^2.0.0":\r  version: 2.0.0\r  resolution: "evil@npm:2.0.0"\n`;
+      const bunCr = bun([bunEntry('a', 'a@1.0.0'), bunEntry('evil', 'evil@2.0.0')]).replace(/\n/g, '\r');
+      const cases: Array<[string, LockFormat, string]> = [
+        ['pnpm packages:', 'pnpm-lock', pnpmPackages],
+        ['pnpm snapshots:', 'pnpm-lock', pnpmSnapshots],
+        ['yarn v1', 'yarn-lock', yarnClassic],
+        ['Yarn 2+', 'yarn-lock', yarnBerry],
+        ['bun.lock', 'bun-lock', bunCr],
+      ];
+      for (const [label, format, text] of cases) {
+        expect({ label, outcome: outcome(format, text, 'evil@2.0.0') }).toEqual({ label, outcome: 'read' });
+      }
+    });
+
+    it.each([
+      ['U+0085', '\u0085'],
+      ['U+2028', '\u2028'],
+      ['U+2029', '\u2029'],
+    ] as const)('T-06 a line holding %s (a line break to a YAML 1.1 parser) is counted, or the file is not read', (_name, sep) => {
+      const cases: Array<[string, LockFormat, string]> = [
+        ['pnpm', 'pnpm-lock', `lockfileVersion: '9.0'\n\npackages:\n\n  a@1.0.0:\n    resolution: {integrity: sha512-x}\n    engines: {node: '>=1'}${sep}  evil@2.0.0:${sep}    resolution: {integrity: sha512-y}\n`],
+        ['yarn v1', 'yarn-lock', `${YARN1_HEAD}a@^1.0.0:\n  version "1.0.0"\n  dependencies:\n    x "1"${sep}evil@^2.0.0:${sep}  version "2.0.0"\n`],
+        ['Yarn 2+', 'yarn-lock', `${BERRY_HEAD}"a@npm:^1.0.0":\n  version: 1.0.0\n  resolution: "a@npm:1.0.0"\n  languageName: node${sep}"evil@npm:^2.0.0":${sep}  version: 2.0.0\n`],
+        ['bun.lock', 'bun-lock', bun([bunEntry('a', 'a@1.0.0'), `    "evil": ["evil@1.0.0", "", {}, "x"],${sep}`])],
+      ];
+      for (const [label, format, text] of cases) {
+        const r = readLock(format, text);
+        const counted = 'unread' in r || r.unrecognised > 0;
+        expect({ label, counted }).toEqual({ label, counted: true });
+      }
+    });
+
+    const EVIL = bunEntry('evil', 'evil@1.0.0');
+    const PACKAGES = `  "packages": {\n${EVIL}\n  }`;
+    it('T-09 bun.lock: a comment, a decoy inside it, another spelling of a top-level key — never zero entries in silence', () => {
+      const decoys: Array<[string, string]> = [
+        ['a block comment with a decoy frame', `{\n  /*\n  "lockfileVersion": 1,\n  "packages": {\n  },\n  */\n  "lockfileVersion":1,\n  "packages" : {\n${EVIL}\n  }\n}\n`],
+        ['a line comment', `{\n  // a comment\n  "lockfileVersion": 1,\n${PACKAGES}\n}\n`],
+        ['a decoy in a comment on deeper lines, the real packages deeper too', `{\n  "workspaces": {\n    /*\n  "lockfileVersion": 1,\n  "packages": {\n  },\n    */\n  },\n  "lockfileVersion": 1,\n    "packages": {\n${EVIL}\n    }\n}\n`],
+        ['a space before the colon', `{\n  "lockfileVersion": 1,\n  "packages" : {\n${EVIL}\n  }\n}\n`],
+        ['a doubled top-level packages', `{\n  "lockfileVersion": 1,\n  "packages": {\n  },\n${PACKAGES},\n}\n`],
+        ['a doubled lockfileVersion', `{\n  "lockfileVersion": 1,\n  "lockfileVersion": 1,\n${PACKAGES}\n}\n`],
+        ['an escape in the key', `{\n  "lockfileVersion": 1,\n  "p\\u0061ckages": {\n${EVIL}\n  }\n}\n`],
+        ['an escape in the version key', `{\n  "lockfileV\\u0065rsion": 1,\n${PACKAGES}\n}\n`],
+        ['another indentation', `{\n    "lockfileVersion": 1,\n    "packages": {\n${EVIL}\n    }\n}\n`],
+      ];
+      for (const [label, text] of decoys) {
+        const got = outcome('bun-lock', text, 'evil@1.0.0');
+        expect({ label, notSilent: NOT_SILENT.includes(got), got }).toEqual({ label, notSilent: true, got });
+      }
+      // bun writes no comment and no key twice: a file with one is no bun.lock.
+      for (const i of [0, 1, 2, 4, 5, 6, 7]) {
+        const [label, text] = decoys[i] ?? ['', ''];
+        expect({ label, unread: 'unread' in readLock('bun-lock', text) }).toEqual({ label, unread: true });
+      }
+      // Only other white space around the colon: the same lockfile, read.
+      expect(asked(lock('bun-lock', decoys[3]?.[1] ?? ''))).toEqual(['evil@1.0.0']);
+    });
+
+    it('T-11 a protocol-relative source is another source, never the project’s own; a local prefix is local in any letter case', () => {
+      const relative = '//host.example.test/probe/-/probe-1.0.0.tgz';
+      const carriers: Array<[string, LockFormat, string]> = [
+        ['package-lock', 'package-lock', npm3({ 'node_modules/probe': { version: '1.0.0', resolved: relative, integrity: INTEGRITY } })],
+        ['yarn v1', 'yarn-lock', yarn1([yarn1Block('probe@^1.0.0', '1.0.0', `${relative}#${COMMIT}`)])],
+        ['pnpm', 'pnpm-lock', pnpm6([pnpmEntry('/probe@1.0.0', `{integrity: ${INTEGRITY}, tarball: ${relative}}`)])],
+        ['bun.lock', 'bun-lock', bun([bunEntry('probe', 'probe@1.0.0', relative)])],
+      ];
+      for (const [label, format, text] of carriers) {
+        const r = lock(format, text);
+        expect({ label, local: r.local, said: asked(r).includes('probe@1.0.0') || r.unrecognised > 0 }).toEqual({ label, local: 0, said: true });
+      }
+      for (const spec of ['FILE:vendor/probe.tgz', 'Link:../probe', 'WORKSPACE:*']) {
+        const r = lock('package-lock', npm3({ 'node_modules/probe': { version: '1.0.0', resolved: spec } }));
+        expect({ spec, local: r.local, git: gitEntries(r).length }).toEqual({ spec, local: 1, git: 0 });
+      }
+    });
+  });
 });

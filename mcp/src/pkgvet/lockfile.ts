@@ -178,8 +178,13 @@ function satisfies(range: string, version: string): boolean {
 
 const has = (o: object, key: string): boolean => Object.prototype.hasOwnProperty.call(o, key);
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-/** `line` without the `\r` of a `\r\n` line end. */
-const noCr = (line: string): string => (line.endsWith('\r') ? line.slice(0, -1) : line);
+/**
+ * The lines of `text`, broken the way a YAML or a yarn parser breaks them: at `\r\n`, at a lone `\r` and at `\n`. A
+ * reader that broke only at `\n` would see one skipped line where the manager sees a new entry.
+ */
+const splitLines = (text: string): string[] => text.split(/\r\n|\r|\n/);
+/** The line breaks of YAML 1.1 that the readers do not split at: a line holding one is counted as not recognised, never read. */
+const SEPARATOR = /[\u0085\u2028\u2029]/;
 /** `s` without one pair of matching quotes. */
 function unquote(s: string): string {
   if (s.length >= 2 && (s.startsWith("'") || s.startsWith('"')) && s.endsWith(s.charAt(0))) return s.slice(1, -1);
@@ -195,8 +200,8 @@ interface Located {
   named: Pin | undefined;
 }
 
-const LOCAL_SPEC = /^(?:file:|link:|workspace:|portal:|patch:)/;
-const GIT_SPEC = /^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:|ssh:)/;
+const LOCAL_SPEC = /^(?:file:|link:|workspace:|portal:|patch:)/i;
+const GIT_SPEC = /^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:|ssh:)/i;
 /** White space and control characters: the URL parser would drop or escape them, and no real lockfile holds one. */
 const UNSAFE_URL = /[\u0000-\u0020\u007f-\u009f\u2028\u2029]/;
 /** Where an entry whose URL cannot be read comes from: another source, said without a host. */
@@ -244,6 +249,8 @@ function archivePair(pathname: string): Pin | undefined {
  */
 function locate(spec: string): Located | 'local' | 'bad' {
   if (spec.length === 0 || spec.length > MAX_LINE) return 'bad';
+  // `//host/x.tgz` is a protocol-relative URL, not a path: it is another source, and said.
+  if (spec.startsWith('//')) return UNSAFE_URL.test(spec) ? 'bad' : { source: { kind: 'elsewhere', host: '', url: spec }, named: undefined };
   if (LOCAL_SPEC.test(spec) || spec.startsWith('/') || spec.startsWith('./') || spec.startsWith('../')) return 'local';
   if (UNSAFE_URL.test(spec)) return 'bad';
   if (GIT_SPEC.test(spec)) return { source: { kind: 'git', host: gitHost(spec) }, named: undefined };
@@ -470,8 +477,7 @@ function pnpmFrame(lines: readonly string[]): { major: number } | { unread: stri
   let keys = 0;
   let packages = 0;
   let snapshots = 0;
-  for (const raw of lines) {
-    const line = noCr(raw);
+  for (const line of lines) {
     const first = line.charCodeAt(0);
     if (line.length === 0 || first === 32 || first === 9) continue;
     if (line.length > MAX_LINE) return { unread: 'a line at column 0 is longer than 65 536 characters' };
@@ -627,7 +633,7 @@ function readPnpmBody(acc: Acc, e: PnpmEntry, body: string): void {
 }
 
 function readPnpm(text: string): LockRead | { unread: string } {
-  const lines = text.split('\n');
+  const lines = splitLines(text);
   const frame = pnpmFrame(lines);
   if ('unread' in frame) return frame;
   const v5 = frame.major === 5;
@@ -639,9 +645,13 @@ function readPnpm(text: string): LockRead | { unread: string } {
     state.cur = null;
     if (cur !== null && cur !== 'skip') finishPnpmEntry(acc, v5, cur);
   };
-  for (const raw of lines) {
-    const line = noCr(raw);
+  const odd = SEPARATOR.test(text);
+  for (const line of lines) {
     if (line.length === 0) continue;
+    if (odd && SEPARATOR.test(line)) {
+      acc.unrecognised += 1;
+      continue;
+    }
     const first = line.charCodeAt(0);
     if (first !== 32 && first !== 9) {
       // Column 0: the frame has checked it. Only the section it opens matters here.
@@ -682,12 +692,13 @@ function readPnpm(text: string): LockRead | { unread: string } {
     }
   }
   close();
+  const projectOf = pnpmProjects(lines, v5);
   return {
     format: 'pnpm-lock',
     entries: acc.entries,
     local: acc.local,
     unrecognised: acc.unrecognised,
-    resolutionOf: (rel, name, range) => pnpmResolution(lines, v5, rel, name, range),
+    resolutionOf: (rel, name, range) => pnpmResolution(projectOf(rel), v5, name, range),
   };
 }
 
@@ -710,39 +721,19 @@ const leadingSpaces = (line: string): number => {
   return n;
 };
 
-/**
- * The version pnpm pinned for `name` in the project `rel` (its importer, or the top of a file of one project) when the
- * recorded specifier is `range`. Read in the one layout pnpm writes: anything else is `null`, and the dependency goes
- * the registry's way.
- */
-function pnpmResolution(lines: readonly string[], v5: boolean, rel: string, name: string, range: string): string | null {
-  if (!validName(name)) return null;
-  let from = 0;
-  let to = lines.length;
-  let indent = 0;
-  const importers = lines.findIndex((l) => noCr(l) === 'importers:');
-  if (importers >= 0) {
-    const wanted = rel === '' ? '.' : rel;
-    let found = -1;
-    for (let i = importers + 1; i < lines.length && found < 0; i += 1) {
-      const line = noCr(lines[i] ?? '').trimEnd();
-      if (line.length > 0 && leadingSpaces(line) === 0) break;
-      if (line === `  ${wanted}:` || line === `  '${wanted}':`) found = i;
-    }
-    if (found < 0) return null;
-    from = found + 1;
-    to = from;
-    while (to < lines.length && (noCr(lines[to] ?? '').trim() === '' || leadingSpaces(noCr(lines[to] ?? '')) > 2)) to += 1;
-    indent = 4;
-  } else if (rel !== '') {
-    return null;
-  }
+interface PnpmProject {
+  specifiers: Map<string, string>;
+  versions: Map<string, string>;
+}
+
+/** The groups of one project: lines `from` to `to`, whose groups (`dependencies:` …) are at `indent` spaces. Read in the one layout pnpm writes. */
+function readPnpmProject(lines: readonly string[], v5: boolean, from: number, to: number, indent: number): PnpmProject {
   const specifiers = new Map<string, string>();
   const versions = new Map<string, string>();
   let group: string | null = null;
   let current: string | null = null;
   for (let i = from; i < to; i += 1) {
-    const line = noCr(lines[i] ?? '');
+    const line = lines[i] ?? '';
     const ind = leadingSpaces(line);
     if (ind === line.length || line.charCodeAt(ind) === 35 || ind < indent) continue;
     if (ind === indent) {
@@ -757,7 +748,8 @@ function pnpmResolution(lines: readonly string[], v5: boolean, rel: string, name
       current = null;
       if (v5) {
         const kv = splitKeyValue(body);
-        if (kv !== null && !(group === 'specifiers' ? specifiers : versions).has(kv[0])) (group === 'specifiers' ? specifiers : versions).set(kv[0], kv[1]);
+        const into = group === 'specifiers' ? specifiers : versions;
+        if (kv !== null && !into.has(kv[0])) into.set(kv[0], kv[1]);
       } else if (group !== 'specifiers') {
         current = pnpmKeyOf(body);
       }
@@ -767,8 +759,63 @@ function pnpmResolution(lines: readonly string[], v5: boolean, rel: string, name
       else if (body.startsWith('version: ') && !versions.has(current)) versions.set(current, unquote(body.slice('version: '.length)));
     }
   }
-  const pinned = versions.get(name);
-  if (specifiers.get(name) !== range || pinned === undefined) return null;
+  return { specifiers, versions };
+}
+
+/**
+ * The project `rel` of a pnpm lockfile: its importer, or the top of a file of one project (`rel` `''`); `null` when the
+ * file does not know it. The importers are located once, and each project is read once, the first time it is asked for:
+ * the hook asks once per direct dependency.
+ */
+function pnpmProjects(lines: readonly string[], v5: boolean): (rel: string) => PnpmProject | null {
+  const importers = lines.findIndex((l) => l === 'importers:');
+  let ranges: Map<string, [number, number]> | undefined;
+  const cache = new Map<string, PnpmProject | null>();
+  const importerRanges = (): Map<string, [number, number]> => {
+    if (ranges !== undefined) return ranges;
+    const found = new Map<string, [number, number]>();
+    let open: { key: string; from: number } | null = null;
+    let end = lines.length;
+    for (let i = importers + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? '';
+      const ind = leadingSpaces(line);
+      if (ind === line.length) continue;
+      if (ind === 0) {
+        end = i;
+        break;
+      }
+      if (ind > 2) continue;
+      if (open !== null && !found.has(open.key)) found.set(open.key, [open.from, i]);
+      open = null;
+      const key = ind === 2 ? pnpmKeyOf(line.slice(2)) : null;
+      if (key !== null) open = { key, from: i + 1 };
+    }
+    if (open !== null && !found.has(open.key)) found.set(open.key, [open.from, end]);
+    ranges = found;
+    return found;
+  };
+  return (rel) => {
+    if (cache.has(rel)) return cache.get(rel) ?? null;
+    let project: PnpmProject | null = null;
+    if (importers < 0) {
+      if (rel === '') project = readPnpmProject(lines, v5, 0, lines.length, 0);
+    } else {
+      const range = importerRanges().get(rel === '' ? '.' : rel);
+      if (range !== undefined) project = readPnpmProject(lines, v5, range[0], range[1], 4);
+    }
+    cache.set(rel, project);
+    return project;
+  };
+}
+
+/**
+ * The version pnpm pinned for `name` in `project` when the recorded specifier is `range`. Anything but the layout pnpm
+ * writes is `null`, and the dependency goes the registry's way.
+ */
+function pnpmResolution(project: PnpmProject | null, v5: boolean, name: string, range: string): string | null {
+  if (project === null || !validName(name)) return null;
+  const pinned = project.versions.get(name);
+  if (project.specifiers.get(name) !== range || pinned === undefined) return null;
   const peers = pinned.indexOf(v5 ? '_' : '(');
   const version = peers < 0 ? pinned : pinned.slice(0, peers);
   return validVersion(version) && satisfies(range, version) ? version : null;
@@ -846,7 +893,7 @@ function yarnKey(line: string, next: string, berry: boolean): { keys: string[]; 
     let text: string;
     let consumed = false;
     if (line.startsWith('? ')) {
-      if (noCr(next).trimEnd() !== ':') return null;
+      if (next.trimEnd() !== ':') return null;
       text = line.slice(2).trim();
       consumed = true;
     } else {
@@ -868,7 +915,7 @@ function yarnKey(line: string, next: string, berry: boolean): { keys: string[]; 
 }
 
 /** Every block of a yarn.lock, handed to `onBlock`; the lines that open no block and are not inside one are counted. */
-function scanYarn(lines: readonly string[], berry: boolean, acc: Acc, onBlock: (b: YarnBlock) => void): void {
+function scanYarn(lines: readonly string[], odd: boolean, berry: boolean, acc: Acc, onBlock: (b: YarnBlock) => void): void {
   const state: { cur: YarnBlock | 'skip' | null } = { cur: null };
   const flush = (): void => {
     const cur = state.cur;
@@ -876,8 +923,8 @@ function scanYarn(lines: readonly string[], berry: boolean, acc: Acc, onBlock: (
     if (cur !== null && cur !== 'skip' && !cur.metadata) onBlock(cur);
   };
   for (let i = 0; i < lines.length; i += 1) {
-    const line = noCr(lines[i] ?? '');
-    if (line.length > MAX_LINE) {
+    const line = lines[i] ?? '';
+    if (line.length > MAX_LINE || (odd && SEPARATOR.test(line))) {
       acc.unrecognised += 1;
       continue;
     }
@@ -935,7 +982,7 @@ function yarnClassicBlock(acc: Acc, b: YarnBlock): void {
   else if (!counted) acc.unrecognised += 1;
 }
 
-const LOCAL_BERRY = /^(?:workspace|patch|link|portal|file):/;
+const LOCAL_BERRY = /^(?:workspace|patch|link|portal|file):/i;
 
 /** A block of a yarn.lock of Yarn 2+: the pair is the `resolution` (`name@npm:version`), never the key. */
 function yarnBerryBlock(acc: Acc, b: YarnBlock): void {
@@ -982,11 +1029,11 @@ function yarnBerryBlock(acc: Acc, b: YarnBlock): void {
 }
 
 function readYarn(text: string): LockRead | { unread: string } {
-  const lines = text.split('\n');
+  const lines = splitLines(text);
+  const odd = SEPARATOR.test(text);
   let berry = false;
   let classic = false;
-  for (const raw of lines) {
-    const line = noCr(raw);
+  for (const line of lines) {
     if (line.length > 40) continue;
     const t = line.trimEnd();
     if (t === '__metadata:') berry = true;
@@ -995,13 +1042,13 @@ function readYarn(text: string): LockRead | { unread: string } {
   if (berry && classic) return { unread: 'it has both the header of a v1 lockfile and `__metadata:`' };
   if (!berry && !classic) return { unread: 'it has neither the `# yarn lockfile v1` header nor `__metadata:`' };
   const acc = newAcc();
-  scanYarn(lines, berry, acc, (b) => (berry ? yarnBerryBlock(acc, b) : yarnClassicBlock(acc, b)));
+  scanYarn(lines, odd, berry, acc, (b) => (berry ? yarnBerryBlock(acc, b) : yarnClassicBlock(acc, b)));
   let index: Map<string, string> | undefined;
   /** descriptor → pinned version, built once from the blocks that are registry packages. */
   const pinnedBy = (): Map<string, string> => {
     if (index !== undefined) return index;
     const map = new Map<string, string>();
-    scanYarn(lines, berry, newAcc(), (b) => {
+    scanYarn(lines, odd, berry, newAcc(), (b) => {
       if (b.version === undefined || !validVersion(b.version)) return;
       if (berry && !(b.resolution ?? '').includes('@npm:')) return;
       for (const key of b.keys) if (!map.has(key)) map.set(key, b.version);
@@ -1093,17 +1140,15 @@ function parseBunLine(line: string): BunLine | null {
   return tail === '' || tail === ',' ? { key: line.slice(5, keyEnd), first, second } : null;
 }
 
-/** The lines of the `packages` section that follows line `start`, up to its closing `  }`. */
-function scanBun(lines: readonly string[], start: number, acc: Acc, onEntry: (e: BunLine) => void): void {
-  for (let i = start + 1; i < lines.length; i += 1) {
-    const line = noCr(lines[i] ?? '');
-    if (line.length > MAX_LINE) {
+/** The lines of the `packages` object (the text between its braces); each must be one entry in the form bun writes. */
+function scanBun(inner: string, acc: Acc, onEntry: (e: BunLine) => void): void {
+  const odd = SEPARATOR.test(inner);
+  for (const line of splitLines(inner)) {
+    if (line.length > MAX_LINE || (odd && SEPARATOR.test(line))) {
       acc.unrecognised += 1;
       continue;
     }
-    const t = line.trimEnd();
-    if (t === '  }' || t === '  },') return;
-    if (t.length === 0) continue;
+    if (line.trim().length === 0) continue;
     const entry = parseBunLine(line);
     if (entry === null) acc.unrecognised += 1;
     else onEntry(entry);
@@ -1130,78 +1175,161 @@ function bunEntry(acc: Acc, e: BunLine): void {
   }
 }
 
-const BUN_PACKAGES = '  "packages": {';
+interface BunFrame {
+  version: string;
+  /** The text between the braces of the one top-level `packages` object. */
+  packages: string;
+  /** The text of the one top-level `workspaces` object, braces included; `''` when there is none, or more than one. */
+  workspaces: string;
+}
 
-function readBun(text: string): LockRead | { unread: string } {
-  const lines = text.split('\n');
+/**
+ * One linear pass over a bun.lock that knows what is inside a JSON string and how deep it is. bun writes no comment, so
+ * a comment opener outside a string makes the file no bun.lock (a decoy frame could hide in one); the top-level keys
+ * are found by depth, not by indentation, and `lockfileVersion` and `packages` must each be there once, written
+ * without an escape.
+ */
+function bunFrame(text: string): BunFrame | { unread: string } {
+  const n = text.length;
+  const skipSpace = (from: number): number => {
+    let k = from;
+    while (k < n && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9 || text.charCodeAt(k) === 10 || text.charCodeAt(k) === 13)) k += 1;
+    return k;
+  };
+  let i = skipSpace(text.charCodeAt(0) === 0xfeff ? 1 : 0);
+  if (text.charCodeAt(i) !== 123) return { unread: 'it is not a JSON object' };
+  let depth = 0;
   let version = '';
-  let versions = 0;
-  let start = -1;
-  let sections = 0;
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = noCr(lines[i] ?? '');
-    if (line.startsWith('  "lockfileVersion": ')) {
-      versions += 1;
-      const value = line.slice('  "lockfileVersion": '.length).trimEnd();
-      version = value.endsWith(',') ? value.slice(0, -1) : value;
-    } else if (line.startsWith('  "packages":')) {
-      if (line.trimEnd() !== BUN_PACKAGES) return { unread: 'its "packages" section does not open on a line of its own' };
-      sections += 1;
-      start = i;
+  const seen = { version: 0, packages: 0, workspaces: 0 };
+  const ranges: Record<'packages' | 'workspaces', [number, number]> = { packages: [-1, -1], workspaces: [-1, -1] };
+  let open: 'packages' | 'workspaces' | null = null;
+  for (; i < n; i += 1) {
+    const c = text.charCodeAt(i);
+    if (c === 34) {
+      let j = i + 1;
+      for (; j < n; j += 1) {
+        const d = text.charCodeAt(j);
+        if (d === 92) j += 1;
+        else if (d === 34) break;
+        else if (d === 10 || d === 13) return { unread: 'a string runs over a line end' };
+      }
+      if (j >= n) return { unread: 'a string is not closed' };
+      const colon = skipSpace(j + 1);
+      if (depth === 1 && text.charCodeAt(colon) === 58) {
+        const key = text.slice(i + 1, j);
+        if (key.includes('\\')) return { unread: 'a top-level key is written with an escape' };
+        const value = skipSpace(colon + 1);
+        if (key === 'lockfileVersion') {
+          seen.version += 1;
+          let end = value;
+          while (end < n && text.charCodeAt(end) >= 48 && text.charCodeAt(end) <= 57) end += 1;
+          const after = text.charCodeAt(skipSpace(end));
+          if (end === value || (after !== 44 && after !== 125)) return { unread: 'its lockfileVersion is not a number' };
+          version = text.slice(value, end);
+        } else if (key === 'packages' || key === 'workspaces') {
+          seen[key] += 1;
+          if (text.charCodeAt(value) === 123) {
+            ranges[key] = [value, -1];
+            open = key;
+          } else if (key === 'packages') {
+            return { unread: 'its "packages" is not an object' };
+          }
+        }
+      }
+      i = j;
+    } else if (c === 47) {
+      const next = text.charCodeAt(i + 1);
+      if (next === 42 || next === 47) return { unread: 'it holds a comment, which bun does not write' };
+    } else if (c === 123 || c === 91) {
+      depth += 1;
+    } else if (c === 125 || c === 93) {
+      depth -= 1;
+      if (depth < 0) return { unread: 'it is not complete JSON' };
+      if (depth === 1 && c === 125 && open !== null) {
+        ranges[open][1] = i;
+        open = null;
+      }
     }
   }
-  if (versions !== 1) return { unread: versions === 0 ? 'it has no lockfileVersion line' : 'it has more than one lockfileVersion line' };
+  if (depth !== 0) return { unread: 'it is not complete JSON' };
+  if (seen.version !== 1) return { unread: seen.version === 0 ? 'it has no lockfileVersion' : 'it has more than one lockfileVersion' };
   if (version !== '0' && version !== '1') return { unread: 'its lockfileVersion is not 0 or 1' };
-  if (sections !== 1) return { unread: sections === 0 ? 'it has no `"packages": {` line' : 'it has more than one `"packages": {` section' };
+  if (seen.packages !== 1) return { unread: seen.packages === 0 ? 'it has no "packages" object' : 'it has more than one "packages" object' };
+  const [from, to] = ranges.packages;
+  const [wFrom, wTo] = ranges.workspaces;
+  return { version, packages: text.slice(from + 1, to), workspaces: seen.workspaces === 1 && wFrom >= 0 && wTo >= 0 ? text.slice(wFrom, wTo + 1) : '' };
+}
+
+function readBun(text: string): LockRead | { unread: string } {
+  const frame = bunFrame(text);
+  if ('unread' in frame) return frame;
   const acc = newAcc();
-  scanBun(lines, start, acc, (e) => bunEntry(acc, e));
-  let index: Map<string, string> | undefined;
+  scanBun(frame.packages, acc, (e) => bunEntry(acc, e));
+  let hoistedIndex: Map<string, string> | undefined;
   /** package key → pinned version, for the keys that are plain names (the hoisted copies). */
   const hoisted = (): Map<string, string> => {
-    if (index !== undefined) return index;
+    if (hoistedIndex !== undefined) return hoistedIndex;
     const map = new Map<string, string>();
-    scanBun(lines, start, newAcc(), (e) => {
+    scanBun(frame.packages, newAcc(), (e) => {
       const at = e.first.indexOf('@', 1);
       if (at > 0 && e.first.slice(0, at) === e.key && validName(e.key) && validVersion(e.first.slice(at + 1)) && !map.has(e.key)) map.set(e.key, e.first.slice(at + 1));
     });
-    index = map;
+    hoistedIndex = map;
     return map;
   };
+  let recordedIndex: Map<string, Set<string>> | undefined;
+  const recorded = (): Map<string, Set<string>> => (recordedIndex ??= bunRecords(frame.workspaces));
   return {
     format: 'bun-lock',
     entries: acc.entries,
     local: acc.local,
     unrecognised: acc.unrecognised,
     resolutionOf: (rel, name, range) => {
-      if (!validName(name) || !bunRecords(lines, rel, name, range)) return null;
+      if (!validName(name) || recorded().get(`${rel}\u0000${name}`)?.has(range) !== true) return null;
       const pinned = hoisted().get(name);
       return pinned !== undefined && satisfies(range, pinned) ? pinned : null;
     },
   };
 }
 
-/** Whether the `workspaces` of the file has, for the project `rel`, a dependency `name` with exactly `range` — in the layout bun writes, line by line; any other layout says no. */
-function bunRecords(lines: readonly string[], rel: string, name: string, range: string): boolean {
-  const header = `    ${JSON.stringify(rel)}: {`;
-  const item = `        ${JSON.stringify(name)}: ${JSON.stringify(range)}`;
-  const state = { inWorkspaces: false, inProject: false, inGroup: false };
-  for (const raw of lines) {
-    const line = noCr(raw).trimEnd();
-    if (!state.inWorkspaces) {
-      state.inWorkspaces = line === '  "workspaces": {';
-    } else if (line === '  }' || line === '  },') {
-      return false;
-    } else if (!state.inProject) {
-      state.inProject = line === header;
-    } else if (line === '    }' || line === '    },') {
-      state.inProject = false;
-    } else if (!state.inGroup) {
-      state.inGroup = DEPENDENCY_GROUPS.some((g) => line === `      "${g}": {`);
+/** A `"key"` at `indent` spaces on a line: the decoded key and what follows its closing quote. */
+function bunMember(line: string, indent: number): { key: string; rest: string } | null {
+  if (!line.startsWith(`${' '.repeat(indent)}"`)) return null;
+  const end = stringEnd(line, indent);
+  const key = end < 0 ? null : stringAt(line, indent, end);
+  return key === null ? null : { key, rest: line.slice(end + 1) };
+}
+
+/**
+ * The dependency ranges the `workspaces` object records, by project and name, read line by line in the layout bun
+ * writes (a project at four spaces, its group at six, a dependency at eight); any other layout records nothing.
+ */
+function bunRecords(workspaces: string): Map<string, Set<string>> {
+  const index = new Map<string, Set<string>>();
+  let project: string | null = null;
+  let inGroup = false;
+  for (const raw of splitLines(workspaces).slice(1)) {
+    const line = raw.trimEnd();
+    if (project === null) {
+      const m = bunMember(line, 4);
+      project = m !== null && m.rest === ': {' ? m.key : null;
+    } else if (!inGroup) {
+      if (line === '    }' || line === '    },') project = null;
+      else inGroup = DEPENDENCY_GROUPS.some((g) => line === `      "${g}": {`);
     } else if (line === '      }' || line === '      },') {
-      state.inGroup = false;
-    } else if (line === item || line === `${item},`) {
-      return true;
+      inGroup = false;
+    } else {
+      const m = bunMember(line, 8);
+      if (m === null || !m.rest.startsWith(': "')) continue;
+      const end = stringEnd(m.rest, 2);
+      const range = end < 0 ? null : stringAt(m.rest, 2, end);
+      const tail = m.rest.slice(end + 1);
+      if (range === null || (tail !== '' && tail !== ',')) continue;
+      const key = `${project}\u0000${m.key}`;
+      const set = index.get(key) ?? new Set<string>();
+      set.add(range);
+      index.set(key, set);
     }
   }
-  return false;
+  return index;
 }
