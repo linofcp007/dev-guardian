@@ -99175,63 +99175,75 @@ var init_hiddenText = __esm({
 });
 
 // src/runners/osv.ts
+function readBatch(chunk, json2) {
+  const results = json2?.results;
+  if (!Array.isArray(results) || results.length !== chunk.length) {
+    const got = Array.isArray(results) ? `${results.length} results` : "no results";
+    return { groups: [], unanswered: chunk, error: `osv answered ${got} for ${chunk.length} queries` };
+  }
+  const groups = [];
+  const unanswered2 = [];
+  chunk.forEach((pkg, idx) => {
+    const res = results[idx];
+    if (typeof res !== "object" || res === null) {
+      unanswered2.push(pkg);
+      return;
+    }
+    if (res.next_page_token !== void 0) unanswered2.push(pkg);
+    const vulns = res.vulns;
+    if (Array.isArray(vulns) && vulns.length > 0) {
+      const ids2 = vulns.map((v) => v.id).filter((x) => typeof x === "string");
+      const group = { ecosystem: pkg.ecosystem, name: pkg.name, vuln_ids: ids2, severity: "high" };
+      if (pkg.version) group.version = pkg.version;
+      groups.push(group);
+    }
+  });
+  const error62 = unanswered2.length > 0 ? `osv left ${unanswered2.length} of ${chunk.length} results incomplete` : void 0;
+  return { groups, unanswered: unanswered2, ...error62 !== void 0 ? { error: error62 } : {} };
+}
 async function queryOsv(packages, opts = {}) {
   const named2 = packages.filter((p) => p.name);
-  const queryable = named2.slice(0, MAX_QUERIES);
+  const queryable = named2.slice(0, opts.maxQueries ?? MAX_QUERIES);
   const unqueried = named2.length - queryable.length;
   if (queryable.length === 0) {
-    return { online: true, queried: 0, unqueried, vulnerable_packages: [] };
+    return { online: true, queried: 0, unqueried, vulnerable_packages: [], unanswered: [] };
   }
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
   if (fetchImpl === void 0) {
-    return { online: false, queried: 0, unqueried, vulnerable_packages: [], error: "no_fetch" };
+    return { online: false, queried: 0, unqueried, vulnerable_packages: [], unanswered: [], error: "no_fetch" };
   }
+  const size = Math.max(1, opts.chunk ?? CHUNK2);
   const chunks = [];
-  for (let i = 0; i < queryable.length; i += CHUNK2) chunks.push(queryable.slice(i, i + CHUNK2));
-  const perChunk = chunks.map(() => []);
-  try {
-    let next = 0;
-    const work = async () => {
-      for (let c = next++; c < chunks.length; c = next++) {
-        const chunk = chunks[c] ?? [];
-        const groups = perChunk[c] ?? [];
-        const body = {
-          queries: chunk.map((p) => ({
-            package: { name: p.name, ecosystem: p.ecosystem },
-            ...p.version ? { version: p.version } : {}
-          }))
-        };
-        const json2 = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
-        const results = Array.isArray(json2.results) ? json2.results : [];
-        results.forEach((res, idx) => {
-          const pkg = chunk[idx];
-          if (!pkg) return;
-          const vulns = res?.vulns;
-          if (Array.isArray(vulns) && vulns.length > 0) {
-            const ids2 = vulns.map((v) => v.id).filter((x) => typeof x === "string");
-            const group = {
-              ecosystem: pkg.ecosystem,
-              name: pkg.name,
-              vuln_ids: ids2,
-              severity: "high"
-            };
-            if (pkg.version) group.version = pkg.version;
-            groups.push(group);
-          }
-        });
+  for (let i = 0; i < queryable.length; i += size) chunks.push(queryable.slice(i, i + size));
+  const outcomes = [];
+  let next = 0;
+  const work = async () => {
+    for (let c = next++; c < chunks.length; c = next++) {
+      const chunk = chunks[c] ?? [];
+      const body = {
+        queries: chunk.map((p) => ({
+          package: { name: p.name, ecosystem: p.ecosystem },
+          ...p.version ? { version: p.version } : {}
+        }))
+      };
+      try {
+        outcomes[c] = readBatch(chunk, await postJson(OSV_BATCH_URL, body, opts, fetchImpl));
+      } catch (e) {
+        outcomes[c] = { groups: [], unanswered: chunk, error: e instanceof Error ? e.message : "osv_request_failed" };
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(IN_FLIGHT2, chunks.length) }, work));
-  } catch (e) {
-    return {
-      online: false,
-      queried: queryable.length,
-      unqueried,
-      vulnerable_packages: [],
-      error: e instanceof Error ? e.message : "osv_request_failed"
-    };
-  }
-  return { online: true, queried: queryable.length, unqueried, vulnerable_packages: perChunk.flat() };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, opts.inFlight ?? IN_FLIGHT2), chunks.length) }, work));
+  const unanswered2 = outcomes.flatMap((o) => o.unanswered);
+  const error62 = outcomes.find((o) => o.error !== void 0)?.error;
+  return {
+    online: unanswered2.length === 0,
+    queried: queryable.length,
+    unqueried,
+    vulnerable_packages: outcomes.flatMap((o) => o.groups),
+    unanswered: unanswered2,
+    ...error62 !== void 0 ? { error: error62 } : {}
+  };
 }
 async function postJson(url2, body, opts, fetchImpl) {
   const controller = new AbortController();

@@ -5,7 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { queryOsv, type OsvPackageQuery, type OsvResult } from '../../../src/runners/osv.js';
+import { queryOsv, type OsvAnswer, type OsvPackageQuery } from '../../../src/runners/osv.js';
 
 const OSV = 'https://api.osv.dev/v1/querybatch';
 const MAL = 'MAL-2025-6022';
@@ -95,7 +95,7 @@ function osv(o: { advisories?: Record<string, string[]>; answer?: (queries: OsvQ
 }
 
 /** The queries a result reports as having no complete answer. */
-function unansweredOf(r: OsvResult): string[] {
+function unansweredOf(r: OsvAnswer): string[] {
   expect(Array.isArray(r.unanswered), 'queryOsv gave no `unanswered` list').toBe(true);
   return r.unanswered.map(keyOf).sort();
 }
