@@ -3682,6 +3682,7 @@ var MAX_QUERIES = 1e3;
 var CHUNK = 100;
 var IN_FLIGHT = 4;
 var MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+var isPlainObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
 function readBatch(chunk, json) {
   const results = json?.results;
   if (!Array.isArray(results) || results.length !== chunk.length) {
@@ -3692,18 +3693,29 @@ function readBatch(chunk, json) {
   const unanswered = [];
   chunk.forEach((pkg, idx) => {
     const res = results[idx];
-    if (typeof res !== "object" || res === null) {
+    if (!isPlainObject(res)) {
       unanswered.push(pkg);
       return;
     }
-    if (res.next_page_token !== void 0) unanswered.push(pkg);
-    const vulns = res.vulns;
-    if (Array.isArray(vulns) && vulns.length > 0) {
-      const ids = vulns.map((v) => v.id).filter((x) => typeof x === "string");
+    let complete = res["next_page_token"] === void 0;
+    const vulns = res["vulns"];
+    const ids = [];
+    if (vulns !== void 0) {
+      if (Array.isArray(vulns)) {
+        for (const v of vulns) {
+          if (isPlainObject(v) && typeof v["id"] === "string") ids.push(v["id"]);
+          else complete = false;
+        }
+      } else {
+        complete = false;
+      }
+    }
+    if (ids.length > 0) {
       const group = { ecosystem: pkg.ecosystem, name: pkg.name, vuln_ids: ids, severity: "high" };
       if (pkg.version) group.version = pkg.version;
       groups.push(group);
     }
+    if (!complete) unanswered.push(pkg);
   });
   const error = unanswered.length > 0 ? `osv left ${unanswered.length} of ${chunk.length} results incomplete` : void 0;
   return { groups, unanswered, ...error !== void 0 ? { error } : {} };
@@ -3755,9 +3767,10 @@ async function queryOsv(packages, opts = {}) {
 async function postJson(url, body, opts, fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    else opts.signal.addEventListener("abort", onAbort, { once: true });
   }
   try {
     const res = await fetchImpl(url, {
@@ -3772,6 +3785,7 @@ async function postJson(url, body, opts, fetchImpl) {
     return read2.json;
   } finally {
     clearTimeout(timeout);
+    opts.signal?.removeEventListener("abort", onAbort);
   }
 }
 

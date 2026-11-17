@@ -1972,4 +1972,32 @@ describe('install-vet-lockfile-pins', () => {
       }
     });
   });
+  // ─────────────────────────────────────────────────────── fix round 2: bun.lock spellings that are not JSON
+  describe('abuse: bun.lock spelled with something that is not JSON', () => {
+    const REAL = '"evil": ["evil@1.0.0", "", {}, "x"]';
+    const spellings: Array<[string, string]> = [
+      ['a form feed between the key and its colon', `{"lockfileVersion":1,"packages":{}, "packages"\f:{${REAL}}}`],
+      ['a no-break space between the key and its colon', `{"lockfileVersion":1,"packages":{}, "packages" :{${REAL}}}`],
+      ['a vertical tab', `{"lockfileVersion":1,"packages":{}, "packages"\v:{${REAL}}}`],
+      ['a single-quoted key', `{"lockfileVersion":1,'packages':{${REAL}}, "packages":{}}`],
+      ['an unquoted key', `{"lockfileVersion":1,packages:{${REAL}}, "packages":{}}`],
+      ['a letter that is no literal', `{"lockfileVersion":1,"packages":{}, "x": undefined}`],
+      ['a lone slash', `{"lockfileVersion":1,"packages":{}, / "x": 1}`],
+      ['a non-ASCII letter', `{"lockfileVersion":1,"packages":{}, "x": é}`],
+    ];
+    it.each(spellings)('T-09 %s: the file is not read, never a silent zero', (_name, text) => {
+      const r = readLock('bun-lock', text);
+      expect({ unread: 'unread' in r, entries: 'unread' in r ? 0 : r.entries.length }).toEqual({ unread: true, entries: 0 });
+    });
+
+    it('T-09 the JSON bun writes is still read: the numbers and the literals true, false and null outside a string', () => {
+      const text = `${fixture('bun.v1.lock')}`;
+      const r = lock('bun-lock', text);
+      expect({ pairs: asked(r), unrecognised: r.unrecognised }).toEqual({ pairs: referenceBun(text).pairs, unrecognised: 0 });
+      const withLiterals = bun([bunEntry('probe', 'probe@1.0.0')], '    "": {\n      "name": "app", "n": -1.5e+3, "t": true, "f": false, "z": null,\n    },');
+      expect(asked(lock('bun-lock', withLiterals))).toEqual(['probe@1.0.0']);
+      // A byte-order mark at the very start is skipped, as before.
+      expect(asked(lock('bun-lock', `﻿${withLiterals}`))).toEqual(['probe@1.0.0']);
+    });
+  });
 });

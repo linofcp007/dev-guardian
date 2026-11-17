@@ -94,6 +94,8 @@ interface BatchOutcome {
   error?: string;
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
 /** Reads the answer of one batch. A batch cannot be matched to its queries unless it has one result each. */
 function readBatch(chunk: OsvPackageQuery[], json: unknown): BatchOutcome {
   const results = (json as { results?: unknown } | null)?.results;
@@ -105,19 +107,32 @@ function readBatch(chunk: OsvPackageQuery[], json: unknown): BatchOutcome {
   const unanswered: OsvPackageQuery[] = [];
   chunk.forEach((pkg, idx) => {
     const res: unknown = results[idx];
-    if (typeof res !== 'object' || res === null) {
+    if (!isPlainObject(res)) {
       unanswered.push(pkg);
       return;
     }
     // A cut result holds only its first page: what came is kept, the query is still unanswered.
-    if ((res as { next_page_token?: unknown }).next_page_token !== undefined) unanswered.push(pkg);
-    const vulns = (res as { vulns?: Array<{ id?: string }> }).vulns;
-    if (Array.isArray(vulns) && vulns.length > 0) {
-      const ids = vulns.map((v) => v.id).filter((x): x is string => typeof x === 'string');
+    let complete = res['next_page_token'] === undefined;
+    const vulns = res['vulns'];
+    const ids: string[] = [];
+    if (vulns !== undefined) {
+      if (Array.isArray(vulns)) {
+        for (const v of vulns as unknown[]) {
+          // An advisory that is not an object with a string id is not read as "no advisory".
+          if (isPlainObject(v) && typeof v['id'] === 'string') ids.push(v['id']);
+          else complete = false;
+        }
+      } else {
+        complete = false;
+      }
+    }
+    // What was well formed stands as a hit, whatever else the result held.
+    if (ids.length > 0) {
       const group: OsvVulnGroup = { ecosystem: pkg.ecosystem, name: pkg.name, vuln_ids: ids, severity: 'high' };
       if (pkg.version) group.version = pkg.version;
       groups.push(group);
     }
+    if (!complete) unanswered.push(pkg);
   });
   const error = unanswered.length > 0 ? `osv left ${unanswered.length} of ${chunk.length} results incomplete` : undefined;
   return { groups, unanswered, ...(error !== undefined ? { error } : {}) };
@@ -182,9 +197,11 @@ async function postJson(
 ): Promise<unknown> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  // The caller's signal outlives the request: its listener goes when the request settles.
+  const onAbort = (): void => controller.abort();
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    else opts.signal.addEventListener('abort', onAbort, { once: true });
   }
   try {
     const res = await fetchImpl(url, {
@@ -199,5 +216,6 @@ async function postJson(
     return read.json;
   } finally {
     clearTimeout(timeout);
+    opts.signal?.removeEventListener('abort', onAbort);
   }
 }

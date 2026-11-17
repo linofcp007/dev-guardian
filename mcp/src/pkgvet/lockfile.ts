@@ -1189,6 +1189,9 @@ interface BunFrame {
  * are found by depth, not by indentation, and `lockfileVersion` and `packages` must each be there once, written
  * without an escape.
  */
+/** The characters JSON allows outside a string besides brackets, quotes and the words: white space, `,`, `:` and those of a number. */
+const JSON_PLAIN: readonly boolean[] = Array.from({ length: 128 }, (_, c) => ' \t\n\r,:+-.eE0123456789'.includes(String.fromCharCode(c)));
+
 function bunFrame(text: string): BunFrame | { unread: string } {
   const n = text.length;
   const skipSpace = (from: number): number => {
@@ -1239,7 +1242,7 @@ function bunFrame(text: string): BunFrame | { unread: string } {
       i = j;
     } else if (c === 47) {
       const next = text.charCodeAt(i + 1);
-      if (next === 42 || next === 47) return { unread: 'it holds a comment, which bun does not write' };
+      return { unread: next === 42 || next === 47 ? 'it holds a comment, which bun does not write' : 'it holds a character JSON does not' };
     } else if (c === 123 || c === 91) {
       depth += 1;
     } else if (c === 125 || c === 93) {
@@ -1249,6 +1252,14 @@ function bunFrame(text: string): BunFrame | { unread: string } {
         ranges[open][1] = i;
         open = null;
       }
+    } else if (c === 116 || c === 102 || c === 110) {
+      // true, false, null: the only words JSON has outside a string.
+      const word = c === 116 ? 'true' : c === 102 ? 'false' : 'null';
+      if (!text.startsWith(word, i)) return { unread: 'it holds a word that is not a JSON literal' };
+      i += word.length - 1;
+    } else if (!JSON_PLAIN[c]) {
+      // Anything else (a single quote, a form feed, a non-ASCII character, another letter) is JSON-flavoured syntax bun never writes.
+      return { unread: 'it holds a character JSON does not' };
     }
   }
   if (depth !== 0) return { unread: 'it is not complete JSON' };

@@ -216,4 +216,65 @@ describe('install-vet-lockfile-pins', () => {
       if (failed) expect(r.online).toBe(false);
     },
   );
+  // ─────────────────────────────────────────────────────────────── fix round 2: a malformed result
+  describe('a result that is not the shape OSV answers with', () => {
+    const hit: OsvPackageQuery = { ecosystem: 'npm', name: 'eslint-config-prettier', version: '10.1.7' };
+    const other: OsvPackageQuery = { ecosystem: 'npm', name: 'left-pad', version: '1.3.0' };
+    /** The two queries, answered: the first with a MAL- advisory, the second with `second`. */
+    const ask = (second: unknown): Promise<OsvAnswer> =>
+      queryOsv([hit, other], { fetchImpl: osv({ answer: () => ({ body: { results: [{ vulns: [{ id: MAL }] }, second] } }) }).fetchImpl });
+
+    it('T-17 a `null` among the `vulns` of one result: the hit read before it stands, and only that query is unanswered', async () => {
+      const r = await ask({ vulns: [null] });
+      expect(r.vulnerable_packages.map((g) => ({ name: g.name, ids: g.vuln_ids }))).toEqual([{ name: hit.name, ids: [MAL] }]);
+      expect(unansweredOf(r)).toEqual([keyOf(other)]);
+      expect(r.online).toBe(false);
+      // The reason is the reader's, never the text of an exception.
+      expect(r.error ?? '').not.toMatch(/TypeError|Cannot read|undefined|null/);
+    });
+
+    const ODD: Array<[string, unknown]> = [
+      ['an array', []],
+      ['a string', 'MAL-1'],
+      ['a number', 7],
+      ['`vulns` a string', { vulns: 'MAL-1' }],
+      ['`vulns` an object', { vulns: { id: MAL } }],
+      ['`vulns` null', { vulns: null }],
+      ['an entry that is a string', { vulns: ['MAL-1'] }],
+      ['an entry without an `id`', { vulns: [{}] }],
+      ['an entry whose `id` is a number', { vulns: [{ id: 7 }] }],
+    ];
+    it.each(ODD)('T-17 %s: that query is unanswered, never read as answered and clean', async (_name, second) => {
+      const r = await ask(second);
+      expect(unansweredOf(r)).toEqual([keyOf(other)]);
+      expect(r.online).toBe(false);
+      expect(r.vulnerable_packages.map((g) => g.name)).toEqual([hit.name]);
+    });
+
+    it('T-17 the well-formed entries of a malformed result are kept as hits', async () => {
+      const r = await ask({ vulns: [{ id: GHSA }, null, { id: 7 }] });
+      expect(r.vulnerable_packages.find((g) => g.name === other.name)?.vuln_ids).toEqual([GHSA]);
+      expect(unansweredOf(r)).toEqual([keyOf(other)]);
+    });
+
+    it('T-17 the abort listener added to the caller’s signal for each request is removed when the request settles', async () => {
+      const controller = new AbortController();
+      const signal = controller.signal;
+      let added = 0;
+      let removed = 0;
+      const add = signal.addEventListener.bind(signal) as (...a: unknown[]) => void;
+      const remove = signal.removeEventListener.bind(signal) as (...a: unknown[]) => void;
+      (signal as unknown as { addEventListener: (...a: unknown[]) => void }).addEventListener = (...a) => {
+        if (a[0] === 'abort') added += 1;
+        add(...a);
+      };
+      (signal as unknown as { removeEventListener: (...a: unknown[]) => void }).removeEventListener = (...a) => {
+        if (a[0] === 'abort') removed += 1;
+        remove(...a);
+      };
+      const r = await queryOsv(packages(30), { fetchImpl: osv().fetchImpl, signal, chunk: 10 });
+      expect(r.online).toBe(true);
+      expect({ added, left: added - removed }).toEqual({ added: 3, left: 0 });
+    });
+  });
 });

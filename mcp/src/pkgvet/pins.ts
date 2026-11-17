@@ -88,7 +88,7 @@ export async function vetPins(pins: readonly Pin[], opts: VetOptions = {}): Prom
     );
     const mal = new Map<string, string[]>();
     for (const g of osv.vulnerable_packages) {
-      const ids = g.vuln_ids.filter((id) => id.startsWith('MAL-'));
+      const ids = g.vuln_ids.filter((id) => id.trim().toUpperCase().startsWith('MAL-'));
       if (ids.length > 0 && g.version !== undefined) mal.set(`${g.name}@${g.version}`, ids);
     }
     const unanswered = new Set(osv.unanswered.map((q) => `${q.name}@${q.version ?? ''}`));

@@ -384,4 +384,23 @@ describe('install-vet-lockfile-pins', () => {
     expect(verdictOf(BAD).malicious).toEqual([MAL]);
     expect(verdictOf(GOOD).malicious).toEqual([]);
   });
+  // ─────────────────────────────────────────────────────────────── fix round 2
+  it('T-15 a `null` among the `vulns` of one pin: the MAL- advisory read in the same batch denies, and only the malformed pin is unanswered', async () => {
+    const other: Pin = { name: 'left-pad', version: '1.3.0' };
+    const o = osv({
+      answer: (queries) => ({ body: { results: queries.map((q) => (q.package.name === BAD.name ? { vulns: [{ id: MAL }] } : { vulns: [null] })) } }),
+    });
+    const verdictOf = verdictsByPin(await vetPins([BAD, other], online(o)));
+    expect(verdictOf(BAD).malicious).toEqual([MAL]);
+    expect(verdictOf(other).malicious).toBeNull();
+    expect(verdictOf(other).unknown ?? '').not.toBe('');
+    expect(verdictOf(other).unknown ?? '').not.toMatch(/TypeError|Cannot read/);
+  });
+
+  it.each([' MAL-2025-6022', 'mal-2025-6022', '\tMal-2025-6022\n'])('T-15 an advisory id written %j is a malicious-package advisory', async (id) => {
+    const o = osv({ advisories: { [key(BAD)]: [id] } });
+    const verdictOf = verdictsByPin(await vetPins([BAD, GOOD], online(o)));
+    expect(verdictOf(BAD).malicious?.length).toBe(1);
+    expect(verdictOf(GOOD).malicious).toEqual([]);
+  });
 });

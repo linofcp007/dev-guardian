@@ -99185,18 +99185,29 @@ function readBatch(chunk, json2) {
   const unanswered2 = [];
   chunk.forEach((pkg, idx) => {
     const res = results[idx];
-    if (typeof res !== "object" || res === null) {
+    if (!isPlainObject4(res)) {
       unanswered2.push(pkg);
       return;
     }
-    if (res.next_page_token !== void 0) unanswered2.push(pkg);
-    const vulns = res.vulns;
-    if (Array.isArray(vulns) && vulns.length > 0) {
-      const ids2 = vulns.map((v) => v.id).filter((x) => typeof x === "string");
+    let complete = res["next_page_token"] === void 0;
+    const vulns = res["vulns"];
+    const ids2 = [];
+    if (vulns !== void 0) {
+      if (Array.isArray(vulns)) {
+        for (const v of vulns) {
+          if (isPlainObject4(v) && typeof v["id"] === "string") ids2.push(v["id"]);
+          else complete = false;
+        }
+      } else {
+        complete = false;
+      }
+    }
+    if (ids2.length > 0) {
       const group = { ecosystem: pkg.ecosystem, name: pkg.name, vuln_ids: ids2, severity: "high" };
       if (pkg.version) group.version = pkg.version;
       groups.push(group);
     }
+    if (!complete) unanswered2.push(pkg);
   });
   const error62 = unanswered2.length > 0 ? `osv left ${unanswered2.length} of ${chunk.length} results incomplete` : void 0;
   return { groups, unanswered: unanswered2, ...error62 !== void 0 ? { error: error62 } : {} };
@@ -99248,9 +99259,10 @@ async function queryOsv(packages, opts = {}) {
 async function postJson(url2, body, opts, fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS7);
+  const onAbort = () => controller.abort();
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    else opts.signal.addEventListener("abort", onAbort, { once: true });
   }
   try {
     const res = await fetchImpl(url2, {
@@ -99265,9 +99277,10 @@ async function postJson(url2, body, opts, fetchImpl) {
     return read3.json;
   } finally {
     clearTimeout(timeout);
+    opts.signal?.removeEventListener("abort", onAbort);
   }
 }
-var OSV_BATCH_URL, DEFAULT_TIMEOUT_MS7, MAX_QUERIES, CHUNK2, IN_FLIGHT2, MAX_RESPONSE_BYTES;
+var OSV_BATCH_URL, DEFAULT_TIMEOUT_MS7, MAX_QUERIES, CHUNK2, IN_FLIGHT2, MAX_RESPONSE_BYTES, isPlainObject4;
 var init_osv = __esm({
   "src/runners/osv.ts"() {
     "use strict";
@@ -99278,6 +99291,7 @@ var init_osv = __esm({
     CHUNK2 = 100;
     IN_FLIGHT2 = 4;
     MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+    isPlainObject4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   }
 });
 
@@ -103691,7 +103705,7 @@ function importSpec(file2, text3) {
     };
   }
   const pathsRaw = prop5(root, "paths");
-  const pathEntries = Object.entries(isPlainObject4(pathsRaw) ? pathsRaw : {});
+  const pathEntries = Object.entries(isPlainObject5(pathsRaw) ? pathsRaw : {});
   if (pathEntries.length === 0) {
     return {
       routes: [],
@@ -103877,7 +103891,7 @@ function str6(value, key) {
 function asArray3(value) {
   return Array.isArray(value) ? value : [];
 }
-function isPlainObject4(value) {
+function isPlainObject5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var import_yaml2, OPERATION_KEYS;
