@@ -5728,6 +5728,7 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
 var MAX_PINS = 8e3;
 var BATCH = 500;
 var IN_FLIGHT2 = 16;
+var REQUEST_GRACE_MS = 250;
 var keyOf = (p) => `${p.name}@${p.version}`;
 function choosePins(pins, opts) {
   const seen = /* @__PURE__ */ new Set();
@@ -5764,7 +5765,10 @@ async function vetPins(pins, opts = {}) {
   try {
     const osv = await queryOsv(
       pins.map((p) => ({ ecosystem: "npm", name: p.name, version: p.version })),
-      { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()), chunk: BATCH, inFlight: IN_FLIGHT2, maxQueries: MAX_PINS }
+      // Each request's own timeout ends AFTER the budget: the budget's abort is what stops a request that never
+      // answers. With the two set to end together, which timer fired first decided the reason that was said — the
+      // budget's phrase or the request's bare "aborted" — and under load it was sometimes the request's.
+      { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) + REQUEST_GRACE_MS, chunk: BATCH, inFlight: IN_FLIGHT2, maxQueries: MAX_PINS }
     );
     const mal = /* @__PURE__ */ new Map();
     for (const g of osv.vulnerable_packages) {
@@ -5772,7 +5776,8 @@ async function vetPins(pins, opts = {}) {
       if (ids.length > 0 && g.version !== void 0) mal.set(`${g.name}@${g.version}`, ids);
     }
     const unanswered = new Set(osv.unanswered.map((q) => `${q.name}@${q.version ?? ""}`));
-    const why = signal.aborted ? "network budget exhausted before OSV answered" : osv.error ?? "OSV gave no complete answer";
+    const ranOut = signal.aborted || Date.now() >= deadline;
+    const why = ranOut ? "network budget exhausted before OSV answered" : osv.error ?? "OSV gave no complete answer";
     const asked = new Set(pins.slice(0, MAX_PINS).map(keyOf));
     return pins.map((pin) => {
       const key = keyOf(pin);

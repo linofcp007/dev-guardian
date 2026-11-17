@@ -285,6 +285,21 @@ describe('install-vet-lockfile-pins', () => {
     },
   );
 
+  // The request's own timeout used to end with the budget, and which of the two timers fired first decided the
+  // reason: the budget's phrase, or the stand-in's bare "aborted" — once in a full run of the suite (2026-11-17).
+  it('T-15 a budget that runs out says so EVERY time: the reason is the budget\'s, never the aborted request\'s own word', async () => {
+    const reasons = new Set<string>();
+    for (let round = 0; round < 40; round += 1) {
+      const o = osv({ answer: () => ({ hang: true }) });
+      const verdicts = await vetPins([GOOD], online(o, { budgetMs: 15 + (round % 7) }));
+      for (const v of verdicts) {
+        expect(v.malicious).toBeNull();
+        reasons.add(v.unknown ?? '');
+      }
+    }
+    expect([...reasons]).toEqual(['network budget exhausted before OSV answered']);
+  });
+
   it('T-15 a result cut short (`next_page_token`): that pin is unanswered, never verified — and the batch that answered keeps its MAL- advisory', async () => {
     const paged: Pin = { name: 'paged-result', version: '3.1.4' };
     const all = [BAD, ...pins(998), paged];

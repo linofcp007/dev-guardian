@@ -22,6 +22,8 @@ export const MAX_PINS = 8000;
 const BATCH = 500;
 /** Requests in flight at once: MAX_PINS / BATCH, so every batch of a call is open together. */
 const IN_FLIGHT = 16;
+/** How long past the budget a request's own timeout ends — see {@link vetPins}: the budget, not the request, ends the wait. */
+const REQUEST_GRACE_MS = 250;
 
 /** `malicious === null`: no complete answer for the pin, and `unknown` says why. */
 export interface PinVerdict {
@@ -84,7 +86,10 @@ export async function vetPins(pins: readonly Pin[], opts: VetOptions = {}): Prom
   try {
     const osv = await queryOsv(
       pins.map((p) => ({ ecosystem: 'npm', name: p.name, version: p.version })),
-      { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()), chunk: BATCH, inFlight: IN_FLIGHT, maxQueries: MAX_PINS },
+      // Each request's own timeout ends AFTER the budget: the budget's abort is what stops a request that never
+      // answers. With the two set to end together, which timer fired first decided the reason that was said — the
+      // budget's phrase or the request's bare "aborted" — and under load it was sometimes the request's.
+      { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) + REQUEST_GRACE_MS, chunk: BATCH, inFlight: IN_FLIGHT, maxQueries: MAX_PINS },
     );
     const mal = new Map<string, string[]>();
     for (const g of osv.vulnerable_packages) {
@@ -92,7 +97,9 @@ export async function vetPins(pins: readonly Pin[], opts: VetOptions = {}): Prom
       if (ids.length > 0 && g.version !== undefined) mal.set(`${g.name}@${g.version}`, ids);
     }
     const unanswered = new Set(osv.unanswered.map((q) => `${q.name}@${q.version ?? ''}`));
-    const why = signal.aborted ? 'network budget exhausted before OSV answered' : (osv.error ?? 'OSV gave no complete answer');
+    // Decided by the clock as well as by the signal: past the deadline, what was left unanswered was left by the budget.
+    const ranOut = signal.aborted || Date.now() >= deadline;
+    const why = ranOut ? 'network budget exhausted before OSV answered' : (osv.error ?? 'OSV gave no complete answer');
     const asked = new Set(pins.slice(0, MAX_PINS).map(keyOf));
     return pins.map((pin): PinVerdict => {
       const key = keyOf(pin);
