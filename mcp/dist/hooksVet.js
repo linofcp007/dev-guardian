@@ -5930,10 +5930,11 @@ function said(text) {
 }
 function pinReason(unknown2) {
   const text = unknown2 ?? "";
-  if (/^(?:network disabled (GUARDIAN_OFFLINE=1)|no fetch implementation available|vetting time budget exhausted|network budget exhausted before OSV answered)$/.test(text)) return text;
-  const http = /^osv http (d{3})$/.exec(text);
+  if (/^(?:network disabled \(GUARDIAN_OFFLINE=1\)|no fetch implementation available|vetting time budget exhausted|network budget exhausted before OSV answered)$/.test(text)) return text;
+  const http = /^osv http (\d{3})$/.exec(text);
   if (http !== null) return `OSV answered HTTP ${http[1] ?? ""}`;
-  if (/^osv (?:answered|left) /.test(text) || /^osv answer over /.test(text)) return "OSV gave an incomplete answer";
+  if (/^osv (?:answered|left) \d+ /.test(text) || /^osv answer over /.test(text)) return "OSV gave an incomplete answer";
+  if (/JSON/.test(text)) return "OSV gave an answer that is not JSON";
   return "OSV lookup failed";
 }
 var notReadLine = (file, why) => `dev-guardian: ${file} was not read (${said(why)}) \u2014 its packages were not vetted.`;
@@ -6337,14 +6338,18 @@ async function decideInstallCommand(command, opts) {
   const unverified = [];
   const unverifiedIn = /* @__PURE__ */ new Map();
   const lockLines = [];
+  const lockCounts = [];
   const lockDenies = /* @__PURE__ */ new Set();
   let malicious = false;
   let missingIn;
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v]));
   const counted = /* @__PURE__ */ new Set();
+  const warnedCovered = /* @__PURE__ */ new Set();
   for (const lock of locked) {
     try {
-      for (const r of vetTyposquatOnly(lock.covered, {
+      const covered = lock.covered.filter((pkg) => !warnedCovered.has(`${lock.manifestFile}\0${pkg.name}\0${pkg.range ?? ""}`));
+      for (const pkg of covered) warnedCovered.add(`${lock.manifestFile}\0${pkg.name}\0${pkg.range ?? ""}`);
+      for (const r of vetTyposquatOnly(covered, {
         ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
         ...opts.popular !== void 0 ? { popular: opts.popular } : {}
       })) {
@@ -6354,6 +6359,7 @@ async function decideInstallCommand(command, opts) {
       const outcome = lockOutcome(lock, verdictOf, counted);
       for (const text of outcome.denies) lockDenies.add(text);
       lockLines.push(...outcome.lines);
+      lockCounts.push(...outcome.lines);
     } catch {
       lockLines.push(notReadLine(lock.file, "could not be read"));
     }
@@ -6399,7 +6405,10 @@ async function decideInstallCommand(command, opts) {
         `${manifestDenies.join(" ")} Installing it or removing the dependency is the user's decision: tell them which file names it, and install nothing from that manifest until they have decided.`
       );
     }
-    return { deny: `dev-guardian blocked this install: ${parts.join(" ")}` };
+    const counts = [...new Set(lockCounts)];
+    return { deny: `dev-guardian blocked this install: ${parts.join(" ")}${counts.length > 0 ? `
+${counts.join(`
+`)}` : ""}` };
   }
   const lines = [];
   if (warnings.length > 0) {

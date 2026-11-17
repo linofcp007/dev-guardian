@@ -407,10 +407,14 @@ function said(text: string): string {
  */
 function pinReason(unknown: string | undefined): string {
   const text = unknown ?? '';
-  if (/^(?:network disabled (GUARDIAN_OFFLINE=1)|no fetch implementation available|vetting time budget exhausted|network budget exhausted before OSV answered)$/.test(text)) return text;
-  const http = /^osv http (d{3})$/.exec(text);
+  // `pins.ts` and `queryOsv` give a string, not a kind: the classes they write are matched exactly, and what
+  // they never write (an error's own message) can only pick the class of its failure, never reach the line.
+  if (/^(?:network disabled \(GUARDIAN_OFFLINE=1\)|no fetch implementation available|vetting time budget exhausted|network budget exhausted before OSV answered)$/.test(text)) return text;
+  const http = /^osv http (\d{3})$/.exec(text);
   if (http !== null) return `OSV answered HTTP ${http[1] ?? ''}`;
-  if (/^osv (?:answered|left) /.test(text) || /^osv answer over /.test(text)) return 'OSV gave an incomplete answer';
+  if (/^osv (?:answered|left) \d+ /.test(text) || /^osv answer over /.test(text)) return 'OSV gave an incomplete answer';
+  // `JSON.parse` of an answer that is no JSON: its message names JSON and quotes the answer — only the class is kept.
+  if (/JSON/.test(text)) return 'OSV gave an answer that is not JSON';
   return 'OSV lookup failed';
 }
 
@@ -983,15 +987,21 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   /** Per manifest file: how many of its packages could not be vetted, and the first reason. */
   const unverifiedIn = new Map<string, { count: number; why: string }>();
   const lockLines: string[] = [];
+  /** What the lockfiles left unvetted (counts, one sentence each): said with a deny too. */
+  const lockCounts: string[] = [];
   const lockDenies = new Set<string>();
   let malicious = false;
   let missingIn: string | undefined;
   // What the lockfiles say. An exception here is one more lockfile not read — the hook stays fail-open.
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v] as const));
   const counted = new Set<string>();
+  const warnedCovered = new Set<string>();
   for (const lock of locked) {
     try {
-      for (const r of vetTyposquatOnly(lock.covered, {
+      // Two installs of one line may read one manifest twice: a covered dependency is judged once.
+      const covered = lock.covered.filter((pkg) => !warnedCovered.has(`${lock.manifestFile}\0${pkg.name}\0${pkg.range ?? ''}`));
+      for (const pkg of covered) warnedCovered.add(`${lock.manifestFile}\0${pkg.name}\0${pkg.range ?? ''}`);
+      for (const r of vetTyposquatOnly(covered, {
         ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
         ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
       })) {
@@ -1001,6 +1011,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
       const outcome = lockOutcome(lock, verdictOf, counted);
       for (const text of outcome.denies) lockDenies.add(text);
       lockLines.push(...outcome.lines);
+      lockCounts.push(...outcome.lines);
     } catch {
       lockLines.push(notReadLine(lock.file, 'could not be read'));
     }
@@ -1052,7 +1063,10 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           "Installing it or removing the dependency is the user's decision: tell them which file names it, and install nothing from that manifest until they have decided.",
       );
     }
-    return { deny: `dev-guardian blocked this install: ${parts.join(' ')}` };
+    // The counts of what was not vetted come after the sentences — the advisory received stands even when a batch failed.
+    // The other lines (another source, not recognised, …) stay out of a deny: they do not change it, and the deny stays short.
+    const counts = [...new Set(lockCounts)];
+    return { deny: `dev-guardian blocked this install: ${parts.join(' ')}${counts.length > 0 ? `\n${counts.join(`\n`)}` : ''}` };
   }
   const lines: string[] = [];
   if (warnings.length > 0) {
