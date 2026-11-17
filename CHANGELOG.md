@@ -8,6 +8,22 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **A manifest install is vetted through its lockfile.** For `npm ci`, `npm install`, `pnpm install`, `yarn` and
+  `bun install` the install hook reads the manager's own lockfile and asks OSV about every pinned package and
+  version, the transitive ones too, and denies a malicious one. The registry is asked only for the direct
+  dependencies the lockfile does not cover. What it could not read, did not recognise or did not get a complete
+  answer for is said, never read as verified. The names and pinned versions of all the lockfile's registry packages
+  now go to OSV (before, only the direct dependencies' names went); `GUARDIAN_PKG_VET=0` turns it off. See
+  [`docs/hooks.md`](docs/hooks.md) and [the known limits](docs/hooks-known-limits.md).
+
+### Changed
+
+- **An incomplete OSV answer is no longer read as "no advisories".** When an answer lacks a result for a query or is
+  cut short, `vet_packages` and the install hook's by-name vetting say the package was not verified, and
+  `scan_skill` says its dependencies were not all checked — still showing the advisories it did receive.
+
 ## [3.11.0] - 2026-11-16
 
 Three places where the tool already knew more than it said or did. `create_fix_pr` learned from its own verification
