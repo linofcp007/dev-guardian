@@ -116732,7 +116732,7 @@ function npmScope(name) {
   const m = /^@([^/]+)\//.exec(name);
   return m?.[1];
 }
-function fromNpmrc(text3, scope) {
+function fromNpmrc(text3, scope, all) {
   let found2;
   for (const raw of text3.split(/\r?\n/)) {
     const line = raw.trim();
@@ -116741,12 +116741,13 @@ function fromNpmrc(text3, scope) {
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     const url2 = (m[2] ?? "").trim();
+    all?.push(url2);
     if (lineScope === void 0) found2 = found2 ?? url2;
     else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url2;
   }
   return found2;
 }
-function fromYarnrcYml(text3, scope) {
+function fromYarnrcYml(text3, scope, all) {
   let global3;
   let inScopes = false;
   let currentScope;
@@ -116759,6 +116760,7 @@ function fromYarnrcYml(text3, scope) {
       currentScope = void 0;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
       if (m !== null) global3 = (m[1] ?? "").replace(/^["']|["']$/g, "");
+      if (m !== null) all?.push(global3 ?? "");
       continue;
     }
     if (!inScopes) continue;
@@ -116768,24 +116770,26 @@ function fromYarnrcYml(text3, scope) {
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
+    if (server !== null) all?.push((server[1] ?? "").replace(/^["']|["']$/g, ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
       return (server[1] ?? "").replace(/^["']|["']$/g, "");
     }
   }
   return global3;
 }
-function fromYarnrc(text3, scope) {
+function fromYarnrc(text3, scope, all) {
   let found2;
   for (const raw of text3.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
+    all?.push(m[2] ?? "");
     if (lineScope === void 0) found2 = found2 ?? m[2];
     else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
   }
   return found2;
 }
-function fromBunfig(text3, scope) {
+function fromBunfig(text3, scope, all) {
   let section = "";
   let found2;
   for (const raw of text3.split(/\r?\n/)) {
@@ -116796,7 +116800,11 @@ function fromBunfig(text3, scope) {
       continue;
     }
     const url2 = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
-    if (section === "install" && /^registry\s*=/.test(line)) found2 = found2 ?? url2;
+    if (section === "install" && /^registry\s*=/.test(line)) {
+      all?.push(url2);
+      found2 = found2 ?? url2;
+    }
+    if (section === "install.scopes" && /^["']?@?[^"'=\s]+["']?\s*=/.test(line)) all?.push(url2);
     if (section === "install.scopes" && scope !== void 0) {
       const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
       if (key !== void 0 && key.toLowerCase() === scope.toLowerCase()) return url2;
@@ -116811,35 +116819,35 @@ function npmConfigFiles(ctx) {
   const near = ancestors2(ctx);
   for (const dir of near) {
     files.push(
-      { path: join115(dir, ".npmrc"), parse: fromNpmrc },
-      { path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
-      { path: join115(dir, ".yarnrc"), parse: fromYarnrc },
-      { path: join115(dir, "bunfig.toml"), parse: fromBunfig }
+      { path: join115(dir, ".npmrc"), parse: fromNpmrc, user: false },
+      { path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml, user: false },
+      { path: join115(dir, ".yarnrc"), parse: fromYarnrc, user: false },
+      { path: join115(dir, "bunfig.toml"), parse: fromBunfig, user: false }
     );
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
     for (let dir = dirname35(top), i = 0; i < 64; dir = dirname35(dir), i += 1) {
-      files.push({ path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      files.push({ path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml, user: false });
       if (dirname35(dir) === dir) break;
     }
   }
   const xdg = envValue6(env, "XDG_CONFIG_HOME") ?? join115(home, ".config");
   const localAppData = envValue6(env, "LOCALAPPDATA") ?? join115(home, "AppData", "Local");
   files.push(
-    { path: envValue6(env, "NPM_CONFIG_USERCONFIG") ?? join115(home, ".npmrc"), parse: fromNpmrc },
-    { path: join115(home, ".yarnrc.yml"), parse: fromYarnrcYml },
-    { path: join115(home, ".yarnrc"), parse: fromYarnrc },
-    { path: join115(home, ".bunfig.toml"), parse: fromBunfig },
-    { path: join115(xdg, ".bunfig.toml"), parse: fromBunfig },
-    { path: join115(xdg, "pnpm", "rc"), parse: fromNpmrc },
-    { path: join115(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
-    { path: join115(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+    { path: envValue6(env, "NPM_CONFIG_USERCONFIG") ?? join115(home, ".npmrc"), parse: fromNpmrc, user: true },
+    { path: join115(home, ".yarnrc.yml"), parse: fromYarnrcYml, user: true },
+    { path: join115(home, ".yarnrc"), parse: fromYarnrc, user: true },
+    { path: join115(home, ".bunfig.toml"), parse: fromBunfig, user: true },
+    { path: join115(xdg, ".bunfig.toml"), parse: fromBunfig, user: true },
+    { path: join115(xdg, "pnpm", "rc"), parse: fromNpmrc, user: true },
+    { path: join115(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc, user: true },
+    { path: join115(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc, user: true }
   );
   const globalConfig2 = envValue6(env, "NPM_CONFIG_GLOBALCONFIG");
-  if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
+  if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc, user: true });
   const prefix = envValue6(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join115(envValue6(env, "APPDATA") ?? join115(home, "AppData", "Roaming"), "npm") : dirname35(dirname35(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join115(prefix, "etc", "npmrc"), parse: fromNpmrc });
+  files.push({ path: join115(prefix, "etc", "npmrc"), parse: fromNpmrc, user: true });
   return files;
 }
 function envRegistry(ecosystem, ctx) {

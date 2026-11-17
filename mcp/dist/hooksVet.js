@@ -3152,7 +3152,7 @@ function npmScope(name) {
   const m = /^@([^/]+)\//.exec(name);
   return m?.[1];
 }
-function fromNpmrc(text, scope) {
+function fromNpmrc(text, scope, all) {
   let found;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -3161,12 +3161,13 @@ function fromNpmrc(text, scope) {
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     const url = (m[2] ?? "").trim();
+    all?.push(url);
     if (lineScope === void 0) found = found ?? url;
     else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url;
   }
   return found;
 }
-function fromYarnrcYml(text, scope) {
+function fromYarnrcYml(text, scope, all) {
   let global;
   let inScopes = false;
   let currentScope;
@@ -3179,6 +3180,7 @@ function fromYarnrcYml(text, scope) {
       currentScope = void 0;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
       if (m !== null) global = (m[1] ?? "").replace(/^["']|["']$/g, "");
+      if (m !== null) all?.push(global ?? "");
       continue;
     }
     if (!inScopes) continue;
@@ -3188,24 +3190,26 @@ function fromYarnrcYml(text, scope) {
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
+    if (server !== null) all?.push((server[1] ?? "").replace(/^["']|["']$/g, ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
       return (server[1] ?? "").replace(/^["']|["']$/g, "");
     }
   }
   return global;
 }
-function fromYarnrc(text, scope) {
+function fromYarnrc(text, scope, all) {
   let found;
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
+    all?.push(m[2] ?? "");
     if (lineScope === void 0) found = found ?? m[2];
     else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
   }
   return found;
 }
-function fromBunfig(text, scope) {
+function fromBunfig(text, scope, all) {
   let section = "";
   let found;
   for (const raw of text.split(/\r?\n/)) {
@@ -3216,7 +3220,11 @@ function fromBunfig(text, scope) {
       continue;
     }
     const url = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
-    if (section === "install" && /^registry\s*=/.test(line)) found = found ?? url;
+    if (section === "install" && /^registry\s*=/.test(line)) {
+      all?.push(url);
+      found = found ?? url;
+    }
+    if (section === "install.scopes" && /^["']?@?[^"'=\s]+["']?\s*=/.test(line)) all?.push(url);
     if (section === "install.scopes" && scope !== void 0) {
       const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
       if (key !== void 0 && key.toLowerCase() === scope.toLowerCase()) return url;
@@ -3232,35 +3240,35 @@ function npmConfigFiles(ctx) {
   const near = ancestors(ctx);
   for (const dir of near) {
     files.push(
-      { path: join4(dir, ".npmrc"), parse: fromNpmrc },
-      { path: join4(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
-      { path: join4(dir, ".yarnrc"), parse: fromYarnrc },
-      { path: join4(dir, "bunfig.toml"), parse: fromBunfig }
+      { path: join4(dir, ".npmrc"), parse: fromNpmrc, user: false },
+      { path: join4(dir, ".yarnrc.yml"), parse: fromYarnrcYml, user: false },
+      { path: join4(dir, ".yarnrc"), parse: fromYarnrc, user: false },
+      { path: join4(dir, "bunfig.toml"), parse: fromBunfig, user: false }
     );
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
     for (let dir = dirname3(top), i = 0; i < 64; dir = dirname3(dir), i += 1) {
-      files.push({ path: join4(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      files.push({ path: join4(dir, ".yarnrc.yml"), parse: fromYarnrcYml, user: false });
       if (dirname3(dir) === dir) break;
     }
   }
   const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join4(home, ".config");
   const localAppData = envValue(env, "LOCALAPPDATA") ?? join4(home, "AppData", "Local");
   files.push(
-    { path: envValue(env, "NPM_CONFIG_USERCONFIG") ?? join4(home, ".npmrc"), parse: fromNpmrc },
-    { path: join4(home, ".yarnrc.yml"), parse: fromYarnrcYml },
-    { path: join4(home, ".yarnrc"), parse: fromYarnrc },
-    { path: join4(home, ".bunfig.toml"), parse: fromBunfig },
-    { path: join4(xdg, ".bunfig.toml"), parse: fromBunfig },
-    { path: join4(xdg, "pnpm", "rc"), parse: fromNpmrc },
-    { path: join4(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
-    { path: join4(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+    { path: envValue(env, "NPM_CONFIG_USERCONFIG") ?? join4(home, ".npmrc"), parse: fromNpmrc, user: true },
+    { path: join4(home, ".yarnrc.yml"), parse: fromYarnrcYml, user: true },
+    { path: join4(home, ".yarnrc"), parse: fromYarnrc, user: true },
+    { path: join4(home, ".bunfig.toml"), parse: fromBunfig, user: true },
+    { path: join4(xdg, ".bunfig.toml"), parse: fromBunfig, user: true },
+    { path: join4(xdg, "pnpm", "rc"), parse: fromNpmrc, user: true },
+    { path: join4(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc, user: true },
+    { path: join4(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc, user: true }
   );
   const globalConfig = envValue(env, "NPM_CONFIG_GLOBALCONFIG");
-  if (globalConfig !== void 0) files.push({ path: globalConfig, parse: fromNpmrc });
+  if (globalConfig !== void 0) files.push({ path: globalConfig, parse: fromNpmrc, user: true });
   const prefix = envValue(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join4(envValue(env, "APPDATA") ?? join4(home, "AppData", "Roaming"), "npm") : dirname3(dirname3(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join4(prefix, "etc", "npmrc"), parse: fromNpmrc });
+  files.push({ path: join4(prefix, "etc", "npmrc"), parse: fromNpmrc, user: true });
   return files;
 }
 var ENV_REGISTRY = {
