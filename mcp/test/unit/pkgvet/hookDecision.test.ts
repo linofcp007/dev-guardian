@@ -2327,7 +2327,9 @@ describe('install-vet-lockfile-pins', () => {
 
   // ── T-26: two manifest installs on one line
 
-  it('T-26 `cd a && npm ci && cd ../b && npm ci`: the two lockfiles share the cap of 8000, and a pin both hold is asked once', async () => {
+  // The second install starts a list of its own (`;`): a `cd` that follows another command's `&&` is one the
+  // command parser does not trust (hooks/shell/workdir.ts), and that install's files are then said as not read.
+  it('T-26 `cd a && npm ci; cd ../b && npm ci`: the two lockfiles share the cap of 8000, and a pin both hold is asked once', async () => {
     const pinsOf = (prefix: string): LockPin[] => Array.from({ length: 5000 }, (_, i): LockPin => [`${prefix}-${String(i).padStart(4, '0')}`, '1.0.0']);
     for (const dir of ['a', 'b']) {
       mkdirSync(join(project, dir));
@@ -2336,7 +2338,7 @@ describe('install-vet-lockfile-pins', () => {
       put('package-lock.json', packageLock({ root: { express: '^4.21.0' }, pins: [['express', '4.21.2'], ...pinsOf(dir)] }), join(project, dir));
     }
     const net = lockNet();
-    const d = await decideInstallCommand('cd a && npm ci && cd ../b && npm ci', at(net.fetchImpl));
+    const d = await decideInstallCommand('cd a && npm ci; cd ../b && npm ci', at(net.fetchImpl));
     expect(d?.deny).toBeUndefined();
     expect(net.asked.filter((pair) => pair === 'express@4.21.2')).toHaveLength(1);
     expect(net.asked).toHaveLength(8000);

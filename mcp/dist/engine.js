@@ -117488,6 +117488,11 @@ function osvNameFor(w, canonical2) {
   if (w.spec.ecosystem === "nuget") return canonical2 ?? w.spec.name;
   return w.spec.name;
 }
+function typosquatCheck(w) {
+  if (!w.popularLoaded) return unknown3("popular-packages list unavailable \u2014 typosquat check not run");
+  if (w.typo === null) return pass();
+  return warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`);
+}
 function buildResult(w, osv, osvError, now, offlineReason) {
   const { spec } = w;
   const eco = spec.ecosystem;
@@ -117496,7 +117501,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   const info = lookup2?.kind === "found" ? lookup2.info : void 0;
   const extraWarn = [];
   const extraUnknown = [];
-  const typosquat = !w.popularLoaded ? unknown3("popular-packages list unavailable \u2014 typosquat check not run") : w.typo !== null ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`) : pass();
+  const typosquat = typosquatCheck(w);
   const ids2 = osvIds(osv, w);
   const malIds = ids2.filter((id) => id.startsWith("MAL-"));
   const vulnIds = ids2.filter((id) => !id.startsWith("MAL-"));
@@ -117515,7 +117520,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     if (eco === "npm") installScripts = unknown3(why);
   } else if (lookup2.kind === "error") {
     exists = unknown3(`${registry2} lookup failed: ${lookup2.reason}`);
-    malicious = osvDown !== void 0 ? unknown3(osvDown) : malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : pass("no OSV malicious-package advisory for any version");
+    malicious = malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : osvDown !== void 0 ? unknown3(osvDown) : pass("no OSV malicious-package advisory for any version");
     vulnerabilities = unknown3(`version unknown: ${lookup2.reason}`);
     publishAge = unknown3(`version unknown: ${lookup2.reason}`);
     if (eco === "npm") installScripts = unknown3(`version unknown: ${lookup2.reason}`);
@@ -117543,10 +117548,10 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const versionUnknown = v === void 0 ? `could not determine which version '${spec.range ?? "latest"}' installs` : void 0;
     if (placeholder) {
       malicious = fail4(`npm replaced this package with a security placeholder (${placeholderVersion ?? "x-security"}): it was taken down as malicious`);
-    } else if (osvDown !== void 0) {
-      malicious = unknown3(osvDown);
     } else if (malIds.length > 0) {
       malicious = w.osvVersioned ? fail4(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`);
+    } else if (osvDown !== void 0) {
+      malicious = unknown3(osvDown);
     } else {
       malicious = pass();
     }

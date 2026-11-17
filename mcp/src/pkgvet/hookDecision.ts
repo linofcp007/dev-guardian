@@ -46,26 +46,48 @@
  * says so, in one line when a file of the project does — a project file may
  * not take a check away unseen.
  *
+ * **The lockfile** of an npm-family manifest install (`lockfile.ts`) is what
+ * the package manager installs, and the hook asks OSV about every pair it pins
+ * (`pins.ts`), at the exact version, beside the registry path of the manifest's
+ * own dependencies and under the same budget and deadline. Only a `MAL-`
+ * advisory denies — with the manifest's sentence, naming the lockfile.
+ * Everything not read, not recognised, not asked or not answered is counted and
+ * said in one line, never given as verified. A direct dependency the lockfile
+ * records at the manifest's range, with a pinned version, is not asked of the
+ * registry (the manager does not resolve it again): its typosquat check stays.
+ *
+ * Only validated text reaches the answer: the lockfile's file name, package
+ * names and exact versions, a host `lockfile.ts` validated.
+ *
  * All network work shares one budget ({@link HOOK_BUDGET_MS}, 3 s): the
  * install commands of a compound line are vetted in parallel under it.
  */
 
 import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, isAbsolute, join, parse, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
+import { LOCKFILES, lockFormat, readLock, type LockRead, type Pin, type Source } from './lockfile.js';
 import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
+import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
-import { npmScopeRegistry, registryCache, type RegistryContext } from './privateRegistry.js';
+import { npmScopeRegistry, npmUserRegistries, registryCache, type RegistryContext } from './privateRegistry.js';
 import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
 import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from './types.js';
-import { HOOK_BUDGET_MS, vetPackages } from './vet.js';
+import { HOOK_BUDGET_MS, vetPackages, vetTyposquatOnly } from './vet.js';
 import { isExactVersion } from './versions.js';
 
 export interface HookVetOptions {
   /** The project directory (the hook payload's `cwd`). */
   cwd: string;
+  /**
+   * The hook's project root. A manifest install's lockfile is looked for in the
+   * directory the command runs in and, when there is none, in the nearest
+   * directory above it up to this one — never beyond. Without it, or with the
+   * command's directory outside it, only the command's own directory is read.
+   */
+  projectDir?: string;
   homeDir?: string;
   env?: Readonly<Record<string, string | undefined>>;
   fetchImpl?: typeof fetch;
@@ -246,7 +268,13 @@ const plural = (n: number): string => (n === 1 ? '1 package' : `${String(n)} pac
  * `--dir`, `--cwd`) or a `cd` that may not have run leaves that unknown, and
  * the manifest unread — said, not guessed.
  */
-function withManifestPackages(parsed: readonly InstallCommand[], opts: HookVetOptions, registry: RegistryContext, notes: string[]): VetCommand[] {
+function withManifestPackages(
+  parsed: readonly InstallCommand[],
+  opts: HookVetOptions,
+  registry: RegistryContext,
+  notes: string[],
+  locked: LockedProject[],
+): VetCommand[] {
   const out: VetCommand[] = [];
   for (const c of parsed) {
     out.push(c);
@@ -268,6 +296,9 @@ function withManifestPackages(parsed: readonly InstallCommand[], opts: HookVetOp
     }
     for (const read of reads) {
       if (read.status === 'absent') continue;
+      // The lockfile is what the manager installs, whether or not the manifest could be read.
+      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, dir, read, opts, registry, notes) : undefined;
+      if (lock !== undefined) locked.push(lock);
       if (read.status === 'unreadable') {
         notes.push(`dev-guardian: ${read.file} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
         continue;
@@ -275,7 +306,9 @@ function withManifestPackages(parsed: readonly InstallCommand[], opts: HookVetOp
       if (read.incomplete !== undefined) {
         notes.push(`dev-guardian: a file ${read.file} includes was not read (${read.incomplete}) — its packages were not vetted.`);
       }
-      const packages = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: dir }, notes) : read.packages;
+      const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: dir }, notes) : read.packages;
+      // A direct dependency the lockfile records for this project leaves the registry path: its typosquat check stays.
+      const packages = lock === undefined ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read.registries];
       const custom = c.customRegistry ?? read.registries[0];
@@ -317,12 +350,318 @@ function withoutOwnRegistryScopes(read: ManifestRead, registry: RegistryContext,
     byProject.add(`@${own.scope}`);
     if (source === '') source = basename(own.source);
   }
-  if (held > 0) {
-    notes.push(
-      `dev-guardian: ${plural(held)} of ${read.file} ${held === 1 ? 'is' : 'are'} in a scope (${[...byProject].join(', ')}) the project's ${source} gives a registry of its own — not vetted.`,
+  if (held > 0) notes.push(ownScopeLine(held, read.file, byProject, source));
+  return kept;
+}
+
+/** The line for packages of a scope a file of the project gives a registry of its own: counted and said, never dropped unseen. */
+function ownScopeLine(held: number, file: string, scopes: Iterable<string>, source: string): string {
+  return `dev-guardian: ${plural(held)} of ${file} ${held === 1 ? 'is' : 'are'} in a scope (${[...scopes].join(', ')}) the project's ${source} gives a registry of its own — not vetted.`;
+}
+
+// ───────────────────────────────────────────────────────────────────── lockfiles
+
+/** The largest lockfile read: the biggest real one measured is a few MiB, and a hostile one is not given more. */
+const MAX_LOCKFILE_BYTES = 16 * 1024 * 1024;
+/** The most distinct hosts a line names. */
+const MAX_NAMED_HOSTS = 3;
+/** The most of a reason repeated in a line. */
+const MAX_REASON_LENGTH = 120;
+
+/** A lockfile read for one manifest install, with what was decided of it before the network. */
+interface LockedProject {
+  /** The lockfile's file name: the only part of its path an answer repeats. */
+  file: string;
+  /** The manifest that names the project's own dependencies, as the command names it. */
+  manifestFile: string;
+  read: LockRead;
+  /** The command's directory relative to the lockfile's, with `/` — what `resolutionOf` is asked about. */
+  rel: string;
+  /** The names the manifest declares: their pairs are asked first. */
+  direct: string[];
+  /** The direct dependencies the lockfile records for this project: the typosquat check alone. */
+  covered: PackageSpec[];
+  /** The pairs to ask OSV about, each once, in file order — the scope rule applied. */
+  asked: Pin[];
+}
+
+const pairKey = (p: Pin): string => `${p.name}@${p.version}`;
+
+/** Text that may stand in a line: no control character, no line break, bounded. */
+function said(text: string): string {
+  const clean = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, ' ').trim();
+  return clean === '' ? 'no reason recorded' : clean.length > MAX_REASON_LENGTH ? `${clean.slice(0, MAX_REASON_LENGTH)}…` : clean;
+}
+
+const notReadLine = (file: string, why: string): string => `dev-guardian: ${file} was not read (${said(why)}) — its packages were not vetted.`;
+
+/** Whether `dir` is `root` or below it. */
+function isWithin(root: string, dir: string): boolean {
+  const rel = relative(resolve(root), resolve(dir));
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+type LockFound =
+  | { status: 'absent' }
+  | { status: 'unread'; file: string; why: string }
+  | { status: 'ok'; file: string; dir: string; text: string };
+
+/**
+ * The lockfile of the manager that runs `manager`: in `dir` and, when there is
+ * none, in the nearest directory above up to `projectDir` — never beyond it.
+ * With no `projectDir`, or a `dir` outside it, only `dir`. Read only through
+ * the hooks' bounded reader, below the project root (a link to a network path
+ * is refused), so a FIFO, a device or a share in its place cannot hold the hook.
+ */
+function findLockfile(manager: string, dir: string, projectDir: string | undefined): LockFound {
+  const names = manager === 'npm' || manager === 'pnpm' || manager === 'yarn' || manager === 'bun' ? LOCKFILES[manager] : [];
+  if (names.length === 0) return { status: 'absent' };
+  const root = projectDir !== undefined && isWithin(projectDir, dir) ? resolve(projectDir) : resolve(dir);
+  // The manifest read already says that a directory on the network was not read.
+  if (isNetworkPath(dir) || isNetworkPath(root)) return { status: 'absent' };
+  const candidates = manager === 'bun' ? [...names, 'bun.lockb'] : names;
+  let at = resolve(dir);
+  for (let i = 0; i < 64; i += 1) {
+    for (const file of candidates) {
+      const path = join(at, file);
+      if (file === 'bun.lockb') {
+        // The binary lockfile of bun < 1.2: nothing here reads it, and it is not read as text.
+        if (presentBelow(root, path)) return { status: 'unread', file, why: "it is bun's binary lockfile" };
+        continue;
+      }
+      const read = readSmallText(path, MAX_LOCKFILE_BYTES, root);
+      if (read.status === 'ok') return { status: 'ok', file, dir: at, text: read.text };
+      if (read.status === 'refused') return { status: 'unread', file, why: refusedWhy(read.reason) };
+    }
+    const parent = dirname(at);
+    if (relative(root, at) === '' || parent === at) break;
+    at = parent;
+  }
+  return { status: 'absent' };
+}
+
+function refusedWhy(reason: 'not-a-regular-file' | 'too-large' | 'unreadable' | 'remote-link'): string {
+  switch (reason) {
+    case 'not-a-regular-file':
+      return 'not a regular file';
+    case 'too-large':
+      return 'over 16 MiB';
+    case 'remote-link':
+      return 'on a network path';
+    default:
+      return 'could not be read';
+  }
+}
+
+/** Whether `url` starts — on a path-segment boundary — with a registry URL the user's own npm configuration names. */
+function fromUserRegistry(url: string, registries: readonly string[]): boolean {
+  let normal: string;
+  try {
+    const u = new URL(url);
+    normal = `${u.origin}${u.pathname}`;
+  } catch {
+    return false;
+  }
+  return registries.some((registry) => normal.startsWith(registry));
+}
+
+/** Where the entries of a lockfile are fetched from, if not the public registry: how many, and from which hosts the lockfile names. */
+function otherSources(read: LockRead, userRegistries: () => readonly string[]): { count: number; hosts: string[] } {
+  const hosts: string[] = [];
+  let count = 0;
+  for (const { source } of read.entries) {
+    if (!isOtherSource(source, userRegistries)) continue;
+    count += 1;
+    if ('host' in source && source.host !== '' && !hosts.includes(source.host)) hosts.push(source.host);
+  }
+  return { count, hosts };
+}
+
+function isOtherSource(source: Source, userRegistries: () => readonly string[]): boolean {
+  if (source.kind === 'git') return true;
+  // Only the USER's registries silence the line: a file of the project never does.
+  return source.kind === 'elsewhere' && !fromUserRegistry(source.url, userRegistries());
+}
+
+function otherSourceLine(count: number, file: string, hosts: readonly string[]): string {
+  const named = hosts.length === 0 ? '' : ` (${hosts.slice(0, MAX_NAMED_HOSTS).join(', ')}${hosts.length > MAX_NAMED_HOSTS ? ` and ${hosts.length - MAX_NAMED_HOSTS} more` : ''})`;
+  return `dev-guardian: ${plural(count)} of ${file} ${count === 1 ? 'comes' : 'come'} from another source${named} — what it serves was not vetted.`;
+}
+
+/**
+ * The pairs of a lockfile to ask OSV about: every pin and every pair a URL
+ * names, but not those of a git source, and not those of a scope the npm
+ * configuration gives a registry of its own — their names stay where the manager
+ * fetches them — unless the lockfile itself gives the public registry's URL for
+ * the entry. What a PROJECT file keeps out is counted for a line.
+ */
+function pairsToAsk(read: LockRead, registry: RegistryContext): { asked: Pin[]; heldByProject: number; scopes: Set<string>; source: string } {
+  const asked: Pin[] = [];
+  const askedKeys = new Set<string>();
+  const heldKeys = new Set<string>();
+  const scopes = new Set<string>();
+  let source = '';
+  const scopeRegistries = new Map<string, ReturnType<typeof npmScopeRegistry>>();
+  const ownRegistry = (name: string): ReturnType<typeof npmScopeRegistry> => {
+    if (!name.startsWith('@')) return null;
+    const scope = name.split('/')[0] ?? name;
+    let own = scopeRegistries.get(scope);
+    if (own === undefined) {
+      own = npmScopeRegistry(name, registry);
+      scopeRegistries.set(scope, own);
+    }
+    return own;
+  };
+  for (const entry of read.entries) {
+    if (entry.source.kind === 'git') continue;
+    for (const pin of [entry.pin, entry.fetched]) {
+      if (pin === undefined) continue;
+      const key = pairKey(pin);
+      const own = entry.source.kind === 'public' ? null : ownRegistry(pin.name);
+      if (own !== null) {
+        if (own.from === 'project') {
+          heldKeys.add(key);
+          scopes.add(`@${own.scope}`);
+          if (source === '') source = basename(own.source);
+        }
+        continue;
+      }
+      if (askedKeys.has(key)) continue;
+      askedKeys.add(key);
+      asked.push(pin);
+    }
+  }
+  return { asked, heldByProject: [...heldKeys].filter((key) => !askedKeys.has(key)).length, scopes, source };
+}
+
+/**
+ * The lockfile of a manifest install, read and planned — or `undefined`, with
+ * the line that says why it was not read. Nothing here throws: a lockfile that
+ * cannot be handled is one more "was not read", and the manifest is vetted as
+ * it is with no lockfile.
+ */
+function lockedProject(
+  c: InstallCommand,
+  dir: string,
+  manifest: ManifestRead,
+  opts: HookVetOptions,
+  registry: RegistryContext,
+  notes: string[],
+): LockedProject | undefined {
+  try {
+    const found = findLockfile(c.manager, dir, opts.projectDir);
+    if (found.status === 'absent') return undefined;
+    if (found.status === 'unread') {
+      notes.push(notReadLine(found.file, found.why));
+      return undefined;
+    }
+    const format = lockFormat(found.file);
+    const read = format === null ? { unread: 'its format is not known' } : readLock(format, found.text);
+    if ('unread' in read) {
+      notes.push(notReadLine(found.file, read.unread));
+      return undefined;
+    }
+    const ctx: RegistryContext = { ...registry, projectDir: dir };
+    let userRegistries: string[] | undefined;
+    const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(ctx));
+    const plan = pairsToAsk(read, ctx);
+    const lines: string[] = [];
+    if (plan.heldByProject > 0) lines.push(ownScopeLine(plan.heldByProject, found.file, plan.scopes, plan.source));
+    const other = otherSources(read, user);
+    if (other.count > 0) lines.push(otherSourceLine(other.count, found.file, other.hosts));
+    const divergent = read.entries.filter((e) => e.fetched !== undefined).length;
+    if (divergent > 0) {
+      lines.push(
+        `dev-guardian: ${divergent === 1 ? '1 entry' : `${divergent} entries`} of ${found.file} ${divergent === 1 ? 'names' : 'name'} one package and ${divergent === 1 ? 'fetches' : 'fetch'} another — both were looked up; check the lockfile.`,
+      );
+    }
+    if (read.unrecognised > 0) {
+      lines.push(`dev-guardian: ${read.unrecognised === 1 ? '1 entry' : `${read.unrecognised} entries`} of ${found.file} ${read.unrecognised === 1 ? 'was' : 'were'} not recognised — not vetted.`);
+    }
+    notes.push(...lines);
+    return {
+      file: found.file,
+      manifestFile: manifest.file,
+      read,
+      rel: relative(found.dir, resolve(dir)).split(sep).join('/'),
+      direct: manifest.packages.map((p) => p.name),
+      covered: [],
+      asked: plan.asked,
+    };
+  } catch {
+    notes.push('dev-guardian: the lockfile was not read (could not be read) — its packages were not vetted.');
+    return undefined;
+  }
+}
+
+/**
+ * The packages the lockfile does NOT cover: a direct dependency leaves the
+ * registry path only when the lockfile records, for this project, the very
+ * range the manifest has, with a pinned version that satisfies it — the case
+ * where the manager installs the pin and resolves nothing again. The covered
+ * ones are kept in `lock.covered`, for the typosquat check alone.
+ */
+function withoutCovered(packages: readonly PackageSpec[], lock: LockedProject): PackageSpec[] {
+  const rest: PackageSpec[] = [];
+  for (const pkg of packages) {
+    const pinned = pkg.range === undefined ? null : lock.read.resolutionOf(lock.rel, pkg.name, pkg.range);
+    if (pinned === null) rest.push(pkg);
+    else lock.covered.push(pkg);
+  }
+  return rest;
+}
+
+/** The advisory ids of a verdict as a line may repeat them: ids of the shape OSV writes, nothing else. */
+function advisoryIds(ids: readonly string[]): string {
+  const clean = ids.map((id) => id.trim()).filter((id) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(id));
+  return clean.length > 0 ? clean.join(', ') : 'a MAL- advisory';
+}
+
+/** What the answers of OSV say of one lockfile: the denials, and the lines for what was left or not answered. */
+function lockOutcome(
+  lock: LockedProject,
+  verdicts: ReadonlyMap<string, PinVerdict>,
+  counted: Set<string>,
+): { denies: string[]; lines: string[] } {
+  const denies = new Set<string>();
+  const lines: string[] = [];
+  const askedKeys = new Set(lock.asked.map(pairKey));
+  const advisory = (v: PinVerdict): string => `OSV malicious-package advisory for ${v.pin.version}: ${advisoryIds(v.malicious ?? [])}`;
+  const found = (pin: Pin | undefined): PinVerdict | undefined => {
+    const v = pin !== undefined && askedKeys.has(pairKey(pin)) ? verdicts.get(pairKey(pin)) : undefined;
+    return v !== undefined && v.malicious !== null && v.malicious.length > 0 ? v : undefined;
+  };
+  for (const entry of lock.read.entries) {
+    const own = found(entry.pin);
+    if (own !== undefined) denies.add(`${lock.file} pins '${pairKey(own.pin)}': ${sentence(advisory(own))}`);
+    const fetched = found(entry.fetched);
+    if (fetched !== undefined) {
+      const names = entry.pin === undefined ? `${lock.file} fetches` : `${lock.file} names '${pairKey(entry.pin)}' and fetches`;
+      denies.add(`${names} '${pairKey(fetched.pin)}': ${sentence(advisory(fetched))}`);
+    }
+  }
+  let unanswered = 0;
+  let why = '';
+  let left = 0;
+  for (const pin of lock.asked) {
+    const key = pairKey(pin);
+    const v = verdicts.get(key);
+    if (v === undefined) {
+      // Not asked: past the cap of the whole call. A pair two lockfiles hold is left once.
+      if (!counted.has(key)) left += 1;
+      counted.add(key);
+    } else if (v.malicious === null) {
+      unanswered += 1;
+      if (why === '') why = v.unknown ?? '';
+    }
+  }
+  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${said(why)}) — not verified.`);
+  if (left > 0) {
+    lines.push(
+      `dev-guardian: ${left} more ${left === 1 ? 'package' : 'packages'} of ${lock.file} ${left === 1 ? 'was' : 'were'} not vetted (only the first ${MAX_PINS} are) — not verified.`,
     );
   }
-  return kept;
+  return { denies: [...denies], lines };
 }
 
 /** Whether a package is on its ecosystem's popular list — the lists `vet_packages` itself uses. */
@@ -556,17 +895,20 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   };
   // What a manifest could not tell: one line each, said whatever else happens.
   const manifestNotes: string[] = [];
+  /** The lockfiles of the manifest installs of the line, read. */
+  const locked: LockedProject[] = [];
+  const isPopular = popularTest(opts);
   const { commands, notVetted, manifestNotVetted, cut } = boundedInstalls(
     command,
     shell,
-    popularTest(opts),
+    isPopular,
     (pkg, c) => runsInstalledCopy(pkg, c, opts),
     opts.nested,
     cdpath,
-    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes),
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked),
   );
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
-  if (commands.length === 0) {
+  if (commands.length === 0 && locked.length === 0) {
     const said = [...manifestNotes, ...(cut ? [CUT_NOTE] : [])];
     return said.length > 0 ? { context: said.join('\n') } : null;
   }
@@ -575,32 +917,71 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
   // One deadline for the whole call (review I4).
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
-  const batches = await Promise.all(
-    commands.map((c) =>
-      vetPackages(c.packages, {
-        budgetMs,
-        offline,
-        deadlineAt,
-        now: opts.now ?? Date.now(),
-        registry,
-        commandRegistries: c.registries,
-        // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
-        // what only those two checks need is not asked of the registry.
-        ...(c.fromManifest !== undefined ? { unreported: MANIFEST_UNREPORTED } : {}),
-        ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
-        ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
-        ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
-      }),
-    ),
+  const now = opts.now ?? Date.now();
+  // The pairs the lockfiles pin, asked at once and beside the registry path: both share the budget and the deadline.
+  const pairs = choosePins(
+    locked.flatMap((l) => l.asked),
+    {
+      direct: new Set(locked.flatMap((l) => l.direct)),
+      popular: (name) => isPopular({ ecosystem: 'npm', name, raw: name }),
+    },
   );
+  const pinned = vetPins(pairs.chosen, {
+    budgetMs,
+    offline,
+    deadlineAt,
+    now,
+    ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+  });
+  const [batches, verdicts] = await Promise.all([
+    Promise.all(
+      commands.map((c) =>
+        vetPackages(c.packages, {
+          budgetMs,
+          offline,
+          deadlineAt,
+          now,
+          registry,
+          commandRegistries: c.registries,
+          // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
+          // what only those two checks need is not asked of the registry.
+          ...(c.fromManifest !== undefined ? { unreported: MANIFEST_UNREPORTED } : {}),
+          ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
+          ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
+          ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
+        }),
+      ),
+    ),
+    pinned,
+  ]);
   const denies: string[] = [];
   const manifestDenies: string[] = [];
   const warnings: string[] = [];
   const unverified: string[] = [];
   /** Per manifest file: how many of its packages could not be vetted, and the first reason. */
   const unverifiedIn = new Map<string, { count: number; why: string }>();
+  const lockLines: string[] = [];
   let malicious = false;
   let missingIn: string | undefined;
+  // What the lockfiles say. An exception here is one more lockfile not read — the hook stays fail-open.
+  const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v] as const));
+  const counted = new Set<string>();
+  for (const lock of locked) {
+    try {
+      for (const r of vetTyposquatOnly(lock.covered, {
+        ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
+        ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
+      })) {
+        const d = decideManifestOne(r, lock.manifestFile);
+        if (d.warn !== undefined) warnings.push(d.warn);
+      }
+      const outcome = lockOutcome(lock, verdictOf, counted);
+      manifestDenies.push(...outcome.denies);
+      lockLines.push(...outcome.lines);
+    } catch {
+      lockLines.push(notReadLine(lock.file, 'could not be read'));
+    }
+  }
   commands.forEach((cmd, i) => {
     for (const r of batches[i] ?? []) {
       if (cmd.fromManifest !== undefined) {
@@ -654,7 +1035,8 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   for (const [file, { count, why }] of unverifiedIn) {
     lines.push(`dev-guardian could not vet ${plural(count)} of ${file} (${why}) — not verified.`);
   }
-  lines.push(...manifestNotes);
+  // Two installs of one line may read one lockfile twice: a line is said once.
+  lines.push(...new Set([...lockLines, ...manifestNotes]));
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`,

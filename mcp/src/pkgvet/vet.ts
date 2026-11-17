@@ -263,6 +263,51 @@ function osvNameFor(w: Work, canonical: string | undefined): string {
   return w.spec.name;
 }
 
+function typosquatCheck(w: Work): CheckResult {
+  if (!w.popularLoaded) return unknown('popular-packages list unavailable — typosquat check not run');
+  if (w.typo === null) return pass();
+  return warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? '' : 's'} from the popular package '${w.typo.similar_to}' — possible typosquat`);
+}
+
+/** The detail of a check the lockfile made unnecessary: the version it pins is asked of OSV on its own. */
+const PINNED_ELSEWHERE = 'not checked: the lockfile pins this version, which is asked of OSV on its own';
+
+/**
+ * The typosquat check alone, for packages whose version a lockfile pins (the
+ * hook, for a direct dependency the lockfile records at the manifest's range):
+ * local, no network, no registry document. Every other check reads
+ * `not_applicable`, never `pass` — it was not made here. Results are in the
+ * order of `specs`.
+ */
+export function vetTyposquatOnly(specs: readonly PackageSpec[], opts: VetOptions = {}): PackageVetResult[] {
+  const indexes = new Map<PkgEcosystem, PopularIndex | null>();
+  return specs.map((spec) => {
+    if (!indexes.has(spec.ecosystem)) indexes.set(spec.ecosystem, popularIndexFor(spec.ecosystem, opts));
+    const index = indexes.get(spec.ecosystem) ?? null;
+    const w: Work = { spec, typo: index === null ? null : findTyposquatTarget(index, spec.name), popularLoaded: index !== null };
+    const typosquat = typosquatCheck(w);
+    const checks: PackageChecks = {
+      exists: na(PINNED_ELSEWHERE),
+      malicious: na(PINNED_ELSEWHERE),
+      vulnerabilities: na(PINNED_ELSEWHERE),
+      publish_age: na(PINNED_ELSEWHERE),
+      install_scripts: spec.ecosystem === 'npm' ? na(PINNED_ELSEWHERE) : na('install-script check is npm-only'),
+      typosquat,
+    };
+    const verdict: PkgVerdict = typosquat.status === 'warn' ? 'warn' : typosquat.status === 'unknown' ? 'unknown' : 'ok';
+    const result: PackageVetResult = {
+      ecosystem: spec.ecosystem,
+      name: spec.name,
+      verdict,
+      reasons: typosquat.detail !== undefined && typosquat.status !== 'pass' ? [typosquat.detail] : [],
+      checks,
+    };
+    if (spec.range !== undefined) result.requested = spec.range;
+    if (w.typo !== null) result.similar_to = w.typo.similar_to;
+    return result;
+  });
+}
+
 function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | undefined, now: number, offlineReason: string | undefined): PackageVetResult {
   const { spec } = w;
   const eco = spec.ecosystem;
@@ -272,11 +317,7 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
   const extraWarn: string[] = [];
   const extraUnknown: string[] = [];
 
-  const typosquat: CheckResult = !w.popularLoaded
-    ? unknown('popular-packages list unavailable — typosquat check not run')
-    : w.typo !== null
-      ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? '' : 's'} from the popular package '${w.typo.similar_to}' — possible typosquat`)
-      : pass();
+  const typosquat = typosquatCheck(w);
 
   const ids = osvIds(osv, w);
   const malIds = ids.filter((id) => id.startsWith('MAL-'));
@@ -300,11 +341,12 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
     exists = unknown(`${registry} lookup failed: ${lookup.reason}`);
     // OSV was asked about the NAME (no version could be resolved): no MAL-
     // advisory on any version is a real pass; one on some version is a warning.
+    // A MAL- hit that arrived decides, whatever OSV left unanswered: only a package with no hit reads unknown.
     malicious =
-      osvDown !== undefined
-        ? unknown(osvDown)
-        : malIds.length > 0
-          ? warn(`OSV lists malicious advisories for this name (${malIds.join(', ')}); the version could not be determined`)
+      malIds.length > 0
+        ? warn(`OSV lists malicious advisories for this name (${malIds.join(', ')}); the version could not be determined`)
+        : osvDown !== undefined
+          ? unknown(osvDown)
           : pass('no OSV malicious-package advisory for any version');
     vulnerabilities = unknown(`version unknown: ${lookup.reason}`);
     publishAge = unknown(`version unknown: ${lookup.reason}`);
@@ -360,12 +402,13 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
 
     if (placeholder) {
       malicious = fail(`npm replaced this package with a security placeholder (${placeholderVersion ?? 'x-security'}): it was taken down as malicious`);
-    } else if (osvDown !== undefined) {
-      malicious = unknown(osvDown);
     } else if (malIds.length > 0) {
+      // As above: a hit that arrived — in a result cut by `next_page_token`, in a batch that answered beside one that failed — is not lost to `osvDown`.
       malicious = w.osvVersioned
         ? fail(`OSV malicious-package advisory for ${v ?? 'this version'}: ${malIds.join(', ')}`)
         : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(', ')}) — which version installs could not be determined`);
+    } else if (osvDown !== undefined) {
+      malicious = unknown(osvDown);
     } else {
       malicious = pass();
     }

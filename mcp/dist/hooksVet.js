@@ -18,7 +18,7 @@ __export(hookDecision_exports, {
 });
 import { lstatSync as lstatSync3, realpathSync, statSync as statSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, parse as parse4, resolve as resolve4 } from "node:path";
+import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, parse as parse4, relative as relative3, resolve as resolve4, sep } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
@@ -143,6 +143,1363 @@ function readSmallText(path, maxBytes, under) {
     if (!walk2.ok) return { status: "refused", reason: walk2.reason };
   }
   return readText(path, maxBytes);
+}
+
+// src/platform/boundedJson.ts
+var JSON_MAX_NODES = 2e6;
+function exceedsCount(text, codes, max) {
+  let n = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (codes.has(text.charCodeAt(i))) {
+      n += 1;
+      if (n > max) return true;
+    }
+  }
+  return false;
+}
+var JSON_NODE_CHARS = /* @__PURE__ */ new Set([123, 91, 44]);
+function parseJsonBounded(text, maxNodes = JSON_MAX_NODES) {
+  if (exceedsCount(text, JSON_NODE_CHARS, maxNodes)) return { ok: false, reason: "too-complex" };
+  try {
+    return { ok: true, value: JSON.parse(text.charCodeAt(0) === 65279 ? text.slice(1) : text) };
+  } catch (e) {
+    return { ok: false, reason: "invalid", detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// src/pkgvet/versions.ts
+var POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
+var DEV_REST = /(?:^|[-._])dev/i;
+function parse2(version) {
+  let s = version.trim().replace(/^[vV=]+/, "");
+  const plus = s.indexOf("+");
+  if (plus >= 0) s = s.slice(0, plus);
+  const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s);
+  if (m === null) return null;
+  const releaseText = m[1] ?? "";
+  const rest = m[2] ?? "";
+  const release = releaseText.split(".").map((x) => Number(x));
+  if (release.some((n) => !Number.isFinite(n))) return null;
+  let stage = 2;
+  if (rest !== "") {
+    if (POST_REST.test(rest)) stage = 3;
+    else if (DEV_REST.test(rest)) stage = 0;
+    else stage = 1;
+  }
+  return { release, stage, rest };
+}
+function compareRelease(a, b) {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+function compareRest(a, b) {
+  const ta = a.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const tb = b.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const n = Math.max(ta.length, tb.length);
+  for (let i = 0; i < n; i += 1) {
+    const x = ta[i];
+    const y = tb[i];
+    if (x === void 0) return -1;
+    if (y === void 0) return 1;
+    const nx = Number(x);
+    const ny = Number(y);
+    if (Number.isFinite(nx) && Number.isFinite(ny)) {
+      if (nx !== ny) return nx - ny;
+    } else if (x.toLowerCase() !== y.toLowerCase()) {
+      return x.toLowerCase() < y.toLowerCase() ? -1 : 1;
+    }
+  }
+  return 0;
+}
+function compareVersions(a, b) {
+  const pa = parse2(a);
+  const pb = parse2(b);
+  if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
+  const r = compareRelease(pa.release, pb.release);
+  if (r !== 0) return r;
+  if (pa.stage !== pb.stage) return pa.stage - pb.stage;
+  return compareRest(pa.rest, pb.rest);
+}
+function isPrerelease(version) {
+  const p = parse2(version);
+  return p === null || p.stage < 2;
+}
+var gte = (x) => (v) => compareVersions(v, x) >= 0;
+var gt = (x) => (v) => compareVersions(v, x) > 0;
+var lt = (x) => (v) => compareVersions(v, x) < 0;
+var lte = (x) => (v) => compareVersions(v, x) <= 0;
+var eq = (x) => (v) => compareVersions(v, x) === 0;
+var ANY = () => true;
+var WILD = /^[xX*]$/;
+function partial(text) {
+  const t = text.trim().replace(/^[vV]/, "");
+  if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
+  const plus = t.indexOf("+");
+  const noBuild = plus >= 0 ? t.slice(0, plus) : t;
+  const dash = noBuild.search(/-/);
+  const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
+  const pre = dash >= 0 ? noBuild.slice(dash) : "";
+  const nums = [];
+  for (const part of core.split(".")) {
+    if (WILD.test(part)) break;
+    if (!/^\d+$/.test(part)) return null;
+    nums.push(Number(part));
+  }
+  return { nums, pre };
+}
+var fmt = (nums) => [0, 1, 2].map((i) => nums[i] ?? 0).join(".");
+function bump(nums) {
+  const next = nums.slice();
+  const last = next.length - 1;
+  next[last] = (next[last] ?? 0) + 1;
+  return fmt(next);
+}
+function comparator(op, text, composerTilde) {
+  const p = partial(text);
+  if (p === null) return null;
+  const { nums, pre } = p;
+  const full = nums.length >= 3;
+  const exact = full ? fmt(nums) + pre : fmt(nums);
+  switch (op) {
+    case "":
+    case "=":
+    case "==":
+      if (nums.length === 0) return [ANY];
+      if (full) return [eq(exact)];
+      return [gte(fmt(nums)), lt(bump(nums))];
+    case "^": {
+      if (nums.length === 0) return [ANY];
+      const [major = 0, minor, patch] = nums;
+      if (major > 0 || nums.length === 1) return [gte(exact), lt(bump([major]))];
+      if ((minor ?? 0) > 0 || nums.length === 2) return [gte(exact), lt(bump([0, minor ?? 0]))];
+      return [gte(exact), lt(bump([0, 0, patch ?? 0]))];
+    }
+    case "~":
+    case "~>": {
+      if (nums.length === 0) return [ANY];
+      if (nums.length === 1) return [gte(exact), lt(bump(nums))];
+      if (composerTilde && nums.length === 2) return [gte(exact), lt(bump(nums.slice(0, 1)))];
+      return [gte(exact), lt(bump(nums.slice(0, 2)))];
+    }
+    case ">=":
+      return [gte(exact)];
+    case ">":
+      return full ? [gt(exact)] : nums.length === 0 ? [() => false] : [gte(bump(nums))];
+    case "<":
+      return [lt(exact)];
+    case "<=":
+      return full ? [lte(exact)] : nums.length === 0 ? [ANY] : [lt(bump(nums))];
+    case "!=":
+      return [(v) => !eq(exact)(v)];
+    default:
+      return null;
+  }
+}
+var COMPARATOR = /^(\^|~>|~|>=|<=|>|<|==|=|!=)?\s*(.*)$/;
+function semverishRange(range, composer) {
+  const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
+  const out = [];
+  for (const alt of alternatives) {
+    let text = alt.trim();
+    if (composer) text = text.replace(/@[a-zA-Z]+$/, "").trim();
+    if (text === "" || text === "*" || WILD.test(text)) {
+      out.push([ANY]);
+      continue;
+    }
+    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text);
+    if (hyphen !== null) {
+      const lo = comparator(">=", hyphen[1] ?? "", composer);
+      const hiPartial = partial(hyphen[2] ?? "");
+      if (lo === null || hiPartial === null) return null;
+      const hi = hiPartial.nums.length >= 3 ? [lte(fmt(hiPartial.nums) + hiPartial.pre)] : hiPartial.nums.length === 0 ? [ANY] : [lt(bump(hiPartial.nums))];
+      out.push([...lo, ...hi]);
+      continue;
+    }
+    const tokens = text.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
+    const preds = [];
+    for (const token of tokens) {
+      if (token === "") continue;
+      const m = COMPARATOR.exec(token);
+      if (m === null) return null;
+      const c = comparator(m[1] ?? "", m[2] ?? "", composer);
+      if (c === null) return null;
+      preds.push(...c);
+    }
+    out.push(preds);
+  }
+  return out;
+}
+var PEP440 = /^\s*(~=|===|==|!=|<=|>=|<|>)\s*([^\s,]+)\s*$/;
+function pep440Range(range) {
+  const preds = [];
+  for (const spec2 of range.split(",")) {
+    if (spec2.trim() === "") continue;
+    const m = PEP440.exec(spec2);
+    if (m === null) return null;
+    const op = m[1] ?? "";
+    const ver = m[2] ?? "";
+    if (op === "===") {
+      preds.push((v) => v === ver);
+      continue;
+    }
+    if (ver.endsWith(".*")) {
+      const prefix = partial(ver.slice(0, -2));
+      if (prefix === null || prefix.nums.length === 0) return null;
+      const inPrefix = (v) => {
+        const p = parse2(v);
+        return p !== null && prefix.nums.every((n, i) => (p.release[i] ?? 0) === n);
+      };
+      if (op === "==") preds.push(inPrefix);
+      else if (op === "!=") preds.push((v) => !inPrefix(v));
+      else return null;
+      continue;
+    }
+    if (parse2(ver) === null) return null;
+    switch (op) {
+      case "==":
+        preds.push(eq(ver));
+        break;
+      case "!=":
+        preds.push((v) => !eq(ver)(v));
+        break;
+      case ">=":
+        preds.push(gte(ver));
+        break;
+      case "<=":
+        preds.push(lte(ver));
+        break;
+      case ">":
+        preds.push(gt(ver));
+        break;
+      case "<":
+        preds.push(lt(ver));
+        break;
+      case "~=": {
+        const p = parse2(ver);
+        if (p === null || p.release.length < 2) return null;
+        const prefix = p.release.slice(0, -1);
+        preds.push(gte(ver), (v) => {
+          const q = parse2(v);
+          return q !== null && prefix.every((n, i) => (q.release[i] ?? 0) === n);
+        });
+        break;
+      }
+      default:
+        return null;
+    }
+  }
+  return [preds];
+}
+function nugetRange(range) {
+  const r = range.trim();
+  const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
+  if (m === null) return parse2(r) === null ? null : [[eq(r)]];
+  const open = m[1];
+  const lo = m[2] ?? "";
+  const hasComma = r.includes(",");
+  const hi = m[3] ?? "";
+  const close = m[4];
+  if (!hasComma) return lo === "" ? null : [[eq(lo)]];
+  const preds = [];
+  if (lo !== "") preds.push(open === "[" ? gte(lo) : gt(lo));
+  if (hi !== "") preds.push(close === "]" ? lte(hi) : lt(hi));
+  return [preds];
+}
+var EXACT_SEMVER = /^[vV=]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+function isExactVersion(ecosystem, range) {
+  if (range === void 0) return false;
+  const r = range.trim();
+  switch (ecosystem) {
+    case "npm":
+      return EXACT_SEMVER.test(r);
+    case "pypi":
+      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse2(r) !== null && !/[,<>=!~*]/.test(r);
+    case "packagist":
+      return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
+    case "nuget":
+      return parse2(r) !== null && !/[[\](),]/.test(r);
+    default:
+      return false;
+  }
+}
+function highest(versions) {
+  let best;
+  for (const v of versions) if (best === void 0 || compareVersions(v, best) > 0) best = v;
+  return best;
+}
+function resolveVersion(ecosystem, range, ctx) {
+  const stable = ctx.versions.filter((v) => !isPrerelease(v));
+  const r = range?.trim() ?? "";
+  if (r === "" || ecosystem === "npm" && r === "latest") {
+    if (ctx.latest !== void 0 && ctx.versions.includes(ctx.latest)) return ctx.latest;
+    return highest(stable);
+  }
+  if (ecosystem === "npm") {
+    const tagged = ctx.tags?.[r];
+    if (tagged !== void 0) return ctx.versions.includes(tagged) ? tagged : void 0;
+  }
+  if (ecosystem === "packagist" && /^dev-|-dev$/i.test(r)) return void 0;
+  if (isExactVersion(ecosystem, r)) {
+    const wanted = r.replace(/^===?\s*/, "");
+    return ctx.versions.find((v) => v === wanted) ?? ctx.versions.find((v) => compareVersions(v, wanted) === 0);
+  }
+  let alternatives;
+  switch (ecosystem) {
+    case "npm":
+      alternatives = semverishRange(r, false);
+      break;
+    case "packagist":
+      alternatives = semverishRange(r, true);
+      break;
+    case "pypi":
+      alternatives = /^(?:\^|~(?!=)|\*$|\d+(?:\.\d+)*\.\*$)/.test(r) ? semverishRange(r, false) : pep440Range(r);
+      break;
+    case "nuget":
+      alternatives = nugetRange(r);
+      break;
+    default:
+      alternatives = null;
+  }
+  if (alternatives === null) return void 0;
+  const matching = stable.filter((v) => alternatives.some((preds) => preds.every((p) => p(v))));
+  if (ecosystem === "npm" && ctx.latest !== void 0 && matching.includes(ctx.latest)) return ctx.latest;
+  return highest(matching);
+}
+
+// src/pkgvet/lockfile.ts
+var LOCKFILES = {
+  npm: ["npm-shrinkwrap.json", "package-lock.json"],
+  pnpm: ["pnpm-lock.yaml"],
+  yarn: ["yarn.lock"],
+  bun: ["bun.lock"]
+};
+function lockFormat(fileName) {
+  switch (fileName) {
+    case "package-lock.json":
+    case "npm-shrinkwrap.json":
+      return "package-lock";
+    case "pnpm-lock.yaml":
+      return "pnpm-lock";
+    case "yarn.lock":
+      return "yarn-lock";
+    case "bun.lock":
+      return "bun-lock";
+    default:
+      return null;
+  }
+}
+function readLock(format, text) {
+  switch (format) {
+    case "package-lock":
+      return readPackageLock(text);
+    case "pnpm-lock":
+      return readPnpm(text);
+    case "yarn-lock":
+      return readYarn(text);
+    case "bun-lock":
+      return readBun(text);
+  }
+}
+var MAX_LINE = 65536;
+var MAX_NAME = 214;
+var MAX_VERSION = 256;
+var MAX_HOST = 80;
+var PUBLIC_HOSTS = /* @__PURE__ */ new Set(["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com"]);
+var NAME = /^(?:@[A-Za-z0-9~-][A-Za-z0-9._~-]*\/)?[A-Za-z0-9~-][A-Za-z0-9._~-]*$/;
+var VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+var DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+function validName(name) {
+  return name.length <= MAX_NAME && NAME.test(name);
+}
+function validVersion(version) {
+  return version.length <= MAX_VERSION && VERSION.test(version) && isExactVersion("npm", version);
+}
+function makePin(name, version) {
+  return validName(name) && validVersion(version) ? { name, version } : void 0;
+}
+function dnsName(host) {
+  const lower = host.toLowerCase();
+  if (lower.length === 0 || lower.length > MAX_HOST) return "";
+  for (const label3 of lower.split(".")) if (!DNS_LABEL.test(label3)) return "";
+  return lower;
+}
+function satisfies(range, version) {
+  try {
+    return resolveVersion("npm", range, { versions: [version] }) === version;
+  } catch {
+    return false;
+  }
+}
+var has = (o, key) => Object.prototype.hasOwnProperty.call(o, key);
+var isRecord = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+var splitLines = (text) => text.split(/\r\n|\r|\n/);
+var SEPARATOR = /[\u0085\u2028\u2029]/;
+function unquote(s) {
+  if (s.length >= 2 && (s.startsWith("'") || s.startsWith('"')) && s.endsWith(s.charAt(0))) return s.slice(1, -1);
+  return s;
+}
+var LOCAL_SPEC = /^(?:file:|link:|workspace:|portal:|patch:)/i;
+var GIT_SPEC = /^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:|ssh:)/i;
+var UNSAFE_URL = /[\u0000-\u0020\u007f-\u009f\u2028\u2029]/;
+var UNKNOWN_ELSEWHERE = { source: { kind: "elsewhere", host: "", url: "" }, named: void 0 };
+function gitHost(spec2) {
+  if (spec2.startsWith("github:")) return "github.com";
+  if (spec2.startsWith("gitlab:")) return "gitlab.com";
+  if (spec2.startsWith("bitbucket:")) return "bitbucket.org";
+  if (spec2.startsWith("gist:")) return "gist.github.com";
+  if (spec2.startsWith("git@")) {
+    const colon = spec2.indexOf(":");
+    return dnsName(spec2.slice(4, colon < 0 ? void 0 : colon));
+  }
+  try {
+    return dnsName(new URL(spec2.startsWith("git+") ? spec2.slice(4) : spec2).hostname);
+  } catch {
+    return "";
+  }
+}
+function archivePair(pathname) {
+  if (!pathname.endsWith(".tgz")) return void 0;
+  const cut = pathname.lastIndexOf("/-/");
+  if (cut < 0) return void 0;
+  const file = pathname.slice(cut + 3, -4);
+  if (file.includes("/")) return void 0;
+  const before = pathname.slice(0, cut);
+  const lastSlash = before.lastIndexOf("/");
+  let name = before.slice(lastSlash + 1).replace(/%2f/gi, "/");
+  if (lastSlash > 0) {
+    const scopeStart = before.lastIndexOf("/", lastSlash - 1);
+    const scope = before.slice(scopeStart + 1, lastSlash);
+    if (scope.startsWith("@") && !name.startsWith("@")) name = `${scope}/${name}`;
+  }
+  const bare = name.slice(name.lastIndexOf("/") + 1);
+  if (!file.startsWith(`${bare}-`)) return void 0;
+  return makePin(name, file.slice(bare.length + 1));
+}
+function locate(spec2) {
+  if (spec2.length === 0 || spec2.length > MAX_LINE) return "bad";
+  if (spec2.startsWith("//")) return UNSAFE_URL.test(spec2) ? "bad" : { source: { kind: "elsewhere", host: "", url: spec2 }, named: void 0 };
+  if (LOCAL_SPEC.test(spec2) || spec2.startsWith("/") || spec2.startsWith("./") || spec2.startsWith("../")) return "local";
+  if (UNSAFE_URL.test(spec2)) return "bad";
+  if (GIT_SPEC.test(spec2)) return { source: { kind: "git", host: gitHost(spec2) }, named: void 0 };
+  let url;
+  try {
+    url = new URL(spec2);
+  } catch {
+    return "bad";
+  }
+  const host = dnsName(url.hostname);
+  const web = url.protocol === "https:" || url.protocol === "http:";
+  if (!web || url.hostname === "codeload.github.com" || url.pathname.endsWith(".git")) return { source: { kind: "git", host }, named: void 0 };
+  const isPublic2 = url.protocol === "https:" && PUBLIC_HOSTS.has(url.hostname) && url.username === "" && url.password === "" && url.port === "";
+  return { source: isPublic2 ? { kind: "public" } : { kind: "elsewhere", host, url: spec2 }, named: archivePair(url.pathname) };
+}
+var newAcc = () => ({ entries: [], seen: /* @__PURE__ */ new Set(), local: 0, unrecognised: 0 });
+function sourceKey(source) {
+  switch (source.kind) {
+    case "elsewhere":
+      return `elsewhere\0${source.host}\0${source.url}`;
+    case "git":
+      return `git\0${source.host}`;
+    default:
+      return source.kind;
+  }
+}
+function emit(acc, pin, located) {
+  const source = located === void 0 ? { kind: "unstated" } : located.source;
+  if (source.kind === "public" && located?.named === void 0) acc.unrecognised += 1;
+  const named = located?.named;
+  const fetched = named !== void 0 && (pin === void 0 || named.name !== pin.name || named.version !== pin.version) ? named : void 0;
+  const key = `${pin === void 0 ? "" : `${pin.name}@${pin.version}`}\0${sourceKey(source)}\0${fetched === void 0 ? "" : `${fetched.name}@${fetched.version}`}`;
+  if (acc.seen.has(key)) return;
+  acc.seen.add(key);
+  const entry = { source };
+  if (pin !== void 0) entry.pin = pin;
+  if (fetched !== void 0) entry.fetched = fetched;
+  acc.entries.push(entry);
+}
+function finish(acc, pin, spec2) {
+  if (spec2 === void 0) {
+    if (pin !== void 0) emit(acc, pin, void 0);
+    return;
+  }
+  const where = locate(spec2);
+  if (where === "local") {
+    acc.local += 1;
+  } else if (where === "bad") {
+    acc.unrecognised += 1;
+    if (pin !== void 0) emit(acc, pin, UNKNOWN_ELSEWHERE);
+  } else {
+    emit(acc, pin, where);
+  }
+}
+var DEPENDENCY_GROUPS = ["dependencies", "devDependencies", "optionalDependencies"];
+function readPackageLock(text) {
+  const parsed = parseJsonBounded(text);
+  if (!parsed.ok) return { unread: parsed.reason === "invalid" ? "it is not valid JSON" : "it holds more JSON values than dev-guardian reads" };
+  const doc = parsed.value;
+  if (!isRecord(doc)) return { unread: "it is not a JSON object" };
+  const version = doc["lockfileVersion"];
+  if (version === void 0) return { unread: "it has no lockfileVersion" };
+  if (version !== 1 && version !== 2 && version !== 3) return { unread: "its lockfileVersion is not 1, 2 or 3" };
+  const acc = newAcc();
+  readPackagesTree(acc, doc["packages"]);
+  readDependenciesTree(acc, doc["dependencies"]);
+  return {
+    format: "package-lock",
+    entries: acc.entries,
+    local: acc.local,
+    unrecognised: acc.unrecognised,
+    resolutionOf: (rel, name, range) => npmResolution(doc, rel, name, range)
+  };
+}
+function readPackagesTree(acc, packages) {
+  if (packages === void 0) return;
+  if (!isRecord(packages)) {
+    acc.unrecognised += 1;
+    return;
+  }
+  for (const [path, entry] of Object.entries(packages)) {
+    if (path === "") continue;
+    if (!isRecord(entry)) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    const cut = path.lastIndexOf("node_modules/");
+    if (entry["link"] === true || cut < 0) {
+      acc.local += 1;
+      continue;
+    }
+    const alias = entry["name"];
+    const version = entry["version"];
+    const resolved = entry["resolved"];
+    if (alias !== void 0 && typeof alias !== "string" || typeof resolved === "string" && resolved.length > MAX_LINE) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    const pin = typeof version === "string" ? makePin(alias ?? path.slice(cut + "node_modules/".length), version) : void 0;
+    const where = typeof resolved === "string" && resolved !== "" ? resolved : void 0;
+    if (pin === void 0) {
+      if (where !== void 0 && locate(where) === "local") acc.local += 1;
+      else acc.unrecognised += 1;
+      continue;
+    }
+    finish(acc, pin, where);
+  }
+}
+function readDependenciesTree(acc, tree) {
+  if (tree === void 0) return;
+  if (!isRecord(tree)) {
+    acc.unrecognised += 1;
+    return;
+  }
+  const stack = [Object.entries(tree)[Symbol.iterator]()];
+  for (let top = stack[stack.length - 1]; top !== void 0; top = stack[stack.length - 1]) {
+    const next = top.next();
+    if (next.done === true) {
+      stack.pop();
+      continue;
+    }
+    const [name, entry] = next.value;
+    if (!isRecord(entry)) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    treeEntry(acc, name, entry);
+    const nested = entry["dependencies"];
+    if (nested === void 0) continue;
+    if (isRecord(nested)) stack.push(Object.entries(nested)[Symbol.iterator]());
+    else acc.unrecognised += 1;
+  }
+}
+function treeEntry(acc, key, entry) {
+  const version = entry["version"];
+  const resolved = entry["resolved"];
+  if (typeof version !== "string" || version.length > MAX_LINE || typeof resolved === "string" && resolved.length > MAX_LINE) {
+    acc.unrecognised += 1;
+    return;
+  }
+  const where = typeof resolved === "string" && resolved !== "" ? resolved : void 0;
+  let name = key;
+  let exact = version;
+  if (version.startsWith("npm:")) {
+    const rest = version.slice("npm:".length);
+    const at = rest.lastIndexOf("@");
+    if (at <= 0) {
+      acc.unrecognised += 1;
+      return;
+    }
+    name = rest.slice(0, at);
+    exact = rest.slice(at + 1);
+  } else if (!validVersion(version)) {
+    finish(acc, void 0, version);
+    return;
+  }
+  const pin = makePin(name, exact);
+  if (pin === void 0) acc.unrecognised += 1;
+  else finish(acc, pin, where);
+}
+function npmResolution(doc, rel, name, range) {
+  const packages = doc["packages"];
+  if (!validName(name) || !isRecord(packages) || !has(packages, rel)) return null;
+  const project = packages[rel];
+  if (!isRecord(project)) return null;
+  const recorded = DEPENDENCY_GROUPS.some((g) => {
+    const group = project[g];
+    return isRecord(group) && has(group, name) && group[name] === range;
+  });
+  if (!recorded) return null;
+  for (let dir = rel; ; dir = dir.slice(0, Math.max(dir.lastIndexOf("/"), 0))) {
+    const key = `${dir === "" ? "" : `${dir}/`}node_modules/${name}`;
+    if (has(packages, key)) {
+      const entry = packages[key];
+      const pinned = isRecord(entry) && entry["link"] !== true ? entry["version"] : void 0;
+      return typeof pinned === "string" && validVersion(pinned) && satisfies(range, pinned) ? pinned : null;
+    }
+    if (dir === "") return null;
+  }
+}
+var SECTION_NAME = /^[A-Za-z][A-Za-z0-9_-]*$/;
+var PNPM_VERSION_LINE = /^lockfileVersion: ['"]?(\d+)(?:\.\d+)?['"]?$/;
+var PLAIN_KEY = /^[^\s'":&*!|>{[?#,%@`-]\S*$/;
+function pnpmFrame(lines) {
+  let major = -1;
+  let keys = 0;
+  let packages = 0;
+  let snapshots = 0;
+  for (const line of lines) {
+    const first = line.charCodeAt(0);
+    if (line.length === 0 || first === 32 || first === 9) continue;
+    if (line.length > MAX_LINE) return { unread: "a line at column 0 is longer than 65 536 characters" };
+    if (first === 35 || line === "---" && keys === 0) continue;
+    const colon = line.indexOf(":");
+    const name = colon > 0 ? line.slice(0, colon) : "";
+    if (!SECTION_NAME.test(name)) return { unread: "a line at column 0 is not a `name:` section" };
+    keys += 1;
+    if (name === "lockfileVersion") {
+      const m = PNPM_VERSION_LINE.exec(line);
+      if (m === null || major !== -1) return { unread: "its lockfileVersion line is not in the form pnpm writes" };
+      major = Number(m[1]);
+    } else if (name === "packages" || name === "snapshots") {
+      if (line.trimEnd() !== `${name}:`) return { unread: `its \`${name}:\` section has something on its own line` };
+      if ((name === "packages" ? packages += 1 : snapshots += 1) > 1) return { unread: `it has more than one \`${name}:\` section` };
+    }
+  }
+  if (major === -1) return { unread: "it has no lockfileVersion line" };
+  if (major !== 5 && major !== 6 && major !== 9) return { unread: "its lockfileVersion is not 5, 6 or 9" };
+  return { major };
+}
+function pnpmKeyOf(rest) {
+  let s = rest.trimEnd();
+  if (s.endsWith(" {}")) s = s.slice(0, -3);
+  if (!s.endsWith(":")) return null;
+  s = s.slice(0, -1);
+  if (s.length === 0) return null;
+  const quote = s.charAt(0);
+  if (quote === "'") return s.length > 2 && s.endsWith("'") && !s.slice(1, -1).includes("'") ? s.slice(1, -1) : null;
+  if (quote === '"') return s.length > 2 && s.endsWith('"') && !/["\\]/.test(s.slice(1, -1)) ? s.slice(1, -1) : null;
+  return PLAIN_KEY.test(s) ? s : null;
+}
+function pnpmKeyPair(key, v5) {
+  const bare = key.startsWith("/") ? key.slice(1) : key;
+  let name;
+  let rest;
+  if (v5) {
+    let slash = bare.indexOf("/");
+    if (bare.startsWith("@") && slash >= 0) slash = bare.indexOf("/", slash + 1);
+    if (slash < 0) return "other";
+    name = bare.slice(0, slash);
+    rest = bare.slice(slash + 1);
+  } else {
+    const at = bare.indexOf("@", 1);
+    if (at < 0) return "other";
+    name = bare.slice(0, at);
+    rest = bare.slice(at + 1);
+  }
+  const suffix = rest.indexOf(v5 ? "_" : "(");
+  const version = suffix < 0 ? rest : rest.slice(0, suffix);
+  const digit = version.charCodeAt(0);
+  if (!(digit >= 48 && digit <= 57)) return "other";
+  return makePin(name, version) ?? "invalid";
+}
+function parsePnpmResolution(body) {
+  const t = body.trimEnd();
+  if (!t.startsWith("resolution: {") || !t.endsWith("}")) return void 0;
+  const out = {};
+  for (const field of t.slice("resolution: {".length, -1).split(", ")) {
+    const at = field.indexOf(": ");
+    if (at < 0) continue;
+    const value = unquote(field.slice(at + 2));
+    switch (field.slice(0, at)) {
+      case "tarball":
+        out.tarball ??= value;
+        break;
+      case "repo":
+        out.repo ??= value;
+        break;
+      case "commit":
+        out.commit ??= value;
+        break;
+      case "directory":
+        out.directory ??= value;
+        break;
+      default:
+    }
+  }
+  return out;
+}
+function finishPnpmEntry(acc, v5, e) {
+  if (e.resolution === "broken") return;
+  if (e.section === "packages" && e.resolution === void 0) {
+    acc.unrecognised += 1;
+    return;
+  }
+  const res = e.resolution;
+  if (res?.directory !== void 0) {
+    acc.local += 1;
+    return;
+  }
+  const pair = pnpmKeyPair(e.key, v5);
+  if (e.section === "snapshots") {
+    if (pair === "invalid") acc.unrecognised += 1;
+    else if (pair !== "other") finish(acc, pair, void 0);
+    return;
+  }
+  const git = res?.repo !== void 0 || res?.commit !== void 0 ? { source: { kind: "git", host: gitHost(res.repo ?? "") }, named: void 0 } : void 0;
+  const pin = pair === "other" ? e.name !== void 0 && e.version !== void 0 ? makePin(e.name, e.version) : void 0 : pair === "invalid" ? void 0 : pair;
+  if (pair === "invalid") {
+    acc.unrecognised += 1;
+  } else if (res?.tarball !== void 0) {
+    finish(acc, pin, res.tarball);
+  } else if (git !== void 0) {
+    emit(acc, pin, git);
+  } else if (pair === "other") {
+    acc.unrecognised += 1;
+  } else {
+    finish(acc, pin, void 0);
+  }
+}
+function readPnpmBody(acc, e, body) {
+  if (body.startsWith("resolution:")) {
+    if (e.resolution !== void 0) {
+      acc.unrecognised += 1;
+      return;
+    }
+    const parsed = parsePnpmResolution(body);
+    if (parsed === void 0) acc.unrecognised += 1;
+    e.resolution = parsed ?? "broken";
+  } else if (body.startsWith("name: ")) {
+    e.name ??= unquote(body.slice("name: ".length).trimEnd());
+  } else if (body.startsWith("version: ")) {
+    e.version ??= unquote(body.slice("version: ".length).trimEnd());
+  }
+}
+function readPnpm(text) {
+  const lines = splitLines(text);
+  const frame = pnpmFrame(lines);
+  if ("unread" in frame) return frame;
+  const v5 = frame.major === 5;
+  const acc = newAcc();
+  let section = "";
+  const state = { cur: null };
+  const close = () => {
+    const cur = state.cur;
+    state.cur = null;
+    if (cur !== null && cur !== "skip") finishPnpmEntry(acc, v5, cur);
+  };
+  const odd = SEPARATOR.test(text);
+  for (const line of lines) {
+    if (line.length === 0) continue;
+    if (odd && SEPARATOR.test(line)) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    const first = line.charCodeAt(0);
+    if (first !== 32 && first !== 9) {
+      if (first === 35 || line === "---") continue;
+      close();
+      const name = line.slice(0, line.indexOf(":"));
+      section = name === "packages" || name === "snapshots" ? name : "";
+      continue;
+    }
+    if (section === "") continue;
+    if (line.length > MAX_LINE) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    let indent = 0;
+    while (line.charCodeAt(indent) === 32) indent += 1;
+    if (indent === line.length) continue;
+    const head = line.charCodeAt(indent);
+    if (head === 9) {
+      acc.unrecognised += 1;
+    } else if (head === 35) {
+    } else if (indent === 2) {
+      close();
+      const key = pnpmKeyOf(line.slice(2));
+      if (key === null) {
+        acc.unrecognised += 1;
+        state.cur = "skip";
+      } else {
+        state.cur = { section, key };
+      }
+    } else if (indent === 1 || indent === 3) {
+      acc.unrecognised += 1;
+    } else if (state.cur === null) {
+      acc.unrecognised += 1;
+    } else if (state.cur !== "skip" && indent === 4 && section === "packages") {
+      readPnpmBody(acc, state.cur, line.slice(4));
+    }
+  }
+  close();
+  const projectOf = pnpmProjects(lines, v5);
+  return {
+    format: "pnpm-lock",
+    entries: acc.entries,
+    local: acc.local,
+    unrecognised: acc.unrecognised,
+    resolutionOf: (rel, name, range) => pnpmResolution(projectOf(rel), v5, name, range)
+  };
+}
+var PNPM_GROUPS = /* @__PURE__ */ new Set(["dependencies", "devDependencies", "optionalDependencies", "specifiers"]);
+function splitKeyValue(body) {
+  if (body.startsWith("'")) {
+    const close = body.indexOf("'", 1);
+    if (close < 0 || !body.startsWith(": ", close + 1)) return null;
+    return [body.slice(1, close), unquote(body.slice(close + 3).trimEnd())];
+  }
+  const at = body.indexOf(": ");
+  return at <= 0 ? null : [body.slice(0, at), unquote(body.slice(at + 2).trimEnd())];
+}
+var leadingSpaces = (line) => {
+  let n = 0;
+  while (line.charCodeAt(n) === 32) n += 1;
+  return n;
+};
+function readPnpmProject(lines, v5, from, to, indent) {
+  const specifiers = /* @__PURE__ */ new Map();
+  const versions = /* @__PURE__ */ new Map();
+  let group = null;
+  let current = null;
+  for (let i = from; i < to; i += 1) {
+    const line = lines[i] ?? "";
+    const ind = leadingSpaces(line);
+    if (ind === line.length || line.charCodeAt(ind) === 35 || ind < indent) continue;
+    if (ind === indent) {
+      const header = line.trimEnd();
+      const label3 = header.endsWith(":") ? header.slice(ind, -1) : "";
+      group = PNPM_GROUPS.has(label3) ? label3 : null;
+      current = null;
+    } else if (group === null) {
+      continue;
+    } else if (ind === indent + 2) {
+      const body = line.slice(ind);
+      current = null;
+      if (v5) {
+        const kv = splitKeyValue(body);
+        const into = group === "specifiers" ? specifiers : versions;
+        if (kv !== null && !into.has(kv[0])) into.set(kv[0], kv[1]);
+      } else if (group !== "specifiers") {
+        current = pnpmKeyOf(body);
+      }
+    } else if (ind === indent + 4 && current !== null) {
+      const body = line.slice(ind).trimEnd();
+      if (body.startsWith("specifier: ") && !specifiers.has(current)) specifiers.set(current, unquote(body.slice("specifier: ".length)));
+      else if (body.startsWith("version: ") && !versions.has(current)) versions.set(current, unquote(body.slice("version: ".length)));
+    }
+  }
+  return { specifiers, versions };
+}
+function pnpmProjects(lines, v5) {
+  const importers = lines.findIndex((l) => l === "importers:");
+  let ranges;
+  const cache2 = /* @__PURE__ */ new Map();
+  const importerRanges = () => {
+    if (ranges !== void 0) return ranges;
+    const found = /* @__PURE__ */ new Map();
+    let open = null;
+    let end = lines.length;
+    for (let i = importers + 1; i < lines.length; i += 1) {
+      const line = lines[i] ?? "";
+      const ind = leadingSpaces(line);
+      if (ind === line.length) continue;
+      if (ind === 0) {
+        end = i;
+        break;
+      }
+      if (ind > 2) continue;
+      if (open !== null && !found.has(open.key)) found.set(open.key, [open.from, i]);
+      open = null;
+      const key = ind === 2 ? pnpmKeyOf(line.slice(2)) : null;
+      if (key !== null) open = { key, from: i + 1 };
+    }
+    if (open !== null && !found.has(open.key)) found.set(open.key, [open.from, end]);
+    ranges = found;
+    return found;
+  };
+  return (rel) => {
+    if (cache2.has(rel)) return cache2.get(rel) ?? null;
+    let project = null;
+    if (importers < 0) {
+      if (rel === "") project = readPnpmProject(lines, v5, 0, lines.length, 0);
+    } else {
+      const range = importerRanges().get(rel === "" ? "." : rel);
+      if (range !== void 0) project = readPnpmProject(lines, v5, range[0], range[1], 4);
+    }
+    cache2.set(rel, project);
+    return project;
+  };
+}
+function pnpmResolution(project, v5, name, range) {
+  if (project === null || !validName(name)) return null;
+  const pinned = project.versions.get(name);
+  if (project.specifiers.get(name) !== range || pinned === void 0) return null;
+  const peers = pinned.indexOf(v5 ? "_" : "(");
+  const version = peers < 0 ? pinned : pinned.slice(0, peers);
+  return validVersion(version) && satisfies(range, version) ? version : null;
+}
+var SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+function parseDescriptor(d) {
+  const at = d.indexOf("@", 1);
+  if (at <= 0) return null;
+  const name = d.slice(0, at);
+  const range = d.slice(at + 1);
+  if (!range.startsWith("npm:")) return { name, range };
+  const rest = range.slice("npm:".length);
+  const inner = rest.indexOf("@", 1);
+  return inner > 0 ? { name: rest.slice(0, inner), range: rest.slice(inner + 1) } : { name, range: rest };
+}
+function splitDescriptors(inner) {
+  const out = [];
+  let i = 0;
+  while (i < inner.length) {
+    if (inner.charCodeAt(i) === 34) {
+      const end = inner.indexOf('"', i + 1);
+      if (end < 0) return null;
+      out.push(inner.slice(i + 1, end));
+      i = end + 1;
+    } else {
+      let end = inner.indexOf(", ", i);
+      if (end < 0) end = inner.length;
+      out.push(inner.slice(i, end));
+      i = end;
+    }
+    if (i < inner.length) {
+      if (!inner.startsWith(", ", i)) return null;
+      i += 2;
+    }
+  }
+  return out.length > 0 && out.every((d) => d.length > 0 && !d.includes("\\")) ? out : null;
+}
+function yarnField(line, berry, field) {
+  const head = berry ? `  ${field}:` : `  ${field}`;
+  if (!line.startsWith(head)) return void 0;
+  const after = line.charCodeAt(head.length);
+  if (Number.isNaN(after)) return null;
+  if (after !== 32) return void 0;
+  const rest = line.slice(head.length + 1).trimEnd();
+  if (rest.startsWith('"')) return rest.length >= 2 && rest.endsWith('"') ? rest.slice(1, -1) : null;
+  return berry && rest.length > 0 && !/\s/.test(rest) ? rest : null;
+}
+function yarnKey(line, next, berry) {
+  if (berry) {
+    let text;
+    let consumed = false;
+    if (line.startsWith("? ")) {
+      if (next.trimEnd() !== ":") return null;
+      text = line.slice(2).trim();
+      consumed = true;
+    } else {
+      const t2 = line.trimEnd();
+      if (!t2.endsWith(":")) return null;
+      text = t2.slice(0, -1);
+    }
+    if (text === "__metadata") return { keys: [], metadata: true, consumed };
+    if (text.startsWith('"')) {
+      if (text.length < 2 || !text.endsWith('"')) return null;
+      text = text.slice(1, -1);
+    }
+    return { keys: text.split(", "), metadata: false, consumed };
+  }
+  const t = line.trimEnd();
+  if (!t.endsWith(":")) return null;
+  const keys = splitDescriptors(t.slice(0, -1));
+  return keys === null ? null : { keys, metadata: false, consumed: false };
+}
+function scanYarn(lines, odd, berry, acc, onBlock) {
+  const state = { cur: null };
+  const flush = () => {
+    const cur = state.cur;
+    state.cur = null;
+    if (cur !== null && cur !== "skip" && !cur.metadata) onBlock(cur);
+  };
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i] ?? "";
+    if (line.length > MAX_LINE || odd && SEPARATOR.test(line)) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    const first = line.charCodeAt(0);
+    if (line.length === 0 || first === 35) continue;
+    if (first !== 32 && first !== 9) {
+      flush();
+      const key = yarnKey(line, lines[i + 1] ?? "", berry);
+      if (key === null) {
+        acc.unrecognised += 1;
+        state.cur = "skip";
+        continue;
+      }
+      if (key.consumed) i += 1;
+      state.cur = { keys: key.keys, flawed: false, metadata: key.metadata };
+      continue;
+    }
+    const block = state.cur;
+    if (block === "skip") continue;
+    const trimmed = line.trimStart();
+    if (trimmed.length === 0 || trimmed.charCodeAt(0) === 35) continue;
+    if (block === null) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    for (const field of berry ? ["version", "resolution"] : ["version", "resolved"]) {
+      const value = yarnField(line, berry, field);
+      if (value === void 0) continue;
+      if (value === null || block[field] !== void 0) block.flawed = true;
+      else block[field] = field === "resolved" ? value.split("#", 1)[0] ?? "" : value;
+      break;
+    }
+  }
+  flush();
+}
+function yarnClassicBlock(acc, b) {
+  const counted = b.flawed || b.version === void 0;
+  if (counted) acc.unrecognised += 1;
+  if (b.version === void 0) return;
+  const parsed = b.keys.map(parseDescriptor);
+  const first = parsed[0];
+  if (first === void 0 || first === null || parsed.some((p) => p === null || p.name !== first.name)) {
+    if (!counted) acc.unrecognised += 1;
+    return;
+  }
+  const where = b.resolved ?? (SCHEME.test(first.range) ? first.range : void 0);
+  const pin = makePin(first.name, b.version);
+  if (pin !== void 0) {
+    finish(acc, pin, where);
+    return;
+  }
+  if (where !== void 0 && locate(where) === "local") acc.local += 1;
+  else if (!counted) acc.unrecognised += 1;
+}
+var LOCAL_BERRY = /^(?:workspace|patch|link|portal|file):/i;
+function yarnBerryBlock(acc, b) {
+  let counted = b.flawed;
+  const note = () => {
+    if (!counted) acc.unrecognised += 1;
+    counted = true;
+  };
+  if (counted) acc.unrecognised += 1;
+  const resolution = b.resolution;
+  const at = resolution === void 0 ? -1 : resolution.indexOf("@", 1);
+  if (resolution === void 0 || at <= 0) {
+    note();
+    return;
+  }
+  const name = resolution.slice(0, at);
+  const spec2 = resolution.slice(at + 1);
+  if (LOCAL_BERRY.test(spec2)) {
+    acc.local += 1;
+    return;
+  }
+  if (!spec2.startsWith("npm:")) {
+    finish(acc, b.version === void 0 ? void 0 : makePin(name, b.version), spec2);
+    return;
+  }
+  const rest = spec2.slice("npm:".length);
+  const cut = rest.indexOf("::");
+  const pin = makePin(name, cut < 0 ? rest : rest.slice(0, cut));
+  let where;
+  if (cut >= 0) {
+    for (const param of rest.slice(cut + 2).split("&")) {
+      if (!param.startsWith("__archiveUrl=")) continue;
+      try {
+        where = decodeURIComponent(param.slice("__archiveUrl=".length));
+      } catch {
+        note();
+      }
+    }
+  }
+  if (pin === void 0) note();
+  else finish(acc, pin, where);
+}
+function readYarn(text) {
+  const lines = splitLines(text);
+  const odd = SEPARATOR.test(text);
+  let berry = false;
+  let classic = false;
+  for (const line of lines) {
+    if (line.length > 40) continue;
+    const t = line.trimEnd();
+    if (t === "__metadata:") berry = true;
+    else if (t === "# yarn lockfile v1") classic = true;
+  }
+  if (berry && classic) return { unread: "it has both the header of a v1 lockfile and `__metadata:`" };
+  if (!berry && !classic) return { unread: "it has neither the `# yarn lockfile v1` header nor `__metadata:`" };
+  const acc = newAcc();
+  scanYarn(lines, odd, berry, acc, (b) => berry ? yarnBerryBlock(acc, b) : yarnClassicBlock(acc, b));
+  let index;
+  const pinnedBy = () => {
+    if (index !== void 0) return index;
+    const map = /* @__PURE__ */ new Map();
+    scanYarn(lines, odd, berry, newAcc(), (b) => {
+      if (b.version === void 0 || !validVersion(b.version)) return;
+      if (berry && !(b.resolution ?? "").includes("@npm:")) return;
+      for (const key of b.keys) if (!map.has(key)) map.set(key, b.version);
+    });
+    index = map;
+    return map;
+  };
+  return {
+    format: "yarn-lock",
+    entries: acc.entries,
+    local: acc.local,
+    unrecognised: acc.unrecognised,
+    // yarn.lock lists no workspace member: found above the command's directory it covers nothing.
+    resolutionOf: (rel, name, range) => {
+      if (rel !== "" || !validName(name)) return null;
+      const pinned = pinnedBy().get(berry ? `${name}@npm:${range}` : `${name}@${range}`);
+      return pinned !== void 0 && satisfies(range, pinned) ? pinned : null;
+    }
+  };
+}
+function stringEnd(line, start) {
+  for (let i = start + 1; i < line.length; i += 1) {
+    const c = line.charCodeAt(i);
+    if (c === 92) i += 1;
+    else if (c === 34) return i;
+  }
+  return -1;
+}
+function stringAt(line, start, end) {
+  const raw = line.slice(start + 1, end);
+  if (!raw.includes("\\")) return raw;
+  try {
+    const value = JSON.parse(`"${raw}"`);
+    return typeof value === "string" ? value : null;
+  } catch {
+    return null;
+  }
+}
+function parseBunLine(line) {
+  if (!line.startsWith('    "')) return null;
+  const keyEnd = stringEnd(line, 4);
+  if (keyEnd < 0 || !line.startsWith(': ["', keyEnd + 1)) return null;
+  const firstStart = keyEnd + 4;
+  const firstEnd = stringEnd(line, firstStart);
+  if (firstEnd < 0) return null;
+  const first = stringAt(line, firstStart, firstEnd);
+  let i = firstEnd + 1;
+  let second;
+  if (line.startsWith(', "', i)) {
+    const end = stringEnd(line, i + 2);
+    if (end < 0) return null;
+    second = stringAt(line, i + 2, end) ?? void 0;
+    if (second === void 0) return null;
+    i = end + 1;
+  }
+  let depth = 1;
+  let inString = false;
+  for (; i < line.length && depth > 0; i += 1) {
+    const c = line.charCodeAt(i);
+    if (inString) {
+      if (c === 92) i += 1;
+      else if (c === 34) inString = false;
+    } else if (c === 34) {
+      inString = true;
+    } else if (c === 91 || c === 123) {
+      depth += 1;
+    } else if (c === 93 || c === 125) {
+      depth -= 1;
+    }
+  }
+  if (first === null || depth !== 0) return null;
+  const tail = line.slice(i).trim();
+  return tail === "" || tail === "," ? { key: line.slice(5, keyEnd), first, second } : null;
+}
+function scanBun(inner, acc, onEntry) {
+  const odd = SEPARATOR.test(inner);
+  for (const line of splitLines(inner)) {
+    if (line.length > MAX_LINE || odd && SEPARATOR.test(line)) {
+      acc.unrecognised += 1;
+      continue;
+    }
+    if (line.trim().length === 0) continue;
+    const entry = parseBunLine(line);
+    if (entry === null) acc.unrecognised += 1;
+    else onEntry(entry);
+  }
+}
+function bunEntry(acc, e) {
+  const at = e.first.indexOf("@", 1);
+  if (at <= 0) {
+    acc.unrecognised += 1;
+    return;
+  }
+  const name = e.first.slice(0, at);
+  const spec2 = e.first.slice(at + 1);
+  if (spec2.startsWith("workspace:")) {
+    acc.local += 1;
+  } else if (VERSION.test(spec2)) {
+    const pin = makePin(name, spec2);
+    if (pin === void 0) acc.unrecognised += 1;
+    else finish(acc, pin, e.second === void 0 || e.second === "" ? void 0 : e.second);
+  } else {
+    finish(acc, void 0, spec2);
+  }
+}
+var JSON_PLAIN = Array.from({ length: 128 }, (_, c) => " 	\n\r,:+-.eE0123456789".includes(String.fromCharCode(c)));
+function bunFrame(text) {
+  const n = text.length;
+  const skipSpace = (from2) => {
+    let k = from2;
+    while (k < n && (text.charCodeAt(k) === 32 || text.charCodeAt(k) === 9 || text.charCodeAt(k) === 10 || text.charCodeAt(k) === 13)) k += 1;
+    return k;
+  };
+  let i = skipSpace(text.charCodeAt(0) === 65279 ? 1 : 0);
+  if (text.charCodeAt(i) !== 123) return { unread: "it is not a JSON object" };
+  let depth = 0;
+  let version = "";
+  const seen = { version: 0, packages: 0, workspaces: 0 };
+  const ranges = { packages: [-1, -1], workspaces: [-1, -1] };
+  let open = null;
+  for (; i < n; i += 1) {
+    const c = text.charCodeAt(i);
+    if (c === 34) {
+      let j = i + 1;
+      for (; j < n; j += 1) {
+        const d = text.charCodeAt(j);
+        if (d === 92) j += 1;
+        else if (d === 34) break;
+        else if (d === 10 || d === 13) return { unread: "a string runs over a line end" };
+      }
+      if (j >= n) return { unread: "a string is not closed" };
+      const colon = skipSpace(j + 1);
+      if (depth === 1 && text.charCodeAt(colon) === 58) {
+        const key = text.slice(i + 1, j);
+        if (key.includes("\\")) return { unread: "a top-level key is written with an escape" };
+        const value = skipSpace(colon + 1);
+        if (key === "lockfileVersion") {
+          seen.version += 1;
+          let end = value;
+          while (end < n && text.charCodeAt(end) >= 48 && text.charCodeAt(end) <= 57) end += 1;
+          const after = text.charCodeAt(skipSpace(end));
+          if (end === value || after !== 44 && after !== 125) return { unread: "its lockfileVersion is not a number" };
+          version = text.slice(value, end);
+        } else if (key === "packages" || key === "workspaces") {
+          seen[key] += 1;
+          if (text.charCodeAt(value) === 123) {
+            ranges[key] = [value, -1];
+            open = key;
+          } else if (key === "packages") {
+            return { unread: 'its "packages" is not an object' };
+          }
+        }
+      }
+      i = j;
+    } else if (c === 47) {
+      const next = text.charCodeAt(i + 1);
+      return { unread: next === 42 || next === 47 ? "it holds a comment, which bun does not write" : "it holds a character JSON does not" };
+    } else if (c === 123 || c === 91) {
+      depth += 1;
+    } else if (c === 125 || c === 93) {
+      depth -= 1;
+      if (depth < 0) return { unread: "it is not complete JSON" };
+      if (depth === 1 && c === 125 && open !== null) {
+        ranges[open][1] = i;
+        open = null;
+      }
+    } else if (c === 116 || c === 102 || c === 110) {
+      const word = c === 116 ? "true" : c === 102 ? "false" : "null";
+      if (!text.startsWith(word, i)) return { unread: "it holds a word that is not a JSON literal" };
+      i += word.length - 1;
+    } else if (!JSON_PLAIN[c]) {
+      return { unread: "it holds a character JSON does not" };
+    }
+  }
+  if (depth !== 0) return { unread: "it is not complete JSON" };
+  if (seen.version !== 1) return { unread: seen.version === 0 ? "it has no lockfileVersion" : "it has more than one lockfileVersion" };
+  if (version !== "0" && version !== "1") return { unread: "its lockfileVersion is not 0 or 1" };
+  if (seen.packages !== 1) return { unread: seen.packages === 0 ? 'it has no "packages" object' : 'it has more than one "packages" object' };
+  const [from, to] = ranges.packages;
+  const [wFrom, wTo] = ranges.workspaces;
+  return { version, packages: text.slice(from + 1, to), workspaces: seen.workspaces === 1 && wFrom >= 0 && wTo >= 0 ? text.slice(wFrom, wTo + 1) : "" };
+}
+function readBun(text) {
+  const frame = bunFrame(text);
+  if ("unread" in frame) return frame;
+  const acc = newAcc();
+  scanBun(frame.packages, acc, (e) => bunEntry(acc, e));
+  let hoistedIndex;
+  const hoisted = () => {
+    if (hoistedIndex !== void 0) return hoistedIndex;
+    const map = /* @__PURE__ */ new Map();
+    scanBun(frame.packages, newAcc(), (e) => {
+      const at = e.first.indexOf("@", 1);
+      if (at > 0 && e.first.slice(0, at) === e.key && validName(e.key) && validVersion(e.first.slice(at + 1)) && !map.has(e.key)) map.set(e.key, e.first.slice(at + 1));
+    });
+    hoistedIndex = map;
+    return map;
+  };
+  let recordedIndex;
+  const recorded = () => recordedIndex ??= bunRecords(frame.workspaces);
+  return {
+    format: "bun-lock",
+    entries: acc.entries,
+    local: acc.local,
+    unrecognised: acc.unrecognised,
+    resolutionOf: (rel, name, range) => {
+      if (!validName(name) || recorded().get(`${rel}\0${name}`)?.has(range) !== true) return null;
+      const pinned = hoisted().get(name);
+      return pinned !== void 0 && satisfies(range, pinned) ? pinned : null;
+    }
+  };
+}
+function bunMember(line, indent) {
+  if (!line.startsWith(`${" ".repeat(indent)}"`)) return null;
+  const end = stringEnd(line, indent);
+  const key = end < 0 ? null : stringAt(line, indent, end);
+  return key === null ? null : { key, rest: line.slice(end + 1) };
+}
+function bunRecords(workspaces) {
+  const index = /* @__PURE__ */ new Map();
+  let project = null;
+  let inGroup = false;
+  for (const raw of splitLines(workspaces).slice(1)) {
+    const line = raw.trimEnd();
+    if (project === null) {
+      const m = bunMember(line, 4);
+      project = m !== null && m.rest === ": {" ? m.key : null;
+    } else if (!inGroup) {
+      if (line === "    }" || line === "    },") project = null;
+      else inGroup = DEPENDENCY_GROUPS.some((g) => line === `      "${g}": {`);
+    } else if (line === "      }" || line === "      },") {
+      inGroup = false;
+    } else {
+      const m = bunMember(line, 8);
+      if (m === null || !m.rest.startsWith(': "')) continue;
+      const end = stringEnd(m.rest, 2);
+      const range = end < 0 ? null : stringAt(m.rest, 2, end);
+      const tail = m.rest.slice(end + 1);
+      if (range === null || tail !== "" && tail !== ",") continue;
+      const key = `${project}\0${m.key}`;
+      const set2 = index.get(key) ?? /* @__PURE__ */ new Set();
+      set2.add(range);
+      index.set(key, set2);
+    }
+  }
+  return index;
 }
 
 // src/pkgvet/manifest.ts
@@ -1201,10 +2558,10 @@ function parseComposer(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const bad = notAPackage(raw);
   if (bad !== null) return skip(raw, bad);
-  const sep = raw.search(/[:=\s]/);
-  let name = sep > 0 ? raw.slice(0, sep) : raw;
-  let range = sep > 0 ? raw.slice(sep + 1) : void 0;
-  if (sep < 0 && raw.includes("@") && !raw.startsWith("@")) {
+  const sep2 = raw.search(/[:=\s]/);
+  let name = sep2 > 0 ? raw.slice(0, sep2) : raw;
+  let range = sep2 > 0 ? raw.slice(sep2 + 1) : void 0;
+  if (sep2 < 0 && raw.includes("@") && !raw.startsWith("@")) {
     const at = raw.indexOf("@");
     name = raw.slice(0, at);
     range = raw.slice(at + 1);
@@ -2087,16 +3444,16 @@ function collectLaunch(d, launch, context) {
   }
   const w = walk(body, table);
   const flags = [...pre.flags, ...w.flags];
-  const has = (names) => names !== void 0 && flags.some((f) => names.has(f.flag));
+  const has2 = (names) => names !== void 0 && flags.some((f) => names.has(f.flag));
   const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
   let byPackageFlag = false;
-  if (!has(table.noFetchFlags)) {
+  if (!has2(table.noFetchFlags)) {
     const named = values(table.packageFlags);
     if (named.length > 0) {
       raws.push(...named);
       byPackageFlag = true;
-    } else if (!has(table.shellFlags)) raws.push(...w.positionals.map((p) => p.value));
+    } else if (!has2(table.shellFlags)) raws.push(...w.positionals.map((p) => p.value));
     raws.push(...values(table.extraPackageFlags));
   }
   const packages = [];
@@ -2490,7 +3847,7 @@ function confidentShape(text) {
   const t = text.trim();
   const words = [];
   let cur = "";
-  let has = false;
+  let has2 = false;
   let quote = null;
   for (let i = 0; i < t.length; i += 1) {
     const ch = t.charAt(i);
@@ -2508,21 +3865,21 @@ function confidentShape(text) {
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
-      has = true;
+      has2 = true;
       continue;
     }
     if (ch === " " || ch === "	") {
-      if (has) words.push(cur);
+      if (has2) words.push(cur);
       cur = "";
-      has = false;
+      has2 = false;
       continue;
     }
     if (NOT_SIMPLE.test(ch)) return notSingle(`'${ch === "\n" || ch === "\r" ? "newline" : ch}' outside quotes`);
     cur += ch;
-    has = true;
+    has2 = true;
   }
   if (quote !== null) return notSingle("unterminated quote");
-  if (has) words.push(cur);
+  if (has2) words.push(cur);
   const [tool, ...rest] = words;
   if (tool === void 0) return notSingle("empty");
   const at = (k) => rest[k] ?? "";
@@ -2717,7 +4074,7 @@ function readManifestText(path, under) {
   if (read2.status === "absent") return read2;
   return { status: "unreadable", reason: refusal(read2) };
 }
-function validName(ecosystem, name) {
+function validName2(ecosystem, name) {
   if (name.length === 0 || name.length > MAX_NAME_LENGTH) return false;
   const spec2 = parsePackageSpec(ecosystem, name);
   return "name" in spec2 && spec2.name === name && spec2.range === void 0;
@@ -2751,7 +4108,7 @@ function npmDependency(key, value) {
     name = at > 0 ? real.slice(0, at) : real;
     wanted = at > 0 ? real.slice(at + 1) : "";
   }
-  if (!validName("npm", name)) return null;
+  if (!validName2("npm", name)) return null;
   const range = npmRange(wanted);
   return range === null ? null : spec("npm", name, range);
 }
@@ -2861,6 +4218,152 @@ function readRequirements(dir, files) {
     if (found.incomplete !== void 0) out.incomplete = found.incomplete;
     return out;
   });
+}
+
+// src/platform/httpBody.ts
+async function readBodyCapped(res, maxBytes) {
+  const declared = Number(res.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    await res.body?.cancel().catch(() => void 0);
+    return null;
+  }
+  if (res.body === null) return Buffer.alloc(0);
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  for (; ; ) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => void 0);
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks);
+}
+async function readJsonCapped(res, maxBytes) {
+  const body = await readBodyCapped(res, maxBytes);
+  if (body === null) return null;
+  return { json: JSON.parse(body.toString("utf8")) };
+}
+function mebibytes(n) {
+  return `${Math.round(n / (1024 * 1024))} MiB`;
+}
+
+// src/runners/osv.ts
+var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
+var DEFAULT_TIMEOUT_MS = 6e3;
+var MAX_QUERIES = 1e3;
+var CHUNK = 100;
+var IN_FLIGHT = 4;
+var MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+var isPlainObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function readBatch(chunk, json) {
+  const results = json?.results;
+  if (!Array.isArray(results) || results.length !== chunk.length) {
+    const got = Array.isArray(results) ? `${results.length} results` : "no results";
+    return { groups: [], unanswered: chunk, error: `osv answered ${got} for ${chunk.length} queries` };
+  }
+  const groups = [];
+  const unanswered = [];
+  chunk.forEach((pkg, idx) => {
+    const res = results[idx];
+    if (!isPlainObject(res)) {
+      unanswered.push(pkg);
+      return;
+    }
+    let complete = res["next_page_token"] === void 0;
+    const vulns = res["vulns"];
+    const ids = [];
+    if (vulns !== void 0) {
+      if (Array.isArray(vulns)) {
+        for (const v of vulns) {
+          if (isPlainObject(v) && typeof v["id"] === "string") ids.push(v["id"]);
+          else complete = false;
+        }
+      } else {
+        complete = false;
+      }
+    }
+    if (ids.length > 0) {
+      const group = { ecosystem: pkg.ecosystem, name: pkg.name, vuln_ids: ids, severity: "high" };
+      if (pkg.version) group.version = pkg.version;
+      groups.push(group);
+    }
+    if (!complete) unanswered.push(pkg);
+  });
+  const error = unanswered.length > 0 ? `osv left ${unanswered.length} of ${chunk.length} results incomplete` : void 0;
+  return { groups, unanswered, ...error !== void 0 ? { error } : {} };
+}
+async function queryOsv(packages, opts = {}) {
+  const named = packages.filter((p) => p.name);
+  const queryable = named.slice(0, opts.maxQueries ?? MAX_QUERIES);
+  const unqueried = named.length - queryable.length;
+  if (queryable.length === 0) {
+    return { online: true, queried: 0, unqueried, vulnerable_packages: [], unanswered: [] };
+  }
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) {
+    return { online: false, queried: 0, unqueried, vulnerable_packages: [], unanswered: [], error: "no_fetch" };
+  }
+  const size = Math.max(1, opts.chunk ?? CHUNK);
+  const chunks = [];
+  for (let i = 0; i < queryable.length; i += size) chunks.push(queryable.slice(i, i + size));
+  const outcomes = [];
+  let next = 0;
+  const work = async () => {
+    for (let c = next++; c < chunks.length; c = next++) {
+      const chunk = chunks[c] ?? [];
+      const body = {
+        queries: chunk.map((p) => ({
+          package: { name: p.name, ecosystem: p.ecosystem },
+          ...p.version ? { version: p.version } : {}
+        }))
+      };
+      try {
+        outcomes[c] = readBatch(chunk, await postJson(OSV_BATCH_URL, body, opts, fetchImpl));
+      } catch (e) {
+        outcomes[c] = { groups: [], unanswered: chunk, error: e instanceof Error ? e.message : "osv_request_failed" };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, opts.inFlight ?? IN_FLIGHT), chunks.length) }, work));
+  const unanswered = outcomes.flatMap((o) => o.unanswered);
+  const error = outcomes.find((o) => o.error !== void 0)?.error;
+  return {
+    online: unanswered.length === 0,
+    queried: queryable.length,
+    unqueried,
+    vulnerable_packages: outcomes.flatMap((o) => o.groups),
+    unanswered,
+    ...error !== void 0 ? { error } : {}
+  };
+}
+async function postJson(url, body, opts, fetchImpl) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort();
+    else opts.signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: controller.signal
+    });
+    if (!res.ok) throw new Error(`osv http ${res.status}`);
+    const read2 = await readJsonCapped(res, MAX_RESPONSE_BYTES);
+    if (read2 === null) throw new Error(`osv answer over ${mebibytes(MAX_RESPONSE_BYTES)}`);
+    return read2.json;
+  } finally {
+    clearTimeout(timeout);
+    opts.signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 // src/pkgvet/popular.ts
@@ -3035,19 +4538,19 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync2, readdirSync as readdirSync2 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, parse as parse2, relative as relative2, resolve as resolve3 } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, parse as parse3, relative as relative2, resolve as resolve3 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
 var MAX_WORKSPACE_DIRS = 3e3;
-var PUBLIC_HOSTS = {
+var PUBLIC_HOSTS2 = {
   npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
   pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
   packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
   nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i
 };
 function isPublic(ecosystem, url) {
-  return PUBLIC_HOSTS[ecosystem].test(url.trim().replace(/^["']|["']$/g, ""));
+  return PUBLIC_HOSTS2[ecosystem].test(url.trim().replace(/^["']|["']$/g, ""));
 }
 function isPublicRegistryUrl(ecosystem, url) {
   return isPublic(ecosystem, url);
@@ -3069,7 +4572,7 @@ function walkRoot(path, ctx, under) {
   const dir = dirname3(abs);
   if (project !== void 0 && holds(dir, project)) return dir;
   if (isInside(home, abs)) return home;
-  return parse2(abs).root;
+  return parse3(abs).root;
 }
 var firstUnread;
 function noteUnread(path, what) {
@@ -3327,6 +4830,42 @@ function npmScopeRegistry(name, ctx = {}) {
   } catch {
   }
   return null;
+}
+function userRegistryUrl(raw) {
+  let u;
+  try {
+    u = new URL(raw.trim().replace(/^["']|["']$/g, ""));
+  } catch {
+    return void 0;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return void 0;
+  const publicHost = ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com"].includes(u.hostname);
+  if (publicHost && u.protocol === "https:" && u.username === "" && u.password === "" && u.port === "") return void 0;
+  const path = u.pathname.endsWith("/") ? u.pathname : `${u.pathname}/`;
+  return `${u.origin}${path}`;
+}
+var ENV_USER_REGISTRY = /^(?:npm_config_(?:@[^:]+:)?registry|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY)$/i;
+function npmUserRegistries(ctx = {}) {
+  const urls = /* @__PURE__ */ new Set();
+  const add = (raw) => {
+    const url = userRegistryUrl(raw);
+    if (url !== void 0) urls.add(url);
+  };
+  try {
+    for (const [key, value] of Object.entries(envOf(ctx))) {
+      if (value !== void 0 && ENV_USER_REGISTRY.test(key)) add(value);
+    }
+    for (const { path, parse: parse5, user } of npmConfigFiles(ctx)) {
+      if (!user) continue;
+      const text = read(path, ctx);
+      if (text === void 0) continue;
+      const named = [];
+      parse5(text, void 0, named);
+      named.forEach(add);
+    }
+  } catch {
+  }
+  return [...urls];
 }
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "vendor", "dist", "build", "target"]);
 var MAX_SCAN_DIRS = MAX_WORKSPACE_DIRS;
@@ -3643,152 +5182,6 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
   return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
 
-// src/platform/httpBody.ts
-async function readBodyCapped(res, maxBytes) {
-  const declared = Number(res.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    await res.body?.cancel().catch(() => void 0);
-    return null;
-  }
-  if (res.body === null) return Buffer.alloc(0);
-  const reader = res.body.getReader();
-  const chunks = [];
-  let size = 0;
-  for (; ; ) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > maxBytes) {
-      await reader.cancel().catch(() => void 0);
-      return null;
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks);
-}
-async function readJsonCapped(res, maxBytes) {
-  const body = await readBodyCapped(res, maxBytes);
-  if (body === null) return null;
-  return { json: JSON.parse(body.toString("utf8")) };
-}
-function mebibytes(n) {
-  return `${Math.round(n / (1024 * 1024))} MiB`;
-}
-
-// src/runners/osv.ts
-var OSV_BATCH_URL = "https://api.osv.dev/v1/querybatch";
-var DEFAULT_TIMEOUT_MS = 6e3;
-var MAX_QUERIES = 1e3;
-var CHUNK = 100;
-var IN_FLIGHT = 4;
-var MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
-var isPlainObject = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-function readBatch(chunk, json) {
-  const results = json?.results;
-  if (!Array.isArray(results) || results.length !== chunk.length) {
-    const got = Array.isArray(results) ? `${results.length} results` : "no results";
-    return { groups: [], unanswered: chunk, error: `osv answered ${got} for ${chunk.length} queries` };
-  }
-  const groups = [];
-  const unanswered = [];
-  chunk.forEach((pkg, idx) => {
-    const res = results[idx];
-    if (!isPlainObject(res)) {
-      unanswered.push(pkg);
-      return;
-    }
-    let complete = res["next_page_token"] === void 0;
-    const vulns = res["vulns"];
-    const ids = [];
-    if (vulns !== void 0) {
-      if (Array.isArray(vulns)) {
-        for (const v of vulns) {
-          if (isPlainObject(v) && typeof v["id"] === "string") ids.push(v["id"]);
-          else complete = false;
-        }
-      } else {
-        complete = false;
-      }
-    }
-    if (ids.length > 0) {
-      const group = { ecosystem: pkg.ecosystem, name: pkg.name, vuln_ids: ids, severity: "high" };
-      if (pkg.version) group.version = pkg.version;
-      groups.push(group);
-    }
-    if (!complete) unanswered.push(pkg);
-  });
-  const error = unanswered.length > 0 ? `osv left ${unanswered.length} of ${chunk.length} results incomplete` : void 0;
-  return { groups, unanswered, ...error !== void 0 ? { error } : {} };
-}
-async function queryOsv(packages, opts = {}) {
-  const named = packages.filter((p) => p.name);
-  const queryable = named.slice(0, opts.maxQueries ?? MAX_QUERIES);
-  const unqueried = named.length - queryable.length;
-  if (queryable.length === 0) {
-    return { online: true, queried: 0, unqueried, vulnerable_packages: [], unanswered: [] };
-  }
-  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
-  if (fetchImpl === void 0) {
-    return { online: false, queried: 0, unqueried, vulnerable_packages: [], unanswered: [], error: "no_fetch" };
-  }
-  const size = Math.max(1, opts.chunk ?? CHUNK);
-  const chunks = [];
-  for (let i = 0; i < queryable.length; i += size) chunks.push(queryable.slice(i, i + size));
-  const outcomes = [];
-  let next = 0;
-  const work = async () => {
-    for (let c = next++; c < chunks.length; c = next++) {
-      const chunk = chunks[c] ?? [];
-      const body = {
-        queries: chunk.map((p) => ({
-          package: { name: p.name, ecosystem: p.ecosystem },
-          ...p.version ? { version: p.version } : {}
-        }))
-      };
-      try {
-        outcomes[c] = readBatch(chunk, await postJson(OSV_BATCH_URL, body, opts, fetchImpl));
-      } catch (e) {
-        outcomes[c] = { groups: [], unanswered: chunk, error: e instanceof Error ? e.message : "osv_request_failed" };
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(Math.max(1, opts.inFlight ?? IN_FLIGHT), chunks.length) }, work));
-  const unanswered = outcomes.flatMap((o) => o.unanswered);
-  const error = outcomes.find((o) => o.error !== void 0)?.error;
-  return {
-    online: unanswered.length === 0,
-    queried: queryable.length,
-    unqueried,
-    vulnerable_packages: outcomes.flatMap((o) => o.groups),
-    unanswered,
-    ...error !== void 0 ? { error } : {}
-  };
-}
-async function postJson(url, body, opts, fetchImpl) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  if (opts.signal) {
-    if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener("abort", onAbort, { once: true });
-  }
-  try {
-    const res = await fetchImpl(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      signal: controller.signal
-    });
-    if (!res.ok) throw new Error(`osv http ${res.status}`);
-    const read2 = await readJsonCapped(res, MAX_RESPONSE_BYTES);
-    if (read2 === null) throw new Error(`osv answer over ${mebibytes(MAX_RESPONSE_BYTES)}`);
-    return read2.json;
-  } finally {
-    clearTimeout(timeout);
-    opts.signal?.removeEventListener("abort", onAbort);
-  }
-}
-
 // src/pkgvet/registry.ts
 function describeError(e, signal) {
   if (signal.aborted) return "network budget exhausted before the registry answered";
@@ -3811,12 +5204,12 @@ async function fetchJson(url, http, headers = {}) {
     return { kind: "error", reason: describeError(e, http.signal) };
   }
 }
-function isRecord(x) {
+function isRecord2(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 function stringRecord(x) {
   const out = {};
-  if (!isRecord(x)) return out;
+  if (!isRecord2(x)) return out;
   for (const [k, v] of Object.entries(x)) if (typeof v === "string") out[k] = v;
   return out;
 }
@@ -3826,11 +5219,11 @@ function npmDocUrl(name) {
 async function lookupNpm(name, http) {
   const r = await fetchJson(npmDocUrl(name), http, { accept: "application/vnd.npm.install-v1+json" });
   if (r.kind !== "ok") return r;
-  if (!isRecord(r.json) || !isRecord(r.json["versions"])) return { kind: "error", reason: "npm registry returned an unexpected document" };
+  if (!isRecord2(r.json) || !isRecord2(r.json["versions"])) return { kind: "error", reason: "npm registry returned an unexpected document" };
   const versions = Object.keys(r.json["versions"]);
   const installScript = {};
   for (const [v, meta] of Object.entries(r.json["versions"])) {
-    if (isRecord(meta) && meta["hasInstallScript"] === true) installScript[v] = true;
+    if (isRecord2(meta) && meta["hasInstallScript"] === true) installScript[v] = true;
   }
   const tags = stringRecord(r.json["dist-tags"]);
   const info = { versions, tags, times: {}, installScript };
@@ -3842,12 +5235,12 @@ async function npmFullDocument(name, http) {
   const r = await fetchJson(npmDocUrl(name), http);
   if (r.kind === "not_found") return { kind: "error", reason: "npm registry no longer has this package" };
   if (r.kind === "error") return r;
-  if (!isRecord(r.json)) return { kind: "error", reason: "npm registry returned an unexpected document" };
+  if (!isRecord2(r.json)) return { kind: "error", reason: "npm registry returned an unexpected document" };
   const scripts = {};
   const versions = r.json["versions"];
-  if (isRecord(versions)) {
+  if (isRecord2(versions)) {
     for (const [v, meta] of Object.entries(versions)) {
-      if (isRecord(meta)) scripts[v] = stringRecord(meta["scripts"]);
+      if (isRecord2(meta)) scripts[v] = stringRecord(meta["scripts"]);
     }
   }
   return { kind: "ok", times: stringRecord(r.json["time"]), scripts };
@@ -3856,13 +5249,13 @@ async function npmVersionScripts(name, version, http) {
   const r = await fetchJson(`${npmDocUrl(name)}/${encodeURIComponent(version)}`, http);
   if (r.kind === "not_found") return { kind: "error", reason: "version manifest not found" };
   if (r.kind === "error") return r;
-  return { kind: "ok", scripts: isRecord(r.json) ? stringRecord(r.json["scripts"]) : {} };
+  return { kind: "ok", scripts: isRecord2(r.json) ? stringRecord(r.json["scripts"]) : {} };
 }
 async function lookupPypi(name, http) {
   const r = await fetchJson(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`, http);
   if (r.kind !== "ok") return r;
-  if (!isRecord(r.json) || !isRecord(r.json["info"])) return { kind: "error", reason: "PyPI returned an unexpected document" };
-  const releases = isRecord(r.json["releases"]) ? r.json["releases"] : {};
+  if (!isRecord2(r.json) || !isRecord2(r.json["info"])) return { kind: "error", reason: "PyPI returned an unexpected document" };
+  const releases = isRecord2(r.json["releases"]) ? r.json["releases"] : {};
   const times = {};
   const versions = [];
   for (const [v, files] of Object.entries(releases)) {
@@ -3870,7 +5263,7 @@ async function lookupPypi(name, http) {
     versions.push(v);
     let earliest;
     for (const f of files) {
-      const t = isRecord(f) ? f["upload_time_iso_8601"] ?? f["upload_time"] : void 0;
+      const t = isRecord2(f) ? f["upload_time_iso_8601"] ?? f["upload_time"] : void 0;
       if (typeof t === "string" && (earliest === void 0 || t < earliest)) earliest = t;
     }
     if (earliest !== void 0) times[v] = earliest;
@@ -3884,14 +5277,14 @@ async function lookupPackagist(name, http) {
   const lower = name.toLowerCase();
   const r = await fetchJson(`https://repo.packagist.org/p2/${lower}.json`, http);
   if (r.kind !== "ok") return r;
-  const pkgs = isRecord(r.json) ? r.json["packages"] : void 0;
-  const list = isRecord(pkgs) ? pkgs[lower] : void 0;
+  const pkgs = isRecord2(r.json) ? r.json["packages"] : void 0;
+  const list = isRecord2(pkgs) ? pkgs[lower] : void 0;
   if (!Array.isArray(list)) return { kind: "error", reason: "Packagist returned an unexpected document" };
   let carried = {};
   const versions = [];
   const times = {};
   for (const entry of list) {
-    if (!isRecord(entry)) continue;
+    if (!isRecord2(entry)) continue;
     const next = { ...carried };
     for (const [k, v] of Object.entries(entry)) {
       if (v === "__unset") delete next[k];
@@ -3910,7 +5303,7 @@ async function lookupNuget(name, http) {
   const lower = name.toLowerCase();
   const r = await fetchJson(`https://api.nuget.org/v3-flatcontainer/${encodeURIComponent(lower)}/index.json`, http);
   if (r.kind !== "ok") return r;
-  const versions = isRecord(r.json) && Array.isArray(r.json["versions"]) ? r.json["versions"].filter((v) => typeof v === "string") : null;
+  const versions = isRecord2(r.json) && Array.isArray(r.json["versions"]) ? r.json["versions"].filter((v) => typeof v === "string") : null;
   if (versions === null) return { kind: "error", reason: "NuGet returned an unexpected document" };
   return { kind: "found", info: { versions, times: {}, installScript: {} } };
 }
@@ -3919,9 +5312,9 @@ function nugetSearchUrl(id) {
 }
 async function nugetCanonicalId(id, http) {
   const r = await fetchJson(nugetSearchUrl(id), http);
-  if (r.kind !== "ok" || !isRecord(r.json) || !Array.isArray(r.json["data"])) return void 0;
+  if (r.kind !== "ok" || !isRecord2(r.json) || !Array.isArray(r.json["data"])) return void 0;
   for (const entry of r.json["data"]) {
-    const found = isRecord(entry) ? entry["id"] : void 0;
+    const found = isRecord2(entry) ? entry["id"] : void 0;
     if (typeof found === "string" && found.toLowerCase() === id.toLowerCase()) return found;
   }
   return void 0;
@@ -3931,7 +5324,7 @@ async function nugetPublished(name, version, http) {
   const r = await fetchJson(url, http);
   if (r.kind === "not_found") return { kind: "error", reason: "NuGet registration leaf not found" };
   if (r.kind === "error") return r;
-  const published = isRecord(r.json) ? r.json["published"] : void 0;
+  const published = isRecord2(r.json) ? r.json["published"] : void 0;
   return typeof published === "string" ? { kind: "ok", published } : { kind: "ok" };
 }
 function lookupRegistry(ecosystem, name, http) {
@@ -3956,309 +5349,6 @@ var OSV_ECOSYSTEM = {
   packagist: "Packagist",
   nuget: "NuGet"
 };
-
-// src/pkgvet/versions.ts
-var POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
-var DEV_REST = /(?:^|[-._])dev/i;
-function parse3(version) {
-  let s = version.trim().replace(/^[vV=]+/, "");
-  const plus = s.indexOf("+");
-  if (plus >= 0) s = s.slice(0, plus);
-  const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s);
-  if (m === null) return null;
-  const releaseText = m[1] ?? "";
-  const rest = m[2] ?? "";
-  const release = releaseText.split(".").map((x) => Number(x));
-  if (release.some((n) => !Number.isFinite(n))) return null;
-  let stage = 2;
-  if (rest !== "") {
-    if (POST_REST.test(rest)) stage = 3;
-    else if (DEV_REST.test(rest)) stage = 0;
-    else stage = 1;
-  }
-  return { release, stage, rest };
-}
-function compareRelease(a, b) {
-  const n = Math.max(a.length, b.length);
-  for (let i = 0; i < n; i += 1) {
-    const d = (a[i] ?? 0) - (b[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
-}
-function compareRest(a, b) {
-  const ta = a.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
-  const tb = b.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
-  const n = Math.max(ta.length, tb.length);
-  for (let i = 0; i < n; i += 1) {
-    const x = ta[i];
-    const y = tb[i];
-    if (x === void 0) return -1;
-    if (y === void 0) return 1;
-    const nx = Number(x);
-    const ny = Number(y);
-    if (Number.isFinite(nx) && Number.isFinite(ny)) {
-      if (nx !== ny) return nx - ny;
-    } else if (x.toLowerCase() !== y.toLowerCase()) {
-      return x.toLowerCase() < y.toLowerCase() ? -1 : 1;
-    }
-  }
-  return 0;
-}
-function compareVersions(a, b) {
-  const pa = parse3(a);
-  const pb = parse3(b);
-  if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
-  const r = compareRelease(pa.release, pb.release);
-  if (r !== 0) return r;
-  if (pa.stage !== pb.stage) return pa.stage - pb.stage;
-  return compareRest(pa.rest, pb.rest);
-}
-function isPrerelease(version) {
-  const p = parse3(version);
-  return p === null || p.stage < 2;
-}
-var gte = (x) => (v) => compareVersions(v, x) >= 0;
-var gt = (x) => (v) => compareVersions(v, x) > 0;
-var lt = (x) => (v) => compareVersions(v, x) < 0;
-var lte = (x) => (v) => compareVersions(v, x) <= 0;
-var eq = (x) => (v) => compareVersions(v, x) === 0;
-var ANY = () => true;
-var WILD = /^[xX*]$/;
-function partial(text) {
-  const t = text.trim().replace(/^[vV]/, "");
-  if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
-  const plus = t.indexOf("+");
-  const noBuild = plus >= 0 ? t.slice(0, plus) : t;
-  const dash = noBuild.search(/-/);
-  const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
-  const pre = dash >= 0 ? noBuild.slice(dash) : "";
-  const nums = [];
-  for (const part of core.split(".")) {
-    if (WILD.test(part)) break;
-    if (!/^\d+$/.test(part)) return null;
-    nums.push(Number(part));
-  }
-  return { nums, pre };
-}
-var fmt = (nums) => [0, 1, 2].map((i) => nums[i] ?? 0).join(".");
-function bump(nums) {
-  const next = nums.slice();
-  const last = next.length - 1;
-  next[last] = (next[last] ?? 0) + 1;
-  return fmt(next);
-}
-function comparator(op, text, composerTilde) {
-  const p = partial(text);
-  if (p === null) return null;
-  const { nums, pre } = p;
-  const full = nums.length >= 3;
-  const exact = full ? fmt(nums) + pre : fmt(nums);
-  switch (op) {
-    case "":
-    case "=":
-    case "==":
-      if (nums.length === 0) return [ANY];
-      if (full) return [eq(exact)];
-      return [gte(fmt(nums)), lt(bump(nums))];
-    case "^": {
-      if (nums.length === 0) return [ANY];
-      const [major = 0, minor, patch] = nums;
-      if (major > 0 || nums.length === 1) return [gte(exact), lt(bump([major]))];
-      if ((minor ?? 0) > 0 || nums.length === 2) return [gte(exact), lt(bump([0, minor ?? 0]))];
-      return [gte(exact), lt(bump([0, 0, patch ?? 0]))];
-    }
-    case "~":
-    case "~>": {
-      if (nums.length === 0) return [ANY];
-      if (nums.length === 1) return [gte(exact), lt(bump(nums))];
-      if (composerTilde && nums.length === 2) return [gte(exact), lt(bump(nums.slice(0, 1)))];
-      return [gte(exact), lt(bump(nums.slice(0, 2)))];
-    }
-    case ">=":
-      return [gte(exact)];
-    case ">":
-      return full ? [gt(exact)] : nums.length === 0 ? [() => false] : [gte(bump(nums))];
-    case "<":
-      return [lt(exact)];
-    case "<=":
-      return full ? [lte(exact)] : nums.length === 0 ? [ANY] : [lt(bump(nums))];
-    case "!=":
-      return [(v) => !eq(exact)(v)];
-    default:
-      return null;
-  }
-}
-var COMPARATOR = /^(\^|~>|~|>=|<=|>|<|==|=|!=)?\s*(.*)$/;
-function semverishRange(range, composer) {
-  const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
-  const out = [];
-  for (const alt of alternatives) {
-    let text = alt.trim();
-    if (composer) text = text.replace(/@[a-zA-Z]+$/, "").trim();
-    if (text === "" || text === "*" || WILD.test(text)) {
-      out.push([ANY]);
-      continue;
-    }
-    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text);
-    if (hyphen !== null) {
-      const lo = comparator(">=", hyphen[1] ?? "", composer);
-      const hiPartial = partial(hyphen[2] ?? "");
-      if (lo === null || hiPartial === null) return null;
-      const hi = hiPartial.nums.length >= 3 ? [lte(fmt(hiPartial.nums) + hiPartial.pre)] : hiPartial.nums.length === 0 ? [ANY] : [lt(bump(hiPartial.nums))];
-      out.push([...lo, ...hi]);
-      continue;
-    }
-    const tokens = text.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
-    const preds = [];
-    for (const token of tokens) {
-      if (token === "") continue;
-      const m = COMPARATOR.exec(token);
-      if (m === null) return null;
-      const c = comparator(m[1] ?? "", m[2] ?? "", composer);
-      if (c === null) return null;
-      preds.push(...c);
-    }
-    out.push(preds);
-  }
-  return out;
-}
-var PEP440 = /^\s*(~=|===|==|!=|<=|>=|<|>)\s*([^\s,]+)\s*$/;
-function pep440Range(range) {
-  const preds = [];
-  for (const spec2 of range.split(",")) {
-    if (spec2.trim() === "") continue;
-    const m = PEP440.exec(spec2);
-    if (m === null) return null;
-    const op = m[1] ?? "";
-    const ver = m[2] ?? "";
-    if (op === "===") {
-      preds.push((v) => v === ver);
-      continue;
-    }
-    if (ver.endsWith(".*")) {
-      const prefix = partial(ver.slice(0, -2));
-      if (prefix === null || prefix.nums.length === 0) return null;
-      const inPrefix = (v) => {
-        const p = parse3(v);
-        return p !== null && prefix.nums.every((n, i) => (p.release[i] ?? 0) === n);
-      };
-      if (op === "==") preds.push(inPrefix);
-      else if (op === "!=") preds.push((v) => !inPrefix(v));
-      else return null;
-      continue;
-    }
-    if (parse3(ver) === null) return null;
-    switch (op) {
-      case "==":
-        preds.push(eq(ver));
-        break;
-      case "!=":
-        preds.push((v) => !eq(ver)(v));
-        break;
-      case ">=":
-        preds.push(gte(ver));
-        break;
-      case "<=":
-        preds.push(lte(ver));
-        break;
-      case ">":
-        preds.push(gt(ver));
-        break;
-      case "<":
-        preds.push(lt(ver));
-        break;
-      case "~=": {
-        const p = parse3(ver);
-        if (p === null || p.release.length < 2) return null;
-        const prefix = p.release.slice(0, -1);
-        preds.push(gte(ver), (v) => {
-          const q = parse3(v);
-          return q !== null && prefix.every((n, i) => (q.release[i] ?? 0) === n);
-        });
-        break;
-      }
-      default:
-        return null;
-    }
-  }
-  return [preds];
-}
-function nugetRange(range) {
-  const r = range.trim();
-  const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
-  if (m === null) return parse3(r) === null ? null : [[eq(r)]];
-  const open = m[1];
-  const lo = m[2] ?? "";
-  const hasComma = r.includes(",");
-  const hi = m[3] ?? "";
-  const close = m[4];
-  if (!hasComma) return lo === "" ? null : [[eq(lo)]];
-  const preds = [];
-  if (lo !== "") preds.push(open === "[" ? gte(lo) : gt(lo));
-  if (hi !== "") preds.push(close === "]" ? lte(hi) : lt(hi));
-  return [preds];
-}
-var EXACT_SEMVER = /^[vV=]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-function isExactVersion(ecosystem, range) {
-  if (range === void 0) return false;
-  const r = range.trim();
-  switch (ecosystem) {
-    case "npm":
-      return EXACT_SEMVER.test(r);
-    case "pypi":
-      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse3(r) !== null && !/[,<>=!~*]/.test(r);
-    case "packagist":
-      return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
-    case "nuget":
-      return parse3(r) !== null && !/[[\](),]/.test(r);
-    default:
-      return false;
-  }
-}
-function highest(versions) {
-  let best;
-  for (const v of versions) if (best === void 0 || compareVersions(v, best) > 0) best = v;
-  return best;
-}
-function resolveVersion(ecosystem, range, ctx) {
-  const stable = ctx.versions.filter((v) => !isPrerelease(v));
-  const r = range?.trim() ?? "";
-  if (r === "" || ecosystem === "npm" && r === "latest") {
-    if (ctx.latest !== void 0 && ctx.versions.includes(ctx.latest)) return ctx.latest;
-    return highest(stable);
-  }
-  if (ecosystem === "npm") {
-    const tagged = ctx.tags?.[r];
-    if (tagged !== void 0) return ctx.versions.includes(tagged) ? tagged : void 0;
-  }
-  if (ecosystem === "packagist" && /^dev-|-dev$/i.test(r)) return void 0;
-  if (isExactVersion(ecosystem, r)) {
-    const wanted = r.replace(/^===?\s*/, "");
-    return ctx.versions.find((v) => v === wanted) ?? ctx.versions.find((v) => compareVersions(v, wanted) === 0);
-  }
-  let alternatives;
-  switch (ecosystem) {
-    case "npm":
-      alternatives = semverishRange(r, false);
-      break;
-    case "packagist":
-      alternatives = semverishRange(r, true);
-      break;
-    case "pypi":
-      alternatives = /^(?:\^|~(?!=)|\*$|\d+(?:\.\d+)*\.\*$)/.test(r) ? semverishRange(r, false) : pep440Range(r);
-      break;
-    case "nuget":
-      alternatives = nugetRange(r);
-      break;
-    default:
-      alternatives = null;
-  }
-  if (alternatives === null) return void 0;
-  const matching = stable.filter((v) => alternatives.some((preds) => preds.every((p) => p(v))));
-  if (ecosystem === "npm" && ctx.latest !== void 0 && matching.includes(ctx.latest)) return ctx.latest;
-  return highest(matching);
-}
 
 // src/pkgvet/vet.ts
 var FRESH_HOURS = 72;
@@ -4358,6 +5448,40 @@ function osvNameFor(w, canonical) {
   if (w.spec.ecosystem === "nuget") return canonical ?? w.spec.name;
   return w.spec.name;
 }
+function typosquatCheck(w) {
+  if (!w.popularLoaded) return unknown("popular-packages list unavailable \u2014 typosquat check not run");
+  if (w.typo === null) return pass();
+  return warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`);
+}
+var PINNED_ELSEWHERE = "not checked: the lockfile pins this version, which is asked of OSV on its own";
+function vetTyposquatOnly(specs, opts = {}) {
+  const indexes = /* @__PURE__ */ new Map();
+  return specs.map((spec2) => {
+    if (!indexes.has(spec2.ecosystem)) indexes.set(spec2.ecosystem, popularIndexFor(spec2.ecosystem, opts));
+    const index = indexes.get(spec2.ecosystem) ?? null;
+    const w = { spec: spec2, typo: index === null ? null : findTyposquatTarget(index, spec2.name), popularLoaded: index !== null };
+    const typosquat = typosquatCheck(w);
+    const checks = {
+      exists: na(PINNED_ELSEWHERE),
+      malicious: na(PINNED_ELSEWHERE),
+      vulnerabilities: na(PINNED_ELSEWHERE),
+      publish_age: na(PINNED_ELSEWHERE),
+      install_scripts: spec2.ecosystem === "npm" ? na(PINNED_ELSEWHERE) : na("install-script check is npm-only"),
+      typosquat
+    };
+    const verdict = typosquat.status === "warn" ? "warn" : typosquat.status === "unknown" ? "unknown" : "ok";
+    const result = {
+      ecosystem: spec2.ecosystem,
+      name: spec2.name,
+      verdict,
+      reasons: typosquat.detail !== void 0 && typosquat.status !== "pass" ? [typosquat.detail] : [],
+      checks
+    };
+    if (spec2.range !== void 0) result.requested = spec2.range;
+    if (w.typo !== null) result.similar_to = w.typo.similar_to;
+    return result;
+  });
+}
 function buildResult(w, osv, osvError, now, offlineReason) {
   const { spec: spec2 } = w;
   const eco = spec2.ecosystem;
@@ -4366,7 +5490,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   const info = lookup?.kind === "found" ? lookup.info : void 0;
   const extraWarn = [];
   const extraUnknown = [];
-  const typosquat = !w.popularLoaded ? unknown("popular-packages list unavailable \u2014 typosquat check not run") : w.typo !== null ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`) : pass();
+  const typosquat = typosquatCheck(w);
   const ids = osvIds(osv, w);
   const malIds = ids.filter((id) => id.startsWith("MAL-"));
   const vulnIds = ids.filter((id) => !id.startsWith("MAL-"));
@@ -4385,7 +5509,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     if (eco === "npm") installScripts = unknown(why);
   } else if (lookup.kind === "error") {
     exists = unknown(`${registry} lookup failed: ${lookup.reason}`);
-    malicious = osvDown !== void 0 ? unknown(osvDown) : malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : pass("no OSV malicious-package advisory for any version");
+    malicious = malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : osvDown !== void 0 ? unknown(osvDown) : pass("no OSV malicious-package advisory for any version");
     vulnerabilities = unknown(`version unknown: ${lookup.reason}`);
     publishAge = unknown(`version unknown: ${lookup.reason}`);
     if (eco === "npm") installScripts = unknown(`version unknown: ${lookup.reason}`);
@@ -4413,10 +5537,10 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const versionUnknown = v === void 0 ? `could not determine which version '${spec2.range ?? "latest"}' installs` : void 0;
     if (placeholder) {
       malicious = fail(`npm replaced this package with a security placeholder (${placeholderVersion ?? "x-security"}): it was taken down as malicious`);
-    } else if (osvDown !== void 0) {
-      malicious = unknown(osvDown);
     } else if (malIds.length > 0) {
       malicious = w.osvVersioned ? fail(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`);
+    } else if (osvDown !== void 0) {
+      malicious = unknown(osvDown);
     } else {
       malicious = pass();
     }
@@ -4577,6 +5701,69 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
   return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
 }
 
+// src/pkgvet/pins.ts
+var MAX_PINS = 8e3;
+var BATCH = 500;
+var IN_FLIGHT2 = 16;
+var keyOf = (p) => `${p.name}@${p.version}`;
+function choosePins(pins, opts) {
+  const seen = /* @__PURE__ */ new Set();
+  const first = [];
+  const second = [];
+  const third = [];
+  for (const pin of pins) {
+    const key = keyOf(pin);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (opts.direct.has(pin.name)) first.push(pin);
+    else if (!opts.popular(pin.name)) second.push(pin);
+    else third.push(pin);
+  }
+  const all = [...first, ...second, ...third];
+  return { chosen: all.slice(0, MAX_PINS), left: Math.max(0, all.length - MAX_PINS) };
+}
+function allUnknown(pins, unknown2) {
+  return pins.map((pin) => ({ pin, malicious: null, unknown: unknown2 }));
+}
+async function vetPins(pins, opts = {}) {
+  if (pins.length === 0) return [];
+  const offline = opts.offline ?? process.env["GUARDIAN_OFFLINE"] === "1";
+  if (offline) return allUnknown(pins, "network disabled (GUARDIAN_OFFLINE=1)");
+  const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
+  if (fetchImpl === void 0) return allUnknown(pins, "no fetch implementation available");
+  const left = opts.deadlineAt === void 0 ? Number.POSITIVE_INFINITY : opts.deadlineAt - Date.now();
+  if (left <= 0) return allUnknown(pins, "vetting time budget exhausted");
+  const budgetMs = Math.max(1, Math.min(opts.budgetMs ?? TOOL_BUDGET_MS, left));
+  const deadline = Date.now() + budgetMs;
+  const budget = new AbortController();
+  const timer = setTimeout(() => budget.abort(new Error("network budget exhausted")), budgetMs);
+  const signal = opts.signal === void 0 ? budget.signal : AbortSignal.any([opts.signal, budget.signal]);
+  try {
+    const osv = await queryOsv(
+      pins.map((p) => ({ ecosystem: "npm", name: p.name, version: p.version })),
+      { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()), chunk: BATCH, inFlight: IN_FLIGHT2, maxQueries: MAX_PINS }
+    );
+    const mal = /* @__PURE__ */ new Map();
+    for (const g of osv.vulnerable_packages) {
+      const ids = g.vuln_ids.filter((id) => id.trim().toUpperCase().startsWith("MAL-"));
+      if (ids.length > 0 && g.version !== void 0) mal.set(`${g.name}@${g.version}`, ids);
+    }
+    const unanswered = new Set(osv.unanswered.map((q) => `${q.name}@${q.version ?? ""}`));
+    const why = signal.aborted ? "network budget exhausted before OSV answered" : osv.error ?? "OSV gave no complete answer";
+    const asked = new Set(pins.slice(0, MAX_PINS).map(keyOf));
+    return pins.map((pin) => {
+      const key = keyOf(pin);
+      const ids = mal.get(key);
+      if (ids !== void 0) return { pin, malicious: ids };
+      if (!asked.has(key)) return { pin, malicious: null, unknown: `not asked: more than ${MAX_PINS} pins in one call` };
+      if (unanswered.has(key)) return { pin, malicious: null, unknown: why };
+      return { pin, malicious: [] };
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // src/pkgvet/hookDecision.ts
 var DEFAULT_DEADLINE_MS = 8e3;
 var MAX_DEADLINE_MS = 12e3;
@@ -4635,7 +5822,7 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
 }
 var NAMED_BY_MANIFEST = "it is named by a manifest, where a missing name is usually a private or a workspace package";
 var plural = (n) => n === 1 ? "1 package" : `${String(n)} packages`;
-function withManifestPackages(parsed, opts, registry, notes) {
+function withManifestPackages(parsed, opts, registry, notes, locked) {
   const out = [];
   for (const c of parsed) {
     out.push(c);
@@ -4656,6 +5843,8 @@ function withManifestPackages(parsed, opts, registry, notes) {
     }
     for (const read2 of reads) {
       if (read2.status === "absent") continue;
+      const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, dir, read2, opts, registry, notes) : void 0;
+      if (lock !== void 0) locked.push(lock);
       if (read2.status === "unreadable") {
         notes.push(`dev-guardian: ${read2.file} was not read (${read2.reason ?? "could not be read"}) \u2014 its packages were not vetted.`);
         continue;
@@ -4663,7 +5852,8 @@ function withManifestPackages(parsed, opts, registry, notes) {
       if (read2.incomplete !== void 0) {
         notes.push(`dev-guardian: a file ${read2.file} includes was not read (${read2.incomplete}) \u2014 its packages were not vetted.`);
       }
-      const packages = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: dir }, notes) : read2.packages;
+      const inScope = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: dir }, notes) : read2.packages;
+      const packages = lock === void 0 ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read2.registries];
       const custom = c.customRegistry ?? read2.registries[0];
@@ -4696,12 +5886,225 @@ function withoutOwnRegistryScopes(read2, registry, notes) {
     byProject.add(`@${own.scope}`);
     if (source === "") source = basename2(own.source);
   }
-  if (held > 0) {
-    notes.push(
-      `dev-guardian: ${plural(held)} of ${read2.file} ${held === 1 ? "is" : "are"} in a scope (${[...byProject].join(", ")}) the project's ${source} gives a registry of its own \u2014 not vetted.`
+  if (held > 0) notes.push(ownScopeLine(held, read2.file, byProject, source));
+  return kept;
+}
+function ownScopeLine(held, file, scopes, source) {
+  return `dev-guardian: ${plural(held)} of ${file} ${held === 1 ? "is" : "are"} in a scope (${[...scopes].join(", ")}) the project's ${source} gives a registry of its own \u2014 not vetted.`;
+}
+var MAX_LOCKFILE_BYTES = 16 * 1024 * 1024;
+var MAX_NAMED_HOSTS = 3;
+var MAX_REASON_LENGTH = 120;
+var pairKey = (p) => `${p.name}@${p.version}`;
+function said(text) {
+  const clean = text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ").trim();
+  return clean === "" ? "no reason recorded" : clean.length > MAX_REASON_LENGTH ? `${clean.slice(0, MAX_REASON_LENGTH)}\u2026` : clean;
+}
+var notReadLine = (file, why) => `dev-guardian: ${file} was not read (${said(why)}) \u2014 its packages were not vetted.`;
+function isWithin(root, dir) {
+  const rel = relative3(resolve4(root), resolve4(dir));
+  return rel === "" || rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute3(rel);
+}
+function findLockfile(manager, dir, projectDir) {
+  const names = manager === "npm" || manager === "pnpm" || manager === "yarn" || manager === "bun" ? LOCKFILES[manager] : [];
+  if (names.length === 0) return { status: "absent" };
+  const root = projectDir !== void 0 && isWithin(projectDir, dir) ? resolve4(projectDir) : resolve4(dir);
+  if (isNetworkPath(dir) || isNetworkPath(root)) return { status: "absent" };
+  const candidates = manager === "bun" ? [...names, "bun.lockb"] : names;
+  let at = resolve4(dir);
+  for (let i = 0; i < 64; i += 1) {
+    for (const file of candidates) {
+      const path = join5(at, file);
+      if (file === "bun.lockb") {
+        if (presentBelow(root, path)) return { status: "unread", file, why: "it is bun's binary lockfile" };
+        continue;
+      }
+      const read2 = readSmallText(path, MAX_LOCKFILE_BYTES, root);
+      if (read2.status === "ok") return { status: "ok", file, dir: at, text: read2.text };
+      if (read2.status === "refused") return { status: "unread", file, why: refusedWhy(read2.reason) };
+    }
+    const parent = dirname4(at);
+    if (relative3(root, at) === "" || parent === at) break;
+    at = parent;
+  }
+  return { status: "absent" };
+}
+function refusedWhy(reason) {
+  switch (reason) {
+    case "not-a-regular-file":
+      return "not a regular file";
+    case "too-large":
+      return "over 16 MiB";
+    case "remote-link":
+      return "on a network path";
+    default:
+      return "could not be read";
+  }
+}
+function fromUserRegistry(url, registries) {
+  let normal;
+  try {
+    const u = new URL(url);
+    normal = `${u.origin}${u.pathname}`;
+  } catch {
+    return false;
+  }
+  return registries.some((registry) => normal.startsWith(registry));
+}
+function otherSources(read2, userRegistries) {
+  const hosts = [];
+  let count = 0;
+  for (const { source } of read2.entries) {
+    if (!isOtherSource(source, userRegistries)) continue;
+    count += 1;
+    if ("host" in source && source.host !== "" && !hosts.includes(source.host)) hosts.push(source.host);
+  }
+  return { count, hosts };
+}
+function isOtherSource(source, userRegistries) {
+  if (source.kind === "git") return true;
+  return source.kind === "elsewhere" && !fromUserRegistry(source.url, userRegistries());
+}
+function otherSourceLine(count, file, hosts) {
+  const named = hosts.length === 0 ? "" : ` (${hosts.slice(0, MAX_NAMED_HOSTS).join(", ")}${hosts.length > MAX_NAMED_HOSTS ? ` and ${hosts.length - MAX_NAMED_HOSTS} more` : ""})`;
+  return `dev-guardian: ${plural(count)} of ${file} ${count === 1 ? "comes" : "come"} from another source${named} \u2014 what it serves was not vetted.`;
+}
+function pairsToAsk(read2, registry) {
+  const asked = [];
+  const askedKeys = /* @__PURE__ */ new Set();
+  const heldKeys = /* @__PURE__ */ new Set();
+  const scopes = /* @__PURE__ */ new Set();
+  let source = "";
+  const scopeRegistries = /* @__PURE__ */ new Map();
+  const ownRegistry = (name) => {
+    if (!name.startsWith("@")) return null;
+    const scope = name.split("/")[0] ?? name;
+    let own = scopeRegistries.get(scope);
+    if (own === void 0) {
+      own = npmScopeRegistry(name, registry);
+      scopeRegistries.set(scope, own);
+    }
+    return own;
+  };
+  for (const entry of read2.entries) {
+    if (entry.source.kind === "git") continue;
+    for (const pin of [entry.pin, entry.fetched]) {
+      if (pin === void 0) continue;
+      const key = pairKey(pin);
+      const own = entry.source.kind === "public" ? null : ownRegistry(pin.name);
+      if (own !== null) {
+        if (own.from === "project") {
+          heldKeys.add(key);
+          scopes.add(`@${own.scope}`);
+          if (source === "") source = basename2(own.source);
+        }
+        continue;
+      }
+      if (askedKeys.has(key)) continue;
+      askedKeys.add(key);
+      asked.push(pin);
+    }
+  }
+  return { asked, heldByProject: [...heldKeys].filter((key) => !askedKeys.has(key)).length, scopes, source };
+}
+function lockedProject(c, dir, manifest, opts, registry, notes) {
+  try {
+    const found = findLockfile(c.manager, dir, opts.projectDir);
+    if (found.status === "absent") return void 0;
+    if (found.status === "unread") {
+      notes.push(notReadLine(found.file, found.why));
+      return void 0;
+    }
+    const format = lockFormat(found.file);
+    const read2 = format === null ? { unread: "its format is not known" } : readLock(format, found.text);
+    if ("unread" in read2) {
+      notes.push(notReadLine(found.file, read2.unread));
+      return void 0;
+    }
+    const ctx = { ...registry, projectDir: dir };
+    let userRegistries;
+    const user = () => userRegistries ??= npmUserRegistries(ctx);
+    const plan = pairsToAsk(read2, ctx);
+    const lines = [];
+    if (plan.heldByProject > 0) lines.push(ownScopeLine(plan.heldByProject, found.file, plan.scopes, plan.source));
+    const other = otherSources(read2, user);
+    if (other.count > 0) lines.push(otherSourceLine(other.count, found.file, other.hosts));
+    const divergent = read2.entries.filter((e) => e.fetched !== void 0).length;
+    if (divergent > 0) {
+      lines.push(
+        `dev-guardian: ${divergent === 1 ? "1 entry" : `${divergent} entries`} of ${found.file} ${divergent === 1 ? "names" : "name"} one package and ${divergent === 1 ? "fetches" : "fetch"} another \u2014 both were looked up; check the lockfile.`
+      );
+    }
+    if (read2.unrecognised > 0) {
+      lines.push(`dev-guardian: ${read2.unrecognised === 1 ? "1 entry" : `${read2.unrecognised} entries`} of ${found.file} ${read2.unrecognised === 1 ? "was" : "were"} not recognised \u2014 not vetted.`);
+    }
+    notes.push(...lines);
+    return {
+      file: found.file,
+      manifestFile: manifest.file,
+      read: read2,
+      rel: relative3(found.dir, resolve4(dir)).split(sep).join("/"),
+      direct: manifest.packages.map((p) => p.name),
+      covered: [],
+      asked: plan.asked
+    };
+  } catch {
+    notes.push("dev-guardian: the lockfile was not read (could not be read) \u2014 its packages were not vetted.");
+    return void 0;
+  }
+}
+function withoutCovered(packages, lock) {
+  const rest = [];
+  for (const pkg of packages) {
+    const pinned = pkg.range === void 0 ? null : lock.read.resolutionOf(lock.rel, pkg.name, pkg.range);
+    if (pinned === null) rest.push(pkg);
+    else lock.covered.push(pkg);
+  }
+  return rest;
+}
+function advisoryIds(ids) {
+  const clean = ids.map((id) => id.trim()).filter((id) => /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/.test(id));
+  return clean.length > 0 ? clean.join(", ") : "a MAL- advisory";
+}
+function lockOutcome(lock, verdicts, counted) {
+  const denies = /* @__PURE__ */ new Set();
+  const lines = [];
+  const askedKeys = new Set(lock.asked.map(pairKey));
+  const advisory = (v) => `OSV malicious-package advisory for ${v.pin.version}: ${advisoryIds(v.malicious ?? [])}`;
+  const found = (pin) => {
+    const v = pin !== void 0 && askedKeys.has(pairKey(pin)) ? verdicts.get(pairKey(pin)) : void 0;
+    return v !== void 0 && v.malicious !== null && v.malicious.length > 0 ? v : void 0;
+  };
+  for (const entry of lock.read.entries) {
+    const own = found(entry.pin);
+    if (own !== void 0) denies.add(`${lock.file} pins '${pairKey(own.pin)}': ${sentence(advisory(own))}`);
+    const fetched = found(entry.fetched);
+    if (fetched !== void 0) {
+      const names = entry.pin === void 0 ? `${lock.file} fetches` : `${lock.file} names '${pairKey(entry.pin)}' and fetches`;
+      denies.add(`${names} '${pairKey(fetched.pin)}': ${sentence(advisory(fetched))}`);
+    }
+  }
+  let unanswered = 0;
+  let why = "";
+  let left = 0;
+  for (const pin of lock.asked) {
+    const key = pairKey(pin);
+    const v = verdicts.get(key);
+    if (v === void 0) {
+      if (!counted.has(key)) left += 1;
+      counted.add(key);
+    } else if (v.malicious === null) {
+      unanswered += 1;
+      if (why === "") why = v.unknown ?? "";
+    }
+  }
+  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${said(why)}) \u2014 not verified.`);
+  if (left > 0) {
+    lines.push(
+      `dev-guardian: ${left} more ${left === 1 ? "package" : "packages"} of ${lock.file} ${left === 1 ? "was" : "were"} not vetted (only the first ${MAX_PINS} are) \u2014 not verified.`
     );
   }
-  return kept;
+  return { denies: [...denies], lines };
 }
 function popularTest(opts) {
   const indexes = /* @__PURE__ */ new Map();
@@ -4843,47 +6246,86 @@ async function decideInstallCommand(command, opts) {
     cache: registryCache()
   };
   const manifestNotes = [];
+  const locked = [];
+  const isPopular = popularTest(opts);
   const { commands, notVetted, manifestNotVetted, cut } = boundedInstalls(
     command,
     shell,
-    popularTest(opts),
+    isPopular,
     (pkg, c) => runsInstalledCopy(pkg, c, opts),
     opts.nested,
     cdpath,
-    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes)
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked)
   );
-  if (commands.length === 0) {
-    const said = [...manifestNotes, ...cut ? [CUT_NOTE] : []];
-    return said.length > 0 ? { context: said.join("\n") } : null;
+  if (commands.length === 0 && locked.length === 0) {
+    const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];
+    return said2.length > 0 ? { context: said2.join("\n") } : null;
   }
   const offline = env["GUARDIAN_OFFLINE"] === "1";
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
-  const batches = await Promise.all(
-    commands.map(
-      (c) => vetPackages(c.packages, {
-        budgetMs,
-        offline,
-        deadlineAt,
-        now: opts.now ?? Date.now(),
-        registry,
-        commandRegistries: c.registries,
-        // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
-        // what only those two checks need is not asked of the registry.
-        ...c.fromManifest !== void 0 ? { unreported: MANIFEST_UNREPORTED } : {},
-        ...opts.fetchImpl !== void 0 ? { fetchImpl: opts.fetchImpl } : {},
-        ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
-        ...opts.popular !== void 0 ? { popular: opts.popular } : {}
-      })
-    )
+  const now = opts.now ?? Date.now();
+  const pairs = choosePins(
+    locked.flatMap((l) => l.asked),
+    {
+      direct: new Set(locked.flatMap((l) => l.direct)),
+      popular: (name) => isPopular({ ecosystem: "npm", name, raw: name })
+    }
   );
+  const pinned = vetPins(pairs.chosen, {
+    budgetMs,
+    offline,
+    deadlineAt,
+    now,
+    ...opts.fetchImpl !== void 0 ? { fetchImpl: opts.fetchImpl } : {}
+  });
+  const [batches, verdicts] = await Promise.all([
+    Promise.all(
+      commands.map(
+        (c) => vetPackages(c.packages, {
+          budgetMs,
+          offline,
+          deadlineAt,
+          now,
+          registry,
+          commandRegistries: c.registries,
+          // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
+          // what only those two checks need is not asked of the registry.
+          ...c.fromManifest !== void 0 ? { unreported: MANIFEST_UNREPORTED } : {},
+          ...opts.fetchImpl !== void 0 ? { fetchImpl: opts.fetchImpl } : {},
+          ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
+          ...opts.popular !== void 0 ? { popular: opts.popular } : {}
+        })
+      )
+    ),
+    pinned
+  ]);
   const denies = [];
   const manifestDenies = [];
   const warnings = [];
   const unverified = [];
   const unverifiedIn = /* @__PURE__ */ new Map();
+  const lockLines = [];
   let malicious = false;
   let missingIn;
+  const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v]));
+  const counted = /* @__PURE__ */ new Set();
+  for (const lock of locked) {
+    try {
+      for (const r of vetTyposquatOnly(lock.covered, {
+        ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
+        ...opts.popular !== void 0 ? { popular: opts.popular } : {}
+      })) {
+        const d = decideManifestOne(r, lock.manifestFile);
+        if (d.warn !== void 0) warnings.push(d.warn);
+      }
+      const outcome = lockOutcome(lock, verdictOf, counted);
+      manifestDenies.push(...outcome.denies);
+      lockLines.push(...outcome.lines);
+    } catch {
+      lockLines.push(notReadLine(lock.file, "could not be read"));
+    }
+  }
   commands.forEach((cmd, i) => {
     for (const r of batches[i] ?? []) {
       if (cmd.fromManifest !== void 0) {
@@ -4931,7 +6373,7 @@ async function decideInstallCommand(command, opts) {
   for (const [file, { count, why }] of unverifiedIn) {
     lines.push(`dev-guardian could not vet ${plural(count)} of ${file} (${why}) \u2014 not verified.`);
   }
-  lines.push(...manifestNotes);
+  lines.push(.../* @__PURE__ */ new Set([...lockLines, ...manifestNotes]));
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) \u2014 not verified.`

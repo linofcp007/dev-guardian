@@ -550,3 +550,61 @@ describe('vetPackages — checks the caller does not report (install-vet-manifes
     expect(r?.checks.install_scripts.status).toBe('warn');
   });
 });
+
+// ───────────────── install-vet-lockfile-pins — a malicious advisory that arrived decides, whatever else OSV did not answer
+
+describe('install-vet-lockfile-pins', () => {
+  const doc = (name: string): Route => ({ body: npmAbbrev(name, { versions: ['1.0.0'], latest: '1.0.0' }) });
+
+  it('T-15 a MAL- advisory in a result OSV cut short (next_page_token) still blocks its package: the query is unanswered, the hit that arrived is not lost', async () => {
+    const fake = fakeFetch({
+      'https://registry.npmjs.org/left-pad': { body: npmAbbrev('left-pad', { versions: ['1.3.0'], latest: '1.3.0' }) },
+      [OSV]: { body: { results: [{ vulns: [{ id: 'MAL-2026-1' }], next_page_token: 'more' }] } },
+    });
+    const [r] = await vetPackages([spec('npm', 'left-pad')], opts(fake));
+    expect(r?.checks.malicious.status).toBe('fail');
+    expect(r?.checks.malicious.detail).toMatch(/MAL-2026-1/);
+    expect(r?.malicious_ids).toEqual(['MAL-2026-1']);
+    expect(r?.verdict).toBe('block');
+    // What OSV did not finish saying about the other checks stays unknown.
+    expect(r?.checks.vulnerabilities.status).toBe('unknown');
+  });
+
+  it('T-15 a package OSV gave no hit for, in the same incomplete answer, stays unknown — never pass', async () => {
+    const fake = fakeFetch({
+      'https://registry.npmjs.org/left-pad': { body: npmAbbrev('left-pad', { versions: ['1.3.0'], latest: '1.3.0' }) },
+      'https://registry.npmjs.org/ms': { body: npmAbbrev('ms', { versions: ['2.1.3'], latest: '2.1.3' }) },
+      [OSV]: { body: { results: [{ vulns: [{ id: 'MAL-2026-1' }], next_page_token: 'more' }, { next_page_token: 'more' }] } },
+    });
+    const [bad, other] = await vetPackages([spec('npm', 'left-pad'), spec('npm', 'ms')], opts(fake));
+    expect(bad?.checks.malicious.status).toBe('fail');
+    expect(other?.checks.malicious.status).toBe('unknown');
+    expect(other?.verdict).toBe('unknown');
+  });
+
+  it('T-15 more than 100 packages, the second OSV batch failing: the hit of the batch that answered blocks, and the packages of the failed one are unknown', async () => {
+    const names = Array.from({ length: 101 }, (_, i) => `pkg-${String(i).padStart(3, '0')}`);
+    const routes: Record<string, Route> = Object.fromEntries(names.map((n) => [`https://registry.npmjs.org/${n}`, doc(n)]));
+    routes[OSV] = (init) => {
+      const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string } }> };
+      if (queries.some((q) => q.package.name === 'pkg-100')) return { status: 500, body: {} };
+      return { body: { results: queries.map((q) => (q.package.name === 'pkg-000' ? { vulns: [{ id: 'MAL-2026-2' }] } : {})) } };
+    };
+    const results = await vetPackages(names.map((n) => spec('npm', n)), opts(fakeFetch(routes)));
+    expect(results[0]?.checks.malicious.status).toBe('fail');
+    expect(results[0]?.verdict).toBe('block');
+    expect(results[100]?.checks.malicious.status).toBe('unknown');
+    // `online` is one flag for the whole call: a package with no hit reads unknown, answered batch or not.
+    expect(results[50]?.checks.malicious.status).toBe('unknown');
+  });
+
+  it('T-15 the registry failing, a MAL- hit that arrived by name still warns (the version is unknown)', async () => {
+    const fake = fakeFetch({
+      'https://registry.npmjs.org/left-pad': { status: 503 },
+      [OSV]: { body: { results: [{ vulns: [{ id: 'MAL-2026-9' }], next_page_token: 'more' }] } },
+    });
+    const [r] = await vetPackages([spec('npm', 'left-pad')], opts(fake));
+    expect(r?.checks.malicious.status).toBe('warn');
+    expect(r?.checks.malicious.detail).toMatch(/MAL-2026-9/);
+  });
+});
