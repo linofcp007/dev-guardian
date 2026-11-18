@@ -1350,3 +1350,37 @@ describe('pkgvet-registry-credentials-said', () => {
     expect(context, 'it names the registry by scheme and host').toContain(origin.host);
   });
 });
+
+// ───────────────── pkgvet-public-registry-url-parse — a registry URL that names the public host before an @ is another registry
+
+describe('pkgvet-public-registry-url-parse', () => {
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const DISGUISED = ['https://', 'registry.npmjs.org', ':x@', 'evil.example', '/'].join('');
+  const NOPE = 'dgprobe-zzq7731-nope';
+
+  it('T-04 a scope the project .npmrc gives a registry of its own through such a URL: the line about the scope is said, and no request names the package', () => {
+    writeFileSync(join(project, '.npmrc'), `@types:registry=${DISGUISED}\n`);
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { '@types/node': '^22.0.0' } }));
+    const r = runHook('npm install', { 'https://registry.npmjs.org/@types%2Fnode': npmDoc('22.0.0'), [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context, 'the line about a scope with a registry of its own').toContain('gives a registry of its own');
+    expect(context).toContain('@types');
+    expect(
+      r.requests.filter((u) => u.includes('types')),
+      'the package is fetched from the other host by the package manager, and asked of neither the public registry nor OSV',
+    ).toEqual([]);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+  });
+
+  it('T-04 a default registry= through such a URL and a name the public registry does not have: a warning with the registry as the reason, never a deny', () => {
+    writeFileSync(join(project, '.npmrc'), `registry=${DISGUISED}\n`);
+    const r = runHook(`npm install ${NOPE}`, { [`https://registry.npmjs.org/${NOPE}`]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a name another registry may serve is a warning, never a deny').toBeUndefined();
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context, 'the answer is a warning that explains the missing name').toContain('a custom registry is configured');
+    expect(context, 'it names the registry by scheme and host').toContain('https://evil.example');
+    expect(context.includes(':x@'), 'and never by its credentials').toBe(false);
+  });
+});

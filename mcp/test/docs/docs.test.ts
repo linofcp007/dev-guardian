@@ -691,3 +691,29 @@ describe('pkgvet-registry-credentials-said', () => {
     });
   });
 });
+
+// ───────────────── pkgvet-public-registry-url-parse — the docs say what counts as the public registry
+
+describe('pkgvet-public-registry-url-parse', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  it('T-05 docs/hooks.md says a registry URL with credentials, or with anything but the public host in its authority, counts as another registry', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end);
+    const saysIt = sentences(section).some(
+      (s) => /\bURL\b/.test(s) && /\bcredentials\b/i.test(s) && /\bauthority\b/i.test(s) && /\bcounts?\b/i.test(s) && /\banother registry\b/i.test(s),
+    );
+    expect({ 'docs/hooks.md: a sentence says a URL with credentials, or with more than the public host in its authority, counts as another registry': saysIt }).toEqual({
+      'docs/hooks.md: a sentence says a URL with credentials, or with more than the public host in its authority, counts as another registry': true,
+    });
+  });
+});

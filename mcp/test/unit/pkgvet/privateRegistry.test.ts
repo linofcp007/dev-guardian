@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { customRegistryFor, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
+import { customRegistryFor, isPublicRegistryUrl, npmScopeRegistry, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -927,4 +927,135 @@ describe('install-vet-lockfile-pins', () => {
     expect(gets).toBe(afterOne);
   });
 
+});
+
+// ───────────────── pkgvet-public-registry-url-parse — a URL is the public registry by its HOST, not by its first characters
+
+describe('pkgvet-public-registry-url-parse', () => {
+  const PUBLIC_HOSTS = {
+    npm: ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'],
+    pypi: ['pypi.org', 'pypi.python.org', 'files.pythonhosted.org'],
+    packagist: ['packagist.org', 'repo.packagist.org'],
+    nuget: ['api.nuget.org', 'www.nuget.org', 'nuget.org'],
+  } as const;
+  const ECOSYSTEMS = Object.keys(PUBLIC_HOSTS) as Array<keyof typeof PUBLIC_HOSTS>;
+  const SCHEMES = ['https://', 'http://', '//'];
+
+  /** The ecosystems and public hosts for which the answer on `urlOf(scheme, host)` is not `expected`, one line each. */
+  const wrongAnswers = (urlOf: (scheme: string, host: string) => string, expected: boolean, schemes: string[] = SCHEMES): string[] => {
+    const wrong: string[] = [];
+    for (const eco of ECOSYSTEMS) {
+      for (const host of PUBLIC_HOSTS[eco]) {
+        for (const scheme of schemes) {
+          const url = urlOf(scheme, host);
+          if (isPublicRegistryUrl(eco, url) !== expected) wrong.push(`${eco}: ${JSON.stringify(url)}`);
+        }
+      }
+    }
+    return wrong;
+  };
+
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const withUser = (scheme: string, host: string, user: string, tail = '/'): string => [scheme, host, user, '@', 'evil.example', tail].join('');
+
+  it('T-01 a URL whose authority carries credentials is another registry, in all four ecosystems and for every public host', () => {
+    for (const user of [':x', ':', ':443']) {
+      expect(wrongAnswers((scheme, host) => withUser(scheme, host, user), false), `credentials "${user}" before the @`).toEqual([]);
+    }
+  });
+
+  it('T-02 the plain forms of a public host stay public; another host, a suffix, a trailing dot, a user@ and a value that is not a URL stay another registry', () => {
+    // Public, as today: any scheme, with or without the slash or a path, the scheme's own port, upper case, quotes, white space at the ends.
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/`, true), 'the host and a slash').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}`, true), 'the host alone').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/simple/`, true), 'a path').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `https://${host}:443/`, true), 'https and 443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `//${host}:443/`, true), 'no scheme and 443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `http://${host}:80/`, true), 'http and 80').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme.toUpperCase()}${host.toUpperCase()}/`, true), 'upper case').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `"${scheme}${host}/"`, true), 'double quotes').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `'${scheme}${host}/'`, true), 'single quotes').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `  ${scheme}${host}/ \t`, true), 'white space at the ends').toEqual([]);
+
+    // Another registry, as today.
+    expect(wrongAnswers((scheme) => `${scheme}evil.example/`, false), 'another host').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}.evil.example/`, false), 'a suffix').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}./`, false), 'a trailing dot').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}evil.example/${host}/`, false), 'the public host in the path of another one').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => ['dguser', '@', host, '/'].join(''), false), 'a user@ and no scheme').toEqual([]);
+    expect(wrongAnswers((scheme, host) => ['dguser', '@', scheme, host, '/'].join(''), false), 'a user@ before the scheme').toEqual([]);
+    for (const eco of ECOSYSTEMS) {
+      for (const notUrl of ['no-index', '(configured)', 'C:\\feed', '']) {
+        expect(isPublicRegistryUrl(eco, notUrl), `${eco}: ${JSON.stringify(notUrl)}`).toBe(false);
+      }
+    }
+  });
+
+  it("T-03 a port that is not the scheme's, a backslash, a space or a control character in the text is another registry", () => {
+    expect(wrongAnswers((_scheme, host) => `https://${host}:8443/`, false), 'https on 8443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `//${host}:8443/`, false), 'no scheme on 8443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `http://${host}:443/`, false), 'http on 443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `https://${host}:80/`, false), 'https on 80').toEqual([]);
+    expect(wrongAnswers((scheme, host) => withUser(scheme, host, '/\\'), false, ['https://']), 'a backslash after the slash').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => ['https://', host, ':443\\@', 'evil.example', '/'].join(''), false), 'a backslash after the port').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => ['https://', host, '\\@', 'evil.example', '/'].join(''), false), 'a backslash right after the host').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a b`, false), 'a space inside').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/ @evil.example/`, false), 'a space before an @').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a\tb`, false), 'a tab inside').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a\u0001b`, false), 'a control character inside').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a\nb`, false), 'a line break inside').toEqual([]);
+  });
+
+  describe('T-03 through the configuration readers', () => {
+    const NPM_URL = withUser('https://', 'registry.npmjs.org', ':x');
+    const PYPI_URL = withUser('https://', 'pypi.org', ':x', '/simple');
+    const NUGET_URL = withUser('https://', 'api.nuget.org', ':x', '/v3/index.json');
+    const put = (file: string, text: string): void => {
+      mkdirSync(join(file, '..'), { recursive: true });
+      writeFileSync(file, text);
+    };
+
+    it('T-03 a project .npmrc registry= with credentials before the host is a registry', () => {
+      put(join(project, '.npmrc'), `registry=${NPM_URL}\n`);
+      expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ kind: 'registry', url: NPM_URL });
+    });
+
+    it('T-03 a project .npmrc @scope:registry= with credentials before the host is the registry of that scope', () => {
+      put(join(project, '.npmrc'), `@s:registry=${NPM_URL}\n`);
+      expect(customRegistryFor('npm', '@s/pkg', ctx())).toMatchObject({ kind: 'registry', url: NPM_URL });
+      expect(npmScopeRegistry('@s/pkg', ctx())).toMatchObject({ scope: 's', url: NPM_URL, from: 'project' });
+    });
+
+    it('T-03 the environment: NPM_CONFIG_REGISTRY, and npm_config_@scope:registry for the scope', () => {
+      expect(customRegistryFor('npm', 'lodash', ctx({ NPM_CONFIG_REGISTRY: NPM_URL }))).toMatchObject({ kind: 'registry', source: 'NPM_CONFIG_REGISTRY' });
+      expect(npmScopeRegistry('@s/pkg', ctx({ 'npm_config_@s:registry': NPM_URL }))).toMatchObject({ scope: 's', url: NPM_URL, from: 'user' });
+    });
+
+    it('T-03 pip.conf index-url with credentials before the host is a registry', () => {
+      put(join(home, '.config', 'pip', 'pip.conf'), `[global]\nindex-url = ${PYPI_URL}\n`);
+      expect(customRegistryFor('pypi', 'requests', ctx())).toMatchObject({ kind: 'registry', url: PYPI_URL });
+    });
+
+    it('T-03 pyproject.toml [tool.uv] index-url with credentials before the host is a registry', () => {
+      put(join(project, 'pyproject.toml'), `[project]\nname = "app"\nversion = "0.1.0"\n\n[tool.uv]\nindex-url = "${PYPI_URL}"\n`);
+      expect(customRegistryFor('pypi', 'requests', ctx())).toMatchObject({ kind: 'registry', url: PYPI_URL });
+    });
+
+    it('T-03 nuget.config package source with credentials before the host is a registry', () => {
+      put(join(project, 'nuget.config'), `<configuration><packageSources><add key="corp" value="${NUGET_URL}" /></packageSources></configuration>\n`);
+      expect(customRegistryFor('nuget', 'Newtonsoft.Json', ctx())).toMatchObject({ kind: 'registry', url: NUGET_URL });
+    });
+
+    it('T-03 an environment variable with several URLs, and with the name=URL form', () => {
+      expect(customRegistryFor('pypi', 'requests', ctx({ PIP_EXTRA_INDEX_URL: `https://pypi.org/simple ${PYPI_URL}` }))).toMatchObject({
+        kind: 'registry',
+        source: 'PIP_EXTRA_INDEX_URL',
+      });
+      expect(customRegistryFor('pypi', 'requests', ctx({ PIP_INDEX_URL: `corp=${PYPI_URL}` }))).toMatchObject({ kind: 'registry', source: 'PIP_INDEX_URL' });
+      expect(customRegistryFor('nuget', 'Newtonsoft.Json', ctx({ NUGET_SOURCE: `https://api.nuget.org/v3/index.json ${NUGET_URL}` }))).toMatchObject({
+        kind: 'registry',
+        source: 'NUGET_SOURCE',
+      });
+    });
+  });
 });
