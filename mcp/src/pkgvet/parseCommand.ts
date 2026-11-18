@@ -126,12 +126,23 @@ const NPM_FILE = /\.(?:tgz|tar\.gz|tar)$/i;
 const PIP_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
 const UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
 const POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
-/** The endings of the old single list: what a word with a version or range is still skipped for, and what an unmeasured manager is unsure of. */
+/** The endings of the old single list: what a version or range of a Python, Composer or NuGet word is still skipped for. */
 const ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
+/** What an unmeasured manager may read as a file: every ending a measured manager reads as one, plus `.egg` and `.nupkg`. */
+const UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 /** The managers nobody measured: a word that ends like an archive is vetted as a name, and the command is uncertain. */
 const UNMEASURED = new Set(['pipx', 'composer', 'dotnet']);
 const UNMEASURED_ARCHIVE =
   'a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known';
+
+/**
+ * Whether `manager` reads a version part or a manifest value that ends like `.tgz`, `.tar.gz` or `.tar` as a file to
+ * install, not a tag: npm and bun do, pnpm and Yarn are taken not to; no manager named is npm. The one rule of the
+ * command line's `name@<part>` and of a `package.json` value (`manifest.ts`).
+ */
+export function readsFileValue(manager: string | undefined, value: string): boolean {
+  return (manager === undefined || manager === 'npm' || manager === 'npx' || manager === 'bun') && NPM_FILE.test(value);
+}
 
 /** The endings `manager` reads as a file in a bare word; `null` when it reads none (or the caller names no manager). */
 function fileEndings(manager: string | undefined, scoped: boolean): RegExp | null {
@@ -155,7 +166,7 @@ function fileEndings(manager: string | undefined, scoped: boolean): RegExp | nul
 
 /** Why a bare name of an unmeasured manager is uncertain, or `undefined`. */
 function unmeasuredReason(manager: string, spec: PackageSpec): string | undefined {
-  return UNMEASURED.has(manager) && spec.name === spec.raw && ARCHIVE.test(spec.raw) ? UNMEASURED_ARCHIVE : undefined;
+  return UNMEASURED.has(manager) && spec.name === spec.raw && UNMEASURED_FILE.test(spec.raw) ? UNMEASURED_ARCHIVE : undefined;
 }
 
 function isPathLike(word: string): boolean {
@@ -202,12 +213,13 @@ function withRange(spec: PackageSpec | SkippedSpec, range: string | undefined): 
   return r !== undefined && r !== '' ? { ...spec, range: r } : spec;
 }
 
-function parseNpm(raw: string, manager?: string): PackageSpec | SkippedSpec {
+/** `alias`: the word is the real name after `npm:` — a name for every manager, whatever it ends in. */
+function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
   const scoped = raw.startsWith('@');
   const at = raw.indexOf('@', scoped ? 1 : 0);
-  // A word with a version keeps the old rule; a bare word is a file only for a manager that reads its ending as one.
-  const bad = notAPackage(raw, at > 0 ? ARCHIVE : fileEndings(manager, scoped));
+  // A bare word is a file only for a manager that reads its ending as one; with a version the part after `@` decides below.
+  const bad = notAPackage(raw, at > 0 || alias ? null : fileEndings(manager, scoped));
   if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : undefined;
@@ -215,11 +227,12 @@ function parseNpm(raw: string, manager?: string): PackageSpec | SkippedSpec {
   if (range !== undefined) {
     if (range.startsWith('npm:')) {
       // `alias@npm:real@range` installs `real` under the name `alias`.
-      const real = parseNpm(range.slice(4), manager);
+      const real = parseNpm(range.slice(4), manager, true);
       return 'name' in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range, ARCHIVE);
+    const rangeBad = notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? 'URL / VCS / protocol spec — not looked up');
+    if (readsFileValue(manager, range)) return skip(raw, 'archive file — not looked up');
     if (range === 'latest') range = undefined;
   }
   return withRange(checkName('npm', name, raw), range);

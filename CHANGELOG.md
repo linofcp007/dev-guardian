@@ -42,7 +42,9 @@ version bump.
   that ended that way was never looked up. Each manager now skips only the endings it reads as a file (measured):
   npm `.tgz`, `.tar.gz` and `.tar`, and not with a scope; bun the same three, scoped too; pnpm and Yarn none; pip,
   uv and poetry their own lists, in `docs/hooks.md`. A key of `package.json` is always a name, and a value is a
-  file only for npm and bun. What you may notice: an install that passed in silence can now be denied (a malicious
+  file only for npm and bun. The name after `npm:` in an alias (`x@npm:evil.zip`) is a name for every manager, and
+  the version part of `name@x.tgz` is a file only for npm and bun (`.tgz`, `.tar.gz`, `.tar`), so `evil@foo.zip`
+  vets `evil`. What you may notice: an install that passed in silence can now be denied (a malicious
   name), warned about (a name the registry does not have, for `pipx`, `composer` and `dotnet`, which were not
   measured) or denied as nonexistent (a mistyped name that ends like an archive, for a measured manager).
 

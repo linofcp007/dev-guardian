@@ -8,7 +8,8 @@
  *     registry does not have ONLY when the whole command, comments
  *     stripped, is ONE plain install statement with allowlisted flags
  *     (controller ruling, round 2 — `confidentShape` in `parseCommand.ts`;
- *     `InstallCommand.uncertain` is empty exactly then) AND no custom
+ *     `InstallCommand.uncertain` is empty then, bar the one reason a name of a
+ *     manager nobody measured that ends like an archive carries) AND no custom
  *     registry, npmjs auth token (scoped names) or local workspace package
  *     explains the 404 (`privateRegistry.ts`). Blocking a missing name buys
  *     little — the install would 404 anyway — and a false deny blocks real
@@ -1206,7 +1207,8 @@ function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; 
  *   - malicious (OSV `MAL-` on the version, npm takedown placeholder) → deny, always;
  *   - missing from the public registry → deny ONLY when the vetting found
  *     nothing to explain it (it is `block`, not `unknown`) AND the command
- *     has the confident shape (`uncertain` is empty); otherwise the ruling's
+ *     has the confident shape (`uncertain` is empty, bar the one reason an
+ *     archive-like name of an unmeasured manager carries); otherwise the ruling's
  *     "not found … ignore this" warning, with the reason;
  *   - every other `warn` check, except known vulnerabilities on a version
  *     the user did not pin exactly (M4: for a range or a bare name the

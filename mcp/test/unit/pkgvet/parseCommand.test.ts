@@ -1041,6 +1041,7 @@ describe('pkgvet-archive-like-name', () => {
    * values (`-r reqs.zip`, `--prefix x.tar`) whose archive-like text is no package.
    */
   const BEFORE: ReadonlyArray<readonly [string, string]> = [
+    // Not here: `name@x.tgz` and `x@npm:…` for the npm family: no longer "as before", T-10 holds them.
     // Not here: `-r reqs.zip` / `-c cons.whl` for a manager whose table takes no value for `-r` / `-c` (npm, pnpm, yarn, bun, the launchers, poetry's `-c`, pipx, composer, dotnet): the word is then in a package position (see the T-02 test below).
     ["npm install left-pad", "npm/npm | P left-pad"],
     ["npm install left-pad@1.3.0", "npm/npm | P left-pad@1.3.0"],
@@ -1054,7 +1055,6 @@ describe('pkgvet-archive-like-name', () => {
     ["npm install github:u/r", "npm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["npm install file:../x.tgz", "npm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["npm install workspace:*", "npm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["npm install foo@bar.tgz", "npm/npm | S foo@bar.tgz => archive file — not looked up"],
     ["npm install lodash.zip@4.2.0", "npm/npm | P lodash.zip@4.2.0"],
     ["npm install thing.egg@1.0", "npm/npm | P thing.egg@1.0"],
     ["npm install --prefix x.tar somepkg", "npm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; directory changed by --prefix | prefixed"],
@@ -1072,7 +1072,6 @@ describe('pkgvet-archive-like-name', () => {
     ["pnpm add github:u/r", "pnpm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["pnpm add file:../x.tgz", "pnpm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["pnpm add workspace:*", "pnpm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["pnpm add foo@bar.tgz", "pnpm/npm | S foo@bar.tgz => archive file — not looked up"],
     ["pnpm add lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0"],
     ["pnpm add thing.egg@1.0", "pnpm/npm | P thing.egg@1.0"],
     ["pnpm add --prefix x.tar somepkg", "pnpm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
@@ -1090,7 +1089,6 @@ describe('pkgvet-archive-like-name', () => {
     ["yarn add github:u/r", "yarn/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["yarn add file:../x.tgz", "yarn/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["yarn add workspace:*", "yarn/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["yarn add foo@bar.tgz", "yarn/npm | S foo@bar.tgz => archive file — not looked up"],
     ["yarn add lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0"],
     ["yarn add thing.egg@1.0", "yarn/npm | P thing.egg@1.0"],
     ["yarn add --prefix x.tar somepkg", "yarn/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
@@ -1108,7 +1106,6 @@ describe('pkgvet-archive-like-name', () => {
     ["bun add github:u/r", "bun/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["bun add file:../x.tgz", "bun/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["bun add workspace:*", "bun/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["bun add foo@bar.tgz", "bun/npm | S foo@bar.tgz => archive file — not looked up"],
     ["bun add lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0"],
     ["bun add thing.egg@1.0", "bun/npm | P thing.egg@1.0"],
     ["bun add --prefix x.tar somepkg", "bun/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
@@ -1206,7 +1203,6 @@ describe('pkgvet-archive-like-name', () => {
     ["npx github:u/r", "npx/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["npx file:../x.tgz", "npx/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["npx workspace:*", "npx/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["npx foo@bar.tgz", "npx/npm | S foo@bar.tgz => archive file — not looked up"],
     ["npx lodash.zip@4.2.0", "npx/npm | P lodash.zip@4.2.0"],
     ["npx thing.egg@1.0", "npx/npm | P thing.egg@1.0"],
     ["npx --prefix x.tar somepkg", "npx/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist | prefixed"],
@@ -1225,7 +1221,6 @@ describe('pkgvet-archive-like-name', () => {
     ["pnpm dlx github:u/r", "pnpm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["pnpm dlx file:../x.tgz", "pnpm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["pnpm dlx workspace:*", "pnpm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["pnpm dlx foo@bar.tgz", "pnpm/npm | S foo@bar.tgz => archive file — not looked up"],
     ["pnpm dlx lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0"],
     ["pnpm dlx thing.egg@1.0", "pnpm/npm | P thing.egg@1.0"],
     ["pnpm dlx --prefix x.tar somepkg", "pnpm/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
@@ -1244,7 +1239,6 @@ describe('pkgvet-archive-like-name', () => {
     ["yarn dlx github:u/r", "yarn/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["yarn dlx file:../x.tgz", "yarn/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["yarn dlx workspace:*", "yarn/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["yarn dlx foo@bar.tgz", "yarn/npm | S foo@bar.tgz => archive file — not looked up"],
     ["yarn dlx lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0"],
     ["yarn dlx thing.egg@1.0", "yarn/npm | P thing.egg@1.0"],
     ["yarn dlx --prefix x.tar somepkg", "yarn/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
@@ -1262,7 +1256,6 @@ describe('pkgvet-archive-like-name', () => {
     ["bunx github:u/r", "bun/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
     ["bunx file:../x.tgz", "bun/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
     ["bunx workspace:*", "bun/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["bunx foo@bar.tgz", "bun/npm | S foo@bar.tgz => archive file — not looked up"],
     ["bunx lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0"],
     ["bunx thing.egg@1.0", "bun/npm | P thing.egg@1.0"],
     ["bunx --prefix x.tar somepkg", "bun/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
@@ -1427,6 +1420,9 @@ describe('pkgvet-archive-like-name', () => {
         const command = `${prefix} evil@foo${ending}`;
         expect(namedAndSkipped(command), command).toEqual({ packages: [], skipped: [[`evil@foo${ending}`, 'archive file — not looked up']] });
       }
+    }
+    for (const command of ['pnpm add foo@bar.tgz', 'yarn add foo@bar.tgz', 'pnpm dlx foo@bar.tgz', 'yarn dlx foo@bar.tgz']) {
+      expect(namedAndSkipped(command), command).toEqual({ packages: [['foo', 'bar.tgz']], skipped: [] });
     }
     expect(namedAndSkipped('npm install lodash.zip@4.2.0'), 'npm install lodash.zip@4.2.0').toEqual({ packages: [['lodash.zip', '4.2.0']], skipped: [] });
   });

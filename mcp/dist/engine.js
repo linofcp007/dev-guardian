@@ -115596,6 +115596,9 @@ var init_auditMcpTools = __esm({
 });
 
 // src/pkgvet/parseCommand.ts
+function readsFileValue(manager, value) {
+  return (manager === void 0 || manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
+}
 function fileEndings(manager, scoped) {
   switch (manager) {
     case "npm":
@@ -115638,22 +115641,23 @@ function withRange(spec, range) {
   const r = range?.trim();
   return r !== void 0 && r !== "" ? { ...spec, range: r } : spec;
 }
-function parseNpm(raw, manager) {
+function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const scoped = raw.startsWith("@");
   const at = raw.indexOf("@", scoped ? 1 : 0);
-  const bad = notAPackage(raw, at > 0 ? ARCHIVE2 : fileEndings(manager, scoped));
+  const bad = notAPackage(raw, at > 0 || alias ? null : fileEndings(manager, scoped));
   if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
     if (range.startsWith("npm:")) {
-      const real = parseNpm(range.slice(4), manager);
+      const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range, ARCHIVE2);
+    const rangeBad = notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
+    if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);

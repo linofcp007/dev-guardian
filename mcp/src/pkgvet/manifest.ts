@@ -36,7 +36,7 @@
 import { dirname, resolve } from 'node:path';
 
 import { isNetworkPath, readSmallText, type TextRead } from '../hooks/configFile.js';
-import { parsePackageSpec } from './parseCommand.js';
+import { parsePackageSpec, readsFileValue } from './parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from './types.js';
 
 type ManifestStatus = 'ok' | 'absent' | 'unreadable';
@@ -145,13 +145,6 @@ const NPM_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies',
 const SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
 /** A dist-tag: one word that no version can be taken for. */
 const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
-/** A value the npm family reads as a file to install, not a tag (measured: npm and bun; pnpm and Yarn 4 read none, Yarn 1 reads .tgz and .tar.gz). */
-const FILE_VALUE = /\.(?:tgz|tar|tar\.gz)$/i;
-
-/** Whether `manager` reads such a value as a file: npm and bun do, pnpm and Yarn are taken not to; no manager named is npm. */
-function readsFileValue(manager: string | undefined): boolean {
-  return manager === undefined || manager === 'npm' || manager === 'npx' || manager === 'bun';
-}
 
 /**
  * What a dependency's value asks the registry for: `undefined` for "the
@@ -162,7 +155,7 @@ function readsFileValue(manager: string | undefined): boolean {
 function npmRange(value: string, manager: string | undefined): string | undefined | null {
   const v = value.trim();
   if (v === '' || v === 'latest') return undefined;
-  if (v.length > MAX_RANGE_LENGTH || (readsFileValue(manager) && FILE_VALUE.test(v))) return null;
+  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
   if (DIST_TAG.test(v)) return v;
   return v.split(/\s+/).every((word) => SEMVER_WORD.test(word)) ? v : null;
 }

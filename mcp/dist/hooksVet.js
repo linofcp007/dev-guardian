@@ -2488,8 +2488,12 @@ var PIP_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.l
 var UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
 var POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
 var ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
+var UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 var UNMEASURED = /* @__PURE__ */ new Set(["pipx", "composer", "dotnet"]);
 var UNMEASURED_ARCHIVE = "a name that ends like an archive file \u2014 this package manager was not measured, so whether it reads the word as a file or as a registry name is not known";
+function readsFileValue(manager, value) {
+  return (manager === void 0 || manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
+}
 function fileEndings(manager, scoped) {
   switch (manager) {
     case "npm":
@@ -2509,7 +2513,7 @@ function fileEndings(manager, scoped) {
   }
 }
 function unmeasuredReason(manager, spec2) {
-  return UNMEASURED.has(manager) && spec2.name === spec2.raw && ARCHIVE.test(spec2.raw) ? UNMEASURED_ARCHIVE : void 0;
+  return UNMEASURED.has(manager) && spec2.name === spec2.raw && UNMEASURED_FILE.test(spec2.raw) ? UNMEASURED_ARCHIVE : void 0;
 }
 function isPathLike(word) {
   return word === "." || word === ".." || word.startsWith("./") || word.startsWith("../") || word.startsWith(".\\") || word.startsWith("..\\") || word.startsWith("/") || word.startsWith("~") || word.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(word);
@@ -2536,22 +2540,23 @@ function withRange(spec2, range) {
   const r = range?.trim();
   return r !== void 0 && r !== "" ? { ...spec2, range: r } : spec2;
 }
-function parseNpm(raw, manager) {
+function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const scoped = raw.startsWith("@");
   const at = raw.indexOf("@", scoped ? 1 : 0);
-  const bad = notAPackage(raw, at > 0 ? ARCHIVE : fileEndings(manager, scoped));
+  const bad = notAPackage(raw, at > 0 || alias ? null : fileEndings(manager, scoped));
   if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
     if (range.startsWith("npm:")) {
-      const real = parseNpm(range.slice(4), manager);
+      const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range, ARCHIVE);
+    const rangeBad = notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
+    if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);
@@ -4129,14 +4134,10 @@ function pushOnce(into, seen, pkg) {
 var NPM_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 var SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
 var DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
-var FILE_VALUE = /\.(?:tgz|tar|tar\.gz)$/i;
-function readsFileValue(manager) {
-  return manager === void 0 || manager === "npm" || manager === "npx" || manager === "bun";
-}
 function npmRange(value, manager) {
   const v = value.trim();
   if (v === "" || v === "latest") return void 0;
-  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager) && FILE_VALUE.test(v)) return null;
+  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
   if (DIST_TAG.test(v)) return v;
   return v.split(/\s+/).every((word) => SEMVER_WORD.test(word)) ? v : null;
 }

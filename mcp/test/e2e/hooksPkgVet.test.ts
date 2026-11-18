@@ -1456,7 +1456,7 @@ describe('pkgvet-archive-like-name', () => {
   it('T-10 `npm install <malicious>@foo.zip` (a tag that ends like an archive) is DENIED, naming the package', () => {
     const name = 'dgprobe-evil';
     const r = runHook(`npm install ${name}@foo.zip`, {
-      [`https://registry.npmjs.org/${name}`]: npmDoc('1.0.0'),
+      [`https://registry.npmjs.org/${name}`]: { ...npmDoc('1.0.0'), body: { ...npmDoc('1.0.0').body as object, 'dist-tags': { latest: '1.0.0', 'foo.zip': '1.0.0' } } },
       [OSV]: { osv: { [`${name}@1.0.0`]: ['MAL-2026-0042'] } },
     });
     expect(r.status).toBe(0);
