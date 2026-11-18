@@ -1174,3 +1174,47 @@ describe('install-vet-lockfile-pins', () => {
     expect(asked(own.requests.slice(above.requests.length))).toEqual(ONLY_OSV);
   });
 });
+
+// ───────────────── install-vet-slow-first-round — a registry document that never arrives, through the real hook process
+
+describe('install-vet-slow-first-round', () => {
+  const SLOW = 'https://registry.npmjs.org/scripted-old';
+  /** Two documents answered at once, OSV with nothing against anyone — and, per run, what the third document does. */
+  const routes = (slow: Route): Record<string, Route> => ({
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/fresh-pkg': npmDoc('2.0.0'),
+    [SLOW]: slow,
+    [OSV]: { osv: {} },
+  });
+
+  // As for the registry that never answers by name (above): the 3 s network budget ends the wait, not the 8 s deadline
+  // behind it — measured as time beyond the same hook answered at once, and 6 s absolute with GUARDIAN_PERF_STRICT=1.
+  it('T-08 `npm ci` with one registry document that never arrives: the hook answers inside its budget, asks OSV before the budget ends, and counts ONE package of the manifest as not verified', () => {
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', 'fresh-pkg': '^2.0.0', 'scripted-old': '^1.0.0' } }),
+    );
+    const answered = runHook('npm ci', routes(npmDoc('1.0.0')));
+    const r = runHook('npm ci', routes({ hang: true }));
+    // The request log is one file for the whole test: what the second run added comes after the first run's lines.
+    const requests = r.requests.slice(answered.requests.length);
+
+    // The reference run: every document arrives, one OSV batch, and nothing is said.
+    expect({ output: answered.output, osv: answered.requests.filter((u) => u === OSV).length }).toEqual({ output: undefined, osv: 1 });
+
+    expect(r.status).toBe(0);
+    expect(r.ms - answered.ms, `${String(r.ms)} ms against ${String(answered.ms)} ms answered`).toBeLessThan(5000);
+    expect(r.ms).toBeLessThan(hangBound(6000));
+    expect({
+      decision: r.output?.hookSpecificOutput?.permissionDecision,
+      said: (r.output?.hookSpecificOutput?.additionalContext ?? '').split('\n'),
+      requests: [...requests].sort(),
+    }).toEqual({
+      decision: undefined,
+      // The two the registry answered for were vetted with OSV's answer: the one line counts the third alone.
+      said: [expect.stringMatching(/^dev-guardian could not vet 1 package of package[.]json \(.+\) — not verified[.]$/)],
+      // One document asked per package — the one that never arrives too, and no second time — and OSV once, while it was owed.
+      requests: [OSV, 'https://registry.npmjs.org/express', 'https://registry.npmjs.org/fresh-pkg', SLOW].sort(),
+    });
+  });
+});

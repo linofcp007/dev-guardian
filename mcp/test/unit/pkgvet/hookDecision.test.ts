@@ -2505,3 +2505,36 @@ describe('install-vet-lockfile-pins', () => {
   });
 
 });
+
+// ───────────────── install-vet-slow-first-round — a document that does not arrive costs its package, not the manifest
+
+describe('install-vet-slow-first-round', () => {
+  it('T-07 a manifest of three packages, the document of one never arriving: ONE line, "could not vet 1 package of package.json" — not 3 — and no deny', async () => {
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { alpha: '^1.0.0', beta: '^1.0.0', gamma: '^1.0.0' } }),
+    );
+    // The registry answers for two at once and never for the third (its request ends when the budget aborts it); OSV answers at once.
+    const f = fakeFetch({
+      'https://registry.npmjs.org/alpha': npmDoc('1.0.0'),
+      'https://registry.npmjs.org/beta': npmDoc('1.0.0'),
+      'https://registry.npmjs.org/gamma': { hang: true },
+      [OSV]: osvClean,
+    });
+    const d = await decideInstallCommand('npm ci', opts(f.fetchImpl, { budgetMs: 1000 }));
+
+    expect({
+      deny: d?.deny,
+      said: (d?.context ?? '').split('\n'),
+      osvRequests: f.calls.filter((u) => u === OSV).length,
+      registryRequests: f.calls.filter((u) => u !== OSV).sort(),
+    }).toEqual({
+      deny: undefined,
+      // The two the registry answered for were vetted, and are not counted: the one line is the third package's, with its reason.
+      said: [expect.stringMatching(/^dev-guardian could not vet 1 package of package\.json \(.*registry.*\) — not verified\.$/)],
+      // OSV was asked while the third document was still owed — once — and nothing was asked twice of the registry.
+      osvRequests: 1,
+      registryRequests: ['alpha', 'beta', 'gamma'].map((n) => `https://registry.npmjs.org/${n}`),
+    });
+  });
+});
