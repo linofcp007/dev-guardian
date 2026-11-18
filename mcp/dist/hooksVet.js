@@ -6545,6 +6545,7 @@ var CHECK_KEYS = [
   "install_scripts",
   "typosquat"
 ];
+var VERSION_CHECKS = /* @__PURE__ */ new Set(["vulnerabilities", "publish_age", "install_scripts"]);
 function sentence(text) {
   return /[.?!]$/.test(text) ? text : `${text}.`;
 }
@@ -6585,7 +6586,7 @@ function decideOne(r, uncertain) {
   }
   const out = {};
   if (warns.length > 0) out.warn = `${label2(r)}: ${warns.slice(0, 3).join("; ")}`;
-  const couldRun = r.requested_version_unpublished === true ? [r.checks.malicious] : Object.values(r.checks);
+  const couldRun = r.requested_version_unpublished === true ? CHECK_KEYS.filter((key) => !VERSION_CHECKS.has(key)).map((key) => r.checks[key]) : Object.values(r.checks);
   const unknownCheck = couldRun.find((c) => c.status === "unknown" && c.detail !== void 0);
   if (unknownCheck !== void 0) out.unverified = `${label2(r)} (${unknownCheck.detail ?? ""})`;
   return out;

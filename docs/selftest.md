@@ -32,8 +32,8 @@ a whole run does not fit a tool call. The server only **shows** the last result.
 
 There are five hook checks, and `hooks:install-vet` is the only one that uses the network. The dispatcher vets that
 install as it vets any other: it asks the public npm registry for the document of `crossenv` and OSV about that name
-— one request each, carrying the name of that package and nothing of yours. `crossenv` is a package npm replaced by
-its security placeholder, and that is what the hook denies. Nothing is installed: see "What it touches", below.
+— normally one request each, about that one package and with nothing of yours. `crossenv` is a package npm replaced
+by its security placeholder, and that is what the hook denies. Nothing is installed: see "What it touches", below.
 
 Each rule pack runs alone, so its verdict depends on nothing but itself. Before the packs, one **probe run** with the
 selftest's own rule tells which canaries Semgrep can read on this path: that is what separates a blind pack from an
@@ -49,7 +49,7 @@ listed as `no_canary`: installed, **not verified** by this command.
 | `detected` | The control ran to the end and reported its canary. | Nothing. |
 | `silent` | It ran to the end, **read** the canary and reported nothing. A scan of that area with 0 findings proves nothing on this machine. | Follow the control's `next` line: the scanner's version, the pack's file, a configuration of the scanner's own. |
 | `missing` | The scanner is not installed. | The `next` line has the install command (`install_toolchain` does it too). |
-| `unverified` | The run cannot be taken to a verdict: it failed, timed out, was partial, never read the canary, had no vulnerability database, or was not started offline. For `hooks:install-vet`: the registry or OSV was not asked (`GUARDIAN_OFFLINE=1`) or did not answer, and the reason is the hook's own "could not vet" line — the network, not the guard. Never `detected`, never `silent`. | Read the reason, fix it, run again. |
+| `unverified` | The run cannot be taken to a verdict: it failed, timed out, was partial, never read the canary, had no vulnerability database, or was not started offline. For `hooks:install-vet` it is usually the network, not the guard: the registry and OSV were not asked (`GUARDIAN_OFFLINE=1`), or one of them did not answer and the reason is the hook's own "could not vet" line. Never `detected`, never `silent`. | Read the reason, fix it, run again. |
 | `no_canary` | An installed scanner the selftest has no canary for. | Nothing: it says only that this command did not test it. |
 | `disabled_by_user` | A guard answered more softly because you switched it off (`GUARDIAN_HOOKS=off`, `GUARDIAN_HOOKS_BASH_BLOCK=0`, `GUARDIAN_PKG_VET=0`, or `"enabled": false`, `"bash": {"block": false}`, `"secrets": {"warn": false}` in `~/.config/dev-guardian/hooks.json`). With package vetting switched off, `hooks:install-vet` is not started at all: it asks the network nothing. | Nothing: your decision, named. |
 
@@ -75,11 +75,13 @@ marked **regressed**, with what changed between the two runs — the plugin's ve
 - **`hooks:install-vet` proves that the install guard denies an install it is given cause to deny; it does not prove
   the registry.** `detected` is any deny of the canary: npm's security placeholder, a malicious-package advisory
   from OSV, or — behind a proxy that answers "no such package" — a name the registry does not have. Whoever controls
-  the network between this machine and the registry controls what the hook is told. `unverified` says only that
-  the hook could not run one of its checks of the canary, whichever it was.
+  the network between this machine and the registry controls what the hook is told. `unverified` says that no
+  verdict was reached — for this check, usually that the hook could not run one of its checks of the canary,
+  whichever it was.
 - **A `silent` `hooks:install-vet` may be the canary, not the guard.** Should npm serve an ordinary package under
-  `crossenv` again, or drop the name, the hook has nothing to deny and the control reads `silent`: what the registry
-  serves for `crossenv` is the first place to look. A network that is down reads `unverified`, not `silent`.
+  `crossenv` again, the hook has nothing to deny and the control reads `silent`: what the registry serves for
+  `crossenv` is the first place to look. A name the registry no longer has at all is denied for that reason, and
+  still reads `detected`; a network that is down reads `unverified`, not `silent`.
 - **What `silent` catches:** a pack whose rules no longer match its canary, a pack from which Semgrep loaded nothing
   and scanned no file, a scanner that returns an empty report with exit 0, a hooks bundle that fails open. A pack
   that Semgrep **rejects** (not YAML, an unknown language, a pattern that does not parse) is `unverified` with
@@ -128,10 +130,10 @@ Nothing in the scan pipeline reads these files. They only inform.
   payload on the dispatcher's standard input; scanners are started with their arguments as a list, with no shell.
   The install that `hooks:install-vet` names is read, never run: no package manager is started, and nothing is
   downloaded, extracted or installed.
-- **The network a normal scan uses, and two requests more:** Trivy's vulnerability database and checks bundle, when
-  its cache is stale; and, for `hooks:install-vet`, one request to the public npm registry and one to OSV, made by
-  the dispatcher, about the one package name `crossenv`. With `GUARDIAN_OFFLINE=1` neither the dependency audit nor
-  the install check is started, and both are `unverified`.
+- **The network a normal scan uses, and the install check's:** Trivy's vulnerability database and checks bundle,
+  when its cache is stale; and, for `hooks:install-vet`, the dispatcher's requests to the public npm registry and to
+  OSV about the one package name `crossenv` — normally one each. With `GUARDIAN_OFFLINE=1` neither the dependency
+  audit nor the install check is started, and both are `unverified`.
 - **The secret canary is synthetic.** It has the format of an AWS access key id, is put together at run time from
   two halves, exists only in the temporary directory, and is in no file of the plugin.
 

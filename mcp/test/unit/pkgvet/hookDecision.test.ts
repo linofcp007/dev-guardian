@@ -2633,6 +2633,31 @@ describe('selftest-install-vet-canary', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]).toMatch(/OSV/);
     expect(notes[0]).not.toMatch(/could not determine which version/);
+
+    // Advisories for OTHER versions of the name are not a check that could not run either: no version installs.
+    const advisories = fakeFetch({ [LODASH]: npmDoc('4.17.21'), [OSV]: () => ({ body: { results: [{ vulns: [{ id: 'GHSA-aaaa-bbbb-cccc' }] }] } }) });
+    const c = await decideInstallCommand(install, opts(advisories.fetchImpl, POPULAR));
+    expect(c?.deny).toBeUndefined();
+    expect(unpublished(c)).toHaveLength(1);
+    expect(said(c).filter((line) => /could not vet|not verified/.test(line))).toEqual([]);
+
+    // A check that does not depend on the version and could not run is still said: here the typosquat check, with no popular list.
+    const noList = fakeFetch({ [LODASH]: npmDoc('4.17.21'), [OSV]: osvClean });
+    const e = await decideInstallCommand(install, opts(noList.fetchImpl, { popular: { npm: null } }));
+    expect(e?.deny).toBeUndefined();
+    expect(unpublished(e)).toHaveLength(1);
+    expect(notesOf(e, 'lodash')).toEqual([expect.stringMatching(/typosquat check not run/)]);
+  });
+
+  it('T-02 a name the registry no longer has is denied, for that reason — so a canary npm DROPPED still reads detected, and only one it serves as an ordinary package reads silent (EC-1)', async () => {
+    const gone = fakeFetch({ [DOCUMENT]: { status: 404 }, [OSV]: osvClean });
+    const d = await decideInstallCommand(`npm install ${NAME}`, opts(gone.fetchImpl, POPULAR));
+    expect(d?.deny).toEqual(expect.stringMatching(/crossenv/));
+    expect(d?.deny).not.toMatch(/security placeholder/);
+
+    // The other half of EC-1, beside it: an ordinary package under the name is not denied.
+    const restored = fakeFetch({ [DOCUMENT]: npmDoc('1.0.9'), [OSV]: osvClean });
+    expect((await decideInstallCommand(`npm install ${NAME}`, opts(restored.fetchImpl, POPULAR)))?.deny).toBeUndefined();
   });
 
   it('T-08 a registry, or OSV, that answers something that is not JSON: the line says so in words of the hook and quotes nothing of the answer', async () => {
