@@ -880,6 +880,41 @@ describe('install-vet-slow-first-round', () => {
     },
   );
 
+  it.each([
+    ['its result cut by next_page_token, no MAL- id in the page that came', 'page'],
+    ['the whole first request answering HTTP 503', '503'],
+  ] as const)(
+    'T-03 a document arriving late and the by-name OSV answer INCOMPLETE — %s: the malware check is unknown with a reason, never a pass; the existence and the version still come from the document; no second request is sent (today: it is asked only for a late name whose first answer holds a MAL- id)',
+    async (_how, mode) => {
+      const net = slowNet({
+        registry: { 'left-pad': { latest: '1.3.0' }, prisma: { latest: '6.1.0', arrives: 'late' } },
+        ...(mode === '503' ? { osvAnswer: () => 503 } : {}),
+      });
+      // `next_page_token` on the result of the late name: the stand-in's OSV answers in full, this cuts that one result.
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const res = await net.fetchImpl(input, init);
+        if (mode !== 'page' || String(input) !== OSV) return res;
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package: { name: string } }> };
+        const json = (await res.json()) as { results: Array<Record<string, unknown>> };
+        const cut = json.results.map((r, i) => (queries[i]?.package.name === 'prisma' ? { ...r, next_page_token: 'more' } : r));
+        return new Response(JSON.stringify({ results: cut }), { status: 200 });
+      }) as typeof fetch;
+      const [, late] = await vetPackages([spec('npm', 'left-pad'), spec('npm', 'prisma')], opts({ fetchImpl, calls: net.calls }, { budgetMs: BUDGET }));
+
+      expect(net.osv[0]).toEqual(['left-pad@1.3.0', 'prisma']);
+      // The choice as it is: no MAL- id came, so no second question — a change of that is to be deliberate.
+      expect(net.osv).toHaveLength(1);
+      expect(late?.checks.exists.status).toBe('pass');
+      expect(late?.version).toBe('6.1.0');
+      expect(late?.checks.malicious.status).toBe('unknown');
+      expect(late?.checks.malicious.detail).toMatch(/OSV lookup failed/);
+      expect(late?.checks.malicious.detail).not.toMatch(/for any version/);
+      expect(late?.checks.vulnerabilities.status).toBe('unknown');
+      expect(late?.verdict).not.toBe('ok');
+      expect(late?.verdict).toBe('unknown');
+    },
+  );
+
   it('T-05 the same, and the budget ending before the second request is answered: a warning that some versions have advisories and that this one was not determined in time — neither passed nor denied', async () => {
     const net = slowNet({
       // The version that installs IS one of the malicious ones: nothing but the answer that did not come could say so.
@@ -890,9 +925,9 @@ describe('install-vet-slow-first-round', () => {
     const [fast, late] = await vetPackages([spec('npm', 'left-pad'), spec('npm', PRETTIER)], opts(net, { budgetMs: BUDGET }));
 
     expect(net.osv[0]).toEqual([PRETTIER, 'left-pad@1.3.0']);
-    // Whatever was asked after it is that package at its version, and once at most.
-    expect(net.osv.length).toBeLessThanOrEqual(2);
-    expect(net.osv.slice(1).flat()).toEqual(net.osv.length > 1 ? [`${PRETTIER}@10.1.7`] : []);
+    // The second request WAS sent, to OSV, holding that package alone with its version — and no third (it hangs until the budget aborts it).
+    expect(net.osv).toEqual([[PRETTIER, 'left-pad@1.3.0'], [`${PRETTIER}@10.1.7`]]);
+    expect(net.calls.filter((c) => c.url === OSV)).toHaveLength(2);
     expect(fast).toMatchObject({ version: '1.3.0', verdict: 'ok' });
 
     expect(late?.checks.exists.status).toBe('pass');
@@ -988,5 +1023,32 @@ describe('install-vet-slow-first-round', () => {
     const answered = results.filter((r) => r.name !== 'pkg-000' && !failed.includes(r.name));
     expect(answered).toHaveLength(MANY.length - 1 - failed.length);
     expect(answered.filter((r) => r.verdict !== 'ok' || r.checks.malicious.status !== 'pass').map((r) => r.name)).toEqual([]);
+  });
+
+  it('T-10 the same NAME twice in a call of more than 100 packages, in two OSV batches, one answering and one failing: each spec is judged by its OWN query — the answered one is vetted (a MAL- advisory for its version denies it), the failed one is not verified', async () => {
+    const fillers = Array.from({ length: 99 }, (_, i) => `filler-${String(i).padStart(3, '0')}`);
+    const names = ['dup', ...fillers];
+    const net = slowNet({
+      registry: Object.fromEntries([...names, 'dup'].map((name) => [name, { latest: '1.0.0' }])),
+      advisories: { 'dup@1.0.0': ['MAL-2026-7'] },
+      // The first batch holds the first 100 queries, the second the 101st alone.
+      osvAnswer: (_request, pairs) => (pairs.length === 1 ? 500 : undefined),
+    });
+    // The two specs of `dup` ask different things of the registry's one document: 1.0.0 is published, 2.0.0 is not,
+    // so the second is asked of OSV by name — in the batch that fails.
+    const specs = [spec('npm', 'dup', '1.0.0'), ...fillers.map((n) => spec('npm', n)), spec('npm', 'dup', '2.0.0')];
+    const results = await vetPackages(specs, opts(net));
+
+    expect(net.osv).toHaveLength(2);
+    expect(net.osv.map((pairs) => pairs.length).sort((a, b) => a - b)).toEqual([1, 100]);
+    const [answeredSpec, failedSpec] = [results[0], results[100]];
+    expect(answeredSpec?.checks.malicious).toEqual({ status: 'fail', detail: expect.stringMatching(/MAL-2026-7/) });
+    expect(answeredSpec?.verdict).toBe('block');
+    // The failed batch's own spec: nothing about it was answered, and the other spec's advisory is not read as its own.
+    expect(failedSpec?.checks.malicious).toEqual({ status: 'unknown', detail: expect.stringMatching(/OSV lookup failed/) });
+    expect(failedSpec?.malicious_ids).toBeUndefined();
+    expect(failedSpec?.verdict).not.toBe('ok');
+    // And the fillers of the answered batch are vetted.
+    expect(results.slice(1, 100).filter((r) => r.verdict !== 'ok').map((r) => r.name)).toEqual([]);
   });
 });
