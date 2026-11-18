@@ -5514,9 +5514,10 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   const extraWarn = [];
   const extraUnknown = [];
   const typosquat = typosquatCheck(w);
+  const askedByNameOnly = w.osvVersioned === false && w.version !== void 0;
   const ids = osvIds(osv, w);
   const malIds = ids.filter((id) => id.startsWith("MAL-"));
-  const vulnIds = ids.filter((id) => !id.startsWith("MAL-"));
+  const vulnIds = askedByNameOnly ? [] : ids.filter((id) => !id.startsWith("MAL-"));
   const osvDown = offlineReason ?? (osv === void 0 || !osv.online ? `OSV lookup failed: ${osvError ?? osv?.error ?? "no answer"}` : void 0);
   let exists;
   let malicious;
@@ -5561,13 +5562,16 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     if (placeholder) {
       malicious = fail(`npm replaced this package with a security placeholder (${placeholderVersion ?? "x-security"}): it was taken down as malicious`);
     } else if (malIds.length > 0) {
-      malicious = w.osvVersioned ? fail(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`);
+      malicious = w.osvVersioned ? fail(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(
+        askedByNameOnly ? `OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 whether ${v ?? "this version"} is one of them was not determined in time` : `OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`
+      );
     } else if (osvDown !== void 0) {
       malicious = unknown(osvDown);
     } else {
-      malicious = pass();
+      malicious = askedByNameOnly ? pass("no OSV malicious-package advisory for any version") : pass();
     }
     if (osvDown !== void 0) vulnerabilities = unknown(osvDown);
+    else if (askedByNameOnly) vulnerabilities = unknown(`vulnerabilities of ${v ?? "this version"} not determined: OSV was asked for the name before the registry answered`);
     else if (vulnIds.length > 0) {
       vulnerabilities = w.osvVersioned ? warn(`${vulnIds.length} known vulnerabilit${vulnIds.length === 1 ? "y" : "ies"} in ${v ?? "this version"}: ${vulnIds.slice(0, 5).join(", ")}${vulnIds.length > 5 ? ", \u2026" : ""}`) : unknown(`${vulnIds.length} advisories exist for some versions \u2014 which version installs could not be determined`);
     } else vulnerabilities = pass();
@@ -5668,8 +5672,16 @@ function explain404(w, opts) {
   }
   w.custom = customFor(w.spec, opts);
 }
+function answeredQuery(osv, q) {
+  if (osv.online) return true;
+  return q !== void 0 && osv.unanswered !== void 0 && !osv.unanswered.includes(q);
+}
+function viewFor(osv, w) {
+  return !osv.online && answeredQuery(osv, w.osvQuery) ? { ...osv, online: true } : osv;
+}
 async function networkRounds(work, http, signal, deadline, now, explain) {
   const fetchImpl = http.fetchImpl;
+  const halfBudgetMs = Math.max(0, (deadline - Date.now()) / 2);
   const lookups = /* @__PURE__ */ new Map();
   const pending = work.map((w) => {
     const key = `${w.spec.ecosystem}\0${w.spec.name.toLowerCase()}`;
@@ -5685,43 +5697,94 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
     const key = w.spec.name.toLowerCase();
     if (w.spec.ecosystem === "nuget" && !canonical.has(key)) canonical.set(key, nugetCanonicalId(w.spec.name, http));
   }
-  const answers = await Promise.all(pending);
-  work.forEach((w, i) => {
-    const answer = answers[i];
-    if (answer !== void 0) w.lookup = answer;
-    if (answer?.kind === "found") resolveFor(w, answer.info);
+  const extras = [];
+  const allSettled = Promise.all(
+    work.map(
+      (w, i) => (pending[i] ?? Promise.resolve(void 0)).then((answer) => {
+        if (answer !== void 0) w.lookup = answer;
+        if (answer?.kind === "found") {
+          resolveFor(w, answer.info);
+          if (!needsNoExtras(w)) extras.push(extrasFor(w, answer.info, http, now).catch(() => void 0));
+        }
+      })
+    )
+  );
+  let halfTimer;
+  const halfPassed = new Promise((resolve5) => {
+    halfTimer = setTimeout(() => resolve5("half"), halfBudgetMs);
   });
-  if (signal.aborted) {
-    const why = "network budget exhausted before OSV was consulted";
-    for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
-    return work.map((w) => buildResult(w, void 0, why, now, void 0));
+  const first = await Promise.race([allSettled.then(() => "answered"), halfPassed]);
+  clearTimeout(halfTimer);
+  let osvAsked;
+  if (first === "half" && !signal.aborted) osvAsked = askOsv(work, canonical, fetchImpl, signal, deadline, true);
+  await allSettled;
+  if (osvAsked === void 0) {
+    if (signal.aborted) {
+      const why = "network budget exhausted before OSV was consulted";
+      for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
+      return work.map((w) => buildResult(w, void 0, why, now, void 0));
+    }
+    osvAsked = askOsv(work, canonical, fetchImpl, signal, deadline, false);
   }
-  let osvError;
-  const osvPromise = (async () => {
+  const extrasDone = Promise.all(extras);
+  const { result: osv, error } = await osvAsked;
+  await Promise.all([extrasDone, askVersionsOfLate(work, osv, fetchImpl, signal, deadline)]);
+  let osvError = error;
+  if (signal.aborted && osv.online === false && osvError === void 0 && osv.error === void 0) osvError = "network budget exhausted before OSV answered";
+  for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
+  return work.map((w) => buildResult(w, w.osvSecond ?? viewFor(osv, w), osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
+}
+function askOsv(work, canonical, fetchImpl, signal, deadline, mixed) {
+  const versions = work.map((w) => w.version);
+  work.forEach((w, i) => {
+    w.osvVersioned = versions[i] !== void 0;
+    if (mixed && w.lookup === void 0) w.late = true;
+  });
+  let error;
+  return (async () => {
     const queries = [];
-    for (const w of work) {
+    for (const [i, w] of work.entries()) {
       const canonicalId = await (canonical.get(w.spec.name.toLowerCase()) ?? Promise.resolve(void 0));
       w.osvName = osvNameFor(w, canonicalId);
       const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName };
-      if (w.version !== void 0) q.version = w.version;
-      w.osvVersioned = w.version !== void 0;
+      const v = versions[i];
+      if (v !== void 0) q.version = v;
       w.osvIndex = queries.length;
+      w.osvQuery = q;
       queries.push(q);
     }
-    return queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
+    return queryOsv(queries, { ...fetchImpl !== void 0 ? { fetchImpl } : {}, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
   })().catch((e) => {
-    osvError = e instanceof Error ? e.message : String(e);
+    error = e instanceof Error ? e.message : String(e);
     return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
-  });
-  const extras = work.map(
-    (w) => w.lookup?.kind === "found" && !needsNoExtras(w) ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
-  );
-  const [osv] = await Promise.all([osvPromise, ...extras]);
-  if (signal.aborted && osv.online === false && osvError === void 0) {
-    osvError = "network budget exhausted before OSV answered";
+  }).then((result) => ({ result, error }));
+}
+async function askVersionsOfLate(work, first, fetchImpl, signal, deadline) {
+  if (signal.aborted) return;
+  const second = /* @__PURE__ */ new Map();
+  for (const w of work) {
+    if (w.late !== true || w.lookup?.kind !== "found" || w.version === void 0 || w.osvName === void 0) continue;
+    if (!osvIds(first, w).some((id) => id.startsWith("MAL-"))) continue;
+    second.set(w, { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName, version: w.version });
   }
-  for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
-  return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
+  if (second.size === 0) return;
+  let answer;
+  try {
+    answer = await queryOsv([...second.values()], {
+      ...fetchImpl !== void 0 ? { fetchImpl } : {},
+      signal,
+      timeoutMs: Math.max(1, deadline - Date.now())
+    });
+  } catch {
+    return;
+  }
+  for (const [w, q] of second) {
+    const before = { osvVersioned: w.osvVersioned, osvQuery: w.osvQuery };
+    w.osvVersioned = true;
+    w.osvQuery = q;
+    if (answeredQuery(answer, q) || osvIds(answer, w).some((id) => id.startsWith("MAL-"))) w.osvSecond = viewFor(answer, w);
+    else Object.assign(w, before);
+  }
 }
 
 // src/pkgvet/pins.ts

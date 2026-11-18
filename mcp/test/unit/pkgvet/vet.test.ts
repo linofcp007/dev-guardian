@@ -594,8 +594,8 @@ describe('install-vet-lockfile-pins', () => {
     expect(results[0]?.checks.malicious.status).toBe('fail');
     expect(results[0]?.verdict).toBe('block');
     expect(results[100]?.checks.malicious.status).toBe('unknown');
-    // `online` is one flag for the whole call: a package with no hit reads unknown, answered batch or not.
-    expect(results[50]?.checks.malicious.status).toBe('unknown');
+    // A package of the batch that answered is vetted: only the failed batch's packages are left unverified (US-1.AC-9).
+    expect(results[50]?.checks.malicious.status).toBe('pass');
   });
 
   it('T-15 the registry failing, a MAL- hit that arrived by name still warns (the version is unknown)', async () => {
