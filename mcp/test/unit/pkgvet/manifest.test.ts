@@ -19,6 +19,7 @@ import {
   readNpmManifest,
   readRequirements,
 } from '../../../src/pkgvet/manifest.js';
+import { decideInstallCommand, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
 import { parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -312,5 +313,107 @@ describe('nothing of a manifest becomes a package but a valid name and a valid r
     // The valid entries are still there: the reader did not give up on the file.
     expect(readNpmManifest(dir).packages.map((p) => p.name)).toContain('express');
     expect(readRequirements(dir, ['r.txt'])[0]?.packages.map((p) => p.name)).toContain('requests');
+  });
+});
+
+// ───────────────── pkgvet-archive-like-name — a manifest names a package by its key and its value, whatever they end in
+
+describe('pkgvet-archive-like-name', () => {
+  it('T-01 a key that ends like an archive is a package name, for every manager: each one is a package, with its name and its range', () => {
+    write(
+      'package.json',
+      JSON.stringify({
+        name: 'app',
+        version: '1.0.0',
+        dependencies: {
+          'lodash.zip': '^4.2.0',
+          'x.tgz': '1.0.0',
+          'x.tar.gz': 'latest',
+          'x.whl': '*',
+          '@s/y.tar': '~2.0.0',
+          alias: 'npm:lodash.zip@^4',
+        },
+      }),
+    );
+    const r = readNpmManifest(dir);
+    expect(r.status).toBe('ok');
+    expect(named(r)).toEqual([
+      ['lodash.zip', '^4.2.0'],
+      ['x.tgz', '1.0.0'],
+      ['x.tar.gz', undefined],
+      ['x.whl', '*'],
+      ['@s/y.tar', '~2.0.0'],
+      ['lodash.zip', '^4'],
+    ]);
+  });
+
+  // The value of a dependency, and the lines of a requirements file, depend on the manager that installs them: they are
+  // driven through the hook's own decision, which has the command, with a registry stand-in that records what is asked.
+  const NOW = Date.parse('2026-09-25T12:00:00Z');
+  let home: string;
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'pkgvet-manifest-home-'));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  /** The names the registries were asked about, in order: every URL but OSV's batch, down to its name. */
+  async function asked(command: string): Promise<string[]> {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      calls.push(url);
+      if (url === 'https://api.osv.dev/v1/querybatch') {
+        const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as { queries: unknown[] }) : { queries: [] };
+        return new Response(JSON.stringify({ results: body.queries.map(() => ({})) }));
+      }
+      if (url.startsWith('https://registry.npmjs.org/')) {
+        return new Response(
+          JSON.stringify({ 'dist-tags': { latest: '1.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.0.0': {} } }),
+        );
+      }
+      if (url.startsWith('https://pypi.org/pypi/')) {
+        return new Response(JSON.stringify({ info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } }));
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    const opts: HookVetOptions = {
+      cwd: dir,
+      homeDir: home,
+      env: { GUARDIAN_OFFLINE: '0' },
+      etcDir: join(home, 'no-etc'),
+      nodeExecPath: join(home, 'no-node', 'bin', 'node'),
+      systemLibraryDir: join(home, 'no-library'),
+      fetchImpl,
+      now: NOW,
+      popular: {},
+    };
+    await decideInstallCommand(command, opts);
+    return calls
+      .filter((u) => u !== 'https://api.osv.dev/v1/querybatch')
+      .map((u) => decodeURIComponent(u.replace('https://registry.npmjs.org/', '').replace('https://pypi.org/pypi/', '').replace(/\/json$/, '')));
+  }
+
+  const VALUES = { 'k-zip': 'y.zip', 'k-tgz': 'y.tgz', 'k-targz': 'y.tar.gz', 'k-tar': 'y.tar' };
+
+  it('T-06 the value of a dependency that ends like an archive: npm and bun read .tgz, .tar.gz and .tar as a file and ask about the key for .zip only', async () => {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: VALUES }));
+    for (const command of ['npm install', 'npm ci', 'bun install']) {
+      expect({ command, asked: await asked(command) }).toEqual({ command, asked: ['k-zip'] });
+    }
+  });
+
+  it('T-06 pnpm and Yarn read none of them as a file: every key is asked about', async () => {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: VALUES }));
+    for (const command of ['pnpm install', 'yarn', 'yarn install']) {
+      expect({ command, asked: await asked(command) }).toEqual({ command, asked: ['k-zip', 'k-tgz', 'k-targz', 'k-tar'] });
+    }
+  });
+
+  it('T-06 a line of a requirements file follows the manager of the command: .tar.bz2 is a file for pip and a name for uv, .egg is a name for both', async () => {
+    write('requirements.txt', 'bzthing.tar.bz2\neggthing.egg\nplainthing\n');
+    expect({ pip: await asked('pip install -r requirements.txt') }).toEqual({ pip: ['eggthing.egg', 'plainthing'] });
+    expect({ uv: await asked('uv pip install -r requirements.txt') }).toEqual({ uv: ['bzthing.tar.bz2', 'eggthing.egg', 'plainthing'] });
   });
 });

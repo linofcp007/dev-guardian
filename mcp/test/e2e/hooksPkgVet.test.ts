@@ -1384,3 +1384,64 @@ describe('pkgvet-public-registry-url-parse', () => {
     expect(context.includes(':x@'), 'and never by its credentials').toBe(false);
   });
 });
+
+// ───────────────── pkgvet-archive-like-name — a name that ends like an archive is vetted when its manager reads it as a name
+
+describe('pkgvet-archive-like-name', () => {
+  const BAD = 'dgprobe-evil.zip';
+  const GOOD = 'dgprobe-clean.tgz';
+  const MALICIOUS: Record<string, Route | Route[]> = {
+    [`https://registry.npmjs.org/${BAD}`]: npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${BAD}@1.0.0`]: ['MAL-2026-0042'] } },
+  };
+  const manifest = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+
+  it('T-07 `npm install <malicious>.zip` is DENIED, naming the package', () => {
+    const r = runHook(`npm install ${BAD}`, MALICIOUS);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${BAD}`);
+  });
+
+  it('T-07 `pnpm add <malicious>.tgz` is DENIED: pnpm reads no ending as a file', () => {
+    const name = 'dgprobe-evil.tgz';
+    const r = runHook(`pnpm add ${name}`, {
+      [`https://registry.npmjs.org/${name}`]: npmDoc('1.0.0'),
+      [OSV]: { osv: { [`${name}@1.0.0`]: ['MAL-2026-0042'] } },
+    });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(name);
+  });
+
+  it('T-07 a bare `npm install` whose package.json has the key <malicious>.zip is DENIED, naming the file and the package', () => {
+    manifest({ [BAD]: '^1.0.0' });
+    const r = runHook('npm install', MALICIOUS);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json/);
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+  });
+
+  it('T-07 a dependency "a": "npm:<malicious>.zip@^1" is DENIED the same way', () => {
+    manifest({ a: `npm:${BAD}@^1` });
+    const r = runHook('npm install', MALICIOUS);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+  });
+
+  it('T-07 `npm install <clean>.tgz` names a file for npm: no request at all, nothing said', () => {
+    const r = runHook(`npm install ${GOOD}`, {});
+    expect(r.output).toBeUndefined();
+    expect(r.requests).toEqual([]);
+  });
+
+  it('T-07 a manager that was not measured, with a name the registry does not have: a warning, never a deny', () => {
+    const name = 'dgprobe-missing.zip';
+    const r = runHook(`pipx install ${name}`, { [`https://pypi.org/pypi/${name}/json`]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.requests, 'the name is asked of the registry').toContain(`https://pypi.org/pypi/${name}/json`);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain(name);
+  });
+});

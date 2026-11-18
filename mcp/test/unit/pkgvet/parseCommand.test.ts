@@ -865,3 +865,537 @@ describe('pnpm install with a package name is a `pnpm add` (install-vet-pnpm-ins
     expect(manifests('pnpm install -g')).toEqual([undefined]);
   });
 });
+
+// ───────────────── pkgvet-archive-like-name — the file endings are the package manager's, not one list for all
+
+describe('pkgvet-archive-like-name', () => {
+  /** Every ending a manager of the measured table may read as a file, and a few it never does. */
+  const ALL_ENDINGS = [
+    '.tgz', '.tar.gz', '.tar', '.zip', '.whl', '.egg', '.nupkg', '.tar.bz2', '.tar.xz', '.tbz', '.txz', '.tlz', '.tar.lz', '.tar.lzma', '.tar.zst',
+  ];
+  const NPM_FILES = ['.tgz', '.tar.gz', '.tar'];
+  const PIP_FILES = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma'];
+  const UV_FILES = ['.zip', '.whl', '.tgz', '.tar.gz', '.tar'];
+  const POETRY_FILES = PIP_FILES.filter((e) => e !== '.whl');
+  /** What the OLD single list already skipped: the part of the measured table a protection test can hold on HEAD. */
+  const OLD_LIST = ['.tgz', '.tar', '.tar.gz', '.tar.bz2', '.tar.xz', '.zip', '.whl', '.egg', '.nupkg'];
+
+  /** The word is a name of this ecosystem, vetted, and nothing about it is skipped or uncertain. */
+  function expectName(command: string, name: string): void {
+    const cmds = parseInstallCommands(command);
+    expect(
+      cmds.map((c) => ({ command, packages: c.packages.map((p) => [p.name, p.range]), skipped: c.skipped, uncertain: c.uncertain })),
+      command,
+    ).toEqual([{ command, packages: [[name, undefined]], skipped: [], uncertain: [] }]);
+  }
+
+  /** The word is an archive file for this manager: not vetted, skipped with its reason, nothing said. */
+  function expectFile(command: string, word: string): void {
+    const cmds = parseInstallCommands(command);
+    expect(
+      cmds.map((c) => ({ command, packages: c.packages.map((p) => p.name), skipped: c.skipped.map((s) => [s.raw, s.reason]) })),
+      command,
+    ).toEqual([{ command, packages: [], skipped: [[word, 'archive file — not looked up']] }]);
+  }
+
+  /** The names each manager of the table reads from the registry: every ending that is not one of its files. */
+  const NAME_CASES: Array<[string, string[]]> = [
+    ['npm install', ALL_ENDINGS.filter((e) => !NPM_FILES.includes(e))],
+    ['pnpm add', ALL_ENDINGS],
+    ['pnpm install', ALL_ENDINGS],
+    ['yarn add', ALL_ENDINGS],
+    ['bun add', ALL_ENDINGS.filter((e) => !NPM_FILES.includes(e))],
+    ['npx', ALL_ENDINGS.filter((e) => !NPM_FILES.includes(e))],
+    ['npm exec', ALL_ENDINGS.filter((e) => !NPM_FILES.includes(e))],
+    ['bunx', ALL_ENDINGS.filter((e) => !NPM_FILES.includes(e))],
+    ['pnpm dlx', ALL_ENDINGS],
+    ['yarn dlx', ALL_ENDINGS],
+    ['pip install', ALL_ENDINGS.filter((e) => !PIP_FILES.includes(e))],
+    ['uv add', ALL_ENDINGS.filter((e) => !UV_FILES.includes(e))],
+    ['uv pip install', ALL_ENDINGS.filter((e) => !UV_FILES.includes(e))],
+    ['uvx', ALL_ENDINGS.filter((e) => !UV_FILES.includes(e))],
+    ['uv tool install', ALL_ENDINGS.filter((e) => !UV_FILES.includes(e))],
+    ['poetry add', ALL_ENDINGS.filter((e) => !POETRY_FILES.includes(e))],
+  ];
+
+  it('T-02 a bare word that ends like an archive but is a name for its manager is a package, vetted with no reason said', () => {
+    for (const [prefix, endings] of NAME_CASES) {
+      for (const ending of endings) expectName(`${prefix} thing${ending}`, `thing${ending}`);
+    }
+  });
+
+  it('T-02 the examples of the plan: lodash.zip, a scoped name for npm, and every launcher', () => {
+    expectName('npm install lodash.zip', 'lodash.zip');
+    expectName('npm install @s/y.tgz', '@s/y.tgz');
+    expectName('npm install @s/y.tar.gz', '@s/y.tar.gz');
+    expectName('pnpm add x.tgz', 'x.tgz');
+    expectName('pnpm add @s/y.tar', '@s/y.tar');
+    expectName('yarn add x.tar', 'x.tar');
+    expectName('bun add x.zip', 'x.zip');
+    expectName('pip install x.egg', 'x.egg');
+    expectName('uv add x.tar.bz2', 'x.tar.bz2');
+    expectName('uv pip install x.tbz', 'x.tbz');
+    expectName('poetry add x.whl', 'x.whl');
+    expectName('npx x.zip', 'x.zip');
+    expectName('pnpm dlx x.tgz', 'x.tgz');
+    expectName('yarn dlx x.tgz', 'x.tgz');
+    expectName('bunx x.zip', 'x.zip');
+    expectName('uvx x.egg', 'x.egg');
+    expectName('uv tool install x.tar.xz', 'x.tar.xz');
+  });
+
+  it('T-02 the endings of pip and poetry that the old list lacked are files for them: skipped, not vetted', () => {
+    for (const ending of ['.tbz', '.txz', '.tlz', '.tar.lz', '.tar.lzma']) {
+      expectFile(`pip install thing${ending}`, `thing${ending}`);
+      expectFile(`poetry add thing${ending}`, `thing${ending}`);
+    }
+  });
+
+  const FILE_CASES: Array<[string, string[], boolean]> = [
+    ['npm install', NPM_FILES, false],
+    ['npx', NPM_FILES, false],
+    ['bun add', NPM_FILES, true],
+    ['bunx', NPM_FILES, true],
+    ['pip install', PIP_FILES, false],
+    ['uv add', UV_FILES, false],
+    ['uv pip install', UV_FILES, false],
+    ['uvx', UV_FILES, false],
+    ['uv tool install', UV_FILES, false],
+    ['poetry add', POETRY_FILES, false],
+  ];
+
+  it('T-03 an ending the manager reads as a file stays skipped as an archive file, with no package (the measured endings the old list already held)', () => {
+    for (const [prefix, endings, scoped] of FILE_CASES) {
+      for (const ending of endings.filter((e) => OLD_LIST.includes(e))) {
+        expectFile(`${prefix} thing${ending}`, `thing${ending}`);
+        if (scoped) expectFile(`${prefix} @s/thing${ending}`, `@s/thing${ending}`);
+      }
+    }
+  });
+
+  it('T-03 `npm i pkg.tgz` names a file: the manifest of the directory is not read', () => {
+    for (const command of ['npm i pkg.tgz', 'npm install pkg.tar.gz', 'npm install ./pkg.tgz', 'bun add pkg.tgz']) {
+      const cmds = parseInstallCommands(command);
+      expect(cmds.map((c) => c.manifest), command).toEqual([undefined]);
+    }
+  });
+
+  it('T-04 a manager that was not measured: the archive-like word is a package AND the command says why it is uncertain', () => {
+    const cases: Array<[string, string]> = [
+      ['pipx install x.zip', 'x.zip'],
+      ['pipx run x.whl', 'x.whl'],
+      ['composer require v/p.zip', 'v/p.zip'],
+      ['dotnet add package X.Y.zip', 'X.Y.zip'],
+    ];
+    for (const [command, name] of cases) {
+      const cmds = parseInstallCommands(command);
+      expect(cmds.map((c) => c.packages.map((p) => p.name)), command).toEqual([[name]]);
+      expect(cmds.map((c) => c.skipped), command).toEqual([[]]);
+      const why = cmds[0]?.uncertain ?? [];
+      expect(
+        why.some((r) => r.toLowerCase().includes('archive')),
+        `${command}: a reason in uncertain mentions the archive-like ending, got ${JSON.stringify(why)}`,
+      ).toBe(true);
+    }
+  });
+
+  it('T-04 without an archive-like ending the same commands are uncertain exactly as before', () => {
+    for (const command of ['pipx install thing', 'pipx run thing', 'composer require v/pkg', 'dotnet add package Some.Pkg']) {
+      expect(parseInstallCommands(command).map((c) => c.uncertain), command).toEqual([[]]);
+    }
+  });
+
+  /** A command's result as one line — a format for the table below, never an expectation computed at run time. */
+  function summarize(command: string): string {
+    return parseInstallCommands(command)
+      .map((c) => {
+        const parts = [`${c.manager}/${c.ecosystem}`];
+        if (c.packages.length > 0) parts.push(`P ${c.packages.map((p) => p.name + (p.range === undefined ? '' : `@${p.range}`)).join(' ')}`);
+        if (c.skipped.length > 0) parts.push(`S ${c.skipped.map((s) => `${s.raw} => ${s.reason}`).join(' ; ')}`);
+        if (c.uncertain.length > 0) parts.push(`U ${c.uncertain.join(' ; ')}`);
+        if (c.manifest !== undefined) parts.push(`M ${JSON.stringify(c.manifest)}`);
+        if (c.prefixed === true) parts.push('prefixed');
+        if (c.customRegistry !== undefined) parts.push(`R ${c.customRegistry}`);
+        return parts.join(' | ');
+      })
+      .join(' || ');
+  }
+
+  /**
+   * What `parseInstallCommands` gave for each of these commands at c4d7ebd4 (the tree before the fix), written out by
+   * hand from one run of it: words with no archive ending — names, versions, paths, URLs, git, protocols — and flag
+   * values (`-r reqs.zip`, `--prefix x.tar`) whose archive-like text is no package.
+   */
+  const BEFORE: ReadonlyArray<readonly [string, string]> = [
+    ["npm install left-pad", "npm/npm | P left-pad"],
+    ["npm install left-pad@1.3.0", "npm/npm | P left-pad@1.3.0"],
+    ["npm install @scope/pkg@^2", "npm/npm | P @scope/pkg@^2"],
+    ["npm install v/pkg", "npm/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["npm install ./x.tgz", "npm/npm | S ./x.tgz => local path — not looked up"],
+    ["npm install \"C:\\x.zip\"", "npm/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["npm install /abs/z.tar.gz", "npm/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["npm install https://h/x.zip", "npm/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["npm install git+https://h/r.git", "npm/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["npm install github:u/r", "npm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["npm install file:../x.tgz", "npm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["npm install workspace:*", "npm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["npm install foo@bar.tgz", "npm/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["npm install lodash.zip@4.2.0", "npm/npm | P lodash.zip@4.2.0"],
+    ["npm install thing.egg@1.0", "npm/npm | P thing.egg@1.0"],
+    ["npm install -r reqs.zip somepkg", "npm/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["npm install --prefix x.tar somepkg", "npm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; directory changed by --prefix | prefixed"],
+    ["npm install --registry https://r.example/x.zip somepkg", "npm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
+    ["npm install -c cons.whl somepkg", "npm/npm | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["npm install -e ./pkg.tgz somepkg", "npm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["pnpm add left-pad", "pnpm/npm | P left-pad"],
+    ["pnpm add left-pad@1.3.0", "pnpm/npm | P left-pad@1.3.0"],
+    ["pnpm add @scope/pkg@^2", "pnpm/npm | P @scope/pkg@^2"],
+    ["pnpm add v/pkg", "pnpm/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["pnpm add ./x.tgz", "pnpm/npm | S ./x.tgz => local path — not looked up"],
+    ["pnpm add \"C:\\x.zip\"", "pnpm/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["pnpm add /abs/z.tar.gz", "pnpm/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["pnpm add https://h/x.zip", "pnpm/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["pnpm add git+https://h/r.git", "pnpm/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["pnpm add github:u/r", "pnpm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["pnpm add file:../x.tgz", "pnpm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["pnpm add workspace:*", "pnpm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["pnpm add foo@bar.tgz", "pnpm/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["pnpm add lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0"],
+    ["pnpm add thing.egg@1.0", "pnpm/npm | P thing.egg@1.0"],
+    ["pnpm add -r reqs.zip somepkg", "pnpm/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist"],
+    ["pnpm add --prefix x.tar somepkg", "pnpm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["pnpm add --registry https://r.example/x.zip somepkg", "pnpm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
+    ["pnpm add -c cons.whl somepkg", "pnpm/npm | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["pnpm add -e ./pkg.tgz somepkg", "pnpm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["yarn add left-pad", "yarn/npm | P left-pad"],
+    ["yarn add left-pad@1.3.0", "yarn/npm | P left-pad@1.3.0"],
+    ["yarn add @scope/pkg@^2", "yarn/npm | P @scope/pkg@^2"],
+    ["yarn add v/pkg", "yarn/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["yarn add ./x.tgz", "yarn/npm | S ./x.tgz => local path — not looked up"],
+    ["yarn add \"C:\\x.zip\"", "yarn/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["yarn add /abs/z.tar.gz", "yarn/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["yarn add https://h/x.zip", "yarn/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["yarn add git+https://h/r.git", "yarn/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["yarn add github:u/r", "yarn/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["yarn add file:../x.tgz", "yarn/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["yarn add workspace:*", "yarn/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["yarn add foo@bar.tgz", "yarn/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["yarn add lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0"],
+    ["yarn add thing.egg@1.0", "yarn/npm | P thing.egg@1.0"],
+    ["yarn add -r reqs.zip somepkg", "yarn/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["yarn add --prefix x.tar somepkg", "yarn/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["yarn add --registry https://r.example/x.zip somepkg", "yarn/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
+    ["yarn add -c cons.whl somepkg", "yarn/npm | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["yarn add -e ./pkg.tgz somepkg", "yarn/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["bun add left-pad", "bun/npm | P left-pad"],
+    ["bun add left-pad@1.3.0", "bun/npm | P left-pad@1.3.0"],
+    ["bun add @scope/pkg@^2", "bun/npm | P @scope/pkg@^2"],
+    ["bun add v/pkg", "bun/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["bun add ./x.tgz", "bun/npm | S ./x.tgz => local path — not looked up"],
+    ["bun add \"C:\\x.zip\"", "bun/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["bun add /abs/z.tar.gz", "bun/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["bun add https://h/x.zip", "bun/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["bun add git+https://h/r.git", "bun/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["bun add github:u/r", "bun/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["bun add file:../x.tgz", "bun/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["bun add workspace:*", "bun/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["bun add foo@bar.tgz", "bun/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["bun add lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0"],
+    ["bun add thing.egg@1.0", "bun/npm | P thing.egg@1.0"],
+    ["bun add -r reqs.zip somepkg", "bun/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["bun add --prefix x.tar somepkg", "bun/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["bun add --registry https://r.example/x.zip somepkg", "bun/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
+    ["bun add -c cons.whl somepkg", "bun/npm | P somepkg | U flag -c is not on the confident-shape allowlist"],
+    ["bun add -e ./pkg.tgz somepkg", "bun/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["pip install left-pad", "pip/pypi | P left-pad"],
+    ["pip install left-pad@1.3.0", "pip/pypi | P left-pad@1.3.0"],
+    ["pip install @scope/pkg@^2", "pip/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["pip install v/pkg", "pip/pypi | S v/pkg => local path — not looked up"],
+    ["pip install ./x.tgz", "pip/pypi | S ./x.tgz => local path — not looked up"],
+    ["pip install \"C:\\x.zip\"", "pip/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["pip install /abs/z.tar.gz", "pip/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["pip install https://h/x.zip", "pip/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["pip install git+https://h/r.git", "pip/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["pip install github:u/r", "pip/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["pip install file:../x.tgz", "pip/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["pip install workspace:*", "pip/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["pip install foo@bar.tgz", "pip/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["pip install lodash.zip@4.2.0", "pip/pypi | P lodash.zip@4.2.0"],
+    ["pip install thing.egg@1.0", "pip/pypi | P thing.egg@1.0"],
+    ["pip install -r reqs.zip somepkg", "pip/pypi | P somepkg | S reqs.zip => requirements file (-r) — read as a manifest, not as a package name | U flag -r is not on the confident-shape allowlist | M {\"kind\":\"requirements\",\"files\":[\"reqs.zip\"]}"],
+    ["pip install --prefix x.tar somepkg", "pip/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist"],
+    ["pip install --registry https://r.example/x.zip somepkg", "pip/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["pip install -c cons.whl somepkg", "pip/pypi | P somepkg | S cons.whl => constraints file (-c) — not vetted | U flag -c is not on the confident-shape allowlist"],
+    ["pip install -e ./pkg.tgz somepkg", "pip/pypi | P somepkg | S ./pkg.tgz => editable install (-e) — local or VCS source, not looked up | U flag -e is not on the confident-shape allowlist"],
+    ["uv add left-pad", "uv/pypi | P left-pad"],
+    ["uv add left-pad@1.3.0", "uv/pypi | P left-pad@1.3.0"],
+    ["uv add @scope/pkg@^2", "uv/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["uv add v/pkg", "uv/pypi | S v/pkg => local path — not looked up"],
+    ["uv add ./x.tgz", "uv/pypi | S ./x.tgz => local path — not looked up"],
+    ["uv add \"C:\\x.zip\"", "uv/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["uv add /abs/z.tar.gz", "uv/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["uv add https://h/x.zip", "uv/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["uv add git+https://h/r.git", "uv/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["uv add github:u/r", "uv/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["uv add file:../x.tgz", "uv/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["uv add workspace:*", "uv/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["uv add foo@bar.tgz", "uv/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["uv add lodash.zip@4.2.0", "uv/pypi | P lodash.zip@4.2.0"],
+    ["uv add thing.egg@1.0", "uv/pypi | P thing.egg@1.0"],
+    ["uv add -r reqs.zip somepkg", "uv/pypi | P somepkg | S reqs.zip => requirements file (-r) — its contents are not vetted | U flag -r is not on the confident-shape allowlist"],
+    ["uv add --prefix x.tar somepkg", "uv/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["uv add --registry https://r.example/x.zip somepkg", "uv/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["uv add -c cons.whl somepkg", "uv/pypi | P somepkg | U flag -c is not on the confident-shape allowlist"],
+    ["uv add -e ./pkg.tgz somepkg", "uv/pypi | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["uv pip install left-pad", "uv-pip/pypi | P left-pad"],
+    ["uv pip install left-pad@1.3.0", "uv-pip/pypi | P left-pad@1.3.0"],
+    ["uv pip install @scope/pkg@^2", "uv-pip/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["uv pip install v/pkg", "uv-pip/pypi | S v/pkg => local path — not looked up"],
+    ["uv pip install ./x.tgz", "uv-pip/pypi | S ./x.tgz => local path — not looked up"],
+    ["uv pip install \"C:\\x.zip\"", "uv-pip/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["uv pip install /abs/z.tar.gz", "uv-pip/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["uv pip install https://h/x.zip", "uv-pip/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["uv pip install git+https://h/r.git", "uv-pip/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["uv pip install github:u/r", "uv-pip/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["uv pip install file:../x.tgz", "uv-pip/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["uv pip install workspace:*", "uv-pip/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["uv pip install foo@bar.tgz", "uv-pip/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["uv pip install lodash.zip@4.2.0", "uv-pip/pypi | P lodash.zip@4.2.0"],
+    ["uv pip install thing.egg@1.0", "uv-pip/pypi | P thing.egg@1.0"],
+    ["uv pip install -r reqs.zip somepkg", "uv-pip/pypi | P somepkg | S reqs.zip => requirements file (-r) — read as a manifest, not as a package name | U flag -r is not on the confident-shape allowlist | M {\"kind\":\"requirements\",\"files\":[\"reqs.zip\"]}"],
+    ["uv pip install --prefix x.tar somepkg", "uv-pip/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist"],
+    ["uv pip install --registry https://r.example/x.zip somepkg", "uv-pip/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["uv pip install -c cons.whl somepkg", "uv-pip/pypi | P somepkg | S cons.whl => constraints file (-c) — not vetted | U flag -c is not on the confident-shape allowlist"],
+    ["uv pip install -e ./pkg.tgz somepkg", "uv-pip/pypi | P somepkg | S ./pkg.tgz => editable install (-e) — local or VCS source, not looked up | U flag -e is not on the confident-shape allowlist"],
+    ["poetry add left-pad", "poetry/pypi | P left-pad"],
+    ["poetry add left-pad@1.3.0", "poetry/pypi | P left-pad@1.3.0"],
+    ["poetry add @scope/pkg@^2", "poetry/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["poetry add v/pkg", "poetry/pypi | S v/pkg => local path — not looked up"],
+    ["poetry add ./x.tgz", "poetry/pypi | S ./x.tgz => local path — not looked up"],
+    ["poetry add \"C:\\x.zip\"", "poetry/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["poetry add /abs/z.tar.gz", "poetry/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["poetry add https://h/x.zip", "poetry/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["poetry add git+https://h/r.git", "poetry/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["poetry add github:u/r", "poetry/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["poetry add file:../x.tgz", "poetry/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["poetry add workspace:*", "poetry/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["poetry add foo@bar.tgz", "poetry/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["poetry add lodash.zip@4.2.0", "poetry/pypi | P lodash.zip@4.2.0"],
+    ["poetry add thing.egg@1.0", "poetry/pypi | P thing.egg@1.0"],
+    ["poetry add -r reqs.zip somepkg", "poetry/pypi | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["poetry add --prefix x.tar somepkg", "poetry/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["poetry add --registry https://r.example/x.zip somepkg", "poetry/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["poetry add -c cons.whl somepkg", "poetry/pypi | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["poetry add -e ./pkg.tgz somepkg", "poetry/pypi | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist"],
+    ["npx left-pad", "npx/npm | P left-pad"],
+    ["npx left-pad@1.3.0", "npx/npm | P left-pad@1.3.0"],
+    ["npx @scope/pkg@^2", "npx/npm | P @scope/pkg@^2"],
+    ["npx v/pkg", "npx/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["npx ./x.tgz", "npx/npm | S ./x.tgz => local path — not looked up"],
+    ["npx \"C:\\x.zip\"", "npx/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["npx /abs/z.tar.gz", "npx/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["npx https://h/x.zip", "npx/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["npx git+https://h/r.git", "npx/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["npx github:u/r", "npx/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["npx file:../x.tgz", "npx/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["npx workspace:*", "npx/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["npx foo@bar.tgz", "npx/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["npx lodash.zip@4.2.0", "npx/npm | P lodash.zip@4.2.0"],
+    ["npx thing.egg@1.0", "npx/npm | P thing.egg@1.0"],
+    ["npx -r reqs.zip somepkg", "npx/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["npx --prefix x.tar somepkg", "npx/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist | prefixed"],
+    ["npx --registry https://r.example/x.zip somepkg", "npx/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
+    ["npx -c cons.whl somepkg", "npx/npm | U flag -c is not on the confident-shape allowlist"],
+    ["npx -e ./pkg.tgz somepkg", "npx/npm | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["pnpm dlx left-pad", "pnpm/npm | P left-pad"],
+    ["pnpm dlx left-pad@1.3.0", "pnpm/npm | P left-pad@1.3.0"],
+    ["pnpm dlx @scope/pkg@^2", "pnpm/npm | P @scope/pkg@^2"],
+    ["pnpm dlx v/pkg", "pnpm/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["pnpm dlx ./x.tgz", "pnpm/npm | S ./x.tgz => local path — not looked up"],
+    ["pnpm dlx \"C:\\x.zip\"", "pnpm/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["pnpm dlx /abs/z.tar.gz", "pnpm/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["pnpm dlx https://h/x.zip", "pnpm/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["pnpm dlx git+https://h/r.git", "pnpm/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["pnpm dlx github:u/r", "pnpm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["pnpm dlx file:../x.tgz", "pnpm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["pnpm dlx workspace:*", "pnpm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["pnpm dlx foo@bar.tgz", "pnpm/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["pnpm dlx lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0"],
+    ["pnpm dlx thing.egg@1.0", "pnpm/npm | P thing.egg@1.0"],
+    ["pnpm dlx -r reqs.zip somepkg", "pnpm/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["pnpm dlx --prefix x.tar somepkg", "pnpm/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["pnpm dlx --registry https://r.example/x.zip somepkg", "pnpm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
+    ["pnpm dlx -c cons.whl somepkg", "pnpm/npm | U flag -c is not on the confident-shape allowlist"],
+    ["pnpm dlx -e ./pkg.tgz somepkg", "pnpm/npm | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["yarn dlx left-pad", "yarn/npm | P left-pad"],
+    ["yarn dlx left-pad@1.3.0", "yarn/npm | P left-pad@1.3.0"],
+    ["yarn dlx @scope/pkg@^2", "yarn/npm | P @scope/pkg@^2"],
+    ["yarn dlx v/pkg", "yarn/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["yarn dlx ./x.tgz", "yarn/npm | S ./x.tgz => local path — not looked up"],
+    ["yarn dlx \"C:\\x.zip\"", "yarn/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["yarn dlx /abs/z.tar.gz", "yarn/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["yarn dlx https://h/x.zip", "yarn/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["yarn dlx git+https://h/r.git", "yarn/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["yarn dlx github:u/r", "yarn/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["yarn dlx file:../x.tgz", "yarn/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["yarn dlx workspace:*", "yarn/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["yarn dlx foo@bar.tgz", "yarn/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["yarn dlx lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0"],
+    ["yarn dlx thing.egg@1.0", "yarn/npm | P thing.egg@1.0"],
+    ["yarn dlx -r reqs.zip somepkg", "yarn/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["yarn dlx --prefix x.tar somepkg", "yarn/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["yarn dlx --registry https://r.example/x.zip somepkg", "yarn/npm | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["yarn dlx -c cons.whl somepkg", "yarn/npm | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["yarn dlx -e ./pkg.tgz somepkg", "yarn/npm | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["bunx left-pad", "bun/npm | P left-pad"],
+    ["bunx left-pad@1.3.0", "bun/npm | P left-pad@1.3.0"],
+    ["bunx @scope/pkg@^2", "bun/npm | P @scope/pkg@^2"],
+    ["bunx v/pkg", "bun/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
+    ["bunx ./x.tgz", "bun/npm | S ./x.tgz => local path — not looked up"],
+    ["bunx \"C:\\x.zip\"", "bun/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["bunx /abs/z.tar.gz", "bun/npm | S /abs/z.tar.gz => local path — not looked up"],
+    ["bunx https://h/x.zip", "bun/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["bunx git+https://h/r.git", "bun/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["bunx github:u/r", "bun/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["bunx file:../x.tgz", "bun/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["bunx workspace:*", "bun/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["bunx foo@bar.tgz", "bun/npm | S foo@bar.tgz => archive file — not looked up"],
+    ["bunx lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0"],
+    ["bunx thing.egg@1.0", "bun/npm | P thing.egg@1.0"],
+    ["bunx -r reqs.zip somepkg", "bun/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["bunx --prefix x.tar somepkg", "bun/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["bunx --registry https://r.example/x.zip somepkg", "bun/npm | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["bunx -c cons.whl somepkg", "bun/npm | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["bunx -e ./pkg.tgz somepkg", "bun/npm | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["uvx left-pad", "uv/pypi | P left-pad"],
+    ["uvx left-pad@1.3.0", "uv/pypi | P left-pad@1.3.0"],
+    ["uvx @scope/pkg@^2", "uv/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["uvx v/pkg", "uv/pypi | S v/pkg => local path — not looked up"],
+    ["uvx ./x.tgz", "uv/pypi | S ./x.tgz => local path — not looked up"],
+    ["uvx \"C:\\x.zip\"", "uv/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["uvx /abs/z.tar.gz", "uv/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["uvx https://h/x.zip", "uv/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["uvx git+https://h/r.git", "uv/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["uvx github:u/r", "uv/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["uvx file:../x.tgz", "uv/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["uvx workspace:*", "uv/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["uvx foo@bar.tgz", "uv/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["uvx lodash.zip@4.2.0", "uv/pypi | P lodash.zip@4.2.0"],
+    ["uvx thing.egg@1.0", "uv/pypi | P thing.egg@1.0"],
+    ["uvx -r reqs.zip somepkg", "uv/pypi | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["uvx --prefix x.tar somepkg", "uv/pypi | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["uvx --registry https://r.example/x.zip somepkg", "uv/pypi | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["uvx -c cons.whl somepkg", "uv/pypi | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["uvx -e ./pkg.tgz somepkg", "uv/pypi | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["uv tool install left-pad", "uv/pypi | P left-pad"],
+    ["uv tool install left-pad@1.3.0", "uv/pypi | P left-pad@1.3.0"],
+    ["uv tool install @scope/pkg@^2", "uv/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["uv tool install v/pkg", "uv/pypi | S v/pkg => local path — not looked up"],
+    ["uv tool install ./x.tgz", "uv/pypi | S ./x.tgz => local path — not looked up"],
+    ["uv tool install \"C:\\x.zip\"", "uv/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["uv tool install /abs/z.tar.gz", "uv/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["uv tool install https://h/x.zip", "uv/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["uv tool install git+https://h/r.git", "uv/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["uv tool install github:u/r", "uv/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["uv tool install file:../x.tgz", "uv/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["uv tool install workspace:*", "uv/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["uv tool install foo@bar.tgz", "uv/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["uv tool install lodash.zip@4.2.0", "uv/pypi | P lodash.zip@4.2.0"],
+    ["uv tool install thing.egg@1.0", "uv/pypi | P thing.egg@1.0"],
+    ["uv tool install -r reqs.zip somepkg", "uv/pypi | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["uv tool install --prefix x.tar somepkg", "uv/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["uv tool install --registry https://r.example/x.zip somepkg", "uv/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["uv tool install -c cons.whl somepkg", "uv/pypi | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["uv tool install -e ./pkg.tgz somepkg", "uv/pypi | P somepkg | S ./pkg.tgz => editable install (-e) — local or VCS source, not looked up | U flag -e is not on the confident-shape allowlist"],
+    ["pipx install left-pad", "pipx/pypi | P left-pad"],
+    ["pipx install left-pad@1.3.0", "pipx/pypi | P left-pad@1.3.0"],
+    ["pipx install @scope/pkg@^2", "pipx/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["pipx install v/pkg", "pipx/pypi | S v/pkg => local path — not looked up"],
+    ["pipx install ./x.tgz", "pipx/pypi | S ./x.tgz => local path — not looked up"],
+    ["pipx install \"C:\\x.zip\"", "pipx/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["pipx install /abs/z.tar.gz", "pipx/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["pipx install https://h/x.zip", "pipx/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["pipx install git+https://h/r.git", "pipx/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["pipx install github:u/r", "pipx/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["pipx install file:../x.tgz", "pipx/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["pipx install workspace:*", "pipx/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["pipx install foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["pipx install lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
+    ["pipx install thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
+    ["pipx install -r reqs.zip somepkg", "pipx/pypi | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["pipx install --prefix x.tar somepkg", "pipx/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["pipx install --registry https://r.example/x.zip somepkg", "pipx/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["pipx install -c cons.whl somepkg", "pipx/pypi | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["pipx install -e ./pkg.tgz somepkg", "pipx/pypi | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist"],
+    ["pipx run left-pad", "pipx/pypi | P left-pad"],
+    ["pipx run left-pad@1.3.0", "pipx/pypi | P left-pad@1.3.0"],
+    ["pipx run @scope/pkg@^2", "pipx/pypi | S @scope/pkg@^2 => local path — not looked up"],
+    ["pipx run v/pkg", "pipx/pypi | S v/pkg => local path — not looked up"],
+    ["pipx run ./x.tgz", "pipx/pypi | S ./x.tgz => local path — not looked up"],
+    ["pipx run \"C:\\x.zip\"", "pipx/pypi | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["pipx run /abs/z.tar.gz", "pipx/pypi | S /abs/z.tar.gz => local path — not looked up"],
+    ["pipx run https://h/x.zip", "pipx/pypi | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["pipx run git+https://h/r.git", "pipx/pypi | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["pipx run github:u/r", "pipx/pypi | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["pipx run file:../x.tgz", "pipx/pypi | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["pipx run workspace:*", "pipx/pypi | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["pipx run foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
+    ["pipx run lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
+    ["pipx run thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
+    ["pipx run -r reqs.zip somepkg", "pipx/pypi | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["pipx run --prefix x.tar somepkg", "pipx/pypi | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["pipx run --registry https://r.example/x.zip somepkg", "pipx/pypi | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["pipx run -c cons.whl somepkg", "pipx/pypi | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["pipx run -e ./pkg.tgz somepkg", "pipx/pypi | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["composer require left-pad", "composer/packagist | S left-pad => platform package or not a vendor/name — not looked up"],
+    ["composer require left-pad@1.3.0", "composer/packagist | S left-pad@1.3.0 => platform package or not a vendor/name — not looked up"],
+    ["composer require @scope/pkg@^2", "composer/packagist | S @scope/pkg@^2 => not a valid packagist package name"],
+    ["composer require v/pkg", "composer/packagist | P v/pkg"],
+    ["composer require ./x.tgz", "composer/packagist | S ./x.tgz => local path — not looked up"],
+    ["composer require \"C:\\x.zip\"", "composer/packagist | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["composer require /abs/z.tar.gz", "composer/packagist | S /abs/z.tar.gz => local path — not looked up"],
+    ["composer require https://h/x.zip", "composer/packagist | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["composer require git+https://h/r.git", "composer/packagist | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["composer require github:u/r", "composer/packagist | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["composer require file:../x.tgz", "composer/packagist | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["composer require workspace:*", "composer/packagist | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["composer require foo@bar.tgz", "composer/packagist | S foo@bar.tgz => archive file — not looked up"],
+    ["composer require lodash.zip@4.2.0", "composer/packagist | S lodash.zip@4.2.0 => platform package or not a vendor/name — not looked up"],
+    ["composer require thing.egg@1.0", "composer/packagist | S thing.egg@1.0 => platform package or not a vendor/name — not looked up"],
+    ["composer require -r reqs.zip somepkg", "composer/packagist | S reqs.zip => archive file — not looked up ; somepkg => platform package or not a vendor/name — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["composer require --prefix x.tar somepkg", "composer/packagist | S somepkg => platform package or not a vendor/name — not looked up | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["composer require --registry https://r.example/x.zip somepkg", "composer/packagist | S somepkg => platform package or not a vendor/name — not looked up | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["composer require -c cons.whl somepkg", "composer/packagist | S cons.whl => archive file — not looked up ; somepkg => platform package or not a vendor/name — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["composer require -e ./pkg.tgz somepkg", "composer/packagist | S ./pkg.tgz => local path — not looked up ; somepkg => platform package or not a vendor/name — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["dotnet add package left-pad", "dotnet/nuget | P left-pad"],
+    ["dotnet add package left-pad@1.3.0", "dotnet/nuget | P left-pad@1.3.0"],
+    ["dotnet add package @scope/pkg@^2", "dotnet/nuget | S @scope/pkg@^2 => not a valid nuget package name"],
+    ["dotnet add package v/pkg", "dotnet/nuget | S v/pkg => not a valid nuget package name"],
+    ["dotnet add package ./x.tgz", "dotnet/nuget | S ./x.tgz => local path — not looked up"],
+    ["dotnet add package \"C:\\x.zip\"", "dotnet/nuget | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
+    ["dotnet add package /abs/z.tar.gz", "dotnet/nuget | S /abs/z.tar.gz => local path — not looked up"],
+    ["dotnet add package https://h/x.zip", "dotnet/nuget | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
+    ["dotnet add package git+https://h/r.git", "dotnet/nuget | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
+    ["dotnet add package github:u/r", "dotnet/nuget | S github:u/r => URL / VCS / protocol spec — not looked up"],
+    ["dotnet add package file:../x.tgz", "dotnet/nuget | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
+    ["dotnet add package workspace:*", "dotnet/nuget | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
+    ["dotnet add package foo@bar.tgz", "dotnet/nuget | S foo@bar.tgz => archive file — not looked up"],
+    ["dotnet add package lodash.zip@4.2.0", "dotnet/nuget | P lodash.zip@4.2.0"],
+    ["dotnet add package thing.egg@1.0", "dotnet/nuget | P thing.egg@1.0"],
+    ["dotnet add package -r reqs.zip somepkg", "dotnet/nuget | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
+    ["dotnet add package --prefix x.tar somepkg", "dotnet/nuget | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
+    ["dotnet add package --registry https://r.example/x.zip somepkg", "dotnet/nuget | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
+    ["dotnet add package -c cons.whl somepkg", "dotnet/nuget | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
+    ["dotnet add package -e ./pkg.tgz somepkg", "dotnet/nuget | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+  ];
+
+  it('T-05 every word with no archive ending, and every flag value, reads exactly as it did before', () => {
+    const differing = BEFORE.filter(([command, expected]) => summarize(command) !== expected).map(([command, expected]) => ({
+      command,
+      expected,
+      got: summarize(command),
+    }));
+    expect(differing).toEqual([]);
+    expect(BEFORE.length).toBeGreaterThanOrEqual(300);
+  });
+});

@@ -264,3 +264,42 @@ describe('pkgvet-registry-credentials-said', () => {
     expect(text).toContain('https://npm.company.example');
   });
 });
+
+// ───────────────── pkgvet-archive-like-name — a spec is a name unless it is a path, a URL or a git spec
+
+describe('pkgvet-archive-like-name', () => {
+  const doc = (v: string): Answer => ({ status: 200, body: { 'dist-tags': { latest: v }, modified: OLD, versions: { [v]: {} } } });
+
+  it('T-08 a name that ends like an archive gets a verdict, as any name does; nothing of it is skipped', async () => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    const calls = stubNetwork({
+      'https://registry.npmjs.org/lodash.zip': doc('4.2.0'),
+      'https://registry.npmjs.org/x.tgz': { status: 404 },
+      'https://pypi.org/pypi/thing.egg/json': {
+        status: 200,
+        body: { info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: OLD }] } },
+      },
+      'https://api.osv.dev/v1/querybatch': OSV_CLEAN,
+    });
+    const npm = expectOk(await run({ ecosystem: 'npm', packages: ['lodash.zip', 'x.tgz'] }));
+    expect(npm.skipped).toEqual([]);
+    expect(npm.packages.map((p) => [p.name, p.verdict])).toEqual([
+      ['lodash.zip', expect.any(String)],
+      ['x.tgz', 'block'],
+    ]);
+    const pypi = expectOk(await run({ ecosystem: 'pypi', packages: ['thing.egg'] }));
+    expect(pypi.skipped).toEqual([]);
+    expect(pypi.packages.map((p) => p.name)).toEqual(['thing.egg']);
+    expect(calls).toContain('https://registry.npmjs.org/lodash.zip');
+    expect(calls).toContain('https://pypi.org/pypi/thing.egg/json');
+  });
+
+  it('T-08 a path and a URL that end like an archive stay skipped, with their reasons', async () => {
+    const r = expectOk(await run({ ecosystem: 'npm', packages: ['./x.tgz', 'https://h/x.zip'] }));
+    expect(r.packages).toEqual([]);
+    expect(r.skipped).toEqual([
+      { raw: './x.tgz', reason: expect.stringMatching(/local path/) },
+      { raw: 'https://h/x.zip', reason: expect.stringMatching(/URL/) },
+    ]);
+  });
+});

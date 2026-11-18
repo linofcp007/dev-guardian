@@ -717,3 +717,63 @@ describe('pkgvet-public-registry-url-parse', () => {
     });
   });
 });
+
+// ───────────────── pkgvet-archive-like-name — the docs say which endings each manager reads as a file
+
+describe('pkgvet-archive-like-name', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item, a table row and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  const NPM_FILES = ['.tgz', '.tar.gz', '.tar'];
+  const PIP_FILES = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma'];
+  const UV_FILES = ['.zip', '.whl', '.tgz', '.tar.gz', '.tar'];
+
+  it('T-09 docs/hooks.md names the endings each manager reads as a file, and no longer says without a qualification that tarballs are never looked up', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const lines = sentences(hooks.slice(at, end === -1 ? undefined : end));
+    const code = (endings: readonly string[]): ((s: string) => boolean) => (s) => endings.every((e) => s.includes(`\`${e}\``));
+    const says = (manager: RegExp, check: (s: string) => boolean): boolean =>
+      lines.some((s) => manager.test(s) && /\bfiles?\b/i.test(s) && check(s));
+
+    const found = {
+      'npm: .tgz .tar.gz .tar': says(/\bnpm\b/, code(NPM_FILES)),
+      'bun: .tgz .tar.gz .tar': says(/\bbun\b/, code(NPM_FILES)),
+      'pip: the twelve': says(/\bpip\b/, code(PIP_FILES)),
+      'uv: the five': says(/\buv\b/, code(UV_FILES)),
+      'poetry: pip\'s list without .whl': says(/\bpoetry\b/, (s) => s.includes('`.whl`') && /\bwithout\b|\bexcept\b|\bnot\b/i.test(s)),
+      'pnpm and Yarn: none': lines.some((s) => /\bpnpm\b/.test(s) && /\bYarn\b/.test(s) && /\bnone\b|\bno ending\b/i.test(s)),
+      'no unqualified "tarballs are never looked up"': !lines.some(
+        (s) => /\btarballs?\b/i.test(s) && /never looked up/i.test(s) && !/\b(?:reads?|reading)\b/i.test(s),
+      ),
+    };
+    expect(found).toEqual({
+      'npm: .tgz .tar.gz .tar': true,
+      'bun: .tgz .tar.gz .tar': true,
+      'pip: the twelve': true,
+      'uv: the five': true,
+      'poetry: pip\'s list without .whl': true,
+      'pnpm and Yarn: none': true,
+      'no unqualified "tarballs are never looked up"': true,
+    });
+  });
+
+  it('T-09 a record of the known limits says what stays (the managers that were not measured, the .tgz value of a manifest under Yarn 1) and has an example; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'archive-like-names');
+    expect(limit, 'a record with the id archive-like-names in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    expect(limit.examples.length, 'at least one example a test runs').toBeGreaterThanOrEqual(1);
+    for (const said of ['pipx', 'composer', 'dotnet', 'Yarn 1']) {
+      expect({ said, found: limit.doc.includes(said) }).toEqual({ said, found: true });
+    }
+    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
+  });
+});
