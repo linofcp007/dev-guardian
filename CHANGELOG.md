@@ -23,6 +23,14 @@ version bump.
 - **An incomplete OSV answer is no longer read as "no advisories".** When an answer lacks a result for a query or is
   cut short, `vet_packages` and the install hook's by-name vetting say the package was not verified, and
   `scan_skill` says its dependencies were not all checked — still showing the advisories it did receive.
+- **A slow registry document no longer leaves a whole manifest unvetted.** The package vetting asked OSV only after
+  every registry document had arrived, so a few large documents could spend the install hook's 3 s — and the hook
+  then said that none of the manifest's packages had been vetted. OSV is now asked at half the budget, with the
+  version of the packages already resolved and by name for the rest, and only the packages whose document did not
+  arrive are counted as not verified. A package that arrives late and has malicious-package advisories on some of its
+  versions is asked about again with its version; with no time left for that, the hook warns that the version was
+  not determined instead of passing or denying it. With more than 100 packages, an OSV batch that fails leaves only
+  its own packages unverified.
 
 ## [3.11.0] - 2026-11-16
 
