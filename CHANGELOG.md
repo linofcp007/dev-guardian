@@ -10,16 +10,30 @@ version bump.
 
 ### Security
 
-- **The install hook and `vet_packages` no longer repeat the credentials of a registry URL.** Since 3.0.0, when a 
-  package name was missing from the public registry and a private registry was configured, the warning explained it 
-  with the configured URL as written — user name, password, a token in the path or the query included. The text 
-  reached the model's context and the session transcript (the hook), and the `vet_packages` response. It happened 
-  for a registry set in an `.npmrc`, `pip.conf` / `pip.ini`, `pyproject.toml`, `uv.toml`, `nuget.config`, an 
-  environment variable, a requirements file or the command line. The warning now names the registry by its scheme 
-  and host (`https://npm.company.example`) and the file or variable that configures it, and nothing else of the 
-  value. If a warning of this kind appeared in a session while a registry URL carried credentials, treat them as 
-  exposed: change or rotate them, and delete or protect that session's transcript. Credentials are better kept out 
+- **The install hook and `vet_packages` no longer repeat the credentials of a registry URL.** Since 3.0.0, when a
+  package name was missing from the public registry and a private registry was configured, the warning explained it
+  with the configured URL as written — user name, password, a token in the path or the query included. The text
+  reached the model's context and the session transcript (the hook), and the `vet_packages` response. It happened
+  for a registry set in an `.npmrc`, `pip.conf` / `pip.ini`, `pyproject.toml`, `uv.toml`, `nuget.config`, an
+  environment variable, a requirements file or the command line. The warning now names the registry by its scheme
+  and host (`https://npm.company.example`) and the file or variable that configures it, and nothing else of the
+  value. If a warning of this kind appeared in a session while a registry URL carried credentials, treat them as
+  exposed: change or rotate them, and delete or protect that session's transcript. Credentials are better kept out
   of the URL (an `.npmrc` `_authToken`, a pip keyring, a NuGet credential provider).
+
+### Fixed
+
+- **A registry URL that starts like the public one but names another host is no longer read as the public
+  registry.** The check looked only at the first characters of the URL, so
+  `https://registry.npmjs.org:x@evil.example/` — whose host is `evil.example`, with `registry.npmjs.org` and `x` as
+  user name and password — counted as npmjs, and the same went for the PyPI, Packagist and NuGet hosts. The URL is
+  now read by its host: only the public host, with no credentials and no port but the scheme's own, is the public
+  registry, and a backslash, a space or a control character in the text makes it another registry. What you may
+  notice, for a registry set that way in an `.npmrc`, `pip.conf`, `pyproject.toml`, `nuget.config` or an
+  environment variable: the line about a scope with a registry of its own is now said, and the packages of that
+  scope are no longer looked up on the public registry or at OSV; and a name missing under such a default registry
+  now warns instead of being denied. The `http://` and `//` forms of the public host still count as the public
+  registry.
 
 ## [3.12.0] - 2026-11-18
 

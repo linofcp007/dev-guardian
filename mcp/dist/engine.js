@@ -116645,7 +116645,14 @@ function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
 function isPublic(ecosystem, url2) {
-  return PUBLIC_HOSTS[ecosystem].test(url2.trim().replace(/^["']|["']$/g, ""));
+  const text3 = url2.trim().replace(/^["']|["']$/g, "");
+  if (UNSAFE_TEXT.test(text3)) return false;
+  const m = URL_SHAPE.exec(text3);
+  if (m === null) return false;
+  const scheme = (m[1] ?? "").toLowerCase();
+  const port = m[3];
+  if (port !== void 0 && port !== (scheme === "http" ? "80" : "443")) return false;
+  return PUBLIC_HOSTS[ecosystem].includes((m[2] ?? "").toLowerCase());
 }
 function isPublicRegistryUrl(ecosystem, url2) {
   return isPublic(ecosystem, url2);
@@ -117204,18 +117211,20 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
   if (unchecked !== void 0) return { kind: "unchecked", source: unchecked.root, cut: unchecked.cut };
   return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
-var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, NUGET_VERSION;
+var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, UNSAFE_TEXT, URL_SHAPE, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, NUGET_VERSION;
 var init_privateRegistry = __esm({
   "src/pkgvet/privateRegistry.ts"() {
     "use strict";
     init_configFile();
     MAX_WORKSPACE_DIRS2 = 3e3;
     PUBLIC_HOSTS = {
-      npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
-      pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
-      packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
-      nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i
+      npm: ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com"],
+      pypi: ["pypi.org", "pypi.python.org", "files.pythonhosted.org"],
+      packagist: ["packagist.org", "repo.packagist.org"],
+      nuget: ["api.nuget.org", "www.nuget.org", "nuget.org"]
     };
+    UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
+    URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d+))?(?:[/?#]|$)/i;
     MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
     NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
     ENV_REGISTRY = {

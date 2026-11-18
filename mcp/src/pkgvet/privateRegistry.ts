@@ -157,15 +157,40 @@ export const MAX_WORKSPACE_DIRS = 3000;
 /** What an unread path was: a registry configuration file, a workspace manifest, or a directory that could not be listed. */
 type UnreadKind = 'configuration' | 'workspace manifest' | 'directory';
 
-const PUBLIC_HOSTS: Record<PkgEcosystem, RegExp> = {
-  npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
-  pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
-  packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
-  nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i,
+/** The public registry's host names, per ecosystem: exactly these, lower case. */
+const PUBLIC_HOSTS: Record<PkgEcosystem, readonly string[]> = {
+  npm: ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'],
+  pypi: ['pypi.org', 'pypi.python.org', 'files.pythonhosted.org'],
+  packagist: ['packagist.org', 'repo.packagist.org'],
+  nuget: ['api.nuget.org', 'www.nuget.org', 'nuget.org'],
 };
 
+/** Backslash, white space and control characters: a URL parser may read these differently from the package manager. */
+const UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
+
+/**
+ * The scheme (`http`, `https` or `''` for `//host`), host and port of a value of the form
+ * `[http: | https:]//host[:port][/…]`. The authority is the text up to the first `/`, `?` or `#`: a host and a
+ * digits-only port, so credentials (an `@`) never match.
+ */
+const URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d+))?(?:[/?#]|$)/i;
+
+/**
+ * Whether `url` is the ecosystem's public registry, decided on the host the package manager would contact, read
+ * from the TEXT (a hand-written reading, not `new URL`: the parser silently drops tabs and line breaks and turns
+ * a backslash into a slash, which is how `https://pypi.org\@evil.example/` would pass). Only the host, in lower case,
+ * and the scheme's own port — 443 for `https:` and `//host`, 80 for `http:` — are accepted; `http:` still counts
+ * (the reasons are in the bug's notes); credentials, another port and any other host do not.
+ */
 function isPublic(ecosystem: PkgEcosystem, url: string): boolean {
-  return PUBLIC_HOSTS[ecosystem].test(url.trim().replace(/^["']|["']$/g, ''));
+  const text = url.trim().replace(/^["']|["']$/g, '');
+  if (UNSAFE_TEXT.test(text)) return false;
+  const m = URL_SHAPE.exec(text);
+  if (m === null) return false;
+  const scheme = (m[1] ?? '').toLowerCase();
+  const port = m[3];
+  if (port !== undefined && port !== (scheme === 'http' ? '80' : '443')) return false;
+  return PUBLIC_HOSTS[ecosystem].includes((m[2] ?? '').toLowerCase());
 }
 
 /** True when `url` is the ecosystem's own public registry (so naming it changes nothing). */
@@ -654,8 +679,8 @@ export function npmScopeRegistryOf(ctx: RegistryContext = {}): (name: string) =>
  * origin and path with a trailing slash, no credentials, query or fragment;
  * `undefined` for anything else (a variable left unexpanded, `(configured)`)
  * and for the public registry. "Public" is decided on the PARSED host, not by
- * {@link isPublic}'s prefix test, which reads `https://registry.npmjs.org:x@evil.example/`
- * as npmjs: exact host, https, no credentials, the default port.
+ * {@link isPublic}: exact host, no credentials, the default port — and, stricter than it, https only
+ * (for the lockfile comparison, `http://registry.npmjs.org/` is another origin).
  */
 function userRegistryUrl(raw: string): string | undefined {
   let u: URL;
@@ -665,7 +690,7 @@ function userRegistryUrl(raw: string): string | undefined {
     return undefined;
   }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return undefined;
-  const publicHost = ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'].includes(u.hostname);
+  const publicHost = PUBLIC_HOSTS.npm.includes(u.hostname);
   if (publicHost && u.protocol === 'https:' && u.username === '' && u.password === '' && u.port === '') return undefined;
   const path = u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`;
   return `${u.origin}${path}`;

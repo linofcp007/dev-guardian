@@ -4547,13 +4547,22 @@ function registryCache() {
 }
 var MAX_WORKSPACE_DIRS = 3e3;
 var PUBLIC_HOSTS2 = {
-  npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
-  pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
-  packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
-  nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i
+  npm: ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com"],
+  pypi: ["pypi.org", "pypi.python.org", "files.pythonhosted.org"],
+  packagist: ["packagist.org", "repo.packagist.org"],
+  nuget: ["api.nuget.org", "www.nuget.org", "nuget.org"]
 };
+var UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
+var URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d+))?(?:[/?#]|$)/i;
 function isPublic(ecosystem, url) {
-  return PUBLIC_HOSTS2[ecosystem].test(url.trim().replace(/^["']|["']$/g, ""));
+  const text = url.trim().replace(/^["']|["']$/g, "");
+  if (UNSAFE_TEXT.test(text)) return false;
+  const m = URL_SHAPE.exec(text);
+  if (m === null) return false;
+  const scheme = (m[1] ?? "").toLowerCase();
+  const port = m[3];
+  if (port !== void 0 && port !== (scheme === "http" ? "80" : "443")) return false;
+  return PUBLIC_HOSTS2[ecosystem].includes((m[2] ?? "").toLowerCase());
 }
 function isPublicRegistryUrl(ecosystem, url) {
   return isPublic(ecosystem, url);
@@ -4865,7 +4874,7 @@ function userRegistryUrl(raw) {
     return void 0;
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") return void 0;
-  const publicHost = ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com"].includes(u.hostname);
+  const publicHost = PUBLIC_HOSTS2.npm.includes(u.hostname);
   if (publicHost && u.protocol === "https:" && u.username === "" && u.password === "" && u.port === "") return void 0;
   const path = u.pathname.endsWith("/") ? u.pathname : `${u.pathname}/`;
   return `${u.origin}${path}`;
