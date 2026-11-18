@@ -1052,3 +1052,141 @@ describe('install-vet-slow-first-round', () => {
     expect(results.slice(1, 100).filter((r) => r.verdict !== 'ok').map((r) => r.name)).toEqual([]);
   });
 });
+
+// ───────────────── pkgvet-registry-credentials-said — a configured registry is named by scheme and host, never by its URL
+
+describe('pkgvet-registry-credentials-said', () => {
+  const MARK = 'dgsecret-zzq7731';
+  const USER = 'dguser';
+  const HOST = 'npm.company.example';
+  const HOST_URL = `https://${HOST}`;
+  const SENTENCE_START = 'a custom registry is configured (';
+  const SENTENCE_END = ' — possibly a private or local package';
+
+  /** A registry URL with credentials, a path and a query, built from pieces so no literal secret stands in the source. */
+  const credentialUrl = (tail: string): string => ['https://', USER, ':', MARK, '@', HOST, tail].join('');
+  const SECRET_URL = credentialUrl(`/caminho/?t=${MARK}#${MARK}`);
+
+  const missing = (name: string): Fake => fakeFetch({ [`https://registry.npmjs.org/${name}`]: { status: 404 }, [OSV]: osvRoute() });
+
+  /** Everything the check writes about a name: the `exists` detail and the reasons. */
+  const said = (r: PackageVetResult | undefined): string => `${r?.checks.exists.detail ?? ''}\n${(r?.reasons ?? []).join('\n')}`;
+
+  /** What the custom-registry sentence shows of the registry: the part in parentheses after the source, without the source. */
+  function shownOfRegistry(text: string, source: string): string {
+    const from = text.indexOf(SENTENCE_START);
+    expect(from, `the custom-registry sentence in: ${text}`).toBeGreaterThan(-1);
+    const to = text.indexOf(SENTENCE_END, from);
+    expect(to, `the end of the custom-registry sentence in: ${text}`).toBeGreaterThan(from);
+    const inner = text.slice(from + SENTENCE_START.length, to - 1);
+    expect(inner.startsWith(source), `the sentence names its source ${source}: ${inner}`).toBe(true);
+    return inner.slice(source.length).replace(/^[\s:,-]+/, '');
+  }
+
+  it('T-01 a registry URL with credentials, a path and a query is named by its source and https://host only — from the command line and from a .npmrc', async () => {
+    const fromCommandLine = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib'), { commandRegistries: [SECRET_URL] }));
+    writeFileSync(join(project, '.npmrc'), `registry=${SECRET_URL}\n`);
+    const fromNpmrc = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib')));
+
+    for (const [where, source, r] of [
+      ['the command line', 'the command line', fromCommandLine[0]],
+      ['a project .npmrc', join(project, '.npmrc'), fromNpmrc[0]],
+    ] as const) {
+      expect(r?.verdict, where).toBe('unknown');
+      const text = said(r);
+      for (const leaked of [MARK, USER, '/caminho', '?t=', '#']) {
+        expect(text.includes(leaked), `${where}: "${leaked}" must not be in: ${text}`).toBe(false);
+      }
+      expect(text, where).toContain(source);
+      expect(shownOfRegistry(text, source), where).toBe(HOST_URL);
+    }
+  });
+
+  // [label, config value, what the sentence may show of it]: the exact scheme://host, or '' when nothing of the value may be shown.
+  const HOSTILE: Array<[label: string, value: string, shown: string]> = [
+    ['a password with @', ['https://', USER, ':p@ss-', MARK, '@', HOST, '/'].join(''), HOST_URL],
+    ['a password with a colon', ['https://', USER, ':p:ss-', MARK, '@', HOST, '/'].join(''), HOST_URL],
+    ['a password with a slash (not a URL the parser reads)', ['https://', USER, ':p/ss-', MARK, '@', HOST, '/'].join(''), ''],
+    ['a password with %40', ['https://', USER, ':p%40ss-', MARK, '@', HOST, '/'].join(''), HOST_URL],
+    ['several URLs separated by spaces', [credentialUrl(`/p/${MARK}`), ' ', ['https://', USER, ':', MARK, '@other.example/y'].join('')].join(''), HOST_URL],
+    ['name=URL', `corp=${credentialUrl(`/p/${MARK}`)}`, HOST_URL],
+    ['a token in the path and the query', `https://${HOST}/${MARK}/account/?token=${MARK}&x=1`, HOST_URL],
+    ['a user without a password', ['https://', MARK, '@', HOST, '/'].join(''), HOST_URL],
+    ['a port', ['https://', USER, ':', MARK, '@', HOST, ':8443/simple'].join(''), HOST_URL],
+    ['text that is not a URL', `not a url ${MARK}`, ''],
+    ['a local folder', `/srv/${MARK}/feed`, ''],
+    ['a Windows folder', `C:\\Users\\${MARK}\\feeds`, ''],
+    ['a UNC share', `\\\\${MARK}-server\\share`, ''],
+    ['a file: URL', `file:///srv/${MARK}/feed`, ''],
+  ];
+
+  it.each(HOSTILE)('T-02 hostile value, %s: the sentence shows exactly the scheme and host, or nothing of the value', async (_label, value, shown) => {
+    for (const [source, extra] of [
+      ['the command line', { commandRegistries: [value] }],
+      ['NPM_CONFIG_REGISTRY', { registry: { projectDir: project, homeDir: home, env: { NPM_CONFIG_REGISTRY: value } } }],
+    ] as const) {
+      const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib'), extra));
+      const text = said(r);
+      expect(text.includes(MARK), `${source}: the marker must not be in: ${text}`).toBe(false);
+      expect(text.includes(USER), `${source}: the user name must not be in: ${text}`).toBe(false);
+      expect(shownOfRegistry(text, source), `${source}: ${value.length} chars of config value`).toBe(shown);
+    }
+  });
+
+  it('T-02 an environment value with several URLs, the public one first: the sentence shows the host of the first that is not public', async () => {
+    const value = ['https://registry.npmjs.org/ ', credentialUrl(`/p/?t=${MARK}`), ' https://other.example/x'].join('');
+    const [r] = await vetPackages(
+      [spec('npm', 'acme-internal-lib')],
+      opts(missing('acme-internal-lib'), { registry: { projectDir: project, homeDir: home, env: { NPM_CONFIG_REGISTRY: value } } }),
+    );
+    const text = said(r);
+    expect(text.includes(MARK), `the marker must not be in: ${text}`).toBe(false);
+    expect(shownOfRegistry(text, 'NPM_CONFIG_REGISTRY')).toBe(HOST_URL);
+  });
+
+  it('T-02 a host with strange characters is shown as the parser reads it, still without the credentials', async () => {
+    const value = ['https://', USER, ':', MARK, '@npm.compány.example/x'].join('');
+    const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib'), { commandRegistries: [value] }));
+    const text = said(r);
+    expect(text.includes(MARK)).toBe(false);
+    const shown = shownOfRegistry(text, 'the command line');
+    expect(shown === '' || (shown.startsWith('https://') && !/[\s/@:?#]/.test(shown.slice('https://'.length)))).toBe(true);
+  });
+
+  it('T-05 protection: an unremarkable registry still makes the name unknown and names the source; the other sentences read as before', async () => {
+    writeFileSync(join(project, '.npmrc'), 'registry=https://npm.acme.local/\n');
+    const [plain] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib')));
+    expect(plain?.verdict).toBe('unknown');
+    expect(plain?.checks.exists.status).toBe('unknown');
+    expect(plain?.reasons.join(' ')).toContain(join(project, '.npmrc'));
+    expect(plain?.checks.exists.detail).toContain(`${SENTENCE_START}${join(project, '.npmrc')}`);
+    rmSync(join(project, '.npmrc'));
+
+    // An npmjs auth token: the sentence of before, with the file only.
+    writeFileSync(join(project, '.npmrc'), '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n');
+    const [auth] = await vetPackages([spec('npm', '@acme/private')], opts(fakeFetch({ 'https://registry.npmjs.org/@acme%2Fprivate': { status: 404 }, [OSV]: osvRoute() })));
+    expect(auth?.verdict).toBe('unknown');
+    expect(auth?.checks.exists.detail).toContain(
+      `but an npmjs auth token is configured (${join(project, '.npmrc')}) and a private scoped package answers 404 to an anonymous lookup — possibly a private or local package; not vetted.`,
+    );
+    rmSync(join(project, '.npmrc'));
+
+    // A local workspace package.
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ workspaces: ['packages/*'] }));
+    mkdirSync(join(project, 'packages', 'ui'), { recursive: true });
+    writeFileSync(join(project, 'packages', 'ui', 'package.json'), JSON.stringify({ name: 'acme-ui-kit' }));
+    const [workspace] = await vetPackages([spec('npm', 'acme-ui-kit')], opts(missing('acme-ui-kit')));
+    expect(workspace?.verdict).toBe('unknown');
+    expect(workspace?.checks.exists.detail).toMatch(/but it is a local workspace package \([^)]+\) — possibly a private or local package; not vetted\.$/);
+    rmSync(join(project, 'package.json'));
+    rmSync(join(project, 'packages'), { recursive: true, force: true });
+
+    // A configuration that could not be read (a directory where `.npmrc` belongs).
+    mkdirSync(join(project, '.npmrc'));
+    const [unreadable] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib')));
+    expect(unreadable?.verdict).toBe('unknown');
+    expect(unreadable?.checks.exists.detail).toContain(
+      `registry configuration at ${join(project, '.npmrc')} could not be read — possibly a private registry — possibly a private or local package; not vetted.`,
+    );
+  });
+});

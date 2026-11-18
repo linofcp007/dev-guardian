@@ -647,3 +647,47 @@ describe('selftest-install-vet-canary', () => {
     });
   });
 });
+
+// ───────────────── pkgvet-registry-credentials-said — the docs say the warning names the registry's host, never its URL
+
+describe('pkgvet-registry-credentials-said', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  it('T-06 docs/hooks.md says the warning names the configured registry by its host and never by its URL; the CHANGELOG has a Security entry under Unreleased with what to do', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end);
+    const namesHostNotUrl = sentences(section).some(
+      (s) => /\bregistry\b/i.test(s) && /\bhost\b/i.test(s) && /\bnever\b/i.test(s) && /\bURLs?\b/.test(s) && /\bwarning\b/i.test(s),
+    );
+
+    const log = read('CHANGELOG.md').replace(/\r\n/g, '\n');
+    const from = log.indexOf('## [Unreleased]');
+    expect(from, 'the Unreleased section of the CHANGELOG').toBeGreaterThan(-1);
+    const next = log.indexOf('\n## [', from + 1);
+    const unreleased = log.slice(from, next === -1 ? undefined : next);
+    const sec = unreleased.indexOf('\n### Security');
+    const secEnd = sec === -1 ? -1 : unreleased.indexOf('\n### ', sec + 1);
+    const security = sec === -1 ? '' : unreleased.slice(sec, secEnd === -1 ? undefined : secEnd).replace(/\s+/g, ' ');
+    const aboutIt = /registry/i.test(security) && /credential|password|token/i.test(security);
+    const saysWhatToDo = /\b(?:change|rotate|revoke|replace)\b/i.test(security) && /transcript/i.test(security);
+
+    expect({
+      'docs/hooks.md: a sentence says the warning names the registry by its host and never by its URL': namesHostNotUrl,
+      'CHANGELOG [Unreleased]: a Security section about the credentials in a registry URL': aboutIt,
+      'CHANGELOG [Unreleased]: it says to change the credentials a session transcript may hold': saysWhatToDo,
+    }).toEqual({
+      'docs/hooks.md: a sentence says the warning names the registry by its host and never by its URL': true,
+      'CHANGELOG [Unreleased]: a Security section about the credentials in a registry URL': true,
+      'CHANGELOG [Unreleased]: it says to change the credentials a session transcript may hold': true,
+    });
+  });
+});

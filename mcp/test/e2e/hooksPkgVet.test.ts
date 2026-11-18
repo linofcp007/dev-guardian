@@ -42,6 +42,9 @@ interface HookOut {
   output: { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string } } | undefined;
   requests: string[];
   ms: number;
+  /** Everything the dispatcher wrote, as written: the JSON answer on stdout and anything on stderr. */
+  stdout: string;
+  stderr: string;
 }
 
 let project: string;
@@ -142,7 +145,7 @@ function runHook(
   const trimmed = (r.stdout ?? '').trim();
   const output = trimmed === '' ? undefined : (JSON.parse(trimmed) as HookOut['output']);
   const requests = existsSync(logFile) ? readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
-  return { status: r.status, output, requests, ms };
+  return { status: r.status, output, requests, ms, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 const npmDoc = (version: string, extra: Record<string, unknown> = {}): Route => ({
@@ -1220,5 +1223,130 @@ describe('install-vet-slow-first-round', () => {
       // One document asked per package — the one that never arrives too, and no second time — and OSV once, while it was owed.
       requests: [OSV, 'https://registry.npmjs.org/express', 'https://registry.npmjs.org/fresh-pkg', SLOW].sort(),
     });
+  });
+});
+
+// ───────────────── pkgvet-registry-credentials-said — a configured registry is named by its host, never by its URL
+
+describe('pkgvet-registry-credentials-said', () => {
+  const MARK = 'dgsecret-zzq7731';
+  const NPM_HOST = 'https://npm.company.example';
+  const PYPI_HOST = 'https://pypi.company.example';
+  const NUGET_HOST = 'https://nuget.company.example';
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const withCredentials = (host: string, tail: string): string => ['https://dguser:', MARK, '@', host.slice('https://'.length), tail].join('');
+  const NPM_URL = withCredentials(NPM_HOST, '/');
+  const PYPI_URL = withCredentials(PYPI_HOST, '/simple');
+  const NUGET_URL = withCredentials(NUGET_HOST, '/v3/index.json');
+
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/dgprobe-zzq7731-nope': { status: 404 },
+    'https://pypi.org/pypi/dgprobe-zzq7731-nope/json': { status: 404 },
+    'https://api.nuget.org/v3-flatcontainer/dgprobe.zzq7731.nope/index.json': { status: 404 },
+    [OSV]: { osv: {} },
+  };
+
+  const put = (file: string, text: string): void => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+  };
+
+  interface Origin {
+    label: string;
+    command: string;
+    /** Files and variables for this origin; the paths are those of the test's own project and home. */
+    setup: () => { env?: Record<string, string>; source: string };
+    /** The scheme and host the warning must name. */
+    host: string;
+  }
+
+  const ORIGINS: Origin[] = [
+    {
+      label: 'the user npmrc',
+      command: 'npm install dgprobe-zzq7731-nope',
+      setup: () => (put(join(home, '.npmrc'), `registry=${NPM_URL}\n`), { source: join(home, '.npmrc') }),
+      host: NPM_HOST,
+    },
+    {
+      label: 'the project .npmrc',
+      command: 'npm install dgprobe-zzq7731-nope',
+      setup: () => (put(join(project, '.npmrc'), `registry=${NPM_URL}\n`), { source: join(project, '.npmrc') }),
+      host: NPM_HOST,
+    },
+    {
+      label: 'NPM_CONFIG_REGISTRY',
+      command: 'npm install dgprobe-zzq7731-nope',
+      setup: () => ({ env: { NPM_CONFIG_REGISTRY: NPM_URL }, source: 'NPM_CONFIG_REGISTRY' }),
+      host: NPM_HOST,
+    },
+    {
+      label: 'the user pip.conf',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => (put(join(home, 'pip', 'pip.conf'), `[global]\nindex-url = ${PYPI_URL}\n`), { source: join(home, 'pip', 'pip.conf') }),
+      host: PYPI_HOST,
+    },
+    {
+      // On Windows pip reads %APPDATA%\pip\pip.ini; the hook reads that path on every platform.
+      label: 'the user pip.ini under APPDATA',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => (put(join(home, 'pip', 'pip.ini'), `[global]\nindex-url = ${PYPI_URL}\n`), { source: join(home, 'pip', 'pip.ini') }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'PIP_INDEX_URL',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => ({ env: { PIP_INDEX_URL: PYPI_URL }, source: 'PIP_INDEX_URL' }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'PIP_EXTRA_INDEX_URL',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => ({ env: { PIP_EXTRA_INDEX_URL: PYPI_URL }, source: 'PIP_EXTRA_INDEX_URL' }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'pyproject.toml [[tool.uv.index]] (uv add)',
+      command: 'uv add dgprobe-zzq7731-nope',
+      setup: () => (
+        put(join(project, 'pyproject.toml'), `[project]\nname = "app"\nversion = "0.1.0"\n\n[[tool.uv.index]]\nname = "corp"\nurl = "${PYPI_URL}"\n`),
+        { source: join(project, 'pyproject.toml') }
+      ),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'nuget.config (dotnet add package)',
+      command: 'dotnet add package Dgprobe.Zzq7731.Nope',
+      setup: () => (
+        put(join(project, 'nuget.config'), `<configuration><packageSources><add key="corp" value="${NUGET_URL}" /></packageSources></configuration>\n`),
+        { source: join(project, 'nuget.config') }
+      ),
+      host: NUGET_HOST,
+    },
+    {
+      // A requirements file's own `--index-url` reaches the check as a registry of the command.
+      label: 'a requirements file with --index-url (pip install -r)',
+      command: 'pip install -r requirements.txt',
+      setup: () => (put(join(project, 'requirements.txt'), `--index-url ${PYPI_URL}\ndgprobe-zzq7731-nope\n`), { source: 'the command line' }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'the command line (--registry)',
+      command: `npm install --registry ${NPM_URL} dgprobe-zzq7731-nope`,
+      setup: () => ({ source: 'the command line' }),
+      host: NPM_HOST,
+    },
+  ];
+
+  it.each(ORIGINS)('T-03 $label: nothing the dispatcher writes holds the credentials; the answer is a warning naming the source and the host', (origin) => {
+    const { env, source } = origin.setup();
+    const r = runHook(origin.command, ROUTES, env === undefined ? {} : { env });
+    expect(r.status).toBe(0);
+    expect(r.stdout.includes(MARK), `the marker is in stdout: ${r.stdout}`).toBe(false);
+    expect(r.stderr.includes(MARK), `the marker is in stderr: ${r.stderr}`).toBe(false);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a name a private registry may serve is a warning, never a deny').toBeUndefined();
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context, 'the answer is a warning that explains the missing name').toContain('a custom registry is configured');
+    expect(context, 'it names where the configuration is').toContain(source);
+    expect(context, 'it names the registry by scheme and host').toContain(origin.host);
   });
 });

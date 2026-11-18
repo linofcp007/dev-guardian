@@ -240,3 +240,27 @@ describe('vet_packages tool', () => {
     expect(r.packages[0]?.verdict).toBe('unknown');
   });
 });
+
+// ───────────────── pkgvet-registry-credentials-said — the response names a configured registry by its host, never its URL
+
+describe('pkgvet-registry-credentials-said', () => {
+  const MARK = 'dgsecret-zzq7731';
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const SECRET_URL = ['https://', 'dguser', ':', MARK, '@', 'npm.company.example', `/caminho/?t=${MARK}`].join('');
+
+  it('T-04 a project .npmrc with credentials in the registry URL: the serialized response has the host and not the marker', async () => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    writeFileSync(join(project, '.npmrc'), `registry=${SECRET_URL}\n`);
+    stubNetwork({
+      'https://registry.npmjs.org/acme-internal-lib': { status: 404 },
+      'https://api.osv.dev/v1/querybatch': OSV_CLEAN,
+    });
+    const r = expectOk(await run({ ecosystem: 'npm', packages: ['acme-internal-lib'] }));
+    expect(r.packages[0]?.verdict).toBe('unknown');
+    const text = JSON.stringify(r);
+    for (const leaked of [MARK, 'dguser', '/caminho', '?t=']) {
+      expect(text.includes(leaked), `"${leaked}" must not be in the response: ${text}`).toBe(false);
+    }
+    expect(text).toContain('https://npm.company.example');
+  });
+});
