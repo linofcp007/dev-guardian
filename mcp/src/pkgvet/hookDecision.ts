@@ -73,10 +73,17 @@ import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
-import { npmScopeRegistryOf, npmUserRegistries, registryCache, type RegistryContext } from './privateRegistry.js';
+import {
+  npmEnvNamesDefaultRegistry,
+  npmProjectDefaultRegistry,
+  npmScopeRegistryOf,
+  npmUserRegistries,
+  registryCache,
+  type RegistryContext,
+} from './privateRegistry.js';
 import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
 import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from './types.js';
-import { HOOK_BUDGET_MS, vetPackages, vetTyposquatOnly } from './vet.js';
+import { HOOK_BUDGET_MS, registryHost, vetPackages, vetTyposquatOnly } from './vet.js';
 import { isExactVersion } from './versions.js';
 
 export interface HookVetOptions {
@@ -277,8 +284,16 @@ function withManifestPackages(
   locked: LockedProject[],
 ): VetCommand[] {
   const out: VetCommand[] = [];
+  const lineAsked = new Map<string, string | undefined>();
+  let userRegistries: string[] | undefined;
+  const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
   for (const c of parsed) {
     out.push(c);
+    // A line of thousands of commands asks once per manager and directory: the answer is the same.
+    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}`;
+    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLine(c, opts, registry, user));
+    const said = lineAsked.get(key);
+    if (said !== undefined) notes.push(said);
     const manifest = c.manifest;
     if (manifest === undefined) continue;
     const dir = c.prefixed === true ? null : commandDir(c, opts);
@@ -325,6 +340,32 @@ function withManifestPackages(
     }
   }
   return out;
+}
+
+/**
+ * The line for a command whose project sets the default registry ({@link npmProjectDefaultRegistry}): the file by its
+ * base name and the registry by `scheme://host` ({@link registryHost}) — nothing else of either. `undefined` (no line)
+ * when the command line or the environment names a registry (the manager obeys those first), when the command's
+ * directory is not known, when the registry is one the USER's own configuration names (a file of the project never
+ * silences it), and on any error. The notes are de-duplicated per call, so a line is said once for one file.
+ */
+function projectDefaultRegistryLine(
+  c: InstallCommand,
+  opts: HookVetOptions,
+  registry: RegistryContext,
+  userRegistries: () => readonly string[],
+): string | undefined {
+  try {
+    if (c.ecosystem !== 'npm' || c.registries.length > 0 || c.prefixed === true || npmEnvNamesDefaultRegistry(registry)) return undefined;
+    const dir = commandDir(c, opts);
+    if (dir === null) return undefined;
+    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir });
+    if (found === null || fromUserRegistry(found.url, userRegistries())) return undefined;
+    const host = registryHost('npm', found.url);
+    return `dev-guardian: the project's ${basename(found.source)} sets the default registry${host === undefined ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+  } catch {
+    return undefined; // fail-open: no line
+  }
 }
 
 /**

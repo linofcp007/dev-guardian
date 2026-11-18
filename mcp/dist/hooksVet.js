@@ -4941,6 +4941,43 @@ function npmScopeRegistryOf(ctx = {}) {
     return null;
   }
 }
+var PROJECT_DEFAULT_FILES = {
+  npm: [{ name: ".npmrc", parse: fromNpmrc }],
+  npx: [{ name: ".npmrc", parse: fromNpmrc }],
+  pnpm: [{ name: ".npmrc", parse: fromNpmrc }],
+  bun: [
+    { name: ".npmrc", parse: fromNpmrc },
+    { name: "bunfig.toml", parse: fromBunfig }
+  ],
+  yarn: [
+    { name: ".npmrc", parse: fromNpmrc },
+    { name: ".yarnrc.yml", parse: fromYarnrcYml },
+    { name: ".yarnrc", parse: fromYarnrc }
+  ]
+};
+function npmProjectDefaultRegistry(manager, ctx = {}) {
+  try {
+    const files = Object.hasOwn(PROJECT_DEFAULT_FILES, manager) ? PROJECT_DEFAULT_FILES[manager] : void 0;
+    if (files === void 0) return null;
+    const near = ancestors(ctx);
+    const first = near.findIndex((dir) => present(join4(dir, "package.json")));
+    const from = first < 0 ? 0 : first;
+    for (const dir of near.slice(from)) {
+      const isBase = dir === near[from];
+      const obeyed = isBase || manager === "yarn" || hasWorkspaces(read(join4(dir, "package.json"), ctx, void 0, "workspace manifest")) || manager === "pnpm" && present(join4(dir, "pnpm-workspace.yaml"));
+      if (!obeyed) continue;
+      for (const { name, parse: parse5 } of files) {
+        const source = join4(dir, name);
+        const text = read(source, ctx);
+        const url = text === void 0 ? void 0 : parse5(text, void 0);
+        if (url === void 0) continue;
+        return isPublic("npm", url) ? null : { source, url };
+      }
+    }
+  } catch {
+  }
+  return null;
+}
 function userRegistryUrl(raw) {
   let u;
   try {
@@ -4955,6 +4992,13 @@ function userRegistryUrl(raw) {
   return `${u.origin}${path}`;
 }
 var ENV_USER_REGISTRY = /^(?:npm_config_(?:@[^:]+:)?registry|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY)$/i;
+function npmEnvNamesDefaultRegistry(ctx = {}) {
+  try {
+    return Object.entries(envOf(ctx)).some(([key, value]) => ENV_USER_REGISTRY.test(key) && !key.includes("@") && (value ?? "").trim() !== "");
+  } catch {
+    return false;
+  }
+}
 function npmUserRegistries(ctx = {}) {
   const urls = /* @__PURE__ */ new Set();
   const add = (raw) => {
@@ -6032,8 +6076,15 @@ var NAMED_BY_MANIFEST = "it is named by a manifest, where a missing name is usua
 var plural = (n) => n === 1 ? "1 package" : `${String(n)} packages`;
 function withManifestPackages(parsed, opts, registry, notes, locked) {
   const out = [];
+  const lineAsked = /* @__PURE__ */ new Map();
+  let userRegistries;
+  const user = () => userRegistries ??= npmUserRegistries(registry);
   for (const c of parsed) {
     out.push(c);
+    const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}`;
+    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLine(c, opts, registry, user));
+    const said2 = lineAsked.get(key);
+    if (said2 !== void 0) notes.push(said2);
     const manifest = c.manifest;
     if (manifest === void 0) continue;
     const dir = c.prefixed === true ? null : commandDir(c, opts);
@@ -6077,6 +6128,19 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
     }
   }
   return out;
+}
+function projectDefaultRegistryLine(c, opts, registry, userRegistries) {
+  try {
+    if (c.ecosystem !== "npm" || c.registries.length > 0 || c.prefixed === true || npmEnvNamesDefaultRegistry(registry)) return void 0;
+    const dir = commandDir(c, opts);
+    if (dir === null) return void 0;
+    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir });
+    if (found === null || fromUserRegistry(found.url, userRegistries())) return void 0;
+    const host = registryHost("npm", found.url);
+    return `dev-guardian: the project's ${basename2(found.source)} sets the default registry${host === void 0 ? "" : ` (${host})`} \u2014 packages are fetched from it, and what it serves was not vetted.`;
+  } catch {
+    return void 0;
+  }
 }
 function withoutOwnRegistryScopes(read2, registry, notes) {
   const kept = [];

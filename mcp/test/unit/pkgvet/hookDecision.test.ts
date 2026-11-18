@@ -2307,7 +2307,13 @@ describe('install-vet-lockfile-pins', () => {
     const net = lockNet();
     const d = await decideInstallCommand('npm ci', at(net.fetchImpl));
     expect(d?.deny).toBeUndefined();
-    expect(lines(d?.context)).toEqual([anotherSource(2, 'package-lock.json', 'npm.corp.example')]);
+    // Since install-vet-project-registry-said the project's .npmrc setting the default registry is said too.
+    expect(lines(d?.context).sort()).toEqual(
+      [
+        anotherSource(2, 'package-lock.json', 'npm.corp.example'),
+        "dev-guardian: the project's .npmrc sets the default registry (https://npm.corp.example) — packages are fetched from it, and what it serves was not vetted.",
+      ].sort(),
+    );
     expect(sorted(net.asked)).toEqual(['express@4.21.2', 'ms@2.1.3']);
   });
 
@@ -2733,8 +2739,8 @@ describe('install-vet-project-registry-said', () => {
   const YARNRC_YML = `npmRegistryServer: "${OTHER}"\n`;
 
   /** The line, exactly: the file by its name, the registry by scheme and host. */
-  const lineFor = (file = '.npmrc', host: string | undefined = HOST): string =>
-    `dev-guardian: the project's ${file} sets the default registry${host === undefined ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+  const lineFor = (file = '.npmrc', host: string | null = HOST): string =>
+    `dev-guardian: the project's ${file} sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
   const SAYS = 'sets the default registry';
   const occurrences = (text: string, part: string): number => text.split(part).length - 1;
 
@@ -2990,7 +2996,7 @@ describe('install-vet-project-registry-said', () => {
   it('T-06 a value that is not a URL gives the line without the host, and nothing of the value', async () => {
     project1('.npmrc', `registry=${MARK}-not-a-url\n`);
     const d = await decide(`npm install ${CLEAN}`);
-    expect(d?.context).toBe(lineFor('.npmrc', undefined));
+    expect(d?.context).toBe(lineFor('.npmrc', null));
     noLeak(d?.context ?? '');
   });
 });

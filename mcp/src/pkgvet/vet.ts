@@ -208,7 +208,7 @@ const needsNoExtras = (w: Work): boolean => w.unreported?.has('publish_age') ===
  * which an `@` is not user information the parser consumed — a password that starts with digits and goes on with
  * `/`, `#`, `?` or a space makes the parser read the user name as the host, so the host cannot be trusted.
  */
-function registryHost(ecosystem: PkgEcosystem, value: string): string | undefined {
+export function registryHost(ecosystem: PkgEcosystem, value: string): string | undefined {
   let named: string | undefined;
   for (const token of value.split(/\s+/)) {
     const candidate = token.replace(/^[^=:/?#@]+=(?=https?:\/\/)/i, '');

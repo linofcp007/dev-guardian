@@ -814,6 +814,19 @@ function userRegistryUrl(raw: string): string | undefined {
 const ENV_USER_REGISTRY = /^(?:npm_config_(?:@[^:]+:)?registry|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY)$/i;
 
 /**
+ * Whether the environment names the default registry of an npm-family manager (`NPM_CONFIG_REGISTRY`,
+ * `YARN_NPM_REGISTRY_SERVER`, `YARN_REGISTRY`, `BUN_CONFIG_REGISTRY`): the manager obeys it before any file of the
+ * project, whatever the value. A scope's own variable (`npm_config_@scope:registry`) is not the default.
+ */
+export function npmEnvNamesDefaultRegistry(ctx: RegistryContext = {}): boolean {
+  try {
+    return Object.entries(envOf(ctx)).some(([key, value]) => ENV_USER_REGISTRY.test(key) && !key.includes('@') && (value ?? '').trim() !== '');
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Every registry URL the USER's npm-family configuration names — `registry=`
  * and `@scope:registry=` of the user npmrc and npm's global one, the
  * environment, `~/.yarnrc.yml`, `~/.bunfig.toml` (and the user-level classic
