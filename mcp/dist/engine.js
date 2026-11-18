@@ -116651,7 +116651,7 @@ function isPublic(ecosystem, url2) {
   if (m === null) return false;
   const scheme = (m[1] ?? "").toLowerCase();
   const port = m[3];
-  if (port !== void 0 && port !== (scheme === "http" ? "80" : "443")) return false;
+  if (port !== void 0 && port !== "" && port !== (scheme === "http" ? "80" : "443")) return false;
   return PUBLIC_HOSTS[ecosystem].includes((m[2] ?? "").toLowerCase());
 }
 function isPublicRegistryUrl(ecosystem, url2) {
@@ -116754,6 +116754,33 @@ function npmScope(name) {
   const m = /^@([^/]+)\//.exec(name);
   return m?.[1];
 }
+function npmrcValue(raw) {
+  const value = raw.trim();
+  if (value.includes("\\")) return value;
+  let quote;
+  let end = value.length;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value.charAt(i);
+    if (quote !== void 0) {
+      if (ch === quote) quote = void 0;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === ";" || ch === "#") {
+      end = i;
+      break;
+    }
+  }
+  return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
+}
+function yamlScalar(raw) {
+  const value = raw.trim();
+  const quote = value.charAt(0);
+  if (quote === '"' || quote === "'") {
+    const close = value.indexOf(quote, 1);
+    if (close > 0) return value.slice(1, close);
+  }
+  const comment = value.search(/\s#/);
+  return (comment === -1 ? value : value.slice(0, comment)).trim();
+}
 function fromNpmrc(text3, scope, all) {
   let found2;
   for (const raw of text3.split(/\r?\n/)) {
@@ -116762,7 +116789,7 @@ function fromNpmrc(text3, scope, all) {
     const m = /^(@[^:=\s]+:)?registry\s*=\s*(.+)$/i.exec(line);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    const url2 = (m[2] ?? "").trim();
+    const url2 = npmrcValue(m[2] ?? "");
     all?.push(url2);
     if (lineScope === void 0) found2 = found2 ?? url2;
     else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url2;
@@ -116781,7 +116808,7 @@ function fromYarnrcYml(text3, scope, all) {
       inScopes = /^npmScopes\s*:/.test(line);
       currentScope = void 0;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-      if (m !== null) global3 = (m[1] ?? "").replace(/^["']|["']$/g, "");
+      if (m !== null) global3 = yamlScalar(m[1] ?? "");
       if (m !== null) all?.push(global3 ?? "");
       continue;
     }
@@ -116792,9 +116819,9 @@ function fromYarnrcYml(text3, scope, all) {
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-    if (server !== null) all?.push((server[1] ?? "").replace(/^["']|["']$/g, ""));
+    if (server !== null) all?.push(yamlScalar(server[1] ?? ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return (server[1] ?? "").replace(/^["']|["']$/g, "");
+      return yamlScalar(server[1] ?? "");
     }
   }
   return global3;
@@ -117224,7 +117251,7 @@ var init_privateRegistry = __esm({
       nuget: ["api.nuget.org", "www.nuget.org", "nuget.org"]
     };
     UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
-    URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d+))?(?:[/?#]|$)/i;
+    URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d*))?(?:[/?#]|$)/i;
     MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
     NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
     ENV_REGISTRY = {

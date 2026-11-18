@@ -171,16 +171,17 @@ const UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
 /**
  * The scheme (`http`, `https` or `''` for `//host`), host and port of a value of the form
  * `[http: | https:]//host[:port][/…]`. The authority is the text up to the first `/`, `?` or `#`: a host and a
- * digits-only port, so credentials (an `@`) never match.
+ * digits-only port (an empty one is the default, as parsers read it), so credentials (an `@`) never match.
  */
-const URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d+))?(?:[/?#]|$)/i;
+const URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d*))?(?:[/?#]|$)/i;
 
 /**
  * Whether `url` is the ecosystem's public registry, decided on the host the package manager would contact, read
  * from the TEXT (a hand-written reading, not `new URL`: the parser silently drops tabs and line breaks and turns
  * a backslash into a slash, which is how `https://pypi.org\@evil.example/` would pass). Only the host, in lower case,
  * and the scheme's own port — 443 for `https:` and `//host`, 80 for `http:` — are accepted; `http:` still counts
- * (the reasons are in the bug's notes); credentials, another port and any other host do not.
+ * (for "does another registry explain a 404" it is the same registry, and for "does this scope keep its names off
+ * the public registry" the package manager itself sends them there); credentials, another port and any other host do not.
  */
 function isPublic(ecosystem: PkgEcosystem, url: string): boolean {
   const text = url.trim().replace(/^["']|["']$/g, '');
@@ -189,7 +190,7 @@ function isPublic(ecosystem: PkgEcosystem, url: string): boolean {
   if (m === null) return false;
   const scheme = (m[1] ?? '').toLowerCase();
   const port = m[3];
-  if (port !== undefined && port !== (scheme === 'http' ? '80' : '443')) return false;
+  if (port !== undefined && port !== '' && port !== (scheme === 'http' ? '80' : '443')) return false;
   return PUBLIC_HOSTS[ecosystem].includes((m[2] ?? '').toLowerCase());
 }
 
@@ -374,6 +375,41 @@ function npmScope(name: string): string | undefined {
   return m?.[1];
 }
 
+/**
+ * An `.npmrc` value as npm, pnpm, Yarn 1 and bun read it: it ends at the first `;` or `#` outside quotes (an inline
+ * comment), and one pair of surrounding quotes is taken off. A value with a backslash (ini escapes) is not cut: it
+ * is handed over whole, and {@link isPublic} then reads it as another registry.
+ */
+function npmrcValue(raw: string): string {
+  const value = raw.trim();
+  if (value.includes('\\')) return value;
+  let quote: string | undefined;
+  let end = value.length;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value.charAt(i);
+    if (quote !== undefined) {
+      if (ch === quote) quote = undefined;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === ';' || ch === '#') {
+      end = i;
+      break;
+    }
+  }
+  return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, '$2');
+}
+
+/** A `.yarnrc.yml` scalar: a quoted one is its content, an unquoted one ends at a ` #` (a comment). */
+function yamlScalar(raw: string): string {
+  const value = raw.trim();
+  const quote = value.charAt(0);
+  if (quote === '"' || quote === "'") {
+    const close = value.indexOf(quote, 1);
+    if (close > 0) return value.slice(1, close);
+  }
+  const comment = value.search(/\s#/);
+  return (comment === -1 ? value : value.slice(0, comment)).trim();
+}
+
 /** `.npmrc`: `registry=` and `@scope:registry=`. */
 function fromNpmrc(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let found: string | undefined;
@@ -383,7 +419,7 @@ function fromNpmrc(text: string, scope: string | undefined, all?: string[]): str
     const m = /^(@[^:=\s]+:)?registry\s*=\s*(.+)$/i.exec(line);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    const url = (m[2] ?? '').trim();
+    const url = npmrcValue(m[2] ?? '');
     all?.push(url);
     if (lineScope === undefined) found = found ?? url;
     else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) return url;
@@ -404,7 +440,7 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
       inScopes = /^npmScopes\s*:/.test(line);
       currentScope = undefined;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-      if (m !== null) global = (m[1] ?? '').replace(/^["']|["']$/g, '');
+      if (m !== null) global = yamlScalar(m[1] ?? '');
       if (m !== null) all?.push(global ?? '');
       continue;
     }
@@ -415,9 +451,9 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-    if (server !== null) all?.push((server[1] ?? '').replace(/^["']|["']$/g, ''));
+    if (server !== null) all?.push(yamlScalar(server[1] ?? ''));
     if (server !== null && scope !== undefined && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return (server[1] ?? '').replace(/^["']|["']$/g, '');
+      return yamlScalar(server[1] ?? '');
     }
   }
   return global;

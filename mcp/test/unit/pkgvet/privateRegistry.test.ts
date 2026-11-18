@@ -1058,4 +1058,84 @@ describe('pkgvet-public-registry-url-parse', () => {
       });
     });
   });
+
+  // Fix round 1: the readers hand over the value as the package manager reads it — the comment after it is dropped.
+  describe('T-02 / T-03 the value as the manager reads it, and the authority that ends at ? or #', () => {
+    const PUBLIC = 'https://registry.npmjs.org/';
+    const OTHER = 'https://npm.acme.local/';
+    const DISGUISED = withUser('https://', 'registry.npmjs.org', ':x');
+    const put = (file: string, text: string): void => {
+      mkdirSync(join(file, '..'), { recursive: true });
+      writeFileSync(file, text);
+    };
+    /** Every spelling npm, pnpm, Yarn 1 and bun read as the URL alone (measured, see the spec's measurements). */
+    const npmrcValues = (url: string): string[] => [`${url} ; a note`, `${url} # a note`, `${url}; a note`, `${url}#a-note`, `"${url}"`, `"${url}" ; a note`];
+    const yarnValues = (url: string): string[] => [`${url} # a note`, `"${url}" # a note`, `"${url}"`, url];
+
+    it('T-02 a public URL followed by a comment, or quoted, in an .npmrc is not a custom registry (as in 3.12.0)', () => {
+      const wrong: string[] = [];
+      for (const value of npmrcValues(PUBLIC)) {
+        put(join(project, '.npmrc'), `registry=${value}\n`);
+        if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push(`registry=${value}`);
+        put(join(project, '.npmrc'), `@s:registry=${value}\n`);
+        if (npmScopeRegistry('@s/pkg', ctx()) !== null) wrong.push(`@s:registry=${value}`);
+        if (customRegistryFor('npm', '@s/pkg', ctx()) !== null) wrong.push(`customRegistryFor @s:registry=${value}`);
+      }
+      put(join(project, '.npmrc'), `registry = "${PUBLIC}"\n`);
+      if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push('registry = "<url>"');
+      expect(wrong).toEqual([]);
+    });
+
+    it('T-02 a public URL followed by a comment, quoted or not, in a .yarnrc.yml is not a custom registry', () => {
+      const wrong: string[] = [];
+      for (const value of yarnValues(PUBLIC)) {
+        put(join(project, '.yarnrc.yml'), `npmRegistryServer: ${value}\n`);
+        if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push(`npmRegistryServer: ${value}`);
+        put(join(project, '.yarnrc.yml'), `npmScopes:\n  s:\n    npmRegistryServer: ${value}\n`);
+        if (npmScopeRegistry('@s/pkg', ctx()) !== null) wrong.push(`npmScopes.s.npmRegistryServer: ${value}`);
+      }
+      expect(wrong).toEqual([]);
+    });
+
+    it('T-02 an empty port is the default one: public', () => {
+      for (const eco of ECOSYSTEMS) {
+        for (const host of PUBLIC_HOSTS[eco]) {
+          for (const tail of ['/simple', '/', '?x=1', '#frag', '']) {
+            for (const scheme of SCHEMES) expect(isPublicRegistryUrl(eco, `${scheme}${host}:${tail}`), `${eco}: ${scheme}${host}:${tail}`).toBe(true);
+          }
+        }
+      }
+    });
+
+    it('T-02 the authority ends at ? or #: a user@ after them is part of the query, fragment or path, and the host is the public one', () => {
+      expect(wrongAnswers((scheme, host) => `${scheme}${host}?@evil.example/`, true), 'after a ?').toEqual([]);
+      expect(wrongAnswers((scheme, host) => `${scheme}${host}#@evil.example`, true), 'after a #').toEqual([]);
+      expect(wrongAnswers((scheme, host) => `${scheme}${host}/@evil.example`, true), 'after a /').toEqual([]);
+    });
+
+    it('T-03 another registry followed by a comment is still a custom registry, and the url has no comment text', () => {
+      const wrong: string[] = [];
+      for (const value of npmrcValues(OTHER)) {
+        put(join(project, '.npmrc'), `registry=${value}\n`);
+        const found = customRegistryFor('npm', 'lodash', ctx());
+        if (found?.kind !== 'registry' || found.url !== OTHER) wrong.push(`registry=${value} -> ${JSON.stringify(found)}`);
+      }
+      rmSync(join(project, '.npmrc'), { force: true });
+      for (const value of yarnValues(OTHER)) {
+        put(join(project, '.yarnrc.yml'), `npmRegistryServer: ${value}\n`);
+        const found = customRegistryFor('npm', 'lodash', ctx());
+        if (found?.kind !== 'registry' || found.url !== OTHER) wrong.push(`npmRegistryServer: ${value} -> ${JSON.stringify(found)}`);
+      }
+      expect(wrong).toEqual([]);
+    });
+
+    it('T-03 a disguised URL followed by a comment is still a registry; a backslash in the value stops the cut and reads as another registry', () => {
+      for (const value of npmrcValues(DISGUISED)) {
+        put(join(project, '.npmrc'), `registry=${value}\n`);
+        expect(customRegistryFor('npm', 'lodash', ctx()), `registry=${value}`).toMatchObject({ kind: 'registry' });
+      }
+      put(join(project, '.npmrc'), 'registry=https://registry.npmjs.org/a\\;b\n');
+      expect(customRegistryFor('npm', 'lodash', ctx()), 'a backslash').toMatchObject({ kind: 'registry' });
+    });
+  });
 });
