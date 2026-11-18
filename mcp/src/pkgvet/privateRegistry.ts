@@ -730,6 +730,65 @@ export function npmScopeRegistryOf(ctx: RegistryContext = {}): (name: string) =>
 }
 
 /**
+ * The project files each manager obeys for the DEFAULT registry, in the order tried within one directory
+ * (measured 2026-11-18: npm 11, pnpm 10, bun 1.4, Yarn 1.22 and 4.18 — the word `yarn` does not tell the two Yarns
+ * apart, so it counts the files of both).
+ */
+const PROJECT_DEFAULT_FILES: Record<string, ReadonlyArray<{ name: string; parse: NpmParser }>> = {
+  npm: [{ name: '.npmrc', parse: fromNpmrc }],
+  npx: [{ name: '.npmrc', parse: fromNpmrc }],
+  pnpm: [{ name: '.npmrc', parse: fromNpmrc }],
+  bun: [
+    { name: '.npmrc', parse: fromNpmrc },
+    { name: 'bunfig.toml', parse: fromBunfig },
+  ],
+  yarn: [
+    { name: '.npmrc', parse: fromNpmrc },
+    { name: '.yarnrc.yml', parse: fromYarnrcYml },
+    { name: '.yarnrc', parse: fromYarnrc },
+  ],
+};
+
+/**
+ * The PROJECT file that sets the default registry for `manager` (`npm`, `npx`, `pnpm`, `bun` or `yarn`), and the
+ * value as the file's parser returns it — the nearest file the manager obeys. The directories are the ones the
+ * manager reads: beside the nearest `package.json` from `ctx.projectDir` up (the directory itself when there is
+ * none), and at a workspace root above it (a `package.json` with `workspaces`; for pnpm also a `pnpm-workspace.yaml`);
+ * Yarn also reads a plain directory above, up to the repository root. Never the home directory or above it.
+ *
+ * `null` for another manager, no such file, the public registry, a file that only gives registries to scopes, a
+ * file that cannot be read; never throws.
+ */
+export function npmProjectDefaultRegistry(manager: string, ctx: RegistryContext = {}): { source: string; url: string } | null {
+  try {
+    const files = Object.hasOwn(PROJECT_DEFAULT_FILES, manager) ? PROJECT_DEFAULT_FILES[manager] : undefined;
+    if (files === undefined) return null;
+    const near = ancestors(ctx);
+    const first = near.findIndex((dir) => present(join(dir, 'package.json')));
+    const from = first < 0 ? 0 : first;
+    for (const dir of near.slice(from)) {
+      const isBase = dir === near[from];
+      const obeyed =
+        isBase ||
+        manager === 'yarn' ||
+        hasWorkspaces(read(join(dir, 'package.json'), ctx, undefined, 'workspace manifest')) ||
+        (manager === 'pnpm' && present(join(dir, 'pnpm-workspace.yaml')));
+      if (!obeyed) continue;
+      for (const { name, parse } of files) {
+        const source = join(dir, name);
+        const text = read(source, ctx);
+        const url = text === undefined ? undefined : parse(text, undefined);
+        if (url === undefined) continue;
+        return isPublic('npm', url) ? null : { source, url };
+      }
+    }
+  } catch {
+    // unknown reads as none: no line
+  }
+  return null;
+}
+
+/**
  * The registry URL as it is compared with a lockfile's: an `http(s)` URL's
  * origin and path with a trailing slash, no credentials, query or fragment;
  * `undefined` for anything else (a variable left unexpanded, `(configured)`)
