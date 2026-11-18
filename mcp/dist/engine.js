@@ -121896,6 +121896,73 @@ var init_canaries = __esm({
   }
 });
 
+// src/pkgvet/lockfile.ts
+var JSON_PLAIN;
+var init_lockfile = __esm({
+  "src/pkgvet/lockfile.ts"() {
+    "use strict";
+    init_boundedJson();
+    init_versions2();
+    JSON_PLAIN = Array.from({ length: 128 }, (_, c) => " 	\n\r,:+-.eE0123456789".includes(String.fromCharCode(c)));
+  }
+});
+
+// src/pkgvet/manifest.ts
+var MAX_MANIFEST_BYTES3, REASON, MANIFEST_UNREADABLE_REASONS, UNKNOWN_DIRECTORY;
+var init_manifest2 = __esm({
+  "src/pkgvet/manifest.ts"() {
+    "use strict";
+    init_configFile();
+    init_parseCommand();
+    MAX_MANIFEST_BYTES3 = 1024 * 1024;
+    REASON = {
+      notRegular: "not a regular file",
+      tooLarge: "over 1 MiB",
+      notJson: "not valid JSON",
+      notManifest: "not a package.json object",
+      network: "on a network path",
+      unreadable: "could not be read",
+      tooMany: "past the limit of 8 requirement files",
+      tooDeep: "included more than 3 levels deep",
+      unknownDir: "where the command runs could not be determined"
+    };
+    MANIFEST_UNREADABLE_REASONS = Object.values(REASON);
+    UNKNOWN_DIRECTORY = REASON.unknownDir;
+  }
+});
+
+// src/pkgvet/pins.ts
+var init_pins2 = __esm({
+  "src/pkgvet/pins.ts"() {
+    "use strict";
+    init_osv();
+    init_vet();
+  }
+});
+
+// src/pkgvet/hookDecision.ts
+var MAX_PARSED_LENGTH, MAX_LOCKFILE_BYTES2, MAX_PACKAGE_JSON_BYTES2, COULD_NOT_VET, NOT_VERIFIED;
+var init_hookDecision = __esm({
+  "src/pkgvet/hookDecision.ts"() {
+    "use strict";
+    init_configFile();
+    init_lockfile();
+    init_manifest2();
+    init_parseCommand();
+    init_pins2();
+    init_popular();
+    init_privateRegistry();
+    init_typosquat();
+    init_vet();
+    init_versions2();
+    MAX_PARSED_LENGTH = 512 * 1024;
+    MAX_LOCKFILE_BYTES2 = 16 * 1024 * 1024;
+    MAX_PACKAGE_JSON_BYTES2 = 1024 * 1024;
+    COULD_NOT_VET = "dev-guardian could not vet ";
+    NOT_VERIFIED = " \u2014 not verified.";
+  }
+});
+
 // src/selftest/hookChecks.ts
 import { join as join120 } from "node:path";
 function answersAsExpected(check2, stdout) {
@@ -121912,6 +121979,19 @@ function answersAsExpected(check2, stdout) {
   if (check2.expect === "deny") return answer.permissionDecision === "deny";
   return typeof answer.additionalContext === "string" && /secret/i.test(answer.additionalContext);
 }
+function notVerifiedLine(stdout) {
+  let parsed2;
+  try {
+    parsed2 = JSON.parse(stdout.trim());
+  } catch {
+    return void 0;
+  }
+  const out = isObject5(parsed2) ? parsed2["hookSpecificOutput"] : void 0;
+  const context = isObject5(out) ? out["additionalContext"] : void 0;
+  if (typeof context !== "string") return void 0;
+  const line = context.split(/\r?\n/).find((l) => l.startsWith(COULD_NOT_VET) && l.endsWith(NOT_VERIFIED));
+  return line === void 0 ? void 0 : line.slice(0, MAX_LINE);
+}
 function softenedBy(check2, env, home) {
   if (env["GUARDIAN_HOOKS"] === "off") return "GUARDIAN_HOOKS=off";
   const file2 = USER_CONFIG_LABEL;
@@ -121925,19 +122005,22 @@ function softenedBy(check2, env, home) {
     const bash = user["bash"];
     if (isObject5(bash) && bash["block"] === false) return `"bash": {"block": false} in ${file2}`;
   }
+  if (check2.id === "hooks:install-vet" && env["GUARDIAN_PKG_VET"] === "0") return "GUARDIAN_PKG_VET=0";
   if (check2.id === "hooks:secret-warning") {
     const secrets = user["secrets"];
     if (isObject5(secrets) && secrets["warn"] === false) return `"secrets": {"warn": false} in ${file2}`;
   }
   return void 0;
 }
-var BASH_COMMAND, POWERSHELL_COMMAND, SECRET_CANARY, preToolUse, HOOK_CHECKS, userHooksConfigPath, isObject5, USER_CONFIG_LABEL;
+var BASH_COMMAND, POWERSHELL_COMMAND, INSTALL_COMMAND, SECRET_CANARY, preToolUse, HOOK_CHECKS, MAX_LINE, userHooksConfigPath, isObject5, USER_CONFIG_LABEL;
 var init_hookChecks = __esm({
   "src/selftest/hookChecks.ts"() {
     "use strict";
     init_configFile();
+    init_hookDecision();
     BASH_COMMAND = ["rm", "-rf", "/"].join(" ");
     POWERSHELL_COMMAND = ["Remove-Item", "-Recurse", "-Force", "C:\\"].join(" ");
+    INSTALL_COMMAND = ["npm", "install", "crossenv"].join(" ");
     SECRET_CANARY = "secrets/app.properties";
     preToolUse = (ws, tool54, input2) => ({
       hook_event_name: "PreToolUse",
@@ -121968,6 +122051,12 @@ var init_hookChecks = __esm({
         })
       },
       {
+        id: "hooks:install-vet",
+        event: "PreToolUse",
+        expect: "deny",
+        payload: (ws) => preToolUse(ws, "Bash", { command: INSTALL_COMMAND })
+      },
+      {
         id: "hooks:secret-warning",
         event: "PostToolUse",
         expect: "secret-warning",
@@ -121979,6 +122068,7 @@ var init_hookChecks = __esm({
         })
       }
     ];
+    MAX_LINE = 600;
     userHooksConfigPath = (home) => join120(home, ".config", "dev-guardian", "hooks.json");
     isObject5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
     USER_CONFIG_LABEL = "~/.config/dev-guardian/hooks.json";
@@ -122033,7 +122123,8 @@ var init_controls = __esm({
       { id: "hooks:bash-block", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS },
       { id: "hooks:powershell-block", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS },
       { id: "hooks:settings-guard", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS },
-      { id: "hooks:secret-warning", kind: "hook", scanner: "hooks", canary: SECRET_CANARY, expect: "secret-warning", timeoutMs: HOOK_TIMEOUT_MS }
+      { id: "hooks:secret-warning", kind: "hook", scanner: "hooks", canary: SECRET_CANARY, expect: "secret-warning", timeoutMs: HOOK_TIMEOUT_MS },
+      { id: "hooks:install-vet", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS }
     ];
   }
 });
@@ -122420,18 +122511,8 @@ async function runSelftest(opts) {
     if (hookControls.length > 0) {
       const dispatcherThere = isRegularFile(opts.dispatcherPath);
       const secretText = seeded.get(SECRET_CANARY) ?? "";
-      for (const control of hookControls) {
-        const check2 = HOOK_CHECKS.find((h) => h.id === control.id);
-        if (check2 === void 0) continue;
-        if (!dispatcherThere) {
-          record8(control, { installed: false, ended: "not_run", canaryRead: null, canaryReported: false, reason: "the hooks' dispatcher is not in this install" }, null);
-          continue;
-        }
-        if (interrupted()) {
-          record8(control, { installed: true, ended: "not_run", canaryRead: null, canaryReported: false, reason: "interrupted before this control ran" }, opts.pluginVersion);
-          continue;
-        }
-        let observation;
+      const notRun2 = (reason, installed = true) => ({ installed, ended: "not_run", canaryRead: null, canaryReported: false, reason });
+      const launchHook = async (control, check2) => {
         try {
           const answer = await within(
             runners.hook({
@@ -122448,26 +122529,52 @@ async function runSelftest(opts) {
             () => ({ exitCode: null, stdout: "", timedOut: true })
           );
           if (answer.spawnError !== void 0) {
-            observation = { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the dispatcher could not be started: ${answer.spawnError}` };
-          } else if (answer.timedOut) {
-            observation = { installed: true, ended: "timeout", canaryRead: null, canaryReported: false, reason: `the dispatcher did not answer in ${Math.round(control.timeoutMs / 1e3)} s` };
-          } else if (answersAsExpected(check2, answer.stdout)) {
-            observation = { installed: true, ended: "ok", canaryRead: true, canaryReported: true };
-          } else {
-            const soft = softenedBy(check2, env, home);
-            observation = {
-              installed: true,
-              ended: "ok",
-              canaryRead: true,
-              canaryReported: false,
-              ...soft !== void 0 ? { softenedBy: soft } : {},
-              reason: check2.expect === "deny" ? "the dispatcher ran and did not deny it: on this install the guard lets it through" : "the dispatcher ran and gave no secret warning for a write that holds one"
-            };
+            return { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the dispatcher could not be started: ${answer.spawnError}` };
           }
+          if (answer.timedOut) {
+            return { installed: true, ended: "timeout", canaryRead: null, canaryReported: false, reason: `the dispatcher did not answer in ${Math.round(control.timeoutMs / 1e3)} s` };
+          }
+          if (answersAsExpected(check2, answer.stdout)) return { installed: true, ended: "ok", canaryRead: true, canaryReported: true };
+          const notVerified = check2.id === "hooks:install-vet" ? notVerifiedLine(answer.stdout) : void 0;
+          if (notVerified !== void 0) return { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: notVerified };
+          const soft = softenedBy(check2, env, home);
+          return {
+            installed: true,
+            ended: "ok",
+            canaryRead: true,
+            canaryReported: false,
+            ...soft !== void 0 ? { softenedBy: soft } : {},
+            reason: check2.expect === "deny" ? "the dispatcher ran and did not deny it: on this install the guard lets it through" : "the dispatcher ran and gave no secret warning for a write that holds one"
+          };
         } catch (error62) {
-          observation = { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf3(error62)}` };
+          return { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf3(error62)}` };
         }
-        record8(control, observation, opts.pluginVersion);
+      };
+      const unlaunched = (check2) => {
+        if (!dispatcherThere) return { observation: notRun2("the hooks' dispatcher is not in this install", false), version: null };
+        if (interrupted()) return { observation: notRun2("interrupted before this control ran"), version: opts.pluginVersion };
+        if (check2.id !== "hooks:install-vet") return void 0;
+        const soft = softenedBy(check2, env, home);
+        if (soft !== void 0) {
+          return {
+            observation: { installed: true, ended: "ok", canaryRead: true, canaryReported: false, softenedBy: soft, reason: "not launched: the user switched package vetting off" },
+            version: opts.pluginVersion
+          };
+        }
+        if (offline) {
+          return { observation: notRun2("GUARDIAN_OFFLINE=1: the install check needs the package registry, and nothing is fetched offline"), version: opts.pluginVersion };
+        }
+        return void 0;
+      };
+      const turnOf = async (control, check2) => unlaunched(check2) ?? { observation: await launchHook(control, check2), version: opts.pluginVersion };
+      const vetControl = hookControls.find((c) => c.id === "hooks:install-vet");
+      const vetCheck = HOOK_CHECKS.find((h) => h.id === "hooks:install-vet");
+      const vetTurn = vetControl !== void 0 && vetCheck !== void 0 ? turnOf(vetControl, vetCheck) : void 0;
+      for (const control of hookControls) {
+        const check2 = HOOK_CHECKS.find((h) => h.id === control.id);
+        if (check2 === void 0) continue;
+        const turn = control === vetControl && vetTurn !== void 0 ? await vetTurn : await turnOf(control, check2);
+        record8(control, turn.observation, turn.version);
       }
     }
     if (!interrupted()) {

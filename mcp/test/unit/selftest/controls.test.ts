@@ -52,7 +52,7 @@ function importsOf(file: string): string[] {
 }
 
 describe('the core controls', () => {
-  it('T-02 one control per rule pack, plus gitleaks, the two Trivy scans and the four hook checks, each id once', () => {
+  it('T-02 one control per rule pack, plus gitleaks, the two Trivy scans and the five hook checks, each id once', () => {
     expect(PACKS.length).toBeGreaterThanOrEqual(15);
     const packControls = CORE_CONTROLS.filter((c) => c.kind === 'semgrep-pack');
     expect(packControls.map((c) => c.pack).sort()).toEqual(PACKS);
@@ -68,9 +68,10 @@ describe('the core controls', () => {
       ['hooks:powershell-block', 'hook', 'hooks'],
       ['hooks:settings-guard', 'hook', 'hooks'],
       ['hooks:secret-warning', 'hook', 'hooks'],
+      ['hooks:install-vet', 'hook', 'hooks'],
     ]);
     expect(new Set(CORE_CONTROLS.map((c) => c.id)).size).toBe(CORE_CONTROLS.length);
-    expect(CORE_CONTROLS).toHaveLength(PACKS.length + 7);
+    expect(CORE_CONTROLS).toHaveLength(PACKS.length + 8);
     for (const c of CORE_CONTROLS) expect(c.timeoutMs, c.id).toBeGreaterThan(0);
   });
 
@@ -111,7 +112,7 @@ describe('the core controls', () => {
     }
 
     const twice = controlsProblems({ packsDir: PACKS_DIR, canariesDir: CANARIES_DIR, controls: [...CORE_CONTROLS, ...CORE_CONTROLS.slice(-1)] });
-    expect(twice.some((p) => p.includes('hooks:secret-warning'))).toBe(true);
+    expect(twice.some((p) => p.includes('hooks:install-vet'))).toBe(true);
   });
 });
 

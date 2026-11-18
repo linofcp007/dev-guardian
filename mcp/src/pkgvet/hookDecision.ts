@@ -681,7 +681,7 @@ function lockOutcome(
       if (why === '') why = v.unknown ?? '';
     }
   }
-  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${pinReason(why)}) — not verified.`);
+  if (unanswered > 0) lines.push(`${COULD_NOT_VET}${plural(unanswered)} of ${lock.file} (${pinReason(why)})${NOT_VERIFIED}`);
   if (left > 0) {
     lines.push(
       `dev-guardian: ${left} more ${left === 1 ? 'package' : 'packages'} of ${lock.file} ${left === 1 ? 'was' : 'were'} not vetted (only the first ${MAX_PINS} are) — not verified.`,
@@ -895,6 +895,14 @@ function plainMove(dir: string, real: string, target: string, windows: boolean):
   return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
 }
 
+/**
+ * The words of the hook's "could not vet … — not verified." line, which the
+ * selftest (`selftest/hookChecks.ts`) recognises by these very constants: were
+ * the line worded otherwise, the recognition would follow.
+ */
+export const COULD_NOT_VET = 'dev-guardian could not vet ';
+export const NOT_VERIFIED = ' — not verified.';
+
 /** The note for a command read only to its first 512 KB. */
 const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
 
@@ -1073,9 +1081,9 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     lines.push('⚠️ dev-guardian package vetting — review before relying on these:');
     for (const w of warnings) lines.push(`  • ${w}`);
   }
-  if (unverified.length > 0) lines.push(`dev-guardian could not vet ${unverified.join(', ')} — not verified.`);
+  if (unverified.length > 0) lines.push(`${COULD_NOT_VET}${unverified.join(', ')}${NOT_VERIFIED}`);
   for (const [file, { count, why }] of unverifiedIn) {
-    lines.push(`dev-guardian could not vet ${plural(count)} of ${file} (${why}) — not verified.`);
+    lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
   }
   // Two installs of one line may read one lockfile twice: a line is said once.
   lines.push(...new Set([...lockLines, ...manifestNotes]));
@@ -1200,7 +1208,9 @@ function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; 
  *   - every other `warn` check, except known vulnerabilities on a version
  *     the user did not pin exactly (M4: for a range or a bare name the
  *     installed version is not known here — the tool still reports them);
- *   - checks that could not run → the one-line "not verified" note.
+ *   - checks that could not run → the one-line "not verified" note — also
+ *     beside a warning: a package with a typosquat suspicion whose registry
+ *     did not answer is told both ways, as {@link decideManifestOne} does.
  */
 function decideOne(
   r: PackageVetResult,
@@ -1230,9 +1240,10 @@ function decideOne(
   if (r.requested_version_unpublished === true) {
     warns.push(`requested version ${r.requested ?? ''} is not published — possibly a hallucinated version`);
   }
-  if (warns.length > 0) return { warn: `${label(r)}: ${warns.slice(0, 3).join('; ')}` };
-
+  const out: { warn?: string; unverified?: string } = {};
+  if (warns.length > 0) out.warn = `${label(r)}: ${warns.slice(0, 3).join('; ')}`;
+  // A warning does not hide a check that could not run: the note says the rest was not verified.
   const unknownCheck = Object.values(r.checks).find((c) => c.status === 'unknown' && c.detail !== undefined);
-  if (unknownCheck !== undefined) return { unverified: `${label(r)} (${unknownCheck.detail ?? ''})` };
-  return {};
+  if (unknownCheck !== undefined) out.unverified = `${label(r)} (${unknownCheck.detail ?? ''})`;
+  return out;
 }

@@ -8,10 +8,12 @@ var __export = (target, all) => {
 // src/pkgvet/hookDecision.ts
 var hookDecision_exports = {};
 __export(hookDecision_exports, {
+  COULD_NOT_VET: () => COULD_NOT_VET,
   DEFAULT_DEADLINE_MS: () => DEFAULT_DEADLINE_MS,
   MAX_DEADLINE_MS: () => MAX_DEADLINE_MS,
   MAX_MANIFEST_PACKAGES: () => MAX_MANIFEST_PACKAGES,
   MAX_VETTED_PACKAGES: () => MAX_VETTED_PACKAGES,
+  NOT_VERIFIED: () => NOT_VERIFIED,
   decideInstallCommand: () => decideInstallCommand,
   escapeHatch: () => escapeHatch,
   vetDeadlineMs: () => vetDeadlineMs
@@ -6198,7 +6200,7 @@ function lockOutcome(lock, verdicts, counted) {
       if (why === "") why = v.unknown ?? "";
     }
   }
-  if (unanswered > 0) lines.push(`dev-guardian could not vet ${plural(unanswered)} of ${lock.file} (${pinReason(why)}) \u2014 not verified.`);
+  if (unanswered > 0) lines.push(`${COULD_NOT_VET}${plural(unanswered)} of ${lock.file} (${pinReason(why)})${NOT_VERIFIED}`);
   if (left > 0) {
     lines.push(
       `dev-guardian: ${left} more ${left === 1 ? "package" : "packages"} of ${lock.file} ${left === 1 ? "was" : "were"} not vetted (only the first ${MAX_PINS} are) \u2014 not verified.`
@@ -6330,6 +6332,8 @@ function plainMove(dir, real, target, windows) {
   const expected = resolve4(real, target);
   return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
 }
+var COULD_NOT_VET = "dev-guardian could not vet ";
+var NOT_VERIFIED = " \u2014 not verified.";
 var CUT_NOTE = "dev-guardian: installs past the first 512 KB of this command were not looked for \u2014 not verified.";
 async function decideInstallCommand(command, opts) {
   const shell = opts.shell ?? "bash";
@@ -6483,9 +6487,9 @@ ${counts.join(`
     lines.push("\u26A0\uFE0F dev-guardian package vetting \u2014 review before relying on these:");
     for (const w of warnings) lines.push(`  \u2022 ${w}`);
   }
-  if (unverified.length > 0) lines.push(`dev-guardian could not vet ${unverified.join(", ")} \u2014 not verified.`);
+  if (unverified.length > 0) lines.push(`${COULD_NOT_VET}${unverified.join(", ")}${NOT_VERIFIED}`);
   for (const [file, { count, why }] of unverifiedIn) {
-    lines.push(`dev-guardian could not vet ${plural(count)} of ${file} (${why}) \u2014 not verified.`);
+    lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
   }
   lines.push(.../* @__PURE__ */ new Set([...lockLines, ...manifestNotes]));
   if (notVetted > 0) {
@@ -6571,10 +6575,11 @@ function decideOne(r, uncertain) {
   if (r.requested_version_unpublished === true) {
     warns.push(`requested version ${r.requested ?? ""} is not published \u2014 possibly a hallucinated version`);
   }
-  if (warns.length > 0) return { warn: `${label2(r)}: ${warns.slice(0, 3).join("; ")}` };
+  const out = {};
+  if (warns.length > 0) out.warn = `${label2(r)}: ${warns.slice(0, 3).join("; ")}`;
   const unknownCheck = Object.values(r.checks).find((c) => c.status === "unknown" && c.detail !== void 0);
-  if (unknownCheck !== void 0) return { unverified: `${label2(r)} (${unknownCheck.detail ?? ""})` };
-  return {};
+  if (unknownCheck !== void 0) out.unverified = `${label2(r)} (${unknownCheck.detail ?? ""})`;
+  return out;
 }
 export {
   hookDecision_exports as installVetting

@@ -16,8 +16,9 @@
  *      the probe read is `silent`; one the probe never read is `unverified`.
  *      That is what tells a blind pack from an ignored path;
  *   4. gitleaks, Trivy's dependency audit, Trivy's IaC scan;
- *   5. the four hook checks, through the installed dispatcher
- *      (`hookChecks.ts`);
+ *   5. the five hook checks, through the installed dispatcher
+ *      (`hookChecks.ts`) — the install check, which asks the network, is
+ *      started first and runs beside the other four;
  *   6. the directory removed — also when a control throws, the run throws or
  *      it is interrupted — and only then the result saved (`store.ts`).
  *
@@ -32,7 +33,7 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { canaryPresent, canaryToken, createWorkspace, isRegularFile, leftoverWorkspaces, PROBE_RULE_FILE, removeWorkspace, seedCanaries, type Workspace } from './canaries.js';
 import { CORE_CONTROLS, PROBE_RULE_ID, SCANNERS_WITH_CONTROLS, type Control, type ScannerName } from './controls.js';
-import { answersAsExpected, HOOK_CHECKS, SECRET_CANARY, softenedBy } from './hookChecks.js';
+import { answersAsExpected, HOOK_CHECKS, notVerifiedLine, SECRET_CANARY, softenedBy } from './hookChecks.js';
 import { HOOKS_NOTE, nextStepFor, type SelftestReport } from './report.js';
 import { markRegressions, readHistory, saveRun, SELFTEST_SCHEMA, type ControlResult, type SaveResult, type SelftestRun } from './store.js';
 import { countVerdicts, exitCodeFor, judgeControl, type Observation, type RunEnd } from './verdict.js';
@@ -487,18 +488,10 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
       const dispatcherThere = isRegularFile(opts.dispatcherPath);
       // What the secret check "writes" is what was seeded: the same text gitleaks is pointed at.
       const secretText = seeded.get(SECRET_CANARY) ?? '';
-      for (const control of hookControls) {
-        const check = HOOK_CHECKS.find((h) => h.id === control.id);
-        if (check === undefined) continue;
-        if (!dispatcherThere) {
-          record(control, { installed: false, ended: 'not_run', canaryRead: null, canaryReported: false, reason: "the hooks' dispatcher is not in this install" }, null);
-          continue;
-        }
-        if (interrupted()) {
-          record(control, { installed: true, ended: 'not_run', canaryRead: null, canaryReported: false, reason: 'interrupted before this control ran' }, opts.pluginVersion);
-          continue;
-        }
-        let observation: Observation;
+      const notRun = (reason: string, installed = true): Observation => ({ installed, ended: 'not_run', canaryRead: null, canaryReported: false, reason });
+
+      /** One launch of the dispatcher for `check`, judged. Never throws. */
+      const launchHook = async (control: Control, check: (typeof HOOK_CHECKS)[number]): Promise<Observation> => {
         try {
           const answer = await within(
             runners.hook({
@@ -515,30 +508,64 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
             (): HookAnswer => ({ exitCode: null, stdout: '', timedOut: true }),
           );
           if (answer.spawnError !== undefined) {
-            observation = { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `the dispatcher could not be started: ${answer.spawnError}` };
-          } else if (answer.timedOut) {
-            observation = { installed: true, ended: 'timeout', canaryRead: null, canaryReported: false, reason: `the dispatcher did not answer in ${Math.round(control.timeoutMs / 1000)} s` };
-          } else if (answersAsExpected(check, answer.stdout)) {
-            observation = { installed: true, ended: 'ok', canaryRead: true, canaryReported: true };
-          } else {
-            // The dispatcher fails open: a blank answer is what this install's guard does with that command.
-            const soft = softenedBy(check, env, home);
-            observation = {
-              installed: true,
-              ended: 'ok',
-              canaryRead: true,
-              canaryReported: false,
-              ...(soft !== undefined ? { softenedBy: soft } : {}),
-              reason:
-                check.expect === 'deny'
-                  ? 'the dispatcher ran and did not deny it: on this install the guard lets it through'
-                  : 'the dispatcher ran and gave no secret warning for a write that holds one',
-            };
+            return { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `the dispatcher could not be started: ${answer.spawnError}` };
           }
+          if (answer.timedOut) {
+            return { installed: true, ended: 'timeout', canaryRead: null, canaryReported: false, reason: `the dispatcher did not answer in ${Math.round(control.timeoutMs / 1000)} s` };
+          }
+          if (answersAsExpected(check, answer.stdout)) return { installed: true, ended: 'ok', canaryRead: true, canaryReported: true };
+          // The install check hears from the network: the hook's own "could not vet" line is not a guard letting the canary through.
+          const notVerified = check.id === 'hooks:install-vet' ? notVerifiedLine(answer.stdout) : undefined;
+          if (notVerified !== undefined) return { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: notVerified };
+          // The dispatcher fails open: a blank answer is what this install's guard does with that command.
+          const soft = softenedBy(check, env, home);
+          return {
+            installed: true,
+            ended: 'ok',
+            canaryRead: true,
+            canaryReported: false,
+            ...(soft !== undefined ? { softenedBy: soft } : {}),
+            reason:
+              check.expect === 'deny'
+                ? 'the dispatcher ran and did not deny it: on this install the guard lets it through'
+                : 'the dispatcher ran and gave no secret warning for a write that holds one',
+          };
         } catch (error) {
-          observation = { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf(error)}` };
+          return { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf(error)}` };
         }
-        record(control, observation, opts.pluginVersion);
+      };
+
+      /** What a control gets without being launched — or `undefined` when it is to be launched. */
+      const unlaunched = (check: (typeof HOOK_CHECKS)[number]): { observation: Observation; version: string | null } | undefined => {
+        if (!dispatcherThere) return { observation: notRun("the hooks' dispatcher is not in this install", false), version: null };
+        if (interrupted()) return { observation: notRun('interrupted before this control ran'), version: opts.pluginVersion };
+        if (check.id !== 'hooks:install-vet') return undefined;
+        // Package vetting alone is the user's to switch off and, offline, never launched: it would only ask the registry.
+        const soft = softenedBy(check, env, home);
+        if (soft !== undefined) {
+          return {
+            observation: { installed: true, ended: 'ok', canaryRead: true, canaryReported: false, softenedBy: soft, reason: 'not launched: the user switched package vetting off' },
+            version: opts.pluginVersion,
+          };
+        }
+        if (offline) {
+          return { observation: notRun('GUARDIAN_OFFLINE=1: the install check needs the package registry, and nothing is fetched offline'), version: opts.pluginVersion };
+        }
+        return undefined;
+      };
+
+      const turnOf = async (control: Control, check: (typeof HOOK_CHECKS)[number]): Promise<{ observation: Observation; version: string | null }> =>
+        unlaunched(check) ?? { observation: await launchHook(control, check), version: opts.pluginVersion };
+
+      // The install check waits on the network: it starts first and is awaited at its own turn, so the report keeps its order.
+      const vetControl = hookControls.find((c) => c.id === 'hooks:install-vet');
+      const vetCheck = HOOK_CHECKS.find((h) => h.id === 'hooks:install-vet');
+      const vetTurn = vetControl !== undefined && vetCheck !== undefined ? turnOf(vetControl, vetCheck) : undefined;
+      for (const control of hookControls) {
+        const check = HOOK_CHECKS.find((h) => h.id === control.id);
+        if (check === undefined) continue;
+        const turn = control === vetControl && vetTurn !== undefined ? await vetTurn : await turnOf(control, check);
+        record(control, turn.observation, turn.version);
       }
     }
 

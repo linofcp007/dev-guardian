@@ -207,7 +207,7 @@ describe('a selftest run', () => {
   it('T-01 makes a new directory under the temporary root, seeds the canaries without their suffix, runs every control and gives each a verdict', async () => {
     const { runners, calls } = fakes();
     const { result, run, tmpRoot } = await selftest(runners);
-    expect(CORE_CONTROLS.length).toBeGreaterThanOrEqual(22);
+    expect(CORE_CONTROLS.length).toBeGreaterThanOrEqual(23);
     expect(run.controls.map((c) => c.id).sort()).toEqual(CORE_CONTROLS.map((c) => c.id).sort());
     for (const c of run.controls) expect(c.verdict, c.id).toBe('detected');
     expect(run.summary.detected).toBe(CORE_CONTROLS.length);
@@ -245,7 +245,7 @@ describe('a selftest run', () => {
     }
     expect(calls.gitleaks).toHaveLength(1);
     expect(calls.trivy.map((c) => c.mode)).toEqual(['deps', 'iac']);
-    expect(calls.hook).toHaveLength(4);
+    expect(calls.hook).toHaveLength(5);
   });
 
   it('T-03 by default the runners are the scan tools own, and the dispatcher is started where the install has it, with the user home untouched', async () => {
@@ -259,7 +259,7 @@ describe('a selftest run', () => {
     const { run } = await selftest(runners, { env: cleanEnv({ FAKE_RECORD: record }) });
     for (const id of HOOK_IDS) expect(run.controls.find((c) => c.id === id)?.verdict, id).toBe('detected');
     const seen = readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { argv: string[]; home: string | null; userprofile: string | null; project: string; cwd: string });
-    expect(seen).toHaveLength(4);
+    expect(seen).toHaveLength(5);
     for (const s of seen) {
       expect(realpathSync.native(s.argv[0] ?? '')).toBe(realpathSync.native(DISPATCHER));
       // The user's own configuration is what is tested: their home is the one the dispatcher sees.
@@ -660,7 +660,7 @@ describe('a selftest run', () => {
     const { runners } = fakes({ hook: realHook });
     await selftest(runners, { env: cleanEnv({ FAKE_RECORD: record }) });
     const seen = readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { argv: string[]; stdin: string; kind: string });
-    expect(seen.map((s) => s.kind).sort()).toEqual(['bash', 'powershell', 'secret', 'settings']);
+    expect(seen.map((s) => s.kind).sort()).toEqual(['bash', 'bash', 'powershell', 'secret', 'settings']);
     for (const s of seen) {
       // The dispatcher and the event's name: nothing else was ever on a command line.
       expect(s.argv).toHaveLength(2);
