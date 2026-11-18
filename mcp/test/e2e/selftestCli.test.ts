@@ -16,10 +16,12 @@
  *     reports nothing — each is `silent`, and none is ever `detected`.
  */
 
-import { cpSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { captureOutput } from '../../src/runners/spawn.js';
+import { CANARY_SUFFIX } from '../../src/selftest/canaries.js';
 import { CORE_CONTROLS } from '../../src/selftest/controls.js';
 import { defaultRunners } from '../../src/selftest/defaultRunners.js';
 import { installPaths } from '../../src/selftest/paths.js';
@@ -305,5 +307,184 @@ describe('dev-guardian selftest — the real scanners', () => {
     expect(verdict('hooks:settings-guard')).toBe('detected');
     expect(verdict('hooks:secret-warning')).toBe('detected');
     expect(r.exitCode).toBe(1);
+  });
+});
+
+// ───────────────── selftest-install-vet-canary — the canary is the name of a malicious package: nothing of it may run
+
+describe('selftest-install-vet-canary', () => {
+  const VET = 'hooks:install-vet';
+  const CANARY = 'crossenv';
+  const REGISTRY_DOCUMENT = `https://registry.npmjs.org/${CANARY}`;
+  const OSV = 'https://api.osv.dev/v1/querybatch';
+  /** The fetch stand-in of the hook tests: in the dispatcher's process it answers the routes below, refuses every other URL and logs each request. */
+  const PRELOAD = new URL('../helpers/fetchMockPreload.mjs', import.meta.url).href;
+  /** What the public registry answers for the canary: the abbreviated document whose `latest` is npm's security placeholder. */
+  const ROUTES = {
+    [REGISTRY_DOCUMENT]: {
+      accept: 'install-v1',
+      body: { 'dist-tags': { latest: '0.0.1-security' }, modified: '2020-01-01T00:00:00.000Z', versions: { '0.0.1-security': {} } },
+    },
+    [OSV]: { osv: {} },
+  };
+  /** What a hook, or a selftest, that RAN the canary's command instead of reading it would start. */
+  const MANAGERS = ['npm', 'npx', 'pnpm', 'yarn', 'bun'];
+  /**
+   * What must not reach the run from this machine: its registry configuration and dev-guardian switches (the list
+   * of `hooksPkgVet.test.ts`), and the two variables the run is given its own value of.
+   */
+  const LEAKY_ENV =
+    /^(?:npm_config_|PIP_|UV_|YARN_|BUN_|NUGET_|NuGetPackageSourceCredentials_|COMPOSER|VIRTUAL_ENV$|CONDA_PREFIX$|XDG_CONFIG_DIRS$|GUARDIAN_|NODE_OPTIONS$|PATH$)/i;
+
+  /**
+   * A directory to be a run's whole PATH: a stand-in for every package
+   * manager, each of which appends its arguments to `mark` when it is
+   * started — how the suite sees a process that should never have been
+   * (`test/integration/plantedBinaries.test.ts`).
+   */
+  function plantedManagers(mark: string): string {
+    const dir = makeTempDir('selftest-vet-path-');
+    for (const name of MANAGERS) {
+      if (process.platform === 'win32') writeFileSync(join(dir, `${name}.cmd`), `@echo off\r\necho ${name} %*>>"${mark}"\r\n`);
+      else {
+        writeFileSync(join(dir, name), `#!/bin/sh\necho "${name} $*" >> '${mark}'\n`);
+        chmodSync(join(dir, name), 0o755);
+      }
+    }
+    return dir;
+  }
+
+  /** Every entry below `dir` — files and directories —, relative, with forward slashes, sorted. */
+  const listing = (dir: string): string[] =>
+    readdirSync(dir, { recursive: true })
+      .map((entry) => String(entry).replace(/\\/g, '/'))
+      .sort();
+
+  /** What a selftest seeds in its temporary project, and nothing else: the shipped canaries without their suffix, their directories, and the reports' directory. */
+  function seededEntries(canariesDir: string): string[] {
+    const entries = new Set<string>(['.guardian', '.guardian/reports']);
+    for (const shipped of listing(join(canariesDir, 'project'))) {
+      if (!shipped.endsWith(CANARY_SUFFIX)) continue;
+      const parts = shipped.slice(0, -CANARY_SUFFIX.length).split('/');
+      parts.forEach((_, i) => entries.add(parts.slice(0, i + 1).join('/')));
+    }
+    return [...entries].sort();
+  }
+
+  /**
+   * A selftest of the hook checks alone, in this process, with the REAL
+   * dispatcher of this checkout: `routes` are all the network its process has
+   * (the stand-in refuses every other URL), the stand-ins of
+   * {@link plantedManagers} are its whole PATH, and its home is empty. No
+   * `GUARDIAN_OFFLINE`: as far as the selftest and the hook know, the network
+   * is there to be asked.
+   */
+  async function hooksRun(routes: Record<string, unknown>): Promise<{
+    result: Awaited<ReturnType<typeof runSelftest>>;
+    /** Every URL the dispatcher asked for, answered or refused. */
+    requests: string[];
+    /** What the stand-ins were started with: empty when no package manager was started. */
+    managersStarted: string;
+    canariesDir: string;
+  }> {
+    const home = makeTempDir('selftest-vet-home-');
+    const log = join(home, 'fetch.log');
+    const mark = join(home, 'A-PACKAGE-MANAGER-WAS-STARTED');
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(process.env)) if (!LEAKY_ENV.test(key)) env[key] = value;
+    Object.assign(env, {
+      PATH: plantedManagers(mark),
+      // Every user-level file — the hooks' own, npm's — is looked for in an empty home.
+      HOME: home,
+      USERPROFILE: home,
+      APPDATA: home,
+      LOCALAPPDATA: home,
+      ProgramData: home,
+      'ProgramFiles(x86)': home,
+      XDG_CONFIG_HOME: home,
+      XDG_DATA_HOME: home,
+      CLAUDE_CONFIG_DIR: '',
+      // The registry and OSV, replaced in the dispatcher's process: no request of these tests reaches a network.
+      NODE_OPTIONS: `${process.env['NODE_OPTIONS'] ?? ''} --import=${PRELOAD}`.trim(),
+      GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(routes),
+      GUARDIAN_TEST_FETCH_LOG: log,
+    });
+
+    // The control: started by its bare name on this PATH, a stand-in does leave its mark — so its absence says something.
+    const started = await captureOutput('npm', ['--version'], { env, timeoutMs: FAST_MS });
+    expect(started.spawnError, 'a bare `npm` on this PATH is the stand-in').toBeUndefined();
+    expect(existsSync(mark), 'started, a stand-in leaves its mark').toBe(true);
+    rmSync(mark);
+
+    const paths = installPaths();
+    const result = await runSelftest({
+      ...paths,
+      dataDir: makeTempDir('selftest-vet-data-'),
+      tmpRoot: makeTempDir('selftest-vet-tmp-'),
+      env,
+      homeDir: home,
+      // Kept, to see what the run left in it; removed with the other temporary directories of this file.
+      keep: true,
+      save: false,
+      controls: CORE_CONTROLS.filter((c) => c.kind === 'hook'),
+      // The dispatcher is started for real; no scanner has a control in this run, and none is asked for its version.
+      runners: { ...defaultRunners(), probe: async () => ({ installed: true, version: '0.0.0' }), installedTools: async () => [] },
+    });
+    return {
+      result,
+      requests: existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : [],
+      managersStarted: existsSync(mark) ? readFileSync(mark, 'utf8') : '',
+      canariesDir: paths.canariesDir,
+    };
+  }
+
+  it("T-07 abuse case: with the real dispatcher and the registry replaced, the canary install is detected — and no package manager is started, nothing is written in the temporary project, and only the canary's registry document and OSV are asked", async () => {
+    const { result: r, requests, managersStarted, canariesDir } = await hooksRun(ROUTES);
+
+    const controls = r.report.run.controls;
+    expect(controls.map((c) => c.id), 'the hook checks of the run').toContain(VET);
+    // The guard read the canary — a package the registry says npm took down — and denied its install.
+    const lines = controls.map((c) => `${c.id}: ${c.verdict} ${c.reason ?? ''}`.trim());
+    expect(lines).toEqual(controls.map((c) => `${c.id}: detected`));
+    expect(r.exitCode).toBe(0);
+
+    // NFR-1, US-1.AC-11: one registry document and one OSV query, for the canary — the only requests of the whole run.
+    expect([...requests].sort()).toEqual([OSV, REGISTRY_DOCUMENT].sort());
+
+    // US-1.AC-10: the command was read, never run — no package manager was started…
+    expect(managersStarted, 'a package manager was started').toBe('');
+    // …and the temporary project holds what the selftest seeded, and nothing an install leaves: no node_modules,
+    // no manifest, no lockfile but the dependency audit's own canary.
+    const kept = r.report.workspace;
+    expect(kept).toMatchObject({ kept: true });
+    const project = listing(join(kept?.path ?? '', 'project'));
+    expect(project).toEqual(seededEntries(canariesDir));
+    expect(project.filter((entry) => /(^|\/)(node_modules|package\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?)$/.test(entry))).toEqual([]);
+    expect(project.filter((entry) => /(^|\/)package-lock\.json$/.test(entry))).toEqual(['deps/package-lock.json']);
+  });
+
+  it("T-11 with the real dispatcher and EVERY request refused — the network cut, and no GUARDIAN_OFFLINE — the install check is unverified, with the hook's reason: never silent, never detected", async () => {
+    // No route at all: the stand-in refuses the registry and OSV alike, as a machine with no way out does.
+    const { result: r, requests, managersStarted } = await hooksRun({});
+
+    const controls = r.report.run.controls;
+    expect(controls.map((c) => c.id), 'the hook checks of the run').toContain(VET);
+    const vet = controls.find((c) => c.id === VET);
+    // The guard could not read what the registry says of the canary, and said so: that is not a guard that kept quiet.
+    expect(`${VET}: ${vet?.verdict ?? 'no verdict'}`).toBe(`${VET}: unverified`);
+    // The reason is the hook's, and the hook's is the failure itself: what the refusing stand-in answered its request.
+    expect(vet?.reason).toContain('unexpected network call in test');
+    expect(vet?.next).toEqual(expect.any(String));
+    // The four checks that ask nothing of the network are not touched by its absence.
+    expect(controls.filter((c) => c.id !== VET).map((c) => `${c.id}: ${c.verdict}`)).toEqual(
+      controls.filter((c) => c.id !== VET).map((c) => `${c.id}: detected`),
+    );
+    // The exit code of a run with an unverified control and no silent one.
+    expect(r.report.run.summary).toMatchObject({ unverified: 1, silent: 0, detected: 4 });
+    expect(r.exitCode).toBe(2);
+
+    // It did ask — the check was launched, not skipped — and asked for nothing but the canary's document and OSV.
+    expect([...new Set(requests)].sort()).toEqual([OSV, REGISTRY_DOCUMENT].sort());
+    expect(managersStarted, 'a package manager was started').toBe('');
   });
 });

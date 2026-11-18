@@ -590,3 +590,60 @@ describe('install-vet-lockfile-pins', () => {
     });
   });
 });
+
+// ───────────────── selftest-install-vet-canary — the docs say there are five hook checks, and that one of them uses the network
+
+describe('selftest-install-vet-canary', () => {
+  /**
+   * The sentences of a hard-wrapped page, each on one line: a line break inside a paragraph is a space; a blank
+   * line, a list item and a full stop before white space end one; a table row is one, whole.
+   */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => {
+        const line = block.replace(/\s+/g, ' ').trim();
+        return line.startsWith('|') ? [line] : line.split(/(?<=[.!?])\s+/);
+      })
+      .filter((s) => s !== '');
+
+  // What US-1.AC-8 and EC-1 want said, each looked for as ONE sentence (or one table row) that holds its words,
+  // whatever the phrasing around them.
+  const STATEMENTS: Array<[what: string, words: RegExp[]]> = [
+    ['there are five hook checks', [/\bfive\b/i, /\bhooks?\b/i]],
+    ['the install check is the only one that uses the network', [/\bonly\b/i, /\bnetwork\b/i]],
+    ["what it asks, and of whom: the canary package's name, of the public npm registry and of OSV", [/\bregistry\b/i, /\bOSV\b/, /\bname\b|crossenv/i]],
+    ['how to read its `unverified`: the registry was not asked, or did not answer — the network, not the guard', [/`unverified`/, /\bnetwork\b|\bregistry\b/i]],
+    ['its `silent` may be the canary, not the guard: npm no longer serving the placeholder is the first place to look (EC-1)', [/`silent`/, /\bplaceholder\b|crossenv/i]],
+  ];
+
+  it('T-09 docs/selftest.md has the line of hooks:install-vet, says it is the one hook check that uses the network, what it asks and how to read its verdicts; the CLI help says five checks of the hooks', () => {
+    const page = read('docs/selftest.md');
+    const said = sentences(page);
+    const from = page.indexOf('## The core controls');
+    const to = page.indexOf('\n## ', from + 1);
+    const controls = sentences(page.slice(from, to === -1 ? undefined : to));
+    const row = controls.find((s) => s.startsWith('|') && s.includes('`hooks:install-vet`')) ?? '';
+
+    // The CLI's own help, as its source holds it: the selftest's paragraph, one line.
+    const cli = read('cli/dev-guardian.mjs');
+    const start = cli.indexOf('selftest — does each core control DETECT');
+    expect(start, "the selftest's paragraph of the CLI help").toBeGreaterThan(-1);
+    const help = cli.slice(start, cli.indexOf('\nExamples:', start)).replace(/\s+/g, ' ');
+
+    expect({
+      'docs/selftest.md, "The core controls": the row of hooks:install-vet, which must answer `deny`': /`deny`/.test(row),
+      'docs/selftest.md does not say': STATEMENTS.filter(([, words]) => !said.some((s) => words.every((w) => w.test(s)))).map(([what]) => what),
+      'docs/selftest.md still says "all four"': /\ball four\b/i.test(page.replace(/\s+/g, ' ')),
+      'the CLI help says five checks of the hooks': /\bfive\b[^.]*\bhooks?\b/i.test(help),
+      'the CLI help still says four checks': /\bfour\b[^.]*\bhooks?\b/i.test(help),
+    }).toEqual({
+      'docs/selftest.md, "The core controls": the row of hooks:install-vet, which must answer `deny`': true,
+      'docs/selftest.md does not say': [],
+      'docs/selftest.md still says "all four"': false,
+      'the CLI help says five checks of the hooks': true,
+      'the CLI help still says four checks': false,
+    });
+  });
+});

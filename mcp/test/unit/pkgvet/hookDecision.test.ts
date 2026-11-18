@@ -2538,3 +2538,77 @@ describe('install-vet-slow-first-round', () => {
     });
   });
 });
+
+// ───────────────── selftest-install-vet-canary — a warning does not hide what could not be verified (US-1.AC-9)
+
+describe('selftest-install-vet-canary', () => {
+  /** The canary of the selftest's install check: a name one edit from a popular one. */
+  const NAME = 'crossenv';
+  const DOCUMENT = `https://registry.npmjs.org/${NAME}`;
+  /** A popular list that holds the name the canary resembles — this file's own way of giving one. */
+  const POPULAR = { popular: { npm: ['cross-env', 'express', 'lodash'] } };
+  /** The network cut: every request is refused, the registry's and OSV's alike. */
+  const cut = (async (): Promise<Response> => {
+    throw new TypeError('fetch failed');
+  }) as typeof fetch;
+
+  const said = (d: Awaited<ReturnType<typeof decideInstallCommand>>): string[] => (d?.context ?? '').split('\n');
+  /** How many times a line names the package — `cross-env` is another name. */
+  const names = (line: string, name: string): number => line.split(new RegExp(`(?<![\\w-])${name}(?![\\w-])`)).length - 1;
+  /** The lines of an answer that warn of the package as a typosquat suspect, and those that say it could not be vetted. */
+  const warningsOf = (d: Awaited<ReturnType<typeof decideInstallCommand>>, name: string): string[] =>
+    said(d).filter((line) => names(line, name) > 0 && /typosquat/.test(line));
+  const notesOf = (d: Awaited<ReturnType<typeof decideInstallCommand>>, name: string): string[] =>
+    said(d).filter((line) => names(line, name) > 0 && /could not vet .* — not verified\.$/.test(line));
+
+  it('T-10 an install by name of a typosquat suspect whose lookup did not answer says BOTH: the warning, and the line "could not vet … — not verified" that names it', async () => {
+    const lookups: Array<[what: string, options: HookVetOptions]> = [
+      // What the dispatcher itself computes for the canary: the committed popular list, and no request answered.
+      ['the committed popular list, the network cut', opts(cut, { popular: undefined })],
+      ['the network cut', opts(cut, POPULAR)],
+      ['the registry answers HTTP 500, OSV answers', opts(fakeFetch({ [DOCUMENT]: { status: 500 }, [OSV]: osvClean }).fetchImpl, POPULAR)],
+      ['the registry answers, OSV answers HTTP 500', opts(fakeFetch({ [DOCUMENT]: npmDoc('1.0.9'), [OSV]: { status: 500 } }).fetchImpl, POPULAR)],
+      ['neither ever answers: the budget ends the wait', opts(fakeFetch({ [DOCUMENT]: { hang: true }, [OSV]: { hang: true } }).fetchImpl, { ...POPULAR, budgetMs: 200 })],
+    ];
+    const answers: Array<{ what: string; deny: string | undefined; warnings: number; resembles: boolean; notes: number }> = [];
+    for (const [what, options] of lookups) {
+      const d = await decideInstallCommand(`npm install ${NAME}`, options);
+      const warnings = warningsOf(d, NAME);
+      answers.push({ what, deny: d?.deny, warnings: warnings.length, resembles: /cross-env/.test(warnings[0] ?? ''), notes: notesOf(d, NAME).length });
+    }
+    // Never a deny; the warning, which names the popular package it resembles; and the note — one line each.
+    expect(answers).toEqual(lookups.map(([what]) => ({ what, deny: undefined, warnings: 1, resembles: true, notes: 1 })));
+  });
+
+  it('T-10 with the registry and OSV answering, the same install says the warning alone — as it does today', async () => {
+    const f = fakeFetch({ [DOCUMENT]: npmDoc('1.0.9'), [OSV]: osvClean });
+    const d = await decideInstallCommand(`npm install ${NAME}`, opts(f.fetchImpl, POPULAR));
+    expect(d?.deny).toBeUndefined();
+    expect(warningsOf(d, NAME)).toHaveLength(1);
+    expect(said(d).filter((line) => /could not vet|not verified/.test(line))).toEqual([]);
+    // One document and one OSV batch were enough: nothing of this package was left unasked.
+    expect(f.calls).toEqual([DOCUMENT, OSV]);
+  });
+
+  it('T-10 a package with no warning whose lookup did not answer says the line alone — as it does today', async () => {
+    for (const fetchImpl of [cut, fakeFetch({ 'https://registry.npmjs.org/express': { status: 500 }, [OSV]: osvClean }).fetchImpl]) {
+      const d = await decideInstallCommand('npm install express', opts(fetchImpl, POPULAR));
+      expect(d?.deny).toBeUndefined();
+      expect(said(d)).toEqual([expect.stringMatching(/^dev-guardian could not vet express \(.+\) — not verified\.$/)]);
+    }
+  });
+
+  it('T-10 the two lines name the package once each, and an install of two packages — one a suspect that was not vetted, the other clean — says nothing of the clean one', async () => {
+    const f = fakeFetch({ [DOCUMENT]: { status: 500 }, 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: osvClean });
+    const d = await decideInstallCommand(`npm install ${NAME} express`, opts(f.fetchImpl, POPULAR));
+    expect(d?.deny).toBeUndefined();
+    // Two lines name the suspect — its warning and its note — and each names it once.
+    const naming = said(d).filter((line) => names(line, NAME) > 0);
+    expect(naming.map((line) => names(line, NAME))).toEqual([1, 1]);
+    expect(warningsOf(d, NAME)).toHaveLength(1);
+    expect(notesOf(d, NAME)).toHaveLength(1);
+    // The clean package was vetted, and is in no line.
+    expect(f.calls).toContain('https://registry.npmjs.org/express');
+    expect(said(d).filter((line) => names(line, 'express') > 0)).toEqual([]);
+  });
+});
