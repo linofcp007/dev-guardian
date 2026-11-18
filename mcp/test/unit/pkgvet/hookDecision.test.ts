@@ -2553,8 +2553,15 @@ describe('selftest-install-vet-canary', () => {
   }) as typeof fetch;
 
   const said = (d: Awaited<ReturnType<typeof decideInstallCommand>>): string[] => (d?.context ?? '').split('\n');
-  /** How many times a line names the package — `cross-env` is another name. */
-  const names = (line: string, name: string): number => line.split(new RegExp(`(?<![\\w-])${name}(?![\\w-])`)).length - 1;
+  /** How many times a line names the package, as a whole name — `cross-env` is another name. */
+  const names = (line: string, name: string): number => {
+    const ofAName = /[\w-]/;
+    let count = 0;
+    for (let at = line.indexOf(name); at !== -1; at = line.indexOf(name, at + name.length)) {
+      if (!ofAName.test(line[at - 1] ?? '') && !ofAName.test(line[at + name.length] ?? '')) count += 1;
+    }
+    return count;
+  };
   /** The lines of an answer that warn of the package as a typosquat suspect, and those that say it could not be vetted. */
   const warningsOf = (d: Awaited<ReturnType<typeof decideInstallCommand>>, name: string): string[] =>
     said(d).filter((line) => names(line, name) > 0 && /typosquat/.test(line));

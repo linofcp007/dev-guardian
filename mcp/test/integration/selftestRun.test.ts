@@ -999,7 +999,9 @@ describe('selftest-install-vet-canary', () => {
     const sources = join(REPO_ROOT, 'mcp', 'src', 'selftest');
     const importers = readdirSync(sources).filter((name) => {
       const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\.\/pkgvet\/hookDecision\.js'/.exec(readFileSync(join(sources, name), 'utf8'))?.[1] ?? '';
-      return phrase.some((constant) => new RegExp(`\\b${constant}\\b`).test(imported));
+      // The names between the braces, without a `type` modifier or an `as` alias.
+      const importedNames = imported.split(',').map((spec) => spec.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0] ?? '');
+      return phrase.some((constant) => importedNames.includes(constant));
     });
     expect(importers, `a module of src/selftest/ imports ${phrase.join(' / ')} from pkgvet/hookDecision.js`).not.toEqual([]);
   });
