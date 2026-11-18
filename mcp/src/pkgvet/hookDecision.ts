@@ -288,7 +288,7 @@ function withManifestPackages(
     }
     let reads: ManifestRead[];
     try {
-      reads = manifest.kind === 'package-json' ? [readNpmManifest(dir)] : readRequirements(dir, manifest.files);
+      reads = manifest.kind === 'package-json' ? [readNpmManifest(dir, c.manager)] : readRequirements(dir, manifest.files, c.manager);
     } catch {
       // Fail-open, and said: nothing of the manifest was vetted.
       notes.push('dev-guardian: the manifest was not read (could not be read) — its packages were not vetted.');

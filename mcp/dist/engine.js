@@ -115596,15 +115596,33 @@ var init_auditMcpTools = __esm({
 });
 
 // src/pkgvet/parseCommand.ts
+function fileEndings(manager, scoped) {
+  switch (manager) {
+    case "npm":
+    case "npx":
+      return scoped ? null : NPM_FILE;
+    case "bun":
+      return NPM_FILE;
+    case "pip":
+      return PIP_FILE;
+    case "uv":
+    case "uv-pip":
+      return UV_FILE;
+    case "poetry":
+      return POETRY_FILE;
+    default:
+      return null;
+  }
+}
 function isPathLike(word) {
   return word === "." || word === ".." || word.startsWith("./") || word.startsWith("../") || word.startsWith(".\\") || word.startsWith("..\\") || word.startsWith("/") || word.startsWith("~") || word.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(word);
 }
-function notAPackage(word) {
+function notAPackage(word, archive) {
   if (word.length === 0) return "empty";
   if (SCP_GIT.test(word)) return "SSH git spec (user@host:path) \u2014 not looked up";
   if (isPathLike(word)) return "local path \u2014 not looked up";
   if (URL_OR_VCS.test(word)) return "URL / VCS / protocol spec \u2014 not looked up";
-  if (ARCHIVE2.test(word)) return "archive file \u2014 not looked up";
+  if (archive !== null && archive.test(word)) return "archive file \u2014 not looked up";
   return null;
 }
 function skip(raw, reason) {
@@ -115620,33 +115638,34 @@ function withRange(spec, range) {
   const r = range?.trim();
   return r !== void 0 && r !== "" ? { ...spec, range: r } : spec;
 }
-function parseNpm(raw) {
+function parseNpm(raw, manager) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
-  if (bad !== null) return skip(raw, bad);
   const scoped = raw.startsWith("@");
   const at = raw.indexOf("@", scoped ? 1 : 0);
+  const bad = notAPackage(raw, at > 0 ? ARCHIVE2 : fileEndings(manager, scoped));
+  if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
     if (range.startsWith("npm:")) {
-      const real = parseNpm(range.slice(4));
+      const real = parseNpm(range.slice(4), manager);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range);
+    const rangeBad = notAPackage(range, ARCHIVE2);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);
 }
-function parsePython(raw, poetryAt) {
+function parsePython(raw, poetryAt, manager) {
   let text3 = raw.trim();
   const semi = text3.indexOf(";");
   if (semi >= 0) text3 = text3.slice(0, semi).trim();
   if (/[$`]/.test(text3)) return skip(raw, "not a literal package name (shell expansion)");
   if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text3)) return skip(raw, "direct URL reference \u2014 not looked up");
-  const bad = notAPackage(text3);
+  const versioned2 = PEP440_OP.test(text3) || text3.indexOf("@") > 0;
+  const bad = notAPackage(text3, versioned2 ? ARCHIVE2 : fileEndings(manager, false));
   if (bad !== null) return skip(raw, bad);
   if (/[\\/]/.test(text3)) return skip(raw, "local path \u2014 not looked up");
   let name = text3;
@@ -115668,7 +115687,8 @@ function parsePython(raw, poetryAt) {
 }
 function parseComposer(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
+  const versioned2 = raw.search(/[:=\s]/) > 0 || raw.includes("@") && !raw.startsWith("@");
+  const bad = notAPackage(raw, versioned2 ? ARCHIVE2 : null);
   if (bad !== null) return skip(raw, bad);
   const sep23 = raw.search(/[:=\s]/);
   let name = sep23 > 0 ? raw.slice(0, sep23) : raw;
@@ -115683,19 +115703,19 @@ function parseComposer(raw) {
 }
 function parseNuget(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
+  const bad = notAPackage(raw, raw.indexOf("@") > 0 ? ARCHIVE2 : null);
   if (bad !== null) return skip(raw, bad);
   const at = raw.indexOf("@");
   const name = at > 0 ? raw.slice(0, at) : raw;
   const range = at > 0 ? raw.slice(at + 1) : void 0;
   return withRange(checkName("nuget", name, raw), range);
 }
-function parsePackageSpec(ecosystem, raw) {
+function parsePackageSpec(ecosystem, raw, manager) {
   switch (ecosystem) {
     case "npm":
-      return parseNpm(raw.trim());
+      return parseNpm(raw.trim(), manager);
     case "pypi":
-      return parsePython(raw, false);
+      return parsePython(raw, false, manager);
     case "packagist":
       return parseComposer(raw.trim());
     case "nuget":
@@ -115704,7 +115724,7 @@ function parsePackageSpec(ecosystem, raw) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115721,6 +115741,10 @@ var init_parseCommand = __esm({
     };
     SHELL_EXPANSION = /[$`*?{}[\]<>|&;]/;
     URL_OR_VCS = /^(?:[a-z][a-z0-9+.-]*:\/\/|git\+|git:|hg\+|svn\+|bzr\+|github:|gitlab:|bitbucket:|gist:|file:|link:|workspace:|portal:|patch:|exec:)/i;
+    NPM_FILE = /\.(?:tgz|tar\.gz|tar)$/i;
+    PIP_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
+    UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
+    POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
     ARCHIVE2 = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
     SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
     PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;

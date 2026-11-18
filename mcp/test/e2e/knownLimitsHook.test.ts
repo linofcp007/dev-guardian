@@ -163,6 +163,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       [...HOOKS.run, ...HOOKS.skip].filter((r) => (r.limit.area as string) === 'install-vetting').map((r) => r.limit.id),
     );
     expect([...ids].sort()).toEqual([
+      'archive-like-names',
       'manifest-lockfile-and-transitive',
       'manifest-not-from-a-registry',
       'manifest-other-managers',

@@ -117,7 +117,46 @@ const NAME_RE: Record<PkgEcosystem, RegExp> = {
 
 const SHELL_EXPANSION = /[$`*?{}[\]<>|&;]/;
 const URL_OR_VCS = /^(?:[a-z][a-z0-9+.-]*:\/\/|git\+|git:|hg\+|svn\+|bzr\+|github:|gitlab:|bitbucket:|gist:|file:|link:|workspace:|portal:|patch:|exec:)/i;
+/**
+ * What a word that ends like an archive may be. One list for every manager was the bug: a package called
+ * `lodash.zip` was skipped unvetted, though the manager fetches it from the registry. Each manager reads only its
+ * own endings as a FILE (measured 2026-11-18); every other word is a name.
+ */
+const NPM_FILE = /\.(?:tgz|tar\.gz|tar)$/i;
+const PIP_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
+const UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
+const POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
+/** The endings of the old single list: what a word with a version or range is still skipped for, and what an unmeasured manager is unsure of. */
 const ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
+/** The managers nobody measured: a word that ends like an archive is vetted as a name, and the command is uncertain. */
+const UNMEASURED = new Set(['pipx', 'composer', 'dotnet']);
+const UNMEASURED_ARCHIVE =
+  'a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known';
+
+/** The endings `manager` reads as a file in a bare word; `null` when it reads none (or the caller names no manager). */
+function fileEndings(manager: string | undefined, scoped: boolean): RegExp | null {
+  switch (manager) {
+    case 'npm':
+    case 'npx':
+      return scoped ? null : NPM_FILE;
+    case 'bun':
+      return NPM_FILE;
+    case 'pip':
+      return PIP_FILE;
+    case 'uv':
+    case 'uv-pip':
+      return UV_FILE;
+    case 'poetry':
+      return POETRY_FILE;
+    default:
+      return null;
+  }
+}
+
+/** Why a bare name of an unmeasured manager is uncertain, or `undefined`. */
+function unmeasuredReason(manager: string, spec: PackageSpec): string | undefined {
+  return UNMEASURED.has(manager) && spec.name === spec.raw && ARCHIVE.test(spec.raw) ? UNMEASURED_ARCHIVE : undefined;
+}
 
 function isPathLike(word: string): boolean {
   return (
@@ -138,12 +177,12 @@ function isPathLike(word: string): boolean {
 const SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
 
 /** A reason this word is not a package name, or `null` when it may be one. */
-function notAPackage(word: string): string | null {
+function notAPackage(word: string, archive: RegExp | null): string | null {
   if (word.length === 0) return 'empty';
   if (SCP_GIT.test(word)) return 'SSH git spec (user@host:path) — not looked up';
   if (isPathLike(word)) return 'local path — not looked up';
   if (URL_OR_VCS.test(word)) return 'URL / VCS / protocol spec — not looked up';
-  if (ARCHIVE.test(word)) return 'archive file — not looked up';
+  if (archive !== null && archive.test(word)) return 'archive file — not looked up';
   return null;
 }
 
@@ -163,22 +202,23 @@ function withRange(spec: PackageSpec | SkippedSpec, range: string | undefined): 
   return r !== undefined && r !== '' ? { ...spec, range: r } : spec;
 }
 
-function parseNpm(raw: string): PackageSpec | SkippedSpec {
+function parseNpm(raw: string, manager?: string): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw);
-  if (bad !== null) return skip(raw, bad);
   const scoped = raw.startsWith('@');
   const at = raw.indexOf('@', scoped ? 1 : 0);
+  // A word with a version keeps the old rule; a bare word is a file only for a manager that reads its ending as one.
+  const bad = notAPackage(raw, at > 0 ? ARCHIVE : fileEndings(manager, scoped));
+  if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : undefined;
   if (!scoped && name.includes('/')) return skip(raw, 'GitHub shorthand (user/repo) — not looked up');
   if (range !== undefined) {
     if (range.startsWith('npm:')) {
       // `alias@npm:real@range` installs `real` under the name `alias`.
-      const real = parseNpm(range.slice(4));
+      const real = parseNpm(range.slice(4), manager);
       return 'name' in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range);
+    const rangeBad = notAPackage(range, ARCHIVE);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? 'URL / VCS / protocol spec — not looked up');
     if (range === 'latest') range = undefined;
   }
@@ -187,13 +227,14 @@ function parseNpm(raw: string): PackageSpec | SkippedSpec {
 
 const PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
 
-function parsePython(raw: string, poetryAt: boolean): PackageSpec | SkippedSpec {
+function parsePython(raw: string, poetryAt: boolean, manager?: string): PackageSpec | SkippedSpec {
   let text = raw.trim();
   const semi = text.indexOf(';');
   if (semi >= 0) text = text.slice(0, semi).trim(); // environment marker
   if (/[$`]/.test(text)) return skip(raw, 'not a literal package name (shell expansion)');
   if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text)) return skip(raw, 'direct URL reference — not looked up');
-  const bad = notAPackage(text);
+  const versioned = PEP440_OP.test(text) || text.indexOf('@') > 0;
+  const bad = notAPackage(text, versioned ? ARCHIVE : fileEndings(manager, false));
   if (bad !== null) return skip(raw, bad);
   if (/[\\/]/.test(text)) return skip(raw, 'local path — not looked up');
   let name = text;
@@ -216,7 +257,8 @@ function parsePython(raw: string, poetryAt: boolean): PackageSpec | SkippedSpec 
 
 function parseComposer(raw: string): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw);
+  const versioned = raw.search(/[:=\s]/) > 0 || (raw.includes('@') && !raw.startsWith('@'));
+  const bad = notAPackage(raw, versioned ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
   const sep = raw.search(/[:=\s]/);
   let name = sep > 0 ? raw.slice(0, sep) : raw;
@@ -232,7 +274,7 @@ function parseComposer(raw: string): PackageSpec | SkippedSpec {
 
 function parseNuget(raw: string): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw);
+  const bad = notAPackage(raw, raw.indexOf('@') > 0 ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
   const at = raw.indexOf('@');
   const name = at > 0 ? raw.slice(0, at) : raw;
@@ -242,14 +284,16 @@ function parseNuget(raw: string): PackageSpec | SkippedSpec {
 
 /**
  * One package spec as a user or tool call writes it: `name`, `name@version`,
- * plus each ecosystem's own spelling (`name==1.2`, `vendor/pkg:^2`).
+ * plus each ecosystem's own spelling (`name==1.2`, `vendor/pkg:^2`). With no
+ * `manager` a bare word is a name whatever it ends in; with one, the endings that
+ * manager reads as a file are skipped as an archive.
  */
-export function parsePackageSpec(ecosystem: PkgEcosystem, raw: string): PackageSpec | SkippedSpec {
+export function parsePackageSpec(ecosystem: PkgEcosystem, raw: string, manager?: string): PackageSpec | SkippedSpec {
   switch (ecosystem) {
     case 'npm':
-      return parseNpm(raw.trim());
+      return parseNpm(raw.trim(), manager);
     case 'pypi':
-      return parsePython(raw, false);
+      return parsePython(raw, false, manager);
     case 'packagist':
       return parseComposer(raw.trim());
     case 'nuget':
@@ -868,17 +912,21 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   }
   const packages: PackageSpec[] = [];
   const skipped: SkippedSpec[] = [...pre.skipped, ...w.skipped];
+  const unsure: string[] = [];
   for (const raw of raws) {
-    const spec = d.ecosystem === 'npm' ? parseNpm(raw) : parsePython(raw, false);
-    if ('name' in spec) packages.push(spec);
-    else skipped.push(spec);
+    const spec = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    if ('name' in spec) {
+      packages.push(spec);
+      const why = unmeasuredReason(d.manager, spec);
+      if (why !== undefined) unsure.push(why);
+    } else skipped.push(spec);
   }
   const out: InstallCommand = {
     ecosystem: d.ecosystem,
     manager: d.manager,
     packages,
     skipped,
-    uncertain: [...new Set([...context, ...pre.uncertain, ...w.uncertain])],
+    uncertain: [...new Set([...context, ...pre.uncertain, ...w.uncertain, ...unsure])],
     registries: [...pre.registries, ...w.registries],
   };
   const registry = pre.customRegistry ?? w.customRegistry;
@@ -916,10 +964,10 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     let spec: PackageSpec | SkippedSpec;
     switch (d.ecosystem) {
       case 'npm':
-        spec = parseNpm(p.value);
+        spec = parseNpm(p.value, d.manager);
         break;
       case 'pypi':
-        spec = parsePython(p.value, d.manager === 'poetry');
+        spec = parsePython(p.value, d.manager === 'poetry', d.manager);
         break;
       case 'packagist':
         if (lastComposer !== undefined && lastComposer.range === undefined && !p.value.includes('/') && COMPOSER_CONSTRAINT.test(p.value)) {
@@ -936,6 +984,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     }
     if ('name' in spec) {
       packages.push(spec);
+      const why = unmeasuredReason(d.manager, spec);
+      if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
       skipped.push(spec);
@@ -1102,7 +1152,9 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
         const c = collect(d, context);
-        c.uncertain = notConfident === null ? [] : [...new Set([notConfident, ...c.uncertain])];
+        // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does.
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE);
+        c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         if (runsElsewhere(words)) c.workdir = null;
         else if (sure === null || sure.length > 0) c.workdir = sure;

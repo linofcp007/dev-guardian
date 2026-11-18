@@ -2483,17 +2483,44 @@ var NAME_RE = {
 };
 var SHELL_EXPANSION = /[$`*?{}[\]<>|&;]/;
 var URL_OR_VCS = /^(?:[a-z][a-z0-9+.-]*:\/\/|git\+|git:|hg\+|svn\+|bzr\+|github:|gitlab:|bitbucket:|gist:|file:|link:|workspace:|portal:|patch:|exec:)/i;
+var NPM_FILE = /\.(?:tgz|tar\.gz|tar)$/i;
+var PIP_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
+var UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
+var POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
 var ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
+var UNMEASURED = /* @__PURE__ */ new Set(["pipx", "composer", "dotnet"]);
+var UNMEASURED_ARCHIVE = "a name that ends like an archive file \u2014 this package manager was not measured, so whether it reads the word as a file or as a registry name is not known";
+function fileEndings(manager, scoped) {
+  switch (manager) {
+    case "npm":
+    case "npx":
+      return scoped ? null : NPM_FILE;
+    case "bun":
+      return NPM_FILE;
+    case "pip":
+      return PIP_FILE;
+    case "uv":
+    case "uv-pip":
+      return UV_FILE;
+    case "poetry":
+      return POETRY_FILE;
+    default:
+      return null;
+  }
+}
+function unmeasuredReason(manager, spec2) {
+  return UNMEASURED.has(manager) && spec2.name === spec2.raw && ARCHIVE.test(spec2.raw) ? UNMEASURED_ARCHIVE : void 0;
+}
 function isPathLike(word) {
   return word === "." || word === ".." || word.startsWith("./") || word.startsWith("../") || word.startsWith(".\\") || word.startsWith("..\\") || word.startsWith("/") || word.startsWith("~") || word.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(word);
 }
 var SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
-function notAPackage(word) {
+function notAPackage(word, archive) {
   if (word.length === 0) return "empty";
   if (SCP_GIT.test(word)) return "SSH git spec (user@host:path) \u2014 not looked up";
   if (isPathLike(word)) return "local path \u2014 not looked up";
   if (URL_OR_VCS.test(word)) return "URL / VCS / protocol spec \u2014 not looked up";
-  if (ARCHIVE.test(word)) return "archive file \u2014 not looked up";
+  if (archive !== null && archive.test(word)) return "archive file \u2014 not looked up";
   return null;
 }
 function skip(raw, reason) {
@@ -2509,34 +2536,35 @@ function withRange(spec2, range) {
   const r = range?.trim();
   return r !== void 0 && r !== "" ? { ...spec2, range: r } : spec2;
 }
-function parseNpm(raw) {
+function parseNpm(raw, manager) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
-  if (bad !== null) return skip(raw, bad);
   const scoped = raw.startsWith("@");
   const at = raw.indexOf("@", scoped ? 1 : 0);
+  const bad = notAPackage(raw, at > 0 ? ARCHIVE : fileEndings(manager, scoped));
+  if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
     if (range.startsWith("npm:")) {
-      const real = parseNpm(range.slice(4));
+      const real = parseNpm(range.slice(4), manager);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range);
+    const rangeBad = notAPackage(range, ARCHIVE);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);
 }
 var PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
-function parsePython(raw, poetryAt) {
+function parsePython(raw, poetryAt, manager) {
   let text = raw.trim();
   const semi = text.indexOf(";");
   if (semi >= 0) text = text.slice(0, semi).trim();
   if (/[$`]/.test(text)) return skip(raw, "not a literal package name (shell expansion)");
   if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text)) return skip(raw, "direct URL reference \u2014 not looked up");
-  const bad = notAPackage(text);
+  const versioned = PEP440_OP.test(text) || text.indexOf("@") > 0;
+  const bad = notAPackage(text, versioned ? ARCHIVE : fileEndings(manager, false));
   if (bad !== null) return skip(raw, bad);
   if (/[\\/]/.test(text)) return skip(raw, "local path \u2014 not looked up");
   let name = text;
@@ -2558,7 +2586,8 @@ function parsePython(raw, poetryAt) {
 }
 function parseComposer(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
+  const versioned = raw.search(/[:=\s]/) > 0 || raw.includes("@") && !raw.startsWith("@");
+  const bad = notAPackage(raw, versioned ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
   const sep2 = raw.search(/[:=\s]/);
   let name = sep2 > 0 ? raw.slice(0, sep2) : raw;
@@ -2573,19 +2602,19 @@ function parseComposer(raw) {
 }
 function parseNuget(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
+  const bad = notAPackage(raw, raw.indexOf("@") > 0 ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
   const at = raw.indexOf("@");
   const name = at > 0 ? raw.slice(0, at) : raw;
   const range = at > 0 ? raw.slice(at + 1) : void 0;
   return withRange(checkName("nuget", name, raw), range);
 }
-function parsePackageSpec(ecosystem, raw) {
+function parsePackageSpec(ecosystem, raw, manager) {
   switch (ecosystem) {
     case "npm":
-      return parseNpm(raw.trim());
+      return parseNpm(raw.trim(), manager);
     case "pypi":
-      return parsePython(raw, false);
+      return parsePython(raw, false, manager);
     case "packagist":
       return parseComposer(raw.trim());
     case "nuget":
@@ -3460,17 +3489,21 @@ function collectLaunch(d, launch, context) {
   }
   const packages = [];
   const skipped = [...pre.skipped, ...w.skipped];
+  const unsure = [];
   for (const raw of raws) {
-    const spec2 = d.ecosystem === "npm" ? parseNpm(raw) : parsePython(raw, false);
-    if ("name" in spec2) packages.push(spec2);
-    else skipped.push(spec2);
+    const spec2 = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    if ("name" in spec2) {
+      packages.push(spec2);
+      const why = unmeasuredReason(d.manager, spec2);
+      if (why !== void 0) unsure.push(why);
+    } else skipped.push(spec2);
   }
   const out = {
     ecosystem: d.ecosystem,
     manager: d.manager,
     packages,
     skipped,
-    uncertain: [.../* @__PURE__ */ new Set([...context, ...pre.uncertain, ...w.uncertain])],
+    uncertain: [.../* @__PURE__ */ new Set([...context, ...pre.uncertain, ...w.uncertain, ...unsure])],
     registries: [...pre.registries, ...w.registries]
   };
   const registry = pre.customRegistry ?? w.customRegistry;
@@ -3505,10 +3538,10 @@ function collect(d, context) {
     let spec2;
     switch (d.ecosystem) {
       case "npm":
-        spec2 = parseNpm(p.value);
+        spec2 = parseNpm(p.value, d.manager);
         break;
       case "pypi":
-        spec2 = parsePython(p.value, d.manager === "poetry");
+        spec2 = parsePython(p.value, d.manager === "poetry", d.manager);
         break;
       case "packagist":
         if (lastComposer !== void 0 && lastComposer.range === void 0 && !p.value.includes("/") && COMPOSER_CONSTRAINT.test(p.value)) {
@@ -3525,6 +3558,8 @@ function collect(d, context) {
     }
     if ("name" in spec2) {
       packages.push(spec2);
+      const why = unmeasuredReason(d.manager, spec2);
+      if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === "packagist" ? spec2 : void 0;
     } else {
       skipped.push(spec2);
@@ -3630,7 +3665,8 @@ function parseReading(text, forced, cdpath) {
         if (envChange) context.push("inline environment assignment in the command (it can redirect the registry)");
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
-        c.uncertain = notConfident === null ? [] : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE);
+        c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         if (runsElsewhere(words)) c.workdir = null;
         else if (sure === null || sure.length > 0) c.workdir = sure;
@@ -4093,15 +4129,18 @@ function pushOnce(into, seen, pkg) {
 var NPM_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 var SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
 var DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
-var ARCHIVE_NAME = /\.(?:tgz|tar|tar\.gz|zip)$/i;
-function npmRange(value) {
+var FILE_VALUE = /\.(?:tgz|tar|tar\.gz)$/i;
+function readsFileValue(manager) {
+  return manager === void 0 || manager === "npm" || manager === "npx" || manager === "bun";
+}
+function npmRange(value, manager) {
   const v = value.trim();
   if (v === "" || v === "latest") return void 0;
-  if (v.length > MAX_RANGE_LENGTH || ARCHIVE_NAME.test(v)) return null;
+  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager) && FILE_VALUE.test(v)) return null;
   if (DIST_TAG.test(v)) return v;
   return v.split(/\s+/).every((word) => SEMVER_WORD.test(word)) ? v : null;
 }
-function npmDependency(key, value) {
+function npmDependency(key, value, manager) {
   let name = key;
   let wanted = value.trim();
   if (wanted.startsWith("npm:")) {
@@ -4111,10 +4150,10 @@ function npmDependency(key, value) {
     wanted = at > 0 ? real.slice(at + 1) : "";
   }
   if (!validName2("npm", name)) return null;
-  const range = npmRange(wanted);
+  const range = npmRange(wanted, manager);
   return range === null ? null : spec("npm", name, range);
 }
-function readNpmManifest(dir) {
+function readNpmManifest(dir, manager) {
   const file = "package.json";
   const read2 = readManifestText(resolve2(dir, file), dir);
   if (read2.status === "absent") return { file, status: "absent", packages: [], registries: [] };
@@ -4135,7 +4174,7 @@ function readNpmManifest(dir) {
     if (entries === null || typeof entries !== "object" || Array.isArray(entries)) continue;
     for (const [key, value] of Object.entries(entries)) {
       if (typeof value !== "string") continue;
-      const pkg = npmDependency(key, value);
+      const pkg = npmDependency(key, value, manager);
       if (pkg !== null) pushOnce(packages, seen, pkg);
     }
   }
@@ -4200,15 +4239,15 @@ function readRequirementFile(path, under, depth, walk2, found) {
       continue;
     }
     const requirement = line.replace(/\s+--[A-Za-z].*$/, "").trim();
-    const parsed = parsePackageSpec("pypi", requirement);
+    const parsed = parsePackageSpec("pypi", requirement, walk2.manager);
     if (!("name" in parsed) || parsed.name.length > MAX_NAME_LENGTH) continue;
     if (parsed.range !== void 0 && !pypiRange(parsed.range)) continue;
     pushOnce(found.packages, found.seen, spec("pypi", parsed.name, parsed.range));
   }
   return { status: "ok" };
 }
-function readRequirements(dir, files) {
-  const walk2 = { files: 0, visited: /* @__PURE__ */ new Set() };
+function readRequirements(dir, files, manager = "pip") {
+  const walk2 = { files: 0, visited: /* @__PURE__ */ new Set(), manager };
   return files.map((given) => {
     const file = label(given);
     if (isNetworkPath(given)) return { file, status: "unreadable", packages: [], registries: [], reason: REASON.network };
@@ -5996,7 +6035,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
     }
     let reads;
     try {
-      reads = manifest.kind === "package-json" ? [readNpmManifest(dir)] : readRequirements(dir, manifest.files);
+      reads = manifest.kind === "package-json" ? [readNpmManifest(dir, c.manager)] : readRequirements(dir, manifest.files, c.manager);
     } catch {
       notes.push("dev-guardian: the manifest was not read (could not be read) \u2014 its packages were not vetted.");
       continue;

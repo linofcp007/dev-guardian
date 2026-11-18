@@ -951,6 +951,20 @@ describe('pkgvet-archive-like-name', () => {
     }
   });
 
+  it('T-02 a short flag the manager takes no value for leaves the next word in a package position: it is a name, and the command is uncertain', () => {
+    const cases: Array<[string, string[]]> = [
+      ['npm install -r reqs.zip somepkg', ['flag -r is not on the confident-shape allowlist', 'unknown flag -r']],
+      ['pnpm add -r reqs.zip somepkg', ['flag -r is not on the confident-shape allowlist']],
+    ];
+    for (const [command, uncertain] of cases) {
+      const cmds = parseInstallCommands(command);
+      expect(
+        cmds.map((c) => ({ command, packages: c.packages.map((p) => p.name), skipped: c.skipped, uncertain: c.uncertain })),
+        command,
+      ).toEqual([{ command, packages: ['reqs.zip', 'somepkg'], skipped: [], uncertain }]);
+    }
+  });
+
   const FILE_CASES: Array<[string, string[], boolean]> = [
     ['npm install', NPM_FILES, false],
     ['npx', NPM_FILES, false],
@@ -1027,6 +1041,7 @@ describe('pkgvet-archive-like-name', () => {
    * values (`-r reqs.zip`, `--prefix x.tar`) whose archive-like text is no package.
    */
   const BEFORE: ReadonlyArray<readonly [string, string]> = [
+    // Not here: `-r reqs.zip` / `-c cons.whl` for a manager whose table takes no value for `-r` / `-c` (npm, pnpm, yarn, bun, the launchers, poetry's `-c`, pipx, composer, dotnet): the word is then in a package position (see the T-02 test below).
     ["npm install left-pad", "npm/npm | P left-pad"],
     ["npm install left-pad@1.3.0", "npm/npm | P left-pad@1.3.0"],
     ["npm install @scope/pkg@^2", "npm/npm | P @scope/pkg@^2"],
@@ -1042,10 +1057,8 @@ describe('pkgvet-archive-like-name', () => {
     ["npm install foo@bar.tgz", "npm/npm | S foo@bar.tgz => archive file — not looked up"],
     ["npm install lodash.zip@4.2.0", "npm/npm | P lodash.zip@4.2.0"],
     ["npm install thing.egg@1.0", "npm/npm | P thing.egg@1.0"],
-    ["npm install -r reqs.zip somepkg", "npm/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["npm install --prefix x.tar somepkg", "npm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; directory changed by --prefix | prefixed"],
     ["npm install --registry https://r.example/x.zip somepkg", "npm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
-    ["npm install -c cons.whl somepkg", "npm/npm | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["npm install -e ./pkg.tgz somepkg", "npm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["pnpm add left-pad", "pnpm/npm | P left-pad"],
     ["pnpm add left-pad@1.3.0", "pnpm/npm | P left-pad@1.3.0"],
@@ -1062,10 +1075,8 @@ describe('pkgvet-archive-like-name', () => {
     ["pnpm add foo@bar.tgz", "pnpm/npm | S foo@bar.tgz => archive file — not looked up"],
     ["pnpm add lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0"],
     ["pnpm add thing.egg@1.0", "pnpm/npm | P thing.egg@1.0"],
-    ["pnpm add -r reqs.zip somepkg", "pnpm/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist"],
     ["pnpm add --prefix x.tar somepkg", "pnpm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["pnpm add --registry https://r.example/x.zip somepkg", "pnpm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
-    ["pnpm add -c cons.whl somepkg", "pnpm/npm | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["pnpm add -e ./pkg.tgz somepkg", "pnpm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["yarn add left-pad", "yarn/npm | P left-pad"],
     ["yarn add left-pad@1.3.0", "yarn/npm | P left-pad@1.3.0"],
@@ -1082,10 +1093,8 @@ describe('pkgvet-archive-like-name', () => {
     ["yarn add foo@bar.tgz", "yarn/npm | S foo@bar.tgz => archive file — not looked up"],
     ["yarn add lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0"],
     ["yarn add thing.egg@1.0", "yarn/npm | P thing.egg@1.0"],
-    ["yarn add -r reqs.zip somepkg", "yarn/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["yarn add --prefix x.tar somepkg", "yarn/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["yarn add --registry https://r.example/x.zip somepkg", "yarn/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
-    ["yarn add -c cons.whl somepkg", "yarn/npm | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["yarn add -e ./pkg.tgz somepkg", "yarn/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["bun add left-pad", "bun/npm | P left-pad"],
     ["bun add left-pad@1.3.0", "bun/npm | P left-pad@1.3.0"],
@@ -1102,7 +1111,6 @@ describe('pkgvet-archive-like-name', () => {
     ["bun add foo@bar.tgz", "bun/npm | S foo@bar.tgz => archive file — not looked up"],
     ["bun add lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0"],
     ["bun add thing.egg@1.0", "bun/npm | P thing.egg@1.0"],
-    ["bun add -r reqs.zip somepkg", "bun/npm | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["bun add --prefix x.tar somepkg", "bun/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["bun add --registry https://r.example/x.zip somepkg", "bun/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
     ["bun add -c cons.whl somepkg", "bun/npm | P somepkg | U flag -c is not on the confident-shape allowlist"],
@@ -1185,7 +1193,6 @@ describe('pkgvet-archive-like-name', () => {
     ["poetry add -r reqs.zip somepkg", "poetry/pypi | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["poetry add --prefix x.tar somepkg", "poetry/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["poetry add --registry https://r.example/x.zip somepkg", "poetry/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
-    ["poetry add -c cons.whl somepkg", "poetry/pypi | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["poetry add -e ./pkg.tgz somepkg", "poetry/pypi | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist"],
     ["npx left-pad", "npx/npm | P left-pad"],
     ["npx left-pad@1.3.0", "npx/npm | P left-pad@1.3.0"],
@@ -1202,7 +1209,6 @@ describe('pkgvet-archive-like-name', () => {
     ["npx foo@bar.tgz", "npx/npm | S foo@bar.tgz => archive file — not looked up"],
     ["npx lodash.zip@4.2.0", "npx/npm | P lodash.zip@4.2.0"],
     ["npx thing.egg@1.0", "npx/npm | P thing.egg@1.0"],
-    ["npx -r reqs.zip somepkg", "npx/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["npx --prefix x.tar somepkg", "npx/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist | prefixed"],
     ["npx --registry https://r.example/x.zip somepkg", "npx/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
     ["npx -c cons.whl somepkg", "npx/npm | U flag -c is not on the confident-shape allowlist"],
@@ -1222,7 +1228,6 @@ describe('pkgvet-archive-like-name', () => {
     ["pnpm dlx foo@bar.tgz", "pnpm/npm | S foo@bar.tgz => archive file — not looked up"],
     ["pnpm dlx lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0"],
     ["pnpm dlx thing.egg@1.0", "pnpm/npm | P thing.egg@1.0"],
-    ["pnpm dlx -r reqs.zip somepkg", "pnpm/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["pnpm dlx --prefix x.tar somepkg", "pnpm/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["pnpm dlx --registry https://r.example/x.zip somepkg", "pnpm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
     ["pnpm dlx -c cons.whl somepkg", "pnpm/npm | U flag -c is not on the confident-shape allowlist"],
@@ -1242,10 +1247,8 @@ describe('pkgvet-archive-like-name', () => {
     ["yarn dlx foo@bar.tgz", "yarn/npm | S foo@bar.tgz => archive file — not looked up"],
     ["yarn dlx lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0"],
     ["yarn dlx thing.egg@1.0", "yarn/npm | P thing.egg@1.0"],
-    ["yarn dlx -r reqs.zip somepkg", "yarn/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["yarn dlx --prefix x.tar somepkg", "yarn/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["yarn dlx --registry https://r.example/x.zip somepkg", "yarn/npm | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
-    ["yarn dlx -c cons.whl somepkg", "yarn/npm | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["yarn dlx -e ./pkg.tgz somepkg", "yarn/npm | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["bunx left-pad", "bun/npm | P left-pad"],
     ["bunx left-pad@1.3.0", "bun/npm | P left-pad@1.3.0"],
@@ -1262,10 +1265,8 @@ describe('pkgvet-archive-like-name', () => {
     ["bunx foo@bar.tgz", "bun/npm | S foo@bar.tgz => archive file — not looked up"],
     ["bunx lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0"],
     ["bunx thing.egg@1.0", "bun/npm | P thing.egg@1.0"],
-    ["bunx -r reqs.zip somepkg", "bun/npm | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["bunx --prefix x.tar somepkg", "bun/npm | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["bunx --registry https://r.example/x.zip somepkg", "bun/npm | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
-    ["bunx -c cons.whl somepkg", "bun/npm | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["bunx -e ./pkg.tgz somepkg", "bun/npm | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["uvx left-pad", "uv/pypi | P left-pad"],
     ["uvx left-pad@1.3.0", "uv/pypi | P left-pad@1.3.0"],
@@ -1322,10 +1323,8 @@ describe('pkgvet-archive-like-name', () => {
     ["pipx install foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
     ["pipx install lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
     ["pipx install thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
-    ["pipx install -r reqs.zip somepkg", "pipx/pypi | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["pipx install --prefix x.tar somepkg", "pipx/pypi | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["pipx install --registry https://r.example/x.zip somepkg", "pipx/pypi | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
-    ["pipx install -c cons.whl somepkg", "pipx/pypi | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["pipx install -e ./pkg.tgz somepkg", "pipx/pypi | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist"],
     ["pipx run left-pad", "pipx/pypi | P left-pad"],
     ["pipx run left-pad@1.3.0", "pipx/pypi | P left-pad@1.3.0"],
@@ -1342,10 +1341,8 @@ describe('pkgvet-archive-like-name', () => {
     ["pipx run foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
     ["pipx run lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
     ["pipx run thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
-    ["pipx run -r reqs.zip somepkg", "pipx/pypi | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["pipx run --prefix x.tar somepkg", "pipx/pypi | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["pipx run --registry https://r.example/x.zip somepkg", "pipx/pypi | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
-    ["pipx run -c cons.whl somepkg", "pipx/pypi | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["pipx run -e ./pkg.tgz somepkg", "pipx/pypi | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["composer require left-pad", "composer/packagist | S left-pad => platform package or not a vendor/name — not looked up"],
     ["composer require left-pad@1.3.0", "composer/packagist | S left-pad@1.3.0 => platform package or not a vendor/name — not looked up"],
@@ -1362,10 +1359,8 @@ describe('pkgvet-archive-like-name', () => {
     ["composer require foo@bar.tgz", "composer/packagist | S foo@bar.tgz => archive file — not looked up"],
     ["composer require lodash.zip@4.2.0", "composer/packagist | S lodash.zip@4.2.0 => platform package or not a vendor/name — not looked up"],
     ["composer require thing.egg@1.0", "composer/packagist | S thing.egg@1.0 => platform package or not a vendor/name — not looked up"],
-    ["composer require -r reqs.zip somepkg", "composer/packagist | S reqs.zip => archive file — not looked up ; somepkg => platform package or not a vendor/name — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["composer require --prefix x.tar somepkg", "composer/packagist | S somepkg => platform package or not a vendor/name — not looked up | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["composer require --registry https://r.example/x.zip somepkg", "composer/packagist | S somepkg => platform package or not a vendor/name — not looked up | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
-    ["composer require -c cons.whl somepkg", "composer/packagist | S cons.whl => archive file — not looked up ; somepkg => platform package or not a vendor/name — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["composer require -e ./pkg.tgz somepkg", "composer/packagist | S ./pkg.tgz => local path — not looked up ; somepkg => platform package or not a vendor/name — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["dotnet add package left-pad", "dotnet/nuget | P left-pad"],
     ["dotnet add package left-pad@1.3.0", "dotnet/nuget | P left-pad@1.3.0"],
@@ -1382,10 +1377,8 @@ describe('pkgvet-archive-like-name', () => {
     ["dotnet add package foo@bar.tgz", "dotnet/nuget | S foo@bar.tgz => archive file — not looked up"],
     ["dotnet add package lodash.zip@4.2.0", "dotnet/nuget | P lodash.zip@4.2.0"],
     ["dotnet add package thing.egg@1.0", "dotnet/nuget | P thing.egg@1.0"],
-    ["dotnet add package -r reqs.zip somepkg", "dotnet/nuget | P somepkg | S reqs.zip => archive file — not looked up | U flag -r is not on the confident-shape allowlist ; unknown flag -r"],
     ["dotnet add package --prefix x.tar somepkg", "dotnet/nuget | P somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
     ["dotnet add package --registry https://r.example/x.zip somepkg", "dotnet/nuget | P somepkg | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
-    ["dotnet add package -c cons.whl somepkg", "dotnet/nuget | P somepkg | S cons.whl => archive file — not looked up | U flag -c is not on the confident-shape allowlist ; unknown flag -c"],
     ["dotnet add package -e ./pkg.tgz somepkg", "dotnet/nuget | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
   ];
 

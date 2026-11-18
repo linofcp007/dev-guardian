@@ -710,3 +710,36 @@
   examples: []
   not_executable: |-
     Each of these shows only in what a registry answers — a publish date, a version's scripts, an advisory — and the suite asks nothing of the network. `hookDecision.test.ts` (T-17) holds it with a registry stand-in: the same package warns by name and is silent from a manifest.
+
+- id: archive-like-names
+  area: install-vetting
+  doc: |-
+    A word that ends like an archive (`.zip`, `.tgz`, `.whl`) is vetted as a package name when the package manager of the command reads it as one, and skipped when that manager reads it as a file; the endings each manager reads as a file are listed in `docs/hooks.md`, under "Install-time package vetting". Two things stay. `pipx`, `composer` and `dotnet` were not measured: their word is vetted as a name and the command counts as uncertain, so a name the registry does not have is a warning and never a deny — if one of them does read the word as a file, the warning is a false one. And the word `yarn` does not say whether Yarn 1 or Yarn 4 runs: a manifest value ending in `.tgz` or `.tar.gz` is a file for Yarn 1 and a tag for Yarn 4, and is vetted as a name, so the dependency's name is looked up although Yarn 1 installs the file.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx install thing.zip
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: composer require vendor/thing.zip
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dotnet add package Some.Thing.zip
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn install
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": { "thing": "thing.tgz" } }
+      expect: { decision: warn }
