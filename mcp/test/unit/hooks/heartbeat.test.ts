@@ -498,6 +498,12 @@ describe('the session mark: writing it', () => {
 
 describe('the session mark: cleaning up', () => {
   const DAY = 24 * 60 * 60 * 1000;
+  /**
+   * The cleanup stops waiting after 1 s by default — the hook's bound, which a busy machine can pass with a hundred
+   * files to remove (seen once: 0 removed where 64 were expected, the test at 1.4 s). These tests are about WHAT goes,
+   * so they wait for the cleanup to end.
+   */
+  const UNHURRIED = { timeoutMs: 60_000 };
 
   /** A mark of host `pid`, last written `age` ms before NOW. */
   function aged(dataDir: string, pid: number, age: number): string {
@@ -511,7 +517,7 @@ describe('the session mark: cleaning up', () => {
     const dir = join(dataDir, HEARTBEAT_DIR);
     const old = aged(dataDir, 1001, MAX_AGE_MS + DAY);
     const recent = aged(dataDir, 1002, MAX_AGE_MS - DAY);
-    expect(await pruneHeartbeats(dir, { now: NOW, isAlive: () => true })).toBe(1);
+    expect(await pruneHeartbeats(dir, { now: NOW, isAlive: () => true, ...UNHURRIED })).toBe(1);
     expect(readdirSync(dir)).toEqual([markFileName(projectKey(ROOT), 1002)]);
     expect(old).not.toBe(recent);
 
@@ -519,17 +525,17 @@ describe('the session mark: cleaning up', () => {
     const dead = makeTempDir('guardian-hb-');
     aged(dead, 2001, 60_000);
     aged(dead, 2002, 60_000);
-    expect(await pruneHeartbeats(join(dead, HEARTBEAT_DIR), { now: NOW, isAlive: (pid) => pid !== 2001 })).toBe(1);
+    expect(await pruneHeartbeats(join(dead, HEARTBEAT_DIR), { now: NOW, isAlive: (pid) => pid !== 2001, ...UNHURRIED })).toBe(1);
     expect(readdirSync(join(dead, HEARTBEAT_DIR))).toEqual([markFileName(projectKey(ROOT), 2002)]);
 
     // The mark just written is kept whatever is said of its process.
     const kept = makeTempDir('guardian-hb-');
     const mine = aged(kept, 3001, 1_000);
-    expect(await pruneHeartbeats(join(kept, HEARTBEAT_DIR), { now: NOW, isAlive: () => false, keep: mine })).toBe(0);
+    expect(await pruneHeartbeats(join(kept, HEARTBEAT_DIR), { now: NOW, isAlive: () => false, keep: mine, ...UNHURRIED })).toBe(0);
 
     const many = makeTempDir('guardian-hb-');
     for (let pid = 5000; pid < 5100; pid += 1) aged(many, pid, MAX_AGE_MS + DAY);
-    expect(await pruneHeartbeats(join(many, HEARTBEAT_DIR), { now: NOW, isAlive: () => true })).toBe(PRUNE_MAX);
+    expect(await pruneHeartbeats(join(many, HEARTBEAT_DIR), { now: NOW, isAlive: () => true, ...UNHURRIED })).toBe(PRUNE_MAX);
     expect(readdirSync(join(many, HEARTBEAT_DIR))).toHaveLength(100 - PRUNE_MAX);
   });
 
@@ -559,7 +565,7 @@ describe('the session mark: cleaning up', () => {
     if (CAN_SYMLINK) symlinkSync(target, linked);
 
     const { fs, calls } = spyFs();
-    expect(await pruneHeartbeats(dir, { now: NOW, isAlive: () => false, fs })).toBe(0);
+    expect(await pruneHeartbeats(dir, { now: NOW, isAlive: () => false, fs, ...UNHURRIED })).toBe(0);
     for (const file of others) expect(statSync(file).isFile(), file).toBe(true);
     expect(statSync(asDirectory).isDirectory()).toBe(true);
     expect(readFileSync(target, 'utf8')).toBe('keep me');
@@ -578,7 +584,7 @@ describe('the session mark: cleaning up', () => {
     const stubborn = spyFs();
     const unlink = stubborn.fs.unlink;
     stubborn.fs.unlink = (path: string) => (path === a ? Promise.reject(Object.assign(new Error('EPERM'), { code: 'EPERM' })) : unlink(path));
-    expect(await pruneHeartbeats(join(failing, HEARTBEAT_DIR), { now: NOW, isAlive: () => true, fs: stubborn.fs })).toBe(1);
+    expect(await pruneHeartbeats(join(failing, HEARTBEAT_DIR), { now: NOW, isAlive: () => true, fs: stubborn.fs, ...UNHURRIED })).toBe(1);
     expect(readdirSync(join(failing, HEARTBEAT_DIR))).toEqual([markFileName(projectKey(ROOT), 7001)]);
   });
 });
