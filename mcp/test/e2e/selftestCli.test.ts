@@ -54,6 +54,40 @@ function cli(args: string[], env: NodeJS.ProcessEnv, timeout = FAST_MS): Run {
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
+// ───────────────── the install check's network, replaced: no test of this file reaches the npm registry or OSV
+
+/** The package the install check names: the one npm replaced by its security placeholder. */
+const CANARY = 'crossenv';
+const REGISTRY_DOCUMENT = `https://registry.npmjs.org/${CANARY}`;
+const OSV = 'https://api.osv.dev/v1/querybatch';
+/** The fetch stand-in of the hook tests: in a Node process it answers the routes below, refuses every other URL and logs each request. */
+const PRELOAD = new URL('../helpers/fetchMockPreload.mjs', import.meta.url).href;
+/** What the public registry answers for the canary: the abbreviated document whose `latest` is npm's security placeholder. */
+const ROUTES = {
+  [REGISTRY_DOCUMENT]: {
+    accept: 'install-v1',
+    body: { 'dist-tags': { latest: '0.0.1-security' }, modified: '2020-01-01T00:00:00.000Z', versions: { '0.0.1-security': {} } },
+  },
+  [OSV]: { osv: {} },
+};
+
+/**
+ * `env`, with the registry and OSV replaced in every Node process the run
+ * starts — the CLI and the dispatcher; a scanner is no Node process and keeps
+ * the network a normal scan uses. `hooks:install-vet` hands the REAL
+ * dispatcher an install to vet: without this it would ask the real registry
+ * about the canary. And without this machine's own switch of package vetting.
+ */
+function registryReplaced(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {
+    ...env,
+    NODE_OPTIONS: `${env['NODE_OPTIONS'] ?? ''} --import=${PRELOAD}`.trim(),
+    GUARDIAN_TEST_FETCH_ROUTES: JSON.stringify(ROUTES),
+  };
+  delete out['GUARDIAN_PKG_VET'];
+  return out;
+}
+
 /**
  * An environment in which no scanner can be found: a PATH that is one empty
  * directory, and a home that has no `~/.local/bin`. Not Node's own directory —
@@ -65,14 +99,18 @@ function noScanners(dataDir: string): NodeJS.ProcessEnv {
   const home = makeTempDir('selftest-nohome-');
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1', GUARDIAN_DATA_DIR: dataDir, HOME: home, USERPROFILE: home, PATH: makeTempDir('selftest-nopath-') };
   for (const key of ['Path', 'GUARDIAN_OFFLINE', 'GUARDIAN_HOOKS', 'GUARDIAN_HOOKS_BASH_BLOCK', 'LOCALAPPDATA', 'APPDATA', 'XDG_DATA_HOME']) delete env[key];
-  return env;
+  return registryReplaced(env);
 }
 
-/** This machine's environment, with the network the scanners use on a normal scan allowed. */
+/**
+ * This machine's environment, with the network the scanners use on a normal
+ * scan allowed — and the install check's registry replaced: the real one is
+ * measured, not tested (the spec's SC-001).
+ */
 function realEnv(dataDir: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: '1', GUARDIAN_DATA_DIR: dataDir };
   for (const key of ['GUARDIAN_OFFLINE', 'GUARDIAN_HOOKS', 'GUARDIAN_HOOKS_BASH_BLOCK']) delete env[key];
-  return env;
+  return registryReplaced(env);
 }
 
 interface Doc extends SelftestRun {
@@ -102,7 +140,8 @@ describe('dev-guardian selftest — the command', () => {
     expect(doc.hooks_note).toBe(HOOKS_NOTE);
     expect(doc.controls.map((c) => c.id).sort()).toEqual(CORE_CONTROLS.map((c) => c.id).sort());
     for (const c of doc.controls) {
-      // The dispatcher is this checkout's, and it answers: the four hook checks detect with no scanner at all.
+      // The dispatcher is this checkout's, and it answers: the five hook checks detect with no scanner at all —
+      // the install check against the stand-in registry, which serves the placeholder.
       expect(c.verdict, c.id).toBe(c.scanner === 'hooks' ? 'detected' : 'missing');
       if (c.verdict === 'missing') expect(c.next, c.id).toEqual(expect.any(String));
     }
@@ -196,7 +235,7 @@ describe('dev-guardian selftest — the real scanners', () => {
       const notDetected = doc.controls.filter((c) => c.verdict !== 'detected').map((c) => `${c.id}: ${c.verdict} — ${c.reason ?? ''}`);
       expect(notDetected).toEqual([]);
       expect(doc.controls).toHaveLength(CORE_CONTROLS.length);
-      expect(doc.controls.length).toBeGreaterThanOrEqual(22);
+      expect(doc.controls.length).toBeGreaterThanOrEqual(23);
       // A version, or — for a Semgrep that only exists as its Docker image — the image's name.
       for (const c of doc.controls) expect(c.scanner_version, c.id).toEqual(expect.stringMatching(/\d+\.\d+|^docker \(/));
       expect(r.status, r.stderr).toBe(0);
@@ -306,6 +345,8 @@ describe('dev-guardian selftest — the real scanners', () => {
     // The parts of the bundle that were not touched still answer.
     expect(verdict('hooks:settings-guard')).toBe('detected');
     expect(verdict('hooks:secret-warning')).toBe('detected');
+    // Package vetting is another part of the bundle than the shell guard: the install check still denies its canary.
+    expect(verdict('hooks:install-vet')).toBe('detected');
     expect(r.exitCode).toBe(1);
   });
 });
@@ -314,19 +355,7 @@ describe('dev-guardian selftest — the real scanners', () => {
 
 describe('selftest-install-vet-canary', () => {
   const VET = 'hooks:install-vet';
-  const CANARY = 'crossenv';
-  const REGISTRY_DOCUMENT = `https://registry.npmjs.org/${CANARY}`;
-  const OSV = 'https://api.osv.dev/v1/querybatch';
-  /** The fetch stand-in of the hook tests: in the dispatcher's process it answers the routes below, refuses every other URL and logs each request. */
-  const PRELOAD = new URL('../helpers/fetchMockPreload.mjs', import.meta.url).href;
-  /** What the public registry answers for the canary: the abbreviated document whose `latest` is npm's security placeholder. */
-  const ROUTES = {
-    [REGISTRY_DOCUMENT]: {
-      accept: 'install-v1',
-      body: { 'dist-tags': { latest: '0.0.1-security' }, modified: '2020-01-01T00:00:00.000Z', versions: { '0.0.1-security': {} } },
-    },
-    [OSV]: { osv: {} },
-  };
+  // The canary, its two URLs, the fetch stand-in and the placeholder routes are this file's own: see `registryReplaced`.
   /** What a hook, or a selftest, that RAN the canary's command instead of reading it would start. */
   const MANAGERS = ['npm', 'npx', 'pnpm', 'yarn', 'bun'];
   /**
