@@ -17,6 +17,13 @@ version bump.
   answer for is said, never read as verified. The names and pinned versions of all the lockfile's registry packages
   now go to OSV (before, only the direct dependencies' names went); `GUARDIAN_PKG_VET=0` turns it off. See
   [`docs/hooks.md`](docs/hooks.md) and [the known limits](docs/hooks-known-limits.md).
+- **The selftest checks the install hook.** `dev-guardian selftest` has a fifth hook check, `hooks:install-vet`: the
+  installed dispatcher is handed, as text, the install of a package npm took down (`npm install crossenv`) and must
+  deny it. Nothing is run or installed. It is the one hook check that uses the network — the dispatcher asks the
+  public npm registry and OSV about that one name —, so when they do not answer it reads `unverified`, never
+  `silent`; with `GUARDIAN_OFFLINE=1` it is not started, and with package vetting switched off
+  (`GUARDIAN_PKG_VET=0`) it is `disabled_by_user`. A selftest lists one control more than before. See
+  [`docs/selftest.md`](docs/selftest.md).
 
 ### Changed
 
@@ -31,6 +38,13 @@ version bump.
   versions is asked about again with its version; with no time left for that, the hook warns that the version was
   not determined instead of passing or denying it. With more than 100 packages, an OSV batch that fails leaves only
   its own packages unverified.
+- **A warning no longer hides what the install hook could not check.** For an install by name
+  (`npm install <name>`), a package with a warning — a typosquat suspicion, say — whose registry or OSV lookup did
+  not answer got the warning alone. The hook now also says `could not vet <name> (…) — not verified`, as it already
+  did for a package a manifest names. No install is denied or allowed differently.
+- **A registry or OSV answer that is not JSON is said in dev-guardian's own words.** The reason used to be the JSON
+  parser's message, which quotes the first characters of the answer; `vet_packages`, `scan_skill` and the install
+  hook now say `gave an answer that is not JSON` / `osv answer is not JSON`, and nothing of the answer.
 
 ## [3.11.0] - 2026-11-16
 

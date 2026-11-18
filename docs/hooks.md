@@ -44,7 +44,7 @@ It is there because a hook that never starts cannot say so. A Claude Code older 
 - **It is cleaned up.** Each SessionStart removes the marks older than 30 days and those of a Claude Code process that no longer exists, 64 at most, and nothing else. Deleting the `hooks-heartbeat` directory removes them all; the next session recreates it.
 - **Both sides must look in the same place.** A `GUARDIAN_DATA_DIR` set for the server and not for the shell that launches Claude Code (or the reverse) leaves the server with no mark to find, and it reports `not_observed`.
 
-The mark says that the host started the hooks. Whether the detectors behind them answer — a catastrophic command denied, a write that switches the hooks off refused, a secret warned about — is the other half, and `dev-guardian selftest` checks it by handing the installed dispatcher each of those as text: see [selftest.md](selftest.md).
+The mark says that the host started the hooks. Whether the detectors behind them answer — a catastrophic command denied, a write that switches the hooks off refused, a secret warned about, the install of a package npm took down denied — is the other half, and `dev-guardian selftest` checks it by handing the installed dispatcher each of those as text: see [selftest.md](selftest.md).
 
 ## The shell guard
 
@@ -69,7 +69,7 @@ When the command installs packages by name — `npm i|install|add`, `pnpm add|i|
 | The name does **not exist** on the public registry | **deny** only when the whole command, comments stripped, is ONE plain install statement — a bare tool name (no `.venv/bin/pip`, `sudo`, `env`, `VAR=x`), no `&&`, `\|\|`, `;`, pipes, `&`, subshells, `$(…)`, backticks, variables, redirections, unquoted commas or `'…''…'`, and only flags from a small per-tool allowlist that cannot change where a package resolves from (not `composer --no-update` / `--no-install` or `dotnet --no-restore`, which defer the lookup) — and nothing below explains the 404. Otherwise a warning: "not found on the public registry — if it is private or local, ignore this". |
 | Published less than 72 h ago, npm install scripts, typosquat suspicion, an unpublished exact version | warning |
 | Known vulnerabilities | warning, only for an exact version pin (for a range the installed version is unknown) |
-| A check could not run (offline, timeout, HTTP error, rate limit, `GUARDIAN_OFFLINE=1`) | one line saying the package was **not** verified; the command runs |
+| A check could not run (offline, timeout, HTTP error, rate limit, `GUARDIAN_OFFLINE=1`) | one line saying the package was **not** verified — also when the same package has a warning; the command runs |
 | Every package clean | silent |
 | A command that installs nothing | silent, and no network request at all |
 

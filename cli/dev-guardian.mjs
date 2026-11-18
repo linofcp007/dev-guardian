@@ -763,8 +763,14 @@ selftest — does each core control DETECT on this machine? (installed is not th
   nothing: a scan of that area with 0 findings proves nothing here); missing;
   unverified (with the reason); disabled_by_user (a guard you switched off).
   Core controls: each rule pack of configs/semgrep/, gitleaks, Trivy's
-  dependency audit and IaC scan, and four checks of the guardrail hooks. Any
+  dependency audit and IaC scan, and five checks of the guardrail hooks. Any
   other installed scanner is listed as no_canary: installed, not verified.
+  One hook check, hooks:install-vet, is the only one that uses the network:
+  the dispatcher is handed, as text, the install of a package npm took down
+  (crossenv), asks the public npm registry and OSV about that one name, and
+  must deny it — nothing is run or installed. When they do not answer it is
+  unverified, never silent; with GUARDIAN_OFFLINE=1, or with package vetting
+  switched off (GUARDIAN_PKG_VET=0), it is not started.
   The temporary directory is removed afterwards, also when interrupted.
   --json                One JSON document on stdout (schema 1); progress on stderr
   --keep                Keep the temporary directory and print its path
