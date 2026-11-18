@@ -8,6 +8,34 @@ version bump.
 
 ## [Unreleased]
 
+## [3.12.0] - 2026-11-18
+
+The install hook reads further, and says what it did not read. A manifest install is vetted through the manager's
+own lockfile — every pinned package and version, the transitive ones too —, a slow registry no longer leaves a whole
+manifest unvetted, and `dev-guardian selftest` now checks that the install hook denies at all.
+
+### Upgrading from 3.11.0
+
+- **A manifest install sends more to OSV.** In a project with a lockfile, `npm ci`, `npm install`, `pnpm install`,
+  `yarn` and `bun install` now send the names and pinned versions of the lockfile's registry packages — the first
+  8 000 — to OSV; 3.11.0 sent the direct dependencies' names. They are public names and versions, and nothing else
+  of the project goes with them. `GUARDIAN_PKG_VET=0` turns package vetting off, and with `GUARDIAN_OFFLINE=1`
+  nothing is asked of the network.
+- **An install that passed may be denied.** A malicious package pinned anywhere in the lockfile — a transitive
+  dependency too — is denied, where 3.11.0 looked at the direct dependencies only. The deny names the lockfile, the
+  package and its version, and the advisory.
+- **The hook says more.** New lines tell what it could not read or did not recognise in a lockfile, how many of its
+  packages come from another source than the public registry, and how many it could not vet. For
+  `npm install <name>`, the `could not vet … — not verified` line now also comes beside a warning. Look at anything
+  of yours that compares the hook's text as a whole.
+- **`vet_packages` and `scan_skill` may say "not verified" where they said clean.** An OSV answer that lacks a
+  result or is cut short no longer reads as "no advisories", and a registry or OSV answer that is not JSON has a
+  reason in fixed words.
+- **`dev-guardian selftest` has one control more, and it uses the network.** `hooks:install-vet` asks the public
+  npm registry and OSV about one package name. On a machine that cannot reach them it is `unverified`, and a
+  selftest that ended with exit code 0 there now ends with 2. `GUARDIAN_PKG_VET=0` makes it `disabled_by_user`,
+  which does not count against exit code 0. A result saved by 3.11.0 reads `stale` after the upgrade, as after any
+  upgrade.
 ### Added
 
 - **A manifest install is vetted through its lockfile.** For `npm ci`, `npm install`, `pnpm install`, `yarn` and
