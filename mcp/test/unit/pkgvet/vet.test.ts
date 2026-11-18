@@ -1057,7 +1057,7 @@ describe('install-vet-slow-first-round', () => {
 
 describe('pkgvet-registry-credentials-said', () => {
   const MARK = 'dgsecret-zzq7731';
-  const USER = 'dguser';
+  const USER = 'dguser-zzq7731';
   const HOST = 'npm.company.example';
   const HOST_URL = `https://${HOST}`;
   const SENTENCE_START = 'a custom registry is configured (';
@@ -1112,6 +1112,11 @@ describe('pkgvet-registry-credentials-said', () => {
     ['name=URL', `corp=${credentialUrl(`/p/${MARK}`)}`, HOST_URL],
     ['a token in the path and the query', `https://${HOST}/${MARK}/account/?token=${MARK}&x=1`, HOST_URL],
     ['a user without a password', ['https://', MARK, '@', HOST, '/'].join(''), HOST_URL],
+    // The parser reads the user name as the host and the digits as a port: the value is ambiguous, so nothing of it is shown.
+    ['a password of digits, then a slash', ['https://', USER, ':8080/ss-', MARK, '@', HOST, '/'].join(''), ''],
+    ['a password of digits, then a #', ['https://', USER, ':2024#x-', MARK, '@', HOST, '/'].join(''), ''],
+    ['a password of digits, then a ?', ['https://', USER, ':2024?x-', MARK, '@', HOST, '/'].join(''), ''],
+    ['a password of digits, then a space', ['https://', USER, ':80 ', MARK, '@', HOST, '/'].join(''), ''],
     ['a port', ['https://', USER, ':', MARK, '@', HOST, ':8443/simple'].join(''), HOST_URL],
     ['text that is not a URL', `not a url ${MARK}`, ''],
     ['a local folder', `/srv/${MARK}/feed`, ''],
@@ -1144,13 +1149,47 @@ describe('pkgvet-registry-credentials-said', () => {
     expect(shownOfRegistry(text, 'NPM_CONFIG_REGISTRY')).toBe(HOST_URL);
   });
 
-  it('T-02 a host with strange characters is shown as the parser reads it, still without the credentials', async () => {
+  it('T-02 several clean URLs with credentials: the first that is not public is named, none of the credentials', async () => {
+    const value = [credentialUrl('/simple'), ' ', ['https://', USER, ':', MARK, '@other.example/simple'].join('')].join('');
+    const [r] = await vetPackages(
+      [spec('npm', 'acme-internal-lib')],
+      opts(missing('acme-internal-lib'), { registry: { projectDir: project, homeDir: home, env: { NPM_CONFIG_REGISTRY: value } } }),
+    );
+    const text = said(r);
+    expect(text.includes(MARK) || text.includes(USER), `no credential may be in: ${text}`).toBe(false);
+    expect(shownOfRegistry(text, 'NPM_CONFIG_REGISTRY')).toBe(HOST_URL);
+  });
+
+  // User information that is only a token (no colon) and is cut by a separator the parser reads as the end of the
+  // authority: it takes the token's prefix for the host, lowercased. Nothing of the token may be shown.
+  const TOKEN = ['gh', 'p_ZzQ', '7731', 'Tok'].join('');
+  it.each([
+    ['a slash', '/'],
+    ['a question mark', '?'],
+    ['a hash', '#'],
+    ['a backslash', '\\'],
+  ])('T-02 a token as user information, cut by %s: no part of the token is shown, in any letter case, and nothing of the value', async (_label, separator) => {
+    const value = ['https://', TOKEN, separator, 'rest-', MARK, '@', HOST, '/'].join('');
+    for (const [source, extra] of [
+      ['the command line', { commandRegistries: [value] }],
+      ['NPM_CONFIG_REGISTRY', { registry: { projectDir: project, homeDir: home, env: { NPM_CONFIG_REGISTRY: value } } }],
+    ] as const) {
+      const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib'), extra));
+      const text = said(r);
+      const lower = text.toLowerCase();
+      for (const part of [TOKEN, 'rest-', MARK]) {
+        expect(lower.includes(part.toLowerCase()), `${source}: "${part}" must not be in: ${text}`).toBe(false);
+      }
+      expect(shownOfRegistry(text, source), source).toBe('');
+    }
+  });
+
+  it('T-02 a host with strange characters is shown as the parser reads it (punycode), without the credentials', async () => {
     const value = ['https://', USER, ':', MARK, '@npm.compány.example/x'].join('');
     const [r] = await vetPackages([spec('npm', 'acme-internal-lib')], opts(missing('acme-internal-lib'), { commandRegistries: [value] }));
     const text = said(r);
-    expect(text.includes(MARK)).toBe(false);
-    const shown = shownOfRegistry(text, 'the command line');
-    expect(shown === '' || (shown.startsWith('https://') && !/[\s/@:?#]/.test(shown.slice('https://'.length)))).toBe(true);
+    expect(text.includes(MARK) || text.includes(USER), `no credential may be in: ${text}`).toBe(false);
+    expect(shownOfRegistry(text, 'the command line')).toBe('https://npm.xn--compny-sta.example');
   });
 
   it('T-05 protection: an unremarkable registry still makes the name unknown and names the source; the other sentences read as before', async () => {

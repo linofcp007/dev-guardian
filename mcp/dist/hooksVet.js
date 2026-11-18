@@ -5420,16 +5420,26 @@ function ageText(hours) {
 }
 var needsNoExtras = (w) => w.unreported?.has("publish_age") === true && w.unreported.has("install_scripts");
 function registryHost(ecosystem, value) {
+  let named;
   for (const token of value.split(/\s+/)) {
     const candidate = token.replace(/^[^=:/?#@]+=(?=https?:\/\/)/i, "");
-    if (isPublicRegistryUrl(ecosystem, candidate)) continue;
-    try {
-      const url = new URL(candidate);
-      if ((url.protocol === "https:" || url.protocol === "http:") && url.hostname !== "") return `${url.protocol}//${url.hostname}`;
-    } catch {
+    const url = parsedHttpUrl(candidate);
+    if (url === void 0) {
+      if (candidate.includes("@")) return void 0;
+      continue;
     }
+    if (url.pathname.includes("@") || url.search.includes("@") || url.hash.includes("@")) return void 0;
+    if (named === void 0 && !isPublicRegistryUrl(ecosystem, candidate)) named = `${url.protocol}//${url.hostname}`;
   }
-  return void 0;
+  return named;
+}
+function parsedHttpUrl(text) {
+  try {
+    const url = new URL(text);
+    return (url.protocol === "https:" || url.protocol === "http:") && url.hostname !== "" ? url : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function customFor(spec2, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec2.ecosystem, u));

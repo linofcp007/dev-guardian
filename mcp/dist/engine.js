@@ -117435,16 +117435,26 @@ function ageText(hours) {
   return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;
 }
 function registryHost(ecosystem, value) {
+  let named2;
   for (const token of value.split(/\s+/)) {
     const candidate = token.replace(/^[^=:/?#@]+=(?=https?:\/\/)/i, "");
-    if (isPublicRegistryUrl(ecosystem, candidate)) continue;
-    try {
-      const url2 = new URL(candidate);
-      if ((url2.protocol === "https:" || url2.protocol === "http:") && url2.hostname !== "") return `${url2.protocol}//${url2.hostname}`;
-    } catch {
+    const url2 = parsedHttpUrl(candidate);
+    if (url2 === void 0) {
+      if (candidate.includes("@")) return void 0;
+      continue;
     }
+    if (url2.pathname.includes("@") || url2.search.includes("@") || url2.hash.includes("@")) return void 0;
+    if (named2 === void 0 && !isPublicRegistryUrl(ecosystem, candidate)) named2 = `${url2.protocol}//${url2.hostname}`;
   }
-  return void 0;
+  return named2;
+}
+function parsedHttpUrl(text3) {
+  try {
+    const url2 = new URL(text3);
+    return (url2.protocol === "https:" || url2.protocol === "http:") && url2.hostname !== "" ? url2 : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function customFor(spec, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
