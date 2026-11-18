@@ -4327,7 +4327,8 @@ async function queryOsv(packages, opts = {}) {
       try {
         outcomes[c] = readBatch(chunk, await postJson(OSV_BATCH_URL, body, opts, fetchImpl));
       } catch (e) {
-        outcomes[c] = { groups: [], unanswered: chunk, error: e instanceof Error ? e.message : "osv_request_failed" };
+        const error2 = e instanceof SyntaxError ? "osv answer is not JSON" : e instanceof Error ? e.message : "osv_request_failed";
+        outcomes[c] = { groups: [], unanswered: chunk, error: error2 };
       }
     }
   };
@@ -5224,7 +5225,14 @@ async function fetchJson(url, http, headers = {}) {
     if (res.status === 404 || res.status === 410) return { kind: "not_found" };
     if (res.status === 429) return { kind: "error", reason: `rate limited by ${new URL(url).host} (HTTP 429)` };
     if (!res.ok) return { kind: "error", reason: `${new URL(url).host} answered HTTP ${res.status}` };
-    return { kind: "ok", json: await res.json() };
+    let json;
+    try {
+      json = await res.json();
+    } catch (e) {
+      if (e instanceof SyntaxError) return { kind: "error", reason: `${new URL(url).host} gave an answer that is not JSON` };
+      throw e;
+    }
+    return { kind: "ok", json };
   } catch (e) {
     return { kind: "error", reason: describeError(e, http.signal) };
   }
@@ -6577,7 +6585,8 @@ function decideOne(r, uncertain) {
   }
   const out = {};
   if (warns.length > 0) out.warn = `${label2(r)}: ${warns.slice(0, 3).join("; ")}`;
-  const unknownCheck = Object.values(r.checks).find((c) => c.status === "unknown" && c.detail !== void 0);
+  const couldRun = r.requested_version_unpublished === true ? [r.checks.malicious] : Object.values(r.checks);
+  const unknownCheck = couldRun.find((c) => c.status === "unknown" && c.detail !== void 0);
   if (unknownCheck !== void 0) out.unverified = `${label2(r)} (${unknownCheck.detail ?? ""})`;
   return out;
 }

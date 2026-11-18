@@ -171,7 +171,9 @@ export async function queryOsv(
       try {
         outcomes[c] = readBatch(chunk, await postJson(OSV_BATCH_URL, body, opts, fetchImpl));
       } catch (e) {
-        outcomes[c] = { groups: [], unanswered: chunk, error: e instanceof Error ? e.message : 'osv_request_failed' };
+        // A parser's own message quotes the text it could not read: nothing of an answer is repeated in an error.
+        const error = e instanceof SyntaxError ? 'osv answer is not JSON' : e instanceof Error ? e.message : 'osv_request_failed';
+        outcomes[c] = { groups: [], unanswered: chunk, error };
       }
     }
   };

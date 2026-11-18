@@ -526,9 +526,12 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
             canaryReported: false,
             ...(soft !== undefined ? { softenedBy: soft } : {}),
             reason:
-              check.expect === 'deny'
-                ? 'the dispatcher ran and did not deny it: on this install the guard lets it through'
-                : 'the dispatcher ran and gave no secret warning for a write that holds one',
+              check.id === 'hooks:install-vet'
+                ? // Two causes this run cannot tell apart: the guard, or a canary npm no longer serves as its placeholder.
+                  'the dispatcher ran and did not deny the install: the guard lets it through — or the registry no longer serves the security placeholder for the canary package'
+                : check.expect === 'deny'
+                  ? 'the dispatcher ran and did not deny it: on this install the guard lets it through'
+                  : 'the dispatcher ran and gave no secret warning for a write that holds one',
           };
         } catch (error) {
           return { installed: true, ended: 'failed', canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf(error)}` };
@@ -561,11 +564,16 @@ export async function runSelftest(opts: SelftestOptions): Promise<SelftestResult
       const vetControl = hookControls.find((c) => c.id === 'hooks:install-vet');
       const vetCheck = HOOK_CHECKS.find((h) => h.id === 'hooks:install-vet');
       const vetTurn = vetControl !== undefined && vetCheck !== undefined ? turnOf(vetControl, vetCheck) : undefined;
-      for (const control of hookControls) {
-        const check = HOOK_CHECKS.find((h) => h.id === control.id);
-        if (check === undefined) continue;
-        const turn = control === vetControl && vetTurn !== undefined ? await vetTurn : await turnOf(control, check);
-        record(control, turn.observation, turn.version);
+      try {
+        for (const control of hookControls) {
+          const check = HOOK_CHECKS.find((h) => h.id === control.id);
+          if (check === undefined) continue;
+          const turn = control === vetControl && vetTurn !== undefined ? await vetTurn : await turnOf(control, check);
+          record(control, turn.observation, turn.version);
+        }
+      } finally {
+        // Whatever ended the loop: the dispatcher started above has ended before the directory it runs in is removed.
+        await vetTurn;
       }
     }
 

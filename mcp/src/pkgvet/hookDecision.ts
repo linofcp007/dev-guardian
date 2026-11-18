@@ -1211,6 +1211,8 @@ function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; 
  *   - checks that could not run → the one-line "not verified" note — also
  *     beside a warning: a package with a typosquat suspicion whose registry
  *     did not answer is told both ways, as {@link decideManifestOne} does.
+ *     Not for the checks an unpublished exact version leaves without a
+ *     version to look at: its warning says that.
  */
 function decideOne(
   r: PackageVetResult,
@@ -1242,8 +1244,11 @@ function decideOne(
   }
   const out: { warn?: string; unverified?: string } = {};
   if (warns.length > 0) out.warn = `${label(r)}: ${warns.slice(0, 3).join('; ')}`;
-  // A warning does not hide a check that could not run: the note says the rest was not verified.
-  const unknownCheck = Object.values(r.checks).find((c) => c.status === 'unknown' && c.detail !== undefined);
+  // A warning does not hide a check that could not run: the note says the rest was not verified. An exact version
+  // nobody published is the exception its own warning states — the checks of "the version it installs" have no
+  // version to look at, and that is not a lookup that failed; the malware lookup, asked for the version as typed, is.
+  const couldRun = r.requested_version_unpublished === true ? [r.checks.malicious] : Object.values(r.checks);
+  const unknownCheck = couldRun.find((c) => c.status === 'unknown' && c.detail !== undefined);
   if (unknownCheck !== undefined) out.unverified = `${label(r)} (${unknownCheck.detail ?? ''})`;
   return out;
 }

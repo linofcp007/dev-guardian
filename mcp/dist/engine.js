@@ -99240,7 +99240,8 @@ async function queryOsv(packages, opts = {}) {
       try {
         outcomes[c] = readBatch(chunk, await postJson(OSV_BATCH_URL, body, opts, fetchImpl));
       } catch (e) {
-        outcomes[c] = { groups: [], unanswered: chunk, error: e instanceof Error ? e.message : "osv_request_failed" };
+        const error63 = e instanceof SyntaxError ? "osv answer is not JSON" : e instanceof Error ? e.message : "osv_request_failed";
+        outcomes[c] = { groups: [], unanswered: chunk, error: error63 };
       }
     }
   };
@@ -117248,7 +117249,14 @@ async function fetchJson(url2, http, headers = {}) {
     if (res.status === 404 || res.status === 410) return { kind: "not_found" };
     if (res.status === 429) return { kind: "error", reason: `rate limited by ${new URL(url2).host} (HTTP 429)` };
     if (!res.ok) return { kind: "error", reason: `${new URL(url2).host} answered HTTP ${res.status}` };
-    return { kind: "ok", json: await res.json() };
+    let json2;
+    try {
+      json2 = await res.json();
+    } catch (e) {
+      if (e instanceof SyntaxError) return { kind: "error", reason: `${new URL(url2).host} gave an answer that is not JSON` };
+      throw e;
+    }
+    return { kind: "ok", json: json2 };
   } catch (e) {
     return { kind: "error", reason: describeError(e, http.signal) };
   }
@@ -122544,7 +122552,10 @@ async function runSelftest(opts) {
             canaryRead: true,
             canaryReported: false,
             ...soft !== void 0 ? { softenedBy: soft } : {},
-            reason: check2.expect === "deny" ? "the dispatcher ran and did not deny it: on this install the guard lets it through" : "the dispatcher ran and gave no secret warning for a write that holds one"
+            reason: check2.id === "hooks:install-vet" ? (
+              // Two causes this run cannot tell apart: the guard, or a canary npm no longer serves as its placeholder.
+              "the dispatcher ran and did not deny the install: the guard lets it through \u2014 or the registry no longer serves the security placeholder for the canary package"
+            ) : check2.expect === "deny" ? "the dispatcher ran and did not deny it: on this install the guard lets it through" : "the dispatcher ran and gave no secret warning for a write that holds one"
           };
         } catch (error62) {
           return { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf3(error62)}` };
@@ -122570,11 +122581,15 @@ async function runSelftest(opts) {
       const vetControl = hookControls.find((c) => c.id === "hooks:install-vet");
       const vetCheck = HOOK_CHECKS.find((h) => h.id === "hooks:install-vet");
       const vetTurn = vetControl !== void 0 && vetCheck !== void 0 ? turnOf(vetControl, vetCheck) : void 0;
-      for (const control of hookControls) {
-        const check2 = HOOK_CHECKS.find((h) => h.id === control.id);
-        if (check2 === void 0) continue;
-        const turn = control === vetControl && vetTurn !== void 0 ? await vetTurn : await turnOf(control, check2);
-        record8(control, turn.observation, turn.version);
+      try {
+        for (const control of hookControls) {
+          const check2 = HOOK_CHECKS.find((h) => h.id === control.id);
+          if (check2 === void 0) continue;
+          const turn = control === vetControl && vetTurn !== void 0 ? await vetTurn : await turnOf(control, check2);
+          record8(control, turn.observation, turn.version);
+        }
+      } finally {
+        await vetTurn;
       }
     }
     if (!interrupted()) {

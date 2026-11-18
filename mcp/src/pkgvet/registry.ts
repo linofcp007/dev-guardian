@@ -51,7 +51,15 @@ async function fetchJson(url: string, http: HttpOptions, headers: Record<string,
     if (res.status === 404 || res.status === 410) return { kind: 'not_found' };
     if (res.status === 429) return { kind: 'error', reason: `rate limited by ${new URL(url).host} (HTTP 429)` };
     if (!res.ok) return { kind: 'error', reason: `${new URL(url).host} answered HTTP ${res.status}` };
-    return { kind: 'ok', json: await res.json() };
+    let json: unknown;
+    try {
+      json = await res.json();
+    } catch (e) {
+      // A parser's own message quotes the text it could not read: nothing of an answer is repeated in a reason.
+      if (e instanceof SyntaxError) return { kind: 'error', reason: `${new URL(url).host} gave an answer that is not JSON` };
+      throw e;
+    }
+    return { kind: 'ok', json };
   } catch (e) {
     return { kind: 'error', reason: describeError(e, http.signal) };
   }

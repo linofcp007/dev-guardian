@@ -2611,4 +2611,52 @@ describe('selftest-install-vet-canary', () => {
     expect(f.calls).toContain('https://registry.npmjs.org/express');
     expect(said(d).filter((line) => names(line, 'express') > 0)).toEqual([]);
   });
+
+  it('T-10 an exact version nobody published says its warning alone — the checks of a version that does not exist are not "could not vet"; with OSV unanswered as well, the note gives THAT reason', async () => {
+    const LODASH = 'https://registry.npmjs.org/lodash';
+    const install = 'npm install lodash@9.9.9';
+    const unpublished = (d: Awaited<ReturnType<typeof decideInstallCommand>>): string[] => said(d).filter((line) => /is not published/.test(line));
+
+    // The registry answers and has no 9.9.9: the warning says exactly that, and nothing of this package was left unasked.
+    const answered = fakeFetch({ [LODASH]: npmDoc('4.17.21'), [OSV]: osvClean });
+    const a = await decideInstallCommand(install, opts(answered.fetchImpl, POPULAR));
+    expect(a?.deny).toBeUndefined();
+    expect(unpublished(a)).toHaveLength(1);
+    expect(said(a).filter((line) => /could not vet|not verified/.test(line))).toEqual([]);
+
+    // OSV not answering IS a check that could not run: the warning, and the note with OSV's reason — not the missing version's.
+    const osvDown = fakeFetch({ [LODASH]: npmDoc('4.17.21'), [OSV]: { status: 500 } });
+    const b = await decideInstallCommand(install, opts(osvDown.fetchImpl, POPULAR));
+    expect(b?.deny).toBeUndefined();
+    expect(unpublished(b)).toHaveLength(1);
+    const notes = notesOf(b, 'lodash');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/OSV/);
+    expect(notes[0]).not.toMatch(/could not determine which version/);
+  });
+
+  it('T-08 a registry, or OSV, that answers something that is not JSON: the line says so in words of the hook and quotes nothing of the answer', async () => {
+    // Short enough to be whole in the fragment of the body that a JSON parser's own message quotes.
+    const MARK = 'zzq7731';
+    const text = (body: string): Response => new Response(body, { status: 200 });
+    const cases: Array<[what: string, fetchImpl: typeof fetch]> = [
+      [
+        'the registry',
+        (async (input: string | URL | Request): Promise<Response> => (String(input) === OSV ? new Response(JSON.stringify({ results: [{}] })) : text(`${MARK} blocked by a proxy`))) as typeof fetch,
+      ],
+      [
+        'OSV',
+        (async (input: string | URL | Request): Promise<Response> =>
+          String(input) === OSV ? text(`${MARK} blocked by a proxy`) : new Response(JSON.stringify(npmDoc('4.21.2').body))) as typeof fetch,
+      ],
+    ];
+    for (const [what, fetchImpl] of cases) {
+      const d = await decideInstallCommand('npm install express', opts(fetchImpl, POPULAR));
+      expect(d?.deny, what).toBeUndefined();
+      const lines = said(d);
+      expect(lines, what).toEqual([expect.stringMatching(/^dev-guardian could not vet express.* \(.*not JSON.*\) — not verified\.$/)]);
+      expect(lines.join('\n'), what).not.toContain(MARK);
+      expect(lines.join('\n'), what).not.toMatch(/Unexpected token/);
+    }
+  });
 });
