@@ -398,13 +398,31 @@ function npmrcValue(raw: string): string {
   return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, '$2');
 }
 
-/** A `.yarnrc.yml` scalar: a quoted one is its content, an unquoted one ends at a ` #` (a comment). */
-function yamlScalar(raw: string): string {
+/** What a registry value the reader cannot judge is read as: never the public registry (as `fromBunfig`'s). */
+const UNREADABLE_VALUE = '(configured)';
+
+/**
+ * A `.yarnrc.yml` `npmRegistryServer` value, when it is a PLAIN SINGLE-LINE scalar; otherwise `(configured)`, which
+ * is never the public registry. YAML has more spellings than a URL has: a doubled quote in a single-quoted scalar,
+ * an escape in a double-quoted one, and a scalar continued on a more indented line all reach a host that the first
+ * characters do not show (measured with Yarn 4.18.1). So:
+ *   - quoted: the closing quote of the same kind ends the value, and only white space or a ` #` comment follows it;
+ *     the content has no quote of that kind and no backslash;
+ *   - unquoted: it does not start with a quote and ends at a ` #` comment;
+ *   - and the next line that is neither blank nor a comment is not more indented than the key (a continuation).
+ */
+function yamlServer(lines: string[], at: number, keyIndent: number, raw: string): string {
+  const next = lines.slice(at + 1).find((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+  if (next !== undefined && next.length - next.trimStart().length > keyIndent) return UNREADABLE_VALUE;
   const value = raw.trim();
   const quote = value.charAt(0);
   if (quote === '"' || quote === "'") {
     const close = value.indexOf(quote, 1);
-    if (close > 0) return value.slice(1, close);
+    if (close < 0) return UNREADABLE_VALUE;
+    const content = value.slice(1, close);
+    const rest = value.slice(close + 1);
+    if (content.includes('\\') || (rest.trim() !== '' && !/^\s+#/.test(rest))) return UNREADABLE_VALUE;
+    return content;
   }
   const comment = value.search(/\s#/);
   return (comment === -1 ? value : value.slice(0, comment)).trim();
@@ -432,7 +450,8 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
   let global: string | undefined;
   let inScopes = false;
   let currentScope: string | undefined;
-  for (const raw of text.split(/\r?\n/)) {
+  const lines = text.split(/\r?\n/);
+  for (const [at, raw] of lines.entries()) {
     if (raw.trim() === '' || raw.trim().startsWith('#')) continue;
     const indent = raw.length - raw.trimStart().length;
     const line = raw.trim();
@@ -440,7 +459,7 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
       inScopes = /^npmScopes\s*:/.test(line);
       currentScope = undefined;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-      if (m !== null) global = yamlScalar(m[1] ?? '');
+      if (m !== null) global = yamlServer(lines, at, indent, m[1] ?? '');
       if (m !== null) all?.push(global ?? '');
       continue;
     }
@@ -451,9 +470,9 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-    if (server !== null) all?.push(yamlScalar(server[1] ?? ''));
+    if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ''));
     if (server !== null && scope !== undefined && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return yamlScalar(server[1] ?? '');
+      return yamlServer(lines, at, indent, server[1] ?? '');
     }
   }
   return global;

@@ -116795,12 +116795,18 @@ function npmrcValue(raw) {
   }
   return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
 }
-function yamlScalar(raw) {
+function yamlServer(lines, at, keyIndent, raw) {
+  const next = lines.slice(at + 1).find((l) => l.trim() !== "" && !l.trim().startsWith("#"));
+  if (next !== void 0 && next.length - next.trimStart().length > keyIndent) return UNREADABLE_VALUE;
   const value = raw.trim();
   const quote = value.charAt(0);
   if (quote === '"' || quote === "'") {
     const close = value.indexOf(quote, 1);
-    if (close > 0) return value.slice(1, close);
+    if (close < 0) return UNREADABLE_VALUE;
+    const content = value.slice(1, close);
+    const rest = value.slice(close + 1);
+    if (content.includes("\\") || rest.trim() !== "" && !/^\s+#/.test(rest)) return UNREADABLE_VALUE;
+    return content;
   }
   const comment = value.search(/\s#/);
   return (comment === -1 ? value : value.slice(0, comment)).trim();
@@ -116824,7 +116830,8 @@ function fromYarnrcYml(text3, scope, all) {
   let global3;
   let inScopes = false;
   let currentScope;
-  for (const raw of text3.split(/\r?\n/)) {
+  const lines = text3.split(/\r?\n/);
+  for (const [at, raw] of lines.entries()) {
     if (raw.trim() === "" || raw.trim().startsWith("#")) continue;
     const indent = raw.length - raw.trimStart().length;
     const line = raw.trim();
@@ -116832,7 +116839,7 @@ function fromYarnrcYml(text3, scope, all) {
       inScopes = /^npmScopes\s*:/.test(line);
       currentScope = void 0;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-      if (m !== null) global3 = yamlScalar(m[1] ?? "");
+      if (m !== null) global3 = yamlServer(lines, at, indent, m[1] ?? "");
       if (m !== null) all?.push(global3 ?? "");
       continue;
     }
@@ -116843,9 +116850,9 @@ function fromYarnrcYml(text3, scope, all) {
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-    if (server !== null) all?.push(yamlScalar(server[1] ?? ""));
+    if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return yamlScalar(server[1] ?? "");
+      return yamlServer(lines, at, indent, server[1] ?? "");
     }
   }
   return global3;
@@ -117262,7 +117269,7 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
   if (unchecked !== void 0) return { kind: "unchecked", source: unchecked.root, cut: unchecked.cut };
   return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
-var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, UNSAFE_TEXT, URL_SHAPE, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, NUGET_VERSION;
+var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, UNSAFE_TEXT, URL_SHAPE, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, UNREADABLE_VALUE, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, NUGET_VERSION;
 var init_privateRegistry = __esm({
   "src/pkgvet/privateRegistry.ts"() {
     "use strict";
@@ -117277,6 +117284,7 @@ var init_privateRegistry = __esm({
     UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
     URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d*))?(?:[/?#]|$)/i;
     MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
+    UNREADABLE_VALUE = "(configured)";
     NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
     ENV_REGISTRY = {
       npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,

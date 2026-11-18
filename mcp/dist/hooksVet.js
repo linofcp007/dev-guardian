@@ -4723,12 +4723,19 @@ function npmrcValue(raw) {
   }
   return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
 }
-function yamlScalar(raw) {
+var UNREADABLE_VALUE = "(configured)";
+function yamlServer(lines, at, keyIndent, raw) {
+  const next = lines.slice(at + 1).find((l) => l.trim() !== "" && !l.trim().startsWith("#"));
+  if (next !== void 0 && next.length - next.trimStart().length > keyIndent) return UNREADABLE_VALUE;
   const value = raw.trim();
   const quote = value.charAt(0);
   if (quote === '"' || quote === "'") {
     const close = value.indexOf(quote, 1);
-    if (close > 0) return value.slice(1, close);
+    if (close < 0) return UNREADABLE_VALUE;
+    const content = value.slice(1, close);
+    const rest = value.slice(close + 1);
+    if (content.includes("\\") || rest.trim() !== "" && !/^\s+#/.test(rest)) return UNREADABLE_VALUE;
+    return content;
   }
   const comment = value.search(/\s#/);
   return (comment === -1 ? value : value.slice(0, comment)).trim();
@@ -4752,7 +4759,8 @@ function fromYarnrcYml(text, scope, all) {
   let global;
   let inScopes = false;
   let currentScope;
-  for (const raw of text.split(/\r?\n/)) {
+  const lines = text.split(/\r?\n/);
+  for (const [at, raw] of lines.entries()) {
     if (raw.trim() === "" || raw.trim().startsWith("#")) continue;
     const indent = raw.length - raw.trimStart().length;
     const line = raw.trim();
@@ -4760,7 +4768,7 @@ function fromYarnrcYml(text, scope, all) {
       inScopes = /^npmScopes\s*:/.test(line);
       currentScope = void 0;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-      if (m !== null) global = yamlScalar(m[1] ?? "");
+      if (m !== null) global = yamlServer(lines, at, indent, m[1] ?? "");
       if (m !== null) all?.push(global ?? "");
       continue;
     }
@@ -4771,9 +4779,9 @@ function fromYarnrcYml(text, scope, all) {
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-    if (server !== null) all?.push(yamlScalar(server[1] ?? ""));
+    if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return yamlScalar(server[1] ?? "");
+      return yamlServer(lines, at, indent, server[1] ?? "");
     }
   }
   return global;

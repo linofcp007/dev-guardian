@@ -1138,4 +1138,66 @@ describe('pkgvet-public-registry-url-parse', () => {
       expect(customRegistryFor('npm', 'lodash', ctx()), 'a backslash').toMatchObject({ kind: 'registry' });
     });
   });
+
+  // Fix round 2: Yarn reads these `.yarnrc.yml` values as ANOTHER host (measured with Yarn 4.18.1); the reader must not read the public URL out of them.
+  describe('T-02 / T-03 a .yarnrc.yml npmRegistryServer that is not a plain single-line scalar', () => {
+    const PUB = ['https://', 'registry.npmjs.org'].join('');
+    const put = (text: string): void => writeFileSync(join(project, '.yarnrc.yml'), text);
+    /** The scalar value written after `npmRegistryServer:` — the continuation, if any, on the lines after it. */
+    const FORMS: Array<[string, string]> = [
+      ['a doubled quote in a single-quoted scalar', `'${PUB}'':x@evil.example/'`],
+      ['a plain scalar continued on a more indented line', `${PUB}\n@CONT:x@evil.example/`],
+      ['a double-quoted scalar continued on an indented line', `"${PUB}\n@CONT:x@evil.example/"`],
+      ['a double-quoted scalar with an escape', `"${PUB}:x\\x40evil.example/"`],
+    ];
+    /** `@CONT` stands for the indent of a continuation line: deeper than the key at `indent` spaces. */
+    const asKey = (value: string, indent: number): string => `${value.replace(/@CONT/g, ' '.repeat(indent + 2))}\n`;
+    const defaultFile = (value: string): string => `npmRegistryServer: ${asKey(value, 0)}`;
+    const scopeFile = (value: string): string => `npmScopes:\n  s:\n    npmRegistryServer: ${asKey(value, 4)}`;
+
+    it.each(FORMS)('T-03 as the default registry, %s is another registry', (_label, value) => {
+      put(defaultFile(value));
+      expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ kind: 'registry' });
+    });
+
+    it.each(FORMS)('T-03 as the registry of a scope, %s is a registry of its own', (_label, value) => {
+      put(scopeFile(value));
+      expect(npmScopeRegistry('@s/pkg', ctx())).not.toBeNull();
+      expect(customRegistryFor('npm', '@s/pkg', ctx())).toMatchObject({ kind: 'registry' });
+    });
+
+    it('T-03 the value that is not plain is not named: the reader gives a placeholder, never part of the text', () => {
+      put(defaultFile(FORMS[1]?.[1] ?? ''));
+      expect(JSON.stringify(customRegistryFor('npm', 'lodash', ctx())).includes('evil.example')).toBe(false);
+    });
+
+    it('T-03 an .npmrc has no continuation line and no doubled-quote escape: its quote tricks still read as another registry', () => {
+      const tricks = [`'${PUB}'':x@evil.example/'`, `"${PUB}":x@evil.example/`, `"${PUB}\\":x@evil.example/"`, `'${PUB}':x@evil.example/`];
+      const wrong: string[] = [];
+      for (const value of tricks) {
+        writeFileSync(join(project, '.npmrc'), `registry=${value}\n`);
+        if (customRegistryFor('npm', 'lodash', ctx())?.kind !== 'registry') wrong.push(value);
+      }
+      expect(wrong).toEqual([]);
+    });
+
+    const PLAIN = [PUB + '/', `"${PUB}/"`, `'${PUB}/'`, `${PUB}/ # a note`, `"${PUB}/" # a note`, `'${PUB}/' # a note`];
+    const FOLLOWERS: Array<[string, string]> = [
+      ['another top-level key', 'enableTelemetry: false\n'],
+      ['a comment and another top-level key', '# a note\n\nenableTelemetry: false\n'],
+      ['a nested mapping of another key', 'npmScopes:\n  other:\n    npmAlwaysAuth: true\n'],
+    ];
+
+    it.each(PLAIN)('T-02 the plain single-line value %s, followed by each kind of next line, is the public registry', (value) => {
+      const wrong: string[] = [];
+      for (const [label, next] of FOLLOWERS) {
+        put(`npmRegistryServer: ${value}\n${next}`);
+        if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push(`default, then ${label}`);
+        put(`npmScopes:\n  s:\n    npmRegistryServer: ${value}\n    npmAlwaysAuth: true\n  t:\n    npmRegistryServer: ${value}\n${next.startsWith('npmScopes') ? '' : next}`);
+        if (npmScopeRegistry('@s/pkg', ctx()) !== null) wrong.push(`scope s, then ${label}`);
+        if (npmScopeRegistry('@t/pkg', ctx()) !== null) wrong.push(`scope t, then ${label}`);
+      }
+      expect(wrong).toEqual([]);
+    });
+  });
 });
