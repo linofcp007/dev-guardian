@@ -1391,4 +1391,63 @@ describe('pkgvet-archive-like-name', () => {
     expect(differing).toEqual([]);
     expect(BEFORE.length).toBeGreaterThanOrEqual(300);
   });
+
+  /** The package a command names, as `[name, range]` pairs, plus what it skipped (raw and reason). */
+  function namedAndSkipped(command: string): { packages: Array<[string, string | undefined]>; skipped: Array<[string, string]> } {
+    const cmds = parseInstallCommands(command);
+    return {
+      packages: cmds.flatMap((c) => c.packages.map((p): [string, string | undefined] => [p.name, p.range])),
+      skipped: cmds.flatMap((c) => c.skipped.map((s): [string, string] => [s.raw, s.reason])),
+    };
+  }
+
+  it('T-10 an alias `x@npm:<name><ending>` names the REAL package, for every manager and every ending: vetted, nothing skipped', () => {
+    for (const ending of OLD_LIST) expectName(`npm install x@npm:evil${ending}`, `evil${ending}`);
+    expectName('npm install x@npm:evil.zip', 'evil.zip');
+    expectName('pnpm add x@npm:evil.tgz', 'evil.tgz');
+    expectName('yarn add x@npm:evil.tar', 'evil.tar');
+    expectName('bun add x@npm:evil.tgz', 'evil.tgz');
+  });
+
+  it('T-10 `<name>@<tag ending like an archive>` is the package <name> with that tag for a manager that reads no file there', () => {
+    const cases: Array<[string, string, string]> = [
+      ['npm install evil@foo.zip', 'evil', 'foo.zip'],
+      ['pnpm add evil@foo.tgz', 'evil', 'foo.tgz'],
+      ['yarn add evil@foo.tgz', 'evil', 'foo.tgz'],
+      ['bun add evil@foo.zip', 'evil', 'foo.zip'],
+    ];
+    for (const [command, name, range] of cases) {
+      expect(namedAndSkipped(command), command).toEqual({ packages: [[name, range]], skipped: [] });
+    }
+  });
+
+  it('T-10 protection: a tag npm and bun read as a file (.tgz .tar.gz .tar) stays skipped as an archive file; a versioned name stays a package', () => {
+    for (const prefix of ['npm install', 'bun add']) {
+      for (const ending of NPM_FILES) {
+        const command = `${prefix} evil@foo${ending}`;
+        expect(namedAndSkipped(command), command).toEqual({ packages: [], skipped: [[`evil@foo${ending}`, 'archive file — not looked up']] });
+      }
+    }
+    expect(namedAndSkipped('npm install lodash.zip@4.2.0'), 'npm install lodash.zip@4.2.0').toEqual({ packages: [['lodash.zip', '4.2.0']], skipped: [] });
+  });
+
+  it('T-10 protection: the versioned forms of Python, Composer and NuGet stay skipped as an archive file', () => {
+    for (const command of ['pip install foo@bar.tgz', 'composer require foo@bar.tgz', 'dotnet add package foo@bar.tgz']) {
+      expect(namedAndSkipped(command), command).toEqual({ packages: [], skipped: [['foo@bar.tgz', 'archive file — not looked up']] });
+    }
+  });
+
+  it('T-11 pipx hands the word to pip: an ending pip reads as a file but the old list lacked is a package AND an unmeasured reason', () => {
+    for (const ending of ['.tbz', '.txz', '.tlz', '.tar.lz', '.tar.lzma']) {
+      const command = `pipx install x${ending}`;
+      const cmds = parseInstallCommands(command);
+      expect(cmds.map((c) => c.packages.map((p) => p.name)), command).toEqual([[`x${ending}`]]);
+      expect(cmds.map((c) => c.skipped), command).toEqual([[]]);
+      const why = cmds[0]?.uncertain ?? [];
+      expect(
+        why.some((r) => r.toLowerCase().includes('archive')),
+        `${command}: a reason in uncertain mentions the archive-like ending, got ${JSON.stringify(why)}`,
+      ).toBe(true);
+    }
+  });
 });

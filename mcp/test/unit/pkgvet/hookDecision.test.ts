@@ -2697,3 +2697,23 @@ describe('selftest-install-vet-canary', () => {
     }
   });
 });
+
+// ───────────────── pkgvet-archive-like-name — a manager that was not measured warns about a missing archive-like name, never denies
+
+describe('pkgvet-archive-like-name', () => {
+  it('T-11 `composer require vendor/<missing>.zip`, the registry answering 404: a warning, never a deny', async () => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('composer require dgprobe/missing.zip', opts(f.fetchImpl));
+    expect(f.calls, 'the name is asked of Packagist').toContain('https://repo.packagist.org/p2/dgprobe/missing.zip.json');
+    expect(d?.deny, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(d?.context ?? '', 'a warning that names the package').toContain('dgprobe/missing.zip');
+  });
+
+  it('T-11 `dotnet add package <Missing>.zip`, the registry answering 404: a warning, never a deny', async () => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('dotnet add package Dgprobe.Missing.zip', opts(f.fetchImpl));
+    expect(f.calls.some((u) => u.startsWith('https://api.nuget.org/v3-flatcontainer/')), 'the name is asked of NuGet').toBe(true);
+    expect(d?.deny, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(d?.context ?? '', 'a warning that names the package').toContain('Dgprobe.Missing.zip');
+  });
+});

@@ -1444,4 +1444,24 @@ describe('pkgvet-archive-like-name', () => {
     expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny for a manager that was not measured').toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain(name);
   });
+
+  it('T-10 `npm install x@npm:<malicious>.zip` (an alias) is DENIED, naming the package', () => {
+    const r = runHook(`npm install x@npm:${BAD}`, MALICIOUS);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${BAD}`);
+  });
+
+  it('T-10 `npm install <malicious>@foo.zip` (a tag that ends like an archive) is DENIED, naming the package', () => {
+    const name = 'dgprobe-evil';
+    const r = runHook(`npm install ${name}@foo.zip`, {
+      [`https://registry.npmjs.org/${name}`]: npmDoc('1.0.0'),
+      [OSV]: { osv: { [`${name}@1.0.0`]: ['MAL-2026-0042'] } },
+    });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(name);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${name}`);
+  });
 });
