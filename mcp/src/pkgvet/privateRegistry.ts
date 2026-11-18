@@ -350,7 +350,7 @@ function npmScope(name: string): string | undefined {
 }
 
 /** `.npmrc`: `registry=` and `@scope:registry=`. */
-function fromNpmrc(text: string, scope: string | undefined): string | undefined {
+function fromNpmrc(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let found: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -359,6 +359,7 @@ function fromNpmrc(text: string, scope: string | undefined): string | undefined 
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     const url = (m[2] ?? '').trim();
+    all?.push(url);
     if (lineScope === undefined) found = found ?? url;
     else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) return url;
   }
@@ -366,7 +367,7 @@ function fromNpmrc(text: string, scope: string | undefined): string | undefined 
 }
 
 /** yarn berry `.yarnrc.yml`: top-level `npmRegistryServer`, or `npmScopes.<scope>.npmRegistryServer`. */
-function fromYarnrcYml(text: string, scope: string | undefined): string | undefined {
+function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let global: string | undefined;
   let inScopes = false;
   let currentScope: string | undefined;
@@ -379,6 +380,7 @@ function fromYarnrcYml(text: string, scope: string | undefined): string | undefi
       currentScope = undefined;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
       if (m !== null) global = (m[1] ?? '').replace(/^["']|["']$/g, '');
+      if (m !== null) all?.push(global ?? '');
       continue;
     }
     if (!inScopes) continue;
@@ -388,6 +390,7 @@ function fromYarnrcYml(text: string, scope: string | undefined): string | undefi
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
+    if (server !== null) all?.push((server[1] ?? '').replace(/^["']|["']$/g, ''));
     if (server !== null && scope !== undefined && currentScope?.toLowerCase() === scope.toLowerCase()) {
       return (server[1] ?? '').replace(/^["']|["']$/g, '');
     }
@@ -396,12 +399,13 @@ function fromYarnrcYml(text: string, scope: string | undefined): string | undefi
 }
 
 /** yarn classic `.yarnrc`: `registry "url"` / `"@scope:registry" "url"`. */
-function fromYarnrc(text: string, scope: string | undefined): string | undefined {
+function fromYarnrc(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let found: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
+    all?.push(m[2] ?? '');
     if (lineScope === undefined) found = found ?? m[2];
     else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
   }
@@ -409,7 +413,7 @@ function fromYarnrc(text: string, scope: string | undefined): string | undefined
 }
 
 /** bun `bunfig.toml`: `[install] registry = …` and `[install.scopes] <scope> = …`. */
-function fromBunfig(text: string, scope: string | undefined): string | undefined {
+function fromBunfig(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let section = '';
   let found: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
@@ -420,7 +424,11 @@ function fromBunfig(text: string, scope: string | undefined): string | undefined
       continue;
     }
     const url = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? '(configured)';
-    if (section === 'install' && /^registry\s*=/.test(line)) found = found ?? url;
+    if (section === 'install' && /^registry\s*=/.test(line)) {
+      all?.push(url);
+      found = found ?? url;
+    }
+    if (section === 'install.scopes' && /^["']?@?[^"'=\s]+["']?\s*=/.test(line)) all?.push(url);
     if (section === 'install.scopes' && scope !== undefined) {
       const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
       if (key !== undefined && key.toLowerCase() === scope.toLowerCase()) return url;
@@ -429,7 +437,18 @@ function fromBunfig(text: string, scope: string | undefined): string | undefined
   return found;
 }
 
-type NpmParser = (text: string, scope: string | undefined) => string | undefined;
+/**
+ * Reads one registry URL for `scope` — or, with `all` given, ALSO pushes every
+ * registry URL the file names (default and per scope), for {@link npmUserRegistries}.
+ */
+type NpmParser = (text: string, scope: string | undefined, all?: string[]) => string | undefined;
+
+/** A configuration file; `user` is false for a file in the project's directories or above its repository root. */
+interface NpmConfigFile {
+  path: string;
+  parse: NpmParser;
+  user: boolean;
+}
 
 /** An npmjs credential in an npmrc (`//registry.npmjs.org/:_authToken=`, `_auth=`, …) or `.yarnrc.yml`. */
 const NPM_AUTH =
@@ -442,17 +461,17 @@ const NPM_AUTH =
  * `~/.yarnrc`, `~/.bunfig.toml`), pnpm's global rc (XDG, `%LOCALAPPDATA%`,
  * macOS), and npm's global npmrc when `npm_config_globalconfig` names it.
  */
-function npmConfigFiles(ctx: RegistryContext): Array<{ path: string; parse: NpmParser }> {
+function npmConfigFiles(ctx: RegistryContext): NpmConfigFile[] {
   const env = envOf(ctx);
   const home = homeOf(ctx);
-  const files: Array<{ path: string; parse: NpmParser }> = [];
+  const files: NpmConfigFile[] = [];
   const near = ancestors(ctx);
   for (const dir of near) {
     files.push(
-      { path: join(dir, '.npmrc'), parse: fromNpmrc },
-      { path: join(dir, '.yarnrc.yml'), parse: fromYarnrcYml },
-      { path: join(dir, '.yarnrc'), parse: fromYarnrc },
-      { path: join(dir, 'bunfig.toml'), parse: fromBunfig },
+      { path: join(dir, '.npmrc'), parse: fromNpmrc, user: false },
+      { path: join(dir, '.yarnrc.yml'), parse: fromYarnrcYml, user: false },
+      { path: join(dir, '.yarnrc'), parse: fromYarnrc, user: false },
+      { path: join(dir, 'bunfig.toml'), parse: fromBunfig, user: false },
     );
   }
   // Yarn Berry reads `.yarnrc.yml` in EVERY ancestor up to the filesystem
@@ -460,24 +479,24 @@ function npmConfigFiles(ctx: RegistryContext): Array<{ path: string; parse: NpmP
   const top = near[near.length - 1];
   if (top !== undefined) {
     for (let dir = dirname(top), i = 0; i < 64; dir = dirname(dir), i += 1) {
-      files.push({ path: join(dir, '.yarnrc.yml'), parse: fromYarnrcYml });
+      files.push({ path: join(dir, '.yarnrc.yml'), parse: fromYarnrcYml, user: false });
       if (dirname(dir) === dir) break;
     }
   }
   const xdg = envValue(env, 'XDG_CONFIG_HOME') ?? join(home, '.config');
   const localAppData = envValue(env, 'LOCALAPPDATA') ?? join(home, 'AppData', 'Local');
   files.push(
-    { path: envValue(env, 'NPM_CONFIG_USERCONFIG') ?? join(home, '.npmrc'), parse: fromNpmrc },
-    { path: join(home, '.yarnrc.yml'), parse: fromYarnrcYml },
-    { path: join(home, '.yarnrc'), parse: fromYarnrc },
-    { path: join(home, '.bunfig.toml'), parse: fromBunfig },
-    { path: join(xdg, '.bunfig.toml'), parse: fromBunfig },
-    { path: join(xdg, 'pnpm', 'rc'), parse: fromNpmrc },
-    { path: join(localAppData, 'pnpm', 'config', 'rc'), parse: fromNpmrc },
-    { path: join(home, 'Library', 'Preferences', 'pnpm', 'rc'), parse: fromNpmrc },
+    { path: envValue(env, 'NPM_CONFIG_USERCONFIG') ?? join(home, '.npmrc'), parse: fromNpmrc, user: true },
+    { path: join(home, '.yarnrc.yml'), parse: fromYarnrcYml, user: true },
+    { path: join(home, '.yarnrc'), parse: fromYarnrc, user: true },
+    { path: join(home, '.bunfig.toml'), parse: fromBunfig, user: true },
+    { path: join(xdg, '.bunfig.toml'), parse: fromBunfig, user: true },
+    { path: join(xdg, 'pnpm', 'rc'), parse: fromNpmrc, user: true },
+    { path: join(localAppData, 'pnpm', 'config', 'rc'), parse: fromNpmrc, user: true },
+    { path: join(home, 'Library', 'Preferences', 'pnpm', 'rc'), parse: fromNpmrc, user: true },
   );
   const globalConfig = envValue(env, 'NPM_CONFIG_GLOBALCONFIG');
-  if (globalConfig !== undefined) files.push({ path: globalConfig, parse: fromNpmrc });
+  if (globalConfig !== undefined) files.push({ path: globalConfig, parse: fromNpmrc, user: true });
   // npm's DEFAULT global npmrc, read even when nothing names it:
   // `<prefix>/etc/npmrc`, the prefix being `%APPDATA%\npm` on Windows and the
   // node installation's prefix (`<prefix>/bin/node`) elsewhere — or
@@ -487,7 +506,7 @@ function npmConfigFiles(ctx: RegistryContext): Array<{ path: string; parse: NpmP
     ((ctx.platform ?? process.platform) === 'win32'
       ? join(envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming'), 'npm')
       : dirname(dirname(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join(prefix, 'etc', 'npmrc'), parse: fromNpmrc });
+  files.push({ path: join(prefix, 'etc', 'npmrc'), parse: fromNpmrc, user: true });
   return files;
 }
 
@@ -563,27 +582,131 @@ export function npmScopeRegistry(
   name: string,
   ctx: RegistryContext = {},
 ): { scope: string; source: string; url: string; from: 'project' | 'user' } | null {
-  const scope = npmScope(name);
-  if (scope === undefined) return null;
-  try {
-    const wanted = `npm_config_@${scope.toLowerCase()}:registry`;
-    for (const [key, raw] of Object.entries(envOf(ctx))) {
-      const value = raw?.trim() ?? '';
-      if (value !== '' && key.toLowerCase() === wanted && !isPublic('npm', value)) return { scope, source: key, url: value, from: 'user' };
+  return npmScopeRegistryOf(ctx)(name);
+}
+
+type ScopeRegistry = { scope: string; source: string; url: string; from: 'project' | 'user' } | null;
+
+/**
+ * {@link npmScopeRegistry} prepared for many names: what a call costs apart
+ * from the name — the environment, the list of configuration files with whose
+ * word each is, and their texts — is done ONCE, on the first scoped name, and
+ * each scope is answered from it once. A lockfile names hundreds of scopes, and
+ * the preparation (file-system calls, a read and a parse per file) cost about a
+ * millisecond a scope. The answers are those of the one-name function: the
+ * environment first, then the first file that names the scope; never throws.
+ */
+export function npmScopeRegistryOf(ctx: RegistryContext = {}): (name: string) => ScopeRegistry {
+  interface Prepared {
+    env: Array<{ key: string; lower: string; value: string }>;
+    files: Array<{ path: string; text: string; parse: (text: string, scope: string | undefined) => string | undefined; project: boolean }>;
+  }
+  let prepared: Prepared | null | undefined;
+  const prepare = (): Prepared | null => {
+    try {
+      const env = Object.entries(envOf(ctx)).map(([key, raw]) => ({ key, lower: key.toLowerCase(), value: raw?.trim() ?? '' }));
+      const near = ancestors(ctx);
+      const files: Prepared['files'] = [];
+      for (const { path, parse } of npmConfigFiles(ctx)) {
+        const text = read(path, ctx);
+        if (text === undefined) continue;
+        files.push({ path, text, parse, project: near.some((dir) => samePath(dir, dirname(path))) });
+      }
+      return { env, files };
+    } catch {
+      // unknown reads as none: the name is then looked up like any other
+      return null;
     }
-    const near = ancestors(ctx);
-    for (const { path, parse } of npmConfigFiles(ctx)) {
+  };
+  const answers = new Map<string, ScopeRegistry>();
+  return (name) => {
+    const scope = npmScope(name);
+    if (scope === undefined) return null;
+    const known = answers.get(scope);
+    if (known !== undefined) return known;
+    if (prepared === undefined) prepared = prepare();
+    const answer = prepared === null ? null : answerFor(scope, prepared);
+    answers.set(scope, answer);
+    return answer;
+  };
+
+  function answerFor(scope: string, from: Prepared): ScopeRegistry {
+    try {
+      const wanted = `npm_config_@${scope.toLowerCase()}:registry`;
+      for (const { key, lower, value } of from.env) {
+        if (value !== '' && lower === wanted && !isPublic('npm', value)) return { scope, source: key, url: value, from: 'user' };
+      }
+      for (const file of from.files) {
+        const url = file.parse(file.text, scope);
+        // The scope's own line — not the default registry, which every name gets.
+        if (url === undefined || url === file.parse(file.text, undefined) || isPublic('npm', url)) continue;
+        return { scope, source: file.path, url, from: file.project ? 'project' : 'user' };
+      }
+    } catch {
+      // unknown reads as none
+    }
+    return null;
+  }
+}
+
+/**
+ * The registry URL as it is compared with a lockfile's: an `http(s)` URL's
+ * origin and path with a trailing slash, no credentials, query or fragment;
+ * `undefined` for anything else (a variable left unexpanded, `(configured)`)
+ * and for the public registry. "Public" is decided on the PARSED host, not by
+ * {@link isPublic}'s prefix test, which reads `https://registry.npmjs.org:x@evil.example/`
+ * as npmjs: exact host, https, no credentials, the default port.
+ */
+function userRegistryUrl(raw: string): string | undefined {
+  let u: URL;
+  try {
+    u = new URL(raw.trim().replace(/^["']|["']$/g, ''));
+  } catch {
+    return undefined;
+  }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') return undefined;
+  const publicHost = ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'].includes(u.hostname);
+  if (publicHost && u.protocol === 'https:' && u.username === '' && u.password === '' && u.port === '') return undefined;
+  const path = u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`;
+  return `${u.origin}${path}`;
+}
+
+/** The environment variables that name an npm-family registry — strictly: `npm_config_replace_registry_host` is a setting, not a URL. */
+const ENV_USER_REGISTRY = /^(?:npm_config_(?:@[^:]+:)?registry|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY)$/i;
+
+/**
+ * Every registry URL the USER's npm-family configuration names — `registry=`
+ * and `@scope:registry=` of the user npmrc and npm's global one, the
+ * environment, `~/.yarnrc.yml`, `~/.bunfig.toml` (and the user-level classic
+ * `.yarnrc` and pnpm's rc) — without the public registry. NEVER a file of the
+ * project, nor a `.yarnrc.yml` above its repository root: a package fetched
+ * from one of these URLs is the user's own choice, and a project file must not
+ * be able to add one (it would silence the hook's line about another origin).
+ * Same files and parsers as {@link npmScopeRegistry}. A configuration that
+ * cannot be read names none; never throws.
+ */
+export function npmUserRegistries(ctx: RegistryContext = {}): string[] {
+  const urls = new Set<string>();
+  const add = (raw: string): void => {
+    const url = userRegistryUrl(raw);
+    if (url !== undefined) urls.add(url);
+  };
+  try {
+    for (const [key, value] of Object.entries(envOf(ctx))) {
+      if (value !== undefined && ENV_USER_REGISTRY.test(key)) add(value);
+    }
+    for (const { path, parse, user } of npmConfigFiles(ctx)) {
+      if (!user) continue;
       const text = read(path, ctx);
       if (text === undefined) continue;
-      const url = parse(text, scope);
-      // The scope's own line — not the default registry, which every name gets.
-      if (url === undefined || url === parse(text, undefined) || isPublic('npm', url)) continue;
-      return { scope, source: path, url, from: near.some((dir) => samePath(dir, dirname(path))) ? 'project' : 'user' };
+      const named: string[] = [];
+      parse(text, undefined, named);
+      named.forEach(add);
     }
   } catch {
-    // unknown reads as none: the name is then looked up like any other
+    // unknown reads as none: nothing is then silenced
   }
-  return null;
+  return [...urls];
 }
 
 // ─────────────────────────────────────────────────────── workspaces

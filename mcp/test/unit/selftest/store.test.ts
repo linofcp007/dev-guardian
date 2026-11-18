@@ -7,8 +7,12 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { decideInstallCommand } from '../../../src/pkgvet/hookDecision.js';
+import { CORE_CONTROLS } from '../../../src/selftest/controls.js';
 import { HOOKS_NOTE } from '../../../src/selftest/report.js';
+import { runSelftest, type HookRunArgs, type ScanOutcome, type SelftestRunners } from '../../../src/selftest/run.js';
 import {
   HISTORY_FILE,
   HISTORY_MAX,
@@ -197,5 +201,108 @@ describe('the saved result, read back', () => {
     expect(s.selftest.regressed).toEqual(['semgrep:base', 'gitleaks', 'trivy:iac']);
     expect(s.selftest.silent).toEqual(['semgrep:base', 'trivy:deps', 'semgrep:new-pack']);
     expect(s.warning).toEqual(expect.any(String));
+  });
+});
+
+// ───────────────── selftest-install-vet-canary — what is saved of the one hook check that hears from the network
+
+describe('selftest-install-vet-canary', () => {
+  const VET = 'hooks:install-vet';
+  const REPO_ROOT = fileURLToPath(new URL('../../../..', import.meta.url));
+  /** In everything the dispatcher answers the install check here, around what the selftest may keep: it must be in nothing saved. */
+  const MARK = 'zz-raw-answer-7731';
+  /** The keys of a saved control: the answer has no field of its own. */
+  const KEPT = ['id', 'next', 'reason', 'scanner', 'scanner_version', 'verdict'];
+  /** The canary's install, as the selftest hands it to the hook: text, put together from pieces. */
+  const CANARY_INSTALL = ['npm', 'install', 'crossenv'].join(' ');
+
+  const answer = (output: Record<string, unknown>): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', ...output } });
+  const isVet = (args: HookRunArgs): boolean => args.payload['tool_name'] === 'Bash' && JSON.stringify(args.payload['tool_input']).includes('crossenv');
+
+  /**
+   * What a selftest of the hook checks saves when the dispatcher prints
+   * `vetAnswer` for the install check (and answers the other four as a
+   * working guard does): the control as it is read back, and the text of the
+   * two files. Every process is replaced.
+   */
+  async function savedAfter(vetAnswer: string): Promise<{ control: ControlResult | undefined; files: string; readsBack: string }> {
+    const noScanner = async (): Promise<ScanOutcome> => {
+      throw new Error('no scanner is run by this test');
+    };
+    const runners: SelftestRunners = {
+      probe: async () => ({ installed: true, version: '9.9.9' }),
+      semgrep: noScanner,
+      gitleaks: noScanner,
+      trivy: noScanner,
+      hook: async (args) => {
+        if (isVet(args)) return { exitCode: 0, stdout: vetAnswer, timedOut: false };
+        const working = args.event === 'PostToolUse' ? { hookEventName: 'PostToolUse', additionalContext: 'possible secret(s) just written' } : { permissionDecision: 'deny' };
+        return { exitCode: 0, stdout: answer(working), timedOut: false };
+      },
+      installedTools: async () => [],
+    };
+    const dataDir = makeTempDir('selftest-store-vet-');
+    const { report } = await runSelftest({
+      runners,
+      packsDir: join(REPO_ROOT, 'configs', 'semgrep'),
+      canariesDir: join(REPO_ROOT, 'configs', 'selftest'),
+      // Only looked at, to see that an install has one: the launcher above starts nothing.
+      dispatcherPath: join(REPO_ROOT, 'hooks', 'guardian-hook.mjs'),
+      dataDir,
+      pluginVersion: '3.9.0',
+      tmpRoot: makeTempDir('selftest-store-tmp-'),
+      env: {},
+      homeDir: makeTempDir('selftest-store-home-'),
+      now: () => new Date(NOW),
+      controls: CORE_CONTROLS.filter((c) => c.kind === 'hook'),
+    });
+    expect(report.saved, report.saved?.note).toMatchObject({ saved: true });
+    const last = readLast(dataDir, NOW);
+    return {
+      control: last.state === 'ok' ? last.run.controls.find((c) => c.id === VET) : undefined,
+      files: readFileSync(join(selftestDir(dataDir), LAST_FILE), 'utf8') + readFileSync(join(selftestDir(dataDir), HISTORY_FILE), 'utf8'),
+      readsBack: last.state,
+    };
+  }
+
+  it('T-08 what is saved of the install check is its verdict and its reason — nothing of what the dispatcher answered around them', async () => {
+    const RAW = [MARK, 'hookSpecificOutput', 'permissionDecision', 'additionalContext'];
+    const holdsNothingRaw = (saved: { control: ControlResult | undefined; files: string; readsBack: string }, what: string): void => {
+      expect(saved.readsBack, `${what}: what was saved reads back as a result`).toBe('ok');
+      for (const raw of RAW) expect({ what, raw, saved: saved.files.includes(raw) }).toEqual({ what, raw, saved: false });
+      for (const key of Object.keys(saved.control ?? {})) expect(KEPT, `${what}: ${key}`).toContain(key);
+    };
+
+    // Detected: the verdict alone — the deny's own sentence is the hook's, and is not kept.
+    const denied = await savedAfter(answer({ permissionDecision: 'deny', permissionDecisionReason: `dev-guardian blocked this install: 'crossenv@0.0.1-security' ${MARK}` }));
+    expect(denied.control, `the saved run has the control ${VET}`).toEqual({ id: VET, scanner: 'hooks', scanner_version: '3.9.0', verdict: 'detected' });
+    holdsNothingRaw(denied, 'detected');
+
+    // Silent: a reason this code wrote, and nothing of the context the hook gave instead of a deny.
+    const letThrough = await savedAfter(answer({ additionalContext: `⚠️ dev-guardian package vetting — review before relying on these:\n  • crossenv: ${MARK}` }));
+    expect(letThrough.control?.verdict).toBe('silent');
+    expect(letThrough.control?.reason).toEqual(expect.any(String));
+    holdsNothingRaw(letThrough, 'silent');
+
+    // Unverified: the hook's reason is kept — one bounded line — and not the answer it came in. The hook's line is
+    // taken from the hook itself, for a registry that cannot be reached (nothing leaves this process; the popular
+    // list is emptied so that the name is not first a typosquat suspect).
+    const said = await decideInstallCommand(CANARY_INSTALL, {
+      cwd: makeTempDir('selftest-store-cwd-'),
+      homeDir: makeTempDir('selftest-store-home-'),
+      env: {},
+      fetchImpl: async () => {
+        throw new Error('getaddrinfo ENOTFOUND registry.npmjs.org');
+      },
+      popular: { npm: [] },
+    });
+    const line = said?.context ?? '';
+    const why = /\((.+)\)/.exec(line)?.[1] ?? '';
+    expect(why, `the hook's line says why, in parentheses: "${line}"`).toMatch(/ENOTFOUND/);
+    const notVetted = await savedAfter(answer({ additionalContext: [`a line before it ${MARK}`, line, `${'x'.repeat(4000)} ${MARK}`].join('\n') }));
+    expect(notVetted.control?.verdict).toBe('unverified');
+    expect(notVetted.control?.reason).toContain(why);
+    expect((notVetted.control?.reason ?? '').length).toBeLessThanOrEqual(600);
+    holdsNothingRaw(notVetted, 'unverified');
   });
 });

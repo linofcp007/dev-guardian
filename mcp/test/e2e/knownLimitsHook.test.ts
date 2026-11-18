@@ -13,10 +13,10 @@
  * as skipped, never as passed.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   evaluateExample,
@@ -27,6 +27,7 @@ import {
   type ExampleRef,
   type HookDecision,
   type HookExample,
+  type KnownLimit,
 } from '../docs/knownLimits.js';
 import { HOOK_TIMEOUT_MS, runHook } from '../helpers/runHook.js';
 import { timeoutAbove } from '../helpers/spawnCap.js';
@@ -83,7 +84,20 @@ function substituted(value: unknown, dirs: Readonly<Record<string, string>>): un
   return value;
 }
 
-function answer(example: HookExample): Actual {
+/**
+ * What an example's hook call gets in its environment beside the launcher's
+ * own. The install-vetting examples run with the network switched off
+ * (install-vet-lockfile-pins): one that holds a lockfile would otherwise ask
+ * OSV, from the suite, about what the lockfile pins — and a record of that
+ * area states what the guard answers WITHOUT the network. Set here, not left
+ * to the suite's own default (`vitest.config.ts`), which another
+ * configuration need not have.
+ */
+function exampleEnv(limit: KnownLimit): Record<string, string> {
+  return limit.area === 'install-vetting' ? { GUARDIAN_OFFLINE: '1' } : {};
+}
+
+function answer(example: HookExample, env: Record<string, string> = {}): Actual {
   const project = makeTempDir('guardian-limit-project-');
   const home = makeTempDir('guardian-limit-home-');
   for (const [rel, content] of Object.entries(example.files ?? {})) {
@@ -102,7 +116,7 @@ function answer(example: HookExample): Actual {
       tool_input: substituted(example.input, { PROJECT: project, HOME: home, PLUGIN: PLUGIN_ROOT, FAKE_AWS_KEY }),
       cwd: project,
     },
-    { cwd: project, homeDir: home },
+    { cwd: project, homeDir: home, env },
   );
   expect(r.status, r.stderr).toBe(0);
   return { detector: 'hook', decision: decisionOf(r.stdout) };
@@ -131,7 +145,7 @@ describe("the hooks' known limits that live in the dispatcher", () => {
     it.each(HOOKS.run.map((ref) => [label(ref), ref] as const))('T-04 %s answers as recorded', (_name, ref) => {
       const example = ref.example;
       if (example.detector !== 'hook') throw new Error('only hook examples run here');
-      const judgement = evaluateExample(ref, () => answer(example));
+      const judgement = evaluateExample(ref, () => answer(example, exampleEnv(ref.limit)));
       expect(judgement, judgement.ok ? '' : judgement.message).toEqual({ ok: true });
     });
   }
@@ -170,5 +184,107 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
     expect(r.status, r.stderr).toBe(0);
     expect(decisionOf(r.stdout)).toBe('warn');
     expect(JSON.stringify(r.stdout)).toMatch(/2 packages of package\.json.*not verified/);
+  });
+});
+
+// ───────────────── install-vet-lockfile-pins — the lockfile's limits, through the dispatcher and without the network
+
+describe('install-vet-lockfile-pins', () => {
+  const RECORD = 'manifest-lockfile-and-transitive';
+
+  /** The fetch stand-in of the hook tests (`fetchMockPreload.mjs`): given no route, it refuses every request, and logs it. */
+  const PRELOAD = new URL('../helpers/fetchMockPreload.mjs', import.meta.url).href;
+  /** A launch with that stand-in in the dispatcher's process: a request an example made would be in `log`, never on a real network. */
+  const traced = (log: string): Record<string, string> => ({
+    NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ''} --import=${PRELOAD}`.trim(),
+    GUARDIAN_TEST_FETCH_LOG: log,
+  });
+  const requestsIn = (log: string): string[] => (existsSync(log) ? readFileSync(log, 'utf8').split('\n').filter(Boolean) : []);
+
+  function lockfileRecord(): KnownLimit {
+    const limit = loadKnownLimits().find((l) => l.id === RECORD);
+    if (limit === undefined) throw new Error(`the data file has no record ${RECORD}`);
+    return limit;
+  }
+
+  // The suite's own default is the network switched off (`vitest.config.ts`). Taken away here, so that what keeps these
+  // launches off the network is what the harness hands an install-vetting example — `exampleEnv` — and nothing else.
+  beforeEach(() => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  // The record's examples answer `none`, or with a line. So would a dispatcher that never opened a lockfile: the
+  // control is a manifest install whose lockfile pins two packages — with the network off, it says how many packages
+  // OF THE LOCKFILE it could not verify.
+  it('T-32 the dispatcher these examples run through does read a lockfile: without the network, it says how many of its packages it could not verify', () => {
+    const project = makeTempDir('guardian-limit-project-');
+    const home = makeTempDir('guardian-limit-home-');
+    const log = join(home, 'fetch.log');
+    const tarball = (name: string, version: string): string => `https://registry.npmjs.org/${name}/-/${name}-${version}.tgz`;
+    writeFileSync(
+      resolve(project, 'package.json'),
+      JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { express: '^4.21.0' } }),
+      'utf8',
+    );
+    writeFileSync(
+      resolve(project, 'package-lock.json'),
+      JSON.stringify(
+        {
+          name: 'app',
+          version: '1.0.0',
+          lockfileVersion: 3,
+          requires: true,
+          packages: {
+            '': { name: 'app', version: '1.0.0', dependencies: { express: '^4.21.0' } },
+            'node_modules/eslint-config-prettier': { version: '10.1.8', resolved: tarball('eslint-config-prettier', '10.1.8') },
+            'node_modules/express': {
+              version: '4.21.2',
+              resolved: tarball('express', '4.21.2'),
+              dependencies: { 'eslint-config-prettier': '^10.1.0' },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+    const r = runHook(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'npm ci' }, cwd: project },
+      { cwd: project, homeDir: home, env: { ...exampleEnv(lockfileRecord()), ...traced(log) } },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    expect(decisionOf(r.stdout)).toBe('warn');
+    expect(JSON.stringify(r.stdout)).toMatch(/could not vet 2 packages of package-lock\.json/);
+    expect(requestsIn(log)).toEqual([]);
+  });
+
+  // A protection: true before the feature, when no example asks anything, and what holds the rewritten record's
+  // examples — each with a lockfile the hook would ask OSV about — off the network.
+  it('T-32 every example of the record answers as recorded with the network switched off by the harness: nothing is asked', () => {
+    const refs = HOOKS.run.filter((r) => r.limit.id === RECORD);
+    expect(refs.length).toBeGreaterThan(0);
+
+    // The stand-in really is in the launched process: handed routes that are not JSON, it stops the launch.
+    const scratch = makeTempDir('guardian-limit-project-');
+    const dead = runHook(
+      { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'echo ok' }, cwd: scratch },
+      { cwd: scratch, env: { ...exampleEnv(lockfileRecord()), ...traced(join(scratch, 'fetch.log')), GUARDIAN_TEST_FETCH_ROUTES: '{not json' } },
+    );
+    expect(dead.status).not.toBe(0);
+    expect(dead.stderr).toContain('fetchMockPreload');
+
+    for (const ref of refs) {
+      const example = ref.example;
+      if (example.detector !== 'hook') throw new Error('only hook examples run here');
+      expect(exampleEnv(ref.limit)).toEqual({ GUARDIAN_OFFLINE: '1' });
+      const log = join(makeTempDir('guardian-limit-log-'), 'fetch.log');
+      const judgement = evaluateExample(ref, () => answer(example, { ...exampleEnv(ref.limit), ...traced(log) }));
+      expect(judgement, judgement.ok ? '' : judgement.message).toEqual({ ok: true });
+      expect({ example: label(ref), requests: requestsIn(log) }).toEqual({ example: label(ref), requests: [] });
+    }
   });
 });

@@ -27,9 +27,13 @@
  * is `unknown`, and a single `unknown` check keeps the verdict off `ok`:
  * nothing here ever reports a package as vetted when it was not.
  *
- * Network: two rounds, both inside ONE wall-clock budget enforced with an
- * AbortSignal — registry lookups in parallel, then OSV (one batch) plus the
- * per-version extras in parallel. The hook passes 3 s; the tool 10 s.
+ * Network: ONE wall-clock budget enforced with an AbortSignal — registry
+ * lookups in parallel, then OSV (one batch) plus the per-version extras in
+ * parallel. OSV is asked as soon as the registry has answered for every
+ * package, or at HALF the budget, whichever comes first: a document still owed
+ * is then asked of OSV by name, and a name with `MAL-` advisories on some
+ * versions is asked once more with its version if the document arrives in time
+ * (`networkRounds`). The hook passes 3 s; the tool 10 s.
  *
  * Dependency-free (global `fetch`, node built-ins): the hook loads it from
  * its bundle, `mcp/dist/hooks.js`.
@@ -180,6 +184,12 @@ interface Work {
   scriptsError?: string;
   osvIndex?: number;
   osvVersioned?: boolean;
+  /** The document came after OSV was asked by name (the registry had not answered at half the budget). */
+  late?: boolean;
+  /** The query OSV was asked for this package: which of `OsvAnswer.unanswered` is its own. */
+  osvQuery?: OsvPackageQuery;
+  /** Set when the second, per-version request answered for this package: it stands in place of the first answer. */
+  osvSecond?: OsvResult;
   /** The name the OSV query used (see `osvNameFor`). */
   osvName?: string;
   /** The checks the caller does not report ({@link VetOptions.unreported}). */
@@ -263,6 +273,51 @@ function osvNameFor(w: Work, canonical: string | undefined): string {
   return w.spec.name;
 }
 
+function typosquatCheck(w: Work): CheckResult {
+  if (!w.popularLoaded) return unknown('popular-packages list unavailable — typosquat check not run');
+  if (w.typo === null) return pass();
+  return warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? '' : 's'} from the popular package '${w.typo.similar_to}' — possible typosquat`);
+}
+
+/** The detail of a check the lockfile made unnecessary: the version it pins is asked of OSV on its own. */
+const PINNED_ELSEWHERE = 'not checked: the lockfile pins this version, which is asked of OSV on its own';
+
+/**
+ * The typosquat check alone, for packages whose version a lockfile pins (the
+ * hook, for a direct dependency the lockfile records at the manifest's range):
+ * local, no network, no registry document. Every other check reads
+ * `not_applicable`, never `pass` — it was not made here. Results are in the
+ * order of `specs`.
+ */
+export function vetTyposquatOnly(specs: readonly PackageSpec[], opts: VetOptions = {}): PackageVetResult[] {
+  const indexes = new Map<PkgEcosystem, PopularIndex | null>();
+  return specs.map((spec) => {
+    if (!indexes.has(spec.ecosystem)) indexes.set(spec.ecosystem, popularIndexFor(spec.ecosystem, opts));
+    const index = indexes.get(spec.ecosystem) ?? null;
+    const w: Work = { spec, typo: index === null ? null : findTyposquatTarget(index, spec.name), popularLoaded: index !== null };
+    const typosquat = typosquatCheck(w);
+    const checks: PackageChecks = {
+      exists: na(PINNED_ELSEWHERE),
+      malicious: na(PINNED_ELSEWHERE),
+      vulnerabilities: na(PINNED_ELSEWHERE),
+      publish_age: na(PINNED_ELSEWHERE),
+      install_scripts: spec.ecosystem === 'npm' ? na(PINNED_ELSEWHERE) : na('install-script check is npm-only'),
+      typosquat,
+    };
+    const verdict: PkgVerdict = typosquat.status === 'warn' ? 'warn' : typosquat.status === 'unknown' ? 'unknown' : 'ok';
+    const result: PackageVetResult = {
+      ecosystem: spec.ecosystem,
+      name: spec.name,
+      verdict,
+      reasons: typosquat.detail !== undefined && typosquat.status !== 'pass' ? [typosquat.detail] : [],
+      checks,
+    };
+    if (spec.range !== undefined) result.requested = spec.range;
+    if (w.typo !== null) result.similar_to = w.typo.similar_to;
+    return result;
+  });
+}
+
 function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | undefined, now: number, offlineReason: string | undefined): PackageVetResult {
   const { spec } = w;
   const eco = spec.ecosystem;
@@ -272,15 +327,14 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
   const extraWarn: string[] = [];
   const extraUnknown: string[] = [];
 
-  const typosquat: CheckResult = !w.popularLoaded
-    ? unknown('popular-packages list unavailable — typosquat check not run')
-    : w.typo !== null
-      ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? '' : 's'} from the popular package '${w.typo.similar_to}' — possible typosquat`)
-      : pass();
+  const typosquat = typosquatCheck(w);
 
+  // A package whose document came after OSV was asked by name: its version is known, the vulnerabilities of that
+  // version were never asked — what OSV said of the name's other versions says nothing of this one.
+  const askedByNameOnly = w.osvVersioned === false && w.version !== undefined;
   const ids = osvIds(osv, w);
   const malIds = ids.filter((id) => id.startsWith('MAL-'));
-  const vulnIds = ids.filter((id) => !id.startsWith('MAL-'));
+  const vulnIds = askedByNameOnly ? [] : ids.filter((id) => !id.startsWith('MAL-'));
   const osvDown = offlineReason ?? (osv === undefined || !osv.online ? `OSV lookup failed: ${osvError ?? osv?.error ?? 'no answer'}` : undefined);
 
   let exists: CheckResult;
@@ -300,11 +354,12 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
     exists = unknown(`${registry} lookup failed: ${lookup.reason}`);
     // OSV was asked about the NAME (no version could be resolved): no MAL-
     // advisory on any version is a real pass; one on some version is a warning.
+    // A MAL- hit that arrived decides, whatever OSV left unanswered: only a package with no hit reads unknown.
     malicious =
-      osvDown !== undefined
-        ? unknown(osvDown)
-        : malIds.length > 0
-          ? warn(`OSV lists malicious advisories for this name (${malIds.join(', ')}); the version could not be determined`)
+      malIds.length > 0
+        ? warn(`OSV lists malicious advisories for this name (${malIds.join(', ')}); the version could not be determined`)
+        : osvDown !== undefined
+          ? unknown(osvDown)
           : pass('no OSV malicious-package advisory for any version');
     vulnerabilities = unknown(`version unknown: ${lookup.reason}`);
     publishAge = unknown(`version unknown: ${lookup.reason}`);
@@ -360,17 +415,23 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
 
     if (placeholder) {
       malicious = fail(`npm replaced this package with a security placeholder (${placeholderVersion ?? 'x-security'}): it was taken down as malicious`);
-    } else if (osvDown !== undefined) {
-      malicious = unknown(osvDown);
     } else if (malIds.length > 0) {
+      // As above: a hit that arrived — in a result cut by `next_page_token`, in a batch that answered beside one that failed — is not lost to `osvDown`.
       malicious = w.osvVersioned
         ? fail(`OSV malicious-package advisory for ${v ?? 'this version'}: ${malIds.join(', ')}`)
-        : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(', ')}) — which version installs could not be determined`);
+        : warn(
+            askedByNameOnly
+              ? `OSV lists malicious advisories for some versions of this package (${malIds.join(', ')}) — whether ${v ?? 'this version'} is one of them was not determined in time`
+              : `OSV lists malicious advisories for some versions of this package (${malIds.join(', ')}) — which version installs could not be determined`,
+          );
+    } else if (osvDown !== undefined) {
+      malicious = unknown(osvDown);
     } else {
-      malicious = pass();
+      malicious = askedByNameOnly ? pass('no OSV malicious-package advisory for any version') : pass();
     }
 
     if (osvDown !== undefined) vulnerabilities = unknown(osvDown);
+    else if (askedByNameOnly) vulnerabilities = unknown(`vulnerabilities of ${v ?? 'this version'} not determined: OSV was asked for the name before the registry answered`);
     else if (vulnIds.length > 0) {
       vulnerabilities = w.osvVersioned
         ? warn(`${vulnIds.length} known vulnerabilit${vulnIds.length === 1 ? 'y' : 'ies'} in ${v ?? 'this version'}: ${vulnIds.slice(0, 5).join(', ')}${vulnIds.length > 5 ? ', …' : ''}`)
@@ -515,6 +576,40 @@ function explain404(w: Work, opts: VetOptions): void {
   w.custom = customFor(w.spec, opts);
 }
 
+/** What `queryOsv` says; a stand-in or a thrown error has no list of what it left unanswered. */
+type OsvOutcome = OsvResult & { unanswered?: OsvPackageQuery[] };
+
+/** Whether OSV answered this query completely — in a call where another batch may have failed (US-1.AC-9). */
+function answeredQuery(osv: OsvOutcome, q: OsvPackageQuery | undefined): boolean {
+  if (osv.online) return true;
+  return q !== undefined && osv.unanswered !== undefined && !osv.unanswered.includes(q);
+}
+
+/** The result as ONE package must read it: online when its own query was answered, whatever happened to the others'. */
+function viewFor(osv: OsvOutcome, w: Work): OsvResult {
+  return !osv.online && answeredQuery(osv, w.osvQuery) ? { ...osv, online: true } : osv;
+}
+
+interface OsvAsked {
+  result: OsvOutcome;
+  error: string | undefined;
+}
+
+/**
+ * Registry lookups, then OSV and the per-version extras, inside one budget.
+ *
+ * OSV is asked at the first of two moments: the registry has answered for
+ * every package (the usual case: one batch, with the versions), or HALF the
+ * budget has passed since this call began its network work. At that instant a
+ * package whose document is still owed is asked of OSV by name, and is `late`
+ * for good however its document turns out: that state is fixed there, in one
+ * place, not by which callback happens to run next. A late document is still
+ * read (existence, version, the npm security placeholder). OSV's answer for a
+ * name says there is no `MAL-` advisory on ANY version (a pass) or that some
+ * version has one; for those names, and only those, the version the document
+ * resolved is asked once more, in ONE further request, if the budget lasts.
+ * Never another request to the registry.
+ */
 async function networkRounds(
   work: Work[],
   http: HttpOptions,
@@ -524,8 +619,9 @@ async function networkRounds(
   explain: (w: Work) => void,
 ): Promise<PackageVetResult[]> {
   const fetchImpl = http.fetchImpl;
+  const halfBudgetMs = Math.max(0, (deadline - Date.now()) / 2);
 
-  // Round 1: the registry, once per distinct name.
+  // The registry, once per distinct name; each answer is applied the moment it arrives.
   const lookups = new Map<string, Promise<RegistryLookup>>();
   const pending = work.map((w) => {
     const key = `${w.spec.ecosystem}\u0000${w.spec.name.toLowerCase()}`;
@@ -538,52 +634,141 @@ async function networkRounds(
   });
   // NuGet's canonical id casing, for OSV (see `osvNameFor`). Started now, in
   // parallel with the flat-container lookup, but only awaited by the OSV
-  // query — never by round 1 — so a slow search cannot hold the registry
-  // answers back.
+  // query — never by the registry round — so a slow search cannot hold the
+  // registry answers back.
   const canonical = new Map<string, Promise<string | undefined>>();
   for (const w of work) {
     const key = w.spec.name.toLowerCase();
     if (w.spec.ecosystem === 'nuget' && !canonical.has(key)) canonical.set(key, nugetCanonicalId(w.spec.name, http));
   }
-  const answers = await Promise.all(pending);
-  work.forEach((w, i) => {
-    const answer = answers[i];
-    if (answer !== undefined) w.lookup = answer;
-    if (answer?.kind === 'found') resolveFor(w, answer.info);
-  });
+  const extras: Promise<void>[] = [];
+  const allSettled = Promise.all(
+    work.map((w, i) =>
+      (pending[i] ?? Promise.resolve(undefined)).then((answer) => {
+        if (answer !== undefined) w.lookup = answer;
+        if (answer?.kind === 'found') {
+          resolveFor(w, answer.info);
+          if (!needsNoExtras(w)) extras.push(extrasFor(w, answer.info, http, now).catch(() => undefined));
+        }
+      }),
+    ),
+  );
 
-  // Round 2: one OSV batch, plus the per-version extras, in parallel.
-  if (signal.aborted) {
-    const why = 'network budget exhausted before OSV was consulted';
-    for (const w of work) if (w.lookup?.kind === 'not_found') explain(w);
-    return work.map((w) => buildResult(w, undefined, why, now, undefined));
+  // The one clock: half the budget. It stops as soon as the registry has answered for everyone.
+  let halfTimer: ReturnType<typeof setTimeout> | undefined;
+  const halfPassed = new Promise<'half'>((resolve) => {
+    halfTimer = setTimeout(() => resolve('half'), halfBudgetMs);
+  });
+  const first = await Promise.race([allSettled.then(() => 'answered' as const), halfPassed]);
+  clearTimeout(halfTimer);
+
+  let osvAsked: Promise<OsvAsked> | undefined;
+  if (first === 'half' && !signal.aborted) osvAsked = askOsv(work, canonical, fetchImpl, signal, deadline, true);
+  // Every lookup ends — answered, or failed when the budget aborts its request — so this wait is bounded by it.
+  await allSettled;
+
+  if (osvAsked === undefined) {
+    if (signal.aborted) {
+      const why = 'network budget exhausted before OSV was consulted';
+      for (const w of work) if (w.lookup?.kind === 'not_found') explain(w);
+      return work.map((w) => buildResult(w, undefined, why, now, undefined));
+    }
+    osvAsked = askOsv(work, canonical, fetchImpl, signal, deadline, false);
   }
-  let osvError: string | undefined;
-  const osvPromise = (async (): Promise<OsvResult> => {
+
+  // The documents are all in, or the budget has ended: the per-version extras and the second OSV request run together.
+  const extrasDone = Promise.all(extras);
+  const { result: osv, error } = await osvAsked;
+  await Promise.all([extrasDone, askVersionsOfLate(work, osv, fetchImpl, signal, deadline)]);
+
+  let osvError = error;
+  if (signal.aborted && osv.online === false && osvError === undefined && osv.error === undefined) osvError = 'network budget exhausted before OSV answered';
+  for (const w of work) if (w.lookup?.kind === 'not_found') explain(w);
+  return work.map((w) => buildResult(w, w.osvSecond ?? viewFor(osv, w), osvError ?? (osv.online ? undefined : osv.error), now, undefined));
+}
+
+/**
+ * The first OSV request: every package, with its version if the registry has
+ * resolved it by now, by name if not. What each package is asked is fixed here,
+ * synchronously, before anything is awaited; `mixed` marks the packages still
+ * owed by the registry as late.
+ */
+function askOsv(
+  work: Work[],
+  canonical: ReadonlyMap<string, Promise<string | undefined>>,
+  fetchImpl: typeof fetch | undefined,
+  signal: AbortSignal,
+  deadline: number,
+  mixed: boolean,
+): Promise<OsvAsked> {
+  const versions = work.map((w) => w.version);
+  work.forEach((w, i) => {
+    w.osvVersioned = versions[i] !== undefined;
+    if (mixed && w.lookup === undefined) w.late = true;
+  });
+  let error: string | undefined;
+  return (async (): Promise<OsvOutcome> => {
     const queries: OsvPackageQuery[] = [];
-    for (const w of work) {
+    for (const [i, w] of work.entries()) {
       const canonicalId = await (canonical.get(w.spec.name.toLowerCase()) ?? Promise.resolve(undefined));
       w.osvName = osvNameFor(w, canonicalId);
       const q: OsvPackageQuery = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName };
-      if (w.version !== undefined) q.version = w.version;
-      w.osvVersioned = w.version !== undefined;
+      const v = versions[i];
+      if (v !== undefined) q.version = v;
       w.osvIndex = queries.length;
+      w.osvQuery = q;
       queries.push(q);
     }
-    return queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
-  })().catch((e: unknown): OsvResult => {
-    osvError = e instanceof Error ? e.message : String(e);
-    return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
-  });
-  const extras = work.map((w) =>
-    w.lookup?.kind === 'found' && !needsNoExtras(w) ? extrasFor(w, w.lookup.info, http, now).catch(() => undefined) : Promise.resolve(),
-  );
-  const [osv] = await Promise.all([osvPromise, ...extras]);
-  if (signal.aborted && osv.online === false && osvError === undefined) {
-    osvError = 'network budget exhausted before OSV answered';
+    return queryOsv(queries, { ...(fetchImpl !== undefined ? { fetchImpl } : {}), signal, timeoutMs: Math.max(1, deadline - Date.now()) });
+  })()
+    .catch((e: unknown): OsvOutcome => {
+      error = e instanceof Error ? e.message : String(e);
+      return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
+    })
+    .then((result) => ({ result, error }));
+}
+
+/**
+ * The one further OSV request: the packages whose document came after OSV was
+ * asked by name, and for whose NAME OSV has `MAL-` advisories on some versions,
+ * asked again with the version their document resolved. Without budget left,
+ * or if the request does not answer, they stay as they are: a warning, neither
+ * passed nor denied. An answer counts for a package only if it completed that
+ * package's query, or gave a `MAL-` hit.
+ */
+async function askVersionsOfLate(
+  work: Work[],
+  first: OsvOutcome,
+  fetchImpl: typeof fetch | undefined,
+  signal: AbortSignal,
+  deadline: number,
+): Promise<void> {
+  if (signal.aborted) return;
+  const second = new Map<Work, OsvPackageQuery>();
+  for (const w of work) {
+    if (w.late !== true || w.lookup?.kind !== 'found' || w.version === undefined || w.osvName === undefined) continue;
+    if (!osvIds(first, w).some((id) => id.startsWith('MAL-'))) continue;
+    second.set(w, { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName, version: w.version });
   }
-  for (const w of work) if (w.lookup?.kind === 'not_found') explain(w);
-  return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? undefined : osv.error), now, undefined));
+  if (second.size === 0) return;
+  let answer: OsvOutcome;
+  try {
+    answer = await queryOsv([...second.values()], {
+      ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+      signal,
+      timeoutMs: Math.max(1, deadline - Date.now()),
+    });
+  } catch {
+    // The package keeps what the first request said of its name: the warning.
+    return;
+  }
+  for (const [w, q] of second) {
+    const before = { osvVersioned: w.osvVersioned, osvQuery: w.osvQuery };
+    w.osvVersioned = true;
+    w.osvQuery = q;
+    if (answeredQuery(answer, q) || osvIds(answer, w).some((id) => id.startsWith('MAL-'))) w.osvSecond = viewFor(answer, w);
+    else Object.assign(w, before);
+  }
 }
 
 /** The worst verdict of a set: block > warn > unknown > ok. */

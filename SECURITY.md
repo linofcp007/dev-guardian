@@ -9,8 +9,8 @@ upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 3.11.x  | ✅        |
-| < 3.11  | ❌        |
+| 3.12.x  | ✅        |
+| < 3.12  | ❌        |
 
 ## Reporting a vulnerability
 
@@ -145,8 +145,13 @@ their respective projects.
   (`mkdtemp`, private to the user) and removes afterwards without following a
   link out of it, also when it is interrupted. No canary is executed, built or
   installed; the hook checks hand the dispatcher a command as text on its
-  standard input; scanners are started with no shell. It opens no database
-  and reads no project, baseline or suppression. The secret canary is
+  standard input; scanners are started with no shell. One of those commands
+  is the install of a package npm took down (`crossenv`): it is read, never
+  run — no package manager is started and nothing is downloaded or
+  installed —, and to vet it the dispatcher asks the public npm registry and
+  OSV about that one public name, with nothing of yours in the request; with
+  `GUARDIAN_OFFLINE=1` or `GUARDIAN_PKG_VET=0` that check is not started. It
+  opens no database and reads no project, baseline or suppression. The secret canary is
   synthetic (the format of an AWS access key id, put together at run time, in
   no file of the plugin) and is in nothing printed or saved. The result is
   kept per install in the data directory (`selftest/`): ids, verdicts,

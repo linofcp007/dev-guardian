@@ -161,7 +161,9 @@ const FAKE_SCANNER = [
   "const { spawnSync } = require('node:child_process');",
   "for (const a of [['status', '--porcelain'], ['ls-files', '-z'], ['log', '-p', '--all']]) {",
   "  const r = spawnSync('git', a, { stdio: ['ignore', 'pipe', 'pipe'] });",
-  "  if (r.status !== 0) { process.stderr.write(String(r.stderr)); process.exit(1); }",
+  // Says WHICH git command failed and how (status, signal, spawn error) besides git's own stderr: this test failed once in
+  // a full run with an empty stderr and nothing else to go by (2026-11-17), and passed alone.
+  "  if (r.status !== 0) { process.stderr.write('git ' + a.join(' ') + ' -> status ' + r.status + ', signal ' + r.signal + ', error ' + (r.error ? r.error.code || r.error.message : 'none') + ', stdout bytes ' + (r.stdout ? r.stdout.length : 'none') + ' | ' + String(r.stderr)); process.exit(1); }",
   '}',
 ].join('\n');
 

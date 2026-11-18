@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { customRegistryFor } from '../../../src/pkgvet/privateRegistry.js';
+import { customRegistryFor, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -768,4 +768,163 @@ describe('customRegistryFor — a file reached through a network or device link 
     },
     60_000,
   );
+});
+
+// T-18: the registries the USER's npm configuration names. A lockfile package
+// fetched from one of them is the user's own choice, and the hook says nothing
+// of it; a registry a file of the PROJECT names never counts — the project is
+// what is being vetted.
+describe('install-vet-lockfile-pins', () => {
+  type UserRegistries = (ctx?: RegistryContext) => string[];
+
+  /** `npmUserRegistries`, reached at run time: the export is new, and a static import of it would stop every test of this file. */
+  async function userRegistries(): Promise<UserRegistries> {
+    const mod: Record<string, unknown> = await import('../../../src/pkgvet/privateRegistry.js');
+    const fn = mod['npmUserRegistries'];
+    if (typeof fn !== 'function') throw new Error('src/pkgvet/privateRegistry.ts does not export `npmUserRegistries` yet');
+    return fn as UserRegistries;
+  }
+
+  /** The URLs listed, sorted and once each: neither their order nor a URL named in two places is the contract. */
+  const listed = async (c: RegistryContext): Promise<string[]> => [...new Set((await userRegistries())(c))].sort();
+
+  it('T-18 `registry=` and `@scope:registry=` of the user npmrc, each with a trailing slash — and never the credential beside them', async () => {
+    writeFileSync(
+      join(home, '.npmrc'),
+      [
+        '; the default registry, and a scope with one of its own',
+        'registry=https://npm.acme.example/team',
+        '@corp:registry=https://npm.corp.example/api/npm/',
+        '//npm.acme.example/team/:_authToken=invented-token-0000',
+        '',
+      ].join('\n'),
+    );
+    expect(await listed(ctx())).toEqual(['https://npm.acme.example/team/', 'https://npm.corp.example/api/npm/']);
+  });
+
+  it('T-18 the user npmrc is the file NPM_CONFIG_USERCONFIG names, when it names one', async () => {
+    const named = join(home, 'ci-npmrc');
+    writeFileSync(named, 'registry=https://ci.acme.example/npm\n');
+    expect(await listed(ctx({ NPM_CONFIG_USERCONFIG: named }))).toEqual(['https://ci.acme.example/npm/']);
+  });
+
+  it('T-18 the global npmrc: the file npm_config_globalconfig names, and npm’s default one on Windows and on POSIX', async () => {
+    const named = join(home, 'global-npmrc');
+    writeFileSync(named, 'registry=https://global.acme.example\n@corp:registry=https://global.corp.example/npm\n');
+    expect(await listed(ctx({ npm_config_globalconfig: named }))).toEqual(['https://global.acme.example/', 'https://global.corp.example/npm/']);
+
+    const appdata = join(home, 'Roaming');
+    mkdirSync(join(appdata, 'npm', 'etc'), { recursive: true });
+    writeFileSync(join(appdata, 'npm', 'etc', 'npmrc'), 'registry=https://windows.acme.example/\n');
+    expect(await listed({ ...ctx({ APPDATA: appdata }), platform: 'win32' })).toEqual(['https://windows.acme.example/']);
+
+    const prefix = join(home, 'usr-local');
+    mkdirSync(join(prefix, 'etc'), { recursive: true });
+    writeFileSync(join(prefix, 'etc', 'npmrc'), 'registry=https://posix.acme.example/\n');
+    expect(await listed({ ...ctx(), platform: 'linux', nodeExecPath: join(prefix, 'bin', 'node') })).toEqual(['https://posix.acme.example/']);
+  });
+
+  it.each([
+    ['npm_config_registry', 'https://env.acme.example/npm', 'https://env.acme.example/npm/'],
+    ['NPM_CONFIG_REGISTRY', 'https://env.acme.example/npm/', 'https://env.acme.example/npm/'],
+    ['npm_config_@corp:registry', 'https://env.corp.example', 'https://env.corp.example/'],
+    ['YARN_NPM_REGISTRY_SERVER', 'https://yarn.acme.example', 'https://yarn.acme.example/'],
+    ['YARN_REGISTRY', 'https://classic.acme.example/', 'https://classic.acme.example/'],
+    ['BUN_CONFIG_REGISTRY', 'https://bun.acme.example/npm', 'https://bun.acme.example/npm/'],
+  ])('T-18 the environment variable %s names one', async (name, value, url) => {
+    expect(await listed(ctx({ [name]: value }))).toEqual([url]);
+  });
+
+  it('T-18 ~/.yarnrc.yml (`npmRegistryServer`, `npmScopes`) and ~/.bunfig.toml (`[install] registry`, `[install.scopes]`)', async () => {
+    writeFileSync(
+      join(home, '.yarnrc.yml'),
+      'npmRegistryServer: "https://yarn.acme.example"\nnpmScopes:\n  corp:\n    npmRegistryServer: "https://yarn.corp.example/npm"\n',
+    );
+    expect(await listed(ctx())).toEqual(['https://yarn.acme.example/', 'https://yarn.corp.example/npm/']);
+
+    rmSync(join(home, '.yarnrc.yml'));
+    writeFileSync(
+      join(home, '.bunfig.toml'),
+      '[install]\nregistry = "https://bun.acme.example/"\n\n[install.scopes]\n"@corp" = { url = "https://bun.corp.example/npm", token = "$BUN_TOKEN" }\n',
+    );
+    expect(await listed(ctx())).toEqual(['https://bun.acme.example/', 'https://bun.corp.example/npm/']);
+  });
+
+  it('T-18 never a file of the project: an .npmrc, .yarnrc.yml, .yarnrc or bunfig.toml in the command’s directory or above it, up to the repository root, names none', async () => {
+    const repo = join(project, 'repo');
+    const member = join(repo, 'packages', 'web');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    mkdirSync(member, { recursive: true });
+    writeFileSync(join(repo, '.npmrc'), 'registry=https://evil.example/npm/\n@corp:registry=https://evil.example/corp/\n');
+    writeFileSync(join(member, '.npmrc'), 'registry=https://evil.example/member/\n');
+    writeFileSync(
+      join(member, '.yarnrc.yml'),
+      'npmRegistryServer: "https://evil.example/yarn"\nnpmScopes:\n  corp:\n    npmRegistryServer: "https://evil.example/yarn-corp"\n',
+    );
+    writeFileSync(join(member, '.yarnrc'), 'registry "https://evil.example/classic"\n');
+    writeFileSync(join(member, 'bunfig.toml'), '[install]\nregistry = "https://evil.example/bun/"\n\n[install.scopes]\n"@corp" = "https://evil.example/bun-corp/"\n');
+    expect(await listed({ ...ctx(), projectDir: member })).toEqual([]);
+    expect(await listed({ ...ctx(), projectDir: repo })).toEqual([]);
+
+    // The user's own is listed beside them — and it alone.
+    writeFileSync(join(home, '.npmrc'), 'registry=https://npm.acme.example/\n');
+    expect(await listed({ ...ctx(), projectDir: member })).toEqual(['https://npm.acme.example/']);
+  });
+
+  it('T-18 the public registry is not one — named in a file or in the environment', async () => {
+    writeFileSync(join(home, '.npmrc'), 'registry=https://registry.npmjs.org/\n@corp:registry=https://registry.npmjs.org\n');
+    writeFileSync(join(home, '.yarnrc.yml'), 'npmRegistryServer: "https://registry.yarnpkg.com"\n');
+    expect(await listed(ctx({ npm_config_registry: 'https://registry.npmjs.org/' }))).toEqual([]);
+  });
+
+  it('T-18 a configuration that cannot be read names none, and nothing is thrown: a directory where the user npmrc belongs, a file over the size cap', async () => {
+    mkdirSync(join(home, '.npmrc'));
+    expect(await listed(ctx())).toEqual([]);
+
+    rmSync(join(home, '.npmrc'), { recursive: true });
+    writeFileSync(join(home, '.npmrc'), `registry=https://npm.acme.example/\n${'#'.repeat(1024 * 1024)}\n`);
+    expect(await listed(ctx())).toEqual([]);
+  });
+
+  it('T-18 a value that is not an http(s) URL is not listed: a variable left unexpanded, a setting that merely has "registry" in its name', async () => {
+    writeFileSync(join(home, '.npmrc'), 'registry=${NPM_REGISTRY_URL}\n');
+    expect(await listed(ctx({ npm_config_replace_registry_host: 'never' }))).toEqual([]);
+  });
+  it('T-24 (US-1.AC-12, US-1.AC-22) the prepared scope lookup answers as `npmScopeRegistry` does, and reads the configuration once however many scopes it is asked', async () => {
+    const mod = await import('../../../src/pkgvet/privateRegistry.js');
+    const { npmScopeRegistry, npmScopeRegistryOf, registryCache } = mod;
+    writeFileSync(join(home, '.npmrc'), '@mine:registry=https://npm.user.example/\n@npmjs:registry=https://registry.npmjs.org/\nregistry=https://npm.default.example/\n');
+    writeFileSync(join(project, '.npmrc'), '@team:registry=https://npm.team.example/\n');
+    const names = ['@mine/a', '@team/b', '@plain/c', 'unscoped', '@npmjs/d', '@mine/other', '@env/e'];
+    const withEnv = ctx({ 'npm_config_@env:registry': 'https://npm.env.example/' });
+    const expected = names.map((n) => npmScopeRegistry(n, withEnv));
+    expect(expected.map((r) => r?.from ?? null)).toEqual(['user', 'project', null, null, null, 'user', 'user']);
+
+    // Reads of a configuration file, counted at the cache the lookups share.
+    let gets = 0;
+    const cache = registryCache();
+    const reads = cache.reads;
+    cache.reads = new Proxy(reads, {
+      get(target, prop) {
+        if (prop === 'get') {
+          return (key: string) => {
+            gets += 1;
+            return target.get(key);
+          };
+        }
+        const value: unknown = Reflect.get(target, prop, target);
+        return typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(target) : value;
+      },
+    });
+    const lookup = npmScopeRegistryOf({ ...withEnv, cache });
+    expect(lookup('unscoped')).toBeNull();
+    expect(gets).toBe(0);
+    expect(lookup('@mine/a')).toEqual(expected[0]);
+    const afterOne = gets;
+    expect(afterOne).toBeGreaterThan(0);
+    expect(names.map((n) => lookup(n))).toEqual(expected);
+    expect(names.map((n) => lookup(n))).toEqual(expected);
+    expect(gets).toBe(afterOne);
+  });
+
 });

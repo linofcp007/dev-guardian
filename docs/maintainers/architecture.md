@@ -74,7 +74,7 @@ quality, deps, observability, performance and compliance. Two halves:
 leaf: nothing under `runners/`, `ci/`, `history/` or the scan tools imports it, and `health_status` and
 `check_toolchain` import only its read side (`store.ts`, `paths.ts`) — `controls.test.ts` holds both.
 
-- `controls.ts` — the registry: one control per file of `configs/semgrep/`, gitleaks, the two Trivy scans, four
+- `controls.ts` — the registry: one control per file of `configs/semgrep/`, gitleaks, the two Trivy scans, five
   hook checks, and the rule each pack's canary must fire. `controlsProblems` fails the suite, by name, on a pack
   with no control or no canary.
 - `canaries.ts` — the temporary directory (`mkdtemp`, removed without following a link) and the seeding of
@@ -82,7 +82,11 @@ leaf: nothing under `runners/`, `ci/`, `history/` or the scan tools imports it, 
 - `run.ts` — the orchestrator. One probe run with the selftest's own Semgrep rule, then one run per pack: a pack
   that does not report a canary the probe read is `silent`, one the probe never read is `unverified`. Everything
   that starts a process is behind `SelftestRunners`; the real ones (`defaultRunners.ts`) are the scan tools' own
-  functions, and the dispatcher is started by `hookRunner.ts` with no shell.
+  functions, and the dispatcher is started by `hookRunner.ts` with no shell. One hook check, `hooks:install-vet`,
+  waits on the network (the registry and OSV, asked by the dispatcher): its launch starts before the other four and
+  is awaited at its own turn. It is not launched offline or with package vetting switched off, and it recognises
+  the hook's "could not vet" line by the constants `pkgvet/hookDecision.ts` writes it with. A test that starts the
+  real dispatcher for a selftest replaces the registry (`registryReplaced` in `test/e2e/selftestCli.test.ts`).
 - `verdict.ts`, `report.ts` — pure. `store.ts` — the result, per install, as two JSON files in the data directory,
   validated when read back; never the project's database.
 

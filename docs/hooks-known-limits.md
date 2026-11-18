@@ -83,8 +83,24 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
   - `Bash` on PreToolUse, input `{"command":"composer install"}`, with `composer.json` present → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"dotnet restore"}` → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"pipenv install"}` → `none` (no answer)
-- Only the manifest's direct dependencies are looked up, at the version its range resolves to on the registry today. The lockfile is not read: a version it pins (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), a `resolved` URL that points somewhere else, and every transitive dependency are installed without a lookup — thousands of packages do not fit the hook's 3 s. `scan_deps` and `deps_audit` read the lockfile.
-  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `package-lock.json` present → `none` (no answer)
+- The lockfile of the command's own package manager (`npm-shrinkwrap.json` or `package-lock.json` for npm, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`) is read, and every name and exact version it pins — transitive dependencies too, up to 8 000 pairs per call — is looked up in OSV for a malicious-package advisory; nothing else of it is looked up or sent. What stays out of that vetting, each one said in a line of the answer unless noted:
+
+- What another source serves. A package the lockfile fetches from a host other than the public npm registry — a mirror, a company proxy, a URL, a git repository — has its pair looked up when it comes by `http` or `https`, and the origin is counted and said: what that origin serves is not verified. Only a registry the user's own npm configuration names is not said.
+- A default registry that a configuration file of the project sets (`.npmrc`, `.yarnrc.yml`, `bunfig.toml`). It is not said: npm swaps it in for the public host of every `resolved` URL, and the lockfiles of pnpm, Yarn 2+ and bun name no host at all.
+- The content of a package. It is not compared with the lockfile's `integrity`, and an archive that does not match its URL is the registry's and the package manager's to notice.
+- A lockfile of another package manager than the command's: `npm ci` does not read a `yarn.lock`, a `pnpm-lock.yaml` or a `bun.lock`, and with none of its own the manifest is vetted as it always was.
+- `bun.lockb`, bun's binary lockfile, and a lockfile of a format version the reader does not know: said as not read, and the manifest is vetted as it always was.
+- Above 8 000 pairs the rest is said and not vetted — a lockfile can be padded past the cap, and the pairs of the manifest's own dependencies and of names off the popular list go first.
+- An `npm install` whose lockfile is out of sync with `package.json`: what npm resolves again is not looked up, and a direct dependency the lockfile does not record at the manifest's range goes through the registry as before. `npm ci` fails on such a lockfile.
+
+`scan_deps` and `deps_audit` read the lockfile for known vulnerabilities.
+  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `package-lock.json` present → `warn`
+  - `Bash` on PreToolUse, input `{"command":"pnpm install"}`, with `.npmrc`, `package.json`, `pnpm-lock.yaml` present → `warn`
+  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `package-lock.json` present → `warn`
+  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `yarn.lock` present → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"bun install"}`, with `package.json`, `bun.lockb` present → `warn`
+  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `package-lock.json` present → `warn`
+  - `Bash` on PreToolUse, input `{"command":"npm install"}`, with `package.json`, `package-lock.json` present → `warn`
 - In a workspace, only the `package.json` of the directory the command runs in is read. The manifests of the workspace's members (`workspaces`, `pnpm-workspace.yaml`) are installed by the same command and are not looked up.
   - `Bash` on PreToolUse, input `{"command":"npm install"}`, with `package.json`, `packages/a/package.json` present → `none` (no answer)
 - A dependency that does not come from a registry is not looked up, because there is nothing to look up: a git repository, a URL, a tarball, a path, `file:`, `link:`, `workspace:`, `catalog:` in a `package.json`; `-e`, a path, a URL or `name @ url` in a requirements file. What such a dependency holds is whatever its source serves.

@@ -1,5 +1,5 @@
 /**
- * The four checks of the guardrail hooks: what each one hands the installed
+ * The five checks of the guardrail hooks: what each one hands the installed
  * dispatcher, what a working guard answers, and which of the user's own
  * settings explains a softer answer.
  *
@@ -19,9 +19,10 @@
 
 import { join } from 'node:path';
 import { readSmallJsonFile } from '../hooks/configFile.js';
+import { COULD_NOT_VET, NOT_VERIFIED } from '../pkgvet/hookDecision.js';
 import type { Workspace } from './canaries.js';
 
-type HookCheckId = 'hooks:bash-block' | 'hooks:powershell-block' | 'hooks:settings-guard' | 'hooks:secret-warning';
+type HookCheckId = 'hooks:bash-block' | 'hooks:powershell-block' | 'hooks:settings-guard' | 'hooks:secret-warning' | 'hooks:install-vet';
 
 interface HookCheck {
   id: HookCheckId;
@@ -36,6 +37,8 @@ interface HookCheck {
 // A catastrophic command for each shell, in pieces: only ever text in a payload.
 const BASH_COMMAND = ['rm', '-rf', '/'].join(' ');
 const POWERSHELL_COMMAND = ['Remove-Item', '-Recurse', '-Force', 'C:\\'].join(' ');
+// An install, by name, of a package npm replaced by its security placeholder (OSV: a `MAL-` advisory): text in a payload, never run.
+const INSTALL_COMMAND = ['npm', 'install', 'crossenv'].join(' ');
 /** The seeded file the secret check "writes": the one gitleaks is pointed at. */
 export const SECRET_CANARY = 'secrets/app.properties';
 
@@ -70,6 +73,12 @@ export const HOOK_CHECKS: readonly HookCheck[] = [
       }),
   },
   {
+    id: 'hooks:install-vet',
+    event: 'PreToolUse',
+    expect: 'deny',
+    payload: (ws) => preToolUse(ws, 'Bash', { command: INSTALL_COMMAND }),
+  },
+  {
     id: 'hooks:secret-warning',
     event: 'PostToolUse',
     expect: 'secret-warning',
@@ -98,6 +107,28 @@ export function answersAsExpected(check: Pick<HookCheck, 'expect'>, stdout: stri
   return typeof answer.additionalContext === 'string' && /secret/i.test(answer.additionalContext);
 }
 
+/**
+ * The line of the dispatcher's answer that says a package could not be vetted
+ * (`pkgvet/hookDecision.ts`'s own words), and nothing else of the answer;
+ * `undefined` when there is none. Bounded: this is what a saved result keeps.
+ */
+export function notVerifiedLine(stdout: string): string | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout.trim());
+  } catch {
+    return undefined;
+  }
+  const out = isObject(parsed) ? parsed['hookSpecificOutput'] : undefined;
+  const context = isObject(out) ? out['additionalContext'] : undefined;
+  if (typeof context !== 'string') return undefined;
+  const line = context.split(/\r?\n/).find((l) => l.startsWith(COULD_NOT_VET) && l.endsWith(NOT_VERIFIED));
+  return line === undefined ? undefined : line.slice(0, MAX_LINE);
+}
+
+/** The longest line kept of the dispatcher's answer: the stored reason's own bound. */
+const MAX_LINE = 600;
+
 /** The user-level hooks configuration: the one file besides the environment that may switch a guard off. */
 const userHooksConfigPath = (home: string): string => join(home, '.config', 'dev-guardian', 'hooks.json');
 
@@ -112,7 +143,7 @@ const USER_CONFIG_LABEL = '~/.config/dev-guardian/hooks.json';
  * answer. Read as the dispatcher reads it: `GUARDIAN_HOOKS=off` and the
  * user-level `"enabled": false` switch every hook off; the shell block also
  * by `GUARDIAN_HOOKS_BASH_BLOCK=0` or `"bash": {"block": false}` (the
- * environment wins); the secret warning by `"secrets": {"warn": false}`.
+ * environment wins); package vetting by `GUARDIAN_PKG_VET=0`; the secret warning by `"secrets": {"warn": false}`.
  */
 export function softenedBy(check: Pick<HookCheck, 'id'>, env: NodeJS.ProcessEnv, home: string): string | undefined {
   if (env['GUARDIAN_HOOKS'] === 'off') return 'GUARDIAN_HOOKS=off';
@@ -127,6 +158,8 @@ export function softenedBy(check: Pick<HookCheck, 'id'>, env: NodeJS.ProcessEnv,
     const bash = user['bash'];
     if (isObject(bash) && bash['block'] === false) return `"bash": {"block": false} in ${file}`;
   }
+  // The dispatcher reads exactly this value (`GUARDIAN_PKG_VET === '0'`) — and it switches no other guard off.
+  if (check.id === 'hooks:install-vet' && env['GUARDIAN_PKG_VET'] === '0') return 'GUARDIAN_PKG_VET=0';
   if (check.id === 'hooks:secret-warning') {
     const secrets = user['secrets'];
     if (isObject(secrets) && secrets['warn'] === false) return `"secrets": {"warn": false} in ${file}`;

@@ -1,0 +1,476 @@
+lockfileVersion: 5.4
+
+overrides:
+  vite: workspace:*
+  '@vitejs/plugin-vue': workspace:*
+
+packageExtensionsChecksum: 696422bac84dd936748019990f84746e
+
+importers:
+
+  .:
+    specifiers:
+      '@babel/types': ^7.18.8
+      '@microsoft/api-extractor': ^7.28.4
+      '@rollup/plugin-typescript': ^8.3.3
+      '@types/babel__core': ^7.1.19
+      '@types/babel__standalone': ^7.1.4
+      '@types/convert-source-map': ^1.5.2
+      '@types/cross-spawn': ^6.0.2
+      '@types/debug': ^4.1.7
+      '@types/estree': ^0.0.52
+      '@types/etag': ^1.8.1
+      '@types/fs-extra': ^9.0.13
+      '@types/hash-sum': ^1.0.0
+      '@types/less': ^3.0.3
+      '@types/micromatch': ^4.0.2
+      '@types/mime': ^2.0.3
+      '@types/minimist': ^1.2.2
+      '@types/node': ^17.0.42
+      '@types/prompts': ^2.4.0
+      '@types/resolve': ^1.20.2
+      '@types/sass': ~1.43.1
+      '@types/semver': ^7.3.10
+      '@types/stylus': ^0.48.38
+      '@types/ws': ^8.5.3
+      '@typescript-eslint/eslint-plugin': ^5.30.5
+      '@typescript-eslint/parser': ^5.30.5
+      conventional-changelog-cli: ^2.2.2
+      cross-env: ^7.0.3
+      esbuild: ^0.14.47
+      eslint: ^8.19.0
+      eslint-define-config: ^1.5.1
+      eslint-plugin-import: ^2.26.0
+      eslint-plugin-node: ^11.1.0
+      execa: ^6.1.0
+      fs-extra: ^10.1.0
+      kill-port: ^1.6.1
+      lint-staged: ^13.0.3
+      minimist: ^1.2.6
+      node-fetch: ^3.2.6
+      npm-run-all: ^4.1.5
+      picocolors: ^1.0.0
+      playwright-chromium: ^1.23.2
+      pnpm: ^7.5.0
+      prettier: 2.7.1
+      prompts: ^2.4.2
+      rimraf: ^3.0.2
+      rollup: ^2.75.6
+      semver: ^7.3.7
+      simple-git-hooks: ^2.8.0
+      sirv: ^2.0.2
+      tslib: ^2.4.0
+      tsx: ^3.7.1
+      typescript: ^4.6.4
+      unbuild: ^0.7.4
+      vite: workspace:*
+      vitepress: ^1.0.0-alpha.4
+      vitest: ^0.18.0
+      vue: ^3.2.37
+    devDependencies:
+      '@babel/types': 7.18.8
+      '@microsoft/api-extractor': 7.28.4
+      '@rollup/plugin-typescript': 8.3.3_uct5nfewsakxkk4livyn3qaf3e
+      '@types/babel__core': 7.1.19
+      '@types/babel__standalone': 7.1.4
+      '@types/convert-source-map': 1.5.2
+      '@types/cross-spawn': 6.0.2
+      '@types/debug': 4.1.7
+      '@types/estree': 0.0.52
+      '@types/etag': 1.8.1
+      '@types/fs-extra': 9.0.13
+      '@types/hash-sum': 1.0.0
+      '@types/less': 3.0.3
+      '@types/micromatch': 4.0.2
+      '@types/mime': 2.0.3
+      '@types/minimist': 1.2.2
+      '@types/node': 17.0.42
+      '@types/prompts': 2.4.0
+      '@types/resolve': 1.20.2
+      '@types/sass': 1.43.1
+      '@types/semver': 7.3.10
+      '@types/stylus': 0.48.38
+      '@types/ws': 8.5.3
+      '@typescript-eslint/eslint-plugin': 5.30.5_v2rueh5ttlnebqgd37frxlfko4
+      '@typescript-eslint/parser': 5.30.5_g4cxuhevh5o54harssx6h7xjim
+      conventional-changelog-cli: 2.2.2
+      cross-env: 7.0.3
+      esbuild: 0.14.47
+      eslint: 8.19.0
+      eslint-define-config: 1.5.1
+      eslint-plugin-import: 2.26.0_iom7pm3yknyiblqpw2vvqvxs5i
+      eslint-plugin-node: 11.1.0_eslint@8.19.0
+      execa: 6.1.0
+      fs-extra: 10.1.0
+      kill-port: 1.6.1
+      lint-staged: 13.0.3
+      minimist: 1.2.6
+      node-fetch: 3.2.6
+      npm-run-all: 4.1.5
+      picocolors: 1.0.0
+      playwright-chromium: 1.23.2
+      pnpm: 7.5.0
+      prettier: 2.7.1
+      prompts: 2.4.2
+      rimraf: 3.0.2
+      rollup: 2.75.6
+      semver: 7.3.7
+      simple-git-hooks: 2.8.0
+      sirv: 2.0.2
+      tslib: 2.4.0
+      tsx: 3.7.1
+      typescript: 4.6.4
+      unbuild: 0.7.4
+      vite: link:packages/vite
+      vitepress: 1.0.0-alpha.4
+      vitest: 0.18.0
+      vue: 3.2.37
+
+  packages/create-vite:
+    specifiers:
+      kolorist: ^1.5.1
+      minimist: ^1.2.6
+      prompts: ^2.4.2
+    dependencies:
+      kolorist: 1.5.1
+      minimist: 1.2.6
+      prompts: 2.4.2
+
+  packages/plugin-legacy:
+    specifiers:
+      '@babel/core': ^7.18.6
+      '@babel/standalone': ^7.18.8
+      core-js: ^3.23.4
+      magic-string: ^0.26.2
+      regenerator-runtime: ^0.13.9
+      systemjs: ^6.12.1
+      vite: workspace:*
+    dependencies:
+      '@babel/standalone': 7.18.8
+      core-js: 3.23.4
+      magic-string: 0.26.2
+      regenerator-runtime: 0.13.9
+      systemjs: 6.12.1
+    devDependencies:
+      '@babel/core': 7.18.6
+      vite: link:../vite
+
+  playground/alias:
+    specifiers:
+      '@vue/shared': ^3.2.37
+      aliased-module: file:./dir/module
+      resolve-linked: workspace:*
+      vue: ^3.2.37
+    dependencies:
+      '@vue/shared': 3.2.37
+      aliased-module: file:playground/alias/dir/module
+      vue: 3.2.37
+    devDependencies:
+      resolve-linked: link:../resolve-linked
+
+  playground/alias/dir/module:
+    specifiers: {}
+
+  playground/external:
+    specifiers:
+      '@vitejs/dep-that-imports-vue': file:./dep-that-imports-vue
+      '@vitejs/dep-that-requires-vue': file:./dep-that-requires-vue
+      vite: workspace:*
+      vue: ^3.2.37
+    dependencies:
+      '@vitejs/dep-that-imports-vue': file:playground/external/dep-that-imports-vue
+      '@vitejs/dep-that-requires-vue': file:playground/external/dep-that-requires-vue
+    devDependencies:
+      vite: link:../../packages/vite
+      vue: 3.2.37
+
+  playground/external/dep-that-imports-vue:
+    specifiers:
+      vue: ^3.2.37
+    dependencies:
+      vue: 3.2.37
+
+packages:
+
+  /@algolia/autocomplete-core/1.6.3:
+    resolution: {integrity: sha512-dqQqRt01fX3YuVFrkceHsoCnzX0bLhrrg8itJI1NM68KjrPYQPYsE+kY8EZTCM4y8VDnhqJErR73xe/ZsV+qAA==}
+    dependencies:
+      '@algolia/autocomplete-shared': 1.6.3
+    dev: true
+
+  /@algolia/autocomplete-shared/1.6.3:
+    resolution: {integrity: sha512-UV46bnkTztyADFaETfzFC5ryIdGVb2zpAoYgu0tfcuYWjhg1KbLXveFffZIrGVoboqmAk1b+jMrl6iCja1i3lg==}
+    dev: true
+
+  /@algolia/cache-browser-local-storage/4.13.1:
+    resolution: {integrity: sha512-UAUVG2PEfwd/FfudsZtYnidJ9eSCpS+LW9cQiesePQLz41NAcddKxBak6eP2GErqyFagSlnVXe/w2E9h2m2ttg==}
+    dependencies:
+      '@algolia/cache-common': 4.13.1
+    dev: true
+
+  /@algolia/cache-common/4.13.1:
+    resolution: {integrity: sha512-7Vaf6IM4L0Jkl3sYXbwK+2beQOgVJ0mKFbz/4qSxKd1iy2Sp77uTAazcX+Dlexekg1fqGUOSO7HS4Sx47ZJmjA==}
+    dev: true
+
+  /@algolia/cache-in-memory/4.13.1:
+    resolution: {integrity: sha512-pZzybCDGApfA/nutsFK1P0Sbsq6fYJU3DwIvyKg4pURerlJM4qZbB9bfLRef0FkzfQu7W11E4cVLCIOWmyZeuQ==}
+    dependencies:
+      '@algolia/cache-common': 4.13.1
+    dev: true
+
+  /@algolia/client-account/4.13.1:
+    resolution: {integrity: sha512-TFLiZ1KqMiir3FNHU+h3b0MArmyaHG+eT8Iojio6TdpeFcAQ1Aiy+2gb3SZk3+pgRJa/BxGmDkRUwE5E/lv3QQ==}
+    dependencies:
+      '@algolia/client-common': 4.13.1
+      '@algolia/client-search': 4.13.1
+      '@algolia/transporter': 4.13.1
+    dev: true
+
+  /@algolia/client-analytics/4.13.1:
+    resolution: {integrity: sha512-iOS1JBqh7xaL5x00M5zyluZ9+9Uy9GqtYHv/2SMuzNW1qP7/0doz1lbcsP3S7KBbZANJTFHUOfuqyRLPk91iFA==}
+    dependencies:
+      '@algolia/client-common': 4.13.1
+      '@algolia/client-search': 4.13.1
+      '@algolia/requester-common': 4.13.1
+      '@algolia/transporter': 4.13.1
+    dev: true
+
+  /@algolia/client-common/4.13.1:
+    resolution: {integrity: sha512-LcDoUE0Zz3YwfXJL6lJ2OMY2soClbjrrAKB6auYVMNJcoKZZ2cbhQoFR24AYoxnGUYBER/8B+9sTBj5bj/Gqbg==}
+    dependencies:
+      '@algolia/requester-common': 4.13.1
+      '@algolia/transporter': 4.13.1
+    dev: true
+
+  /@babel/core/7.18.5:
+    resolution: {integrity: sha512-MGY8vg3DxMnctw0LdvSEojOsumc70g0t18gNyUdAZqB1Rpd1Bqo/svHGvt+UJ6JcGX+DIekGFDxxIWofBxLCnQ==}
+    engines: {node: '>=6.9.0'}
+    dependencies:
+      '@ampproject/remapping': 2.2.0
+      '@babel/code-frame': 7.16.7
+      '@babel/generator': 7.18.2
+      '@babel/helper-compilation-targets': 7.18.2_@babel+core@7.18.5
+      '@babel/helper-module-transforms': 7.18.0
+      '@babel/helpers': 7.18.2
+      '@babel/parser': 7.18.5
+      '@babel/template': 7.16.7
+      '@babel/traverse': 7.18.5
+      '@babel/types': 7.18.8
+      convert-source-map: 1.8.0
+      debug: 4.3.4
+      gensync: 1.0.0-beta.2
+      json5: 2.2.1
+      semver: 6.3.0
+    transitivePeerDependencies:
+      - supports-color
+    dev: true
+
+  /@babel/core/7.18.6:
+    resolution: {integrity: sha512-cQbWBpxcbbs/IUredIPkHiAGULLV8iwgNRMFzvbhEXISp4f3rUUXE5+TIw6KwUWUR3DwyI6gmBRnmAtYaWehwQ==}
+    engines: {node: '>=6.9.0'}
+    dependencies:
+      '@ampproject/remapping': 2.2.0
+      '@babel/code-frame': 7.18.6
+      '@babel/generator': 7.18.7
+      '@babel/helper-compilation-targets': 7.18.6_@babel+core@7.18.6
+      '@babel/helper-module-transforms': 7.18.6
+      '@babel/helpers': 7.18.6
+      '@babel/parser': 7.18.6
+      '@babel/template': 7.18.6
+      '@babel/traverse': 7.18.6
+      '@babel/types': 7.18.7
+      convert-source-map: 1.8.0
+      debug: 4.3.4
+      gensync: 1.0.0-beta.2
+      json5: 2.2.1
+      semver: 6.3.0
+    transitivePeerDependencies:
+      - supports-color
+
+  /@babel/helper-compilation-targets/7.18.2_@babel+core@7.18.5:
+    resolution: {integrity: sha512-s1jnPotJS9uQnzFtiZVBUxe67CuBa679oWFHpxYYnTpRL/1ffhyX44R9uYiXoa/pLXcY9H2moJta0iaanlk/rQ==}
+    engines: {node: '>=6.9.0'}
+    peerDependencies:
+      '@babel/core': ^7.0.0
+    dependencies:
+      '@babel/compat-data': 7.17.10
+      '@babel/core': 7.18.5
+      '@babel/helper-validator-option': 7.16.7
+      browserslist: 4.20.3
+      semver: 6.3.0
+    dev: true
+
+  /@babel/helper-compilation-targets/7.18.6_@babel+core@7.18.6:
+    resolution: {integrity: sha512-vFjbfhNCzqdeAtZflUFrG5YIFqGTqsctrtkZ1D/NB0mDW9TwW3GmmUepYY4G9wCET5rY5ugz4OGTcLd614IzQg==}
+    engines: {node: '>=6.9.0'}
+    peerDependencies:
+      '@babel/core': ^7.0.0
+    dependencies:
+      '@babel/compat-data': 7.18.6
+      '@babel/core': 7.18.6
+      '@babel/helper-validator-option': 7.18.6
+      browserslist: 4.20.3
+      semver: 6.3.0
+
+  /@babel/standalone/7.18.8:
+    resolution: {integrity: sha512-cDayR7x6IAp7k1947fYeo7OxD7QwT9/UZ+BT05Zq2pfsOzkhOJZdY19X0NvL6fYaszwnzO0zVHgp04OspPh3SA==}
+    engines: {node: '>=6.9.0'}
+    dev: false
+
+  /@babel/types/7.18.8:
+    resolution: {integrity: sha512-qwpdsmraq0aJ3osLJRApsc2ouSJCdnMeZwB0DhbtHAtRpZNZCdlbRnHIgcRKzdE1g0iOGg644fzjOBcdOz9cPw==}
+    engines: {node: '>=6.9.0'}
+    dependencies:
+      '@babel/helper-validator-identifier': 7.18.6
+      to-fast-properties: 2.0.0
+
+  /@emotion/react/11.9.3_react@18.2.0:
+    resolution: {integrity: sha512-g9Q1GcTOlzOEjqwuLF/Zd9LC+4FljjPjDfxSM7KmEakm+hsHXk+bYZ2q+/hTJzr0OUNkujo72pXLQvXj6H+GJQ==}
+    peerDependencies:
+      '@babel/core': ^7.0.0
+      '@types/react': '*'
+      react: '>=16.8.0'
+    peerDependenciesMeta:
+      '@babel/core':
+        optional: true
+      '@types/react':
+        optional: true
+    dependencies:
+      '@babel/runtime': 7.18.3
+      '@emotion/babel-plugin': 11.9.2
+      '@emotion/cache': 11.9.3
+      '@emotion/serialize': 1.0.4
+      '@emotion/utils': 1.1.0
+      '@emotion/weak-memoize': 0.2.5
+      hoist-non-react-statics: 3.3.2
+      react: 18.2.0
+    dev: false
+
+  /@polka/url/1.0.0-next.21:
+    resolution: {integrity: sha512-a5Sab1C4/icpTZVzZc5Ghpz88yQtGOyNqYXcZgOssB2uuAr+wF/MvN6bgtW32q7HHrvBki+BsZ0OuNv6EV3K9g==}
+    dev: true
+
+  /@rollup/plugin-typescript/8.3.3_uct5nfewsakxkk4livyn3qaf3e:
+    resolution: {integrity: sha512-55L9SyiYu3r/JtqdjhwcwaECXP7JeJ9h1Sg1VWRJKIutla2MdZQodTgcCNybXLMCnqpNLEhS2vGENww98L1npg==}
+    engines: {node: '>=8.0.0'}
+    peerDependencies:
+      rollup: ^2.14.0
+      tslib: '*'
+      typescript: '>=3.7.0'
+    peerDependenciesMeta:
+      tslib:
+        optional: true
+    dependencies:
+      '@rollup/pluginutils': 3.1.0_rollup@2.75.6
+      resolve: 1.22.1
+      rollup: 2.75.6
+      tslib: 2.4.0
+      typescript: 4.6.4
+    dev: true
+
+  /@vue/shared/3.2.37:
+    resolution: {integrity: sha512-4rSJemR2NQIo9Klm1vabqWjD8rs/ZaJSzMxkMNeJS6lHiUjjUeYFbooN19NgFjztubEKh3WlZUeOLVdbbUWHsw==}
+
+  /JSONStream/1.3.5:
+    resolution: {integrity: sha512-E+iruNOY8VV9s4JEbe1aNEm6MiszPRr/UfcHMz0TQh1BXSxHK+ASV1R6W4HpjBhSeS+54PIsAMCBmwD06LLsqQ==}
+    hasBin: true
+    dependencies:
+      jsonparse: 1.3.1
+      through: 2.3.8
+    dev: true
+
+  /core-js/3.23.4:
+    resolution: {integrity: sha512-vjsKqRc1RyAJC3Ye2kYqgfdThb3zYnx9CrqoCcjMOENMtQPC7ZViBvlDxwYU/2z2NI/IPuiXw5mT4hWhddqjzQ==}
+    requiresBuild: true
+    dev: false
+
+  /esbuild-android-64/0.14.47:
+    resolution: {integrity: sha512-R13Bd9+tqLVFndncMHssZrPWe6/0Kpv2/dt4aA69soX4PRxlzsVpCvoJeFE8sOEoeVEiBkI0myjlkDodXlHa0g==}
+    engines: {node: '>=12'}
+    cpu: [x64]
+    os: [android]
+    requiresBuild: true
+    optional: true
+
+  /esbuild-android-arm64/0.13.15:
+    resolution: {integrity: sha512-m602nft/XXeO8YQPUDVoHfjyRVPdPgjyyXOxZ44MK/agewFFkPa8tUo6lAzSWh5Ui5PB4KR9UIFTSBKh/RrCmg==}
+    cpu: [arm64]
+    os: [android]
+    requiresBuild: true
+    dev: true
+    optional: true
+
+  /esbuild-android-arm64/0.14.47:
+    resolution: {integrity: sha512-OkwOjj7ts4lBp/TL6hdd8HftIzOy/pdtbrNA4+0oVWgGG64HrdVzAF5gxtJufAPOsEjkyh1oIYvKAUinKKQRSQ==}
+    engines: {node: '>=12'}
+    cpu: [arm64]
+    os: [android]
+    requiresBuild: true
+    optional: true
+
+  /kolorist/1.5.1:
+    resolution: {integrity: sha512-lxpCM3HTvquGxKGzHeknB/sUjuVoUElLlfYnXZT73K8geR9jQbroGlSCFBax9/0mpGoD3kzcMLnOlGQPJJNyqQ==}
+    dev: false
+
+  /minimist/1.2.6:
+    resolution: {integrity: sha512-Jsjnk4bw3YJqYzbdyBiNsPWHPfO++UGG749Cxs6peCu5Xg4nrena6OVxOYxrQTqww0Jmwt+Ref8rggumkTLz9Q==}
+
+  /querystring/0.2.0:
+    resolution: {integrity: sha1-sgmEkgO7Jd+CDadW50cAWHhSFiA=}
+    engines: {node: '>=0.4.x'}
+    deprecated: The querystring API is considered Legacy. new code should use the URLSearchParams API instead.
+    dev: false
+
+  /react-dom/18.2.0_react@18.2.0:
+    resolution: {integrity: sha512-6IMTriUmvsjHUjNtEDudZfuDQUoWXVxKHhlEGSk81n4YFS+r/Kl99wXiwlVXtPBtJenozv2P+hxDsw9eA7Xo6g==}
+    peerDependencies:
+      react: ^18.2.0
+    dependencies:
+      loose-envify: 1.4.0
+      react: 18.2.0
+      scheduler: 0.23.0
+    dev: false
+
+  /react/18.2.0:
+    resolution: {integrity: sha512-/3IjMdb2L9QbBdWiW5e3P2/npwMBaU9mHCSCUzNln0ZCYbcfTsGbTJrU/kGemdH2IWmB2ioZ+zkxtmq6g09fGQ==}
+    engines: {node: '>=0.10.0'}
+    dependencies:
+      loose-envify: 1.4.0
+    dev: false
+
+  /vue/3.2.37:
+    resolution: {integrity: sha512-bOKEZxrm8Eh+fveCqS1/NkG/n6aMidsI6hahas7pa0w/l7jkbssJVsRhVDs07IdDq7h9KHswZOgItnwJAgtVtQ==}
+    dependencies:
+      '@vue/compiler-dom': 3.2.37
+      '@vue/compiler-sfc': 3.2.37
+      '@vue/runtime-dom': 3.2.37
+      '@vue/server-renderer': 3.2.37_vue@3.2.37
+      '@vue/shared': 3.2.37
+
+  file:playground/alias/dir/module:
+    resolution: {directory: playground/alias/dir/module, type: directory}
+    name: '@vite/aliased-module'
+    version: 0.0.0
+    dev: false
+
+  file:playground/css/css-js-dep:
+    resolution: {directory: playground/css/css-js-dep, type: directory}
+    name: css-js-dep
+    version: 1.0.0
+    dev: true
+
+  file:playground/external/dep-that-imports-vue:
+    resolution: {directory: playground/external/dep-that-imports-vue, type: directory}
+    name: '@vitejs/dep-that-imports-vue'
+    version: 0.0.0
+    dependencies:
+      vue: 3.2.37
+    dev: false
+
+  file:playground/external/dep-that-requires-vue:
+    resolution: {directory: playground/external/dep-that-requires-vue, type: directory}
+    name: '@vitejs/dep-that-requires-vue'
+    version: 0.0.0
+    dependencies:
+      vue: 3.2.37
+    dev: false

@@ -26,11 +26,12 @@ import {
 import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { decideInstallCommand } from '../../src/pkgvet/hookDecision.js';
 import { semgrepSpawn } from '../../src/runners/semgrepRun.js';
 import { CANARY_MARKER, CANARY_SUFFIX, PROBE_RULE_FILE, PROBE_RULE_SOURCE, TOKEN_PLACEHOLDER, WORKSPACE_PREFIX, canaryToken } from '../../src/selftest/canaries.js';
 import { CORE_CONTROLS, PROBE_RULE_ID, type Control } from '../../src/selftest/controls.js';
 import { defaultRunners } from '../../src/selftest/defaultRunners.js';
-import { SECRET_CANARY } from '../../src/selftest/hookChecks.js';
+import { HOOK_CHECKS, SECRET_CANARY } from '../../src/selftest/hookChecks.js';
 import { renderJson, renderTable } from '../../src/selftest/report.js';
 import { runSelftest, type HookRunArgs, type ScanArgs, type ScanOutcome, type SelftestOptions, type SelftestResult, type SelftestRunners } from '../../src/selftest/run.js';
 import { HISTORY_FILE, LAST_FILE, readHistory, selftestDir, type SelftestRun } from '../../src/selftest/store.js';
@@ -206,7 +207,7 @@ describe('a selftest run', () => {
   it('T-01 makes a new directory under the temporary root, seeds the canaries without their suffix, runs every control and gives each a verdict', async () => {
     const { runners, calls } = fakes();
     const { result, run, tmpRoot } = await selftest(runners);
-    expect(CORE_CONTROLS.length).toBeGreaterThanOrEqual(22);
+    expect(CORE_CONTROLS.length).toBeGreaterThanOrEqual(23);
     expect(run.controls.map((c) => c.id).sort()).toEqual(CORE_CONTROLS.map((c) => c.id).sort());
     for (const c of run.controls) expect(c.verdict, c.id).toBe('detected');
     expect(run.summary.detected).toBe(CORE_CONTROLS.length);
@@ -244,7 +245,7 @@ describe('a selftest run', () => {
     }
     expect(calls.gitleaks).toHaveLength(1);
     expect(calls.trivy.map((c) => c.mode)).toEqual(['deps', 'iac']);
-    expect(calls.hook).toHaveLength(4);
+    expect(calls.hook).toHaveLength(5);
   });
 
   it('T-03 by default the runners are the scan tools own, and the dispatcher is started where the install has it, with the user home untouched', async () => {
@@ -258,7 +259,7 @@ describe('a selftest run', () => {
     const { run } = await selftest(runners, { env: cleanEnv({ FAKE_RECORD: record }) });
     for (const id of HOOK_IDS) expect(run.controls.find((c) => c.id === id)?.verdict, id).toBe('detected');
     const seen = readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { argv: string[]; home: string | null; userprofile: string | null; project: string; cwd: string });
-    expect(seen).toHaveLength(4);
+    expect(seen).toHaveLength(5);
     for (const s of seen) {
       expect(realpathSync.native(s.argv[0] ?? '')).toBe(realpathSync.native(DISPATCHER));
       // The user's own configuration is what is tested: their home is the one the dispatcher sees.
@@ -659,7 +660,7 @@ describe('a selftest run', () => {
     const { runners } = fakes({ hook: realHook });
     await selftest(runners, { env: cleanEnv({ FAKE_RECORD: record }) });
     const seen = readFileSync(record, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { argv: string[]; stdin: string; kind: string });
-    expect(seen.map((s) => s.kind).sort()).toEqual(['bash', 'powershell', 'secret', 'settings']);
+    expect(seen.map((s) => s.kind).sort()).toEqual(['bash', 'bash', 'powershell', 'secret', 'settings']);
     for (const s of seen) {
       // The dispatcher and the event's name: nothing else was ever on a command line.
       expect(s.argv).toHaveLength(2);
@@ -837,5 +838,217 @@ describe('a selftest run', () => {
     expect(readHistory(dataDir).runs).toEqual([r.run]);
     // No run in an unreadable history: nothing can have regressed from it.
     expect(r.run.controls.some((c) => c.regressed === true)).toBe(false);
+  });
+});
+
+// ───────────────── selftest-install-vet-canary — the fifth hook check: the install of a package npm took down
+
+describe('selftest-install-vet-canary', () => {
+  /** A `string`, not the literal: it is compared with ids whose type does not hold it before the control exists. */
+  const VET: string = 'hooks:install-vet';
+  /** The package npm replaced by its security placeholder, and the install the dispatcher is handed — text, put together from pieces here too. */
+  const CANARY = 'crossenv';
+  const CANARY_INSTALL = ['npm', 'install', CANARY].join(' ');
+
+  /** `cleanEnv`, and without the switch of package vetting this machine may have set. */
+  const vetEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => {
+    const env = cleanEnv();
+    delete env['GUARDIAN_PKG_VET'];
+    return { ...env, ...extra };
+  };
+
+  const commandOf = (args: HookRunArgs): string => {
+    const input = args.payload['tool_input'];
+    const command = typeof input === 'object' && input !== null ? (input as { command?: unknown }).command : undefined;
+    return typeof command === 'string' ? command : '';
+  };
+  /** The launch of the install check: the Bash payload that names the canary package. */
+  const isVet = (args: HookRunArgs): boolean => args.payload['tool_name'] === 'Bash' && commandOf(args).includes(CANARY);
+  /** A launch by its event and tool; the four older checks, sorted. */
+  const launch = (args: HookRunArgs): string => `${args.event}:${String(args.payload['tool_name'])}`;
+  const OTHER_FOUR = ['PostToolUse:Write', 'PreToolUse:Bash', 'PreToolUse:PowerShell', 'PreToolUse:Write'];
+
+  /** The dispatcher's answer that carries `text` as context and denies nothing. */
+  const context = (text: string): string => JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: text } });
+
+  /** Runners whose dispatcher prints `stdout` for the install check and answers the other four as a working guard does. */
+  function vetAnswers(stdout: string): { runners: SelftestRunners; handed: HookRunArgs[] } {
+    const base = fakes();
+    const handed: HookRunArgs[] = [];
+    return {
+      handed,
+      runners: {
+        ...base.runners,
+        hook: async (args) => {
+          handed.push(args);
+          return isVet(args) ? { exitCode: 0, stdout, timedOut: false } : base.runners.hook(args);
+        },
+      },
+    };
+  }
+
+  /** A registry that cannot be reached: every request fails, as on a machine with no route to it. Nothing leaves this process. */
+  const unreachable: typeof fetch = async () => {
+    throw new Error('getaddrinfo ENOTFOUND registry.npmjs.org');
+  };
+  /** EC-1 — npm no longer serves the placeholder: the name is an ordinary package again, and OSV knows nothing of it. */
+  const restored: typeof fetch = async (input) => {
+    const url = String(input instanceof Request ? input.url : input);
+    const body = url.startsWith('https://registry.npmjs.org/')
+      ? { name: CANARY, 'dist-tags': { latest: '1.0.9' }, modified: '2020-01-01T00:00:00.000Z', time: { '1.0.9': '2020-01-01T00:00:00.000Z' }, versions: { '1.0.9': { name: CANARY, version: '1.0.9' } } }
+      : { results: [{}] };
+    return new Response(JSON.stringify(body));
+  };
+  /** What the hook itself decides of the canary's install — its own function, with `fetchImpl` in the network's place. */
+  const hookDecides = (fetchImpl: typeof fetch, popular?: { npm: readonly string[] }): ReturnType<typeof decideInstallCommand> =>
+    decideInstallCommand(CANARY_INSTALL, {
+      cwd: makeTempDir('selftest-vet-cwd-'),
+      homeDir: EMPTY_HOME,
+      env: {},
+      fetchImpl,
+      ...(popular !== undefined ? { popular } : {}),
+    });
+
+  it('T-01 the control hooks:install-vet is handed to the dispatcher as a Bash PreToolUse payload whose command installs the canary package, in the temporary project; a deny is detected', async () => {
+    expect(CORE_CONTROLS.map((c) => c.id), 'the registry of controls (selftest/controls.ts)').toContain(VET);
+    expect(CORE_CONTROLS.find((c) => c.id === VET)).toMatchObject({ kind: 'hook', scanner: 'hooks', canary: null, expect: 'deny' });
+    expect(HOOK_CHECKS.map((h): string => h.id), 'the table of hook checks (selftest/hookChecks.ts)').toContain(VET);
+
+    const { runners, calls } = fakes();
+    const r = await selftest(runners, { env: vetEnv() });
+    expect(r.verdict(VET)).toBe('detected');
+    // As any detected control: its id, the plugin's version, the verdict — and no reason.
+    expect(r.run.controls.find((c) => c.id === VET)).toEqual({ id: VET, scanner: 'hooks', scanner_version: '3.9.0', verdict: 'detected' });
+    expect(r.result.exitCode).toBe(0);
+
+    // Launched once, the way the other four are: the installed dispatcher, the event as its one argument.
+    expect(calls.hook).toHaveLength(5);
+    expect(calls.hook.filter((c) => !isVet(c)).map(launch).sort()).toEqual(OTHER_FOUR);
+    const handed = calls.hook.filter(isVet);
+    expect(handed).toHaveLength(1);
+    const project = [...calls.projects][0] ?? '';
+    expect(handed[0]).toMatchObject({ dispatcher: DISPATCHER, event: 'PreToolUse', cwd: project });
+    // The install is by NAME, and it is text in the payload: nothing else is in it.
+    expect(handed[0]?.payload).toEqual({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: CANARY_INSTALL }, cwd: project });
+    // The project is the temporary one — where the command was run from is never named to the hook.
+    expect(handed[0]?.env['CLAUDE_PROJECT_DIR']).toBe(project);
+    expect(basename(project)).toBe('project');
+    expect(basename(dirname(project)).startsWith(WORKSPACE_PREFIX)).toBe(true);
+    expect(realpathSync.native(dirname(dirname(project)))).toBe(realpathSync.native(r.tmpRoot));
+
+    // Like the other commands of the table, this one is put together from pieces: no line of the file is the command.
+    const table = readFileSync(join(REPO_ROOT, 'mcp', 'src', 'selftest', 'hookChecks.ts'), 'utf8');
+    expect(table.includes(CANARY_INSTALL), 'selftest/hookChecks.ts spells the command out').toBe(false);
+  });
+
+  it("T-02 a dispatcher that neither denies nor says it could not vet — no output, a decision that is not a deny, the hook's words for a package that is no longer a placeholder (EC-1) — is silent", async () => {
+    // Nothing at all: what a hooks bundle that fails open prints.
+    const mute = vetAnswers('');
+    const a = await selftest(mute.runners, { env: vetEnv() });
+    expect(a.verdict(VET), 'the dispatcher ran and let the canary through').toBe('silent');
+    expect(mute.handed.filter(isVet)).toHaveLength(1);
+    for (const id of HOOK_IDS) expect(a.verdict(id), id).toBe('detected');
+    expect(a.reason(VET)).not.toBe('');
+    expect(a.run.controls.find((c) => c.id === VET)?.next).toEqual(expect.any(String));
+    expect(a.run.summary.silent).toBe(1);
+    expect(a.result.exitCode).toBe(1);
+
+    // A decision that is not a deny.
+    const allowed = vetAnswers(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'allow' } }));
+    expect((await selftest(allowed.runners, { env: vetEnv() })).verdict(VET)).toBe('silent');
+
+    // EC-1: the registry serves an ordinary package under the canary's name. What the hook then says is another
+    // context — taken from the hook itself —, not a deny and not "could not vet": the guard read the canary and let it through.
+    const said = await hookDecides(restored);
+    expect(said?.deny, 'the stand-in registry serves no placeholder: the hook does not deny').toBeUndefined();
+    expect(said?.context, 'the hook still has something to say of this name').toEqual(expect.any(String));
+    const ec1 = await selftest(vetAnswers(context(said?.context ?? '')).runners, { env: vetEnv() });
+    expect(ec1.verdict(VET)).toBe('silent');
+    expect(ec1.result.exitCode).toBe(1);
+  });
+
+  it("T-03 a dispatcher that says it could not vet the package is unverified with the hook's reason — never silent, never detected —, and its line is recognised by the constant the hook exports", async () => {
+    // The line the hook writes when the registry cannot be reached, taken from the hook itself: no copy of its text here.
+    // (This name is one edit from a popular one: with the committed popular list the hook's answer also holds its
+    // typosquat warning — T-10 of `hookDecision.test.ts`. The list is emptied to have the line alone.)
+    const said = await hookDecides(unreachable, { npm: [] });
+    expect(said?.deny).toBeUndefined();
+    const line = said?.context ?? '';
+    const why = /\((.+)\)/.exec(line)?.[1] ?? '';
+    expect(why, `the hook's line says why, in parentheses: "${line}"`).toMatch(/ENOTFOUND/);
+
+    const { runners, handed } = vetAnswers(context(line));
+    const r = await selftest(runners, { env: vetEnv() });
+    expect(r.verdict(VET), 'not verified is not silent, and not detected').toBe('unverified');
+    expect(handed.filter(isVet)).toHaveLength(1);
+    // The reason is the hook's.
+    expect(r.reason(VET)).toContain(why);
+    expect(r.run.controls.find((c) => c.id === VET)?.next).toEqual(expect.any(String));
+    for (const id of HOOK_IDS) expect(r.verdict(id), id).toBe('detected');
+    expect(r.run.summary).toMatchObject({ silent: 0, unverified: 1 });
+    // As every unverified control: not the exit code of a blind one.
+    expect(r.result.exitCode).toBe(2);
+
+    // The phrase is the hook's own — a constant `pkgvet/hookDecision.ts` exports — and the selftest imports it:
+    // were the hook to word its line otherwise, the selftest would follow, and no copy of the text could go stale.
+    const exported = Object.entries((await import('../../src/pkgvet/hookDecision.js')) as Record<string, unknown>);
+    const phrase = exported
+      .filter(([, value]) => (typeof value === 'string' && value.trim().length >= 8 && line.includes(value)) || (value instanceof RegExp && value.test(line)))
+      .map(([name]) => name);
+    expect(phrase, 'pkgvet/hookDecision.ts exports the phrase of its "could not vet … — not verified" line as a constant: a string the line holds, or a pattern it matches').not.toEqual([]);
+    const sources = join(REPO_ROOT, 'mcp', 'src', 'selftest');
+    const importers = readdirSync(sources).filter((name) => {
+      const imported = /import\s*\{([^}]*)\}\s*from\s*'\.\.\/pkgvet\/hookDecision\.js'/.exec(readFileSync(join(sources, name), 'utf8'))?.[1] ?? '';
+      // The names between the braces, without a `type` modifier or an `as` alias.
+      const importedNames = imported.split(',').map((spec) => spec.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0] ?? '');
+      return phrase.some((constant) => importedNames.includes(constant));
+    });
+    expect(importers, `a module of src/selftest/ imports ${phrase.join(' / ')} from pkgvet/hookDecision.js`).not.toEqual([]);
+  });
+
+  it('T-04 with GUARDIAN_OFFLINE=1 the install check is not launched and is unverified, for want of the registry, while the other four run; with no dispatcher, or interrupted, it gets the verdicts the other hook checks get', async () => {
+    // The fake dispatcher would deny it: offline it is never asked.
+    const { runners, calls } = fakes();
+    const offline = await selftest(runners, { env: vetEnv({ GUARDIAN_OFFLINE: '1' }) });
+    expect(offline.verdict(VET), 'not launched offline: neither detected nor silent').toBe('unverified');
+    expect(offline.reason(VET)).toContain('GUARDIAN_OFFLINE=1');
+    expect(offline.reason(VET)).toMatch(/registry/i);
+    expect(calls.hook.filter(isVet)).toEqual([]);
+    expect(calls.hook.map(launch).sort()).toEqual(OTHER_FOUR);
+    for (const id of HOOK_IDS) expect(offline.verdict(id), id).toBe('detected');
+    expect(offline.result.exitCode).toBe(2);
+
+    /** The control's verdict and reason are those of an older hook check of the same run. */
+    const asTheOthers = (r: Ran, verdict: Verdict, reason: RegExp): void => {
+      expect(r.verdict(VET)).toBe(verdict);
+      expect([r.verdict(VET), r.reason(VET)]).toEqual([r.verdict('hooks:bash-block'), r.reason('hooks:bash-block')]);
+      expect(r.reason(VET)).toMatch(reason);
+    };
+
+    // EC-2: no dispatcher in the install.
+    const none = await selftest(fakes().runners, { env: vetEnv(), dispatcherPath: join(makeTempDir('selftest-nodisp-'), 'guardian-hook.mjs') });
+    asTheOthers(none, 'missing', /dispatcher is not in this install/);
+
+    // EC-2: interrupted before the hooks are reached.
+    const stop = new AbortController();
+    const base = fakes();
+    const interrupted = await selftest(
+      {
+        ...base.runners,
+        gitleaks: async (args) => {
+          stop.abort();
+          return base.runners.gitleaks(args);
+        },
+      },
+      { env: vetEnv(), signal: stop.signal },
+    );
+    asTheOthers(interrupted, 'unverified', /interrupted/);
+    expect(base.calls.hook).toHaveLength(0);
+
+    // A dispatcher that does not start, and one that does not answer in its time.
+    const unstarted = await selftest(fakes({ hook: async () => ({ exitCode: null, stdout: '', timedOut: false, spawnError: 'spawn node ENOENT' }) }).runners, { env: vetEnv() });
+    asTheOthers(unstarted, 'unverified', /could not be started: spawn node ENOENT/);
+    const late = await selftest(fakes({ hook: async () => ({ exitCode: null, stdout: '', timedOut: true }) }).runners, { env: vetEnv() });
+    asTheOthers(late, 'unverified', /did not answer/);
   });
 });

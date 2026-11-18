@@ -1346,11 +1346,13 @@ async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
  *
  * @param {string} command
  * @param {string} cwd
+ * @param {string} root The project's root ({@link projectRootOf}): a manifest install's lockfile is looked for
+ *   from the command's directory up to it and never beyond — a workspace keeps its lockfile at the root.
  * @param {string} toolName
  * @param {ReadonlyArray<{ text: string, shell: 'bash' | 'powershell' }>} [nested]
  * @returns {Promise<{ deny?: string, context?: string } | null>}
  */
-async function vetInstallCommand(command, cwd, toolName, nested = []) {
+async function vetInstallCommand(command, cwd, root, toolName, nested = []) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
   // A command that names no installer installs nothing: the vetting modules
   // are not even loaded (review 8, item 17 — `mcp/src/pkgvet/mayInstall.ts`).
@@ -1366,7 +1368,7 @@ async function vetInstallCommand(command, cwd, toolName, nested = []) {
     // The PowerShell tool's commands are also read the way PowerShell reads
     // them (comma lists, backtick continuations) — see `parseInstallCommands`.
     const shell = toolName === 'PowerShell' ? 'powershell' : 'bash';
-    return await mod.decideInstallCommand(command, { cwd, popularDir: POPULAR_DIR, shell, nested, startedAt: HOOK_STARTED });
+    return await mod.decideInstallCommand(command, { cwd, projectDir: root, popularDir: POPULAR_DIR, shell, nested, startedAt: HOOK_STARTED });
   } catch (err) {
     debug(`package vetting skipped (fail-open): ${err instanceof Error ? err.message : String(err)}`);
     return null;
@@ -1447,7 +1449,7 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   // point (emit() exits), so it is never vetted. From here on the network
   // may have been used, so the answer goes out through respond(), never
   // emit()/noop() — see respond() for why.
-  const vet = await vetInstallCommand(command, cwd, toolName, Array.isArray(a.scripts) ? a.scripts : []);
+  const vet = await vetInstallCommand(command, cwd, root, toolName, Array.isArray(a.scripts) ? a.scripts : []);
   if (vet?.deny) {
     return respond('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: vet.deny });
   }

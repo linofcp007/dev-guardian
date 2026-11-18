@@ -482,7 +482,17 @@
 - id: manifest-lockfile-and-transitive
   area: install-vetting
   doc: |-
-    Only the manifest's direct dependencies are looked up, at the version its range resolves to on the registry today. The lockfile is not read: a version it pins (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`), a `resolved` URL that points somewhere else, and every transitive dependency are installed without a lookup — thousands of packages do not fit the hook's 3 s. `scan_deps` and `deps_audit` read the lockfile.
+    The lockfile of the command's own package manager (`npm-shrinkwrap.json` or `package-lock.json` for npm, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`) is read, and every name and exact version it pins — transitive dependencies too, up to 8 000 pairs per call — is looked up in OSV for a malicious-package advisory; nothing else of it is looked up or sent. What stays out of that vetting, each one said in a line of the answer unless noted:
+
+    - What another source serves. A package the lockfile fetches from a host other than the public npm registry — a mirror, a company proxy, a URL, a git repository — has its pair looked up when it comes by `http` or `https`, and the origin is counted and said: what that origin serves is not verified. Only a registry the user's own npm configuration names is not said.
+    - A default registry that a configuration file of the project sets (`.npmrc`, `.yarnrc.yml`, `bunfig.toml`). It is not said: npm swaps it in for the public host of every `resolved` URL, and the lockfiles of pnpm, Yarn 2+ and bun name no host at all.
+    - The content of a package. It is not compared with the lockfile's `integrity`, and an archive that does not match its URL is the registry's and the package manager's to notice.
+    - A lockfile of another package manager than the command's: `npm ci` does not read a `yarn.lock`, a `pnpm-lock.yaml` or a `bun.lock`, and with none of its own the manifest is vetted as it always was.
+    - `bun.lockb`, bun's binary lockfile, and a lockfile of a format version the reader does not know: said as not read, and the manifest is vetted as it always was.
+    - Above 8 000 pairs the rest is said and not vetted — a lockfile can be padded past the cap, and the pairs of the manifest's own dependencies and of names off the popular list go first.
+    - An `npm install` whose lockfile is out of sync with `package.json`: what npm resolves again is not looked up, and a direct dependency the lockfile does not record at the manifest's range goes through the registry as before. `npm ci` fails on such a lockfile.
+
+    `scan_deps` and `deps_audit` read the lockfile for known vulnerabilities.
   examples:
     - detector: hook
       event: PreToolUse
@@ -491,18 +501,139 @@
         command: npm ci
       files:
         package.json: |
-          { "name": "app", "version": "1.0.0" }
+          { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3" } }
         package-lock.json: |
           {
             "name": "app",
             "version": "1.0.0",
             "lockfileVersion": 3,
+            "requires": true,
             "packages": {
-              "": { "name": "app", "version": "1.0.0" },
-              "node_modules/crossenv": { "version": "1.0.1", "resolved": "https://example.invalid/crossenv-1.0.1.tgz" }
+              "": { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3" } },
+              "node_modules/ms": { "version": "2.1.3", "resolved": "https://registry.npmmirror.com/ms/-/ms-2.1.3.tgz" }
             }
           }
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pnpm install
+      files:
+        .npmrc: |
+          registry=https://npm.corp.example/team/
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3" } }
+        pnpm-lock.yaml: |
+          lockfileVersion: '9.0'
+
+          importers:
+
+            .:
+              dependencies:
+                ms:
+                  specifier: ^2.1.3
+                  version: 2.1.3
+
+          packages:
+
+            ms@2.1.3:
+              resolution: {integrity: sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==}
+
+          snapshots:
+
+            ms@2.1.3: {}
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm ci
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3" } }
+        package-lock.json: |
+          {
+            "name": "app",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "requires": true,
+            "packages": {
+              "": { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3" } },
+              "node_modules/ms": {
+                "version": "2.1.3",
+                "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
+                "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA=="
+              }
+            }
+          }
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm ci
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": {} }
+        yarn.lock: |
+          # THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.
+          # yarn lockfile v1
+
+
+          crossenv@^1.0.1:
+            version "1.0.1"
+            resolved "https://registry.yarnpkg.com/crossenv/-/crossenv-1.0.1.tgz#0123456789abcdef0123456789abcdef01234567"
       expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: bun install
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3" } }
+        bun.lockb: "bun-lockfile-format-v0"
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm ci
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": {} }
+        package-lock.json: |
+          {
+            "name": "app",
+            "version": "1.0.0",
+            "lockfileVersion": 4,
+            "packages": {
+              "": { "name": "app", "version": "1.0.0" },
+              "node_modules/crossenv": { "version": "1.0.1", "resolved": "https://registry.npmjs.org/crossenv/-/crossenv-1.0.1.tgz" }
+            }
+          }
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm install
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3", "left-pad": "^1.3.0" } }
+        package-lock.json: |
+          {
+            "name": "app",
+            "version": "1.0.0",
+            "lockfileVersion": 3,
+            "requires": true,
+            "packages": {
+              "": { "name": "app", "version": "1.0.0", "dependencies": { "ms": "^2.1.3" } },
+              "node_modules/ms": { "version": "2.1.3", "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz" }
+            }
+          }
+      expect: { decision: warn }
 
 - id: manifest-workspace-members
   area: install-vetting

@@ -4,7 +4,7 @@
  *
  * One control per rule pack of `configs/semgrep/` — a pack is tested alone, so
  * that its verdict depends on nothing but itself —, the secret scan
- * (gitleaks), the dependency audit and the IaC scan (Trivy), and four checks
+ * (gitleaks), the dependency audit and the IaC scan (Trivy), and five checks
  * of the guardrail hooks. Every other installed scanner is listed by the
  * selftest as `no_canary`: installed, not verified.
  *
@@ -94,6 +94,7 @@ export const CORE_CONTROLS: readonly Control[] = [
   { id: 'hooks:powershell-block', kind: 'hook', scanner: 'hooks', canary: null, expect: 'deny', timeoutMs: HOOK_TIMEOUT_MS },
   { id: 'hooks:settings-guard', kind: 'hook', scanner: 'hooks', canary: null, expect: 'deny', timeoutMs: HOOK_TIMEOUT_MS },
   { id: 'hooks:secret-warning', kind: 'hook', scanner: 'hooks', canary: SECRET_CANARY, expect: 'secret-warning', timeoutMs: HOOK_TIMEOUT_MS },
+  { id: 'hooks:install-vet', kind: 'hook', scanner: 'hooks', canary: null, expect: 'deny', timeoutMs: HOOK_TIMEOUT_MS },
 ];
 
 interface ControlsCheck {

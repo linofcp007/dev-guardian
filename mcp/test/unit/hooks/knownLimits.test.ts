@@ -39,6 +39,7 @@ import {
   type Actual,
   type ExampleRef,
   type HookDecision,
+  type KnownLimit,
   type LimitExample,
   type SecretExample,
   type ShellExample,
@@ -405,5 +406,116 @@ describe('the limits of the manifest vetting, as data', () => {
     }
     // Only the limit that needs a registry's answer goes without an example the suite can run.
     expect(records.filter((l) => l.examples.length === 0).map((l) => l.id)).toEqual(['manifest-quiet-checks']);
+  });
+});
+
+// ───────────────── install-vet-lockfile-pins — the lockfile's record says what still stays out
+
+describe('install-vet-lockfile-pins', () => {
+  const RECORD = 'manifest-lockfile-and-transitive';
+
+  function lockfileRecord(): KnownLimit {
+    const limit = loadKnownLimits().find((l) => l.id === RECORD);
+    if (limit === undefined) throw new Error(`the data file has no record ${RECORD}`);
+    return limit;
+  }
+
+  // The lockfile IS read now, and every pair it pins is asked of OSV: the record stops saying otherwise and lists what
+  // the vetting by the lockfile leaves out (US-2.AC-1). Each thing is looked for by its own words, in any phrasing.
+  it('T-32 the record no longer says the lockfile is not read, and names each thing that stays out', () => {
+    const doc = lockfileRecord().doc.replace(/\s+/g, ' ');
+    // What the record said while the lockfile was not opened.
+    const stillSaid = [/lockfile is not read/i, /every transitive dependency[^.]*installed without a lookup/i]
+      .filter((re) => re.test(doc))
+      .map(String);
+
+    const STAYS_OUT: Array<[what: string, said: RegExp[]]> = [
+      ['what another source serves', [/another source|other source|elsewhere|mirror|another (?:host|origin|registry)/i]],
+      ["a default registry set by a configuration file of the project (it is not said)", [/default registry/i, /project|\.npmrc/i]],
+      ["the lockfile's `integrity` (the content is not compared with it)", [/integrity/i]],
+      ["another package manager's lockfile", [/(?:an)?other (?:package )?manager|manager other than|not the command's/i]],
+      ['`bun.lockb`', [/bun\.lockb/]],
+      ['a format version the reader does not know', [/version/i, /not know|unknown|other than|newer/i]],
+      ['the cap of 8 000 pairs', [/8[\s,.]?000/]],
+      [
+        'an `npm install` whose lockfile is out of sync (what the manager resolves again is not looked up)',
+        [/`npm install`/, /out of sync|out-of-sync|not in sync|resolves?[^.]{0,20}(?:again|anew)|re-?resolv/i],
+      ],
+    ];
+    const notSaid = STAYS_OUT.filter(([, said]) => !said.every((re) => re.test(doc))).map(([what]) => what);
+    expect({ stillSaid, notSaid }).toEqual({ stillSaid: [], notSaid: [] });
+  });
+
+  // "An example for each case the guard answers without the network": each is recognised by the files it cannot do
+  // without, never by its wording. The cap is the one thing with no example asked for here — 8 000 pairs do not fit
+  // an example's `files`.
+  it('T-32 the record has an example the hook runs for each thing a few files can show', () => {
+    const MANAGER_LOCKFILES: Readonly<Record<string, readonly string[]>> = {
+      npm: ['npm-shrinkwrap.json', 'package-lock.json'],
+      pnpm: ['pnpm-lock.yaml'],
+      yarn: ['yarn.lock'],
+      bun: ['bun.lock', 'bun.lockb'],
+    };
+    const ANY_LOCKFILE = Object.values(MANAGER_LOCKFILES).flat();
+    const PUBLIC_HOSTS = ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'];
+    const base = (path: string): string => path.split('/').pop() ?? path;
+
+    interface Shown {
+      command: string;
+      files: Array<[name: string, text: string]>;
+    }
+    const shown: Shown[] = lockfileRecord().examples.flatMap((e) =>
+      e.detector === 'hook' && typeof e.input['command'] === 'string'
+        ? [{ command: e.input['command'], files: Object.entries(e.files ?? {}).map(([path, text]): [string, string] => [base(path), text]) }]
+        : [],
+    );
+    const lockfiles = (s: Shown): Array<[string, string]> => s.files.filter(([name]) => ANY_LOCKFILE.includes(name));
+    const has = (s: Shown, name: string): boolean => s.files.some(([n]) => n === name);
+    const manager = (s: Shown): string => /^\s*(npm|pnpm|yarn|bun)\b/.exec(s.command)?.[1] ?? '';
+
+    /** Whether a lockfile's text states a format version its reader does not know. */
+    const unknownVersion = ([name, text]: [string, string]): boolean => {
+      if (name === 'yarn.lock') return !/^# yarn lockfile v1\s*$/m.test(text) && !/^__metadata:/m.test(text);
+      const version = /["']?lockfileVersion["']?\s*:\s*["']?(\d+)/.exec(text)?.[1];
+      if (version === undefined) return false;
+      const known = name === 'pnpm-lock.yaml' ? ['5', '6', '9'] : name === 'bun.lock' ? ['0', '1'] : ['1', '2', '3'];
+      return !known.includes(version);
+    };
+
+    const CASES: Array<[what: string, shows: (s: Shown) => boolean]> = [
+      [
+        'a lockfile entry fetched from a host that is not the public registry',
+        (s) =>
+          lockfiles(s).some(([, text]) =>
+            [...text.matchAll(/https?:\/\/([^/\s"'#]+)/g)].some((m) => !PUBLIC_HOSTS.includes((m[1] ?? '').toLowerCase())),
+          ),
+      ],
+      [
+        'a configuration file of the project that sets the default registry',
+        (s) =>
+          s.files.some(
+            ([name, text]) =>
+              ['.npmrc', '.yarnrc', '.yarnrc.yml', 'bunfig.toml'].includes(name) && /^\s*(?:registry\s*[= "]|npmRegistryServer\s*:)/m.test(text),
+          ),
+      ],
+      ['a lockfile entry with an `integrity`', (s) => lockfiles(s).some(([, text]) => /integrity/.test(text))],
+      [
+        "another manager's lockfile, and none of the command's own",
+        (s) => {
+          const own = MANAGER_LOCKFILES[manager(s)];
+          return own !== undefined && lockfiles(s).length > 0 && !lockfiles(s).some(([name]) => own.includes(name));
+        },
+      ],
+      ['`bun.lockb`, or a lockfile of a format version the reader does not know', (s) => has(s, 'bun.lockb') || lockfiles(s).some(unknownVersion)],
+      [
+        '`npm install` — not `npm ci` — beside a package.json and its lockfile',
+        (s) =>
+          /^\s*npm\s+(?:install|i)(?:\s+--?[\w-]+)*\s*$/.test(s.command) &&
+          has(s, 'package.json') &&
+          lockfiles(s).some(([name]) => (MANAGER_LOCKFILES['npm'] ?? []).includes(name)),
+      ],
+    ];
+    const notShown = CASES.filter(([, shows]) => !shown.some(shows)).map(([what]) => what);
+    expect(notShown).toEqual([]);
   });
 });

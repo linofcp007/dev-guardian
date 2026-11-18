@@ -5,10 +5,18 @@
  * runs them.
  */
 
-import { describe, expect, it } from 'vitest';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, describe, expect, it } from 'vitest';
+import { CORE_CONTROLS } from '../../../src/selftest/controls.js';
+import { SECRET_CANARY } from '../../../src/selftest/hookChecks.js';
 import { HOOKS_NOTE, nextStepFor, renderHistory, renderHistoryJson, renderJson, renderTable, type SelftestReport } from '../../../src/selftest/report.js';
-import type { ControlResult, SelftestRun } from '../../../src/selftest/store.js';
+import { runSelftest, type HookRunArgs, type ScanOutcome, type SelftestRunners } from '../../../src/selftest/run.js';
+import { readLast, scannerSelftest, SELFTEST_SCANNERS, selftestStatus, type ControlResult, type SelftestRun } from '../../../src/selftest/store.js';
 import { countVerdicts } from '../../../src/selftest/verdict.js';
+import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
+
+afterAll(cleanupTempDirs);
 
 const CONTROLS: ControlResult[] = [
   { id: 'gitleaks', scanner: 'gitleaks', scanner_version: '8.30.1', verdict: 'detected' },
@@ -123,5 +131,111 @@ describe('the selftest report', () => {
     expect(json).toMatchObject({ schema: 1, problem: 'a problem' });
     expect(json.runs.map((r) => r.ran_at)).toEqual([newer.ran_at, older.ran_at]);
     expect(JSON.parse(renderHistoryJson([]))).toEqual({ schema: 1, runs: [] });
+  });
+});
+
+// ───────────────── selftest-install-vet-canary — the fifth hook check, shown where the other four are
+
+describe('selftest-install-vet-canary', () => {
+  const VET = 'hooks:install-vet';
+  const SHELL = 'hooks:bash-block';
+  const REPO_ROOT = fileURLToPath(new URL('../../../..', import.meta.url));
+  const NOW = Date.parse('2026-11-13T12:00:00.000Z');
+  const COMMAND = 'node "/plugin/cli/dev-guardian.mjs" selftest';
+
+  /** What a working guard prints: a deny before a tool runs, the secret warning after a write. */
+  const working = (args: HookRunArgs): string =>
+    JSON.stringify({
+      hookSpecificOutput:
+        args.event === 'PostToolUse'
+          ? { hookEventName: 'PostToolUse', additionalContext: 'possible secret(s) just written' }
+          : { hookEventName: 'PreToolUse', permissionDecision: 'deny' },
+    });
+  /** The two checks whose payload is a Bash command: the shell guard's and the install's. */
+  const isBash = (args: HookRunArgs): boolean => args.payload['tool_name'] === 'Bash';
+
+  /**
+   * A selftest of the secret scan and the hook checks, every process
+   * replaced: gitleaks reports its canary, and the dispatcher's answer to
+   * each payload is `answer`'s. Saved in a data directory of its own.
+   */
+  async function ran(answer: (args: HookRunArgs) => string, env: Record<string, string> = {}): Promise<{ report: SelftestReport; exitCode: number; dataDir: string }> {
+    const noScanner = async (): Promise<ScanOutcome> => {
+      throw new Error('this scanner is not run by this test');
+    };
+    const runners: SelftestRunners = {
+      probe: async () => ({ installed: true, version: '9.9.9' }),
+      semgrep: noScanner,
+      gitleaks: async () => ({ ended: 'ok', findings: [{ rule: 'aws-access-token', file: SECRET_CANARY }], read: null }),
+      trivy: noScanner,
+      hook: async (args) => ({ exitCode: 0, stdout: answer(args), timedOut: false }),
+      installedTools: async () => [],
+    };
+    const dataDir = makeTempDir('selftest-report-data-');
+    const result = await runSelftest({
+      runners,
+      packsDir: join(REPO_ROOT, 'configs', 'semgrep'),
+      canariesDir: join(REPO_ROOT, 'configs', 'selftest'),
+      // Only looked at, to see that an install has one: the launcher above starts nothing.
+      dispatcherPath: join(REPO_ROOT, 'hooks', 'guardian-hook.mjs'),
+      dataDir,
+      pluginVersion: '3.9.0',
+      tmpRoot: makeTempDir('selftest-report-tmp-'),
+      env,
+      homeDir: makeTempDir('selftest-report-home-'),
+      now: () => new Date(NOW),
+      controls: CORE_CONTROLS.filter((c) => c.kind === 'hook' || c.kind === 'gitleaks'),
+    });
+    return { report: result.report, exitCode: result.exitCode, dataDir };
+  }
+
+  const controlOf = (shown: SelftestReport, id: string): ControlResult | undefined => shown.run.controls.find((c) => c.id === id);
+  const rowOf = (shown: SelftestReport, id: string): string => renderTable(shown).split('\n').find((l) => l.trimStart().startsWith(`${id} `)) ?? '';
+  const health = (dataDir: string): ReturnType<typeof selftestStatus> => selftestStatus({ dataDir, pluginVersion: '3.9.0', command: COMMAND, now: NOW });
+
+  it('T-06 the install check is in the table, in the JSON and in what is saved; health_status and check_toolchain tell its silent as they tell the other hook checks', async () => {
+    // Every guard answers as a working one.
+    const all = await ran(working);
+    const detected = { id: VET, scanner: 'hooks', scanner_version: '3.9.0', verdict: 'detected' };
+    expect(controlOf(all.report, VET), `the run has the control ${VET}`).toEqual(detected);
+    expect(rowOf(all.report, VET)).toMatch(/^\s+hooks:install-vet +detected +3\.9\.0$/);
+    const json = JSON.parse(renderJson(all.report)) as SelftestRun;
+    expect(json.controls.find((c) => c.id === VET)).toEqual(detected);
+    expect(json.summary.detected).toBe(json.controls.length);
+    const saved = readLast(all.dataDir, NOW);
+    expect(saved.state === 'ok' ? saved.run.controls.find((c) => c.id === VET) : saved).toEqual(detected);
+    expect(health(all.dataDir).warning).toBeNull();
+    expect(all.exitCode).toBe(0);
+
+    // The dispatcher lets both Bash payloads through: the shell guard and the install check are silent, and told alike.
+    const mute = await ran((args) => (isBash(args) ? '' : working(args)));
+    const vet = controlOf(mute.report, VET);
+    const shell = controlOf(mute.report, SHELL);
+    expect([shell?.verdict, vet?.verdict]).toEqual(['silent', 'silent']);
+    expect(vet?.next).toEqual(expect.any(String));
+    expect(vet?.next).toBe(shell?.next);
+    expect(rowOf(mute.report, VET)).toMatch(/^\s+hooks:install-vet +silent +3\.9\.0 +\S/);
+    expect(mute.exitCode).toBe(1);
+    // health_status: both are named in the one warning that says 0 findings prove nothing here.
+    const blind = health(mute.dataDir);
+    expect(blind.selftest.silent).toEqual([SHELL, VET]);
+    for (const id of [SHELL, VET]) expect(blind.warning, id).toContain(id);
+    expect(blind.warning).toMatch(/0 findings proves nothing on this machine/);
+    // check_toolchain shows scanners, and the hooks are none: a silent hook check is no scanner's verdict.
+    expect(SELFTEST_SCANNERS as readonly string[]).not.toContain('hooks');
+    const gitleaks = scannerSelftest(readLast(mute.dataDir, NOW), 'gitleaks', '9.9.9');
+    expect(gitleaks).toMatchObject({ verdict: 'detected', stale: false });
+    expect(gitleaks).not.toHaveProperty('silent');
+
+    // Unverified is said in the table with its reason and counted — and, as for any control, is not that warning.
+    const offline = await ran(working, { GUARDIAN_OFFLINE: '1' });
+    const unverified = controlOf(offline.report, VET);
+    expect(unverified?.verdict).toBe('unverified');
+    expect(unverified?.next).toEqual(expect.any(String));
+    expect(rowOf(offline.report, VET)).toContain(unverified?.reason ?? 'no reason');
+    expect(JSON.parse(renderJson(offline.report))).toMatchObject({ summary: { unverified: 1, silent: 0 }, exit_code: 2 });
+    const open = health(offline.dataDir);
+    expect(open.warning).toBeNull();
+    expect(open.selftest.counts).toMatchObject({ unverified: 1, silent: 0 });
   });
 });

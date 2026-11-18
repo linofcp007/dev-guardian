@@ -99175,70 +99175,95 @@ var init_hiddenText = __esm({
 });
 
 // src/runners/osv.ts
+function readBatch(chunk, json2) {
+  const results = json2?.results;
+  if (!Array.isArray(results) || results.length !== chunk.length) {
+    const got = Array.isArray(results) ? `${results.length} results` : "no results";
+    return { groups: [], unanswered: chunk, error: `osv answered ${got} for ${chunk.length} queries` };
+  }
+  const groups = [];
+  const unanswered2 = [];
+  chunk.forEach((pkg, idx) => {
+    const res = results[idx];
+    if (!isPlainObject4(res)) {
+      unanswered2.push(pkg);
+      return;
+    }
+    let complete = res["next_page_token"] === void 0;
+    const vulns = res["vulns"];
+    const ids2 = [];
+    if (vulns !== void 0) {
+      if (Array.isArray(vulns)) {
+        for (const v of vulns) {
+          if (isPlainObject4(v) && typeof v["id"] === "string") ids2.push(v["id"]);
+          else complete = false;
+        }
+      } else {
+        complete = false;
+      }
+    }
+    if (ids2.length > 0) {
+      const group = { ecosystem: pkg.ecosystem, name: pkg.name, vuln_ids: ids2, severity: "high" };
+      if (pkg.version) group.version = pkg.version;
+      groups.push(group);
+    }
+    if (!complete) unanswered2.push(pkg);
+  });
+  const error62 = unanswered2.length > 0 ? `osv left ${unanswered2.length} of ${chunk.length} results incomplete` : void 0;
+  return { groups, unanswered: unanswered2, ...error62 !== void 0 ? { error: error62 } : {} };
+}
 async function queryOsv(packages, opts = {}) {
   const named2 = packages.filter((p) => p.name);
-  const queryable = named2.slice(0, MAX_QUERIES);
+  const queryable = named2.slice(0, opts.maxQueries ?? MAX_QUERIES);
   const unqueried = named2.length - queryable.length;
   if (queryable.length === 0) {
-    return { online: true, queried: 0, unqueried, vulnerable_packages: [] };
+    return { online: true, queried: 0, unqueried, vulnerable_packages: [], unanswered: [] };
   }
   const fetchImpl = opts.fetchImpl ?? (typeof fetch === "function" ? fetch : void 0);
   if (fetchImpl === void 0) {
-    return { online: false, queried: 0, unqueried, vulnerable_packages: [], error: "no_fetch" };
+    return { online: false, queried: 0, unqueried, vulnerable_packages: [], unanswered: [], error: "no_fetch" };
   }
+  const size = Math.max(1, opts.chunk ?? CHUNK2);
   const chunks = [];
-  for (let i = 0; i < queryable.length; i += CHUNK2) chunks.push(queryable.slice(i, i + CHUNK2));
-  const perChunk = chunks.map(() => []);
-  try {
-    let next = 0;
-    const work = async () => {
-      for (let c = next++; c < chunks.length; c = next++) {
-        const chunk = chunks[c] ?? [];
-        const groups = perChunk[c] ?? [];
-        const body = {
-          queries: chunk.map((p) => ({
-            package: { name: p.name, ecosystem: p.ecosystem },
-            ...p.version ? { version: p.version } : {}
-          }))
-        };
-        const json2 = await postJson(OSV_BATCH_URL, body, opts, fetchImpl);
-        const results = Array.isArray(json2.results) ? json2.results : [];
-        results.forEach((res, idx) => {
-          const pkg = chunk[idx];
-          if (!pkg) return;
-          const vulns = res?.vulns;
-          if (Array.isArray(vulns) && vulns.length > 0) {
-            const ids2 = vulns.map((v) => v.id).filter((x) => typeof x === "string");
-            const group = {
-              ecosystem: pkg.ecosystem,
-              name: pkg.name,
-              vuln_ids: ids2,
-              severity: "high"
-            };
-            if (pkg.version) group.version = pkg.version;
-            groups.push(group);
-          }
-        });
+  for (let i = 0; i < queryable.length; i += size) chunks.push(queryable.slice(i, i + size));
+  const outcomes = [];
+  let next = 0;
+  const work = async () => {
+    for (let c = next++; c < chunks.length; c = next++) {
+      const chunk = chunks[c] ?? [];
+      const body = {
+        queries: chunk.map((p) => ({
+          package: { name: p.name, ecosystem: p.ecosystem },
+          ...p.version ? { version: p.version } : {}
+        }))
+      };
+      try {
+        outcomes[c] = readBatch(chunk, await postJson(OSV_BATCH_URL, body, opts, fetchImpl));
+      } catch (e) {
+        const error63 = e instanceof SyntaxError ? "osv answer is not JSON" : e instanceof Error ? e.message : "osv_request_failed";
+        outcomes[c] = { groups: [], unanswered: chunk, error: error63 };
       }
-    };
-    await Promise.all(Array.from({ length: Math.min(IN_FLIGHT2, chunks.length) }, work));
-  } catch (e) {
-    return {
-      online: false,
-      queried: queryable.length,
-      unqueried,
-      vulnerable_packages: [],
-      error: e instanceof Error ? e.message : "osv_request_failed"
-    };
-  }
-  return { online: true, queried: queryable.length, unqueried, vulnerable_packages: perChunk.flat() };
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, opts.inFlight ?? IN_FLIGHT2), chunks.length) }, work));
+  const unanswered2 = outcomes.flatMap((o) => o.unanswered);
+  const error62 = outcomes.find((o) => o.error !== void 0)?.error;
+  return {
+    online: unanswered2.length === 0,
+    queried: queryable.length,
+    unqueried,
+    vulnerable_packages: outcomes.flatMap((o) => o.groups),
+    unanswered: unanswered2,
+    ...error62 !== void 0 ? { error: error62 } : {}
+  };
 }
 async function postJson(url2, body, opts, fetchImpl) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS7);
+  const onAbort = () => controller.abort();
   if (opts.signal) {
     if (opts.signal.aborted) controller.abort();
-    else opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+    else opts.signal.addEventListener("abort", onAbort, { once: true });
   }
   try {
     const res = await fetchImpl(url2, {
@@ -99253,9 +99278,10 @@ async function postJson(url2, body, opts, fetchImpl) {
     return read3.json;
   } finally {
     clearTimeout(timeout);
+    opts.signal?.removeEventListener("abort", onAbort);
   }
 }
-var OSV_BATCH_URL, DEFAULT_TIMEOUT_MS7, MAX_QUERIES, CHUNK2, IN_FLIGHT2, MAX_RESPONSE_BYTES;
+var OSV_BATCH_URL, DEFAULT_TIMEOUT_MS7, MAX_QUERIES, CHUNK2, IN_FLIGHT2, MAX_RESPONSE_BYTES, isPlainObject4;
 var init_osv = __esm({
   "src/runners/osv.ts"() {
     "use strict";
@@ -99266,6 +99292,7 @@ var init_osv = __esm({
     CHUNK2 = 100;
     IN_FLIGHT2 = 4;
     MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+    isPlainObject4 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
   }
 });
 
@@ -103679,7 +103706,7 @@ function importSpec(file2, text3) {
     };
   }
   const pathsRaw = prop5(root, "paths");
-  const pathEntries = Object.entries(isPlainObject4(pathsRaw) ? pathsRaw : {});
+  const pathEntries = Object.entries(isPlainObject5(pathsRaw) ? pathsRaw : {});
   if (pathEntries.length === 0) {
     return {
       routes: [],
@@ -103865,7 +103892,7 @@ function str6(value, key) {
 function asArray3(value) {
   return Array.isArray(value) ? value : [];
 }
-function isPlainObject4(value) {
+function isPlainObject5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 var import_yaml2, OPERATION_KEYS;
@@ -116720,7 +116747,7 @@ function npmScope(name) {
   const m = /^@([^/]+)\//.exec(name);
   return m?.[1];
 }
-function fromNpmrc(text3, scope) {
+function fromNpmrc(text3, scope, all) {
   let found2;
   for (const raw of text3.split(/\r?\n/)) {
     const line = raw.trim();
@@ -116729,12 +116756,13 @@ function fromNpmrc(text3, scope) {
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     const url2 = (m[2] ?? "").trim();
+    all?.push(url2);
     if (lineScope === void 0) found2 = found2 ?? url2;
     else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url2;
   }
   return found2;
 }
-function fromYarnrcYml(text3, scope) {
+function fromYarnrcYml(text3, scope, all) {
   let global3;
   let inScopes = false;
   let currentScope;
@@ -116747,6 +116775,7 @@ function fromYarnrcYml(text3, scope) {
       currentScope = void 0;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
       if (m !== null) global3 = (m[1] ?? "").replace(/^["']|["']$/g, "");
+      if (m !== null) all?.push(global3 ?? "");
       continue;
     }
     if (!inScopes) continue;
@@ -116756,24 +116785,26 @@ function fromYarnrcYml(text3, scope) {
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
+    if (server !== null) all?.push((server[1] ?? "").replace(/^["']|["']$/g, ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
       return (server[1] ?? "").replace(/^["']|["']$/g, "");
     }
   }
   return global3;
 }
-function fromYarnrc(text3, scope) {
+function fromYarnrc(text3, scope, all) {
   let found2;
   for (const raw of text3.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
+    all?.push(m[2] ?? "");
     if (lineScope === void 0) found2 = found2 ?? m[2];
     else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
   }
   return found2;
 }
-function fromBunfig(text3, scope) {
+function fromBunfig(text3, scope, all) {
   let section = "";
   let found2;
   for (const raw of text3.split(/\r?\n/)) {
@@ -116784,7 +116815,11 @@ function fromBunfig(text3, scope) {
       continue;
     }
     const url2 = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
-    if (section === "install" && /^registry\s*=/.test(line)) found2 = found2 ?? url2;
+    if (section === "install" && /^registry\s*=/.test(line)) {
+      all?.push(url2);
+      found2 = found2 ?? url2;
+    }
+    if (section === "install.scopes" && /^["']?@?[^"'=\s]+["']?\s*=/.test(line)) all?.push(url2);
     if (section === "install.scopes" && scope !== void 0) {
       const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
       if (key !== void 0 && key.toLowerCase() === scope.toLowerCase()) return url2;
@@ -116799,35 +116834,35 @@ function npmConfigFiles(ctx) {
   const near = ancestors2(ctx);
   for (const dir of near) {
     files.push(
-      { path: join115(dir, ".npmrc"), parse: fromNpmrc },
-      { path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml },
-      { path: join115(dir, ".yarnrc"), parse: fromYarnrc },
-      { path: join115(dir, "bunfig.toml"), parse: fromBunfig }
+      { path: join115(dir, ".npmrc"), parse: fromNpmrc, user: false },
+      { path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml, user: false },
+      { path: join115(dir, ".yarnrc"), parse: fromYarnrc, user: false },
+      { path: join115(dir, "bunfig.toml"), parse: fromBunfig, user: false }
     );
   }
   const top = near[near.length - 1];
   if (top !== void 0) {
     for (let dir = dirname35(top), i = 0; i < 64; dir = dirname35(dir), i += 1) {
-      files.push({ path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml });
+      files.push({ path: join115(dir, ".yarnrc.yml"), parse: fromYarnrcYml, user: false });
       if (dirname35(dir) === dir) break;
     }
   }
   const xdg = envValue6(env, "XDG_CONFIG_HOME") ?? join115(home, ".config");
   const localAppData = envValue6(env, "LOCALAPPDATA") ?? join115(home, "AppData", "Local");
   files.push(
-    { path: envValue6(env, "NPM_CONFIG_USERCONFIG") ?? join115(home, ".npmrc"), parse: fromNpmrc },
-    { path: join115(home, ".yarnrc.yml"), parse: fromYarnrcYml },
-    { path: join115(home, ".yarnrc"), parse: fromYarnrc },
-    { path: join115(home, ".bunfig.toml"), parse: fromBunfig },
-    { path: join115(xdg, ".bunfig.toml"), parse: fromBunfig },
-    { path: join115(xdg, "pnpm", "rc"), parse: fromNpmrc },
-    { path: join115(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc },
-    { path: join115(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc }
+    { path: envValue6(env, "NPM_CONFIG_USERCONFIG") ?? join115(home, ".npmrc"), parse: fromNpmrc, user: true },
+    { path: join115(home, ".yarnrc.yml"), parse: fromYarnrcYml, user: true },
+    { path: join115(home, ".yarnrc"), parse: fromYarnrc, user: true },
+    { path: join115(home, ".bunfig.toml"), parse: fromBunfig, user: true },
+    { path: join115(xdg, ".bunfig.toml"), parse: fromBunfig, user: true },
+    { path: join115(xdg, "pnpm", "rc"), parse: fromNpmrc, user: true },
+    { path: join115(localAppData, "pnpm", "config", "rc"), parse: fromNpmrc, user: true },
+    { path: join115(home, "Library", "Preferences", "pnpm", "rc"), parse: fromNpmrc, user: true }
   );
   const globalConfig2 = envValue6(env, "NPM_CONFIG_GLOBALCONFIG");
-  if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc });
+  if (globalConfig2 !== void 0) files.push({ path: globalConfig2, parse: fromNpmrc, user: true });
   const prefix = envValue6(env, "NPM_CONFIG_PREFIX") ?? ((ctx.platform ?? process.platform) === "win32" ? join115(envValue6(env, "APPDATA") ?? join115(home, "AppData", "Roaming"), "npm") : dirname35(dirname35(ctx.nodeExecPath ?? process.execPath)));
-  files.push({ path: join115(prefix, "etc", "npmrc"), parse: fromNpmrc });
+  files.push({ path: join115(prefix, "etc", "npmrc"), parse: fromNpmrc, user: true });
   return files;
 }
 function envRegistry(ecosystem, ctx) {
@@ -117214,7 +117249,14 @@ async function fetchJson(url2, http, headers = {}) {
     if (res.status === 404 || res.status === 410) return { kind: "not_found" };
     if (res.status === 429) return { kind: "error", reason: `rate limited by ${new URL(url2).host} (HTTP 429)` };
     if (!res.ok) return { kind: "error", reason: `${new URL(url2).host} answered HTTP ${res.status}` };
-    return { kind: "ok", json: await res.json() };
+    let json2;
+    try {
+      json2 = await res.json();
+    } catch (e) {
+      if (e instanceof SyntaxError) return { kind: "error", reason: `${new URL(url2).host} gave an answer that is not JSON` };
+      throw e;
+    }
+    return { kind: "ok", json: json2 };
   } catch (e) {
     return { kind: "error", reason: describeError(e, http.signal) };
   }
@@ -117454,6 +117496,11 @@ function osvNameFor(w, canonical2) {
   if (w.spec.ecosystem === "nuget") return canonical2 ?? w.spec.name;
   return w.spec.name;
 }
+function typosquatCheck(w) {
+  if (!w.popularLoaded) return unknown3("popular-packages list unavailable \u2014 typosquat check not run");
+  if (w.typo === null) return pass();
+  return warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`);
+}
 function buildResult(w, osv, osvError, now, offlineReason) {
   const { spec } = w;
   const eco = spec.ecosystem;
@@ -117462,10 +117509,11 @@ function buildResult(w, osv, osvError, now, offlineReason) {
   const info = lookup2?.kind === "found" ? lookup2.info : void 0;
   const extraWarn = [];
   const extraUnknown = [];
-  const typosquat = !w.popularLoaded ? unknown3("popular-packages list unavailable \u2014 typosquat check not run") : w.typo !== null ? warn(`name is ${w.typo.distance} edit${w.typo.distance === 1 ? "" : "s"} from the popular package '${w.typo.similar_to}' \u2014 possible typosquat`) : pass();
+  const typosquat = typosquatCheck(w);
+  const askedByNameOnly = w.osvVersioned === false && w.version !== void 0;
   const ids2 = osvIds(osv, w);
   const malIds = ids2.filter((id) => id.startsWith("MAL-"));
-  const vulnIds = ids2.filter((id) => !id.startsWith("MAL-"));
+  const vulnIds = askedByNameOnly ? [] : ids2.filter((id) => !id.startsWith("MAL-"));
   const osvDown = offlineReason ?? (osv === void 0 || !osv.online ? `OSV lookup failed: ${osvError ?? osv?.error ?? "no answer"}` : void 0);
   let exists;
   let malicious;
@@ -117481,7 +117529,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     if (eco === "npm") installScripts = unknown3(why);
   } else if (lookup2.kind === "error") {
     exists = unknown3(`${registry2} lookup failed: ${lookup2.reason}`);
-    malicious = osvDown !== void 0 ? unknown3(osvDown) : malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : pass("no OSV malicious-package advisory for any version");
+    malicious = malIds.length > 0 ? warn(`OSV lists malicious advisories for this name (${malIds.join(", ")}); the version could not be determined`) : osvDown !== void 0 ? unknown3(osvDown) : pass("no OSV malicious-package advisory for any version");
     vulnerabilities = unknown3(`version unknown: ${lookup2.reason}`);
     publishAge = unknown3(`version unknown: ${lookup2.reason}`);
     if (eco === "npm") installScripts = unknown3(`version unknown: ${lookup2.reason}`);
@@ -117509,14 +117557,17 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const versionUnknown = v === void 0 ? `could not determine which version '${spec.range ?? "latest"}' installs` : void 0;
     if (placeholder) {
       malicious = fail4(`npm replaced this package with a security placeholder (${placeholderVersion ?? "x-security"}): it was taken down as malicious`);
+    } else if (malIds.length > 0) {
+      malicious = w.osvVersioned ? fail4(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(
+        askedByNameOnly ? `OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 whether ${v ?? "this version"} is one of them was not determined in time` : `OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`
+      );
     } else if (osvDown !== void 0) {
       malicious = unknown3(osvDown);
-    } else if (malIds.length > 0) {
-      malicious = w.osvVersioned ? fail4(`OSV malicious-package advisory for ${v ?? "this version"}: ${malIds.join(", ")}`) : warn(`OSV lists malicious advisories for some versions of this package (${malIds.join(", ")}) \u2014 which version installs could not be determined`);
     } else {
-      malicious = pass();
+      malicious = askedByNameOnly ? pass("no OSV malicious-package advisory for any version") : pass();
     }
     if (osvDown !== void 0) vulnerabilities = unknown3(osvDown);
+    else if (askedByNameOnly) vulnerabilities = unknown3(`vulnerabilities of ${v ?? "this version"} not determined: OSV was asked for the name before the registry answered`);
     else if (vulnIds.length > 0) {
       vulnerabilities = w.osvVersioned ? warn(`${vulnIds.length} known vulnerabilit${vulnIds.length === 1 ? "y" : "ies"} in ${v ?? "this version"}: ${vulnIds.slice(0, 5).join(", ")}${vulnIds.length > 5 ? ", \u2026" : ""}`) : unknown3(`${vulnIds.length} advisories exist for some versions \u2014 which version installs could not be determined`);
     } else vulnerabilities = pass();
@@ -117617,8 +117668,16 @@ function explain404(w, opts) {
   }
   w.custom = customFor(w.spec, opts);
 }
+function answeredQuery(osv, q) {
+  if (osv.online) return true;
+  return q !== void 0 && osv.unanswered !== void 0 && !osv.unanswered.includes(q);
+}
+function viewFor(osv, w) {
+  return !osv.online && answeredQuery(osv, w.osvQuery) ? { ...osv, online: true } : osv;
+}
 async function networkRounds(work, http, signal, deadline, now, explain) {
   const fetchImpl = http.fetchImpl;
+  const halfBudgetMs = Math.max(0, (deadline - Date.now()) / 2);
   const lookups = /* @__PURE__ */ new Map();
   const pending = work.map((w) => {
     const key = `${w.spec.ecosystem}\0${w.spec.name.toLowerCase()}`;
@@ -117634,43 +117693,94 @@ async function networkRounds(work, http, signal, deadline, now, explain) {
     const key = w.spec.name.toLowerCase();
     if (w.spec.ecosystem === "nuget" && !canonical2.has(key)) canonical2.set(key, nugetCanonicalId(w.spec.name, http));
   }
-  const answers2 = await Promise.all(pending);
-  work.forEach((w, i) => {
-    const answer = answers2[i];
-    if (answer !== void 0) w.lookup = answer;
-    if (answer?.kind === "found") resolveFor(w, answer.info);
+  const extras = [];
+  const allSettled = Promise.all(
+    work.map(
+      (w, i) => (pending[i] ?? Promise.resolve(void 0)).then((answer) => {
+        if (answer !== void 0) w.lookup = answer;
+        if (answer?.kind === "found") {
+          resolveFor(w, answer.info);
+          if (!needsNoExtras(w)) extras.push(extrasFor(w, answer.info, http, now).catch(() => void 0));
+        }
+      })
+    )
+  );
+  let halfTimer;
+  const halfPassed = new Promise((resolve39) => {
+    halfTimer = setTimeout(() => resolve39("half"), halfBudgetMs);
   });
-  if (signal.aborted) {
-    const why = "network budget exhausted before OSV was consulted";
-    for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
-    return work.map((w) => buildResult(w, void 0, why, now, void 0));
+  const first = await Promise.race([allSettled.then(() => "answered"), halfPassed]);
+  clearTimeout(halfTimer);
+  let osvAsked;
+  if (first === "half" && !signal.aborted) osvAsked = askOsv(work, canonical2, fetchImpl, signal, deadline, true);
+  await allSettled;
+  if (osvAsked === void 0) {
+    if (signal.aborted) {
+      const why = "network budget exhausted before OSV was consulted";
+      for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
+      return work.map((w) => buildResult(w, void 0, why, now, void 0));
+    }
+    osvAsked = askOsv(work, canonical2, fetchImpl, signal, deadline, false);
   }
-  let osvError;
-  const osvPromise = (async () => {
+  const extrasDone = Promise.all(extras);
+  const { result: osv, error: error62 } = await osvAsked;
+  await Promise.all([extrasDone, askVersionsOfLate(work, osv, fetchImpl, signal, deadline)]);
+  let osvError = error62;
+  if (signal.aborted && osv.online === false && osvError === void 0 && osv.error === void 0) osvError = "network budget exhausted before OSV answered";
+  for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
+  return work.map((w) => buildResult(w, w.osvSecond ?? viewFor(osv, w), osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
+}
+function askOsv(work, canonical2, fetchImpl, signal, deadline, mixed) {
+  const versions = work.map((w) => w.version);
+  work.forEach((w, i) => {
+    w.osvVersioned = versions[i] !== void 0;
+    if (mixed && w.lookup === void 0) w.late = true;
+  });
+  let error62;
+  return (async () => {
     const queries = [];
-    for (const w of work) {
+    for (const [i, w] of work.entries()) {
       const canonicalId = await (canonical2.get(w.spec.name.toLowerCase()) ?? Promise.resolve(void 0));
       w.osvName = osvNameFor(w, canonicalId);
       const q = { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName };
-      if (w.version !== void 0) q.version = w.version;
-      w.osvVersioned = w.version !== void 0;
+      const v = versions[i];
+      if (v !== void 0) q.version = v;
       w.osvIndex = queries.length;
+      w.osvQuery = q;
       queries.push(q);
     }
-    return queryOsv(queries, { fetchImpl, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
+    return queryOsv(queries, { ...fetchImpl !== void 0 ? { fetchImpl } : {}, signal, timeoutMs: Math.max(1, deadline - Date.now()) });
   })().catch((e) => {
-    osvError = e instanceof Error ? e.message : String(e);
+    error62 = e instanceof Error ? e.message : String(e);
     return { online: false, queried: 0, unqueried: 0, vulnerable_packages: [] };
-  });
-  const extras = work.map(
-    (w) => w.lookup?.kind === "found" && !needsNoExtras(w) ? extrasFor(w, w.lookup.info, http, now).catch(() => void 0) : Promise.resolve()
-  );
-  const [osv] = await Promise.all([osvPromise, ...extras]);
-  if (signal.aborted && osv.online === false && osvError === void 0) {
-    osvError = "network budget exhausted before OSV answered";
+  }).then((result) => ({ result, error: error62 }));
+}
+async function askVersionsOfLate(work, first, fetchImpl, signal, deadline) {
+  if (signal.aborted) return;
+  const second = /* @__PURE__ */ new Map();
+  for (const w of work) {
+    if (w.late !== true || w.lookup?.kind !== "found" || w.version === void 0 || w.osvName === void 0) continue;
+    if (!osvIds(first, w).some((id) => id.startsWith("MAL-"))) continue;
+    second.set(w, { ecosystem: OSV_ECOSYSTEM[w.spec.ecosystem], name: w.osvName, version: w.version });
   }
-  for (const w of work) if (w.lookup?.kind === "not_found") explain(w);
-  return work.map((w) => buildResult(w, osv, osvError ?? (osv.online ? void 0 : osv.error), now, void 0));
+  if (second.size === 0) return;
+  let answer;
+  try {
+    answer = await queryOsv([...second.values()], {
+      ...fetchImpl !== void 0 ? { fetchImpl } : {},
+      signal,
+      timeoutMs: Math.max(1, deadline - Date.now())
+    });
+  } catch {
+    return;
+  }
+  for (const [w, q] of second) {
+    const before = { osvVersioned: w.osvVersioned, osvQuery: w.osvQuery };
+    w.osvVersioned = true;
+    w.osvQuery = q;
+    if (answeredQuery(answer, q) || osvIds(answer, w).some((id) => id.startsWith("MAL-"))) w.osvSecond = viewFor(answer, w);
+    else Object.assign(w, before);
+  }
 }
 function worstVerdict2(results) {
   const rank2 = { ok: 0, unknown: 1, warn: 2, block: 3 };
@@ -121794,6 +121904,73 @@ var init_canaries = __esm({
   }
 });
 
+// src/pkgvet/lockfile.ts
+var JSON_PLAIN;
+var init_lockfile = __esm({
+  "src/pkgvet/lockfile.ts"() {
+    "use strict";
+    init_boundedJson();
+    init_versions2();
+    JSON_PLAIN = Array.from({ length: 128 }, (_, c) => " 	\n\r,:+-.eE0123456789".includes(String.fromCharCode(c)));
+  }
+});
+
+// src/pkgvet/manifest.ts
+var MAX_MANIFEST_BYTES3, REASON, MANIFEST_UNREADABLE_REASONS, UNKNOWN_DIRECTORY;
+var init_manifest2 = __esm({
+  "src/pkgvet/manifest.ts"() {
+    "use strict";
+    init_configFile();
+    init_parseCommand();
+    MAX_MANIFEST_BYTES3 = 1024 * 1024;
+    REASON = {
+      notRegular: "not a regular file",
+      tooLarge: "over 1 MiB",
+      notJson: "not valid JSON",
+      notManifest: "not a package.json object",
+      network: "on a network path",
+      unreadable: "could not be read",
+      tooMany: "past the limit of 8 requirement files",
+      tooDeep: "included more than 3 levels deep",
+      unknownDir: "where the command runs could not be determined"
+    };
+    MANIFEST_UNREADABLE_REASONS = Object.values(REASON);
+    UNKNOWN_DIRECTORY = REASON.unknownDir;
+  }
+});
+
+// src/pkgvet/pins.ts
+var init_pins2 = __esm({
+  "src/pkgvet/pins.ts"() {
+    "use strict";
+    init_osv();
+    init_vet();
+  }
+});
+
+// src/pkgvet/hookDecision.ts
+var MAX_PARSED_LENGTH, MAX_LOCKFILE_BYTES2, MAX_PACKAGE_JSON_BYTES2, COULD_NOT_VET, NOT_VERIFIED;
+var init_hookDecision = __esm({
+  "src/pkgvet/hookDecision.ts"() {
+    "use strict";
+    init_configFile();
+    init_lockfile();
+    init_manifest2();
+    init_parseCommand();
+    init_pins2();
+    init_popular();
+    init_privateRegistry();
+    init_typosquat();
+    init_vet();
+    init_versions2();
+    MAX_PARSED_LENGTH = 512 * 1024;
+    MAX_LOCKFILE_BYTES2 = 16 * 1024 * 1024;
+    MAX_PACKAGE_JSON_BYTES2 = 1024 * 1024;
+    COULD_NOT_VET = "dev-guardian could not vet ";
+    NOT_VERIFIED = " \u2014 not verified.";
+  }
+});
+
 // src/selftest/hookChecks.ts
 import { join as join120 } from "node:path";
 function answersAsExpected(check2, stdout) {
@@ -121810,6 +121987,19 @@ function answersAsExpected(check2, stdout) {
   if (check2.expect === "deny") return answer.permissionDecision === "deny";
   return typeof answer.additionalContext === "string" && /secret/i.test(answer.additionalContext);
 }
+function notVerifiedLine(stdout) {
+  let parsed2;
+  try {
+    parsed2 = JSON.parse(stdout.trim());
+  } catch {
+    return void 0;
+  }
+  const out = isObject5(parsed2) ? parsed2["hookSpecificOutput"] : void 0;
+  const context = isObject5(out) ? out["additionalContext"] : void 0;
+  if (typeof context !== "string") return void 0;
+  const line = context.split(/\r?\n/).find((l) => l.startsWith(COULD_NOT_VET) && l.endsWith(NOT_VERIFIED));
+  return line === void 0 ? void 0 : line.slice(0, MAX_LINE);
+}
 function softenedBy(check2, env, home) {
   if (env["GUARDIAN_HOOKS"] === "off") return "GUARDIAN_HOOKS=off";
   const file2 = USER_CONFIG_LABEL;
@@ -121823,19 +122013,22 @@ function softenedBy(check2, env, home) {
     const bash = user["bash"];
     if (isObject5(bash) && bash["block"] === false) return `"bash": {"block": false} in ${file2}`;
   }
+  if (check2.id === "hooks:install-vet" && env["GUARDIAN_PKG_VET"] === "0") return "GUARDIAN_PKG_VET=0";
   if (check2.id === "hooks:secret-warning") {
     const secrets = user["secrets"];
     if (isObject5(secrets) && secrets["warn"] === false) return `"secrets": {"warn": false} in ${file2}`;
   }
   return void 0;
 }
-var BASH_COMMAND, POWERSHELL_COMMAND, SECRET_CANARY, preToolUse, HOOK_CHECKS, userHooksConfigPath, isObject5, USER_CONFIG_LABEL;
+var BASH_COMMAND, POWERSHELL_COMMAND, INSTALL_COMMAND, SECRET_CANARY, preToolUse, HOOK_CHECKS, MAX_LINE, userHooksConfigPath, isObject5, USER_CONFIG_LABEL;
 var init_hookChecks = __esm({
   "src/selftest/hookChecks.ts"() {
     "use strict";
     init_configFile();
+    init_hookDecision();
     BASH_COMMAND = ["rm", "-rf", "/"].join(" ");
     POWERSHELL_COMMAND = ["Remove-Item", "-Recurse", "-Force", "C:\\"].join(" ");
+    INSTALL_COMMAND = ["npm", "install", "crossenv"].join(" ");
     SECRET_CANARY = "secrets/app.properties";
     preToolUse = (ws, tool54, input2) => ({
       hook_event_name: "PreToolUse",
@@ -121866,6 +122059,12 @@ var init_hookChecks = __esm({
         })
       },
       {
+        id: "hooks:install-vet",
+        event: "PreToolUse",
+        expect: "deny",
+        payload: (ws) => preToolUse(ws, "Bash", { command: INSTALL_COMMAND })
+      },
+      {
         id: "hooks:secret-warning",
         event: "PostToolUse",
         expect: "secret-warning",
@@ -121877,6 +122076,7 @@ var init_hookChecks = __esm({
         })
       }
     ];
+    MAX_LINE = 600;
     userHooksConfigPath = (home) => join120(home, ".config", "dev-guardian", "hooks.json");
     isObject5 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
     USER_CONFIG_LABEL = "~/.config/dev-guardian/hooks.json";
@@ -121931,7 +122131,8 @@ var init_controls = __esm({
       { id: "hooks:bash-block", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS },
       { id: "hooks:powershell-block", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS },
       { id: "hooks:settings-guard", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS },
-      { id: "hooks:secret-warning", kind: "hook", scanner: "hooks", canary: SECRET_CANARY, expect: "secret-warning", timeoutMs: HOOK_TIMEOUT_MS }
+      { id: "hooks:secret-warning", kind: "hook", scanner: "hooks", canary: SECRET_CANARY, expect: "secret-warning", timeoutMs: HOOK_TIMEOUT_MS },
+      { id: "hooks:install-vet", kind: "hook", scanner: "hooks", canary: null, expect: "deny", timeoutMs: HOOK_TIMEOUT_MS }
     ];
   }
 });
@@ -122318,18 +122519,8 @@ async function runSelftest(opts) {
     if (hookControls.length > 0) {
       const dispatcherThere = isRegularFile(opts.dispatcherPath);
       const secretText = seeded.get(SECRET_CANARY) ?? "";
-      for (const control of hookControls) {
-        const check2 = HOOK_CHECKS.find((h) => h.id === control.id);
-        if (check2 === void 0) continue;
-        if (!dispatcherThere) {
-          record8(control, { installed: false, ended: "not_run", canaryRead: null, canaryReported: false, reason: "the hooks' dispatcher is not in this install" }, null);
-          continue;
-        }
-        if (interrupted()) {
-          record8(control, { installed: true, ended: "not_run", canaryRead: null, canaryReported: false, reason: "interrupted before this control ran" }, opts.pluginVersion);
-          continue;
-        }
-        let observation;
+      const notRun2 = (reason, installed = true) => ({ installed, ended: "not_run", canaryRead: null, canaryReported: false, reason });
+      const launchHook = async (control, check2) => {
         try {
           const answer = await within(
             runners.hook({
@@ -122346,26 +122537,59 @@ async function runSelftest(opts) {
             () => ({ exitCode: null, stdout: "", timedOut: true })
           );
           if (answer.spawnError !== void 0) {
-            observation = { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the dispatcher could not be started: ${answer.spawnError}` };
-          } else if (answer.timedOut) {
-            observation = { installed: true, ended: "timeout", canaryRead: null, canaryReported: false, reason: `the dispatcher did not answer in ${Math.round(control.timeoutMs / 1e3)} s` };
-          } else if (answersAsExpected(check2, answer.stdout)) {
-            observation = { installed: true, ended: "ok", canaryRead: true, canaryReported: true };
-          } else {
-            const soft = softenedBy(check2, env, home);
-            observation = {
-              installed: true,
-              ended: "ok",
-              canaryRead: true,
-              canaryReported: false,
-              ...soft !== void 0 ? { softenedBy: soft } : {},
-              reason: check2.expect === "deny" ? "the dispatcher ran and did not deny it: on this install the guard lets it through" : "the dispatcher ran and gave no secret warning for a write that holds one"
-            };
+            return { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the dispatcher could not be started: ${answer.spawnError}` };
           }
+          if (answer.timedOut) {
+            return { installed: true, ended: "timeout", canaryRead: null, canaryReported: false, reason: `the dispatcher did not answer in ${Math.round(control.timeoutMs / 1e3)} s` };
+          }
+          if (answersAsExpected(check2, answer.stdout)) return { installed: true, ended: "ok", canaryRead: true, canaryReported: true };
+          const notVerified = check2.id === "hooks:install-vet" ? notVerifiedLine(answer.stdout) : void 0;
+          if (notVerified !== void 0) return { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: notVerified };
+          const soft = softenedBy(check2, env, home);
+          return {
+            installed: true,
+            ended: "ok",
+            canaryRead: true,
+            canaryReported: false,
+            ...soft !== void 0 ? { softenedBy: soft } : {},
+            reason: check2.id === "hooks:install-vet" ? (
+              // Two causes this run cannot tell apart: the guard, or a canary npm no longer serves as its placeholder.
+              "the dispatcher ran and did not deny the install: the guard lets it through \u2014 or the registry no longer serves the security placeholder for the canary package"
+            ) : check2.expect === "deny" ? "the dispatcher ran and did not deny it: on this install the guard lets it through" : "the dispatcher ran and gave no secret warning for a write that holds one"
+          };
         } catch (error62) {
-          observation = { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf3(error62)}` };
+          return { installed: true, ended: "failed", canaryRead: null, canaryReported: false, reason: `the control failed: ${messageOf3(error62)}` };
         }
-        record8(control, observation, opts.pluginVersion);
+      };
+      const unlaunched = (check2) => {
+        if (!dispatcherThere) return { observation: notRun2("the hooks' dispatcher is not in this install", false), version: null };
+        if (interrupted()) return { observation: notRun2("interrupted before this control ran"), version: opts.pluginVersion };
+        if (check2.id !== "hooks:install-vet") return void 0;
+        const soft = softenedBy(check2, env, home);
+        if (soft !== void 0) {
+          return {
+            observation: { installed: true, ended: "ok", canaryRead: true, canaryReported: false, softenedBy: soft, reason: "not launched: the user switched package vetting off" },
+            version: opts.pluginVersion
+          };
+        }
+        if (offline) {
+          return { observation: notRun2("GUARDIAN_OFFLINE=1: the install check needs the package registry, and nothing is fetched offline"), version: opts.pluginVersion };
+        }
+        return void 0;
+      };
+      const turnOf = async (control, check2) => unlaunched(check2) ?? { observation: await launchHook(control, check2), version: opts.pluginVersion };
+      const vetControl = hookControls.find((c) => c.id === "hooks:install-vet");
+      const vetCheck = HOOK_CHECKS.find((h) => h.id === "hooks:install-vet");
+      const vetTurn = vetControl !== void 0 && vetCheck !== void 0 ? turnOf(vetControl, vetCheck) : void 0;
+      try {
+        for (const control of hookControls) {
+          const check2 = HOOK_CHECKS.find((h) => h.id === control.id);
+          if (check2 === void 0) continue;
+          const turn = control === vetControl && vetTurn !== void 0 ? await vetTurn : await turnOf(control, check2);
+          record8(control, turn.observation, turn.version);
+        }
+      } finally {
+        await vetTurn;
       }
     }
     if (!interrupted()) {
