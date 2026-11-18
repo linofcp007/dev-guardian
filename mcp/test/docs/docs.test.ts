@@ -777,3 +777,64 @@ describe('pkgvet-archive-like-name', () => {
     expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
   });
 });
+
+// ───────────────── install-vet-project-registry-said — the docs say the line, the files of each manager, and what stays
+
+describe('install-vet-project-registry-said', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item, a table row and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  it('T-08 docs/hooks.md describes the line a project default registry gets and the files each manager obeys', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const lines = sentences(hooks.slice(at, end === -1 ? undefined : end));
+    const code = (s: string, ...files: string[]): boolean => files.every((f) => s.includes(`\`${f}\``));
+    const found = {
+      'the line: a file of the project sets the default registry, and what it serves was not vetted': lines.some(
+        (s) => /sets the default registry/i.test(s) && /\bproject\b/i.test(s) && /\bnot (?:vetted|verified)\b/i.test(s),
+      ),
+      'npm and pnpm: .npmrc': lines.some((s) => /\bnpm\b/.test(s) && /\bpnpm\b/.test(s) && code(s, '.npmrc') && !code(s, 'bunfig.toml')),
+      'bun: .npmrc and bunfig.toml': lines.some((s) => /\bbun\b/.test(s) && code(s, '.npmrc', 'bunfig.toml')),
+      'Yarn: .npmrc, .yarnrc and .yarnrc.yml': lines.some((s) => /\bYarn\b/.test(s) && code(s, '.npmrc', '.yarnrc', '.yarnrc.yml')),
+      'where: beside the package.json and at a workspace root': lines.some(
+        (s) => /\bdefault registry\b/i.test(s) && /\bworkspace\b/i.test(s) && /package\.json/.test(s),
+      ),
+    };
+    expect(found).toEqual({
+      'the line: a file of the project sets the default registry, and what it serves was not vetted': true,
+      'npm and pnpm: .npmrc': true,
+      'bun: .npmrc and bunfig.toml': true,
+      'Yarn: .npmrc, .yarnrc and .yarnrc.yml': true,
+      'where: beside the package.json and at a workspace root': true,
+    });
+  });
+
+  it('T-08 the record manifest-lockfile-and-transitive no longer says a project default registry is not said', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'manifest-lockfile-and-transitive');
+    expect(limit, 'the record manifest-lockfile-and-transitive').toBeDefined();
+    const doc = limit?.doc ?? '';
+    expect(doc, 'the record still lists the other things that stay out').toContain('another source');
+    const about = doc.split('\n').filter((l) => /default registry/i.test(l) && /configuration file of the project/i.test(l));
+    expect(about.filter((l) => /\bIt is not said\b/.test(l))).toEqual([]);
+  });
+
+  it('T-08 a record project-default-registry says what stays: Yarn 1 and 4, and the indexes of PyPI, Composer and NuGet; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'project-default-registry');
+    expect(limit, 'a record with the id project-default-registry in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    expect(limit.examples.length, 'at least one example a test runs').toBeGreaterThanOrEqual(1);
+    for (const said of ['Yarn 1', 'Yarn 4', 'PyPI', 'Composer', 'NuGet']) {
+      expect({ said, found: limit.doc.includes(said) }).toEqual({ said, found: true });
+    }
+    expect(limit.doc, 'the indexes a project file sets are said only when a name is missing').toMatch(/\bonly\b[^.]*\bmissing\b|\bmissing\b[^.]*\bonly\b/i);
+    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
+  });
+});

@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { customRegistryFor, isPublicRegistryUrl, npmScopeRegistry, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
+import * as privateRegistry from '../../../src/pkgvet/privateRegistry.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -1199,5 +1200,203 @@ describe('pkgvet-public-registry-url-parse', () => {
       }
       expect(wrong).toEqual([]);
     });
+  });
+});
+
+// ───────────────── install-vet-project-registry-said — which project file sets the default registry, per manager
+
+describe('install-vet-project-registry-said', () => {
+  type ProjectDefault = (manager: string, ctx: RegistryContext) => { source: string; url: string } | null;
+
+  /**
+   * The function is looked up at run time: it is the export this feature adds, and a named import of a missing
+   * export would break the type-check of the whole file. Until it is there, every test here fails on this line.
+   */
+  function projectDefault(): ProjectDefault {
+    const fn = (privateRegistry as Record<string, unknown>)['npmProjectDefaultRegistry'];
+    expect(typeof fn, 'privateRegistry.ts exports npmProjectDefaultRegistry(manager, ctx)').toBe('function');
+    return fn as ProjectDefault;
+  }
+
+  const OTHER = 'https://npm.other.example/';
+  const NEARER = 'https://npm.nearer.example/';
+  const NPMRC = `registry=${OTHER}\n`;
+  const BUNFIG = `[install]\nregistry = "${OTHER}"\n`;
+  const YARNRC = `registry "${OTHER}"\n`;
+  const YARNRC_YML = `npmRegistryServer: "${OTHER}"\n`;
+  const MANIFEST = '{ "name": "fixture-app", "version": "1.0.0" }\n';
+  const WORKSPACES = '{ "name": "fixture-root", "version": "1.0.0", "workspaces": ["packages/*"] }\n';
+
+  /** A file of the test's project, by path below it. */
+  const put = (rel: string, text: string): void => {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), text);
+  };
+  /** The repository root, so that a walk above the project stops at it. */
+  const repository = (): void => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+  };
+  /** What a command run in `dir` (below the project) is answered, the path normalised, and what it was asked. */
+  const answer = (manager: string, dir: string): unknown => {
+    const r = projectDefault()(manager, { ...ctx(), projectDir: join(project, dir) });
+    return { manager, dir, answer: r === null ? null : { source: resolve(r.source), url: r.url } };
+  };
+  /** The answer that names the file `rel` of the project and the registry `url`. */
+  const found = (manager: string, dir: string, rel: string, url = OTHER): unknown => ({
+    manager,
+    dir,
+    answer: { source: resolve(project, rel), url },
+  });
+  const nothing = (manager: string, dir = ''): unknown => ({ manager, dir, answer: null });
+
+  const NPM_FAMILY = ['npm', 'npx', 'pnpm', 'bun', 'yarn'];
+
+  it.each(NPM_FAMILY)('T-01 %s: the .npmrc beside the package.json is the project default registry', (manager) => {
+    put('package.json', MANIFEST);
+    put('.npmrc', NPMRC);
+    expect(answer(manager, '')).toEqual(found(manager, '', '.npmrc'));
+  });
+
+  it.each(NPM_FAMILY)('T-01 %s: a command run in a subdirectory with no package.json reads the .npmrc beside the nearest package.json', (manager) => {
+    put('package.json', MANIFEST);
+    put('.npmrc', NPMRC);
+    const sub = join('src', 'deep');
+    mkdirSync(join(project, sub), { recursive: true });
+    expect(answer(manager, sub)).toEqual(found(manager, sub, '.npmrc'));
+  });
+
+  it.each(NPM_FAMILY)('T-01 %s: the .npmrc at a workspace root (a package.json with workspaces) above the project', (manager) => {
+    put('package.json', WORKSPACES);
+    put('.npmrc', NPMRC);
+    const web = join('packages', 'web');
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer(manager, web)).toEqual(found(manager, web, '.npmrc'));
+  });
+
+  it('T-01 pnpm: the .npmrc at a pnpm-workspace.yaml root above the project', () => {
+    const web = join('packages', 'web');
+    put('pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n");
+    put('package.json', MANIFEST);
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer('pnpm', web)).toEqual(found('pnpm', web, '.npmrc'));
+  });
+
+  it('T-01 bun: the bunfig.toml beside the package.json, and at a workspace root above it', () => {
+    const web = join('packages', 'web');
+    put('package.json', MANIFEST);
+    put('bunfig.toml', BUNFIG);
+    expect(answer('bun', '')).toEqual(found('bun', '', 'bunfig.toml'));
+    put('package.json', WORKSPACES);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer('bun', web)).toEqual(found('bun', web, 'bunfig.toml'));
+  });
+
+  it.each([
+    ['.yarnrc', YARNRC],
+    ['.yarnrc.yml', YARNRC_YML],
+  ])('T-01 yarn: the %s beside the package.json, in a plain directory above it and at a workspace root', (file, text) => {
+    const web = join('packages', 'web');
+    repository();
+    put('package.json', MANIFEST);
+    put(file, text);
+    expect(answer('yarn', '')).toEqual(found('yarn', '', file));
+    // The directory above, with no workspace: Yarn reads it all the same.
+    rmSync(join(project, 'package.json'));
+    put(join('app', 'package.json'), MANIFEST);
+    expect(answer('yarn', 'app')).toEqual(found('yarn', 'app', file));
+    // A workspace root above.
+    put('package.json', WORKSPACES);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer('yarn', web)).toEqual(found('yarn', web, file));
+  });
+
+  it("T-01 the nearest file wins: the project's own .npmrc over the one of the workspace root above it", () => {
+    const web = join('packages', 'web');
+    put('package.json', WORKSPACES);
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    put(join(web, '.npmrc'), `registry=${NEARER}\n`);
+    for (const manager of NPM_FAMILY) {
+      expect(answer(manager, web)).toEqual(found(manager, web, join(web, '.npmrc'), NEARER));
+    }
+  });
+
+  it('T-01 yarn: the nearest of the plain directories above wins', () => {
+    const app = join('mid', 'app');
+    repository();
+    put('.yarnrc.yml', YARNRC_YML);
+    put(join('mid', '.yarnrc.yml'), `npmRegistryServer: "${NEARER}"\n`);
+    put(join(app, 'package.json'), MANIFEST);
+    expect(answer('yarn', app)).toEqual(found('yarn', app, join('mid', '.yarnrc.yml'), NEARER));
+  });
+
+  // ── nothing: the answer is null
+
+  it.each(NPM_FAMILY)('T-02 %s: no configuration file, nothing', (manager) => {
+    put('package.json', MANIFEST);
+    expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it.each([
+    ['registry=https://registry.npmjs.org/\n', 'the public registry written out'],
+    [`@acme:registry=${OTHER}\n`, 'a registry for a scope only'],
+  ])('T-02 an .npmrc with %j (%s) gives nothing for any manager', (text) => {
+    put('package.json', MANIFEST);
+    put('.npmrc', text);
+    for (const manager of NPM_FAMILY) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it('T-02 the public registry written out, and a registry for a scope only, in the .yarnrc, .yarnrc.yml and bunfig.toml', () => {
+    put('package.json', MANIFEST);
+    put('.yarnrc.yml', `npmRegistryServer: "https://registry.yarnpkg.com"\nnpmScopes:\n  acme:\n    npmRegistryServer: "${OTHER}"\n`);
+    put('.yarnrc', 'registry "https://registry.yarnpkg.com"\n');
+    put('bunfig.toml', `[install]\nregistry = "https://registry.npmjs.org/"\n\n[install.scopes]\nacme = { url = "${OTHER}" }\n`);
+    for (const manager of ['yarn', 'bun']) expect(answer(manager, '')).toEqual(nothing(manager));
+    rmSync(join(project, '.yarnrc'));
+    put('.yarnrc.yml', `npmScopes:\n  acme:\n    npmRegistryServer: "${OTHER}"\n`);
+    put('bunfig.toml', `[install.scopes]\nacme = { url = "${OTHER}" }\n`);
+    for (const manager of ['yarn', 'bun']) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it.each([
+    ['bunfig.toml', BUNFIG, ['npm', 'npx', 'pnpm', 'yarn']],
+    ['.yarnrc', YARNRC, ['npm', 'npx', 'pnpm', 'bun']],
+    ['.yarnrc.yml', YARNRC_YML, ['npm', 'npx', 'pnpm', 'bun']],
+    ['pnpm-workspace.yaml', `packages:\n  - 'packages/*'\nregistry: ${OTHER}\n`, ['npm', 'npx', 'pnpm']],
+  ])('T-02 %s is a file the manager does not obey: nothing for %j', (file, text, managers) => {
+    put('package.json', MANIFEST);
+    put(file, text);
+    for (const manager of managers) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it.each(['npm', 'npx', 'pnpm', 'bun'])('T-02 %s: an .npmrc in a directory above that is no workspace root is not obeyed', (manager) => {
+    repository();
+    put('.npmrc', NPMRC);
+    put(join('app', 'package.json'), MANIFEST);
+    expect(answer(manager, 'app')).toEqual(nothing(manager, 'app'));
+  });
+
+  it.each(['npm', 'bun'])('T-02 %s: a pnpm-workspace.yaml makes a workspace root for pnpm only', (manager) => {
+    const web = join('packages', 'web');
+    repository();
+    put('pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n");
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer(manager, web)).toEqual(nothing(manager, web));
+  });
+
+  it("T-02 the user's own files are never the project's: the home .npmrc, .yarnrc.yml and .bunfig.toml", () => {
+    put('package.json', MANIFEST);
+    writeFileSync(join(home, '.npmrc'), NPMRC);
+    writeFileSync(join(home, '.yarnrc.yml'), YARNRC_YML);
+    writeFileSync(join(home, '.bunfig.toml'), BUNFIG);
+    for (const manager of NPM_FAMILY) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it('T-02 a file that cannot be read (a directory where the .npmrc belongs) gives nothing, and does not throw', () => {
+    put('package.json', MANIFEST);
+    mkdirSync(join(project, '.npmrc'));
+    for (const manager of NPM_FAMILY) expect(answer(manager, '')).toEqual(nothing(manager));
   });
 });

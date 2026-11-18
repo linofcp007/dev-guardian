@@ -1465,3 +1465,46 @@ describe('pkgvet-archive-like-name', () => {
     expect(r.requests).toContain(`https://registry.npmjs.org/${name}`);
   });
 });
+
+// ───────────────── install-vet-project-registry-said — a project file that sets the default registry is said, through the dispatcher
+
+describe('install-vet-project-registry-said', () => {
+  const CLEAN = 'dgprobe-clean';
+  const HOST = 'https://npm.other.example';
+  const ROUTES: Record<string, Route> = { [`https://registry.npmjs.org/${CLEAN}`]: npmDoc('1.0.0'), [OSV]: { osv: {} } };
+  const line = (file: string): string =>
+    `dev-guardian: the project's ${file} sets the default registry (${HOST}) — packages are fetched from it, and what it serves was not vetted.`;
+  const put = (dir: string, file: string, text: string): void => {
+    mkdirSync(dirname(join(dir, file)), { recursive: true });
+    writeFileSync(join(dir, file), text);
+  };
+
+  it('T-07 `npm install <clean>` with the default registry set by the project .npmrc: the answer is the line, naming the file and the host', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, '.npmrc', `registry=${HOST}/\n`);
+    const r = runHook(`npm install ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('.npmrc'));
+  });
+
+  it('T-07 the same registry in the .npmrc of the home directory: the dispatcher says nothing', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, '.npmrc', `registry=${HOST}/\n`);
+    // The control: without the user's own word for it, it is said.
+    expect(runHook(`npm install ${CLEAN}`, ROUTES).output?.hookSpecificOutput?.additionalContext, 'the control').toBe(line('.npmrc'));
+    put(home, '.npmrc', `registry=${HOST}/\n`);
+    const r = runHook(`npm install ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim(), 'no answer at all').toBe('');
+    expect(r.output).toBeUndefined();
+  });
+
+  it('T-07 `bun add <clean>` with a bunfig.toml: the line names bunfig.toml', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, 'bunfig.toml', `[install]\nregistry = "${HOST}/"\n`);
+    const r = runHook(`bun add ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('bunfig.toml'));
+  });
+});
