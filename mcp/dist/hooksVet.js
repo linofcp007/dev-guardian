@@ -5419,6 +5419,18 @@ function ageText(hours) {
   return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;
 }
 var needsNoExtras = (w) => w.unreported?.has("publish_age") === true && w.unreported.has("install_scripts");
+function registryHost(ecosystem, value) {
+  for (const token of value.split(/\s+/)) {
+    const candidate = token.replace(/^[^=:/?#@]+=(?=https?:\/\/)/i, "");
+    if (isPublicRegistryUrl(ecosystem, candidate)) continue;
+    try {
+      const url = new URL(candidate);
+      if ((url.protocol === "https:" || url.protocol === "http:") && url.hostname !== "") return `${url.protocol}//${url.hostname}`;
+    } catch {
+    }
+  }
+  return void 0;
+}
 function customFor(spec2, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec2.ecosystem, u));
   if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine };
@@ -5551,7 +5563,8 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     const custom = w.custom ?? null;
     if (custom !== null) {
-      const where = `${custom.source}${custom.url !== void 0 ? `: ${custom.url}` : ""}`;
+      const host = custom.url === void 0 ? void 0 : registryHost(eco, custom.url);
+      const where = `${custom.source}${host !== void 0 ? `: ${host}` : ""}`;
       const why = custom.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : custom.kind === "workspace" ? `it is a local workspace package (${where})` : custom.kind === "unchecked" ? custom.cut === "time" ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})` : `the workspace at ${custom.source} has more than ${MAX_WORKSPACE_DIRS} directories and was not read to its end \u2014 it may hold the package` : custom.kind === "unreadable" ? custom.what === "workspace manifest" ? `workspace manifest at ${custom.source} could not be read \u2014 possibly a local workspace package` : custom.what === "directory" ? `directory ${custom.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${custom.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown(`not on ${registry}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {

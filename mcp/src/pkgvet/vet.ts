@@ -199,6 +199,27 @@ interface Work {
 /** Both checks that need a second request are unreported: no full document, no version document. */
 const needsNoExtras = (w: Work): boolean => w.unreported?.has('publish_age') === true && w.unreported.has('install_scripts');
 
+/**
+ * How a sentence names a configured registry: `scheme://host` of the first URL in `value` that is not the
+ * ecosystem's public registry, read with the URL parser — never the configuration's own text, which may carry
+ * credentials, a port, a path holding a token or a query. A `name=` in front of a URL is dropped. A value with
+ * no http(s) URL that has a host (`no-index`, `(configured)`, a folder, a UNC share, a `file:` URL, any text the
+ * parser rejects) names nothing: the sentence keeps only the source.
+ */
+function registryHost(ecosystem: PkgEcosystem, value: string): string | undefined {
+  for (const token of value.split(/\s+/)) {
+    const candidate = token.replace(/^[^=:/?#@]+=(?=https?:\/\/)/i, '');
+    if (isPublicRegistryUrl(ecosystem, candidate)) continue;
+    try {
+      const url = new URL(candidate);
+      if ((url.protocol === 'https:' || url.protocol === 'http:') && url.hostname !== '') return `${url.protocol}//${url.hostname}`;
+    } catch {
+      // not a URL: it is not named
+    }
+  }
+  return undefined;
+}
+
 function customFor(spec: PackageSpec, opts: VetOptions): CustomRegistry | null {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
   if (onCommandLine !== undefined) return { kind: 'registry', source: 'the command line', url: onCommandLine };
@@ -368,7 +389,8 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : '';
     const custom = w.custom ?? null;
     if (custom !== null) {
-      const where = `${custom.source}${custom.url !== undefined ? `: ${custom.url}` : ''}`;
+      const host = custom.url === undefined ? undefined : registryHost(eco, custom.url);
+      const where = `${custom.source}${host !== undefined ? `: ${host}` : ''}`;
       const why =
         custom.kind === 'auth'
           ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup`

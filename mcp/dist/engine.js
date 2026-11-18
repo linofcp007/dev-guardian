@@ -117434,6 +117434,18 @@ function ageText(hours) {
   const days = hours / 24;
   return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;
 }
+function registryHost(ecosystem, value) {
+  for (const token of value.split(/\s+/)) {
+    const candidate = token.replace(/^[^=:/?#@]+=(?=https?:\/\/)/i, "");
+    if (isPublicRegistryUrl(ecosystem, candidate)) continue;
+    try {
+      const url2 = new URL(candidate);
+      if ((url2.protocol === "https:" || url2.protocol === "http:") && url2.hostname !== "") return `${url2.protocol}//${url2.hostname}`;
+    } catch {
+    }
+  }
+  return void 0;
+}
 function customFor(spec, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
   if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine };
@@ -117537,7 +117549,8 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     const custom2 = w.custom ?? null;
     if (custom2 !== null) {
-      const where = `${custom2.source}${custom2.url !== void 0 ? `: ${custom2.url}` : ""}`;
+      const host = custom2.url === void 0 ? void 0 : registryHost(eco, custom2.url);
+      const where = `${custom2.source}${host !== void 0 ? `: ${host}` : ""}`;
       const why = custom2.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : custom2.kind === "workspace" ? `it is a local workspace package (${where})` : custom2.kind === "unchecked" ? custom2.cut === "time" ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})` : `the workspace at ${custom2.source} has more than ${MAX_WORKSPACE_DIRS2} directories and was not read to its end \u2014 it may hold the package` : custom2.kind === "unreadable" ? custom2.what === "workspace manifest" ? `workspace manifest at ${custom2.source} could not be read \u2014 possibly a local workspace package` : custom2.what === "directory" ? `directory ${custom2.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${custom2.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown3(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {

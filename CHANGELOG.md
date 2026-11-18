@@ -8,6 +8,19 @@ version bump.
 
 ## [Unreleased]
 
+### Security
+
+- **The install hook and `vet_packages` no longer repeat the credentials of a registry URL.** Since 3.0.0, when a 
+  package name was missing from the public registry and a private registry was configured, the warning explained it 
+  with the configured URL as written — user name, password, a token in the path or the query included. The text 
+  reached the model's context and the session transcript (the hook), and the `vet_packages` response. It happened 
+  for a registry set in an `.npmrc`, `pip.conf` / `pip.ini`, `pyproject.toml`, `uv.toml`, `nuget.config`, an 
+  environment variable, a requirements file or the command line. The warning now names the registry by its scheme 
+  and host (`https://npm.company.example`) and the file or variable that configures it, and nothing else of the 
+  value. If a warning of this kind appeared in a session while a registry URL carried credentials, treat them as 
+  exposed: change or rotate them, and delete or protect that session's transcript. Credentials are better kept out 
+  of the URL (an `.npmrc` `_authToken`, a pip keyring, a NuGet credential provider).
+
 ## [3.12.0] - 2026-11-18
 
 The install hook reads further, and says what it did not read. A manifest install is vetted through the manager's

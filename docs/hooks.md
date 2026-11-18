@@ -107,6 +107,8 @@ These files are read like the hook configuration (below): a file reached through
 
 A registry that *is* the public one (`registry.npmjs.org`, `pypi.org/simple`, `api.nuget.org`) is not custom. Paths, tarballs, URLs, git specs (`git@host:repo` included), `file:` / `workspace:` specs, requirement files and flag values are never looked up; a bare `npm install` vets nothing.
 
+When a configured registry explains a missing name, the warning names it by its host and the file or variable that configures it, never by its URL: the registry is shown as `scheme://host`, with no credentials, port, path, query or fragment, and a value that is not a URL with a host (a folder, a share, `no-index`) is not shown at all.
+
 The network hosts involved are listed in [SECURITY.md](../SECURITY.md).
 
 ## Configuration
