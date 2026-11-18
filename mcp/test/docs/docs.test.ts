@@ -449,7 +449,7 @@ describe('docs/env.md', () => {
     }
     expect(names.size).toBeGreaterThan(10);
     const env = read('docs/env.md');
-    const undocumented = [...names].filter((n) => !new RegExp(`\`${n}\``).test(env)).sort();
+    const undocumented = [...names].filter((n) => !env.includes(`\`${n}\``)).sort();
     expect(undocumented).toEqual([]);
   });
 });

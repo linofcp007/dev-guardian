@@ -768,9 +768,13 @@ describe('install-vet-lockfile-pins', () => {
     notOsv: requests.filter((u) => u !== OSV),
   });
   const ONLY_OSV = { anything: true, notOsv: [] };
-  const literal = (text: string): string => text.replace(/[.]/g, '[.]');
-  const pinned = (lockfile: string, version: string): RegExp =>
-    new RegExp(`${literal(lockfile)} pins 'eslint-config-prettier@${literal(version)}'.*${ADVISORY}`, 's');
+  /** The deny names the lockfile's pin of the malicious version, and the advisory somewhere after it. */
+  const expectPinned = (text: string, lockfile: string, version: string): void => {
+    const pin = `${lockfile} pins 'eslint-config-prettier@${version}'`;
+    const at = text.indexOf(pin);
+    expect(at, `"${pin}" in: ${text}`).toBeGreaterThanOrEqual(0);
+    expect(text.slice(at + pin.length)).toContain(ADVISORY);
+  };
 
   /** One direct dependency, `express`, at a range every lockfile below records for this project. */
   const manifest = (deps: Record<string, string> = { express: '^4.21.0' }, dir: string = project): void =>
@@ -920,7 +924,7 @@ describe('install-vet-lockfile-pins', () => {
       const r = runHook(command, ROUTES);
       expect(r.status).toBe(0);
       expect(decision(r)).toBe('deny');
-      expect(reason(r)).toMatch(pinned(lockfile, MALICIOUS));
+      expectPinned(reason(r), lockfile, MALICIOUS);
       // The sentence a malicious package of the manifest is denied with: the decision is the user's, and no way round is named.
       expect(reason(r)).toMatch(/is the user's decision/);
       expect(reason(r)).not.toMatch(/GUARDIAN_PKG_VET|--registry/);
@@ -1145,7 +1149,7 @@ describe('install-vet-lockfile-pins', () => {
       const r = runHook('npm ci', ROUTES, { cwd: member, env });
       expect(r.status).toBe(0);
       expect(decision(r)).toBe('deny');
-      expect(reason(r)).toMatch(pinned('package-lock.json', MALICIOUS));
+      expectPinned(reason(r), 'package-lock.json', MALICIOUS);
       // The root lockfile records the member's own range for `express`: no document of it is asked of the registry.
       expect(asked(r.requests)).toEqual(ONLY_OSV);
     },
@@ -1169,7 +1173,7 @@ describe('install-vet-lockfile-pins', () => {
     writeFileSync(join(app, 'package-lock.json'), packageLock(MALICIOUS));
     const own = runHook('npm ci', ROUTES, outside);
     expect(decision(own)).toBe('deny');
-    expect(reason(own)).toMatch(pinned('package-lock.json', MALICIOUS));
+    expectPinned(reason(own), 'package-lock.json', MALICIOUS);
     // The request log is one file for the whole test: what the second run added comes after the first run's lines.
     expect(asked(own.requests.slice(above.requests.length))).toEqual(ONLY_OSV);
   });

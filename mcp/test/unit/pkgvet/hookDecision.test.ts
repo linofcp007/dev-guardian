@@ -1752,9 +1752,13 @@ describe('install-vet-lockfile-pins', () => {
   const denyOf = (d: Decision): string => d?.deny ?? '(no deny)';
   const lines = (context: string | undefined): string[] => (context ?? '').split('\n');
   const sorted = (xs: readonly string[]): string[] => [...xs].sort();
-  /** The one line of a lockfile that was not read; the group is the reason. */
-  const notRead = (file: string): RegExp =>
-    new RegExp(`^dev-guardian: ${file.replace(/\./g, '\\.')} was not read \\((.+)\\) — its packages were not vetted\\.$`);
+  /** The reason the one line of a lockfile that was not read gives — `undefined` when `line` is not that line. */
+  const notReadReason = (line: string | undefined, file: string): string | undefined => {
+    const head = `dev-guardian: ${file} was not read (`;
+    const tail = ') — its packages were not vetted.';
+    if (line === undefined || !line.startsWith(head) || !line.endsWith(tail) || line.length <= head.length + tail.length) return undefined;
+    return line.slice(head.length, line.length - tail.length);
+  };
   const anotherSource = (count: number, file: string, hosts: string): string =>
     `dev-guardian: ${count} packages of ${file} come from another source (${hosts}) — what it serves was not vetted.`;
   const ownScope = (count: number, file: string): string =>
@@ -2055,8 +2059,9 @@ describe('install-vet-lockfile-pins', () => {
       expect(d?.deny).toBeUndefined();
       const said = lines(d?.context);
       expect(said).toHaveLength(1);
-      expect(said[0]).toMatch(notRead(file));
-      expect(notRead(file).exec(said[0] ?? '')?.[1]).toMatch(reason);
+      const why = notReadReason(said[0], file);
+      expect(why, said[0]).toBeDefined();
+      expect(why).toMatch(reason);
       expect(d?.context).not.toMatch(/IGNORE|evil\.example/);
     },
   );
