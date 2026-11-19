@@ -2256,3 +2256,154 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     expect(read('evil-pkg-zq@npm:evil.tar')).toEqual([['evil-pkg-zq', undefined], ['evil.tar', undefined]]);
   });
 });
+
+// ───────────────── install-vet-npm-exec-bool-word — a launcher line is read as the launcher reads it
+
+describe('install-vet-npm-exec-bool-word', () => {
+  const MANIFEST = { kind: 'package-json' };
+  /** The names a line would vet, sorted: the order of two readings of one word is not what is pinned. */
+  const namesOf = (command: string): string[] => vetted(command).map(([name]) => name).sort();
+  const uncertainOf = (command: string): string[] => parseInstallCommands(command).flatMap((c) => c.uncertain);
+  const manifestsOf = (command: string): unknown[] => parseInstallCommands(command).map((c) => c.manifest);
+  const NPM_EXEC = ['npm exec', 'npm x'] as const;
+
+  it.each(
+    NPM_EXEC.flatMap((prefix) =>
+      [
+        '--yes true p',
+        '--yes false p',
+        '-y true p',
+        '-qy true p',
+        '-dy false p',
+        '--prefer-offline false p',
+        '--prefer-online false p',
+        '--ignore-existing false p',
+        '--workspaces false p',
+        '--include-workspace-root false p',
+        '--yes false -- p',
+      ].map((rest) => [prefix, rest] as const),
+    ),
+  )('T-01 `%s %s`: the word after a boolean flag of npm is its value, the package is p', (prefix, rest) => {
+    expect(namesOf(`${prefix} ${rest}`), `${prefix} ${rest}`).toEqual(['p']);
+  });
+
+  it('T-01 `npm --yes false exec p` gives p and no `false`', () => {
+    expect(namesOf('npm --yes false exec p')).toEqual(['p']);
+  });
+
+  it.each(NPM_EXEC)('T-01 `%s --yes true` alone names no package', (prefix) => {
+    expect(namesOf(`${prefix} --yes true`)).toEqual([]);
+  });
+
+  it.each(
+    NPM_EXEC.flatMap((prefix) =>
+      ['--silent false p', '--quiet false p', '-q false p', '-d false p', '-s false p', '-yq false p', '--yes=true false p', '-- false p'].map(
+        (rest) => [prefix, rest] as const,
+      ),
+    ),
+  )('T-01 `%s %s`: after a loglevel shortcut, an `=` flag or `--` the word is the package: false', (prefix, rest) => {
+    expect(namesOf(`${prefix} ${rest}`), `${prefix} ${rest}`).toContain('false');
+  });
+
+  it('T-02 guard: the plain launchers give p', () => {
+    for (const command of ['npx p', 'npm exec p', 'pnpm dlx p', 'yarn dlx p', 'bunx p']) {
+      expect({ command, names: namesOf(command) }).toEqual({ command, names: ['p'] });
+    }
+  });
+
+  it('T-02 guard: `npx --yes false p` is read as before, the package is false', () => {
+    expect(namesOf('npx --yes false p')).toEqual(['false']);
+  });
+
+  it.each(['npx --no-install p', 'npx --no p', "npx -c 'p --help'"])('T-02 guard: `%s` names no package (nothing is downloaded, or the line is a shell command)', (command) => {
+    expect(namesOf(command)).toEqual([]);
+    // Non-vacuous: the line is read as a launcher command, it names nothing.
+    expect(parseInstallCommands(command)).toHaveLength(1);
+  });
+
+  it('T-02 guard: `npx -p p cmd` gives p', () => {
+    expect(namesOf('npx -p p cmd')).toEqual(['p']);
+  });
+
+  it('T-02 guard: `pnpm exec p` is no install', () => {
+    expect(parseInstallCommands('pnpm exec p')).toEqual([]);
+  });
+
+  it.each(['yarn add -D false', 'bun add --force false'])('T-02 guard: `%s` gives the package false', (command) => {
+    expect(namesOf(command)).toEqual(['false']);
+  });
+
+  it.each(NPM_EXEC)('T-04 `%s --ignore-scripts p` gives p with no uncertainty (the flag is npm\'s own, boolean)', (prefix) => {
+    const command = `${prefix} --ignore-scripts p`;
+    expect(namesOf(command)).toEqual(['p']);
+    expect(uncertainOf(command)).toEqual([]);
+  });
+
+  it.each(NPM_EXEC)('T-04 `%s -p false p`: `-p` is a boolean flag of npm, the package is p', (prefix) => {
+    expect(namesOf(`${prefix} -p false p`)).toEqual(['p']);
+  });
+
+  it.each(NPM_EXEC)('T-04 `%s --no-install p`: the flag does not stop the download, p is vetted', (prefix) => {
+    expect(namesOf(`${prefix} --no-install p`)).toEqual(['p']);
+  });
+
+  it.each(NPM_EXEC)('T-04 `%s --package=p cmd` and `--package p -- cmd` give p', (prefix) => {
+    expect(namesOf(`${prefix} --package=p cmd`)).toEqual(['p']);
+    expect(namesOf(`${prefix} --package p -- cmd`)).toEqual(['p']);
+  });
+
+  it.each([
+    'npm exec --no false p',
+    'npm exec --offline false p',
+    'npx --no false p',
+    'pnpm dlx -c false p',
+    'pnpm dlx --shell-mode false p',
+  ])('T-05 `%s`: p is vetted and the command is uncertain', (command) => {
+    expect(namesOf(command)).toEqual(['p']);
+    expect(uncertainOf(command).length, 'the two readings are said as an uncertainty').toBeGreaterThan(0);
+  });
+
+  it.each(['npx -qy false p', 'bunx --quiet false p', 'pnpm dlx --silent false p'])(
+    'T-05 `%s`: both false and p are vetted and the command is uncertain',
+    (command) => {
+      expect(namesOf(command)).toEqual(['false', 'p']);
+      expect(uncertainOf(command).length, 'the two readings are said as an uncertainty').toBeGreaterThan(0);
+    },
+  );
+
+  it.each(['pnpm dlx -c p', 'pnpm dlx --shell-mode p', 'pnpx -c p', "pnpm dlx --package p -c 'echo x'"])(
+    'T-06 `%s`: the one word is the package p',
+    (command) => {
+      expect(namesOf(command)).toEqual(['p']);
+    },
+  );
+
+  it('T-06 `pnpm dlx -c \'p --version\'` (several words) names no package', () => {
+    expect(namesOf("pnpm dlx -c 'p --version'")).toEqual([]);
+    // Non-vacuous: the line is read as a launcher command, it names nothing.
+    expect(parseInstallCommands("pnpm dlx -c 'p --version'")).toHaveLength(1);
+  });
+
+  it.each(['yarn --production false', 'yarn --production true', 'yarn install --production false', 'bun install --production true'])(
+    'T-07 `%s` is an install of the manifest, uncertain',
+    (command) => {
+      expect(manifestsOf(command), command).toEqual([MANIFEST]);
+      expect(uncertainOf(command).length, 'the two readings are said as an uncertainty').toBeGreaterThan(0);
+    },
+  );
+
+  it('T-07 `bun install --production true` still vets the word `true` as a package', () => {
+    expect(namesOf('bun install --production true')).toEqual(['true']);
+  });
+
+  it('T-07 `yarn add --production true p` vets p and true and reads the manifest', () => {
+    expect(namesOf('yarn add --production true p')).toEqual(['p', 'true']);
+    expect(manifestsOf('yarn add --production true p')).toEqual([MANIFEST]);
+    expect(uncertainOf('yarn add --production true p').length).toBeGreaterThan(0);
+  });
+
+  it.each(['yarn --production', 'bun install --production'])('T-07 `%s` without a word is read as before: the manifest, no package', (command) => {
+    expect(manifestsOf(command), command).toEqual([MANIFEST]);
+    expect(namesOf(command)).toEqual([]);
+  });
+});

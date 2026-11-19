@@ -1807,3 +1807,24 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     deniedFor(runHook('yarn install', ROUTES));
   });
 });
+
+// ───────────────── install-vet-npm-exec-bool-word — a launcher line is read as the launcher reads it, through the dispatcher
+
+describe('install-vet-npm-exec-bool-word', () => {
+  // `evil-cli-zy` is malicious only here. `true` and `false` have no route: the registry is never asked for them when the line is read right.
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-cli-zy': npmDoc('1.0.0'),
+    [OSV]: { osv: { 'evil-cli-zy@1.0.0': ['MAL-2026-0088'] } },
+  };
+
+  it.each(['npm exec --yes true evil-cli-zy', 'npm exec --prefer-offline false evil-cli-zy', 'pnpm dlx -c evil-cli-zy'])(
+    'T-03 %s is DENIED for the package, not for a `true` / `false` that is a flag value',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/evil-cli-zy.*MAL-2026-0088/s);
+      expect(r.requests.filter((u) => /registry\.npmjs\.org\/(?:true|false)(?:$|[/?])/.test(u))).toEqual([]);
+    },
+  );
+});
