@@ -164,6 +164,8 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
     );
     expect([...ids].sort()).toEqual([
       'archive-like-names',
+      'corepack-manager-download',
+      'install-other-runners',
       'manifest-lockfile-and-transitive',
       'manifest-not-from-a-registry',
       'manifest-other-managers',

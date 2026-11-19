@@ -759,6 +759,22 @@ function commandStart(words: readonly ShellWord[]): number {
   return commandWordIndex(words);
 }
 
+/**
+ * The six names corepack 0.36.0 takes as the first word after `corepack` (measured, and read in its code: the word is
+ * split at its first `@`, lower case only, and no flag of corepack may stand before it), with the name each is read as:
+ * `yarnpkg` is Yarn's second name.
+ */
+const COREPACK_MANAGERS: ReadonlyMap<string, string> = new Map([
+  ['yarn', 'yarn'], ['yarnpkg', 'yarn'], ['pnpm', 'pnpm'], ['pnpx', 'pnpx'], ['npm', 'npm'], ['npx', 'npx'],
+]);
+
+/** The manager `corepack <word>` runs — `yarn@4.18.1`, `npm@^11`, `pnpm@latest` — or `undefined` when the word is none of the six. */
+function corepackManager(word: string | undefined): string | undefined {
+  if (word === undefined) return undefined;
+  const at = word.indexOf('@');
+  return COREPACK_MANAGERS.get(at < 0 ? word : word.slice(0, at));
+}
+
 const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall']);
 /** npm's subcommands that install the manifest and take no package: `ci`, `install-test`, `install-ci-test` and their aliases. */
 const NPM_MANIFEST_INSTALL = new Set([
@@ -919,6 +935,18 @@ function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): D
   }
   if (/^pip[0-9.]*$/.test(head)) head = 'pip';
   if (head === 'composer.phar') head = 'composer';
+  if (head === 'yarnpkg') head = 'yarn';
+  if (head === 'corepack') {
+    // `corepack <manager>[@version] <rest>` runs the manager on <rest>; `use <manager>` and `up` install the project's manifest.
+    const first = words[start + 1]?.value;
+    const via = corepackManager(first);
+    if (via !== undefined) {
+      head = via;
+      i = start + 2;
+    } else if (first === 'up' || (first === 'use' && corepackManager(words[start + 2]?.value) !== undefined)) {
+      return { manager: 'npm', ecosystem: 'npm', args: [], pre: [], uncertain: [], manifest: 'always' };
+    } else return null;
+  }
 
   // The launchers named by themselves (review P1).
   const rest = words.slice(i);
@@ -1557,7 +1585,10 @@ function confidentShape(text: string): string | null {
   if (quote !== null) return notSingle('unterminated quote');
   if (has) words.push(cur);
 
-  const [tool, ...rest] = words;
+  // `corepack yarn@4 add p` is as plain as `yarn add p`; `yarnpkg` is `yarn`.
+  const viaCorepack = words[0] === 'corepack' ? corepackManager(words[1]) : undefined;
+  const [named, ...rest] = viaCorepack === undefined ? words : [viaCorepack, ...words.slice(2)];
+  const tool = named === 'yarnpkg' ? 'yarn' : named;
   if (tool === undefined) return notSingle('empty');
   const at = (k: number): string => rest[k] ?? '';
   let key: string;

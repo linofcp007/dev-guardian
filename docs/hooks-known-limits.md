@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **32 limits**, 28 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **34 limits**, 30 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -125,6 +125,16 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
 - The line may be said for an install that IS global, when the command says global in a way the hook does not take as certain: a variable in the command (`npm install -g $FLAGS thing`), `-g` with `--location=project`, a short cluster such as `-gD`, a global word that follows a flag taking a value (`--tag --global`), a flag the hook's table does not know beside `-g` (`--unsafe-perm`). The hook reads a global install only when a word says so and no word can take it back; a line too many is the price, never one too few.
 - The indexes a project file gives PyPI, Composer and NuGet (`pyproject.toml`, `uv.toml`, `composer.json`, `nuget.config`) are said only when a name is missing from the public registry, as the warning's reason; an install that finds every name there carries no line about them.
   - No test runs it: The line is added to an install that is vetted against a registry's answers, and the harness of the known limits runs offline: a hook that is offline says what it could not verify, never the line. `hookDecision.test.ts` and `hooksPkgVet.test.ts` (T-03 to T-09, `install-vet-project-registry-said`) hold it, with a registry stand-in and through the dispatcher..
+- An install through `corepack <manager>[@version]` is vetted as the manager's own (`corepack yarn add <name>`, `corepack pnpm install`, `corepack use <manager>`, `corepack up`; `yarnpkg` is `yarn`). What the hook does not see is the package manager that corepack itself downloads: with no version fixed it fetches the newest release, and Yarn 2 and later come from `repo.yarnpkg.com`, none of it looked up against a registry or an advisory. `corepack prepare`, `corepack install` and `corepack enable` only download or link the manager and name nothing of the project, so they are not read as installs. Fix the manager's version (`packageManager` in `package.json`) and vet it with `vet_packages` before it is downloaded.
+  - `Bash` on PreToolUse, input `{"command":"corepack prepare yarn@4.18.1 --activate"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"corepack install -g pnpm@latest"}` → `none` (no answer)
+- Tool runners in front of a package manager, other than `corepack` and the shell's own (`sudo`, `env`, `time`, …), are not followed: `volta run`, `fnm exec`, `mise exec --`, `asdf exec`, `nvm exec`, `dotenv --`, `cross-env VAR=x`, `doppler run --` and `op run --`. An install behind one of them is not vetted. Their syntax is taken from their documentation: none of them was run here.
+  - `Bash` on PreToolUse, input `{"command":"volta run npm install left-pad"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"fnm exec npm install left-pad"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"mise exec -- npm install left-pad"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"asdf exec npm install left-pad"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"dotenv -- npm install left-pad"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"cross-env VAR=x npm install left-pad"}` → `none` (no answer)
 
 ## The write guards
 

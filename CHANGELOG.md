@@ -18,6 +18,14 @@ version bump.
   <package>`, `yarn --network-concurrency 1`). Present since 3.0.0. The word after such a flag is now vetted as a
   possible package and the command is marked uncertain, so a name the registry does not have is a warning, never a
   deny; the manifest is still read when that word is the only thing named. Update; there is nothing to rotate.
+- **An install through `corepack`, or with the name `yarnpkg`, passed without being vetted.** The hook did not know
+  the words, so `corepack yarn add <package>`, `corepack pnpm install`, `corepack npx <package>`,
+  `corepack use <manager>`, `corepack up` and `yarnpkg add <package>` were neither looked up nor mentioned, and a
+  malicious package, or one named in the project's `package.json`, went in. Present since 3.0.0. `corepack
+  <manager>[@version] …` is now read as `<manager> …` (the six names corepack takes: `yarn`, `yarnpkg`, `pnpm`,
+  `pnpx`, `npm`, `npx`), `yarnpkg` as `yarn`, and `corepack use` and `corepack up` as an install of the manifest. The
+  manager that corepack itself downloads, and installs behind other tool runners (`volta run`, `mise exec --`, …),
+  are still not vetted; both are recorded in the known limits. Update; there is nothing to rotate.
 
 ## [3.13.0] - 2026-11-19
 

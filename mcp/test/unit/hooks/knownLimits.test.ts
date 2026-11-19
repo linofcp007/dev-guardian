@@ -388,6 +388,8 @@ describe("the hooks' known limits, as data", () => {
 describe('the limits of the manifest vetting, as data', () => {
   const WANTED = [
     'archive-like-names',
+    'corepack-manager-download',
+    'install-other-runners',
     'manifest-lockfile-and-transitive',
     'manifest-not-from-a-registry',
     'manifest-other-managers',

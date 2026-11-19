@@ -5672,7 +5672,7 @@ var mayInstall_exports = {};
 __export(mayInstall_exports, {
   mayInstall: () => mayInstall
 });
-var INSTALLER_WORD = /(?:^|[^\w.-])(?:npm|pnpm|pnpx|npx|yarn|bunx?|pipx?|pip\d[\d.]*|uvx?|poetry|composer|dotnet)(?:$|[^\w-])/i;
+var INSTALLER_WORD = /(?:^|[^\w.-])(?:npm|pnpm|pnpx|npx|yarn|yarnpkg|corepack|bunx?|pipx?|pip\d[\d.]*|uvx?|poetry|composer|dotnet)(?:$|[^\w-])/i;
 function mayInstall(command) {
   const unquoted = command.replace(/['"`]/g, "");
   return INSTALLER_WORD.test(unquoted.replace(/\\/g, "")) || INSTALLER_WORD.test(unquoted.replace(/\\/g, "/"));

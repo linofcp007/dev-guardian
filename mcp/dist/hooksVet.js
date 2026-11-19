@@ -3351,6 +3351,19 @@ function base(word) {
 function commandStart(words) {
   return commandWordIndex(words);
 }
+var COREPACK_MANAGERS = /* @__PURE__ */ new Map([
+  ["yarn", "yarn"],
+  ["yarnpkg", "yarn"],
+  ["pnpm", "pnpm"],
+  ["pnpx", "pnpx"],
+  ["npm", "npm"],
+  ["npx", "npx"]
+]);
+function corepackManager(word) {
+  if (word === void 0) return void 0;
+  const at = word.indexOf("@");
+  return COREPACK_MANAGERS.get(at < 0 ? word : word.slice(0, at));
+}
 var NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall"]);
 var NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
   "ci",
@@ -3441,6 +3454,17 @@ function detectReading(words, flagWordIsValue) {
   }
   if (/^pip[0-9.]*$/.test(head)) head = "pip";
   if (head === "composer.phar") head = "composer";
+  if (head === "yarnpkg") head = "yarn";
+  if (head === "corepack") {
+    const first = words[start + 1]?.value;
+    const via = corepackManager(first);
+    if (via !== void 0) {
+      head = via;
+      i = start + 2;
+    } else if (first === "up" || first === "use" && corepackManager(words[start + 2]?.value) !== void 0) {
+      return { manager: "npm", ecosystem: "npm", args: [], pre: [], uncertain: [], manifest: "always" };
+    } else return null;
+  }
   const rest = words.slice(i);
   if (head === "npx") return launcher("npx", "npm", rest, [], { style: "run", flags: "npx", localFirst: true });
   if (head === "pnpx") return launcher("pnpm", "npm", rest, [], { style: "run", flags: "pnpm-dlx" });
@@ -4006,7 +4030,9 @@ function confidentShape(text) {
   }
   if (quote !== null) return notSingle("unterminated quote");
   if (has2) words.push(cur);
-  const [tool, ...rest] = words;
+  const viaCorepack = words[0] === "corepack" ? corepackManager(words[1]) : void 0;
+  const [named, ...rest] = viaCorepack === void 0 ? words : [viaCorepack, ...words.slice(2)];
+  const tool = named === "yarnpkg" ? "yarn" : named;
   if (tool === void 0) return notSingle("empty");
   const at = (k) => rest[k] ?? "";
   let key;
