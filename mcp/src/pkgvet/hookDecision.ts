@@ -74,6 +74,7 @@ import { MAX_CANDIDATES_PER_COMMAND, parseInstallCommands, type CommandShell, ty
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
 import {
+  gitRepositoryRoot,
   npmEnvNamesDefaultRegistry,
   npmProjectDefaultRegistry,
   npmScopeRegistryOf,
@@ -308,6 +309,8 @@ function withManifestPackages(
   locked: LockedProject[],
 ): VetCommand[] {
   const out: VetCommand[] = [];
+  // The root a manifest or a lockfile is looked for up to: the project directory, or the root of the git repository it is in.
+  const top = opts.projectDir === undefined ? undefined : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
   const lineAsked = new Map<string, string[]>();
   let userRegistries: string[] | undefined;
   const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
@@ -331,7 +334,7 @@ function withManifestPackages(
     let base = dir;
     try {
       if (manifest.kind === 'package-json') {
-        const nearest = readNearestManifest(c.manager, dir, opts.projectDir);
+        const nearest = readNearestManifest(c.manager, dir, opts.projectDir, top);
         base = nearest.dir;
         reads = [nearest.read];
       } else {
@@ -345,7 +348,7 @@ function withManifestPackages(
     for (const read of reads) {
       if (read.status === 'absent') continue;
       // The lockfile is what the manager installs, whether or not the manifest could be read.
-      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, base, read, opts, registry, notes) : undefined;
+      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, base, read, opts, top, registry, notes) : undefined;
       if (lock !== undefined) locked.push(lock);
       if (read.status === 'unreadable') {
         notes.push(`dev-guardian: ${read.file} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
@@ -522,10 +525,10 @@ type LockFound =
  * the hooks' bounded reader, below the project root (a link to a network path
  * is refused), so a FIFO, a device or a share in its place cannot hold the hook.
  */
-function findLockfile(manager: string, dir: string, projectDir: string | undefined): LockFound {
+function findLockfile(manager: string, dir: string, projectDir: string | undefined, top: string | undefined): LockFound {
   const names = manager === 'npm' || manager === 'pnpm' || manager === 'yarn' || manager === 'bun' ? LOCKFILES[manager] : [];
   if (names.length === 0) return { status: 'absent' };
-  const { root, dirs } = climb(dir, projectDir);
+  const { root, dirs } = climb(dir, projectDir, top);
   // The manifest read already says that a directory on the network was not read.
   if (isNetworkPath(dir) || isNetworkPath(root)) return { status: 'absent' };
   const candidates = manager === 'bun' ? [...names, 'bun.lockb'] : names;
@@ -547,11 +550,12 @@ function findLockfile(manager: string, dir: string, projectDir: string | undefin
 
 /**
  * `dir` and each directory above it up to the project root, nearest first — the one bound of what a command's
- * directory may read upward, for the lockfile and the manifest alike. With no `projectDir`, or a `dir` outside it,
- * only `dir`: nothing above the project is ever read.
+ * directory may read upward, for the lockfile and the manifest alike. The root is `top` — the root of the git
+ * repository the project directory is in ({@link gitRepositoryRoot}) — or else `projectDir`. With no `projectDir`, or
+ * a `dir` outside it, only `dir`: nothing above that root is ever read.
  */
-function climb(dir: string, projectDir: string | undefined): { root: string; dirs: string[] } {
-  const root = projectDir !== undefined && isWithin(projectDir, dir) ? resolve(projectDir) : resolve(dir);
+function climb(dir: string, projectDir: string | undefined, top: string | undefined): { root: string; dirs: string[] } {
+  const root = projectDir !== undefined && isWithin(projectDir, dir) ? resolve(top ?? projectDir) : resolve(dir);
   const dirs: string[] = [];
   let at = resolve(dir);
   for (let i = 0; i < 64; i += 1) {
@@ -569,11 +573,11 @@ function climb(dir: string, projectDir: string | undefined): { root: string; dir
  * the answer too (a manager would stop there). None at all: the `absent` of `dir`. A manifest above `dir` is named
  * by its path from `dir`, in POSIX form (`../package.json`); `dir` of the answer is the directory it was read in.
  */
-function readNearestManifest(manager: string, dir: string, projectDir: string | undefined): { read: ManifestRead; dir: string } {
+function readNearestManifest(manager: string, dir: string, projectDir: string | undefined, top: string | undefined): { read: ManifestRead; dir: string } {
   const here = resolve(dir);
   const absent = readNpmManifest(here, manager);
   if (absent.status !== 'absent') return { read: absent, dir: here };
-  for (const at of climb(dir, projectDir).dirs.slice(1)) {
+  for (const at of climb(dir, projectDir, top).dirs.slice(1)) {
     const read = readNpmManifest(at, manager);
     if (read.status === 'absent') continue;
     return { read: { ...read, file: `${relative(here, at).split(sep).join('/')}/${read.file}` }, dir: at };
@@ -685,11 +689,12 @@ function lockedProject(
   dir: string,
   manifest: ManifestRead,
   opts: HookVetOptions,
+  top: string | undefined,
   registry: RegistryContext,
   notes: string[],
 ): LockedProject | undefined {
   try {
-    const found = findLockfile(c.manager, dir, opts.projectDir);
+    const found = findLockfile(c.manager, dir, opts.projectDir, top);
     if (found.status === 'absent') return undefined;
     if (found.status === 'unread') {
       notes.push(notReadLine(found.file, found.why));

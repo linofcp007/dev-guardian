@@ -355,6 +355,16 @@ function ancestors(ctx: RegistryContext): string[] {
   return out;
 }
 
+/**
+ * The root of the git repository the project directory is in — the first of {@link ancestors} that holds a `.git` (a
+ * directory, or a file as in a worktree or a submodule) — or `undefined`: no repository, or one above the user's home,
+ * 16 directories up or more. The same limits as the registry files', so both walks agree on the project.
+ */
+export function gitRepositoryRoot(ctx: RegistryContext): string | undefined {
+  const top = ancestors(ctx).at(-1);
+  return top !== undefined && present(join(top, '.git')) ? top : undefined;
+}
+
 function envOf(ctx: RegistryContext): Readonly<Record<string, string | undefined>> {
   return ctx.env ?? process.env;
 }

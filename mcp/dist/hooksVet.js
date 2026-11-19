@@ -4948,6 +4948,10 @@ function ancestors(ctx) {
   }
   return out;
 }
+function gitRepositoryRoot(ctx) {
+  const top = ancestors(ctx).at(-1);
+  return top !== void 0 && present(join4(top, ".git")) ? top : void 0;
+}
 function envOf(ctx) {
   return ctx.env ?? process.env;
 }
@@ -6346,6 +6350,7 @@ var NAMED_BY_MANIFEST = "it is named by a manifest, where a missing name is usua
 var plural = (n) => n === 1 ? "1 package" : `${String(n)} packages`;
 function withManifestPackages(parsed, opts, registry, notes, locked) {
   const out = [];
+  const top = opts.projectDir === void 0 ? void 0 : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
   const lineAsked = /* @__PURE__ */ new Map();
   let userRegistries;
   const user = () => userRegistries ??= npmUserRegistries(registry);
@@ -6366,7 +6371,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
     let base2 = dir;
     try {
       if (manifest.kind === "package-json") {
-        const nearest = readNearestManifest(c.manager, dir, opts.projectDir);
+        const nearest = readNearestManifest(c.manager, dir, opts.projectDir, top);
         base2 = nearest.dir;
         reads = [nearest.read];
       } else {
@@ -6378,7 +6383,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
     }
     for (const read2 of reads) {
       if (read2.status === "absent") continue;
-      const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, base2, read2, opts, registry, notes) : void 0;
+      const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, base2, read2, opts, top, registry, notes) : void 0;
       if (lock !== void 0) locked.push(lock);
       if (read2.status === "unreadable") {
         notes.push(`dev-guardian: ${read2.file} was not read (${read2.reason ?? "could not be read"}) \u2014 its packages were not vetted.`);
@@ -6472,10 +6477,10 @@ function isWithin(root, dir) {
   const rel = relative3(resolve4(root), resolve4(dir));
   return rel === "" || rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute3(rel);
 }
-function findLockfile(manager, dir, projectDir) {
+function findLockfile(manager, dir, projectDir, top) {
   const names = manager === "npm" || manager === "pnpm" || manager === "yarn" || manager === "bun" ? LOCKFILES[manager] : [];
   if (names.length === 0) return { status: "absent" };
-  const { root, dirs } = climb(dir, projectDir);
+  const { root, dirs } = climb(dir, projectDir, top);
   if (isNetworkPath(dir) || isNetworkPath(root)) return { status: "absent" };
   const candidates = manager === "bun" ? [...names, "bun.lockb"] : names;
   for (const at of dirs) {
@@ -6492,8 +6497,8 @@ function findLockfile(manager, dir, projectDir) {
   }
   return { status: "absent" };
 }
-function climb(dir, projectDir) {
-  const root = projectDir !== void 0 && isWithin(projectDir, dir) ? resolve4(projectDir) : resolve4(dir);
+function climb(dir, projectDir, top) {
+  const root = projectDir !== void 0 && isWithin(projectDir, dir) ? resolve4(top ?? projectDir) : resolve4(dir);
   const dirs = [];
   let at = resolve4(dir);
   for (let i = 0; i < 64; i += 1) {
@@ -6504,11 +6509,11 @@ function climb(dir, projectDir) {
   }
   return { root, dirs };
 }
-function readNearestManifest(manager, dir, projectDir) {
+function readNearestManifest(manager, dir, projectDir, top) {
   const here = resolve4(dir);
   const absent = readNpmManifest(here, manager);
   if (absent.status !== "absent") return { read: absent, dir: here };
-  for (const at of climb(dir, projectDir).dirs.slice(1)) {
+  for (const at of climb(dir, projectDir, top).dirs.slice(1)) {
     const read2 = readNpmManifest(at, manager);
     if (read2.status === "absent") continue;
     return { read: { ...read2, file: `${relative3(here, at).split(sep).join("/")}/${read2.file}` }, dir: at };
@@ -6587,9 +6592,9 @@ function pairsToAsk(read2, registry) {
   }
   return { asked, heldByProject: [...heldKeys].filter((key) => !askedKeys.has(key)).length, scopes, source };
 }
-function lockedProject(c, dir, manifest, opts, registry, notes) {
+function lockedProject(c, dir, manifest, opts, top, registry, notes) {
   try {
-    const found = findLockfile(c.manager, dir, opts.projectDir);
+    const found = findLockfile(c.manager, dir, opts.projectDir, top);
     if (found.status === "absent") return void 0;
     if (found.status === "unread") {
       notes.push(notReadLine(found.file, found.why));

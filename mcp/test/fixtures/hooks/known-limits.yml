@@ -655,7 +655,7 @@
 - id: manifest-above-project-root
   area: install-vetting
   doc: |-
-    The package managers look for a `package.json` above the directory they run in, past the project root: npm, pnpm, Yarn 1 and 4 and bun were measured, and none stops at a `.git` or at the home directory. The hook reads the nearest `package.json` from where the command runs up to the project root and no further, so a manifest above the project root — installed by a command run in a folder of the project that has none — is installed unvetted, and nothing is said.
+    The package managers look for a `package.json` above the directory they run in, past the project root: npm, pnpm, Yarn 1 and 4 and bun were measured, and none stops at a `.git` or at the home directory. The hook reads the nearest `package.json` from where the command runs up to the project root — the root of the git repository when the session was opened in a subfolder of one (the first folder above with a `.git`, at most 16 folders up, never the home directory) — and no further, so a manifest above that root, or above a project that is in no repository, is installed unvetted, and nothing is said.
   examples:
     - detector: hook
       event: PreToolUse
