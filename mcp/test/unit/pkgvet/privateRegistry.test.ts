@@ -1206,7 +1206,7 @@ describe('pkgvet-public-registry-url-parse', () => {
 // ───────────────── install-vet-project-registry-said — which project file sets the default registry, per manager
 
 describe('install-vet-project-registry-said', () => {
-  type ProjectDefault = (manager: string, ctx: RegistryContext) => { source: string; url: string } | null;
+  type ProjectDefault = (manager: string, ctx: RegistryContext) => Array<{ source: string; url: string }>;
 
   /**
    * The function is looked up at run time: it is the export this feature adds, and a named import of a missing
@@ -1239,15 +1239,21 @@ describe('install-vet-project-registry-said', () => {
   /** What a command run in `dir` (below the project) is answered, the path normalised, and what it was asked. */
   const answer = (manager: string, dir: string): unknown => {
     const r = projectDefault()(manager, { ...ctx(), projectDir: join(project, dir) });
-    return { manager, dir, answer: r === null ? null : { source: resolve(r.source), url: r.url } };
+    return { manager, dir, answer: Array.isArray(r) ? r.map((e) => ({ source: resolve(e.source), url: e.url })) : r };
   };
-  /** The answer that names the file `rel` of the project and the registry `url`. */
+  /** The answer that names the file `rel` of the project and the registry `url`: one entry. */
   const found = (manager: string, dir: string, rel: string, url = OTHER): unknown => ({
     manager,
     dir,
-    answer: { source: resolve(project, rel), url },
+    answer: [{ source: resolve(project, rel), url }],
   });
-  const nothing = (manager: string, dir = ''): unknown => ({ manager, dir, answer: null });
+  /** The answer that lists every file, in the order given (the nearest first). */
+  const foundAll = (manager: string, dir: string, entries: Array<[rel: string, url: string]>): unknown => ({
+    manager,
+    dir,
+    answer: entries.map(([rel, url]) => ({ source: resolve(project, rel), url })),
+  });
+  const nothing = (manager: string, dir = ''): unknown => ({ manager, dir, answer: [] });
 
   const NPM_FAMILY = ['npm', 'npx', 'pnpm', 'bun', 'yarn'];
 
@@ -1311,24 +1317,73 @@ describe('install-vet-project-registry-said', () => {
     expect(answer('yarn', web)).toEqual(found('yarn', web, file));
   });
 
-  it("T-01 the nearest file wins: the project's own .npmrc over the one of the workspace root above it", () => {
+  // Adjusted to the array contract: the nearest file is listed first, and the workspace root's follows it.
+  it("T-01 the project's own .npmrc is listed first, the one of the workspace root above it after", () => {
     const web = join('packages', 'web');
     put('package.json', WORKSPACES);
     put('.npmrc', NPMRC);
     put(join(web, 'package.json'), MANIFEST);
     put(join(web, '.npmrc'), `registry=${NEARER}\n`);
     for (const manager of NPM_FAMILY) {
-      expect(answer(manager, web)).toEqual(found(manager, web, join(web, '.npmrc'), NEARER));
+      expect(answer(manager, web)).toEqual(
+        foundAll(manager, web, [
+          [join(web, '.npmrc'), NEARER],
+          ['.npmrc', OTHER],
+        ]),
+      );
     }
   });
 
-  it('T-01 yarn: the nearest of the plain directories above wins', () => {
+  it('T-01 yarn: both of the plain directories above are listed, the nearest first', () => {
     const app = join('mid', 'app');
     repository();
     put('.yarnrc.yml', YARNRC_YML);
     put(join('mid', '.yarnrc.yml'), `npmRegistryServer: "${NEARER}"\n`);
     put(join(app, 'package.json'), MANIFEST);
-    expect(answer('yarn', app)).toEqual(found('yarn', app, join('mid', '.yarnrc.yml'), NEARER));
+    expect(answer('yarn', app)).toEqual(
+      foundAll('yarn', app, [
+        [join('mid', '.yarnrc.yml'), NEARER],
+        ['.yarnrc.yml', OTHER],
+      ]),
+    );
+  });
+
+  it.each(['npm', 'pnpm', 'bun'])('T-01 %s: a member .npmrc and the workspace root .npmrc with different registries are both returned, the member first', (manager) => {
+    const web = join('packages', 'web');
+    repository();
+    put('package.json', WORKSPACES);
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    put(join(web, '.npmrc'), `registry=${NEARER}\n`);
+    expect(answer(manager, web)).toEqual(
+      foundAll(manager, web, [
+        [join(web, '.npmrc'), NEARER],
+        ['.npmrc', OTHER],
+      ]),
+    );
+  });
+
+  it('T-01 yarn: a .npmrc with one registry and a .yarnrc.yml with another in the same directory are both returned', () => {
+    repository();
+    put('package.json', MANIFEST);
+    put('.npmrc', `registry=${NEARER}\n`);
+    put('.yarnrc.yml', YARNRC_YML);
+    expect(answer('yarn', '')).toEqual(
+      foundAll('yarn', '', [
+        ['.npmrc', NEARER],
+        ['.yarnrc.yml', OTHER],
+      ]),
+    );
+  });
+
+  it('T-01 a file with the public registry beside one with another registry: only the other is returned', () => {
+    repository();
+    put('package.json', MANIFEST);
+    put('.npmrc', 'registry=https://registry.npmjs.org/\n');
+    put('.yarnrc.yml', YARNRC_YML);
+    put('bunfig.toml', BUNFIG);
+    expect(answer('yarn', '')).toEqual(found('yarn', '', '.yarnrc.yml'));
+    expect(answer('bun', '')).toEqual(found('bun', '', 'bunfig.toml'));
   });
 
   // ── nothing: the answer is null
@@ -1398,5 +1453,50 @@ describe('install-vet-project-registry-said', () => {
     put('package.json', MANIFEST);
     mkdirSync(join(project, '.npmrc'));
     for (const manager of NPM_FAMILY) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  // ── T-09: a repeated key is read at its LAST value, by every reader and in every question
+
+  const PUBLIC = 'https://registry.npmjs.org/';
+  const PUBLIC_YARN = 'https://registry.yarnpkg.com';
+  /** The project: a repository with a manifest and one configuration file. */
+  const configured = (file: string, text: string): void => {
+    repository();
+    put('package.json', MANIFEST);
+    put(file, text);
+  };
+
+  it('T-09 .npmrc: registry= public then registry= other is the other; the reverse is the public registry', () => {
+    configured('.npmrc', `registry=${PUBLIC}\nregistry=${OTHER}\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question').toMatchObject({ url: OTHER });
+    expect(answer('npm', '')).toEqual(found('npm', '', '.npmrc'));
+    put('.npmrc', `registry=${OTHER}\nregistry=${PUBLIC}\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question, reversed').toBeNull();
+    expect(answer('npm', '')).toEqual(nothing('npm'));
+  });
+
+  it('T-09 .npmrc: @s:registry= public then @s:registry= other is the other for npmScopeRegistry; the reverse is null', () => {
+    configured('.npmrc', `@s:registry=${PUBLIC}\n@s:registry=${OTHER}\n`);
+    expect(npmScopeRegistry('@s/pkg', ctx())).toMatchObject({ scope: 's', url: OTHER, from: 'project' });
+    put('.npmrc', `@s:registry=${OTHER}\n@s:registry=${PUBLIC}\n`);
+    expect(npmScopeRegistry('@s/pkg', ctx())).toBeNull();
+  });
+
+  it('T-09 .yarnrc: registry "public" then registry "other" is the other; the reverse is the public registry', () => {
+    configured('.yarnrc', `registry "${PUBLIC_YARN}"\nregistry "${OTHER}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question').toMatchObject({ url: OTHER });
+    expect(answer('yarn', '')).toEqual(found('yarn', '', '.yarnrc'));
+    put('.yarnrc', `registry "${OTHER}"\nregistry "${PUBLIC_YARN}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question, reversed').toBeNull();
+    expect(answer('yarn', '')).toEqual(nothing('yarn'));
+  });
+
+  it('T-09 .yarnrc.yml: two top-level npmRegistryServer keys, the last is the one', () => {
+    configured('.yarnrc.yml', `npmRegistryServer: "${PUBLIC_YARN}"\nnpmRegistryServer: "${OTHER}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question').toMatchObject({ url: OTHER });
+    expect(answer('yarn', '')).toEqual(found('yarn', '', '.yarnrc.yml'));
+    put('.yarnrc.yml', `npmRegistryServer: "${OTHER}"\nnpmRegistryServer: "${PUBLIC_YARN}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question, reversed').toBeNull();
+    expect(answer('yarn', '')).toEqual(nothing('yarn'));
   });
 });

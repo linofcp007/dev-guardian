@@ -2999,4 +2999,107 @@ describe('install-vet-project-registry-said', () => {
     expect(d?.context).toBe(lineFor('.npmrc', null));
     noLeak(d?.context ?? '');
   });
+
+  // ── T-09: the last value of a repeated key, every file a manager may obey, at most three lines, nothing for a global install
+
+  const hostOf = (name: string): string => `https://npm.${name}.example`;
+  /** The decision for `command` run in `cwd`, a directory of the temp project. */
+  const decideIn = (cwd: string, command: string): ReturnType<typeof decideInstallCommand> =>
+    decideInstallCommand(command, opts(net().fetchImpl, { cwd, env: { GUARDIAN_OFFLINE: '0' } }));
+  /** The temp project as a repository, so that no walk climbs out of it. */
+  const repository = (): void => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+  };
+
+  it('T-09 a registry= repeated in the .npmrc: the line is said with the host of the LAST value', async () => {
+    repository();
+    project1('.npmrc', `registry=${hostOf('first')}/\nregistry=${OTHER}\n`);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toBe(lineFor('.npmrc', HOST));
+  });
+
+  it('T-09 the registry of the user on the first line and another on the second: the line is said, with the other host', async () => {
+    repository();
+    put(home, '.npmrc', NPMRC);
+    project1('.npmrc', `registry=${OTHER}\nregistry=${hostOf('second')}/\n`);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('.npmrc', hostOf('second')));
+  });
+
+  it('T-09 a public .npmrc and a .yarnrc.yml with another registry: `yarn add` says the line, naming .yarnrc.yml', async () => {
+    repository();
+    project1('.npmrc', 'registry=https://registry.npmjs.org/\n');
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    const d = await decide(`yarn add ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('.yarnrc.yml'));
+  });
+
+  it('T-09 a public .npmrc and a bunfig.toml with another registry: `bun add` says the line, naming bunfig.toml', async () => {
+    repository();
+    project1('.npmrc', 'registry=https://registry.npmjs.org/\n');
+    put(project, 'bunfig.toml', BUNFIG);
+    const d = await decide(`bun add ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('bunfig.toml'));
+  });
+
+  it('T-09 a member .npmrc and the .npmrc of the workspace root with two registries: two lines, the member first', async () => {
+    const web = join(project, 'packages', 'web');
+    repository();
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: ['packages/*'] }));
+    put(project, '.npmrc', `registry=${hostOf('root')}/\n`);
+    put(web, 'package.json', MANIFEST);
+    put(web, '.npmrc', `registry=${hostOf('member')}/\n`);
+    const d = await decideIn(web, `npm install ${CLEAN}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context?.split('\n')).toEqual([lineFor('.npmrc', hostOf('member')), lineFor('.npmrc', hostOf('root'))]);
+  });
+
+  it('T-09 four project files with four registries: three lines and a last line with the count of the rest', async () => {
+    const app = join(project, 'app');
+    repository();
+    put(app, 'package.json', MANIFEST);
+    put(app, '.npmrc', `registry=${hostOf('a')}/\n`);
+    put(app, '.yarnrc.yml', `npmRegistryServer: "${hostOf('b')}/"\n`);
+    put(app, '.yarnrc', `registry "${hostOf('c')}/"\n`);
+    put(project, '.yarnrc.yml', `npmRegistryServer: "${hostOf('d')}/"\n`);
+    const d = await decideIn(app, `yarn add ${CLEAN}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context?.split('\n')).toEqual([
+      lineFor('.npmrc', hostOf('a')),
+      lineFor('.yarnrc.yml', hostOf('b')),
+      lineFor('.yarnrc', hostOf('c')),
+      'dev-guardian: 1 more file of the project sets the default registry.',
+    ]);
+  });
+
+  it.each([
+    ['npm install -g', `npm install -g ${CLEAN}`, `npm install ${CLEAN}`],
+    ['npm install --global', `npm install --global ${CLEAN}`, `npm install ${CLEAN}`],
+    ['npm install --location=global', `npm install --location=global ${CLEAN}`, `npm install ${CLEAN}`],
+    ['pnpm add -g', `pnpm add -g ${CLEAN}`, `pnpm add ${CLEAN}`],
+    ['yarn global add', `yarn global add ${CLEAN}`, `yarn add ${CLEAN}`],
+    ['bun add -g', `bun add -g ${CLEAN}`, `bun add ${CLEAN}`],
+  ])('T-09 %s: a global install does not obey the project file, so no line — and the same project says it for the non-global command', async (_label, global, control) => {
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', NPMRC);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    put(project, 'bunfig.toml', BUNFIG);
+    expect((await decide(control))?.context ?? '', 'the control: the non-global command says the line').toContain(SAYS);
+    const d = await decide(global);
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+  });
+
+  it.each([
+    ['the user without a trailing slash, the project with one', `registry=${HOST}/team\n`, `registry=${HOST}/team/\n`],
+    ['the user with a trailing slash, the project without one', `registry=${HOST}/team/\n`, `registry=${HOST}/team\n`],
+    ['the user without a trailing slash, the project with one, no path', `registry=${HOST}\n`, NPMRC],
+    ['the user with a trailing slash, the project without one, no path', NPMRC, `registry=${HOST}\n`],
+  ])('T-09 %s: the same registry, so no line', async (_label, userText, projectText) => {
+    project1('.npmrc', projectText);
+    expect((await decide(`npm install ${CLEAN}`))?.context ?? '', 'the control: without the user file the line is said').toContain(SAYS);
+    put(home, '.npmrc', userText);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+  });
 });

@@ -830,10 +830,20 @@ describe('install-vet-project-registry-said', () => {
     expect(limit, 'a record with the id project-default-registry in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
     if (limit === undefined) return;
     expect(limit.area).toBe('install-vetting');
-    expect(limit.examples.length, 'at least one example a test runs').toBeGreaterThanOrEqual(1);
+    // The harness of the known limits runs offline and does not see the line: no example proves anything about it.
+    expect(limit.examples, 'no example: the offline harness does not see the line').toEqual([]);
+    expect((limit.not_executable ?? '').trim(), 'the reason no test of the harness can run it').not.toBe('');
     for (const said of ['Yarn 1', 'Yarn 4', 'PyPI', 'Composer', 'NuGet']) {
       expect({ said, found: limit.doc.includes(said) }).toEqual({ said, found: true });
     }
+    // What stays after the fix round: a registry variable assigned inline in the command itself, and a line that
+    // names a file the manager ends up not obeying (a member's file under a workspace root).
+    const doc = limit.doc.toLowerCase();
+    expect({ inline: doc.includes('inline'), environment: doc.includes('environment'), workspace: doc.includes('workspace') }).toEqual({
+      inline: true,
+      environment: true,
+      workspace: true,
+    });
     expect(limit.doc, 'the indexes a project file sets are said only when a name is missing').toMatch(/\bonly\b[^.]*\bmissing\b|\bmissing\b[^.]*\bonly\b/i);
     expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
   });

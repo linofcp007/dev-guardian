@@ -1520,4 +1520,12 @@ describe('install-vet-project-registry-said', () => {
     expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('bunfig.toml'));
   });
 
+  it('T-09 a project .npmrc with registry=<public> then registry=<other>: the context has the line with the other host', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, '.npmrc', `registry=https://registry.npmjs.org/\nregistry=${HOST}/\n`);
+    const r = runHook(`npm install ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('.npmrc'));
+  });
 });
