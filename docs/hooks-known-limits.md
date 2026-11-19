@@ -145,11 +145,15 @@ A launcher that runs corepack or a package manager — `npx corepack yarn add �
   - `Bash` on PreToolUse, input `{"command":"npx pnpm add left-pad"}` → `warn`
 - A word after a flag the hook does not know is vetted as a possible package (it may be the flag's value), and a command contributes at most 50 such words. Packages the command certainly names are chosen first, but a package that is itself such a word — it follows an unknown flag — can be left out when 50 or more others stand before it on the line. The hook says how many packages of the command were not vetted; it does not deny or ask.
   - `Bash` on PreToolUse, input `{"command":"npm install --a j0 --a j1 --a j2 --a j3 --a j4 --a j5 --a j6 --a j7 --a j8 --a j9 --a j10 --a j11 --a j12 --a j13 --a j14 --a j15 --a j16 --a j17 --a j18 --a j19 --a j20 --a j21 --a j22 --a j23 --a j24 --a j25 --a j26 --a j27 --a j28 --a j29 --a j30 --a j31 --a j32 --a j33 --a j34 --a j35 --a j36 --a j37 --a j38 --a j39 --a j40 --a j41 --a j42 --a j43 --a j44 --a j45 --a j46 --a j47 --a j48 --a j49 --a j50 --a j51 --a j52 --a j53 --a j54 --a j55 --a j56 --a j57 --a j58 --a j59 --b last-pkg"}` → `warn`
-- Of the .NET commands that fetch a NuGet package, only `dotnet add package <name>`, `dotnet package add <name>` and `dotnet tool install <name>` are read, and the name is looked up. Not read: `dotnet new install <id>` (the template installer — what it asks of the sources was not measured: it refused the stand-in source), `dotnet tool update`, `dotnet tool restore` (the tool manifest) and `dotnet workload install`. They fetch without a lookup.
+- Of the .NET commands, only `dotnet add package <name>`, `dotnet package add <name>` and `dotnet tool install <name>` are read as installs of a NuGet package, and the name is looked up. Not read, and not measured, so what each one asks of the package sources is not known: `dotnet new install <id>` (the template installer: it refused the stand-in source in the one measurement made), `dotnet tool update`, `dotnet tool restore` (the tool manifest), `dotnet tool execute` / `dotnet tool exec`, `dotnet dnx` and `dnx` (the SDK help says they execute a tool from source without permanently installing it) and `dotnet workload install`. No name of theirs is looked up.
   - `Bash` on PreToolUse, input `{"command":"dotnet new install Acme.Totally.Missing.Templates"}` → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"dotnet tool update Acme.Totally.Missing.Tool"}` → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"dotnet tool restore"}` → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"dotnet workload install maui"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"dotnet tool execute Acme.Totally.Missing.Tool"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"dotnet tool exec Acme.Totally.Missing.Tool"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"dotnet dnx Acme.Totally.Missing.Tool"}` → `none` (no answer)
+  - `Bash` on PreToolUse, input `{"command":"dnx Acme.Totally.Missing.Tool"}` → `none` (no answer)
 
 ## The write guards
 

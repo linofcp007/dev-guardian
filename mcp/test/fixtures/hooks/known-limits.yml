@@ -873,7 +873,7 @@
 - id: dotnet-other-install-forms
   area: install-vetting
   doc: |-
-    Of the .NET commands that fetch a NuGet package, only `dotnet add package <name>`, `dotnet package add <name>` and `dotnet tool install <name>` are read, and the name is looked up. Not read: `dotnet new install <id>` (the template installer — what it asks of the sources was not measured: it refused the stand-in source), `dotnet tool update`, `dotnet tool restore` (the tool manifest) and `dotnet workload install`. They fetch without a lookup.
+    Of the .NET commands, only `dotnet add package <name>`, `dotnet package add <name>` and `dotnet tool install <name>` are read as installs of a NuGet package, and the name is looked up. Not read, and not measured, so what each one asks of the package sources is not known: `dotnet new install <id>` (the template installer: it refused the stand-in source in the one measurement made), `dotnet tool update`, `dotnet tool restore` (the tool manifest), `dotnet tool execute` / `dotnet tool exec`, `dotnet dnx` and `dnx` (the SDK help says they execute a tool from source without permanently installing it) and `dotnet workload install`. No name of theirs is looked up.
   examples:
     - detector: hook
       event: PreToolUse
@@ -898,4 +898,28 @@
       tool: Bash
       input:
         command: dotnet workload install maui
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dotnet tool execute Acme.Totally.Missing.Tool
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dotnet tool exec Acme.Totally.Missing.Tool
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dotnet dnx Acme.Totally.Missing.Tool
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dnx Acme.Totally.Missing.Tool
       expect: { decision: none }

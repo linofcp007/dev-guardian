@@ -2111,4 +2111,64 @@ describe('install-vet-dotnet-forms', () => {
     expect(cmd?.packages).toEqual([]);
     expect(cmd?.skipped.map((s) => s.raw)).toEqual(['$TOOL']);
   });
+
+  // The flag tables of the two new forms (the SDK 10.0.404 help): each test fails when its entry leaves the table, because the
+  // flag is then unknown and the word after it is a candidate package, or the source is no longer a registry of its own.
+  /** The command's own reading: packages, the uncertainty that says a flag is unknown, and the registry it names. */
+  const reading = (command: string): { packages: string[][]; unknownFlags: string[]; skipped: string[]; registry: string | undefined } => {
+    const cmds = parseInstallCommands(command);
+    return {
+      packages: cmds.flatMap((c) => c.packages.map((p) => [p.name, p.range ?? ''])),
+      unknownFlags: cmds.flatMap((c) => c.uncertain.filter((u) => u.startsWith('unknown flag'))),
+      skipped: cmds.flatMap((c) => c.skipped.map((s) => s.raw)),
+      registry: cmds[0]?.customRegistry,
+    };
+  };
+
+  it.each([
+    ['dotnet tool install -v diag some.tool', 'diag'],
+    ['dotnet tool install --verbosity diag some.tool', 'diag'],
+    ['dotnet tool install some.tool -v diag', 'diag'],
+  ])('review 1: `%s`: `-v` / `--verbosity` is the MSBuild verbosity, its value is neither a package nor a version', (command, value) => {
+    expect(reading(command)).toEqual({ packages: [['some.tool', '']], unknownFlags: [], skipped: [], registry: undefined });
+    expect(command).toContain(value);
+  });
+
+  it.each([
+    ['dotnet package add Some.Pkg -v 1.2.3', '1.2.3'],
+    ['dotnet package add -v 1.2.3 Some.Pkg', '1.2.3'],
+    ['dotnet add package Some.Pkg -v 1.2.3', '1.2.3'],
+  ])('review 1: `%s`: `-v` is the version of the package', (command, version) => {
+    expect(reading(command)).toEqual({ packages: [['Some.Pkg', version]], unknownFlags: [], skipped: [], registry: undefined });
+  });
+
+  it.each([
+    ['dotnet tool install --configfile ./nuget.config some.tool', './nuget.config'],
+    ['dotnet tool install --source https://feed.example/v3/index.json some.tool', 'https://feed.example/v3/index.json'],
+    ['dotnet tool install --add-source https://feed.example/v3/index.json some.tool', 'https://feed.example/v3/index.json'],
+    ['dotnet package add Some.Pkg --source https://feed.example/v3/index.json', 'https://feed.example/v3/index.json'],
+    ['dotnet package add Some.Pkg -s https://feed.example/v3/index.json', 'https://feed.example/v3/index.json'],
+  ])('review 1: `%s`: the source is a registry of its own, as in `dotnet add package`', (command, registry) => {
+    const r = reading(command);
+    expect(r.registry).toBe(registry);
+    expect(r.packages).toHaveLength(1);
+    expect(r.unknownFlags).toEqual([]);
+  });
+
+  it.each([
+    'dotnet tool install -a arm64 some.tool',
+    'dotnet tool install --arch arm64 some.tool',
+    'dotnet tool install --tool-manifest ./.config/dotnet-tools.json some.tool',
+    'dotnet tool install --tool-path ./t some.tool',
+    'dotnet tool install --framework net10.0 some.tool',
+    'dotnet package add --file app.cs Some.Pkg',
+    'dotnet package add --project app.csproj Some.Pkg',
+    'dotnet package add --package-directory ./pk Some.Pkg',
+    'dotnet package add --framework net10.0 Some.Pkg',
+  ])('review 1: `%s`: the flag takes the next word, which is not looked up as a package', (command) => {
+    const r = reading(command);
+    expect(r.packages.map((p) => p[0])).toEqual([command.endsWith('some.tool') ? 'some.tool' : 'Some.Pkg']);
+    expect(r.unknownFlags).toEqual([]);
+    expect(r.skipped).toEqual([]);
+  });
 });

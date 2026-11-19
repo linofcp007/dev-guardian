@@ -1758,4 +1758,20 @@ describe('install-vet-dotnet-forms', () => {
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
     },
   );
+
+  // A name that ends like an archive file is always a name for dotnet (measured); dotnet is not a measured manager for the
+  // archive rule, so the verdict is a warning, never a deny, and the registry is asked for the whole name.
+  it.each([
+    ['dotnet add package Dgprobe.Zzq7731.Nope.nupkg', 'dgprobe.zzq7731.nope.nupkg'],
+    ['dotnet package add Dgprobe.Zzq7731.Nope.nupkg', 'dgprobe.zzq7731.nope.nupkg'],
+    ['dotnet tool install Dgprobe.Zzq7731.Nope.zip', 'dgprobe.zzq7731.nope.zip'],
+    ['dotnet tool install -g Dgprobe.Zzq7731.Nope.nupkg', 'dgprobe.zzq7731.nope.nupkg'],
+  ])('review 1: `%s`: an archive-like name is a warning, not a deny, and NuGet is asked for the whole name', (command, asked) => {
+    const url = `https://api.nuget.org/v3-flatcontainer/${asked}/index.json`;
+    const r = runHook(command, { [url]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.requests, 'the registry is asked for the name').toContain(url);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain('not found on the public registry');
+  });
 });
