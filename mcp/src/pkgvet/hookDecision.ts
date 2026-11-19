@@ -215,21 +215,35 @@ function boundedInstalls(
   nested: ReadonlyArray<{ text: string; shell: CommandShell }> = [],
   cdpath = false,
   withManifests: (parsed: readonly InstallCommand[]) => VetCommand[] = (parsed) => [...parsed],
-): { commands: VetCommand[]; notVetted: number; manifestNotVetted: number; cut: boolean } {
+  pastDeadline: () => boolean = () => false,
+): { commands: VetCommand[]; notVetted: number; manifestNotVetted: number; cut: boolean; unassessed: number } {
   const cut = command.length > MAX_PARSED_LENGTH;
+  // The safety net of the budget (review round 2): past the deadline a launcher is no longer asked whether the project
+  // has a copy of its package — its packages go to the vetting as if fetched, which says "time budget" when it cannot
+  // look them up either. More is vetted, never less; `unassessed` is said.
+  let unassessed = 0;
   const parsed = withManifests(
-    parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) =>
+    parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) => {
       // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
       // fetch nothing: there is nothing to vet (review P1).
-      c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c,
-    ),
+      if (c.localFirst !== true) return c;
+      if (pastDeadline()) {
+        unassessed += 1;
+        return c;
+      }
+      return { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) };
+    }),
   );
   const key = (pkg: PackageSpec): string => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
   const seen = new Set<string>();
   const named: PackageSpec[] = [];
   const ofManifests: PackageSpec[] = [];
+  // A name is certain when some occurrence of it is not only a candidate (the word after a flag the parse does not know).
+  const certainKeys = new Set<string>();
   for (const c of parsed) {
+    const candidates = new Set(c.candidates);
     for (const pkg of c.packages) {
+      if (c.fromManifest === undefined && !candidates.has(pkg)) certainKeys.add(key(pkg));
       if (seen.has(key(pkg))) continue;
       seen.add(key(pkg));
       (c.fromManifest === undefined ? named : ofManifests).push(pkg);
@@ -239,7 +253,13 @@ function boundedInstalls(
   // in front of a malicious one must not push it past the cap.
   const firstOf = (unique: readonly PackageSpec[], cap: number): string[] =>
     [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, cap).map(key);
-  const chosen = new Set([...firstOf(named, MAX_VETTED_PACKAGES), ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
+  // Under the ceiling the packages the command surely names come first; the candidates take what is left, in line order.
+  const certain = firstOf(
+    named.filter((p) => certainKeys.has(key(p))),
+    MAX_VETTED_PACKAGES,
+  );
+  const candidateKeys = named.filter((p) => !certainKeys.has(key(p))).map(key).slice(0, MAX_VETTED_PACKAGES - certain.length);
+  const chosen = new Set([...certain, ...candidateKeys, ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
   const commands: VetCommand[] = [];
   for (const c of parsed) {
     const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
@@ -253,6 +273,7 @@ function boundedInstalls(
     notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES) + parsed.reduce((n, c) => n + (c.candidatesDropped ?? 0), 0),
     manifestNotVetted: Math.max(0, ofManifests.length - MAX_MANIFEST_PACKAGES),
     cut,
+    unassessed,
   };
 }
 
@@ -860,11 +881,17 @@ function installedLocally(name: string, cwd: string, byPackageFlag = false, mana
  * ({@link commandDir}): `cd mcp && npx vitest run` from the repository root ran
  * `mcp`'s own vitest, and the hook warned about the registry's newest one.
  */
-function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions): boolean {
+function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions, memo: Map<string, boolean>): boolean {
   // `--prefix` (`-C`) points npm at another project: where is not read here (review of 3.4.0, finding 5).
   if (pkg.range !== undefined || pkg.raw !== pkg.name || c.prefixed === true) return false;
   const dir = commandDir(c, opts);
-  return dir !== null && installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
+  if (dir === null) return false;
+  const key = `${dir}\0${pkg.name}\0${String(c.byPackageFlag === true)}\0${c.manager}`;
+  const known = memo.get(key);
+  if (known !== undefined) return known;
+  const found = installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
+  memo.set(key, found);
+  return found;
 }
 
 /**
@@ -984,14 +1011,19 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   /** The lockfiles of the manifest installs of the line, read. */
   const locked: LockedProject[] = [];
   const isPopular = popularTest(opts);
-  const { commands, notVetted, manifestNotVetted, cut } = boundedInstalls(
+  // One deadline for the whole call (review I4).
+  const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
+  // One lookup per directory and name, however many statements of the line name them (review round 2: 8 000 x `npx lodash;`).
+  const localCopies = new Map<string, boolean>();
+  const { commands, notVetted, manifestNotVetted, cut, unassessed } = boundedInstalls(
     command,
     shell,
     isPopular,
-    (pkg, c) => runsInstalledCopy(pkg, c, opts),
+    (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies),
     opts.nested,
     cdpath,
     (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked),
+    () => Date.now() > deadlineAt,
   );
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {
@@ -1001,8 +1033,6 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
 
   const offline = env['GUARDIAN_OFFLINE'] === '1';
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
-  // One deadline for the whole call (review I4).
-  const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
   const now = opts.now ?? Date.now();
   // The pairs the lockfiles pin, asked at once and beside the registry path: both share the budget and the deadline.
   const pairs = choosePins(
@@ -1139,6 +1169,11 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   }
   // Two installs of one line may read one lockfile twice: a line is said once.
   lines.push(...new Set([...lockLines, ...manifestNotes]));
+  if (unassessed > 0) {
+    lines.push(
+      `dev-guardian: ${unassessed} launcher commands of this line were not checked for a copy in the project (vetting time budget exhausted) — their packages were vetted as if fetched.`,
+    );
+  }
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`,

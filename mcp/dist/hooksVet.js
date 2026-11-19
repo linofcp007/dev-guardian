@@ -3734,12 +3734,16 @@ function collectLaunch(d, launch, context) {
     raws.push(...values(table.extraPackageFlags));
   }
   const packages = [];
+  const candidates = [];
+  const certainRaws = new Set(limited.kept.filter((p) => p.candidate !== true).map((p) => p.value));
+  const candidateRaws = new Set(limited.kept.filter((p) => p.candidate === true).map((p) => p.value));
   const skipped = [...pre.skipped, ...w.skipped];
   const unsure = [];
   for (const raw of raws) {
     const spec2 = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ("name" in spec2) {
       packages.push(spec2);
+      if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(spec2);
       const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0) unsure.push(why);
     } else skipped.push(spec2);
@@ -3757,6 +3761,7 @@ function collectLaunch(d, launch, context) {
   if (launch.localFirst === true) out.localFirst = true;
   if (byPackageFlag) out.byPackageFlag = true;
   if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
+  if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === "--prefix" || f.flag === "-C")) out.prefixed = true;
   return out;
 }
@@ -3784,6 +3789,7 @@ function collect(d, context) {
   if (limited.dropped > 0 && d.manifest !== "always") out.candidatesDropped = limited.dropped;
   let candidateSkipped = 0;
   let namedPackages = 0;
+  const candidatePackages = [];
   let lastComposer;
   for (const p of positionals) {
     let spec2;
@@ -3810,6 +3816,7 @@ function collect(d, context) {
     if ("name" in spec2) {
       packages.push(spec2);
       if (p.candidate !== true) namedPackages += 1;
+      else candidatePackages.push(spec2);
       const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === "packagist" ? spec2 : void 0;
@@ -3819,6 +3826,7 @@ function collect(d, context) {
       lastComposer = void 0;
     }
   }
+  if (candidatePackages.length > 0) out.candidates = candidatePackages;
   if (d.ecosystem === "nuget") {
     const extra = positionals.some((p) => p.candidate === true) ? [] : packages.splice(1);
     for (const e of extra) skipped.push(skip(e.raw, "unexpected extra argument to dotnet add package"));
@@ -6290,30 +6298,40 @@ var MAX_VETTED_PACKAGES = MAX_CANDIDATES_PER_COMMAND;
 var MAX_MANIFEST_PACKAGES = 150;
 var MANIFEST_UNREPORTED = /* @__PURE__ */ new Set(["publish_age", "install_scripts"]);
 var MAX_PARSED_LENGTH = 512 * 1024;
-function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed]) {
+function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed], pastDeadline = () => false) {
   const cut = command.length > MAX_PARSED_LENGTH;
+  let unassessed = 0;
   const parsed = withManifests(
-    parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map(
-      (c) => (
-        // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
-        // fetch nothing: there is nothing to vet (review P1).
-        c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c
-      )
-    )
+    parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) => {
+      if (c.localFirst !== true) return c;
+      if (pastDeadline()) {
+        unassessed += 1;
+        return c;
+      }
+      return { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) };
+    })
   );
   const key = (pkg) => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ""}`;
   const seen = /* @__PURE__ */ new Set();
   const named = [];
   const ofManifests = [];
+  const certainKeys = /* @__PURE__ */ new Set();
   for (const c of parsed) {
+    const candidates = new Set(c.candidates);
     for (const pkg of c.packages) {
+      if (c.fromManifest === void 0 && !candidates.has(pkg)) certainKeys.add(key(pkg));
       if (seen.has(key(pkg))) continue;
       seen.add(key(pkg));
       (c.fromManifest === void 0 ? named : ofManifests).push(pkg);
     }
   }
   const firstOf = (unique, cap) => [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, cap).map(key);
-  const chosen = /* @__PURE__ */ new Set([...firstOf(named, MAX_VETTED_PACKAGES), ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
+  const certain = firstOf(
+    named.filter((p) => certainKeys.has(key(p))),
+    MAX_VETTED_PACKAGES
+  );
+  const candidateKeys = named.filter((p) => !certainKeys.has(key(p))).map(key).slice(0, MAX_VETTED_PACKAGES - certain.length);
+  const chosen = /* @__PURE__ */ new Set([...certain, ...candidateKeys, ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
   const commands = [];
   for (const c of parsed) {
     const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
@@ -6326,7 +6344,8 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
     // The candidates the parse left out past its own ceiling count as packages not vetted.
     notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES) + parsed.reduce((n, c) => n + (c.candidatesDropped ?? 0), 0),
     manifestNotVetted: Math.max(0, ofManifests.length - MAX_MANIFEST_PACKAGES),
-    cut
+    cut,
+    unassessed
   };
 }
 var NAMED_BY_MANIFEST = "it is named by a manifest, where a missing name is usually a private or a workspace package";
@@ -6715,10 +6734,16 @@ function installedLocally(name, cwd, byPackageFlag = false, manager = "") {
   }
   return false;
 }
-function runsInstalledCopy(pkg, c, opts) {
+function runsInstalledCopy(pkg, c, opts, memo) {
   if (pkg.range !== void 0 || pkg.raw !== pkg.name || c.prefixed === true) return false;
   const dir = commandDir(c, opts);
-  return dir !== null && installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
+  if (dir === null) return false;
+  const key = `${dir}\0${pkg.name}\0${String(c.byPackageFlag === true)}\0${c.manager}`;
+  const known = memo.get(key);
+  if (known !== void 0) return known;
+  const found = installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
+  memo.set(key, found);
+  return found;
 }
 function commandDir(c, opts) {
   if (c.workdir === void 0) return resolve4(opts.cwd);
@@ -6792,14 +6817,17 @@ async function decideInstallCommand(command, opts) {
   const manifestNotes = [];
   const locked = [];
   const isPopular = popularTest(opts);
-  const { commands, notVetted, manifestNotVetted, cut } = boundedInstalls(
+  const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
+  const localCopies = /* @__PURE__ */ new Map();
+  const { commands, notVetted, manifestNotVetted, cut, unassessed } = boundedInstalls(
     command,
     shell,
     isPopular,
-    (pkg, c) => runsInstalledCopy(pkg, c, opts),
+    (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies),
     opts.nested,
     cdpath,
-    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked)
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked),
+    () => Date.now() > deadlineAt
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];
@@ -6807,7 +6835,6 @@ async function decideInstallCommand(command, opts) {
   }
   const offline = env["GUARDIAN_OFFLINE"] === "1";
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
-  const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
   const now = opts.now ?? Date.now();
   const pairs = choosePins(
     locked.flatMap((l) => l.asked),
@@ -6932,6 +6959,11 @@ ${counts.join(`
     lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
   }
   lines.push(.../* @__PURE__ */ new Set([...lockLines, ...manifestNotes]));
+  if (unassessed > 0) {
+    lines.push(
+      `dev-guardian: ${unassessed} launcher commands of this line were not checked for a copy in the project (vetting time budget exhausted) \u2014 their packages were vetted as if fetched.`
+    );
+  }
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) \u2014 not verified.`

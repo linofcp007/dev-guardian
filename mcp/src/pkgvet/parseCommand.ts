@@ -79,6 +79,11 @@ export interface InstallCommand {
    */
   candidatesDropped?: number;
   /**
+   * The packages (of {@link packages}) that are only candidates: the word after a flag the table does not know, which
+   * may be that flag's value. Under a ceiling the packages the command surely names are vetted before them.
+   */
+  candidates?: PackageSpec[];
+  /**
    * Where the command runs when a directory change earlier in the line moved
    * it: the targets of those `cd` / `pushd` / `Set-Location` words in order,
    * each relative to the one before (the hook resolves them against its own
@@ -1195,12 +1200,16 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
     raws.push(...values(table.extraPackageFlags));
   }
   const packages: PackageSpec[] = [];
+  const candidates: PackageSpec[] = [];
+  const certainRaws = new Set(limited.kept.filter((p) => p.candidate !== true).map((p) => p.value));
+  const candidateRaws = new Set(limited.kept.filter((p) => p.candidate === true).map((p) => p.value));
   const skipped: SkippedSpec[] = [...pre.skipped, ...w.skipped];
   const unsure: string[] = [];
   for (const raw of raws) {
     const spec = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ('name' in spec) {
       packages.push(spec);
+      if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(spec);
       const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined) unsure.push(why);
     } else skipped.push(spec);
@@ -1218,6 +1227,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (launch.localFirst === true) out.localFirst = true;
   if (byPackageFlag) out.byPackageFlag = true;
   if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
+  if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
   return out;
 }
@@ -1250,6 +1260,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   // thing the command surely names, so it does not stop the manifest from being read.
   let candidateSkipped = 0;
   let namedPackages = 0;
+  const candidatePackages: PackageSpec[] = [];
   let lastComposer: PackageSpec | undefined;
   for (const p of positionals) {
     let spec: PackageSpec | SkippedSpec;
@@ -1276,6 +1287,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     if ('name' in spec) {
       packages.push(spec);
       if (p.candidate !== true) namedPackages += 1;
+      else candidatePackages.push(spec);
       const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
@@ -1285,6 +1297,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
       lastComposer = undefined;
     }
   }
+
+  if (candidatePackages.length > 0) out.candidates = candidatePackages;
 
   if (d.ecosystem === 'nuget') {
     // One package per `dotnet add package`; its version is a flag. With a candidate on the line (the word after a flag
