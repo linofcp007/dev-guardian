@@ -3202,4 +3202,71 @@ describe('install-vet-unknown-flag-hides-package', () => {
     const d = await decideInstallCommand('npm install --fetch-retries 3 lodash', opts(reg.fetchImpl));
     expect(d?.deny).toBeUndefined();
   });
+
+  // ── Review round 2: the ceiling of candidates never takes the place of a package the command surely names.
+  const candidates = (n: number): string => Array.from({ length: n }, (_, i) => `--a j${String(i)}`).join(' ');
+  const lookedUp = (calls: readonly string[]): string[] => calls.filter((u) => /^https:\/\/registry\.npmjs\.org\/[^/]+$/.test(u));
+  const notVettedCount = (context: string | undefined): number | undefined => {
+    const m = /(\d+) more packages in this command were not vetted/.exec(context ?? '');
+    return m === null ? undefined : Number(m[1]);
+  };
+
+  it.each([
+    ['npm install, 50 candidates', `npm install ${candidates(50)} real`, 1],
+    ['npm install, 60 candidates', `npm install ${candidates(60)} real`, 11],
+    ['npx, 60 candidates', `npx ${candidates(60)} real`, 11],
+  ])('T-10 %s in front of a certainly named package: it is looked up, and the answer says how many candidates were left out', async (_label, command, left) => {
+    const reg = registry({ exists: ['real'] });
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    expect(lookedUp(reg.calls)).toContain('https://registry.npmjs.org/real');
+    expect(notVettedCount(d?.context)).toBe(left);
+  });
+
+  it.each([`npm install ${candidates(50)} real`, `npm install ${candidates(60)} real`, `npx ${candidates(60)} real`])(
+    'T-10 %s: a malicious `real` is DENIED, however many candidates stand in front of it',
+    async (command) => {
+      const reg = registry({ exists: ['real'], malicious: ['real'] });
+      const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+      expect(d?.deny).toMatch(/real/);
+    },
+  );
+
+  it('T-10 guard: 51 distinct candidates and no certain package — exactly 50 are looked up and 1 is said', async () => {
+    const reg = registry({ exists: [] });
+    const d = await decideInstallCommand(`npm install ${candidates(51)}`, opts(reg.fetchImpl));
+    expect(lookedUp(reg.calls)).toHaveLength(50);
+    expect(notVettedCount(d?.context)).toBe(1);
+  });
+
+  it('T-10 guard: a plain line of 51 certain names keeps its behaviour — 50 are looked up and 1 is said', async () => {
+    const names = Array.from({ length: 51 }, (_, i) => `n${String(i)}`);
+    const reg = registry({ exists: names });
+    const d = await decideInstallCommand(`npm install ${names.join(' ')}`, opts(reg.fetchImpl));
+    expect(lookedUp(reg.calls)).toHaveLength(50);
+    expect(notVettedCount(d?.context)).toBe(1);
+  });
+
+  // ── Review round 2: many statements answer within the hook's budget. The cost is per statement, so the bound is the
+  // hang-vs-fine one of the file, and the shape is read against the same number of statements of an install that has no
+  // launcher in it (8 000 `npm i lodash;` cost ~0.15 s here, 8 000 `npx lodash;` ~6 s before the fix).
+  const timed = async (command: string, reg: ReturnType<typeof registry>): Promise<{ ms: number; context: string | undefined; deny: string | undefined }> => {
+    const t0 = performance.now();
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl, { deadlineAt: Date.now() + HOOK_BUDGET_MS }));
+    return { ms: performance.now() - t0, context: d?.context, deny: d?.deny };
+  };
+  it.each([
+    ['6 000 x `npx --a x p;`', 'npx --a x p;'.repeat(6_000), 'npm install --a x p;'.repeat(6_000)],
+    ['3 000 x `npx --a x1 --b y1 p;`', 'npx --a x1 --b y1 p;'.repeat(3_000), 'npm install --a x1 --b y1 p;'.repeat(3_000)],
+    ['8 000 x `npx lodash;`', 'npx lodash;'.repeat(8_000), 'npm install lodash;'.repeat(8_000)],
+  ])('T-11 %s: the decision comes back within the hook budget, not far above the same count of plain installs, and is no silent allow', async (_label, command, reference) => {
+    const refMs = Math.min(...[await timed(reference, registry({ exists: ['lodash'] })), await timed(reference, registry({ exists: ['lodash'] })), await timed(reference, registry({ exists: ['lodash'] }))].map((r) => r.ms));
+    const reg = registry({ exists: ['lodash'] });
+    const r = await timed(command, reg);
+    expect(r.ms, `${_label}: ${r.ms.toFixed(0)} ms against ${refMs.toFixed(0)} ms for the plain installs`).toBeLessThan(hangBound(HOOK_BUDGET_MS));
+    expect(r.ms, `${_label}: ${r.ms.toFixed(0)} ms against ${refMs.toFixed(0)} ms for the plain installs`).toBeLessThan(Math.max(20 * refMs, 500));
+    expect(r.deny).toBeUndefined();
+    // Every verdict is there, or a line says that part of the command was not vetted.
+    const said = /'p': not found on the public registry/.test(r.context ?? '') || /not vetted|time budget|not verified/.test(r.context ?? '') || command.includes('lodash');
+    expect(said, 'a silent allow').toBe(true);
+  }, 600_000);
 });
