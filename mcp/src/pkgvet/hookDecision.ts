@@ -362,7 +362,8 @@ function withManifestPackages(
       }
       const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: base }, notes) : read.packages;
       // A direct dependency the lockfile records for this project leaves the registry path: its typosquat check stays.
-      const packages = lock === undefined ? inScope : withoutCovered(inScope, lock);
+      // Not for an update verb: it moves them past the pins, so every direct dependency is vetted by name (the pins still go to OSV).
+      const packages = lock === undefined || c.update === true ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read.registries];
       const custom = c.customRegistry ?? read.registries[0];

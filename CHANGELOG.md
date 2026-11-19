@@ -10,6 +10,14 @@ version bump.
 
 ### Security
 
+- **The update and maintenance verbs installed the manifest without being vetted.** `npm update` (`upgrade`, `up`),
+  `pnpm update` (`up`, `upgrade`), `yarn upgrade`, `yarn up`, `bun update`, `npm dedupe`, `npm prune`, `npm audit fix`,
+  `pnpm dedupe` and `yarn dedupe` install the project's `package.json` dependencies, the update verbs past the
+  versions the lockfile pins, and the hook did not read them as installs: in a hostile repository `npm update` installed
+  the manifest with no lookup. Present since 3.10.0, when the manifest began to be read. These verbs are now manifest
+  installs, vetted like `npm install`; an update verb also vets the direct dependencies by name at the registry even
+  when the lockfile pins them (the pins still go to OSV), and the names given to it (`npm update lodash`) are not
+  looked up as new packages. `npm update -g` reads no manifest. Update; there is nothing to rotate.
 - **An install run in a folder with no `package.json` passed without being vetted.** The package managers walk up
   to the nearest `package.json` (measured with npm, pnpm, Yarn 1 and 4, and bun), so `cd docs && npm install`, or a
   session opened in a subfolder, installs the manifest of the folder above, bare or by name. The hook read only the

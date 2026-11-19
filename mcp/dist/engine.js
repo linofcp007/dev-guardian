@@ -115728,7 +115728,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -116483,14 +116483,18 @@ var init_parseCommand = __esm({
       "clean-install-test",
       "sit"
     ]);
+    NPM_UPDATE = /* @__PURE__ */ new Set(["update", "u", "up", "upgrade", "udpate"]);
+    NPM_MAINTENANCE = /* @__PURE__ */ new Set(["dedupe", "ddp", "prune"]);
+    PNPM_UPDATE = /* @__PURE__ */ new Set(["update", "up", "upgrade"]);
+    YARN_UPDATE = /* @__PURE__ */ new Set(["upgrade", "upgrade-interactive"]);
     COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
     BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
     PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
     SUBCOMMANDS = {
-      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, "exec", "x"]),
-      pnpm: /* @__PURE__ */ new Set(["add", "dlx", ...PNPM_INSTALL]),
-      bun: /* @__PURE__ */ new Set([...BUN_ADD, "x"]),
-      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx"]),
+      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x"]),
+      pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE]),
+      bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x"]),
+      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE]),
       pip: /* @__PURE__ */ new Set(["install"]),
       uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
       poetry: /* @__PURE__ */ new Set(["add"]),

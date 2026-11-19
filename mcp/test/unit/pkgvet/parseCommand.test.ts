@@ -862,12 +862,14 @@ describe('pnpm install with a package name is a `pnpm add` (install-vet-pnpm-ins
     },
   );
 
-  it('T-02 pnpm add is read as before; pnpm install-test and pnpm update are still no install command', () => {
+  // install-vet-update-verbs: `pnpm update <name>` now installs the manifest (the name selects a dependency, no package is vetted).
+  it('T-02 pnpm add is read as before; pnpm install-test is still no install command, and pnpm update names no package', () => {
     expect(vetted('pnpm add left-pad')).toEqual([['left-pad', undefined]]);
     expect(manifests('pnpm add left-pad')).toEqual([{ kind: 'package-json' }]);
     expect(parseInstallCommands('pnpm install-test left-pad')).toEqual([]);
     expect(parseInstallCommands('pnpm it left-pad')).toEqual([]);
-    expect(parseInstallCommands('pnpm update left-pad')).toEqual([]);
+    expect(vetted('pnpm update left-pad')).toEqual([]);
+    expect(manifests('pnpm update left-pad')).toEqual([{ kind: 'package-json' }]);
     expect(parseInstallCommands('pnpm install -g')).toHaveLength(1);
     expect(manifests('pnpm install -g')).toEqual([undefined]);
   });
@@ -1964,7 +1966,17 @@ describe('install-vet-update-verbs', () => {
   });
 
   it.each(['npm update -g', 'pnpm update -g'])('T-02 guard: `%s` is global for certain and reads no manifest', (command) => {
-    expect({ command, manifests: parseInstallCommands(command).map((c) => c.manifest) }).toEqual({ command, manifests: [] });
+    expect({ command, manifests: parseInstallCommands(command).flatMap((c) => (c.manifest === undefined ? [] : [c.manifest])) }).toEqual({ command, manifests: [] });
+  });
+
+  it.each([
+    ['corepack npm update', 'npm update'],
+    ['corepack pnpm@latest update', 'pnpm update'],
+    ['corepack yarn@4.18.1 up lodash', 'yarn up lodash'],
+    ['corepack yarn dedupe', 'yarn dedupe'],
+  ])('T-01 / T-04 through corepack: `%s` reads as `%s`', (command, plain) => {
+    expect(vettable(plain), plain).toEqual([{ packages: [], manifest: MANIFEST }]);
+    expect({ command, parse: parseInstallCommands(command) }).toEqual({ command, parse: parseInstallCommands(plain) });
   });
 
   it.each([

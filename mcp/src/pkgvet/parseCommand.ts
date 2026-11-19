@@ -122,6 +122,13 @@ export interface InstallCommand {
    * the file is the hook's (`pkgvet/manifest.ts`): this module does no I/O.
    */
   manifest?: { kind: 'package-json' } | { kind: 'requirements'; files: readonly string[] };
+  /**
+   * The manifest install is an UPDATE (`npm update`, `pnpm up`, `yarn upgrade`, `yarn up <pattern>`, `bun update`): the
+   * manager moves the direct dependencies past what the lockfile pins (measured 2026-11-19), so the pins are not what
+   * will be installed. The words after the verb select dependencies of the manifest: `packages` stays empty. Only
+   * together with `manifest`.
+   */
+  update?: true;
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -854,7 +861,14 @@ const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta'
 const NPM_MANIFEST_INSTALL = new Set([
   'ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean', 'install-test', 'it', 'install-ci-test', 'cit', 'clean-install-test', 'sit',
 ]);
-const COMPOSER_REQUIRE = new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
+/** npm's `update` and its aliases (`npm help update`: u, up, upgrade, udpate): the direct dependencies move past the lockfile's pins. */
+const NPM_UPDATE = new Set(['update', 'u', 'up', 'upgrade', 'udpate']);
+/** npm's other subcommands that install the manifest as `install` does (the lockfile is obeyed): `dedupe` and its alias, `prune`. */
+const NPM_MAINTENANCE = new Set(['dedupe', 'ddp', 'prune']);
+const PNPM_UPDATE = new Set(['update', 'up', 'upgrade']);
+/** Yarn 1's `upgrade` (and its interactive form): the manifest moves past the lockfile's pins. */
+const YARN_UPDATE = new Set(['upgrade', 'upgrade-interactive']);
+const COMPOSER_REQUIRE =new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
 const BUN_ADD = new Set(['add', 'a', 'install', 'i']);
 /** pnpm's install subcommand: with a package it adds it, with none it installs the manifest. */
 const PNPM_INSTALL = new Set(['install', 'i']);
@@ -937,6 +951,8 @@ interface Detected {
    * the manager installs the manifest beside what the command names.
    */
   manifest?: 'always' | 'bare';
+  /** An update verb: a manifest install that moves the direct dependencies past the lockfile's pins ({@link InstallCommand.update}). */
+  update?: true;
 }
 
 /** A launcher as `detect` returns it. */
@@ -985,10 +1001,10 @@ function scanPositional(
 
 /** The subcommands `detect` reads for each manager: a word after an unknown flag that is none of them is that flag's value. */
 const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
-  npm: new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, 'exec', 'x']),
-  pnpm: new Set(['add', 'dlx', ...PNPM_INSTALL]),
-  bun: new Set([...BUN_ADD, 'x']),
-  yarn: new Set(['install', 'add', 'global', 'workspace', 'dlx']),
+  npm: new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, 'audit', 'exec', 'x']),
+  pnpm: new Set(['add', 'dlx', 'dedupe', ...PNPM_INSTALL, ...PNPM_UPDATE]),
+  bun: new Set([...BUN_ADD, 'update', 'x']),
+  yarn: new Set(['install', 'add', 'global', 'workspace', 'dlx', 'dedupe', 'up', ...YARN_UPDATE]),
   pip: new Set(['install']),
   uv: new Set(['add', 'pip', 'tool']),
   poetry: new Set(['add']),
@@ -1092,21 +1108,38 @@ function detect(words: readonly ShellWord[]): Detected | null {
     case 'npm':
       // `npm install` installs the manifest, with or without a package; `npm ci` and its kin always do.
       if (NPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
-      if (NPM_MANIFEST_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      if (NPM_MANIFEST_INSTALL.has(subWord) || NPM_MAINTENANCE.has(subWord)) {
+        return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      }
+      // The names after an update verb select dependencies of the manifest: none is a package (`manifest: 'always'`).
+      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      // `npm audit fix` installs the lockfile's packages; `npm audit` and `npm audit signatures` install nothing.
+      if (subWord === 'audit' && words[nextPositional(words, sub + 1, table)]?.value === 'fix') {
+        return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      }
       return null;
     case 'pnpm':
       if (subWord === 'add') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       // `pnpm install <pkg>` / `pnpm i <pkg>` is pnpm's `add` (measured, pnpm 10.33: it resolves the name as a direct
       // dependency), and installs the manifest too. Up to and including 3.10.0 the form with a package was not read at all.
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
+      if (subWord === 'dedupe') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
       return null;
     case 'bun': {
       // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too, and install the manifest.
+      if (subWord === 'update') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
       if (!BUN_ADD.has(subWord)) return null;
       return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
     }
     case 'yarn': {
-      if (subWord === 'install') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      if (subWord === 'install' || subWord === 'dedupe') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
+      if (YARN_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (subWord === 'up') {
+        // Yarn 4: `yarn up <pattern>` moves that dependency to its latest; without a pattern it installs the manifest as `install` does.
+        const update = nextPositional(words, sub + 1, table) >= 0;
+        return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', ...(update ? { update: true as const } : {}) };
+      }
       let at = sub;
       const uncertain: string[] = [];
       if (subWord === 'global') at = nextPositional(words, sub + 1, table, ADD_ONLY);
@@ -1323,6 +1356,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     // An install that names packages installs the project's manifest too (measured 2026-11-19, npm 11, pnpm 10, Yarn,
     // bun), so a package, a skipped word (`npm i ./pkg.tgz`) or a candidate word does not stop it from being read.
     out.manifest = { kind: 'package-json' };
+    if (d.update === true) out.update = true;
   }
   return out;
 }
@@ -1397,7 +1431,7 @@ export function parseInstallCommands(
 function manifestKey(c: InstallCommand): string {
   const m = c.manifest;
   if (m === undefined) return '';
-  return JSON.stringify([m.kind, m.kind === 'requirements' ? m.files : [], c.workdir ?? null, c.prefixed === true]);
+  return JSON.stringify([m.kind, m.kind === 'requirements' ? m.files : [], c.workdir ?? null, c.prefixed === true, c.update === true]);
 }
 
 /** Why a package found in a script the command hands a shell is never denied as missing. */

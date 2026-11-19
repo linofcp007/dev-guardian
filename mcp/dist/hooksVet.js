@@ -3505,6 +3505,10 @@ var NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
   "clean-install-test",
   "sit"
 ]);
+var NPM_UPDATE = /* @__PURE__ */ new Set(["update", "u", "up", "upgrade", "udpate"]);
+var NPM_MAINTENANCE = /* @__PURE__ */ new Set(["dedupe", "ddp", "prune"]);
+var PNPM_UPDATE = /* @__PURE__ */ new Set(["update", "up", "upgrade"]);
+var YARN_UPDATE = /* @__PURE__ */ new Set(["upgrade", "upgrade-interactive"]);
 var COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
 var BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
 var PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
@@ -3559,10 +3563,10 @@ function scanPositional(words, from, table, subcommands) {
   return { at: -1, candidate: false };
 }
 var SUBCOMMANDS = {
-  npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, "exec", "x"]),
-  pnpm: /* @__PURE__ */ new Set(["add", "dlx", ...PNPM_INSTALL]),
-  bun: /* @__PURE__ */ new Set([...BUN_ADD, "x"]),
-  yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx"]),
+  npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x"]),
+  pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE]),
+  bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x"]),
+  yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE]),
   pip: /* @__PURE__ */ new Set(["install"]),
   uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
   poetry: /* @__PURE__ */ new Set(["add"]),
@@ -3649,18 +3653,32 @@ function detect(words) {
   switch (head) {
     case "npm":
       if (NPM_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
-      if (NPM_MANIFEST_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
+      if (NPM_MANIFEST_INSTALL.has(subWord) || NPM_MAINTENANCE.has(subWord)) {
+        return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
+      }
+      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
+      if (subWord === "audit" && words[nextPositional(words, sub + 1, table)]?.value === "fix") {
+        return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
+      }
       return null;
     case "pnpm":
       if (subWord === "add") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
+      if (subWord === "dedupe") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
+      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
       return null;
     case "bun": {
+      if (subWord === "update") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
       if (!BUN_ADD.has(subWord)) return null;
       return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
     }
     case "yarn": {
-      if (subWord === "install") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
+      if (subWord === "install" || subWord === "dedupe") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
+      if (YARN_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
+      if (subWord === "up") {
+        const update = nextPositional(words, sub + 1, table) >= 0;
+        return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", ...update ? { update: true } : {} };
+      }
       let at = sub;
       const uncertain = [];
       if (subWord === "global") at = nextPositional(words, sub + 1, table, ADD_ONLY);
@@ -3837,6 +3855,7 @@ function collect(d, context) {
     if (files.length > 0) out.manifest = { kind: "requirements", files };
   } else if (d.manifest !== void 0 && out.global !== true) {
     out.manifest = { kind: "package-json" };
+    if (d.update === true) out.update = true;
   }
   return out;
 }
@@ -3874,7 +3893,7 @@ function parseInstallCommands(command, opts = {}) {
 function manifestKey(c) {
   const m = c.manifest;
   if (m === void 0) return "";
-  return JSON.stringify([m.kind, m.kind === "requirements" ? m.files : [], c.workdir ?? null, c.prefixed === true]);
+  return JSON.stringify([m.kind, m.kind === "requirements" ? m.files : [], c.workdir ?? null, c.prefixed === true, c.update === true]);
 }
 var NESTED_SCRIPT = "found in a script the command hands a shell (bash -c, cmd /c, pwsh -c, a script piped to a shell) \u2014 vetted, never denied as missing";
 function readingsOf(command, shell, forced, cdpath) {
@@ -6393,7 +6412,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
         notes.push(`dev-guardian: a file ${read2.file} includes was not read (${read2.incomplete}) \u2014 its packages were not vetted.`);
       }
       const inScope = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: base2 }, notes) : read2.packages;
-      const packages = lock === void 0 ? inScope : withoutCovered(inScope, lock);
+      const packages = lock === void 0 || c.update === true ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read2.registries];
       const custom = c.customRegistry ?? read2.registries[0];
