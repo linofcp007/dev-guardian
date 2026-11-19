@@ -2172,3 +2172,73 @@ describe('install-vet-dotnet-forms', () => {
     expect(r.skipped).toEqual([]);
   });
 });
+
+// ───────────────── pkgvet-yarn-berry-npm-protocol — `key@npm:rest` is the registry protocol for Yarn and bun, an alias for npm and pnpm
+
+describe('pkgvet-yarn-berry-npm-protocol', () => {
+  /** The names a line would vet, sorted: the order of two readings of one word is not what is pinned. */
+  const namesOf = (command: string): string[] => vetted(command).map(([name]) => name).sort();
+  const uncertainOf = (command: string): string[] => parseInstallCommands(command).flatMap((c) => c.uncertain);
+
+  // `yarn dlx` and `yarn workspace w add` read the spec like `yarn add`.
+  const BERRY_PREFIXES = ['yarn add', 'bun add', 'yarn dlx', 'yarn workspace w add'] as const;
+
+  it.each(
+    BERRY_PREFIXES.flatMap((prefix) =>
+      (
+        [
+          ['evil-pkg-zq@npm:^1.2.3', 'evil-pkg-zq'],
+          ['evil-pkg-zq@npm:*', 'evil-pkg-zq'],
+          ['evil-pkg-zq@npm:>=1.0.0', 'evil-pkg-zq'],
+          ['evil-pkg-zq@NPM:^1', 'evil-pkg-zq'],
+          ['@scope-zq/evil-pkg-zq@npm:^1', '@scope-zq/evil-pkg-zq'],
+        ] as const
+      ).map(([spec, key]) => [prefix, spec, key] as const),
+    ),
+  )('T-01 `%s %s`: the rest is no package name, the package is the key %s', (prefix, spec, key) => {
+    expect(namesOf(`${prefix} ${spec}`)).toEqual([key]);
+  });
+
+  it.each(
+    BERRY_PREFIXES.flatMap((prefix) =>
+      (
+        [
+          ['evil-pkg-zq@npm:latest', 'evil-pkg-zq', 'latest'],
+          ['evil-pkg-zq@npm:1.0.0', 'evil-pkg-zq', '1.0.0'],
+          ['evil-pkg-zq@npm:1.x', 'evil-pkg-zq', '1.x'],
+          ['alias-zq@npm:real-zq', 'alias-zq', 'real-zq'],
+          ['evil-pkg-zq@NPM:latest', 'evil-pkg-zq', 'latest'],
+          ['@scope-zq/evil-pkg-zq@npm:1.0.0', '@scope-zq/evil-pkg-zq', '1.0.0'],
+        ] as const
+      ).map(([spec, key, rest]) => [prefix, spec, key, rest] as const),
+    ),
+  )('T-01 `%s %s`: a valid name without a range of its own, both %s and %s are vetted, the command is uncertain', (prefix, spec, key, rest) => {
+    const command = `${prefix} ${spec}`;
+    expect(namesOf(command)).toEqual([key, rest].sort());
+    expect(uncertainOf(command).length, 'the two readings are said as an uncertainty').toBeGreaterThan(0);
+  });
+
+  // The other managers, and a rest that carries its own range, are read as before.
+  const SAME_FOR_ALL = ['npm install', 'pnpm add', 'yarn add', 'bun add'] as const;
+
+  it.each(['npm install', 'pnpm add'] as const)('T-02 guard: `%s` reads `key@npm:rest` as an alias, only the rest is vetted', (prefix) => {
+    expect(vetted(`${prefix} evil-pkg-zq@npm:latest`)).toEqual([['latest', undefined]]);
+    expect(vetted(`${prefix} alias-zq@npm:real-zq`)).toEqual([['real-zq', undefined]]);
+    const [cmd] = parseInstallCommands(`${prefix} evil-pkg-zq@npm:^1.2.3`);
+    expect(cmd?.packages).toEqual([]);
+    expect(cmd?.skipped.map((s) => s.raw)).toEqual(['evil-pkg-zq@npm:^1.2.3']);
+  });
+
+  it.each(SAME_FOR_ALL)('T-02 guard: `%s` reads a rest with a range of its own as an alias of the rest', (prefix) => {
+    expect(vetted(`${prefix} alias-zq@npm:real-zq@1.0.0`)).toEqual([['real-zq', '1.0.0']]);
+    expect(vetted(`${prefix} alias-zq@npm:@scope-zq/real-zq@^2`)).toEqual([['@scope-zq/real-zq', '^2']]);
+  });
+
+  it.each(SAME_FOR_ALL)('T-02 guard: `%s` skips a rest that is a path or a shell expansion', (prefix) => {
+    for (const spec of ['evil-pkg-zq@npm:./x.tgz', 'evil-pkg-zq@npm:$X']) {
+      const [cmd] = parseInstallCommands(`${prefix} ${spec}`);
+      expect(cmd?.packages, spec).toEqual([]);
+      expect(cmd?.skipped.map((s) => s.raw), spec).toEqual([spec]);
+    }
+  });
+});

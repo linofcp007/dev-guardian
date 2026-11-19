@@ -1775,3 +1775,35 @@ describe('install-vet-dotnet-forms', () => {
     expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain('not found on the public registry');
   });
 });
+
+// ───────────────── pkgvet-yarn-berry-npm-protocol — `key@npm:rest` for Yarn and bun through the dispatcher
+
+describe('pkgvet-yarn-berry-npm-protocol', () => {
+  // `evil-pkg-zq` is malicious only here; its newest version, 1.5.0, satisfies `^1.2.3`. `1.0.0` is the rest read as a name: not on the registry.
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-pkg-zq': npmDoc('1.5.0'),
+    'https://registry.npmjs.org/1.0.0': { status: 404 },
+    [OSV]: { osv: { 'evil-pkg-zq@1.5.0': ['MAL-2026-0099'] } },
+  };
+  const deniedFor = (r: HookOut): void => {
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/evil-pkg-zq/);
+  };
+
+  it('T-05 `yarn add evil@npm:^1.2.3` is DENIED, naming the package', () => {
+    deniedFor(runHook('yarn add evil-pkg-zq@npm:^1.2.3', ROUTES));
+  });
+
+  it('T-05 `bun add evil@npm:1.0.0` is DENIED, naming the package', () => {
+    deniedFor(runHook('bun add evil-pkg-zq@npm:1.0.0', ROUTES));
+  });
+
+  it('T-05 `yarn install` in a project whose package.json has `"evil": "npm:^1.2.3"` is DENIED, naming the package', () => {
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'evil-pkg-zq': 'npm:^1.2.3' } }),
+    );
+    deniedFor(runHook('yarn install', ROUTES));
+  });
+});

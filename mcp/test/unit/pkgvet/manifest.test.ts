@@ -427,3 +427,36 @@ describe('pkgvet-archive-like-name', () => {
     ]);
   });
 });
+
+// ───────────────── pkgvet-yarn-berry-npm-protocol — a `npm:` value is read by the manager that installs it
+
+describe('pkgvet-yarn-berry-npm-protocol', () => {
+  /** What `readNpmManifest(dir, manager)` reads out of one dependency `key: value`. */
+  function read(manager: string, value: string, key = 'evil-pkg-zq'): Array<[string, string | undefined]> {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [key]: value } }));
+    const r = readNpmManifest(dir, manager);
+    expect(r.status).toBe('ok');
+    return named(r);
+  }
+  const sortedNames = (pairs: Array<[string, string | undefined]>): string[] => pairs.map(([name]) => name).sort();
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a rest that is no package name leaves the key, with the rest as its range', (manager) => {
+    expect(read(manager, 'npm:^1.2.3')).toEqual([['evil-pkg-zq', '^1.2.3']]);
+  });
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a valid name without a range of its own makes both the key and the rest a package', (manager) => {
+    expect(sortedNames(read(manager, 'npm:1.0.0'))).toEqual(['1.0.0', 'evil-pkg-zq']);
+    expect(sortedNames(read(manager, 'npm:latest'))).toEqual(['evil-pkg-zq', 'latest']);
+  });
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a rest with a range of its own is an alias of the rest', (manager) => {
+    expect(read(manager, 'npm:real-zq@1.0.0', 'alias-zq')).toEqual([['real-zq', '1.0.0']]);
+  });
+
+  it.each(['npm', 'pnpm'])('T-03 guard: `%s` reads the value as an alias, as before', (manager) => {
+    expect(read(manager, 'npm:^1.2.3')).toEqual([]);
+    expect(read(manager, 'npm:1.0.0')).toEqual([['1.0.0', undefined]]);
+    expect(read(manager, 'npm:latest')).toEqual([['latest', undefined]]);
+    expect(read(manager, 'npm:real-zq@1.0.0', 'alias-zq')).toEqual([['real-zq', '1.0.0']]);
+  });
+});

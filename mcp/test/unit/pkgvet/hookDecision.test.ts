@@ -3909,3 +3909,31 @@ describe('install-vet-update-verbs', () => {
     expect(n.registry, 'the manifest is what is vetted').toContain(doc('express'));
   });
 });
+
+// ───────────────── pkgvet-yarn-berry-npm-protocol — the decision for `key@npm:rest` with Yarn and bun
+
+describe('pkgvet-yarn-berry-npm-protocol', () => {
+  it('T-04 `yarn add alias@npm:real`: `real` exists, `alias` does not — not denied, the warning says both readings', async () => {
+    const reg = registry({ exists: ['real-zq'] });
+    const d = await decideInstallCommand('yarn add alias-zq@npm:real-zq', opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toContain('alias-zq');
+    expect(d?.context).toContain('not found on the public registry');
+    expect(d?.context).toMatch(/not denied:.*real-zq/s);
+  });
+
+  it('T-04 `yarn add evil@npm:1.x` with `evil` on the registry is not denied for `1.x` not existing', async () => {
+    const reg = registry({ exists: ['evil-pkg-zq'] });
+    const d = await decideInstallCommand('yarn add evil-pkg-zq@npm:1.x', opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+  });
+
+  it('T-04 a malicious package is denied under either name of `key@npm:rest`', async () => {
+    const asKey = registry({ exists: ['evil-pkg-zq'], malicious: ['evil-pkg-zq'] });
+    const k = await decideInstallCommand('yarn add evil-pkg-zq@npm:^1.2.3', opts(asKey.fetchImpl, { popular: {} }));
+    expect(k?.deny ?? '', 'the key is the package').toMatch(/evil-pkg-zq/);
+    const asRest = registry({ exists: ['alias-zq', 'bad-zq'], malicious: ['bad-zq'] });
+    const r = await decideInstallCommand('yarn add alias-zq@npm:bad-zq', opts(asRest.fetchImpl, { popular: {} }));
+    expect(r?.deny ?? '', 'the rest is the other reading').toMatch(/bad-zq/);
+  });
+});
