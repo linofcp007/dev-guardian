@@ -2725,7 +2725,8 @@ var FLAGS = {
     bool: set(...NPM_COMMON_BOOL),
     registry: set("--registry"),
     dir: set("--prefix", "-C"),
-    workspace: set("--workspace", "-w", "--workspaces")
+    workspace: set("--workspace", "-w", "--workspaces"),
+    boolWord: "flag-and-cluster"
   },
   pnpm: {
     value: set(
@@ -2748,7 +2749,8 @@ var FLAGS = {
     bool: set(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r"),
     registry: set("--registry"),
     dir: set("--dir", "-C"),
-    workspace: set("--workspace", "--filter", "-F")
+    workspace: set("--workspace", "--filter", "-F"),
+    boolWord: "flag"
   },
   yarn: {
     value: set(
@@ -3285,10 +3287,15 @@ function walk(words, table) {
       continue;
     }
     if (table.bool.has(v)) {
-      note(v, void 0);
+      const word = words[i + 1]?.value;
+      if (table.boolWord !== void 0 && (word === "true" || word === "false")) {
+        note(v, word);
+        i += 1;
+      } else note(v, void 0);
       continue;
     }
     if (!v.startsWith("--") && SHORT_CLUSTER.test(v)) {
+      let allBool = true;
       for (let k = 1; k < v.length; k += 1) {
         const flag = `-${v.charAt(k)}`;
         if (table.value.has(flag)) {
@@ -3303,9 +3310,12 @@ function walk(words, table) {
         if (!table.bool.has(flag)) {
           uncertain.push(`unknown flag ${flag}`);
           unknownFlags += 1;
+          allBool = false;
         }
         note(flag, void 0);
       }
+      const after = words[i + 1]?.value;
+      if (allBool && table.boolWord === "flag-and-cluster" && !table.value.has(`-${v.slice(-1)}`) && (after === "true" || after === "false")) i += 1;
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
@@ -3343,7 +3353,7 @@ var BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
 var PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
 var YARN_PRINTS = /* @__PURE__ */ new Set(["--version", "-v", "-V", "--help", "-h"]);
 var REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement", "--requirements"]);
-var isGlobalFlag = (f) => f.flag === "-g" || f.flag === "--global" || f.flag === "--location" && f.value === "global";
+var isGlobalFlag = (f) => (f.flag === "-g" || f.flag === "--global") && f.value !== "false" || f.flag === "--location" && f.value === "global";
 var beforeDoubleDash = (words) => {
   const at = words.findIndex((w) => w.value === "--");
   return at < 0 ? [...words] : words.slice(0, at);
@@ -3615,8 +3625,9 @@ function collect(d, context) {
   if (d.manager === "pip" || d.manager === "uv-pip") {
     const files = walked.flags.flatMap((f) => REQUIREMENT_FLAGS.has(f.flag) && f.value !== void 0 && f.value !== "" ? [f.value] : []);
     if (files.length > 0) out.manifest = { kind: "requirements", files };
-  } else if (d.manifest !== void 0 && !allFlags.some(isGlobalFlag)) {
-    if (d.manifest === "always" || packages.length === 0 && skipped.length === 0) out.manifest = { kind: "package-json" };
+  } else if (d.manifest !== void 0 && out.global !== true) {
+    const maybeFlags = allFlags.some(isGlobalFlag) && skipped.length > 0 && skipped.every((s) => /[$`]/.test(s.raw));
+    if (d.manifest === "always" || packages.length === 0 && (skipped.length === 0 || maybeFlags)) out.manifest = { kind: "package-json" };
   }
   return out;
 }

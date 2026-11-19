@@ -115849,7 +115849,8 @@ var init_parseCommand = __esm({
         bool: set2(...NPM_COMMON_BOOL),
         registry: set2("--registry"),
         dir: set2("--prefix", "-C"),
-        workspace: set2("--workspace", "-w", "--workspaces")
+        workspace: set2("--workspace", "-w", "--workspaces"),
+        boolWord: "flag-and-cluster"
       },
       pnpm: {
         value: set2(
@@ -115872,7 +115873,8 @@ var init_parseCommand = __esm({
         bool: set2(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r"),
         registry: set2("--registry"),
         dir: set2("--dir", "-C"),
-        workspace: set2("--workspace", "--filter", "-F")
+        workspace: set2("--workspace", "--filter", "-F"),
+        boolWord: "flag"
       },
       yarn: {
         value: set2(

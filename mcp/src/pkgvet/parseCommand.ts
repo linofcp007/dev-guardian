@@ -343,6 +343,14 @@ interface FlagTable {
    * `--working-dir`, `--directory`, …).
    */
   dir?: ReadonlySet<string>;
+  /**
+   * A literal `true` or `false` right after a boolean flag is that flag's value, not a package: `npm install -D false`
+   * installs the manifest. Measured 2026-11-19 (npm 11.19.0 / 11.20.0, pnpm 10.33.2): npm does it after an exact boolean
+   * flag and after a short cluster of boolean letters (`-DE false`), pnpm after an exact boolean flag (a pnpm cluster was
+   * not measured: unchanged). A flag written with `=` takes nothing after it. Absent for the other managers and the
+   * launchers, which were not measured (or fetch the word as a package: `npx --yes false pkg`).
+   */
+  boolWord?: 'flag' | 'flag-and-cluster';
   /** Flags that put the install in a workspace context, where a name may be a local package. */
   workspace?: ReadonlySet<string>;
   /**
@@ -383,6 +391,7 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('--registry'),
     dir: set('--prefix', '-C'),
     workspace: set('--workspace', '-w', '--workspaces'),
+    boolWord: 'flag-and-cluster',
   },
   pnpm: {
     value: set('--registry', '--filter', '-F', '--dir', '-C', '--reporter', '--store-dir', '--global-dir',
@@ -392,6 +401,7 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('--registry'),
     dir: set('--dir', '-C'),
     workspace: set('--workspace', '--filter', '-F'),
+    boolWord: 'flag',
   },
   yarn: {
     value: set('--registry', '--cwd', '--network-timeout', '--modules-folder', '--cache-folder', '--mutex', '--scope',
@@ -649,10 +659,15 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
       continue;
     }
     if (table.bool.has(v)) {
-      note(v, undefined);
+      const word = words[i + 1]?.value;
+      if (table.boolWord !== undefined && (word === 'true' || word === 'false')) {
+        note(v, word);
+        i += 1;
+      } else note(v, undefined);
       continue;
     }
     if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
+      let allBool = true;
       for (let k = 1; k < v.length; k += 1) {
         const flag = `-${v.charAt(k)}`;
         if (table.value.has(flag)) {
@@ -667,9 +682,12 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
         if (!table.bool.has(flag)) {
           uncertain.push(`unknown flag ${flag}`);
           unknownFlags += 1;
+          allBool = false;
         }
         note(flag, undefined);
       }
+      const after = words[i + 1]?.value;
+      if (allBool && table.boolWord === 'flag-and-cluster' && !table.value.has(`-${v.slice(-1)}`) && (after === 'true' || after === 'false')) i += 1;
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
@@ -715,7 +733,7 @@ const YARN_PRINTS = new Set(['--version', '-v', '-V', '--help', '-h']);
 const REQUIREMENT_FLAGS = new Set(['-r', '--requirement', '--requirements']);
 /** The flags that make an npm-family install a global one: no project manifest is installed. */
 const isGlobalFlag = (f: { flag: string; value?: string }): boolean =>
-  f.flag === '-g' || f.flag === '--global' || (f.flag === '--location' && f.value === 'global');
+  ((f.flag === '-g' || f.flag === '--global') && f.value !== 'false') || (f.flag === '--location' && f.value === 'global');
 
 /** The words a flag can come from: what follows a `--` word is no flag. */
 const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
@@ -1088,9 +1106,14 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
     const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
     if (files.length > 0) out.manifest = { kind: 'requirements', files };
-  } else if (d.manifest !== undefined && !allFlags.some(isGlobalFlag)) {
+  } else if (d.manifest !== undefined && out.global !== true) {
+    // The manifest is left unread only for an install that is global FOR CERTAIN (`out.global`); in doubt — `-g $X`,
+    // `-g --location=project`, `npm ci --global=false` — it is read: vetting more, never less (measured 2026-11-19).
     // `npm i ./pkg.tgz` installs that, not the manifest: a word that was skipped counts as a thing named.
-    if (d.manifest === 'always' || (packages.length === 0 && skipped.length === 0)) out.manifest = { kind: 'package-json' };
+    // A word with a shell expansion beside a global-looking flag may be the flag's value or `--no-global` itself: no thing
+    // is surely named, so the manifest is read.
+    const maybeFlags = allFlags.some(isGlobalFlag) && skipped.length > 0 && skipped.every((s) => /[$`]/.test(s.raw));
+    if (d.manifest === 'always' || (packages.length === 0 && (skipped.length === 0 || maybeFlags))) out.manifest = { kind: 'package-json' };
   }
   return out;
 }
