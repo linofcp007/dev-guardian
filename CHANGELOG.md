@@ -8,6 +8,21 @@ version bump.
 
 ## [Unreleased]
 
+### Added
+
+- **The install hook says when a file of the project sets the default registry.** A project `.npmrc`, `.yarnrc`,
+  `.yarnrc.yml` or `bunfig.toml` that points the package manager at another registry means the packages come from
+  there, and "verified" used to mean only what the public registry and OSV said. The hook now adds one line to its
+  answer for an install by name, from a manifest or through a launcher: the file's name and the registry as
+  `scheme://host` (never its credentials, path or query), and that what it serves was not vetted. Which file counts
+  is what each manager obeys, measured: `.npmrc` for npm and pnpm, `.npmrc` and `bunfig.toml` for bun, `.npmrc`,
+  `.yarnrc` and `.yarnrc.yml` for Yarn. The line is not said when the user's own configuration names that registry,
+  when `--registry` or a registry variable of the environment sets one, or when the directory the command runs in is
+  not known. No verdict changes, and the line stays out of a deny. What you may notice: a new line in the hook's
+  answer for installs that were silent, in a repository whose own file sets the default registry; anything that
+  compares the hook's text as a whole should expect it. See [`docs/hooks.md`](docs/hooks.md) and
+  [the known limits](docs/hooks-known-limits.md).
+
 ### Security
 
 - **The install hook and `vet_packages` no longer repeat the credentials of a registry URL.** Since 3.0.0, when a

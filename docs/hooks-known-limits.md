@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **31 limits**, 28 with at least one example and 3 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **32 limits**, 29 with at least one example and 3 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -86,7 +86,7 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
 - The lockfile of the command's own package manager (`npm-shrinkwrap.json` or `package-lock.json` for npm, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`) is read, and every name and exact version it pins — transitive dependencies too, up to 8 000 pairs per call — is looked up in OSV for a malicious-package advisory; nothing else of it is looked up or sent. What stays out of that vetting, each one said in a line of the answer unless noted:
 
 - What another source serves. A package the lockfile fetches from a host other than the public npm registry — a mirror, a company proxy, a URL, a git repository — has its pair looked up when it comes by `http` or `https`, and the origin is counted and said: what that origin serves is not verified. Only a registry the user's own npm configuration names is not said.
-- A default registry that a configuration file of the project sets (`.npmrc`, `.yarnrc.yml`, `bunfig.toml`). It is not said: npm swaps it in for the public host of every `resolved` URL, and the lockfiles of pnpm, Yarn 2+ and bun name no host at all.
+- A default registry that a configuration file of the project sets (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `bunfig.toml`) is said in a line of its own, whatever the lockfile holds: npm swaps it in for the public host of every `resolved` URL, and the lockfiles of pnpm, Yarn 2+ and bun name no host at all. What that line does not cover is in the record `project-default-registry`, and the line is described in `docs/hooks.md`.
 - The content of a package. It is not compared with the lockfile's `integrity`, and an archive that does not match its URL is the registry's and the package manager's to notice.
 - A lockfile of another package manager than the command's: `npm ci` does not read a `yarn.lock`, a `pnpm-lock.yaml` or a `bun.lock`, and with none of its own the manifest is vetted as it always was.
 - `bun.lockb`, bun's binary lockfile, and a lockfile of a format version the reader does not know: said as not read, and the manifest is vetted as it always was.
@@ -115,6 +115,14 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
   - `Bash` on PreToolUse, input `{"command":"composer require vendor/thing.zip"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"dotnet add package Some.Thing.zip"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"yarn install"}`, with `package.json` present → `warn`
+- When a file of the project sets the default registry, the hook says so in one line (described in `docs/hooks.md`, under "Install-time package vetting"). What stays:
+
+- The word `yarn` does not say whether Yarn 1 or Yarn 4 runs, so the hook counts the files of both. A project `.npmrc` that sets a registry in a Yarn 4 project, which Yarn 4 does not obey, still gets the line.
+- When two files of one directory set different registries (bun's `.npmrc` and `bunfig.toml`, or Yarn's three files) the line names the first the hook reads: `.npmrc`, then `bunfig.toml` for bun; `.npmrc`, `.yarnrc.yml`, then `.yarnrc` for Yarn. Which of them the manager obeys was not measured.
+- The indexes a project file gives PyPI, Composer and NuGet (`pyproject.toml`, `uv.toml`, `composer.json`, `nuget.config`) are said only when a name is missing from the public registry, as the warning's reason; an install that finds every name there carries no line about them.
+- A `.yarnrc.yml` above the repository root is not read for this line, although Yarn reads it.
+  - `Bash` on PreToolUse, input `{"command":"yarn add thing"}`, with `package.json`, `.npmrc` present → `warn`
+  - `Bash` on PreToolUse, input `{"command":"bun add thing"}`, with `package.json`, `bunfig.toml` present → `warn`
 
 ## The write guards
 
