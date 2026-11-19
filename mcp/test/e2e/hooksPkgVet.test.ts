@@ -1686,6 +1686,22 @@ describe('install-vet-manifest-parent-dir', () => {
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/\.\.\/package\.json.*crossenv/s);
     },
   );
+
+  it('T-09 the session in repo/docs/ of a git repository, `cd ../src && npm install`: the manifest of repo/ is read, named ../package.json', () => {
+    const repo = join(project, 'repo');
+    mkdirSync(join(repo, 'docs'), { recursive: true });
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    mkdirSync(join(repo, '.git'));
+    writeFileSync(
+      join(repo, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', crossenv: '*' } }),
+    );
+    const docs = join(repo, 'docs');
+    const r = runHook('cd ../src && npm install', ROUTES, { cwd: docs, env: { CLAUDE_PROJECT_DIR: docs } });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/\.\.\/package\.json.*crossenv/s);
+  });
 });
 
 // ───────────────── install-vet-update-verbs — the update and maintenance verbs through the dispatcher

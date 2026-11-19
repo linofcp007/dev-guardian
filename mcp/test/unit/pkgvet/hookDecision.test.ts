@@ -3710,6 +3710,44 @@ describe('install-vet-manifest-parent-dir', () => {
     const d = await decideInstallCommand('npm install', at(reg.fetchImpl, near, near));
     expect(d?.deny ?? '(no deny)').toMatch(/package\.json names 'evil-pkg/);
   });
+
+  // ── T-09: a folder of the repository other than the session's is inside the project
+
+  /** `repo/` is a git repository with a malicious manifest; the session is in `repo/docs/`; `repo/src/` is a sibling folder. */
+  const sessionInDocs = (): { repo: string; docs: string; src: string } => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    const src = dirOf('src', repo);
+    mkdirSync(docs, { recursive: true });
+    mkdirSync(src, { recursive: true });
+    mkdirSync(join(repo, '.git'));
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    return { repo, docs, src };
+  };
+
+  it.each(['npm install', 'npm install express'])('T-09 `%s` run in repo/src/ with the session in repo/docs/: the manifest of repo/ is read, named ../package.json', async (command) => {
+    const { docs, src } = sessionInDocs();
+    const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand(command, at(reg.fetchImpl, src, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-09 `cd ../src && npm install` from repo/docs/ (the session): the manifest of repo/ is read, named ../package.json', async () => {
+    const { docs } = sessionInDocs();
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('cd ../src && npm install', at(reg.fetchImpl, docs, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-09 guard: a command directory outside the repository reads only that directory', async () => {
+    const { docs } = sessionInDocs();
+    const other = dirOf('other');
+    mkdirSync(other, { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, other, docs))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
 });
 
 // ───────────────── install-vet-update-verbs — an update verb vets the manifest past what the lockfile pins
