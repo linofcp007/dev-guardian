@@ -3172,7 +3172,7 @@ describe('install-vet-unknown-flag-hides-package', () => {
     const reg = registry({ exists: [] });
     const d = await decideInstallCommand('npm install --dgunknown zz-no-such-pkg', opts(reg.fetchImpl));
     expect(d?.deny).toBeUndefined();
-    expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry.*not denied: unknown flag --dgunknown/s);
+    expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry.*not denied:.*unknown flag --dgunknown/s);
   });
 
   it('T-06 `npm install --fetch-retries 3 lodash` is not denied', async () => {

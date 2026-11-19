@@ -588,6 +588,8 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
 
 interface Positional {
   value: string;
+  /** The word after a long flag the table does not know: a possible package, or that flag's value ({@link afterUnknownFlag}). */
+  candidate?: true;
 }
 
 interface WalkResult {
@@ -606,6 +608,22 @@ interface WalkResult {
 const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 
 const isBoolWord = (word: string | undefined): boolean => word === 'true' || word === 'false';
+
+/**
+ * The one rule for the word after a flag the table does not know: `walk` and `nextPositional` both ask it, so the
+ * flag is read the same way in a package position and in the subcommand position. The tables are hand-written lists
+ * and the managers have more boolean flags than they hold: a long flag (no `=`, not `--no-...`) is followed by a word
+ * that may be its value or a package, and the hook cannot tell. `candidate`: the word stays a possible value AND is
+ * vetted as a possible package; `value`: npm and pnpm read a `true` / `false` as the value (measured 2026-11-19);
+ * `none`: the flag takes no word (a short flag, one written with `=`, `--no-...`, one the table knows, or one followed
+ * by a flag).
+ */
+function afterUnknownFlag(v: string, next: string | undefined, table: FlagTable): 'none' | 'value' | 'candidate' {
+  if (table.value.has(v) || table.bool.has(v)) return 'none';
+  if (!v.startsWith('--') || v === '--' || v.startsWith('--no-') || v.includes('=')) return 'none';
+  if (next === undefined || (next.startsWith('-') && next.length > 1)) return 'none';
+  return table.boolWord !== undefined && isBoolWord(next) ? 'value' : 'candidate';
+}
 
 /**
  * Whether the flag word `v` (no `=`) is one that takes a following `true` / `false` as its value, in a table with
@@ -628,9 +646,10 @@ function takesBoolWord(v: string, table: FlagTable): boolean {
  * Short-flag clusters are expanded letter by letter (`-qr req.txt` is `-q`
  * then `-r req.txt`; `-rreq.txt` is `-r req.txt`): the first letter that
  * takes a value takes the rest of the cluster, or the next word. A flag
- * this table does not know makes the parse uncertain; an unknown LONG flag
- * still swallows the next word (missing a package fails open, vetting a
- * flag's value as a name does not).
+ * this table does not know makes the parse uncertain; the word after an
+ * unknown LONG flag is both a possible value and a candidate package
+ * ({@link afterUnknownFlag}): vetting a flag's value as a name only warns, and
+ * missing a package fails open.
  */
 function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   const positionals: Positional[] = [];
@@ -656,13 +675,14 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     if (table.workspace?.has(flag)) uncertain.push(`workspace context (${flag})`);
   };
   const known = (flag: string): boolean => table.value.has(flag) || table.bool.has(flag);
+  let candidateAt = -1;
   for (let i = 0; i < words.length; i += 1) {
     const w = words[i];
     if (w === undefined) break;
     const v = w.value;
     if (v === '--') continue;
     if (!v.startsWith('-') || v.length === 1) {
-      positionals.push({ value: v });
+      positionals.push(i === candidateAt ? { value: v, candidate: true } : { value: v });
       continue;
     }
     const eqAt = v.indexOf('=');
@@ -711,7 +731,9 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     }
     uncertain.push(`unknown flag ${v}`);
     unknownFlags += 1;
-    if (v.startsWith('--') && !v.startsWith('--no-')) i += 1;
+    const after = afterUnknownFlag(v, words[i + 1]?.value, table);
+    if (after === 'value') i += 1;
+    else if (after === 'candidate') candidateAt = i + 1;
   }
   const out: WalkResult = { positionals, skipped, uncertain, registries, flags, unknownFlags };
   if (customRegistry !== undefined) out.customRegistry = customRegistry;
@@ -838,22 +860,44 @@ function launcher(
   return { manager, ecosystem, args, pre, uncertain: [], launch };
 }
 
-/** First positional (non-flag) index at or after `from`, honouring the table's value flags. */
-function nextPositional(words: readonly ShellWord[], from: number, table: FlagTable): number {
+/**
+ * First positional (non-flag) index at or after `from`, honouring the table's value flags, with whether that word
+ * follows a flag the table does not know ({@link afterUnknownFlag}: it may be that flag's value). With
+ * `candidateAsValue` such a word is read as the value and skipped.
+ */
+function scanPositional(words: readonly ShellWord[], from: number, table: FlagTable, candidateAsValue: boolean): { at: number; candidate: boolean } {
+  let candidateAt = -1;
   for (let i = from; i < words.length; i += 1) {
     const v = words[i]?.value ?? '';
     if (v.startsWith('-') && v.length > 1) {
-      if (!v.includes('=') && table.value.has(v)) i += 1;
+      if (v.includes('=')) continue;
+      if (table.value.has(v)) i += 1;
       // `npm -D false install`: the word after a boolean flag is its value, not the subcommand.
-      else if (!v.includes('=') && takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      else if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      else {
+        const after = afterUnknownFlag(v, words[i + 1]?.value, table);
+        if (after === 'value' || (after === 'candidate' && candidateAsValue)) i += 1;
+        else if (after === 'candidate') candidateAt = i + 1;
+      }
       continue;
     }
-    return i;
+    return { at: i, candidate: i === candidateAt };
   }
-  return -1;
+  return { at: -1, candidate: false };
 }
 
+/**
+ * The command at `words`, read twice when it needs it: a word after a flag the table does not know may be that flag's
+ * value (`npm --fetch-retries 0 install p`, `yarn --network-concurrency 1`), so when the first reading (the word as
+ * the subcommand) finds nothing to read, the second reads it as the flag's value.
+ */
 function detect(words: readonly ShellWord[]): Detected | null {
+  return detectReading(words, false) ?? detectReading(words, true);
+}
+
+function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): Detected | null {
+  const nextPositional = (ws: readonly ShellWord[], from: number, table: FlagTable): number =>
+    scanPositional(ws, from, table, flagWordIsValue).at;
   const start = commandStart(words);
   const headWord = words[start];
   if (headWord === undefined) return null;
@@ -1003,8 +1047,14 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   const pre = walk(d.pre, table);
   let body = d.args;
   if (launch.style === 'run') {
-    const at = nextPositional(d.args, 0, table);
-    if (at >= 0) body = d.args.slice(0, at + 1);
+    // The word after a flag the table does not know may be that flag's value: then the next positional is a package too.
+    let scan = scanPositional(d.args, 0, table, false);
+    let end = scan.at;
+    while (scan.at >= 0 && scan.candidate) {
+      scan = scanPositional(d.args, scan.at + 1, table, false);
+      if (scan.at >= 0) end = scan.at;
+    }
+    if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
   const flags = [...pre.flags, ...w.flags];
@@ -1076,6 +1126,10 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
 
+  // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
+  // thing the command surely names, so it does not stop the manifest from being read.
+  let candidateSkipped = 0;
+  let namedPackages = 0;
   let lastComposer: PackageSpec | undefined;
   for (const p of positionals) {
     let spec: PackageSpec | SkippedSpec;
@@ -1101,18 +1155,21 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     }
     if ('name' in spec) {
       packages.push(spec);
+      if (p.candidate !== true) namedPackages += 1;
       const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
       skipped.push(spec);
+      if (p.candidate === true) candidateSkipped += 1;
       lastComposer = undefined;
     }
   }
 
   if (d.ecosystem === 'nuget') {
-    // One package per `dotnet add package`; its version is a flag.
-    const extra = packages.splice(1);
+    // One package per `dotnet add package`; its version is a flag. With a candidate on the line (the word after a flag
+    // the table does not know) the real name may be any of the words: none is dropped.
+    const extra = positionals.some((p) => p.candidate === true) ? [] : packages.splice(1);
     for (const e of extra) skipped.push(skip(e.raw, 'unexpected extra argument to dotnet add package'));
     const first = packages[0];
     const version = flagValue(d.args, ['-v', '--version']);
@@ -1137,7 +1194,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     // A word with a shell expansion beside a global-looking flag may be the flag's value or `--no-global` itself: no thing
     // is surely named, so the manifest is read.
     const maybeFlags = allFlags.some(isGlobalFlag) && skipped.length > 0 && skipped.every((s) => /[$`]/.test(s.raw));
-    if (d.manifest === 'always' || (packages.length === 0 && (skipped.length === 0 || maybeFlags))) out.manifest = { kind: 'package-json' };
+    if (d.manifest === 'always' || (namedPackages === 0 && (skipped.length === candidateSkipped || maybeFlags))) out.manifest = { kind: 'package-json' };
   }
   return out;
 }

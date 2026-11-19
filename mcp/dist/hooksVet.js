@@ -3240,6 +3240,12 @@ var LAUNCH_FLAGS = {
 };
 var SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 var isBoolWord = (word) => word === "true" || word === "false";
+function afterUnknownFlag(v, next, table) {
+  if (table.value.has(v) || table.bool.has(v)) return "none";
+  if (!v.startsWith("--") || v === "--" || v.startsWith("--no-") || v.includes("=")) return "none";
+  if (next === void 0 || next.startsWith("-") && next.length > 1) return "none";
+  return table.boolWord !== void 0 && isBoolWord(next) ? "value" : "candidate";
+}
 function takesBoolWord(v, table) {
   const rule = table.boolWord;
   if (rule === void 0) return false;
@@ -3273,13 +3279,14 @@ function walk(words, table) {
     if (table.workspace?.has(flag)) uncertain.push(`workspace context (${flag})`);
   };
   const known = (flag) => table.value.has(flag) || table.bool.has(flag);
+  let candidateAt = -1;
   for (let i = 0; i < words.length; i += 1) {
     const w = words[i];
     if (w === void 0) break;
     const v = w.value;
     if (v === "--") continue;
     if (!v.startsWith("-") || v.length === 1) {
-      positionals.push({ value: v });
+      positionals.push(i === candidateAt ? { value: v, candidate: true } : { value: v });
       continue;
     }
     const eqAt = v.indexOf("=");
@@ -3328,7 +3335,9 @@ function walk(words, table) {
     }
     uncertain.push(`unknown flag ${v}`);
     unknownFlags += 1;
-    if (v.startsWith("--") && !v.startsWith("--no-")) i += 1;
+    const after = afterUnknownFlag(v, words[i + 1]?.value, table);
+    if (after === "value") i += 1;
+    else if (after === "candidate") candidateAt = i + 1;
   }
   const out = { positionals, skipped, uncertain, registries, flags, unknownFlags };
   if (customRegistry !== void 0) out.customRegistry = customRegistry;
@@ -3389,19 +3398,30 @@ function saysGlobal(manager, pre, args) {
 function launcher(manager, ecosystem, args, pre, launch) {
   return { manager, ecosystem, args, pre, uncertain: [], launch };
 }
-function nextPositional(words, from, table) {
+function scanPositional(words, from, table, candidateAsValue) {
+  let candidateAt = -1;
   for (let i = from; i < words.length; i += 1) {
     const v = words[i]?.value ?? "";
     if (v.startsWith("-") && v.length > 1) {
-      if (!v.includes("=") && table.value.has(v)) i += 1;
-      else if (!v.includes("=") && takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      if (v.includes("=")) continue;
+      if (table.value.has(v)) i += 1;
+      else if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      else {
+        const after = afterUnknownFlag(v, words[i + 1]?.value, table);
+        if (after === "value" || after === "candidate" && candidateAsValue) i += 1;
+        else if (after === "candidate") candidateAt = i + 1;
+      }
       continue;
     }
-    return i;
+    return { at: i, candidate: i === candidateAt };
   }
-  return -1;
+  return { at: -1, candidate: false };
 }
 function detect(words) {
+  return detectReading(words, false) ?? detectReading(words, true);
+}
+function detectReading(words, flagWordIsValue) {
+  const nextPositional = (ws, from, table2) => scanPositional(ws, from, table2, flagWordIsValue).at;
   const start = commandStart(words);
   const headWord = words[start];
   if (headWord === void 0) return null;
@@ -3526,8 +3546,13 @@ function collectLaunch(d, launch, context) {
   const pre = walk(d.pre, table);
   let body = d.args;
   if (launch.style === "run") {
-    const at = nextPositional(d.args, 0, table);
-    if (at >= 0) body = d.args.slice(0, at + 1);
+    let scan = scanPositional(d.args, 0, table, false);
+    let end = scan.at;
+    while (scan.at >= 0 && scan.candidate) {
+      scan = scanPositional(d.args, scan.at + 1, table, false);
+      if (scan.at >= 0) end = scan.at;
+    }
+    if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
   const flags = [...pre.flags, ...w.flags];
@@ -3589,6 +3614,8 @@ function collect(d, context) {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== void 0) out.customRegistry = registry;
+  let candidateSkipped = 0;
+  let namedPackages = 0;
   let lastComposer;
   for (const p of positionals) {
     let spec2;
@@ -3614,16 +3641,18 @@ function collect(d, context) {
     }
     if ("name" in spec2) {
       packages.push(spec2);
+      if (p.candidate !== true) namedPackages += 1;
       const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === "packagist" ? spec2 : void 0;
     } else {
       skipped.push(spec2);
+      if (p.candidate === true) candidateSkipped += 1;
       lastComposer = void 0;
     }
   }
   if (d.ecosystem === "nuget") {
-    const extra = packages.splice(1);
+    const extra = positionals.some((p) => p.candidate === true) ? [] : packages.splice(1);
     for (const e of extra) skipped.push(skip(e.raw, "unexpected extra argument to dotnet add package"));
     const first = packages[0];
     const version = flagValue(d.args, ["-v", "--version"]);
@@ -3637,7 +3666,7 @@ function collect(d, context) {
     if (files.length > 0) out.manifest = { kind: "requirements", files };
   } else if (d.manifest !== void 0 && out.global !== true) {
     const maybeFlags = allFlags.some(isGlobalFlag) && skipped.length > 0 && skipped.every((s) => /[$`]/.test(s.raw));
-    if (d.manifest === "always" || packages.length === 0 && (skipped.length === 0 || maybeFlags)) out.manifest = { kind: "package-json" };
+    if (d.manifest === "always" || namedPackages === 0 && (skipped.length === candidateSkipped || maybeFlags)) out.manifest = { kind: "package-json" };
   }
   return out;
 }

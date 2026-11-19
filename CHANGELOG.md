@@ -8,6 +8,17 @@ version bump.
 
 ## [Unreleased]
 
+### Security
+
+- **An install behind a flag the hook did not know passed without being vetted.** The hook read the word after
+  any long flag missing from its tables as that flag's value, so `npm install --prefer-dedupe <package>`,
+  `pnpm add --shamefully-hoist <package>`, `yarn add --ignore-engines <package>`, `npx --ignore-scripts <package>`
+  and `bunx --yes <package>` were neither looked up nor mentioned, and a malicious package went in. The same word
+  hid the install when a flag that takes a value stood before the subcommand (`npm --fetch-retries 0 install
+  <package>`, `yarn --network-concurrency 1`). Present since 3.0.0. The word after such a flag is now vetted as a
+  possible package and the command is marked uncertain, so a name the registry does not have is a warning, never a
+  deny; the manifest is still read when that word is the only thing named. Update; there is nothing to rotate.
+
 ## [3.13.0] - 2026-11-19
 
 The install hook reads the command and the registry configuration the way the package manager does. It no longer
