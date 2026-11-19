@@ -555,10 +555,12 @@ function findLockfile(manager: string, dir: string, projectDir: string | undefin
  * `dir` and each directory above it up to the project root, nearest first — the one bound of what a command's
  * directory may read upward, for the lockfile and the manifest alike. The root is `top` — the root of the git
  * repository the project directory is in ({@link gitRepositoryRoot}) — or else `projectDir`. With no `projectDir`, or
- * a `dir` outside it, only `dir`: nothing above that root is ever read.
+ * a `dir` outside that root, only `dir`: nothing above that root is ever read.
  */
 function climb(dir: string, projectDir: string | undefined, top: string | undefined): { root: string; dirs: string[] } {
-  const root = projectDir !== undefined && isWithin(projectDir, dir) ? resolve(top ?? projectDir) : resolve(dir);
+  // Inside the project is inside the repository root when there is one: a sibling folder of the session's is the project's.
+  const bound = top ?? projectDir;
+  const root = bound !== undefined && projectDir !== undefined && isWithin(bound, dir) ? resolve(bound) : resolve(dir);
   const dirs: string[] = [];
   let at = resolve(dir);
   for (let i = 0; i < 64; i += 1) {

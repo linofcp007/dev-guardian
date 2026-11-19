@@ -6498,7 +6498,8 @@ function findLockfile(manager, dir, projectDir, top) {
   return { status: "absent" };
 }
 function climb(dir, projectDir, top) {
-  const root = projectDir !== void 0 && isWithin(projectDir, dir) ? resolve4(top ?? projectDir) : resolve4(dir);
+  const bound = top ?? projectDir;
+  const root = bound !== void 0 && projectDir !== void 0 && isWithin(bound, dir) ? resolve4(bound) : resolve4(dir);
   const dirs = [];
   let at = resolve4(dir);
   for (let i = 0; i < 64; i += 1) {
