@@ -449,7 +449,7 @@ describe('docs/env.md', () => {
     }
     expect(names.size).toBeGreaterThan(10);
     const env = read('docs/env.md');
-    const undocumented = [...names].filter((n) => !new RegExp(`\`${n}\``).test(env)).sort();
+    const undocumented = [...names].filter((n) => !env.includes(`\`${n}\``)).sort();
     expect(undocumented).toEqual([]);
   });
 });
@@ -645,5 +645,208 @@ describe('selftest-install-vet-canary', () => {
       'the CLI help says five checks of the hooks': true,
       'the CLI help still says four checks': false,
     });
+  });
+});
+
+// ───────────────── pkgvet-registry-credentials-said — the docs say the warning names the registry's host, never its URL
+
+describe('pkgvet-registry-credentials-said', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  it('T-06 docs/hooks.md says the warning names the configured registry by its host and never by its URL; the CHANGELOG has a Security entry with what to do', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end);
+    const namesHostNotUrl = sentences(section).some(
+      (s) => /\bregistry\b/i.test(s) && /\bhost\b/i.test(s) && /\bnever\b/i.test(s) && /\bURLs?\b/.test(s) && /\bwarning\b/i.test(s),
+    );
+
+    // The entry is written under [Unreleased] and a release moves it to that version's section: the "### Security"
+    // block of every section is read, and the one about this is the one that names the scheme and host.
+    const log = read('CHANGELOG.md').replace(/\r\n/g, '\n');
+    const securityBlocks = log.split(/\n(?=## \[)/).map((section) => {
+      const sec = section.indexOf('\n### Security');
+      if (sec === -1) return '';
+      const secEnd = section.indexOf('\n### ', sec + 1);
+      return section.slice(sec, secEnd === -1 ? undefined : secEnd).replace(/\s+/g, ' ');
+    });
+    const security = securityBlocks.find((block) => /registry URL/i.test(block) && /credentials/i.test(block) && /scheme and host/i.test(block)) ?? '';
+    const aboutIt = /registry/i.test(security) && /credential|password|token/i.test(security);
+    const saysWhatToDo = /\b(?:change|rotate|revoke|replace)\b/i.test(security) && /transcript/i.test(security);
+
+    expect({
+      'docs/hooks.md: a sentence says the warning names the registry by its host and never by its URL': namesHostNotUrl,
+      'CHANGELOG: a Security section about the credentials in a registry URL': aboutIt,
+      'CHANGELOG: it says to change the credentials a session transcript may hold': saysWhatToDo,
+    }).toEqual({
+      'docs/hooks.md: a sentence says the warning names the registry by its host and never by its URL': true,
+      'CHANGELOG: a Security section about the credentials in a registry URL': true,
+      'CHANGELOG: it says to change the credentials a session transcript may hold': true,
+    });
+  });
+});
+
+// ───────────────── pkgvet-public-registry-url-parse — the docs say what counts as the public registry
+
+describe('pkgvet-public-registry-url-parse', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  it('T-05 docs/hooks.md says a registry URL with credentials, or with anything but the public host in its authority, counts as another registry', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end);
+    const saysIt = sentences(section).some(
+      (s) => /\bURL\b/.test(s) && /\bcredentials\b/i.test(s) && /\bauthority\b/i.test(s) && /\bcounts?\b/i.test(s) && /\banother registry\b/i.test(s),
+    );
+    expect({ 'docs/hooks.md: a sentence says a URL with credentials, or with more than the public host in its authority, counts as another registry': saysIt }).toEqual({
+      'docs/hooks.md: a sentence says a URL with credentials, or with more than the public host in its authority, counts as another registry': true,
+    });
+  });
+});
+
+// ───────────────── pkgvet-archive-like-name — the docs say which endings each manager reads as a file
+
+describe('pkgvet-archive-like-name', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item, a table row and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  const NPM_FILES = ['.tgz', '.tar.gz', '.tar'];
+  const PIP_FILES = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma'];
+  const UV_FILES = ['.zip', '.whl', '.tgz', '.tar.gz', '.tar'];
+
+  it('T-09 docs/hooks.md names the endings each manager reads as a file, and no longer says without a qualification that tarballs are never looked up', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const lines = sentences(hooks.slice(at, end === -1 ? undefined : end));
+    const code = (endings: readonly string[]): ((s: string) => boolean) => (s) => endings.every((e) => s.includes(`\`${e}\``));
+    const says = (manager: RegExp, check: (s: string) => boolean): boolean =>
+      lines.some((s) => manager.test(s) && /\bfiles?\b/i.test(s) && check(s));
+
+    const found = {
+      'npm: .tgz .tar.gz .tar': says(/\bnpm\b/, code(NPM_FILES)),
+      'bun: .tgz .tar.gz .tar': says(/\bbun\b/, code(NPM_FILES)),
+      'pip: the twelve': says(/\bpip\b/, code(PIP_FILES)),
+      'uv: the five': says(/\buv\b/, code(UV_FILES)),
+      'poetry: pip\'s list without .whl': says(/\bpoetry\b/, (s) => s.includes('`.whl`') && /\bwithout\b|\bexcept\b|\bnot\b/i.test(s)),
+      'pnpm and Yarn: none': lines.some((s) => /\bpnpm\b/.test(s) && /\bYarn\b/.test(s) && /\bnone\b|\bno ending\b/i.test(s)),
+      'no unqualified "tarballs are never looked up"': !lines.some(
+        (s) => /\btarballs?\b/i.test(s) && /never looked up/i.test(s) && !/\b(?:reads?|reading)\b/i.test(s),
+      ),
+    };
+    expect(found).toEqual({
+      'npm: .tgz .tar.gz .tar': true,
+      'bun: .tgz .tar.gz .tar': true,
+      'pip: the twelve': true,
+      'uv: the five': true,
+      'poetry: pip\'s list without .whl': true,
+      'pnpm and Yarn: none': true,
+      'no unqualified "tarballs are never looked up"': true,
+    });
+  });
+
+  it('T-09 a record of the known limits says what stays (the managers that were not measured, the .tgz value of a manifest under Yarn 1) and has an example; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'archive-like-names');
+    expect(limit, 'a record with the id archive-like-names in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    expect(limit.examples.length, 'at least one example a test runs').toBeGreaterThanOrEqual(1);
+    for (const said of ['pipx', 'composer', 'dotnet', 'Yarn 1']) {
+      expect({ said, found: limit.doc.includes(said) }).toEqual({ said, found: true });
+    }
+    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
+  });
+});
+
+// ───────────────── install-vet-project-registry-said — the docs say the line, the files of each manager, and what stays
+
+describe('install-vet-project-registry-said', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item, a table row and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  it('T-08 docs/hooks.md describes the line a project default registry gets and the files each manager obeys', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const lines = sentences(hooks.slice(at, end === -1 ? undefined : end));
+    const code = (s: string, ...files: string[]): boolean => files.every((f) => s.includes(`\`${f}\``));
+    const found = {
+      'the line: a file of the project sets the default registry, and what it serves was not vetted': lines.some(
+        (s) => /sets the default registry/i.test(s) && /\bproject\b/i.test(s) && /\bnot (?:vetted|verified)\b/i.test(s),
+      ),
+      'npm and pnpm: .npmrc': lines.some((s) => /\bnpm\b/.test(s) && /\bpnpm\b/.test(s) && code(s, '.npmrc') && !code(s, 'bunfig.toml')),
+      'bun: .npmrc and bunfig.toml': lines.some((s) => /\bbun\b/.test(s) && code(s, '.npmrc', 'bunfig.toml')),
+      'Yarn: .npmrc, .yarnrc and .yarnrc.yml': lines.some((s) => /\bYarn\b/.test(s) && code(s, '.npmrc', '.yarnrc', '.yarnrc.yml')),
+      'where: beside the package.json and at a workspace root': lines.some(
+        (s) => /\bdefault registry\b/i.test(s) && /\bworkspace\b/i.test(s) && /package\.json/.test(s),
+      ),
+    };
+    expect(found).toEqual({
+      'the line: a file of the project sets the default registry, and what it serves was not vetted': true,
+      'npm and pnpm: .npmrc': true,
+      'bun: .npmrc and bunfig.toml': true,
+      'Yarn: .npmrc, .yarnrc and .yarnrc.yml': true,
+      'where: beside the package.json and at a workspace root': true,
+    });
+  });
+
+  it('T-08 the record manifest-lockfile-and-transitive no longer says a project default registry is not said', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'manifest-lockfile-and-transitive');
+    expect(limit, 'the record manifest-lockfile-and-transitive').toBeDefined();
+    const doc = limit?.doc ?? '';
+    expect(doc, 'the record still lists the other things that stay out').toContain('another source');
+    const about = doc.split('\n').filter((l) => /default registry/i.test(l) && /configuration file of the project/i.test(l));
+    expect(about.filter((l) => /\bIt is not said\b/.test(l))).toEqual([]);
+  });
+
+  it('T-08 a record project-default-registry says what stays: Yarn 1 and 4, and the indexes of PyPI, Composer and NuGet; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'project-default-registry');
+    expect(limit, 'a record with the id project-default-registry in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    // The harness of the known limits runs offline and does not see the line: no example proves anything about it.
+    expect(limit.examples, 'no example: the offline harness does not see the line').toEqual([]);
+    expect((limit.not_executable ?? '').trim(), 'the reason no test of the harness can run it').not.toBe('');
+    for (const said of ['Yarn 1', 'Yarn 4', 'PyPI', 'Composer', 'NuGet']) {
+      expect({ said, found: limit.doc.includes(said) }).toEqual({ said, found: true });
+    }
+    // What stays after the fix round: a registry variable assigned inline in the command itself, and a line that
+    // names a file the manager ends up not obeying (a member's file under a workspace root).
+    const doc = limit.doc.toLowerCase();
+    expect({ inline: doc.includes('inline'), environment: doc.includes('environment'), workspace: doc.includes('workspace') }).toEqual({
+      inline: true,
+      environment: true,
+      workspace: true,
+    });
+    expect(limit.doc, 'the indexes a project file sets are said only when a name is missing').toMatch(/\bonly\b[^.]*\bmissing\b|\bmissing\b[^.]*\bonly\b/i);
+    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
   });
 });

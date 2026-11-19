@@ -42,6 +42,9 @@ interface HookOut {
   output: { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string; additionalContext?: string } } | undefined;
   requests: string[];
   ms: number;
+  /** Everything the dispatcher wrote, as written: the JSON answer on stdout and anything on stderr. */
+  stdout: string;
+  stderr: string;
 }
 
 let project: string;
@@ -142,7 +145,7 @@ function runHook(
   const trimmed = (r.stdout ?? '').trim();
   const output = trimmed === '' ? undefined : (JSON.parse(trimmed) as HookOut['output']);
   const requests = existsSync(logFile) ? readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
-  return { status: r.status, output, requests, ms };
+  return { status: r.status, output, requests, ms, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
 }
 
 const npmDoc = (version: string, extra: Record<string, unknown> = {}): Route => ({
@@ -768,9 +771,13 @@ describe('install-vet-lockfile-pins', () => {
     notOsv: requests.filter((u) => u !== OSV),
   });
   const ONLY_OSV = { anything: true, notOsv: [] };
-  const literal = (text: string): string => text.replace(/[.]/g, '[.]');
-  const pinned = (lockfile: string, version: string): RegExp =>
-    new RegExp(`${literal(lockfile)} pins 'eslint-config-prettier@${literal(version)}'.*${ADVISORY}`, 's');
+  /** The deny names the lockfile's pin of the malicious version, and the advisory somewhere after it. */
+  const expectPinned = (text: string, lockfile: string, version: string): void => {
+    const pin = `${lockfile} pins 'eslint-config-prettier@${version}'`;
+    const at = text.indexOf(pin);
+    expect(at, `"${pin}" in: ${text}`).toBeGreaterThanOrEqual(0);
+    expect(text.slice(at + pin.length)).toContain(ADVISORY);
+  };
 
   /** One direct dependency, `express`, at a range every lockfile below records for this project. */
   const manifest = (deps: Record<string, string> = { express: '^4.21.0' }, dir: string = project): void =>
@@ -920,7 +927,7 @@ describe('install-vet-lockfile-pins', () => {
       const r = runHook(command, ROUTES);
       expect(r.status).toBe(0);
       expect(decision(r)).toBe('deny');
-      expect(reason(r)).toMatch(pinned(lockfile, MALICIOUS));
+      expectPinned(reason(r), lockfile, MALICIOUS);
       // The sentence a malicious package of the manifest is denied with: the decision is the user's, and no way round is named.
       expect(reason(r)).toMatch(/is the user's decision/);
       expect(reason(r)).not.toMatch(/GUARDIAN_PKG_VET|--registry/);
@@ -1145,7 +1152,7 @@ describe('install-vet-lockfile-pins', () => {
       const r = runHook('npm ci', ROUTES, { cwd: member, env });
       expect(r.status).toBe(0);
       expect(decision(r)).toBe('deny');
-      expect(reason(r)).toMatch(pinned('package-lock.json', MALICIOUS));
+      expectPinned(reason(r), 'package-lock.json', MALICIOUS);
       // The root lockfile records the member's own range for `express`: no document of it is asked of the registry.
       expect(asked(r.requests)).toEqual(ONLY_OSV);
     },
@@ -1169,7 +1176,7 @@ describe('install-vet-lockfile-pins', () => {
     writeFileSync(join(app, 'package-lock.json'), packageLock(MALICIOUS));
     const own = runHook('npm ci', ROUTES, outside);
     expect(decision(own)).toBe('deny');
-    expect(reason(own)).toMatch(pinned('package-lock.json', MALICIOUS));
+    expectPinned(reason(own), 'package-lock.json', MALICIOUS);
     // The request log is one file for the whole test: what the second run added comes after the first run's lines.
     expect(asked(own.requests.slice(above.requests.length))).toEqual(ONLY_OSV);
   });
@@ -1217,4 +1224,331 @@ describe('install-vet-slow-first-round', () => {
       requests: [OSV, 'https://registry.npmjs.org/express', 'https://registry.npmjs.org/fresh-pkg', SLOW].sort(),
     });
   });
+});
+
+// ───────────────── pkgvet-registry-credentials-said — a configured registry is named by its host, never by its URL
+
+describe('pkgvet-registry-credentials-said', () => {
+  const MARK = 'dgsecret-zzq7731';
+  const NPM_HOST = 'https://npm.company.example';
+  const PYPI_HOST = 'https://pypi.company.example';
+  const NUGET_HOST = 'https://nuget.company.example';
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const withCredentials = (host: string, tail: string): string => ['https://dguser:', MARK, '@', host.slice('https://'.length), tail].join('');
+  const NPM_URL = withCredentials(NPM_HOST, '/');
+  const PYPI_URL = withCredentials(PYPI_HOST, '/simple');
+  const NUGET_URL = withCredentials(NUGET_HOST, '/v3/index.json');
+
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/dgprobe-zzq7731-nope': { status: 404 },
+    'https://pypi.org/pypi/dgprobe-zzq7731-nope/json': { status: 404 },
+    'https://api.nuget.org/v3-flatcontainer/dgprobe.zzq7731.nope/index.json': { status: 404 },
+    [OSV]: { osv: {} },
+  };
+
+  const put = (file: string, text: string): void => {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, text);
+  };
+
+  interface Origin {
+    label: string;
+    command: string;
+    /** Files and variables for this origin; the paths are those of the test's own project and home. */
+    setup: () => { env?: Record<string, string>; source: string };
+    /** The scheme and host the warning must name. */
+    host: string;
+  }
+
+  const ORIGINS: Origin[] = [
+    {
+      label: 'the user npmrc',
+      command: 'npm install dgprobe-zzq7731-nope',
+      setup: () => (put(join(home, '.npmrc'), `registry=${NPM_URL}\n`), { source: join(home, '.npmrc') }),
+      host: NPM_HOST,
+    },
+    {
+      label: 'the project .npmrc',
+      command: 'npm install dgprobe-zzq7731-nope',
+      setup: () => (put(join(project, '.npmrc'), `registry=${NPM_URL}\n`), { source: join(project, '.npmrc') }),
+      host: NPM_HOST,
+    },
+    {
+      label: 'NPM_CONFIG_REGISTRY',
+      command: 'npm install dgprobe-zzq7731-nope',
+      setup: () => ({ env: { NPM_CONFIG_REGISTRY: NPM_URL }, source: 'NPM_CONFIG_REGISTRY' }),
+      host: NPM_HOST,
+    },
+    {
+      label: 'the user pip.conf',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => (put(join(home, 'pip', 'pip.conf'), `[global]\nindex-url = ${PYPI_URL}\n`), { source: join(home, 'pip', 'pip.conf') }),
+      host: PYPI_HOST,
+    },
+    {
+      // On Windows pip reads %APPDATA%\pip\pip.ini; the hook reads that path on every platform.
+      label: 'the user pip.ini under APPDATA',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => (put(join(home, 'pip', 'pip.ini'), `[global]\nindex-url = ${PYPI_URL}\n`), { source: join(home, 'pip', 'pip.ini') }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'PIP_INDEX_URL',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => ({ env: { PIP_INDEX_URL: PYPI_URL }, source: 'PIP_INDEX_URL' }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'PIP_EXTRA_INDEX_URL',
+      command: 'pip install dgprobe-zzq7731-nope',
+      setup: () => ({ env: { PIP_EXTRA_INDEX_URL: PYPI_URL }, source: 'PIP_EXTRA_INDEX_URL' }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'pyproject.toml [[tool.uv.index]] (uv add)',
+      command: 'uv add dgprobe-zzq7731-nope',
+      setup: () => (
+        put(join(project, 'pyproject.toml'), `[project]\nname = "app"\nversion = "0.1.0"\n\n[[tool.uv.index]]\nname = "corp"\nurl = "${PYPI_URL}"\n`),
+        { source: join(project, 'pyproject.toml') }
+      ),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'nuget.config (dotnet add package)',
+      command: 'dotnet add package Dgprobe.Zzq7731.Nope',
+      setup: () => (
+        put(join(project, 'nuget.config'), `<configuration><packageSources><add key="corp" value="${NUGET_URL}" /></packageSources></configuration>\n`),
+        { source: join(project, 'nuget.config') }
+      ),
+      host: NUGET_HOST,
+    },
+    {
+      // A requirements file's own `--index-url` reaches the check as a registry of the command.
+      label: 'a requirements file with --index-url (pip install -r)',
+      command: 'pip install -r requirements.txt',
+      setup: () => (put(join(project, 'requirements.txt'), `--index-url ${PYPI_URL}\ndgprobe-zzq7731-nope\n`), { source: 'the command line' }),
+      host: PYPI_HOST,
+    },
+    {
+      label: 'the command line (--registry)',
+      command: `npm install --registry ${NPM_URL} dgprobe-zzq7731-nope`,
+      setup: () => ({ source: 'the command line' }),
+      host: NPM_HOST,
+    },
+  ];
+
+  it.each(ORIGINS)('T-03 $label: nothing the dispatcher writes holds the credentials; the answer is a warning naming the source and the host', (origin) => {
+    const { env, source } = origin.setup();
+    const r = runHook(origin.command, ROUTES, env === undefined ? {} : { env });
+    expect(r.status).toBe(0);
+    expect(r.stdout.includes(MARK), `the marker is in stdout: ${r.stdout}`).toBe(false);
+    expect(r.stderr.includes(MARK), `the marker is in stderr: ${r.stderr}`).toBe(false);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a name a private registry may serve is a warning, never a deny').toBeUndefined();
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context, 'the answer is a warning that explains the missing name').toContain('a custom registry is configured');
+    expect(context, 'it names where the configuration is').toContain(source);
+    expect(context, 'it names the registry by scheme and host').toContain(origin.host);
+  });
+});
+
+// ───────────────── pkgvet-public-registry-url-parse — a registry URL that names the public host before an @ is another registry
+
+describe('pkgvet-public-registry-url-parse', () => {
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const DISGUISED = ['https://', 'registry.npmjs.org', ':x@', 'evil.example', '/'].join('');
+  const NOPE = 'dgprobe-zzq7731-nope';
+
+  it('T-04 a scope the project .npmrc gives a registry of its own through such a URL: the line about the scope is said, and no request names the package', () => {
+    writeFileSync(join(project, '.npmrc'), `@types:registry=${DISGUISED}\n`);
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { '@types/node': '^22.0.0' } }));
+    const r = runHook('npm install', { 'https://registry.npmjs.org/@types%2Fnode': npmDoc('22.0.0'), [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context, 'the line about a scope with a registry of its own').toContain('gives a registry of its own');
+    expect(context).toContain('@types');
+    expect(
+      r.requests.filter((u) => u.includes('types')),
+      'the package is fetched from the other host by the package manager, and asked of neither the public registry nor OSV',
+    ).toEqual([]);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+  });
+
+  it('T-04 a default registry= through such a URL and a name the public registry does not have: a warning with the registry as the reason, never a deny', () => {
+    writeFileSync(join(project, '.npmrc'), `registry=${DISGUISED}\n`);
+    const r = runHook(`npm install ${NOPE}`, { [`https://registry.npmjs.org/${NOPE}`]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a name another registry may serve is a warning, never a deny').toBeUndefined();
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context, 'the answer is a warning that explains the missing name').toContain('a custom registry is configured');
+    expect(context, 'it names the registry by scheme and host').toContain('https://evil.example');
+    expect(context.includes(':x@'), 'and never by its credentials').toBe(false);
+  });
+});
+
+// ───────────────── pkgvet-archive-like-name — a name that ends like an archive is vetted when its manager reads it as a name
+
+describe('pkgvet-archive-like-name', () => {
+  const BAD = 'dgprobe-evil.zip';
+  const GOOD = 'dgprobe-clean.tgz';
+  const MALICIOUS: Record<string, Route | Route[]> = {
+    [`https://registry.npmjs.org/${BAD}`]: npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${BAD}@1.0.0`]: ['MAL-2026-0042'] } },
+  };
+  const manifest = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+
+  it('T-07 `npm install <malicious>.zip` is DENIED, naming the package', () => {
+    const r = runHook(`npm install ${BAD}`, MALICIOUS);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${BAD}`);
+  });
+
+  it('T-07 `pnpm add <malicious>.tgz` is DENIED: pnpm reads no ending as a file', () => {
+    const name = 'dgprobe-evil.tgz';
+    const r = runHook(`pnpm add ${name}`, {
+      [`https://registry.npmjs.org/${name}`]: npmDoc('1.0.0'),
+      [OSV]: { osv: { [`${name}@1.0.0`]: ['MAL-2026-0042'] } },
+    });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(name);
+  });
+
+  it('T-07 a bare `npm install` whose package.json has the key <malicious>.zip is DENIED, naming the file and the package', () => {
+    manifest({ [BAD]: '^1.0.0' });
+    const r = runHook('npm install', MALICIOUS);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json/);
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+  });
+
+  it('T-07 a dependency "a": "npm:<malicious>.zip@^1" is DENIED the same way', () => {
+    manifest({ a: `npm:${BAD}@^1` });
+    const r = runHook('npm install', MALICIOUS);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+  });
+
+  it('T-07 `npm install <clean>.tgz` names a file for npm: no request at all, nothing said', () => {
+    const r = runHook(`npm install ${GOOD}`, {});
+    expect(r.output).toBeUndefined();
+    expect(r.requests).toEqual([]);
+  });
+
+  it('T-07 a manager that was not measured, with a name the registry does not have: a warning, never a deny', () => {
+    const name = 'dgprobe-missing.zip';
+    const r = runHook(`pipx install ${name}`, { [`https://pypi.org/pypi/${name}/json`]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.requests, 'the name is asked of the registry').toContain(`https://pypi.org/pypi/${name}/json`);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain(name);
+  });
+
+  it('T-10 `npm install x@npm:<malicious>.zip` (an alias) is DENIED, naming the package', () => {
+    const r = runHook(`npm install x@npm:${BAD}`, MALICIOUS);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(BAD);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${BAD}`);
+  });
+
+  it('T-10 `npm install <malicious>@foo.zip` (a tag that ends like an archive) is DENIED, naming the package', () => {
+    const name = 'dgprobe-evil';
+    const r = runHook(`npm install ${name}@foo.zip`, {
+      [`https://registry.npmjs.org/${name}`]: { ...npmDoc('1.0.0'), body: { ...npmDoc('1.0.0').body as object, 'dist-tags': { latest: '1.0.0', 'foo.zip': '1.0.0' } } },
+      [OSV]: { osv: { [`${name}@1.0.0`]: ['MAL-2026-0042'] } },
+    });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(name);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${name}`);
+  });
+  it('T-10 `npm install x@NPM:<malicious>` (the alias prefix in upper case) is DENIED, naming the package', () => {
+    const name = 'dgprobe-evil';
+    const r = runHook(`npm install x@NPM:${name}`, {
+      'https://registry.npmjs.org/x': npmDoc('1.0.0'),
+      [`https://registry.npmjs.org/${name}`]: npmDoc('1.0.0'),
+      [OSV]: { osv: { [`${name}@1.0.0`]: ['MAL-2026-0042'] } },
+    });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(name);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${name}`);
+  });
+});
+
+// ───────────────── install-vet-project-registry-said — a project file that sets the default registry is said, through the dispatcher
+
+describe('install-vet-project-registry-said', () => {
+  const CLEAN = 'dgprobe-clean';
+  const HOST = 'https://npm.other.example';
+  const ROUTES: Record<string, Route> = { [`https://registry.npmjs.org/${CLEAN}`]: npmDoc('1.0.0'), [OSV]: { osv: {} } };
+  const line = (file: string): string =>
+    `dev-guardian: the project's ${file} sets the default registry (${HOST}) — packages are fetched from it, and what it serves was not vetted.`;
+  const put = (dir: string, file: string, text: string): void => {
+    mkdirSync(dirname(join(dir, file)), { recursive: true });
+    writeFileSync(join(dir, file), text);
+  };
+
+  it('T-07 `npm install <clean>` with the default registry set by the project .npmrc: the answer is the line, naming the file and the host', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, '.npmrc', `registry=${HOST}/\n`);
+    const r = runHook(`npm install ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('.npmrc'));
+  });
+
+  it('T-07 the same registry in the .npmrc of the home directory: the dispatcher says nothing', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, '.npmrc', `registry=${HOST}/\n`);
+    // The control: without the user's own word for it, it is said.
+    expect(runHook(`npm install ${CLEAN}`, ROUTES).output?.hookSpecificOutput?.additionalContext, 'the control').toBe(line('.npmrc'));
+    put(home, '.npmrc', `registry=${HOST}/\n`);
+    const r = runHook(`npm install ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.stdout.trim(), 'no answer at all').toBe('');
+    expect(r.output).toBeUndefined();
+  });
+
+  it('T-07 `bun add <clean>` with a bunfig.toml: the line names bunfig.toml', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, 'bunfig.toml', `[install]\nregistry = "${HOST}/"\n`);
+    const r = runHook(`bun add ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('bunfig.toml'));
+  });
+
+  it('T-09 a project .npmrc with registry=<public> then registry=<other>: the context has the line with the other host', () => {
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put(project, '.npmrc', `registry=https://registry.npmjs.org/\nregistry=${HOST}/\n`);
+    const r = runHook(`npm install ${CLEAN}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('.npmrc'));
+  });
+});
+
+// ───────────────── install-vet-bare-install-misread — through the dispatcher
+
+describe('install-vet-bare-install-misread', () => {
+  const manifest = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+
+  it.each(['npm install --global=false', 'npm install -D false', 'npm -D false install'])(
+    'T-03 %s in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      manifest({ express: '^4.21.0', crossenv: '*' });
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package.json.*crossenv/s);
+    },
+  );
 });

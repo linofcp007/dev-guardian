@@ -8,7 +8,8 @@
  *     registry does not have ONLY when the whole command, comments
  *     stripped, is ONE plain install statement with allowlisted flags
  *     (controller ruling, round 2 — `confidentShape` in `parseCommand.ts`;
- *     `InstallCommand.uncertain` is empty exactly then) AND no custom
+ *     `InstallCommand.uncertain` is empty then, bar the one reason a name of a
+ *     manager nobody measured that ends like an archive carries) AND no custom
  *     registry, npmjs auth token (scoped names) or local workspace package
  *     explains the 404 (`privateRegistry.ts`). Blocking a missing name buys
  *     little — the install would 404 anyway — and a false deny blocks real
@@ -72,10 +73,17 @@ import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead
 import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
-import { npmScopeRegistryOf, npmUserRegistries, registryCache, type RegistryContext } from './privateRegistry.js';
+import {
+  npmEnvNamesDefaultRegistry,
+  npmProjectDefaultRegistry,
+  npmScopeRegistryOf,
+  npmUserRegistries,
+  registryCache,
+  type RegistryContext,
+} from './privateRegistry.js';
 import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
 import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from './types.js';
-import { HOOK_BUDGET_MS, vetPackages, vetTyposquatOnly } from './vet.js';
+import { HOOK_BUDGET_MS, registryHost, vetPackages, vetTyposquatOnly } from './vet.js';
 import { isExactVersion } from './versions.js';
 
 export interface HookVetOptions {
@@ -276,8 +284,15 @@ function withManifestPackages(
   locked: LockedProject[],
 ): VetCommand[] {
   const out: VetCommand[] = [];
+  const lineAsked = new Map<string, string[]>();
+  let userRegistries: string[] | undefined;
+  const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
   for (const c of parsed) {
     out.push(c);
+    // A line of thousands of commands asks once per manager and directory: the answer is the same.
+    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)}`;
+    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
+    notes.push(...(lineAsked.get(key) ?? []));
     const manifest = c.manifest;
     if (manifest === undefined) continue;
     const dir = c.prefixed === true ? null : commandDir(c, opts);
@@ -288,7 +303,7 @@ function withManifestPackages(
     }
     let reads: ManifestRead[];
     try {
-      reads = manifest.kind === 'package-json' ? [readNpmManifest(dir)] : readRequirements(dir, manifest.files);
+      reads = manifest.kind === 'package-json' ? [readNpmManifest(dir, c.manager)] : readRequirements(dir, manifest.files, c.manager);
     } catch {
       // Fail-open, and said: nothing of the manifest was vetted.
       notes.push('dev-guardian: the manifest was not read (could not be read) — its packages were not vetted.');
@@ -324,6 +339,42 @@ function withManifestPackages(
     }
   }
   return out;
+}
+
+/** The most lines said for the project files that set the default registry: the rest is counted. */
+const MAX_REGISTRY_LINES = 3;
+
+/**
+ * The lines for a command whose project sets the default registry ({@link npmProjectDefaultRegistry}): one per file
+ * that gives a registry which is not one of the USER's, nearest first — the file by its base name and the registry by
+ * `scheme://host` ({@link registryHost}), nothing else of either — at most {@link MAX_REGISTRY_LINES}, and a last line
+ * that counts the files left out. The managers do not agree on which file wins, so each is said. `[]` (no line) when
+ * the command line or the environment names a registry (the manager obeys those first), for a global install (the
+ * manager does not obey the project's file), when the command's directory is not known, when every registry is one the
+ * user's own configuration names (a file of the project never silences a line), and on any error. The notes are
+ * de-duplicated per call, so a line is said once.
+ */
+function projectDefaultRegistryLines(
+  c: InstallCommand,
+  opts: HookVetOptions,
+  registry: RegistryContext,
+  userRegistries: () => readonly string[],
+): string[] {
+  try {
+    if (c.ecosystem !== 'npm' || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
+    const dir = commandDir(c, opts);
+    if (dir === null) return [];
+    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
+    const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
+      const host = registryHost('npm', f.url);
+      return `dev-guardian: the project's ${basename(f.source)} sets the default registry${host === undefined ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+    });
+    const rest = found.length - lines.length;
+    if (rest > 0) lines.push(rest === 1 ? 'dev-guardian: 1 more file of the project sets the default registry.' : `dev-guardian: ${rest} more files of the project set the default registry.`);
+    return lines;
+  } catch {
+    return []; // fail-open: no line
+  }
 }
 
 /**
@@ -483,7 +534,7 @@ function fromUserRegistry(url: string, registries: readonly string[]): boolean {
   let normal: string;
   try {
     const u = new URL(url);
-    normal = `${u.origin}${u.pathname}`;
+    normal = `${u.origin}${u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`}`;
   } catch {
     return false;
   }
@@ -1206,7 +1257,8 @@ function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; 
  *   - malicious (OSV `MAL-` on the version, npm takedown placeholder) → deny, always;
  *   - missing from the public registry → deny ONLY when the vetting found
  *     nothing to explain it (it is `block`, not `unknown`) AND the command
- *     has the confident shape (`uncertain` is empty); otherwise the ruling's
+ *     has the confident shape (`uncertain` is empty, bar the one reason an
+ *     archive-like name of an unmeasured manager carries); otherwise the ruling's
  *     "not found … ignore this" warning, with the reason;
  *   - every other `warn` check, except known vulnerabilities on a version
  *     the user did not pin exactly (M4: for a range or a bare name the

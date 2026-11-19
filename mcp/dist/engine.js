@@ -115596,15 +115596,36 @@ var init_auditMcpTools = __esm({
 });
 
 // src/pkgvet/parseCommand.ts
+function readsFileValue(manager, value) {
+  return (manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
+}
+function fileEndings(manager, scoped) {
+  switch (manager) {
+    case "npm":
+    case "npx":
+      return scoped ? null : NPM_FILE;
+    case "bun":
+      return NPM_FILE;
+    case "pip":
+      return PIP_FILE;
+    case "uv":
+    case "uv-pip":
+      return UV_FILE;
+    case "poetry":
+      return POETRY_FILE;
+    default:
+      return null;
+  }
+}
 function isPathLike(word) {
   return word === "." || word === ".." || word.startsWith("./") || word.startsWith("../") || word.startsWith(".\\") || word.startsWith("..\\") || word.startsWith("/") || word.startsWith("~") || word.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(word);
 }
-function notAPackage(word) {
+function notAPackage(word, archive) {
   if (word.length === 0) return "empty";
   if (SCP_GIT.test(word)) return "SSH git spec (user@host:path) \u2014 not looked up";
   if (isPathLike(word)) return "local path \u2014 not looked up";
   if (URL_OR_VCS.test(word)) return "URL / VCS / protocol spec \u2014 not looked up";
-  if (ARCHIVE2.test(word)) return "archive file \u2014 not looked up";
+  if (archive !== null && archive.test(word)) return "archive file \u2014 not looked up";
   return null;
 }
 function skip(raw, reason) {
@@ -115620,33 +115641,35 @@ function withRange(spec, range) {
   const r = range?.trim();
   return r !== void 0 && r !== "" ? { ...spec, range: r } : spec;
 }
-function parseNpm(raw) {
+function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
-  if (bad !== null) return skip(raw, bad);
   const scoped = raw.startsWith("@");
   const at = raw.indexOf("@", scoped ? 1 : 0);
+  const bad = notAPackage(raw, at > 0 || alias ? null : fileEndings(manager, scoped));
+  if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
-    if (range.startsWith("npm:")) {
-      const real = parseNpm(range.slice(4));
+    if (/^npm:/i.test(range)) {
+      const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range);
+    const rangeBad = notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
+    if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);
 }
-function parsePython(raw, poetryAt) {
+function parsePython(raw, poetryAt, manager) {
   let text3 = raw.trim();
   const semi = text3.indexOf(";");
   if (semi >= 0) text3 = text3.slice(0, semi).trim();
   if (/[$`]/.test(text3)) return skip(raw, "not a literal package name (shell expansion)");
   if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text3)) return skip(raw, "direct URL reference \u2014 not looked up");
-  const bad = notAPackage(text3);
+  const versioned2 = PEP440_OP.test(text3) || text3.indexOf("@") > 0;
+  const bad = notAPackage(text3, versioned2 ? ARCHIVE2 : fileEndings(manager, false));
   if (bad !== null) return skip(raw, bad);
   if (/[\\/]/.test(text3)) return skip(raw, "local path \u2014 not looked up");
   let name = text3;
@@ -115668,7 +115691,8 @@ function parsePython(raw, poetryAt) {
 }
 function parseComposer(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
+  const versioned2 = raw.search(/[:=\s]/) > 0 || raw.includes("@") && !raw.startsWith("@");
+  const bad = notAPackage(raw, versioned2 ? ARCHIVE2 : null);
   if (bad !== null) return skip(raw, bad);
   const sep23 = raw.search(/[:=\s]/);
   let name = sep23 > 0 ? raw.slice(0, sep23) : raw;
@@ -115683,19 +115707,19 @@ function parseComposer(raw) {
 }
 function parseNuget(raw) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw);
+  const bad = notAPackage(raw, raw.indexOf("@") > 0 ? ARCHIVE2 : null);
   if (bad !== null) return skip(raw, bad);
   const at = raw.indexOf("@");
   const name = at > 0 ? raw.slice(0, at) : raw;
   const range = at > 0 ? raw.slice(at + 1) : void 0;
   return withRange(checkName("nuget", name, raw), range);
 }
-function parsePackageSpec(ecosystem, raw) {
+function parsePackageSpec(ecosystem, raw, manager) {
   switch (ecosystem) {
     case "npm":
-      return parseNpm(raw.trim());
+      return parseNpm(raw.trim(), manager);
     case "pypi":
-      return parsePython(raw, false);
+      return parsePython(raw, false, manager);
     case "packagist":
       return parseComposer(raw.trim());
     case "nuget":
@@ -115704,7 +115728,7 @@ function parsePackageSpec(ecosystem, raw) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115721,6 +115745,10 @@ var init_parseCommand = __esm({
     };
     SHELL_EXPANSION = /[$`*?{}[\]<>|&;]/;
     URL_OR_VCS = /^(?:[a-z][a-z0-9+.-]*:\/\/|git\+|git:|hg\+|svn\+|bzr\+|github:|gitlab:|bitbucket:|gist:|file:|link:|workspace:|portal:|patch:|exec:)/i;
+    NPM_FILE = /\.(?:tgz|tar\.gz|tar)$/i;
+    PIP_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
+    UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
+    POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
     ARCHIVE2 = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
     SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
     PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
@@ -115792,6 +115820,7 @@ var init_parseCommand = __esm({
       "--frozen-lockfile",
       "--no-frozen-lockfile"
     ];
+    LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
     FLAGS = {
       npm: {
         // `-C` is npm's short form of `--prefix`.
@@ -115821,7 +115850,8 @@ var init_parseCommand = __esm({
         bool: set2(...NPM_COMMON_BOOL),
         registry: set2("--registry"),
         dir: set2("--prefix", "-C"),
-        workspace: set2("--workspace", "-w", "--workspaces")
+        workspace: set2("--workspace", "-w", "--workspaces"),
+        boolWord: { except: LOGLEVEL_FLAGS }
       },
       pnpm: {
         value: set2(
@@ -115844,7 +115874,8 @@ var init_parseCommand = __esm({
         bool: set2(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r"),
         registry: set2("--registry"),
         dir: set2("--dir", "-C"),
-        workspace: set2("--workspace", "--filter", "-F")
+        workspace: set2("--workspace", "--filter", "-F"),
+        boolWord: { except: LOGLEVEL_FLAGS }
       },
       yarn: {
         value: set2(
@@ -116645,7 +116676,14 @@ function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
 function isPublic(ecosystem, url2) {
-  return PUBLIC_HOSTS[ecosystem].test(url2.trim().replace(/^["']|["']$/g, ""));
+  const text3 = url2.trim().replace(/^["']|["']$/g, "");
+  if (UNSAFE_TEXT.test(text3)) return false;
+  const m = URL_SHAPE.exec(text3);
+  if (m === null) return false;
+  const scheme = (m[1] ?? "").toLowerCase();
+  const port = m[3];
+  if (port !== void 0 && port !== "" && port !== (scheme === "http" ? "80" : "443")) return false;
+  return PUBLIC_HOSTS[ecosystem].includes((m[2] ?? "").toLowerCase());
 }
 function isPublicRegistryUrl(ecosystem, url2) {
   return isPublic(ecosystem, url2);
@@ -116747,26 +116785,62 @@ function npmScope(name) {
   const m = /^@([^/]+)\//.exec(name);
   return m?.[1];
 }
+function npmrcValue(raw) {
+  const value = raw.trim();
+  if (value.includes("\\")) return value;
+  let quote;
+  let end = value.length;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value.charAt(i);
+    if (quote !== void 0) {
+      if (ch === quote) quote = void 0;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === ";" || ch === "#") {
+      end = i;
+      break;
+    }
+  }
+  return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
+}
+function yamlServer(lines, at, keyIndent, raw) {
+  const next = lines.slice(at + 1).find((l) => l.trim() !== "" && !l.trim().startsWith("#"));
+  if (next !== void 0 && next.length - next.trimStart().length > keyIndent) return UNREADABLE_VALUE;
+  const value = raw.trim();
+  const quote = value.charAt(0);
+  if (quote === '"' || quote === "'") {
+    const close = value.indexOf(quote, 1);
+    if (close < 0) return UNREADABLE_VALUE;
+    const content = value.slice(1, close);
+    const rest = value.slice(close + 1);
+    if (content.includes("\\") || rest.trim() !== "" && !/^\s+#/.test(rest)) return UNREADABLE_VALUE;
+    return content;
+  }
+  const comment = value.search(/\s#/);
+  return (comment === -1 ? value : value.slice(0, comment)).trim();
+}
 function fromNpmrc(text3, scope, all) {
   let found2;
+  let scoped;
   for (const raw of text3.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith("#") || line.startsWith(";")) continue;
     const m = /^(@[^:=\s]+:)?registry\s*=\s*(.+)$/i.exec(line);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    const url2 = (m[2] ?? "").trim();
+    const url2 = npmrcValue(m[2] ?? "");
     all?.push(url2);
-    if (lineScope === void 0) found2 = found2 ?? url2;
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url2;
+    if (lineScope === void 0) found2 = url2;
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = url2;
   }
-  return found2;
+  return scoped ?? found2;
 }
 function fromYarnrcYml(text3, scope, all) {
   let global3;
+  let scoped;
   let inScopes = false;
   let currentScope;
-  for (const raw of text3.split(/\r?\n/)) {
+  const lines = text3.split(/\r?\n/);
+  for (const [at, raw] of lines.entries()) {
     if (raw.trim() === "" || raw.trim().startsWith("#")) continue;
     const indent = raw.length - raw.trimStart().length;
     const line = raw.trim();
@@ -116774,7 +116848,7 @@ function fromYarnrcYml(text3, scope, all) {
       inScopes = /^npmScopes\s*:/.test(line);
       currentScope = void 0;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-      if (m !== null) global3 = (m[1] ?? "").replace(/^["']|["']$/g, "");
+      if (m !== null) global3 = yamlServer(lines, at, indent, m[1] ?? "");
       if (m !== null) all?.push(global3 ?? "");
       continue;
     }
@@ -116785,24 +116859,25 @@ function fromYarnrcYml(text3, scope, all) {
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-    if (server !== null) all?.push((server[1] ?? "").replace(/^["']|["']$/g, ""));
+    if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return (server[1] ?? "").replace(/^["']|["']$/g, "");
+      scoped = yamlServer(lines, at, indent, server[1] ?? "");
     }
   }
-  return global3;
+  return scoped ?? global3;
 }
 function fromYarnrc(text3, scope, all) {
   let found2;
+  let scoped;
   for (const raw of text3.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     all?.push(m[2] ?? "");
-    if (lineScope === void 0) found2 = found2 ?? m[2];
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
+    if (lineScope === void 0) found2 = m[2];
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
   }
-  return found2;
+  return scoped ?? found2;
 }
 function fromBunfig(text3, scope, all) {
   let section = "";
@@ -117204,19 +117279,22 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
   if (unchecked !== void 0) return { kind: "unchecked", source: unchecked.root, cut: unchecked.cut };
   return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
-var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, NUGET_VERSION;
+var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, UNSAFE_TEXT, URL_SHAPE, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, UNREADABLE_VALUE, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, NUGET_VERSION;
 var init_privateRegistry = __esm({
   "src/pkgvet/privateRegistry.ts"() {
     "use strict";
     init_configFile();
     MAX_WORKSPACE_DIRS2 = 3e3;
     PUBLIC_HOSTS = {
-      npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
-      pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
-      packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
-      nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i
+      npm: ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com"],
+      pypi: ["pypi.org", "pypi.python.org", "files.pythonhosted.org"],
+      packagist: ["packagist.org", "repo.packagist.org"],
+      nuget: ["api.nuget.org", "www.nuget.org", "nuget.org"]
     };
+    UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
+    URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d*))?(?:[/?#]|$)/i;
     MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
+    UNREADABLE_VALUE = "(configured)";
     NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
     ENV_REGISTRY = {
       npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
@@ -117434,6 +117512,28 @@ function ageText(hours) {
   const days = hours / 24;
   return days < 10 ? `${Math.round(days * 10) / 10} days ago` : `${Math.round(days)} days ago`;
 }
+function registryHost(ecosystem, value) {
+  let named2;
+  for (const token of value.split(/\s+/)) {
+    const candidate = token.replace(/^[^=:/?#@]+=(?=https?:\/\/)/i, "");
+    const url2 = parsedHttpUrl(candidate);
+    if (url2 === void 0) {
+      if (candidate.includes("@")) return void 0;
+      continue;
+    }
+    if (url2.pathname.includes("@") || url2.search.includes("@") || url2.hash.includes("@")) return void 0;
+    if (named2 === void 0 && !isPublicRegistryUrl(ecosystem, candidate)) named2 = `${url2.protocol}//${url2.hostname}`;
+  }
+  return named2;
+}
+function parsedHttpUrl(text3) {
+  try {
+    const url2 = new URL(text3);
+    return (url2.protocol === "https:" || url2.protocol === "http:") && url2.hostname !== "" ? url2 : void 0;
+  } catch {
+    return void 0;
+  }
+}
 function customFor(spec, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
   if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine };
@@ -117537,7 +117637,8 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     const didYouMean = w.typo !== null ? ` Did you mean '${w.typo.similar_to}'?` : "";
     const custom2 = w.custom ?? null;
     if (custom2 !== null) {
-      const where = `${custom2.source}${custom2.url !== void 0 ? `: ${custom2.url}` : ""}`;
+      const host = custom2.url === void 0 ? void 0 : registryHost(eco, custom2.url);
+      const where = `${custom2.source}${host !== void 0 ? `: ${host}` : ""}`;
       const why = custom2.kind === "auth" ? `an npmjs auth token is configured (${where}) and a private scoped package answers 404 to an anonymous lookup` : custom2.kind === "workspace" ? `it is a local workspace package (${where})` : custom2.kind === "unchecked" ? custom2.cut === "time" ? `whether a private registry or a local workspace package explains it could not be checked (${TIME_BUDGET})` : `the workspace at ${custom2.source} has more than ${MAX_WORKSPACE_DIRS2} directories and was not read to its end \u2014 it may hold the package` : custom2.kind === "unreadable" ? custom2.what === "workspace manifest" ? `workspace manifest at ${custom2.source} could not be read \u2014 possibly a local workspace package` : custom2.what === "directory" ? `directory ${custom2.source} could not be listed \u2014 it may hold registry configuration` : `registry configuration at ${custom2.source} could not be read \u2014 possibly a private registry` : `a custom registry is configured (${where})`;
       exists = unknown3(`not on ${registry2}, but ${why} \u2014 possibly a private or local package; not vetted.${didYouMean}`);
     } else {

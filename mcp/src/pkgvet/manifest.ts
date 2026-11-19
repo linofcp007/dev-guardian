@@ -36,7 +36,7 @@
 import { dirname, resolve } from 'node:path';
 
 import { isNetworkPath, readSmallText, type TextRead } from '../hooks/configFile.js';
-import { parsePackageSpec } from './parseCommand.js';
+import { parsePackageSpec, readsFileValue } from './parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from './types.js';
 
 type ManifestStatus = 'ok' | 'absent' | 'unreadable';
@@ -145,8 +145,6 @@ const NPM_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies',
 const SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
 /** A dist-tag: one word that no version can be taken for. */
 const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
-/** A value that names a file to install, not a tag. */
-const ARCHIVE_NAME = /\.(?:tgz|tar|tar\.gz|zip)$/i;
 
 /**
  * What a dependency's value asks the registry for: `undefined` for "the
@@ -154,35 +152,37 @@ const ARCHIVE_NAME = /\.(?:tgz|tar|tar\.gz|zip)$/i;
  * value is no registry spec at all — a path, `file:`, `link:`, `workspace:`,
  * `catalog:`, a URL, a git repository, `user/repo`, an archive, or text.
  */
-function npmRange(value: string): string | undefined | null {
+function npmRange(value: string, manager: string): string | undefined | null {
   const v = value.trim();
   if (v === '' || v === 'latest') return undefined;
-  if (v.length > MAX_RANGE_LENGTH || ARCHIVE_NAME.test(v)) return null;
+  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
   if (DIST_TAG.test(v)) return v;
   return v.split(/\s+/).every((word) => SEMVER_WORD.test(word)) ? v : null;
 }
 
 /** A dependency entry as the package a registry would serve — `"x": "npm:real@^1"` is `real` — or `null`. */
-function npmDependency(key: string, value: string): PackageSpec | null {
+function npmDependency(key: string, value: string, manager: string): PackageSpec | null {
   let name = key;
   let wanted = value.trim();
-  if (wanted.startsWith('npm:')) {
+  if (/^npm:/i.test(wanted)) {
     const real = wanted.slice(4);
     const at = real.indexOf('@', real.startsWith('@') ? 1 : 0);
     name = at > 0 ? real.slice(0, at) : real;
     wanted = at > 0 ? real.slice(at + 1) : '';
   }
   if (!validName('npm', name)) return null;
-  const range = npmRange(wanted);
+  const range = npmRange(wanted, manager);
   return range === null ? null : spec('npm', name, range);
 }
 
 /**
  * The dependencies the `package.json` of `dir` declares — `dependencies`,
  * `devDependencies`, `optionalDependencies` and `peerDependencies` — as the
- * packages a registry would serve. No other field of the file is used.
+ * packages a registry would serve. No other field of the file is used. A key is
+ * always a name; a value is a registry spec unless `manager` (the command's; npm
+ * when none) reads it as a file.
  */
-export function readNpmManifest(dir: string): ManifestRead {
+export function readNpmManifest(dir: string, manager = 'npm'): ManifestRead {
   const file = 'package.json';
   const read = readManifestText(resolve(dir, file), dir);
   if (read.status === 'absent') return { file, status: 'absent', packages: [], registries: [] };
@@ -203,7 +203,7 @@ export function readNpmManifest(dir: string): ManifestRead {
     if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) continue;
     for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
       if (typeof value !== 'string') continue;
-      const pkg = npmDependency(key, value);
+      const pkg = npmDependency(key, value, manager);
       if (pkg !== null) pushOnce(packages, seen, pkg);
     }
   }
@@ -258,6 +258,8 @@ interface RequirementsWalk {
   /** Files read or attempted so far, includes counted, over every `-r` of the command. */
   files: number;
   visited: Set<string>;
+  /** The manager of the command: its list of archive endings reads a line as a file or as a name. */
+  manager: string;
 }
 
 interface RequirementsFound {
@@ -305,7 +307,7 @@ function readRequirementFile(
     }
     // Per-requirement options (`--hash=…`, `--config-settings …`) follow the requirement.
     const requirement = line.replace(/\s+--[A-Za-z].*$/, '').trim();
-    const parsed = parsePackageSpec('pypi', requirement);
+    const parsed = parsePackageSpec('pypi', requirement, walk.manager);
     if (!('name' in parsed) || parsed.name.length > MAX_NAME_LENGTH) continue;
     if (parsed.range !== undefined && !pypiRange(parsed.range)) continue;
     pushOnce(found.packages, found.seen, spec('pypi', parsed.name, parsed.range));
@@ -319,8 +321,8 @@ function readRequirementFile(
  * levels, eight files in all for the command). One answer per file given, in
  * order: an include's packages are its includer's.
  */
-export function readRequirements(dir: string, files: readonly string[]): ManifestRead[] {
-  const walk: RequirementsWalk = { files: 0, visited: new Set<string>() };
+export function readRequirements(dir: string, files: readonly string[], manager = 'pip'): ManifestRead[] {
+  const walk: RequirementsWalk = { files: 0, visited: new Set<string>(), manager };
   return files.map((given): ManifestRead => {
     const file = label(given);
     if (isNetworkPath(given)) return { file, status: 'unreadable', packages: [], registries: [], reason: REASON.network };

@@ -240,3 +240,81 @@ describe('vet_packages tool', () => {
     expect(r.packages[0]?.verdict).toBe('unknown');
   });
 });
+
+// ───────────────── pkgvet-registry-credentials-said — the response names a configured registry by its host, never its URL
+
+describe('pkgvet-registry-credentials-said', () => {
+  const MARK = 'dgsecret-zzq7731';
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const SECRET_URL = ['https://', 'dguser', ':', MARK, '@', 'npm.company.example', `/caminho/?t=${MARK}`].join('');
+
+  it('T-04 a project .npmrc with credentials in the registry URL: the serialized response has the host and not the marker', async () => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    writeFileSync(join(project, '.npmrc'), `registry=${SECRET_URL}\n`);
+    stubNetwork({
+      'https://registry.npmjs.org/acme-internal-lib': { status: 404 },
+      'https://api.osv.dev/v1/querybatch': OSV_CLEAN,
+    });
+    const r = expectOk(await run({ ecosystem: 'npm', packages: ['acme-internal-lib'] }));
+    expect(r.packages[0]?.verdict).toBe('unknown');
+    const text = JSON.stringify(r);
+    for (const leaked of [MARK, 'dguser', '/caminho', '?t=']) {
+      expect(text.includes(leaked), `"${leaked}" must not be in the response: ${text}`).toBe(false);
+    }
+    expect(text).toContain('https://npm.company.example');
+  });
+});
+
+// ───────────────── pkgvet-archive-like-name — a spec is a name unless it is a path, a URL or a git spec
+
+describe('pkgvet-archive-like-name', () => {
+  const doc = (v: string): Answer => ({ status: 200, body: { 'dist-tags': { latest: v }, modified: OLD, versions: { [v]: {} } } });
+
+  it('T-08 a name that ends like an archive gets a verdict, as any name does; nothing of it is skipped', async () => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    const calls = stubNetwork({
+      'https://registry.npmjs.org/lodash.zip': doc('4.2.0'),
+      'https://registry.npmjs.org/x.tgz': { status: 404 },
+      'https://pypi.org/pypi/thing.egg/json': {
+        status: 200,
+        body: { info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: OLD }] } },
+      },
+      'https://api.osv.dev/v1/querybatch': OSV_CLEAN,
+    });
+    const npm = expectOk(await run({ ecosystem: 'npm', packages: ['lodash.zip', 'x.tgz'] }));
+    expect(npm.skipped).toEqual([]);
+    expect(npm.packages.map((p) => [p.name, p.verdict])).toEqual([
+      ['lodash.zip', expect.any(String)],
+      ['x.tgz', 'block'],
+    ]);
+    const pypi = expectOk(await run({ ecosystem: 'pypi', packages: ['thing.egg'] }));
+    expect(pypi.skipped).toEqual([]);
+    expect(pypi.packages.map((p) => p.name)).toEqual(['thing.egg']);
+    expect(calls).toContain('https://registry.npmjs.org/lodash.zip');
+    expect(calls).toContain('https://pypi.org/pypi/thing.egg/json');
+  });
+
+  it('T-08 a path and a URL that end like an archive stay skipped, with their reasons', async () => {
+    const r = expectOk(await run({ ecosystem: 'npm', packages: ['./x.tgz', 'https://h/x.zip'] }));
+    expect(r.packages).toEqual([]);
+    expect(r.skipped).toEqual([
+      { raw: './x.tgz', reason: expect.stringMatching(/local path/) },
+      { raw: 'https://h/x.zip', reason: expect.stringMatching(/URL/) },
+    ]);
+  });
+
+  it('T-08 a spec with a version part that ends like an archive is the name before the @: a verdict for it, nothing skipped', async () => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    const withTags = (v: string): Answer => ({
+      status: 200,
+      body: { 'dist-tags': { latest: v, 'foo.tgz': v, 'foo.zip': v }, modified: OLD, versions: { [v]: {} } },
+    });
+    const calls = stubNetwork({ 'https://registry.npmjs.org/evil': withTags('1.0.0'), 'https://api.osv.dev/v1/querybatch': OSV_CLEAN });
+    for (const spec of ['evil@foo.tgz', 'evil@foo.zip']) {
+      const r = expectOk(await run({ ecosystem: 'npm', packages: [spec] }));
+      expect(r.skipped, spec).toEqual([]);
+      expect(r.packages.map((p) => [p.name, p.verdict]), spec).toEqual([['evil', expect.any(String)]]);
+    }
+    expect(calls).toContain('https://registry.npmjs.org/evil');
+  });
+});

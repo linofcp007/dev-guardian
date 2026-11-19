@@ -96,6 +96,13 @@ export interface InstallCommand {
    */
   prefixed?: boolean;
   /**
+   * A global install, read only when it is certain ({@link saysGlobal}; Yarn only by `yarn global add`): the manager
+   * puts the package in its global directory and does not obey the project's own configuration file for the registry
+   * (measured 2026-11-19 with npm 11, pnpm 10, Yarn 1.22 and 4, bun 1.4). In doubt it is absent: a line too many, never
+   * one too few.
+   */
+  global?: boolean;
+  /**
    * The command installs what a manifest says: the `package.json` of the
    * directory it runs in (`npm install` with no package, `npm ci`, `pnpm
    * install`, `yarn`, `bun install`), or the requirement files given to `pip
@@ -117,7 +124,58 @@ const NAME_RE: Record<PkgEcosystem, RegExp> = {
 
 const SHELL_EXPANSION = /[$`*?{}[\]<>|&;]/;
 const URL_OR_VCS = /^(?:[a-z][a-z0-9+.-]*:\/\/|git\+|git:|hg\+|svn\+|bzr\+|github:|gitlab:|bitbucket:|gist:|file:|link:|workspace:|portal:|patch:|exec:)/i;
+/**
+ * What a word that ends like an archive may be. One list for every manager was the bug: a package called
+ * `lodash.zip` was skipped unvetted, though the manager fetches it from the registry. Each manager reads only its
+ * own endings as a FILE (measured 2026-11-18); every other word is a name.
+ */
+const NPM_FILE = /\.(?:tgz|tar\.gz|tar)$/i;
+const PIP_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
+const UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
+const POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
+/** The endings of the old single list: what a version or range of a Python, Composer or NuGet word is still skipped for. */
 const ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
+/** What an unmeasured manager may read as a file: every ending a measured manager reads as one, plus `.egg` and `.nupkg`. */
+const UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
+/** The managers nobody measured: a word that ends like an archive is vetted as a name, and the command is uncertain. */
+const UNMEASURED = new Set(['pipx', 'composer', 'dotnet']);
+const UNMEASURED_ARCHIVE =
+  'a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known';
+
+/**
+ * Whether `manager` reads a version part or a manifest value that ends like `.tgz`, `.tar.gz` or `.tar` as a file to
+ * install, not a tag: npm and bun do, pnpm and Yarn are taken not to; with no manager named nothing is a file (a spec
+ * handed to `vet_packages` is a name). The one rule of the command line's `name@<part>` and of a `package.json`
+ * value (`manifest.ts` names its default manager itself).
+ */
+export function readsFileValue(manager: string | undefined, value: string): boolean {
+  return (manager === 'npm' || manager === 'npx' || manager === 'bun') && NPM_FILE.test(value);
+}
+
+/** The endings `manager` reads as a file in a bare word; `null` when it reads none (or the caller names no manager). */
+function fileEndings(manager: string | undefined, scoped: boolean): RegExp | null {
+  switch (manager) {
+    case 'npm':
+    case 'npx':
+      return scoped ? null : NPM_FILE;
+    case 'bun':
+      return NPM_FILE;
+    case 'pip':
+      return PIP_FILE;
+    case 'uv':
+    case 'uv-pip':
+      return UV_FILE;
+    case 'poetry':
+      return POETRY_FILE;
+    default:
+      return null;
+  }
+}
+
+/** Why a bare name of an unmeasured manager is uncertain, or `undefined`. */
+function unmeasuredReason(manager: string, spec: PackageSpec): string | undefined {
+  return UNMEASURED.has(manager) && spec.name === spec.raw && UNMEASURED_FILE.test(spec.raw) ? UNMEASURED_ARCHIVE : undefined;
+}
 
 function isPathLike(word: string): boolean {
   return (
@@ -138,12 +196,12 @@ function isPathLike(word: string): boolean {
 const SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
 
 /** A reason this word is not a package name, or `null` when it may be one. */
-function notAPackage(word: string): string | null {
+function notAPackage(word: string, archive: RegExp | null): string | null {
   if (word.length === 0) return 'empty';
   if (SCP_GIT.test(word)) return 'SSH git spec (user@host:path) — not looked up';
   if (isPathLike(word)) return 'local path — not looked up';
   if (URL_OR_VCS.test(word)) return 'URL / VCS / protocol spec — not looked up';
-  if (ARCHIVE.test(word)) return 'archive file — not looked up';
+  if (archive !== null && archive.test(word)) return 'archive file — not looked up';
   return null;
 }
 
@@ -163,23 +221,26 @@ function withRange(spec: PackageSpec | SkippedSpec, range: string | undefined): 
   return r !== undefined && r !== '' ? { ...spec, range: r } : spec;
 }
 
-function parseNpm(raw: string): PackageSpec | SkippedSpec {
+/** `alias`: the word is the real name after `npm:` (read in any letter case, as npm does) — a name for every manager, whatever it ends in. */
+function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw);
-  if (bad !== null) return skip(raw, bad);
   const scoped = raw.startsWith('@');
   const at = raw.indexOf('@', scoped ? 1 : 0);
+  // A bare word is a file only for a manager that reads its ending as one; with a version the part after `@` decides below.
+  const bad = notAPackage(raw, at > 0 || alias ? null : fileEndings(manager, scoped));
+  if (bad !== null) return skip(raw, bad);
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : undefined;
   if (!scoped && name.includes('/')) return skip(raw, 'GitHub shorthand (user/repo) — not looked up');
   if (range !== undefined) {
-    if (range.startsWith('npm:')) {
+    if (/^npm:/i.test(range)) {
       // `alias@npm:real@range` installs `real` under the name `alias`.
-      const real = parseNpm(range.slice(4));
+      const real = parseNpm(range.slice(4), manager, true);
       return 'name' in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range);
+    const rangeBad = notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? 'URL / VCS / protocol spec — not looked up');
+    if (readsFileValue(manager, range)) return skip(raw, 'archive file — not looked up');
     if (range === 'latest') range = undefined;
   }
   return withRange(checkName('npm', name, raw), range);
@@ -187,13 +248,14 @@ function parseNpm(raw: string): PackageSpec | SkippedSpec {
 
 const PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
 
-function parsePython(raw: string, poetryAt: boolean): PackageSpec | SkippedSpec {
+function parsePython(raw: string, poetryAt: boolean, manager?: string): PackageSpec | SkippedSpec {
   let text = raw.trim();
   const semi = text.indexOf(';');
   if (semi >= 0) text = text.slice(0, semi).trim(); // environment marker
   if (/[$`]/.test(text)) return skip(raw, 'not a literal package name (shell expansion)');
   if (/\s@\s|@\s*(?:[a-z][a-z0-9+.-]*:\/\/|git\+|file:)/i.test(text)) return skip(raw, 'direct URL reference — not looked up');
-  const bad = notAPackage(text);
+  const versioned = PEP440_OP.test(text) || text.indexOf('@') > 0;
+  const bad = notAPackage(text, versioned ? ARCHIVE : fileEndings(manager, false));
   if (bad !== null) return skip(raw, bad);
   if (/[\\/]/.test(text)) return skip(raw, 'local path — not looked up');
   let name = text;
@@ -216,7 +278,8 @@ function parsePython(raw: string, poetryAt: boolean): PackageSpec | SkippedSpec 
 
 function parseComposer(raw: string): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw);
+  const versioned = raw.search(/[:=\s]/) > 0 || (raw.includes('@') && !raw.startsWith('@'));
+  const bad = notAPackage(raw, versioned ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
   const sep = raw.search(/[:=\s]/);
   let name = sep > 0 ? raw.slice(0, sep) : raw;
@@ -232,7 +295,7 @@ function parseComposer(raw: string): PackageSpec | SkippedSpec {
 
 function parseNuget(raw: string): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw);
+  const bad = notAPackage(raw, raw.indexOf('@') > 0 ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
   const at = raw.indexOf('@');
   const name = at > 0 ? raw.slice(0, at) : raw;
@@ -242,14 +305,16 @@ function parseNuget(raw: string): PackageSpec | SkippedSpec {
 
 /**
  * One package spec as a user or tool call writes it: `name`, `name@version`,
- * plus each ecosystem's own spelling (`name==1.2`, `vendor/pkg:^2`).
+ * plus each ecosystem's own spelling (`name==1.2`, `vendor/pkg:^2`). With no
+ * `manager` a bare word is a name whatever it ends in; with one, the endings that
+ * manager reads as a file are skipped as an archive.
  */
-export function parsePackageSpec(ecosystem: PkgEcosystem, raw: string): PackageSpec | SkippedSpec {
+export function parsePackageSpec(ecosystem: PkgEcosystem, raw: string, manager?: string): PackageSpec | SkippedSpec {
   switch (ecosystem) {
     case 'npm':
-      return parseNpm(raw.trim());
+      return parseNpm(raw.trim(), manager);
     case 'pypi':
-      return parsePython(raw, false);
+      return parsePython(raw, false, manager);
     case 'packagist':
       return parseComposer(raw.trim());
     case 'nuget':
@@ -278,6 +343,16 @@ interface FlagTable {
    * `--working-dir`, `--directory`, …).
    */
   dir?: ReadonlySet<string>;
+  /**
+   * A literal `true` or `false` right after a boolean flag is that flag's value, not a package: `npm install -D false`
+   * installs the manifest ({@link takesBoolWord}). Measured 2026-11-19 (npm 11.19.0 / 11.20.0, pnpm 10.33.2), the same
+   * for both: after an exact boolean flag, and after a short cluster of boolean letters when the cluster's LAST letter
+   * takes it (`-qD false` yes; `-Dq false` no — the word is then a package). `except` are the boolean flags that take
+   * NO word, whose word stays a package: the loglevel shorthands `--silent`, `--quiet`, `-q`, `--verbose`, `-d`. A flag
+   * written with `=` takes nothing after it. Absent for the other managers and the launchers, which were not measured
+   * (or fetch the word as a package: `npx --yes false pkg`).
+   */
+  boolWord?: { except: ReadonlySet<string> };
   /** Flags that put the install in a workspace context, where a name may be a local package. */
   workspace?: ReadonlySet<string>;
   /**
@@ -308,6 +383,9 @@ const NPM_COMMON_BOOL = [
   '--exact', '--peer', '--optional', '--tilde', '-T', '--frozen-lockfile', '--no-frozen-lockfile',
 ];
 
+/** The loglevel shorthands of npm and pnpm: boolean flags that take no `true` / `false` word (measured 2026-11-19). */
+const LOGLEVEL_FLAGS: ReadonlySet<string> = new Set(['--silent', '--quiet', '-q', '--verbose', '-d']);
+
 const FLAGS: Record<string, FlagTable> = {
   npm: {
     // `-C` is npm's short form of `--prefix`.
@@ -318,6 +396,7 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('--registry'),
     dir: set('--prefix', '-C'),
     workspace: set('--workspace', '-w', '--workspaces'),
+    boolWord: { except: LOGLEVEL_FLAGS },
   },
   pnpm: {
     value: set('--registry', '--filter', '-F', '--dir', '-C', '--reporter', '--store-dir', '--global-dir',
@@ -327,6 +406,7 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('--registry'),
     dir: set('--dir', '-C'),
     workspace: set('--workspace', '--filter', '-F'),
+    boolWord: { except: LOGLEVEL_FLAGS },
   },
   yarn: {
     value: set('--registry', '--cwd', '--network-timeout', '--modules-folder', '--cache-folder', '--mutex', '--scope',
@@ -519,9 +599,28 @@ interface WalkResult {
   uncertain: string[];
   /** Every flag seen, with its value when it took one — what a launcher's packages are read from. */
   flags: Array<{ flag: string; value?: string }>;
+  /** How many flags the table of the manager does not know: npm reads abbreviations (`--loc=project`) that it does not hold. */
+  unknownFlags: number;
 }
 
 const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
+
+const isBoolWord = (word: string | undefined): boolean => word === 'true' || word === 'false';
+
+/**
+ * Whether the flag word `v` (no `=`) is one that takes a following `true` / `false` as its value, in a table with
+ * {@link FlagTable.boolWord}: an exact boolean flag that is not a loglevel shorthand, or a short cluster of boolean
+ * letters whose LAST letter is such a flag (measured 2026-11-19: npm 11.20.0, pnpm 10.33.2).
+ */
+function takesBoolWord(v: string, table: FlagTable): boolean {
+  const rule = table.boolWord;
+  if (rule === undefined) return false;
+  if (table.bool.has(v)) return !rule.except.has(v);
+  if (v.startsWith('--') || !SHORT_CLUSTER.test(v)) return false;
+  const letters = [...v.slice(1)].map((c) => `-${c}`);
+  const last = letters[letters.length - 1];
+  return letters.every((flag) => table.bool.has(flag)) && last !== undefined && !rule.except.has(last);
+}
 
 /**
  * Separates flags (and their values) from positional words.
@@ -537,6 +636,7 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   const positionals: Positional[] = [];
   const skipped: SkippedSpec[] = [];
   const uncertain: string[] = [];
+  let unknownFlags = 0;
   let customRegistry: string | undefined;
   const registries: string[] = [];
   const flags: Array<{ flag: string; value?: string }> = [];
@@ -568,7 +668,10 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     const eqAt = v.indexOf('=');
     if (eqAt > 0) {
       const flag = v.slice(0, eqAt);
-      if (!known(flag)) uncertain.push(`unknown flag ${flag}`);
+      if (!known(flag)) {
+        uncertain.push(`unknown flag ${flag}`);
+        unknownFlags += 1;
+      }
       note(flag, v.slice(eqAt + 1));
       continue;
     }
@@ -578,7 +681,11 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
       continue;
     }
     if (table.bool.has(v)) {
-      note(v, undefined);
+      const word = words[i + 1]?.value;
+      if (takesBoolWord(v, table) && isBoolWord(word)) {
+        note(v, word);
+        i += 1;
+      } else note(v, undefined);
       continue;
     }
     if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
@@ -593,15 +700,20 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
           }
           break;
         }
-        if (!table.bool.has(flag)) uncertain.push(`unknown flag ${flag}`);
+        if (!table.bool.has(flag)) {
+          uncertain.push(`unknown flag ${flag}`);
+          unknownFlags += 1;
+        }
         note(flag, undefined);
       }
+      if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
+    unknownFlags += 1;
     if (v.startsWith('--') && !v.startsWith('--no-')) i += 1;
   }
-  const out: WalkResult = { positionals, skipped, uncertain, registries, flags };
+  const out: WalkResult = { positionals, skipped, uncertain, registries, flags, unknownFlags };
   if (customRegistry !== undefined) out.customRegistry = customRegistry;
   return out;
 }
@@ -640,7 +752,52 @@ const YARN_PRINTS = new Set(['--version', '-v', '-V', '--help', '-h']);
 const REQUIREMENT_FLAGS = new Set(['-r', '--requirement', '--requirements']);
 /** The flags that make an npm-family install a global one: no project manifest is installed. */
 const isGlobalFlag = (f: { flag: string; value?: string }): boolean =>
-  f.flag === '-g' || f.flag === '--global' || (f.flag === '--location' && f.value === 'global');
+  ((f.flag === '-g' || f.flag === '--global') && f.value !== 'false') || (f.flag === '--location' && f.value === 'global');
+
+/** The words a flag can come from: what follows a `--` word is no flag. */
+const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
+  const at = words.findIndex((w) => w.value === '--');
+  return at < 0 ? [...words] : words.slice(0, at);
+};
+
+/**
+ * Whether an npm, pnpm or bun command says it is a GLOBAL install, and no word can take that back — measured
+ * 2026-11-19 (npm 11, pnpm 10, Yarn 1.22 and 4, bun 1.4): the project's registry file is not obeyed by a global install,
+ * but is by `--global=false`, `-g false`, `-g --no-global`, `-g --location=project`. The words before the subcommand
+ * and the words after it are two lists, each read up to a `--` word. In doubt the answer is no:
+ *   - a word with a shell expansion (`$` or a backtick) may be `false` or `--no-global`: not global;
+ *   - says global: the exact words `-g` and `--global` (not when the next word of the list is `false`), `--global=true`,
+ *     and for npm `--location=global` and `--location global`;
+ *   - takes it back: any other word that starts with `-` and has `global` or `location` in it, or starts `-g=`;
+ *   - a short cluster that holds a `g` (`-gD`, `-Dg false`) takes it back: the word after it may be the value of its `g`
+ *     (measured 2026-11-19, npm 11.20.0: `-g -Dg false` installs the manifest); a package name with "global" in it takes
+ *     nothing back.
+ * It is only part of the answer: a global word that stands where another flag's value goes (`--otp --global`) is that
+ * flag's value, not a flag — the caller also asks the walker's flags ({@link isGlobalFlag}), which know the flags that
+ * take a value, and a flag the manager's table does not know (npm's abbreviations: `--loc=project`) leaves it not global.
+ * Yarn is global only by its subcommand (`yarn global add`, {@link Detected.global}): a flag never makes it so (Yarn 1's
+ * `-g` takes a value, Yarn 4 refuses it).
+ */
+function saysGlobal(manager: string, pre: readonly ShellWord[], args: readonly ShellWord[]): boolean {
+  if (manager !== 'npm' && manager !== 'pnpm' && manager !== 'bun') return false;
+  if ([...pre, ...args].some((w) => /[$`]/.test(w.value))) return false;
+  let says = false;
+  for (const list of [beforeDoubleDash(pre), beforeDoubleDash(args)]) {
+    for (const [at, w] of list.entries()) {
+      const v = w.value;
+      const next = list[at + 1]?.value;
+      if (!v.startsWith('-')) continue;
+      if (v === '-g' || v === '--global') {
+        if (next === 'false') return false;
+        says = true;
+      } else if (v === '--global=true') says = true;
+      else if (manager === 'npm' && (v === '--location=global' || (v === '--location' && next === 'global'))) says = true;
+      else if (v.startsWith('-g=') || /global|location/.test(v.toLowerCase())) return false;
+      else if (/^-[A-Za-z]{2,}$/.test(v) && v.includes('g')) return false; // a cluster with a `g`: its word may be the value of that `g`
+    }
+  }
+  return says;
+}
 
 interface Detected {
   manager: string;
@@ -651,6 +808,8 @@ interface Detected {
   pre: ShellWord[];
   /** Reasons found while locating the subcommand (a workspace, a project argument). */
   uncertain: string[];
+  /** `yarn global add`: the install is a global one. */
+  global?: boolean;
   /**
    * A launcher (review P1), and its {@link LAUNCH_FLAGS} table: `run` fetches
    * the package its first positional word names (or its package flags do)
@@ -685,6 +844,8 @@ function nextPositional(words: readonly ShellWord[], from: number, table: FlagTa
     const v = words[i]?.value ?? '';
     if (v.startsWith('-') && v.length > 1) {
       if (!v.includes('=') && table.value.has(v)) i += 1;
+      // `npm -D false install`: the word after a boolean flag is its value, not the subcommand.
+      else if (!v.includes('=') && takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
       continue;
     }
     return i;
@@ -790,7 +951,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
         uncertain.push('workspace context (yarn workspace)');
       }
       if (at < 0 || words[at]?.value !== 'add') return null;
-      return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain };
+      return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, ...(subWord === 'global' ? { global: true } : {}) };
     }
     case 'pip':
       return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -868,17 +1029,21 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   }
   const packages: PackageSpec[] = [];
   const skipped: SkippedSpec[] = [...pre.skipped, ...w.skipped];
+  const unsure: string[] = [];
   for (const raw of raws) {
-    const spec = d.ecosystem === 'npm' ? parseNpm(raw) : parsePython(raw, false);
-    if ('name' in spec) packages.push(spec);
-    else skipped.push(spec);
+    const spec = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    if ('name' in spec) {
+      packages.push(spec);
+      const why = unmeasuredReason(d.manager, spec);
+      if (why !== undefined) unsure.push(why);
+    } else skipped.push(spec);
   }
   const out: InstallCommand = {
     ecosystem: d.ecosystem,
     manager: d.manager,
     packages,
     skipped,
-    uncertain: [...new Set([...context, ...pre.uncertain, ...w.uncertain])],
+    uncertain: [...new Set([...context, ...pre.uncertain, ...w.uncertain, ...unsure])],
     registries: [...pre.registries, ...w.registries],
   };
   const registry = pre.customRegistry ?? w.customRegistry;
@@ -916,10 +1081,10 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     let spec: PackageSpec | SkippedSpec;
     switch (d.ecosystem) {
       case 'npm':
-        spec = parseNpm(p.value);
+        spec = parseNpm(p.value, d.manager);
         break;
       case 'pypi':
-        spec = parsePython(p.value, d.manager === 'poetry');
+        spec = parsePython(p.value, d.manager === 'poetry', d.manager);
         break;
       case 'packagist':
         if (lastComposer !== undefined && lastComposer.range === undefined && !p.value.includes('/') && COMPOSER_CONSTRAINT.test(p.value)) {
@@ -936,6 +1101,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     }
     if ('name' in spec) {
       packages.push(spec);
+      const why = unmeasuredReason(d.manager, spec);
+      if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
       skipped.push(spec);
@@ -954,12 +1121,23 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
 
   // What the command installs from a manifest, beside what it names.
   if (allFlags.some((f) => flagTable.dir?.has(f.flag) === true)) out.prefixed = true;
+  // Three readings must agree (npm 11.20.0, measured 2026-11-19). The walker knows which flags take a value (`--otp
+  // --global` hands `--global` to `--otp`, and npm then obeys the project's file); the raw words know what takes a
+  // global flag back; and every flag must be one the manager's table knows, because npm reads abbreviations and
+  // shorthands the table does not hold (`-g --loc=project` and `-g --g=false` obey the project's file). In doubt: no.
+  const knownFlagsOnly = preWalk.unknownFlags + walked.unknownFlags === 0;
+  if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
     const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
     if (files.length > 0) out.manifest = { kind: 'requirements', files };
-  } else if (d.manifest !== undefined && !allFlags.some(isGlobalFlag)) {
+  } else if (d.manifest !== undefined && out.global !== true) {
+    // The manifest is left unread only for an install that is global FOR CERTAIN (`out.global`); in doubt — `-g $X`,
+    // `-g --location=project`, `npm ci --global=false` — it is read: vetting more, never less (measured 2026-11-19).
     // `npm i ./pkg.tgz` installs that, not the manifest: a word that was skipped counts as a thing named.
-    if (d.manifest === 'always' || (packages.length === 0 && skipped.length === 0)) out.manifest = { kind: 'package-json' };
+    // A word with a shell expansion beside a global-looking flag may be the flag's value or `--no-global` itself: no thing
+    // is surely named, so the manifest is read.
+    const maybeFlags = allFlags.some(isGlobalFlag) && skipped.length > 0 && skipped.every((s) => /[$`]/.test(s.raw));
+    if (d.manifest === 'always' || (packages.length === 0 && (skipped.length === 0 || maybeFlags))) out.manifest = { kind: 'package-json' };
   }
   return out;
 }
@@ -1102,7 +1280,9 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
         const c = collect(d, context);
-        c.uncertain = notConfident === null ? [] : [...new Set([notConfident, ...c.uncertain])];
+        // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does.
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE);
+        c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         if (runsElsewhere(words)) c.workdir = null;
         else if (sure === null || sure.length > 0) c.workdir = sure;

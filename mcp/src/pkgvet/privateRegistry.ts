@@ -157,15 +157,41 @@ export const MAX_WORKSPACE_DIRS = 3000;
 /** What an unread path was: a registry configuration file, a workspace manifest, or a directory that could not be listed. */
 type UnreadKind = 'configuration' | 'workspace manifest' | 'directory';
 
-const PUBLIC_HOSTS: Record<PkgEcosystem, RegExp> = {
-  npm: /^(?:https?:)?\/\/(?:registry\.npmjs\.(?:org|com)|registry\.yarnpkg\.com)(?:[:/]|$)/i,
-  pypi: /^(?:https?:)?\/\/(?:pypi\.org|pypi\.python\.org|files\.pythonhosted\.org)(?:[:/]|$)/i,
-  packagist: /^(?:https?:)?\/\/(?:repo\.)?packagist\.org(?:[:/]|$)/i,
-  nuget: /^(?:https?:)?\/\/(?:api\.nuget\.org|www\.nuget\.org|nuget\.org)(?:[:/]|$)/i,
+/** The public registry's host names, per ecosystem: exactly these, lower case. */
+const PUBLIC_HOSTS: Record<PkgEcosystem, readonly string[]> = {
+  npm: ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'],
+  pypi: ['pypi.org', 'pypi.python.org', 'files.pythonhosted.org'],
+  packagist: ['packagist.org', 'repo.packagist.org'],
+  nuget: ['api.nuget.org', 'www.nuget.org', 'nuget.org'],
 };
 
+/** Backslash, white space and control characters: a URL parser may read these differently from the package manager. */
+const UNSAFE_TEXT = /[\\\s\u0000-\u001f\u007f]/;
+
+/**
+ * The scheme (`http`, `https` or `''` for `//host`), host and port of a value of the form
+ * `[http: | https:]//host[:port][/…]`. The authority is the text up to the first `/`, `?` or `#`: a host and a
+ * digits-only port (an empty one is the default, as parsers read it), so credentials (an `@`) never match.
+ */
+const URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d*))?(?:[/?#]|$)/i;
+
+/**
+ * Whether `url` is the ecosystem's public registry, decided on the host the package manager would contact, read
+ * from the TEXT (a hand-written reading, not `new URL`: the parser silently drops tabs and line breaks and turns
+ * a backslash into a slash, which is how `https://pypi.org\@evil.example/` would pass). Only the host, in lower case,
+ * and the scheme's own port — 443 for `https:` and `//host`, 80 for `http:` — are accepted; `http:` still counts
+ * (for "does another registry explain a 404" it is the same registry, and for "does this scope keep its names off
+ * the public registry" the package manager itself sends them there); credentials, another port and any other host do not.
+ */
 function isPublic(ecosystem: PkgEcosystem, url: string): boolean {
-  return PUBLIC_HOSTS[ecosystem].test(url.trim().replace(/^["']|["']$/g, ''));
+  const text = url.trim().replace(/^["']|["']$/g, '');
+  if (UNSAFE_TEXT.test(text)) return false;
+  const m = URL_SHAPE.exec(text);
+  if (m === null) return false;
+  const scheme = (m[1] ?? '').toLowerCase();
+  const port = m[3];
+  if (port !== undefined && port !== '' && port !== (scheme === 'http' ? '80' : '443')) return false;
+  return PUBLIC_HOSTS[ecosystem].includes((m[2] ?? '').toLowerCase());
 }
 
 /** True when `url` is the ecosystem's own public registry (so naming it changes nothing). */
@@ -349,29 +375,85 @@ function npmScope(name: string): string | undefined {
   return m?.[1];
 }
 
-/** `.npmrc`: `registry=` and `@scope:registry=`. */
+/**
+ * An `.npmrc` value as npm, pnpm, Yarn 1 and bun read it: it ends at the first `;` or `#` outside quotes (an inline
+ * comment), and one pair of surrounding quotes is taken off. A value with a backslash (ini escapes) is not cut: it
+ * is handed over whole, and {@link isPublic} then reads it as another registry.
+ */
+function npmrcValue(raw: string): string {
+  const value = raw.trim();
+  if (value.includes('\\')) return value;
+  let quote: string | undefined;
+  let end = value.length;
+  for (let i = 0; i < value.length; i += 1) {
+    const ch = value.charAt(i);
+    if (quote !== undefined) {
+      if (ch === quote) quote = undefined;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (ch === ';' || ch === '#') {
+      end = i;
+      break;
+    }
+  }
+  return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, '$2');
+}
+
+/** What a registry value the reader cannot judge is read as: never the public registry (as `fromBunfig`'s). */
+const UNREADABLE_VALUE = '(configured)';
+
+/**
+ * A `.yarnrc.yml` `npmRegistryServer` value, when it is a PLAIN SINGLE-LINE scalar; otherwise `(configured)`, which
+ * is never the public registry. YAML has more spellings than a URL has: a doubled quote in a single-quoted scalar,
+ * an escape in a double-quoted one, and a scalar continued on a more indented line all reach a host that the first
+ * characters do not show (measured with Yarn 4.18.1). So:
+ *   - quoted: the closing quote of the same kind ends the value, and only white space or a ` #` comment follows it;
+ *     the content has no quote of that kind and no backslash;
+ *   - unquoted: it does not start with a quote and ends at a ` #` comment;
+ *   - and the next line that is neither blank nor a comment is not more indented than the key (a continuation).
+ */
+function yamlServer(lines: string[], at: number, keyIndent: number, raw: string): string {
+  const next = lines.slice(at + 1).find((l) => l.trim() !== '' && !l.trim().startsWith('#'));
+  if (next !== undefined && next.length - next.trimStart().length > keyIndent) return UNREADABLE_VALUE;
+  const value = raw.trim();
+  const quote = value.charAt(0);
+  if (quote === '"' || quote === "'") {
+    const close = value.indexOf(quote, 1);
+    if (close < 0) return UNREADABLE_VALUE;
+    const content = value.slice(1, close);
+    const rest = value.slice(close + 1);
+    if (content.includes('\\') || (rest.trim() !== '' && !/^\s+#/.test(rest))) return UNREADABLE_VALUE;
+    return content;
+  }
+  const comment = value.search(/\s#/);
+  return (comment === -1 ? value : value.slice(0, comment)).trim();
+}
+
+/** `.npmrc`: `registry=` and `@scope:registry=`. A key repeated in the file is read at its LAST line, as the managers do. */
 function fromNpmrc(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let found: string | undefined;
+  let scoped: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith('#') || line.startsWith(';')) continue;
     const m = /^(@[^:=\s]+:)?registry\s*=\s*(.+)$/i.exec(line);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    const url = (m[2] ?? '').trim();
+    const url = npmrcValue(m[2] ?? '');
     all?.push(url);
-    if (lineScope === undefined) found = found ?? url;
-    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) return url;
+    if (lineScope === undefined) found = url;
+    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) scoped = url;
   }
-  return found;
+  return scoped ?? found;
 }
 
-/** yarn berry `.yarnrc.yml`: top-level `npmRegistryServer`, or `npmScopes.<scope>.npmRegistryServer`. */
+/** yarn berry `.yarnrc.yml`: top-level `npmRegistryServer`, or `npmScopes.<scope>.npmRegistryServer`; the last of a repeated key. */
 function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let global: string | undefined;
+  let scoped: string | undefined;
   let inScopes = false;
   let currentScope: string | undefined;
-  for (const raw of text.split(/\r?\n/)) {
+  const lines = text.split(/\r?\n/);
+  for (const [at, raw] of lines.entries()) {
     if (raw.trim() === '' || raw.trim().startsWith('#')) continue;
     const indent = raw.length - raw.trimStart().length;
     const line = raw.trim();
@@ -379,7 +461,7 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
       inScopes = /^npmScopes\s*:/.test(line);
       currentScope = undefined;
       const m = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-      if (m !== null) global = (m[1] ?? '').replace(/^["']|["']$/g, '');
+      if (m !== null) global = yamlServer(lines, at, indent, m[1] ?? '');
       if (m !== null) all?.push(global ?? '');
       continue;
     }
@@ -390,26 +472,27 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
       continue;
     }
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
-    if (server !== null) all?.push((server[1] ?? '').replace(/^["']|["']$/g, ''));
+    if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ''));
     if (server !== null && scope !== undefined && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return (server[1] ?? '').replace(/^["']|["']$/g, '');
+      scoped = yamlServer(lines, at, indent, server[1] ?? '');
     }
   }
-  return global;
+  return scoped ?? global;
 }
 
 /** yarn classic `.yarnrc`: `registry "url"` / `"@scope:registry" "url"`. */
 function fromYarnrc(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let found: string | undefined;
+  let scoped: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     all?.push(m[2] ?? '');
-    if (lineScope === undefined) found = found ?? m[2];
-    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
+    if (lineScope === undefined) found = m[2];
+    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
   }
-  return found;
+  return scoped ?? found;
 }
 
 /** bun `bunfig.toml`: `[install] registry = …` and `[install.scopes] <scope> = …`. */
@@ -650,12 +733,76 @@ export function npmScopeRegistryOf(ctx: RegistryContext = {}): (name: string) =>
 }
 
 /**
+ * The project files each manager obeys for the DEFAULT registry, in the order tried within one directory
+ * (measured 2026-11-18: npm 11, pnpm 10, bun 1.4, Yarn 1.22 and 4.18 — the word `yarn` does not tell the two Yarns
+ * apart, so it counts the files of both).
+ */
+const PROJECT_DEFAULT_FILES: Record<string, ReadonlyArray<{ name: string; parse: NpmParser }>> = {
+  npm: [{ name: '.npmrc', parse: fromNpmrc }],
+  npx: [{ name: '.npmrc', parse: fromNpmrc }],
+  pnpm: [{ name: '.npmrc', parse: fromNpmrc }],
+  bun: [
+    { name: '.npmrc', parse: fromNpmrc },
+    { name: 'bunfig.toml', parse: fromBunfig },
+  ],
+  yarn: [
+    { name: '.npmrc', parse: fromNpmrc },
+    { name: '.yarnrc.yml', parse: fromYarnrcYml },
+    { name: '.yarnrc', parse: fromYarnrc },
+  ],
+};
+
+/**
+ * EVERY project file that sets the default registry for `manager` (`npm`, `npx`, `pnpm`, `bun` or `yarn`) to one that
+ * is not the public registry, each with the value as its parser returns it (the LAST line of a repeated key): the
+ * nearest directory first and, within a directory, in the order of {@link PROJECT_DEFAULT_FILES}. The managers do not
+ * agree on which file wins (measured 2026-11-19: the workspace root's for npm and bun, the member's for pnpm and Yarn,
+ * and in one directory `bunfig.toml` over `.npmrc` for bun, `.npmrc` over `.yarnrc` for Yarn 1), so none is chosen:
+ * a file that sets the public registry is no entry, and does not hide another. The directories are the ones the
+ * manager reads: beside the nearest `package.json` from `ctx.projectDir` up (the directory itself when there is
+ * none), and at a workspace root above it (a `package.json` with `workspaces`; for pnpm also a
+ * `pnpm-workspace.yaml`); Yarn also reads a plain directory above, up to the repository root. Never the home directory
+ * or above it.
+ *
+ * `[]` for another manager, no such file, only the public registry, files that only give registries to scopes, files
+ * that cannot be read; never throws.
+ */
+export function npmProjectDefaultRegistry(manager: string, ctx: RegistryContext = {}): Array<{ source: string; url: string }> {
+  const found: Array<{ source: string; url: string }> = [];
+  try {
+    const files = Object.hasOwn(PROJECT_DEFAULT_FILES, manager) ? PROJECT_DEFAULT_FILES[manager] : undefined;
+    if (files === undefined) return found;
+    const near = ancestors(ctx);
+    const first = near.findIndex((dir) => present(join(dir, 'package.json')));
+    const from = first < 0 ? 0 : first;
+    for (const dir of near.slice(from)) {
+      const isBase = dir === near[from];
+      const obeyed =
+        isBase ||
+        manager === 'yarn' ||
+        hasWorkspaces(read(join(dir, 'package.json'), ctx, undefined, 'workspace manifest')) ||
+        (manager === 'pnpm' && present(join(dir, 'pnpm-workspace.yaml')));
+      if (!obeyed) continue;
+      for (const { name, parse } of files) {
+        const source = join(dir, name);
+        const text = read(source, ctx);
+        const url = text === undefined ? undefined : parse(text, undefined);
+        if (url !== undefined && !isPublic('npm', url)) found.push({ source, url });
+      }
+    }
+  } catch {
+    // unknown reads as none for the files not yet read: fail-open, what was found stays
+  }
+  return found;
+}
+
+/**
  * The registry URL as it is compared with a lockfile's: an `http(s)` URL's
  * origin and path with a trailing slash, no credentials, query or fragment;
  * `undefined` for anything else (a variable left unexpanded, `(configured)`)
  * and for the public registry. "Public" is decided on the PARSED host, not by
- * {@link isPublic}'s prefix test, which reads `https://registry.npmjs.org:x@evil.example/`
- * as npmjs: exact host, https, no credentials, the default port.
+ * {@link isPublic}: exact host, no credentials, the default port — and, stricter than it, https only
+ * (for the lockfile comparison, `http://registry.npmjs.org/` is another origin).
  */
 function userRegistryUrl(raw: string): string | undefined {
   let u: URL;
@@ -665,7 +812,7 @@ function userRegistryUrl(raw: string): string | undefined {
     return undefined;
   }
   if (u.protocol !== 'https:' && u.protocol !== 'http:') return undefined;
-  const publicHost = ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'].includes(u.hostname);
+  const publicHost = PUBLIC_HOSTS.npm.includes(u.hostname);
   if (publicHost && u.protocol === 'https:' && u.username === '' && u.password === '' && u.port === '') return undefined;
   const path = u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`;
   return `${u.origin}${path}`;
@@ -673,6 +820,19 @@ function userRegistryUrl(raw: string): string | undefined {
 
 /** The environment variables that name an npm-family registry — strictly: `npm_config_replace_registry_host` is a setting, not a URL. */
 const ENV_USER_REGISTRY = /^(?:npm_config_(?:@[^:]+:)?registry|YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY)$/i;
+
+/**
+ * Whether the environment names the default registry of an npm-family manager (`NPM_CONFIG_REGISTRY`,
+ * `YARN_NPM_REGISTRY_SERVER`, `YARN_REGISTRY`, `BUN_CONFIG_REGISTRY`): the manager obeys it before any file of the
+ * project, whatever the value. A scope's own variable (`npm_config_@scope:registry`) is not the default.
+ */
+export function npmEnvNamesDefaultRegistry(ctx: RegistryContext = {}): boolean {
+  try {
+    return Object.entries(envOf(ctx)).some(([key, value]) => ENV_USER_REGISTRY.test(key) && !key.includes('@') && (value ?? '').trim() !== '');
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Every registry URL the USER's npm-family configuration names — `registry=`

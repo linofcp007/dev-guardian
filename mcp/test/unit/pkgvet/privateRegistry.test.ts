@@ -1,11 +1,12 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { customRegistryFor, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
+import { customRegistryFor, isPublicRegistryUrl, npmScopeRegistry, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
+import * as privateRegistry from '../../../src/pkgvet/privateRegistry.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -927,4 +928,575 @@ describe('install-vet-lockfile-pins', () => {
     expect(gets).toBe(afterOne);
   });
 
+});
+
+// ───────────────── pkgvet-public-registry-url-parse — a URL is the public registry by its HOST, not by its first characters
+
+describe('pkgvet-public-registry-url-parse', () => {
+  const PUBLIC_HOSTS = {
+    npm: ['registry.npmjs.org', 'registry.npmjs.com', 'registry.yarnpkg.com'],
+    pypi: ['pypi.org', 'pypi.python.org', 'files.pythonhosted.org'],
+    packagist: ['packagist.org', 'repo.packagist.org'],
+    nuget: ['api.nuget.org', 'www.nuget.org', 'nuget.org'],
+  } as const;
+  const ECOSYSTEMS = Object.keys(PUBLIC_HOSTS) as Array<keyof typeof PUBLIC_HOSTS>;
+  const SCHEMES = ['https://', 'http://', '//'];
+
+  /** The ecosystems and public hosts for which the answer on `urlOf(scheme, host)` is not `expected`, one line each. */
+  const wrongAnswers = (urlOf: (scheme: string, host: string) => string, expected: boolean, schemes: string[] = SCHEMES): string[] => {
+    const wrong: string[] = [];
+    for (const eco of ECOSYSTEMS) {
+      for (const host of PUBLIC_HOSTS[eco]) {
+        for (const scheme of schemes) {
+          const url = urlOf(scheme, host);
+          if (isPublicRegistryUrl(eco, url) !== expected) wrong.push(`${eco}: ${JSON.stringify(url)}`);
+        }
+      }
+    }
+    return wrong;
+  };
+
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const withUser = (scheme: string, host: string, user: string, tail = '/'): string => [scheme, host, user, '@', 'evil.example', tail].join('');
+
+  it('T-01 a URL whose authority carries credentials is another registry, in all four ecosystems and for every public host', () => {
+    for (const user of [':x', ':', ':443']) {
+      expect(wrongAnswers((scheme, host) => withUser(scheme, host, user), false), `credentials "${user}" before the @`).toEqual([]);
+    }
+  });
+
+  it('T-02 the plain forms of a public host stay public; another host, a suffix, a trailing dot, a user@ and a value that is not a URL stay another registry', () => {
+    // Public, as today: any scheme, with or without the slash or a path, the scheme's own port, upper case, quotes, white space at the ends.
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/`, true), 'the host and a slash').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}`, true), 'the host alone').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/simple/`, true), 'a path').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `https://${host}:443/`, true), 'https and 443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `//${host}:443/`, true), 'no scheme and 443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `http://${host}:80/`, true), 'http and 80').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme.toUpperCase()}${host.toUpperCase()}/`, true), 'upper case').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `"${scheme}${host}/"`, true), 'double quotes').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `'${scheme}${host}/'`, true), 'single quotes').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `  ${scheme}${host}/ \t`, true), 'white space at the ends').toEqual([]);
+
+    // Another registry, as today.
+    expect(wrongAnswers((scheme) => `${scheme}evil.example/`, false), 'another host').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}.evil.example/`, false), 'a suffix').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}./`, false), 'a trailing dot').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}evil.example/${host}/`, false), 'the public host in the path of another one').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => ['dguser', '@', host, '/'].join(''), false), 'a user@ and no scheme').toEqual([]);
+    expect(wrongAnswers((scheme, host) => ['dguser', '@', scheme, host, '/'].join(''), false), 'a user@ before the scheme').toEqual([]);
+    for (const eco of ECOSYSTEMS) {
+      for (const notUrl of ['no-index', '(configured)', 'C:\\feed', '']) {
+        expect(isPublicRegistryUrl(eco, notUrl), `${eco}: ${JSON.stringify(notUrl)}`).toBe(false);
+      }
+    }
+  });
+
+  it("T-03 a port that is not the scheme's, a backslash, a space or a control character in the text is another registry", () => {
+    expect(wrongAnswers((_scheme, host) => `https://${host}:8443/`, false), 'https on 8443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `//${host}:8443/`, false), 'no scheme on 8443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `http://${host}:443/`, false), 'http on 443').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => `https://${host}:80/`, false), 'https on 80').toEqual([]);
+    expect(wrongAnswers((scheme, host) => withUser(scheme, host, '/\\'), false, ['https://']), 'a backslash after the slash').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => ['https://', host, ':443\\@', 'evil.example', '/'].join(''), false), 'a backslash after the port').toEqual([]);
+    expect(wrongAnswers((_scheme, host) => ['https://', host, '\\@', 'evil.example', '/'].join(''), false), 'a backslash right after the host').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a b`, false), 'a space inside').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/ @evil.example/`, false), 'a space before an @').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a\tb`, false), 'a tab inside').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a\u0001b`, false), 'a control character inside').toEqual([]);
+    expect(wrongAnswers((scheme, host) => `${scheme}${host}/a\nb`, false), 'a line break inside').toEqual([]);
+  });
+
+  describe('T-03 through the configuration readers', () => {
+    const NPM_URL = withUser('https://', 'registry.npmjs.org', ':x');
+    const PYPI_URL = withUser('https://', 'pypi.org', ':x', '/simple');
+    const NUGET_URL = withUser('https://', 'api.nuget.org', ':x', '/v3/index.json');
+    const put = (file: string, text: string): void => {
+      mkdirSync(join(file, '..'), { recursive: true });
+      writeFileSync(file, text);
+    };
+
+    it('T-03 a project .npmrc registry= with credentials before the host is a registry', () => {
+      put(join(project, '.npmrc'), `registry=${NPM_URL}\n`);
+      expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ kind: 'registry', url: NPM_URL });
+    });
+
+    it('T-03 a project .npmrc @scope:registry= with credentials before the host is the registry of that scope', () => {
+      put(join(project, '.npmrc'), `@s:registry=${NPM_URL}\n`);
+      expect(customRegistryFor('npm', '@s/pkg', ctx())).toMatchObject({ kind: 'registry', url: NPM_URL });
+      expect(npmScopeRegistry('@s/pkg', ctx())).toMatchObject({ scope: 's', url: NPM_URL, from: 'project' });
+    });
+
+    it('T-03 the environment: NPM_CONFIG_REGISTRY, and npm_config_@scope:registry for the scope', () => {
+      expect(customRegistryFor('npm', 'lodash', ctx({ NPM_CONFIG_REGISTRY: NPM_URL }))).toMatchObject({ kind: 'registry', source: 'NPM_CONFIG_REGISTRY' });
+      expect(npmScopeRegistry('@s/pkg', ctx({ 'npm_config_@s:registry': NPM_URL }))).toMatchObject({ scope: 's', url: NPM_URL, from: 'user' });
+    });
+
+    it('T-03 pip.conf index-url with credentials before the host is a registry', () => {
+      put(join(home, '.config', 'pip', 'pip.conf'), `[global]\nindex-url = ${PYPI_URL}\n`);
+      expect(customRegistryFor('pypi', 'requests', ctx())).toMatchObject({ kind: 'registry', url: PYPI_URL });
+    });
+
+    it('T-03 pyproject.toml [tool.uv] index-url with credentials before the host is a registry', () => {
+      put(join(project, 'pyproject.toml'), `[project]\nname = "app"\nversion = "0.1.0"\n\n[tool.uv]\nindex-url = "${PYPI_URL}"\n`);
+      expect(customRegistryFor('pypi', 'requests', ctx())).toMatchObject({ kind: 'registry', url: PYPI_URL });
+    });
+
+    it('T-03 nuget.config package source with credentials before the host is a registry', () => {
+      put(join(project, 'nuget.config'), `<configuration><packageSources><add key="corp" value="${NUGET_URL}" /></packageSources></configuration>\n`);
+      expect(customRegistryFor('nuget', 'Newtonsoft.Json', ctx())).toMatchObject({ kind: 'registry', url: NUGET_URL });
+    });
+
+    it('T-03 an environment variable with several URLs, and with the name=URL form', () => {
+      expect(customRegistryFor('pypi', 'requests', ctx({ PIP_EXTRA_INDEX_URL: `https://pypi.org/simple ${PYPI_URL}` }))).toMatchObject({
+        kind: 'registry',
+        source: 'PIP_EXTRA_INDEX_URL',
+      });
+      expect(customRegistryFor('pypi', 'requests', ctx({ PIP_INDEX_URL: `corp=${PYPI_URL}` }))).toMatchObject({ kind: 'registry', source: 'PIP_INDEX_URL' });
+      expect(customRegistryFor('nuget', 'Newtonsoft.Json', ctx({ NUGET_SOURCE: `https://api.nuget.org/v3/index.json ${NUGET_URL}` }))).toMatchObject({
+        kind: 'registry',
+        source: 'NUGET_SOURCE',
+      });
+    });
+  });
+
+  // Fix round 1: the readers hand over the value as the package manager reads it — the comment after it is dropped.
+  describe('T-02 / T-03 the value as the manager reads it, and the authority that ends at ? or #', () => {
+    const PUBLIC = 'https://registry.npmjs.org/';
+    const OTHER = 'https://npm.acme.local/';
+    const DISGUISED = withUser('https://', 'registry.npmjs.org', ':x');
+    const put = (file: string, text: string): void => {
+      mkdirSync(join(file, '..'), { recursive: true });
+      writeFileSync(file, text);
+    };
+    /** Every spelling npm, pnpm, Yarn 1 and bun read as the URL alone (measured, see the spec's measurements). */
+    const npmrcValues = (url: string): string[] => [`${url} ; a note`, `${url} # a note`, `${url}; a note`, `${url}#a-note`, `"${url}"`, `"${url}" ; a note`];
+    const yarnValues = (url: string): string[] => [`${url} # a note`, `"${url}" # a note`, `"${url}"`, url];
+
+    it('T-02 a public URL followed by a comment, or quoted, in an .npmrc is not a custom registry (as in 3.12.0)', () => {
+      const wrong: string[] = [];
+      for (const value of npmrcValues(PUBLIC)) {
+        put(join(project, '.npmrc'), `registry=${value}\n`);
+        if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push(`registry=${value}`);
+        put(join(project, '.npmrc'), `@s:registry=${value}\n`);
+        if (npmScopeRegistry('@s/pkg', ctx()) !== null) wrong.push(`@s:registry=${value}`);
+        if (customRegistryFor('npm', '@s/pkg', ctx()) !== null) wrong.push(`customRegistryFor @s:registry=${value}`);
+      }
+      put(join(project, '.npmrc'), `registry = "${PUBLIC}"\n`);
+      if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push('registry = "<url>"');
+      expect(wrong).toEqual([]);
+    });
+
+    it('T-02 a public URL followed by a comment, quoted or not, in a .yarnrc.yml is not a custom registry', () => {
+      const wrong: string[] = [];
+      for (const value of yarnValues(PUBLIC)) {
+        put(join(project, '.yarnrc.yml'), `npmRegistryServer: ${value}\n`);
+        if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push(`npmRegistryServer: ${value}`);
+        put(join(project, '.yarnrc.yml'), `npmScopes:\n  s:\n    npmRegistryServer: ${value}\n`);
+        if (npmScopeRegistry('@s/pkg', ctx()) !== null) wrong.push(`npmScopes.s.npmRegistryServer: ${value}`);
+      }
+      expect(wrong).toEqual([]);
+    });
+
+    it('T-02 an empty port is the default one: public', () => {
+      for (const eco of ECOSYSTEMS) {
+        for (const host of PUBLIC_HOSTS[eco]) {
+          for (const tail of ['/simple', '/', '?x=1', '#frag', '']) {
+            for (const scheme of SCHEMES) expect(isPublicRegistryUrl(eco, `${scheme}${host}:${tail}`), `${eco}: ${scheme}${host}:${tail}`).toBe(true);
+          }
+        }
+      }
+    });
+
+    it('T-02 the authority ends at ? or #: a user@ after them is part of the query, fragment or path, and the host is the public one', () => {
+      expect(wrongAnswers((scheme, host) => `${scheme}${host}?@evil.example/`, true), 'after a ?').toEqual([]);
+      expect(wrongAnswers((scheme, host) => `${scheme}${host}#@evil.example`, true), 'after a #').toEqual([]);
+      expect(wrongAnswers((scheme, host) => `${scheme}${host}/@evil.example`, true), 'after a /').toEqual([]);
+    });
+
+    it('T-03 another registry followed by a comment is still a custom registry, and the url has no comment text', () => {
+      const wrong: string[] = [];
+      for (const value of npmrcValues(OTHER)) {
+        put(join(project, '.npmrc'), `registry=${value}\n`);
+        const found = customRegistryFor('npm', 'lodash', ctx());
+        if (found?.kind !== 'registry' || found.url !== OTHER) wrong.push(`registry=${value} -> ${JSON.stringify(found)}`);
+      }
+      rmSync(join(project, '.npmrc'), { force: true });
+      for (const value of yarnValues(OTHER)) {
+        put(join(project, '.yarnrc.yml'), `npmRegistryServer: ${value}\n`);
+        const found = customRegistryFor('npm', 'lodash', ctx());
+        if (found?.kind !== 'registry' || found.url !== OTHER) wrong.push(`npmRegistryServer: ${value} -> ${JSON.stringify(found)}`);
+      }
+      expect(wrong).toEqual([]);
+    });
+
+    it('T-03 a disguised URL followed by a comment is still a registry; a backslash in the value stops the cut and reads as another registry', () => {
+      for (const value of npmrcValues(DISGUISED)) {
+        put(join(project, '.npmrc'), `registry=${value}\n`);
+        expect(customRegistryFor('npm', 'lodash', ctx()), `registry=${value}`).toMatchObject({ kind: 'registry' });
+      }
+      put(join(project, '.npmrc'), 'registry=https://registry.npmjs.org/a\\;b\n');
+      expect(customRegistryFor('npm', 'lodash', ctx()), 'a backslash').toMatchObject({ kind: 'registry' });
+    });
+  });
+
+  // Fix round 2: Yarn reads these `.yarnrc.yml` values as ANOTHER host (measured with Yarn 4.18.1); the reader must not read the public URL out of them.
+  describe('T-02 / T-03 a .yarnrc.yml npmRegistryServer that is not a plain single-line scalar', () => {
+    const PUB = ['https://', 'registry.npmjs.org'].join('');
+    const put = (text: string): void => writeFileSync(join(project, '.yarnrc.yml'), text);
+    /** The scalar value written after `npmRegistryServer:` — the continuation, if any, on the lines after it. */
+    const FORMS: Array<[string, string]> = [
+      ['a doubled quote in a single-quoted scalar', `'${PUB}'':x@evil.example/'`],
+      ['a plain scalar continued on a more indented line', `${PUB}\n@CONT:x@evil.example/`],
+      ['a double-quoted scalar continued on an indented line', `"${PUB}\n@CONT:x@evil.example/"`],
+      ['a double-quoted scalar with an escape', `"${PUB}:x\\x40evil.example/"`],
+    ];
+    /** `@CONT` stands for the indent of a continuation line: deeper than the key at `indent` spaces. */
+    const asKey = (value: string, indent: number): string => `${value.replace(/@CONT/g, ' '.repeat(indent + 2))}\n`;
+    const defaultFile = (value: string): string => `npmRegistryServer: ${asKey(value, 0)}`;
+    const scopeFile = (value: string): string => `npmScopes:\n  s:\n    npmRegistryServer: ${asKey(value, 4)}`;
+
+    it.each(FORMS)('T-03 as the default registry, %s is another registry', (_label, value) => {
+      put(defaultFile(value));
+      expect(customRegistryFor('npm', 'lodash', ctx())).toMatchObject({ kind: 'registry' });
+    });
+
+    it.each(FORMS)('T-03 as the registry of a scope, %s is a registry of its own', (_label, value) => {
+      put(scopeFile(value));
+      expect(npmScopeRegistry('@s/pkg', ctx())).not.toBeNull();
+      expect(customRegistryFor('npm', '@s/pkg', ctx())).toMatchObject({ kind: 'registry' });
+    });
+
+    it('T-03 the value that is not plain is not named: the reader gives a placeholder, never part of the text', () => {
+      put(defaultFile(FORMS[1]?.[1] ?? ''));
+      expect(JSON.stringify(customRegistryFor('npm', 'lodash', ctx())).includes('evil.example')).toBe(false);
+    });
+
+    it('T-03 an .npmrc has no continuation line and no doubled-quote escape: its quote tricks still read as another registry', () => {
+      const tricks = [`'${PUB}'':x@evil.example/'`, `"${PUB}":x@evil.example/`, `"${PUB}\\":x@evil.example/"`, `'${PUB}':x@evil.example/`];
+      const wrong: string[] = [];
+      for (const value of tricks) {
+        writeFileSync(join(project, '.npmrc'), `registry=${value}\n`);
+        if (customRegistryFor('npm', 'lodash', ctx())?.kind !== 'registry') wrong.push(value);
+      }
+      expect(wrong).toEqual([]);
+    });
+
+    const PLAIN = [PUB + '/', `"${PUB}/"`, `'${PUB}/'`, `${PUB}/ # a note`, `"${PUB}/" # a note`, `'${PUB}/' # a note`];
+    const FOLLOWERS: Array<[string, string]> = [
+      ['another top-level key', 'enableTelemetry: false\n'],
+      ['a comment and another top-level key', '# a note\n\nenableTelemetry: false\n'],
+      ['a nested mapping of another key', 'npmScopes:\n  other:\n    npmAlwaysAuth: true\n'],
+    ];
+
+    it.each(PLAIN)('T-02 the plain single-line value %s, followed by each kind of next line, is the public registry', (value) => {
+      const wrong: string[] = [];
+      for (const [label, next] of FOLLOWERS) {
+        put(`npmRegistryServer: ${value}\n${next}`);
+        if (customRegistryFor('npm', 'lodash', ctx()) !== null) wrong.push(`default, then ${label}`);
+        put(`npmScopes:\n  s:\n    npmRegistryServer: ${value}\n    npmAlwaysAuth: true\n  t:\n    npmRegistryServer: ${value}\n${next.startsWith('npmScopes') ? '' : next}`);
+        if (npmScopeRegistry('@s/pkg', ctx()) !== null) wrong.push(`scope s, then ${label}`);
+        if (npmScopeRegistry('@t/pkg', ctx()) !== null) wrong.push(`scope t, then ${label}`);
+      }
+      expect(wrong).toEqual([]);
+    });
+  });
+});
+
+// ───────────────── install-vet-project-registry-said — which project file sets the default registry, per manager
+
+describe('install-vet-project-registry-said', () => {
+  type ProjectDefault = (manager: string, ctx: RegistryContext) => Array<{ source: string; url: string }>;
+
+  /**
+   * The function is looked up at run time: it is the export this feature adds, and a named import of a missing
+   * export would break the type-check of the whole file. Until it is there, every test here fails on this line.
+   */
+  function projectDefault(): ProjectDefault {
+    const fn = (privateRegistry as Record<string, unknown>)['npmProjectDefaultRegistry'];
+    expect(typeof fn, 'privateRegistry.ts exports npmProjectDefaultRegistry(manager, ctx)').toBe('function');
+    return fn as ProjectDefault;
+  }
+
+  const OTHER = 'https://npm.other.example/';
+  const NEARER = 'https://npm.nearer.example/';
+  const NPMRC = `registry=${OTHER}\n`;
+  const BUNFIG = `[install]\nregistry = "${OTHER}"\n`;
+  const YARNRC = `registry "${OTHER}"\n`;
+  const YARNRC_YML = `npmRegistryServer: "${OTHER}"\n`;
+  const MANIFEST = '{ "name": "fixture-app", "version": "1.0.0" }\n';
+  const WORKSPACES = '{ "name": "fixture-root", "version": "1.0.0", "workspaces": ["packages/*"] }\n';
+
+  /** A file of the test's project, by path below it. */
+  const put = (rel: string, text: string): void => {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), text);
+  };
+  /** The repository root, so that a walk above the project stops at it. */
+  const repository = (): void => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+  };
+  /** What a command run in `dir` (below the project) is answered, the path normalised, and what it was asked. */
+  const answer = (manager: string, dir: string): unknown => {
+    const r = projectDefault()(manager, { ...ctx(), projectDir: join(project, dir) });
+    return { manager, dir, answer: Array.isArray(r) ? r.map((e) => ({ source: resolve(e.source), url: e.url })) : r };
+  };
+  /** The answer that names the file `rel` of the project and the registry `url`: one entry. */
+  const found = (manager: string, dir: string, rel: string, url = OTHER): unknown => ({
+    manager,
+    dir,
+    answer: [{ source: resolve(project, rel), url }],
+  });
+  /** The answer that lists every file, in the order given (the nearest first). */
+  const foundAll = (manager: string, dir: string, entries: Array<[rel: string, url: string]>): unknown => ({
+    manager,
+    dir,
+    answer: entries.map(([rel, url]) => ({ source: resolve(project, rel), url })),
+  });
+  const nothing = (manager: string, dir = ''): unknown => ({ manager, dir, answer: [] });
+
+  const NPM_FAMILY = ['npm', 'npx', 'pnpm', 'bun', 'yarn'];
+
+  it.each(NPM_FAMILY)('T-01 %s: the .npmrc beside the package.json is the project default registry', (manager) => {
+    put('package.json', MANIFEST);
+    put('.npmrc', NPMRC);
+    expect(answer(manager, '')).toEqual(found(manager, '', '.npmrc'));
+  });
+
+  it.each(NPM_FAMILY)('T-01 %s: a command run in a subdirectory with no package.json reads the .npmrc beside the nearest package.json', (manager) => {
+    put('package.json', MANIFEST);
+    put('.npmrc', NPMRC);
+    const sub = join('src', 'deep');
+    mkdirSync(join(project, sub), { recursive: true });
+    expect(answer(manager, sub)).toEqual(found(manager, sub, '.npmrc'));
+  });
+
+  it.each(NPM_FAMILY)('T-01 %s: the .npmrc at a workspace root (a package.json with workspaces) above the project', (manager) => {
+    put('package.json', WORKSPACES);
+    put('.npmrc', NPMRC);
+    const web = join('packages', 'web');
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer(manager, web)).toEqual(found(manager, web, '.npmrc'));
+  });
+
+  it('T-01 pnpm: the .npmrc at a pnpm-workspace.yaml root above the project', () => {
+    const web = join('packages', 'web');
+    put('pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n");
+    put('package.json', MANIFEST);
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer('pnpm', web)).toEqual(found('pnpm', web, '.npmrc'));
+  });
+
+  it('T-01 bun: the bunfig.toml beside the package.json, and at a workspace root above it', () => {
+    const web = join('packages', 'web');
+    put('package.json', MANIFEST);
+    put('bunfig.toml', BUNFIG);
+    expect(answer('bun', '')).toEqual(found('bun', '', 'bunfig.toml'));
+    put('package.json', WORKSPACES);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer('bun', web)).toEqual(found('bun', web, 'bunfig.toml'));
+  });
+
+  it.each([
+    ['.yarnrc', YARNRC],
+    ['.yarnrc.yml', YARNRC_YML],
+  ])('T-01 yarn: the %s beside the package.json, in a plain directory above it and at a workspace root', (file, text) => {
+    const web = join('packages', 'web');
+    repository();
+    put('package.json', MANIFEST);
+    put(file, text);
+    expect(answer('yarn', '')).toEqual(found('yarn', '', file));
+    // The directory above, with no workspace: Yarn reads it all the same.
+    rmSync(join(project, 'package.json'));
+    put(join('app', 'package.json'), MANIFEST);
+    expect(answer('yarn', 'app')).toEqual(found('yarn', 'app', file));
+    // A workspace root above.
+    put('package.json', WORKSPACES);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer('yarn', web)).toEqual(found('yarn', web, file));
+  });
+
+  // Adjusted to the array contract: the nearest file is listed first, and the workspace root's follows it.
+  it("T-01 the project's own .npmrc is listed first, the one of the workspace root above it after", () => {
+    const web = join('packages', 'web');
+    put('package.json', WORKSPACES);
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    put(join(web, '.npmrc'), `registry=${NEARER}\n`);
+    for (const manager of NPM_FAMILY) {
+      expect(answer(manager, web)).toEqual(
+        foundAll(manager, web, [
+          [join(web, '.npmrc'), NEARER],
+          ['.npmrc', OTHER],
+        ]),
+      );
+    }
+  });
+
+  it('T-01 yarn: both of the plain directories above are listed, the nearest first', () => {
+    const app = join('mid', 'app');
+    repository();
+    put('.yarnrc.yml', YARNRC_YML);
+    put(join('mid', '.yarnrc.yml'), `npmRegistryServer: "${NEARER}"\n`);
+    put(join(app, 'package.json'), MANIFEST);
+    expect(answer('yarn', app)).toEqual(
+      foundAll('yarn', app, [
+        [join('mid', '.yarnrc.yml'), NEARER],
+        ['.yarnrc.yml', OTHER],
+      ]),
+    );
+  });
+
+  it.each(['npm', 'pnpm', 'bun'])('T-01 %s: a member .npmrc and the workspace root .npmrc with different registries are both returned, the member first', (manager) => {
+    const web = join('packages', 'web');
+    repository();
+    put('package.json', WORKSPACES);
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    put(join(web, '.npmrc'), `registry=${NEARER}\n`);
+    expect(answer(manager, web)).toEqual(
+      foundAll(manager, web, [
+        [join(web, '.npmrc'), NEARER],
+        ['.npmrc', OTHER],
+      ]),
+    );
+  });
+
+  it('T-01 yarn: a .npmrc with one registry and a .yarnrc.yml with another in the same directory are both returned', () => {
+    repository();
+    put('package.json', MANIFEST);
+    put('.npmrc', `registry=${NEARER}\n`);
+    put('.yarnrc.yml', YARNRC_YML);
+    expect(answer('yarn', '')).toEqual(
+      foundAll('yarn', '', [
+        ['.npmrc', NEARER],
+        ['.yarnrc.yml', OTHER],
+      ]),
+    );
+  });
+
+  it('T-01 a file with the public registry beside one with another registry: only the other is returned', () => {
+    repository();
+    put('package.json', MANIFEST);
+    put('.npmrc', 'registry=https://registry.npmjs.org/\n');
+    put('.yarnrc.yml', YARNRC_YML);
+    put('bunfig.toml', BUNFIG);
+    expect(answer('yarn', '')).toEqual(found('yarn', '', '.yarnrc.yml'));
+    expect(answer('bun', '')).toEqual(found('bun', '', 'bunfig.toml'));
+  });
+
+  // ── nothing: the answer is null
+
+  it.each(NPM_FAMILY)('T-02 %s: no configuration file, nothing', (manager) => {
+    put('package.json', MANIFEST);
+    expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it.each([
+    ['registry=https://registry.npmjs.org/\n', 'the public registry written out'],
+    [`@acme:registry=${OTHER}\n`, 'a registry for a scope only'],
+  ])('T-02 an .npmrc with %j (%s) gives nothing for any manager', (text) => {
+    put('package.json', MANIFEST);
+    put('.npmrc', text);
+    for (const manager of NPM_FAMILY) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it('T-02 the public registry written out, and a registry for a scope only, in the .yarnrc, .yarnrc.yml and bunfig.toml', () => {
+    put('package.json', MANIFEST);
+    put('.yarnrc.yml', `npmRegistryServer: "https://registry.yarnpkg.com"\nnpmScopes:\n  acme:\n    npmRegistryServer: "${OTHER}"\n`);
+    put('.yarnrc', 'registry "https://registry.yarnpkg.com"\n');
+    put('bunfig.toml', `[install]\nregistry = "https://registry.npmjs.org/"\n\n[install.scopes]\nacme = { url = "${OTHER}" }\n`);
+    for (const manager of ['yarn', 'bun']) expect(answer(manager, '')).toEqual(nothing(manager));
+    rmSync(join(project, '.yarnrc'));
+    put('.yarnrc.yml', `npmScopes:\n  acme:\n    npmRegistryServer: "${OTHER}"\n`);
+    put('bunfig.toml', `[install.scopes]\nacme = { url = "${OTHER}" }\n`);
+    for (const manager of ['yarn', 'bun']) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it.each([
+    ['bunfig.toml', BUNFIG, ['npm', 'npx', 'pnpm', 'yarn']],
+    ['.yarnrc', YARNRC, ['npm', 'npx', 'pnpm', 'bun']],
+    ['.yarnrc.yml', YARNRC_YML, ['npm', 'npx', 'pnpm', 'bun']],
+    ['pnpm-workspace.yaml', `packages:\n  - 'packages/*'\nregistry: ${OTHER}\n`, ['npm', 'npx', 'pnpm']],
+  ])('T-02 %s is a file the manager does not obey: nothing for %j', (file, text, managers) => {
+    put('package.json', MANIFEST);
+    put(file, text);
+    for (const manager of managers) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it.each(['npm', 'npx', 'pnpm', 'bun'])('T-02 %s: an .npmrc in a directory above that is no workspace root is not obeyed', (manager) => {
+    repository();
+    put('.npmrc', NPMRC);
+    put(join('app', 'package.json'), MANIFEST);
+    expect(answer(manager, 'app')).toEqual(nothing(manager, 'app'));
+  });
+
+  it.each(['npm', 'bun'])('T-02 %s: a pnpm-workspace.yaml makes a workspace root for pnpm only', (manager) => {
+    const web = join('packages', 'web');
+    repository();
+    put('pnpm-workspace.yaml', "packages:\n  - 'packages/*'\n");
+    put('.npmrc', NPMRC);
+    put(join(web, 'package.json'), MANIFEST);
+    expect(answer(manager, web)).toEqual(nothing(manager, web));
+  });
+
+  it("T-02 the user's own files are never the project's: the home .npmrc, .yarnrc.yml and .bunfig.toml", () => {
+    put('package.json', MANIFEST);
+    writeFileSync(join(home, '.npmrc'), NPMRC);
+    writeFileSync(join(home, '.yarnrc.yml'), YARNRC_YML);
+    writeFileSync(join(home, '.bunfig.toml'), BUNFIG);
+    for (const manager of NPM_FAMILY) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  it('T-02 a file that cannot be read (a directory where the .npmrc belongs) gives nothing, and does not throw', () => {
+    put('package.json', MANIFEST);
+    mkdirSync(join(project, '.npmrc'));
+    for (const manager of NPM_FAMILY) expect(answer(manager, '')).toEqual(nothing(manager));
+  });
+
+  // ── T-09: a repeated key is read at its LAST value, by every reader and in every question
+
+  const PUBLIC = 'https://registry.npmjs.org/';
+  const PUBLIC_YARN = 'https://registry.yarnpkg.com';
+  /** The project: a repository with a manifest and one configuration file. */
+  const configured = (file: string, text: string): void => {
+    repository();
+    put('package.json', MANIFEST);
+    put(file, text);
+  };
+
+  it('T-09 .npmrc: registry= public then registry= other is the other; the reverse is the public registry', () => {
+    configured('.npmrc', `registry=${PUBLIC}\nregistry=${OTHER}\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question').toMatchObject({ url: OTHER });
+    expect(answer('npm', '')).toEqual(found('npm', '', '.npmrc'));
+    put('.npmrc', `registry=${OTHER}\nregistry=${PUBLIC}\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question, reversed').toBeNull();
+    expect(answer('npm', '')).toEqual(nothing('npm'));
+  });
+
+  it('T-09 .npmrc: @s:registry= public then @s:registry= other is the other for npmScopeRegistry; the reverse is null', () => {
+    configured('.npmrc', `@s:registry=${PUBLIC}\n@s:registry=${OTHER}\n`);
+    expect(npmScopeRegistry('@s/pkg', ctx())).toMatchObject({ scope: 's', url: OTHER, from: 'project' });
+    put('.npmrc', `@s:registry=${OTHER}\n@s:registry=${PUBLIC}\n`);
+    expect(npmScopeRegistry('@s/pkg', ctx())).toBeNull();
+  });
+
+  it('T-09 .yarnrc: registry "public" then registry "other" is the other; the reverse is the public registry', () => {
+    configured('.yarnrc', `registry "${PUBLIC_YARN}"\nregistry "${OTHER}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question').toMatchObject({ url: OTHER });
+    expect(answer('yarn', '')).toEqual(found('yarn', '', '.yarnrc'));
+    put('.yarnrc', `registry "${OTHER}"\nregistry "${PUBLIC_YARN}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question, reversed').toBeNull();
+    expect(answer('yarn', '')).toEqual(nothing('yarn'));
+  });
+
+  it('T-09 .yarnrc.yml: two top-level npmRegistryServer keys, the last is the one', () => {
+    configured('.yarnrc.yml', `npmRegistryServer: "${PUBLIC_YARN}"\nnpmRegistryServer: "${OTHER}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question').toMatchObject({ url: OTHER });
+    expect(answer('yarn', '')).toEqual(found('yarn', '', '.yarnrc.yml'));
+    put('.yarnrc.yml', `npmRegistryServer: "${OTHER}"\nnpmRegistryServer: "${PUBLIC_YARN}"\n`);
+    expect(customRegistryFor('npm', 'lodash', ctx()), 'the 404 question, reversed').toBeNull();
+    expect(answer('yarn', '')).toEqual(nothing('yarn'));
+  });
 });

@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -1752,9 +1752,13 @@ describe('install-vet-lockfile-pins', () => {
   const denyOf = (d: Decision): string => d?.deny ?? '(no deny)';
   const lines = (context: string | undefined): string[] => (context ?? '').split('\n');
   const sorted = (xs: readonly string[]): string[] => [...xs].sort();
-  /** The one line of a lockfile that was not read; the group is the reason. */
-  const notRead = (file: string): RegExp =>
-    new RegExp(`^dev-guardian: ${file.replace(/\./g, '\\.')} was not read \\((.+)\\) — its packages were not vetted\\.$`);
+  /** The reason the one line of a lockfile that was not read gives — `undefined` when `line` is not that line. */
+  const notReadReason = (line: string | undefined, file: string): string | undefined => {
+    const head = `dev-guardian: ${file} was not read (`;
+    const tail = ') — its packages were not vetted.';
+    if (line === undefined || !line.startsWith(head) || !line.endsWith(tail) || line.length <= head.length + tail.length) return undefined;
+    return line.slice(head.length, line.length - tail.length);
+  };
   const anotherSource = (count: number, file: string, hosts: string): string =>
     `dev-guardian: ${count} packages of ${file} come from another source (${hosts}) — what it serves was not vetted.`;
   const ownScope = (count: number, file: string): string =>
@@ -2055,8 +2059,9 @@ describe('install-vet-lockfile-pins', () => {
       expect(d?.deny).toBeUndefined();
       const said = lines(d?.context);
       expect(said).toHaveLength(1);
-      expect(said[0]).toMatch(notRead(file));
-      expect(notRead(file).exec(said[0] ?? '')?.[1]).toMatch(reason);
+      const why = notReadReason(said[0], file);
+      expect(why, said[0]).toBeDefined();
+      expect(why).toMatch(reason);
       expect(d?.context).not.toMatch(/IGNORE|evil\.example/);
     },
   );
@@ -2302,7 +2307,13 @@ describe('install-vet-lockfile-pins', () => {
     const net = lockNet();
     const d = await decideInstallCommand('npm ci', at(net.fetchImpl));
     expect(d?.deny).toBeUndefined();
-    expect(lines(d?.context)).toEqual([anotherSource(2, 'package-lock.json', 'npm.corp.example')]);
+    // Since install-vet-project-registry-said the project's .npmrc setting the default registry is said too.
+    expect(lines(d?.context).sort()).toEqual(
+      [
+        anotherSource(2, 'package-lock.json', 'npm.corp.example'),
+        "dev-guardian: the project's .npmrc sets the default registry (https://npm.corp.example) — packages are fetched from it, and what it serves was not vetted.",
+      ].sort(),
+    );
     expect(sorted(net.asked)).toEqual(['express@4.21.2', 'ms@2.1.3']);
   });
 
@@ -2690,5 +2701,466 @@ describe('selftest-install-vet-canary', () => {
       expect(lines.join('\n'), what).not.toContain(MARK);
       expect(lines.join('\n'), what).not.toMatch(/Unexpected token/);
     }
+  });
+});
+
+// ───────────────── pkgvet-archive-like-name — a manager that was not measured warns about a missing archive-like name, never denies
+
+describe('pkgvet-archive-like-name', () => {
+  it('T-11 `composer require vendor/<missing>.zip`, the registry answering 404: a warning, never a deny', async () => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('composer require dgprobe/missing.zip', opts(f.fetchImpl));
+    expect(f.calls, 'the name is asked of Packagist').toContain('https://repo.packagist.org/p2/dgprobe/missing.zip.json');
+    expect(d?.deny, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(d?.context ?? '', 'a warning that names the package').toContain('dgprobe/missing.zip');
+  });
+
+  it('T-11 `dotnet add package <Missing>.zip`, the registry answering 404: a warning, never a deny', async () => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('dotnet add package Dgprobe.Missing.zip', opts(f.fetchImpl));
+    expect(f.calls.some((u) => u.startsWith('https://api.nuget.org/v3-flatcontainer/')), 'the name is asked of NuGet').toBe(true);
+    expect(d?.deny, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(d?.context ?? '', 'a warning that names the package').toContain('Dgprobe.Missing.zip');
+  });
+});
+
+// ───────────────── install-vet-project-registry-said — a project file that sets the default registry is said
+
+describe('install-vet-project-registry-said', () => {
+  const HOST = 'https://npm.other.example';
+  const OTHER = `${HOST}/`;
+  const CLEAN = 'dgprobe-clean';
+  const MISSING = 'dgprobe-missing';
+  const EVIL = 'dgprobe-evil';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+  const NPMRC = `registry=${OTHER}\n`;
+  const BUNFIG = `[install]\nregistry = "${OTHER}"\n`;
+  const YARNRC = `registry "${OTHER}"\n`;
+  const YARNRC_YML = `npmRegistryServer: "${OTHER}"\n`;
+
+  /** The line, exactly: the file by its name, the registry by scheme and host. */
+  const lineFor = (file = '.npmrc', host: string | null = HOST): string =>
+    `dev-guardian: the project's ${file} sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+  const SAYS = 'sets the default registry';
+  const occurrences = (text: string, part: string): number => text.split(part).length - 1;
+
+  /**
+   * The network of these tests: the public registry has every name but `missing` (404), and OSV calls `malicious` names
+   * malicious. Any other URL is an error — the hook then says the name was not verified, which fails an exact answer.
+   */
+  function net(spec: { missing?: readonly string[]; malicious?: readonly string[] } = {}): { fetchImpl: typeof fetch; calls: string[] } {
+    const calls: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      calls.push(url);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string } }> };
+        return json({ results: queries.map((q) => (spec.malicious?.includes(q.package?.name ?? '') === true ? { vulns: [{ id: 'MAL-2026-1' }] } : {})) });
+      }
+      const doc = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+      if (doc !== null) {
+        return spec.missing?.includes(decodeURIComponent(doc[1] ?? '')) === true ? json({}, 404) : json(npmDoc('1.0.0').body);
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, calls };
+  }
+
+  /** The decision for `command` in the temp project, the environment being the test's own plus `env`. */
+  function decide(command: string, spec: Parameters<typeof net>[0] = {}, env: Record<string, string> = {}): ReturnType<typeof decideInstallCommand> {
+    return decideInstallCommand(command, opts(net(spec).fetchImpl, { env: { GUARDIAN_OFFLINE: '0', ...env } }));
+  }
+
+  const put = (dir: string, rel: string, text: string): void => {
+    mkdirSync(dirname(join(dir, rel)), { recursive: true });
+    writeFileSync(join(dir, rel), text);
+  };
+  /** A project with the manifest and one more file. */
+  const project1 = (file: string, text: string): void => {
+    put(project, 'package.json', MANIFEST);
+    put(project, file, text);
+  };
+
+  // ── T-03: the line is said, once, for every kind of command the hook vets
+
+  const SAID: Array<[label: string, command: string, file: string, text: string, manifest?: string]> = [
+    ['npm install of a clean package', `npm install ${CLEAN}`, '.npmrc', NPMRC],
+    ['npm install of a manifest', 'npm install', '.npmrc', NPMRC, JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [CLEAN]: '^1.0.0' } })],
+    ['npx launcher', `npx ${CLEAN}`, '.npmrc', NPMRC],
+    ['npm install of two packages', `npm install ${CLEAN} dgprobe-other`, '.npmrc', NPMRC],
+    ['pnpm add', `pnpm add ${CLEAN}`, '.npmrc', NPMRC],
+    ['bun add and its bunfig.toml', `bun add ${CLEAN}`, 'bunfig.toml', BUNFIG],
+    ['yarn add and a .yarnrc.yml', `yarn add ${CLEAN}`, '.yarnrc.yml', YARNRC_YML],
+    ['yarn add and a .yarnrc', `yarn add ${CLEAN}`, '.yarnrc', YARNRC],
+  ];
+
+  it.each(SAID)('T-03 %s: the line is there once, naming the file and scheme://host — and nothing else', async (_label, command, file, text, manifest) => {
+    put(project, 'package.json', manifest ?? MANIFEST);
+    put(project, file, text);
+    const d = await decide(command);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toBe(lineFor(file));
+    expect(occurrences(d?.context ?? '', SAYS)).toBe(1);
+  });
+
+  // ── T-04: silent
+
+  interface Silent {
+    label: string;
+    /** The same command with nothing that silences: the control, which says the line. */
+    control: string;
+    command: string;
+    /** What makes it silent, applied after the control. */
+    silence?: () => void;
+    env?: () => Record<string, string>;
+  }
+
+  const SILENT: Silent[] = [
+    {
+      label: 'the same registry in the user npmrc',
+      control: `npm install ${CLEAN}`,
+      command: `npm install ${CLEAN}`,
+      silence: () => put(home, '.npmrc', NPMRC),
+    },
+    {
+      label: "the same registry in npm's global npmrc",
+      control: `npm install ${CLEAN}`,
+      command: `npm install ${CLEAN}`,
+      silence: () => put(home, 'global-npmrc', NPMRC),
+      env: () => ({ NPM_CONFIG_GLOBALCONFIG: join(home, 'global-npmrc') }),
+    },
+    {
+      label: 'the same registry in the environment (NPM_CONFIG_REGISTRY)',
+      control: `npm install ${CLEAN}`,
+      command: `npm install ${CLEAN}`,
+      env: () => ({ NPM_CONFIG_REGISTRY: OTHER }),
+    },
+    {
+      label: 'the same registry in ~/.yarnrc.yml',
+      control: `yarn add ${CLEAN}`,
+      command: `yarn add ${CLEAN}`,
+      silence: () => put(home, '.yarnrc.yml', YARNRC_YML),
+    },
+    {
+      label: 'the same registry in ~/.bunfig.toml',
+      control: `bun add ${CLEAN}`,
+      command: `bun add ${CLEAN}`,
+      silence: () => put(home, '.bunfig.toml', BUNFIG),
+    },
+    {
+      label: '--registry on the command line',
+      control: `npm install ${CLEAN}`,
+      command: `npm install --registry https://npm.third.example/ ${CLEAN}`,
+    },
+    {
+      label: 'NPM_CONFIG_REGISTRY giving another registry',
+      control: `npm install ${CLEAN}`,
+      command: `npm install ${CLEAN}`,
+      env: () => ({ NPM_CONFIG_REGISTRY: 'https://npm.third.example/' }),
+    },
+    {
+      label: 'YARN_NPM_REGISTRY_SERVER giving another registry',
+      control: `yarn add ${CLEAN}`,
+      command: `yarn add ${CLEAN}`,
+      env: () => ({ YARN_NPM_REGISTRY_SERVER: 'https://npm.third.example/' }),
+    },
+    {
+      label: 'YARN_REGISTRY giving another registry',
+      control: `yarn add ${CLEAN}`,
+      command: `yarn add ${CLEAN}`,
+      env: () => ({ YARN_REGISTRY: 'https://npm.third.example/' }),
+    },
+    {
+      label: 'BUN_CONFIG_REGISTRY giving another registry',
+      control: `bun add ${CLEAN}`,
+      command: `bun add ${CLEAN}`,
+      env: () => ({ BUN_CONFIG_REGISTRY: 'https://npm.third.example/' }),
+    },
+    { label: 'npm --prefix: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install --prefix sub ${CLEAN}` },
+    { label: 'npm -C: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install -C sub ${CLEAN}` },
+    { label: 'pnpm -C: the command\'s directory is not known', control: `pnpm add ${CLEAN}`, command: `pnpm add -C sub ${CLEAN}` },
+    { label: 'yarn --cwd: the command\'s directory is not known', control: `yarn add ${CLEAN}`, command: `yarn add --cwd sub ${CLEAN}` },
+    { label: 'bun --cwd: the command\'s directory is not known', control: `bun add ${CLEAN}`, command: `bun add --cwd sub ${CLEAN}` },
+  ];
+
+  it.each(SILENT)('T-04 silent for $label — and said without it', async (s) => {
+    // The project: a manifest, and every file a manager of the cases reads, all with the one registry.
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', NPMRC);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    put(project, 'bunfig.toml', BUNFIG);
+    mkdirSync(join(project, 'sub'));
+    const control = await decide(s.control);
+    expect(control?.context ?? '', 'the control, with nothing that silences it, says the line').toContain(SAYS);
+    s.silence?.();
+    const d = await decide(s.command, {}, s.env?.() ?? {});
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+  });
+
+  it('T-04 with no such project file the answer is exactly what it was: silent for a clean package, the usual deny for a missing one', async () => {
+    put(project, 'package.json', MANIFEST);
+    expect(await decide(`npm install ${CLEAN}`)).toBeNull();
+    const missing = await decide(`npm install ${MISSING}`, { missing: [MISSING] });
+    expect(missing?.deny).toContain(MISSING);
+    expect(missing?.deny).toContain('does not exist');
+    expect(missing?.deny ?? '').not.toContain(SAYS);
+    expect(missing?.context ?? '').not.toContain(SAYS);
+    // A file that gives scopes only, or the public registry, is no default registry either.
+    put(project, '.npmrc', `@acme:registry=${OTHER}\nregistry=https://registry.npmjs.org/\n`);
+    expect(await decide(`npm install ${CLEAN}`)).toBeNull();
+  });
+
+  // ── T-05: a project file never silences, and no verdict changes
+
+  it('T-05 the registry repeated in other files of the project (a .yarnrc.yml, a bunfig.toml, a scope of the same .npmrc) does not take the line away', async () => {
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', `registry=${OTHER}\n@acme:registry=${OTHER}\n`);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    put(project, 'bunfig.toml', BUNFIG);
+    put(project, '.yarnrc', YARNRC);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('.npmrc'));
+  });
+
+  it('T-05 a malicious package is still refused, and the refusal stays as it is: no line, the same text as without the registry file', async () => {
+    project1('.npmrc', NPMRC);
+    const withFile = await decide(`npm install ${EVIL}`, { malicious: [EVIL] });
+    expect(withFile?.deny, 'denied, naming the package').toContain(EVIL);
+    expect(withFile?.deny, 'the verdict').toContain('MAL-2026-1');
+    expect(withFile?.deny ?? '', 'the deny stays short: no line').not.toContain(SAYS);
+    rmSync(join(project, '.npmrc'));
+    const without = await decide(`npm install ${EVIL}`, { malicious: [EVIL] });
+    expect(withFile?.deny, 'the same text as in a project without the file').toBe(without?.deny);
+  });
+
+  it('T-05 a name the public registry does not have still warns for the configured registry — never a deny — and the line is there', async () => {
+    project1('.npmrc', NPMRC);
+    const d = await decide(`npm install ${MISSING}`, { missing: [MISSING] });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toContain('a custom registry is configured');
+    expect(d?.context).toContain(MISSING);
+    expect(d?.context).toContain(lineFor('.npmrc'));
+    expect(occurrences(d?.context ?? '', SAYS)).toBe(1);
+  });
+
+  // ── T-06: nothing of the URL but its scheme and host, and the file by its name only
+
+  const MARK = 'dgsecret-zzq7731';
+  // Built from pieces: no literal `scheme://user:password@host` stands in the test source.
+  const HOSTILE: Array<[label: string, url: string]> = [
+    ['credentials', ['https://dguser:', MARK, '@', 'npm.other.example', '/'].join('')],
+    ['a token in the path', `${OTHER}${MARK}/npm/`],
+    ['a token in the query', `${OTHER}?token=${MARK}`],
+    ['credentials, a path and a query', ['https://dguser:', MARK, '@', 'npm.other.example', '/team/', MARK, '?x=', MARK].join('')],
+  ];
+  /** The line as it may be said for a value that is not an ordinary URL: with the host, or without. */
+  const LINE_SHAPE = /dev-guardian: the project's \.npmrc sets the default registry(?: \(https:\/\/npm\.other\.example\))? — packages are fetched from it, and what it serves was not vetted\./;
+
+  function noLeak(text: string): void {
+    expect(text.includes(MARK), 'the marker of the credentials, path or query').toBe(false);
+    expect(text.includes('dguser'), 'the user name').toBe(false);
+    expect(text.includes(basename(project)), 'the project folder').toBe(false);
+    expect(text.includes(join(project, '.npmrc')), 'the file by its path').toBe(false);
+  }
+
+  it.each(HOSTILE)('T-06 %s in the default registry: the line names scheme://host and the file by name only', async (_label, url) => {
+    project1('.npmrc', `registry=${url}\n`);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('.npmrc'));
+    noLeak(d?.context ?? '');
+  });
+
+  it('T-06 a password with an @ in it: the line carries no part of it, with the host or without', async () => {
+    project1('.npmrc', `registry=${['https://dguser:pa@', MARK, '@', 'npm.other.example', '/x'].join('')}\n`);
+    const d = await decide(`npm install ${CLEAN}`);
+    const context = d?.context ?? '';
+    expect(context, 'the line, whole').toMatch(LINE_SHAPE);
+    expect(context.split('\n'), 'and nothing else').toHaveLength(1);
+    noLeak(context);
+  });
+
+  it('T-06 the hostile URL in a bunfig.toml and in a .yarnrc.yml: the file by name, the registry by host', async () => {
+    const url = ['https://dguser:', MARK, '@', 'npm.other.example', '/', MARK, '?t=', MARK].join('');
+    project1('bunfig.toml', `[install]\nregistry = "${url}"\n`);
+    const viaBun = await decide(`bun add ${CLEAN}`);
+    expect(viaBun?.context).toBe(lineFor('bunfig.toml'));
+    noLeak(viaBun?.context ?? '');
+    rmSync(join(project, 'bunfig.toml'));
+    put(project, '.yarnrc.yml', `npmRegistryServer: "${url}"\n`);
+    const viaYarn = await decide(`yarn add ${CLEAN}`);
+    expect(viaYarn?.context).toBe(lineFor('.yarnrc.yml'));
+    noLeak(viaYarn?.context ?? '');
+  });
+
+  it('T-06 a value that is not a URL gives the line without the host, and nothing of the value', async () => {
+    project1('.npmrc', `registry=${MARK}-not-a-url\n`);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('.npmrc', null));
+    noLeak(d?.context ?? '');
+  });
+
+  // ── T-09: the last value of a repeated key, every file a manager may obey, at most three lines, nothing for a global install
+
+  const hostOf = (name: string): string => `https://npm.${name}.example`;
+  /** The decision for `command` run in `cwd`, a directory of the temp project. */
+  const decideIn = (cwd: string, command: string): ReturnType<typeof decideInstallCommand> =>
+    decideInstallCommand(command, opts(net().fetchImpl, { cwd, env: { GUARDIAN_OFFLINE: '0' } }));
+  /** The temp project as a repository, so that no walk climbs out of it. */
+  const repository = (): void => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+  };
+
+  it('T-09 a registry= repeated in the .npmrc: the line is said with the host of the LAST value', async () => {
+    repository();
+    project1('.npmrc', `registry=${hostOf('first')}/\nregistry=${OTHER}\n`);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toBe(lineFor('.npmrc', HOST));
+  });
+
+  it('T-09 the registry of the user on the first line and another on the second: the line is said, with the other host', async () => {
+    repository();
+    put(home, '.npmrc', NPMRC);
+    project1('.npmrc', `registry=${OTHER}\nregistry=${hostOf('second')}/\n`);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('.npmrc', hostOf('second')));
+  });
+
+  it('T-09 a public .npmrc and a .yarnrc.yml with another registry: `yarn add` says the line, naming .yarnrc.yml', async () => {
+    repository();
+    project1('.npmrc', 'registry=https://registry.npmjs.org/\n');
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    const d = await decide(`yarn add ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('.yarnrc.yml'));
+  });
+
+  it('T-09 a public .npmrc and a bunfig.toml with another registry: `bun add` says the line, naming bunfig.toml', async () => {
+    repository();
+    project1('.npmrc', 'registry=https://registry.npmjs.org/\n');
+    put(project, 'bunfig.toml', BUNFIG);
+    const d = await decide(`bun add ${CLEAN}`);
+    expect(d?.context).toBe(lineFor('bunfig.toml'));
+  });
+
+  it('T-09 a member .npmrc and the .npmrc of the workspace root with two registries: two lines, the member first', async () => {
+    const web = join(project, 'packages', 'web');
+    repository();
+    put(project, 'package.json', JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: ['packages/*'] }));
+    put(project, '.npmrc', `registry=${hostOf('root')}/\n`);
+    put(web, 'package.json', MANIFEST);
+    put(web, '.npmrc', `registry=${hostOf('member')}/\n`);
+    const d = await decideIn(web, `npm install ${CLEAN}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context?.split('\n')).toEqual([lineFor('.npmrc', hostOf('member')), lineFor('.npmrc', hostOf('root'))]);
+  });
+
+  it('T-09 four project files with four registries: three lines and a last line with the count of the rest', async () => {
+    const app = join(project, 'app');
+    repository();
+    put(app, 'package.json', MANIFEST);
+    put(app, '.npmrc', `registry=${hostOf('a')}/\n`);
+    put(app, '.yarnrc.yml', `npmRegistryServer: "${hostOf('b')}/"\n`);
+    put(app, '.yarnrc', `registry "${hostOf('c')}/"\n`);
+    put(project, '.yarnrc.yml', `npmRegistryServer: "${hostOf('d')}/"\n`);
+    const d = await decideIn(app, `yarn add ${CLEAN}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context?.split('\n')).toEqual([
+      lineFor('.npmrc', hostOf('a')),
+      lineFor('.yarnrc.yml', hostOf('b')),
+      lineFor('.yarnrc', hostOf('c')),
+      'dev-guardian: 1 more file of the project sets the default registry.',
+    ]);
+  });
+
+  it.each([
+    ['npm install -g', `npm install -g ${CLEAN}`, `npm install ${CLEAN}`],
+    ['npm install --global', `npm install --global ${CLEAN}`, `npm install ${CLEAN}`],
+    ['npm install --location=global', `npm install --location=global ${CLEAN}`, `npm install ${CLEAN}`],
+    ['pnpm add -g', `pnpm add -g ${CLEAN}`, `pnpm add ${CLEAN}`],
+    ['yarn global add', `yarn global add ${CLEAN}`, `yarn add ${CLEAN}`],
+    ['bun add -g', `bun add -g ${CLEAN}`, `bun add ${CLEAN}`],
+  ])('T-09 %s: a global install does not obey the project file, so no line — and the same project says it for the non-global command', async (_label, global, control) => {
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', NPMRC);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    put(project, 'bunfig.toml', BUNFIG);
+    expect((await decide(control))?.context ?? '', 'the control: the non-global command says the line').toContain(SAYS);
+    const d = await decide(global);
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+  });
+
+  it.each([
+    ['the user without a trailing slash, the project with one', `registry=${HOST}/team\n`, `registry=${HOST}/team/\n`],
+    ['the user with a trailing slash, the project without one', `registry=${HOST}/team/\n`, `registry=${HOST}/team\n`],
+    ['the user without a trailing slash, the project with one, no path', `registry=${HOST}\n`, NPMRC],
+    ['the user with a trailing slash, the project without one, no path', NPMRC, `registry=${HOST}\n`],
+  ])('T-09 %s: the same registry, so no line', async (_label, userText, projectText) => {
+    project1('.npmrc', projectText);
+    expect((await decide(`npm install ${CLEAN}`))?.context ?? '', 'the control: without the user file the line is said').toContain(SAYS);
+    put(home, '.npmrc', userText);
+    const d = await decide(`npm install ${CLEAN}`);
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+  });
+
+  it.each([
+    ['npm install --global=false', `npm install --global=false ${CLEAN}`],
+    ['npm install -g false', `npm install -g false ${CLEAN}`],
+    ['npm install -g --no-global', `npm install -g --no-global ${CLEAN}`],
+    ['pnpm add -g false', `pnpm add -g false ${CLEAN}`],
+    ['npm install --otp --global (the value of --otp)', `npm install --otp --global ${CLEAN}`],
+    ['npm i -g --loc=project (an abbreviation npm reads)', `npm i -g --loc=project ${CLEAN}`],
+    ['npm install -g --g=false (an abbreviation npm reads)', `npm install -g --g=false ${CLEAN}`],
+    ['yarn add -g gdir (a value of Yarn 1, no global install)', `yarn add -g gdir ${CLEAN}`],
+  ])('T-09 %s: the manager obeys the project file, so the line is said', async (_label, command) => {
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', NPMRC);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    const d = await decide(command);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(SAYS);
+  });
+
+  it.each([
+    ['npm install -g', `npm install -g ${CLEAN}`],
+    ['pnpm add -g', `pnpm add -g ${CLEAN}`],
+    ['yarn global add', `yarn global add ${CLEAN}`],
+    ['bun add -g', `bun add -g ${CLEAN}`],
+  ])('T-09 %s: certainly global, so no line', async (_label, command) => {
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', NPMRC);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    put(project, 'bunfig.toml', BUNFIG);
+    const d = await decide(command);
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+  });
+});
+
+// ───────────────── install-vet-bare-install-misread — a bare install with a flag and a true / false word reads the manifest
+
+describe('install-vet-bare-install-misread', () => {
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+
+  it('T-04 `npm install --force true` with a manifest of clean packages is not denied, and the registry is not asked about `true`', async () => {
+    pkgJson({ express: '^4.21.0', 'left-pad': '^1.3.0' });
+    const reg = registry({ exists: ['express', 'left-pad'] });
+    const d = await decideInstallCommand('npm install --force true', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(reg.calls.filter((u) => u.endsWith('/true'))).toEqual([]);
+    expect(reg.calls, 'the manifest is what is vetted').toContain('https://registry.npmjs.org/express');
+  });
+
+  it('T-04 `npm install --silent true`: the word after a loglevel flag is a package, and the registry is asked about it', async () => {
+    const reg = registry({ exists: [] });
+    await decideInstallCommand('npm install --silent true', opts(reg.fetchImpl));
+    expect(reg.calls).toContain('https://registry.npmjs.org/true');
+  });
+
+  it('T-04 `npm install -D false lodash` vets lodash and not false', async () => {
+    const reg = registry({ exists: ['lodash'] });
+    await decideInstallCommand('npm install -D false lodash', opts(reg.fetchImpl));
+    expect(reg.calls).toContain('https://registry.npmjs.org/lodash');
+    expect(reg.calls.filter((u) => u.endsWith('/false'))).toEqual([]);
   });
 });
