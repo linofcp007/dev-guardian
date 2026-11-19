@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **38 limits**, 34 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **39 limits**, 35 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -164,6 +164,16 @@ A launcher that runs corepack or a package manager — `npx corepack yarn add �
   - `Bash` on PreToolUse, input `{"command":"yarn add evil-pkg-zq@npm:^1.2.3"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"bun add alias-zq@npm:real-zq"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"yarn install"}`, with `package.json` present → `none` (no answer)
+- A `true` or `false` after a flag of a launcher (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`) is read as the manager reads it where that was measured (npm 11.20, pnpm 10.33, Yarn 4.18, bun 1.4, 2026-11-19), and looked up both ways, with the command uncertain, where it was not. What stays out:
+
+- `yarn dlx` and `bunx` were measured only in a Linux container, not on Windows (neither is installed there), and nothing was measured on macOS or in a session with a terminal: with one, npm asks before it installs a package that `npm exec --yes false <package>` would otherwise leave alone.
+- A `true` / `false` after a long flag the hook's table does not know is read as that flag's value, as for every manager: `npx --ignore-scripts false <package>` and `pnpm dlx --loglevel silent false <package>` fetch `false`, which is then not looked up (the package after it is, as a possible package). The only packages with those names are npm's security placeholder and a harmless one.
+- The hook looks up more than the manager asks for where it cannot tell the readings apart, and where the manager refuses the line: `yarn dlx -y false <package>`, `pnpm dlx --yes <package>` and every `bunx` line with `false` in it on a system where `false` is a program. The extra lookup is a warning for a name the registry does not have, never a deny.
+- With `npx`, `--no-install false <package>` and `--offline false <package>` fetch nothing (measured), and the hook looks `<package>` up all the same.
+- `pnpm dlx -c <word> <more words>` is a shell command, and no package is looked up for it.
+  - `Bash` on PreToolUse, input `{"command":"npx --ignore-scripts false dgprobe-zzq7731"}` → `warn`
+  - `Bash` on PreToolUse, input `{"command":"yarn dlx -y false dgprobe-zzq7731"}` → `warn`
+  - `Bash` on PreToolUse, input `{"command":"pnpm dlx -c dgprobe-zzq7731 --version"}` → `none` (no answer)
 
 ## The write guards
 

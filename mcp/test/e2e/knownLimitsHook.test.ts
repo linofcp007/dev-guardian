@@ -168,6 +168,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'dotnet-other-install-forms',
       'install-candidates-over-ceiling',
       'install-other-runners',
+      'launcher-flag-words',
       'manifest-above-project-root',
       'manifest-lockfile-and-transitive',
       'manifest-not-from-a-registry',

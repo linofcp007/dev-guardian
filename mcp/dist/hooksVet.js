@@ -2726,60 +2726,61 @@ var NPM_COMMON_BOOL = [
   "--no-frozen-lockfile"
 ];
 var LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
+var NPM_TABLE = {
+  // `-C` is npm's short form of `--prefix`.
+  value: set(
+    "--registry",
+    "--prefix",
+    "-C",
+    "--tag",
+    "--workspace",
+    "-w",
+    "--omit",
+    "--include",
+    "--install-strategy",
+    "--cache",
+    "--userconfig",
+    "--globalconfig",
+    "--before",
+    "--loglevel",
+    "--save-prefix",
+    "--otp",
+    "--scope",
+    "--cpu",
+    "--os",
+    "--libc",
+    "--location",
+    // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+    "--fetch-retries",
+    "--fetch-retry-factor",
+    "--fetch-retry-mintimeout",
+    "--fetch-retry-maxtimeout",
+    "--fetch-timeout",
+    "--cache-min",
+    "--cache-max",
+    "--maxsockets",
+    "--depth",
+    "--node-options",
+    "--script-shell",
+    "--auth-type",
+    "--cafile",
+    "--https-proxy",
+    "--proxy",
+    "--noproxy",
+    "--local-address",
+    "--user-agent",
+    "--min-release-age"
+  ),
+  // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
+  // regression tests of this fix use them as the examples of a flag the table lacks.)
+  bool: set(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl"),
+  registry: set("--registry"),
+  dir: set("--prefix", "-C"),
+  workspace: set("--workspace", "-w", "--workspaces"),
+  boolWord: { except: LOGLEVEL_FLAGS }
+};
 var FLAGS = {
-  npm: {
-    // `-C` is npm's short form of `--prefix`.
-    value: set(
-      "--registry",
-      "--prefix",
-      "-C",
-      "--tag",
-      "--workspace",
-      "-w",
-      "--omit",
-      "--include",
-      "--install-strategy",
-      "--cache",
-      "--userconfig",
-      "--globalconfig",
-      "--before",
-      "--loglevel",
-      "--save-prefix",
-      "--otp",
-      "--scope",
-      "--cpu",
-      "--os",
-      "--libc",
-      "--location",
-      // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
-      "--fetch-retries",
-      "--fetch-retry-factor",
-      "--fetch-retry-mintimeout",
-      "--fetch-retry-maxtimeout",
-      "--fetch-timeout",
-      "--cache-min",
-      "--cache-max",
-      "--maxsockets",
-      "--depth",
-      "--node-options",
-      "--script-shell",
-      "--auth-type",
-      "--cafile",
-      "--https-proxy",
-      "--proxy",
-      "--noproxy",
-      "--local-address",
-      "--user-agent",
-      "--min-release-age"
-    ),
-    // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
-    // regression tests of this fix use them as the examples of a flag the table lacks.)
-    bool: set(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl"),
-    registry: set("--registry"),
-    dir: set("--prefix", "-C"),
-    workspace: set("--workspace", "-w", "--workspaces"),
-    boolWord: { except: LOGLEVEL_FLAGS }
-  },
+  npm: NPM_TABLE,
   pnpm: {
     value: set(
       "--registry",
@@ -3331,33 +3332,59 @@ var LAUNCH_FLAGS = {
       "--offline",
       "--workspaces",
       "--include-workspace-root",
-      "--verbose"
+      "--verbose",
+      "--no-yes"
     ),
     registry: set("--registry"),
     workspace: set("--workspace", "-w", "--workspaces"),
     packageFlags: set("--package", "-p"),
     shellFlags: set("--call", "-c"),
-    noFetchFlags: set("--no", "--no-install", "--offline")
+    noFetchFlags: set("--no", "--no-install", "--offline"),
+    // Measured 2026-11-19 (npx, npm 11.20.0): `--no false P` and `--no-yes false P` ask for P; the word is their value.
+    // `--no-install false P` and `--offline false P` fetch nothing (measured); they are read like `--no` (the word is their
+    // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
+    optionalWord: set("--no", "--no-yes", "--no-install", "--offline"),
+    bothWays: "clusters"
+  },
+  // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
+  // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+  "npm-exec": {
+    value: set(...NPM_TABLE.value, "--package", "--call", "-c"),
+    bool: set(...NPM_TABLE.bool, "-p", "--no", "--no-install", "--no-yes", "--ignore-existing"),
+    registry: NPM_TABLE.registry,
+    workspace: NPM_TABLE.workspace,
+    packageFlags: set("--package"),
+    shellFlags: set("--call", "-c"),
+    noFetchFlags: set("--no", "--offline"),
+    boolWord: { except: LOGLEVEL_FLAGS }
   },
   "pnpm-dlx": {
     value: set("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
-    bool: set("--silent", "-s", "--shell-mode", "-c"),
+    // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
+    bool: set("--silent", "-s", "--shell-mode", "-c", "--quiet", "--verbose", "-p"),
     registry: set("--registry"),
     dir: set("--dir", "-C"),
     packageFlags: set("--package"),
-    shellFlags: set("--shell-mode", "-c")
+    shellFlags: set("--shell-mode", "-c"),
+    // Measured 2026-11-19 (pnpm 10.33.2): `-c P`, `--shell-mode P`, `-c false P` and `-p false P` ask for P.
+    optionalWord: set("--shell-mode", "-c", "-p"),
+    shellWord: true,
+    bothWays: "flags"
   },
   "yarn-dlx": {
     value: set("--package", "-p"),
     bool: set("--quiet", "-q"),
     registry: set(),
-    packageFlags: set("--package", "-p")
+    packageFlags: set("--package", "-p"),
+    bothWays: "flags"
   },
   bunx: {
     value: set("--package", "-p"),
-    bool: set("--bun", "--silent", "--verbose"),
+    // `--quiet` (bun 1.4.4, measured 2026-11-19: `bunx --quiet false P` asks for `false`).
+    bool: set("--bun", "--silent", "--verbose", "--quiet"),
     registry: set(),
-    packageFlags: set("--package", "-p")
+    packageFlags: set("--package", "-p"),
+    bothWays: "flags"
   },
   uvx: {
     value: set(...UV_VALUED, "--from", "--with", "-w"),
@@ -3443,6 +3470,15 @@ function takesBoolWord(v, table) {
   const last = letters[letters.length - 1];
   return letters.every((flag) => table.bool.has(flag)) && last !== void 0 && !rule.except.has(last);
 }
+function takesWord(v, table) {
+  return takesBoolWord(v, table) || table.optionalWord?.has(v) === true;
+}
+function readsBothWays(v, next, table) {
+  if (table.bothWays === void 0 || !isBoolWord(next)) return false;
+  if (!v.startsWith("--") && SHORT_CLUSTER.test(v)) return true;
+  return table.bothWays === "flags" && table.bool.has(v);
+}
+var bothWaysReason = (word, flag) => `\`${word}\` after \`${flag}\`${TWO_READINGS} \u2014 the value of the flag, or the package \u2014 both are looked up`;
 function walk(words, table) {
   const positionals = [];
   const skipped = [];
@@ -3494,10 +3530,16 @@ function walk(words, table) {
     }
     if (table.bool.has(v)) {
       const word = words[i + 1]?.value;
-      if (takesBoolWord(v, table) && isBoolWord(word)) {
+      if (takesWord(v, table) && isBoolWord(word)) {
         note(v, word);
         i += 1;
-      } else note(v, void 0);
+      } else {
+        note(v, void 0);
+        if (readsBothWays(v, word, table)) {
+          candidateAt = i + 1;
+          uncertain.push(bothWaysReason(word ?? "", v));
+        }
+      }
       continue;
     }
     if (!v.startsWith("--") && SHORT_CLUSTER.test(v)) {
@@ -3518,7 +3560,12 @@ function walk(words, table) {
         }
         note(flag, void 0);
       }
-      if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      const word = words[i + 1]?.value;
+      if (takesWord(v, table) && isBoolWord(word)) i += 1;
+      else if (readsBothWays(v, word, table)) {
+        candidateAt = i + 1;
+        uncertain.push(bothWaysReason(word ?? "", v));
+      }
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
@@ -3610,7 +3657,8 @@ function scanPositional(words, from, table, subcommands) {
     if (v.startsWith("-") && v.length > 1) {
       if (v.includes("=")) continue;
       if (table.value.has(v)) i += 1;
-      else if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      else if (takesWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      else if (readsBothWays(v, words[i + 1]?.value, table)) candidateAt = i + 1;
       else {
         const next = words[i + 1]?.value;
         const after = afterUnknownFlag(v, next, table);
@@ -3638,7 +3686,8 @@ var PIPX_SUBCOMMANDS = /* @__PURE__ */ new Set(["install", "run"]);
 var ADD_ONLY = /* @__PURE__ */ new Set(["add"]);
 var INSTALL_ONLY = /* @__PURE__ */ new Set(["install"]);
 var PACKAGE_ONLY = /* @__PURE__ */ new Set(["package"]);
-function detect(words) {
+function detect(input) {
+  let words = input;
   const nextPositional = (ws, from, table2, subcommands) => scanPositional(ws, from, table2, subcommands).at;
   const start = commandStart(words);
   const headWord = words[start];
@@ -3684,10 +3733,18 @@ function detect(words) {
   }
   const table = FLAGS[head];
   if (table === void 0) return null;
-  const sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
+  let sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
+  let productionWord;
+  const wordAt = words[sub];
+  if (head === "yarn" && wordAt !== void 0 && isBoolWord(wordAt.value) && words[sub - 1]?.value === "--production") {
+    productionWord = wordAt;
+    words = [...words.slice(0, sub), ...words.slice(sub + 1)];
+    sub = nextPositional(words, sub, table, SUBCOMMANDS[head]);
+  }
+  const tag = (d) => productionWord === void 0 ? d : { ...d, twoWays: productionWord, uncertain: [...d.uncertain, bothWaysReason(productionWord.value, "--production")] };
   if (sub < 0) {
     if (head === "yarn" && !rest.some((w) => YARN_PRINTS.has(w.value))) {
-      return { manager: head, ecosystem: "npm", args: rest, pre: [], uncertain: [], manifest: "always" };
+      return tag({ manager: head, ecosystem: "npm", args: rest, pre: [], uncertain: [], manifest: "always" });
     }
     return null;
   }
@@ -3695,7 +3752,7 @@ function detect(words) {
   const after = words.slice(sub + 1);
   const before = words.slice(i, sub);
   if (head === "npm" && (subName === "exec" || subName === "x")) {
-    return launcher("npm", "npm", after, before, { style: "run", flags: "npx", localFirst: true });
+    return launcher("npm", "npm", after, before, { style: "run", flags: "npm-exec", localFirst: true });
   }
   if (head === "pnpm" && subName === "dlx") return launcher("pnpm", "npm", after, before, { style: "run", flags: "pnpm-dlx" });
   if (head === "yarn" && subName === "dlx") return launcher("yarn", "npm", after, before, { style: "run", flags: "yarn-dlx" });
@@ -3734,11 +3791,11 @@ function detect(words) {
       return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
     }
     case "yarn": {
-      if (subWord === "install" || subWord === "dedupe") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
-      if (YARN_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
+      if (subWord === "install" || subWord === "dedupe") return tag({ manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" });
+      if (YARN_UPDATE.has(subWord)) return tag({ manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true });
       if (subWord === "up") {
         const update = nextPositional(words, sub + 1, table) >= 0;
-        return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", ...update ? { update: true } : {} };
+        return tag({ manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", ...update ? { update: true } : {} });
       }
       let at = sub;
       const uncertain = [];
@@ -3749,7 +3806,7 @@ function detect(words) {
         uncertain.push("workspace context (yarn workspace)");
       }
       if (at < 0 || words[at]?.value !== "add") return null;
-      return { manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "bare", ...subWord === "global" ? { global: true } : {} };
+      return tag({ manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "bare", ...subWord === "global" ? { global: true } : {} });
     }
     case "pip":
       return subWord === "install" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -3811,7 +3868,8 @@ function collectLaunch(d, launch, context) {
   }
   const w = walk(body, table);
   const flags = [...pre.flags, ...w.flags];
-  const has2 = (names) => names !== void 0 && flags.some((f) => names.has(f.flag));
+  const has2 = (names) => names !== void 0 && flags.some((f) => names.has(f.flag) && !isBoolWord(f.value));
+  const wordFlags = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value));
   const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
   const limited = limitCandidates(w.positionals);
@@ -3822,6 +3880,7 @@ function collectLaunch(d, launch, context) {
       raws.push(...named);
       byPackageFlag = true;
     } else if (!has2(table.shellFlags)) raws.push(...limited.kept.map((p) => p.value));
+    else if (table.shellWord === true && d.args.length === body.length) raws.push(...limited.kept.map((p) => p.value).filter((v) => !/\s/.test(v)));
     raws.push(...values(table.extraPackageFlags));
   }
   const packages = [];
@@ -3829,7 +3888,7 @@ function collectLaunch(d, launch, context) {
   const certainRaws = new Set(limited.kept.filter((p) => p.candidate !== true).map((p) => p.value));
   const candidateRaws = new Set(limited.kept.filter((p) => p.candidate === true).map((p) => p.value));
   const skipped = [...pre.skipped, ...w.skipped];
-  const unsure = [];
+  const unsure = [...wordFlags(table.noFetchFlags), ...wordFlags(table.shellFlags)].map((f) => bothWaysReason(f.value ?? "", f.flag));
   for (const raw of raws) {
     const spec2 = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ("name" in spec2) {
@@ -3917,6 +3976,13 @@ function collect(d, context) {
     } else {
       skipped.push(spec2);
       lastComposer = void 0;
+    }
+  }
+  if (d.twoWays !== void 0) {
+    const spec2 = parseNpm(d.twoWays.value, d.manager);
+    if ("name" in spec2) {
+      packages.push(spec2);
+      candidatePackages.push(spec2);
     }
   }
   if (candidatePackages.length > 0) out.candidates = candidatePackages;
@@ -4228,6 +4294,8 @@ var ALLOW = {
   // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
   // out of the confident shape.
   npx: { bool: set("-y", "--yes", "-q", "--quiet", "--silent"), value: set() },
+  // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
+  "npm-exec": { bool: set("-y", "--yes", "-q", "--quiet", "--silent", "--ignore-scripts"), value: set() },
   "pnpm-dlx": { bool: set("--silent", "-s"), value: set() },
   "yarn-dlx": { bool: set("-q", "--quiet"), value: set() },
   bunx: { bool: set("--bun", "--silent", "--verbose"), value: set() },
@@ -4304,7 +4372,7 @@ function confidentShape(text) {
       break;
     case "npm":
       if (at(0) === "exec" || at(0) === "x") {
-        [key, args, launch] = ["npx", rest.slice(1), true];
+        [key, args, launch] = ["npm-exec", rest.slice(1), true];
         break;
       }
       if (!NPM_INSTALL.has(at(0))) return notPlain(`'npm ${at(0)}'`);

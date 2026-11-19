@@ -115741,7 +115741,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115835,60 +115835,61 @@ var init_parseCommand = __esm({
       "--no-frozen-lockfile"
     ];
     LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
+    NPM_TABLE = {
+      // `-C` is npm's short form of `--prefix`.
+      value: set2(
+        "--registry",
+        "--prefix",
+        "-C",
+        "--tag",
+        "--workspace",
+        "-w",
+        "--omit",
+        "--include",
+        "--install-strategy",
+        "--cache",
+        "--userconfig",
+        "--globalconfig",
+        "--before",
+        "--loglevel",
+        "--save-prefix",
+        "--otp",
+        "--scope",
+        "--cpu",
+        "--os",
+        "--libc",
+        "--location",
+        // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+        "--fetch-retries",
+        "--fetch-retry-factor",
+        "--fetch-retry-mintimeout",
+        "--fetch-retry-maxtimeout",
+        "--fetch-timeout",
+        "--cache-min",
+        "--cache-max",
+        "--maxsockets",
+        "--depth",
+        "--node-options",
+        "--script-shell",
+        "--auth-type",
+        "--cafile",
+        "--https-proxy",
+        "--proxy",
+        "--noproxy",
+        "--local-address",
+        "--user-agent",
+        "--min-release-age"
+      ),
+      // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
+      // regression tests of this fix use them as the examples of a flag the table lacks.)
+      bool: set2(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl"),
+      registry: set2("--registry"),
+      dir: set2("--prefix", "-C"),
+      workspace: set2("--workspace", "-w", "--workspaces"),
+      boolWord: { except: LOGLEVEL_FLAGS }
+    };
     FLAGS = {
-      npm: {
-        // `-C` is npm's short form of `--prefix`.
-        value: set2(
-          "--registry",
-          "--prefix",
-          "-C",
-          "--tag",
-          "--workspace",
-          "-w",
-          "--omit",
-          "--include",
-          "--install-strategy",
-          "--cache",
-          "--userconfig",
-          "--globalconfig",
-          "--before",
-          "--loglevel",
-          "--save-prefix",
-          "--otp",
-          "--scope",
-          "--cpu",
-          "--os",
-          "--libc",
-          "--location",
-          // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
-          "--fetch-retries",
-          "--fetch-retry-factor",
-          "--fetch-retry-mintimeout",
-          "--fetch-retry-maxtimeout",
-          "--fetch-timeout",
-          "--cache-min",
-          "--cache-max",
-          "--maxsockets",
-          "--depth",
-          "--node-options",
-          "--script-shell",
-          "--auth-type",
-          "--cafile",
-          "--https-proxy",
-          "--proxy",
-          "--noproxy",
-          "--local-address",
-          "--user-agent",
-          "--min-release-age"
-        ),
-        // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
-        // regression tests of this fix use them as the examples of a flag the table lacks.)
-        bool: set2(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl"),
-        registry: set2("--registry"),
-        dir: set2("--prefix", "-C"),
-        workspace: set2("--workspace", "-w", "--workspaces"),
-        boolWord: { except: LOGLEVEL_FLAGS }
-      },
+      npm: NPM_TABLE,
       pnpm: {
         value: set2(
           "--registry",
@@ -116440,33 +116441,59 @@ var init_parseCommand = __esm({
           "--offline",
           "--workspaces",
           "--include-workspace-root",
-          "--verbose"
+          "--verbose",
+          "--no-yes"
         ),
         registry: set2("--registry"),
         workspace: set2("--workspace", "-w", "--workspaces"),
         packageFlags: set2("--package", "-p"),
         shellFlags: set2("--call", "-c"),
-        noFetchFlags: set2("--no", "--no-install", "--offline")
+        noFetchFlags: set2("--no", "--no-install", "--offline"),
+        // Measured 2026-11-19 (npx, npm 11.20.0): `--no false P` and `--no-yes false P` ask for P; the word is their value.
+        // `--no-install false P` and `--offline false P` fetch nothing (measured); they are read like `--no` (the word is their
+        // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
+        optionalWord: set2("--no", "--no-yes", "--no-install", "--offline"),
+        bothWays: "clusters"
+      },
+      // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
+      // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+      "npm-exec": {
+        value: set2(...NPM_TABLE.value, "--package", "--call", "-c"),
+        bool: set2(...NPM_TABLE.bool, "-p", "--no", "--no-install", "--no-yes", "--ignore-existing"),
+        registry: NPM_TABLE.registry,
+        workspace: NPM_TABLE.workspace,
+        packageFlags: set2("--package"),
+        shellFlags: set2("--call", "-c"),
+        noFetchFlags: set2("--no", "--offline"),
+        boolWord: { except: LOGLEVEL_FLAGS }
       },
       "pnpm-dlx": {
         value: set2("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
-        bool: set2("--silent", "-s", "--shell-mode", "-c"),
+        // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
+        bool: set2("--silent", "-s", "--shell-mode", "-c", "--quiet", "--verbose", "-p"),
         registry: set2("--registry"),
         dir: set2("--dir", "-C"),
         packageFlags: set2("--package"),
-        shellFlags: set2("--shell-mode", "-c")
+        shellFlags: set2("--shell-mode", "-c"),
+        // Measured 2026-11-19 (pnpm 10.33.2): `-c P`, `--shell-mode P`, `-c false P` and `-p false P` ask for P.
+        optionalWord: set2("--shell-mode", "-c", "-p"),
+        shellWord: true,
+        bothWays: "flags"
       },
       "yarn-dlx": {
         value: set2("--package", "-p"),
         bool: set2("--quiet", "-q"),
         registry: set2(),
-        packageFlags: set2("--package", "-p")
+        packageFlags: set2("--package", "-p"),
+        bothWays: "flags"
       },
       bunx: {
         value: set2("--package", "-p"),
-        bool: set2("--bun", "--silent", "--verbose"),
+        // `--quiet` (bun 1.4.4, measured 2026-11-19: `bunx --quiet false P` asks for `false`).
+        bool: set2("--bun", "--silent", "--verbose", "--quiet"),
         registry: set2(),
-        packageFlags: set2("--package", "-p")
+        packageFlags: set2("--package", "-p"),
+        bothWays: "flags"
       },
       uvx: {
         value: set2(...UV_VALUED, "--from", "--with", "-w"),
@@ -116680,6 +116707,8 @@ var init_parseCommand = __esm({
       // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
       // out of the confident shape.
       npx: { bool: set2("-y", "--yes", "-q", "--quiet", "--silent"), value: set2() },
+      // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
+      "npm-exec": { bool: set2("-y", "--yes", "-q", "--quiet", "--silent", "--ignore-scripts"), value: set2() },
       "pnpm-dlx": { bool: set2("--silent", "-s"), value: set2() },
       "yarn-dlx": { bool: set2("-q", "--quiet"), value: set2() },
       bunx: { bool: set2("--bun", "--silent", "--verbose"), value: set2() },

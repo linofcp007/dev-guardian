@@ -2363,6 +2363,19 @@ describe('install-vet-npm-exec-bool-word', () => {
     expect(uncertainOf(command).length, 'the two readings are said as an uncertainty').toBeGreaterThan(0);
   });
 
+  it.each(['npx --offline false p', 'npx --no-install false p', 'npx --no-yes false p'])(
+    'T-05 `%s`: the word is the flag\'s value, p is vetted and the command is uncertain',
+    (command) => {
+      expect(namesOf(command)).toEqual(['p']);
+      expect(uncertainOf(command).length, 'the two readings are said as an uncertainty').toBeGreaterThan(0);
+    },
+  );
+
+  it.each(['npx --offline p', 'npx --no-install p', 'npx --no p'])('T-05 guard: `%s` without the word names no package', (command) => {
+    expect(namesOf(command)).toEqual([]);
+    expect(parseInstallCommands(command)).toHaveLength(1);
+  });
+
   it.each(['npx -qy false p', 'bunx --quiet false p', 'pnpm dlx --silent false p'])(
     'T-05 `%s`: both false and p are vetted and the command is uncertain',
     (command) => {
@@ -2391,6 +2404,10 @@ describe('install-vet-npm-exec-bool-word', () => {
       expect(uncertainOf(command).length, 'the two readings are said as an uncertainty').toBeGreaterThan(0);
     },
   );
+
+  it.each(['yarn --production false', 'yarn --production true'])('T-07 `%s` also vets the word as a package (AC-7: the line is read both ways)', (command) => {
+    expect(namesOf(command)).toEqual([command.endsWith('true') ? 'true' : 'false']);
+  });
 
   it('T-07 `bun install --production true` still vets the word `true` as a package', () => {
     expect(namesOf('bun install --production true')).toEqual(['true']);

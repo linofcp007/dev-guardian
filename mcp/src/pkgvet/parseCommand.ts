@@ -443,6 +443,21 @@ interface FlagTable {
   shellFlags?: ReadonlySet<string>;
   /** Flags that forbid fetching anything (`npx --no-install`). */
   noFetchFlags?: ReadonlySet<string>;
+  /**
+   * For a launcher that does not follow npm's {@link boolWord} rule: the boolean flags that nevertheless take a `true` /
+   * `false` word as their value (`npx --no false pkg` asks for `pkg`, measured 2026-11-19). A flag of `noFetchFlags` or
+   * `shellFlags` that has such a value is off, not on.
+   */
+  optionalWord?: ReadonlySet<string>;
+  /**
+   * What a launcher that does not follow {@link boolWord} does with a `true` / `false` after a flag whose reading the hook
+   * cannot tell: `clusters` after a group of letters (`npx -qy false pkg` asks for `pkg`), `flags` after an exact flag of
+   * the table too (`bunx --quiet false pkg` asks for `false`). The word is vetted as a package AND the next positional is
+   * too ({@link Positional.candidate}), and the command is uncertain.
+   */
+  bothWays?: 'clusters' | 'flags';
+  /** After a shell-mode flag a positional of ONE word is the package (`pnpm dlx -c pkg`, measured 2026-11-19); several words are shell text. */
+  shellWord?: true;
 }
 
 const set = (...xs: string[]): ReadonlySet<string> => new Set(xs);
@@ -462,25 +477,27 @@ const NPM_COMMON_BOOL = [
 /** The loglevel shorthands of npm and pnpm: boolean flags that take no `true` / `false` word (measured 2026-11-19). */
 const LOGLEVEL_FLAGS: ReadonlySet<string> = new Set(['--silent', '--quiet', '-q', '--verbose', '-d']);
 
+const NPM_TABLE: FlagTable = {
+  // `-C` is npm's short form of `--prefix`.
+  value: set('--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include',
+    '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix',
+    '--otp', '--scope', '--cpu', '--os', '--libc', '--location',
+    // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+    '--fetch-retries', '--fetch-retry-factor', '--fetch-retry-mintimeout', '--fetch-retry-maxtimeout',
+    '--fetch-timeout', '--cache-min', '--cache-max', '--maxsockets', '--depth', '--node-options', '--script-shell',
+    '--auth-type', '--cafile', '--https-proxy', '--proxy', '--noproxy', '--local-address', '--user-agent',
+    '--min-release-age'),
+  // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
+  // regression tests of this fix use them as the examples of a flag the table lacks.)
+  bool: set(...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl'),
+  registry: set('--registry'),
+  dir: set('--prefix', '-C'),
+  workspace: set('--workspace', '-w', '--workspaces'),
+  boolWord: { except: LOGLEVEL_FLAGS },
+};
+
 const FLAGS: Record<string, FlagTable> = {
-  npm: {
-    // `-C` is npm's short form of `--prefix`.
-    value: set('--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include',
-      '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix',
-      '--otp', '--scope', '--cpu', '--os', '--libc', '--location',
-      // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
-      '--fetch-retries', '--fetch-retry-factor', '--fetch-retry-mintimeout', '--fetch-retry-maxtimeout',
-      '--fetch-timeout', '--cache-min', '--cache-max', '--maxsockets', '--depth', '--node-options', '--script-shell',
-      '--auth-type', '--cafile', '--https-proxy', '--proxy', '--noproxy', '--local-address', '--user-agent',
-      '--min-release-age'),
-    // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
-    // regression tests of this fix use them as the examples of a flag the table lacks.)
-    bool: set(...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl'),
-    registry: set('--registry'),
-    dir: set('--prefix', '-C'),
-    workspace: set('--workspace', '-w', '--workspaces'),
-    boolWord: { except: LOGLEVEL_FLAGS },
-  },
+  npm: NPM_TABLE,
   pnpm: {
     value: set('--registry', '--filter', '-F', '--dir', '-C', '--reporter', '--store-dir', '--global-dir',
       '--modules-dir', '--virtual-store-dir', '--lockfile-dir', '--network-concurrency', '--config', '--loglevel',
@@ -642,32 +659,57 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     value: set('--package', '-p', '--call', '-c', '--registry', '--cache', '--userconfig', '--prefix', '-C', '--workspace', '-w',
       '--loglevel', '--node-options'),
     bool: set('--yes', '-y', '--no', '--no-install', '--ignore-existing', '--quiet', '-q', '--silent', '--prefer-offline',
-      '--prefer-online', '--offline', '--workspaces', '--include-workspace-root', '--verbose'),
+      '--prefer-online', '--offline', '--workspaces', '--include-workspace-root', '--verbose', '--no-yes'),
     registry: set('--registry'),
     workspace: set('--workspace', '-w', '--workspaces'),
     packageFlags: set('--package', '-p'),
     shellFlags: set('--call', '-c'),
     noFetchFlags: set('--no', '--no-install', '--offline'),
+    // Measured 2026-11-19 (npx, npm 11.20.0): `--no false P` and `--no-yes false P` ask for P; the word is their value.
+    // `--no-install false P` and `--offline false P` fetch nothing (measured); they are read like `--no` (the word is their
+    // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
+    optionalWord: set('--no', '--no-yes', '--no-install', '--offline'),
+    bothWays: 'clusters',
+  },
+  // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
+  // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+  'npm-exec': {
+    value: set(...NPM_TABLE.value, '--package', '--call', '-c'),
+    bool: set(...NPM_TABLE.bool, '-p', '--no', '--no-install', '--no-yes', '--ignore-existing'),
+    registry: NPM_TABLE.registry,
+    workspace: NPM_TABLE.workspace,
+    packageFlags: set('--package'),
+    shellFlags: set('--call', '-c'),
+    noFetchFlags: set('--no', '--offline'),
+    boolWord: { except: LOGLEVEL_FLAGS },
   },
   'pnpm-dlx': {
     value: set('--package', '--allow-build', '--registry', '--dir', '-C', '--reporter'),
-    bool: set('--silent', '-s', '--shell-mode', '-c'),
+    // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
+    bool: set('--silent', '-s', '--shell-mode', '-c', '--quiet', '--verbose', '-p'),
     registry: set('--registry'),
     dir: set('--dir', '-C'),
     packageFlags: set('--package'),
     shellFlags: set('--shell-mode', '-c'),
+    // Measured 2026-11-19 (pnpm 10.33.2): `-c P`, `--shell-mode P`, `-c false P` and `-p false P` ask for P.
+    optionalWord: set('--shell-mode', '-c', '-p'),
+    shellWord: true,
+    bothWays: 'flags',
   },
   'yarn-dlx': {
     value: set('--package', '-p'),
     bool: set('--quiet', '-q'),
     registry: set(),
     packageFlags: set('--package', '-p'),
+    bothWays: 'flags',
   },
   bunx: {
     value: set('--package', '-p'),
-    bool: set('--bun', '--silent', '--verbose'),
+    // `--quiet` (bun 1.4.4, measured 2026-11-19: `bunx --quiet false P` asks for `false`).
+    bool: set('--bun', '--silent', '--verbose', '--quiet'),
     registry: set(),
     packageFlags: set('--package', '-p'),
+    bothWays: 'flags',
   },
   uvx: {
     value: set(...UV_VALUED, '--from', '--with', '-w'),
@@ -789,6 +831,22 @@ function takesBoolWord(v: string, table: FlagTable): boolean {
   return letters.every((flag) => table.bool.has(flag)) && last !== undefined && !rule.except.has(last);
 }
 
+/** Whether a `true` / `false` after the flag `v` is that flag's value: npm's rule ({@link takesBoolWord}) or the launcher's own list. */
+function takesWord(v: string, table: FlagTable): boolean {
+  return takesBoolWord(v, table) || table.optionalWord?.has(v) === true;
+}
+
+/** Whether a `true` / `false` after the flag `v` is read both ways, by the table's {@link FlagTable.bothWays}. */
+function readsBothWays(v: string, next: string | undefined, table: FlagTable): boolean {
+  if (table.bothWays === undefined || !isBoolWord(next)) return false;
+  if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) return true;
+  return table.bothWays === 'flags' && table.bool.has(v);
+}
+
+/** Why a command whose `true` / `false` after a flag is read both ways is uncertain (it keeps this reason in a confident shape). */
+const bothWaysReason = (word: string, flag: string): string =>
+  `\`${word}\` after \`${flag}\`${TWO_READINGS} — the value of the flag, or the package — both are looked up`;
+
 /**
  * Separates flags (and their values) from positional words.
  *
@@ -851,10 +909,16 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     }
     if (table.bool.has(v)) {
       const word = words[i + 1]?.value;
-      if (takesBoolWord(v, table) && isBoolWord(word)) {
+      if (takesWord(v, table) && isBoolWord(word)) {
         note(v, word);
         i += 1;
-      } else note(v, undefined);
+      } else {
+        note(v, undefined);
+        if (readsBothWays(v, word, table)) {
+          candidateAt = i + 1;
+          uncertain.push(bothWaysReason(word ?? '', v));
+        }
+      }
       continue;
     }
     if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
@@ -875,7 +939,12 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
         }
         note(flag, undefined);
       }
-      if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      const word = words[i + 1]?.value;
+      if (takesWord(v, table) && isBoolWord(word)) i += 1;
+      else if (readsBothWays(v, word, table)) {
+        candidateAt = i + 1;
+        uncertain.push(bothWaysReason(word ?? '', v));
+      }
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
@@ -1021,6 +1090,8 @@ interface Detected {
    * the manager installs the manifest beside what the command names.
    */
   manifest?: 'always' | 'bare';
+  /** Yarn: the `true` / `false` after `--production`, the value of that flag for Yarn 1 and a word to vet for the others ({@link bothWaysReason}). */
+  twoWays?: ShellWord;
   /** An update verb: a manifest install that moves the direct dependencies past the lockfile's pins ({@link InstallCommand.update}). */
   update?: true;
 }
@@ -1055,7 +1126,8 @@ function scanPositional(
       if (v.includes('=')) continue;
       if (table.value.has(v)) i += 1;
       // `npm -D false install`: the word after a boolean flag is its value, not the subcommand.
-      else if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      else if (takesWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
+      else if (readsBothWays(v, words[i + 1]?.value, table)) candidateAt = i + 1;
       else {
         const next = words[i + 1]?.value;
         const after = afterUnknownFlag(v, next, table);
@@ -1091,7 +1163,8 @@ const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
  * install p`, `yarn --network-concurrency 1`): the scan for the subcommand takes it as one unless it is a subcommand
  * the hook reads, word by word and in one pass.
  */
-function detect(words: readonly ShellWord[]): Detected | null {
+function detect(input: readonly ShellWord[]): Detected | null {
+  let words = input;
   const nextPositional = (ws: readonly ShellWord[], from: number, table: FlagTable, subcommands?: ReadonlySet<string>): number =>
     scanPositional(ws, from, table, subcommands).at;
   const start = commandStart(words);
@@ -1144,11 +1217,24 @@ function detect(words: readonly ShellWord[]): Detected | null {
 
   const table = FLAGS[head];
   if (table === undefined) return null;
-  const sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
+  let sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
+  // Yarn 1 reads a `true` / `false` after `--production` as that flag's value (measured 2026-11-19), Yarn 4 and the scan above
+  // as the subcommand: the word is taken out of the line, and vetted as a possible package beside the manifest it then installs.
+  let productionWord: ShellWord | undefined;
+  const wordAt = words[sub];
+  if (head === 'yarn' && wordAt !== undefined && isBoolWord(wordAt.value) && words[sub - 1]?.value === '--production') {
+    productionWord = wordAt;
+    words = [...words.slice(0, sub), ...words.slice(sub + 1)];
+    sub = nextPositional(words, sub, table, SUBCOMMANDS[head]);
+  }
+  const tag = (d: Detected): Detected =>
+    productionWord === undefined
+      ? d
+      : { ...d, twoWays: productionWord, uncertain: [...d.uncertain, bothWaysReason(productionWord.value, '--production')] };
   if (sub < 0) {
     // A bare `yarn` — flags only — installs the project's manifest, unless a flag only prints.
     if (head === 'yarn' && !rest.some((w) => YARN_PRINTS.has(w.value))) {
-      return { manager: head, ecosystem: 'npm', args: rest, pre: [], uncertain: [], manifest: 'always' };
+      return tag({ manager: head, ecosystem: 'npm', args: rest, pre: [], uncertain: [], manifest: 'always' });
     }
     return null;
   }
@@ -1157,7 +1243,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
   const after = words.slice(sub + 1);
   const before = words.slice(i, sub);
   if (head === 'npm' && (subName === 'exec' || subName === 'x')) {
-    return launcher('npm', 'npm', after, before, { style: 'run', flags: 'npx', localFirst: true });
+    return launcher('npm', 'npm', after, before, { style: 'run', flags: 'npm-exec', localFirst: true });
   }
   if (head === 'pnpm' && subName === 'dlx') return launcher('pnpm', 'npm', after, before, { style: 'run', flags: 'pnpm-dlx' });
   if (head === 'yarn' && subName === 'dlx') return launcher('yarn', 'npm', after, before, { style: 'run', flags: 'yarn-dlx' });
@@ -1203,12 +1289,12 @@ function detect(words: readonly ShellWord[]): Detected | null {
       return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
     }
     case 'yarn': {
-      if (subWord === 'install' || subWord === 'dedupe') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
-      if (YARN_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (subWord === 'install' || subWord === 'dedupe') return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' });
+      if (YARN_UPDATE.has(subWord)) return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true });
       if (subWord === 'up') {
         // Yarn 4: `yarn up <pattern>` moves that dependency to its latest; without a pattern it installs the manifest as `install` does.
         const update = nextPositional(words, sub + 1, table) >= 0;
-        return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', ...(update ? { update: true as const } : {}) };
+        return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', ...(update ? { update: true as const } : {}) });
       }
       let at = sub;
       const uncertain: string[] = [];
@@ -1219,7 +1305,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
         uncertain.push('workspace context (yarn workspace)');
       }
       if (at < 0 || words[at]?.value !== 'add') return null;
-      return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare', ...(subWord === 'global' ? { global: true } : {}) };
+      return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare', ...(subWord === 'global' ? { global: true } : {}) });
     }
     case 'pip':
       return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -1299,7 +1385,12 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   }
   const w = walk(body, table);
   const flags = [...pre.flags, ...w.flags];
-  const has = (names: ReadonlySet<string> | undefined): boolean => names !== undefined && flags.some((f) => names.has(f.flag));
+  // A flag of `names` is ON unless it carries a `true` / `false` word (`--no false`, `-c false`): then it is off, and the
+  // positional after it is looked up, the command being uncertain (the word may be read the other way).
+  const has = (names: ReadonlySet<string> | undefined): boolean =>
+    names !== undefined && flags.some((f) => names.has(f.flag) && !isBoolWord(f.value));
+  const wordFlags = (names: ReadonlySet<string> | undefined): Array<{ flag: string; value?: string }> =>
+    names === undefined ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value));
   const values = (names: ReadonlySet<string> | undefined): string[] =>
     names === undefined
       ? []
@@ -1317,6 +1408,9 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
       raws.push(...named);
       byPackageFlag = true;
     } else if (!has(table.shellFlags)) raws.push(...limited.kept.map((p) => p.value));
+    // In shell mode the positional is shell text — but a line of ONE word is a package for pnpm (`pnpm dlx -c pkg`, measured
+    // 2026-11-19); with more words after it (`-c a b`) or spaces inside it (`-c 'a --version'`) it is a command, not looked up.
+    else if (table.shellWord === true && d.args.length === body.length) raws.push(...limited.kept.map((p) => p.value).filter((v) => !/\s/.test(v)));
     raws.push(...values(table.extraPackageFlags));
   }
   const packages: PackageSpec[] = [];
@@ -1324,7 +1418,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   const certainRaws = new Set(limited.kept.filter((p) => p.candidate !== true).map((p) => p.value));
   const candidateRaws = new Set(limited.kept.filter((p) => p.candidate === true).map((p) => p.value));
   const skipped: SkippedSpec[] = [...pre.skipped, ...w.skipped];
-  const unsure: string[] = [];
+  const unsure: string[] = [...wordFlags(table.noFetchFlags), ...wordFlags(table.shellFlags)].map((f) => bothWaysReason(f.value ?? '', f.flag));
   for (const raw of raws) {
     const spec = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ('name' in spec) {
@@ -1420,6 +1514,13 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     }
   }
 
+  if (d.twoWays !== undefined) {
+    const spec = parseNpm(d.twoWays.value, d.manager);
+    if ('name' in spec) {
+      packages.push(spec);
+      candidatePackages.push(spec);
+    }
+  }
   if (candidatePackages.length > 0) out.candidates = candidatePackages;
 
   if (d.ecosystem === 'nuget') {
@@ -1745,6 +1846,8 @@ const ALLOW: Record<string, Allow> = {
   // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
   // out of the confident shape.
   npx: { bool: set('-y', '--yes', '-q', '--quiet', '--silent'), value: set() },
+  // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
+  'npm-exec': { bool: set('-y', '--yes', '-q', '--quiet', '--silent', '--ignore-scripts'), value: set() },
   'pnpm-dlx': { bool: set('--silent', '-s'), value: set() },
   'yarn-dlx': { bool: set('-q', '--quiet'), value: set() },
   bunx: { bool: set('--bun', '--silent', '--verbose'), value: set() },
@@ -1845,7 +1948,7 @@ function confidentShape(text: string): string | null {
       break;
     case 'npm':
       if (at(0) === 'exec' || at(0) === 'x') {
-        [key, args, launch] = ['npx', rest.slice(1), true];
+        [key, args, launch] = ['npm-exec', rest.slice(1), true];
         break;
       }
       if (!NPM_INSTALL.has(at(0))) return notPlain(`'npm ${at(0)}'`);
