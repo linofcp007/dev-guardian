@@ -1350,11 +1350,17 @@ describe('manifest installs — the packages a manifest names are vetted', () =>
     expect(await decideInstallCommand('npm ci', opts(registry({ exists: ['express', 'lodash'] }).fetchImpl))).toBeNull();
   });
 
-  it('T-18 a by-name install does not read the manifest beside it', async () => {
+  it('T-18 a by-name install reads the manifest beside it, and the named package is asked first (install-vet-named-install-manifest)', async () => {
     pkgJson({ crossenv: '*' });
-    const f = fakeFetch({ 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: osvClean });
-    expect(await decideInstallCommand('npm install express', opts(f.fetchImpl))).toBeNull();
-    expect(f.calls).toEqual(['https://registry.npmjs.org/express', OSV]);
+    const f = fakeFetch({
+      'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+      'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+      [OSV]: osvClean,
+    });
+    const d = await decideInstallCommand('npm install express', opts(f.fetchImpl));
+    // The manifest names npm's security placeholder for `crossenv`: denied, with the file and the package.
+    expect(d?.deny).toMatch(/package\.json.*crossenv/s);
+    expect(f.calls.filter((u) => u !== OSV)).toEqual(['https://registry.npmjs.org/express', 'https://registry.npmjs.org/crossenv']);
   });
 
   it('T-19 abuse: only package names and versions leave, and only for the public registry and OSV', async () => {
@@ -2814,6 +2820,8 @@ describe('install-vet-project-registry-said', () => {
     /** What makes it silent, applied after the control. */
     silence?: () => void;
     env?: () => Record<string, string>;
+    /** The directory is not known: the by-name install also says its manifest was not read (install-vet-named-install-manifest). */
+    manifestNotRead?: true;
   }
 
   const SILENT: Silent[] = [
@@ -2877,11 +2885,11 @@ describe('install-vet-project-registry-said', () => {
       command: `bun add ${CLEAN}`,
       env: () => ({ BUN_CONFIG_REGISTRY: 'https://npm.third.example/' }),
     },
-    { label: 'npm --prefix: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install --prefix sub ${CLEAN}` },
-    { label: 'npm -C: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install -C sub ${CLEAN}` },
-    { label: 'pnpm -C: the command\'s directory is not known', control: `pnpm add ${CLEAN}`, command: `pnpm add -C sub ${CLEAN}` },
-    { label: 'yarn --cwd: the command\'s directory is not known', control: `yarn add ${CLEAN}`, command: `yarn add --cwd sub ${CLEAN}` },
-    { label: 'bun --cwd: the command\'s directory is not known', control: `bun add ${CLEAN}`, command: `bun add --cwd sub ${CLEAN}` },
+    { label: 'npm --prefix: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install --prefix sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'npm -C: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install -C sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'pnpm -C: the command\'s directory is not known', control: `pnpm add ${CLEAN}`, command: `pnpm add -C sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'yarn --cwd: the command\'s directory is not known', control: `yarn add ${CLEAN}`, command: `yarn add --cwd sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'bun --cwd: the command\'s directory is not known', control: `bun add ${CLEAN}`, command: `bun add --cwd sub ${CLEAN}`, manifestNotRead: true },
   ];
 
   it.each(SILENT)('T-04 silent for $label — and said without it', async (s) => {
@@ -2895,7 +2903,9 @@ describe('install-vet-project-registry-said', () => {
     expect(control?.context ?? '', 'the control, with nothing that silences it, says the line').toContain(SAYS);
     s.silence?.();
     const d = await decide(s.command, {}, s.env?.() ?? {});
-    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+    // The only line an unknown directory adds is the manifest's own: the registry line stays silent.
+    const notRead = 'dev-guardian: package.json was not read (where the command runs could not be determined) — its packages were not vetted.';
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: s.manifestNotRead === true ? notRead : undefined });
   });
 
   it('T-04 with no such project file the answer is exactly what it was: silent for a clean package, the usual deny for a missing one', async () => {

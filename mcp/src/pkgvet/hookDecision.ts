@@ -292,8 +292,9 @@ const plural = (n: number): string => (n === 1 ? '1 package' : `${String(n)} pac
  * manifest that is there and was not read, and for the packages a project
  * file keeps from the lookup.
  *
- * A manifest is read only for a command the parser marked as installing one
- * — never for a by-name install beside a `package.json`. It is read where the
+ * A manifest is read for a command the parser marked as installing one: a
+ * bare install, and a by-name install that is not global for certain (the
+ * manager installs the `package.json` beside the names). It is read where the
  * command runs ({@link commandDir}); a directory flag (`--prefix`, `-C`,
  * `--dir`, `--cwd`) or a `cd` that may not have run leaves that unknown, and
  * the manifest unread — said, not guessed.

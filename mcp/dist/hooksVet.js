@@ -3652,13 +3652,12 @@ function detect(words) {
       if (NPM_MANIFEST_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
       return null;
     case "pnpm":
-      if (subWord === "add") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [] };
+      if (subWord === "add") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
       return null;
     case "bun": {
       if (!BUN_ADD.has(subWord)) return null;
-      const d = { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [] };
-      return subWord === "install" || subWord === "i" ? { ...d, manifest: "bare" } : d;
+      return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
     }
     case "yarn": {
       if (subWord === "install") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
@@ -3671,7 +3670,7 @@ function detect(words) {
         uncertain.push("workspace context (yarn workspace)");
       }
       if (at < 0 || words[at]?.value !== "add") return null;
-      return { manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, ...subWord === "global" ? { global: true } : {} };
+      return { manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "bare", ...subWord === "global" ? { global: true } : {} };
     }
     case "pip":
       return subWord === "install" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -3787,8 +3786,6 @@ function collect(d, context) {
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== void 0) out.customRegistry = registry;
   if (limited.dropped > 0 && d.manifest !== "always") out.candidatesDropped = limited.dropped;
-  let candidateSkipped = 0;
-  let namedPackages = 0;
   const candidatePackages = [];
   let lastComposer;
   for (const p of positionals) {
@@ -3815,14 +3812,12 @@ function collect(d, context) {
     }
     if ("name" in spec2) {
       packages.push(spec2);
-      if (p.candidate !== true) namedPackages += 1;
-      else candidatePackages.push(spec2);
+      if (p.candidate === true) candidatePackages.push(spec2);
       const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === "packagist" ? spec2 : void 0;
     } else {
       skipped.push(spec2);
-      if (p.candidate === true) candidateSkipped += 1;
       lastComposer = void 0;
     }
   }
@@ -3841,8 +3836,7 @@ function collect(d, context) {
     const files = walked.flags.flatMap((f) => REQUIREMENT_FLAGS.has(f.flag) && f.value !== void 0 && f.value !== "" ? [f.value] : []);
     if (files.length > 0) out.manifest = { kind: "requirements", files };
   } else if (d.manifest !== void 0 && out.global !== true) {
-    const maybeFlags = allFlags.some(isGlobalFlag) && skipped.length > 0 && skipped.every((s) => /[$`]/.test(s.raw));
-    if (d.manifest === "always" || namedPackages === 0 && (skipped.length === candidateSkipped || maybeFlags)) out.manifest = { kind: "package-json" };
+    out.manifest = { kind: "package-json" };
   }
   return out;
 }

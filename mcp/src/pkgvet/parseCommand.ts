@@ -932,8 +932,8 @@ interface Detected {
    * An install of the project's `package.json`: `always` for a subcommand
    * that takes no package (`npm ci`, `pnpm install`, `yarn install`, a bare
    * `yarn`), whose positional words are then no packages; `bare` for one that
-   * installs the manifest only when it names nothing (`npm install`, `bun
-   * install`).
+   * takes packages too (`npm install`, `pnpm add`, `yarn add`, `bun add`):
+   * the manager installs the manifest beside what the command names.
    */
   manifest?: 'always' | 'bare';
 }
@@ -1094,7 +1094,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
       if (NPM_MANIFEST_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
       return null;
     case 'pnpm':
-      if (subWord === 'add') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] };
+      if (subWord === 'add') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       // `pnpm install <pkg>` / `pnpm i <pkg>` is pnpm's `add` (measured, pnpm 10.33: it resolves the name as a direct
       // dependency); with no package it installs the manifest. Up to and including 3.10.0 the form with a package was not read at all.
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
@@ -1102,8 +1102,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
     case 'bun': {
       // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too; a bare `bun install` installs the manifest.
       if (!BUN_ADD.has(subWord)) return null;
-      const d: Detected = { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [] };
-      return subWord === 'install' || subWord === 'i' ? { ...d, manifest: 'bare' } : d;
+      return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
     }
     case 'yarn': {
       if (subWord === 'install') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
@@ -1116,7 +1115,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
         uncertain.push('workspace context (yarn workspace)');
       }
       if (at < 0 || words[at]?.value !== 'add') return null;
-      return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, ...(subWord === 'global' ? { global: true } : {}) };
+      return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare', ...(subWord === 'global' ? { global: true } : {}) };
     }
     case 'pip':
       return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -1258,8 +1257,6 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
 
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
   // thing the command surely names, so it does not stop the manifest from being read.
-  let candidateSkipped = 0;
-  let namedPackages = 0;
   const candidatePackages: PackageSpec[] = [];
   let lastComposer: PackageSpec | undefined;
   for (const p of positionals) {
@@ -1286,14 +1283,12 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     }
     if ('name' in spec) {
       packages.push(spec);
-      if (p.candidate !== true) namedPackages += 1;
-      else candidatePackages.push(spec);
+      if (p.candidate === true) candidatePackages.push(spec);
       const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
       skipped.push(spec);
-      if (p.candidate === true) candidateSkipped += 1;
       lastComposer = undefined;
     }
   }
@@ -1324,11 +1319,9 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   } else if (d.manifest !== undefined && out.global !== true) {
     // The manifest is left unread only for an install that is global FOR CERTAIN (`out.global`); in doubt — `-g $X`,
     // `-g --location=project`, `npm ci --global=false` — it is read: vetting more, never less (measured 2026-11-19).
-    // `npm i ./pkg.tgz` installs that, not the manifest: a word that was skipped counts as a thing named.
-    // A word with a shell expansion beside a global-looking flag may be the flag's value or `--no-global` itself: no thing
-    // is surely named, so the manifest is read.
-    const maybeFlags = allFlags.some(isGlobalFlag) && skipped.length > 0 && skipped.every((s) => /[$`]/.test(s.raw));
-    if (d.manifest === 'always' || (namedPackages === 0 && (skipped.length === candidateSkipped || maybeFlags))) out.manifest = { kind: 'package-json' };
+    // An install that names packages installs the project's manifest too (measured 2026-11-19, npm 11, pnpm 10, Yarn,
+    // bun), so a package, a skipped word (`npm i ./pkg.tgz`) or a candidate word does not stop it from being read.
+    out.manifest = { kind: 'package-json' };
   }
   return out;
 }

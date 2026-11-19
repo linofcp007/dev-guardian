@@ -685,13 +685,13 @@ describe('guardian-hook PreToolUse — `pnpm install <package>` is vetted as `pn
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv.*security placeholder/s);
   });
 
-  it('T-03 beside a package.json that names another malicious package: only the package of the command line is looked up and named', () => {
+  it('T-03 beside a package.json that names another malicious package: both are looked up and named, the file too (install-vet-named-install-manifest)', () => {
     writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'evil-in-manifest': '*' } }));
     const r = runHook('pnpm install crossenv', { ...PLACEHOLDER, 'https://registry.npmjs.org/evil-in-manifest': npmDoc('0.0.1-security') });
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv/);
-    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).not.toMatch(/evil-in-manifest|package\.json/);
-    expect(r.requests.filter((u) => u.includes('evil-in-manifest'))).toEqual([]);
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*evil-in-manifest/s);
+    expect(r.requests.filter((u) => u.includes('evil-in-manifest'))).toEqual(['https://registry.npmjs.org/evil-in-manifest']);
   });
 
   it('T-03 a name the registry does not have is denied as missing for `pnpm install <name>`, as it is for `pnpm add <name>`', () => {
@@ -736,7 +736,9 @@ describe('guardian-hook PreToolUse — a manifest install asks only what it repo
     expect(denied.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(denied.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
 
-    // The request log is one file for the whole test: what the second run added comes after the first run's lines.
+    // The same names typed in a project with no manifest (a by-name install reads the manifest too, and it would add its own
+    // lookup of `fresh-pkg`). The request log is one file for the whole test: what the second run added comes after the first run's.
+    rmSync(join(project, 'package.json'));
     const named = runHook('npm install fresh-pkg scripted-old', routes());
     const added = named.requests.slice(denied.requests.length);
     expect(added.filter((u) => u === 'https://registry.npmjs.org/fresh-pkg')).toHaveLength(2);

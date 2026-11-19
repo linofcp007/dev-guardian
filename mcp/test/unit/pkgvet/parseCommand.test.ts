@@ -777,8 +777,6 @@ describe('manifest installs — a command that installs what a manifest says', (
   });
 
   it.each([
-    'npm i ./pkg.tgz',
-    'npm install express',
     'npm install -g',
     'npm i --global',
     'yarn global add serve',
@@ -788,9 +786,6 @@ describe('manifest installs — a command that installs what a manifest says', (
     'yarn --help',
     'npm run install',
     'npm test',
-    'pnpm add left-pad',
-    'bun add left-pad',
-    'bun install left-pad',
     'pip install requests',
     'pip install -c constraints.txt requests',
     'pip download -r a.txt',
@@ -799,6 +794,15 @@ describe('manifest installs — a command that installs what a manifest says', (
   ])('T-03 %s is no manifest install', (command) => {
     expect(manifests(command).filter((m) => m !== undefined)).toEqual([]);
   });
+
+  // These were "no manifest install" until install-vet-named-install-manifest: an install that names a package installs
+  // the project's manifest too, unless it is global for certain.
+  it.each(['npm i ./pkg.tgz', 'npm install express', 'pnpm add left-pad', 'bun add left-pad', 'bun install left-pad'])(
+    'T-03 %s names a package (or a file) and reads the manifest of the directory too',
+    (command) => {
+      expect(manifests(command)).toEqual([{ kind: 'package-json' }]);
+    },
+  );
 
   it('T-04 a manifest install in a script the command hands a shell is one too', () => {
     const script = (text: string): Array<{ text: string; shell: 'bash' }> => [{ text, shell: 'bash' }];
@@ -824,11 +828,11 @@ describe('pnpm install with a package name is a `pnpm add` (install-vet-pnpm-ins
     ['pnpm i -D crossenv@1', [['crossenv', '1']]],
     ['pnpm --filter web install left-pad', [['left-pad', undefined]]],
     ['pnpm install left-pad is-number', [['left-pad', undefined], ['is-number', undefined]]],
-  ])('T-01 %s names its packages and reads no manifest', (command, packages) => {
+  ])('T-01 %s names its packages and reads the manifest too (install-vet-named-install-manifest)', (command, packages) => {
     const found = parseInstallCommands(command);
     expect(found).toHaveLength(1);
     expect(vetted(command)).toEqual(packages);
-    expect(found[0]?.manifest).toBeUndefined();
+    expect(found[0]?.manifest).toEqual({ kind: 'package-json' });
     expect(found[0]?.ecosystem).toBe('npm');
     expect(found[0]?.manager).toBe('pnpm');
   });
@@ -860,7 +864,7 @@ describe('pnpm install with a package name is a `pnpm add` (install-vet-pnpm-ins
 
   it('T-02 pnpm add is read as before; pnpm install-test and pnpm update are still no install command', () => {
     expect(vetted('pnpm add left-pad')).toEqual([['left-pad', undefined]]);
-    expect(manifests('pnpm add left-pad')).toEqual([undefined]);
+    expect(manifests('pnpm add left-pad')).toEqual([{ kind: 'package-json' }]);
     expect(parseInstallCommands('pnpm install-test left-pad')).toEqual([]);
     expect(parseInstallCommands('pnpm it left-pad')).toEqual([]);
     expect(parseInstallCommands('pnpm update left-pad')).toEqual([]);
@@ -990,10 +994,10 @@ describe('pkgvet-archive-like-name', () => {
     }
   });
 
-  it('T-03 `npm i pkg.tgz` names a file: the manifest of the directory is not read', () => {
+  it('T-03 `npm i pkg.tgz` names a file: it is not looked up by name, and the manifest of the directory is read (install-vet-named-install-manifest)', () => {
     for (const command of ['npm i pkg.tgz', 'npm install pkg.tar.gz', 'npm install ./pkg.tgz', 'bun add pkg.tgz']) {
       const cmds = parseInstallCommands(command);
-      expect(cmds.map((c) => c.manifest), command).toEqual([undefined]);
+      expect(cmds.map((c) => c.manifest), command).toEqual([{ kind: 'package-json' }]);
     }
   });
 
@@ -1046,75 +1050,75 @@ describe('pkgvet-archive-like-name', () => {
   const BEFORE: ReadonlyArray<readonly [string, string]> = [
     // Not here: `name@x.tgz` and `x@npm:…` for the npm family: no longer "as before", T-10 holds them.
     // Not here: `-r reqs.zip` / `-c cons.whl` for a manager whose table takes no value for `-r` / `-c` (npm, pnpm, yarn, bun, the launchers, poetry's `-c`, pipx, composer, dotnet): the word is then in a package position (see the T-02 test below).
-    ["npm install left-pad", "npm/npm | P left-pad"],
-    ["npm install left-pad@1.3.0", "npm/npm | P left-pad@1.3.0"],
-    ["npm install @scope/pkg@^2", "npm/npm | P @scope/pkg@^2"],
-    ["npm install v/pkg", "npm/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
-    ["npm install ./x.tgz", "npm/npm | S ./x.tgz => local path — not looked up"],
-    ["npm install \"C:\\x.zip\"", "npm/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
-    ["npm install /abs/z.tar.gz", "npm/npm | S /abs/z.tar.gz => local path — not looked up"],
-    ["npm install https://h/x.zip", "npm/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
-    ["npm install git+https://h/r.git", "npm/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
-    ["npm install github:u/r", "npm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
-    ["npm install file:../x.tgz", "npm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
-    ["npm install workspace:*", "npm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["npm install lodash.zip@4.2.0", "npm/npm | P lodash.zip@4.2.0"],
-    ["npm install thing.egg@1.0", "npm/npm | P thing.egg@1.0"],
-    ["npm install --prefix x.tar somepkg", "npm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; directory changed by --prefix | prefixed"],
-    ["npm install --registry https://r.example/x.zip somepkg", "npm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
-    ["npm install -e ./pkg.tgz somepkg", "npm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
-    ["pnpm add left-pad", "pnpm/npm | P left-pad"],
-    ["pnpm add left-pad@1.3.0", "pnpm/npm | P left-pad@1.3.0"],
-    ["pnpm add @scope/pkg@^2", "pnpm/npm | P @scope/pkg@^2"],
-    ["pnpm add v/pkg", "pnpm/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
-    ["pnpm add ./x.tgz", "pnpm/npm | S ./x.tgz => local path — not looked up"],
-    ["pnpm add \"C:\\x.zip\"", "pnpm/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
-    ["pnpm add /abs/z.tar.gz", "pnpm/npm | S /abs/z.tar.gz => local path — not looked up"],
-    ["pnpm add https://h/x.zip", "pnpm/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
-    ["pnpm add git+https://h/r.git", "pnpm/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
-    ["pnpm add github:u/r", "pnpm/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
-    ["pnpm add file:../x.tgz", "pnpm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
-    ["pnpm add workspace:*", "pnpm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["pnpm add lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0"],
-    ["pnpm add thing.egg@1.0", "pnpm/npm | P thing.egg@1.0"],
-    ["pnpm add --prefix x.tar somepkg", "pnpm/npm | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
-    ["pnpm add --registry https://r.example/x.zip somepkg", "pnpm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
-    ["pnpm add -e ./pkg.tgz somepkg", "pnpm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
-    ["yarn add left-pad", "yarn/npm | P left-pad"],
-    ["yarn add left-pad@1.3.0", "yarn/npm | P left-pad@1.3.0"],
-    ["yarn add @scope/pkg@^2", "yarn/npm | P @scope/pkg@^2"],
-    ["yarn add v/pkg", "yarn/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
-    ["yarn add ./x.tgz", "yarn/npm | S ./x.tgz => local path — not looked up"],
-    ["yarn add \"C:\\x.zip\"", "yarn/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
-    ["yarn add /abs/z.tar.gz", "yarn/npm | S /abs/z.tar.gz => local path — not looked up"],
-    ["yarn add https://h/x.zip", "yarn/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
-    ["yarn add git+https://h/r.git", "yarn/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
-    ["yarn add github:u/r", "yarn/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
-    ["yarn add file:../x.tgz", "yarn/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
-    ["yarn add workspace:*", "yarn/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["yarn add lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0"],
-    ["yarn add thing.egg@1.0", "yarn/npm | P thing.egg@1.0"],
-    ["yarn add --prefix x.tar somepkg", "yarn/npm | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
-    ["yarn add --registry https://r.example/x.zip somepkg", "yarn/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
-    ["yarn add -e ./pkg.tgz somepkg", "yarn/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
-    ["bun add left-pad", "bun/npm | P left-pad"],
-    ["bun add left-pad@1.3.0", "bun/npm | P left-pad@1.3.0"],
-    ["bun add @scope/pkg@^2", "bun/npm | P @scope/pkg@^2"],
-    ["bun add v/pkg", "bun/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up"],
-    ["bun add ./x.tgz", "bun/npm | S ./x.tgz => local path — not looked up"],
-    ["bun add \"C:\\x.zip\"", "bun/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes)"],
-    ["bun add /abs/z.tar.gz", "bun/npm | S /abs/z.tar.gz => local path — not looked up"],
-    ["bun add https://h/x.zip", "bun/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up"],
-    ["bun add git+https://h/r.git", "bun/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up"],
-    ["bun add github:u/r", "bun/npm | S github:u/r => URL / VCS / protocol spec — not looked up"],
-    ["bun add file:../x.tgz", "bun/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up"],
-    ["bun add workspace:*", "bun/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes)"],
-    ["bun add lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0"],
-    ["bun add thing.egg@1.0", "bun/npm | P thing.egg@1.0"],
-    ["bun add --prefix x.tar somepkg", "bun/npm | P somepkg | S x.tar => archive file — not looked up | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix"],
-    ["bun add --registry https://r.example/x.zip somepkg", "bun/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | R https://r.example/x.zip"],
-    ["bun add -c cons.whl somepkg", "bun/npm | P somepkg | U flag -c is not on the confident-shape allowlist"],
-    ["bun add -e ./pkg.tgz somepkg", "bun/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
+    ["npm install left-pad", "npm/npm | P left-pad | M {\"kind\":\"package-json\"}"],
+    ["npm install left-pad@1.3.0", "npm/npm | P left-pad@1.3.0 | M {\"kind\":\"package-json\"}"],
+    ["npm install @scope/pkg@^2", "npm/npm | P @scope/pkg@^2 | M {\"kind\":\"package-json\"}"],
+    ["npm install v/pkg", "npm/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up | M {\"kind\":\"package-json\"}"],
+    ["npm install ./x.tgz", "npm/npm | S ./x.tgz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["npm install \"C:\\x.zip\"", "npm/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes) | M {\"kind\":\"package-json\"}"],
+    ["npm install /abs/z.tar.gz", "npm/npm | S /abs/z.tar.gz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["npm install https://h/x.zip", "npm/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["npm install git+https://h/r.git", "npm/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["npm install github:u/r", "npm/npm | S github:u/r => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["npm install file:../x.tgz", "npm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["npm install workspace:*", "npm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes) | M {\"kind\":\"package-json\"}"],
+    ["npm install lodash.zip@4.2.0", "npm/npm | P lodash.zip@4.2.0 | M {\"kind\":\"package-json\"}"],
+    ["npm install thing.egg@1.0", "npm/npm | P thing.egg@1.0 | M {\"kind\":\"package-json\"}"],
+    ["npm install --prefix x.tar somepkg", "npm/npm | P somepkg | U flag --prefix is not on the confident-shape allowlist ; directory changed by --prefix | M {\"kind\":\"package-json\"} | prefixed"],
+    ["npm install --registry https://r.example/x.zip somepkg", "npm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | M {\"kind\":\"package-json\"} | R https://r.example/x.zip"],
+    ["npm install -e ./pkg.tgz somepkg", "npm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e | M {\"kind\":\"package-json\"}"],
+    ["pnpm add left-pad", "pnpm/npm | P left-pad | M {\"kind\":\"package-json\"}"],
+    ["pnpm add left-pad@1.3.0", "pnpm/npm | P left-pad@1.3.0 | M {\"kind\":\"package-json\"}"],
+    ["pnpm add @scope/pkg@^2", "pnpm/npm | P @scope/pkg@^2 | M {\"kind\":\"package-json\"}"],
+    ["pnpm add v/pkg", "pnpm/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up | M {\"kind\":\"package-json\"}"],
+    ["pnpm add ./x.tgz", "pnpm/npm | S ./x.tgz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["pnpm add \"C:\\x.zip\"", "pnpm/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes) | M {\"kind\":\"package-json\"}"],
+    ["pnpm add /abs/z.tar.gz", "pnpm/npm | S /abs/z.tar.gz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["pnpm add https://h/x.zip", "pnpm/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["pnpm add git+https://h/r.git", "pnpm/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["pnpm add github:u/r", "pnpm/npm | S github:u/r => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["pnpm add file:../x.tgz", "pnpm/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["pnpm add workspace:*", "pnpm/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes) | M {\"kind\":\"package-json\"}"],
+    ["pnpm add lodash.zip@4.2.0", "pnpm/npm | P lodash.zip@4.2.0 | M {\"kind\":\"package-json\"}"],
+    ["pnpm add thing.egg@1.0", "pnpm/npm | P thing.egg@1.0 | M {\"kind\":\"package-json\"}"],
+    ["pnpm add --prefix x.tar somepkg", "pnpm/npm | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix | M {\"kind\":\"package-json\"}"],
+    ["pnpm add --registry https://r.example/x.zip somepkg", "pnpm/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | M {\"kind\":\"package-json\"} | R https://r.example/x.zip"],
+    ["pnpm add -e ./pkg.tgz somepkg", "pnpm/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e | M {\"kind\":\"package-json\"}"],
+    ["yarn add left-pad", "yarn/npm | P left-pad | M {\"kind\":\"package-json\"}"],
+    ["yarn add left-pad@1.3.0", "yarn/npm | P left-pad@1.3.0 | M {\"kind\":\"package-json\"}"],
+    ["yarn add @scope/pkg@^2", "yarn/npm | P @scope/pkg@^2 | M {\"kind\":\"package-json\"}"],
+    ["yarn add v/pkg", "yarn/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up | M {\"kind\":\"package-json\"}"],
+    ["yarn add ./x.tgz", "yarn/npm | S ./x.tgz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["yarn add \"C:\\x.zip\"", "yarn/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes) | M {\"kind\":\"package-json\"}"],
+    ["yarn add /abs/z.tar.gz", "yarn/npm | S /abs/z.tar.gz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["yarn add https://h/x.zip", "yarn/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["yarn add git+https://h/r.git", "yarn/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["yarn add github:u/r", "yarn/npm | S github:u/r => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["yarn add file:../x.tgz", "yarn/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["yarn add workspace:*", "yarn/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes) | M {\"kind\":\"package-json\"}"],
+    ["yarn add lodash.zip@4.2.0", "yarn/npm | P lodash.zip@4.2.0 | M {\"kind\":\"package-json\"}"],
+    ["yarn add thing.egg@1.0", "yarn/npm | P thing.egg@1.0 | M {\"kind\":\"package-json\"}"],
+    ["yarn add --prefix x.tar somepkg", "yarn/npm | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix | M {\"kind\":\"package-json\"}"],
+    ["yarn add --registry https://r.example/x.zip somepkg", "yarn/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | M {\"kind\":\"package-json\"} | R https://r.example/x.zip"],
+    ["yarn add -e ./pkg.tgz somepkg", "yarn/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e | M {\"kind\":\"package-json\"}"],
+    ["bun add left-pad", "bun/npm | P left-pad | M {\"kind\":\"package-json\"}"],
+    ["bun add left-pad@1.3.0", "bun/npm | P left-pad@1.3.0 | M {\"kind\":\"package-json\"}"],
+    ["bun add @scope/pkg@^2", "bun/npm | P @scope/pkg@^2 | M {\"kind\":\"package-json\"}"],
+    ["bun add v/pkg", "bun/npm | S v/pkg => GitHub shorthand (user/repo) — not looked up | M {\"kind\":\"package-json\"}"],
+    ["bun add ./x.tgz", "bun/npm | S ./x.tgz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["bun add \"C:\\x.zip\"", "bun/npm | S C:\\x.zip => local path — not looked up | U not a single plain install statement ('\\' inside double quotes) | M {\"kind\":\"package-json\"}"],
+    ["bun add /abs/z.tar.gz", "bun/npm | S /abs/z.tar.gz => local path — not looked up | M {\"kind\":\"package-json\"}"],
+    ["bun add https://h/x.zip", "bun/npm | S https://h/x.zip => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["bun add git+https://h/r.git", "bun/npm | S git+https://h/r.git => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["bun add github:u/r", "bun/npm | S github:u/r => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["bun add file:../x.tgz", "bun/npm | S file:../x.tgz => URL / VCS / protocol spec — not looked up | M {\"kind\":\"package-json\"}"],
+    ["bun add workspace:*", "bun/npm | S workspace:* => URL / VCS / protocol spec — not looked up | U not a single plain install statement ('*' outside quotes) | M {\"kind\":\"package-json\"}"],
+    ["bun add lodash.zip@4.2.0", "bun/npm | P lodash.zip@4.2.0 | M {\"kind\":\"package-json\"}"],
+    ["bun add thing.egg@1.0", "bun/npm | P thing.egg@1.0 | M {\"kind\":\"package-json\"}"],
+    ["bun add --prefix x.tar somepkg", "bun/npm | P somepkg | S x.tar => archive file — not looked up | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix | M {\"kind\":\"package-json\"}"],
+    ["bun add --registry https://r.example/x.zip somepkg", "bun/npm | P somepkg | U flag --registry is not on the confident-shape allowlist | M {\"kind\":\"package-json\"} | R https://r.example/x.zip"],
+    ["bun add -c cons.whl somepkg", "bun/npm | P somepkg | U flag -c is not on the confident-shape allowlist | M {\"kind\":\"package-json\"}"],
+    ["bun add -e ./pkg.tgz somepkg", "bun/npm | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e | M {\"kind\":\"package-json\"}"],
     ["pip install left-pad", "pip/pypi | P left-pad"],
     ["pip install left-pad@1.3.0", "pip/pypi | P left-pad@1.3.0"],
     ["pip install @scope/pkg@^2", "pip/pypi | S @scope/pkg@^2 => local path — not looked up"],
@@ -1593,26 +1597,26 @@ describe('install-vet-bare-install-misread', () => {
   it.each([
     ['npm install', [], MANIFEST],
     ['npm install -g', [], undefined],
-    ['npm install x', ['x'], undefined],
+    ['npm install x', ['x'], MANIFEST],
     ['npm install -g x', ['x'], undefined],
     ['npm install --otp -g', [], MANIFEST],
-    ['yarn add -D false', ['false'], undefined],
-    ['bun add --force false', ['false'], undefined],
+    ['yarn add -D false', ['false'], MANIFEST],
+    ['bun add --force false', ['false'], MANIFEST],
     ['npx false', ['false'], undefined],
     ['npm install --unknown-flag false', [], MANIFEST],
     // The loglevel shorthands take no word: the word is a package. A cluster's word belongs to its LAST letter.
-    ['npm install --silent true', ['true'], undefined],
-    ['npm install --quiet false', ['false'], undefined],
-    ['npm install -q false', ['false'], undefined],
-    ['npm install --verbose false', ['false'], undefined],
-    ['npm install -d false', ['false'], undefined],
-    ['npm install -Dq false', ['false'], undefined],
-    ['npm install -qd false', ['false'], undefined],
-    ['npm install -Dd true', ['true'], undefined],
-    ['pnpm install --silent false', ['false'], undefined],
-    ['pnpm install -q false', ['false'], undefined],
-    ['pnpm install -Dq false', ['false'], undefined],
-  ])('T-02 %s: as before — packages %j, manifest %j', (command, packages, manifest) => {
+    ['npm install --silent true', ['true'], MANIFEST],
+    ['npm install --quiet false', ['false'], MANIFEST],
+    ['npm install -q false', ['false'], MANIFEST],
+    ['npm install --verbose false', ['false'], MANIFEST],
+    ['npm install -d false', ['false'], MANIFEST],
+    ['npm install -Dq false', ['false'], MANIFEST],
+    ['npm install -qd false', ['false'], MANIFEST],
+    ['npm install -Dd true', ['true'], MANIFEST],
+    ['pnpm install --silent false', ['false'], MANIFEST],
+    ['pnpm install -q false', ['false'], MANIFEST],
+    ['pnpm install -Dq false', ['false'], MANIFEST],
+  ])('T-02 %s: packages %j, manifest %j (a by-name install reads the manifest too; global and launchers do not)', (command, packages, manifest) => {
     const r = read(command);
     expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages, manifest });
   });
@@ -1675,9 +1679,9 @@ describe('install-vet-unknown-flag-hides-package', () => {
     expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p'], manifest: MANIFEST });
   });
 
-  it('T-04 npm install --dgunknown p r: a real package is on the line, so the manifest is not read', () => {
+  it('T-04 npm install --dgunknown p r: a real package is on the line, and the manifest is read all the same (install-vet-named-install-manifest)', () => {
     const r = read('npm install --dgunknown p r');
-    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p', 'r'], manifest: undefined });
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p', 'r'], manifest: MANIFEST });
   });
 
   it.each([
@@ -1804,8 +1808,8 @@ describe('install-vet-through-corepack', () => {
     for (const command of ['grep corepack README.md', 'echo "use corepack yarn add left-pad"', 'git commit -m "corepack yarn add left-pad"', 'cat docs/yarnpkg.md', 'npm view corepack']) {
       expect({ command, parse: parsed(command) }).toEqual({ command, parse: [] });
     }
-    expect(vettable('npm install corepack')).toEqual([{ packages: ['corepack'], manifest: undefined }]);
-    expect(vettable('yarn add yarnpkg')).toEqual([{ packages: ['yarnpkg'], manifest: undefined }]);
+    expect(vettable('npm install corepack')).toEqual([{ packages: ['corepack'], manifest: MANIFEST }]);
+    expect(vettable('yarn add yarnpkg')).toEqual([{ packages: ['yarnpkg'], manifest: MANIFEST }]);
   });
 
   it('T-02 not installs: what corepack does with its own cache, a name it does not know, and a flag before the manager', () => {
@@ -1819,9 +1823,9 @@ describe('install-vet-through-corepack', () => {
   });
 
   it('T-02 as before: the same commands without `corepack` give what they gave', () => {
-    expect(vettable('yarn add p')).toEqual([{ packages: ['p'], manifest: undefined }]);
+    expect(vettable('yarn add p')).toEqual([{ packages: ['p'], manifest: MANIFEST }]);
     expect(vettable('npm install')).toEqual([{ packages: [], manifest: MANIFEST }]);
-    expect(vettable('bun add p')).toEqual([{ packages: ['p'], manifest: undefined }]);
+    expect(vettable('bun add p')).toEqual([{ packages: ['p'], manifest: MANIFEST }]);
     expect(vettable('enable')).toEqual([]);
   });
 
