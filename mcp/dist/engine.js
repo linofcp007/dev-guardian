@@ -115597,7 +115597,7 @@ var init_auditMcpTools = __esm({
 
 // src/pkgvet/parseCommand.ts
 function readsFileValue(manager, value) {
-  return (manager === void 0 || manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
+  return (manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
 }
 function fileEndings(manager, scoped) {
   switch (manager) {
@@ -115651,7 +115651,7 @@ function parseNpm(raw, manager, alias = false) {
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
-    if (range.startsWith("npm:")) {
+    if (/^npm:/i.test(range)) {
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }

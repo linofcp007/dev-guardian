@@ -2492,7 +2492,7 @@ var UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz
 var UNMEASURED = /* @__PURE__ */ new Set(["pipx", "composer", "dotnet"]);
 var UNMEASURED_ARCHIVE = "a name that ends like an archive file \u2014 this package manager was not measured, so whether it reads the word as a file or as a registry name is not known";
 function readsFileValue(manager, value) {
-  return (manager === void 0 || manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
+  return (manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
 }
 function fileEndings(manager, scoped) {
   switch (manager) {
@@ -2550,7 +2550,7 @@ function parseNpm(raw, manager, alias = false) {
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
-    if (range.startsWith("npm:")) {
+    if (/^npm:/i.test(range)) {
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
@@ -4144,7 +4144,7 @@ function npmRange(value, manager) {
 function npmDependency(key, value, manager) {
   let name = key;
   let wanted = value.trim();
-  if (wanted.startsWith("npm:")) {
+  if (/^npm:/i.test(wanted)) {
     const real = wanted.slice(4);
     const at = real.indexOf("@", real.startsWith("@") ? 1 : 0);
     name = at > 0 ? real.slice(0, at) : real;
@@ -4154,7 +4154,7 @@ function npmDependency(key, value, manager) {
   const range = npmRange(wanted, manager);
   return range === null ? null : spec("npm", name, range);
 }
-function readNpmManifest(dir, manager) {
+function readNpmManifest(dir, manager = "npm") {
   const file = "package.json";
   const read2 = readManifestText(resolve2(dir, file), dir);
   if (read2.status === "absent") return { file, status: "absent", packages: [], registries: [] };

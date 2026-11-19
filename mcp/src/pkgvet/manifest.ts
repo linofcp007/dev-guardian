@@ -152,7 +152,7 @@ const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
  * value is no registry spec at all — a path, `file:`, `link:`, `workspace:`,
  * `catalog:`, a URL, a git repository, `user/repo`, an archive, or text.
  */
-function npmRange(value: string, manager: string | undefined): string | undefined | null {
+function npmRange(value: string, manager: string): string | undefined | null {
   const v = value.trim();
   if (v === '' || v === 'latest') return undefined;
   if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
@@ -161,10 +161,10 @@ function npmRange(value: string, manager: string | undefined): string | undefine
 }
 
 /** A dependency entry as the package a registry would serve — `"x": "npm:real@^1"` is `real` — or `null`. */
-function npmDependency(key: string, value: string, manager: string | undefined): PackageSpec | null {
+function npmDependency(key: string, value: string, manager: string): PackageSpec | null {
   let name = key;
   let wanted = value.trim();
-  if (wanted.startsWith('npm:')) {
+  if (/^npm:/i.test(wanted)) {
     const real = wanted.slice(4);
     const at = real.indexOf('@', real.startsWith('@') ? 1 : 0);
     name = at > 0 ? real.slice(0, at) : real;
@@ -182,7 +182,7 @@ function npmDependency(key: string, value: string, manager: string | undefined):
  * always a name; a value is a registry spec unless `manager` (the command's; npm
  * when none) reads it as a file.
  */
-export function readNpmManifest(dir: string, manager?: string): ManifestRead {
+export function readNpmManifest(dir: string, manager = 'npm'): ManifestRead {
   const file = 'package.json';
   const read = readManifestText(resolve(dir, file), dir);
   if (read.status === 'absent') return { file, status: 'absent', packages: [], registries: [] };

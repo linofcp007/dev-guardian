@@ -17,11 +17,11 @@ version bump.
   `scheme://host` (never its credentials, path or query), and that what it serves was not vetted. Which file counts
   is what each manager obeys, measured: `.npmrc` for npm and pnpm, `.npmrc` and `bunfig.toml` for bun, `.npmrc`,
   `.yarnrc` and `.yarnrc.yml` for Yarn. The line is not said when the user's own configuration names that registry,
-  when `--registry` or a registry variable of the environment sets one, or when the directory the command runs in is
-  not known. No verdict changes, and the line stays out of a deny. What you may notice: a new line in the hook's
+  when `--registry` or a registry variable of the environment sets one, or when the directory the command runs in
+  is not known. No verdict changes, and the line stays out of a deny. What you may notice: a new line in the hook's
   answer for installs that were silent, in a repository whose own file sets the default registry; anything that
-  compares the hook's text as a whole should expect it. See [`docs/hooks.md`](docs/hooks.md) and
-  [the known limits](docs/hooks-known-limits.md).
+  compares the hook's text as a whole should expect it. See [`docs/hooks.md`](docs/hooks.md) and [the known
+  limits](docs/hooks-known-limits.md).
 
 ### Security
 
@@ -52,16 +52,19 @@ version bump.
 
 - **A package whose name ends like an archive is no longer skipped by the install hook and `vet_packages`.**
   `lodash.zip` is a real package, but one list of endings (`.zip`, `.tgz`, `.whl`, `.egg`, `.nupkg` and more) made
-  the hook skip any such word as "an archive file", in silence, whatever the package manager — in a command
-  (`npm install lodash.zip`), as a key or a value of `package.json` and in `vet_packages` — so a malicious name
-  that ended that way was never looked up. Each manager now skips only the endings it reads as a file (measured):
-  npm `.tgz`, `.tar.gz` and `.tar`, and not with a scope; bun the same three, scoped too; pnpm and Yarn none; pip,
-  uv and poetry their own lists, in `docs/hooks.md`. A key of `package.json` is always a name, and a value is a
-  file only for npm and bun. The name after `npm:` in an alias (`x@npm:evil.zip`) is a name for every manager, and
-  the version part of `name@x.tgz` is a file only for npm and bun (`.tgz`, `.tar.gz`, `.tar`), so `evil@foo.zip`
-  vets `evil`. What you may notice: an install that passed in silence can now be denied (a malicious
-  name), warned about (a name the registry does not have, for `pipx`, `composer` and `dotnet`, which were not
-  measured) or denied as nonexistent (a mistyped name that ends like an archive, for a measured manager).
+  the hook skip any such word as "an archive file", in silence, whatever the package manager — in a command (`npm
+  install lodash.zip`), as a key or a value of `package.json` and in `vet_packages` — so a malicious name that
+  ended that way was never looked up. Each manager now skips only the endings it reads as a file (measured): npm
+  `.tgz`, `.tar.gz` and `.tar`, and not with a scope; bun the same three, scoped too; pnpm and Yarn none; pip, uv
+  and poetry their own lists, in `docs/hooks.md`. A key of `package.json` is always a name, and a value is a file
+  only for npm and bun. The name after `npm:` in an alias (`x@npm:evil.zip`) is a name for every manager, and the
+  version part of `name@x.tgz` is a file only for npm and bun (`.tgz`, `.tar.gz`, `.tar`), so `evil@foo.zip` vets
+  `evil`. The `npm:` prefix of an alias is now read in any letter case: `npm install x@NPM:evil` used to make the
+  hook vet `x` while npm installed `evil`, and `"x": "NPM:evil"` in a `package.json` was dropped in silence.
+  `vet_packages` takes `evil@foo.tgz` as the name `evil` too, since it names no package manager. What you may
+  notice: an install that passed in silence can now be denied (a malicious name), warned about (a name the registry
+  does not have, for `pipx`, `composer` and `dotnet`, which were not measured) or denied as nonexistent (a mistyped
+  name that ends like an archive, for a measured manager).
 
 ## [3.12.0] - 2026-11-18
 

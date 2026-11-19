@@ -137,11 +137,12 @@ const UNMEASURED_ARCHIVE =
 
 /**
  * Whether `manager` reads a version part or a manifest value that ends like `.tgz`, `.tar.gz` or `.tar` as a file to
- * install, not a tag: npm and bun do, pnpm and Yarn are taken not to; no manager named is npm. The one rule of the
- * command line's `name@<part>` and of a `package.json` value (`manifest.ts`).
+ * install, not a tag: npm and bun do, pnpm and Yarn are taken not to; with no manager named nothing is a file (a spec
+ * handed to `vet_packages` is a name). The one rule of the command line's `name@<part>` and of a `package.json`
+ * value (`manifest.ts` names its default manager itself).
  */
 export function readsFileValue(manager: string | undefined, value: string): boolean {
-  return (manager === undefined || manager === 'npm' || manager === 'npx' || manager === 'bun') && NPM_FILE.test(value);
+  return (manager === 'npm' || manager === 'npx' || manager === 'bun') && NPM_FILE.test(value);
 }
 
 /** The endings `manager` reads as a file in a bare word; `null` when it reads none (or the caller names no manager). */
@@ -213,7 +214,7 @@ function withRange(spec: PackageSpec | SkippedSpec, range: string | undefined): 
   return r !== undefined && r !== '' ? { ...spec, range: r } : spec;
 }
 
-/** `alias`: the word is the real name after `npm:` — a name for every manager, whatever it ends in. */
+/** `alias`: the word is the real name after `npm:` (read in any letter case, as npm does) — a name for every manager, whatever it ends in. */
 function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
   const scoped = raw.startsWith('@');
@@ -225,7 +226,7 @@ function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | S
   let range = at > 0 ? raw.slice(at + 1) : undefined;
   if (!scoped && name.includes('/')) return skip(raw, 'GitHub shorthand (user/repo) — not looked up');
   if (range !== undefined) {
-    if (range.startsWith('npm:')) {
+    if (/^npm:/i.test(range)) {
       // `alias@npm:real@range` installs `real` under the name `alias`.
       const real = parseNpm(range.slice(4), manager, true);
       return 'name' in real ? { ...real, raw } : skip(raw, real.reason);
