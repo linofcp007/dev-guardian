@@ -10,6 +10,7 @@ version bump.
 
 ### Security
 
+- **`yarn add evil@npm:^1.2.3` and `bun add evil@npm:1.0.0` installed a package the hook never looked up.** The hook read `name@npm:rest` as an npm alias for every manager and vetted only `rest`. Under Yarn 4 and bun `npm:` is the registry protocol and the package is `name`: a range after `npm:` (`^1.2.3`, `*`) vetted nobody, a version or a tag (`1.0.0`, `latest`) vetted the wrong word, and `yarn add evil@npm:1.x` was denied for a name nobody asked for. The same reading was applied to a `package.json` value `"evil": "npm:^1.2.3"`. Present since 3.0.0. Now, for Yarn and bun, a word after `npm:` that is no package name is read as `name`, one that is a valid name with no range is read both ways (`name`, at the word when that is a version or a range, and the word are looked up, a missing one is a warning, a malicious one is denied), and one with a `@range` of its own stays an alias; npm and pnpm read it as before. Yarn 2 and 3, `resolutions` and `overrides` were not measured or read, and the known limits say so. Update; there is nothing to rotate.
 - **`dotnet package add` and `dotnet tool install` fetched a NuGet package without being vetted.** The hook read one
   .NET form, `dotnet add package <name>`. The .NET 10 form `dotnet package add <name>` and `dotnet tool install <name>`
   (with or without `-g`, `--local`, `--tool-path`) ask NuGet for the same package, and were not read as installs: no

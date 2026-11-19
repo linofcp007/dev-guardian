@@ -459,4 +459,11 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     expect(read(manager, 'npm:latest')).toEqual([['latest', undefined]]);
     expect(read(manager, 'npm:real-zq@1.0.0', 'alias-zq')).toEqual([['real-zq', '1.0.0']]);
   });
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a key read both ways keeps a rest that is a version or a range as its range, a word leaves it with none', (manager) => {
+    expect(read(manager, 'npm:1.0.0')).toEqual([['evil-pkg-zq', '1.0.0'], ['1.0.0', undefined]]);
+    expect(read(manager, 'npm:1.x')).toEqual([['evil-pkg-zq', '1.x'], ['1.x', undefined]]);
+    expect(read(manager, 'npm:latest')).toEqual([['evil-pkg-zq', undefined], ['latest', undefined]]);
+    expect(read(manager, 'npm:real-zq', 'alias-zq')).toEqual([['alias-zq', undefined], ['real-zq', undefined]]);
+  });
 });

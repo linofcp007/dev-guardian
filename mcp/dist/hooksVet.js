@@ -2540,6 +2540,32 @@ function withRange(spec2, range) {
   const r = range?.trim();
   return r !== void 0 && r !== "" ? { ...spec2, range: r } : spec2;
 }
+var SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
+function isSemverRange(text) {
+  return text.split(/\s+/).every((word) => SEMVER_WORD.test(word));
+}
+function npmProtocolReading(manager, rest) {
+  if (manager !== "yarn" && manager !== "bun") return "alias";
+  if (/[$`]/.test(rest)) return "alias";
+  if (rest.indexOf("@", rest.startsWith("@") ? 1 : 0) > 0) return "alias";
+  if (rest !== "" && notAPackage(rest, null) !== null) return "alias";
+  return NAME_RE.npm.test(rest) ? "both" : "key";
+}
+function npmProtocolRest(raw, manager) {
+  const at = raw.indexOf("@", raw.startsWith("@") ? 1 : 0);
+  const range = at > 0 ? raw.slice(at + 1) : "";
+  if (!/^npm:/i.test(range) || npmProtocolReading(manager, range.slice(4)) !== "both") return void 0;
+  const real = parseNpm(range.slice(4), manager, true);
+  return "name" in real ? { ...real, raw } : void 0;
+}
+var TWO_READINGS = " is read two ways";
+function bothReadings(first, second) {
+  return `\`${first.raw}\`${TWO_READINGS} \u2014 Yarn 4 asks the registry for \`${first.name}\`, Yarn 1 for \`${second.name}\`, and bun for one or the other \u2014 both are looked up`;
+}
+function npmReadings(spec2, manager) {
+  const second = npmProtocolRest(spec2.raw, manager);
+  return second === void 0 ? { packages: [spec2] } : { packages: [spec2, second], why: bothReadings(spec2, second) };
+}
 function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const scoped = raw.startsWith("@");
@@ -2551,6 +2577,9 @@ function parseNpm(raw, manager, alias = false) {
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
     if (/^npm:/i.test(range)) {
+      const rest = range.slice(4);
+      const reading = alias ? "alias" : npmProtocolReading(manager, rest);
+      if (reading !== "alias") return withRange(checkName("npm", name, raw), reading === "key" || isSemverRange(rest) ? rest : void 0);
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
@@ -3804,9 +3833,12 @@ function collectLaunch(d, launch, context) {
   for (const raw of raws) {
     const spec2 = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ("name" in spec2) {
-      packages.push(spec2);
-      if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(spec2);
-      const why = unmeasuredReason(d.manager, spec2);
+      const read2 = d.ecosystem === "npm" ? npmReadings(spec2, d.manager) : { packages: [spec2] };
+      for (const each of read2.packages) {
+        packages.push(each);
+        if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(each);
+      }
+      const why = unmeasuredReason(d.manager, spec2) ?? ("why" in read2 ? read2.why : void 0);
       if (why !== void 0) unsure.push(why);
     } else skipped.push(spec2);
   }
@@ -3874,9 +3906,12 @@ function collect(d, context) {
         spec2 = skip(p.value, "unsupported ecosystem");
     }
     if ("name" in spec2) {
-      packages.push(spec2);
-      if (p.candidate === true) candidatePackages.push(spec2);
-      const why = unmeasuredReason(d.manager, spec2);
+      const read2 = d.ecosystem === "npm" ? npmReadings(spec2, d.manager) : { packages: [spec2] };
+      for (const each of read2.packages) {
+        packages.push(each);
+        if (p.candidate === true) candidatePackages.push(each);
+      }
+      const why = unmeasuredReason(d.manager, spec2) ?? ("why" in read2 ? read2.why : void 0);
       if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === "packagist" ? spec2 : void 0;
     } else {
@@ -3987,7 +4022,7 @@ function parseReading(text, forced, cdpath) {
         if (envChange) context.push("inline environment assignment in the command (it can redirect the registry)");
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE);
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         if (runsElsewhere(words)) c.workdir = null;
@@ -4457,27 +4492,37 @@ function pushOnce(into, seen, pkg) {
   into.push(pkg);
 }
 var NPM_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
-var SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
 var DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 function npmRange(value, manager) {
   const v = value.trim();
   if (v === "" || v === "latest") return void 0;
   if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
   if (DIST_TAG.test(v)) return v;
-  return v.split(/\s+/).every((word) => SEMVER_WORD.test(word)) ? v : null;
+  return isSemverRange(v) ? v : null;
 }
 function npmDependency(key, value, manager) {
   let name = key;
   let wanted = value.trim();
+  let second;
   if (/^npm:/i.test(wanted)) {
     const real = wanted.slice(4);
-    const at = real.indexOf("@", real.startsWith("@") ? 1 : 0);
-    name = at > 0 ? real.slice(0, at) : real;
-    wanted = at > 0 ? real.slice(at + 1) : "";
+    const reading = npmProtocolReading(manager, real);
+    if (reading === "alias") {
+      const at = real.indexOf("@", real.startsWith("@") ? 1 : 0);
+      name = at > 0 ? real.slice(0, at) : real;
+      wanted = at > 0 ? real.slice(at + 1) : "";
+    } else if (reading === "both") {
+      second = real;
+      wanted = isSemverRange(real) ? real : "";
+    } else {
+      wanted = npmRange(real, manager) === null ? "" : real;
+    }
   }
-  if (!validName2("npm", name)) return null;
+  if (!validName2("npm", name)) return [];
   const range = npmRange(wanted, manager);
-  return range === null ? null : spec("npm", name, range);
+  if (range === null) return [];
+  const own = spec("npm", name, range);
+  return second !== void 0 && validName2("npm", second) ? [own, spec("npm", second, void 0)] : [own];
 }
 function readNpmManifest(dir, manager = "npm") {
   const file = "package.json";
@@ -4500,8 +4545,7 @@ function readNpmManifest(dir, manager = "npm") {
     if (entries === null || typeof entries !== "object" || Array.isArray(entries)) continue;
     for (const [key, value] of Object.entries(entries)) {
       if (typeof value !== "string") continue;
-      const pkg = npmDependency(key, value, manager);
-      if (pkg !== null) pushOnce(packages, seen, pkg);
+      for (const pkg of npmDependency(key, value, manager)) pushOnce(packages, seen, pkg);
     }
   }
   return { file, status: "ok", packages, registries: [] };

@@ -400,6 +400,7 @@ describe('the limits of the manifest vetting, as data', () => {
     'manifest-quiet-checks',
     'manifest-workspace-members',
     'project-default-registry',
+    'yarn-bun-npm-protocol',
   ];
 
   it('T-25 the install-vetting area has a record for each limit, with an example the hook runs — or the reason none can', () => {

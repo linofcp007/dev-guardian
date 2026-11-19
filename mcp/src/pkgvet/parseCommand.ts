@@ -239,6 +239,60 @@ function withRange(spec: PackageSpec | SkippedSpec, range: string | undefined): 
   return r !== undefined && r !== '' ? { ...spec, range: r } : spec;
 }
 
+/** One word of a semver range: `||`, a hyphen, a wildcard, or a version with its comparator. */
+const SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
+
+/** Whether the text is a version or a range (`1.0.0`, `1.x`, `^1.2.3 <2`), not a dist-tag or a name: the one test of a manifest value and of a command's `key@npm:rest`. */
+export function isSemverRange(text: string): boolean {
+  return text.split(/\s+/).every((word) => SEMVER_WORD.test(word));
+}
+
+/**
+ * How `key@npm:rest` is read (measured, table B of pkgvet-yarn-berry-npm-protocol). npm and pnpm read an alias: `rest` is
+ * the package. Yarn 4 and bun (measured; Yarn 2 and 3 were not, the reading follows Yarn 4) read the registry protocol: the
+ * package is `key` and `rest` a version, a range or a tag — or an alias when `rest` has a `@range` of its own. Yarn 1 reads an
+ * alias, and bun either by the shape of `rest`; the hook does not know which runs, so a `rest` that is a valid name without a
+ * range is read both ways. `rest` that is a path, a URL or a shell
+ * expansion is `alias`: it is skipped, as for every manager. The one rule of the command line and of a `package.json` value.
+ *
+ * - `alias`: only `rest` is the package (or the word is skipped);
+ * - `key`: only `key` is the package, `rest` is its range;
+ * - `both`: `key` and `rest` are each a package, and the command is uncertain; `key` is asked at `rest` when that is a version or a range.
+ */
+export function npmProtocolReading(manager: string | undefined, rest: string): 'alias' | 'key' | 'both' {
+  if (manager !== 'yarn' && manager !== 'bun') return 'alias';
+  if (/[$`]/.test(rest)) return 'alias';
+  if (rest.indexOf('@', rest.startsWith('@') ? 1 : 0) > 0) return 'alias';
+  if (rest !== '' && notAPackage(rest, null) !== null) return 'alias';
+  return NAME_RE.npm.test(rest) ? 'both' : 'key';
+}
+
+/**
+ * The second package of a `key@npm:rest` that {@link npmProtocolReading} reads both ways: `rest`, which {@link parseNpm} did
+ * not return (it returned `key`). `undefined` for every other word.
+ */
+function npmProtocolRest(raw: string, manager: string | undefined): PackageSpec | undefined {
+  const at = raw.indexOf('@', raw.startsWith('@') ? 1 : 0);
+  const range = at > 0 ? raw.slice(at + 1) : '';
+  if (!/^npm:/i.test(range) || npmProtocolReading(manager, range.slice(4)) !== 'both') return undefined;
+  const real = parseNpm(range.slice(4), manager, true);
+  return 'name' in real ? { ...real, raw } : undefined;
+}
+
+/** What the reason of a `key@npm:rest` read both ways says of the word: a confident command keeps this reason, it is no doubt about the shape. */
+const TWO_READINGS = ' is read two ways';
+
+/** Why a command that names `key@npm:rest` read both ways is uncertain. */
+function bothReadings(first: PackageSpec, second: PackageSpec): string {
+  return `\`${first.raw}\`${TWO_READINGS} — Yarn 4 asks the registry for \`${first.name}\`, Yarn 1 for \`${second.name}\`, and bun for one or the other — both are looked up`;
+}
+
+/** What a word of an npm install names: its package, and the second one of a `key@npm:rest` read both ways, with why the command is uncertain. */
+function npmReadings(spec: PackageSpec, manager: string | undefined): { packages: PackageSpec[]; why?: string } {
+  const second = npmProtocolRest(spec.raw, manager);
+  return second === undefined ? { packages: [spec] } : { packages: [spec, second], why: bothReadings(spec, second) };
+}
+
 /** `alias`: the word is the real name after `npm:` (read in any letter case, as npm does) — a name for every manager, whatever it ends in. */
 function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
@@ -252,6 +306,10 @@ function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | S
   if (!scoped && name.includes('/')) return skip(raw, 'GitHub shorthand (user/repo) — not looked up');
   if (range !== undefined) {
     if (/^npm:/i.test(range)) {
+      const rest = range.slice(4);
+      const reading = alias ? 'alias' : npmProtocolReading(manager, rest);
+      // Yarn and bun: `key@npm:rest` asks for `key`; the `rest` that is a range stays its range (`both` adds `rest` as a name).
+      if (reading !== 'alias') return withRange(checkName('npm', name, raw), reading === 'key' || isSemverRange(rest) ? rest : undefined);
       // `alias@npm:real@range` installs `real` under the name `alias`.
       const real = parseNpm(range.slice(4), manager, true);
       return 'name' in real ? { ...real, raw } : skip(raw, real.reason);
@@ -1270,9 +1328,12 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   for (const raw of raws) {
     const spec = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ('name' in spec) {
-      packages.push(spec);
-      if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(spec);
-      const why = unmeasuredReason(d.manager, spec);
+      const read = d.ecosystem === 'npm' ? npmReadings(spec, d.manager) : { packages: [spec] };
+      for (const each of read.packages) {
+        packages.push(each);
+        if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(each);
+      }
+      const why = unmeasuredReason(d.manager, spec) ?? ('why' in read ? read.why : undefined);
       if (why !== undefined) unsure.push(why);
     } else skipped.push(spec);
   }
@@ -1345,9 +1406,12 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
         spec = skip(p.value, 'unsupported ecosystem');
     }
     if ('name' in spec) {
-      packages.push(spec);
-      if (p.candidate === true) candidatePackages.push(spec);
-      const why = unmeasuredReason(d.manager, spec);
+      const read = d.ecosystem === 'npm' ? npmReadings(spec, d.manager) : { packages: [spec] };
+      for (const each of read.packages) {
+        packages.push(each);
+        if (p.candidate === true) candidatePackages.push(each);
+      }
+      const why = unmeasuredReason(d.manager, spec) ?? ('why' in read ? read.why : undefined);
       if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
@@ -1528,8 +1592,9 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
         const c = collect(d, context);
-        // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does.
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE);
+        // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does,
+        // and so does a `key@npm:rest` that Yarn and bun read as either of two packages.
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         if (runsElsewhere(words)) c.workdir = null;

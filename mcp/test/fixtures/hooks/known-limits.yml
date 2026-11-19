@@ -726,7 +726,7 @@
 - id: archive-like-names
   area: install-vetting
   doc: |-
-    A word that ends like an archive (`.zip`, `.tgz`, `.whl`) is vetted as a package name when the package manager of the command reads it as one, and skipped when that manager reads it as a file; the endings each manager reads as a file are listed in `docs/hooks.md`, under "Install-time package vetting". Two things stay. `pipx`, `composer` and `dotnet` were not measured: their word is vetted as a name and the command counts as uncertain, so a name the registry does not have is a warning and never a deny — if one of them does read the word as a file, the warning is a false one. And the word `yarn` does not say whether Yarn 1 or Yarn 4 runs: a manifest value ending in `.tgz` or `.tar.gz` is a file for Yarn 1 and a tag for Yarn 4, and is vetted as a name, so the dependency's name is looked up although Yarn 1 installs the file; the same holds for a version part on a command line (`yarn add name@x.tgz`). And under Yarn 2 and later `name@npm:<tag>` is the package `name` itself, not an alias, while the hook reads the form as npm does and vets the name after `npm:`.
+    A word that ends like an archive (`.zip`, `.tgz`, `.whl`) is vetted as a package name when the package manager of the command reads it as one, and skipped when that manager reads it as a file; the endings each manager reads as a file are listed in `docs/hooks.md`, under "Install-time package vetting". Two things stay. `pipx`, `composer` and `dotnet` were not measured: their word is vetted as a name and the command counts as uncertain, so a name the registry does not have is a warning and never a deny — if one of them does read the word as a file, the warning is a false one. And the word `yarn` does not say whether Yarn 1 or Yarn 4 runs: a manifest value ending in `.tgz` or `.tar.gz` is a file for Yarn 1 and a tag for Yarn 4, and is vetted as a name, so the dependency's name is looked up although Yarn 1 installs the file; the same holds for a version part on a command line (`yarn add name@x.tgz`). And under Yarn 4 and bun `name@npm:<tag>` is the package `name` itself, which the hook looks up together with the word after `npm:` (see `yarn-bun-npm-protocol`).
   examples:
     - detector: hook
       event: PreToolUse
@@ -922,4 +922,37 @@
       tool: Bash
       input:
         command: dnx Acme.Totally.Missing.Tool
+      expect: { decision: none }
+
+- id: yarn-bun-npm-protocol
+  area: install-vetting
+  doc: |-
+    For Yarn 4 and for bun (measured), `name@npm:<rest>` is the registry protocol: the manager asks for `name` itself when `<rest>` is a version, a range or a tag, and for `<rest>` when it has a `@range` of its own (`name@npm:real@1.0.0`, an alias). For npm and pnpm it is always an alias. The word `yarn` does not say which Yarn runs, and the hook does not read `packageManager` or `yarnPath` to choose; it reads a `<rest>` that is no package name (`^1.2.3`, `*`, `>=1.0.0`) as `name`, and a `<rest>` that is a valid name with no range (`latest`, `1.0.0`, `1.x`, `real`) as both: it looks up `name` (at `<rest>` when that is a version or a range) and `<rest>`, and counts the command as uncertain, so a name the registry does not have is a warning and never a deny (a malicious one is denied). The same reading holds for a `package.json` value `npm:<rest>` of a Yarn or bun install. What stays:
+
+    - Yarn 2 and 3 were not measured, only Yarn 1 and Yarn 4 (and bun 1.4.4): the reading follows Yarn 4.
+    - A command with a word read both ways counts as uncertain as a whole, so ANOTHER name on the same line that the registry does not have is a warning and not a deny (a malicious one is still denied).
+    - The bun rule is not copied (a full version or a range that starts with an operator is the key, anything else an alias): the two-name reading covers it, at the price of one lookup too many.
+    - `name@NPM:<rest>` in capitals reads as the package `name` under Yarn 1, and bun reads it as a git URL (`https://NPM/<rest>/`): the hook reads it as the lower-case form.
+    - `resolutions` and `overrides` of a `package.json` are not read, and neither is a lockfile written by Yarn for these forms.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn add evil-pkg-zq@npm:^1.2.3
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: bun add alias-zq@npm:real-zq
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn install
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "resolutions": { "left-pad-zq": "npm:evil-pkg-zq@1.0.0" }, "overrides": { "left-pad-zq": "npm:evil-pkg-zq@1.0.0" } }
       expect: { decision: none }

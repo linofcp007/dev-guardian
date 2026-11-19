@@ -38,7 +38,7 @@
 import { dirname, resolve } from 'node:path';
 
 import { isNetworkPath, readSmallText, type TextRead } from '../hooks/configFile.js';
-import { parsePackageSpec, readsFileValue } from './parseCommand.js';
+import { isSemverRange, npmProtocolReading, parsePackageSpec, readsFileValue } from './parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from './types.js';
 
 type ManifestStatus = 'ok' | 'absent' | 'unreadable';
@@ -143,8 +143,6 @@ function pushOnce(into: PackageSpec[], seen: Set<string>, pkg: PackageSpec): voi
 /** The sections of a `package.json` an install fetches (npm 7 and later install peers too). */
 const NPM_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
 
-/** One word of a semver range: `||`, a hyphen, a wildcard, or a version with its comparator. */
-const SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
 /** A dist-tag: one word that no version can be taken for. */
 const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
@@ -159,22 +157,39 @@ function npmRange(value: string, manager: string): string | undefined | null {
   if (v === '' || v === 'latest') return undefined;
   if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
   if (DIST_TAG.test(v)) return v;
-  return v.split(/\s+/).every((word) => SEMVER_WORD.test(word)) ? v : null;
+  return isSemverRange(v) ? v : null;
 }
 
-/** A dependency entry as the package a registry would serve — `"x": "npm:real@^1"` is `real` — or `null`. */
-function npmDependency(key: string, value: string, manager: string): PackageSpec | null {
+/**
+ * A dependency entry as the packages a registry would serve: `"x": "npm:real@^1"` is `real` (an alias); for Yarn and bun
+ * `"x": "npm:^1"` is `x` and `"x": "npm:1.0.0"` is both `x` and `1.0.0` ({@link npmProtocolReading}, the command line's own
+ * rule). Empty when the value is no registry spec.
+ */
+function npmDependency(key: string, value: string, manager: string): PackageSpec[] {
   let name = key;
   let wanted = value.trim();
+  let second: string | undefined;
   if (/^npm:/i.test(wanted)) {
     const real = wanted.slice(4);
-    const at = real.indexOf('@', real.startsWith('@') ? 1 : 0);
-    name = at > 0 ? real.slice(0, at) : real;
-    wanted = at > 0 ? real.slice(at + 1) : '';
+    const reading = npmProtocolReading(manager, real);
+    if (reading === 'alias') {
+      const at = real.indexOf('@', real.startsWith('@') ? 1 : 0);
+      name = at > 0 ? real.slice(0, at) : real;
+      wanted = at > 0 ? real.slice(at + 1) : '';
+    } else if (reading === 'both') {
+      second = real;
+      // The key is asked at that version or range; a word (a tag, a name) leaves it with none.
+      wanted = isSemverRange(real) ? real : '';
+    } else {
+      // The key is the package and the rest its range; a rest that is no range still leaves the key vetted.
+      wanted = npmRange(real, manager) === null ? '' : real;
+    }
   }
-  if (!validName('npm', name)) return null;
+  if (!validName('npm', name)) return [];
   const range = npmRange(wanted, manager);
-  return range === null ? null : spec('npm', name, range);
+  if (range === null) return [];
+  const own = spec('npm', name, range);
+  return second !== undefined && validName('npm', second) ? [own, spec('npm', second, undefined)] : [own];
 }
 
 /**
@@ -205,8 +220,7 @@ export function readNpmManifest(dir: string, manager = 'npm'): ManifestRead {
     if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) continue;
     for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
       if (typeof value !== 'string') continue;
-      const pkg = npmDependency(key, value, manager);
-      if (pkg !== null) pushOnce(packages, seen, pkg);
+      for (const pkg of npmDependency(key, value, manager)) pushOnce(packages, seen, pkg);
     }
   }
   return { file, status: 'ok', packages, registries: [] };

@@ -1403,12 +1403,15 @@ describe('pkgvet-archive-like-name', () => {
     };
   }
 
-  it('T-10 an alias `x@npm:<name><ending>` names the REAL package, for every manager and every ending: vetted, nothing skipped', () => {
+  it('T-10 an alias `x@npm:<name><ending>` names the REAL package for npm and pnpm, and for Yarn and bun the key `x` too: vetted, nothing skipped', () => {
     for (const ending of OLD_LIST) expectName(`npm install x@npm:evil${ending}`, `evil${ending}`);
     expectName('npm install x@npm:evil.zip', 'evil.zip');
     expectName('pnpm add x@npm:evil.tgz', 'evil.tgz');
-    expectName('yarn add x@npm:evil.tar', 'evil.tar');
-    expectName('bun add x@npm:evil.tgz', 'evil.tgz');
+    // Since pkgvet-yarn-berry-npm-protocol (US-1.AC-3) Yarn and bun read both names: the key `x` and `evil.<ending>`.
+    for (const [command, rest] of [['yarn add x@npm:evil.tar', 'evil.tar'], ['bun add x@npm:evil.tgz', 'evil.tgz']] as const) {
+      const got = namedAndSkipped(command);
+      expect({ command, names: got.packages.map(([n]) => n).sort(), skipped: got.skipped }).toEqual({ command, names: ['x', rest].sort(), skipped: [] });
+    }
   });
 
   it('T-10 `<name>@<tag ending like an archive>` is the package <name> with that tag for a manager that reads no file there', () => {
@@ -2189,7 +2192,7 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
         [
           ['evil-pkg-zq@npm:^1.2.3', 'evil-pkg-zq'],
           ['evil-pkg-zq@npm:*', 'evil-pkg-zq'],
-          ['evil-pkg-zq@npm:>=1.0.0', 'evil-pkg-zq'],
+          ["'evil-pkg-zq@npm:>=1.0.0'", 'evil-pkg-zq'],
           ['evil-pkg-zq@NPM:^1', 'evil-pkg-zq'],
           ['@scope-zq/evil-pkg-zq@npm:^1', '@scope-zq/evil-pkg-zq'],
         ] as const
@@ -2240,5 +2243,16 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
       expect(cmd?.packages, spec).toEqual([]);
       expect(cmd?.skipped.map((s) => s.raw), spec).toEqual([spec]);
     }
+  });
+
+  it.each(['yarn add', 'bun add'] as const)('T-01 `%s`: a key read both ways keeps a rest that is a version or a range as its range, a word leaves it with none; the second name never has one', (prefix) => {
+    const read = (spec: string): Array<[string, string | undefined]> => vetted(`${prefix} ${spec}`);
+    expect(read('evil-pkg-zq@npm:1.0.0')).toEqual([['evil-pkg-zq', '1.0.0'], ['1.0.0', undefined]]);
+    expect(read('evil-pkg-zq@npm:1.x')).toEqual([['evil-pkg-zq', '1.x'], ['1.x', undefined]]);
+    expect(read('evil-pkg-zq@npm:1.2')).toEqual([['evil-pkg-zq', '1.2'], ['1.2', undefined]]);
+    expect(read('evil-pkg-zq@npm:1.0.0-beta.1')).toEqual([['evil-pkg-zq', '1.0.0-beta.1'], ['1.0.0-beta.1', undefined]]);
+    expect(read('evil-pkg-zq@npm:latest')).toEqual([['evil-pkg-zq', undefined], ['latest', undefined]]);
+    expect(read('alias-zq@npm:real-zq')).toEqual([['alias-zq', undefined], ['real-zq', undefined]]);
+    expect(read('evil-pkg-zq@npm:evil.tar')).toEqual([['evil-pkg-zq', undefined], ['evil.tar', undefined]]);
   });
 });

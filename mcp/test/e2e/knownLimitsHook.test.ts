@@ -174,6 +174,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'manifest-other-managers',
       'manifest-private-scope',
       'manifest-workspace-members',
+      'yarn-bun-npm-protocol',
     ]);
   });
 

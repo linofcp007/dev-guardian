@@ -3930,10 +3930,33 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
 
   it('T-04 a malicious package is denied under either name of `key@npm:rest`', async () => {
     const asKey = registry({ exists: ['evil-pkg-zq'], malicious: ['evil-pkg-zq'] });
-    const k = await decideInstallCommand('yarn add evil-pkg-zq@npm:^1.2.3', opts(asKey.fetchImpl, { popular: {} }));
+    const k = await decideInstallCommand('yarn add evil-pkg-zq@npm:^1', opts(asKey.fetchImpl, { popular: {} }));
     expect(k?.deny ?? '', 'the key is the package').toMatch(/evil-pkg-zq/);
     const asRest = registry({ exists: ['alias-zq', 'bad-zq'], malicious: ['bad-zq'] });
     const r = await decideInstallCommand('yarn add alias-zq@npm:bad-zq', opts(asRest.fetchImpl, { popular: {} }));
     expect(r?.deny ?? '', 'the rest is the other reading').toMatch(/bad-zq/);
+  });
+
+  it('T-04 `yarn add evil@npm:<version>`: the version asked of the key goes to OSV, so a malicious version is denied and another is not', async () => {
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => (p === 'evil-pkg-zq@1.0.0' ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      if (url === 'https://registry.npmjs.org/evil-pkg-zq') {
+        return json({ 'dist-tags': { latest: '2.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.0.0': {}, '2.0.0': {} } });
+      }
+      return json({ error: 'Not found' }, 404);
+    }) as typeof fetch;
+    const bad = await decideInstallCommand('yarn add evil-pkg-zq@npm:1.0.0', opts(fetchImpl, { popular: {} }));
+    expect(bad?.deny ?? '', 'the malicious version is the one asked').toMatch(/evil-pkg-zq/);
+    const other = await decideInstallCommand('yarn add evil-pkg-zq@npm:2.0.0', opts(fetchImpl, { popular: {} }));
+    expect(other?.deny).toBeUndefined();
+    expect(asked).toContain('evil-pkg-zq@2.0.0');
   });
 });
