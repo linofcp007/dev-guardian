@@ -1727,3 +1727,23 @@ describe('install-vet-update-verbs', () => {
     },
   );
 });
+
+// ───────────────── install-vet-dotnet-forms — `dotnet package add` and `dotnet tool install` through the dispatcher
+
+describe('install-vet-dotnet-forms', () => {
+  // The preload's NuGet fake: the flat container answers 404 for a name nuget.org does not know.
+  const ROUTES: Record<string, Route> = {
+    'https://api.nuget.org/v3-flatcontainer/dgprobe.zzq7731.nope/index.json': { status: 404 },
+    [OSV]: { osv: {} },
+  };
+
+  it.each(['dotnet add package Dgprobe.Zzq7731.Nope', 'dotnet package add Dgprobe.Zzq7731.Nope', 'dotnet tool install Dgprobe.Zzq7731.Nope', 'dotnet tool install -g Dgprobe.Zzq7731.Nope'])(
+    'T-03 `%s`: a name NuGet does not know is DENIED',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    },
+  );
+});

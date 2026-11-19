@@ -1994,3 +1994,103 @@ describe('install-vet-update-verbs', () => {
     expect({ command, parse: essence(command) }).toEqual({ command, parse: essence(install) });
   });
 });
+
+// ───────────────── install-vet-dotnet-forms — `dotnet package add` and `dotnet tool install` ask NuGet for the package too
+
+describe('install-vet-dotnet-forms', () => {
+  /** What a line is, in what matters for vetting: manager, ecosystem, packages (name and range), what was skipped and said uncertain. */
+  const essence = (command: string): unknown =>
+    parseInstallCommands(command).map((c) => ({
+      ecosystem: c.ecosystem,
+      packages: c.packages.map((p) => [p.name, p.range]),
+      skipped: c.skipped,
+      uncertain: c.uncertain,
+    }));
+  /** The same, without the uncertainty: for the forms whose uncertainty the spec does not pin down. */
+  const packagesOf = (command: string): unknown =>
+    parseInstallCommands(command).map((c) => ({ ecosystem: c.ecosystem, packages: c.packages.map((p) => [p.name, p.range]), skipped: c.skipped }));
+
+  it.each([
+    ['dotnet package add Some.Pkg', 'dotnet add package Some.Pkg', [['Some.Pkg', undefined]]],
+    ['dotnet package add Some.Pkg --version 1.2.3', 'dotnet add package Some.Pkg --version 1.2.3', [['Some.Pkg', '1.2.3']]],
+    ['dotnet package add Some.Pkg.nupkg', 'dotnet add package Some.Pkg.nupkg', [['Some.Pkg.nupkg', undefined]]],
+  ] as const)('T-01 `%s` reads as `%s`: NuGet package %j', (command, oldForm, expected) => {
+    // Non-vacuous: the old form is pinned to the expectation, so an empty parse cannot equal it.
+    expect(vetted(oldForm), oldForm).toEqual(expected);
+    expect(vetted(command), command).toEqual(expected);
+    expect(essence(command), `${command} against ${oldForm}`).toEqual(essence(oldForm));
+  });
+
+  it('T-01 `dotnet package add Some.Pkg --project app.csproj` gives the NuGet package, the project word is no package', () => {
+    const command = 'dotnet package add Some.Pkg --project app.csproj';
+    expect(ecosystems(command)).toEqual(['nuget']);
+    expect(vetted(command)).toEqual([['Some.Pkg', undefined]]);
+    expect(packagesOf(command)).toEqual(packagesOf('dotnet add package Some.Pkg'));
+  });
+
+  it.each([
+    ['dotnet tool install some.tool', [['some.tool', undefined]]],
+    ['dotnet tool install -g some.tool', [['some.tool', undefined]]],
+    ['dotnet tool install --global some.tool --version 1.0.0', [['some.tool', '1.0.0']]],
+    ['dotnet tool install --tool-path ./t some.tool', [['some.tool', undefined]]],
+    ['dotnet tool install --local some.tool', [['some.tool', undefined]]],
+    ['dotnet tool install some.tool.zip', [['some.tool.zip', undefined]]],
+    ['dotnet tool install some.tool.nupkg', [['some.tool.nupkg', undefined]]],
+  ] as const)('T-01 `%s` is a NuGet install of %j: the flag values are no package', (command, expected) => {
+    expect(ecosystems(command), command).toEqual(['nuget']);
+    expect(vetted(command), command).toEqual(expected);
+  });
+
+  it('T-02 guard: `dotnet add package` is read as before', () => {
+    expect(vetted('dotnet add package Some.Pkg')).toEqual([['Some.Pkg', undefined]]);
+    expect(ecosystems('dotnet add package Some.Pkg')).toEqual(['nuget']);
+    expect(parseInstallCommands('dotnet add package Some.Pkg').map((c) => c.uncertain)).toEqual([[]]);
+    expect(vetted('dotnet add app.csproj package Some.Pkg')).toEqual([['Some.Pkg', undefined]]);
+    expect(ecosystems('dotnet add app.csproj package Some.Pkg')).toEqual(['nuget']);
+    expect(
+      parseInstallCommands('dotnet add app.csproj package Some.Pkg').some((c) => c.uncertain.some((u) => /project/.test(u))),
+      'the project argument is said as an uncertainty',
+    ).toBe(true);
+  });
+
+  it.each([
+    'dotnet build',
+    'dotnet restore',
+    'dotnet tool list',
+    'dotnet tool run some.tool',
+    'dotnet tool uninstall some.tool',
+    'dotnet package list',
+    'dotnet package remove Some.Pkg',
+  ])('T-02 guard: `%s` is no install', (command) => {
+    expect(parseInstallCommands(command)).toEqual([]);
+  });
+
+  it('T-04 `dotnet tool install` with no name gives no package', () => {
+    expect(vetted('dotnet tool install')).toEqual([]);
+    expect(vetted('dotnet tool install -g')).toEqual([]);
+    // Non-vacuous: the form is read (an install of the NuGet ecosystem), it just names nothing.
+    expect(ecosystems('dotnet tool install -g')).toEqual(['nuget']);
+  });
+
+  it('T-04 `dotnet tool install a b` vets `a` and says `b` is an extra argument', () => {
+    const [cmd, ...rest] = parseInstallCommands('dotnet tool install a b');
+    expect(rest).toEqual([]);
+    expect(cmd?.packages.map((p) => p.name)).toEqual(['a']);
+    expect(cmd?.skipped).toEqual([{ raw: 'b', reason: expect.stringMatching(/unexpected extra argument/) }]);
+  });
+
+  it('T-04 `--add-source <url>` is no package: the URL is recorded as the command\'s registry', () => {
+    const url = 'https://feed.example/v3/index.json';
+    const [cmd] = parseInstallCommands(`dotnet tool install some.tool --add-source ${url}`);
+    expect(cmd?.packages.map((p) => p.name)).toEqual(['some.tool']);
+    expect(cmd?.skipped).toEqual([]);
+    expect(cmd?.customRegistry).toBe(url);
+  });
+
+  it('T-04 `dotnet tool install $TOOL` is skipped and said, never vetted', () => {
+    const [cmd] = parseInstallCommands('dotnet tool install $TOOL');
+    expect(cmd?.ecosystem).toBe('nuget');
+    expect(cmd?.packages).toEqual([]);
+    expect(cmd?.skipped.map((s) => s.raw)).toEqual(['$TOOL']);
+  });
+});
