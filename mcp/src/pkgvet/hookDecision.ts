@@ -294,8 +294,9 @@ const plural = (n: number): string => (n === 1 ? '1 package' : `${String(n)} pac
  *
  * A manifest is read for a command the parser marked as installing one: a
  * bare install, and a by-name install that is not global for certain (the
- * manager installs the `package.json` beside the names). It is read where the
- * command runs ({@link commandDir}); a directory flag (`--prefix`, `-C`,
+ * manager installs the `package.json` beside the names). A package.json is the
+ * nearest one from where the command runs ({@link commandDir}) up to the project
+ * root ({@link readNearestManifest}); a directory flag (`--prefix`, `-C`,
  * `--dir`, `--cwd`) or a `cd` that may not have run leaves that unknown, and
  * the manifest unread — said, not guessed.
  */
@@ -325,8 +326,17 @@ function withManifestPackages(
       continue;
     }
     let reads: ManifestRead[];
+    // Where the project is: the directory of the manifest the manager installs — the nearest above the command's — and,
+    // for a requirements file (its path is on the command line), the command's own.
+    let base = dir;
     try {
-      reads = manifest.kind === 'package-json' ? [readNpmManifest(dir, c.manager)] : readRequirements(dir, manifest.files, c.manager);
+      if (manifest.kind === 'package-json') {
+        const nearest = readNearestManifest(c.manager, dir, opts.projectDir);
+        base = nearest.dir;
+        reads = [nearest.read];
+      } else {
+        reads = readRequirements(dir, manifest.files, c.manager);
+      }
     } catch {
       // Fail-open, and said: nothing of the manifest was vetted.
       notes.push('dev-guardian: the manifest was not read (could not be read) — its packages were not vetted.');
@@ -335,7 +345,7 @@ function withManifestPackages(
     for (const read of reads) {
       if (read.status === 'absent') continue;
       // The lockfile is what the manager installs, whether or not the manifest could be read.
-      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, dir, read, opts, registry, notes) : undefined;
+      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, base, read, opts, registry, notes) : undefined;
       if (lock !== undefined) locked.push(lock);
       if (read.status === 'unreadable') {
         notes.push(`dev-guardian: ${read.file} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
@@ -344,7 +354,7 @@ function withManifestPackages(
       if (read.incomplete !== undefined) {
         notes.push(`dev-guardian: a file ${read.file} includes was not read (${read.incomplete}) — its packages were not vetted.`);
       }
-      const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: dir }, notes) : read.packages;
+      const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: base }, notes) : read.packages;
       // A direct dependency the lockfile records for this project leaves the registry path: its typosquat check stays.
       const packages = lock === undefined ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
@@ -515,12 +525,11 @@ type LockFound =
 function findLockfile(manager: string, dir: string, projectDir: string | undefined): LockFound {
   const names = manager === 'npm' || manager === 'pnpm' || manager === 'yarn' || manager === 'bun' ? LOCKFILES[manager] : [];
   if (names.length === 0) return { status: 'absent' };
-  const root = projectDir !== undefined && isWithin(projectDir, dir) ? resolve(projectDir) : resolve(dir);
+  const { root, dirs } = climb(dir, projectDir);
   // The manifest read already says that a directory on the network was not read.
   if (isNetworkPath(dir) || isNetworkPath(root)) return { status: 'absent' };
   const candidates = manager === 'bun' ? [...names, 'bun.lockb'] : names;
-  let at = resolve(dir);
-  for (let i = 0; i < 64; i += 1) {
+  for (const at of dirs) {
     for (const file of candidates) {
       const path = join(at, file);
       if (file === 'bun.lockb') {
@@ -532,11 +541,44 @@ function findLockfile(manager: string, dir: string, projectDir: string | undefin
       if (read.status === 'ok') return { status: 'ok', file, dir: at, text: read.text };
       if (read.status === 'refused') return { status: 'unread', file, why: refusedWhy(read.reason) };
     }
+  }
+  return { status: 'absent' };
+}
+
+/**
+ * `dir` and each directory above it up to the project root, nearest first — the one bound of what a command's
+ * directory may read upward, for the lockfile and the manifest alike. With no `projectDir`, or a `dir` outside it,
+ * only `dir`: nothing above the project is ever read.
+ */
+function climb(dir: string, projectDir: string | undefined): { root: string; dirs: string[] } {
+  const root = projectDir !== undefined && isWithin(projectDir, dir) ? resolve(projectDir) : resolve(dir);
+  const dirs: string[] = [];
+  let at = resolve(dir);
+  for (let i = 0; i < 64; i += 1) {
+    dirs.push(at);
     const parent = dirname(at);
     if (relative(root, at) === '' || parent === at) break;
     at = parent;
   }
-  return { status: 'absent' };
+  return { root, dirs };
+}
+
+/**
+ * The `package.json` a manager installs from `dir`: the nearest one from `dir` up to the project root, as the
+ * managers find theirs — the first found is the manifest, several are never merged. One that cannot be read is
+ * the answer too (a manager would stop there). None at all: the `absent` of `dir`. A manifest above `dir` is named
+ * by its path from `dir`, in POSIX form (`../package.json`); `dir` of the answer is the directory it was read in.
+ */
+function readNearestManifest(manager: string, dir: string, projectDir: string | undefined): { read: ManifestRead; dir: string } {
+  const here = resolve(dir);
+  const absent = readNpmManifest(here, manager);
+  if (absent.status !== 'absent') return { read: absent, dir: here };
+  for (const at of climb(dir, projectDir).dirs.slice(1)) {
+    const read = readNpmManifest(at, manager);
+    if (read.status === 'absent') continue;
+    return { read: { ...read, file: `${relative(here, at).split(sep).join('/')}/${read.file}` }, dir: at };
+  }
+  return { read: absent, dir: here };
 }
 
 function refusedWhy(reason: 'not-a-regular-file' | 'too-large' | 'unreadable' | 'remote-link'): string {

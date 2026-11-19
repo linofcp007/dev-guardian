@@ -638,7 +638,7 @@
 - id: manifest-workspace-members
   area: install-vetting
   doc: |-
-    In a workspace, only the `package.json` of the directory the command runs in is read. The manifests of the workspace's members (`workspaces`, `pnpm-workspace.yaml`) are installed by the same command and are not looked up.
+    In a workspace, only the one `package.json` the command installs is read: the nearest from the directory it runs in up to the project root — from a folder that is not a member, the root's. The manifests of the workspace's members (`workspaces`, `pnpm-workspace.yaml`) are installed by the same command and are not looked up.
   examples:
     - detector: hook
       event: PreToolUse
@@ -650,6 +650,18 @@
           { "name": "root", "version": "1.0.0", "private": true, "workspaces": ["packages/*"] }
         packages/a/package.json: |
           { "name": "a", "version": "1.0.0", "dependencies": { "crossenv": "*" } }
+      expect: { decision: none }
+
+- id: manifest-above-project-root
+  area: install-vetting
+  doc: |-
+    The package managers look for a `package.json` above the directory they run in, past the project root: npm, pnpm, Yarn 1 and 4 and bun were measured, and none stops at a `.git` or at the home directory. The hook reads the nearest `package.json` from where the command runs up to the project root and no further, so a manifest above the project root — installed by a command run in a folder of the project that has none — is installed unvetted, and nothing is said.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm install
       expect: { decision: none }
 
 - id: manifest-not-from-a-registry

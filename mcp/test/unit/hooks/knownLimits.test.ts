@@ -391,6 +391,7 @@ describe('the limits of the manifest vetting, as data', () => {
     'corepack-manager-download',
     'install-candidates-over-ceiling',
     'install-other-runners',
+    'manifest-above-project-root',
     'manifest-lockfile-and-transitive',
     'manifest-not-from-a-registry',
     'manifest-other-managers',

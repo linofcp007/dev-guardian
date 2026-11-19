@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **35 limits**, 31 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **36 limits**, 32 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -101,8 +101,10 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
   - `Bash` on PreToolUse, input `{"command":"bun install"}`, with `package.json`, `bun.lockb` present → `warn`
   - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `package-lock.json` present → `warn`
   - `Bash` on PreToolUse, input `{"command":"npm install"}`, with `package.json`, `package-lock.json` present → `warn`
-- In a workspace, only the `package.json` of the directory the command runs in is read. The manifests of the workspace's members (`workspaces`, `pnpm-workspace.yaml`) are installed by the same command and are not looked up.
+- In a workspace, only the one `package.json` the command installs is read: the nearest from the directory it runs in up to the project root — from a folder that is not a member, the root's. The manifests of the workspace's members (`workspaces`, `pnpm-workspace.yaml`) are installed by the same command and are not looked up.
   - `Bash` on PreToolUse, input `{"command":"npm install"}`, with `package.json`, `packages/a/package.json` present → `none` (no answer)
+- The package managers look for a `package.json` above the directory they run in, past the project root: npm, pnpm, Yarn 1 and 4 and bun were measured, and none stops at a `.git` or at the home directory. The hook reads the nearest `package.json` from where the command runs up to the project root and no further, so a manifest above the project root — installed by a command run in a folder of the project that has none — is installed unvetted, and nothing is said.
+  - `Bash` on PreToolUse, input `{"command":"npm install"}` → `none` (no answer)
 - A dependency that does not come from a registry is not looked up, because there is nothing to look up: a git repository, a URL, a tarball, a path, `file:`, `link:`, `workspace:`, `catalog:` in a `package.json`; `-e`, a path, a URL or `name @ url` in a requirements file. What such a dependency holds is whatever its source serves.
   - `Bash` on PreToolUse, input `{"command":"npm install"}`, with `package.json` present → `none` (no answer)
   - `Bash` on PreToolUse, input `{"command":"pip install -r requirements.txt"}`, with `requirements.txt` present → `none` (no answer)

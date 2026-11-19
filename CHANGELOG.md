@@ -10,6 +10,15 @@ version bump.
 
 ### Security
 
+- **An install run in a folder with no `package.json` passed without being vetted.** The package managers walk up
+  to the nearest `package.json` (measured with npm, pnpm, Yarn 1 and 4, and bun), so `cd docs && npm install`, or a
+  session opened in a subfolder, installs the manifest of the folder above, bare or by name. The hook read only the
+  `package.json` of the directory the command runs in, found none, and said nothing: that manifest and its lockfile
+  went unvetted. Present since 3.10.0, when the manifest began to be read (by name, since the entry below).
+  The manifest is now the nearest `package.json` from where the command runs up to the project root, its lockfile is
+  looked for from there, and a manifest above the command's directory is named by its path (`../package.json`). A
+  `package.json` above the project root is still not read; it is recorded in the known limits. Update; there is
+  nothing to rotate.
 - **An install behind a flag the hook did not know passed without being vetted.** The hook read the word after
   any long flag missing from its tables as that flag's value, so `npm install --prefer-dedupe <package>`,
   `pnpm add --shamefully-hoist <package>`, `yarn add --ignore-engines <package>`, `npx --ignore-scripts <package>`

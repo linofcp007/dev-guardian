@@ -6363,15 +6363,22 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
       continue;
     }
     let reads;
+    let base2 = dir;
     try {
-      reads = manifest.kind === "package-json" ? [readNpmManifest(dir, c.manager)] : readRequirements(dir, manifest.files, c.manager);
+      if (manifest.kind === "package-json") {
+        const nearest = readNearestManifest(c.manager, dir, opts.projectDir);
+        base2 = nearest.dir;
+        reads = [nearest.read];
+      } else {
+        reads = readRequirements(dir, manifest.files, c.manager);
+      }
     } catch {
       notes.push("dev-guardian: the manifest was not read (could not be read) \u2014 its packages were not vetted.");
       continue;
     }
     for (const read2 of reads) {
       if (read2.status === "absent") continue;
-      const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, dir, read2, opts, registry, notes) : void 0;
+      const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, base2, read2, opts, registry, notes) : void 0;
       if (lock !== void 0) locked.push(lock);
       if (read2.status === "unreadable") {
         notes.push(`dev-guardian: ${read2.file} was not read (${read2.reason ?? "could not be read"}) \u2014 its packages were not vetted.`);
@@ -6380,7 +6387,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
       if (read2.incomplete !== void 0) {
         notes.push(`dev-guardian: a file ${read2.file} includes was not read (${read2.incomplete}) \u2014 its packages were not vetted.`);
       }
-      const inScope = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: dir }, notes) : read2.packages;
+      const inScope = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: base2 }, notes) : read2.packages;
       const packages = lock === void 0 ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read2.registries];
@@ -6468,11 +6475,10 @@ function isWithin(root, dir) {
 function findLockfile(manager, dir, projectDir) {
   const names = manager === "npm" || manager === "pnpm" || manager === "yarn" || manager === "bun" ? LOCKFILES[manager] : [];
   if (names.length === 0) return { status: "absent" };
-  const root = projectDir !== void 0 && isWithin(projectDir, dir) ? resolve4(projectDir) : resolve4(dir);
+  const { root, dirs } = climb(dir, projectDir);
   if (isNetworkPath(dir) || isNetworkPath(root)) return { status: "absent" };
   const candidates = manager === "bun" ? [...names, "bun.lockb"] : names;
-  let at = resolve4(dir);
-  for (let i = 0; i < 64; i += 1) {
+  for (const at of dirs) {
     for (const file of candidates) {
       const path = join5(at, file);
       if (file === "bun.lockb") {
@@ -6483,11 +6489,31 @@ function findLockfile(manager, dir, projectDir) {
       if (read2.status === "ok") return { status: "ok", file, dir: at, text: read2.text };
       if (read2.status === "refused") return { status: "unread", file, why: refusedWhy(read2.reason) };
     }
+  }
+  return { status: "absent" };
+}
+function climb(dir, projectDir) {
+  const root = projectDir !== void 0 && isWithin(projectDir, dir) ? resolve4(projectDir) : resolve4(dir);
+  const dirs = [];
+  let at = resolve4(dir);
+  for (let i = 0; i < 64; i += 1) {
+    dirs.push(at);
     const parent = dirname4(at);
     if (relative3(root, at) === "" || parent === at) break;
     at = parent;
   }
-  return { status: "absent" };
+  return { root, dirs };
+}
+function readNearestManifest(manager, dir, projectDir) {
+  const here = resolve4(dir);
+  const absent = readNpmManifest(here, manager);
+  if (absent.status !== "absent") return { read: absent, dir: here };
+  for (const at of climb(dir, projectDir).dirs.slice(1)) {
+    const read2 = readNpmManifest(at, manager);
+    if (read2.status === "absent") continue;
+    return { read: { ...read2, file: `${relative3(here, at).split(sep).join("/")}/${read2.file}` }, dir: at };
+  }
+  return { read: absent, dir: here };
 }
 function refusedWhy(reason) {
   switch (reason) {
