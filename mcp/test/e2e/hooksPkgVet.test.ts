@@ -1653,3 +1653,37 @@ describe('install-vet-named-install-manifest', () => {
     },
   );
 });
+
+// ───────────────── install-vet-manifest-parent-dir — through the dispatcher
+
+describe('install-vet-manifest-parent-dir', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+  const rootManifest = (): void => {
+    mkdirSync(join(project, 'sub'), { recursive: true });
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', crossenv: '*' } }),
+    );
+  };
+  const SESSIONS: ReadonlyArray<readonly [what: string, command: string, cwd: (root: string) => string]> = [
+    ['session in sub/', 'npm install', (root) => join(root, 'sub')],
+    ['`cd sub &&` from the project root', 'cd sub && npm install', (root) => root],
+    ['session in sub/, by name', 'npm install express', (root) => join(root, 'sub')],
+    ['`cd sub &&` from the project root, by name', 'cd sub && npm install express', (root) => root],
+  ];
+
+  it.each(SESSIONS)(
+    'T-03 %s (`%s`): the root package.json names a malicious package, so the install is DENIED, with the file as ../package.json',
+    (_what, command, cwd) => {
+      rootManifest();
+      const r = runHook(command, ROUTES, { cwd: cwd(project) });
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/\.\.\/package\.json.*crossenv/s);
+    },
+  );
+});

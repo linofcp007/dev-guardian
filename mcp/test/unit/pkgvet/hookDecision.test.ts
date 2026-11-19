@@ -3426,3 +3426,201 @@ describe('install-vet-named-install-manifest', () => {
     );
   });
 });
+
+// ───────────────── install-vet-manifest-parent-dir — the manifest a manager installs is the nearest one above the command
+
+describe('install-vet-manifest-parent-dir', () => {
+  const dirOf = (rel: string, base: string = project): string => join(base, ...rel.split('/'));
+  const pkgJson = (deps: Record<string, string>, dir: string = project, extra: Record<string, unknown> = {}): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps, ...extra }));
+  };
+  /** The options of a hook call that runs in `cwd` of a project rooted at `root`, as the dispatcher gives them. */
+  const at = (fetchImpl: typeof fetch, cwd: string, root: string = project): HookVetOptions => opts(fetchImpl, { cwd, projectDir: root });
+  const doc = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const BARE = ['npm install', 'npm ci', 'pnpm install', 'yarn', 'yarn install', 'bun install'];
+  const BY_NAME = ['npm install express', 'pnpm add express', 'yarn add express', 'bun add express'];
+  const FOLDERS = ['sub', 'sub/deeper'];
+  const lines = (context: string | undefined): string[] => (context ?? '').split('\n');
+
+  /** A package-lock.json of lockfileVersion 3 for a project whose one direct dependency is express. */
+  const lockOf = (transitive: string, version: string): string =>
+    JSON.stringify({
+      name: 'fixture-app',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } },
+        'node_modules/express': { version: '4.21.2', resolved: 'https://registry.npmjs.org/express/-/express-4.21.2.tgz' },
+        [`node_modules/${transitive}`]: { version, resolved: `https://registry.npmjs.org/${transitive}/-/${transitive}-${version}.tgz` },
+      },
+    });
+  /** The registry and OSV of the lockfile tests: every document answers, OSV flags `bad-transitive@1.0.0`, and the requests are kept. */
+  function lockNet(): { fetchImpl: typeof fetch; registry: string[]; asked: string[] } {
+    const registryCalls: string[] = [];
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => (p === 'bad-transitive@1.0.0' ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      if (/^https:\/\/registry\.npmjs\.org\/[^/]+$/.test(url)) {
+        registryCalls.push(url);
+        return json(npmDoc('1.0.0').body);
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, registry: registryCalls, asked };
+  }
+
+  // ── T-01: the nearest package.json above the command is the manifest
+
+  it.each(FOLDERS.flatMap((rel) => BARE.map((command) => [command, rel] as const)))(
+    'T-01 `%s` run in %s (no package.json there): the root manifest that names a malicious package is DENIED',
+    async (command, rel) => {
+      mkdirSync(dirOf(rel), { recursive: true });
+      pkgJson({ express: '^4.21.0', 'evil-pkg': '^1.0.0' });
+      const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+      const d = await decideInstallCommand(command, at(reg.fetchImpl, dirOf(rel)));
+      expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+      expect(d?.deny).not.toMatch(/express/);
+    },
+  );
+
+  it.each(FOLDERS.flatMap((rel) => BY_NAME.map((command) => [command, rel] as const)))(
+    'T-01 by name — `%s` run in %s (no package.json there): the root manifest that names a malicious package is DENIED',
+    async (command, rel) => {
+      mkdirSync(dirOf(rel), { recursive: true });
+      pkgJson({ 'evil-pkg': '^1.0.0' });
+      const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+      const d = await decideInstallCommand(command, at(reg.fetchImpl, dirOf(rel)));
+      expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+    },
+  );
+
+  it.each(FOLDERS.flatMap((rel) => BARE.map((command) => [command, rel] as const)))(
+    'T-01 `%s` run in %s with a clean root manifest: the dependencies of the root manifest are asked about',
+    async (command, rel) => {
+      mkdirSync(dirOf(rel), { recursive: true });
+      pkgJson({ express: '^4.21.0', 'left-pad': '^1.3.0' });
+      const reg = registry({ exists: ['express', 'left-pad'] });
+      expect(await decideInstallCommand(command, at(reg.fetchImpl, dirOf(rel)))).toBeNull();
+      expect(reg.calls).toContain(doc('express'));
+      expect(reg.calls).toContain(doc('left-pad'));
+    },
+  );
+
+  // ── T-02: what was right stays (guards — green before the fix and after it)
+
+  it('T-02 guard: a package.json in the directory of the command is the one read, and the root one is not', async () => {
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    pkgJson({ 'left-pad': '^1.3.0' }, dirOf('sub'));
+    const reg = registry({ exists: ['evil-pkg', 'left-pad'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub')))).toBeNull();
+    expect(reg.calls).toContain(doc('left-pad'));
+    expect(reg.calls).not.toContain(doc('evil-pkg'));
+  });
+
+  it.each(['npm install --prefix sub', 'pnpm -C sub install', 'yarn --cwd sub install'])(
+    'T-02 guard: `%s` says package.json was not read, and reads none',
+    async (command) => {
+      pkgJson({ 'evil-pkg': '^1.0.0' });
+      pkgJson({ 'evil-pkg': '^1.0.0' }, dirOf('sub'));
+      const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+      const d = await decideInstallCommand(command, at(reg.fetchImpl, project));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toMatch(/package\.json was not read \(where the command runs could not be determined\)/);
+      expect(reg.calls).toEqual([]);
+    },
+  );
+
+  it('T-02 guard: no package.json from the directory of the command up to the project root is silence', async () => {
+    mkdirSync(dirOf('sub/deeper'), { recursive: true });
+    const reg = registry({});
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub/deeper')))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-02 guard: a command directory outside the project reads that directory alone', async () => {
+    const outside = dirOf('outside');
+    const root = dirOf('inside');
+    mkdirSync(root, { recursive: true });
+    mkdirSync(dirOf('sub', outside), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, outside);
+    // The project root is `inside`; the command runs in `outside`, which has a package.json of its own.
+    const own = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const denied = await decideInstallCommand('npm install', at(own.fetchImpl, outside, root));
+    expect(denied?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg/s);
+    // Below that directory nothing is read: it has no package.json, and the one above it is not looked for.
+    const below = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(below.fetchImpl, dirOf('sub', outside), root))).toBeNull();
+    expect(below.calls).toEqual([]);
+  });
+
+  // ── T-04: the lockfile is looked for from the directory of the manifest found
+
+  it('T-04 the lockfile of the root is read for a command in sub/: what it pins goes to OSV, and the registry is not asked about the covered dependency', async () => {
+    mkdirSync(dirOf('sub'), { recursive: true });
+    pkgJson({ express: '^4.21.0' });
+    writeFileSync(join(project, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, dirOf('sub')))).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
+  });
+
+  it('T-04 a malicious version the lockfile of the root pins is DENIED for a command in sub/, naming the lockfile', async () => {
+    mkdirSync(dirOf('sub'), { recursive: true });
+    pkgJson({ express: '^4.21.0' });
+    writeFileSync(join(project, 'package-lock.json'), lockOf('bad-transitive', '1.0.0'));
+    const net = lockNet();
+    const d = await decideInstallCommand('npm ci', at(net.fetchImpl, dirOf('sub')));
+    expect(d?.deny ?? '(no deny)').toMatch(/package-lock\.json pins 'bad-transitive@1\.0\.0': .*MAL-2026-77/);
+  });
+
+  it('T-04 a package.json above that cannot be read gives the line "was not read", with its path from the directory of the command', async () => {
+    mkdirSync(dirOf('sub'), { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{ "dependencies": ');
+    const reg = registry({});
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub')));
+    expect(d?.deny).toBeUndefined();
+    expect(lines(d?.context)).toHaveLength(1);
+    expect(d?.context ?? '(no context)').toMatch(/^dev-guardian: \.\.\/package\.json was not read \(not valid JSON\) — its packages were not vetted\.$/);
+  });
+
+  // ── T-05: the climb stops at the project root (guard — green before the fix and after it)
+
+  it('T-05 guard: a package.json only above the project root is not read, for a command below the root', async () => {
+    const repo = dirOf('repo');
+    mkdirSync(dirOf('sub', repo), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub', repo), repo))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  // ── T-06: a node_modules in the way, and a workspace
+
+  it('T-06 sub/ with an empty node_modules and no package.json: the root manifest is read', async () => {
+    mkdirSync(dirOf('sub/node_modules'), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('yarn install', at(reg.fetchImpl, dirOf('sub')));
+    expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-06 a workspace run from tools/, which is no member: the manifest of the root is read, and the members are not', async () => {
+    mkdirSync(dirOf('tools'), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, project, { workspaces: ['packages/*'] });
+    pkgJson({ 'member-only': '^1.0.0' }, dirOf('packages/web'));
+    const reg = registry({ exists: ['evil-pkg', 'member-only'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('tools')));
+    expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+    expect(reg.calls).not.toContain(doc('member-only'));
+  });
+});
