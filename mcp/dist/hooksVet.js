@@ -3240,6 +3240,7 @@ function walk(words, table) {
   const positionals = [];
   const skipped = [];
   const uncertain = [];
+  let unknownFlags = 0;
   let customRegistry;
   const registries = [];
   const flags = [];
@@ -3271,7 +3272,10 @@ function walk(words, table) {
     const eqAt = v.indexOf("=");
     if (eqAt > 0) {
       const flag = v.slice(0, eqAt);
-      if (!known(flag)) uncertain.push(`unknown flag ${flag}`);
+      if (!known(flag)) {
+        uncertain.push(`unknown flag ${flag}`);
+        unknownFlags += 1;
+      }
       note(flag, v.slice(eqAt + 1));
       continue;
     }
@@ -3296,15 +3300,19 @@ function walk(words, table) {
           }
           break;
         }
-        if (!table.bool.has(flag)) uncertain.push(`unknown flag ${flag}`);
+        if (!table.bool.has(flag)) {
+          uncertain.push(`unknown flag ${flag}`);
+          unknownFlags += 1;
+        }
         note(flag, void 0);
       }
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
+    unknownFlags += 1;
     if (v.startsWith("--") && !v.startsWith("--no-")) i += 1;
   }
-  const out = { positionals, skipped, uncertain, registries, flags };
+  const out = { positionals, skipped, uncertain, registries, flags, unknownFlags };
   if (customRegistry !== void 0) out.customRegistry = customRegistry;
   return out;
 }
@@ -3602,7 +3610,8 @@ function collect(d, context) {
     if (first !== void 0 && version !== void 0) first.range = version;
   }
   if (allFlags.some((f) => flagTable.dir?.has(f.flag) === true)) out.prefixed = true;
-  if (d.global === true || allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args)) out.global = true;
+  const knownFlagsOnly = preWalk.unknownFlags + walked.unknownFlags === 0;
+  if (d.global === true || knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args)) out.global = true;
   if (d.manager === "pip" || d.manager === "uv-pip") {
     const files = walked.flags.flatMap((f) => REQUIREMENT_FLAGS.has(f.flag) && f.value !== void 0 && f.value !== "" ? [f.value] : []);
     if (files.length > 0) out.manifest = { kind: "requirements", files };

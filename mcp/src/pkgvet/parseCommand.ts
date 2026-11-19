@@ -584,6 +584,8 @@ interface WalkResult {
   uncertain: string[];
   /** Every flag seen, with its value when it took one — what a launcher's packages are read from. */
   flags: Array<{ flag: string; value?: string }>;
+  /** How many flags the table of the manager does not know: npm reads abbreviations (`--loc=project`) that it does not hold. */
+  unknownFlags: number;
 }
 
 const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
@@ -602,6 +604,7 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   const positionals: Positional[] = [];
   const skipped: SkippedSpec[] = [];
   const uncertain: string[] = [];
+  let unknownFlags = 0;
   let customRegistry: string | undefined;
   const registries: string[] = [];
   const flags: Array<{ flag: string; value?: string }> = [];
@@ -633,7 +636,10 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     const eqAt = v.indexOf('=');
     if (eqAt > 0) {
       const flag = v.slice(0, eqAt);
-      if (!known(flag)) uncertain.push(`unknown flag ${flag}`);
+      if (!known(flag)) {
+        uncertain.push(`unknown flag ${flag}`);
+        unknownFlags += 1;
+      }
       note(flag, v.slice(eqAt + 1));
       continue;
     }
@@ -658,15 +664,19 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
           }
           break;
         }
-        if (!table.bool.has(flag)) uncertain.push(`unknown flag ${flag}`);
+        if (!table.bool.has(flag)) {
+          uncertain.push(`unknown flag ${flag}`);
+          unknownFlags += 1;
+        }
         note(flag, undefined);
       }
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
+    unknownFlags += 1;
     if (v.startsWith('--') && !v.startsWith('--no-')) i += 1;
   }
-  const out: WalkResult = { positionals, skipped, uncertain, registries, flags };
+  const out: WalkResult = { positionals, skipped, uncertain, registries, flags, unknownFlags };
   if (customRegistry !== undefined) out.customRegistry = customRegistry;
   return out;
 }
@@ -723,9 +733,9 @@ const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
  *     and for npm `--location=global` and `--location global`;
  *   - takes it back: any other word that starts with `-` and has `global` or `location` in it, or starts `-g=`;
  *   - a short cluster (`-gD`) says nothing; a package name with "global" in it takes nothing back.
- * It is only half the answer: a global word that stands where another flag's value goes (`--otp --global`) is that
+ * It is only part of the answer: a global word that stands where another flag's value goes (`--otp --global`) is that
  * flag's value, not a flag — the caller also asks the walker's flags ({@link isGlobalFlag}), which know the flags that
- * take a value, and both must agree.
+ * take a value, and a flag the manager's table does not know (npm's abbreviations: `--loc=project`) leaves it not global.
  * Yarn is global only by its subcommand (`yarn global add`, {@link Detected.global}): a flag never makes it so (Yarn 1's
  * `-g` takes a value, Yarn 4 refuses it).
  */
@@ -1069,9 +1079,12 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
 
   // What the command installs from a manifest, beside what it names.
   if (allFlags.some((f) => flagTable.dir?.has(f.flag) === true)) out.prefixed = true;
-  // Both readings must agree: the walker knows which flags take a value (`--otp --global` hands `--global` to `--otp`, and
-  // npm 11.20 then obeys the project's file — measured 2026-11-19), the raw words know what takes a global flag back.
-  if (d.global === true || (allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
+  // Three readings must agree (npm 11.20.0, measured 2026-11-19). The walker knows which flags take a value (`--otp
+  // --global` hands `--global` to `--otp`, and npm then obeys the project's file); the raw words know what takes a
+  // global flag back; and every flag must be one the manager's table knows, because npm reads abbreviations and
+  // shorthands the table does not hold (`-g --loc=project` and `-g --g=false` obey the project's file). In doubt: no.
+  const knownFlagsOnly = preWalk.unknownFlags + walked.unknownFlags === 0;
+  if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
     const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
     if (files.length > 0) out.manifest = { kind: 'requirements', files };

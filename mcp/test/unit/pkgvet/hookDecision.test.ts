@@ -3109,6 +3109,8 @@ describe('install-vet-project-registry-said', () => {
     ['npm install -g --no-global', `npm install -g --no-global ${CLEAN}`],
     ['pnpm add -g false', `pnpm add -g false ${CLEAN}`],
     ['npm install --otp --global (the value of --otp)', `npm install --otp --global ${CLEAN}`],
+    ['npm i -g --loc=project (an abbreviation npm reads)', `npm i -g --loc=project ${CLEAN}`],
+    ['npm install -g --g=false (an abbreviation npm reads)', `npm install -g --g=false ${CLEAN}`],
     ['yarn add -g gdir (a value of Yarn 1, no global install)', `yarn add -g gdir ${CLEAN}`],
   ])('T-09 %s: the manager obeys the project file, so the line is said', async (_label, command) => {
     put(project, 'package.json', MANIFEST);

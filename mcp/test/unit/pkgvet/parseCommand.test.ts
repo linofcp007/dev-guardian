@@ -1487,6 +1487,9 @@ describe('install-vet-project-registry-said', () => {
     'bun add --global x',
     'npm install --otp 123456 -g x',
     'npm install -g true x',
+    'npm install -g --force x',
+    'npm install --save-exact -g x',
+    'pnpm add -g --ignore-scripts x',
   ])('T-09 %s: a global install', (command) => {
     expect(globalOf(command)).toBe(true);
   });
@@ -1522,6 +1525,13 @@ describe('install-vet-project-registry-said', () => {
     'npm install --script-shell --global x',
     'npm install --tag --global x',
     'pnpm add --filter -g x',
+    'npm i -g --loc=project x',
+    'npm i -g --loca=project x',
+    'npm i -g --g=false x',
+    'npm install -g --foo=bar x',
+    'npm install -g --unsafe-perm x',
+    'npm --loc=project install -g x',
+    'pnpm add -g --frozen x',
   ])('T-09 %s: not certainly global, so not global', (command) => {
     expect(globalOf(command) === true).toBe(false);
   });
