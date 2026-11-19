@@ -1709,3 +1709,66 @@ describe('install-vet-unknown-flag-hides-package', () => {
     expect(parseInstallCommands('npm run build')).toEqual([]);
   });
 });
+
+// ───────────────── install-vet-through-corepack — `corepack <manager> …` and `yarnpkg` are read as the manager they run
+
+describe('install-vet-through-corepack', () => {
+  const MANIFEST = { kind: 'package-json' };
+  /** Every install command of `command`, whole: what the hook vets is all of it, so the comparison is too. */
+  const parsed = (command: string): ReturnType<typeof parseInstallCommands> => parseInstallCommands(command);
+  /** What a line gives for vetting: the packages and the manifest it names, whatever the manager's name. */
+  const vettable = (command: string): Array<{ packages: string[]; manifest: unknown }> =>
+    parseInstallCommands(command).flatMap((c) => (c.packages.length > 0 || c.manifest !== undefined ? [{ packages: c.packages.map((p) => p.name), manifest: c.manifest }] : []));
+
+  const TABLE = [
+    'yarn add p', 'yarn install', 'yarn', 'yarn dlx p', 'npm install p', 'npm install', 'npm ci', 'npm exec p', 'npx p',
+    'pnpm add p', 'pnpm install', 'pnpm dlx p', 'pnpx p', 'yarn add -D p', 'npm install -g p',
+  ];
+
+  it.each(TABLE)('T-01 `corepack` before `%s`, with no version, @1.2.3, @^4 or @latest, reads as the line without it', (line) => {
+    const base = parsed(line);
+    // The table must be a real install for the property to say anything: an empty parse equals an empty parse.
+    expect(vettable(line), line).not.toEqual([]);
+    const space = line.indexOf(' ');
+    const manager = space === -1 ? line : line.slice(0, space);
+    const rest = space === -1 ? '' : line.slice(space);
+    // The whole parse is compared — packages with names, ranges and `raw`, manifest, global, uncertain, manager — since
+    // `corepack` is a prefix the package manager receives no part of: nothing observable may differ from the base line.
+    for (const command of [`corepack ${line}`, `corepack ${manager}@1.2.3${rest}`, `corepack ${manager}@^4${rest}`, `corepack ${manager}@latest${rest}`]) {
+      expect({ command, parse: parsed(command) }).toEqual({ command, parse: base });
+    }
+  });
+
+  it('T-02 not installs: what corepack does with its own cache, a name it does not know, and a flag before the manager', () => {
+    for (const command of [
+      'corepack enable', 'corepack disable', 'corepack install', 'corepack install -g yarn@4.18.1', 'corepack prepare yarn@4.18.1 --activate',
+      'corepack pack', 'corepack cache clean', 'corepack hydrate f.tgz', 'corepack YARN add p', 'corepack bun add p',
+      'corepack --verbose yarn add p', 'corepack -- yarn add p',
+    ]) {
+      expect({ command, vetted: vettable(command) }).toEqual({ command, vetted: [] });
+    }
+  });
+
+  it('T-02 as before: the same commands without `corepack` give what they gave', () => {
+    expect(vettable('yarn add p')).toEqual([{ packages: ['p'], manifest: undefined }]);
+    expect(vettable('npm install')).toEqual([{ packages: [], manifest: MANIFEST }]);
+    expect(vettable('bun add p')).toEqual([{ packages: ['p'], manifest: undefined }]);
+    expect(vettable('enable')).toEqual([]);
+  });
+
+  it.each(['yarnpkg add p', 'yarnpkg install', 'yarnpkg', 'yarnpkg global add p', 'yarnpkg add -D p', 'yarnpkg dlx p'])(
+    'T-04 %s gives what `yarn` gives for the same words',
+    (line) => {
+      const asYarn = `yarn${line.slice('yarnpkg'.length)}`;
+      expect(vettable(asYarn), asYarn).not.toEqual([]);
+      expect(parsed(line)).toEqual(parsed(asYarn));
+    },
+  );
+
+  it.each(['corepack use npm@11.19.0', 'corepack use pnpm@latest', 'corepack use yarn@4.18.1', 'corepack up'])(
+    'T-04 %s is an install of the project manifest, naming no package',
+    (command) => {
+      expect(vettable(command)).toEqual([{ packages: [], manifest: MANIFEST }]);
+    },
+  );
+});

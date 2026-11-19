@@ -1572,3 +1572,35 @@ describe('install-vet-unknown-flag-hides-package', () => {
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/evil-cli-zz.*MAL-2026-0077/s);
   });
 });
+
+// ───────────────── install-vet-through-corepack — `corepack <manager> …` and `yarnpkg` through the dispatcher
+
+describe('install-vet-through-corepack', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+  };
+
+  it.each(['corepack yarn add evil-cli-zz', 'corepack npx evil-cli-zz', 'yarnpkg add evil-cli-zz'])('T-03 %s is DENIED, naming the package', (command) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/evil-cli-zz.*MAL-2026-0077/s);
+  });
+
+  it.each(['corepack pnpm install', 'corepack use yarn@4.18.1', 'corepack up'])(
+    'T-03 %s in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      writeFileSync(
+        join(project, 'package.json'),
+        JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', crossenv: '*' } }),
+      );
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+});
