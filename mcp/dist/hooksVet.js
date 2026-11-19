@@ -2548,8 +2548,12 @@ function npmProtocolReading(manager, rest) {
   if (manager !== "yarn" && manager !== "bun") return "alias";
   if (/[$`]/.test(rest)) return "alias";
   if (rest.indexOf("@", rest.startsWith("@") ? 1 : 0) > 0) return "alias";
-  if (rest !== "" && notAPackage(rest, null) !== null) return "alias";
+  if (rest !== "" && !isSemverRange(rest) && notAPackage(rest, null) !== null) return "alias";
   return NAME_RE.npm.test(rest) ? "both" : "key";
+}
+var MAX_RANGE_LENGTH = 100;
+function npmKeyRange(manager, rest) {
+  return rest.length <= MAX_RANGE_LENGTH && isSemverRange(rest) && !readsFileValue(manager, rest) ? rest : void 0;
 }
 function npmProtocolRest(raw, manager) {
   const at = raw.indexOf("@", raw.startsWith("@") ? 1 : 0);
@@ -2559,12 +2563,16 @@ function npmProtocolRest(raw, manager) {
   return "name" in real ? { ...real, raw } : void 0;
 }
 var TWO_READINGS = " is read two ways";
-function bothReadings(first, second) {
-  return `\`${first.raw}\`${TWO_READINGS} \u2014 Yarn 4 asks the registry for \`${first.name}\`, Yarn 1 for \`${second.name}\`, and bun for one or the other \u2014 both are looked up`;
+function bothReadings(pairs) {
+  const [first, second] = pairs[0] ?? [];
+  if (first === void 0 || second === void 0) return void 0;
+  const more = pairs.length - 1;
+  const others = more === 0 ? "" : ` (and ${more} more ${more === 1 ? "word" : "words"} like it)`;
+  return `\`${first.raw}\`${others}${TWO_READINGS} \u2014 Yarn 4 asks the registry for \`${first.name}\`, Yarn 1 for \`${second.name}\`, and bun for one or the other \u2014 both are looked up`;
 }
 function npmReadings(spec2, manager) {
   const second = npmProtocolRest(spec2.raw, manager);
-  return second === void 0 ? { packages: [spec2] } : { packages: [spec2, second], why: bothReadings(spec2, second) };
+  return second === void 0 ? { packages: [spec2] } : { packages: [spec2, second], pair: [spec2, second] };
 }
 function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
@@ -2579,7 +2587,7 @@ function parseNpm(raw, manager, alias = false) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);
       const reading = alias ? "alias" : npmProtocolReading(manager, rest);
-      if (reading !== "alias") return withRange(checkName("npm", name, raw), reading === "key" || isSemverRange(rest) ? rest : void 0);
+      if (reading !== "alias") return withRange(checkName("npm", name, raw), npmKeyRange(manager, rest));
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
@@ -3889,6 +3897,7 @@ function collectLaunch(d, launch, context) {
   const candidateRaws = new Set(limited.kept.filter((p) => p.candidate === true).map((p) => p.value));
   const skipped = [...pre.skipped, ...w.skipped];
   const unsure = [...wordFlags(table.noFetchFlags), ...wordFlags(table.shellFlags)].map((f) => bothWaysReason(f.value ?? "", f.flag));
+  const bothPairs = [];
   for (const raw of raws) {
     const spec2 = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ("name" in spec2) {
@@ -3897,10 +3906,13 @@ function collectLaunch(d, launch, context) {
         packages.push(each);
         if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(each);
       }
-      const why = unmeasuredReason(d.manager, spec2) ?? ("why" in read2 ? read2.why : void 0);
+      if ("pair" in read2 && read2.pair !== void 0) bothPairs.push(read2.pair);
+      const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0) unsure.push(why);
     } else skipped.push(spec2);
   }
+  const bothWhy = bothReadings(bothPairs);
+  if (bothWhy !== void 0) unsure.push(bothWhy);
   const out = {
     ecosystem: d.ecosystem,
     manager: d.manager,
@@ -3941,6 +3953,7 @@ function collect(d, context) {
   if (registry !== void 0) out.customRegistry = registry;
   if (limited.dropped > 0 && d.manifest !== "always") out.candidatesDropped = limited.dropped;
   const candidatePackages = [];
+  const bothPairs = [];
   let lastComposer;
   for (const p of positionals) {
     let spec2;
@@ -3970,7 +3983,8 @@ function collect(d, context) {
         packages.push(each);
         if (p.candidate === true) candidatePackages.push(each);
       }
-      const why = unmeasuredReason(d.manager, spec2) ?? ("why" in read2 ? read2.why : void 0);
+      if ("pair" in read2 && read2.pair !== void 0) bothPairs.push(read2.pair);
+      const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === "packagist" ? spec2 : void 0;
     } else {
@@ -3985,6 +3999,8 @@ function collect(d, context) {
       candidatePackages.push(spec2);
     }
   }
+  const bothWhy = bothReadings(bothPairs);
+  if (bothWhy !== void 0) out.uncertain.push(bothWhy);
   if (candidatePackages.length > 0) out.candidates = candidatePackages;
   if (d.ecosystem === "nuget") {
     const extra = positionals.some((p) => p.candidate === true) ? [] : packages.splice(1);
@@ -4515,7 +4531,6 @@ var REASON = {
 var MANIFEST_UNREADABLE_REASONS = Object.values(REASON);
 var UNKNOWN_DIRECTORY = REASON.unknownDir;
 var MAX_NAME_LENGTH = 214;
-var MAX_RANGE_LENGTH = 100;
 var MAX_LABEL_LENGTH = 120;
 function label(file) {
   const clean = file.replace(/[\u0000-\u001f\u007f]+/g, " ").trim();
@@ -4581,9 +4596,9 @@ function npmDependency(key, value, manager) {
       wanted = at > 0 ? real.slice(at + 1) : "";
     } else if (reading === "both") {
       second = real;
-      wanted = isSemverRange(real) ? real : "";
+      wanted = npmKeyRange(manager, real) ?? "";
     } else {
-      wanted = npmRange(real, manager) === null ? "" : real;
+      wanted = npmKeyRange(manager, real) ?? "";
     }
   }
   if (!validName2("npm", name)) return [];

@@ -3959,4 +3959,16 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     expect(other?.deny).toBeUndefined();
     expect(asked).toContain('evil-pkg-zq@2.0.0');
   });
+
+  // ── round 1 of the review (T-06)
+
+  it('T-06 a command with 20 words `kN@npm:latest`, every name missing: the reason of the two readings is said once, and the context stays short', async () => {
+    const words = Array.from({ length: 20 }, (_, i) => `k${i}-zq@npm:latest`);
+    const reg = registry();
+    const d = await decideInstallCommand(`yarn add ${words.join(' ')}`, opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    const context = d?.context ?? '';
+    expect(context).toContain('and 19 more words like it');
+    expect(context.length).toBeLessThan(10_000);
+  });
 });

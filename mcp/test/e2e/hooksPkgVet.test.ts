@@ -1806,6 +1806,28 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     );
     deniedFor(runHook('yarn install', ROUTES));
   });
+
+  // ── round 1 of the review (T-06)
+
+  it('T-06 `yarn add evil@npm:~1.5.0` is DENIED, naming the package (a `~` and a version is a range, not a path)', () => {
+    deniedFor(runHook('yarn add evil-pkg-zq@npm:~1.5.0', ROUTES));
+  });
+
+  it('T-06 `yarn add evil@npm:^1.2.3` asks the key at the version the range picks: only that one, not the latest, is malicious', () => {
+    // The newest version is 2.0.0 and clean; the range ^1.2.3 picks 1.5.0, the one the advisory names.
+    const doc: Route = {
+      accept: 'install-v1',
+      body: { 'dist-tags': { latest: '2.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.2.3': {}, '1.5.0': {}, '2.0.0': {} } },
+    };
+    const routes: Record<string, Route> = {
+      'https://registry.npmjs.org/range-pkg-zq': doc,
+      [OSV]: { osv: { 'range-pkg-zq@1.5.0': ['MAL-2026-0098'] } },
+    };
+    const r = runHook('yarn add range-pkg-zq@npm:^1.2.3', routes);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/range-pkg-zq/);
+  });
 });
 
 // ───────────────── install-vet-npm-exec-bool-word — a launcher line is read as the launcher reads it, through the dispatcher

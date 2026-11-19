@@ -263,8 +263,21 @@ export function npmProtocolReading(manager: string | undefined, rest: string): '
   if (manager !== 'yarn' && manager !== 'bun') return 'alias';
   if (/[$`]/.test(rest)) return 'alias';
   if (rest.indexOf('@', rest.startsWith('@') ? 1 : 0) > 0) return 'alias';
-  if (rest !== '' && notAPackage(rest, null) !== null) return 'alias';
+  // A version or a range is a range before it is a path: `~1.2.3` starts like the home directory `~`.
+  if (rest !== '' && !isSemverRange(rest) && notAPackage(rest, null) !== null) return 'alias';
   return NAME_RE.npm.test(rest) ? 'both' : 'key';
+}
+
+/** The longest range a command or a manifest value may give a package: a longer one is not taken for a range. */
+export const MAX_RANGE_LENGTH = 100;
+
+/**
+ * The range `key` keeps in a `key@npm:rest` read as the registry protocol (`key` and `both`): `rest` when it is a version or a
+ * range the manager takes there — not an archive bun reads as a file — and nothing when it is a word (a tag, a name, a path). The one
+ * rule of the command line and of a `package.json` value.
+ */
+export function npmKeyRange(manager: string | undefined, rest: string): string | undefined {
+  return rest.length <= MAX_RANGE_LENGTH && isSemverRange(rest) && !readsFileValue(manager, rest) ? rest : undefined;
 }
 
 /**
@@ -282,15 +295,19 @@ function npmProtocolRest(raw: string, manager: string | undefined): PackageSpec 
 /** What the reason of a `key@npm:rest` read both ways says of the word: a confident command keeps this reason, it is no doubt about the shape. */
 const TWO_READINGS = ' is read two ways';
 
-/** Why a command that names `key@npm:rest` read both ways is uncertain. */
-function bothReadings(first: PackageSpec, second: PackageSpec): string {
-  return `\`${first.raw}\`${TWO_READINGS} — Yarn 4 asks the registry for \`${first.name}\`, Yarn 1 for \`${second.name}\`, and bun for one or the other — both are looked up`;
+/** Why a command that names `key@npm:rest` read both ways is uncertain: said once, for the first word and how many more are like it. */
+function bothReadings(pairs: ReadonlyArray<readonly [PackageSpec, PackageSpec]>): string | undefined {
+  const [first, second] = pairs[0] ?? [];
+  if (first === undefined || second === undefined) return undefined;
+  const more = pairs.length - 1;
+  const others = more === 0 ? '' : ` (and ${more} more ${more === 1 ? 'word' : 'words'} like it)`;
+  return `\`${first.raw}\`${others}${TWO_READINGS} — Yarn 4 asks the registry for \`${first.name}\`, Yarn 1 for \`${second.name}\`, and bun for one or the other — both are looked up`;
 }
 
-/** What a word of an npm install names: its package, and the second one of a `key@npm:rest` read both ways, with why the command is uncertain. */
-function npmReadings(spec: PackageSpec, manager: string | undefined): { packages: PackageSpec[]; why?: string } {
+/** What a word of an npm install names: its package, and the second one of a `key@npm:rest` read both ways (the pair is kept to say why the command is uncertain). */
+function npmReadings(spec: PackageSpec, manager: string | undefined): { packages: PackageSpec[]; pair?: readonly [PackageSpec, PackageSpec] } {
   const second = npmProtocolRest(spec.raw, manager);
-  return second === undefined ? { packages: [spec] } : { packages: [spec, second], why: bothReadings(spec, second) };
+  return second === undefined ? { packages: [spec] } : { packages: [spec, second], pair: [spec, second] };
 }
 
 /** `alias`: the word is the real name after `npm:` (read in any letter case, as npm does) — a name for every manager, whatever it ends in. */
@@ -309,7 +326,7 @@ function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | S
       const rest = range.slice(4);
       const reading = alias ? 'alias' : npmProtocolReading(manager, rest);
       // Yarn and bun: `key@npm:rest` asks for `key`; the `rest` that is a range stays its range (`both` adds `rest` as a name).
-      if (reading !== 'alias') return withRange(checkName('npm', name, raw), reading === 'key' || isSemverRange(rest) ? rest : undefined);
+      if (reading !== 'alias') return withRange(checkName('npm', name, raw), npmKeyRange(manager, rest));
       // `alias@npm:real@range` installs `real` under the name `alias`.
       const real = parseNpm(range.slice(4), manager, true);
       return 'name' in real ? { ...real, raw } : skip(raw, real.reason);
@@ -1419,6 +1436,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   const candidateRaws = new Set(limited.kept.filter((p) => p.candidate === true).map((p) => p.value));
   const skipped: SkippedSpec[] = [...pre.skipped, ...w.skipped];
   const unsure: string[] = [...wordFlags(table.noFetchFlags), ...wordFlags(table.shellFlags)].map((f) => bothWaysReason(f.value ?? '', f.flag));
+  const bothPairs: Array<readonly [PackageSpec, PackageSpec]> = [];
   for (const raw of raws) {
     const spec = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     if ('name' in spec) {
@@ -1427,10 +1445,13 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
         packages.push(each);
         if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(each);
       }
-      const why = unmeasuredReason(d.manager, spec) ?? ('why' in read ? read.why : undefined);
+      if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
+      const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined) unsure.push(why);
     } else skipped.push(spec);
   }
+  const bothWhy = bothReadings(bothPairs);
+  if (bothWhy !== undefined) unsure.push(bothWhy);
   const out: InstallCommand = {
     ecosystem: d.ecosystem,
     manager: d.manager,
@@ -1476,6 +1497,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
   // thing the command surely names, so it does not stop the manifest from being read.
   const candidatePackages: PackageSpec[] = [];
+  const bothPairs: Array<readonly [PackageSpec, PackageSpec]> = [];
   let lastComposer: PackageSpec | undefined;
   for (const p of positionals) {
     let spec: PackageSpec | SkippedSpec;
@@ -1505,7 +1527,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
         packages.push(each);
         if (p.candidate === true) candidatePackages.push(each);
       }
-      const why = unmeasuredReason(d.manager, spec) ?? ('why' in read ? read.why : undefined);
+      if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
+      const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
@@ -1521,6 +1544,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
       candidatePackages.push(spec);
     }
   }
+  const bothWhy = bothReadings(bothPairs);
+  if (bothWhy !== undefined) out.uncertain.push(bothWhy);
   if (candidatePackages.length > 0) out.candidates = candidatePackages;
 
   if (d.ecosystem === 'nuget') {

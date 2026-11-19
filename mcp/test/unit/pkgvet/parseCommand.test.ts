@@ -2255,6 +2255,52 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     expect(read('alias-zq@npm:real-zq')).toEqual([['alias-zq', undefined], ['real-zq', undefined]]);
     expect(read('evil-pkg-zq@npm:evil.tar')).toEqual([['evil-pkg-zq', undefined], ['evil.tar', undefined]]);
   });
+
+  // ── round 1 of the review (T-06)
+
+  it.each(['yarn add', 'bun add'] as const)('T-06 `%s`: a rest that is `~` and a version is a range for the key, `~/x` and `~user/x` stay paths', (prefix) => {
+    expect(vetted(`${prefix} evil-pkg-zq@npm:~1.2.3`)).toEqual([['evil-pkg-zq', '~1.2.3']]);
+    expect(vetted(`${prefix} evil-pkg-zq@npm:~1`)).toEqual([['evil-pkg-zq', '~1']]);
+    for (const spec of ['evil-pkg-zq@npm:~/x', 'evil-pkg-zq@npm:~user-zq/x']) {
+      const [cmd] = parseInstallCommands(`${prefix} ${spec}`);
+      expect(cmd?.packages, spec).toEqual([]);
+      expect(cmd?.skipped.map((s) => s.raw), spec).toEqual([spec]);
+    }
+  });
+
+  it.each(['npm install', 'pnpm add'] as const)('T-06 guard: `%s` reads `key@npm:~1.2.3` as before: a path, skipped', (prefix) => {
+    const [cmd] = parseInstallCommands(`${prefix} evil-pkg-zq@npm:~1.2.3`);
+    expect(cmd?.packages).toEqual([]);
+    expect(cmd?.skipped.map((s) => s.raw)).toEqual(['evil-pkg-zq@npm:~1.2.3']);
+  });
+
+  it.each(['yarn add', 'bun add'] as const)('T-06 `%s`: the range of the key is the rest only when the rest is a range; an empty rest is the key', (prefix) => {
+    expect(vetted(`${prefix} evil-pkg-zq@npm:^1.2.3`)).toEqual([['evil-pkg-zq', '^1.2.3']]);
+    expect(vetted(`${prefix} lodash-zq@npm:user/repo`)).toEqual([['lodash-zq', undefined]]);
+    expect(vetted(`${prefix} 'lodash-zq@npm:foo bar'`)).toEqual([['lodash-zq', undefined]]);
+    expect(vetted(`${prefix} evil-pkg-zq@npm:`)).toEqual([['evil-pkg-zq', undefined]]);
+  });
+
+  it.each([
+    ['yarn add x@npm:evil.tar', 'evil.tar'],
+    ['bun add x@npm:evil.tgz', 'evil.tgz'],
+  ] as const)('T-06 (EC-5) `%s` vets both names, nothing skipped', (command, rest) => {
+    expect(namesOf(command)).toEqual(['x', rest].sort());
+    expect(parseInstallCommands(command).flatMap((c) => c.skipped)).toEqual([]);
+  });
+
+  it('T-06 the two readings are said once per command: the first word and how many more are like it', () => {
+    const words = Array.from({ length: 5 }, (_, i) => `k${i}-zq@npm:latest`);
+    const reasons = parseInstallCommands(`yarn add ${words.join(' ')}`)
+      .flatMap((c) => c.uncertain)
+      .filter((u) => u.includes(' is read two ways'));
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toContain('k0-zq@npm:latest');
+    expect(reasons[0]).toContain('and 4 more words like it');
+    const one = parseInstallCommands('yarn add k0-zq@npm:latest').flatMap((c) => c.uncertain).filter((u) => u.includes(' is read two ways'));
+    expect(one).toHaveLength(1);
+    expect(one[0]).not.toContain('more word');
+  });
 });
 
 // ───────────────── install-vet-npm-exec-bool-word — a launcher line is read as the launcher reads it

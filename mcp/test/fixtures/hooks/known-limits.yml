@@ -927,26 +927,16 @@
 - id: yarn-bun-npm-protocol
   area: install-vetting
   doc: |-
-    For Yarn 4 and for bun (measured), `name@npm:<rest>` is the registry protocol: the manager asks for `name` itself when `<rest>` is a version, a range or a tag, and for `<rest>` when it has a `@range` of its own (`name@npm:real@1.0.0`, an alias). For npm and pnpm it is always an alias. The word `yarn` does not say which Yarn runs, and the hook does not read `packageManager` or `yarnPath` to choose; it reads a `<rest>` that is no package name (`^1.2.3`, `*`, `>=1.0.0`) as `name`, and a `<rest>` that is a valid name with no range (`latest`, `1.0.0`, `1.x`, `real`) as both: it looks up `name` (at `<rest>` when that is a version or a range) and `<rest>`, and counts the command as uncertain, so a name the registry does not have is a warning and never a deny (a malicious one is denied). The same reading holds for a `package.json` value `npm:<rest>` of a Yarn or bun install. What stays:
+    For Yarn 4 (measured), `name@npm:<rest>` is the registry protocol: it asks for `name` itself when `<rest>` is a version, a range or a tag, and for `<rest>` when it has a `@range` of its own (`name@npm:real@1.0.0`, an alias). Bun (1.4.4, measured) asks for `name` only when `<rest>` is a full version or a range that starts with an operator, and for `<rest>`, an alias, for `latest`, `next`, `1`, `1.2`, `1.x` or another word; Yarn 1 reads an alias. For npm and pnpm it is always an alias. The word `yarn` does not say which Yarn runs, and the hook does not read `packageManager` or `yarnPath` to choose; it reads a `<rest>` that is no package name (`^1.2.3`, `*`, `>=1.0.0`) as `name`, and a `<rest>` that is a valid name with no range (`latest`, `1.0.0`, `1.x`, `real`) as both: it looks up `name` (at `<rest>` when that is a version or a range) and `<rest>`, and counts the command as uncertain, so a name the registry does not have is a warning and never a deny (a malicious one is denied). The same reading holds for a `package.json` value `npm:<rest>` of a Yarn or bun install. What stays:
 
     - Yarn 2 and 3 were not measured, only Yarn 1 and Yarn 4 (and bun 1.4.4): the reading follows Yarn 4.
     - A command with a word read both ways counts as uncertain as a whole, so ANOTHER name on the same line that the registry does not have is a warning and not a deny (a malicious one is still denied).
-    - The bun rule is not copied (a full version or a range that starts with an operator is the key, anything else an alias): the two-name reading covers it, at the price of one lookup too many.
+    - The bun rule is not copied: the two-name reading covers it, at the price of one lookup too many.
+    - A range with an operator or a space is read only inside quotes (`'name@npm:>=1.0.0'`): unquoted, the shell takes `>` for a redirection, which is a general limit and not of this form.
+    - A `package.json` value `"x": "npm:1.0.0"` leaves a "could not vet" line for the name `1.0.0` at every `yarn install`: the public registry answers that name with a document that is no package.
     - `name@NPM:<rest>` in capitals reads as the package `name` under Yarn 1, and bun reads it as a git URL (`https://NPM/<rest>/`): the hook reads it as the lower-case form.
     - `resolutions` and `overrides` of a `package.json` are not read, and neither is a lockfile written by Yarn for these forms.
   examples:
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: yarn add evil-pkg-zq@npm:^1.2.3
-      expect: { decision: warn }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: bun add alias-zq@npm:real-zq
-      expect: { decision: warn }
     - detector: hook
       event: PreToolUse
       tool: Bash

@@ -115648,8 +115648,11 @@ function npmProtocolReading(manager, rest) {
   if (manager !== "yarn" && manager !== "bun") return "alias";
   if (/[$`]/.test(rest)) return "alias";
   if (rest.indexOf("@", rest.startsWith("@") ? 1 : 0) > 0) return "alias";
-  if (rest !== "" && notAPackage(rest, null) !== null) return "alias";
+  if (rest !== "" && !isSemverRange(rest) && notAPackage(rest, null) !== null) return "alias";
   return NAME_RE.npm.test(rest) ? "both" : "key";
+}
+function npmKeyRange(manager, rest) {
+  return rest.length <= MAX_RANGE_LENGTH && isSemverRange(rest) && !readsFileValue(manager, rest) ? rest : void 0;
 }
 function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
@@ -115664,7 +115667,7 @@ function parseNpm(raw, manager, alias = false) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);
       const reading = alias ? "alias" : npmProtocolReading(manager, rest);
-      if (reading !== "alias") return withRange(checkName("npm", name, raw), reading === "key" || isSemverRange(rest) ? rest : void 0);
+      if (reading !== "alias") return withRange(checkName("npm", name, raw), npmKeyRange(manager, rest));
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
@@ -115741,7 +115744,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115765,6 +115768,7 @@ var init_parseCommand = __esm({
     ARCHIVE2 = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
     SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
     SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
+    MAX_RANGE_LENGTH = 100;
     PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
     set2 = (...xs) => new Set(xs);
     NPM_COMMON_BOOL = [

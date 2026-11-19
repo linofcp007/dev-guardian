@@ -38,7 +38,7 @@
 import { dirname, resolve } from 'node:path';
 
 import { isNetworkPath, readSmallText, type TextRead } from '../hooks/configFile.js';
-import { isSemverRange, npmProtocolReading, parsePackageSpec, readsFileValue } from './parseCommand.js';
+import { isSemverRange, MAX_RANGE_LENGTH, npmKeyRange, npmProtocolReading, parsePackageSpec, readsFileValue } from './parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from './types.js';
 
 type ManifestStatus = 'ok' | 'absent' | 'unreadable';
@@ -83,7 +83,6 @@ export const UNKNOWN_DIRECTORY = REASON.unknownDir;
 
 /** npm's own limit on a package name; a longer one is no package. */
 const MAX_NAME_LENGTH = 214;
-const MAX_RANGE_LENGTH = 100;
 /** The most of a file name that is repeated in a message. */
 const MAX_LABEL_LENGTH = 120;
 
@@ -178,11 +177,11 @@ function npmDependency(key: string, value: string, manager: string): PackageSpec
       wanted = at > 0 ? real.slice(at + 1) : '';
     } else if (reading === 'both') {
       second = real;
-      // The key is asked at that version or range; a word (a tag, a name) leaves it with none.
-      wanted = isSemverRange(real) ? real : '';
+      // The key is asked at that version or range; a word (a tag, a name) or an archive bun reads as a file leaves it with none.
+      wanted = npmKeyRange(manager, real) ?? '';
     } else {
       // The key is the package and the rest its range; a rest that is no range still leaves the key vetted.
-      wanted = npmRange(real, manager) === null ? '' : real;
+      wanted = npmKeyRange(manager, real) ?? '';
     }
   }
   if (!validName('npm', name)) return [];

@@ -466,4 +466,28 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     expect(read(manager, 'npm:latest')).toEqual([['evil-pkg-zq', undefined], ['latest', undefined]]);
     expect(read(manager, 'npm:real-zq', 'alias-zq')).toEqual([['alias-zq', undefined], ['real-zq', undefined]]);
   });
+
+  // ── round 1 of the review (T-06)
+
+  it.each(['yarn', 'bun'])('T-06 `%s`: `npm:~1.2.3` and `npm:~1` are a range for the key; `~/x` and `~user/x` stay paths', (manager) => {
+    expect(read(manager, 'npm:~1.2.3')).toEqual([['evil-pkg-zq', '~1.2.3']]);
+    expect(read(manager, 'npm:~1')).toEqual([['evil-pkg-zq', '~1']]);
+    expect(read(manager, 'npm:~/x')).toEqual([]);
+    expect(read(manager, 'npm:~user-zq/x')).toEqual([]);
+  });
+
+  it('T-06 `bun`: a rest that ends like an archive bun reads as a file gives both names, with no range for the key', () => {
+    for (const value of ['npm:1.0.0.tgz', 'npm:2foo.tar.gz']) {
+      const got = read('bun', value);
+      expect(got.map(([n]) => n).sort(), value).toEqual(['evil-pkg-zq', value.slice(4)].sort());
+      expect(got.find(([n]) => n === 'evil-pkg-zq')?.[1], value).toBeUndefined();
+    }
+  });
+
+  it.each(['yarn', 'bun'])('T-06 `%s`: a value that is a shell expansion, a path or a URL is skipped; a rest that is no range is no range for the key', (manager) => {
+    expect(read(manager, 'npm:$X')).toEqual([]);
+    expect(read(manager, 'npm:./x.tgz')).toEqual([]);
+    expect(read(manager, 'npm:https://example.test/x.tgz')).toEqual([]);
+    expect(read(manager, 'npm:user/repo')).toEqual([['evil-pkg-zq', undefined]]);
+  });
 });
