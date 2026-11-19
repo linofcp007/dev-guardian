@@ -3175,6 +3175,28 @@ describe('install-vet-unknown-flag-hides-package', () => {
     expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry.*not denied:.*unknown flag --dgunknown/s);
   });
 
+  // `npm --a x … install p` is read as the launcher `npm x` (npm's `exec` alias): no word of it is `p`, only the cost counts.
+  it('T-09 240 KB of `--a x` pairs before the subcommand (with npm exec alias `x`): the decision comes back inside the hook budget, never a deny', async () => {
+    const reg = registry({ exists: [] });
+    const t0 = performance.now();
+    const d = await decideInstallCommand(`npm ${'--a x '.repeat(40_000)}install p`, opts(reg.fetchImpl, { deadlineAt: Date.now() + HOOK_BUDGET_MS }));
+    expect(performance.now() - t0).toBeLessThan(hangBound(HOOK_BUDGET_MS));
+    expect(d?.deny).toBeUndefined();
+  }, 300_000);
+
+  it.each([
+    ['before the subcommand', `npm ${'--a y '.repeat(40_000)}install p`],
+    ['after the subcommand', `npm install ${'--a y '.repeat(40_000)}p`],
+    ['in a launcher', `npx ${'--a y '.repeat(40_000)}p`],
+  ])('T-09 240 KB of `--a y` pairs %s: the decision comes back inside the hook budget, with the candidates warned about, never denied', async (_label, command) => {
+    const reg = registry({ exists: [] });
+    const t0 = performance.now();
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl, { deadlineAt: Date.now() + HOOK_BUDGET_MS }));
+    expect(performance.now() - t0).toBeLessThan(hangBound(HOOK_BUDGET_MS));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/'p': not found on the public registry.*not denied:.*unknown flag --a/s);
+  }, 300_000);
+
   it('T-06 `npm install --fetch-retries 3 lodash` is not denied', async () => {
     const reg = registry({ exists: ['lodash'] });
     const d = await decideInstallCommand('npm install --fetch-retries 3 lodash', opts(reg.fetchImpl));

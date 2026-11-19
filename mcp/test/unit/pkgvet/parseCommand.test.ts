@@ -1680,11 +1680,48 @@ describe('install-vet-unknown-flag-hides-package', () => {
     expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p', 'r'], manifest: undefined });
   });
 
-  it('T-05 npm and pnpm read a true / false word after the unknown flag as its value; yarn has no such rule', () => {
-    expect(read('npm install --dgunknown false p').packages).toEqual(['p']);
-    expect(read('pnpm add --dgunknown true p').packages).toEqual(['p']);
-    expect(read('yarn add --dgunknown false p').packages).toEqual(['false', 'p']);
+  it.each([
+    ['npm install --dgunknown false p', ['p']],
+    ['pnpm add --dgunknown true p', ['p']],
+    ['yarn add --dgunknown false p', ['p']],
+    ['yarn add --emoji true lodash', ['lodash']],
+    ['bun add --dgunknown true p', ['p']],
+    ['npx --dgunknown true p', ['p']],
+    // The word is the positional itself, with no unknown flag before it: still a package.
+    ['yarn add true', ['true']],
+    ['npx false', ['false']],
+  ])('T-05 %s: a true / false word after an unknown flag is its value, in every manager — packages %j', (command, packages) => {
+    expect(read(command).packages).toEqual(packages);
   });
+
+  it.each([
+    'npm --fetch-retries 3 --engine-strict install p',
+    'pnpm --fetch-retries 3 --shamefully-hoist add p',
+    'yarn --network-concurrency 1 --ignore-engines add p',
+    'npm --dgx 1 --dgy install p',
+    'npm --dgx 1 --dgy 2 install p',
+    'npm --fetch-retries 3 --engine-strict install --prefer-dedupe p',
+  ])('T-08 %s: several unknown flags before the subcommand still leave the install, and its package `p`', (command) => {
+    expect(read(command).packages).toContain('p');
+  });
+
+  it('T-08 npm --dgx x install p stays the launcher `npm x` with the package `install` (what npm itself does)', () => {
+    expect(read('npm --dgx x install p').packages).toEqual(['install']);
+  });
+
+  // The cost has the shape of a linear growth: 4 000 pairs cost at most 16 times what 500 do (linear reads ~8,
+  // quadratic ~64; see test/helpers/timing.ts). Review round 1: 5 000 pairs took 14 to 16 s before the subcommand
+  // and in a launcher, past the hook's 15 s limit.
+  // Before the subcommand the pair is also written with `x`, which npm reads as its `exec` alias (T-08): another path.
+  const PAIR_SHAPES: Array<[string, (n: number) => string]> = [
+    ['before the subcommand', (n) => `npm ${'--a y '.repeat(n)}install p`],
+    ['before the subcommand, with npm exec alias `x`', (n) => `npm ${'--a x '.repeat(n)}install p`],
+    ['after the subcommand', (n) => `npm install ${'--a y '.repeat(n)}p`],
+    ['in a launcher', (n) => `npx ${'--a y '.repeat(n)}p`],
+  ];
+  it.each(PAIR_SHAPES)('T-09 %s: eight times as many `--a y` pairs cost at most 16 times as much', (label, make) => {
+    expectLinear(`unknown-flag pairs ${label}`, (n) => void parseInstallCommands(make(n)), 500, { factor: 8, maxRatio: 16 });
+  }, 300_000);
 
   it.each(['npm --fetch-retries 0 install p', 'npm --cache-min 10 install p'])(
     'T-07 %s: the word after the unknown flag is not the subcommand; the install is read',
