@@ -291,3 +291,23 @@ describe('install-vet-lockfile-pins', () => {
     }
   });
 });
+
+// ───────────────── install-vet-through-corepack — the two records of what stays
+
+describe('install-vet-through-corepack', () => {
+  it('T-06 the records of the corepack download and of the other runners exist, and every example of theirs is one the dispatcher harness runs', () => {
+    const limits = loadKnownLimits();
+    // The harness above iterates HOOKS.run and HOOKS.skip (named by label, as its tests are): an example outside them would never be checked against the dispatcher.
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const id of ['corepack-manager-download', 'install-other-runners']) {
+      const record = limits.find((l) => l.id === id);
+      expect(record, `the data file has no record ${id}`).toBeDefined();
+      expect(record?.area).toBe('install-vetting');
+      const examples = record?.examples ?? [];
+      expect(examples.filter((e) => e.detector === 'hook').length, id).toBeGreaterThan(0);
+      for (const [index, example] of examples.entries()) {
+        expect({ id, detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ id, detector: 'hook', harnessed: true });
+      }
+    }
+  });
+});
