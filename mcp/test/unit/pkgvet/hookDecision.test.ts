@@ -3623,4 +3623,91 @@ describe('install-vet-manifest-parent-dir', () => {
     expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
     expect(reg.calls).not.toContain(doc('member-only'));
   });
+
+  // ── T-08: a session opened in a subfolder of a git repository — the repository's root is the project's
+
+  const GIT_AS = [
+    ['a directory', (repo: string) => mkdirSync(join(repo, '.git'))],
+    ['a file (worktree, submodule)', (repo: string) => writeFileSync(join(repo, '.git'), 'gitdir: ../elsewhere/.git/worktrees/x\n')],
+  ] as const;
+
+  it.each(GIT_AS)('T-08 .git is %s in repo/: `npm install` in repo/docs/ (the session folder) reads the manifest of repo/ and names it ../package.json', async (_what, mkGit) => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    mkGit(repo);
+    pkgJson({ express: '^4.21.0', 'evil-pkg': '^1.0.0' }, repo);
+    const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, docs, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it.each(GIT_AS)('T-08 .git is %s in repo/: `npm install <clean name>` in repo/docs/ reads the manifest of repo/', async (_what, mkGit) => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    mkGit(repo);
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install express', at(reg.fetchImpl, docs, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-08 .git in repo/: the lockfile of repo/ is read for a command in repo/docs/ — its pins go to OSV', async () => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    mkdirSync(join(repo, '.git'));
+    pkgJson({ express: '^4.21.0' }, repo);
+    writeFileSync(join(repo, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, docs, docs))).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
+  });
+
+  it('T-08 guard: with no .git in any ancestor, a manifest above the project directory is not read', async () => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, docs, docs))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-08 guard: the directory that holds .git is the home directory: its package.json is not read', async () => {
+    const userHome = dirOf('userhome');
+    const docs = dirOf('docs', userHome);
+    mkdirSync(docs, { recursive: true });
+    mkdirSync(join(userHome, '.git'));
+    pkgJson({ 'evil-pkg': '^1.0.0' }, userHome);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', opts(reg.fetchImpl, { cwd: docs, projectDir: docs, homeDir: userHome }))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  /** A repository with a malicious manifest at its root and a project directory `levels` below it. */
+  const deepRepo = (levels: number): string => {
+    const repo = dirOf('repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    const deep = dirOf(Array.from({ length: levels }, (_, i) => `d${String(i)}`).join('/'), repo);
+    mkdirSync(deep, { recursive: true });
+    return deep;
+  };
+
+  it('T-08 guard: a .git more than 16 directories up is not reached', async () => {
+    const far = deepRepo(16);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, far, far))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-08 a .git 16 directories up (the project directory included) is reached', async () => {
+    const near = deepRepo(15);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, near, near));
+    expect(d?.deny ?? '(no deny)').toMatch(/package\.json names 'evil-pkg/);
+  });
 });
