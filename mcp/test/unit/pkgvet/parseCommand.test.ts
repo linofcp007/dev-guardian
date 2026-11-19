@@ -1904,3 +1904,81 @@ describe('install-vet-named-install-manifest', () => {
     },
   );
 });
+
+// ───────────────── install-vet-update-verbs — the update and maintenance verbs install the manifest
+
+describe('install-vet-update-verbs', () => {
+  const MANIFEST = { kind: 'package-json' };
+  /** What a line gives for vetting: per install command, the packages it names and the manifest it reads. */
+  const vettable = (command: string): Array<{ packages: string[]; manifest: unknown }> =>
+    parseInstallCommands(command).map((c) => ({ packages: c.packages.map((p) => p.name), manifest: c.manifest }));
+  /** What the line is, in what matters for vetting: manager, ecosystem, packages, manifest and whether it is global. */
+  const essence = (command: string): unknown =>
+    parseInstallCommands(command).map((c) => ({
+      manager: c.manager,
+      ecosystem: c.ecosystem,
+      packages: c.packages.map((p) => p.name),
+      manifest: c.manifest,
+      global: c.global,
+    }));
+
+  it.each([
+    'npm update',
+    'npm upgrade',
+    'npm up',
+    'npm update lodash',
+    'pnpm update',
+    'pnpm up',
+    'pnpm upgrade',
+    'pnpm update --latest',
+    'pnpm update lodash',
+    'yarn upgrade',
+    'yarn upgrade lodash',
+    'yarn upgrade --latest',
+    'yarn up lodash',
+    "yarn up '*'",
+    'bun update',
+    'bun update lodash',
+    'bun update --latest',
+    'yarn upgrade-interactive',
+  ])('T-01 `%s` is a manifest install that names no package (the names after an update verb select dependencies)', (command) => {
+    expect(vettable(command)).toEqual([{ packages: [], manifest: MANIFEST }]);
+  });
+
+  it.each(['npm install', 'npm ci', 'pnpm install', 'yarn install', 'bun install'])('T-02 guard: `%s` is still a manifest install that names no package', (command) => {
+    expect(vettable(command)).toEqual([{ packages: [], manifest: MANIFEST }]);
+  });
+
+  it.each([
+    'npm outdated',
+    'npm rebuild',
+    'npm run update',
+    'npm audit',
+    'npm audit signatures',
+    'pnpm outdated',
+    'yarn outdated',
+    'bun outdated',
+    'npm view lodash',
+  ])('T-02 guard: `%s` is no install', (command) => {
+    expect({ command, parse: parseInstallCommands(command) }).toEqual({ command, parse: [] });
+  });
+
+  it.each(['npm update -g', 'pnpm update -g'])('T-02 guard: `%s` is global for certain and reads no manifest', (command) => {
+    expect({ command, manifests: parseInstallCommands(command).map((c) => c.manifest) }).toEqual({ command, manifests: [] });
+  });
+
+  it.each([
+    ['npm dedupe', 'npm install'],
+    ['npm ddp', 'npm install'],
+    ['npm prune', 'npm install'],
+    ['npm audit fix', 'npm install'],
+    ['npm audit fix --force', 'npm install'],
+    ['pnpm dedupe', 'pnpm install'],
+    ['yarn dedupe', 'yarn install'],
+    ['yarn up', 'yarn install'],
+  ])('T-04 `%s` reads as `%s` (manager, ecosystem, packages, manifest, global), and is a manifest install', (command, install) => {
+    // Non-vacuous: the comparison line is a real manifest install, so an empty parse cannot equal it.
+    expect(vettable(install), install).toEqual([{ packages: [], manifest: MANIFEST }]);
+    expect({ command, parse: essence(command) }).toEqual({ command, parse: essence(install) });
+  });
+});

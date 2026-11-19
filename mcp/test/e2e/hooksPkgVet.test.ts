@@ -1687,3 +1687,27 @@ describe('install-vet-manifest-parent-dir', () => {
     },
   );
 });
+
+// ───────────────── install-vet-update-verbs — the update and maintenance verbs through the dispatcher
+
+describe('install-vet-update-verbs', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+
+  it.each(['npm update', 'pnpm update', 'yarn upgrade', 'yarn up lodash', 'bun update', 'npm dedupe', 'npm audit fix'])(
+    'T-03 `%s` in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      writeFileSync(
+        join(project, 'package.json'),
+        JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { lodash: '^4.17.21', crossenv: '*' } }),
+      );
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+});

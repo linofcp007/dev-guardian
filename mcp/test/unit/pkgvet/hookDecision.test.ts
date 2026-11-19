@@ -3711,3 +3711,87 @@ describe('install-vet-manifest-parent-dir', () => {
     expect(d?.deny ?? '(no deny)').toMatch(/package\.json names 'evil-pkg/);
   });
 });
+
+// ───────────────── install-vet-update-verbs — an update verb vets the manifest past what the lockfile pins
+
+describe('install-vet-update-verbs', () => {
+  const doc = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  /** A package-lock.json (v3) of a project whose one direct dependency, `d`, is pinned at 1.0.0. */
+  const lockPinningD = (): void =>
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: { d: '^1.0.0' } },
+          'node_modules/d': { version: '1.0.0', resolved: 'https://registry.npmjs.org/d/-/d-1.0.0.tgz' },
+        },
+      }),
+    );
+  /** The registry (every document answers 1.0.0, except `missing`) and OSV (`flagged` name@version pairs are malware); every request is kept. */
+  function net(spec: { missing?: string[]; flagged?: string[] } = {}): { fetchImpl: typeof fetch; registry: string[]; asked: string[] } {
+    const registryCalls: string[] = [];
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => ((spec.flagged ?? []).includes(p) ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      const m = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+      if (m !== null) {
+        registryCalls.push(url);
+        return (spec.missing ?? []).includes(decodeURIComponent(m[1] ?? '')) ? json({ error: 'Not found' }, 404) : json(npmDoc('1.0.0').body);
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, registry: registryCalls, asked };
+  }
+
+  it('T-05 guard: `npm install` with a lockfile that pins the direct dependency `d` does not ask the registry about `d`; the pin goes to OSV', async () => {
+    pkgJson({ d: '^1.0.0' });
+    lockPinningD();
+    const n = net();
+    expect(await decideInstallCommand('npm install', opts(n.fetchImpl))).toBeNull();
+    expect(n.registry).toEqual([]);
+    expect(n.asked).toEqual(['d@1.0.0']);
+  });
+
+  it('T-05 `npm update` with a lockfile that pins `d` at 1.0.0 asks the registry about `d` anyway, and OSV still receives the pinned version', async () => {
+    pkgJson({ d: '^1.0.0' });
+    lockPinningD();
+    const n = net();
+    expect(await decideInstallCommand('npm update', opts(n.fetchImpl))).toBeNull();
+    expect(n.registry).toContain(doc('d'));
+    expect(n.asked).toContain('d@1.0.0');
+  });
+
+  it('T-05 `npm update` with a lockfile, where the registry says `d` is malicious by name, is DENIED naming the file and `d`', async () => {
+    pkgJson({ d: '^1.0.0' });
+    lockPinningD();
+    // OSV flags every `d@1.0.0` it is asked about: the version the registry gives for `d` and the one the lockfile pins.
+    const n = net({ flagged: ['d@1.0.0'] });
+    const d = await decideInstallCommand('npm update', opts(n.fetchImpl));
+    expect(d?.deny ?? '(no deny)').toMatch(/'d(@1\.0\.0)?'/);
+    expect(d?.deny).toMatch(/MAL-2026-77/);
+    expect(n.registry).toContain(doc('d'));
+  });
+
+  it('T-06 `npm update <a name the registry does not have>` asks nothing about that name and denies nothing for it; the manifest is vetted', async () => {
+    pkgJson({ express: '^4.21.0' });
+    const n = net({ missing: ['ghost-pkg-zz'] });
+    const d = await decideInstallCommand('npm update ghost-pkg-zz', opts(n.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(n.registry).not.toContain(doc('ghost-pkg-zz'));
+    expect(n.asked.some((p) => p.startsWith('ghost-pkg-zz@'))).toBe(false);
+    expect(n.registry, 'the manifest is what is vetted').toContain(doc('express'));
+  });
+});
