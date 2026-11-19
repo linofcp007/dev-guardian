@@ -2696,6 +2696,7 @@ var NPM_COMMON_BOOL = [
   "--frozen-lockfile",
   "--no-frozen-lockfile"
 ];
+var LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
 var FLAGS = {
   npm: {
     // `-C` is npm's short form of `--prefix`.
@@ -2726,7 +2727,7 @@ var FLAGS = {
     registry: set("--registry"),
     dir: set("--prefix", "-C"),
     workspace: set("--workspace", "-w", "--workspaces"),
-    boolWord: "flag-and-cluster"
+    boolWord: { except: LOGLEVEL_FLAGS }
   },
   pnpm: {
     value: set(
@@ -2750,7 +2751,7 @@ var FLAGS = {
     registry: set("--registry"),
     dir: set("--dir", "-C"),
     workspace: set("--workspace", "--filter", "-F"),
-    boolWord: "flag"
+    boolWord: { except: LOGLEVEL_FLAGS }
   },
   yarn: {
     value: set(
@@ -3238,6 +3239,16 @@ var LAUNCH_FLAGS = {
   }
 };
 var SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
+var isBoolWord = (word) => word === "true" || word === "false";
+function takesBoolWord(v, table) {
+  const rule = table.boolWord;
+  if (rule === void 0) return false;
+  if (table.bool.has(v)) return !rule.except.has(v);
+  if (v.startsWith("--") || !SHORT_CLUSTER.test(v)) return false;
+  const letters = [...v.slice(1)].map((c) => `-${c}`);
+  const last = letters[letters.length - 1];
+  return letters.every((flag) => table.bool.has(flag)) && last !== void 0 && !rule.except.has(last);
+}
 function walk(words, table) {
   const positionals = [];
   const skipped = [];
@@ -3288,14 +3299,13 @@ function walk(words, table) {
     }
     if (table.bool.has(v)) {
       const word = words[i + 1]?.value;
-      if (table.boolWord !== void 0 && (word === "true" || word === "false")) {
+      if (takesBoolWord(v, table) && isBoolWord(word)) {
         note(v, word);
         i += 1;
       } else note(v, void 0);
       continue;
     }
     if (!v.startsWith("--") && SHORT_CLUSTER.test(v)) {
-      let allBool = true;
       for (let k = 1; k < v.length; k += 1) {
         const flag = `-${v.charAt(k)}`;
         if (table.value.has(flag)) {
@@ -3310,12 +3320,10 @@ function walk(words, table) {
         if (!table.bool.has(flag)) {
           uncertain.push(`unknown flag ${flag}`);
           unknownFlags += 1;
-          allBool = false;
         }
         note(flag, void 0);
       }
-      const after = words[i + 1]?.value;
-      if (allBool && table.boolWord === "flag-and-cluster" && !table.value.has(`-${v.slice(-1)}`) && (after === "true" || after === "false")) i += 1;
+      if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
@@ -3373,6 +3381,7 @@ function saysGlobal(manager, pre, args) {
       } else if (v === "--global=true") says = true;
       else if (manager === "npm" && (v === "--location=global" || v === "--location" && next === "global")) says = true;
       else if (v.startsWith("-g=") || /global|location/.test(v.toLowerCase())) return false;
+      else if (/^-[A-Za-z]{2,}$/.test(v) && v.includes("g")) return false;
     }
   }
   return says;
@@ -3385,6 +3394,7 @@ function nextPositional(words, from, table) {
     const v = words[i]?.value ?? "";
     if (v.startsWith("-") && v.length > 1) {
       if (!v.includes("=") && table.value.has(v)) i += 1;
+      else if (!v.includes("=") && takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
       continue;
     }
     return i;

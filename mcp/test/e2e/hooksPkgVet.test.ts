@@ -1541,7 +1541,7 @@ describe('install-vet-bare-install-misread', () => {
     [OSV]: { osv: {} },
   };
 
-  it.each(['npm install --global=false', 'npm install -D false'])(
+  it.each(['npm install --global=false', 'npm install -D false', 'npm -D false install'])(
     'T-03 %s in a project whose package.json names a malicious package is DENIED, naming the file and the package',
     (command) => {
       manifest({ express: '^4.21.0', crossenv: '*' });

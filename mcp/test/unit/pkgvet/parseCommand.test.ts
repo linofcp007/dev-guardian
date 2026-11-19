@@ -1563,6 +1563,21 @@ describe('install-vet-bare-install-misread', () => {
     'npm install -g $X',
     'npm install -g --location=project',
     'npm ci --global=false',
+    'npm install -qD false',
+    'npm install -DE false',
+    'npm install -g -Dg false',
+    'npm install -Dg false',
+    'pnpm install -qD false',
+    'pnpm install -Dg false',
+    'pnpm install -r false',
+    'pnpm install --recursive false',
+    'pnpm install -w false',
+    'pnpm install --workspace-root false',
+    'npm -D false install',
+    'npm --force true install',
+    'npm -g false install',
+    'pnpm -D false install',
+    'pnpm --force false install',
   ])('T-01 %s: the manifest is installed, and no package is named', (command) => {
     const r = read(command);
     expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: MANIFEST });
@@ -1582,6 +1597,18 @@ describe('install-vet-bare-install-misread', () => {
     ['bun add --force false', ['false'], undefined],
     ['npx false', ['false'], undefined],
     ['npm install --unknown-flag false', [], MANIFEST],
+    // The loglevel shorthands take no word: the word is a package. A cluster's word belongs to its LAST letter.
+    ['npm install --silent true', ['true'], undefined],
+    ['npm install --quiet false', ['false'], undefined],
+    ['npm install -q false', ['false'], undefined],
+    ['npm install --verbose false', ['false'], undefined],
+    ['npm install -d false', ['false'], undefined],
+    ['npm install -Dq false', ['false'], undefined],
+    ['npm install -qd false', ['false'], undefined],
+    ['npm install -Dd true', ['true'], undefined],
+    ['pnpm install --silent false', ['false'], undefined],
+    ['pnpm install -q false', ['false'], undefined],
+    ['pnpm install -Dq false', ['false'], undefined],
   ])('T-02 %s: as before — packages %j, manifest %j', (command, packages, manifest) => {
     const r = read(command);
     expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages, manifest });

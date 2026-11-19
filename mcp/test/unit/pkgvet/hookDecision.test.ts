@@ -3151,6 +3151,12 @@ describe('install-vet-bare-install-misread', () => {
     expect(reg.calls, 'the manifest is what is vetted').toContain('https://registry.npmjs.org/express');
   });
 
+  it('T-04 `npm install --silent true`: the word after a loglevel flag is a package, and the registry is asked about it', async () => {
+    const reg = registry({ exists: [] });
+    await decideInstallCommand('npm install --silent true', opts(reg.fetchImpl));
+    expect(reg.calls).toContain('https://registry.npmjs.org/true');
+  });
+
   it('T-04 `npm install -D false lodash` vets lodash and not false', async () => {
     const reg = registry({ exists: ['lodash'] });
     await decideInstallCommand('npm install -D false lodash', opts(reg.fetchImpl));

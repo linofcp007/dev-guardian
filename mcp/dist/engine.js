@@ -115728,7 +115728,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115820,6 +115820,7 @@ var init_parseCommand = __esm({
       "--frozen-lockfile",
       "--no-frozen-lockfile"
     ];
+    LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
     FLAGS = {
       npm: {
         // `-C` is npm's short form of `--prefix`.
@@ -115850,7 +115851,7 @@ var init_parseCommand = __esm({
         registry: set2("--registry"),
         dir: set2("--prefix", "-C"),
         workspace: set2("--workspace", "-w", "--workspaces"),
-        boolWord: "flag-and-cluster"
+        boolWord: { except: LOGLEVEL_FLAGS }
       },
       pnpm: {
         value: set2(
@@ -115874,7 +115875,7 @@ var init_parseCommand = __esm({
         registry: set2("--registry"),
         dir: set2("--dir", "-C"),
         workspace: set2("--workspace", "--filter", "-F"),
-        boolWord: "flag"
+        boolWord: { except: LOGLEVEL_FLAGS }
       },
       yarn: {
         value: set2(

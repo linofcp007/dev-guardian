@@ -73,7 +73,8 @@ version bump.
   whatever its value, and a `true` or `false` after a boolean flag for a package, so it did not read the manifest
   and a malicious package in it was never looked up. The manifest is now left unread only for an install that is
   global for certain, and for npm and pnpm a `true` or `false` after a boolean flag is that flag's value, as the
-  managers read it (measured with npm 11.19 and 11.20 and pnpm 10.33). What you may notice: a manifest install that
+  managers read it, except after `--silent`, `--quiet`, `-q`, `--verbose` and `-d`, where it is a package (measured
+  with npm 11.20 and pnpm 10.33). What you may notice: a manifest install that
   was silent is now vetted and can be denied; and an `npm install --force true`, which the hook used to deny over a
   package named `true`, is no longer. See [`docs/hooks.md`](docs/hooks.md).
 

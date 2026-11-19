@@ -345,12 +345,14 @@ interface FlagTable {
   dir?: ReadonlySet<string>;
   /**
    * A literal `true` or `false` right after a boolean flag is that flag's value, not a package: `npm install -D false`
-   * installs the manifest. Measured 2026-11-19 (npm 11.19.0 / 11.20.0, pnpm 10.33.2): npm does it after an exact boolean
-   * flag and after a short cluster of boolean letters (`-DE false`), pnpm after an exact boolean flag (a pnpm cluster was
-   * not measured: unchanged). A flag written with `=` takes nothing after it. Absent for the other managers and the
-   * launchers, which were not measured (or fetch the word as a package: `npx --yes false pkg`).
+   * installs the manifest ({@link takesBoolWord}). Measured 2026-11-19 (npm 11.19.0 / 11.20.0, pnpm 10.33.2), the same
+   * for both: after an exact boolean flag, and after a short cluster of boolean letters when the cluster's LAST letter
+   * takes it (`-qD false` yes; `-Dq false` no — the word is then a package). `except` are the boolean flags that take
+   * NO word, whose word stays a package: the loglevel shorthands `--silent`, `--quiet`, `-q`, `--verbose`, `-d`. A flag
+   * written with `=` takes nothing after it. Absent for the other managers and the launchers, which were not measured
+   * (or fetch the word as a package: `npx --yes false pkg`).
    */
-  boolWord?: 'flag' | 'flag-and-cluster';
+  boolWord?: { except: ReadonlySet<string> };
   /** Flags that put the install in a workspace context, where a name may be a local package. */
   workspace?: ReadonlySet<string>;
   /**
@@ -381,6 +383,9 @@ const NPM_COMMON_BOOL = [
   '--exact', '--peer', '--optional', '--tilde', '-T', '--frozen-lockfile', '--no-frozen-lockfile',
 ];
 
+/** The loglevel shorthands of npm and pnpm: boolean flags that take no `true` / `false` word (measured 2026-11-19). */
+const LOGLEVEL_FLAGS: ReadonlySet<string> = new Set(['--silent', '--quiet', '-q', '--verbose', '-d']);
+
 const FLAGS: Record<string, FlagTable> = {
   npm: {
     // `-C` is npm's short form of `--prefix`.
@@ -391,7 +396,7 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('--registry'),
     dir: set('--prefix', '-C'),
     workspace: set('--workspace', '-w', '--workspaces'),
-    boolWord: 'flag-and-cluster',
+    boolWord: { except: LOGLEVEL_FLAGS },
   },
   pnpm: {
     value: set('--registry', '--filter', '-F', '--dir', '-C', '--reporter', '--store-dir', '--global-dir',
@@ -401,7 +406,7 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('--registry'),
     dir: set('--dir', '-C'),
     workspace: set('--workspace', '--filter', '-F'),
-    boolWord: 'flag',
+    boolWord: { except: LOGLEVEL_FLAGS },
   },
   yarn: {
     value: set('--registry', '--cwd', '--network-timeout', '--modules-folder', '--cache-folder', '--mutex', '--scope',
@@ -600,6 +605,23 @@ interface WalkResult {
 
 const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 
+const isBoolWord = (word: string | undefined): boolean => word === 'true' || word === 'false';
+
+/**
+ * Whether the flag word `v` (no `=`) is one that takes a following `true` / `false` as its value, in a table with
+ * {@link FlagTable.boolWord}: an exact boolean flag that is not a loglevel shorthand, or a short cluster of boolean
+ * letters whose LAST letter is such a flag (measured 2026-11-19: npm 11.20.0, pnpm 10.33.2).
+ */
+function takesBoolWord(v: string, table: FlagTable): boolean {
+  const rule = table.boolWord;
+  if (rule === undefined) return false;
+  if (table.bool.has(v)) return !rule.except.has(v);
+  if (v.startsWith('--') || !SHORT_CLUSTER.test(v)) return false;
+  const letters = [...v.slice(1)].map((c) => `-${c}`);
+  const last = letters[letters.length - 1];
+  return letters.every((flag) => table.bool.has(flag)) && last !== undefined && !rule.except.has(last);
+}
+
 /**
  * Separates flags (and their values) from positional words.
  *
@@ -660,14 +682,13 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     }
     if (table.bool.has(v)) {
       const word = words[i + 1]?.value;
-      if (table.boolWord !== undefined && (word === 'true' || word === 'false')) {
+      if (takesBoolWord(v, table) && isBoolWord(word)) {
         note(v, word);
         i += 1;
       } else note(v, undefined);
       continue;
     }
     if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
-      let allBool = true;
       for (let k = 1; k < v.length; k += 1) {
         const flag = `-${v.charAt(k)}`;
         if (table.value.has(flag)) {
@@ -682,12 +703,10 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
         if (!table.bool.has(flag)) {
           uncertain.push(`unknown flag ${flag}`);
           unknownFlags += 1;
-          allBool = false;
         }
         note(flag, undefined);
       }
-      const after = words[i + 1]?.value;
-      if (allBool && table.boolWord === 'flag-and-cluster' && !table.value.has(`-${v.slice(-1)}`) && (after === 'true' || after === 'false')) i += 1;
+      if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
       continue;
     }
     uncertain.push(`unknown flag ${v}`);
@@ -750,7 +769,9 @@ const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
  *   - says global: the exact words `-g` and `--global` (not when the next word of the list is `false`), `--global=true`,
  *     and for npm `--location=global` and `--location global`;
  *   - takes it back: any other word that starts with `-` and has `global` or `location` in it, or starts `-g=`;
- *   - a short cluster (`-gD`) says nothing; a package name with "global" in it takes nothing back.
+ *   - a short cluster that holds a `g` (`-gD`, `-Dg false`) takes it back: the word after it may be the value of its `g`
+ *     (measured 2026-11-19, npm 11.20.0: `-g -Dg false` installs the manifest); a package name with "global" in it takes
+ *     nothing back.
  * It is only part of the answer: a global word that stands where another flag's value goes (`--otp --global`) is that
  * flag's value, not a flag — the caller also asks the walker's flags ({@link isGlobalFlag}), which know the flags that
  * take a value, and a flag the manager's table does not know (npm's abbreviations: `--loc=project`) leaves it not global.
@@ -772,6 +793,7 @@ function saysGlobal(manager: string, pre: readonly ShellWord[], args: readonly S
       } else if (v === '--global=true') says = true;
       else if (manager === 'npm' && (v === '--location=global' || (v === '--location' && next === 'global'))) says = true;
       else if (v.startsWith('-g=') || /global|location/.test(v.toLowerCase())) return false;
+      else if (/^-[A-Za-z]{2,}$/.test(v) && v.includes('g')) return false; // a cluster with a `g`: its word may be the value of that `g`
     }
   }
   return says;
@@ -822,6 +844,8 @@ function nextPositional(words: readonly ShellWord[], from: number, table: FlagTa
     const v = words[i]?.value ?? '';
     if (v.startsWith('-') && v.length > 1) {
       if (!v.includes('=') && table.value.has(v)) i += 1;
+      // `npm -D false install`: the word after a boolean flag is its value, not the subcommand.
+      else if (!v.includes('=') && takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
       continue;
     }
     return i;
