@@ -26,9 +26,12 @@
  *   - **silent** when every package came back `ok`, and for every command
  *     that installs nothing — which never touches the network.
  *
- * **A manifest install** — `npm install` with no package, `npm ci`, `pnpm
- * install`, `yarn`, `bun install`, `pip install -r` — names nothing on the
- * command line: the manifest does. Its direct dependencies (`manifest.ts`)
+ * **A manifest install** — `npm install`, `npm ci`, `pnpm install`, `yarn`,
+ * `bun install`, `pip install -r`, and an install that names a package inside
+ * a project (`npm install <pkg>`, `pnpm add`, `yarn add`, `bun add`: the
+ * manager installs the manifest beside the names; not `-g`, not a launcher) —
+ * reads a manifest, the nearest `package.json` from where the command runs up
+ * to the project or repository root. Its direct dependencies (`manifest.ts`)
  * join the same lookups, under the same cap and budget, and answer by a rule
  * of their own ({@link decideManifestOne}), because a manifest is installed
  * again and again and a missing name in one is usually a private package:

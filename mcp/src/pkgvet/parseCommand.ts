@@ -114,10 +114,11 @@ export interface InstallCommand {
   global?: boolean;
   /**
    * The command installs what a manifest says: the `package.json` of the
-   * directory it runs in (`npm install` with no package, `npm ci`, `pnpm
-   * install`, `yarn`, `bun install`), or the requirement files given to `pip
-   * install -r`, as written and in order. Present also when `packages` is
-   * empty; absent for an install that names everything it fetches. Reading
+   * directory it runs in (`npm install`, `npm ci`, `pnpm install`, `yarn`,
+   * `bun install`, and `npm install <pkg>`, `pnpm add`, `yarn add`, `bun add`,
+   * which install it beside the names), or the requirement files given to
+   * `pip install -r`, as written and in order. Present also when `packages` is
+   * empty; absent for a global install for certain and for a launcher. Reading
    * the file is the hook's (`pkgvet/manifest.ts`): this module does no I/O.
    */
   manifest?: { kind: 'package-json' } | { kind: 'requirements'; files: readonly string[] };
@@ -1089,18 +1090,18 @@ function detect(words: readonly ShellWord[]): Detected | null {
 
   switch (head) {
     case 'npm':
-      // A bare `npm install` installs the manifest; `npm ci` and its kin always do.
+      // `npm install` installs the manifest, with or without a package; `npm ci` and its kin always do.
       if (NPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       if (NPM_MANIFEST_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
       return null;
     case 'pnpm':
       if (subWord === 'add') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       // `pnpm install <pkg>` / `pnpm i <pkg>` is pnpm's `add` (measured, pnpm 10.33: it resolves the name as a direct
-      // dependency); with no package it installs the manifest. Up to and including 3.10.0 the form with a package was not read at all.
+      // dependency), and installs the manifest too. Up to and including 3.10.0 the form with a package was not read at all.
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       return null;
     case 'bun': {
-      // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too; a bare `bun install` installs the manifest.
+      // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too, and install the manifest.
       if (!BUN_ADD.has(subWord)) return null;
       return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
     }

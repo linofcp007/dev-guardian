@@ -2,9 +2,11 @@
  * What a manifest install fetches from a registry: the dependencies a
  * `package.json` declares, and the packages a requirements file names.
  *
- * `npm install` with no package, `npm ci`, `pnpm install`, `yarn`, `bun
- * install` and `pip install -r` name nothing on the command line — the
- * manifest does, and the install hook used to say nothing about it: `npm
+ * `npm install` (with or without a package), `npm ci`, `pnpm install`, `yarn`,
+ * `bun install`, `pnpm add`, `yarn add`, `bun add` and `pip install -r` install
+ * a manifest (for npm the nearest `package.json` from where the command runs
+ * up to the project or repository root), and the install hook used to say
+ * nothing about it: `npm
  * install crossenv` was denied while the same package in `package.json`
  * installed in silence. This module turns the manifest into the
  * {@link PackageSpec}s the vetting already knows.

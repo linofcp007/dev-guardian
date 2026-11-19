@@ -885,6 +885,14 @@ describe('install-vet-named-install-manifest', () => {
     expect(description).toMatch(/(by name|names a package|named package|install <pkg>|with a package)/i);
   });
 
+  it('T-09 the SECURITY.md egress row for the public registries says an install by name inside a project sends the manifest names too', () => {
+    const row = read('SECURITY.md')
+      .split('\n')
+      .find((line) => line.startsWith('| `registry.npmjs.org`'));
+    expect(row, 'the egress row of the public registries').toBeDefined();
+    expect(row).toMatch(/install by name inside a project[^|]*installs the manifest too/);
+  });
+
   it('T-09 skills/guardian-deps/SKILL.md no longer says the manifest is read only for `npm install` "sem nomes"', () => {
     const skill = read('skills/guardian-deps/SKILL.md');
     expect(skill).not.toMatch(/`npm install` sem nomes/);
