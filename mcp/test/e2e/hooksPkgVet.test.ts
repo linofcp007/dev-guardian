@@ -1529,3 +1529,26 @@ describe('install-vet-project-registry-said', () => {
     expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('.npmrc'));
   });
 });
+
+// ───────────────── install-vet-bare-install-misread — through the dispatcher
+
+describe('install-vet-bare-install-misread', () => {
+  const manifest = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+
+  it.each(['npm install --global=false', 'npm install -D false'])(
+    'T-03 %s in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      manifest({ express: '^4.21.0', crossenv: '*' });
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package.json.*crossenv/s);
+    },
+  );
+});

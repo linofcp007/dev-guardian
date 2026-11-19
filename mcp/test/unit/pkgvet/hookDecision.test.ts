@@ -3135,3 +3135,26 @@ describe('install-vet-project-registry-said', () => {
     expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
   });
 });
+
+// ───────────────── install-vet-bare-install-misread — a bare install with a flag and a true / false word reads the manifest
+
+describe('install-vet-bare-install-misread', () => {
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+
+  it('T-04 `npm install --force true` with a manifest of clean packages is not denied, and the registry is not asked about `true`', async () => {
+    pkgJson({ express: '^4.21.0', 'left-pad': '^1.3.0' });
+    const reg = registry({ exists: ['express', 'left-pad'] });
+    const d = await decideInstallCommand('npm install --force true', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(reg.calls.filter((u) => u.endsWith('/true'))).toEqual([]);
+    expect(reg.calls, 'the manifest is what is vetted').toContain('https://registry.npmjs.org/express');
+  });
+
+  it('T-04 `npm install -D false lodash` vets lodash and not false', async () => {
+    const reg = registry({ exists: ['lodash'] });
+    await decideInstallCommand('npm install -D false lodash', opts(reg.fetchImpl));
+    expect(reg.calls).toContain('https://registry.npmjs.org/lodash');
+    expect(reg.calls.filter((u) => u.endsWith('/false'))).toEqual([]);
+  });
+});

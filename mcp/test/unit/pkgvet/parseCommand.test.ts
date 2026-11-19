@@ -1536,3 +1536,54 @@ describe('install-vet-project-registry-said', () => {
     expect(globalOf(command) === true).toBe(false);
   });
 });
+
+// ───────────────── install-vet-bare-install-misread — a bare install is read as the manager reads it
+
+describe('install-vet-bare-install-misread', () => {
+  /** What the single install command of `command` gives: its packages, its manifest and whether it is global. */
+  const read = (command: string): { packages: string[]; manifest: unknown; global: boolean | undefined } => {
+    const parsed = parseInstallCommands(command);
+    expect(parsed, command).toHaveLength(1);
+    const c = parsed[0];
+    return { packages: (c?.packages ?? []).map((p) => p.name), manifest: c?.manifest, global: c?.global };
+  };
+  const MANIFEST = { kind: 'package-json' };
+
+  it.each([
+    'npm install --global=false',
+    'npm i -g=false',
+    'npm install -g --no-global',
+    'npm install -g false',
+    'npm install --global false',
+    'npm install -D false',
+    'npm install --force true',
+    'pnpm install --global=false',
+    'pnpm install -g false',
+    'pnpm install --force false',
+    'npm install -g $X',
+    'npm install -g --location=project',
+    'npm ci --global=false',
+  ])('T-01 %s: the manifest is installed, and no package is named', (command) => {
+    const r = read(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: MANIFEST });
+  });
+
+  it('T-01 npm install -g true is a global install for certain: no package, no manifest', () => {
+    expect(read('npm install -g true')).toEqual({ packages: [], manifest: undefined, global: true });
+  });
+
+  it.each([
+    ['npm install', [], MANIFEST],
+    ['npm install -g', [], undefined],
+    ['npm install x', ['x'], undefined],
+    ['npm install -g x', ['x'], undefined],
+    ['npm install --otp -g', [], MANIFEST],
+    ['yarn add -D false', ['false'], undefined],
+    ['bun add --force false', ['false'], undefined],
+    ['npx false', ['false'], undefined],
+    ['npm install --unknown-flag false', [], MANIFEST],
+  ])('T-02 %s: as before — packages %j, manifest %j', (command, packages, manifest) => {
+    const r = read(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages, manifest });
+  });
+});
