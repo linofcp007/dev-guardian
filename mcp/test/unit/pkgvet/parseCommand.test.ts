@@ -1947,6 +1947,18 @@ describe('install-vet-update-verbs', () => {
     expect(vettable(command)).toEqual([{ packages: [], manifest: MANIFEST }]);
   });
 
+  it.each([
+    ['npm u', 'npm update'],
+    ['npm udpate', 'npm update'],
+    ['npm audit --json fix', 'npm audit fix'],
+    ['npm audit fix --dry-run', 'npm audit fix'],
+    ['pnpm update --interactive', 'pnpm update'],
+    ['pnpm up -i', 'pnpm update'],
+  ])('T-01 `%s` reads as `%s` (an npm alias, or a flag that does not change the verb)', (command, plain) => {
+    expect(vettable(plain), plain).toEqual([{ packages: [], manifest: MANIFEST }]);
+    expect({ command, parse: essence(command) }).toEqual({ command, parse: essence(plain) });
+  });
+
   it.each(['npm install', 'npm ci', 'pnpm install', 'yarn install', 'bun install'])('T-02 guard: `%s` is still a manifest install that names no package', (command) => {
     expect(vettable(command)).toEqual([{ packages: [], manifest: MANIFEST }]);
   });

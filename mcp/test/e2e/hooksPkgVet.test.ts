@@ -1713,7 +1713,19 @@ describe('install-vet-update-verbs', () => {
     [OSV]: { osv: {} },
   };
 
-  it.each(['npm update', 'pnpm update', 'yarn upgrade', 'yarn up lodash', 'bun update', 'npm dedupe', 'npm audit fix'])(
+  it.each([
+    'npm update',
+    'pnpm update',
+    'yarn upgrade',
+    'yarn up lodash',
+    'bun update',
+    'npm dedupe',
+    'npm audit fix',
+    'npm prune',
+    'pnpm dedupe',
+    'yarn dedupe',
+    'yarn up',
+  ])(
     'T-03 `%s` in a project whose package.json names a malicious package is DENIED, naming the file and the package',
     (command) => {
       writeFileSync(

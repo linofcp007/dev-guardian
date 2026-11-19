@@ -878,7 +878,7 @@ const NPM_MAINTENANCE = new Set(['dedupe', 'ddp', 'prune']);
 const PNPM_UPDATE = new Set(['update', 'up', 'upgrade']);
 /** Yarn 1's `upgrade` (and its interactive form): the manifest moves past the lockfile's pins. */
 const YARN_UPDATE = new Set(['upgrade', 'upgrade-interactive']);
-const COMPOSER_REQUIRE =new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
+const COMPOSER_REQUIRE = new Set(['require', 'r', 'req', 'requ', 'requi', 'requir']);
 const BUN_ADD = new Set(['add', 'a', 'install', 'i']);
 /** pnpm's install subcommand: with a package it adds it, with none it installs the manifest. */
 const PNPM_INSTALL = new Set(['install', 'i']);
