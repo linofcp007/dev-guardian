@@ -1841,3 +1841,62 @@ describe('install-vet-through-corepack', () => {
     },
   );
 });
+
+// ───────────────── install-vet-named-install-manifest — an install that names a package also installs the manifest
+
+describe('install-vet-named-install-manifest', () => {
+  const MANIFEST = { kind: 'package-json' };
+  /** What the single install command of `command` gives: its packages, its manifest and whether it is global. */
+  const read = (command: string): { packages: string[]; manifest: unknown; global: boolean | undefined } => {
+    const parsed = parseInstallCommands(command);
+    expect(parsed, command).toHaveLength(1);
+    const c = parsed[0];
+    return { packages: (c?.packages ?? []).map((p) => p.name), manifest: c?.manifest, global: c?.global };
+  };
+
+  it.each([
+    'npm install p',
+    'npm i p',
+    'npm add p',
+    'npm install p --no-save',
+    'pnpm add p',
+    'pnpm install p',
+    'yarn add p',
+    'yarn workspace w add p',
+    'bun add p',
+    'bun install p',
+  ])('T-01 %s: the package is named AND the manifest is read', (command) => {
+    const r = read(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p'], manifest: MANIFEST });
+  });
+
+  it.each([
+    'npm install -g p',
+    'npm install --location=global p',
+    'pnpm add -g p',
+    'bun add -g p',
+    'yarn global add p',
+    'npx p',
+    'npm exec p',
+    'pnpm dlx p',
+    'yarn dlx p',
+    'bunx p',
+  ])('T-02 %s: the package is named and the manifest is NOT read (global for certain, or a launcher)', (command) => {
+    const r = read(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p'], manifest: undefined });
+  });
+
+  it('T-02 when "global" is in doubt (`npm install -g $X p`) the manifest is read: vet too much, never too little', () => {
+    const r = read('npm install -g $X p');
+    expect(r.global).not.toBe(true);
+    expect(r.manifest).toEqual(MANIFEST);
+  });
+
+  it.each(['npm i ./pkg.tgz', 'pnpm add ./pkg.tgz', 'npm install https://x.example/p.tgz'])(
+    'T-03 %s: no package is vetted by name, and the manifest is read',
+    (command) => {
+      const r = read(command);
+      expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: MANIFEST });
+    },
+  );
+});

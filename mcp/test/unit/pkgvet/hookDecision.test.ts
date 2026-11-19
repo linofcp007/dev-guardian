@@ -3270,3 +3270,149 @@ describe('install-vet-unknown-flag-hides-package', () => {
     expect(said, 'a silent allow').toBe(true);
   }, 600_000);
 });
+
+// ───────────────── install-vet-named-install-manifest — an install that names a package also vets the manifest
+
+describe('install-vet-named-install-manifest', () => {
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const registryDoc = (name: string): string => `https://registry.npmjs.org/${name}`;
+
+  it('T-04 `npm install <clean>` beside a manifest that names a package with a malware advisory is DENIED, naming the file and that package', async () => {
+    pkgJson({ express: '^4.21.0', 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['express', 'evil-pkg', 'lodash'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install lodash', opts(reg.fetchImpl));
+    expect(d?.deny).toMatch(/package\.json/);
+    expect(d?.deny).toMatch(/evil-pkg/);
+    expect(d?.deny).toMatch(/MAL-2026-77/);
+    // The package the user named is clean, and a clean package of the manifest is not accused.
+    expect(d?.deny).not.toMatch(/lodash|express/);
+  });
+
+  it('T-04 a typosquat in the manifest warns (file, package, the name it resembles) beside a by-name install, and does not deny', async () => {
+    pkgJson({ lodahs: '^1.0.0' });
+    const reg = registry({ exists: ['lodahs', 'express'] });
+    const d = await decideInstallCommand('npm install express', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/package\.json/);
+    expect(d?.context).toMatch(/lodahs/);
+    expect(d?.context).toMatch(/lodash/);
+  });
+
+  it('T-04 a clean manifest beside a by-name install is silence, and its packages were looked up', async () => {
+    pkgJson({ express: '^4.21.0', 'left-pad': '^1.3.0' });
+    const reg = registry({ exists: ['express', 'left-pad', 'lodash'] });
+    expect(await decideInstallCommand('npm install lodash', opts(reg.fetchImpl))).toBeNull();
+    expect(reg.calls, 'the manifest is what is vetted beside the named package').toContain(registryDoc('left-pad'));
+    expect(reg.calls).toContain(registryDoc('lodash'));
+  });
+
+  it('T-04 a named package the registry does not have is still DENIED as today, manifest or not', async () => {
+    pkgJson({ express: '^4.21.0' });
+    const reg = registry({ exists: ['express'] });
+    const d = await decideInstallCommand('npm install react-magic-form-helperz', opts(reg.fetchImpl));
+    expect(d?.deny).toMatch(/react-magic-form-helperz/);
+  });
+
+  it.each(['npm install --prefix other p', 'cd "$WHERE" && npm install p'])(
+    'T-05 %s: `p` is vetted and one line says package.json was not read, with the reason',
+    async (command) => {
+      pkgJson({ crossenv: '*' });
+      mkdirSync(join(project, 'other'));
+      writeFileSync(join(project, 'other', 'package.json'), JSON.stringify({ dependencies: { crossenv: '*' } }));
+      const reg = registry({ exists: ['p', 'crossenv'], malicious: ['crossenv'] });
+      const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+      expect(reg.calls, 'the named package is vetted').toContain(registryDoc('p'));
+      expect(reg.calls, 'no manifest was guessed at').not.toContain(registryDoc('crossenv'));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toMatch(/package\.json was not read \(where the command runs could not be determined\)/);
+    },
+  );
+
+  it('T-06 the named package is asked first, and has its verdict while the manifest lookups never answer: the line says what was left, nothing denies', async () => {
+    pkgJson({ alpha: '^1.0.0', beta: '^1.0.0' });
+    // `lodahs` is one edit from `lodash`: the warning about it is the named package's verdict.
+    const f = fakeFetch({
+      [registryDoc('lodahs')]: npmDoc('1.0.0'),
+      [registryDoc('alpha')]: { hang: true },
+      [registryDoc('beta')]: { hang: true },
+      [OSV]: osvClean,
+    });
+    const d = await decideInstallCommand('npm install lodahs', opts(f.fetchImpl, { budgetMs: 300, popular: { npm: ['lodash'] } }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/lodahs.*lodash|lodash.*lodahs/s);
+    expect(d?.context).toMatch(/could not vet 2 packages of package\.json/);
+    const first = (name: string): number => f.calls.indexOf(registryDoc(name));
+    expect(first('alpha'), 'the documents of the manifest were asked').toBeGreaterThan(-1);
+    expect(first('lodahs')).toBeGreaterThan(-1);
+    expect(first('lodahs')).toBeLessThan(first('alpha'));
+    expect(first('lodahs')).toBeLessThan(first('beta'));
+  });
+
+  describe('T-07 what leaves the machine', () => {
+    /** The fetch of `reg`, recording the headers of every request. */
+    const withHeaders = (reg: ReturnType<typeof registry>): { fetchImpl: typeof fetch; headers: string[] } => {
+      const headers: string[] = [];
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        new Headers(init?.headers).forEach((value, key) => headers.push(`${key}: ${value}`));
+        return reg.fetchImpl(input, init);
+      }) as typeof fetch;
+      return { fetchImpl, headers };
+    };
+    /** Every registry document asked and every package name OSV was asked about, as one set of strings. */
+    const requested = (reg: ReturnType<typeof registry>): Set<string> => {
+      const out = new Set<string>();
+      for (const url of reg.calls) if (url !== OSV) out.add(url);
+      for (const body of reg.bodies) {
+        const queries = (JSON.parse(body) as { queries?: Array<{ package?: { name?: string } }> }).queries ?? [];
+        for (const q of queries) out.add(`osv:${q.package?.name ?? ''}`);
+      }
+      return out;
+    };
+
+    const PUBLIC = ['express', 'lodash', 'left-pad', 'chalk', 'zod', 'react', 'debug'];
+    const PRIVATE = ['@acme/billing', '@acme/ui', '@corp/internal-tool'];
+    /** A small deterministic generator, so a failure names the manifest that caused it. */
+    const manifestsOf = (count: number): Array<Record<string, string>> => {
+      let seed = 20261119;
+      const next = (n: number): number => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return Math.floor(seed / 65536) % n;
+      };
+      return Array.from({ length: count }, () => {
+        const deps: Record<string, string> = {};
+        for (const name of [...PUBLIC, ...PRIVATE]) if (next(2) === 0) deps[name] = '^1.0.0';
+        deps[PUBLIC[next(PUBLIC.length)] ?? 'express'] = '^1.0.0';
+        deps[PRIVATE[next(PRIVATE.length)] ?? '@acme/ui'] = '^2.0.0';
+        return deps;
+      });
+    };
+
+    it.each(manifestsOf(6).map((deps, i) => [i, deps] as const))(
+      'T-07 manifest %i: the requests of `npm install named` are those of a bare `npm install`, plus the named package; no credential, no private scope',
+      async (_i, deps) => {
+        writeFileSync(
+          join(home, '.npmrc'),
+          ['@acme:registry=https://npm.acme.example/', '@corp:registry=https://npm.corp.example/', '//npm.acme.example/:_authToken=SECRET-TOKEN-123', ''].join('\n'),
+        );
+        pkgJson(deps);
+        const exists = [...PUBLIC, ...PRIVATE, 'named-pkg'];
+        const bare = registry({ exists });
+        const bareSent = withHeaders(bare);
+        await decideInstallCommand('npm install', opts(bareSent.fetchImpl));
+        const byName = registry({ exists });
+        const byNameSent = withHeaders(byName);
+        await decideInstallCommand('npm install named-pkg', opts(byNameSent.fetchImpl));
+
+        const allowed = new Set([...requested(bare), registryDoc('named-pkg'), 'osv:named-pkg']);
+        const extra = [...requested(byName)].filter((r) => !allowed.has(r));
+        expect({ deps, extra }).toEqual({ deps, extra: [] });
+        // Non-vacuous: the manifest IS read, so every public dependency it has is asked of the registry.
+        for (const name of PUBLIC.filter((n) => n in deps)) expect(byName.calls, name).toContain(registryDoc(name));
+        const sent = [...byName.calls, ...byName.bodies, ...byNameSent.headers].join('\n');
+        expect(sent).not.toMatch(/acme|corp\.example|@corp|SECRET-TOKEN/);
+        expect(byNameSent.headers.filter((h) => /^(authorization|cookie|proxy-authorization):/i.test(h))).toEqual([]);
+      },
+    );
+  });
+});
