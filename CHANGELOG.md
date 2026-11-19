@@ -61,6 +61,18 @@ says when a file of the project sets the default registry.
 
 ### Added
 
+- **The install hook vets the manifest on an install that names a package.** `npm install <package>` (also `i` and
+  `add`), `pnpm add` and `pnpm install <package>`, `yarn add`, `yarn workspace <w> add`, `bun add` and `bun install
+  <package>` install the project's `package.json` as well, measured with npm, pnpm, Yarn 1 and 4 and bun, and the
+  hook vetted only the named package: a hostile manifest came in beside a clean package. The manifest is now read
+  and vetted for these installs with a manifest's own rules (only a malicious package denies), after the named
+  packages, which are looked up first. A global install (`npm install -g`, `yarn global add`) and the launchers
+  (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`) still do not read it. Cost, measured on the test projects: 0.24 s
+  more with a lockfile, 0.24 to 0.33 s without. What you will meet: a by-name install in a project whose manifest
+  names a malicious package is now denied, naming the file and the package, and the manifest's warnings (a
+  typosquat, a name the public registry does not have) now appear on by-name installs too. Nothing new leaves the
+  machine: what a bare install already sent (the dependency names, the lockfile's pinned names and versions; no
+  private scope, no credential).
 - **The install hook says when a file of the project sets the default registry.** A project `.npmrc`, `.yarnrc`,
   `.yarnrc.yml` or `bunfig.toml` that points the package manager at another registry means the packages come from
   there, and "verified" used to mean only what the public registry and OSV said. The hook now adds one line to its

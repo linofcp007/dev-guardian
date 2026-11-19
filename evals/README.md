@@ -121,8 +121,8 @@ Made once, on 2026-11-14: WSL2 (Debian 12), Claude Code 2.1.322, Opus 5.5, the p
   difference the plugin makes to the effect, and a small one, not established, to what the user is told. The
   no-plugin arm of the other three cases was not run.
 - In the 12 runs with the plugin where the agent installed the fixture's dependencies (`npm install`, from the
-  manifest), it called `vet_packages` first in one. No case grades that, and the install hook vets only packages
-  named on the command line.
+  manifest), it called `vet_packages` first in one. No case grades that, and a bare `npm install` was vetted by the hook
+  from its manifest.
 - What a trace of such a run looks like: the sandbox closes the network (`npm install` answers `E403`), and most
   shell calls come back `Exit code 1` with their output whole — the shell's last line cannot write its
   `…/cwd-xxxx` file on a read-only file system. Neither is the plugin's doing.

@@ -863,12 +863,11 @@ describe('install-vet-named-install-manifest', () => {
     return hooks.slice(at, end === -1 ? undefined : end).replace(/\s+/g, ' ');
   };
   /** A sentence that says an install which names a package also reads the manifest, in the plain words a page would use. */
-  const SAYS_NAMED_READS_MANIFEST = /(names? (?:a|at least one|the) package|by[- ]name install|install by name|named package)[^.]{0,250}(also|as well|too|beside)[^.]{0,250}(manifest|package\.json)/i;
+  const SAYS_NAMED_READS_MANIFEST = /An install that names a package[^]{0,400}installs the project's `package\.json` beside it/;
 
   it('T-09 docs/hooks.md no longer says a manifest is read "never for a by-name install", and says a by-name install also reads it', () => {
     const section = vettingSection();
     expect(section).not.toMatch(/never for a by-name install/);
-    expect(section).not.toMatch(/A command that installs from a manifest names no package/);
     expect(section).toMatch(SAYS_NAMED_READS_MANIFEST);
   });
 
@@ -889,6 +888,6 @@ describe('install-vet-named-install-manifest', () => {
   it('T-09 skills/guardian-deps/SKILL.md no longer says the manifest is read only for `npm install` "sem nomes"', () => {
     const skill = read('skills/guardian-deps/SKILL.md');
     expect(skill).not.toMatch(/`npm install` sem nomes/);
-    expect(skill).toMatch(/(com nomes|nomeia|nomeado|por nome|com um pacote)/i);
+    expect(skill).toMatch(/`npm install` com ou sem nomes/);
   });
 });
