@@ -17,7 +17,9 @@ version bump.
   hid the install when a flag that takes a value stood before the subcommand (`npm --fetch-retries 0 install
   <package>`, `yarn --network-concurrency 1`). Present since 3.0.0. The word after such a flag is now vetted as a
   possible package and the command is marked uncertain, so a name the registry does not have is a warning, never a
-  deny; the manifest is still read when that word is the only thing named. Update; there is nothing to rotate.
+  deny; the manifest is still read when that word is the only thing named. A Yarn script behind a flag the hook
+  does not know (`yarn --dgunknown build`) is now read as a bare `yarn`, so the manifest is vetted. Update; there is
+  nothing to rotate.
 - **An install through `corepack`, or with the name `yarnpkg`, passed without being vetted.** The hook did not know
   the words, so `corepack yarn add <package>`, `corepack pnpm install`, `corepack npx <package>`,
   `corepack use <manager>`, `corepack up` and `yarnpkg add <package>` were neither looked up nor mentioned, and a

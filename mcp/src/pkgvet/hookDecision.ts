@@ -70,7 +70,7 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } fr
 import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
 import { LOCKFILES, lockFormat, readLock, type LockRead, type Pin, type Source } from './lockfile.js';
 import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
-import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
+import { MAX_CANDIDATES_PER_COMMAND, parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
 import {
@@ -171,7 +171,7 @@ function firstLine(r: PackageVetResult): string {
 }
 
 /** The most packages NAMED ON THE COMMAND LINE one hook call looks up; the rest are named as not vetted. */
-export const MAX_VETTED_PACKAGES = 50;
+export const MAX_VETTED_PACKAGES = MAX_CANDIDATES_PER_COMMAND;
 /**
  * The most packages of MANIFESTS one hook call looks up, beside those the
  * command names. Nobody types fifty names, but real applications declare more
@@ -249,7 +249,8 @@ function boundedInstalls(
   }
   return {
     commands,
-    notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES),
+    // The candidates the parse left out past its own ceiling count as packages not vetted.
+    notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES) + parsed.reduce((n, c) => n + (c.candidatesDropped ?? 0), 0),
     manifestNotVetted: Math.max(0, ofManifests.length - MAX_MANIFEST_PACKAGES),
     cut,
   };

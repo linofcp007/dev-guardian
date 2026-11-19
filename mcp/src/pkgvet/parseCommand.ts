@@ -74,6 +74,11 @@ export interface InstallCommand {
    */
   byPackageFlag?: boolean;
   /**
+   * How many distinct candidates (words after a flag the table does not know) were left out past
+   * {@link MAX_CANDIDATES_PER_COMMAND}: the decision says they were not vetted.
+   */
+  candidatesDropped?: number;
+  /**
    * Where the command runs when a directory change earlier in the line moved
    * it: the targets of those `cd` / `pushd` / `Set-Location` words in order,
    * each relative to the one before (the hook resolves them against its own
@@ -391,8 +396,15 @@ const FLAGS: Record<string, FlagTable> = {
     // `-C` is npm's short form of `--prefix`.
     value: set('--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include',
       '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix',
-      '--otp', '--scope', '--cpu', '--os', '--libc', '--location'),
-    bool: set(...NPM_COMMON_BOOL),
+      '--otp', '--scope', '--cpu', '--os', '--libc', '--location',
+      // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+      '--fetch-retries', '--fetch-retry-factor', '--fetch-retry-mintimeout', '--fetch-retry-maxtimeout',
+      '--fetch-timeout', '--cache-min', '--cache-max', '--maxsockets', '--depth', '--node-options', '--script-shell',
+      '--auth-type', '--cafile', '--https-proxy', '--proxy', '--noproxy', '--local-address', '--user-agent',
+      '--min-release-age'),
+    // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
+    // regression tests of this fix use them as the examples of a flag the table lacks.)
+    bool: set(...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl'),
     registry: set('--registry'),
     dir: set('--prefix', '-C'),
     workspace: set('--workspace', '-w', '--workspaces'),
@@ -401,8 +413,17 @@ const FLAGS: Record<string, FlagTable> = {
   pnpm: {
     value: set('--registry', '--filter', '-F', '--dir', '-C', '--reporter', '--store-dir', '--global-dir',
       '--modules-dir', '--virtual-store-dir', '--lockfile-dir', '--network-concurrency', '--config', '--loglevel',
-      '--allow-build'),
-    bool: set(...NPM_COMMON_BOOL, '--workspace', '-w', '--workspace-root', '--recursive', '-r'),
+      '--allow-build',
+      // pnpm 10.33.2 `add --help` / `install --help` (measurements/flags/pnpm-*-help.txt): shown with an argument.
+      '--child-concurrency', '--hoist-pattern', '--public-hoist-pattern', '--filter-prod', '--test-pattern',
+      '--changed-files-ignore-pattern', '--trust-policy-exclude', '--trust-policy-ignore-after'),
+    // pnpm 10.33.2 `add --help` / `install --help`: shown without one. (`--shamefully-hoist` is one too and left
+    // unknown, like npm's `--prefer-dedupe`: the regression tests use it as the example of a flag the table lacks.)
+    bool: set(...NPM_COMMON_BOOL, '--workspace', '-w', '--workspace-root', '--recursive', '-r', '--ignore-pnpmfile',
+      '--prefer-frozen-lockfile', '--fix-lockfile', '--ignore-workspace', '--lockfile-only', '--merge-git-branch-lockfiles',
+      '--optimistic-repeat-install', '--resolution-only', '--side-effects-cache', '--side-effects-cache-readonly',
+      '--strict-peer-dependencies', '--use-running-store-server', '--use-store-server', '--use-stderr', '--stream',
+      '--aggregate-output', '--fail-if-no-match', '--save-catalog', '--prod'),
     registry: set('--registry'),
     dir: set('--dir', '-C'),
     workspace: set('--workspace', '--filter', '-F'),
@@ -410,9 +431,18 @@ const FLAGS: Record<string, FlagTable> = {
   },
   yarn: {
     value: set('--registry', '--cwd', '--network-timeout', '--modules-folder', '--cache-folder', '--mutex', '--scope',
-      '--mode'),
+      '--mode',
+      // Yarn 1.22.22 `yarn --help` (measurements/flags/yarn-1.22.22-help.txt): shown with an argument.
+      '--network-concurrency', '--link-folder', '--global-folder', '--preferred-cache-folder', '--use-yarnrc',
+      '--https-proxy', '--proxy', '--otp'),
+    // Yarn 1.22.22 `yarn --help`: shown without one. Left out: `--emoji`, `--scripts-prepend-node-path` and `--prod` /
+    // `--production`, whose argument is optional (`[bool]`, `[prod]`), and `--ignore-engines`, the example of a flag the
+    // table lacks in the regression tests of this fix.
     bool: set(...NPM_COMMON_BOOL, '--ignore-workspace-root-check', '-W', '--cached', '--interactive', '-i',
-      '--prefer-dev'),
+      '--prefer-dev', '--check-files', '--disable-pnp', '--enable-pnp', '--pnp', '--flat', '--focus', '--har',
+      '--ignore-optional', '--ignore-platform', '--link-duplicates', '--no-default-rc', '--non-interactive',
+      '--no-node-version-check', '--pure-lockfile', '--skip-integrity-check', '--strict-semver', '--update-checksums',
+      '-A'),
     registry: set('--registry'),
     dir: set('--cwd'),
   },
@@ -432,13 +462,18 @@ const FLAGS: Record<string, FlagTable> = {
       '--proxy', '--retries', '--timeout', '--exists-action', '--cert', '--client-cert', '--cache-dir',
       '--no-binary', '--only-binary', '--config-settings', '-C', '--global-option', '--report', '--python',
       '--root-user-action', '--keyring-provider', '--group', '--index-strategy', '--extra', '--override',
-      '-p', '--prerelease', '--resolution', '--requirements'),
+      '-p', '--prerelease', '--resolution', '--requirements',
+      // pip 26.2.1 `install --help` (measurements/flags/pip-install-help.txt): shown with an argument.
+      '--use-feature', '--use-deprecated', '--all-releases', '--build-constraint', '--only-final', '--resume-retries',
+      '--refresh-package', '--requirements-from-script', '--uploaded-prior-to'),
     bool: set('-U', '--upgrade', '--user', '--no-deps', '--pre', '--force-reinstall', '-I', '--ignore-installed',
       '--no-cache-dir', '--no-cache', '-q', '-v', '--quiet', '--verbose', '--break-system-packages', '--dry-run',
       '--no-build-isolation', '--require-hashes', '--isolated', '--disable-pip-version-check', '--no-input',
       '--compile', '--no-compile', '--prefer-binary', '--no-warn-script-location', '--use-pep517', '--no-clean',
       '--check-build-dependencies', '--ignore-requires-python', '--system', '--all-extras', '--no-index',
-      '--compile-bytecode'),
+      '--compile-bytecode',
+      // pip 26.2.1 `install --help`: shown without one.
+      '--debug', '--only-deps'),
     registry: set('-i', '--index-url', '--extra-index-url', '-f', '--find-links', '--index', '--default-index'),
     registryBool: set('--no-index'),
     reported: new Map([
@@ -482,18 +517,21 @@ const FLAGS: Record<string, FlagTable> = {
   },
   composer: {
     dir: set('--working-dir', '-d'),
-    value: set('--working-dir', '-d'),
+    // composer 2.10.3 `require --help` (measurements/flags/composer-require-help.txt): these options take a value
+    // (`--prefer-install` was listed below as a boolean: it is `--prefer-install=PREFER-INSTALL`).
+    value: set('--working-dir', '-d', '--prefer-install', '--ignore-platform-req', '--audit-format', '--apcu-autoloader-prefix'),
     bool: set('--dev', '--no-dev', '--no-update', '--no-install', '--no-audit', '--no-security-blocking',
       '--update-with-dependencies', '-w', '--update-with-all-dependencies', '-W', '--with-dependencies',
-      '--with-all-dependencies', '--prefer-dist', '--prefer-source', '--prefer-install', '--dry-run',
+      '--with-all-dependencies', '--prefer-dist', '--prefer-source', '--dry-run',
       '--no-progress', '--no-scripts', '--no-plugins', '--update-no-dev', '--ignore-platform-reqs',
       '--prefer-stable', '--prefer-lowest', '--sort-packages', '--optimize-autoloader', '-o', '--classmap-authoritative',
       '-a', '--apcu-autoloader', '--fixed', '-n', '--no-interaction', '-q', '--quiet', '-v', '-vv', '-vvv',
-      '--ansi', '--no-ansi', '--no-cache', '--minimal-changes', '-m'),
+      '--ansi', '--no-ansi', '--no-cache', '--minimal-changes', '-m', '--profile', '--no-blocking', '--no-suggest'),
     registry: set(),
   },
   dotnet: {
-    value: set('-v', '--version', '-f', '--framework', '-s', '--source', '--package-directory'),
+    // dotnet 10.0.404 `add package --help` (measurements/flags/dotnet-add-package-help.txt): `--project` and `--file` take one.
+    value: set('-v', '--version', '-f', '--framework', '-s', '--source', '--package-directory', '--project', '--file'),
     bool: set('-n', '--no-restore', '--interactive', '--prerelease'),
     registry: set('-s', '--source'),
   },
@@ -586,6 +624,13 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
   },
 };
 
+/**
+ * The most distinct candidate words one command contributes (the words after flags the table does not know). The same
+ * number as the decision's limit of packages named on a command line (`MAX_VETTED_PACKAGES`): past it a word would not
+ * be looked up anyway, and each one costs the hook a lookup in the project's files before that limit applies.
+ */
+export const MAX_CANDIDATES_PER_COMMAND = 50;
+
 interface Positional {
   value: string;
   /** The word after a long flag the table does not know: a possible package, or that flag's value ({@link afterUnknownFlag}). */
@@ -605,6 +650,27 @@ interface WalkResult {
   unknownFlags: number;
 }
 
+/** The positionals with each candidate once and at most {@link MAX_CANDIDATES_PER_COMMAND} of them; `dropped` counts the rest. */
+function limitCandidates(positionals: readonly Positional[]): { kept: Positional[]; dropped: number } {
+  const seen = new Set<string>();
+  const kept: Positional[] = [];
+  let dropped = 0;
+  for (const p of positionals) {
+    if (p.candidate !== true) {
+      kept.push(p);
+      continue;
+    }
+    if (seen.has(p.value)) continue;
+    if (seen.size >= MAX_CANDIDATES_PER_COMMAND) {
+      dropped += 1;
+      continue;
+    }
+    seen.add(p.value);
+    kept.push(p);
+  }
+  return { kept, dropped };
+}
+
 const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 
 const isBoolWord = (word: string | undefined): boolean => word === 'true' || word === 'false';
@@ -614,7 +680,7 @@ const isBoolWord = (word: string | undefined): boolean => word === 'true' || wor
  * flag is read the same way in a package position and in the subcommand position. The tables are hand-written lists
  * and the managers have more boolean flags than they hold: a long flag (no `=`, not `--no-...`) is followed by a word
  * that may be its value or a package, and the hook cannot tell. `candidate`: the word stays a possible value AND is
- * vetted as a possible package; `value`: npm and pnpm read a `true` / `false` as the value (measured 2026-11-19);
+ * vetted as a possible package; `value`: a `true` / `false` is the value;
  * `none`: the flag takes no word (a short flag, one written with `=`, `--no-...`, one the table knows, or one followed
  * by a flag).
  */
@@ -622,7 +688,9 @@ function afterUnknownFlag(v: string, next: string | undefined, table: FlagTable)
   if (table.value.has(v) || table.bool.has(v)) return 'none';
   if (!v.startsWith('--') || v === '--' || v.startsWith('--no-') || v.includes('=')) return 'none';
   if (next === undefined || (next.startsWith('-') && next.length > 1)) return 'none';
-  return table.boolWord !== undefined && isBoolWord(next) ? 'value' : 'candidate';
+  // After a flag the table does not know, `true` / `false` is its value for every manager: the only packages with those
+  // names are npm's security placeholder and a harmless one nobody else can publish (review round 1: `yarn add --emoji true x`).
+  return isBoolWord(next) ? 'value' : 'candidate';
 }
 
 /**
@@ -878,10 +946,16 @@ function launcher(
 
 /**
  * First positional (non-flag) index at or after `from`, honouring the table's value flags, with whether that word
- * follows a flag the table does not know ({@link afterUnknownFlag}: it may be that flag's value). With
- * `candidateAsValue` such a word is read as the value and skipped.
+ * follows a flag the table does not know ({@link afterUnknownFlag}: it may be that flag's value). With `subcommands`
+ * (the position of a subcommand) such a word is the subcommand only when it is one the hook reads; any other is that
+ * flag's value, and the scan goes on: one pass, however many unknown flags come first.
  */
-function scanPositional(words: readonly ShellWord[], from: number, table: FlagTable, candidateAsValue: boolean): { at: number; candidate: boolean } {
+function scanPositional(
+  words: readonly ShellWord[],
+  from: number,
+  table: FlagTable,
+  subcommands?: ReadonlySet<string>,
+): { at: number; candidate: boolean } {
   let candidateAt = -1;
   for (let i = from; i < words.length; i += 1) {
     const v = words[i]?.value ?? '';
@@ -891,8 +965,9 @@ function scanPositional(words: readonly ShellWord[], from: number, table: FlagTa
       // `npm -D false install`: the word after a boolean flag is its value, not the subcommand.
       else if (takesBoolWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
       else {
-        const after = afterUnknownFlag(v, words[i + 1]?.value, table);
-        if (after === 'value' || (after === 'candidate' && candidateAsValue)) i += 1;
+        const next = words[i + 1]?.value;
+        const after = afterUnknownFlag(v, next, table);
+        if (after === 'value' || (after === 'candidate' && subcommands !== undefined && !subcommands.has(next ?? ''))) i += 1;
         else if (after === 'candidate') candidateAt = i + 1;
       }
       continue;
@@ -902,18 +977,31 @@ function scanPositional(words: readonly ShellWord[], from: number, table: FlagTa
   return { at: -1, candidate: false };
 }
 
+/** The subcommands `detect` reads for each manager: a word after an unknown flag that is none of them is that flag's value. */
+const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
+  npm: new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, 'exec', 'x']),
+  pnpm: new Set(['add', 'dlx', ...PNPM_INSTALL]),
+  bun: new Set([...BUN_ADD, 'x']),
+  yarn: new Set(['install', 'add', 'global', 'workspace', 'dlx']),
+  pip: new Set(['install']),
+  uv: new Set(['add', 'pip', 'tool']),
+  poetry: new Set(['add']),
+  composer: COMPOSER_REQUIRE,
+  dotnet: new Set(['add']),
+};
+const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run']);
+const ADD_ONLY: ReadonlySet<string> = new Set(['add']);
+const INSTALL_ONLY: ReadonlySet<string> = new Set(['install']);
+const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
+
 /**
- * The command at `words`, read twice when it needs it: a word after a flag the table does not know may be that flag's
- * value (`npm --fetch-retries 0 install p`, `yarn --network-concurrency 1`), so when the first reading (the word as
- * the subcommand) finds nothing to read, the second reads it as the flag's value.
+ * The command at `words`. A word after a flag the table does not know may be that flag's value (`npm --fetch-retries 0
+ * install p`, `yarn --network-concurrency 1`): the scan for the subcommand takes it as one unless it is a subcommand
+ * the hook reads, word by word and in one pass.
  */
 function detect(words: readonly ShellWord[]): Detected | null {
-  return detectReading(words, false) ?? detectReading(words, true);
-}
-
-function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): Detected | null {
-  const nextPositional = (ws: readonly ShellWord[], from: number, table: FlagTable): number =>
-    scanPositional(ws, from, table, flagWordIsValue).at;
+  const nextPositional = (ws: readonly ShellWord[], from: number, table: FlagTable, subcommands?: ReadonlySet<string>): number =>
+    scanPositional(ws, from, table, subcommands).at;
   const start = commandStart(words);
   const headWord = words[start];
   if (headWord === undefined) return null;
@@ -955,7 +1043,7 @@ function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): D
   if (head === 'bunx') return launcher('bun', 'npm', rest, [], { style: 'run', flags: 'bunx', localFirst: true });
   if (head === 'uvx') return launcher('uv', 'pypi', rest, [], { style: 'run', flags: 'uvx' });
   if (head === 'pipx') {
-    const sub = nextPositional(words, i, LAUNCH_FLAGS['pipx-run'] ?? FLAGS['pip'] ?? { value: set(), bool: set(), registry: set() });
+    const sub = nextPositional(words, i, LAUNCH_FLAGS['pipx-run'] ?? FLAGS['pip'] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
     const subWord = sub < 0 ? '' : (words[sub]?.value ?? '');
     if (subWord === 'install') return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'install', flags: 'pipx-install' });
     if (subWord === 'run') return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'run', flags: 'pipx-run' });
@@ -964,7 +1052,7 @@ function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): D
 
   const table = FLAGS[head];
   if (table === undefined) return null;
-  const sub = nextPositional(words, i, table);
+  const sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
   if (sub < 0) {
     // A bare `yarn` — flags only — installs the project's manifest, unless a flag only prints.
     if (head === 'yarn' && !rest.some((w) => YARN_PRINTS.has(w.value))) {
@@ -984,7 +1072,7 @@ function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): D
   if (head === 'bun' && subName === 'x') return launcher('bun', 'npm', after, before, { style: 'run', flags: 'bunx', localFirst: true });
   if (head === 'uv' && subName === 'tool') {
     const toolTable = LAUNCH_FLAGS['uvx'] ?? table;
-    const verb = nextPositional(words, sub + 1, toolTable);
+    const verb = nextPositional(words, sub + 1, toolTable, PIPX_SUBCOMMANDS);
     const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
     const tail = words.slice(verb + 1);
     if (verbName === 'run') return launcher('uv', 'pypi', tail, before, { style: 'run', flags: 'uvx' });
@@ -1016,10 +1104,10 @@ function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): D
       if (subWord === 'install') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
       let at = sub;
       const uncertain: string[] = [];
-      if (subWord === 'global') at = nextPositional(words, sub + 1, table);
+      if (subWord === 'global') at = nextPositional(words, sub + 1, table, ADD_ONLY);
       else if (subWord === 'workspace') {
         const ws = nextPositional(words, sub + 1, table);
-        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table);
+        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table, ADD_ONLY);
         uncertain.push('workspace context (yarn workspace)');
       }
       if (at < 0 || words[at]?.value !== 'add') return null;
@@ -1030,7 +1118,7 @@ function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): D
     case 'uv': {
       if (subWord === 'add') return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
       if (subWord === 'pip') {
-        const inst = nextPositional(words, sub + 1, table);
+        const inst = nextPositional(words, sub + 1, table, INSTALL_ONLY);
         if (inst >= 0 && words[inst]?.value === 'install') {
           return { manager: 'uv-pip', ecosystem: 'pypi', args: words.slice(inst + 1), pre, uncertain: [] };
         }
@@ -1050,7 +1138,7 @@ function detectReading(words: readonly ShellWord[], flagWordIsValue: boolean): D
       const uncertain: string[] = [];
       if (at >= 0 && words[at]?.value !== 'package') {
         uncertain.push('dotnet project argument (the NuGet configuration next to that project was not read)');
-        at = nextPositional(words, at + 1, table);
+        at = nextPositional(words, at + 1, table, PACKAGE_ONLY);
       }
       if (at < 0 || words[at]?.value !== 'package') return null;
       return { manager: head, ecosystem: 'nuget', args: words.slice(at + 1), pre, uncertain };
@@ -1076,10 +1164,10 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   let body = d.args;
   if (launch.style === 'run') {
     // The word after a flag the table does not know may be that flag's value: then the next positional is a package too.
-    let scan = scanPositional(d.args, 0, table, false);
+    let scan = scanPositional(d.args, 0, table);
     let end = scan.at;
     while (scan.at >= 0 && scan.candidate) {
-      scan = scanPositional(d.args, scan.at + 1, table, false);
+      scan = scanPositional(d.args, scan.at + 1, table);
       if (scan.at >= 0) end = scan.at;
     }
     if (end >= 0) body = d.args.slice(0, end + 1);
@@ -1096,13 +1184,14 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
           .map((v) => v.trim())
           .filter((v) => v !== '');
   const raws: string[] = [];
+  const limited = limitCandidates(w.positionals);
   let byPackageFlag = false;
   if (!has(table.noFetchFlags)) {
     const named = values(table.packageFlags);
     if (named.length > 0) {
       raws.push(...named);
       byPackageFlag = true;
-    } else if (!has(table.shellFlags)) raws.push(...w.positionals.map((p) => p.value));
+    } else if (!has(table.shellFlags)) raws.push(...limited.kept.map((p) => p.value));
     raws.push(...values(table.extraPackageFlags));
   }
   const packages: PackageSpec[] = [];
@@ -1128,6 +1217,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (registry !== undefined) out.customRegistry = registry;
   if (launch.localFirst === true) out.localFirst = true;
   if (byPackageFlag) out.byPackageFlag = true;
+  if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
   return out;
 }
@@ -1140,7 +1230,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   const walked = walk(d.args, flagTable);
   const { skipped, customRegistry, uncertain, registries } = walked;
   // A subcommand that takes no package names none: its positional words are not looked up.
-  const positionals = d.manifest === 'always' ? [] : walked.positionals;
+  const limited = limitCandidates(walked.positionals);
+  const positionals = d.manifest === 'always' ? [] : limited.kept;
   const allFlags = [...preWalk.flags, ...walked.flags];
   const packages: PackageSpec[] = [];
   const out: InstallCommand = {
@@ -1153,6 +1244,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
+  if (limited.dropped > 0 && d.manifest !== 'always') out.candidatesDropped = limited.dropped;
 
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
   // thing the command surely names, so it does not stop the manifest from being read.

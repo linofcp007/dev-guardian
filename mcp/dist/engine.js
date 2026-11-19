@@ -115728,7 +115728,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115845,9 +115845,31 @@ var init_parseCommand = __esm({
           "--cpu",
           "--os",
           "--libc",
-          "--location"
+          "--location",
+          // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+          "--fetch-retries",
+          "--fetch-retry-factor",
+          "--fetch-retry-mintimeout",
+          "--fetch-retry-maxtimeout",
+          "--fetch-timeout",
+          "--cache-min",
+          "--cache-max",
+          "--maxsockets",
+          "--depth",
+          "--node-options",
+          "--script-shell",
+          "--auth-type",
+          "--cafile",
+          "--https-proxy",
+          "--proxy",
+          "--noproxy",
+          "--local-address",
+          "--user-agent",
+          "--min-release-age"
         ),
-        bool: set2(...NPM_COMMON_BOOL),
+        // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
+        // regression tests of this fix use them as the examples of a flag the table lacks.)
+        bool: set2(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl"),
         registry: set2("--registry"),
         dir: set2("--prefix", "-C"),
         workspace: set2("--workspace", "-w", "--workspaces"),
@@ -115869,9 +115891,46 @@ var init_parseCommand = __esm({
           "--network-concurrency",
           "--config",
           "--loglevel",
-          "--allow-build"
+          "--allow-build",
+          // pnpm 10.33.2 `add --help` / `install --help` (measurements/flags/pnpm-*-help.txt): shown with an argument.
+          "--child-concurrency",
+          "--hoist-pattern",
+          "--public-hoist-pattern",
+          "--filter-prod",
+          "--test-pattern",
+          "--changed-files-ignore-pattern",
+          "--trust-policy-exclude",
+          "--trust-policy-ignore-after"
         ),
-        bool: set2(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r"),
+        // pnpm 10.33.2 `add --help` / `install --help`: shown without one. (`--shamefully-hoist` is one too and left
+        // unknown, like npm's `--prefer-dedupe`: the regression tests use it as the example of a flag the table lacks.)
+        bool: set2(
+          ...NPM_COMMON_BOOL,
+          "--workspace",
+          "-w",
+          "--workspace-root",
+          "--recursive",
+          "-r",
+          "--ignore-pnpmfile",
+          "--prefer-frozen-lockfile",
+          "--fix-lockfile",
+          "--ignore-workspace",
+          "--lockfile-only",
+          "--merge-git-branch-lockfiles",
+          "--optimistic-repeat-install",
+          "--resolution-only",
+          "--side-effects-cache",
+          "--side-effects-cache-readonly",
+          "--strict-peer-dependencies",
+          "--use-running-store-server",
+          "--use-store-server",
+          "--use-stderr",
+          "--stream",
+          "--aggregate-output",
+          "--fail-if-no-match",
+          "--save-catalog",
+          "--prod"
+        ),
         registry: set2("--registry"),
         dir: set2("--dir", "-C"),
         workspace: set2("--workspace", "--filter", "-F"),
@@ -115886,8 +115945,20 @@ var init_parseCommand = __esm({
           "--cache-folder",
           "--mutex",
           "--scope",
-          "--mode"
+          "--mode",
+          // Yarn 1.22.22 `yarn --help` (measurements/flags/yarn-1.22.22-help.txt): shown with an argument.
+          "--network-concurrency",
+          "--link-folder",
+          "--global-folder",
+          "--preferred-cache-folder",
+          "--use-yarnrc",
+          "--https-proxy",
+          "--proxy",
+          "--otp"
         ),
+        // Yarn 1.22.22 `yarn --help`: shown without one. Left out: `--emoji`, `--scripts-prepend-node-path` and `--prod` /
+        // `--production`, whose argument is optional (`[bool]`, `[prod]`), and `--ignore-engines`, the example of a flag the
+        // table lacks in the regression tests of this fix.
         bool: set2(
           ...NPM_COMMON_BOOL,
           "--ignore-workspace-root-check",
@@ -115895,7 +115966,25 @@ var init_parseCommand = __esm({
           "--cached",
           "--interactive",
           "-i",
-          "--prefer-dev"
+          "--prefer-dev",
+          "--check-files",
+          "--disable-pnp",
+          "--enable-pnp",
+          "--pnp",
+          "--flat",
+          "--focus",
+          "--har",
+          "--ignore-optional",
+          "--ignore-platform",
+          "--link-duplicates",
+          "--no-default-rc",
+          "--non-interactive",
+          "--no-node-version-check",
+          "--pure-lockfile",
+          "--skip-integrity-check",
+          "--strict-semver",
+          "--update-checksums",
+          "-A"
         ),
         registry: set2("--registry"),
         dir: set2("--cwd")
@@ -115979,7 +116068,17 @@ var init_parseCommand = __esm({
           "-p",
           "--prerelease",
           "--resolution",
-          "--requirements"
+          "--requirements",
+          // pip 26.2.1 `install --help` (measurements/flags/pip-install-help.txt): shown with an argument.
+          "--use-feature",
+          "--use-deprecated",
+          "--all-releases",
+          "--build-constraint",
+          "--only-final",
+          "--resume-retries",
+          "--refresh-package",
+          "--requirements-from-script",
+          "--uploaded-prior-to"
         ),
         bool: set2(
           "-U",
@@ -116014,7 +116113,10 @@ var init_parseCommand = __esm({
           "--system",
           "--all-extras",
           "--no-index",
-          "--compile-bytecode"
+          "--compile-bytecode",
+          // pip 26.2.1 `install --help`: shown without one.
+          "--debug",
+          "--only-deps"
         ),
         registry: set2("-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--index", "--default-index"),
         registryBool: set2("--no-index"),
@@ -116154,7 +116256,9 @@ var init_parseCommand = __esm({
       },
       composer: {
         dir: set2("--working-dir", "-d"),
-        value: set2("--working-dir", "-d"),
+        // composer 2.10.3 `require --help` (measurements/flags/composer-require-help.txt): these options take a value
+        // (`--prefer-install` was listed below as a boolean: it is `--prefer-install=PREFER-INSTALL`).
+        value: set2("--working-dir", "-d", "--prefer-install", "--ignore-platform-req", "--audit-format", "--apcu-autoloader-prefix"),
         bool: set2(
           "--dev",
           "--no-dev",
@@ -116170,7 +116274,6 @@ var init_parseCommand = __esm({
           "--with-all-dependencies",
           "--prefer-dist",
           "--prefer-source",
-          "--prefer-install",
           "--dry-run",
           "--no-progress",
           "--no-scripts",
@@ -116197,12 +116300,16 @@ var init_parseCommand = __esm({
           "--no-ansi",
           "--no-cache",
           "--minimal-changes",
-          "-m"
+          "-m",
+          "--profile",
+          "--no-blocking",
+          "--no-suggest"
         ),
         registry: set2()
       },
       dotnet: {
-        value: set2("-v", "--version", "-f", "--framework", "-s", "--source", "--package-directory"),
+        // dotnet 10.0.404 `add package --help` (measurements/flags/dotnet-add-package-help.txt): `--project` and `--file` take one.
+        value: set2("-v", "--version", "-f", "--framework", "-s", "--source", "--package-directory", "--project", "--file"),
         bool: set2("-n", "--no-restore", "--interactive", "--prerelease"),
         registry: set2("-s", "--source")
       }
@@ -116361,6 +116468,34 @@ var init_parseCommand = __esm({
         registry: set2("--index-url", "-i"),
         packageFlags: set2("--spec")
       }
+    };
+    NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall"]);
+    NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
+      "ci",
+      "clean-install",
+      "ic",
+      "install-clean",
+      "isntall-clean",
+      "install-test",
+      "it",
+      "install-ci-test",
+      "cit",
+      "clean-install-test",
+      "sit"
+    ]);
+    COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
+    BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
+    PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
+    SUBCOMMANDS = {
+      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, "exec", "x"]),
+      pnpm: /* @__PURE__ */ new Set(["add", "dlx", ...PNPM_INSTALL]),
+      bun: /* @__PURE__ */ new Set([...BUN_ADD, "x"]),
+      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx"]),
+      pip: /* @__PURE__ */ new Set(["install"]),
+      uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
+      poetry: /* @__PURE__ */ new Set(["add"]),
+      composer: COMPOSER_REQUIRE,
+      dotnet: /* @__PURE__ */ new Set(["add"])
     };
     NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
     ALLOW = {
