@@ -1433,6 +1433,20 @@ describe('pkgvet-archive-like-name', () => {
     }
   });
 
+  it('T-10 the alias prefix in any letter case is an alias for npm: the real name is the package, the alias name is not, and the lower-case forms stay as they are', () => {
+    const cases: Array<[string, Array<[string, string | undefined]>]> = [
+      ['npm install x@NPM:evil', [['evil', undefined]]],
+      ['npm install x@Npm:evil.zip', [['evil.zip', undefined]]],
+      ['npm install x@NPM:evil@^1', [['evil', '^1']]],
+      ['npx x@NPM:evil', [['evil', undefined]]],
+    ];
+    for (const [command, packages] of cases) {
+      expect(namedAndSkipped(command), command).toEqual({ packages, skipped: [] });
+    }
+    expect(namedAndSkipped('npm install x@npm:evil'), 'npm install x@npm:evil').toEqual({ packages: [['evil', undefined]], skipped: [] });
+    expect(namedAndSkipped('npm install x@npm:evil@^1'), 'npm install x@npm:evil@^1').toEqual({ packages: [['evil', '^1']], skipped: [] });
+  });
+
   it('T-11 pipx hands the word to pip: an ending pip reads as a file but the old list lacked is a package AND an unmeasured reason', () => {
     for (const ending of ['.tbz', '.txz', '.tlz', '.tar.lz', '.tar.lzma']) {
       const command = `pipx install x${ending}`;

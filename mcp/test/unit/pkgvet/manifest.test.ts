@@ -416,4 +416,14 @@ describe('pkgvet-archive-like-name', () => {
     expect({ pip: await asked('pip install -r requirements.txt') }).toEqual({ pip: ['eggthing.egg', 'plainthing'] });
     expect({ uv: await asked('uv pip install -r requirements.txt') }).toEqual({ uv: ['bzthing.tar.bz2', 'eggthing.egg', 'plainthing'] });
   });
+
+  it('T-10 a value that starts with the alias prefix in any letter case names the real package; the key is not a package', () => {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { x: 'NPM:evil@^1', y: 'Npm:other' } }));
+    const r = readNpmManifest(dir);
+    expect(r.status).toBe('ok');
+    expect(named(r)).toEqual([
+      ['evil', '^1'],
+      ['other', undefined],
+    ]);
+  });
 });

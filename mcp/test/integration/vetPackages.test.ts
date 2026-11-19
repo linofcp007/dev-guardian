@@ -302,4 +302,19 @@ describe('pkgvet-archive-like-name', () => {
       { raw: 'https://h/x.zip', reason: expect.stringMatching(/URL/) },
     ]);
   });
+
+  it('T-08 a spec with a version part that ends like an archive is the name before the @: a verdict for it, nothing skipped', async () => {
+    vi.stubEnv('GUARDIAN_OFFLINE', '0');
+    const withTags = (v: string): Answer => ({
+      status: 200,
+      body: { 'dist-tags': { latest: v, 'foo.tgz': v, 'foo.zip': v }, modified: OLD, versions: { [v]: {} } },
+    });
+    const calls = stubNetwork({ 'https://registry.npmjs.org/evil': withTags('1.0.0'), 'https://api.osv.dev/v1/querybatch': OSV_CLEAN });
+    for (const spec of ['evil@foo.tgz', 'evil@foo.zip']) {
+      const r = expectOk(await run({ ecosystem: 'npm', packages: [spec] }));
+      expect(r.skipped, spec).toEqual([]);
+      expect(r.packages.map((p) => [p.name, p.verdict]), spec).toEqual([['evil', expect.any(String)]]);
+    }
+    expect(calls).toContain('https://registry.npmjs.org/evil');
+  });
 });

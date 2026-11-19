@@ -1464,6 +1464,18 @@ describe('pkgvet-archive-like-name', () => {
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(name);
     expect(r.requests).toContain(`https://registry.npmjs.org/${name}`);
   });
+  it('T-10 `npm install x@NPM:<malicious>` (the alias prefix in upper case) is DENIED, naming the package', () => {
+    const name = 'dgprobe-evil';
+    const r = runHook(`npm install x@NPM:${name}`, {
+      'https://registry.npmjs.org/x': npmDoc('1.0.0'),
+      [`https://registry.npmjs.org/${name}`]: npmDoc('1.0.0'),
+      [OSV]: { osv: { [`${name}@1.0.0`]: ['MAL-2026-0042'] } },
+    });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toContain(name);
+    expect(r.requests).toContain(`https://registry.npmjs.org/${name}`);
+  });
 });
 
 // ───────────────── install-vet-project-registry-said — a project file that sets the default registry is said, through the dispatcher
@@ -1507,4 +1519,5 @@ describe('install-vet-project-registry-said', () => {
     expect(r.status).toBe(0);
     expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('bunfig.toml'));
   });
+
 });
