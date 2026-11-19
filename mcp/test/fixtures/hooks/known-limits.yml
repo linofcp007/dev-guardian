@@ -763,7 +763,7 @@
 - id: corepack-manager-download
   area: install-vetting
   doc: |-
-    An install through `corepack <manager>[@version]` is vetted as the manager's own (`corepack yarn add <name>`, `corepack pnpm install`, `corepack use <manager>`, `corepack up`; `yarnpkg` is `yarn`). What the hook does not see is the package manager that corepack itself downloads: with no version fixed it fetches the newest release, and Yarn 2 and later come from `repo.yarnpkg.com`, none of it looked up against a registry or an advisory. `corepack prepare`, `corepack install` and `corepack enable` only download or link the manager and name nothing of the project, so they are not read as installs. Fix the manager's version (`packageManager` in `package.json`) and vet it with `vet_packages` before it is downloaded.
+    An install through `corepack <manager>[@version]` is vetted as the manager's own (`corepack yarn add <name>`, `corepack pnpm install`, `corepack use <manager>`, `corepack up`; `yarnpkg` is `yarn`). What the hook does not see is the package manager that corepack itself downloads: with no version fixed it asks for the newest release, and Yarn 2 and later come from the host corepack's own configuration names (`repo.yarnpkg.com`), none of it looked up against a registry or an advisory. `corepack prepare`, `corepack install` and `corepack enable` only download or link the manager and name nothing of the project, so they are not read as installs. Fix the manager's version (`packageManager` in `package.json`) and vet it with `vet_packages` before it is downloaded.
   examples:
     - detector: hook
       event: PreToolUse
@@ -782,6 +782,8 @@
   area: install-vetting
   doc: |-
     Tool runners in front of a package manager, other than `corepack` and the shell's own (`sudo`, `env`, `time`, …), are not followed: `volta run`, `fnm exec`, `mise exec --`, `asdf exec`, `nvm exec`, `dotenv --`, `cross-env VAR=x`, `doppler run --` and `op run --`. An install behind one of them is not vetted. Their syntax is taken from their documentation: none of them was run here.
+
+    A launcher that runs corepack or a package manager — `npx corepack yarn add …`, `npm exec corepack -- yarn add …`, `pnpm dlx corepack …`, `npx pnpm add …`, `npx yarn add …` — has the package it launches (`corepack`, `pnpm`, `yarn`) vetted, and the rest of the line is taken as that program's arguments: the package the manager then installs is not vetted. Offline the hook warns that the launched package was not verified, and nothing about the package after it.
   examples:
     - detector: hook
       event: PreToolUse
@@ -819,3 +821,27 @@
       input:
         command: cross-env VAR=x npm install left-pad
       expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx corepack yarn add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm exec corepack -- yarn add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pnpm dlx corepack yarn add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx pnpm add left-pad
+      expect: { decision: warn }

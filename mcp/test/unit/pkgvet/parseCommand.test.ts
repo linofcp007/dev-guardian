@@ -1760,6 +1760,7 @@ describe('install-vet-through-corepack', () => {
   const TABLE = [
     'yarn add p', 'yarn install', 'yarn', 'yarn dlx p', 'npm install p', 'npm install', 'npm ci', 'npm exec p', 'npx p',
     'pnpm add p', 'pnpm install', 'pnpm dlx p', 'pnpx p', 'yarn add -D p', 'npm install -g p',
+    'npm install-test', 'yarn global add p', 'yarn workspace w add p', 'npx --yes p', 'yarn add --dgunknown p',
   ];
 
   it.each(TABLE)('T-01 `corepack` before `%s`, with no version, @1.2.3, @^4 or @latest, reads as the line without it', (line) => {
@@ -1774,6 +1775,37 @@ describe('install-vet-through-corepack', () => {
     for (const command of [`corepack ${line}`, `corepack ${manager}@1.2.3${rest}`, `corepack ${manager}@^4${rest}`, `corepack ${manager}@latest${rest}`]) {
       expect({ command, parse: parsed(command) }).toEqual({ command, parse: base });
     }
+  });
+
+  it('T-01 `corepack npx --yes p`, a flag of the launcher after the manager, reads as `npx --yes p`', () => {
+    expect(vettable('npx --yes p')).toEqual([{ packages: ['p'], manifest: undefined }]);
+    expect(parsed('corepack npx --yes p')).toEqual(parsed('npx --yes p'));
+  });
+
+  it('T-01 EC-2 `corepack yarn@$V add p` names the same package as `yarn add p`; the variable makes the line uncertain, which only warns', () => {
+    const [c] = parsed('corepack yarn@$V add p');
+    const [base] = parsed('yarn add p');
+    expect(c?.packages).toEqual(base?.packages);
+    expect({ manager: c?.manager, manifest: c?.manifest }).toEqual({ manager: base?.manager, manifest: base?.manifest });
+    expect(base?.uncertain).toEqual([]);
+    expect((c?.uncertain ?? []).join(' ; ')).toMatch(/'\$' outside quotes/);
+  });
+
+  it.each([
+    ['env X=1 corepack yarn add p', 'env X=1 yarn add p'],
+    ['sudo corepack npm install -g p', 'sudo npm install -g p'],
+    ['corepack yarn add evil@npm:latest', 'yarn add evil@npm:latest'],
+  ])('T-01 EC-3 / EC-4 %s reads as %s', (line, plain) => {
+    expect(vettable(plain), plain).not.toEqual([]);
+    expect(parsed(line)).toEqual(parsed(plain));
+  });
+
+  it('T-02 the words as an argument or inside a string are no install; as a package name they are one', () => {
+    for (const command of ['grep corepack README.md', 'echo "use corepack yarn add left-pad"', 'git commit -m "corepack yarn add left-pad"', 'cat docs/yarnpkg.md', 'npm view corepack']) {
+      expect({ command, parse: parsed(command) }).toEqual({ command, parse: [] });
+    }
+    expect(vettable('npm install corepack')).toEqual([{ packages: ['corepack'], manifest: undefined }]);
+    expect(vettable('yarn add yarnpkg')).toEqual([{ packages: ['yarnpkg'], manifest: undefined }]);
   });
 
   it('T-02 not installs: what corepack does with its own cache, a name it does not know, and a flag before the manager', () => {

@@ -1603,4 +1603,13 @@ describe('install-vet-through-corepack', () => {
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
     },
   );
+
+  it('T-03 `corepack yarn add <a name the registry does not have>` is denied as a missing name, as `yarn add <same>` is', () => {
+    const routes: Record<string, Route> = { 'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 }, [OSV]: { osv: {} } };
+    for (const command of ['yarn add react-form-autopilot-helperz', 'corepack yarn add react-form-autopilot-helperz']) {
+      const r = runHook(command, routes);
+      expect({ command, decision: r.output?.hookSpecificOutput?.permissionDecision }).toEqual({ command, decision: 'deny' });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/does not exist/);
+    }
+  });
 });
