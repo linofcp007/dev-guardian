@@ -1614,3 +1614,91 @@ describe('install-vet-bare-install-misread', () => {
     expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages, manifest });
   });
 });
+
+// ───────────────── install-vet-unknown-flag-hides-package — a word after a flag the table does not know is also a candidate
+
+describe('install-vet-unknown-flag-hides-package', () => {
+  /** What the single install command of `command` gives: its packages, its manifest and the reasons it is uncertain. */
+  const read = (command: string): { packages: string[]; manifest: unknown; uncertain: string } => {
+    const parsed = parseInstallCommands(command);
+    expect(parsed, command).toHaveLength(1);
+    const c = parsed[0];
+    return { packages: (c?.packages ?? []).map((p) => p.name), manifest: c?.manifest, uncertain: (c?.uncertain ?? []).join(' ; ') };
+  };
+  const MANIFEST = { kind: 'package-json' };
+
+  it.each([
+    'npm install --prefer-dedupe p',
+    'npm i --ignore-engines p',
+    'npm install --dgunknown p',
+    'pnpm add --shamefully-hoist p',
+    'yarn add --ignore-engines p',
+    'bun add --dgunknown p',
+    'pip install --dgunknown p',
+    'uv pip install --dgunknown p',
+    'npx --ignore-scripts p',
+    'bunx --yes p',
+  ])('T-01 %s: the word after the unknown flag is a candidate package, and the command is uncertain ("unknown flag")', (command) => {
+    const r = read(command);
+    expect(r.packages).toContain('p');
+    expect(r.uncertain).toMatch(/unknown flag/);
+  });
+
+  it('T-01 npm install --dgunknown p q: both words are packages', () => {
+    expect(read('npm install --dgunknown p q').packages).toEqual(['p', 'q']);
+  });
+
+  it('T-01 npm install --a x --b y p: each unknown flag leaves its word as a candidate', () => {
+    expect(read('npm install --a x --b y p').packages).toEqual(['x', 'y', 'p']);
+  });
+
+  it('T-02 as before: a value flag of the table, a short flag, an `=` flag, a `--no-` flag and a flag of the table take no candidate', () => {
+    expect(read('npm install --registry https://r.example p').packages).toEqual(['p']);
+    expect(read('npm install -Z p').packages).toEqual(['p']);
+    expect(read('npm install --dgunknown=1 p').packages).toEqual(['p']);
+    expect(read('npm install --no-dgunknown p').packages).toEqual(['p']);
+    expect(read('npm install --force p').packages).toEqual(['p']);
+    expect(read('pip install --no-compile p').packages).toEqual(['p']);
+    // An archive-looking value is never a package of the line (the fix lists it as skipped; today it is not read at all).
+    expect(read('pnpm add --prefix x.tar somepkg').packages).toEqual(['somepkg']);
+  });
+
+  it('T-04 npm install --dgunknown p: p is a candidate AND the manifest is read (p may be the flag value)', () => {
+    const r = read('npm install --dgunknown p');
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p'], manifest: MANIFEST });
+  });
+
+  it('T-04 npm install --dgunknown p r: a real package is on the line, so the manifest is not read', () => {
+    const r = read('npm install --dgunknown p r');
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: ['p', 'r'], manifest: undefined });
+  });
+
+  it('T-05 npm and pnpm read a true / false word after the unknown flag as its value; yarn has no such rule', () => {
+    expect(read('npm install --dgunknown false p').packages).toEqual(['p']);
+    expect(read('pnpm add --dgunknown true p').packages).toEqual(['p']);
+    expect(read('yarn add --dgunknown false p').packages).toEqual(['false', 'p']);
+  });
+
+  it.each(['npm --fetch-retries 0 install p', 'npm --cache-min 10 install p'])(
+    'T-07 %s: the word after the unknown flag is not the subcommand; the install is read',
+    (command) => {
+      expect(read(command).packages).toContain('p');
+    },
+  );
+
+  it('T-07 yarn --network-concurrency 1 installs the manifest', () => {
+    const r = read('yarn --network-concurrency 1');
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: MANIFEST });
+  });
+
+  it('T-07 yarn --dgunknown build installs the manifest and is uncertain ("unknown flag")', () => {
+    const r = read('yarn --dgunknown build');
+    expect(r.manifest).toEqual(MANIFEST);
+    expect(r.uncertain).toMatch(/unknown flag/);
+  });
+
+  it('T-07 yarn build and npm run build are still no install', () => {
+    expect(parseInstallCommands('yarn build')).toEqual([]);
+    expect(parseInstallCommands('npm run build')).toEqual([]);
+  });
+});

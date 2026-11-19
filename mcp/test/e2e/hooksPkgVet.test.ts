@@ -1552,3 +1552,23 @@ describe('install-vet-bare-install-misread', () => {
     },
   );
 });
+
+// ───────────────── install-vet-unknown-flag-hides-package — through the dispatcher
+
+describe('install-vet-unknown-flag-hides-package', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+    [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+  };
+
+  it.each([
+    'npm install --prefer-dedupe evil-cli-zz',
+    'yarn add --ignore-engines evil-cli-zz',
+    'npx --ignore-scripts evil-cli-zz',
+  ])('T-03 %s is DENIED, naming the package', (command) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/evil-cli-zz.*MAL-2026-0077/s);
+  });
+});

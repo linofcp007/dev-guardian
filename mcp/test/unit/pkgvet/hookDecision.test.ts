@@ -3164,3 +3164,20 @@ describe('install-vet-bare-install-misread', () => {
     expect(reg.calls.filter((u) => u.endsWith('/false'))).toEqual([]);
   });
 });
+
+// ───────────────── install-vet-unknown-flag-hides-package — a candidate word that the registry does not have is a warning
+
+describe('install-vet-unknown-flag-hides-package', () => {
+  it('T-06 `npm install --dgunknown <a name the registry lacks>` is a warning that says it was not denied because of the unknown flag, never a deny', async () => {
+    const reg = registry({ exists: [] });
+    const d = await decideInstallCommand('npm install --dgunknown zz-no-such-pkg', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry.*not denied: unknown flag --dgunknown/s);
+  });
+
+  it('T-06 `npm install --fetch-retries 3 lodash` is not denied', async () => {
+    const reg = registry({ exists: ['lodash'] });
+    const d = await decideInstallCommand('npm install --fetch-retries 3 lodash', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+  });
+});
