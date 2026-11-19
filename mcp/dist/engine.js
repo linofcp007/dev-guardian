@@ -116817,6 +116817,7 @@ function yamlServer(lines, at, keyIndent, raw) {
 }
 function fromNpmrc(text3, scope, all) {
   let found2;
+  let scoped;
   for (const raw of text3.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith("#") || line.startsWith(";")) continue;
@@ -116825,13 +116826,14 @@ function fromNpmrc(text3, scope, all) {
     const lineScope = m[1]?.slice(1, -1);
     const url2 = npmrcValue(m[2] ?? "");
     all?.push(url2);
-    if (lineScope === void 0) found2 = found2 ?? url2;
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url2;
+    if (lineScope === void 0) found2 = url2;
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = url2;
   }
-  return found2;
+  return scoped ?? found2;
 }
 function fromYarnrcYml(text3, scope, all) {
   let global3;
+  let scoped;
   let inScopes = false;
   let currentScope;
   const lines = text3.split(/\r?\n/);
@@ -116856,22 +116858,23 @@ function fromYarnrcYml(text3, scope, all) {
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
     if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return yamlServer(lines, at, indent, server[1] ?? "");
+      scoped = yamlServer(lines, at, indent, server[1] ?? "");
     }
   }
-  return global3;
+  return scoped ?? global3;
 }
 function fromYarnrc(text3, scope, all) {
   let found2;
+  let scoped;
   for (const raw of text3.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     all?.push(m[2] ?? "");
-    if (lineScope === void 0) found2 = found2 ?? m[2];
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
+    if (lineScope === void 0) found2 = m[2];
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
   }
-  return found2;
+  return scoped ?? found2;
 }
 function fromBunfig(text3, scope, all) {
   let section = "";

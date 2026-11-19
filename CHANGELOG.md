@@ -16,12 +16,13 @@ version bump.
   answer for an install by name, from a manifest or through a launcher: the file's name and the registry as
   `scheme://host` (never its credentials, path or query), and that what it serves was not vetted. Which file counts
   is what each manager obeys, measured: `.npmrc` for npm and pnpm, `.npmrc` and `bunfig.toml` for bun, `.npmrc`,
-  `.yarnrc` and `.yarnrc.yml` for Yarn. The line is not said when the user's own configuration names that registry,
-  when `--registry` or a registry variable of the environment sets one, or when the directory the command runs in
-  is not known. No verdict changes, and the line stays out of a deny. What you may notice: a new line in the hook's
-  answer for installs that were silent, in a repository whose own file sets the default registry; anything that
-  compares the hook's text as a whole should expect it. See [`docs/hooks.md`](docs/hooks.md) and [the known
-  limits](docs/hooks-known-limits.md).
+  `.yarnrc` and `.yarnrc.yml` for Yarn. Every such file with another registry gets a line, three at most and a
+  line that counts the rest, and a key repeated in a file is read at its last line. The line is not said when the
+  user's own configuration names that registry, when `--registry` or a registry variable of the environment sets
+  one, for a global install, or when the directory the command runs in is not known. No verdict changes, and the
+  line stays out of a deny. What you may notice: a new line in the hook's answer for installs that were silent, in
+  a repository whose own file sets the default registry; anything that compares the hook's text as a whole should
+  expect it. See [`docs/hooks.md`](docs/hooks.md) and [the known limits](docs/hooks-known-limits.md).
 
 ### Security
 

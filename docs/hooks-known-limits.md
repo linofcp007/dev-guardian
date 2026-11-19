@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **32 limits**, 29 with at least one example and 3 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **32 limits**, 28 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -115,14 +115,16 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
   - `Bash` on PreToolUse, input `{"command":"composer require vendor/thing.zip"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"dotnet add package Some.Thing.zip"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"yarn install"}`, with `package.json` present → `warn`
-- When a file of the project sets the default registry, the hook says so in one line (described in `docs/hooks.md`, under "Install-time package vetting"). What stays:
+- When a file of the project sets the default registry, the hook says so in one line per file, at most three and a line that counts the rest (described in `docs/hooks.md`, under "Install-time package vetting"). What stays:
 
 - The word `yarn` does not say whether Yarn 1 or Yarn 4 runs, so the hook counts the files of both. A project `.npmrc` that sets a registry in a Yarn 4 project, which Yarn 4 does not obey, still gets the line.
-- When two files of one directory set different registries (bun's `.npmrc` and `bunfig.toml`, or Yarn's three files) the line names the first the hook reads: `.npmrc`, then `bunfig.toml` for bun; `.npmrc`, `.yarnrc.yml`, then `.yarnrc` for Yarn. Which of them the manager obeys was not measured.
-- The indexes a project file gives PyPI, Composer and NuGet (`pyproject.toml`, `uv.toml`, `composer.json`, `nuget.config`) are said only when a name is missing from the public registry, as the warning's reason; an install that finds every name there carries no line about them.
+- The managers do not agree on which file they obey (measured: the workspace root's `.npmrc` for npm and bun, the member's for pnpm and Yarn; in one directory `bunfig.toml` over `.npmrc` for bun, `.npmrc` over `.yarnrc` for Yarn 1), and the hook does not choose: it says every file of the directories the manager reads whose registry is not the user's. So a line may name a file the manager ends up not obeying, such as a member's `.npmrc` under a workspace root for npm.
+- A registry variable assigned inline in the command itself (`NPM_CONFIG_REGISTRY=https://… npm install thing`) is not seen: the line is still said, although the manager obeys the variable. Only the environment of the hook's own process is read.
+- npm picks the directory of the project by a `node_modules` folder as well as by a `package.json`, and the hook looks beside the nearest `package.json` only; and the walk above the command's directory stops after 16 directories. A project file beyond either is not read for this line.
 - A `.yarnrc.yml` above the repository root is not read for this line, although Yarn reads it.
-  - `Bash` on PreToolUse, input `{"command":"yarn add thing"}`, with `package.json`, `.npmrc` present → `warn`
-  - `Bash` on PreToolUse, input `{"command":"bun add thing"}`, with `package.json`, `bunfig.toml` present → `warn`
+- The line may be said for an install that IS global, when the command says global in a way the hook does not take as certain: a variable in the command (`npm install -g $FLAGS thing`), `-g` with `--location=project`, a short cluster such as `-gD`, a global word that follows a flag taking a value (`--tag --global`). The hook reads a global install only when a word says so and no word can take it back; a line too many is the price, never one too few.
+- The indexes a project file gives PyPI, Composer and NuGet (`pyproject.toml`, `uv.toml`, `composer.json`, `nuget.config`) are said only when a name is missing from the public registry, as the warning's reason; an install that finds every name there carries no line about them.
+  - No test runs it: The line is added to an install that is vetted against a registry's answers, and the harness of the known limits runs offline: a hook that is offline says what it could not verify, never the line. `hookDecision.test.ts` and `hooksPkgVet.test.ts` (T-03 to T-09, `install-vet-project-registry-said`) hold it, with a registry stand-in and through the dispatcher..
 
 ## The write guards
 

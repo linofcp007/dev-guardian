@@ -284,16 +284,15 @@ function withManifestPackages(
   locked: LockedProject[],
 ): VetCommand[] {
   const out: VetCommand[] = [];
-  const lineAsked = new Map<string, string | undefined>();
+  const lineAsked = new Map<string, string[]>();
   let userRegistries: string[] | undefined;
   const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
   for (const c of parsed) {
     out.push(c);
     // A line of thousands of commands asks once per manager and directory: the answer is the same.
-    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}`;
-    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLine(c, opts, registry, user));
-    const said = lineAsked.get(key);
-    if (said !== undefined) notes.push(said);
+    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)}`;
+    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
+    notes.push(...(lineAsked.get(key) ?? []));
     const manifest = c.manifest;
     if (manifest === undefined) continue;
     const dir = c.prefixed === true ? null : commandDir(c, opts);
@@ -342,29 +341,39 @@ function withManifestPackages(
   return out;
 }
 
+/** The most lines said for the project files that set the default registry: the rest is counted. */
+const MAX_REGISTRY_LINES = 3;
+
 /**
- * The line for a command whose project sets the default registry ({@link npmProjectDefaultRegistry}): the file by its
- * base name and the registry by `scheme://host` ({@link registryHost}) — nothing else of either. `undefined` (no line)
- * when the command line or the environment names a registry (the manager obeys those first), when the command's
- * directory is not known, when the registry is one the USER's own configuration names (a file of the project never
- * silences it), and on any error. The notes are de-duplicated per call, so a line is said once for one file.
+ * The lines for a command whose project sets the default registry ({@link npmProjectDefaultRegistry}): one per file
+ * that gives a registry which is not one of the USER's, nearest first — the file by its base name and the registry by
+ * `scheme://host` ({@link registryHost}), nothing else of either — at most {@link MAX_REGISTRY_LINES}, and a last line
+ * that counts the files left out. The managers do not agree on which file wins, so each is said. `[]` (no line) when
+ * the command line or the environment names a registry (the manager obeys those first), for a global install (the
+ * manager does not obey the project's file), when the command's directory is not known, when every registry is one the
+ * user's own configuration names (a file of the project never silences a line), and on any error. The notes are
+ * de-duplicated per call, so a line is said once.
  */
-function projectDefaultRegistryLine(
+function projectDefaultRegistryLines(
   c: InstallCommand,
   opts: HookVetOptions,
   registry: RegistryContext,
   userRegistries: () => readonly string[],
-): string | undefined {
+): string[] {
   try {
-    if (c.ecosystem !== 'npm' || c.registries.length > 0 || c.prefixed === true || npmEnvNamesDefaultRegistry(registry)) return undefined;
+    if (c.ecosystem !== 'npm' || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
     const dir = commandDir(c, opts);
-    if (dir === null) return undefined;
-    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir });
-    if (found === null || fromUserRegistry(found.url, userRegistries())) return undefined;
-    const host = registryHost('npm', found.url);
-    return `dev-guardian: the project's ${basename(found.source)} sets the default registry${host === undefined ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+    if (dir === null) return [];
+    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
+    const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
+      const host = registryHost('npm', f.url);
+      return `dev-guardian: the project's ${basename(f.source)} sets the default registry${host === undefined ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+    });
+    const rest = found.length - lines.length;
+    if (rest > 0) lines.push(rest === 1 ? 'dev-guardian: 1 more file of the project sets the default registry.' : `dev-guardian: ${rest} more files of the project set the default registry.`);
+    return lines;
   } catch {
-    return undefined; // fail-open: no line
+    return []; // fail-open: no line
   }
 }
 
@@ -525,7 +534,7 @@ function fromUserRegistry(url: string, registries: readonly string[]): boolean {
   let normal: string;
   try {
     const u = new URL(url);
-    normal = `${u.origin}${u.pathname}`;
+    normal = `${u.origin}${u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`}`;
   } catch {
     return false;
   }

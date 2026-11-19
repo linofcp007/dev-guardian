@@ -96,6 +96,13 @@ export interface InstallCommand {
    */
   prefixed?: boolean;
   /**
+   * A global install, read only when it is certain ({@link saysGlobal}; Yarn only by `yarn global add`): the manager
+   * puts the package in its global directory and does not obey the project's own configuration file for the registry
+   * (measured 2026-11-19 with npm 11, pnpm 10, Yarn 1.22 and 4, bun 1.4). In doubt it is absent: a line too many, never
+   * one too few.
+   */
+  global?: boolean;
+  /**
    * The command installs what a manifest says: the `package.json` of the
    * directory it runs in (`npm install` with no package, `npm ci`, `pnpm
    * install`, `yarn`, `bun install`), or the requirement files given to `pip
@@ -700,6 +707,48 @@ const REQUIREMENT_FLAGS = new Set(['-r', '--requirement', '--requirements']);
 const isGlobalFlag = (f: { flag: string; value?: string }): boolean =>
   f.flag === '-g' || f.flag === '--global' || (f.flag === '--location' && f.value === 'global');
 
+/** The words a flag can come from: what follows a `--` word is no flag. */
+const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
+  const at = words.findIndex((w) => w.value === '--');
+  return at < 0 ? [...words] : words.slice(0, at);
+};
+
+/**
+ * Whether an npm, pnpm or bun command says it is a GLOBAL install, and no word can take that back — measured
+ * 2026-11-19 (npm 11, pnpm 10, Yarn 1.22 and 4, bun 1.4): the project's registry file is not obeyed by a global install,
+ * but is by `--global=false`, `-g false`, `-g --no-global`, `-g --location=project`. The words before the subcommand
+ * and the words after it are two lists, each read up to a `--` word. In doubt the answer is no:
+ *   - a word with a shell expansion (`$` or a backtick) may be `false` or `--no-global`: not global;
+ *   - says global: the exact words `-g` and `--global` (not when the next word of the list is `false`), `--global=true`,
+ *     and for npm `--location=global` and `--location global`;
+ *   - takes it back: any other word that starts with `-` and has `global` or `location` in it, or starts `-g=`;
+ *   - a short cluster (`-gD`) says nothing; a package name with "global" in it takes nothing back.
+ * It is only half the answer: a global word that stands where another flag's value goes (`--otp --global`) is that
+ * flag's value, not a flag — the caller also asks the walker's flags ({@link isGlobalFlag}), which know the flags that
+ * take a value, and both must agree.
+ * Yarn is global only by its subcommand (`yarn global add`, {@link Detected.global}): a flag never makes it so (Yarn 1's
+ * `-g` takes a value, Yarn 4 refuses it).
+ */
+function saysGlobal(manager: string, pre: readonly ShellWord[], args: readonly ShellWord[]): boolean {
+  if (manager !== 'npm' && manager !== 'pnpm' && manager !== 'bun') return false;
+  if ([...pre, ...args].some((w) => /[$`]/.test(w.value))) return false;
+  let says = false;
+  for (const list of [beforeDoubleDash(pre), beforeDoubleDash(args)]) {
+    for (const [at, w] of list.entries()) {
+      const v = w.value;
+      const next = list[at + 1]?.value;
+      if (!v.startsWith('-')) continue;
+      if (v === '-g' || v === '--global') {
+        if (next === 'false') return false;
+        says = true;
+      } else if (v === '--global=true') says = true;
+      else if (manager === 'npm' && (v === '--location=global' || (v === '--location' && next === 'global'))) says = true;
+      else if (v.startsWith('-g=') || /global|location/.test(v.toLowerCase())) return false;
+    }
+  }
+  return says;
+}
+
 interface Detected {
   manager: string;
   ecosystem: PkgEcosystem;
@@ -709,6 +758,8 @@ interface Detected {
   pre: ShellWord[];
   /** Reasons found while locating the subcommand (a workspace, a project argument). */
   uncertain: string[];
+  /** `yarn global add`: the install is a global one. */
+  global?: boolean;
   /**
    * A launcher (review P1), and its {@link LAUNCH_FLAGS} table: `run` fetches
    * the package its first positional word names (or its package flags do)
@@ -848,7 +899,7 @@ function detect(words: readonly ShellWord[]): Detected | null {
         uncertain.push('workspace context (yarn workspace)');
       }
       if (at < 0 || words[at]?.value !== 'add') return null;
-      return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain };
+      return { manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, ...(subWord === 'global' ? { global: true } : {}) };
     }
     case 'pip':
       return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -1018,6 +1069,9 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
 
   // What the command installs from a manifest, beside what it names.
   if (allFlags.some((f) => flagTable.dir?.has(f.flag) === true)) out.prefixed = true;
+  // Both readings must agree: the walker knows which flags take a value (`--otp --global` hands `--global` to `--otp`, and
+  // npm 11.20 then obeys the project's file — measured 2026-11-19), the raw words know what takes a global flag back.
+  if (d.global === true || (allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
     const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
     if (files.length > 0) out.manifest = { kind: 'requirements', files };

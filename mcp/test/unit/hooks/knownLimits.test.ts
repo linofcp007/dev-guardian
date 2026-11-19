@@ -406,8 +406,8 @@ describe('the limits of the manifest vetting, as data', () => {
       const shown = hooks.length > 0 || (l.not_executable ?? '').trim() !== '';
       expect({ id: l.id, shown }).toEqual({ id: l.id, shown: true });
     }
-    // Only the limit that needs a registry's answer goes without an example the suite can run.
-    expect(records.filter((l) => l.examples.length === 0).map((l) => l.id)).toEqual(['manifest-quiet-checks']);
+    // Only the limits that need a registry's answer go without an example the suite can run: the harness is offline.
+    expect(records.filter((l) => l.examples.length === 0).map((l) => l.id)).toEqual(['manifest-quiet-checks', 'project-default-registry']);
   });
 });
 

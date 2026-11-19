@@ -3336,6 +3336,29 @@ var PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
 var YARN_PRINTS = /* @__PURE__ */ new Set(["--version", "-v", "-V", "--help", "-h"]);
 var REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement", "--requirements"]);
 var isGlobalFlag = (f) => f.flag === "-g" || f.flag === "--global" || f.flag === "--location" && f.value === "global";
+var beforeDoubleDash = (words) => {
+  const at = words.findIndex((w) => w.value === "--");
+  return at < 0 ? [...words] : words.slice(0, at);
+};
+function saysGlobal(manager, pre, args) {
+  if (manager !== "npm" && manager !== "pnpm" && manager !== "bun") return false;
+  if ([...pre, ...args].some((w) => /[$`]/.test(w.value))) return false;
+  let says = false;
+  for (const list of [beforeDoubleDash(pre), beforeDoubleDash(args)]) {
+    for (const [at, w] of list.entries()) {
+      const v = w.value;
+      const next = list[at + 1]?.value;
+      if (!v.startsWith("-")) continue;
+      if (v === "-g" || v === "--global") {
+        if (next === "false") return false;
+        says = true;
+      } else if (v === "--global=true") says = true;
+      else if (manager === "npm" && (v === "--location=global" || v === "--location" && next === "global")) says = true;
+      else if (v.startsWith("-g=") || /global|location/.test(v.toLowerCase())) return false;
+    }
+  }
+  return says;
+}
 function launcher(manager, ecosystem, args, pre, launch) {
   return { manager, ecosystem, args, pre, uncertain: [], launch };
 }
@@ -3436,7 +3459,7 @@ function detect(words) {
         uncertain.push("workspace context (yarn workspace)");
       }
       if (at < 0 || words[at]?.value !== "add") return null;
-      return { manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain };
+      return { manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, ...subWord === "global" ? { global: true } : {} };
     }
     case "pip":
       return subWord === "install" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -3579,6 +3602,7 @@ function collect(d, context) {
     if (first !== void 0 && version !== void 0) first.range = version;
   }
   if (allFlags.some((f) => flagTable.dir?.has(f.flag) === true)) out.prefixed = true;
+  if (d.global === true || allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args)) out.global = true;
   if (d.manager === "pip" || d.manager === "uv-pip") {
     const files = walked.flags.flatMap((f) => REQUIREMENT_FLAGS.has(f.flag) && f.value !== void 0 && f.value !== "" ? [f.value] : []);
     if (files.length > 0) out.manifest = { kind: "requirements", files };
@@ -4743,6 +4767,7 @@ function yamlServer(lines, at, keyIndent, raw) {
 }
 function fromNpmrc(text, scope, all) {
   let found;
+  let scoped;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith("#") || line.startsWith(";")) continue;
@@ -4751,13 +4776,14 @@ function fromNpmrc(text, scope, all) {
     const lineScope = m[1]?.slice(1, -1);
     const url = npmrcValue(m[2] ?? "");
     all?.push(url);
-    if (lineScope === void 0) found = found ?? url;
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return url;
+    if (lineScope === void 0) found = url;
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = url;
   }
-  return found;
+  return scoped ?? found;
 }
 function fromYarnrcYml(text, scope, all) {
   let global;
+  let scoped;
   let inScopes = false;
   let currentScope;
   const lines = text.split(/\r?\n/);
@@ -4782,22 +4808,23 @@ function fromYarnrcYml(text, scope, all) {
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
     if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ""));
     if (server !== null && scope !== void 0 && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return yamlServer(lines, at, indent, server[1] ?? "");
+      scoped = yamlServer(lines, at, indent, server[1] ?? "");
     }
   }
-  return global;
+  return scoped ?? global;
 }
 function fromYarnrc(text, scope, all) {
   let found;
+  let scoped;
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     all?.push(m[2] ?? "");
-    if (lineScope === void 0) found = found ?? m[2];
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
+    if (lineScope === void 0) found = m[2];
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
   }
-  return found;
+  return scoped ?? found;
 }
 function fromBunfig(text, scope, all) {
   let section = "";
@@ -4956,9 +4983,10 @@ var PROJECT_DEFAULT_FILES = {
   ]
 };
 function npmProjectDefaultRegistry(manager, ctx = {}) {
+  const found = [];
   try {
     const files = Object.hasOwn(PROJECT_DEFAULT_FILES, manager) ? PROJECT_DEFAULT_FILES[manager] : void 0;
-    if (files === void 0) return null;
+    if (files === void 0) return found;
     const near = ancestors(ctx);
     const first = near.findIndex((dir) => present(join4(dir, "package.json")));
     const from = first < 0 ? 0 : first;
@@ -4970,13 +4998,12 @@ function npmProjectDefaultRegistry(manager, ctx = {}) {
         const source = join4(dir, name);
         const text = read(source, ctx);
         const url = text === void 0 ? void 0 : parse5(text, void 0);
-        if (url === void 0) continue;
-        return isPublic("npm", url) ? null : { source, url };
+        if (url !== void 0 && !isPublic("npm", url)) found.push({ source, url });
       }
     }
   } catch {
   }
-  return null;
+  return found;
 }
 function userRegistryUrl(raw) {
   let u;
@@ -6081,10 +6108,9 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
   const user = () => userRegistries ??= npmUserRegistries(registry);
   for (const c of parsed) {
     out.push(c);
-    const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}`;
-    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLine(c, opts, registry, user));
-    const said2 = lineAsked.get(key);
-    if (said2 !== void 0) notes.push(said2);
+    const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}\0${String(c.global === true)}`;
+    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
+    notes.push(...lineAsked.get(key) ?? []);
     const manifest = c.manifest;
     if (manifest === void 0) continue;
     const dir = c.prefixed === true ? null : commandDir(c, opts);
@@ -6129,17 +6155,22 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
   }
   return out;
 }
-function projectDefaultRegistryLine(c, opts, registry, userRegistries) {
+var MAX_REGISTRY_LINES = 3;
+function projectDefaultRegistryLines(c, opts, registry, userRegistries) {
   try {
-    if (c.ecosystem !== "npm" || c.registries.length > 0 || c.prefixed === true || npmEnvNamesDefaultRegistry(registry)) return void 0;
+    if (c.ecosystem !== "npm" || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
     const dir = commandDir(c, opts);
-    if (dir === null) return void 0;
-    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir });
-    if (found === null || fromUserRegistry(found.url, userRegistries())) return void 0;
-    const host = registryHost("npm", found.url);
-    return `dev-guardian: the project's ${basename2(found.source)} sets the default registry${host === void 0 ? "" : ` (${host})`} \u2014 packages are fetched from it, and what it serves was not vetted.`;
+    if (dir === null) return [];
+    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
+    const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
+      const host = registryHost("npm", f.url);
+      return `dev-guardian: the project's ${basename2(f.source)} sets the default registry${host === void 0 ? "" : ` (${host})`} \u2014 packages are fetched from it, and what it serves was not vetted.`;
+    });
+    const rest = found.length - lines.length;
+    if (rest > 0) lines.push(rest === 1 ? "dev-guardian: 1 more file of the project sets the default registry." : `dev-guardian: ${rest} more files of the project set the default registry.`);
+    return lines;
   } catch {
-    return void 0;
+    return [];
   }
 }
 function withoutOwnRegistryScopes(read2, registry, notes) {
@@ -6231,7 +6262,7 @@ function fromUserRegistry(url, registries) {
   let normal;
   try {
     const u = new URL(url);
-    normal = `${u.origin}${u.pathname}`;
+    normal = `${u.origin}${u.pathname.endsWith("/") ? u.pathname : `${u.pathname}/`}`;
   } catch {
     return false;
   }

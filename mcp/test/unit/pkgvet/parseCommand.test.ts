@@ -1461,3 +1461,68 @@ describe('pkgvet-archive-like-name', () => {
     }
   });
 });
+
+// ───────────────── install-vet-project-registry-said — "global" is read only when a word says so and no word takes it back
+
+describe('install-vet-project-registry-said', () => {
+  /** The `global` the parser gives the single install command of `command`. */
+  const globalOf = (command: string): boolean | undefined => {
+    const parsed = parseInstallCommands(command);
+    expect(parsed, command).toHaveLength(1);
+    return parsed[0]?.global;
+  };
+
+  it.each([
+    'npm install -g x',
+    'npm i --global x',
+    'npm install --global=true x',
+    'npm install --location=global x',
+    'npm install --location global x',
+    'npm -g install x',
+    'npm install -g global-agent',
+    'pnpm add -g x',
+    'pnpm add --global x',
+    'yarn global add x',
+    'bun add -g x',
+    'bun add --global x',
+    'npm install --otp 123456 -g x',
+    'npm install -g true x',
+  ])('T-09 %s: a global install', (command) => {
+    expect(globalOf(command)).toBe(true);
+  });
+
+  it.each([
+    'npm install x',
+    'npm install --global=false x',
+    'npm install -g=false x',
+    'npm install -g false x',
+    'npm install --global false x',
+    'npm install -g --no-global x',
+    'npm install --no-global -g x',
+    'npm install -g --global=false x',
+    'npm install --location=global --location=project x',
+    'npm install -g --location=project x',
+    'npm install --location project -g x',
+    'npm install x -- -g',
+    'npm install -gD x',
+    'npm install -g $FLAGS x',
+    'npm install -g "$PKG"',
+    'pnpm add --global=false x',
+    'pnpm add -g false x',
+    'pnpm add -g --no-global x',
+    'pnpm add --location=global x',
+    'pnpm add -g --config.global=false x',
+    'pnpm add -g --global-dir /tmp/g x',
+    'yarn add -g gdir x',
+    'yarn add --global gdir x',
+    'yarn add --global=false x',
+    'bun add --location=global x',
+    'npm install --otp --global x',
+    'npm install --otp -g x',
+    'npm install --script-shell --global x',
+    'npm install --tag --global x',
+    'pnpm add --filter -g x',
+  ])('T-09 %s: not certainly global, so not global', (command) => {
+    expect(globalOf(command) === true).toBe(false);
+  });
+});

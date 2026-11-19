@@ -3102,4 +3102,34 @@ describe('install-vet-project-registry-said', () => {
     const d = await decide(`npm install ${CLEAN}`);
     expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
   });
+
+  it.each([
+    ['npm install --global=false', `npm install --global=false ${CLEAN}`],
+    ['npm install -g false', `npm install -g false ${CLEAN}`],
+    ['npm install -g --no-global', `npm install -g --no-global ${CLEAN}`],
+    ['pnpm add -g false', `pnpm add -g false ${CLEAN}`],
+    ['npm install --otp --global (the value of --otp)', `npm install --otp --global ${CLEAN}`],
+    ['yarn add -g gdir (a value of Yarn 1, no global install)', `yarn add -g gdir ${CLEAN}`],
+  ])('T-09 %s: the manager obeys the project file, so the line is said', async (_label, command) => {
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', NPMRC);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    const d = await decide(command);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(SAYS);
+  });
+
+  it.each([
+    ['npm install -g', `npm install -g ${CLEAN}`],
+    ['pnpm add -g', `pnpm add -g ${CLEAN}`],
+    ['yarn global add', `yarn global add ${CLEAN}`],
+    ['bun add -g', `bun add -g ${CLEAN}`],
+  ])('T-09 %s: certainly global, so no line', async (_label, command) => {
+    put(project, 'package.json', MANIFEST);
+    put(project, '.npmrc', NPMRC);
+    put(project, '.yarnrc.yml', YARNRC_YML);
+    put(project, 'bunfig.toml', BUNFIG);
+    const d = await decide(command);
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+  });
 });

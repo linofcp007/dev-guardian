@@ -428,9 +428,10 @@ function yamlServer(lines: string[], at: number, keyIndent: number, raw: string)
   return (comment === -1 ? value : value.slice(0, comment)).trim();
 }
 
-/** `.npmrc`: `registry=` and `@scope:registry=`. */
+/** `.npmrc`: `registry=` and `@scope:registry=`. A key repeated in the file is read at its LAST line, as the managers do. */
 function fromNpmrc(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let found: string | undefined;
+  let scoped: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line.startsWith('#') || line.startsWith(';')) continue;
@@ -439,15 +440,16 @@ function fromNpmrc(text: string, scope: string | undefined, all?: string[]): str
     const lineScope = m[1]?.slice(1, -1);
     const url = npmrcValue(m[2] ?? '');
     all?.push(url);
-    if (lineScope === undefined) found = found ?? url;
-    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) return url;
+    if (lineScope === undefined) found = url;
+    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) scoped = url;
   }
-  return found;
+  return scoped ?? found;
 }
 
-/** yarn berry `.yarnrc.yml`: top-level `npmRegistryServer`, or `npmScopes.<scope>.npmRegistryServer`. */
+/** yarn berry `.yarnrc.yml`: top-level `npmRegistryServer`, or `npmScopes.<scope>.npmRegistryServer`; the last of a repeated key. */
 function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let global: string | undefined;
+  let scoped: string | undefined;
   let inScopes = false;
   let currentScope: string | undefined;
   const lines = text.split(/\r?\n/);
@@ -472,24 +474,25 @@ function fromYarnrcYml(text: string, scope: string | undefined, all?: string[]):
     const server = /^npmRegistryServer\s*:\s*(.+)$/.exec(line);
     if (server !== null) all?.push(yamlServer(lines, at, indent, server[1] ?? ''));
     if (server !== null && scope !== undefined && currentScope?.toLowerCase() === scope.toLowerCase()) {
-      return yamlServer(lines, at, indent, server[1] ?? '');
+      scoped = yamlServer(lines, at, indent, server[1] ?? '');
     }
   }
-  return global;
+  return scoped ?? global;
 }
 
 /** yarn classic `.yarnrc`: `registry "url"` / `"@scope:registry" "url"`. */
 function fromYarnrc(text: string, scope: string | undefined, all?: string[]): string | undefined {
   let found: string | undefined;
+  let scoped: string | undefined;
   for (const raw of text.split(/\r?\n/)) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
     all?.push(m[2] ?? '');
-    if (lineScope === undefined) found = found ?? m[2];
-    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) return m[2];
+    if (lineScope === undefined) found = m[2];
+    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
   }
-  return found;
+  return scoped ?? found;
 }
 
 /** bun `bunfig.toml`: `[install] registry = …` and `[install.scopes] <scope> = …`. */
@@ -750,19 +753,25 @@ const PROJECT_DEFAULT_FILES: Record<string, ReadonlyArray<{ name: string; parse:
 };
 
 /**
- * The PROJECT file that sets the default registry for `manager` (`npm`, `npx`, `pnpm`, `bun` or `yarn`), and the
- * value as the file's parser returns it — the nearest file the manager obeys. The directories are the ones the
+ * EVERY project file that sets the default registry for `manager` (`npm`, `npx`, `pnpm`, `bun` or `yarn`) to one that
+ * is not the public registry, each with the value as its parser returns it (the LAST line of a repeated key): the
+ * nearest directory first and, within a directory, in the order of {@link PROJECT_DEFAULT_FILES}. The managers do not
+ * agree on which file wins (measured 2026-11-19: the workspace root's for npm and bun, the member's for pnpm and Yarn,
+ * and in one directory `bunfig.toml` over `.npmrc` for bun, `.npmrc` over `.yarnrc` for Yarn 1), so none is chosen:
+ * a file that sets the public registry is no entry, and does not hide another. The directories are the ones the
  * manager reads: beside the nearest `package.json` from `ctx.projectDir` up (the directory itself when there is
- * none), and at a workspace root above it (a `package.json` with `workspaces`; for pnpm also a `pnpm-workspace.yaml`);
- * Yarn also reads a plain directory above, up to the repository root. Never the home directory or above it.
+ * none), and at a workspace root above it (a `package.json` with `workspaces`; for pnpm also a
+ * `pnpm-workspace.yaml`); Yarn also reads a plain directory above, up to the repository root. Never the home directory
+ * or above it.
  *
- * `null` for another manager, no such file, the public registry, a file that only gives registries to scopes, a
- * file that cannot be read; never throws.
+ * `[]` for another manager, no such file, only the public registry, files that only give registries to scopes, files
+ * that cannot be read; never throws.
  */
-export function npmProjectDefaultRegistry(manager: string, ctx: RegistryContext = {}): { source: string; url: string } | null {
+export function npmProjectDefaultRegistry(manager: string, ctx: RegistryContext = {}): Array<{ source: string; url: string }> {
+  const found: Array<{ source: string; url: string }> = [];
   try {
     const files = Object.hasOwn(PROJECT_DEFAULT_FILES, manager) ? PROJECT_DEFAULT_FILES[manager] : undefined;
-    if (files === undefined) return null;
+    if (files === undefined) return found;
     const near = ancestors(ctx);
     const first = near.findIndex((dir) => present(join(dir, 'package.json')));
     const from = first < 0 ? 0 : first;
@@ -778,14 +787,13 @@ export function npmProjectDefaultRegistry(manager: string, ctx: RegistryContext 
         const source = join(dir, name);
         const text = read(source, ctx);
         const url = text === undefined ? undefined : parse(text, undefined);
-        if (url === undefined) continue;
-        return isPublic('npm', url) ? null : { source, url };
+        if (url !== undefined && !isPublic('npm', url)) found.push({ source, url });
       }
     }
   } catch {
-    // unknown reads as none: no line
+    // unknown reads as none for the files not yet read: fail-open, what was found stays
   }
-  return null;
+  return found;
 }
 
 /**
