@@ -8,6 +8,36 @@ version bump.
 
 ## [Unreleased]
 
+## [3.13.0] - 2026-11-19
+
+The install hook reads the command and the registry configuration the way the package manager does. It no longer
+repeats the credentials of a registry URL, no longer takes a disguised URL for the public registry, no longer skips
+a package whose name ends like an archive, vets the manifest of a bare install however the command is spelled, and
+says when a file of the project sets the default registry.
+
+### Upgrading from 3.12.0
+
+- **Rotate credentials that a warning may have shown.** Up to 3.12.0 the "not found … a custom registry is
+  configured" warning of the install hook and of `vet_packages` repeated the configured registry URL as written. If
+  such a warning appeared in a session while the URL carried a user name, a password or a token, treat them as
+  exposed: change or rotate them, and delete or protect that session's transcript. The warning now names the
+  registry by its scheme and host only.
+- **The hook says one more kind of line.** In a repository whose own `.npmrc`, `.yarnrc`, `.yarnrc.yml` or
+  `bunfig.toml` sets the default registry to anything but the public one, every install the hook vets carries a
+  line that names the file and the registry's host — up to three such lines, then a count. No verdict changes. The
+  line is not said for a registry your own configuration names, nor for a global install. Anything that compares
+  the hook's text as a whole should expect it.
+- **An install that passed in silence may now be denied or warned about.** A package whose name ends like an
+  archive (`lodash.zip`), the real name behind an alias written `x@NPM:name`, and the manifest of a bare install
+  spelled `npm install --global=false` or `npm install -D false` are now looked up, and a malicious one is denied.
+  A name the registry does not have is denied as nonexistent or, for a manager that was not measured, warned about.
+- **A disguised registry URL is another registry.** With `https://registry.npmjs.org:x@other.example/` as a scope's
+  or the default registry, the packages of that scope are no longer looked up on the public registry and the line
+  about the scope is said; a name missing under such a default registry warns instead of being denied.
+- **`npm install --force true` is no longer denied over a package named `true`.** For npm and pnpm the word after a
+  boolean flag is the flag's value; the manifest is vetted instead. After `--silent`, `--quiet`, `-q`, `--verbose`
+  and `-d` the word is still a package, and is vetted as one.
+
 ### Added
 
 - **The install hook says when a file of the project sets the default registry.** A project `.npmrc`, `.yarnrc`,
@@ -16,12 +46,12 @@ version bump.
   answer for an install by name, from a manifest or through a launcher: the file's name and the registry as
   `scheme://host` (never its credentials, path or query), and that what it serves was not vetted. Which file counts
   is what each manager obeys, measured: `.npmrc` for npm and pnpm, `.npmrc` and `bunfig.toml` for bun, `.npmrc`,
-  `.yarnrc` and `.yarnrc.yml` for Yarn. Every such file with another registry gets a line, three at most and a
-  line that counts the rest, and a key repeated in a file is read at its last line. The line is not said when the
-  user's own configuration names that registry, when `--registry` or a registry variable of the environment sets
-  one, for a global install, or when the directory the command runs in is not known. No verdict changes, and the
-  line stays out of a deny. What you may notice: a new line in the hook's answer for installs that were silent, in
-  a repository whose own file sets the default registry; anything that compares the hook's text as a whole should
+  `.yarnrc` and `.yarnrc.yml` for Yarn. Every such file with another registry gets a line, three at most and a line
+  that counts the rest, and a key repeated in a file is read at its last line. The line is not said when the user's
+  own configuration names that registry, when `--registry` or a registry variable of the environment sets one, for
+  a global install, or when the directory the command runs in is not known. No verdict changes, and the line stays
+  out of a deny. What you may notice: a new line in the hook's answer for installs that were silent, in a
+  repository whose own file sets the default registry; anything that compares the hook's text as a whole should
   expect it. See [`docs/hooks.md`](docs/hooks.md) and [the known limits](docs/hooks-known-limits.md).
 
 ### Security
@@ -74,9 +104,9 @@ version bump.
   and a malicious package in it was never looked up. The manifest is now left unread only for an install that is
   global for certain, and for npm and pnpm a `true` or `false` after a boolean flag is that flag's value, as the
   managers read it, except after `--silent`, `--quiet`, `-q`, `--verbose` and `-d`, where it is a package (measured
-  with npm 11.20 and pnpm 10.33). What you may notice: a manifest install that
-  was silent is now vetted and can be denied; and an `npm install --force true`, which the hook used to deny over a
-  package named `true`, is no longer. See [`docs/hooks.md`](docs/hooks.md).
+  with npm 11.20 and pnpm 10.33). What you may notice: a manifest install that was silent is now vetted and can be
+  denied; and an `npm install --force true`, which the hook used to deny over a package named `true`, is no longer.
+  See [`docs/hooks.md`](docs/hooks.md).
 
 ## [3.12.0] - 2026-11-18
 
