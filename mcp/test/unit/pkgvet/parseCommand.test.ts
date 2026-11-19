@@ -2026,6 +2026,12 @@ describe('install-vet-dotnet-forms', () => {
     expect(ecosystems(command)).toEqual(['nuget']);
     expect(vetted(command)).toEqual([['Some.Pkg', undefined]]);
     expect(packagesOf(command)).toEqual(packagesOf('dotnet add package Some.Pkg'));
+    // The project is a flag here: the NuGet configuration next to it is not read, as for `dotnet add <project> package`.
+    const projectReason = parseInstallCommands('dotnet add app.csproj package Some.Pkg')
+      .flatMap((c) => c.uncertain)
+      .filter((u) => u.includes('project argument'));
+    expect(projectReason).toHaveLength(1);
+    expect(parseInstallCommands(command).flatMap((c) => c.uncertain)).toEqual(expect.arrayContaining(projectReason));
   });
 
   it.each([

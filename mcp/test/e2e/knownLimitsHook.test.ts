@@ -165,6 +165,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
     expect([...ids].sort()).toEqual([
       'archive-like-names',
       'corepack-manager-download',
+      'dotnet-other-install-forms',
       'install-candidates-over-ceiling',
       'install-other-runners',
       'manifest-above-project-root',
@@ -319,6 +320,23 @@ describe('install-vet-through-corepack', () => {
 describe('install-vet-unknown-flag-hides-package', () => {
   it('T-12 the record of the candidate ceiling exists, is an install-vetting record with a hook example, and its example is one the dispatcher harness runs', () => {
     const id = 'install-candidates-over-ceiling';
+    const record = loadKnownLimits().find((l) => l.id === id);
+    expect(record, `the data file has no record ${id}`).toBeDefined();
+    expect(record?.area).toBe('install-vetting');
+    const examples = record?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+    }
+  });
+});
+
+// ───────────────── install-vet-dotnet-forms — the record of the .NET forms that stay unread
+
+describe('install-vet-dotnet-forms', () => {
+  it('T-05 the record of the other .NET install forms exists, is an install-vetting record with hook examples, and its examples are ones the dispatcher harness runs', () => {
+    const id = 'dotnet-other-install-forms';
     const record = loadKnownLimits().find((l) => l.id === id);
     expect(record, `the data file has no record ${id}`).toBeDefined();
     expect(record?.area).toBe('install-vetting');

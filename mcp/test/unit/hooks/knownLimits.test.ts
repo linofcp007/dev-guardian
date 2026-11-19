@@ -389,6 +389,7 @@ describe('the limits of the manifest vetting, as data', () => {
   const WANTED = [
     'archive-like-names',
     'corepack-manager-download',
+    'dotnet-other-install-forms',
     'install-candidates-over-ceiling',
     'install-other-runners',
     'manifest-above-project-root',

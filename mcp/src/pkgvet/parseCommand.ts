@@ -548,6 +548,16 @@ const FLAGS: Record<string, FlagTable> = {
     bool: set('-n', '--no-restore', '--interactive', '--prerelease'),
     registry: set('-s', '--source'),
   },
+  // dotnet 10.0.404 `tool install --help` (.specs/install-vet-dotnet-forms/measurements/help/dotnet-tool-install-help.txt):
+  // `-v` is the MSBuild verbosity here (a version in `add package`), and the sources are `--add-source` and `--source`;
+  // `--configfile` names a NuGet configuration, which may hold a private source: it is read as one.
+  'dotnet-tool': {
+    value: set('--tool-path', '--version', '--configfile', '--tool-manifest', '--add-source', '--source', '--framework', '-v',
+      '--verbosity', '-a', '--arch'),
+    bool: set('-g', '--global', '--local', '--prerelease', '--disable-parallel', '--ignore-failed-sources', '--no-http-cache',
+      '--interactive', '--allow-downgrade', '--create-manifest-if-needed', '--allow-roll-forward'),
+    registry: set('--add-source', '--source', '--configfile'),
+  },
 };
 
 const UV_VALUED = [
@@ -934,6 +944,8 @@ interface Detected {
   pre: ShellWord[];
   /** Reasons found while locating the subcommand (a workspace, a project argument). */
   uncertain: string[];
+  /** The {@link FLAGS} key of the command's own flags, when they are not its manager's (`dotnet tool install`). */
+  flagTable?: string;
   /** `yarn global add`: the install is a global one. */
   global?: boolean;
   /**
@@ -1009,7 +1021,7 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   uv: new Set(['add', 'pip', 'tool']),
   poetry: new Set(['add']),
   composer: COMPOSER_REQUIRE,
-  dotnet: new Set(['add']),
+  dotnet: new Set(['add', 'package', 'tool']),
 };
 const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run']);
 const ADD_ONLY: ReadonlySet<string> = new Set(['add']);
@@ -1170,6 +1182,23 @@ function detect(words: readonly ShellWord[]): Detected | null {
         ? { manager: head, ecosystem: 'packagist', args: words.slice(sub + 1), pre, uncertain: [] }
         : null;
     case 'dotnet': {
+      // dotnet package add <NAME> (.NET 10: the same command as `add package`, the project a flag)
+      if (subWord === 'package') {
+        const verb = nextPositional(words, sub + 1, table, ADD_ONLY);
+        if (verb < 0 || words[verb]?.value !== 'add') return null;
+        const args = words.slice(verb + 1);
+        const uncertain = args.some((w) => /^--(?:project|file)(?:=|$)/.test(w.value))
+          ? ['dotnet project argument (the NuGet configuration next to that project was not read)']
+          : [];
+        return { manager: head, ecosystem: 'nuget', args, pre, uncertain };
+      }
+      // dotnet tool install <NAME>: the tool is a NuGet package, asked of the sources as `add package` asks.
+      if (subWord === 'tool') {
+        const toolTable = FLAGS['dotnet-tool'] ?? table;
+        const verb = nextPositional(words, sub + 1, toolTable, INSTALL_ONLY);
+        if (verb < 0 || words[verb]?.value !== 'install') return null;
+        return { manager: head, ecosystem: 'nuget', args: words.slice(verb + 1), pre, uncertain: [], flagTable: 'dotnet-tool' };
+      }
       if (subWord !== 'add') return null;
       // dotnet add [<PROJECT>] package <NAME>
       let at = nextPositional(words, sub + 1, table);
@@ -1267,7 +1296,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
 
 function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.launch !== undefined) return collectLaunch(d, d.launch, context);
-  const table = FLAGS[d.manager === 'uv-pip' ? 'pip' : d.manager] ?? FLAGS['npm'];
+  const table = FLAGS[d.flagTable ?? (d.manager === 'uv-pip' ? 'pip' : d.manager)] ?? FLAGS['npm'];
   const flagTable = table ?? { value: set(), bool: set(), registry: set() };
   const preWalk = walk(d.pre, flagTable);
   const walked = walk(d.args, flagTable);
@@ -1335,7 +1364,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     const extra = positionals.some((p) => p.candidate === true) ? [] : packages.splice(1);
     for (const e of extra) skipped.push(skip(e.raw, 'unexpected extra argument to dotnet add package'));
     const first = packages[0];
-    const version = flagValue(d.args, ['-v', '--version']);
+    const version = flagValue(d.args, d.flagTable === 'dotnet-tool' ? ['--version'] : ['-v', '--version']);
     if (first !== undefined && version !== undefined) first.range = version;
   }
 
@@ -1642,6 +1671,11 @@ const ALLOW: Record<string, Allow> = {
     value: set(),
   },
   dotnet: { bool: set('--prerelease'), value: set('-v', '--version', '-f', '--framework') },
+  // `dotnet tool install`: no source, configuration file or verbosity flag; a tool is global, local or in a folder.
+  'dotnet-tool': {
+    bool: set('--prerelease', '-g', '--global', '--local', '--allow-downgrade', '--create-manifest-if-needed', '--allow-roll-forward'),
+    value: set('--version', '--framework', '--tool-path'),
+  },
   // The launchers (review P1): consent and verbosity only. A package flag
   // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
   // out of the confident shape.
@@ -1797,8 +1831,9 @@ function confidentShape(text: string): string | null {
       [key, args] = ['composer', rest.slice(1)];
       break;
     case 'dotnet':
-      if (at(0) !== 'add' || at(1) !== 'package') return notPlain(`'dotnet ${at(0)} ${at(1)}' (dotnet add <project> package …)`);
-      [key, args] = ['dotnet', rest.slice(2)];
+      if ((at(0) === 'add' && at(1) === 'package') || (at(0) === 'package' && at(1) === 'add')) [key, args] = ['dotnet', rest.slice(2)];
+      else if (at(0) === 'tool' && at(1) === 'install') [key, args] = ['dotnet-tool', rest.slice(2)];
+      else return notPlain(`'dotnet ${at(0)} ${at(1)}' (dotnet add <project> package …)`);
       break;
     default:
       return notPlain(`'${tool}' is not a bare package-manager name`);

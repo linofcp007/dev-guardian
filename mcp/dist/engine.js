@@ -116312,6 +116312,38 @@ var init_parseCommand = __esm({
         value: set2("-v", "--version", "-f", "--framework", "-s", "--source", "--package-directory", "--project", "--file"),
         bool: set2("-n", "--no-restore", "--interactive", "--prerelease"),
         registry: set2("-s", "--source")
+      },
+      // dotnet 10.0.404 `tool install --help` (.specs/install-vet-dotnet-forms/measurements/help/dotnet-tool-install-help.txt):
+      // `-v` is the MSBuild verbosity here (a version in `add package`), and the sources are `--add-source` and `--source`;
+      // `--configfile` names a NuGet configuration, which may hold a private source: it is read as one.
+      "dotnet-tool": {
+        value: set2(
+          "--tool-path",
+          "--version",
+          "--configfile",
+          "--tool-manifest",
+          "--add-source",
+          "--source",
+          "--framework",
+          "-v",
+          "--verbosity",
+          "-a",
+          "--arch"
+        ),
+        bool: set2(
+          "-g",
+          "--global",
+          "--local",
+          "--prerelease",
+          "--disable-parallel",
+          "--ignore-failed-sources",
+          "--no-http-cache",
+          "--interactive",
+          "--allow-downgrade",
+          "--create-manifest-if-needed",
+          "--allow-roll-forward"
+        ),
+        registry: set2("--add-source", "--source", "--configfile")
       }
     };
     UV_VALUED = [
@@ -116499,7 +116531,7 @@ var init_parseCommand = __esm({
       uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
       poetry: /* @__PURE__ */ new Set(["add"]),
       composer: COMPOSER_REQUIRE,
-      dotnet: /* @__PURE__ */ new Set(["add"])
+      dotnet: /* @__PURE__ */ new Set(["add", "package", "tool"])
     };
     NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
     ALLOW = {
@@ -116625,6 +116657,11 @@ var init_parseCommand = __esm({
         value: set2()
       },
       dotnet: { bool: set2("--prerelease"), value: set2("-v", "--version", "-f", "--framework") },
+      // `dotnet tool install`: no source, configuration file or verbosity flag; a tool is global, local or in a folder.
+      "dotnet-tool": {
+        bool: set2("--prerelease", "-g", "--global", "--local", "--allow-downgrade", "--create-manifest-if-needed", "--allow-roll-forward"),
+        value: set2("--version", "--framework", "--tool-path")
+      },
       // The launchers (review P1): consent and verbosity only. A package flag
       // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
       // out of the confident shape.

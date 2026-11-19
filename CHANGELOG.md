@@ -10,6 +10,15 @@ version bump.
 
 ### Security
 
+- **`dotnet package add` and `dotnet tool install` fetched a NuGet package without being vetted.** The hook read one
+  .NET form, `dotnet add package <name>`. The .NET 10 form `dotnet package add <name>` and `dotnet tool install <name>`
+  (with or without `-g`, `--local`, `--tool-path`) ask NuGet for the same package, and were not read as installs: no
+  lookup, no line, so a name that does not exist, a typosquat or a malicious package passed. A .NET tool is code that
+  runs on the machine. Present since 3.0.0, when install vetting began. These two forms are now read as NuGet installs
+  and vetted like `dotnet add package` (a name NuGet does not know is denied; `--add-source`, `--source` and
+  `--configfile` lower the denial to a warning, as `--source` does for `dotnet add package`). `dotnet new install`,
+  `dotnet tool update`, `dotnet tool restore` and `dotnet workload install` stay unread, and the known limits say so.
+  Update; there is nothing to rotate.
 - **The update and maintenance verbs installed the manifest without being vetted.** `npm update` (`upgrade`, `up`),
   `pnpm update` (`up`, `upgrade`), `yarn upgrade`, `yarn up`, `bun update`, `npm dedupe`, `npm prune`, `npm audit fix`,
   `pnpm dedupe` and `yarn dedupe` install the project's `package.json` dependencies, the update verbs past the
