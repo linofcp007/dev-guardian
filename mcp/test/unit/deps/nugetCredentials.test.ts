@@ -234,3 +234,38 @@ describe('nugetRestoreRefusal', () => {
     expect(nugetRestoreRefusal(user.repo, [user.repo], user.nuget)?.reason).toMatch(/^not restored: your NuGet configuration .*NuGet\.Config: it is not a regular file/);
   });
 });
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-08 — the "not restored" reason of a nuget.config
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const REST = ['ken', 'Qq', '88'].join('');
+  const SECRET = ['tk', 'n1'].join('');
+  const leaked = (text: string): boolean => text.toLowerCase().includes(TOKEN.toLowerCase());
+
+  it('T-08 a feed with a stored credential pointed at a URL with an at-sign outside the credentials: "not restored" names the feed, no host, nothing of the token', () => {
+    const { repo, nuget } = setup(sources(['corp', OWN]) + creds('corp'));
+    write(repo, 'NuGet.config', config(sources(['corp', `https://${TOKEN}/${REST}@host.example/v3/index.json`])));
+    const refusal = nugetRestoreRefusal(repo, [repo], nuget);
+    expect(refusal?.code).toBe('nuget_credential_rebound');
+    expect(refusal?.reason).toMatch(/^not restored: NuGet\.config points the NuGet feed "corp" at https:\/\/(?!host\.example)/);
+    expect({ leaked: leaked(refusal?.reason ?? ''), hostExample: (refusal?.reason ?? '').includes('host.example') }).toEqual({ leaked: false, hostExample: false });
+  });
+
+  it('T-08 a network path whose first segment is followed by an at-sign: the reason carries nothing of the token', () => {
+    const { repo, nuget } = setup(null);
+    write(repo, 'nuget.config', config(`<config><add key="globalPackagesFolder" value="\\\\${TOKEN}\\${REST}@host\\share" /></config>`));
+    const refusal = nugetRestoreRefusal(repo, [repo], nuget);
+    expect(refusal?.code).toBe('nuget_network_path');
+    expect(leaked(refusal?.reason ?? '')).toBe(false);
+  });
+
+  it('T-08 a feed whose credentials are well formed still names the host', () => {
+    const { repo, nuget } = setup(sources(['corp', OWN]) + creds('corp'));
+    write(repo, 'NuGet.config', config(sources(['corp', `https://user:${SECRET}@host.example/v3/index.json`])));
+    const refusal = nugetRestoreRefusal(repo, [repo], nuget);
+    expect(refusal?.reason).toMatch(/^not restored: NuGet\.config points the NuGet feed "corp" at https:\/\/host\.example, and you hold a credential/);
+    expect(refusal?.reason ?? '').not.toContain(SECRET);
+  });
+});

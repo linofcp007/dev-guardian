@@ -1850,3 +1850,54 @@ describe('install-vet-npm-exec-bool-word', () => {
     },
   );
 });
+
+// ───────────────── lockfile-origin-host-from-userinfo — through the real hook process
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const REST = ['ken', 'Qq', '88'].join('');
+  const SECRET = ['tk', 'n1'].join('');
+  const ROUTES: Record<string, Route> = { [OSV]: { osv: {} } };
+
+  const lockWith = (resolved: string): string =>
+    `${JSON.stringify(
+      {
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: { probe: '^1.0.0' } },
+          'node_modules/probe': { version: '1.0.0', resolved, integrity: `sha512-${'A'.repeat(86)}==` },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+
+  /** What `npm ci` says, as additionalContext, in a project whose package-lock has one entry fetched from `resolved`. */
+  function said(resolved: string): { context: string; stdout: string; stderr: string; status: number | null } {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { probe: '^1.0.0' } }));
+    writeFileSync(join(project, 'package-lock.json'), lockWith(resolved));
+    const r = runHook('npm ci', ROUTES);
+    return { context: r.output?.hookSpecificOutput?.additionalContext ?? '', stdout: r.stdout, stderr: r.stderr, status: r.status };
+  }
+
+  it('T-05 an entry whose URL has an at-sign outside the credentials: the line says another source, with no host and nothing of the token', () => {
+    const out = said(`https://${TOKEN}/${REST}@host.example/probe/-/probe-1.0.0.tgz`);
+    expect(out.status).toBe(0);
+    expect(out.context).toMatch(/comes from another source — what it serves was not vetted\./);
+    for (const text of [out.context, out.stdout, out.stderr]) {
+      expect(text.includes(TOKEN), 'the token').toBe(false);
+      expect(text.includes(TOKEN.toLowerCase()), 'the token in lower case').toBe(false);
+    }
+  });
+
+  it('T-05 an entry with well formed credentials in its URL: the line names the host', () => {
+    const out = said(`https://user:${SECRET}@host.example/probe/-/probe-1.0.0.tgz`);
+    expect(out.status).toBe(0);
+    expect(out.context).toMatch(/comes from another source \(host\.example\) — what it serves was not vetted\./);
+    expect(out.context.includes(SECRET)).toBe(false);
+  });
+});

@@ -3972,3 +3972,68 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     expect(context.length).toBeLessThan(10_000);
   });
 });
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-03 — a registry= whose comment cut hides an at-sign
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const REST = ['ken', 'Qq', '88'].join('');
+  const CLEAN = 'dgprobe-clean';
+  const MISSING = 'dgprobe-missing';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+
+  /** The line the project default registry is said with: the file by its name, the registry by scheme and host (or no host). */
+  const lineFor = (host: string | null): string =>
+    `dev-guardian: the project's .npmrc sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+
+  /** The public registry has every name but MISSING; OSV calls none malicious; any other URL is an error. */
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    if (url === OSV) return json({ results: (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries.map(() => ({})) });
+    const doc = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+    if (doc !== null) return doc[1] === MISSING ? json({}, 404) : json(npmDoc('1.0.0').body);
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+
+  async function decideWith(registryLine: string, name: string): Promise<string> {
+    writeFileSync(join(project, 'package.json'), MANIFEST);
+    writeFileSync(join(project, '.npmrc'), `${registryLine}\n`);
+    const d = await decideInstallCommand(`npm install ${name}`, opts(fetchImpl, { env: { GUARDIAN_OFFLINE: '0' } }));
+    expect(d?.deny).toBeUndefined();
+    return d?.context ?? '';
+  }
+  const leaked = (text: string): boolean => text.includes(TOKEN) || text.includes(TOKEN.toLowerCase());
+
+  const HIDDEN: Array<[string, string]> = [
+    ['a hash inside the credentials', `registry=https://${TOKEN}#${REST}@host.example/`],
+    ['a semicolon inside the credentials', `registry=https://${TOKEN};${REST}@host.example/`],
+  ];
+
+  it.each(HIDDEN)('T-03 %s: the line of the default registry and the custom registry warning say no host and nothing of the token', async (_label, registryLine) => {
+    const line = await decideWith(registryLine, CLEAN);
+    expect({ line: line.split('\n'), leaked: leaked(line) }).toEqual({ line: [lineFor(null)], leaked: false });
+    const warning = await decideWith(registryLine, MISSING);
+    expect(warning).toContain('a custom registry is configured');
+    expect(warning).toContain(lineFor(null));
+    expect(leaked(warning)).toBe(false);
+    expect(warning).not.toContain('host.example');
+  });
+
+  it('T-03 a registry= whose comment holds an at-sign (a ; after the value) is said without a host', async () => {
+    const line = await decideWith('registry=https://reg.example/ ; admin@corp.example', CLEAN);
+    expect(line).toBe(lineFor(null));
+    const warning = await decideWith('registry=https://reg.example/ ; admin@corp.example', MISSING);
+    expect(warning).not.toContain('corp.example');
+    expect(warning).not.toContain('https://reg.example');
+  });
+
+  it('T-03 a registry= with an ordinary comment still names its host, in the line and in the warning', async () => {
+    const line = await decideWith('registry=https://reg.example/ # nota', CLEAN);
+    expect(line).toBe(lineFor('https://reg.example'));
+    const warning = await decideWith('registry=https://reg.example/ # nota', MISSING);
+    expect(warning).toContain('a custom registry is configured');
+    expect(warning).toContain('https://reg.example');
+  });
+});
