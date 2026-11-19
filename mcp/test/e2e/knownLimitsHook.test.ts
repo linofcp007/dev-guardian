@@ -165,6 +165,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
     expect([...ids].sort()).toEqual([
       'archive-like-names',
       'corepack-manager-download',
+      'install-candidates-over-ceiling',
       'install-other-runners',
       'manifest-lockfile-and-transitive',
       'manifest-not-from-a-registry',
@@ -308,6 +309,23 @@ describe('install-vet-through-corepack', () => {
       for (const [index, example] of examples.entries()) {
         expect({ id, detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ id, detector: 'hook', harnessed: true });
       }
+    }
+  });
+});
+
+// ───────────────── install-vet-unknown-flag-hides-package — the record of the candidate ceiling
+
+describe('install-vet-unknown-flag-hides-package', () => {
+  it('T-12 the record of the candidate ceiling exists, is an install-vetting record with a hook example, and its example is one the dispatcher harness runs', () => {
+    const id = 'install-candidates-over-ceiling';
+    const record = loadKnownLimits().find((l) => l.id === id);
+    expect(record, `the data file has no record ${id}`).toBeDefined();
+    expect(record?.area).toBe('install-vetting');
+    const examples = record?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
     }
   });
 });

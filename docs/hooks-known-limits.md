@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **34 limits**, 30 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **35 limits**, 31 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -141,6 +141,8 @@ A launcher that runs corepack or a package manager — `npx corepack yarn add �
   - `Bash` on PreToolUse, input `{"command":"npm exec corepack -- yarn add left-pad"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"pnpm dlx corepack yarn add left-pad"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"npx pnpm add left-pad"}` → `warn`
+- A word after a flag the hook does not know is vetted as a possible package (it may be the flag's value), and a command contributes at most 50 such words. Packages the command certainly names are chosen first, but a package that is itself such a word — it follows an unknown flag — can be left out when 50 or more others stand before it on the line. The hook says how many packages of the command were not vetted; it does not deny or ask.
+  - `Bash` on PreToolUse, input `{"command":"npm install --a j0 --a j1 --a j2 --a j3 --a j4 --a j5 --a j6 --a j7 --a j8 --a j9 --a j10 --a j11 --a j12 --a j13 --a j14 --a j15 --a j16 --a j17 --a j18 --a j19 --a j20 --a j21 --a j22 --a j23 --a j24 --a j25 --a j26 --a j27 --a j28 --a j29 --a j30 --a j31 --a j32 --a j33 --a j34 --a j35 --a j36 --a j37 --a j38 --a j39 --a j40 --a j41 --a j42 --a j43 --a j44 --a j45 --a j46 --a j47 --a j48 --a j49 --a j50 --a j51 --a j52 --a j53 --a j54 --a j55 --a j56 --a j57 --a j58 --a j59 --b last-pkg"}` → `warn`
 
 ## The write guards
 
