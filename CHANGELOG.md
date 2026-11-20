@@ -8,6 +8,19 @@ version bump.
 
 ## [Unreleased]
 
+## [3.14.1] - 2026-11-20
+
+A patch release for one regression of 3.14.0: a lockfile whose entries repeat their own scope could spend the
+install hook's whole time budget, and a malicious package pinned in that lockfile was then not denied.
+
+### Upgrading from 3.14.0
+
+- **Update if you run 3.14.0.** Only that release is affected: 3.13.0 denied the lockfile of the measurement, and
+  3.14.1 does again. There is nothing to configure and nothing to rotate.
+- **One line may no longer name a host.** For a lockfile entry whose URL holds the package's own scope nested in
+  itself (`/@s/@s/nn` for the package `@s/n`), the hook no longer names the host the entry comes from; the entry is
+  still counted as coming from another source.
+
 ### Security
 
 - **A lockfile could spend the install hook's whole time budget, and a malicious package pinned in it was not
