@@ -3402,6 +3402,33 @@ var LAUNCH_FLAGS = {
     noFetchFlags: set("--no", "--offline"),
     boolWord: { except: LOGLEVEL_FLAGS }
   },
+  // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
+  // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
+  // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+  "npm-init": {
+    value: set(...NPM_TABLE.value, "--init-author-name", "--init-author-url", "--init-license", "--init-module", "--init-type", "--init-version"),
+    bool: set(...NPM_TABLE.bool, "--init-private", "--no-workspaces-update"),
+    registry: NPM_TABLE.registry,
+    dir: NPM_TABLE.dir,
+    workspace: NPM_TABLE.workspace,
+    boolWord: { except: LOGLEVEL_FLAGS }
+  },
+  // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
+  "yarn-create": {
+    value: set("--package", "-p"),
+    bool: set("--quiet", "-q"),
+    registry: set(),
+    packageFlags: set("--package", "-p")
+  },
+  // `pnpm create` (pnpm 11.24.0): the flags of `pnpm dlx` that are no package flags; no flag was measured with it.
+  "pnpm-create": {
+    value: set("--allow-build", "--registry", "--dir", "-C", "--reporter"),
+    bool: set("--silent", "-s", "--quiet", "--verbose"),
+    registry: set("--registry"),
+    dir: set("--dir", "-C")
+  },
+  // `bun create` / `bun c`: no flag was measured.
+  "bun-create": { value: set(), bool: set(), registry: set() },
   "pnpm-dlx": {
     value: set("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
     // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
@@ -3716,11 +3743,16 @@ function scanPositional(words, from, table, subcommands) {
   }
   return { at: -1, candidate: false };
 }
+var NPM_INITIALIZER = /* @__PURE__ */ new Set(["create", "init", "innit"]);
+var CREATE_ONLY = /* @__PURE__ */ new Set(["create"]);
+var BUN_INITIALIZER = /* @__PURE__ */ new Set(["create", "c"]);
+var INITIALIZER_VERBS = { npm: NPM_INITIALIZER, pnpm: CREATE_ONLY, yarn: CREATE_ONLY, bun: BUN_INITIALIZER };
+var INITIALIZER_FLAGS = { npm: "npm-init", pnpm: "pnpm-create", yarn: "yarn-create", bun: "bun-create" };
 var SUBCOMMANDS = {
-  npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x"]),
-  pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE]),
-  bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x"]),
-  yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE]),
+  npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x", ...NPM_INITIALIZER]),
+  pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
+  bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x", ...BUN_INITIALIZER]),
+  yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE, ...CREATE_ONLY]),
   pip: /* @__PURE__ */ new Set(["install"]),
   uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
   poetry: /* @__PURE__ */ new Set(["add"]),
@@ -3733,7 +3765,7 @@ var INSTALL_ONLY = /* @__PURE__ */ new Set(["install"]);
 var PACKAGE_ONLY = /* @__PURE__ */ new Set(["package"]);
 function detect(input) {
   let words = input;
-  const nextPositional = (ws, from, table2, subcommands) => scanPositional(ws, from, table2, subcommands).at;
+  const nextPositional = (ws, from, table2, subcommands2) => scanPositional(ws, from, table2, subcommands2).at;
   const start = commandStart(words);
   const headWord = words[start];
   if (headWord === void 0) return null;
@@ -3755,12 +3787,12 @@ function detect(input) {
   if (head === "composer.phar") head = "composer";
   if (head === "yarnpkg") head = "yarn";
   if (head === "corepack") {
-    const first = words[start + 1]?.value;
-    const via = corepackManager(first);
+    const first2 = words[start + 1]?.value;
+    const via = corepackManager(first2);
     if (via !== void 0) {
       head = via;
       i = start + 2;
-    } else if (first === "up" || first === "use" && corepackManager(words[start + 2]?.value) !== void 0) {
+    } else if (first2 === "up" || first2 === "use" && corepackManager(words[start + 2]?.value) !== void 0) {
       return { manager: "npm", ecosystem: "npm", args: [], pre: [], uncertain: [], manifest: "always" };
     } else return null;
   }
@@ -3778,7 +3810,16 @@ function detect(input) {
   }
   const table = FLAGS[head];
   if (table === void 0) return null;
-  let sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
+  const initVerbs = INITIALIZER_VERBS[head];
+  const subcommands = SUBCOMMANDS[head];
+  let first = scanPositional(words, i, table, subcommands);
+  while (initVerbs !== void 0 && first.at >= 0 && first.candidate && initVerbs.has(words[first.at]?.value ?? "")) {
+    const following = scanPositional(words, first.at + 1, table, subcommands).at;
+    const followingWord = following < 0 ? void 0 : words[following]?.value ?? "";
+    if (followingWord !== void 0 && !(subcommands?.has(followingWord) === true && !initVerbs.has(followingWord))) break;
+    first = scanPositional(words, first.at + 1, table, subcommands);
+  }
+  let sub = first.at;
   let productionWord;
   const wordAt = words[sub];
   if (head === "yarn" && wordAt !== void 0 && isBoolWord(wordAt.value) && words[sub - 1]?.value === "--production") {
@@ -3802,6 +3843,7 @@ function detect(input) {
   if (head === "pnpm" && subName === "dlx") return launcher("pnpm", "npm", after, before, { style: "run", flags: "pnpm-dlx" });
   if (head === "yarn" && subName === "dlx") return launcher("yarn", "npm", after, before, { style: "run", flags: "yarn-dlx" });
   if (head === "bun" && subName === "x") return launcher("bun", "npm", after, before, { style: "run", flags: "bunx", localFirst: true });
+  if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === "uv" && subName === "tool") {
     const toolTable = LAUNCH_FLAGS["uvx"] ?? table;
     const verb = nextPositional(words, sub + 1, toolTable, PIPX_SUBCOMMANDS);
@@ -3898,17 +3940,69 @@ function detect(input) {
   }
 }
 var COMPOSER_CONSTRAINT = /^(?:[\^~<>=!*]|v?\d|dev-|@)/;
+function launchEnd(args, table) {
+  let scan = scanPositional(args, 0, table);
+  let end = scan.at;
+  while (scan.at >= 0 && scan.candidate) {
+    scan = scanPositional(args, scan.at + 1, table);
+    if (scan.at >= 0) end = scan.at;
+  }
+  return end;
+}
+function isInitializerName(word, manager) {
+  return "name" in parseNpm(initializerNames(word, manager).names[0] ?? word, manager);
+}
+function initializerLaunch(head, after, before) {
+  const flags = INITIALIZER_FLAGS[head];
+  const table = flags === void 0 ? void 0 : LAUNCH_FLAGS[flags];
+  if (flags === void 0 || table === void 0) return null;
+  const end = launchEnd(after, table);
+  if (end < 0) return null;
+  if (!walk(after.slice(0, end + 1), table).positionals.some((p) => isInitializerName(p.value, head))) return null;
+  return launcher(head, "npm", after, before, { style: "run", flags, initializer: true });
+}
+function initializerNames(word, manager) {
+  const scoped = word.startsWith("@");
+  const at = word.indexOf("@", scoped ? 1 : 0);
+  const bare = at > 0 ? word.slice(0, at) : word;
+  const version = at > 0 ? word.slice(at) : "";
+  const unmeasured = (names) => ({
+    names,
+    why: `\`${word}\`${TWO_READINGS} \u2014 with the \`create-\` prefix added again, or as written (not measured) \u2014 both are looked up`
+  });
+  if (scoped) {
+    const slash = bare.indexOf("/");
+    if (slash < 0) {
+      const names = [`${bare}/create${version}`];
+      if (manager !== "yarn" || version === "") return { names };
+      return {
+        names,
+        why: `\`${word}\`${TWO_READINGS} \u2014 Yarn 3 and 4 ask the registry for \`${bare}/create\`, Yarn 1 does not ask it \u2014 \`${bare}/create\` is looked up`
+      };
+    }
+    const scope = bare.slice(0, slash);
+    const rest = bare.slice(slash + 1);
+    if (rest === "create" || rest.startsWith("create-")) return unmeasured([`${scope}/create-${rest}${version}`, `${bare}${version}`]);
+    return { names: [`${scope}/create-${rest}${version}`] };
+  }
+  if (bare === "create") return unmeasured([`create-create${version}`, `create${version}`]);
+  if (bare.startsWith("create-")) {
+    if (manager === "pnpm") return { names: [`${bare}${version}`] };
+    if (manager === "yarn") {
+      return {
+        names: [`create-${bare}${version}`, `${bare}${version}`],
+        why: `\`${word}\`${TWO_READINGS} \u2014 Yarn 1 and 3 ask the registry for \`create-${bare}\`, Yarn 4 for \`${bare}\` \u2014 both are looked up`
+      };
+    }
+  }
+  return { names: [`create-${bare}${version}`] };
+}
 function collectLaunch(d, launch, context) {
   const table = LAUNCH_FLAGS[launch.flags] ?? { value: set(), bool: set(), registry: set() };
   const pre = walk(d.pre, table);
   let body = d.args;
   if (launch.style === "run") {
-    let scan = scanPositional(d.args, 0, table);
-    let end = scan.at;
-    while (scan.at >= 0 && scan.candidate) {
-      scan = scanPositional(d.args, scan.at + 1, table);
-      if (scan.at >= 0) end = scan.at;
-    }
+    const end = launchEnd(d.args, table);
     if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
@@ -3917,9 +4011,22 @@ function collectLaunch(d, launch, context) {
   const wordFlags = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value) && f.eq !== true);
   const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
-  const limited = limitCandidates(w.positionals);
+  const initializer = launch.initializer === true;
+  const limited = limitCandidates(initializer ? w.positionals.filter((p) => isInitializerName(p.value, d.manager)) : w.positionals);
+  const written = /* @__PURE__ */ new Map();
+  const initWhy = [];
   let byPackageFlag = false;
-  if (!has2(table.noFetchFlags)) {
+  if (initializer) {
+    raws.push(...values(table.packageFlags));
+    for (const p of limited.kept) {
+      const read2 = initializerNames(p.value, d.manager);
+      for (const name of read2.names) {
+        raws.push(name);
+        written.set(name, p.value);
+      }
+      if (read2.why !== void 0) initWhy.push(read2.why);
+    }
+  } else if (!has2(table.noFetchFlags)) {
     const named = values(table.packageFlags);
     if (named.length > 0) {
       raws.push(...named);
@@ -3936,12 +4043,14 @@ function collectLaunch(d, launch, context) {
   const unsure = [...wordFlags(table.noFetchFlags), ...wordFlags(table.shellFlags)].map((f) => bothWaysReason(f.value ?? "", f.flag));
   const bothPairs = [];
   for (const raw of raws) {
-    const spec2 = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    const parsed = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    const asWritten = written.get(raw) ?? raw;
+    const spec2 = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
     if ("name" in spec2) {
       const read2 = d.ecosystem === "npm" ? npmReadings(spec2, d.manager) : { packages: [spec2] };
       for (const each of read2.packages) {
         packages.push(each);
-        if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(each);
+        if (!byPackageFlag && candidateRaws.has(asWritten) && !certainRaws.has(asWritten)) candidates.push(each);
       }
       if ("pair" in read2 && read2.pair !== void 0) bothPairs.push(read2.pair);
       const why = unmeasuredReason(d.manager, spec2);
@@ -3950,6 +4059,7 @@ function collectLaunch(d, launch, context) {
   }
   const bothWhy = bothReadings(bothPairs);
   if (bothWhy !== void 0) unsure.push(bothWhy);
+  unsure.push(...initWhy);
   const out = {
     ecosystem: d.ecosystem,
     manager: d.manager,

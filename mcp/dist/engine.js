@@ -115782,7 +115782,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -116510,6 +116510,33 @@ var init_parseCommand = __esm({
         noFetchFlags: set2("--no", "--offline"),
         boolWord: { except: LOGLEVEL_FLAGS }
       },
+      // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
+      // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
+      // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+      "npm-init": {
+        value: set2(...NPM_TABLE.value, "--init-author-name", "--init-author-url", "--init-license", "--init-module", "--init-type", "--init-version"),
+        bool: set2(...NPM_TABLE.bool, "--init-private", "--no-workspaces-update"),
+        registry: NPM_TABLE.registry,
+        dir: NPM_TABLE.dir,
+        workspace: NPM_TABLE.workspace,
+        boolWord: { except: LOGLEVEL_FLAGS }
+      },
+      // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
+      "yarn-create": {
+        value: set2("--package", "-p"),
+        bool: set2("--quiet", "-q"),
+        registry: set2(),
+        packageFlags: set2("--package", "-p")
+      },
+      // `pnpm create` (pnpm 11.24.0): the flags of `pnpm dlx` that are no package flags; no flag was measured with it.
+      "pnpm-create": {
+        value: set2("--allow-build", "--registry", "--dir", "-C", "--reporter"),
+        bool: set2("--silent", "-s", "--quiet", "--verbose"),
+        registry: set2("--registry"),
+        dir: set2("--dir", "-C")
+      },
+      // `bun create` / `bun c`: no flag was measured.
+      "bun-create": { value: set2(), bool: set2(), registry: set2() },
       "pnpm-dlx": {
         value: set2("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
         // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
@@ -116606,11 +116633,14 @@ var init_parseCommand = __esm({
     COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
     BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
     PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
+    NPM_INITIALIZER = /* @__PURE__ */ new Set(["create", "init", "innit"]);
+    CREATE_ONLY = /* @__PURE__ */ new Set(["create"]);
+    BUN_INITIALIZER = /* @__PURE__ */ new Set(["create", "c"]);
     SUBCOMMANDS = {
-      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x"]),
-      pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE]),
-      bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x"]),
-      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE]),
+      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x", ...NPM_INITIALIZER]),
+      pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
+      bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x", ...BUN_INITIALIZER]),
+      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE, ...CREATE_ONLY]),
       pip: /* @__PURE__ */ new Set(["install"]),
       uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
       poetry: /* @__PURE__ */ new Set(["add"]),
