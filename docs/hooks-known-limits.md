@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **45 limits**, 41 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **46 limits**, 42 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -181,11 +181,20 @@ This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/t
 - Yarn 2 and 3 were not measured, only Yarn 1 and Yarn 4 (and bun 1.4.4): the reading follows Yarn 4.
 - A command with a word read both ways counts as uncertain as a whole, so ANOTHER name on the same line that the registry does not have is a warning and not a deny (a malicious one is still denied).
 - The bun rule is not copied: the two-name reading covers it, at the price of one lookup too many.
-- A range with an operator or a space is read only inside quotes (`'name@npm:>=1.0.0'`): unquoted, the shell takes `>` for a redirection, which is a general limit and not of this form.
+- A range written without quotes (`name@npm:>=1.0.0`) is read: bash hands the manager `name@npm:` and the hook reads that, and the PowerShell tool is read both ways (see `install-redirect-glued-word`). A range with a space still needs quotes.
 - A `package.json` value `"x": "npm:1.0.0"` leaves a "could not vet" line for the name `1.0.0` at every `yarn install`: the public registry answers that name with a document that is no package.
 - `name@NPM:<rest>` in capitals reads as the package `name` under Yarn 1, and bun reads it as a git URL (`https://NPM/<rest>/`): the hook reads it as the lower-case form.
 - `resolutions` and `overrides` of a `package.json` are not read, and neither is a lockfile written by Yarn for these forms.
   - `Bash` on PreToolUse, input `{"command":"yarn install"}`, with `package.json` present → `none` (no answer)
+- A word of an install line that has a `>` or a `<` glued to text (`name@>=1.0.0`, `name@<2`, `name>=1`, `name> out.txt`) is read as the shell hands it to the program (measured 2026-11-20: bash gives `name@` to npm, pnpm, bun and Yarn 1, which install the latest; PowerShell 7.6 and 5.1 give the whole word, and a `>` is a redirection there only at the start of a word or after digits or `*`; `<` never is). Bash and the PowerShell tool: the text before the operator is the word, and the target of the redirection is never looked up. PowerShell tool: the whole word is read as well, and so is the next word as an argument; an npm, pnpm, Yarn or bun range with a `<` or a `>` is looked up with the range and without it (a `.cmd` shim makes cmd.exe read the line again and hand the manager `name@`). `name@` is the package `name` with no range. A line with an unquoted redirection stays uncertain: a name the registry does not have is a warning and never a deny; a malicious package is denied. What stays:
+
+- With the PowerShell tool the target of `name> out.txt` is looked up as a package: PowerShell hands the program `name>` and `out.txt` (measured), and `out.txt` is read by the rules of any install word. A lookup too many, a warning at most.
+- `name@` after a launcher (`npx name@`, `pnpm dlx name@`) was not measured: `name` is looked up and the command is uncertain, so a missing name is a warning.
+- `name@npm:` was measured only for Yarn 4: for npm and pnpm the word is put aside, and nothing is looked up.
+- Nothing was measured behind PowerShell with a real package manager, only how the line is split; cmd.exe and Git Bash as the shell that writes the line were not measured either; nor was a prefix that ends in a digit under bash (`name2>out.txt`, `name@1>out.txt`: read as a word, the rule of bash).
+- The pip reading of `name>=1.0` and `name>out.log` in PowerShell follows the shell's split (measured), not a run of pip.
+  - `PowerShell` on PreToolUse, input `{"command":"npm install dgprobe-zzq7731-named> out.txt"}` → `warn`
+  - `Bash` on PreToolUse, input `{"command":"npx dgprobe-zzq7731-named@"}` → `warn`
 - A `true` or `false` after a flag of a launcher (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`) is read as the manager reads it where that was measured (npm 11.20, pnpm 10.33, Yarn 4.18, bun 1.4, 2026-11-19), and looked up both ways, with the command uncertain, where it was not. What stays out:
 
 - `yarn dlx` and `bunx` were measured only in a Linux container, not on Windows (neither is installed there), and nothing was measured on macOS or in a session with a terminal: with one, npm asks before it installs a package that `npm exec --yes false <package>` would otherwise leave alone.

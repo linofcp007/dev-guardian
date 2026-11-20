@@ -2766,14 +2766,20 @@ function singleQuotedEnd(text3, at) {
   }
   return text3.length;
 }
-function powershellAsPosix(text3) {
+function powershellAsPosix(text3, options = {}) {
   const seen = hereStrings();
+  let token = "";
+  let glued = null;
   const braces = [];
   let out = "";
   let i = 0;
   while (i < text3.length) {
     const ch = text3.charAt(i);
     const boundary = atBoundary(text3, i);
+    if (boundary || UNICODE_SPACE.test(text3.charAt(i - 1))) {
+      token = "";
+      glued = null;
+    }
     if (boundary && text3.startsWith("<#", i)) {
       i = blockCommentEnd(text3, i);
       out += " ";
@@ -2829,6 +2835,7 @@ function powershellAsPosix(text3) {
         j += 1;
       }
       out += posixSingle(lit);
+      token += lit === "" ? '""' : lit;
       i = j + 1;
       continue;
     }
@@ -2867,7 +2874,11 @@ function powershellAsPosix(text3) {
     }
     if (ch === "\\") out += "\\\\";
     else if (ch === "," || UNICODE_SPACE.test(ch)) out += " ";
-    else out += ch;
+    else if (options.literalGluedRedirects === true && (ch === "<" || ch === ">")) {
+      glued ??= !/^(?:\d*|\*|&)$/.test(token);
+      out += glued ? posixSingle(ch) : ch;
+    } else out += ch;
+    token += ch;
     i += 1;
   }
   return out;
@@ -3500,7 +3511,7 @@ function withoutRedirections(words) {
       out.push(word.value);
       continue;
     }
-    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
+    if (!NOT_A_WORD_PREFIX.test(r.prefix)) out.push(r.prefix);
     if (r.inline === "") i += 1;
   }
   return out;
@@ -3846,7 +3857,7 @@ function withoutRedirectWords(words) {
   }
   return out;
 }
-var NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, GIT_VALUED, REMOVERS, CMD_SWITCHED;
+var NEW_ITEM_VALUED, NOT_A_WORD_PREFIX, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, GIT_VALUED, REMOVERS, CMD_SWITCHED;
 var init_effects = __esm({
   "src/hooks/shell/effects.ts"() {
     "use strict";
@@ -3861,6 +3872,7 @@ var init_effects = __esm({
       ["target", ["value", "target"]],
       ["credential", ["credential"]]
     ];
+    NOT_A_WORD_PREFIX = /^(?:\d*|&)$/;
     COPY_VALUED = /* @__PURE__ */ new Set(["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"]);
     PS_PATH_PARAMS = ["path", "literalpath", "destination"];
     PS_VALUE_PARAMS = ["filter", "include", "exclude", "credential", "fromsession", "tosession"];
@@ -115700,6 +115712,7 @@ function parseNpm(raw, manager, alias = false) {
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
+  if (range === "") range = void 0;
   if (range !== void 0) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);

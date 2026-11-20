@@ -251,14 +251,20 @@ function singleQuotedEnd(text, at) {
   }
   return text.length;
 }
-function powershellAsPosix(text) {
+function powershellAsPosix(text, options = {}) {
   const seen = hereStrings();
+  let token = "";
+  let glued = null;
   const braces = [];
   let out = "";
   let i = 0;
   while (i < text.length) {
     const ch = text.charAt(i);
     const boundary = atBoundary(text, i);
+    if (boundary || UNICODE_SPACE.test(text.charAt(i - 1))) {
+      token = "";
+      glued = null;
+    }
     if (boundary && text.startsWith("<#", i)) {
       i = blockCommentEnd(text, i);
       out += " ";
@@ -314,6 +320,7 @@ function powershellAsPosix(text) {
         j += 1;
       }
       out += posixSingle(lit);
+      token += lit === "" ? '""' : lit;
       i = j + 1;
       continue;
     }
@@ -352,7 +359,11 @@ function powershellAsPosix(text) {
     }
     if (ch === "\\") out += "\\\\";
     else if (ch === "," || UNICODE_SPACE.test(ch)) out += " ";
-    else out += ch;
+    else if (options.literalGluedRedirects === true && (ch === "<" || ch === ">")) {
+      glued ??= !/^(?:\d*|\*|&)$/.test(token);
+      out += glued ? posixSingle(ch) : ch;
+    } else out += ch;
+    token += ch;
     i += 1;
   }
   return out;
@@ -947,6 +958,7 @@ function redirectTargets(words) {
   }
   return out;
 }
+var NOT_A_WORD_PREFIX = /^(?:\d*|&)$/;
 function withoutRedirections(words) {
   const out = [];
   for (let i = 0; i < words.length; i += 1) {
@@ -957,7 +969,7 @@ function withoutRedirections(words) {
       out.push(word.value);
       continue;
     }
-    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
+    if (!NOT_A_WORD_PREFIX.test(r.prefix)) out.push(r.prefix);
     if (r.inline === "") i += 1;
   }
   return out;

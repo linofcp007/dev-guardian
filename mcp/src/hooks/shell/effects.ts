@@ -280,6 +280,36 @@ export function redirectTargets(words: readonly ShellWord[]): string[] {
   return out;
 }
 
+/** What may stand before a redirection operator without being a word of its own: nothing, a file descriptor (`2>&1`), or the `&` of `&>`. */
+const NOT_A_WORD_PREFIX = /^(?:\d*|&)$/;
+/** The same, for {@link wordsWithoutRedirections}: also `*`, the all-streams redirection of PowerShell (`*> all.log`). */
+const NOT_A_WORD_PREFIX_OR_STREAMS = /^(?:\d*|&|\*)$/;
+
+/**
+ * The words of `words` as the program receives them, with every redirection removed — what {@link withoutRedirections}
+ * does, as words, for the package reading (`install-vet-redirect-glued-word`). A word that carries a redirection operator
+ * is cut at the operator: when what stands before it is an ordinary word (`pkg@>=1.0.0` is `pkg@`, `ci>out.log` is `ci`)
+ * that text stays, as the shell hands it to the program; when it is nothing, a file descriptor, `&` or `*` the word goes
+ * (`2>&1`, `>f`, `&>f`, `*>f`). The operand goes too, glued to the operator or the next word. A `&` that ends the text
+ * before the operator belongs to it (`pkg&>out` is `pkg`). Measured 2026-11-20: bash hands `P@` to npm for `P@>=1.0.0`.
+ */
+export function wordsWithoutRedirections(words: readonly ShellWord[]): ShellWord[] {
+  const out: ShellWord[] = [];
+  for (let i = 0; i < words.length; i += 1) {
+    const word = words[i];
+    if (word === undefined) continue;
+    const r = parseRedirect(word);
+    if (r === null) {
+      out.push(word);
+      continue;
+    }
+    const prefix = r.prefix.endsWith('&') ? r.prefix.slice(0, -1) : r.prefix;
+    if (!NOT_A_WORD_PREFIX_OR_STREAMS.test(prefix)) out.push({ value: prefix, quoted: word.quoted });
+    if (r.inline === '') i += 1;
+  }
+  return out;
+}
+
 /**
  * The argument values with every redirection (operator and operand) removed,
  * so `tee /tmp/x < .guardian/hooks.config.json` reads as `tee /tmp/x`: a file
@@ -295,7 +325,7 @@ export function withoutRedirections(words: readonly ShellWord[]): string[] {
       out.push(word.value);
       continue;
     }
-    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
+    if (!NOT_A_WORD_PREFIX.test(r.prefix)) out.push(r.prefix);
     if (r.inline === '') i += 1;
   }
   return out;

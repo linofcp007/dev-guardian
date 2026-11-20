@@ -1772,14 +1772,20 @@ function cdOperand(args) {
 }
 
 // src/hooks/shell/effects.ts
-function withoutRedirectWords(words) {
+var NOT_A_WORD_PREFIX_OR_STREAMS = /^(?:\d*|&|\*)$/;
+function wordsWithoutRedirections(words) {
   const out = [];
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i];
     if (word === void 0) continue;
     const r = parseRedirect(word);
-    if (r === null) out.push(word);
-    else if (r.inline === "") i += 1;
+    if (r === null) {
+      out.push(word);
+      continue;
+    }
+    const prefix = r.prefix.endsWith("&") ? r.prefix.slice(0, -1) : r.prefix;
+    if (!NOT_A_WORD_PREFIX_OR_STREAMS.test(prefix)) out.push({ value: prefix, quoted: word.quoted });
+    if (r.inline === "") i += 1;
   }
   return out;
 }
@@ -2394,14 +2400,20 @@ function blockCommentEnd(text, i) {
   return end < 0 ? text.length : end + 2;
 }
 var PLAIN_BRACED_VARIABLE = /^\$\{[\w:.?\\/-]*\}$/;
-function powershellAsPosix(text) {
+function powershellAsPosix(text, options = {}) {
   const seen = hereStrings();
+  let token = "";
+  let glued = null;
   const braces = [];
   let out = "";
   let i = 0;
   while (i < text.length) {
     const ch = text.charAt(i);
     const boundary = atBoundary(text, i);
+    if (boundary || UNICODE_SPACE.test(text.charAt(i - 1))) {
+      token = "";
+      glued = null;
+    }
     if (boundary && text.startsWith("<#", i)) {
       i = blockCommentEnd(text, i);
       out += " ";
@@ -2457,6 +2469,7 @@ function powershellAsPosix(text) {
         j += 1;
       }
       out += posixSingle(lit);
+      token += lit === "" ? '""' : lit;
       i = j + 1;
       continue;
     }
@@ -2495,7 +2508,11 @@ function powershellAsPosix(text) {
     }
     if (ch === "\\") out += "\\\\";
     else if (ch === "," || UNICODE_SPACE.test(ch)) out += " ";
-    else out += ch;
+    else if (options.literalGluedRedirects === true && (ch === "<" || ch === ">")) {
+      glued ??= !/^(?:\d*|\*|&)$/.test(token);
+      out += glued ? posixSingle(ch) : ch;
+    } else out += ch;
+    token += ch;
     i += 1;
   }
   return out;
@@ -2517,6 +2534,7 @@ var POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz
 var ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
 var UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 var UNMEASURED = /* @__PURE__ */ new Set(["pipx", "composer", "dotnet"]);
+var LAUNCHER_NAME_AT = "a name ending in @ under a launcher was not measured";
 var UNMEASURED_ARCHIVE = "a name that ends like an archive file \u2014 this package manager was not measured, so whether it reads the word as a file or as a registry name is not known";
 function readsFileValue(manager, value) {
   return (manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
@@ -2617,6 +2635,7 @@ function parseNpm(raw, manager, alias = false) {
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
+  if (range === "") range = void 0;
   if (range !== void 0) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);
@@ -4104,6 +4123,7 @@ function collectLaunch(d, launch, context) {
       if ("pair" in read2 && read2.pair !== void 0) bothPairs.push(read2.pair);
       const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0) unsure.push(why);
+      if (d.ecosystem === "npm" && asWritten.endsWith("@")) unsure.push(LAUNCHER_NAME_AT);
     } else skipped.push(spec2);
   }
   const bothWhy = bothReadings(bothPairs);
@@ -4229,7 +4249,7 @@ function flagValue(words, names) {
   }
   return void 0;
 }
-var POWERSHELL_READING = "found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space) \u2014 vetted for malicious versions only";
+var POWERSHELL_READING = "found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space, a `>` or `<` glued to a word) \u2014 vetted for malicious versions only";
 function packageKey(p) {
   return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ""}`;
 }
@@ -4260,8 +4280,8 @@ function readingsOf(command, shell, forced, cdpath) {
   const text = stripComments(command);
   const out = parseReading(text, forced, cdpath);
   if (shell !== "powershell") return out;
-  const asPowerShell = powershellAsPosix(text);
-  if (asPowerShell === text) return out;
+  const asPowerShell = powershellAsPosix(text, { literalGluedRedirects: true });
+  if (asPowerShell === text) return withoutRanges(out);
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const seenManifests = new Set(out.map(manifestKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
@@ -4273,7 +4293,27 @@ function readingsOf(command, shell, forced, cdpath) {
     const { manifest: _same, ...withoutManifest } = c;
     out.push({ ...newManifest ? c : withoutManifest, packages, skipped: [] });
   }
-  return out;
+  return withoutRanges(out);
+}
+var NPM_FAMILY = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "bun"]);
+function withoutRanges(commands) {
+  const seen = new Set(commands.flatMap((c) => c.packages.map(packageKey)));
+  const extra = [];
+  for (const c of commands) {
+    if (c.ecosystem !== "npm" || !NPM_FAMILY.has(c.manager)) continue;
+    const packages = [];
+    for (const p of c.packages) {
+      if (p.range === void 0 || !/[<>]/.test(p.range)) continue;
+      const bare = { ecosystem: p.ecosystem, name: p.name, raw: p.name };
+      if (seen.has(packageKey(bare))) continue;
+      seen.add(packageKey(bare));
+      packages.push(bare);
+    }
+    if (packages.length === 0) continue;
+    const { manifest: _manifest, updateNames: _names, ...rest } = c;
+    extra.push({ ...rest, packages, skipped: [] });
+  }
+  return [...commands, ...extra];
 }
 function movesDirectory(text) {
   try {
@@ -4352,7 +4392,7 @@ function readLaunchedManager(d, context, notConfident) {
   const innerWords = words.map((w) => w.value);
   const unmeasured = unmeasuredForm(launch, spec2.name, ownFlags, dash, innerWords);
   const shape = notConfident ?? unmeasured ?? confidentWords(spec2.name === "corepack" ? ["corepack", ...innerWords] : [spec2.name, ...innerWords]);
-  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
   c.uncertain = shape === null ? keep : [.../* @__PURE__ */ new Set([shape, ...c.uncertain])];
   return c;
 }
@@ -4370,13 +4410,13 @@ function parseReading(text, forced, cdpath) {
   let dirChanged = false;
   split.statements.forEach((statement, s) => {
     statement.commands.forEach((words, w) => {
-      const d = detect(withoutRedirectWords(words));
+      const d = detect(wordsWithoutRedirections(words));
       if (d !== null) {
         const context = [];
         if (envChange) context.push("inline environment assignment in the command (it can redirect the registry)");
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         const elsewhere = runsElsewhere(words);

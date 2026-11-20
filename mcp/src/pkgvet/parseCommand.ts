@@ -26,7 +26,7 @@
  */
 
 import { commandWordIndex, resolveCommand } from '../hooks/shell/command.js';
-import { withoutRedirectWords } from '../hooks/shell/effects.js';
+import { wordsWithoutRedirections } from '../hooks/shell/effects.js';
 import { splitShell, type ShellWord } from '../hooks/shell/split.js';
 import { workdirs } from '../hooks/shell/workdir.js';
 import { powershellAsPosix } from '../hooks/powershellText.js';
@@ -164,6 +164,8 @@ const ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
 const UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 /** The managers nobody measured: a word that ends like an archive is vetted as a name, and the command is uncertain. */
 const UNMEASURED = new Set(['pipx', 'composer', 'dotnet']);
+/** Why `npx name@` and the other launchers may not deny a missing name: what a launcher does with a word that ends in `@` was not measured. */
+const LAUNCHER_NAME_AT = 'a name ending in @ under a launcher was not measured';
 const UNMEASURED_ARCHIVE =
   'a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known';
 
@@ -343,6 +345,8 @@ function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | S
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : undefined;
   if (!scoped && name.includes('/')) return skip(raw, 'GitHub shorthand (user/repo) — not looked up');
+  // `name@` with nothing after the @ is the package with no range: npm, pnpm, bun and Yarn 1 install the latest (measured 2026-11-20).
+  if (range === '') range = undefined;
   if (range !== undefined) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);
@@ -1712,6 +1716,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
       if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
       const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined) unsure.push(why);
+      if (d.ecosystem === 'npm' && asWritten.endsWith('@')) unsure.push(LAUNCHER_NAME_AT);
     } else skipped.push(spec);
   }
   const bothWhy = bothReadings(bothPairs);
@@ -1867,7 +1872,7 @@ export type CommandShell = 'bash' | 'powershell';
 
 /** Why a package found only by reading the command as PowerShell does is never denied as missing. */
 const POWERSHELL_READING =
-  'found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space) — vetted for malicious versions only';
+  'found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space, a `>` or `<` glued to a word) — vetted for malicious versions only';
 
 function packageKey(p: PackageSpec): string {
   return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ''}`;
@@ -1932,8 +1937,9 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
   const text = stripComments(command);
   const out = parseReading(text, forced, cdpath);
   if (shell !== 'powershell') return out;
-  const asPowerShell = powershellAsPosix(text);
-  if (asPowerShell === text) return out;
+  // `>` and `<` after text are part of the word for PowerShell (measured, 7.6 and 5.1): the word reaches the program whole.
+  const asPowerShell = powershellAsPosix(text, { literalGluedRedirects: true });
+  if (asPowerShell === text) return withoutRanges(out);
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const seenManifests = new Set(out.map(manifestKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
@@ -1946,7 +1952,35 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
     const { manifest: _same, ...withoutManifest } = c;
     out.push({ ...(newManifest ? c : withoutManifest), packages, skipped: [] });
   }
-  return out;
+  return withoutRanges(out);
+}
+
+/** The managers of the npm family: a range with `<` or `>` written for them reaches a `.cmd` shim, which hands the cmd.exe-read word on (measured: `P@>=1.0.0` becomes `P@`). */
+const NPM_FAMILY = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+
+/**
+ * For the PowerShell tool: each package of the npm family read with a range that has `<` or `>` is looked up a second time with none,
+ * because behind a `.cmd` the cmd.exe reads the line again and hands the manager `name@`, which installs the latest. The second ones come
+ * after every package of the line, as commands of their own that keep the certainty of the command they came from.
+ */
+function withoutRanges(commands: InstallCommand[]): InstallCommand[] {
+  const seen = new Set(commands.flatMap((c) => c.packages.map(packageKey)));
+  const extra: InstallCommand[] = [];
+  for (const c of commands) {
+    if (c.ecosystem !== 'npm' || !NPM_FAMILY.has(c.manager)) continue;
+    const packages: PackageSpec[] = [];
+    for (const p of c.packages) {
+      if (p.range === undefined || !/[<>]/.test(p.range)) continue;
+      const bare: PackageSpec = { ecosystem: p.ecosystem, name: p.name, raw: p.name };
+      if (seen.has(packageKey(bare))) continue;
+      seen.add(packageKey(bare));
+      packages.push(bare);
+    }
+    if (packages.length === 0) continue;
+    const { manifest: _manifest, updateNames: _names, ...rest } = c;
+    extra.push({ ...rest, packages, skipped: [] });
+  }
+  return [...commands, ...extra];
 }
 
 /** Whether any statement of `text` changes directory ({@link changesDirectory}); an unreadable text may. */
@@ -2082,7 +2116,7 @@ function readLaunchedManager(d: Detected, context: readonly string[], notConfide
   const innerWords = words.map((w) => w.value);
   const unmeasured = unmeasuredForm(launch, spec.name, ownFlags, dash, innerWords);
   const shape = notConfident ?? unmeasured ?? confidentWords(spec.name === 'corepack' ? ['corepack', ...innerWords] : [spec.name, ...innerWords]);
-  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
   c.uncertain = shape === null ? keep : [...new Set([shape, ...c.uncertain])];
   return c;
 }
@@ -2112,7 +2146,7 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
     statement.commands.forEach((words, w) => {
       // A redirection is no package: `pip install x 2>&1` named a package `2`
       // (PEP 508 reads `2>&1` as `2` at a version `>&1`), `2> err.log` two.
-      const d = detect(withoutRedirectWords(words));
+      const d = detect(wordsWithoutRedirections(words));
       if (d !== null) {
         const context: string[] = [];
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
@@ -2120,7 +2154,7 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         const c = collect(d, context);
         // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does,
         // and so does a `key@npm:rest` that Yarn and bun read as either of two packages.
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         const elsewhere = runsElsewhere(words);

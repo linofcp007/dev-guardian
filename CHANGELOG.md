@@ -24,6 +24,26 @@ version bump.
 
 ### Security
 
+- **The install hook now vets a package written with an unquoted `>` or `<` glued to it, and `name@`.** `npm install <package>@>=1.0.0`,
+  `pnpm add`, `bun add` and `yarn add` with the same word, `<package>@<2`, `<package>> out.txt` and `pip install <package>>=1.0` were never
+  looked up: the hook dropped every word that has a redirection operator, a rule meant for `2>&1`. But bash hands the manager
+  the text before the operator (`<package>@`) and writes the rest to a file, and npm 11.19, pnpm 11.24, bun 1.4 and Yarn 1.22
+  then installed the latest version of `<package>` (measured 2026-11-20 in a container with a stand-in registry; the hook
+  asked about the dependencies of the manifest and not about `<package>`). PowerShell 7.6 and 5.1 treat a `>` as a redirection
+  only at the start of a word or after digits or `*`, and `<` never: they hand the program the whole word, and behind a `.cmd`
+  shim cmd.exe reads the line again and hands the manager `<package>@` (measured with a stand-in `.cmd`; no real manager ran on
+  Windows). `npm install <package>@`, `npx <package>@` and the same for pnpm, bun and Yarn were put aside as empty. Now the text
+  before the operator is the word, whatever it is (`npm ci>out.log` is `npm ci`, `pip install -r reqs.txt>out.log` reads the
+  file), the target of a redirection is never looked up, a descriptor (`2>&1`, `2>err.log`), `&>`, `*>` and an operator that starts
+  a word stay out, and `name@` is the package `name` with no range. With the PowerShell tool the hook reads both ways — the
+  whole word and the part before the operator — and looks an npm, pnpm, Yarn or bun range with `<` or `>` up with the range and
+  without it, quoted or not. A line with an unquoted redirection is still uncertain: a name the registry does not have is a
+  warning, never a deny, and a malicious package is denied; `npm install '<package>@>=1.0.0'` with the PowerShell tool is
+  denied for a missing name as before, and `npm install <package>@` is denied like `npm install <package>`. Upgrading: lines that
+  said nothing before now say what the registry says about the package — a warning for a name it does not have, a refusal for a
+  malicious one — `npm ci>out.log` and `pip install -r reqs.txt>out.log` now read the manifest, and with the PowerShell tool the
+  target of `<package>> out.txt` is looked up as a package. Under a launcher, `npx <package>@` only warns (not measured). See
+  `install-redirect-glued-word` in the known limits.
 - **The install hook now vets what a launcher makes a package manager install.** `npx pnpm add <package>`, `npx yarn add
   <package>`, `npx -y pnpm@11 add <package>`, `npm exec -- pnpm add <package>`, `pnpm dlx yarn add <package>`, `yarn dlx pnpm add <package>`, `bunx pnpm add
   <package>`, `npx corepack yarn add <package>` and `npm exec corepack -- yarn add <package>` vetted only the manager they
