@@ -1165,7 +1165,16 @@ interface Detected {
    * and hands every later word to the program; `install` installs every
    * positional word, as an install command does.
    */
-  launch?: { style: 'run' | 'install'; flags: string; localFirst?: boolean; initializer?: true };
+  launch?: {
+    style: 'run' | 'install';
+    flags: string;
+    localFirst?: boolean;
+    initializer?: true;
+    /** How the launcher is written (`npx`, `npm exec`, `npm x`, `pnpm dlx`, `pnpx`, `yarn dlx`, `bunx`, `bun x`): `flags` joins spellings. */
+    spelling?: string;
+    /** The line began `corepack <manager>[@version]` before the launcher. */
+    viaCorepack?: true;
+  };
   /**
    * An install of the project's `package.json`: `always` for a subcommand
    * that takes no package (`npm ci`, `pnpm install`, `yarn install`, a bare
@@ -1327,12 +1336,14 @@ function detect(input: readonly ShellWord[]): Detected | null {
   if (/^pip[0-9.]*$/.test(head)) head = 'pip';
   if (head === 'composer.phar') head = 'composer';
   if (head === 'yarnpkg') head = 'yarn';
+  let viaCorepack = false;
   if (head === 'corepack') {
     // `corepack <manager>[@version] <rest>` runs the manager on <rest>; `use <manager>` and `up` install the project's manifest.
     const first = words[start + 1]?.value;
     const via = corepackManager(first);
     if (via !== undefined) {
       head = via;
+      viaCorepack = true;
       i = start + 2;
     } else if (first === 'up' || (first === 'use' && corepackManager(words[start + 2]?.value) !== undefined)) {
       return { manager: 'npm', ecosystem: 'npm', args: [], pre: [], uncertain: [], manifest: 'always' };
@@ -1341,9 +1352,10 @@ function detect(input: readonly ShellWord[]): Detected | null {
 
   // The launchers named by themselves (review P1).
   const rest = words.slice(i);
-  if (head === 'npx') return launcher('npx', 'npm', rest, [], { style: 'run', flags: 'npx', localFirst: true });
-  if (head === 'pnpx') return launcher('pnpm', 'npm', rest, [], { style: 'run', flags: 'pnpm-dlx' });
-  if (head === 'bunx') return launcher('bun', 'npm', rest, [], { style: 'run', flags: 'bunx', localFirst: true });
+  const corepackMark = viaCorepack ? ({ viaCorepack: true } as const) : {};
+  if (head === 'npx') return launcher('npx', 'npm', rest, [], { style: 'run', flags: 'npx', localFirst: true, spelling: 'npx', ...corepackMark });
+  if (head === 'pnpx') return launcher('pnpm', 'npm', rest, [], { style: 'run', flags: 'pnpm-dlx', spelling: 'pnpx', ...corepackMark });
+  if (head === 'bunx') return launcher('bun', 'npm', rest, [], { style: 'run', flags: 'bunx', localFirst: true, spelling: 'bunx', ...corepackMark });
   if (head === 'uvx') return launcher('uv', 'pypi', rest, [], { style: 'run', flags: 'uvx' });
   if (head === 'pipx') {
     const sub = nextPositional(words, i, LAUNCH_FLAGS['pipx-run'] ?? FLAGS['pip'] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
@@ -1394,11 +1406,11 @@ function detect(input: readonly ShellWord[]): Detected | null {
   const after = words.slice(sub + 1);
   const before = words.slice(i, sub);
   if (head === 'npm' && (subName === 'exec' || subName === 'x')) {
-    return launcher('npm', 'npm', after, before, { style: 'run', flags: 'npm-exec', localFirst: true });
+    return launcher('npm', 'npm', after, before, { style: 'run', flags: 'npm-exec', localFirst: true, spelling: `npm ${subName}`, ...corepackMark });
   }
-  if (head === 'pnpm' && subName === 'dlx') return launcher('pnpm', 'npm', after, before, { style: 'run', flags: 'pnpm-dlx' });
-  if (head === 'yarn' && subName === 'dlx') return launcher('yarn', 'npm', after, before, { style: 'run', flags: 'yarn-dlx' });
-  if (head === 'bun' && subName === 'x') return launcher('bun', 'npm', after, before, { style: 'run', flags: 'bunx', localFirst: true });
+  if (head === 'pnpm' && subName === 'dlx') return launcher('pnpm', 'npm', after, before, { style: 'run', flags: 'pnpm-dlx', spelling: 'pnpm dlx', ...corepackMark });
+  if (head === 'yarn' && subName === 'dlx') return launcher('yarn', 'npm', after, before, { style: 'run', flags: 'yarn-dlx', spelling: 'yarn dlx', ...corepackMark });
+  if (head === 'bun' && subName === 'x') return launcher('bun', 'npm', after, before, { style: 'run', flags: 'bunx', localFirst: true, spelling: 'bun x', ...corepackMark });
   if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === 'uv' && subName === 'tool') {
     const toolTable = LAUNCH_FLAGS['uvx'] ?? table;
@@ -1947,6 +1959,135 @@ function movesDirectory(text: string): boolean {
 }
 
 /**
+ * The launcher lines whose inner command may DENY a name the registry does not have. Measured 2026-11-20 in a Linux container
+ * (Node 24.21.0, npm 11.19.0, pnpm 11.24.0, Yarn 1.22.22 and 4.18.1, bun 1.4.4, corepack 0.36.0) against a substitute registry
+ * that logged every request: each pair below, run with `add <P>` and no flag of its own, asked the registry for `P` and for the
+ * manifest's dependency and installed both. `npx` also with `-y`; `npm exec` only with a `--` before the launched word, or after
+ * `corepack`; behind `corepack` the manager that ran was Yarn 1.22.22. `pnpm dlx` and `yarn dlx` were started as `corepack pnpm@11.24.0
+ * dlx …` and `corepack yarn@4.18.1 dlx …`: a `corepack <manager>[@version]` before them is read as the same line. Nothing else was
+ * measured: another pair, spelling, launcher flag, `--` or inner verb leaves the inner command uncertain (it only warns).
+ */
+interface MeasuredLaunch {
+  spelling: string;
+  /** The launched word, without its version. */
+  launched: string;
+  /** The launcher's own flags that were part of the measurement. */
+  flags: readonly string[];
+  /** Where the `--` stood: before the launched word, after it, or nowhere. */
+  dash: 'before' | 'after' | 'none';
+  /** The manager `corepack` ran (written without a version) when the launched word is `corepack`. */
+  behindCorepack?: string;
+  /** Whether `corepack <manager>[@version]` may stand before the launcher. */
+  prefix?: true;
+}
+const MEASURED_LAUNCHES: readonly MeasuredLaunch[] = [
+  { spelling: 'npx', launched: 'pnpm', flags: ['-y'], dash: 'none' },
+  { spelling: 'npx', launched: 'yarn', flags: ['-y'], dash: 'none' },
+  { spelling: 'npx', launched: 'corepack', flags: ['-y'], dash: 'none', behindCorepack: 'yarn' },
+  { spelling: 'npm exec', launched: 'pnpm', flags: [], dash: 'before' },
+  { spelling: 'npm exec', launched: 'corepack', flags: [], dash: 'after', behindCorepack: 'yarn' },
+  { spelling: 'pnpm dlx', launched: 'yarn', flags: [], dash: 'none', prefix: true },
+  { spelling: 'yarn dlx', launched: 'pnpm', flags: [], dash: 'none', prefix: true },
+  { spelling: 'bunx', launched: 'pnpm', flags: [], dash: 'none' },
+];
+/** The verb of the measured lines. */
+const MEASURED_VERB = 'add';
+/** The launchers of the npm family ({@link LAUNCH_FLAGS} names): the only ones whose launched package may be a package manager. */
+const NPM_LAUNCH_TABLES: ReadonlySet<string> = new Set(['npx', 'npm-exec', 'pnpm-dlx', 'yarn-dlx', 'bunx']);
+/** The package managers (and corepack) the hook reads behind a launcher, by the name of the launched word without its version. */
+const LAUNCHED_MANAGERS: ReadonlySet<string> = new Set(['npm', 'pnpm', 'yarn', 'yarnpkg', 'bun', 'corepack']);
+/** The flags that move a launcher, or its manager, away from where the command runs, or into a workspace (the `dir` and `workspace` sets). */
+const MOVING_FLAGS = ['--prefix', '-C', '--dir', '--cwd', '-w', '--workspace', '--workspaces', '--filter', '-F'];
+
+function unmeasuredLaunch(why: string): string {
+  return `a package manager run by a launcher — this form was not measured (${why})`;
+}
+
+/** What the measurement does not cover about this launcher line, or `undefined` when it is one of the measured forms. */
+function unmeasuredForm(
+  launch: NonNullable<Detected['launch']>,
+  launched: string,
+  ownFlags: readonly string[],
+  dash: { before: boolean; after: boolean },
+  inner: readonly string[],
+): string | undefined {
+  const spelling = launch.spelling ?? '';
+  const ofSpelling = MEASURED_LAUNCHES.filter((m) => m.spelling === spelling);
+  if (ofSpelling.length === 0) return unmeasuredLaunch(`the launcher's spelling: ${spelling}`);
+  const m = ofSpelling.find((each) => each.launched === launched);
+  if (m === undefined || (launch.viaCorepack === true && m.prefix !== true)) return unmeasuredLaunch(`the pair: ${spelling} ${launched}`);
+  const stray = ownFlags.find((f) => !m.flags.includes(f));
+  if (stray !== undefined) return unmeasuredLaunch(`a flag of the launcher: ${stray}`);
+  const placed = dash.before ? (dash.after ? 'both' : 'before') : dash.after ? 'after' : 'none';
+  if (placed !== m.dash) return unmeasuredLaunch(`a flag of the launcher: the \`--\` is ${placed === 'none' ? 'missing' : 'not where it was measured'}`);
+  if (m.behindCorepack !== undefined && inner[0] !== m.behindCorepack) return unmeasuredLaunch(`the pair: ${spelling} ${launched} ${inner[0] ?? ''}`);
+  const verb = inner[m.behindCorepack === undefined ? 0 : 1];
+  if (verb !== MEASURED_VERB) return unmeasuredLaunch(`the inner verb: ${verb ?? 'none'}`);
+  return undefined;
+}
+
+/**
+ * The command a launcher of the npm family runs, when what it launches is a package manager the hook reads: the words after the
+ * launched word, read as that manager reads them — `npx pnpm add p` is also `pnpm add p`, and `npx corepack yarn add p` is also
+ * `corepack yarn add p` (measured 2026-11-20: the manager fetches `p` and installs the project's manifest). One level: this reads
+ * the inner command once and never looks inside it for another launcher. `undefined` when the launcher launches anything else, runs
+ * shell text (`npx -c`), or the words after the manager are no command the hook reads (`npx pnpm --version`).
+ *
+ * It is a command of its own: its manager, flags, manifest and registry are the manager's, it has no `localFirst`, and it takes the
+ * directory flags of the launcher (`--prefix`, `--dir`, `-w`, …) as its own `prefixed`. It may deny a missing name only when the
+ * whole line is plain (`notConfident`, the outer judgement) and is one of the forms measured ({@link MEASURED_LAUNCHES}) with a plain
+ * inner command ({@link confidentWords}); otherwise it carries the reason.
+ */
+function readLaunchedManager(d: Detected, context: readonly string[], notConfident: string | null): InstallCommand | undefined {
+  const launch = d.launch;
+  if (launch === undefined || launch.style !== 'run' || launch.initializer === true || d.ecosystem !== 'npm' || !NPM_LAUNCH_TABLES.has(launch.flags)) {
+    return undefined;
+  }
+  const table = LAUNCH_FLAGS[launch.flags];
+  if (table === undefined) return undefined;
+  const found = scanPositional(d.args, 0, table);
+  // The word after a flag the table does not know may be that flag's value: it is only a candidate, nothing is read behind it.
+  if (found.at < 0 || found.candidate) return undefined;
+  const launchedWord = d.args[found.at];
+  if (launchedWord === undefined) return undefined;
+  const before = [...d.pre, ...d.args.slice(0, found.at)];
+  // A shell-text flag (`-c`, `--call`, `--shell-mode`): the word is a command line, not a package.
+  if (before.some((w) => table.shellFlags?.has(w.value) === true)) return undefined;
+  const spec = parseNpm(launchedWord.value, d.manager);
+  if (!('name' in spec) || !LAUNCHED_MANAGERS.has(spec.name)) return undefined;
+  const dash = { before: before.some((w) => w.value === '--'), after: d.args[found.at + 1]?.value === '--' };
+  const words = d.args.slice(found.at + (dash.after ? 2 : 1));
+  const head: ShellWord = { ...launchedWord, value: spec.name };
+  const innerDetected = detect([head, ...words]);
+  if (innerDetected === null) return undefined;
+
+  const c = collect(innerDetected, context);
+  // The directory flags of the launcher make the manifest it installs not the one where the command runs.
+  const moving = new Set([...MOVING_FLAGS, ...(table.dir ?? []), ...(table.workspace ?? []), ...(FLAGS[d.manager]?.dir ?? []), ...(FLAGS[d.manager]?.workspace ?? [])]);
+  const named = (w: ShellWord): boolean => {
+    const eq = w.value.indexOf('=');
+    return moving.has(eq > 0 ? w.value.slice(0, eq) : w.value);
+  };
+  if (before.some(named)) c.prefixed = true;
+  // `npm exec` reads the flags after the manager itself unless a `--` stands before them (npm's documentation; not run): `-g` there
+  // may be npm's, so the inner command is never global for certain and its manifest is read.
+  if (launch.flags === 'npm-exec' && !dash.before && !dash.after && c.global === true) {
+    delete c.global;
+    if (innerDetected.manifest !== undefined) {
+      c.manifest = { kind: 'package-json' };
+      if (innerDetected.update === true) c.update = true;
+    }
+  }
+  const ownFlags = before.filter((w) => w.value !== '--').map((w) => w.value);
+  const innerWords = words.map((w) => w.value);
+  const unmeasured = unmeasuredForm(launch, spec.name, ownFlags, dash, innerWords);
+  const shape = notConfident ?? unmeasured ?? confidentWords(spec.name === 'corepack' ? ['corepack', ...innerWords] : [spec.name, ...innerWords]);
+  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+  c.uncertain = shape === null ? keep : [...new Set([shape, ...c.uncertain])];
+  return c;
+}
+
+/**
  * The install commands of one reading of the command. `forced`, when given,
  * is the reason no package of this reading may be denied as missing;
  * otherwise the controller ruling's confident-shape test decides.
@@ -1982,9 +2123,19 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
-        if (runsElsewhere(words)) c.workdir = null;
-        else if (sure === null || sure.length > 0) c.workdir = sure;
+        const elsewhere = runsElsewhere(words);
+        const place = (command: InstallCommand): void => {
+          if (elsewhere) command.workdir = null;
+          else if (sure === null || sure.length > 0) command.workdir = sure;
+        };
+        place(c);
         out.push(c);
+        // A launcher that runs a package manager: the words after it are a command of that manager, read once and joined to the line.
+        const inner = readLaunchedManager(d, context, notConfident);
+        if (inner !== undefined) {
+          place(inner);
+          out.push(inner);
+        }
       }
       if (changesDirectory(words)) dirChanged = true;
     });
@@ -2210,7 +2361,15 @@ function confidentShape(text: string): string | null {
   }
   if (quote !== null) return notSingle('unterminated quote');
   if (has) words.push(cur);
+  return confidentWords(words);
+}
 
+/**
+ * The word half of {@link confidentShape}: whether the words — the command's own, already split and unquoted — are one plain
+ * install statement of a tool with only allowlisted flags. The command inside a launcher (`npx pnpm add p`) is judged by the
+ * words after the launcher ({@link readLaunchedManager}).
+ */
+function confidentWords(words: readonly string[]): string | null {
   // `corepack yarn@4 add p` is as plain as `yarn add p`; `yarnpkg` is `yarn`.
   const viaCorepack = words[0] === 'corepack' ? corepackManager(words[1]) : undefined;
   const [named, ...rest] = viaCorepack === undefined ? words : [viaCorepack, ...words.slice(2)];

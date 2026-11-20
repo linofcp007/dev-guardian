@@ -3813,20 +3813,23 @@ function detect(input) {
   if (/^pip[0-9.]*$/.test(head)) head = "pip";
   if (head === "composer.phar") head = "composer";
   if (head === "yarnpkg") head = "yarn";
+  let viaCorepack = false;
   if (head === "corepack") {
     const first2 = words[start + 1]?.value;
     const via = corepackManager(first2);
     if (via !== void 0) {
       head = via;
+      viaCorepack = true;
       i = start + 2;
     } else if (first2 === "up" || first2 === "use" && corepackManager(words[start + 2]?.value) !== void 0) {
       return { manager: "npm", ecosystem: "npm", args: [], pre: [], uncertain: [], manifest: "always" };
     } else return null;
   }
   const rest = words.slice(i);
-  if (head === "npx") return launcher("npx", "npm", rest, [], { style: "run", flags: "npx", localFirst: true });
-  if (head === "pnpx") return launcher("pnpm", "npm", rest, [], { style: "run", flags: "pnpm-dlx" });
-  if (head === "bunx") return launcher("bun", "npm", rest, [], { style: "run", flags: "bunx", localFirst: true });
+  const corepackMark = viaCorepack ? { viaCorepack: true } : {};
+  if (head === "npx") return launcher("npx", "npm", rest, [], { style: "run", flags: "npx", localFirst: true, spelling: "npx", ...corepackMark });
+  if (head === "pnpx") return launcher("pnpm", "npm", rest, [], { style: "run", flags: "pnpm-dlx", spelling: "pnpx", ...corepackMark });
+  if (head === "bunx") return launcher("bun", "npm", rest, [], { style: "run", flags: "bunx", localFirst: true, spelling: "bunx", ...corepackMark });
   if (head === "uvx") return launcher("uv", "pypi", rest, [], { style: "run", flags: "uvx" });
   if (head === "pipx") {
     const sub2 = nextPositional(words, i, LAUNCH_FLAGS["pipx-run"] ?? FLAGS["pip"] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
@@ -3865,11 +3868,11 @@ function detect(input) {
   const after = words.slice(sub + 1);
   const before = words.slice(i, sub);
   if (head === "npm" && (subName === "exec" || subName === "x")) {
-    return launcher("npm", "npm", after, before, { style: "run", flags: "npm-exec", localFirst: true });
+    return launcher("npm", "npm", after, before, { style: "run", flags: "npm-exec", localFirst: true, spelling: `npm ${subName}`, ...corepackMark });
   }
-  if (head === "pnpm" && subName === "dlx") return launcher("pnpm", "npm", after, before, { style: "run", flags: "pnpm-dlx" });
-  if (head === "yarn" && subName === "dlx") return launcher("yarn", "npm", after, before, { style: "run", flags: "yarn-dlx" });
-  if (head === "bun" && subName === "x") return launcher("bun", "npm", after, before, { style: "run", flags: "bunx", localFirst: true });
+  if (head === "pnpm" && subName === "dlx") return launcher("pnpm", "npm", after, before, { style: "run", flags: "pnpm-dlx", spelling: "pnpm dlx", ...corepackMark });
+  if (head === "yarn" && subName === "dlx") return launcher("yarn", "npm", after, before, { style: "run", flags: "yarn-dlx", spelling: "yarn dlx", ...corepackMark });
+  if (head === "bun" && subName === "x") return launcher("bun", "npm", after, before, { style: "run", flags: "bunx", localFirst: true, spelling: "bun x", ...corepackMark });
   if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === "uv" && subName === "tool") {
     const toolTable = LAUNCH_FLAGS["uvx"] ?? table;
@@ -4279,6 +4282,80 @@ function movesDirectory(text) {
     return true;
   }
 }
+var MEASURED_LAUNCHES = [
+  { spelling: "npx", launched: "pnpm", flags: ["-y"], dash: "none" },
+  { spelling: "npx", launched: "yarn", flags: ["-y"], dash: "none" },
+  { spelling: "npx", launched: "corepack", flags: ["-y"], dash: "none", behindCorepack: "yarn" },
+  { spelling: "npm exec", launched: "pnpm", flags: [], dash: "before" },
+  { spelling: "npm exec", launched: "corepack", flags: [], dash: "after", behindCorepack: "yarn" },
+  { spelling: "pnpm dlx", launched: "yarn", flags: [], dash: "none", prefix: true },
+  { spelling: "yarn dlx", launched: "pnpm", flags: [], dash: "none", prefix: true },
+  { spelling: "bunx", launched: "pnpm", flags: [], dash: "none" }
+];
+var MEASURED_VERB = "add";
+var NPM_LAUNCH_TABLES = /* @__PURE__ */ new Set(["npx", "npm-exec", "pnpm-dlx", "yarn-dlx", "bunx"]);
+var LAUNCHED_MANAGERS = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "yarnpkg", "bun", "corepack"]);
+var MOVING_FLAGS = ["--prefix", "-C", "--dir", "--cwd", "-w", "--workspace", "--workspaces", "--filter", "-F"];
+function unmeasuredLaunch(why) {
+  return `a package manager run by a launcher \u2014 this form was not measured (${why})`;
+}
+function unmeasuredForm(launch, launched, ownFlags, dash, inner) {
+  const spelling = launch.spelling ?? "";
+  const ofSpelling = MEASURED_LAUNCHES.filter((m2) => m2.spelling === spelling);
+  if (ofSpelling.length === 0) return unmeasuredLaunch(`the launcher's spelling: ${spelling}`);
+  const m = ofSpelling.find((each) => each.launched === launched);
+  if (m === void 0 || launch.viaCorepack === true && m.prefix !== true) return unmeasuredLaunch(`the pair: ${spelling} ${launched}`);
+  const stray = ownFlags.find((f) => !m.flags.includes(f));
+  if (stray !== void 0) return unmeasuredLaunch(`a flag of the launcher: ${stray}`);
+  const placed = dash.before ? dash.after ? "both" : "before" : dash.after ? "after" : "none";
+  if (placed !== m.dash) return unmeasuredLaunch(`a flag of the launcher: the \`--\` is ${placed === "none" ? "missing" : "not where it was measured"}`);
+  if (m.behindCorepack !== void 0 && inner[0] !== m.behindCorepack) return unmeasuredLaunch(`the pair: ${spelling} ${launched} ${inner[0] ?? ""}`);
+  const verb = inner[m.behindCorepack === void 0 ? 0 : 1];
+  if (verb !== MEASURED_VERB) return unmeasuredLaunch(`the inner verb: ${verb ?? "none"}`);
+  return void 0;
+}
+function readLaunchedManager(d, context, notConfident) {
+  const launch = d.launch;
+  if (launch === void 0 || launch.style !== "run" || launch.initializer === true || d.ecosystem !== "npm" || !NPM_LAUNCH_TABLES.has(launch.flags)) {
+    return void 0;
+  }
+  const table = LAUNCH_FLAGS[launch.flags];
+  if (table === void 0) return void 0;
+  const found = scanPositional(d.args, 0, table);
+  if (found.at < 0 || found.candidate) return void 0;
+  const launchedWord = d.args[found.at];
+  if (launchedWord === void 0) return void 0;
+  const before = [...d.pre, ...d.args.slice(0, found.at)];
+  if (before.some((w) => table.shellFlags?.has(w.value) === true)) return void 0;
+  const spec2 = parseNpm(launchedWord.value, d.manager);
+  if (!("name" in spec2) || !LAUNCHED_MANAGERS.has(spec2.name)) return void 0;
+  const dash = { before: before.some((w) => w.value === "--"), after: d.args[found.at + 1]?.value === "--" };
+  const words = d.args.slice(found.at + (dash.after ? 2 : 1));
+  const head = { ...launchedWord, value: spec2.name };
+  const innerDetected = detect([head, ...words]);
+  if (innerDetected === null) return void 0;
+  const c = collect(innerDetected, context);
+  const moving = /* @__PURE__ */ new Set([...MOVING_FLAGS, ...table.dir ?? [], ...table.workspace ?? [], ...FLAGS[d.manager]?.dir ?? [], ...FLAGS[d.manager]?.workspace ?? []]);
+  const named = (w) => {
+    const eq2 = w.value.indexOf("=");
+    return moving.has(eq2 > 0 ? w.value.slice(0, eq2) : w.value);
+  };
+  if (before.some(named)) c.prefixed = true;
+  if (launch.flags === "npm-exec" && !dash.before && !dash.after && c.global === true) {
+    delete c.global;
+    if (innerDetected.manifest !== void 0) {
+      c.manifest = { kind: "package-json" };
+      if (innerDetected.update === true) c.update = true;
+    }
+  }
+  const ownFlags = before.filter((w) => w.value !== "--").map((w) => w.value);
+  const innerWords = words.map((w) => w.value);
+  const unmeasured = unmeasuredForm(launch, spec2.name, ownFlags, dash, innerWords);
+  const shape = notConfident ?? unmeasured ?? confidentWords(spec2.name === "corepack" ? ["corepack", ...innerWords] : [spec2.name, ...innerWords]);
+  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+  c.uncertain = shape === null ? keep : [.../* @__PURE__ */ new Set([shape, ...c.uncertain])];
+  return c;
+}
 function parseReading(text, forced, cdpath) {
   const out = [];
   let split;
@@ -4302,9 +4379,18 @@ function parseReading(text, forced, cdpath) {
         const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
-        if (runsElsewhere(words)) c.workdir = null;
-        else if (sure === null || sure.length > 0) c.workdir = sure;
+        const elsewhere = runsElsewhere(words);
+        const place = (command) => {
+          if (elsewhere) command.workdir = null;
+          else if (sure === null || sure.length > 0) command.workdir = sure;
+        };
+        place(c);
         out.push(c);
+        const inner = readLaunchedManager(d, context, notConfident);
+        if (inner !== void 0) {
+          place(inner);
+          out.push(inner);
+        }
       }
       if (changesDirectory(words)) dirChanged = true;
     });
@@ -4564,6 +4650,9 @@ function confidentShape(text) {
   }
   if (quote !== null) return notSingle("unterminated quote");
   if (has2) words.push(cur);
+  return confidentWords(words);
+}
+function confidentWords(words) {
   const viaCorepack = words[0] === "corepack" ? corepackManager(words[1]) : void 0;
   const [named, ...rest] = viaCorepack === void 0 ? words : [viaCorepack, ...words.slice(2)];
   const tool = named === "yarnpkg" ? "yarn" : named;

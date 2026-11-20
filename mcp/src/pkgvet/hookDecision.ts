@@ -29,7 +29,8 @@
  * **A manifest install** — `npm install`, `npm ci`, `pnpm install`, `yarn`,
  * `bun install`, `pip install -r`, and an install that names a package inside
  * a project (`npm install <pkg>`, `pnpm add`, `yarn add`, `bun add`: the
- * manager installs the manifest beside the names; not `-g`, not a launcher) —
+ * manager installs the manifest beside the names; not `-g`, not a launcher of another package — a launcher that runs a
+ * package manager, `npx pnpm add <pkg>`, reads it as that manager does, as a command of its own in the list) —
  * reads a manifest, the nearest `package.json` from where the command runs up
  * to the project or repository root. Its direct dependencies (`manifest.ts`)
  * join the same lookups, under the same cap and budget, and answer by a rule

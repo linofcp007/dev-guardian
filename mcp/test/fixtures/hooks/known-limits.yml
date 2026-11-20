@@ -794,8 +794,6 @@
   area: install-vetting
   doc: |-
     Tool runners in front of a package manager, other than `corepack` and the shell's own (`sudo`, `env`, `time`, …), are not followed: `volta run`, `fnm exec`, `mise exec --`, `asdf exec`, `nvm exec`, `dotenv --`, `cross-env VAR=x`, `doppler run --` and `op run --`. An install behind one of them is not vetted. Their syntax is taken from their documentation: none of them was run here.
-
-    A launcher that runs corepack or a package manager — `npx corepack yarn add …`, `npm exec corepack -- yarn add …`, `pnpm dlx corepack …`, `npx pnpm add …`, `npx yarn add …` — has the package it launches (`corepack`, `pnpm`, `yarn`) vetted, and the rest of the line is taken as that program's arguments: the package the manager then installs is not vetted. Offline the hook warns that the launched package was not verified, and nothing about the package after it.
   examples:
     - detector: hook
       event: PreToolUse
@@ -833,29 +831,49 @@
       input:
         command: cross-env VAR=x npm install left-pad
       expect: { decision: none }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: npx corepack yarn add left-pad
-      expect: { decision: warn }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: npm exec corepack -- yarn add left-pad
-      expect: { decision: warn }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: pnpm dlx corepack yarn add left-pad
-      expect: { decision: warn }
+
+- id: install-launcher-runs-manager
+  area: install-vetting
+  doc: |-
+    A launcher of the npm family that runs a package manager — `npx pnpm add <p>`, `npm exec -- pnpm add <p>`, `pnpm dlx yarn add <p>`, `yarn dlx pnpm add <p>`, `bunx pnpm add <p>`, `npx corepack yarn add <p>` — has the words after the manager read as a command of that manager, and `<p>` and the project's manifest are vetted (measured 2026-11-20 with a stand-in registry: npm 11.19, pnpm 11.24, Yarn 1.22 and 4.18, bun 1.4, corepack 0.36). A name the registry does not have is denied only in the nine lines measured; everywhere else it is a warning, because the form was not measured. What stays:
+
+    - Forms that were not measured only warn for a missing name (a malicious package is denied in all of them): another pair (`bunx yarn add <p>`, `npx npm install <p>`, `npm exec yarn …`), another spelling of the launcher (`npm x`, `bun x`, `pnpx`), a flag of the launcher (`--yes`, `--no-install`, `-p`), a `--` in another place (`npm exec pnpm -- add <p>`, `npx pnpm -- add <p>`), another inner verb (`npx pnpm install left-pad`), another manager or a version behind `corepack` (`npx corepack pnpm add <p>`, `npx corepack yarn@4 add <p>`), and an inner flag outside the manager's confident list.
+    - One level only: behind `npx npx pnpm add <p>` only the first `npx` is vetted (neither `pnpm` nor `<p>`), and behind `npx pnpm dlx yarn add <p>` `pnpm` and `yarn` are vetted and `<p>` is not.
+    - `@pnpm/exe` and `@yarnpkg/cli-dist` (`npx @pnpm/exe add <p>`) are packages that run a manager too, and are not read as managers; `pnpm exec <manager> …` and `yarn exec` run what the project already has installed and are not read.
+    - The Python launchers in front of a manager (`uvx pip install <p>`, `pipx run pip install <p>`) are not read: only the launched package is vetted. `.yarnrc.yml` and `bunfig.toml` behind a launcher were not measured, and neither was `pnpm` 12, which `npx pnpm` fetches today.
+    - With the manager already in the project (`node_modules/pnpm`), the launcher runs that copy and its own package is not vetted; the words after it still are.
+  examples:
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
         command: npx pnpm add left-pad
+      files:
+        node_modules/pnpm/package.json: '{"name":"pnpm","version":"11.24.0"}'
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx npx pnpm add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx pnpm dlx yarn add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx @pnpm/exe add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx pnpm exec tsc
       expect: { decision: warn }
 
 - id: install-candidates-over-ceiling

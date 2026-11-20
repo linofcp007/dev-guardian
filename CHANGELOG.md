@@ -24,6 +24,26 @@ version bump.
 
 ### Security
 
+- **The install hook now vets what a launcher makes a package manager install.** `npx pnpm add <package>`, `npx yarn add
+  <package>`, `npx -y pnpm@11 add <package>`, `npm exec -- pnpm add <package>`, `pnpm dlx yarn add <package>`, `yarn dlx pnpm add <package>`, `bunx pnpm add
+  <package>`, `npx corepack yarn add <package>` and `npm exec corepack -- yarn add <package>` vetted only the manager they
+  launch (`pnpm`, `yarn`, `corepack`): the manager then asked the registry for `<package>` and for the dependencies of the
+  project's `package.json` and installed all of them, unvetted (measured 2026-11-20 with a stand-in registry: npm 11.19,
+  pnpm 11.24, Yarn 1.22 and 4.18, bun 1.4, corepack 0.36; `pnpm add <package>` and `yarn add <package>` were refused). When
+  a launcher of the npm family runs `npm`, `pnpm`, `yarn`, `yarnpkg`, `bun` or `corepack`, the words after it are now read
+  as a command of that manager, one level deep, and vetted as the line without the launcher is. A name the registry does
+  not have is denied in the nine measured lines, in a plain single statement, with any version of the launched manager and
+  only the flags of the inner manager's confident list (`-D`, `-E`, …); `corepack <manager>@<version> dlx …` before `pnpm
+  dlx` and `yarn dlx` is read as the line without it. Every other form — another pair, `npm x`, `bun x`, `pnpx`, a flag of
+  the launcher (`--yes`, `--no-install`, `-p`), `--` elsewhere, another inner verb, a version behind `corepack` — is
+  vetted and only warns for a missing name; a package OSV lists as malicious is denied everywhere. Upgrading: the
+  manifest of the project is now read on these lines too (`npx yarn`, `npx pnpm install`, `npx corepack up`, …), so the
+  names of its dependencies go to the registry and to OSV and the answer takes as long as for an install of the manifest;
+  with a directory or workspace flag on the launcher one line says the `package.json` was not read. Only one level is
+  read: behind `npx npx pnpm add <package>` only the first `npx` is vetted, and behind `npx pnpm dlx yarn add <package>`
+  `pnpm` and `yarn` are, not `<package>`. Not read, and listed in the known limits: the Python launchers (`uvx pip install
+  <package>`, `pipx run pip install <package>`), `pnpm exec <manager>`, `@pnpm/exe` and `@yarnpkg/cli-dist`, and a
+  `.yarnrc.yml` or `bunfig.toml` behind a launcher.
 - **The install hook now vets the initializers of the npm family and `npm install-test <package>`.** `npm create`,
   `npm init <name>`, `npm innit`, `yarn create`, `pnpm create` and `bun create` / `bun c` download `create-<name>`
   and run it, and `npm install-test <package>` / `npm it <package>` install the package; none of them was looked at
