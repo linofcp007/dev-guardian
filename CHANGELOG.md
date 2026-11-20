@@ -74,6 +74,17 @@ host.
   so the hook's refusal was never reached. [`evals/README.md`](evals/README.md) says what the run shows and what it
   does not.
 
+### Changed
+
+- **The repository's `.trivyignore` accepts one more advisory that has no upgrade.** `CVE-2026-115563`, published
+  on 2026-11-16, is in `mcp` 1.29.0, a dependency of Semgrep in the hashed Python requirements the CI templates
+  install; every Semgrep release up to 1.186.0 pins that version. The flaw is in the SDK's OAuth client
+  (`mcp.client.auth`), and the advisory says MCP servers are not affected: in Semgrep 1.182.0 no file imports
+  `mcp.client` (measured on 2026-11-20), and the SDK is imported only by the `semgrep mcp` subcommand, which no
+  pipeline starts. The entry expires on 2027-02-13, like the three other `mcp` entries. The file is the
+  repository's own: it decides nothing in a project dev-guardian scans, and every scan here names what it
+  suppressed (`suppressed_by_repo_config`).
+
 ### Security
 
 - **A `package.json` dependency with a value the hook did not know was dropped from the manifest check.** The hook
