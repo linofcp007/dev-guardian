@@ -370,3 +370,36 @@ describe('install-vet-manifest-parent-dir', () => {
     }
   });
 });
+
+// ───────────────── install-vet-npm-unread-verbs — the record of what the initializers leave unverified
+
+describe('install-vet-npm-unread-verbs', () => {
+  describe('known limits', () => {
+    it('T-07 the record `install-initializers` exists, is an install-vetting record with hook examples the dispatcher harness runs, and says what these verbs leave unverified or only warn about', () => {
+      const id = 'install-initializers';
+      const record = loadKnownLimits().find((l) => l.id === id);
+      expect(record, `the data file has no record ${id}`).toBeDefined();
+      expect(record?.area).toBe('install-vetting');
+      const examples = record?.examples ?? [];
+      expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+      const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+      for (const [index, example] of examples.entries()) {
+        expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+      }
+      // The harness runs offline: what an example shows is "could not vet" or silence, never the refusal of a missing name.
+      expect(examples.filter((e) => e.detector === 'hook' && e.expect.decision === 'deny')).toEqual([]);
+      const doc = record?.doc ?? '';
+      expect(doc).toContain('bun create');
+      expect(doc).toContain('.bun-create');
+      expect(doc).toContain('yarn create @scope@');
+      expect(doc).toContain('yarn create -p');
+      expect(doc).toContain('create-');
+    });
+
+    it('T-07 the record `manifest-other-managers` says that a package given to `npm install-test` is vetted', () => {
+      const record = loadKnownLimits().find((l) => l.id === 'manifest-other-managers');
+      expect(record, 'the data file has no record manifest-other-managers').toBeDefined();
+      expect(record?.doc ?? '').toMatch(/a package given to `npm install-test` is (?:vetted|verified|looked up)/);
+    });
+  });
+});

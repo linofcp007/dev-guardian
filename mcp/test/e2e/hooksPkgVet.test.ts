@@ -2159,3 +2159,47 @@ describe('install-vet-manifest-warning-volume', () => {
     expect(count[0]).toMatch(/15 more packages of package\.json/);
   });
 });
+
+// ───────────────── install-vet-npm-unread-verbs — the initializers, through the dispatcher
+
+describe('install-vet-npm-unread-verbs', () => {
+  describe('initializers', () => {
+    const X = 'dgprobe-zzq7731-init';
+    const URL_OF = `https://registry.npmjs.org/create-${X}`;
+    const missing: Record<string, Route> = { [URL_OF]: { status: 404 }, [OSV]: { osv: {} } };
+    const malicious: Record<string, Route> = { [URL_OF]: npmDoc('1.0.0'), [OSV]: { osv: { [`create-${X}@1.0.0`]: ['MAL-2026-0731'] } } };
+
+    it.each([`npm create ${X}`, `npm create ${X}@latest`, `npm init -y ${X}`, `pnpm create ${X}`, `yarn create ${X}`])(
+      'T-02 `%s` with a name the registry does not have is DENIED, naming create-<name>',
+      (command) => {
+        const r = runHook(command, missing);
+        expect(r.status, command).toBe(0);
+        expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+        const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+        expect(reason, command).toContain(`create-${X}`);
+        expect(reason, command).toContain('does not exist on the npm registry');
+      },
+    );
+
+    it(`T-02 \`bun create ${X}\` with a name the registry does not have is not denied: it says so, naming create-<name>`, () => {
+      const r = runHook(`bun create ${X}`, missing);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+      expect(context).toContain(`create-${X}`);
+      expect(context).toContain('not found on the public registry');
+    });
+
+    it.each([`npm create ${X}`, `npm init -y ${X}`, `npm init -w folder ${X}`, `pnpm create ${X}`, `yarn create ${X}`, `bun create ${X}`])(
+      'T-02 `%s` with a create-<name> that OSV lists as malicious is DENIED, with the advisory',
+      (command) => {
+        const r = runHook(command, malicious);
+        expect(r.status, command).toBe(0);
+        expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+        const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+        expect(reason, command).toContain(`create-${X}`);
+        expect(reason, command).toContain('MAL-2026-0731');
+      },
+    );
+  });
+});

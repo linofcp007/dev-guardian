@@ -10,6 +10,7 @@ import {
   vetDeadlineMs,
   type HookVetOptions,
 } from '../../../src/pkgvet/hookDecision.js';
+import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -4440,6 +4441,160 @@ describe('install-vet-manifest-warning-volume', () => {
       expect(namesSaid(d?.context)).toEqual([name(1), 'lodahs', ...Array.from({ length: 4 }, (_, i) => name(i + 2))]);
       expect(notFoundLines(d?.context).find((l) => l.includes('lodahs'))).toContain("Did you mean 'lodash'?");
       expect(countLines(d?.context)[0]).toMatch(/7 more packages of package\.json/);
+    });
+  });
+});
+
+// ───────────────── install-vet-npm-unread-verbs — the initializers and `npm install-test <package>` are vetted
+
+describe('install-vet-npm-unread-verbs', () => {
+  const X = 'dgprobe-zzq7731-init';
+  const S = '@dgprobe-zzq7731';
+  const DENIED = 'does not exist on the npm registry';
+  const NOT_FOUND = 'not found on the public registry';
+  const decide = async (command: string, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(command, opts(reg.fetchImpl));
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  /** The names the "not found" lines of an answer quote, sorted. */
+  const notFoundNames = (context: string | undefined): string[] =>
+    (context ?? '')
+      .split('\n')
+      .filter((l) => l.includes(NOT_FOUND))
+      .map((l) => /'([^']+)'/.exec(l)?.[1] ?? l)
+      .sort();
+  /** The packages a line gives, sorted, and whether every command of it is uncertain "two ways". */
+  const readOf = (command: string): { names: string[]; twoWays: boolean } => {
+    const parsed = parseInstallCommands(command);
+    return {
+      names: parsed.flatMap((c) => c.packages.map((p) => p.name)).sort(),
+      twoWays: parsed.length > 0 && parsed.every((c) => c.uncertain.some((u) => u.includes(' is read two ways'))),
+    };
+  };
+
+  describe('initializers', () => {
+    it.each([
+      [`npm create -y ${X}`, `create-${X}`],
+      [`npm init --yes --silent ${X}`, `create-${X}`],
+      [`npm innit -q ${X}`, `create-${X}`],
+      [`npm create --quiet ${X}`, `create-${X}`],
+      [`yarn create -q ${X}`, `create-${X}`],
+      [`yarn create --quiet ${X}`, `create-${X}`],
+      [`pnpm create ${X}@^1`, `create-${X}`],
+      [`npm init ${S}/${X}@latest`, `${S}/create-${X}`],
+    ])('T-03 `%s`: a missing name is DENIED, naming %s', async (command, name) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      expect(d?.deny ?? '', command).toContain(DENIED);
+      expect(d?.deny ?? '', command).toContain(`'${name}'`);
+      expect(reg.calls, command).toContain(urlOf(name));
+    });
+
+    it.each([
+      [`bun create ${X}`, [`create-${X}`]],
+      [`bun c ${X}`, [`create-${X}`]],
+      [`npm init -w folder ${X}`, [`create-${X}`]],
+      [`npm create --registry https://npm.dgprobe.invalid/ ${X}`, [`create-${X}`]],
+      [`npm init --scope ${S} ${X}`, [`create-${X}`]],
+      [`npm init -f ${X}`, [`create-${X}`]],
+      [`pnpm create --allow-build=a ${X}`, [`create-${X}`]],
+      [`bun create --dgunknown ${X}`, [`create-${X}`]],
+      [`yarn create -p ${X}-pkg ${X}`, [`${X}-pkg`, `create-${X}`]],
+      [`npm create --dgunknown ${X}`, [`create-${X}`]],
+      [`npm create ${X} && ls`, [`create-${X}`]],
+      [`sudo npm create ${X}`, [`create-${X}`]],
+      [`yarn create ${S}@1.2.3`, [`${S}/create`]],
+    ])('T-03 `%s`: a missing name only WARNS, naming %j', async (command, names) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      expect(d?.deny, command).toBeUndefined();
+      expect(notFoundNames(d?.context), command).toEqual([...names].sort());
+      // `--scope @s` is the value of a flag, not the initializer: `@s/create` is asked for only where the line names it.
+      expect(
+        reg.calls.some((c) => c.includes('%2F')),
+        command,
+      ).toBe(names.some((n) => n.includes('/')));
+    });
+
+    it('T-03 with `@s:registry=<url>` in the project .npmrc, `npm init @s` is not denied: `@s/create` is asked of the public registry and its 404 warns, with the registry of the scope as the reason', async () => {
+      writeFileSync(join(project, '.npmrc'), `${S}:registry=https://npm.dgprobe.invalid/\n`);
+      const reg = registry();
+      const d = await decide(`npm init ${S}`, reg);
+      expect(d?.deny).toBeUndefined();
+      expect(reg.calls).toContain(urlOf(`${S}/create`));
+      expect(notFoundNames(d?.context)).toEqual([`${S}/create`]);
+      expect(d?.context).toContain('a custom registry is configured');
+      expect(d?.context).toContain('npm.dgprobe.invalid');
+    });
+
+    it.each([
+      ['npm create create-foo', 'deny', ['create-create-foo'], 'create-create-foo'],
+      ['bun create create-foo', 'warn', ['create-create-foo'], 'create-create-foo'],
+      ['yarn create create-foo', 'warn', ['create-create-foo', 'create-foo'], 'create-create-foo'],
+      ['npm create create', 'warn', ['create', 'create-create'], 'create-create'],
+      ['pnpm create create', 'warn', ['create', 'create-create'], 'create-create'],
+      ['npm init @s/create-foo', 'warn', ['@s/create-create-foo', '@s/create-foo'], '@s/create-create-foo'],
+    ] as const)('T-06 `%s`: with the doubled-prefix name missing and the other published: %s', async (command, outcome, names, missing) => {
+      const reg = registry({ exists: names.filter((n) => n !== missing) });
+      const d = await decide(command, reg);
+      for (const name of names) expect(reg.calls, command).toContain(urlOf(name));
+      if (outcome === 'deny') {
+        expect(d?.deny ?? '', command).toContain(DENIED);
+        expect(d?.deny ?? '', command).toContain(`'${missing}'`);
+      } else {
+        expect(d?.deny, command).toBeUndefined();
+        expect(notFoundNames(d?.context), command).toEqual([missing]);
+      }
+    });
+
+    it('T-06 `pnpm create create-foo` asks for `create-foo` as written and, with it published, says nothing', async () => {
+      const reg = registry({ exists: ['create-foo'] });
+      const d = await decide('pnpm create create-foo', reg);
+      expect(reg.calls).toContain(urlOf('create-foo'));
+      expect(reg.calls).not.toContain(urlOf('create-create-foo'));
+      expect(d).toBeNull();
+    });
+
+    it.each([
+      ['npm create create-foo', ['create-create-foo'], false],
+      ['bun create create-foo', ['create-create-foo'], false],
+      ['pnpm create create-foo', ['create-foo'], false],
+      ['yarn create create-foo', ['create-create-foo', 'create-foo'], true],
+      ['npm create create', ['create', 'create-create'], true],
+      ['pnpm create create', ['create', 'create-create'], true],
+      ['npm init @s/create-foo', ['@s/create-create-foo', '@s/create-foo'], true],
+    ] as const)('T-06 `%s` is read as the packages %j; uncertain "is read two ways": %s', (command, names, twoWays) => {
+      expect(readOf(command)).toEqual({ names: [...names], twoWays });
+    });
+  });
+
+  describe('install-test', () => {
+    const P = 'dgprobe-zzq7731-pkg';
+
+    it.each(['npm install-test', 'npm it'])('T-08 `%s <a missing name>` is DENIED as `npm install <it>` is', async (verb) => {
+      const control = await decide(`npm install ${P}`, registry());
+      expect(control?.deny ?? '').toContain(DENIED);
+      const reg = registry();
+      const d = await decide(`${verb} ${P}`, reg);
+      expect(d?.deny ?? '', verb).toContain(DENIED);
+      expect(d?.deny ?? '', verb).toContain(`'${P}'`);
+      expect(reg.calls, verb).toContain(urlOf(P));
+    });
+
+    it.each(['npm install-test', 'npm it'])('T-08 `%s <a malicious package>` is DENIED, with the advisory', async (verb) => {
+      const d = await decide(`${verb} ${P}`, registry({ exists: [P], malicious: [P] }));
+      expect(d?.deny ?? '', verb).toContain('MAL-2026-77');
+      expect(d?.deny ?? '', verb).toContain(P);
+    });
+
+    it('T-08 `npm it -g <a missing name>` is DENIED and the manifest of the project is not read', async () => {
+      const dep = 'dgprobe-zzq7731-dep';
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [dep]: '^1.0.0' } }));
+      const reg = registry();
+      const d = await decide(`npm it -g ${P}`, reg);
+      expect(d?.deny ?? '').toContain(DENIED);
+      expect(d?.deny ?? '').toContain(`'${P}'`);
+      expect(reg.calls).toContain(urlOf(P));
+      expect(reg.calls).not.toContain(urlOf(dep));
     });
   });
 });

@@ -2685,3 +2685,140 @@ describe('install-vet-tilde-range-skipped', () => {
     expect(vetted('composer require vendor-zq/tilde-pkg-zq:~1.0')).toEqual([['vendor-zq/tilde-pkg-zq', '~1.0']]);
   });
 });
+
+// ───────────────── install-vet-npm-unread-verbs — the initializers and `npm install-test <package>` are read
+
+describe('install-vet-npm-unread-verbs', () => {
+  const X = 'dgprobe-zzq7731-init';
+  const S = '@dgprobe-zzq7731';
+  const MANIFEST = { kind: 'package-json' };
+
+  /** What each install command of a line gives: the packages as `[name, range, raw]`, the manifest and whether it is a launch that looks in the project first. */
+  const shapes = (command: string): Array<{ packages: Array<[string, string | undefined, string]>; manifest: unknown; localFirst: unknown }> =>
+    parseInstallCommands(command).map((c) => ({
+      packages: c.packages.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+      manifest: c.manifest,
+      localFirst: c.localFirst,
+    }));
+  /** The one command an initializer line is: one package, no manifest, no `localFirst`. */
+  const initializer = (name: string, range: string | undefined, raw: string): unknown[] => [
+    { packages: [[name, range, raw]], manifest: undefined, localFirst: undefined },
+  ];
+
+  describe('initializers', () => {
+    /** The words an initializer takes, each with what the manager looks up for it (`create-<x>`, `@s/create`, `@s/create-<x>`). */
+    const WORDS: Array<[string, string, string | undefined]> = [
+      [X, `create-${X}`, undefined],
+      [`${X}@1.2.3`, `create-${X}`, '1.2.3'],
+      [`${X}@latest`, `create-${X}`, undefined],
+      [`${X}@^1`, `create-${X}`, '^1'],
+      [S, `${S}/create`, undefined],
+      [`${S}@1.2.3`, `${S}/create`, '1.2.3'],
+      [`${S}/${X}`, `${S}/create-${X}`, undefined],
+      [`${S}/${X}@1.2.3`, `${S}/create-${X}`, '1.2.3'],
+    ];
+    const LINES: Array<[string, string]> = [
+      ['npm create', ''],
+      ['npm init', ''],
+      ['npm innit', ''],
+      ['yarn create', ''],
+      ['pnpm create', ' my-app'],
+      ['bun create', ' dest'],
+      ['bun c', ''],
+    ];
+
+    it.each(LINES.flatMap(([line, after]) => WORDS.map(([word, name, range]) => [line, word, after, name, range] as const)))(
+      'T-01 `%s %s%s` gives one command, the package %s with the range %s and the word as written',
+      (line, word, after, name, range) => {
+        expect(shapes(`${line} ${word}${after}`), `${line} ${word}${after}`).toEqual(initializer(name, range, word));
+      },
+    );
+
+    it.each([
+      [`npm init -y ${X}`, `create-${X}`, X],
+      [`npm init --silent ${X} my-app`, `create-${X}`, X],
+      [`npm init ${X} -- --template react`, `create-${X}`, X],
+      ['bun create App.tsx', 'create-App.tsx', 'App.tsx'],
+      [`pnpm create -C sub ${X}`, `create-${X}`, X],
+      [`yarn create --cwd ./sub ${X}`, `create-${X}`, X],
+      [`npm --dgunknown create ${X}`, `create-${X}`, X],
+      [`corepack yarn@4 create ${X}`, `create-${X}`, X],
+      [`yarnpkg create ${X}`, `create-${X}`, X],
+    ])('T-01 `%s` gives one command, which looks up %s, with nothing of the initializer arguments', (command, name, raw) => {
+      expect(shapes(command), command).toEqual(initializer(name, undefined, raw));
+    });
+
+    // What today's parser answers, written out: the forms that fetch nothing, and the verbs the work leaves as they are.
+    it.each(['npm init', 'npm init -y', 'yarn create', 'pnpm create'])('T-05 `%s` names no initializer: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each(['npm link', 'npm link P', 'npm pack P', 'npm view P'])('T-05 `%s` is not an install command: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each(['npm init user/repo', 'npm init ./folder', 'bun create user/repo'])('T-05 `%s` is not a registry name: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each(['npm --dgunknown create install P', 'npm --dgunknown init install P', 'bun --dgunknown c install P'])(
+      'T-05 `%s` stays the `install` command with P, as today',
+      (command) => {
+        expect(shapes(command), command).toEqual([{ packages: [['P', undefined, 'P']], manifest: MANIFEST, localFirst: undefined }]);
+      },
+    );
+
+    it('T-05 `yarn --dgunknown create` stays the manifest install of the verbless `yarn`, as today', () => {
+      expect(shapes('yarn --dgunknown create')).toEqual([{ packages: [], manifest: MANIFEST, localFirst: undefined }]);
+    });
+
+    it.each(['npm install-test', 'npm it'])('T-05 `%s` with no package: the manifest and no package', (command) => {
+      expect(shapes(command)).toEqual([{ packages: [], manifest: MANIFEST, localFirst: undefined }]);
+    });
+
+    it('T-05 `pnpm install-test left-pad` is not read: no command', () => {
+      expect(parseInstallCommands('pnpm install-test left-pad')).toEqual([]);
+    });
+
+    it.each([
+      [`npx create-${X}`, true],
+      [`npm exec create-${X}`, true],
+      [`pnpm dlx create-${X}`, undefined],
+    ])('T-05 `%s` stays a launcher of that package, as today', (command, localFirst) => {
+      expect(shapes(command), command).toEqual([{ packages: [[`create-${X}`, undefined, `create-${X}`]], manifest: undefined, localFirst }]);
+    });
+  });
+
+  describe('install-test', () => {
+    const P = 'dgprobe-zzq7731-pkg';
+    /** What a line gives except its verb: the packages, the manifest, the global flag and the reasons it is uncertain (the verb named in a reason is left out). */
+    const reading = (command: string): unknown[] =>
+      parseInstallCommands(command).map((c) => ({
+        packages: c.packages.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+        manifest: c.manifest,
+        global: c.global,
+        uncertain: c.uncertain.map((u) => u.replace(/\('npm [a-z-]+'\)/, "('npm <verb>')")),
+      }));
+
+    it.each(['install-test', 'it'].flatMap((verb) => ['', '-D ', '--no-save ', '-g '].map((flags) => [verb, flags] as const)))(
+      'T-04 `npm %s %s<P>` is read as `npm install` with the same flags: packages, manifest, global and uncertain',
+      (verb, flags) => {
+        expect(reading(`npm ${verb} ${flags}${P}`), `npm ${verb} ${flags}${P}`).toEqual(reading(`npm install ${flags}${P}`));
+      },
+    );
+
+    it.each(['install-test', 'it'])('T-04 `npm %s <P>@1.2.3` is read as `npm install <P>@1.2.3`, with the range', (verb) => {
+      expect(reading(`npm ${verb} ${P}@1.2.3`)).toEqual(reading(`npm install ${P}@1.2.3`));
+      expect(vetted(`npm ${verb} ${P}@1.2.3`)).toEqual([[P, '1.2.3']]);
+    });
+
+    it.each(['install-test', 'it'])('T-04 `npm %s -g <P>` names the package and reads no manifest (global)', (verb) => {
+      const [c] = parseInstallCommands(`npm ${verb} -g ${P}`);
+      expect({ packages: c?.packages.map((p) => p.name), manifest: c?.manifest, global: c?.global }).toEqual({
+        packages: [P],
+        manifest: undefined,
+        global: true,
+      });
+    });
+  });
+});
