@@ -171,16 +171,12 @@ function parseJsonBounded(text, maxNodes = JSON_MAX_NODES) {
 
 // src/pkgvet/strayAt.ts
 function strayAt(url, ownName) {
-  let path = url.pathname;
+  let path = url.pathname.toLowerCase();
   const slash = ownName === void 0 ? -1 : ownName.indexOf("/");
   if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
     const scope = ownName.slice(0, slash).toLowerCase();
     const rest = ownName.slice(slash + 1).toLowerCase();
-    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) {
-      for (let at = path.toLowerCase().indexOf(form); at >= 0; at = path.toLowerCase().indexOf(form)) {
-        path = `${path.slice(0, at)}/${path.slice(at + form.length)}`;
-      }
-    }
+    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) path = path.split(form).join("/");
   }
   return path.includes("@") || url.search.includes("@") || url.hash.includes("@");
 }

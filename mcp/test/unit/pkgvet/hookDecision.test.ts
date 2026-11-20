@@ -4172,3 +4172,33 @@ describe('install-vet-manifest-value-dropped', () => {
     expect(registryFor('drop-pkg-zq').map((url) => url.replace('drop-pkg-zq', 'X'))).toEqual(registryFor('latest-pkg-zq').map((url) => url.replace('latest-pkg-zq', 'X')));
   });
 });
+
+// ───────────────── lockfile-own-scope-scan-quadratic: T-05 — a comment with an at-sign never changes the decision
+
+describe('lockfile-own-scope-scan-quadratic', () => {
+  const MISSING = 'dgprobe-missing';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+
+  /** The public registry (either spelling of its host) has every name but MISSING; OSV calls none malicious; any other URL is an error. */
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    if (url === OSV) return json({ results: (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries.map(() => ({})) });
+    const doc = /^https:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/([^/]+)$/.exec(url);
+    if (doc !== null) return doc[1] === MISSING ? json({}, 404) : json(npmDoc('1.0.0').body);
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+
+  it.each([
+    ['.yarnrc.yml', 'npmRegistryServer: https://registry.npmjs.org/ # owner: a@b.example\n', 'yarn add'],
+    ['.yarnrc', 'registry https://registry.yarnpkg.com/ # a@b.example\n', 'yarn add'],
+    ['bunfig.toml', '[install]\nregistry = https://registry.npmjs.org/ # a@b.example\n', 'bun add'],
+  ])('T-05 %s: the public registry and an unquoted comment with an at-sign: a missing name is still refused, and no line of registry is said', async (file, text, verb) => {
+    writeFileSync(join(project, 'package.json'), MANIFEST);
+    writeFileSync(join(project, file), text);
+    const d = await decideInstallCommand(`${verb} ${MISSING}`, opts(fetchImpl, { env: { GUARDIAN_OFFLINE: '0' } }));
+    expect(d?.deny ?? '').toMatch(/does not exist/);
+    expect(d?.context ?? '').not.toContain('a custom registry is configured');
+    expect(d?.context ?? '').not.toContain('sets the default registry');
+  });
+});

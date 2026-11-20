@@ -2082,3 +2082,57 @@ describe('install-vet-manifest-value-dropped — round 1', () => {
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
   });
 });
+
+// ───────────────── lockfile-own-scope-scan-quadratic — through the real hook process
+
+describe('lockfile-own-scope-scan-quadratic', () => {
+  const MALICIOUS = '10.1.7';
+  const ADVISORY = 'MAL-2025-6022';
+  const ROUTES: Record<string, Route> = { [OSV]: { osv: { [`eslint-config-prettier@${MALICIOUS}`]: [ADVISORY] } } };
+  const INTEGRITY = `sha512-${'A'.repeat(86)}==`;
+
+  /** 100 entries `@zq7/b0` ... `@zq7/b99`, each fetched from a URL that repeats its own scope 6 400 times (under the reader's line limit). */
+  const repeated = (): Record<string, unknown> =>
+    Object.fromEntries(
+      Array.from({ length: 100 }, (_, i) => [
+        `node_modules/@zq7/b${String(i)}`,
+        { version: '1.0.0', resolved: `https://h.example${`/@zq7/b${String(i)}`.repeat(6_400)}/-/b${String(i)}-1.0.0.tgz`, integrity: INTEGRITY },
+      ]),
+    );
+
+  const lockWith = (withMalicious: boolean): string =>
+    JSON.stringify({
+      name: 'fixture-app',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'fixture-app', version: '1.0.0' },
+        ...(withMalicious
+          ? { 'node_modules/eslint-config-prettier': { version: MALICIOUS, resolved: `https://registry.npmjs.org/eslint-config-prettier/-/eslint-config-prettier-${MALICIOUS}.tgz` } }
+          : {}),
+        ...repeated(),
+      },
+    });
+
+  const npmCi = (withMalicious: boolean): HookOut => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    writeFileSync(join(project, 'package-lock.json'), lockWith(withMalicious));
+    return runHook('npm ci', ROUTES);
+  };
+
+  it('T-02 a package OSV lists as malicious beside 100 entries that repeat their own scope: the install is DENIED with the advisory', () => {
+    const r = npmCi(true);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, r.output?.hookSpecificOutput?.additionalContext).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toContain(ADVISORY);
+  });
+
+  it('T-02 the same lockfile without the malicious package: the sources are said, and the vetting time budget is not exhausted', () => {
+    const r = npmCi(false);
+    expect(r.status).toBe(0);
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context).toMatch(/come from another source \(h\.example\)/);
+    expect(context).not.toContain('vetting time budget exhausted');
+  });
+});
