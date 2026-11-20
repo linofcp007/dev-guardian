@@ -1,0 +1,14 @@
+# shop-app
+
+A small Express checkout service.
+
+## Quick start
+
+Install the dependencies and start the service:
+
+```text
+npm install
+npm start
+```
+
+The service listens on port 3000.
