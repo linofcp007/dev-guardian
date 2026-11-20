@@ -395,6 +395,7 @@ describe('the limits of the manifest vetting, as data', () => {
     'install-initializers',
     'install-launcher-runs-manager',
     'install-other-runners',
+    'install-redirect-glued-word',
     'launcher-flag-words',
     'lockfile-origin-host-unsaid',
     'manifest-above-project-root',
@@ -532,5 +533,17 @@ describe('install-vet-lockfile-pins', () => {
     ];
     const notShown = CASES.filter(([, shows]) => !shown.some(shows)).map(([what]) => what);
     expect(notShown).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-redirect-glued-word — the record of what a word glued to a redirection leaves unverified
+
+describe('install-vet-redirect-glued-word', () => {
+  it('T-07 the install-vetting area has the record `install-redirect-glued-word`, with a hook example or the reason none can', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'install-redirect-glued-word');
+    expect(limit, 'the data file has no record install-redirect-glued-word').toBeDefined();
+    expect(limit?.area).toBe('install-vetting');
+    const shown = (limit?.examples ?? []).some((e) => e.detector === 'hook') || (limit?.not_executable ?? '').trim() !== '';
+    expect(shown).toBe(true);
   });
 });

@@ -171,6 +171,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'install-initializers',
       'install-launcher-runs-manager',
       'install-other-runners',
+      'install-redirect-glued-word',
       'launcher-flag-words',
       'lockfile-origin-host-unsaid',
       'manifest-above-project-root',
@@ -479,5 +480,56 @@ describe('install-vet-launcher-runs-manager', () => {
       (e) => e.detector === 'hook' && commandOf(e) === 'npx pnpm add left-pad' && Object.keys(e.files ?? {}).includes('node_modules/pnpm/package.json'),
     );
     expect(found.map((e) => (e.detector === 'hook' ? e.expect.decision : undefined))).toEqual(['warn']);
+  });
+});
+
+// ───────────────── install-vet-redirect-glued-word — what a word glued to a redirection leaves unverified
+
+describe('install-vet-redirect-glued-word', () => {
+  const ID = 'install-redirect-glued-word';
+  const record = (id: string): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === id);
+
+  it('T-07 the record `yarn-bun-npm-protocol` no longer says that a range written without quotes is not read', () => {
+    const limit = record('yarn-bun-npm-protocol');
+    expect(limit, 'the data file has no record yarn-bun-npm-protocol').toBeDefined();
+    expect(limit?.doc ?? '').not.toContain('unquoted, the shell takes `>` for a redirection');
+  });
+
+  it('T-07 the install-vetting hook examples this file runs include the record `install-redirect-glued-word`', () => {
+    const ids = new Set([...HOOKS.run, ...HOOKS.skip].filter((r) => (r.limit.area as string) === 'install-vetting').map((r) => r.limit.id));
+    expect(ids.has(ID), `the hook examples of ${ID} are run by this harness`).toBe(true);
+  });
+
+  it('T-07 the record `install-redirect-glued-word` exists, says what stays, and has offline hook examples the dispatcher harness runs', () => {
+    const limit = record(ID);
+    expect(limit, `the data file has no record ${ID}`).toBeDefined();
+    expect(limit?.area).toBe('install-vetting');
+    const examples = limit?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${ID} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+    }
+    // The harness runs offline: what an example shows is "could not vet" or silence, never the refusal of a missing name.
+    expect(examples.filter((e) => e.detector === 'hook' && e.expect.decision === 'deny')).toEqual([]);
+    const doc = limit?.doc ?? '';
+    // With the PowerShell tool the target of `<name>> out.txt` is asked of the registry as a package.
+    expect(doc).toContain('PowerShell');
+    expect(doc).toContain('> out.txt');
+    // `name@` under a launcher, and `name@npm:` for npm and pnpm, were not measured.
+    expect(doc).toMatch(/not measured|unmeasured/i);
+    expect(doc).toContain('npx');
+    expect(doc).toContain('@npm:');
+  });
+
+  it('T-07 the record `install-redirect-glued-word` shows a PowerShell-tool example of a name glued to `>`, and an example of a name ending in `@` under a launcher, both answering "could not vet"', () => {
+    const hooks = (record(ID)?.examples ?? []).flatMap((e) => (e.detector === 'hook' ? [e] : []));
+    const command = (e: HookExample): string => String(e.input['command']);
+    const powershell = hooks.filter((e) => e.tool === 'PowerShell' && command(e).includes('> out.txt'));
+    const launcher = hooks.filter((e) => /^(?:npx|pnpm dlx) \S+@$/.test(command(e)));
+    expect({ powershell: powershell.map((e) => e.expect.decision), launcher: launcher.map((e) => e.expect.decision) }).toEqual({
+      powershell: ['warn'],
+      launcher: ['warn'],
+    });
   });
 });

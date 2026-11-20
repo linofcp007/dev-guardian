@@ -4957,3 +4957,39 @@ describe('install-vet-launcher-runs-manager', () => {
     expect(d?.context ?? '').toContain('the command line: https://r.example');
   });
 });
+
+// ───────────────── install-vet-redirect-glued-word — `name@` under a launcher, and a redirection glued to a word, are vetted
+
+describe('install-vet-redirect-glued-word', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const NOT_FOUND = `'${P}': not found on the public registry`;
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === urlOf(name)).length;
+
+  it.each([`npx ${P}@`, `pnpm dlx ${P}@`])('T-06 `%s` with a name the registry does not have only WARNS, saying it was not found', async (command) => {
+    const reg = registry({ exists: [] });
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    expect(asked(reg, P), `${command}: the name is looked up`).toBeGreaterThan(0);
+    expect(d?.deny, command).toBeUndefined();
+    expect(d?.context ?? '', command).toContain(NOT_FOUND);
+  });
+
+  it.each([`npx ${P}@`, `pnpm dlx ${P}@`])('T-06 `%s` with a package OSV lists as malicious is DENIED, with the advisory', async (command) => {
+    const reg = registry({ exists: [P], malicious: [P] });
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    expect(d?.deny ?? '', command).toContain('MAL-2026-77');
+    expect(d?.deny ?? '', command).toContain(P);
+  });
+
+  it('T-06 `npm ci>out.log` in a project whose package.json has a malicious dependency is DENIED by the manifest, as `npm ci` is', async () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [DEP]: '^1.0.0' } }));
+    const control = await decideInstallCommand('npm ci', opts(registry({ exists: [DEP], malicious: [DEP] }).fetchImpl));
+    expect(control?.deny ?? '', 'the control, `npm ci`').toContain(DEP);
+    const reg = registry({ exists: [DEP], malicious: [DEP] });
+    const d = await decideInstallCommand('npm ci>out.log', opts(reg.fetchImpl));
+    expect(d?.deny ?? '', 'npm ci>out.log').toContain(DEP);
+    expect(d?.deny ?? '', 'npm ci>out.log').toContain('package.json');
+    expect(asked(reg, DEP)).toBeGreaterThan(0);
+  });
+});

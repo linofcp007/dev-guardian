@@ -2321,3 +2321,64 @@ describe('install-vet-launcher-runs-manager', () => {
     expect(r.output?.hookSpecificOutput?.additionalContext).toEqual(control.output?.hookSpecificOutput?.additionalContext);
   });
 });
+
+// ───────────────── install-vet-redirect-glued-word — a range written without quotes, and `name@`, through the dispatcher
+
+describe('install-vet-redirect-glued-word', () => {
+  const ABSENT = 'dgprobe-zzq7731-absent';
+  const M = 'dgprobe-zzq7731-evil';
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const routes = (name: string): Record<string, Route | Route[]> => ({
+    [url(name)]: name === ABSENT ? { status: 404 } : npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${M}@1.0.0`]: ['MAL-2026-0731'] } },
+  });
+  const TOOLS = ['Bash', 'PowerShell'];
+  /** The lines of a warning that name `name` as missing from the registry. */
+  const notFoundLines = (context: string | undefined, name: string): string[] =>
+    (context ?? '').split('\n').filter((l) => l.includes(`'${name}'`) && l.includes('not found on the public registry'));
+
+  it.each(TOOLS)('T-04 `npm install <malicious>@>=1.0.0` with the %s tool is DENIED, with the advisory', (tool) => {
+    const r = runHook(`npm install ${M}@>=1.0.0`, routes(M), { tool });
+    expect(r.status, tool).toBe(0);
+    expect(r.requests, tool).toContain(url(M));
+    expect(r.output?.hookSpecificOutput?.permissionDecision, tool).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, tool).toContain('MAL-2026-0731');
+    expect(reason, tool).toContain(M);
+  });
+
+  it('T-04 `npm install <absent name>@>=1.0.0` with the Bash tool WARNS once, and does not deny', () => {
+    const r = runHook(`npm install ${ABSENT}@>=1.0.0`, routes(ABSENT), { tool: 'Bash' });
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(ABSENT));
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(notFoundLines(r.output?.hookSpecificOutput?.additionalContext, ABSENT)).toHaveLength(1);
+  });
+
+  it('T-04 `npm install <absent name>@>=1.0.0` with the PowerShell tool WARNS in two lines naming the same package, and does not deny', () => {
+    const r = runHook(`npm install ${ABSENT}@>=1.0.0`, routes(ABSENT), { tool: 'PowerShell' });
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(ABSENT));
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(notFoundLines(r.output?.hookSpecificOutput?.additionalContext, ABSENT)).toHaveLength(2);
+  });
+
+  it("T-04 `npm install '<absent name>@>=1.0.0'` with the PowerShell tool is DENIED, as today", () => {
+    const r = runHook(`npm install '${ABSENT}@>=1.0.0'`, routes(ABSENT), { tool: 'PowerShell' });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toContain(ABSENT);
+  });
+
+  it.each(TOOLS)('T-04 `npm install <absent name>@` with the %s tool is DENIED, as `npm install <absent name>` is', (tool) => {
+    const control = runHook(`npm install ${ABSENT}`, routes(ABSENT), { tool });
+    expect(control.output?.hookSpecificOutput?.permissionDecision, `the control, ${tool}`).toBe('deny');
+    const r = runHook(`npm install ${ABSENT}@`, routes(ABSENT), { tool });
+    expect(r.status, tool).toBe(0);
+    expect(r.requests, tool).toContain(url(ABSENT));
+    expect(r.output?.hookSpecificOutput?.permissionDecision, tool).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, tool).toContain(ABSENT);
+    expect(reason, tool).toContain('does not exist on the npm registry');
+  });
+});

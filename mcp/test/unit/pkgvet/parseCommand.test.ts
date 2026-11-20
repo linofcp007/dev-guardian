@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { powershellAsPosix } from '../../../src/hooks/powershellText.js';
+import { withoutRedirectWords } from '../../../src/hooks/shell/effects.js';
+import { splitShell } from '../../../src/hooks/shell/split.js';
 import { parseInstallCommands, parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from '../../../src/pkgvet/types.js';
 import { expectLinear, PERF_STRICT } from '../../helpers/timing.js';
@@ -3132,4 +3135,260 @@ describe('install-vet-launcher-runs-manager', () => {
   it('T-09 eight times as many `npx pnpm add p;` statements cost well under 22.6 times as much', () => {
     expectLinear('npx pnpm add p; repeated', (n) => void parseInstallCommands('npx pnpm add p;'.repeat(n)), 100);
   }, 120_000);
+});
+
+// ───────────────── install-vet-redirect-glued-word — a word glued to a redirection operator, and `name@` with no range
+
+describe('install-vet-redirect-glued-word', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const Q = 'dgprobe-zzq7731-second';
+  const PIP = 'dgprobe-zzq7731-pip';
+  const PJ = { kind: 'package-json' };
+  /** The words these lines must never leave as packages: a redirection target, or what follows the operator in a glued word. */
+  const NEVER = ['=1.0.0', '2', '=1.0', 'out.txt', 'out.log', 'out'];
+
+  type Pair = [name: string, range: string | undefined];
+  type Reading = { packages: Pair[]; manifest: unknown; uncertain: boolean };
+  /** What each install command of a line gives: its packages as `[name, range]`, its manifest, and whether it is uncertain. */
+  const readings = (command: string, shell?: 'bash' | 'powershell'): Reading[] =>
+    parseInstallCommands(command, shell === undefined ? {} : { shell }).map((c) => ({
+      packages: c.packages.map((p): Pair => [p.name, p.range]),
+      manifest: c.manifest,
+      uncertain: c.uncertain.length > 0,
+    }));
+  const flat = (rs: readonly Reading[]): Pair[] => rs.flatMap((r) => r.packages);
+
+  // ── T-01: the bash reading keeps the word the shell hands the program
+
+  const GLUED: Array<[line: string, packages: Pair[]]> = [
+    [`npm install ${P}@>=1.0.0`, [[P, undefined]]],
+    [`pnpm add ${P}@>=1.0.0`, [[P, undefined]]],
+    [`bun add ${P}@>=1.0.0`, [[P, undefined]]],
+    [`yarn add ${P}@>=1.0.0`, [[P, undefined]]],
+    [`npm install ${P}@<2`, [[P, undefined]]],
+    [`npm install ${P}@>=1<2`, [[P, undefined]]],
+    [`npm install ${P}> out.txt`, [[P, undefined]]],
+    [
+      `npm install ${P}>out.txt ${Q}`,
+      [
+        [P, undefined],
+        [Q, undefined],
+      ],
+    ],
+    [`npm install ${P}&>out`, [[P, undefined]]],
+    [`npm install ${P}2>out.txt`, [[`${P}2`, undefined]]],
+    [`npm install ${P}@1>out.txt`, [[P, '1']]],
+    [`npm install ${P}>&2`, [[P, undefined]]],
+    [`npm install ${P}@<(echo 1)`, [[P, undefined]]],
+    [`yarn add ${P}@npm:>=1.0.0`, [[P, undefined]]],
+  ];
+
+  it.each(GLUED)('T-01 `%s` (bash) reads the word before the operator: the packages are the ones listed, the manifest is read, the command is uncertain', (line, packages) => {
+    expect(readings(line, 'bash'), line).toEqual([{ packages, manifest: PJ, uncertain: true }]);
+    expect(
+      flat(readings(line, 'bash')).filter(([name]) => NEVER.includes(name)),
+      `${line}: a redirection target or the rest of a glued word is no package`,
+    ).toEqual([]);
+  });
+
+  it.each<[line: string, packages: Pair[]]>([
+    [`pip install ${PIP}>=1.0`, [[PIP, undefined]]],
+    [`pip install ${PIP}>out.log`, [[PIP, undefined]]],
+  ])('T-01 `%s` (bash) reads the Python name before the operator, and the command is uncertain', (line, packages) => {
+    expect(readings(line, 'bash'), line).toEqual([{ packages, manifest: undefined, uncertain: true }]);
+  });
+
+  it('T-01 `npm install>out.log <P>` reads `npm install <P>`: the package and the manifest, and the command is uncertain', () => {
+    expect(readings(`npm install>out.log ${P}`, 'bash')).toEqual([{ packages: [[P, undefined]], manifest: PJ, uncertain: true }]);
+  });
+
+  it('T-01 `npm ci>out.log` reads `npm ci`: no package, one install of the manifest, and the command is uncertain', () => {
+    expect(readings('npm ci>out.log', 'bash')).toEqual([{ packages: [], manifest: PJ, uncertain: true }]);
+  });
+
+  it('T-01 `pip install -r reqs.txt>out.log` reads `pip install -r reqs.txt`: no package, the file `reqs.txt` as the manifest, and the command is uncertain', () => {
+    expect(readings('pip install -r reqs.txt>out.log', 'bash')).toEqual([
+      { packages: [], manifest: { kind: 'requirements', files: ['reqs.txt'] }, uncertain: true },
+    ]);
+  });
+
+  // ── T-02: the PowerShell reading keeps the whole word, and the part before the operator is read too
+
+  type Viewed = [name: string, range: string | undefined, uncertain: boolean, powershellReason: boolean];
+  /** Per package of a line read for the PowerShell tool: its name and range, whether its command is uncertain and whether it carries the reason of the PowerShell reading. */
+  const viewed = (command: string): Viewed[] =>
+    parseInstallCommands(command, { shell: 'powershell' }).flatMap((c) =>
+      c.packages.map((p): Viewed => [p.name, p.range, c.uncertain.length > 0, c.uncertain.some((u) => u.includes('PowerShell'))]),
+    );
+
+  it.each<[line: string, expected: Viewed[]]>([
+    // The bash reading gives the name without the range, the PowerShell reading the whole word: `name@range`.
+    [
+      `npm install ${P}@>=1.0.0`,
+      [
+        [P, undefined, true, false],
+        [P, '>=1.0.0', true, true],
+      ],
+    ],
+    [
+      `npm install ${P}@<2`,
+      [
+        [P, undefined, true, false],
+        [P, '<2', true, true],
+      ],
+    ],
+    [
+      `pip install ${PIP}>=1.0`,
+      [
+        [PIP, undefined, true, false],
+        [PIP, '>=1.0', true, true],
+      ],
+    ],
+    [
+      `pip install ${PIP}>out.log`,
+      [
+        [PIP, undefined, true, false],
+        [PIP, '>out.log', true, true],
+      ],
+    ],
+    // `P>` is no package name: the next word is an argument, read by the rules of any install word.
+    [
+      `npm install ${P}> out.txt`,
+      [
+        [P, undefined, true, false],
+        ['out.txt', undefined, true, true],
+      ],
+    ],
+    // The whole word `P2>out.txt` is no package; `P2` is the bash reading's.
+    [`npm install ${P}2>out.txt`, [[`${P}2`, undefined, true, false]]],
+  ])('T-02 `%s` (PowerShell tool) lists the packages of both readings, the command is uncertain, and the PowerShell reading carries its own reason', (line, expected) => {
+    expect(viewed(line), line).toEqual(expected);
+  });
+
+  it("T-02 `npm install '<P>@>=1.0.0'` (PowerShell tool) gives the quoted word, then the same package without the range, and the command stays confident", () => {
+    expect(viewed(`npm install '${P}@>=1.0.0'`)).toEqual([
+      [P, '>=1.0.0', false, false],
+      [P, undefined, false, false],
+    ]);
+  });
+
+  it('T-02 the packages without a range come after every other package of the line, and the command keeps its certainty', () => {
+    expect(viewed(`npm install '${P}@>=1.0.0' '${Q}@<2'`)).toEqual([
+      [P, '>=1.0.0', false, false],
+      [Q, '<2', false, false],
+      [P, undefined, false, false],
+      [Q, undefined, false, false],
+    ]);
+  });
+
+  it('T-02 `pip install "<pkg>>=1.0"` (PowerShell tool) gives the quoted word only, as today', () => {
+    expect(viewed(`pip install "${PIP}>=1.0"`)).toEqual([[PIP, '>=1.0', false, false]]);
+  });
+
+  // ── T-03: protection — what stays out of the reading, and the words that stay as they are
+
+  const BOTH = ['2>&1', '2> err.log', '2>err.log', '1>out.txt', '> out.txt', '>out.txt', '&> all.log', '< in.txt', '<<< texto', '>> log.txt', '2>>err.log'];
+  const POWERSHELL_ONLY = ['3>&1', '*> all.log'];
+  const BASES = [`npm install ${P}`, `npm install ${P} ${Q}`, `pip install ${PIP}`, 'npm ci'];
+  /** The command with the redirection at the end, between the manager and the verb, after the verb, and at the start. */
+  const placed = (base: string, redirection: string): string[] => {
+    const [manager = '', verb = '', ...rest] = base.split(' ');
+    const tail = rest.join(' ');
+    return [`${base} ${redirection}`, `${manager} ${redirection} ${verb} ${tail}`.trim(), `${manager} ${verb} ${redirection} ${tail}`.trim(), `${redirection} ${base}`];
+  };
+  const withoutUncertainty = (rs: readonly Reading[]): Array<Omit<Reading, 'uncertain'>> => rs.map(({ packages, manifest }) => ({ packages, manifest }));
+
+  it.each<[shell: 'bash' | 'powershell', redirections: string[]]>([
+    ['bash', BOTH],
+    ['powershell', [...BOTH, ...POWERSHELL_ONLY]],
+  ])(
+    'T-03 (%s) a descriptor, a redirection that starts a word, `&>`, `<`, `<<<` and `>>` leave the packages and the manifest as the command without them, in any position, and the command is uncertain',
+    (shell, redirections) => {
+      let checked = 0;
+      for (const base of BASES) {
+        const control = withoutUncertainty(readings(base, shell));
+        expect(control.length, base).toBeGreaterThan(0);
+        for (const redirection of redirections) {
+          for (const line of placed(base, redirection)) {
+            checked += 1;
+            const got = readings(line, shell);
+            expect({ line, reading: withoutUncertainty(got) }, line).toEqual({ line, reading: control });
+            expect({ line, uncertain: got.map((r) => r.uncertain) }, line).toEqual({ line, uncertain: got.map(() => true) });
+          }
+        }
+      }
+      expect(checked, 'lines checked').toBe(BASES.length * redirections.length * 4);
+    },
+  );
+
+  it('T-03 `npm *> all.log install <P>` (PowerShell tool) reads `npm install <P>`', () => {
+    // The raw line, as the parser gets it: npm *> all.log install dgprobe-zzq7731-named
+    const line = `npm *> all.log install ${P}`;
+    expect(line).toBe('npm *> all.log install dgprobe-zzq7731-named');
+    expect(withoutUncertainty(readings(line, 'powershell'))).toEqual(withoutUncertainty(readings(`npm install ${P}`, 'powershell')));
+  });
+
+  it("T-03 a quoted word is read as today with the bash reading: `'<P>@>=1.0.0'` and `\"<pkg>>=1.0\"` keep their range", () => {
+    expect(readings(`npm install '${P}@>=1.0.0'`, 'bash')).toEqual([{ packages: [[P, '>=1.0.0']], manifest: PJ, uncertain: false }]);
+    expect(readings(`pip install "${PIP}>=1.0"`, 'bash')).toEqual([{ packages: [[PIP, '>=1.0']], manifest: undefined, uncertain: false }]);
+  });
+
+  it('T-03 `withoutRedirectWords` takes the glued word and the descriptor out of the words of `npm install <P>@>=1.0.0 2>&1`, as the command guard reads them', () => {
+    const words = splitShell(`npm install ${P}@>=1.0.0 2>&1`).statements[0]?.commands[0] ?? [];
+    expect(words.map((w) => w.value)).toEqual(['npm', 'install', `${P}@>=1.0.0`, '2>&1']);
+    expect(withoutRedirectWords(words).map((w) => w.value)).toEqual(['npm', 'install']);
+  });
+
+  it('T-03 `powershellAsPosix` without an option gives the text of today for `npm install <P>@>=1.0.0`: the text unchanged', () => {
+    const line = `npm install ${P}@>=1.0.0`;
+    expect(powershellAsPosix(line)).toBe(line);
+  });
+
+  // ── T-05: `name@` is the package `name`
+
+  const OPEN: Array<[line: string, packages: Pair[]]> = [
+    [`npm install ${P}@`, [[P, undefined]]],
+    [`pnpm add ${P}@`, [[P, undefined]]],
+    [`bun add ${P}@`, [[P, undefined]]],
+    [`yarn add ${P}@`, [[P, undefined]]],
+    ['npm install @s/n@', [['@s/n', undefined]]],
+    [
+      `npm install ${P}@ ${Q}`,
+      [
+        [P, undefined],
+        [Q, undefined],
+      ],
+    ],
+  ];
+
+  it.each(OPEN)('T-05 `%s` gives the packages listed, with no range, and no word put aside as empty', (line, packages) => {
+    const commands = parseInstallCommands(line);
+    expect(
+      { packages: commands.map((c) => c.packages.map((p): Pair => [p.name, p.range])), skipped: commands.map((c) => c.skipped.map((s) => s.raw)) },
+      line,
+    ).toEqual({ packages: [packages], skipped: [[]] });
+  });
+
+  it("T-05 `parsePackageSpec('npm', '<P>@')` gives the package, with no range", () => {
+    const spec = parsePackageSpec('npm', `${P}@`);
+    expect('name' in spec ? { name: spec.name, range: spec.range ?? null } : { skipped: spec.reason }).toEqual({ name: P, range: null });
+  });
+
+  it.each([`npx ${P}@`, `pnpm dlx ${P}@`])('T-05 `%s` gives the package, and the command is uncertain for the reason of the launcher, which a confident command keeps', (line) => {
+    const commands = parseInstallCommands(line);
+    expect(
+      commands.map((c) => c.packages.map((p): Pair => [p.name, p.range])),
+      line,
+    ).toEqual([[[P, undefined]]]);
+    expect(
+      commands.flatMap((c) => c.uncertain),
+      line,
+    ).toContain('a name ending in @ under a launcher was not measured');
+  });
+
+  it('T-05 `yarn add <P>@npm:` gives the package, and `npm install <P>@npm:` is still put aside, as today', () => {
+    expect(readings(`yarn add ${P}@npm:`).map((r) => r.packages)).toEqual([[[P, undefined]]]);
+    const npm = parseInstallCommands(`npm install ${P}@npm:`);
+    expect({ packages: npm.map((c) => c.packages), skipped: npm.map((c) => c.skipped.map((s) => s.raw)) }).toEqual({ packages: [[]], skipped: [[`${P}@npm:`]] });
+  });
 });
