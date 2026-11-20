@@ -165,6 +165,12 @@ export interface HookDecision {
   deny?: string;
   /** Warnings and notes for the model, when there is anything to say. */
   context?: string;
+  /**
+   * The reason of a question to the user, without the `dev-guardian: ` prefix and the final full stop (the
+   * dispatcher adds them): a ceiling was passed or the command was cut, so some packages were not vetted. Never set
+   * with `deny`; it does not depend on the network or the deadline.
+   */
+  ask?: string;
 }
 
 function label(r: PackageVetResult): string {
@@ -1113,6 +1119,30 @@ export const COULD_NOT_VET = 'dev-guardian could not vet ';
 export const NOT_VERIFIED = ' — not verified.';
 
 /** The note for a command read only to its first 512 KB. */
+/**
+ * The reasons to ask the user, one per signal of {@link boundedInstalls} — the names of the commands past the
+ * ceiling, the dependencies of the manifests past theirs, the cut at 512 KB — in that order, joined by `; `.
+ * `undefined` when none holds. Fixed sentences with two integers and the ceilings: nothing of the project is in them.
+ */
+function askReason(signals: { notVetted: number; manifestNotVetted: number; cut: boolean }): string | undefined {
+  const verb = (n: number): string => (n === 1 ? '1 was' : `${String(n)} were`);
+  const reasons: string[] = [];
+  if (signals.notVetted > 0) {
+    reasons.push(
+      `this command names more packages than the hook vets — ${verb(signals.notVetted)} not vetted (only the first ${String(MAX_VETTED_PACKAGES)} are); allow it only if you expected a command this long`,
+    );
+  }
+  if (signals.manifestNotVetted > 0) {
+    reasons.push(
+      `the manifests this command installs name more dependencies than the hook vets — ${verb(signals.manifestNotVetted)} not vetted (only the first ${String(MAX_MANIFEST_PACKAGES)} are); allow it only if you expected that`,
+    );
+  }
+  if (signals.cut) {
+    reasons.push('this command is longer than the hook reads — installs past the first 512 KB were not looked for; allow it only if you expected a command this long');
+  }
+  return reasons.length > 0 ? reasons.join('; ') : undefined;
+}
+
 const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
 
 /**
@@ -1158,7 +1188,9 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {
     const said = [...manifestNotes, ...(cut ? [CUT_NOTE] : [])];
-    return said.length > 0 ? { context: said.join('\n') } : null;
+    if (said.length === 0) return null;
+    const question = askReason({ notVetted, manifestNotVetted, cut });
+    return question === undefined ? { context: said.join('\n') } : { context: said.join('\n'), ask: question };
   }
 
   const offline = env['GUARDIAN_OFFLINE'] === '1';
@@ -1330,7 +1362,9 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     );
   }
   if (cut) lines.push(CUT_NOTE);
-  return lines.length > 0 ? { context: lines.join('\n') } : null;
+  if (lines.length === 0) return null;
+  const question = askReason({ notVetted, manifestNotVetted, cut });
+  return question === undefined ? { context: lines.join('\n') } : { context: lines.join('\n'), ask: question };
 }
 
 const NOT_FOUND = 'not found on the public registry — if it is private or local, ignore this.';

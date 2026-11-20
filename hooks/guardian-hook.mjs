@@ -1350,7 +1350,7 @@ async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
  *   from the command's directory up to it and never beyond — a workspace keeps its lockfile at the root.
  * @param {string} toolName
  * @param {ReadonlyArray<{ text: string, shell: 'bash' | 'powershell' }>} [nested]
- * @returns {Promise<{ deny?: string, context?: string } | null>}
+ * @returns {Promise<{ deny?: string, context?: string, ask?: string } | null>}
  */
 async function vetInstallCommand(command, cwd, root, toolName, nested = []) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
@@ -1461,8 +1461,12 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   // Claude Code asks the user, showing them why. With the block switched off
   // it is only the warning above, as a block would be. An internal error of
   // the guard is no question — it fails open, as every hook does.
-  if (a.ask && cfg.bash.block) {
-    return respond('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: `dev-guardian: ${a.ask}.`, ...context });
+  // One question for the command: the guard's reason first (only with the block on), the install
+  // vetting's after it. The vetting's never follows that switch, as its deny does not: a ceiling
+  // passed or a command cut short would otherwise run with only a line to say what was not vetted.
+  const questions = [...(a.ask && cfg.bash.block ? [a.ask] : []), ...(vet?.ask ? [vet.ask] : [])];
+  if (questions.length > 0) {
+    return respond('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: `dev-guardian: ${questions.join('; ')}.`, ...context });
   }
   return respond('PreToolUse', notes.length > 0 ? context : undefined);
 }

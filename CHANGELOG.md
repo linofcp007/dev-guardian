@@ -24,6 +24,22 @@ version bump.
 
 ### Security
 
+- **The install hook asks the user when a call passes a ceiling, instead of saying a line and letting it run.** The hook
+  vets at most 50 packages per call, 150 dependencies of manifests and the first 512 KB of a command, and said "N more
+  packages … were not vetted" for the rest: padding a line with 51 names, a manifest with 150 dependencies ahead of
+  another, or a command past 512 KB was enough to get a package installed unvetted with only that line. It now asks:
+  `permissionDecision: ask`, with a reason that says how many were not vetted (or that installs past the first 512 KB
+  were not looked for), and the context keeps the warnings and the count line it had. This holds with `bash.block:
+  false` (the question belongs to the install vetting, whose deny does not follow that switch), offline
+  (`GUARDIAN_OFFLINE=1`) and past the vetting deadline, since the counts come before any request; if the shell guard
+  asks about the same command, one question carries both reasons, the guard's first. A deny always wins: it carries no
+  question. A command over 512 KB asks only when it names an installer. **For whoever upgrades:** every update verb
+  (`npm update`, `pnpm up`, `yarn upgrade`, `bun update`) in a project of more than 150 direct dependencies, and every
+  `pip install -r` / `uv pip install -r` of more than 150 packages, now asks at each run (no lockfile covers them);
+  an install that obeys a lockfile covering the direct dependencies does not ask, and a lockfile past 8 000 pairs
+  stays a warning line. In a `-p` run, where nobody can answer, Claude Code refuses the call and the model reads the
+  reason (its documentation; the `dontAsk` mode refuses what would ask), and there is no switch for this question
+  alone: `GUARDIAN_PKG_VET=0` switches the whole install vetting off, the deny of a malicious package with it.
 - **The install hook now vets a package written with an unquoted `>` or `<` glued to it, and `name@`.** `npm install <package>@>=1.0.0`,
   `pnpm add`, `bun add` and `yarn add` with the same word, `<package>@<2`, `<package>> out.txt` and `pip install <package>>=1.0` were never
   looked up: the hook dropped every word that has a redirection operator, a rule meant for `2>&1`. But bash hands the manager

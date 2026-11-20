@@ -7402,6 +7402,24 @@ function plainMove(dir, real, target, windows) {
 }
 var COULD_NOT_VET = "dev-guardian could not vet ";
 var NOT_VERIFIED = " \u2014 not verified.";
+function askReason(signals) {
+  const verb = (n) => n === 1 ? "1 was" : `${String(n)} were`;
+  const reasons = [];
+  if (signals.notVetted > 0) {
+    reasons.push(
+      `this command names more packages than the hook vets \u2014 ${verb(signals.notVetted)} not vetted (only the first ${String(MAX_VETTED_PACKAGES)} are); allow it only if you expected a command this long`
+    );
+  }
+  if (signals.manifestNotVetted > 0) {
+    reasons.push(
+      `the manifests this command installs name more dependencies than the hook vets \u2014 ${verb(signals.manifestNotVetted)} not vetted (only the first ${String(MAX_MANIFEST_PACKAGES)} are); allow it only if you expected that`
+    );
+  }
+  if (signals.cut) {
+    reasons.push("this command is longer than the hook reads \u2014 installs past the first 512 KB were not looked for; allow it only if you expected a command this long");
+  }
+  return reasons.length > 0 ? reasons.join("; ") : void 0;
+}
 var CUT_NOTE = "dev-guardian: installs past the first 512 KB of this command were not looked for \u2014 not verified.";
 async function decideInstallCommand(command, opts) {
   const shell = opts.shell ?? "bash";
@@ -7434,7 +7452,9 @@ async function decideInstallCommand(command, opts) {
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];
-    return said2.length > 0 ? { context: said2.join("\n") } : null;
+    if (said2.length === 0) return null;
+    const question2 = askReason({ notVetted, manifestNotVetted, cut });
+    return question2 === void 0 ? { context: said2.join("\n") } : { context: said2.join("\n"), ask: question2 };
   }
   const offline = env["GUARDIAN_OFFLINE"] === "1";
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
@@ -7592,7 +7612,9 @@ ${counts.join(`
     );
   }
   if (cut) lines.push(CUT_NOTE);
-  return lines.length > 0 ? { context: lines.join("\n") } : null;
+  if (lines.length === 0) return null;
+  const question = askReason({ notVetted, manifestNotVetted, cut });
+  return question === void 0 ? { context: lines.join("\n") } : { context: lines.join("\n"), ask: question };
 }
 var NOT_FOUND = "not found on the public registry \u2014 if it is private or local, ignore this.";
 var REGISTRY_FLAG = {
