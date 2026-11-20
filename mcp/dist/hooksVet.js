@@ -3948,6 +3948,9 @@ function launchEnd(args, table) {
   return end;
 }
 function isInitializerName(word, manager) {
+  const scoped = word.startsWith("@");
+  const versioned = word.indexOf("@", scoped ? 1 : 0) > 0;
+  if (notAPackage(word, versioned ? null : fileEndings(manager, scoped)) !== null) return false;
   return "name" in parseNpm(initializerNames(word, manager).names[0] ?? word, manager);
 }
 function initializerLaunch(head, after, before) {

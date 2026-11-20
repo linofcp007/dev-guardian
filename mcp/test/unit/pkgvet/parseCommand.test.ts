@@ -2761,6 +2761,21 @@ describe('install-vet-npm-unread-verbs', () => {
       expect(parseInstallCommands(command)).toEqual([]);
     });
 
+    // The word as written decides, not what a `create-` in front would make of it: `npm init .` is not the package `create-.`.
+    it.each([
+      'npm init .',
+      'npm init ..',
+      'npm init ~',
+      'npm create ~/templates/app',
+      'yarn create .',
+      'pnpm create ..',
+      'bun create .',
+      'npm init template.tgz',
+      'npm init https://example.invalid/template.tgz',
+    ])('T-05 `%s` names a path, an archive or a URL, not a registry name: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
     it.each(['npm --dgunknown create install P', 'npm --dgunknown init install P', 'bun --dgunknown c install P'])(
       'T-05 `%s` stays the `install` command with P, as today',
       (command) => {

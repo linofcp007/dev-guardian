@@ -1470,7 +1470,12 @@ function launchEnd(args: readonly ShellWord[], table: FlagTable): number {
 
 /** Whether a word given to an initializer is a registry name: not a path, a URL, an archive, `user/repo` or a bad range. */
 function isInitializerName(word: string, manager: string): boolean {
-  // Judged by the package it is made into: a lone scope (`@s`) is no name by itself, but `@s/create` is one.
+  // The word as written decides first: a path, a URL, an SSH spec or an archive is no registry name, whatever a `create-` in
+  // front would make of it (`npm init .` is not the package `create-.`, nor `npm init ~` the package `create-~`).
+  const scoped = word.startsWith('@');
+  const versioned = word.indexOf('@', scoped ? 1 : 0) > 0;
+  if (notAPackage(word, versioned ? null : fileEndings(manager, scoped)) !== null) return false;
+  // Then it is judged by the package it is made into: a lone scope (`@s`) is no name by itself, but `@s/create` is one.
   return 'name' in parseNpm(initializerNames(word, manager).names[0] ?? word, manager);
 }
 
