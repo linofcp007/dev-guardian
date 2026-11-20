@@ -124,3 +124,24 @@ describe('download-then-run stays linear in the file', () => {
     }
   });
 });
+
+// scanskill-shell-lookalike-false-positives: the header form, the `json.tool` step and the plain request line that
+// the fix adds are read by `scanContent` from every start of a long line. Each case hands the new shape as many
+// starting points as it can, and a failing tail where it can (no `-H`, a closing `| bash`, a path past 512
+// characters); both sizes are compared with `expectLinear`, never a number of milliseconds. Green before the fix
+// (the shapes are read as they are today) and after it.
+describe('scanskill-shell-lookalike-false-positives', () => {
+  it.each([
+    ['T-03 a header name of many words', (n: number): string => `curl -H "${line('key-', n)}: $A_TOKEN" https://x.example`],
+    ['T-03 the same name behind -X, not -H (fails at the flag)', (n: number): string => `curl -X "${line('key-', n)}: $A_TOKEN"`],
+    ['T-03 json.tool steps after base64 -d', (n: number): string => `echo x | base64 -d ${line('| python3 -m json.tool ', n)}`],
+    ['T-03 json.tool steps after base64 -d, then | bash', (n: number): string => `echo x | base64 -d ${line('| python3 -m json.tool ', n)}| bash`],
+    ['T-03 a URL path of .env words past 512 characters', (n: number): string => `curl https://x.example${line('/.env', n)}`],
+  ])('%s', (label, make) => {
+    for (const isCode of [true, false]) {
+      expectLinear(`${label} (${isCode ? 'code' : 'instruction'} file)`, (size) => {
+        scanContent(make(size), isCode);
+      }, SIZE);
+    }
+  });
+});
