@@ -533,3 +533,30 @@ describe('install-vet-redirect-glued-word', () => {
     });
   });
 });
+
+// ───────────────── install-vet-over-ceiling-asks — the candidate ceiling is a question now, not a note
+
+describe('install-vet-over-ceiling-asks', () => {
+  const ID = 'install-candidates-over-ceiling';
+  const record = (): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === ID);
+
+  it('T-06 the record `install-candidates-over-ceiling` says the hook asks the user before the install runs, and no longer says it does not deny or ask', () => {
+    const doc = (record()?.doc ?? '').replace(/\s+/g, ' ');
+    expect(record(), `the data file has no record ${ID}`).toBeDefined();
+    expect(doc).not.toContain('it does not deny or ask');
+    expect(doc).toContain('the hook says how many packages of the command were not vetted and asks the user before the install runs');
+  });
+
+  it('T-06 the record expects `ask` of its example, and the dispatcher, run without the network, gives `ask`', () => {
+    const hooks = (record()?.examples ?? []).flatMap((e) => (e.detector === 'hook' ? [e] : []));
+    expect(hooks.map((e) => e.expect.decision)).toEqual(['ask']);
+    const limit = record();
+    expect(limit).toBeDefined();
+    const env = limit === undefined ? {} : exampleEnv(limit);
+    const given = hooks.map((e) => {
+      const got = answer(e, env);
+      return got.detector === 'hook' ? got.decision : got.detector;
+    });
+    expect(given).toEqual(['ask']);
+  });
+});

@@ -2382,3 +2382,103 @@ describe('install-vet-redirect-glued-word', () => {
     expect(reason, tool).toContain('does not exist on the npm registry');
   });
 });
+
+// ───────────────── install-vet-over-ceiling-asks — past a ceiling, the dispatcher asks the user
+
+describe('install-vet-over-ceiling-asks', () => {
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const TYPO = 'lodahs';
+  const named = (n: number): string => `dgprobe-zzq7731-c${String(n)}`;
+  /** `lodahs` first, then 50 more: 51 names, the registry has them all, and the 51st is the one that is not vetted. */
+  const NAMES = [TYPO, ...Array.from({ length: 50 }, (_, i) => named(i + 1))];
+  const INSTALL = `npm install ${NAMES.join(' ')}`;
+  const ROUTES: Record<string, Route> = { [OSV]: { osv: {} }, ...Object.fromEntries(NAMES.map((n) => [url(n), npmDoc('1.0.0')])) };
+  const VET_REASON = 'this command names more packages than the hook vets';
+  const GUARD_REASON = "this command deletes or moves away Claude Code's settings";
+  const userConfig = (config: Record<string, unknown>): void => {
+    mkdirSync(join(home, '.config', 'dev-guardian'), { recursive: true });
+    writeFileSync(join(home, '.config', 'dev-guardian', 'hooks.json'), JSON.stringify(config));
+  };
+  const reasonOf = (r: HookOut): string => r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+  const contextOf = (r: HookOut): string => r.output?.hookSpecificOutput?.additionalContext ?? '(no context)';
+
+  it('T-05 `npm install` with 51 names the registry has, the typosquat `lodahs` among the first 50: `ask`, the reason starts with the vetting\'s, the context keeps the warning and the count line', () => {
+    const r = runHook(INSTALL, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(TYPO));
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(r)).toMatch(/^dev-guardian: this command names more packages than the hook vets/);
+    expect(contextOf(r)).toMatch(/lodahs.*lodash/s);
+    expect(contextOf(r)).toContain('1 more packages in this command were not vetted');
+  });
+
+  it('T-05 the same command from the PowerShell tool: `ask`', () => {
+    const r = runHook(INSTALL, ROUTES, { tool: 'PowerShell' });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(r)).toContain(VET_REASON);
+  });
+
+  it('T-05 with `bash.block: false` in the user configuration: `ask` all the same (the question is the vetting\'s, not the guard\'s)', () => {
+    userConfig({ bash: { block: false } });
+    const r = runHook(INSTALL, ROUTES);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(r)).toContain(VET_REASON);
+  });
+
+  it('T-05 a command the shell guard also asks about, then the install: ONE question, the guard\'s reason first and the vetting\'s after it; with `bash.block: false` only the vetting\'s', () => {
+    const command = `rm .claude/settings.json; ${INSTALL}`;
+    const both = runHook(command, ROUTES);
+    expect(both.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    const reason = reasonOf(both);
+    expect(reason).toMatch(/^dev-guardian: this command deletes or moves away Claude Code's settings/);
+    expect(reason.indexOf(GUARD_REASON)).toBeGreaterThanOrEqual(0);
+    expect(reason.indexOf(VET_REASON)).toBeGreaterThan(reason.indexOf(GUARD_REASON));
+
+    userConfig({ bash: { block: false } });
+    const vetOnly = runHook(command, ROUTES);
+    expect(vetOnly.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(vetOnly)).toMatch(/^dev-guardian: this command names more packages than the hook vets/);
+    expect(reasonOf(vetOnly)).not.toContain(GUARD_REASON);
+    expect(contextOf(vetOnly)).toContain("deletes or moves away Claude Code's settings");
+  });
+
+  it('T-05 with `GUARDIAN_PKG_VET=0` the vetting asks nothing: no request, no question', () => {
+    const r = runHook(INSTALL, ROUTES, { env: { GUARDIAN_PKG_VET: '0' } });
+    expect(r.output).toBeUndefined();
+    expect(r.requests).toEqual([]);
+    const guarded = runHook(`rm .claude/settings.json; ${INSTALL}`, ROUTES, { env: { GUARDIAN_PKG_VET: '0' } });
+    expect(guarded.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(guarded)).not.toContain(VET_REASON);
+  });
+
+  describe('T-08 a command cut at 512 KB, through the dispatcher', () => {
+    const CUT_REASON = 'installs past the first 512 KB were not looked for';
+    const GUARD_CUT = 'too large or too deeply nested to assess in full';
+    const padded = `${'echo x; '.repeat(70_000)}npm i ${named(1)}`;
+
+    it('T-08 `echo x; ` 70 000 times then `npm i <name>`, with `bash.block: false`: the question carries only the vetting\'s reason', () => {
+      userConfig({ bash: { block: false } });
+      const r = runHook(padded, {});
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(reasonOf(r)).toContain(CUT_REASON);
+      expect(reasonOf(r)).not.toContain(GUARD_CUT);
+    });
+
+    it('T-08 the same with the guard on: the guard\'s reason first, the vetting\'s after it', () => {
+      const r = runHook(padded, {});
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+      const reason = reasonOf(r);
+      expect(reason).toContain(GUARD_CUT);
+      expect(reason.indexOf(CUT_REASON)).toBeGreaterThan(reason.indexOf(GUARD_CUT));
+    });
+
+    it('T-08 a 600 KB command with no installer word and `bash.block: false`: no question (a protection)', () => {
+      userConfig({ bash: { block: false } });
+      const command = 'echo x; '.repeat(75_000);
+      expect(command.length).toBeGreaterThan(512 * 1024);
+      const r = runHook(command, {});
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.requests).toEqual([]);
+    });
+  });
+});

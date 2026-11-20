@@ -916,3 +916,41 @@ describe('install-vet-launcher-runs-manager', () => {
     expect(skill).not.toContain('nem `npx`');
   });
 });
+
+// ───────────────── install-vet-over-ceiling-asks — docs/hooks.md says that going past a ceiling is a question
+
+describe('install-vet-over-ceiling-asks', () => {
+  /** docs/hooks.md with its line breaks flattened, so a sentence is found wherever the page wraps it. */
+  const hooksPage = (): string => read('docs/hooks.md').replace(/\s+/g, ' ');
+  const occurrences = (text: string, phrase: string): number => text.split(phrase).length - 1;
+
+  it('T-07 the by-name and the manifest passages no longer say "a note says how many more were not vetted": the user is asked, and the question says how many', () => {
+    const page = hooksPage();
+    expect(page).not.toContain('a note says how many more were not vetted');
+    // One for the installs by name, one for the manifests.
+    expect(occurrences(page, 'the user is asked, and the question says how many more were not vetted')).toBeGreaterThanOrEqual(2);
+  });
+
+  it('T-07 the passage on the candidate words says the rest are counted in the line and the user is asked', () => {
+    const page = hooksPage();
+    expect(page).toContain('are counted in the "more packages in this command were not vetted" line, and the user is asked');
+  });
+
+  it('T-07 the passage on the 512 KB cut says that past it the user is asked, not that a note says so', () => {
+    const page = hooksPage();
+    expect(page).not.toContain('512 KB (past that, no missing-name deny, and a note says so');
+    expect(page).toContain('512 KB (past that, no missing-name deny, and the user is asked, even when the first 512 KB install nothing)');
+  });
+
+  it('T-07 "With the block switched off each is only a warning" no longer covers the question of the install vetting, which the block switch does not turn off', () => {
+    const page = hooksPage();
+    expect(page).not.toContain('With the block switched off each is only a warning.');
+    expect(page).toContain('With the block switched off each is only a warning, except the question about an install past a ceiling, which the block does not follow');
+  });
+
+  it('T-07 the page says there is no switch for this question alone, and what happens when no one can answer it', () => {
+    const page = hooksPage();
+    expect(page).toContain('no switch for this question alone');
+    expect(page).toContain('when no one can answer, the call is refused and the model reads the reason');
+  });
+});
