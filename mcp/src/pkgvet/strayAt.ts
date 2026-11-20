@@ -13,17 +13,17 @@
 
 /** Whether `url` has an `@` outside its credentials, other than the scope of `ownName` (the package the URL serves, when known). */
 export function strayAt(url: URL, ownName?: string): boolean {
-  let path = url.pathname;
+  // In lower case, once: all that is asked of the path afterwards is whether an `@` is left in it.
+  let path = url.pathname.toLowerCase();
   const slash = ownName === undefined ? -1 : ownName.indexOf('/');
   if (ownName !== undefined && ownName.startsWith('@') && slash > 1) {
     const scope = ownName.slice(0, slash).toLowerCase();
     const rest = ownName.slice(slash + 1).toLowerCase();
-    // Every occurrence: Artifactory writes the scope twice (`/@scope/name/-/@scope/name-1.0.0.tgz`).
-    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) {
-      for (let at = path.toLowerCase().indexOf(form); at >= 0; at = path.toLowerCase().indexOf(form)) {
-        path = `${path.slice(0, at)}/${path.slice(at + form.length)}`;
-      }
-    }
+    // Every occurrence: Artifactory writes the scope twice (`/@scope/name/-/@scope/name-1.0.0.tgz`). ONE pass a form,
+    // never a search from the start after each removal: a lockfile line may repeat the scope 9 000 times, and a pass
+    // per occurrence spent the hook's whole time budget on 100 such entries. An occurrence that only appears once
+    // another is taken off (`/@s/@s/nn` for `@s/n`) is therefore left, and its `@` counts as stray: the host is not said.
+    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) path = path.split(form).join('/');
   }
   return path.includes('@') || url.search.includes('@') || url.hash.includes('@');
 }

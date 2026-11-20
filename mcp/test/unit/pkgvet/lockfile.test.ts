@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
 
 import { LOCKFILES, askable, lockFormat, readLock, type LockEntry, type LockFormat, type LockRead, type Pin } from '../../../src/pkgvet/lockfile.js';
-import { writtenStrayAt } from '../../../src/pkgvet/strayAt.js';
+import { strayAt, writtenStrayAt } from '../../../src/pkgvet/strayAt.js';
 import { isExactVersion } from '../../../src/pkgvet/versions.js';
 import { expectLinear, hangBound } from '../../helpers/timing.js';
 import { mulberry32 } from '../../helpers/yamlFuzz.js';
@@ -2135,5 +2135,60 @@ describe('lockfile-origin-host-from-userinfo', () => {
     const url = `https://host.example/@SCOPE/NOME/-/${FILE}`;
     const r = lock('package-lock', npm3({ [`node_modules/${SCOPED}`]: { version: '1.0.0', resolved: url, integrity: INTEGRITY } }));
     expect(hostOf(entryOf(r, `${SCOPED}@1.0.0`).source)).toBe('host.example');
+  });
+});
+
+// ───────────────────────────────────────────────────────── lockfile-own-scope-scan-quadratic: T-01, T-03, T-04
+describe('lockfile-own-scope-scan-quadratic', () => {
+  // Invented value, built in pieces: it is not written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const hostOf = (source: LockEntry['source']): string | undefined => ('host' in source ? source.host : undefined);
+  /** One entry `name@1.0.0` of a package-lock v3 whose URL is `url`: the host its source says, `undefined` for none. */
+  const hostOfEntry = (name: string, url: string): string | undefined => {
+    const r = lock('package-lock', npm3({ [`node_modules/${name}`]: { version: '1.0.0', resolved: url, integrity: INTEGRITY } }));
+    return hostOf(entryOf(r, `${name}@1.0.0`).source);
+  };
+
+  it('T-01 the own scope repeated n times in the URL path: eight times the occurrences cost well under 22.6 times as much', () => {
+    // The shape, not the machine: linear ~8, quadratic ~64. Each URL is built once per size, outside the timed function.
+    for (const [form, label] of [['/@a/b0', 'plain'], ['/@a%2fb0', 'encoded']] as const) {
+      const urls = new Map([1_000, 8_000].map((n) => [n, new URL(`https://h.example${form.repeat(n)}/-/b0-1.0.0.tgz`)]));
+      expect(strayAt(urls.get(1_000) ?? new URL('https://h.example/'), '@a/b0'), `${label}: every occurrence is the own scope`).toBe(false);
+      expectLinear(`strayAt: the own scope (${label}) n times`, (n) => void strayAt(urls.get(n) ?? new URL('https://h.example/'), '@a/b0'), 1_000);
+    }
+  });
+
+  it('T-04 an at-sign left over when the own scope is taken off once at every place: stray, and the entry says no host', () => {
+    const url = 'https://h.example/@s/@s/nn/-/n-1.0.0.tgz';
+    expect(strayAt(new URL(url), '@s/n')).toBe(true);
+    expect(hostOfEntry('@s/n', url)).toBe('');
+  });
+
+  describe('T-03 what lockfile-origin-host-from-userinfo fixed does not change', () => {
+    it.each([
+      ['once', 'https://host.example/@scope/nome/-/nome-1.0.0.tgz'],
+      ['twice (the form of Artifactory)', 'https://host.example/api/npm/repo/@scope/nome/-/@scope/nome-1.0.0.tgz'],
+      ['three times', 'https://host.example/@scope/nome/@scope/nome/-/@scope/nome-1.0.0.tgz'],
+      ['in capitals', 'https://host.example/@SCOPE/NOME/-/nome-1.0.0.tgz'],
+      ['encoded with %2f', 'https://host.example/@scope%2fnome/-/nome-1.0.0.tgz'],
+      ['encoded with %2F', 'https://host.example/@scope%2Fnome/-/nome-1.0.0.tgz'],
+    ])('the own scope %s still names the host', (_label, url) => {
+      expect({ url, host: hostOfEntry('@scope/nome', url) }).toEqual({ url, host: 'host.example' });
+    });
+
+    it.each([
+      ['an at-sign after the own scope', `https://${TOKEN}/@scope/nome@host.example/-/nome-1.0.0.tgz`],
+      ['an at-sign in the query', `https://${TOKEN}/@scope/nome/-/nome-1.0.0.tgz?x=a@host.example`],
+      ['an at-sign in the fragment', `https://${TOKEN}/@scope/nome/-/nome-1.0.0.tgz#a@host.example`],
+    ])('%s still says no host', (_label, url) => {
+      expect({ url, host: hostOfEntry('@scope/nome', url) }).toEqual({ url, host: '' });
+    });
+
+    it('an entry with no name, and an entry without a scope whose path has an at-sign, still say no host', () => {
+      const url = `https://${TOKEN}/@host.example/nome/-/nome-1.0.0.tgz`;
+      const unnamed = lock('package-lock', npm1({ nome: { version: url } })).entries.filter((e: LockEntry) => e.pin === undefined);
+      expect({ count: unnamed.length, host: unnamed[0] === undefined ? undefined : hostOf(unnamed[0].source) }).toEqual({ count: 1, host: '' });
+      expect(hostOfEntry('nome', 'https://host.example/@x/nome/-/nome-1.0.0.tgz')).toBe('');
+    });
   });
 });

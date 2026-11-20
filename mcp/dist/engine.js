@@ -56720,16 +56720,12 @@ var init_npmPlanningCopy = __esm({
 
 // src/pkgvet/strayAt.ts
 function strayAt(url2, ownName) {
-  let path3 = url2.pathname;
+  let path3 = url2.pathname.toLowerCase();
   const slash = ownName === void 0 ? -1 : ownName.indexOf("/");
   if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
     const scope = ownName.slice(0, slash).toLowerCase();
     const rest = ownName.slice(slash + 1).toLowerCase();
-    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) {
-      for (let at = path3.toLowerCase().indexOf(form); at >= 0; at = path3.toLowerCase().indexOf(form)) {
-        path3 = `${path3.slice(0, at)}/${path3.slice(at + form.length)}`;
-      }
-    }
+    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) path3 = path3.split(form).join("/");
   }
   return path3.includes("@") || url2.search.includes("@") || url2.hash.includes("@");
 }
