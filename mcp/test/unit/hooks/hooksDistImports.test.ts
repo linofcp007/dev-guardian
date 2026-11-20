@@ -150,3 +150,51 @@ describe('the hooks bundle has what the dispatcher loads', () => {
     expect(dispatcherLoaders()).toContain('loadHeartbeat');
   });
 });
+
+// Bugfix `hook-unc-cwd-hang`: which folders a call works in is chosen by a module of the common part, and a folder on
+// the network is asked about by a part of its own (`hooksProbe`), so that only a call with such a folder parses it
+// and its `node:child_process`. Task 2 merges these two loaders into `USED` above; until then they are held here, so
+// that the loaders the dispatcher does not name yet leave the two tests over `USED` as they are.
+describe('hook-unc-cwd-hang', () => {
+  const UNC_LOADERS: Readonly<Record<string, readonly string[]>> = {
+    loadSessionDirs: ['chooseSessionDirs', 'unreachableLines'],
+    loadFolderProbe: ['probeFolders'],
+  };
+
+  it('T-09 the bundle gives the dispatcher what it loads: loadSessionDirs and loadFolderProbe, named by the dispatcher and resolving to the two functions', async () => {
+    expect(dispatcherLoaders()).toEqual(expect.arrayContaining(Object.keys(UNC_LOADERS)));
+    const bundle = (await import(pathToFileURL(BUNDLE).href)) as Record<string, unknown>;
+    const missing: string[] = [];
+    for (const [loader, names] of Object.entries(UNC_LOADERS)) {
+      const load = bundle[loader];
+      if (typeof load !== 'function') {
+        missing.push(`${loader}: not exported`);
+        continue;
+      }
+      const mod = (await (load as () => Promise<Record<string, unknown>>)()) as Record<string, unknown>;
+      for (const name of names) if (typeof mod[name] !== 'function') missing.push(`${loader}: ${name}`);
+    }
+    expect(missing).toEqual([]);
+  });
+
+  it('T-09 the common, write, shell and session parts gain no node:child_process from this; hooksProbe is the one, with the session part, that loads it', async () => {
+    const { hooksOptions, HOOK_PARTS } = (await import(pathToFileURL(join(MCP_ROOT, 'scripts', 'bundleOptions.mjs')).href)) as {
+      hooksOptions: (root: string, digest: { bytes: number; sha256: string }) => BuildOptions;
+      HOOK_PARTS: readonly string[];
+    };
+    // `dist/<part>.js` for each of these is what `distSync.test.ts` lists as BUNDLE_NAMES.
+    expect(HOOK_PARTS).toContain('hooksProbe');
+    const meta = (await build({ ...hooksOptions(MCP_ROOT, { bytes: 0, sha256: '' }), write: false, metafile: true, logLevel: 'silent' })).metafile;
+    const output = (entry: string): { sources: string[]; builtins: string[] } => {
+      const o = Object.values(meta.outputs).find((x) => x.entryPoint === `src/${entry}.ts`);
+      expect(o, entry).toBeDefined();
+      return { sources: Object.keys(o?.inputs ?? {}), builtins: (o?.imports ?? []).map((i) => i.path).filter((p) => p.startsWith('node:')) };
+    };
+    const withChildProcess = ['hooksEntry', 'hooksWrite', 'hooksBash', 'hooksSession', 'hooksProbe']
+      .filter((entry) => output(entry).builtins.includes('node:child_process'))
+      .sort();
+    expect(withChildProcess).toEqual(['hooksProbe', 'hooksSession']);
+    expect(output('hooksEntry').sources).toContain('src/hooks/sessionDirs.ts');
+    expect(output('hooksProbe').sources.sort()).toEqual(['src/hooks/folderProbe.ts', 'src/hooksProbe.ts']);
+  });
+});
