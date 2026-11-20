@@ -1118,7 +1118,6 @@ function plainMove(dir: string, real: string, target: string, windows: boolean):
 export const COULD_NOT_VET = 'dev-guardian could not vet ';
 export const NOT_VERIFIED = ' — not verified.';
 
-/** The note for a command read only to its first 512 KB. */
 /**
  * The reasons to ask the user, one per signal of {@link boundedInstalls} — the names of the commands past the
  * ceiling, the dependencies of the manifests past theirs, the cut at 512 KB — in that order, joined by `; `.
@@ -1143,7 +1142,8 @@ function askReason(signals: { notVetted: number; manifestNotVetted: number; cut:
   return reasons.length > 0 ? reasons.join('; ') : undefined;
 }
 
-const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
+/** The note for a command read only to its first 512 KB. */
+const CUT_NOTE ='dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
 
 /**
  * `null` when there is nothing to say: no install command, or every package

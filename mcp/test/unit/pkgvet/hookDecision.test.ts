@@ -5184,6 +5184,16 @@ describe('install-vet-over-ceiling-asks', () => {
       expect(d?.deny).toBe(MISSING(typed(7)));
       expect(askOf(d)).toBeUndefined();
     });
+
+    // Review of the execution (2026-11-20): the refusal wins over the question of the 512 KB cut too.
+    it('T-03 a malicious package in the read part of a command over 512 KB: a deny that names it, and no `ask`', async () => {
+      const command = `npm i ${typed(1)}; ${'echo x; '.repeat(70_000)}npm i ${typed(2)}`;
+      expect(command.length).toBeGreaterThan(512 * 1024);
+      const d = await decide(command, registry({ exists: [typed(1), typed(2)], malicious: [typed(1)] }));
+      expect(d?.deny ?? '').toContain(typed(1));
+      expect(d?.deny ?? '').toContain('MAL-2026-77');
+      expect(askOf(d)).toBeUndefined();
+    });
   });
 
   describe('T-04 inside the ceilings nothing changes, and there is no question', () => {
