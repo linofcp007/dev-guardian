@@ -4748,3 +4748,188 @@ describe('install-vet-global-update-by-name', () => {
     expect(d?.context ?? '').toContain(NOT_FOUND);
   });
 });
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher runs, when it is a package manager, is vetted
+
+describe('install-vet-launcher-runs-manager', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const DENIED = 'does not exist on the npm registry';
+  const NOT_FOUND = `'${P}': not found on the public registry`;
+  const MANAGERS = ['npm', 'pnpm', 'yarn', 'yarnpkg', 'bun', 'corepack', 'npx'];
+  const NBSP = String.fromCharCode(0xa0);
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === urlOf(name)).length;
+  const pkgJson = (dir: string, deps: Record<string, string>): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  };
+  /** A line as the hook hands it to the decision: the command, the scripts the shell guard read in it and the tool's shell. */
+  type Line = { command: string; nested?: Array<{ text: string; shell: 'bash' | 'powershell' }>; shell?: 'bash' | 'powershell' };
+  const decide = async (line: Line, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(line.command, opts(reg.fetchImpl, { nested: line.nested, shell: line.shell }));
+  const plain = (command: string): Line => ({ command });
+
+  // ── T-04: the manifest of the project, vetted as in an install without the launcher
+
+  it.each([`npx pnpm add ${P}`, `npx pnpm install`, `npx yarn`])(
+    'T-04 `%s`, with a malicious dependency in package.json: DENIED by the manifest, as the same command without the launcher is',
+    async (command) => {
+      pkgJson(project, { [DEP]: '^1.0.0' });
+      const without = command.replace(/^npx /, '');
+      const control = await decide(plain(without), registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] }));
+      expect(control?.deny ?? '', `the control ${without}`).toContain(DEP);
+      const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+      const d = await decide(plain(command), reg);
+      expect(d?.deny ?? '', command).toContain(DEP);
+      expect(d?.deny ?? '', command).toContain('package.json');
+      expect(asked(reg, DEP), command).toBeGreaterThan(0);
+    },
+  );
+
+  it('T-04 `npx pnpm add <P>` with `node_modules/pnpm` in the project: the launcher is not asked about, and the inner command is read all the same', async () => {
+    pkgJson(project, { [DEP]: '^1.0.0' });
+    mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'pnpm'), '#!/bin/sh\n');
+    mkdirSync(join(project, 'node_modules', 'pnpm'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'pnpm', 'package.json'), '{"name":"pnpm"}');
+    const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+    const d = await decide(plain(`npx pnpm add ${P}`), reg);
+    expect(asked(reg, 'pnpm'), 'the manager is installed: the outer command asks nothing').toBe(0);
+    expect(d?.deny ?? '').toContain(DEP);
+    expect(d?.deny ?? '').toContain('package.json');
+  });
+
+  it('T-04 `cd sub && npx pnpm add <P>` reads the manifest of `sub`', async () => {
+    pkgJson(join(project, 'sub'), { [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+    const d = await decide(plain(`cd sub && npx pnpm add ${P}`), reg);
+    expect(d?.deny ?? '').toContain(DEP);
+    expect(d?.deny ?? '').toContain('package.json');
+  });
+
+  it.each([
+    `npx --prefix d pnpm add ${P}`,
+    `pnpm --dir d dlx yarn add ${P}`,
+    `yarn --cwd d dlx pnpm add ${P}`,
+    `npm exec -w pkg -- pnpm add ${P}`,
+  ])('T-04 `%s`: one line says package.json was not read, and the manifest of the command folder is not asked', async (command) => {
+    pkgJson(project, { [DEP]: '^1.0.0' });
+    pkgJson(join(project, 'd'), { [DEP]: '^1.0.0' });
+    pkgJson(join(project, 'pkg'), { [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+    const d = await decide(plain(command), reg);
+    expect(d?.deny, command).toBeUndefined();
+    expect(d?.context ?? '', command).toContain('package.json was not read (where the command runs could not be determined)');
+    expect(asked(reg, DEP), command).toBe(0);
+  });
+
+  // ── T-06: the refusal and the warning
+
+  /** The lines measured on 2026-11-20 (the nine of the decision 1) and the three inferences of the decision 2: a missing name is DENIED. */
+  const REFUSED = [
+    `npx pnpm add ${P}`,
+    `npx yarn add ${P}`,
+    `npx -y pnpm@11 add ${P}`,
+    `npm exec -- pnpm add ${P}`,
+    `pnpm dlx yarn add ${P}`,
+    `yarn dlx pnpm add ${P}`,
+    `bunx pnpm add ${P}`,
+    `npx corepack yarn add ${P}`,
+    `npm exec corepack -- yarn add ${P}`,
+    `npx pnpm add -D ${P}`,
+    `npx pnpm@12 add ${P}`,
+    `corepack pnpm@11 dlx yarn add ${P}`,
+  ].map(plain);
+
+  /** Everything else that reads: a missing name only WARNS. */
+  const WARNED: Line[] = [
+    `bunx yarn add ${P}`,
+    `npx npm install ${P}`,
+    `npx bun add ${P}`,
+    `npx yarnpkg add ${P}`,
+    `npm x pnpm add ${P}`,
+    `bun x pnpm add ${P}`,
+    `pnpx yarn add ${P}`,
+    `npx --yes pnpm add ${P}`,
+    `npm exec -y -- pnpm add ${P}`,
+    `npm exec pnpm -- add ${P}`,
+    `npm exec pnpm add ${P}`,
+    `npx -p pnpm pnpm add ${P}`,
+    `npx --no-install pnpm add ${P}`,
+    `npx pnpm install ${P}`,
+    `npx corepack pnpm add ${P}`,
+    `npx corepack yarn@4 add ${P}`,
+    `npx pnpm -- add ${P}`,
+    `npx pnpm add --dgunknown ${P}`,
+    `sudo npx pnpm add ${P}`,
+  ]
+    .map(plain)
+    .concat([
+      { command: `bash -c 'npx pnpm add ${P}'`, nested: [{ text: `npx pnpm add ${P}`, shell: 'bash' }] },
+      // The POSIX reading finds no command here (`npx<nbsp>pnpm` is one word); the PowerShell reading finds `npx pnpm add <P>`.
+      { command: `npx${NBSP}pnpm add ${P}`, shell: 'powershell' },
+    ]);
+
+  const label = (l: Line): string => `${l.command}${l.shell === undefined ? '' : ` (${l.shell} reading)`}`;
+
+  it.each(REFUSED.map((l) => [label(l), l] as const))('T-06 `%s` with a name the registry does not have is DENIED, naming it', async (_name, line) => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(line, reg);
+    expect(d?.deny ?? '', line.command).toContain(DENIED);
+    expect(d?.deny ?? '', line.command).toContain(`'${P}'`);
+    expect(asked(reg, P), line.command).toBeGreaterThan(0);
+  });
+
+  it.each(WARNED.map((l) => [label(l), l] as const))('T-06 `%s` with a name the registry does not have only WARNS, saying it was not found', async (_name, line) => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(line, reg);
+    expect(d?.deny, line.command).toBeUndefined();
+    expect(d?.context ?? '', line.command).toContain(NOT_FOUND);
+    expect(asked(reg, P), line.command).toBeGreaterThan(0);
+  });
+
+  it.each([...REFUSED, ...WARNED].map((l) => [label(l), l] as const))('T-06 `%s` with a package OSV lists as malicious is DENIED, with the advisory', async (_name, line) => {
+    const reg = registry({ exists: [...MANAGERS, P], malicious: [P] });
+    const d = await decide(line, reg);
+    expect(d?.deny ?? '', line.command).toContain('MAL-2026-77');
+    expect(d?.deny ?? '', line.command).toContain(P);
+  });
+
+  it('T-06 `npx pnpm dlx yarn add <P>`: `pnpm` and `yarn` are looked up and `<P>` never is (one level only)', async () => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(plain(`npx pnpm dlx yarn add ${P}`), reg);
+    expect({ pnpm: asked(reg, 'pnpm'), yarn: asked(reg, 'yarn'), named: asked(reg, P) }).toEqual({ pnpm: 1, yarn: 1, named: 0 });
+    expect(d?.deny).toBeUndefined();
+  });
+
+  it('T-06 `npx npx pnpm add <P>`: only `npx` is looked up (one level only)', async () => {
+    const reg = registry({ exists: MANAGERS });
+    await decide(plain(`npx npx pnpm add ${P}`), reg);
+    expect({ npx: asked(reg, 'npx'), pnpm: asked(reg, 'pnpm'), named: asked(reg, P) }).toEqual({ npx: 1, pnpm: 0, named: 0 });
+  });
+
+  // ── T-07: the registry the project configures, said on the line of the inner command
+
+  it('T-07 `npx pnpm add <a missing name>` with a registry in the project .npmrc: no deny, the name is said as not found, and the registry line is there once', async () => {
+    const OTHER = 'https://npm.other.example';
+    pkgJson(project, {});
+    writeFileSync(join(project, '.npmrc'), `registry=${OTHER}/\n`);
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(plain(`npx pnpm add ${P}`), reg);
+    const SAYS = "dev-guardian: the project's .npmrc sets the default registry";
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+    expect(d?.context ?? '').toContain('a custom registry is configured');
+    expect((d?.context ?? '').split(SAYS).length - 1, 'the line of the registry appears once').toBe(1);
+    expect(d?.context ?? '').toContain(`${SAYS} (${OTHER}) — packages are fetched from it, and what it serves was not vetted.`);
+  });
+
+  it('T-07 `npx pnpm add --registry=https://r.example <a missing name>` warns, and says the registry of the line', async () => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(plain(`npx pnpm add --registry=https://r.example ${P}`), reg);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+    expect(d?.context ?? '').toContain('the command line: https://r.example');
+  });
+});

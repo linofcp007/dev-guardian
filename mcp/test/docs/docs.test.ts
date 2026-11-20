@@ -899,3 +899,20 @@ describe('install-vet-named-install-manifest', () => {
     expect(skill).toMatch(/`npm install` com ou sem nomes/);
   });
 });
+
+// ───────────────── install-vet-launcher-runs-manager — the prose says a launcher that runs a package manager is read like the manager
+
+describe('install-vet-launcher-runs-manager', () => {
+  it('T-10 the SECURITY.md egress row for the public registries says a launcher that runs a package manager sends the manifest names too', () => {
+    const row = read('SECURITY.md')
+      .split('\n')
+      .find((line) => line.startsWith('| `registry.npmjs.org`'));
+    expect(row, 'the egress row of the public registries').toBeDefined();
+    expect(row).toMatch(/launcher that runs a package manager[^|]*manifest/);
+  });
+
+  it('T-10 skills/guardian-deps/SKILL.md no longer says the manifest is not read for `npx`', () => {
+    const skill = read('skills/guardian-deps/SKILL.md');
+    expect(skill).not.toContain('nem `npx`');
+  });
+});

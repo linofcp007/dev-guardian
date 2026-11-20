@@ -2261,3 +2261,63 @@ describe('install-vet-global-update-by-name', () => {
     expect(r.output?.hookSpecificOutput?.additionalContext ?? '').not.toContain(FRESH);
   });
 });
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher runs, when it is a package manager, through the dispatcher
+
+describe('install-vet-launcher-runs-manager', () => {
+  const ABSENT = 'dgprobe-zzq7731-absent';
+  const EXISTS = 'dgprobe-zzq7731-exists';
+  const M = 'dgprobe-zzq7731-evil';
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  /** The managers the launcher runs exist; `named` is the package the manager is told to install; OSV calls `M` malicious. */
+  const routes = (named: string): Record<string, Route | Route[]> => ({
+    [url('pnpm')]: npmDoc('1.0.0'),
+    [url('yarn')]: npmDoc('1.0.0'),
+    [url('corepack')]: npmDoc('1.0.0'),
+    [url(named)]: named === ABSENT ? { status: 404 } : npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${M}@1.0.0`]: ['MAL-2026-0731'] } },
+  });
+
+  // The nine lines measured on 2026-11-20 with a substitute registry (bug.md): each one installs `<P>`.
+  it.each([
+    `npx pnpm add ${ABSENT}`,
+    `npx yarn add ${ABSENT}`,
+    `npx -y pnpm@11 add ${ABSENT}`,
+    `npm exec -- pnpm add ${ABSENT}`,
+    `pnpm dlx yarn add ${ABSENT}`,
+    `yarn dlx pnpm add ${ABSENT}`,
+    `bunx pnpm add ${ABSENT}`,
+    `npx corepack yarn add ${ABSENT}`,
+    `npm exec corepack -- yarn add ${ABSENT}`,
+  ])('T-02 `%s` with a name the registry does not have is DENIED, naming the package, and the launched manager was asked about too', (command) => {
+    const r = runHook(command, routes(ABSENT));
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain(ABSENT);
+    expect(reason, command).toContain('does not exist on the npm registry');
+    expect(r.requests, command).toContain(url(ABSENT));
+    expect(
+      r.requests.some((u) => u === url('pnpm') || u === url('yarn') || u === url('corepack')),
+      `${command}: the launched manager is asked about as well`,
+    ).toBe(true);
+  });
+
+  it.each([`npx pnpm add ${M}`, `npm exec corepack -- yarn add ${M}`])('T-02 `%s` with a package OSV lists as malicious is DENIED, with the advisory', (command) => {
+    const r = runHook(command, routes(M));
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain('MAL-2026-0731');
+    expect(reason, command).toContain(M);
+  });
+
+  it('T-02 `npx pnpm add <a package that exists>`: the package is asked about, and what the answer says of the launched manager is what it says of `npx pnpm --version`', () => {
+    const r = runHook(`npx pnpm add ${EXISTS}`, routes(EXISTS));
+    expect(r.requests, 'the package named to the manager is asked about').toContain(url(EXISTS));
+    const control = runHook('npx pnpm --version', routes(EXISTS));
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toEqual(control.output?.hookSpecificOutput?.additionalContext);
+  });
+});

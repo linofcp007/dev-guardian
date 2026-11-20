@@ -393,6 +393,7 @@ describe('the limits of the manifest vetting, as data', () => {
     'install-candidates-over-ceiling',
     'install-global-update-by-name',
     'install-initializers',
+    'install-launcher-runs-manager',
     'install-other-runners',
     'launcher-flag-words',
     'lockfile-origin-host-unsaid',

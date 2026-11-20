@@ -169,6 +169,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'install-candidates-over-ceiling',
       'install-global-update-by-name',
       'install-initializers',
+      'install-launcher-runs-manager',
       'install-other-runners',
       'launcher-flag-words',
       'lockfile-origin-host-unsaid',
@@ -429,5 +430,54 @@ describe('install-vet-global-update-by-name', () => {
     expect(doc).toContain('install scripts');
     expect(doc).toContain('vulnerabilities');
     expect(doc).toContain('`yarn workspace <w> upgrade <P>`');
+  });
+});
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher in front of a package manager leaves unverified
+
+describe('install-vet-launcher-runs-manager', () => {
+  const ID = 'install-launcher-runs-manager';
+  const record = (id: string): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === id);
+  const commandOf = (e: { detector: string; input?: Record<string, unknown> }): string => (e.detector === 'hook' ? String(e.input?.['command']) : '');
+
+  it('T-08 the record `install-other-runners` no longer says the package behind a launcher that runs a manager is not vetted, and its launcher examples are gone', () => {
+    const other = record('install-other-runners');
+    expect(other, 'the data file has no record install-other-runners').toBeDefined();
+    const doc = other?.doc ?? '';
+    expect(doc).not.toContain('the package the manager then installs is not vetted');
+    expect(doc).not.toMatch(/npx (?:corepack|pnpm|yarn) /);
+    const launchers = (other?.examples ?? []).map(commandOf).filter((c) => /^(?:npx|npm exec|pnpm dlx|yarn dlx|bunx|bun x|pnpx) /.test(c));
+    expect(launchers).toEqual([]);
+  });
+
+  it('T-08 the record `install-launcher-runs-manager` exists, says the forms that were not measured, the one level, `@pnpm/exe`, `@yarnpkg/cli-dist` and `pnpm exec <manager>`, and has hook examples the dispatcher harness runs', () => {
+    const limit = record(ID);
+    expect(limit, `the data file has no record ${ID}`).toBeDefined();
+    expect(limit?.area).toBe('install-vetting');
+    const examples = limit?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${ID} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+    }
+    // The harness runs offline: what an example shows is "could not vet" or silence, never the refusal of a missing name.
+    expect(examples.filter((e) => e.detector === 'hook' && e.expect.decision === 'deny')).toEqual([]);
+    const doc = limit?.doc ?? '';
+    expect(doc).toMatch(/not measured|unmeasured/i);
+    expect(doc).toContain('npx npx pnpm');
+    expect(doc).toContain('npx pnpm dlx yarn');
+    expect(doc).toContain('@pnpm/exe');
+    expect(doc).toContain('@yarnpkg/cli-dist');
+    expect(doc).toContain('pnpm exec');
+    // docs.test.ts keeps this phrase out of every known limit.
+    expect(doc).not.toContain('pnpm install <package>');
+  });
+
+  it('T-08 the record `install-launcher-runs-manager` has the example `npx pnpm add left-pad` with `node_modules/pnpm/package.json` in the project, which warns (without the fix it is silent)', () => {
+    const examples = record(ID)?.examples ?? [];
+    const found = examples.filter(
+      (e) => e.detector === 'hook' && commandOf(e) === 'npx pnpm add left-pad' && Object.keys(e.files ?? {}).includes('node_modules/pnpm/package.json'),
+    );
+    expect(found.map((e) => (e.detector === 'hook' ? e.expect.decision : undefined))).toEqual(['warn']);
   });
 });

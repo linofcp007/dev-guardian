@@ -2994,3 +2994,132 @@ describe('install-vet-global-update-by-name', () => {
     expect(read(command).map((c) => ({ packages: c.packages, manifest: c.manifest, update: c.update }))).toEqual([{ packages: [], manifest: MANIFEST, update: true }]);
   });
 });
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher of the npm family runs, when it is a package manager
+
+describe('install-vet-launcher-runs-manager', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const Q = 'dgprobe-zzq7731-second';
+  const MANIFEST = { kind: 'package-json' };
+  type Shape = {
+    manager: string;
+    packages: Array<[string, string | undefined, string]>;
+    manifest: unknown;
+    global: unknown;
+    localFirst: unknown;
+  };
+  /** What each install command of a line gives: the manager, the packages as `[name, range, raw]`, the manifest, whether it is global and whether it looks in the project first. */
+  const shapes = (command: string): Shape[] =>
+    parseInstallCommands(command).map((c) => ({
+      manager: c.manager,
+      packages: c.packages.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+      manifest: c.manifest,
+      global: c.global,
+      localFirst: c.localFirst,
+    }));
+  /** The command of the launcher itself, as the parser gives it today: the launcher's manager and the one word it launches. */
+  const outer = (manager: string, launched: [string, string | undefined, string] | undefined, localFirst: boolean): Shape => ({
+    manager,
+    packages: launched === undefined ? [] : [launched],
+    manifest: undefined,
+    global: undefined,
+    localFirst: localFirst ? true : undefined,
+  });
+  const word = (name: string, range?: string): [string, string | undefined, string] => [name, range, range === undefined ? name : `${name}@${range}`];
+
+  // ── T-01: the second command is the line without the launcher
+
+  const LAUNCHED: Array<[line: string, first: Shape, inner: string]> = [
+    [`npx pnpm add ${P}`, outer('npx', word('pnpm'), true), `pnpm add ${P}`],
+    [`npx yarn add ${P}`, outer('npx', word('yarn'), true), `yarn add ${P}`],
+    [`npx -y pnpm@11 add ${P}`, outer('npx', word('pnpm', '11'), true), `pnpm add ${P}`],
+    [`npm exec -- pnpm add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`npm exec pnpm -- add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`npm exec pnpm add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`npm x pnpm add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`pnpm dlx yarn add ${P}`, outer('pnpm', word('yarn'), false), `yarn add ${P}`],
+    [`corepack pnpm@11 dlx yarn add ${P}`, outer('pnpm', word('yarn'), false), `yarn add ${P}`],
+    [`pnpx yarn add ${P}`, outer('pnpm', word('yarn'), false), `yarn add ${P}`],
+    [`yarn dlx pnpm add ${P}`, outer('yarn', word('pnpm'), false), `pnpm add ${P}`],
+    [`bunx pnpm add ${P}`, outer('bun', word('pnpm'), true), `pnpm add ${P}`],
+    [`bun x pnpm add ${P}`, outer('bun', word('pnpm'), true), `pnpm add ${P}`],
+    [`npx npm install ${P}`, outer('npx', word('npm'), true), `npm install ${P}`],
+    [`npx bun add ${P}`, outer('npx', word('bun'), true), `bun add ${P}`],
+    [`npx yarnpkg add ${P}`, outer('npx', word('yarnpkg'), true), `yarnpkg add ${P}`],
+    [`npx pnpm add -D ${P} ${Q}`, outer('npx', word('pnpm'), true), `pnpm add -D ${P} ${Q}`],
+    [`npx -p pnpm pnpm add ${P}`, outer('npx', word('pnpm'), true), `pnpm add ${P}`],
+    [`npx -p cowsay pnpm add ${P}`, outer('npx', word('cowsay'), true), `pnpm add ${P}`],
+    [`npx --no-install pnpm add ${P}`, outer('npx', undefined, true), `pnpm add ${P}`],
+  ];
+
+  it.each(LAUNCHED)('T-01 `%s` gives the launcher command, as today, and a second one equal to the line without the launcher', (line, first, inner) => {
+    const expected = shapes(inner);
+    expect(expected.length, `the line without the launcher: ${inner}`).toBe(1);
+    expect(shapes(line), line).toEqual([first, { ...expected[0], localFirst: undefined }]);
+  });
+
+  it(`T-01 \`npm exec pnpm add -g ${P}\`: the second command is not global, and it has the manifest`, () => {
+    expect(shapes(`npm exec pnpm add -g ${P}`)).toEqual([
+      outer('npm', word('pnpm'), true),
+      { manager: 'pnpm', packages: [word(P)], manifest: MANIFEST, global: undefined, localFirst: undefined },
+    ]);
+  });
+
+  // ── T-03: behind the corepack
+
+  const COREPACK: Array<[line: string, first: Shape, inner: string]> = [
+    [`npx corepack yarn add ${P}`, outer('npx', word('corepack'), true), `corepack yarn add ${P}`],
+    [`npm exec corepack -- yarn add ${P}`, outer('npm', word('corepack'), true), `corepack yarn add ${P}`],
+    [`npx corepack pnpm@11 add ${P}`, outer('npx', word('corepack'), true), `corepack pnpm@11 add ${P}`],
+    [`pnpm dlx corepack yarn add ${P}`, outer('pnpm', word('corepack'), false), `corepack yarn add ${P}`],
+    ['npx corepack up', outer('npx', word('corepack'), true), 'corepack up'],
+    ['npx corepack use pnpm@11', outer('npx', word('corepack'), true), 'corepack up'],
+  ];
+
+  it.each(COREPACK)('T-03 `%s` gives the launcher command, as today, and a second one equal to the line without the launcher', (line, first, inner) => {
+    const expected = shapes(inner);
+    expect(expected.length, `the line without the launcher: ${inner}`).toBe(1);
+    expect(shapes(line), line).toEqual([first, { ...expected[0], localFirst: undefined }]);
+  });
+
+  it.each(['npx corepack enable', 'npx corepack --version'])('T-03 `%s` is one command, the launcher of corepack, as today', (line) => {
+    expect(shapes(line), line).toEqual([outer('npx', word('corepack'), true)]);
+  });
+
+  // ── T-05: protection — what stays one command, with the values written here
+
+  const ONE: Array<[line: string, command: Shape]> = [
+    ['npx cowsay hello', outer('npx', word('cowsay'), true)],
+    ['pnpm dlx create-thing x', outer('pnpm', word('create-thing'), false)],
+    ['bunx tsc --noEmit', outer('bun', word('tsc'), true)],
+    ['npx -p typescript tsc', outer('npx', word('typescript'), true)],
+    ['npx pnpm-lock-tool add x', outer('npx', word('pnpm-lock-tool'), true)],
+    ['npx @pnpm/exe add x', outer('npx', word('@pnpm/exe'), true)],
+    ['npx pnpm --version', outer('npx', word('pnpm'), true)],
+    ['npx yarn run build', outer('npx', word('yarn'), true)],
+    ['npx pnpm exec tsc', outer('npx', word('pnpm'), true)],
+    ['npx corepack enable', outer('npx', word('corepack'), true)],
+    [`npx npx pnpm add ${P}`, outer('npx', word('npx'), true)],
+    // The word after a flag the table does not know is only a candidate: the words are looked up and nothing is read behind them.
+    [`npx --foo pnpm add ${P}`, { ...outer('npx', word('pnpm'), true), packages: [word('pnpm'), word('add')] }],
+    [`npx -c 'pnpm add ${P}'`, outer('npx', undefined, true)],
+    [`uvx npm install ${P}`, outer('uv', word('npm'), false)],
+    [`pipx run yarn add ${P}`, outer('pipx', word('yarn'), false)],
+  ];
+
+  it.each(ONE)('T-05 `%s` is one command, as today', (line, command) => {
+    expect(shapes(line), line).toEqual([command]);
+  });
+
+  it.each([`uvx npm install ${P}`, `pipx run yarn add ${P}`])('T-05 `%s` is a Python launcher: one command, of the Python ecosystem, and no command of the npm family follows', (line) => {
+    expect(parseInstallCommands(line).map((c) => c.ecosystem)).toEqual(['pypi']);
+  });
+
+  // ── T-09: protection — the cost of the line stays linear (one level, one reading)
+
+  // `n` times the statement `npx pnpm add p;`: eight times as many cost well under 22.6 times as much (linear reads ~8,
+  // quadratic ~64; see test/helpers/timing.ts). Guards the rule "one level, one reading" against a re-reading per command.
+  it('T-09 eight times as many `npx pnpm add p;` statements cost well under 22.6 times as much', () => {
+    expectLinear('npx pnpm add p; repeated', (n) => void parseInstallCommands('npx pnpm add p;'.repeat(n)), 100);
+  }, 120_000);
+});
