@@ -3671,15 +3671,13 @@ function corepackManager(word) {
   const at = word.indexOf("@");
   return COREPACK_MANAGERS.get(at < 0 ? word : word.slice(0, at));
 }
-var NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall"]);
+var NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "install-test", "it"]);
 var NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
   "ci",
   "clean-install",
   "ic",
   "install-clean",
   "isntall-clean",
-  "install-test",
-  "it",
   "install-ci-test",
   "cit",
   "clean-install-test",

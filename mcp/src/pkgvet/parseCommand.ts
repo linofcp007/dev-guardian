@@ -1061,10 +1061,10 @@ function corepackManager(word: string | undefined): string | undefined {
   return COREPACK_MANAGERS.get(at < 0 ? word : word.slice(0, at));
 }
 
-const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall']);
-/** npm's subcommands that install the manifest and take no package: `ci`, `install-test`, `install-ci-test` and their aliases. */
+const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'install-test', 'it']);
+/** npm's subcommands that install the manifest and take no package: `ci`, `install-ci-test` and their aliases (`install-test` and `it` take a package, as `install` does: they are in {@link NPM_INSTALL}). */
 const NPM_MANIFEST_INSTALL = new Set([
-  'ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean', 'install-test', 'it', 'install-ci-test', 'cit', 'clean-install-test', 'sit',
+  'ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean', 'install-ci-test', 'cit', 'clean-install-test', 'sit',
 ]);
 /** npm's `update` and its aliases (`npm help update`: u, up, upgrade, udpate): the direct dependencies move past the lockfile's pins. */
 const NPM_UPDATE = new Set(['update', 'u', 'up', 'upgrade', 'udpate']);

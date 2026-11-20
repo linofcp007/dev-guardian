@@ -116612,15 +116612,13 @@ var init_parseCommand = __esm({
         packageFlags: set2("--spec")
       }
     };
-    NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall"]);
+    NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "install-test", "it"]);
     NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
       "ci",
       "clean-install",
       "ic",
       "install-clean",
       "isntall-clean",
-      "install-test",
-      "it",
       "install-ci-test",
       "cit",
       "clean-install-test",
