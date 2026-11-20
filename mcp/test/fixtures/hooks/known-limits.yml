@@ -972,6 +972,28 @@
         command: pnpm dlx -c dgprobe-zzq7731 --version
       expect: { decision: none }
 
+- id: tilde-range-word
+  area: install-vetting
+  doc: |-
+    In an install or launcher line of the npm family (npm, pnpm, Yarn, bun, `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`), the part after the `@` of `name@<spec>` is a range when it is a version or a range of semver words, and `~` followed by a version (`~1.0.0`, `~1`, `~1.0.x`) is one: the package is looked up with that range, as it is for `^1.0.0`. A `~` that opens a path (`name@~/x`, `name@~user/x`, `~/dir`) stays a path and is not looked up: npm 11.20, pnpm 10.33 and Yarn 1.22 ask the registry for nothing for it (measured, 2026-11-19). What stays:
+
+    - `name@~` and `name@~abc` are neither a range nor a path with a `/`: they are skipped and the hook says nothing, as before.
+    - The `~` range was measured with npm 11.20 and pnpm 10.33 on Windows and npm 11.19 and Yarn 1.22 in a Linux container: each asks the registry for `name`. Yarn 4 and bun were not measured for it (neither is installed on the machine that measured): the hook reads the range as it does for the others.
+    - macOS was not measured.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm install dgprobe-zzq7731@~abc
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm install dgprobe-zzq7731@~
+      expect: { decision: none }
+
 - id: lockfile-origin-host-unsaid
   area: install-vetting
   doc: |-

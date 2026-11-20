@@ -402,6 +402,7 @@ describe('the limits of the manifest vetting, as data', () => {
     'manifest-quiet-checks',
     'manifest-workspace-members',
     'project-default-registry',
+    'tilde-range-word',
     'yarn-bun-npm-protocol',
   ];
 

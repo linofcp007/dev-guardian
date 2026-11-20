@@ -115705,7 +115705,7 @@ function parseNpm(raw, manager, alias = false) {
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range, null);
+    const rangeBad = isSemverRange(range) ? null : notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
     if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
     if (range === "latest") range = void 0;
