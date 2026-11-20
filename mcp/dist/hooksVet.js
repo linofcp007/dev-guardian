@@ -4453,6 +4453,10 @@ var ALLOW = {
   // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
   "npm-exec": { bool: set("-y", "--yes", "-q", "--quiet", "--silent", "--ignore-scripts"), value: set() },
   "pnpm-dlx": { bool: set("--silent", "-s"), value: set() },
+  // The initializers (measured 2026-11-20): consent and verbosity only; pnpm none, bun has no entry (it never denies).
+  "npm-init": { bool: set("-y", "--yes", "-q", "--quiet", "--silent"), value: set() },
+  "yarn-create": { bool: set("-q", "--quiet"), value: set() },
+  "pnpm-create": { bool: set(), value: set() },
   "yarn-dlx": { bool: set("-q", "--quiet"), value: set() },
   bunx: { bool: set("--bun", "--silent", "--verbose"), value: set() },
   uvx: { bool: set("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set() },
@@ -4461,6 +4465,7 @@ var ALLOW = {
   "pipx-run": { bool: set("-q", "--quiet", "-v", "--verbose", "--no-cache"), value: set() }
 };
 var NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\],]/;
+var BUN_TEMPLATE_REASON = "`bun create` uses a template of that name from a `.bun-create` folder when there is one, which was not looked for";
 function notSingle(why) {
   return `not a single plain install statement (${why})`;
 }
@@ -4531,6 +4536,10 @@ function confidentShape(text) {
         [key, args, launch] = ["npm-exec", rest.slice(1), true];
         break;
       }
+      if (NPM_INITIALIZER.has(at(0))) {
+        [key, args, launch] = ["npm-init", rest.slice(1), true];
+        break;
+      }
       if (!NPM_INSTALL.has(at(0))) return notPlain(`'npm ${at(0)}'`);
       [key, args] = ["npm", rest.slice(1)];
       break;
@@ -4538,6 +4547,10 @@ function confidentShape(text) {
     case "yarn":
       if (at(0) === "dlx") {
         [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
+        break;
+      }
+      if (at(0) === "create") {
+        [key, args, launch] = [`${tool}-create`, rest.slice(1), true];
         break;
       }
       if (at(0) !== "add" && !(tool === "pnpm" && PNPM_INSTALL.has(at(0)))) return notPlain(`'${tool} ${at(0)}'`);
@@ -4548,6 +4561,7 @@ function confidentShape(text) {
         [key, args, launch] = ["bunx", rest.slice(1), true];
         break;
       }
+      if (BUN_INITIALIZER.has(at(0))) return BUN_TEMPLATE_REASON;
       if (!BUN_ADD.has(at(0))) return notPlain(`'bun ${at(0)}'`);
       [key, args] = ["bun", rest.slice(1)];
       break;

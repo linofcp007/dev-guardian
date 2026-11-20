@@ -116783,6 +116783,10 @@ var init_parseCommand = __esm({
       // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
       "npm-exec": { bool: set2("-y", "--yes", "-q", "--quiet", "--silent", "--ignore-scripts"), value: set2() },
       "pnpm-dlx": { bool: set2("--silent", "-s"), value: set2() },
+      // The initializers (measured 2026-11-20): consent and verbosity only; pnpm none, bun has no entry (it never denies).
+      "npm-init": { bool: set2("-y", "--yes", "-q", "--quiet", "--silent"), value: set2() },
+      "yarn-create": { bool: set2("-q", "--quiet"), value: set2() },
+      "pnpm-create": { bool: set2(), value: set2() },
       "yarn-dlx": { bool: set2("-q", "--quiet"), value: set2() },
       bunx: { bool: set2("--bun", "--silent", "--verbose"), value: set2() },
       uvx: { bool: set2("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set2() },

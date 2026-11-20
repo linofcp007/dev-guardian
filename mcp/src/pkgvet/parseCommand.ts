@@ -2036,6 +2036,10 @@ const ALLOW: Record<string, Allow> = {
   // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
   'npm-exec': { bool: set('-y', '--yes', '-q', '--quiet', '--silent', '--ignore-scripts'), value: set() },
   'pnpm-dlx': { bool: set('--silent', '-s'), value: set() },
+  // The initializers (measured 2026-11-20): consent and verbosity only; pnpm none, bun has no entry (it never denies).
+  'npm-init': { bool: set('-y', '--yes', '-q', '--quiet', '--silent'), value: set() },
+  'yarn-create': { bool: set('-q', '--quiet'), value: set() },
+  'pnpm-create': { bool: set(), value: set() },
   'yarn-dlx': { bool: set('-q', '--quiet'), value: set() },
   bunx: { bool: set('--bun', '--silent', '--verbose'), value: set() },
   uvx: { bool: set('-q', '--quiet', '-v', '--verbose', '--isolated'), value: set() },
@@ -2050,6 +2054,8 @@ const ALLOW: Record<string, Allow> = {
  * element of `a,b` as its own argument.
  */
 const NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\],]/;
+
+const BUN_TEMPLATE_REASON = '`bun create` uses a template of that name from a `.bun-create` folder when there is one, which was not looked for';
 
 function notSingle(why: string): string {
   return `not a single plain install statement (${why})`;
@@ -2138,6 +2144,11 @@ function confidentShape(text: string): string | null {
         [key, args, launch] = ['npm-exec', rest.slice(1), true];
         break;
       }
+      // An initializer (`npm create|init|innit <x>`) is a launcher of `create-<x>`: the first positional closes the judgement.
+      if (NPM_INITIALIZER.has(at(0))) {
+        [key, args, launch] = ['npm-init', rest.slice(1), true];
+        break;
+      }
       if (!NPM_INSTALL.has(at(0))) return notPlain(`'npm ${at(0)}'`);
       [key, args] = ['npm', rest.slice(1)];
       break;
@@ -2145,6 +2156,10 @@ function confidentShape(text: string): string | null {
     case 'yarn':
       if (at(0) === 'dlx') {
         [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
+        break;
+      }
+      if (at(0) === 'create') {
+        [key, args, launch] = [`${tool}-create`, rest.slice(1), true];
         break;
       }
       // `pnpm install <pkg>` is as plain an install statement as `pnpm add <pkg>`; yarn's `install` takes no package.
@@ -2156,6 +2171,9 @@ function confidentShape(text: string): string | null {
         [key, args, launch] = ['bunx', rest.slice(1), true];
         break;
       }
+      // `bun create <x>` uses a template of that name from a `.bun-create` folder when there is one and then asks the registry
+      // for nothing (measured 2026-11-20, bun 1.4.4): the hook does not read that folder, so a missing name never denies.
+      if (BUN_INITIALIZER.has(at(0))) return BUN_TEMPLATE_REASON;
       if (!BUN_ADD.has(at(0))) return notPlain(`'bun ${at(0)}'`);
       [key, args] = ['bun', rest.slice(1)];
       break;
