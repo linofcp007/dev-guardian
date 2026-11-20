@@ -2004,4 +2004,16 @@ describe('install-vet-tilde-range-skipped', () => {
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/tilde-missing-zq.*does not exist/s);
     },
   );
+
+  // Round 1 of the review (T-06): a tilde that is no range is a registry spec; the package is vetted with no range, at its newest version.
+  it.each(['npm install tilde-newest-zq@~x', 'npm install tilde-newest-zq@~abc'])('T-06 `%s` is DENIED, naming the package', (command) => {
+    const routes: Record<string, Route> = {
+      'https://registry.npmjs.org/tilde-newest-zq': npmDoc('2.0.0'),
+      [OSV]: { osv: { 'tilde-newest-zq@2.0.0': ['MAL-2026-0094'] } },
+    };
+    const r = runHook(command, routes);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/tilde-newest-zq.*MAL-2026-0094/s);
+  });
 });

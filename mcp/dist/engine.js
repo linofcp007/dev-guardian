@@ -115705,9 +115705,11 @@ function parseNpm(raw, manager, alias = false) {
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = isSemverRange(range) ? null : notAPackage(range, null);
+    const tildeSpec = range.startsWith("~") && !/[\\/]/.test(range);
+    const rangeBad = tildeSpec || isSemverRange(range) ? null : notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
     if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
+    if (tildeSpec && !isSemverRange(range)) range = void 0;
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);

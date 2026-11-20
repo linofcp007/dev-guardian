@@ -2627,16 +2627,51 @@ describe('install-vet-tilde-range-skipped', () => {
     },
   );
 
-  it.each(['npm install', 'pnpm add', 'yarn add', 'bun add'] as const)(
-    'T-02 guard: `%s` reads `~` alone and `~` with a word as today: skipped',
-    (line) => {
-      for (const word of [`${NAME}@~`, `${NAME}@~abc`]) {
-        const command = `${line} ${word}`;
-        expect(vetted(command), command).toEqual([]);
-        expect(skippedOf(command), command).toEqual([word]);
-      }
+  // Round 1 of the review (T-06): a `~` that does not open a path is a registry spec — the package is vetted, with the range when
+  // the hook reads one and without when it does not. These replace the two cases of T-02 that said `~` and `~abc` are skipped.
+  const TILDE_WORDS = ['~x', '~X', '~x.x.x', '~*.*', '"~ 1"', '~', '~abc', '~latest'] as const;
+  const ALL_LINES = ['npm install', 'pnpm add', 'yarn add', 'bun add', 'npx', 'npm exec', 'pnpm dlx', 'yarn dlx', 'bunx'] as const;
+
+  it.each(ALL_LINES.flatMap((line) => TILDE_WORDS.map((word) => [line, word] as const)))(
+    'T-06 `%s %s` after the name: the package is vetted, with no range, nothing skipped',
+    (line, word) => {
+      const spec = word.startsWith('"') ? `"${NAME}@${word.slice(1)}` : `${NAME}@${word}`;
+      const command = `${line} ${spec}`;
+      expect(vetted(command), command).toEqual([[NAME, undefined]]);
+      expect(skippedOf(command), command).toEqual([]);
     },
   );
+
+  it.each(TILDE_WORDS.map((word) => [word] as const))('T-06 the tool reads `name@%s` as the package, with no range', (word) => {
+    const raw = `${NAME}@${word.replaceAll('"', '')}`;
+    const r = parsePackageSpec('npm', raw);
+    expect('name' in r, raw).toBe(true);
+    expect(r, raw).toMatchObject({ name: NAME });
+    expect('range' in r ? r.range : undefined, raw).toBeUndefined();
+  });
+
+  it.each(ALL_LINES)('T-06 `%s`: a tilde that opens a path stays a path, skipped', (line) => {
+    for (const word of [`${NAME}@~/x`, `${NAME}@~user-zq/x`, `${NAME}@~1/x`, '~/pasta']) {
+      const command = `${line} ${word}`;
+      expect(vetted(command), command).toEqual([]);
+      expect(skippedOf(command), command).toEqual([word]);
+    }
+  });
+
+  it('T-06 a tilde followed by a backslash is a path: skipped, in a command (quoted) and for the tool', () => {
+    const raw = `${NAME}@~\\x`;
+    expect(vetted(`npm install '${raw}'`)).toEqual([]);
+    expect(skippedOf(`npm install '${raw}'`)).toEqual([raw]);
+    expect(parsePackageSpec('npm', raw)).toMatchObject({ raw });
+    expect('name' in parsePackageSpec('npm', raw)).toBe(false);
+  });
+
+  it('T-06 `name@~1.0.0.tgz` follows the list of files of the manager of files: skipped for npm and bun, vetted for pnpm and Yarn, as `name@1.0.0.tgz`', () => {
+    for (const word of ['~1.0.0.tgz', '~1.tar.gz', '1.0.0.tgz']) {
+      for (const line of ['npm install', 'bun add']) expect(vetted(`${line} ${NAME}@${word}`), `${line} ${word}`).toEqual([]);
+      for (const line of ['pnpm add', 'yarn add']) expect(vetted(`${line} ${NAME}@${word}`), `${line} ${word}`).toEqual([[NAME, word]]);
+    }
+  });
 
   it.each(['npm install', 'pnpm add', 'yarn add', 'bun add', 'npx'] as const)('T-02 guard: `%s` reads the other ranges as today', (line) => {
     expect(vetted(`${line} ${NAME}@^1.0.0`)).toEqual([[NAME, '^1.0.0']]);

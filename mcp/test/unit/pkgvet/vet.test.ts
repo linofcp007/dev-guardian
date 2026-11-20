@@ -1260,4 +1260,14 @@ describe('install-vet-tilde-range-skipped', () => {
     expect(parsed).toEqual({ raw: 'tilde-pkg-zq@~/x', reason: 'local path — not looked up' });
     expect(results).toEqual([]);
   });
+
+  it.each(['~x', '~abc', '~latest', '~'])('T-06 `tilde-pkg-zq@%s` is the package, vetted with no range, never skipped', async (word) => {
+    const fake = fakeFetch({
+      'https://registry.npmjs.org/tilde-pkg-zq': { body: npmAbbrev('tilde-pkg-zq', { versions: ['1.0.0', '2.0.0'], latest: '2.0.0' }) },
+      [OSV]: osvRoute({ 'tilde-pkg-zq@2.0.0': ['MAL-2026-0094'] }),
+    });
+    const { parsed, results } = await readAndVet(`tilde-pkg-zq@${word}`, fake);
+    expect(parsed).toMatchObject({ name: 'tilde-pkg-zq' });
+    expect(results.map((r) => [r.name, r.verdict])).toEqual([['tilde-pkg-zq', 'block']]);
+  });
 });

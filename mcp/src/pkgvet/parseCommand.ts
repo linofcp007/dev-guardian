@@ -331,10 +331,14 @@ function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | S
       const real = parseNpm(range.slice(4), manager, true);
       return 'name' in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    // A version or a range is a range before it is a path: `~1.0.0` starts like the home directory `~`, and the manager asks the registry for it.
-    const rangeBad = isSemverRange(range) ? null : notAPackage(range, null);
+    // A `~` opens a path only with a slash after it (`~/x`, `~user/x`): the managers ask the registry for `~1.0.0`, `~x`, `~abc` and a lone `~`
+    // (measured). A version or a range is a range before it is a path; a `~` word with no slash is a registry spec the hook does not read
+    // as a range, so the package is vetted with none.
+    const tildeSpec = range.startsWith('~') && !/[\\/]/.test(range);
+    const rangeBad = tildeSpec || isSemverRange(range) ? null : notAPackage(range, null);
     if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? 'URL / VCS / protocol spec — not looked up');
     if (readsFileValue(manager, range)) return skip(raw, 'archive file — not looked up');
+    if (tildeSpec && !isSemverRange(range)) range = undefined;
     if (range === 'latest') range = undefined;
   }
   return withRange(checkName('npm', name, raw), range);

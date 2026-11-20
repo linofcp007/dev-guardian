@@ -975,23 +975,23 @@
 - id: tilde-range-word
   area: install-vetting
   doc: |-
-    In an install or launcher line of the npm family (npm, pnpm, Yarn, bun, `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`), the part after the `@` of `name@<spec>` is a range when it is a version or a range of semver words, and `~` followed by a version (`~1.0.0`, `~1`, `~1.0.x`) is one: the package is looked up with that range, as it is for `^1.0.0`. A `~` that opens a path (`name@~/x`, `name@~user/x`, `~/dir`) stays a path and is not looked up: npm 11.20, pnpm 10.33 and Yarn 1.22 ask the registry for nothing for it (measured, 2026-11-19). What stays:
+    In an install or launcher line of the npm family (npm, pnpm, Yarn, bun, `npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`), the part after the `@` of `name@<spec>` that starts with `~` opens a path only when a slash or a backslash follows (`name@~/x`, `name@~user/x`, `name@~1/x`): that word is skipped and nothing is looked up. Any other `~` word is a spec of the registry and the package is looked up: with the range when the hook reads one (`~1.0.0`, `~1`, `~1.0.x`), with none when it does not (`~x`, `~*.*`, `~abc`, `~latest`, a lone `~`, `"name@~ 1"`). Measured on 2026-11-20: npm 11.20 and pnpm 10.33 on Windows, and npm 11.19 and Yarn 1.22 in a Linux container, ask the registry for the package in nine such forms; `name@~/x` asks nothing of npm, pnpm and Yarn 1.22. What stays:
 
-    - `name@~` and `name@~abc` are neither a range nor a path with a `/`: they are skipped and the hook says nothing, as before.
-    - The `~` range was measured with npm 11.20 and pnpm 10.33 on Windows and npm 11.19 and Yarn 1.22 in a Linux container: each asks the registry for `name`. Yarn 4 and bun were not measured for it (neither is installed on the machine that measured): the hook reads the range as it does for the others.
-    - macOS was not measured.
+    - A `~` word that is not a range is looked up with no range, so the version the manager picks for it (a dist-tag called `~abc`, for instance) is not the one that is checked: the newest is.
+    - `name@~user/x` is skipped as a path; only npm was measured for it, and it reads it as a git spec and asks the registry for nothing. pnpm and Yarn were not measured for it.
+    - Yarn 4 and bun were not measured for the tilde forms (neither is installed on the machine that measured): the hook reads them as it reads the others. macOS was not measured.
   examples:
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
-        command: npm install dgprobe-zzq7731@~abc
+        command: npm install dgprobe-zzq7731@~user/x
       expect: { decision: none }
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
-        command: npm install dgprobe-zzq7731@~
+        command: npm install dgprobe-zzq7731@~/x
       expect: { decision: none }
 
 - id: lockfile-origin-host-unsaid
