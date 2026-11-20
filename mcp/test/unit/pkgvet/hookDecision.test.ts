@@ -4598,3 +4598,153 @@ describe('install-vet-npm-unread-verbs', () => {
     });
   });
 });
+
+// ───────────────── install-vet-global-update-by-name — the names given to a global update, or to `yarn up`, are vetted
+
+describe('install-vet-global-update-by-name', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const DENIED = 'does not exist on the npm registry';
+  const NOT_FOUND = `'${P}': not found on the public registry`;
+  const NOT_DENIED = 'a package named to an update is fetched only when it is already installed';
+  const EVERY_GLOBAL = 'this command updates every globally installed package — none of them was vetted';
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const decide = async (command: string, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(command, opts(reg.fetchImpl));
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === urlOf(name)).length;
+
+  /** The forms of the Yarn that update the manifest and name `P`. */
+  const YARN_UPDATES = [`yarn up ${P}`, `yarn up -R ${P}`, `yarn up -i ${P}`, `yarn workspace W up ${P}`, `yarn workspaces foreach -A up ${P}`];
+
+  it.each(YARN_UPDATES)('T-04 `%s`, P not in the manifest and published as malicious: P is asked of the registry and DENIED, with the advisory', async (command) => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP, P], malicious: [P] });
+    const d = await decide(command, reg);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+    expect(d?.deny ?? '', command).toContain('MAL-2026-77');
+    expect(d?.deny ?? '', command).toContain(P);
+  });
+
+  it.each(YARN_UPDATES)('T-04 `%s`, P not in the manifest and not on the registry: P is asked, the answer is a warning that says why, never a deny', async (command) => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP] });
+    const d = await decide(command, reg);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+    expect(asked(reg, DEP), 'the manifest is read as well').toBeGreaterThan(0);
+    expect(d?.deny, command).toBeUndefined();
+    expect(d?.context ?? '', command).toContain(NOT_FOUND);
+    expect(d?.context ?? '', command).toContain(NOT_DENIED);
+  });
+
+  it.each(YARN_UPDATES)('T-04 `%s` in a folder with no manifest: P is asked of the registry', async (command) => {
+    const reg = registry({ exists: [P] });
+    await decide(command, reg);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+  });
+
+  it.each(YARN_UPDATES)('T-04 `%s`, P in the manifest and no version: P is asked ONCE, by the manifest', async (command) => {
+    pkgJson({ [P]: '^1.0.0' });
+    const reg = registry({ exists: [P] });
+    await decide(command, reg);
+    expect(asked(reg, P), command).toBe(1);
+  });
+
+  it('T-04 `yarn up <P>@^3` with P in the manifest: P is asked again for the range, and the version the range picks goes to OSV', async () => {
+    pkgJson({ [P]: '^1.0.0' });
+    const queried: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        queried.push(...queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`));
+        return new Response(JSON.stringify({ results: queries.map(() => ({})) }), { status: 200 });
+      }
+      if (url === urlOf(P)) {
+        const versions = { '1.0.0': {}, '3.4.0': {}, '4.0.0': {} };
+        return new Response(JSON.stringify({ 'dist-tags': { latest: '4.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions }), { status: 200 });
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    expect(await decideInstallCommand(`yarn up ${P}@^3`, opts(fetchImpl))).toBeNull();
+    expect(queried).toContain(`${P}@3.4.0`);
+  });
+
+  it('T-04 `pnpm update -g --latest <P>` in a project whose manifest does not have P: the manifest is read and P is asked, a missing P only warns', async () => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP] });
+    const d = await decide(`pnpm update -g --latest ${P}`, reg);
+    expect(asked(reg, DEP), 'the manifest is read').toBeGreaterThan(0);
+    expect(asked(reg, P)).toBeGreaterThan(0);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+  });
+
+  it('T-04 `pnpm update -g --latest <P>` with P malicious is DENIED', async () => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP, P], malicious: [P] });
+    const d = await decide(`pnpm update -g --latest ${P}`, reg);
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  // ── the update that names nobody (T-05)
+
+  it.each(['npm update -g', 'pnpm update -g', 'bun update -g', 'yarn global upgrade'])(
+    'T-05 `%s` says it updates every globally installed package and none was vetted: context, no deny, and the manifest of the project is not read',
+    async (command) => {
+      pkgJson({ [DEP]: '^1.0.0' });
+      const reg = registry({ exists: [DEP] });
+      const d = await decide(command, reg);
+      expect(d?.deny, command).toBeUndefined();
+      expect(d?.context ?? '', command).toContain(EVERY_GLOBAL);
+      expect(reg.calls, command).toEqual([]);
+    },
+  );
+
+  // ── protection (T-06): the names of a project update are not looked up, and the decision is today's
+
+  it.each([`npm update ${P}`, `pnpm update ${P}`, `bun update ${P}`, `yarn upgrade ${P}`])(
+    'T-06 `%s`, P not in the manifest: P is not asked, nothing is said, the manifest is vetted',
+    async (command) => {
+      pkgJson({ [DEP]: '^1.0.0' });
+      const reg = registry({ exists: [DEP] });
+      expect(await decide(command, reg), command).toBeNull();
+      expect(asked(reg, P), command).toBe(0);
+      expect(asked(reg, DEP), command).toBeGreaterThan(0);
+    },
+  );
+
+  it.each([`npm update ${P}`, `pnpm update ${P}`, `bun update ${P}`, `yarn upgrade ${P}`])(
+    'T-06 `%s`, P in the manifest: P is asked once, by the manifest, and nothing is said',
+    async (command) => {
+      pkgJson({ [P]: '^1.0.0' });
+      const reg = registry({ exists: [P] });
+      expect(await decide(command, reg), command).toBeNull();
+      expect(asked(reg, P), command).toBe(1);
+    },
+  );
+
+  it('T-06 `npm update` in a project: the manifest is vetted and nothing is said', async () => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP] });
+    expect(await decide('npm update', reg)).toBeNull();
+    expect(asked(reg, DEP)).toBeGreaterThan(0);
+  });
+
+  it.each([`npm install -g ${P}`, `pnpm add -g ${P}`])('T-06 `%s` with a name the registry does not have is DENIED, as today', async (command) => {
+    const reg = registry();
+    const d = await decide(command, reg);
+    expect(d?.deny ?? '', command).toContain(DENIED);
+    expect(d?.deny ?? '', command).toContain(`'${P}'`);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+  });
+
+  it('T-06 `yarn global add <P>` with a name the registry does not have: asked, and only a warning (the command is not a plain install), as today', async () => {
+    const reg = registry();
+    const d = await decide(`yarn global add ${P}`, reg);
+    expect(asked(reg, P)).toBeGreaterThan(0);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+  });
+});

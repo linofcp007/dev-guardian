@@ -2203,3 +2203,61 @@ describe('install-vet-npm-unread-verbs', () => {
     );
   });
 });
+
+// ───────────────── install-vet-global-update-by-name — the names given to a global update, through the dispatcher
+
+describe('install-vet-global-update-by-name', () => {
+  const M = 'dgprobe-zzq7731-evil';
+  const ABSENT = 'dgprobe-zzq7731-absent';
+  const FRESH = 'dgprobe-zzq7731-fresh';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const hourAgo = (): string => new Date(Date.now() - 3600 * 1000).toISOString();
+  /** A project whose manifest has a dependency the registry does not have: a global update must not read it. */
+  const manifest = (): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [DEP]: '^1.0.0' } }));
+  const routes = (): Record<string, Route | Route[]> => ({
+    [url(M)]: npmDoc('1.0.0'),
+    [url(ABSENT)]: { status: 404 },
+    // Published an hour ago, with install scripts: a manifest-style lookup says nothing about either.
+    [url(FRESH)]: [
+      { accept: 'install-v1', body: { 'dist-tags': { latest: '2.0.0' }, modified: hourAgo(), versions: { '2.0.0': { hasInstallScript: true } } } },
+      { body: { time: { '2.0.0': hourAgo() }, versions: { '2.0.0': { scripts: { postinstall: 'node build.js' } } } } },
+    ],
+    [url(DEP)]: { status: 404 },
+    [OSV]: { osv: { [`${M}@1.0.0`]: ['MAL-2026-0731'] } },
+  });
+
+  it.each([`npm update -g ${M}`, `yarn global upgrade ${M}`])('T-02 `%s` with a package OSV lists as malicious is DENIED, with the advisory', (command) => {
+    manifest();
+    const r = runHook(command, routes());
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain('MAL-2026-0731');
+    expect(reason, command).toContain(M);
+    expect(r.requests.filter((u) => u === url(DEP)), 'the manifest of the project is not read').toEqual([]);
+  });
+
+  it('T-02 `npm update -g <a name the registry does not have>` warns that it was not found, says why it is not denied, and the manifest dependency is not asked', () => {
+    manifest();
+    const r = runHook(`npm update -g ${ABSENT}`, routes());
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context).toContain(`'${ABSENT}': not found on the public registry`);
+    expect(context).toContain('a package named to an update is fetched only when it is already installed');
+    expect(r.requests).toContain(url(ABSENT));
+    expect(r.requests.filter((u) => u === url(DEP))).toEqual([]);
+  });
+
+  it('T-02 `npm update -g <a package published an hour ago, with install scripts>`: the registry WAS asked about it, and the answer has no line about it', () => {
+    manifest();
+    const r = runHook(`npm update -g ${FRESH}`, routes());
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(FRESH));
+    expect(r.requests.filter((u) => u === url(DEP))).toEqual([]);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').not.toContain(FRESH);
+  });
+});

@@ -2822,3 +2822,148 @@ describe('install-vet-npm-unread-verbs', () => {
     });
   });
 });
+
+// ───────────────── install-vet-global-update-by-name — the names given to a global update, or to `yarn up`, are read
+
+describe('install-vet-global-update-by-name', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const MANIFEST = { kind: 'package-json' };
+  type Parsed = ReturnType<typeof parseInstallCommands>[number];
+  /** `updateNames` is the field this work adds: read through a type that has it, so a parser without it fails by its assertion, not by the compiler. */
+  type WithUpdateNames = Parsed & { updateNames?: readonly PackageSpec[] };
+  /** What a line gives, per command: the packages, the names given to an update verb as `[name, range, raw]`, the manifest, the update flag, whether it is global and why it is uncertain. */
+  const read = (
+    command: string,
+  ): Array<{
+    packages: string[];
+    updateNames: Array<[string, string | undefined, string]> | undefined;
+    manifest: unknown;
+    update: unknown;
+    global: unknown;
+    uncertain: string[];
+  }> =>
+    parseInstallCommands(command).map((c) => ({
+      packages: c.packages.map((p) => p.name),
+      updateNames: (c as WithUpdateNames).updateNames?.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+      manifest: c.manifest,
+      update: c.update,
+      global: c.global,
+      uncertain: c.uncertain,
+    }));
+  /** The same, without the reasons the command is uncertain: the words of the verb differ between two spellings of one command. */
+  const essence = (command: string): unknown => read(command).map(({ uncertain: _uncertain, ...rest }) => rest);
+  const workspaceReason = (command: string): boolean => read(command).some((c) => c.uncertain.some((u) => u.startsWith('workspace context')));
+
+  it.each([
+    `npm update -g ${P}`,
+    `npm up -g ${P}`,
+    `npm upgrade -g ${P}`,
+    `npm update ${P} --global`,
+    `npm -g update ${P}`,
+    `npm update --location=global ${P}`,
+    `pnpm update -g ${P}`,
+    `pnpm up -g ${P}`,
+    `pnpm upgrade -g ${P}`,
+    `bun update -g ${P}`,
+    `yarn global upgrade ${P}`,
+    `yarn global upgrade ${P} --latest`,
+  ])('T-01 `%s` gives the name in `updateNames` and not in `packages`; global for certain, no manifest', (command) => {
+    expect(read(command), command).toEqual([
+      { packages: [], updateNames: [[P, undefined, P]], manifest: undefined, update: undefined, global: true, uncertain: expect.any(Array) },
+    ]);
+  });
+
+  it('T-01 `npm update -g <P>@2` gives the name with its range', () => {
+    expect(read(`npm update -g ${P}@2`).map((c) => ({ packages: c.packages, updateNames: c.updateNames, manifest: c.manifest }))).toEqual([
+      { packages: [], updateNames: [[P, '2', `${P}@2`]], manifest: undefined },
+    ]);
+  });
+
+  it.each([`pnpm update -g --latest ${P}`, `npm update -gD ${P}`, `npm update -g false ${P}`, `npm update --global=false ${P}`])(
+    'T-01 `%s` is global but not for certain: `updateNames` has the name AND the manifest is read',
+    (command) => {
+      const parsed = read(command);
+      expect(parsed.length, command).toBe(1);
+      expect({
+        command,
+        packages: parsed.map((c) => c.packages),
+        named: parsed.map((c) => (c.updateNames ?? []).filter((n) => n[0] === P).length),
+        manifest: parsed.map((c) => c.manifest),
+        update: parsed.map((c) => c.update),
+      }).toEqual({ command, packages: [[]], named: [1], manifest: [MANIFEST], update: [true] });
+    },
+  );
+
+  it("T-01 `bash -c 'npm update -g <P>'` gives what `npm update -g <P>` gives: the nested command is not dropped for having no packages", () => {
+    expect(read(`bash -c 'npm update -g ${P}'`)).toEqual(read(`npm update -g ${P}`));
+    expect(read(`bash -c 'npm update -g ${P}'`).map((c) => c.updateNames)).toEqual([[[P, undefined, P]]]);
+  });
+
+  it.each(['npm update -g', 'pnpm update -g', 'bun update -g', 'yarn global upgrade'])(
+    'T-01 `%s` has no names: `updateNames` is empty, global for certain, no manifest',
+    (command) => {
+      expect(read(command), command).toEqual([
+        { packages: [], updateNames: [], manifest: undefined, update: undefined, global: true, uncertain: expect.any(Array) },
+      ]);
+    },
+  );
+
+  // ── the Yarn forms (T-03)
+
+  it.each([
+    [`yarn workspace W up ${P}`, `yarn up ${P}`],
+    ['yarn workspace W up', 'yarn up'],
+    [`yarn workspaces foreach -A up ${P}`, `yarn up ${P}`],
+    [`yarn workspaces foreach --all -p up ${P}`, `yarn up ${P}`],
+  ])('T-03 `%s` gives what `%s` gives, and is uncertain for the workspace context', (command, plain) => {
+    expect(essence(command), command).toEqual(essence(plain));
+    expect(essence(command), command).not.toEqual([]);
+    expect(workspaceReason(command), command).toBe(true);
+  });
+
+  it('T-03 `yarn up <P>` gives the name in `updateNames`, the manifest and the update, and no package', () => {
+    expect(essence(`yarn up ${P}`)).toEqual([{ packages: [], updateNames: [[P, undefined, P]], manifest: MANIFEST, update: true, global: undefined }]);
+  });
+
+  it.each([
+    [`yarn workspace W up ${P}`, [[P, undefined, P]]],
+    [`yarn workspaces foreach -A up ${P}`, [[P, undefined, P]]],
+    ['yarn workspace W up', []],
+  ])('T-03 `%s`: `updateNames` is %j and `packages` is empty', (command, names) => {
+    expect(read(command).map((c) => ({ packages: c.packages, updateNames: c.updateNames }))).toEqual([{ packages: [], updateNames: names }]);
+  });
+
+  it('T-03 `yarn workspaces foreach -A add <P>` gives what `yarn workspace W add <P>` gives: the package in `packages`', () => {
+    expect(essence(`yarn workspaces foreach -A add ${P}`)).toEqual(essence(`yarn workspace W add ${P}`));
+    expect(essence(`yarn workspaces foreach -A add ${P}`)).toEqual([{ packages: [P], updateNames: undefined, manifest: MANIFEST, update: undefined, global: undefined }]);
+    expect(workspaceReason(`yarn workspaces foreach -A add ${P}`)).toBe(true);
+  });
+
+  it('T-03 `yarn workspaces foreach --dgunknown-flag up <P>` is uncertain for the flag the hook does not know', () => {
+    const reasons = read(`yarn workspaces foreach --dgunknown-flag up ${P}`).flatMap((c) => c.uncertain);
+    expect(
+      reasons.some((u) => u.includes('a flag of yarn workspaces foreach the hook does not know')),
+      reasons.join(' | '),
+    ).toBe(true);
+  });
+
+  it('T-03 `yarn up <P>@^3` gives the name with its range', () => {
+    expect(read(`yarn up ${P}@^3`).map((c) => ({ packages: c.packages, updateNames: c.updateNames }))).toEqual([
+      { packages: [], updateNames: [[P, '^3', `${P}@^3`]] },
+    ]);
+  });
+
+  it.each([`yarn up '*'`, `yarn up '@babel/*'`])('T-03 `%s` gives no name: a pattern is not a package', (command) => {
+    expect(read(command).map((c) => ({ packages: c.packages, updateNames: c.updateNames }))).toEqual([{ packages: [], updateNames: [] }]);
+  });
+
+  it.each(['yarn workspace W run build', 'yarn workspaces list', `yarn workspace W upgrade ${P}`])('T-03 `%s` stays unread: no command', (command) => {
+    expect(parseInstallCommands(command)).toEqual([]);
+  });
+
+  // ── protection (T-06): the parser clause
+
+  it.each(['yarn up lodash', "yarn up '*'", 'corepack yarn@4.18.1 up lodash'])('T-06 `%s` keeps `packages` empty and the manifest read, as today', (command) => {
+    expect(read(command).map((c) => ({ packages: c.packages, manifest: c.manifest, update: c.update }))).toEqual([{ packages: [], manifest: MANIFEST, update: true }]);
+  });
+});

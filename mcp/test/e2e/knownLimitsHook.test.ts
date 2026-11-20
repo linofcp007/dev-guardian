@@ -404,3 +404,29 @@ describe('install-vet-npm-unread-verbs', () => {
     });
   });
 });
+
+// ───────────────── install-vet-global-update-by-name — the record of what a global update by name leaves unverified
+
+describe('install-vet-global-update-by-name', () => {
+  it('T-07 the record `install-global-update-by-name` exists, says what a global update by name leaves unverified, and has the three offline hook examples the harness runs', () => {
+    const id = 'install-global-update-by-name';
+    const record = loadKnownLimits().find((l) => l.id === id);
+    expect(record, `the data file has no record ${id}`).toBeDefined();
+    expect(record?.area).toBe('install-vetting');
+    const examples = record?.examples ?? [];
+    expect(
+      examples.map((e) => ({ detector: e.detector, command: e.detector === 'hook' ? e.input.command : undefined, decision: e.detector === 'hook' ? e.expect.decision : undefined })).sort((a, b) => String(a.command).localeCompare(String(b.command))),
+    ).toEqual([
+      { detector: 'hook', command: 'npm update -g', decision: 'warn' },
+      { detector: 'hook', command: 'npm update -g left-pad', decision: 'warn' },
+      { detector: 'hook', command: 'yarn workspace docs upgrade left-pad', decision: 'none' },
+    ]);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const index of examples.keys()) expect(harnessed.has(`${id} #${String(index + 1)}`), `${id} #${String(index + 1)} is run by the dispatcher harness`).toBe(true);
+    const doc = record?.doc ?? '';
+    expect(doc).toContain('globally installed');
+    expect(doc).toContain('install scripts');
+    expect(doc).toContain('vulnerabilities');
+    expect(doc).toContain('`yarn workspace <w> upgrade <P>`');
+  });
+});
