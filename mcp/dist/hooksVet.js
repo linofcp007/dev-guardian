@@ -176,12 +176,9 @@ function strayAt(url, ownName) {
   if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
     const scope = ownName.slice(0, slash).toLowerCase();
     const rest = ownName.slice(slash + 1).toLowerCase();
-    const lower = path.toLowerCase();
     for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) {
-      const at = lower.indexOf(form);
-      if (at >= 0) {
+      for (let at = path.toLowerCase().indexOf(form); at >= 0; at = path.toLowerCase().indexOf(form)) {
         path = `${path.slice(0, at)}/${path.slice(at + form.length)}`;
-        break;
       }
     }
   }
@@ -191,8 +188,12 @@ function writtenStrayAt(text, ownName) {
   try {
     return strayAt(new URL(text.startsWith("git+") ? text.slice(4) : text), ownName);
   } catch {
-    return text.includes("@");
+    return true;
   }
+}
+var COMMENT_HOLDS_AT = "#@";
+function withCommentAt(value, cutOff) {
+  return cutOff.includes("@") ? `${value}${COMMENT_HOLDS_AT}` : value;
 }
 
 // src/pkgvet/versions.ts
@@ -5203,8 +5204,7 @@ function npmrcValue(raw) {
       break;
     }
   }
-  if (value.slice(end).includes("@")) return UNREADABLE_VALUE;
-  return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
+  return withCommentAt(value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2"), value.slice(end));
 }
 var UNREADABLE_VALUE = "(configured)";
 function yamlServer(lines, at, keyIndent, raw) {
@@ -5218,10 +5218,10 @@ function yamlServer(lines, at, keyIndent, raw) {
     const content = value.slice(1, close);
     const rest = value.slice(close + 1);
     if (content.includes("\\") || rest.trim() !== "" && !/^\s+#/.test(rest)) return UNREADABLE_VALUE;
-    return content;
+    return withCommentAt(content, rest);
   }
   const comment = value.search(/\s#/);
-  return (comment === -1 ? value : value.slice(0, comment)).trim();
+  return comment === -1 ? value.trim() : withCommentAt(value.slice(0, comment).trim(), value.slice(comment));
 }
 function fromNpmrc(text, scope, all) {
   let found;
@@ -5278,9 +5278,10 @@ function fromYarnrc(text, scope, all) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    all?.push(m[2] ?? "");
-    if (lineScope === void 0) found = m[2];
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
+    const value = withCommentAt(m[2] ?? "", raw.slice(m[0].length));
+    all?.push(value);
+    if (lineScope === void 0) found = value;
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = value;
   }
   return scoped ?? found;
 }
@@ -5294,7 +5295,9 @@ function fromBunfig(text, scope, all) {
       section = (header[1] ?? "").trim();
       continue;
     }
-    const url = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
+    const match = /https?:\/\/[^"'\s}]+/.exec(line);
+    const unquoted = match !== null && !/["']/.test(line.charAt(match.index - 1));
+    const url = match === null ? "(configured)" : withCommentAt(match[0], unquoted ? line.slice(match.index + match[0].length) : "");
     if (section === "install" && /^registry\s*=/.test(line)) {
       all?.push(url);
       found = found ?? url;

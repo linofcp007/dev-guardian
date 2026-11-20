@@ -17,6 +17,7 @@ import { describe, expect, it } from 'vitest';
 import { parse as parseYaml, stringify as toYaml } from 'yaml';
 
 import { LOCKFILES, askable, lockFormat, readLock, type LockEntry, type LockFormat, type LockRead, type Pin } from '../../../src/pkgvet/lockfile.js';
+import { writtenStrayAt } from '../../../src/pkgvet/strayAt.js';
 import { isExactVersion } from '../../../src/pkgvet/versions.js';
 import { expectLinear, hangBound } from '../../helpers/timing.js';
 import { mulberry32 } from '../../helpers/yamlFuzz.js';
@@ -2079,6 +2080,14 @@ describe('lockfile-origin-host-from-userinfo', () => {
     expect(refused.unrecognised).toBe(1);
   });
 
+  it('T-09 text the URL parser refuses never throws from the rule (the hooks fail open): its host is not said', () => {
+    for (const text of ['', '::', 'not a url', 'git+', 'git+@', 'https://[bad/x.tgz', 'git+https://host.example:notaport/x.git']) {
+      expect({ text, stray: writtenStrayAt(text) }).toEqual({ text, stray: true });
+    }
+    expect(writtenStrayAt('git+https://host.example/org/repo.git')).toBe(false);
+    expect(writtenStrayAt('https://host.example/x.tgz#abc')).toBe(false);
+  });
+
   it('T-04 an at-sign that opens a path segment other than the own scope of the entry is outside the credentials: no host, named entry or not', () => {
     const url = `https://${TOKEN}/@host.example/nome/-/nome-1.0.0.tgz`;
     const named = lock('package-lock', npm3({ 'node_modules/nome': { version: '1.0.0', resolved: url, integrity: INTEGRITY } }));
@@ -2088,5 +2097,43 @@ describe('lockfile-origin-host-from-userinfo', () => {
     const unnamed = lock('package-lock', npm1({ nome: { version: url } }));
     const only = unnamed.entries.filter((e: LockEntry) => e.pin === undefined);
     expect({ count: only.length, kind: only[0]?.source.kind, host: only[0] === undefined ? undefined : hostOf(only[0].source), leaks: leaks(unnamed) }).toEqual({ count: 1, kind: 'elsewhere', host: '', leaks: '' });
+  });
+});
+
+// ───────────────────────────────────────────────────────── lockfile-origin-host-from-userinfo: T-09 (review round 1)
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const SCOPED = '@scope/nome';
+  const FILE = 'nome-1.0.0.tgz';
+  const hostOf = (source: LockEntry['source']): string | undefined => ('host' in source ? source.host : undefined);
+
+  /** One entry `@scope/nome@1.0.0` whose URL is `url`, in each format that states one. */
+  const CARRIERS: ReadonlyArray<{ where: string; format: LockFormat; make: (url: string) => string }> = [
+    { where: 'package-lock v3', format: 'package-lock', make: (url) => npm3({ [`node_modules/${SCOPED}`]: { version: '1.0.0', resolved: url, integrity: INTEGRITY } }) },
+    { where: 'package-lock v1', format: 'package-lock', make: (url) => npm1({ [SCOPED]: { version: '1.0.0', resolved: url, integrity: INTEGRITY } }) },
+    { where: 'pnpm-lock v9', format: 'pnpm-lock', make: (url) => pnpm9([pnpmEntry(`'${SCOPED}@1.0.0'`, `{integrity: ${INTEGRITY}, tarball: ${url}}`)]) },
+    { where: 'yarn.lock v1', format: 'yarn-lock', make: (url) => yarn1([yarn1Block(`"${SCOPED}@^1.0.0"`, '1.0.0', `${url}#${COMMIT}`)]) },
+    { where: 'bun.lock', format: 'bun-lock', make: (url) => bun([bunEntry(SCOPED, `${SCOPED}@1.0.0`, url)]) },
+  ];
+
+  it.each(CARRIERS)('T-09 $where: the scope of the entry twice in the path (the form of Artifactory) still names the host', ({ format, make }) => {
+    const url = `https://host.example/api/npm/repo/${SCOPED}/-/${SCOPED}-1.0.0.tgz`;
+    const entry = entryOf(lock(format, make(url)), `${SCOPED}@1.0.0`);
+    expect({ kind: entry.source.kind, host: hostOf(entry.source) }).toEqual({ kind: 'elsewhere', host: 'host.example' });
+    const encoded = `https://host.example/api/npm/repo/@scope%2fnome/-/${FILE}`;
+    expect(hostOf(entryOf(lock(format, make(encoded)), `${SCOPED}@1.0.0`).source)).toBe('host.example');
+  });
+
+  it.each(CARRIERS)('T-09 $where: an at-sign left after the scope of the entry is still outside the credentials: no host', ({ format, make }) => {
+    const url = `https://${TOKEN}/${SCOPED}@host.example/api/-/${FILE}`;
+    const entry = entryOf(lock(format, make(url)), `${SCOPED}@1.0.0`);
+    expect({ kind: entry.source.kind, host: hostOf(entry.source) }).toEqual({ kind: 'elsewhere', host: '' });
+  });
+
+  it('T-09 a scope written with capitals in the path is the scope of the entry: the host is said', () => {
+    const url = `https://host.example/@SCOPE/NOME/-/${FILE}`;
+    const r = lock('package-lock', npm3({ [`node_modules/${SCOPED}`]: { version: '1.0.0', resolved: url, integrity: INTEGRITY } }));
+    expect(hostOf(entryOf(r, `${SCOPED}@1.0.0`).source)).toBe('host.example');
   });
 });

@@ -4037,3 +4037,89 @@ describe('lockfile-origin-host-from-userinfo', () => {
     expect(warning).toContain('https://reg.example');
   });
 });
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-09 (review round 1) — a comment never changes the decision
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const CLEAN = 'dgprobe-clean';
+  const MISSING = 'dgprobe-missing';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+  const PUBLIC = 'https://registry.npmjs.org/';
+
+  const lineFor = (file: string, host: string | null): string =>
+    `dev-guardian: the project's ${file} sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+
+  /** The public registry has every name but MISSING; OSV calls none malicious; any other URL is an error. */
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    if (url === OSV) return json({ results: (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries.map(() => ({})) });
+    const doc = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+    if (doc !== null) return doc[1] === MISSING ? json({}, 404) : json(npmDoc('1.0.0').body);
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+
+  /** The decision for `command`, with `text` as the registry file `file` of the project (or of the user's home). */
+  async function decideWith(file: string, text: string, command: string, where: 'project' | 'user' = 'project'): Promise<{ deny: string; context: string }> {
+    writeFileSync(join(project, 'package.json'), MANIFEST);
+    writeFileSync(join(where === 'project' ? project : home, file), text);
+    const d = await decideInstallCommand(command, opts(fetchImpl, { env: { GUARDIAN_OFFLINE: '0' } }));
+    return { deny: d?.deny ?? '', context: d?.context ?? '' };
+  }
+  const noToken = (text: string): void => {
+    expect(text.includes(TOKEN), 'the token').toBe(false);
+    expect(text.includes(TOKEN.toLowerCase()), 'the token in lower case').toBe(false);
+  };
+
+  describe.each([['project', 'the .npmrc of the project'], ['user', 'the .npmrc of the user']] as const)('%s', (where, label) => {
+    it.each([['a hash', '#'], ['a semicolon', ';']])(`T-09 ${label}: the public registry and a comment (%s) with an at-sign: a missing name is still refused, and no line of registry is said`, async (_name, mark) => {
+      const text = `registry=${PUBLIC} ${mark} owner: a@b.example\n`;
+      const refused = await decideWith('.npmrc', text, `npm install ${MISSING}`, where);
+      expect(refused.deny).toMatch(/does not exist/);
+      expect(refused.context).not.toContain('a custom registry is configured');
+      expect(refused.context).not.toContain('sets the default registry');
+      const clean = await decideWith('.npmrc', text, `npm install ${CLEAN}`, where);
+      expect(clean.deny).toBe('');
+      expect(clean.context).not.toContain('sets the default registry');
+    });
+  });
+
+  it.each([['a space', ' '], ['a tab', '\t']])('T-09 .npmrc: %s before the hash that hides the rest of the credentials: no host, no token', async (_name, gap) => {
+    const text = `registry=https://${TOKEN}${gap}#rest@host.example/\n`;
+    const line = await decideWith('.npmrc', text, `npm install ${CLEAN}`);
+    expect(line.context).toBe(lineFor('.npmrc', null));
+    const warning = await decideWith('.npmrc', text, `npm install ${MISSING}`);
+    expect(warning.deny).toBe('');
+    expect(warning.context).toContain('a custom registry is configured');
+    noToken(`${line.context}\n${warning.context}\n${warning.deny}`);
+  });
+
+  it.each([['a space', ' '], ['a tab', '\t']])('T-09 .yarnrc.yml: npmRegistryServer with %s before the hash that hides the rest of the credentials: no host, no token', async (_name, gap) => {
+    const text = `npmRegistryServer: https://${TOKEN}${gap}#rest@reg.example/\n`;
+    const line = await decideWith('.yarnrc.yml', text, `yarn add ${CLEAN}`);
+    expect(line.context).toBe(lineFor('.yarnrc.yml', null));
+    const warning = await decideWith('.yarnrc.yml', text, `yarn add ${MISSING}`);
+    expect(warning.context).toContain('a custom registry is configured');
+    noToken(`${line.context}\n${warning.context}\n${warning.deny}`);
+  });
+
+  it.each([['without quotes', `registry https://${TOKEN} #rest@reg.example/\n`], ['with quotes', `registry "https://${TOKEN}" #rest@reg.example/\n`]])(
+    'T-09 .yarnrc %s, a comment that holds the rest of the credentials: no host, no token',
+    async (_name, text) => {
+      const line = await decideWith('.yarnrc', text, `yarn add ${CLEAN}`);
+      expect(line.context).toBe(lineFor('.yarnrc', null));
+      const warning = await decideWith('.yarnrc', text, `yarn add ${MISSING}`);
+      expect(warning.context).toContain('a custom registry is configured');
+      noToken(`${line.context}\n${warning.context}\n${warning.deny}`);
+    },
+  );
+
+  it('T-09 bunfig.toml: an unquoted registry and a comment that holds the rest of the credentials: no host, no token', async () => {
+    const text = `[install]\nregistry = https://${TOKEN} #rest@reg.example/\n`;
+    const line = await decideWith('bunfig.toml', text, `bun add ${CLEAN}`);
+    expect(line.context).toBe(lineFor('bunfig.toml', null));
+    noToken(line.context);
+  });
+});

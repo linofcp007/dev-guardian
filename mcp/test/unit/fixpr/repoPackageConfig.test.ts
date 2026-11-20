@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFil
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import {
+  checkNpmSources,
   composerChoosesRepository,
   installRefusal,
   setAsidePackageConfig,
@@ -241,5 +242,31 @@ describe('the package-manager processes create_fix_pr runs directly', () => {
     const ci = seen.find((o) => o.command === 'npm');
     expect(ci?.extendEnv).toBe(false);
     expect(ci?.env).toBeDefined();
+  });
+});
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const REST = ['ken', 'Qq', '88'].join('');
+  const yarnLock = (resolved: string): string =>
+    ['# yarn lockfile v1', '', 'q@1.0.0:', '  version "1.0.0"', `  resolved "${resolved}"`, ''].join('\n');
+
+  it.each([
+    ['a protocol-relative path', `//${TOKEN}/${REST}@host.example/x.tgz`],
+    ['a file: URL', `file://${TOKEN}/${REST}@host.example/x.tgz`],
+  ])('T-09 yarn.lock, %s whose credentials hold a slash: the refusal names the path and no piece of the credentials', (_name, resolved) => {
+    const dir = tree({ 'package.json': JSON.stringify({ name: 'x', version: '1.0.0' }), 'yarn.lock': yarnLock(resolved) });
+    const named = checkNpmSources(dir).network;
+    expect(named).toHaveLength(1);
+    expect(named[0] ?? '').toMatch(/^yarn\.lock:5 \(/);
+    expect(named.join('\n').toLowerCase().includes(TOKEN.toLowerCase())).toBe(false);
+  });
+
+  it('T-09 package.json: a dependency spec on a network path whose credentials hold a slash names no piece of them either', () => {
+    const dir = tree({ 'package.json': JSON.stringify({ name: 'x', version: '1.0.0', dependencies: { p: `file://${TOKEN}/${REST}@host.example/p.tgz` } }) });
+    const named = checkNpmSources(dir).network;
+    expect(named).toHaveLength(1);
+    expect(named.join('\n').toLowerCase().includes(TOKEN.toLowerCase())).toBe(false);
   });
 });

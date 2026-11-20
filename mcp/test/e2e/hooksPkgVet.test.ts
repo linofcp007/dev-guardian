@@ -1945,3 +1945,21 @@ describe('lockfile-origin-host-from-userinfo', () => {
     expect(out.context.includes(SECRET)).toBe(false);
   });
 });
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-09 (review round 1) — through the real hook process
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  const MISSING = 'dgprobe-missing-zq';
+  const ROUTES: Record<string, Route> = { [`https://registry.npmjs.org/${MISSING}`]: { status: 404 }, [OSV]: { osv: {} } };
+
+  it.each([['a hash', '#'], ['a semicolon', ';']])('T-09 the public registry and a comment (%s) with an at-sign: a missing name is refused, and no line of registry is said', (_name, mark) => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    writeFileSync(join(project, '.npmrc'), `registry=https://registry.npmjs.org/ ${mark} owner: a@b.example\n`);
+    const r = runHook(`npm install ${MISSING}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/does not exist/);
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').not.toContain('sets the default registry');
+    expect(r.stdout).not.toContain('a custom registry is configured');
+  });
+});
