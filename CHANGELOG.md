@@ -8,6 +8,20 @@ version bump.
 
 ## [Unreleased]
 
+### Changed
+
+- **The install hook lists five missing names of a manifest, and counts the rest.** Every dependency of a manifest
+  that the public registry does not have used to get a warning line of its own at every install: a `package.json`
+  with 150 private packages and no scope configured gave 151 lines and 33 257 characters at each `npm install`, and
+  a requirements file the same at each `pip install -r` (measured). One answer now lists the first five such names,
+  of all the manifests it read together, and one line says how many more there are and in which files —
+  `dev-guardian: 145 more packages of package.json are not on the public registry either (in a manifest that is
+  usually a private or a workspace package) — not listed.` The same 150 names now give seven lines and under 1 600
+  characters. Nothing else changes: every name is still looked up and still goes to the malware check, so a
+  malicious package at any position is denied; a missing name one letter from a popular package (`Did you mean
+  '…'?`), a typosquat suspicion and the warnings of the packages named on the command line are always listed; and an
+  answer with five missing names or fewer is word for word what it was.
+
 ## [3.14.1] - 2026-11-20
 
 A patch release for one regression of 3.14.0: a lockfile whose entries repeat their own scope could spend the

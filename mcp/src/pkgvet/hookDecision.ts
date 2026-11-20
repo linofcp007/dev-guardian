@@ -290,6 +290,39 @@ const NAMED_BY_MANIFEST = 'it is named by a manifest, where a missing name is us
 const plural = (n: number): string => (n === 1 ? '1 package' : `${String(n)} packages`);
 
 /**
+ * The most "not found on the public registry" warnings of manifests ONE ANSWER lists; the rest are counted in one
+ * line ({@link missingCountLine}). A project whose private packages have no scope configured gets one such warning a
+ * dependency at every install — 150 of them were 151 lines and 33 000 characters. Per answer, not per file, so the
+ * size has a known maximum whatever the line installs. A missing name that comes with a "Did you mean" is never
+ * counted: that one is the sign of a mistyped dependency.
+ */
+const MAX_MANIFEST_MISSING_LINES = 5;
+/** The most manifest files the count line names; the others are counted too. */
+const MAX_COUNTED_FILES = 3;
+
+/**
+ * The one line for the missing names of manifests past {@link MAX_MANIFEST_MISSING_LINES}: how many, and of which
+ * files (as the warnings call them). They were asked of the registry and of the malware check like the listed ones —
+ * only their lines are left out.
+ */
+function missingCountLine(counted: ReadonlyMap<string, number>): string {
+  const files = [...counted.keys()];
+  const total = [...counted.values()].reduce((sum, n) => sum + n, 0);
+  const shown = files.slice(0, MAX_COUNTED_FILES);
+  const rest = files.length - shown.length;
+  const named =
+    rest > 0
+      ? `${shown.join(', ')} and ${String(rest)} more file${rest === 1 ? '' : 's'}`
+      : shown.length > 1
+        ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1] ?? ''}`
+        : (shown[0] ?? '');
+  return (
+    `dev-guardian: ${String(total)} more package${total === 1 ? '' : 's'} of ${named} ${total === 1 ? 'is' : 'are'} ` +
+    'not on the public registry either (in a manifest that is usually a private or a workspace package) — not listed.'
+  );
+}
+
+/**
  * The commands to vet, with what each manifest install reads beside what it
  * names: one more command per manifest, holding the packages the file names
  * (`fromManifest`), after the command itself. `notes` gets a line for every
@@ -1140,6 +1173,20 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v] as const));
   const counted = new Set<string>();
   const warnedCovered = new Set<string>();
+  // The plain missing-name warnings of manifests: the first of the answer are listed, the others counted per file.
+  let missingListed = 0;
+  const missingCounted = new Map<string, number>();
+  const warnOfManifest = (d: { warn?: string; plainMissing?: true }, file: string): void => {
+    if (d.warn === undefined) return;
+    if (d.plainMissing === true) {
+      if (missingListed >= MAX_MANIFEST_MISSING_LINES) {
+        missingCounted.set(file, (missingCounted.get(file) ?? 0) + 1);
+        return;
+      }
+      missingListed += 1;
+    }
+    warnings.push(d.warn);
+  };
   for (const lock of locked) {
     try {
       // Two installs of one line may read one manifest twice: a covered dependency is judged once.
@@ -1149,8 +1196,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
         ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
       })) {
-        const d = decideManifestOne(r, lock.manifestFile);
-        if (d.warn !== undefined) warnings.push(d.warn);
+        warnOfManifest(decideManifestOne(r, lock.manifestFile), lock.manifestFile);
       }
       const outcome = lockOutcome(lock, verdictOf, counted);
       for (const text of outcome.denies) lockDenies.add(text);
@@ -1170,7 +1216,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
       if (cmd.fromManifest !== undefined) {
         const d = decideManifestOne(r, cmd.fromManifest);
         if (d.deny !== undefined) manifestDenies.push(d.deny);
-        if (d.warn !== undefined) warnings.push(d.warn);
+        warnOfManifest(d, cmd.fromManifest);
         if (d.unverified !== undefined) {
           const sofar = unverifiedIn.get(cmd.fromManifest);
           unverifiedIn.set(cmd.fromManifest, { count: (sofar?.count ?? 0) + 1, why: sofar?.why ?? d.unverified });
@@ -1217,6 +1263,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     lines.push('⚠️ dev-guardian package vetting — review before relying on these:');
     for (const w of warnings) lines.push(`  • ${w}`);
   }
+  if (missingCounted.size > 0) lines.push(missingCountLine(missingCounted));
   if (unverified.length > 0) lines.push(`${COULD_NOT_VET}${unverified.join(', ')}${NOT_VERIFIED}`);
   for (const [file, { count, why }] of unverifiedIn) {
     lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
@@ -1308,7 +1355,9 @@ function sentence(text: string): string {
  *     takedown placeholder) → deny, with the file that names it;
  *   - missing from the public registry → a warning, never a deny: a missing
  *     name in a manifest is usually a private or a workspace package, and a
- *     deny would stop every install of the project;
+ *     deny would stop every install of the project. `plainMissing` says the
+ *     warning is that one and carries no "Did you mean": the caller lists the
+ *     first {@link MAX_MANIFEST_MISSING_LINES} of an answer and counts the rest;
  *   - a typosquat suspicion → a warning;
  *   - a fresh version, install scripts, known vulnerabilities, an exact
  *     version nobody published → nothing: said once at `npm install <name>`,
@@ -1320,7 +1369,10 @@ function sentence(text: string): string {
  * Nothing of the manifest is in the text but the file's name, the package's
  * name and a version: `manifest.ts` lets nothing else through.
  */
-function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; warn?: string; unverified?: string } {
+function decideManifestOne(
+  r: PackageVetResult,
+  file: string,
+): { deny?: string; warn?: string; plainMissing?: true; unverified?: string } {
   if (r.checks.malicious.status === 'fail') {
     const why = Object.values(r.checks)
       .filter((c) => c.status === 'fail' && c.detail !== undefined)
@@ -1331,7 +1383,10 @@ function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; 
   if (r.not_on_public_registry === true) {
     const didYouMean = r.similar_to !== undefined ? ` Did you mean '${r.similar_to}'?` : '';
     const why = r.verdict === 'block' ? `not denied: ${NAMED_BY_MANIFEST}` : (r.checks.exists.detail ?? '');
-    return { warn: `${file}: '${label(r)}': ${NOT_FOUND}${didYouMean} (${why})` };
+    return {
+      warn: `${file}: '${label(r)}': ${NOT_FOUND}${didYouMean} (${why})`,
+      ...(r.similar_to === undefined ? { plainMissing: true as const } : {}),
+    };
   }
   const out: { warn?: string; unverified?: string } = {};
   const typo = r.checks.typosquat;

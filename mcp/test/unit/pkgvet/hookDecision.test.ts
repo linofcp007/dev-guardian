@@ -4219,7 +4219,7 @@ describe('install-vet-manifest-warning-volume', () => {
   const writeRequirements = (file: string, deps: string[]): void => writeFileSync(join(project, file), `${deps.join('\n')}\n`);
   const linesOf = (context: string | undefined): string[] => (context ?? '').split('\n');
   const notFoundLines = (context: string | undefined): string[] => linesOf(context).filter((l) => l.includes('not found on the public registry'));
-  const countLines = (context: string | undefined): string[] => linesOf(context).filter((l) => l.includes('are not on the public registry either'));
+  const countLines = (context: string | undefined): string[] => linesOf(context).filter((l) => l.includes('not on the public registry either'));
   /** The package names the "not found" lines say, in the order they come. */
   const namesSaid = (context: string | undefined): string[] =>
     notFoundLines(context).map((l) => /'(dgprobe-zzq7731-\d+|lodahs)': not found/.exec(l)?.[1] ?? l);

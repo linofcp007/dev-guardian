@@ -6580,6 +6580,16 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
 }
 var NAMED_BY_MANIFEST = "it is named by a manifest, where a missing name is usually a private or a workspace package";
 var plural = (n) => n === 1 ? "1 package" : `${String(n)} packages`;
+var MAX_MANIFEST_MISSING_LINES = 5;
+var MAX_COUNTED_FILES = 3;
+function missingCountLine(counted) {
+  const files = [...counted.keys()];
+  const total = [...counted.values()].reduce((sum, n) => sum + n, 0);
+  const shown = files.slice(0, MAX_COUNTED_FILES);
+  const rest = files.length - shown.length;
+  const named = rest > 0 ? `${shown.join(", ")} and ${String(rest)} more file${rest === 1 ? "" : "s"}` : shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1] ?? ""}` : shown[0] ?? "";
+  return `dev-guardian: ${String(total)} more package${total === 1 ? "" : "s"} of ${named} ${total === 1 ? "is" : "are"} not on the public registry either (in a manifest that is usually a private or a workspace package) \u2014 not listed.`;
+}
 function withManifestPackages(parsed, opts, registry, notes, locked) {
   const out = [];
   const top = opts.projectDir === void 0 ? void 0 : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
@@ -7142,6 +7152,19 @@ async function decideInstallCommand(command, opts) {
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v]));
   const counted = /* @__PURE__ */ new Set();
   const warnedCovered = /* @__PURE__ */ new Set();
+  let missingListed = 0;
+  const missingCounted = /* @__PURE__ */ new Map();
+  const warnOfManifest = (d, file) => {
+    if (d.warn === void 0) return;
+    if (d.plainMissing === true) {
+      if (missingListed >= MAX_MANIFEST_MISSING_LINES) {
+        missingCounted.set(file, (missingCounted.get(file) ?? 0) + 1);
+        return;
+      }
+      missingListed += 1;
+    }
+    warnings.push(d.warn);
+  };
   for (const lock of locked) {
     try {
       const covered = lock.covered.filter((pkg) => !warnedCovered.has(`${lock.manifestFile}\0${pkg.name}\0${pkg.range ?? ""}`));
@@ -7150,8 +7173,7 @@ async function decideInstallCommand(command, opts) {
         ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
         ...opts.popular !== void 0 ? { popular: opts.popular } : {}
       })) {
-        const d = decideManifestOne(r, lock.manifestFile);
-        if (d.warn !== void 0) warnings.push(d.warn);
+        warnOfManifest(decideManifestOne(r, lock.manifestFile), lock.manifestFile);
       }
       const outcome = lockOutcome(lock, verdictOf, counted);
       for (const text of outcome.denies) lockDenies.add(text);
@@ -7171,7 +7193,7 @@ async function decideInstallCommand(command, opts) {
       if (cmd.fromManifest !== void 0) {
         const d2 = decideManifestOne(r, cmd.fromManifest);
         if (d2.deny !== void 0) manifestDenies.push(d2.deny);
-        if (d2.warn !== void 0) warnings.push(d2.warn);
+        warnOfManifest(d2, cmd.fromManifest);
         if (d2.unverified !== void 0) {
           const sofar = unverifiedIn.get(cmd.fromManifest);
           unverifiedIn.set(cmd.fromManifest, { count: (sofar?.count ?? 0) + 1, why: sofar?.why ?? d2.unverified });
@@ -7212,6 +7234,7 @@ ${counts.join(`
     lines.push("\u26A0\uFE0F dev-guardian package vetting \u2014 review before relying on these:");
     for (const w of warnings) lines.push(`  \u2022 ${w}`);
   }
+  if (missingCounted.size > 0) lines.push(missingCountLine(missingCounted));
   if (unverified.length > 0) lines.push(`${COULD_NOT_VET}${unverified.join(", ")}${NOT_VERIFIED}`);
   for (const [file, { count, why }] of unverifiedIn) {
     lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
@@ -7279,7 +7302,10 @@ function decideManifestOne(r, file) {
   if (r.not_on_public_registry === true) {
     const didYouMean = r.similar_to !== void 0 ? ` Did you mean '${r.similar_to}'?` : "";
     const why = r.verdict === "block" ? `not denied: ${NAMED_BY_MANIFEST}` : r.checks.exists.detail ?? "";
-    return { warn: `${file}: '${label2(r)}': ${NOT_FOUND}${didYouMean} (${why})` };
+    return {
+      warn: `${file}: '${label2(r)}': ${NOT_FOUND}${didYouMean} (${why})`,
+      ...r.similar_to === void 0 ? { plainMissing: true } : {}
+    };
   }
   const out = {};
   const typo = r.checks.typosquat;
