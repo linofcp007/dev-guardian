@@ -129,6 +129,13 @@ export interface InstallCommand {
    * together with `manifest`.
    */
   update?: true;
+  /**
+   * The names given to an update verb, read apart from `packages` (which stays empty for one): what the manager fetches
+   * when they are installed already (measured 2026-11-20: npm 11.19, pnpm 11.24, bun 1.4, Yarn 1.22 / 3.8 / 4.18). Present
+   * only for an npm, pnpm or bun update with a global flag word on the line ({@link hasGlobalFlagWord}), for `yarn global
+   * upgrade` and for Yarn's `up` forms; `[]` when the verb has no positional word. A glob pattern, a path and a URL are no name.
+   */
+  updateNames?: PackageSpec[];
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -1085,6 +1092,15 @@ const REQUIREMENT_FLAGS = new Set(['-r', '--requirement', '--requirements']);
 const isGlobalFlag = (f: { flag: string; value?: string }): boolean =>
   ((f.flag === '-g' || f.flag === '--global') && f.value !== 'false') || (f.flag === '--location' && f.value === 'global');
 
+/**
+ * Whether the line has a word that may say GLOBAL, before a `--` word: `-g`, `--global`, `--global=<value>`, `--location`,
+ * `--location=<value>`, or a short cluster that holds a `g`. It only decides whether an update verb keeps the names it is
+ * given ({@link InstallCommand.updateNames}); whether the command IS global stays {@link saysGlobal}'s answer.
+ */
+const GLOBAL_FLAG_WORD = /^(?:--global(?:=.*)?|--location(?:=.*)?|-[A-Za-z]*g[A-Za-z]*)$/;
+const hasGlobalFlagWord = (pre: readonly ShellWord[], args: readonly ShellWord[]): boolean =>
+  [...beforeDoubleDash(pre), ...beforeDoubleDash(args)].some((w) => GLOBAL_FLAG_WORD.test(w.value));
+
 /** The words a flag can come from: what follows a `--` word is no flag. */
 const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
   const at = words.findIndex((w) => w.value === '--');
@@ -1160,6 +1176,8 @@ interface Detected {
   manifest?: 'always' | 'bare';
   /** An update verb: a manifest install that moves the direct dependencies past the lockfile's pins ({@link InstallCommand.update}). */
   update?: true;
+  /** An update verb that keeps the names it is given ({@link InstallCommand.updateNames}): always, or only with a global flag word on the line. */
+  names?: 'always' | 'global-word';
 }
 
 /** A launcher as `detect` returns it. */
@@ -1223,7 +1241,7 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   npm: new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, 'audit', 'exec', 'x', ...NPM_INITIALIZER]),
   pnpm: new Set(['add', 'dlx', 'dedupe', ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
   bun: new Set([...BUN_ADD, 'update', 'x', ...BUN_INITIALIZER]),
-  yarn: new Set(['install', 'add', 'global', 'workspace', 'dlx', 'dedupe', 'up', ...YARN_UPDATE, ...CREATE_ONLY]),
+  yarn: new Set(['install', 'add', 'global', 'workspace', 'workspaces', 'dlx', 'dedupe', 'up', ...YARN_UPDATE, ...CREATE_ONLY]),
   pip: new Set(['install']),
   uv: new Set(['add', 'pip', 'tool']),
   poetry: new Set(['add']),
@@ -1232,6 +1250,49 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
 };
 const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run']);
 const ADD_ONLY: ReadonlySet<string> = new Set(['add']);
+const ADD_OR_UP: ReadonlySet<string> = new Set(['add', 'up']);
+const ADD_OR_UPGRADE: ReadonlySet<string> = new Set(['add', 'upgrade']);
+const FOREACH_ONLY: ReadonlySet<string> = new Set(['foreach']);
+const FOREACH_UNKNOWN_FLAG = 'a flag of yarn workspaces foreach the hook does not know';
+/**
+ * The flags of `yarn workspaces foreach` (the help of Yarn 4.18.1, `.specs/_findings-2026-11-20/measurements/cmd-forms/explore-linux-container-2026-11-20.txt`):
+ * its own table, not Yarn's own. `--since` takes an optional value, so it is not here.
+ */
+const FOREACH_VALUE: ReadonlySet<string> = new Set(['--from', '--include', '--exclude', '-j', '--jobs']);
+const FOREACH_BOOL: ReadonlySet<string> = new Set(['-A', '--all', '-R', '--recursive', '-W', '--worktree', '-v', '--verbose', '-p', '--parallel', '-i', '--interlaced', '-t', '--topological', '--topological-dev', '--no-private', '-n', '--dry-run']);
+
+/** The verb (`up` or `add`) after the flags of `yarn workspaces foreach`, from `from`; `unknown` when a flag is not in the table. */
+function foreachVerb(words: readonly ShellWord[], from: number): { at: number; unknown: boolean } {
+  let unknown = false;
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (!v.startsWith('-') || v.length === 1) return ADD_OR_UP.has(v) ? { at: i, unknown } : { at: -1, unknown };
+    const flag = v.includes('=') ? v.slice(0, v.indexOf('=')) : v;
+    if (FOREACH_VALUE.has(flag)) {
+      if (!v.includes('=')) i += 1;
+    } else if (!FOREACH_BOOL.has(flag)) unknown = true;
+  }
+  return { at: -1, unknown };
+}
+
+/** What `yarn workspace <w>` and `yarn workspaces foreach` give after their words: `up` is read as `yarn up`, `add` as `yarn add`; any other verb is not read. */
+function yarnWorkspaceVerb(
+  words: readonly ShellWord[],
+  at: number,
+  table: FlagTable,
+  head: string,
+  pre: ShellWord[],
+  uncertain: string[],
+  tag: (d: Detected) => Detected,
+): Detected | null {
+  const verb = words[at]?.value;
+  if (verb === 'up') {
+    const update = scanPositional(words, at + 1, table).at >= 0;
+    return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'always', names: 'always', ...(update ? { update: true as const } : {}) });
+  }
+  if (verb !== 'add') return null;
+  return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare' });
+}
 const INSTALL_ONLY: ReadonlySet<string> = new Set(['install']);
 const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
 
@@ -1359,7 +1420,7 @@ function detect(input: readonly ShellWord[]): Detected | null {
         return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
       }
       // The names after an update verb select dependencies of the manifest: none is a package (`manifest: 'always'`).
-      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       // `npm audit fix` installs the lockfile's packages; `npm audit` and `npm audit signatures` install nothing.
       if (subWord === 'audit' && words[nextPositional(words, sub + 1, table)]?.value === 'fix') {
         return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
@@ -1371,11 +1432,11 @@ function detect(input: readonly ShellWord[]): Detected | null {
       // dependency), and installs the manifest too. Up to and including 3.10.0 the form with a package was not read at all.
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       if (subWord === 'dedupe') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
-      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       return null;
     case 'bun': {
       // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too, and install the manifest.
-      if (subWord === 'update') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (subWord === 'update') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       if (!BUN_ADD.has(subWord)) return null;
       return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
     }
@@ -1385,18 +1446,36 @@ function detect(input: readonly ShellWord[]): Detected | null {
       if (subWord === 'up') {
         // Yarn 4: `yarn up <pattern>` moves that dependency to its latest; without a pattern it installs the manifest as `install` does.
         const update = nextPositional(words, sub + 1, table) >= 0;
-        return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', ...(update ? { update: true as const } : {}) });
+        return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', names: 'always', ...(update ? { update: true as const } : {}) });
       }
       let at = sub;
       const uncertain: string[] = [];
-      if (subWord === 'global') at = nextPositional(words, sub + 1, table, ADD_ONLY);
+      if (subWord === 'workspaces') {
+        // `yarn workspaces foreach <flags> up|add …` (Yarn 4.18; Yarn 3.8 has no such command): read as `yarn up` and `yarn workspace <w> add`.
+        const foreach = nextPositional(words, sub + 1, table, FOREACH_ONLY);
+        if (foreach < 0 || words[foreach]?.value !== 'foreach') return null;
+        const verb = foreachVerb(words, foreach + 1);
+        if (verb.at < 0) return null;
+        uncertain.push('workspace context (yarn workspaces)');
+        if (verb.unknown) uncertain.push(FOREACH_UNKNOWN_FLAG);
+        return yarnWorkspaceVerb(words, verb.at, table, head, pre, uncertain, tag);
+      }
+      if (subWord === 'global') at = nextPositional(words, sub + 1, table, ADD_OR_UPGRADE);
       else if (subWord === 'workspace') {
         const ws = nextPositional(words, sub + 1, table);
-        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table, ADD_ONLY);
+        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table, ADD_OR_UP);
         uncertain.push('workspace context (yarn workspace)');
       }
-      if (at < 0 || words[at]?.value !== 'add') return null;
-      return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare', ...(subWord === 'global' ? { global: true } : {}) });
+      if (at < 0) return null;
+      if (subWord === 'global' && words[at]?.value === 'upgrade') {
+        // Measured 2026-11-20 (Yarn 1.22): `yarn global upgrade <P>` fetches P when it is installed globally; the project is not read.
+        return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, global: true, names: 'always' });
+      }
+      if (subWord === 'global') {
+        if (words[at]?.value !== 'add') return null;
+        return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare', global: true });
+      }
+      return yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag);
     }
     case 'pip':
       return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -1653,7 +1732,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   const { skipped, customRegistry, uncertain, registries } = walked;
   // A subcommand that takes no package names none: its positional words are not looked up.
   const limited = limitCandidates(walked.positionals);
-  const positionals = d.manifest === 'always' ? [] : limited.kept;
+  // The words after an update verb are its names ({@link InstallCommand.updateNames}), never packages.
+  const positionals = d.manifest === 'always' || d.names !== undefined ? [] : limited.kept;
   const allFlags = [...preWalk.flags, ...walked.flags];
   const packages: PackageSpec[] = [];
   const out: InstallCommand = {
@@ -1666,7 +1746,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
-  if (limited.dropped > 0 && d.manifest !== 'always') out.candidatesDropped = limited.dropped;
+  if (limited.dropped > 0 && d.manifest !== 'always' && d.names === undefined) out.candidatesDropped = limited.dropped;
 
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
   // thing the command surely names, so it does not stop the manifest from being read.
@@ -1732,6 +1812,16 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   // global flag back; and every flag must be one the manager's table knows, because npm reads abbreviations and
   // shorthands the table does not hold (`-g --loc=project` and `-g --g=false` obey the project's file). In doubt: no.
   const knownFlagsOnly = preWalk.unknownFlags + walked.unknownFlags === 0;
+  // The names of an update verb (not a package: `packages` stays empty for one): a pattern, a path and a URL are none.
+  if (d.names === 'always' || (d.names === 'global-word' && hasGlobalFlagWord(d.pre, d.args))) {
+    out.updateNames = [];
+    for (const p of limited.kept) {
+      const spec = parseNpm(p.value, d.manager);
+      // A pattern, a path or a URL is no name; it is kept as a skipped word, so that "no word at all" can be told from it.
+      if ('name' in spec) out.updateNames.push(spec);
+      else skipped.push(spec);
+    }
+  }
   if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
     const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
@@ -1803,7 +1893,7 @@ export function parseInstallCommands(
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === undefined) continue;
+      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined) continue;
       for (const p of packages) seen.add(packageKey(p));
       // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest read.
       const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined);
@@ -1836,7 +1926,7 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     // A manifest install only this reading finds is kept; one both readings find is the same install.
     const newManifest = c.manifest !== undefined && !seenManifests.has(manifestKey(c));
-    if (packages.length === 0 && !newManifest) continue;
+    if (packages.length === 0 && !newManifest && c.updateNames === undefined) continue;
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
     const { manifest: _same, ...withoutManifest } = c;

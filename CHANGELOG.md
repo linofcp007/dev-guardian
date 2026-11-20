@@ -46,6 +46,32 @@ version bump.
     denied, as `npm exec` and `npm install` are, with the escape hatch the deny names. The names `create-<name>` now
     go to the public registry and to OSV; in a project whose `.npmrc`, `.yarnrc`, `.yarnrc.yml` or `bunfig.toml`
     sets the default registry, a missing name only warns, with that registry as the reason.
+- **The install hook now vets the package an update is told to fetch.** `npm update -g <package>` (also `npm up` and
+  `npm upgrade`), `pnpm update -g <package>`, `bun update -g <package>` and `yarn global upgrade <package>` fetch the
+  package when it is installed globally, and `yarn up <package>`, `yarn workspace <w> up <package>` and `yarn workspaces
+  foreach … up <package>` fetch it for the workspace. The install form (`npm install -g <package>`) was looked up;
+  the global update forms and the two workspace forms were silent, with no lookup at all, and for `yarn up <package>`
+  only the manifest was read (measured 2026-11-20 with a stand-in registry: npm 11.19, pnpm 11.24, Yarn 1.22, 3.8 and
+  4.18, bun 1.4: each manager asked the registry for the package and installed 1.5.0 or 2.1.0 of it). The name is now
+  looked up — sent to the public registry and to OSV — with the version or range it carries, as a package named to an
+  update:
+  - **Denied:** a package OSV lists as malicious, as for an install.
+  - **Only a warning:** a name the registry does not have, and a typosquat suspicion. A missing name is never denied
+    here: with nothing installed globally the managers asked the registry for nothing, and Yarn refuses a name no
+    workspace depends on (both measured; a missing name beside other global packages was not), and the hook cannot
+    see what is installed globally. The warning says so.
+  - **One line:** `npm update -g`, `pnpm update -g`, `bun update -g` and `yarn global upgrade` with no name say that the
+    command updates every globally installed package and that none was vetted. They are not denied and the project's
+    manifest is not read, as before.
+  - **Not said:** a recent version, install scripts and known vulnerabilities of the name, which an update would repeat
+    at every run (the known limit `install-global-update-by-name` lists what stays).
+  - **Upgrading:** `yarn workspace <w> up` and `yarn workspaces foreach … up|add` were not read (measured: `workspace
+    <w> up` with Yarn 3.8 and 4.18, `foreach -A up` with Yarn 4.18; `foreach … add` is read by the same rule and was
+    not measured); they are now read as `yarn up` and `yarn workspace <w> add`, so they vet the nearest `package.json` and the lockfile
+    like those do, and the command is uncertain for the workspace context. `yarn workspaces foreach` with a flag its
+    help does not list is uncertain too. A name that a manifest read for the command already has, without a version,
+    is looked up once, by the manifest, as before. The names of a project update (`npm update <name>`,
+    `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`) are still not looked up.
 
 ## [3.14.1] - 2026-11-20
 

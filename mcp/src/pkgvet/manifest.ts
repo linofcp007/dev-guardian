@@ -49,6 +49,11 @@ export interface ManifestRead {
   status: ManifestStatus;
   /** The packages a registry would serve, each once, in the order of the file. */
   packages: PackageSpec[];
+  /**
+   * Every name the file declares as a dependency, the ones that are no registry spec too (a `workspace:`, `file:` or git value, which
+   * are not in `packages`): what a name given to an update is compared with. A requirements file has its packages' names.
+   */
+  names: string[];
   /** The registries / indexes the file itself names (a requirements file's `--index-url` and the like). */
   registries: string[];
   /** With `unreadable`: why, one of {@link MANIFEST_UNREADABLE_REASONS}. */
@@ -212,28 +217,30 @@ function npmDependency(key: string, value: string, manager: string): PackageSpec
 export function readNpmManifest(dir: string, manager = 'npm'): ManifestRead {
   const file = 'package.json';
   const read = readManifestText(resolve(dir, file), dir);
-  if (read.status === 'absent') return { file, status: 'absent', packages: [], registries: [] };
-  if (read.status === 'unreadable') return { file, status: 'unreadable', packages: [], registries: [], reason: read.reason };
+  if (read.status === 'absent') return { file, status: 'absent', packages: [], names: [], registries: [] };
+  if (read.status === 'unreadable') return { file, status: 'unreadable', packages: [], names: [], registries: [], reason: read.reason };
   let manifest: unknown;
   try {
     manifest = JSON.parse(read.text);
   } catch {
-    return { file, status: 'unreadable', packages: [], registries: [], reason: REASON.notJson };
+    return { file, status: 'unreadable', packages: [], names: [], registries: [], reason: REASON.notJson };
   }
   if (manifest === null || typeof manifest !== 'object' || Array.isArray(manifest)) {
-    return { file, status: 'unreadable', packages: [], registries: [], reason: REASON.notManifest };
+    return { file, status: 'unreadable', packages: [], names: [], registries: [], reason: REASON.notManifest };
   }
   const packages: PackageSpec[] = [];
+  const names = new Set<string>();
   const seen = new Set<string>();
   for (const section of NPM_SECTIONS) {
     const entries = (manifest as Record<string, unknown>)[section];
     if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) continue;
     for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
+      names.add(key);
       if (typeof value !== 'string') continue;
       for (const pkg of npmDependency(key, value, manager)) pushOnce(packages, seen, pkg);
     }
   }
-  return { file, status: 'ok', packages, registries: [] };
+  return { file, status: 'ok', packages, names: [...names], registries: [] };
 }
 
 // ───────────────────────────────────────────────────────────── requirements
@@ -351,12 +358,12 @@ export function readRequirements(dir: string, files: readonly string[], manager 
   const walk: RequirementsWalk = { files: 0, visited: new Set<string>(), manager };
   return files.map((given): ManifestRead => {
     const file = label(given);
-    if (isNetworkPath(given)) return { file, status: 'unreadable', packages: [], registries: [], reason: REASON.network };
+    if (isNetworkPath(given)) return { file, status: 'unreadable', packages: [], names: [], registries: [], reason: REASON.network };
     const found: RequirementsFound = { packages: [], registries: [], seen: new Set<string>() };
     const read = readRequirementFile(resolve(dir, given), dir, 0, walk, found);
-    if (read.status === 'absent') return { file, status: 'absent', packages: [], registries: [] };
-    if (read.status === 'unreadable') return { file, status: 'unreadable', packages: [], registries: [], reason: read.reason };
-    const out: ManifestRead = { file, status: 'ok', packages: found.packages, registries: found.registries };
+    if (read.status === 'absent') return { file, status: 'absent', packages: [], names: [], registries: [] };
+    if (read.status === 'unreadable') return { file, status: 'unreadable', packages: [], names: [], registries: [], reason: read.reason };
+    const out: ManifestRead = { file, status: 'ok', packages: found.packages, names: found.packages.map((p) => p.name), registries: found.registries };
     if (found.incomplete !== undefined) out.incomplete = found.incomplete;
     return out;
   });

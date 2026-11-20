@@ -167,6 +167,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'corepack-manager-download',
       'dotnet-other-install-forms',
       'install-candidates-over-ceiling',
+      'install-global-update-by-name',
       'install-initializers',
       'install-other-runners',
       'launcher-flag-words',

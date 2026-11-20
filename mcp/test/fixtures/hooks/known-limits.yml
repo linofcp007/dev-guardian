@@ -433,7 +433,7 @@
 - id: manifest-other-managers
   area: install-vetting
   doc: |-
-    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies, they are not looked up; the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`. The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it. `npm install-test` and `npm it` install the manifest as `npm install` does, and a package given to `npm install-test` is vetted like one given to `npm install` (a name the registry does not have is denied in the same forms).
+    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `yarn workspaces foreach … add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn workspace <w> up`, `yarn workspaces foreach … up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies of the manifest: in a project update they are not looked up (`npm update <name>`, `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`), while the names given to a global update and to the `up` forms of Yarn are vetted as a package named to an update (see `install-global-update-by-name`); the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`. The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it. `npm install-test` and `npm it` install the manifest as `npm install` does, and a package given to `npm install-test` is vetted like one given to `npm install` (a name the registry does not have is denied in the same forms).
   examples:
     - detector: hook
       event: PreToolUse
@@ -1105,3 +1105,32 @@
             }
           }
       expect: { decision: warn }
+
+- id: install-global-update-by-name
+  area: install-vetting
+  doc: |-
+    A package named to an update that fetches it is vetted by name (measured 2026-11-20: npm 11.19, pnpm 11.24, Yarn 1.22, 3.8 and 4.18, bun 1.4): `npm update -g <name>`, `npm up` and `npm upgrade` with it, `pnpm update -g <name>`, `bun update -g <name>`, `yarn global upgrade <name>` (a global update, where the manager asks the registry only for a name that is installed globally already) and `yarn up <name>`, `yarn workspace <w> up <name>` and `yarn workspaces foreach … up <name>` (which move a dependency of the workspace). The name is looked up, with the version or range it carries: a malicious package is denied, a typosquat suspicion is a warning, and a name the registry does not have only warns. A global update with no name says in one line that it updates every globally installed package and that none was vetted. What stays:
+
+    - The hook does not know what is installed globally, and answers the same whether or not the package is: a name the registry does not have warns where the manager would do nothing, and is never denied for that.
+    - The version an update fetches is not the one the hook looks at, and a recent version, install scripts and known vulnerabilities of the package are not said: an update repeats them at every run, and the name is only asked for its malware check and its typosquat check.
+    - The names given to a project update in a workspace of npm or pnpm (`npm update <name> -w <workspace>`, `pnpm update <name> -r`) are not looked up, as the names of any project update are not; and `yarn workspace <w> upgrade <P>` (Yarn 1) is not read at all.
+    - A pattern (`yarn up '*'`), a path and a URL are no name and are not looked up.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm update -g left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm update -g
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn workspace docs upgrade left-pad
+      expect: { decision: none }

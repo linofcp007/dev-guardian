@@ -281,8 +281,29 @@ function boundedInstalls(
   };
 }
 
-/** An install command as it is vetted: the packages a manifest names carry the file that names them. */
-type VetCommand = InstallCommand & { fromManifest?: string };
+/**
+ * An install command as it is vetted: the packages a manifest names carry the file that names them, and the names an update
+ * verb is given ({@link InstallCommand.updateNames}) are marked `fromUpdate`.
+ */
+type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true };
+
+/** Why the name given to an update is never denied as missing (measured 2026-11-20: an update fetches only what is installed already). */
+const NAMED_TO_UPDATE = 'not denied: a package named to an update is fetched only when it is already installed';
+
+/** Said for a global update that names nothing: the managers update every globally installed package (measured 2026-11-20). */
+const UPDATES_EVERY_GLOBAL = 'dev-guardian: this command updates every globally installed package — none of them was vetted.';
+
+/**
+ * The names an update verb is given, as one more command to vet (`fromUpdate`): those that no manifest read for the command
+ * has, and those with a version or a range (the manifest's own check is not that version); all of them when no manifest was
+ * read. `undefined` when there is nothing to vet.
+ */
+function updateCommand(c: InstallCommand, inManifest: ReadonlySet<string>): VetCommand | undefined {
+  const packages = (c.updateNames ?? []).filter((n) => n.range !== undefined || !inManifest.has(n.name));
+  if (packages.length === 0) return undefined;
+  const { manifest: _manifest, update: _update, updateNames: _names, ...rest } = c;
+  return { ...rest, packages, skipped: [], fromUpdate: true };
+}
 
 /** Why a package a manifest names is never denied as missing. */
 const NAMED_BY_MANIFEST = 'it is named by a manifest, where a missing name is usually a private or a workspace package';
@@ -352,16 +373,26 @@ function withManifestPackages(
   const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
   for (const c of parsed) {
     out.push(c);
+    // The names of an update are vetted whatever happens to the manifest below: every early `continue` comes after this.
+    const pushUpdate = (inManifest: ReadonlySet<string>): void => {
+      const more = updateCommand(c, inManifest);
+      if (more !== undefined) out.push(more);
+    };
+    if (c.global === true && c.updateNames?.length === 0 && c.skipped.length === 0) notes.push(UPDATES_EVERY_GLOBAL);
     // A line of thousands of commands asks once per manager and directory: the answer is the same.
     const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
     notes.push(...(lineAsked.get(key) ?? []));
     const manifest = c.manifest;
-    if (manifest === undefined) continue;
+    if (manifest === undefined) {
+      pushUpdate(new Set());
+      continue;
+    }
     const dir = c.prefixed === true ? null : commandDir(c, opts);
     if (dir === null) {
       const what = manifest.kind === 'package-json' ? 'package.json' : 'the requirements file';
       notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) — its packages were not vetted.`);
+      pushUpdate(new Set());
       continue;
     }
     let reads: ManifestRead[];
@@ -379,8 +410,10 @@ function withManifestPackages(
     } catch {
       // Fail-open, and said: nothing of the manifest was vetted.
       notes.push('dev-guardian: the manifest was not read (could not be read) — its packages were not vetted.');
+      pushUpdate(new Set());
       continue;
     }
+    pushUpdate(new Set(reads.flatMap((r) => (r.status === 'ok' ? r.names : []))));
     for (const read of reads) {
       if (read.status === 'absent') continue;
       // The lockfile is what the manager installs, whether or not the manifest could be read.
@@ -1148,7 +1181,8 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           commandRegistries: c.registries,
           // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
           // what only those two checks need is not asked of the registry.
-          ...(c.fromManifest !== undefined ? { unreported: MANIFEST_UNREPORTED } : {}),
+          // The names given to an update are told neither of them: an update repeats them at every run.
+          ...(c.fromManifest !== undefined || c.fromUpdate === true ? { unreported: MANIFEST_UNREPORTED } : {}),
           ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
           ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
           ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
@@ -1223,7 +1257,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         }
         continue;
       }
-      const d = decideOne(r, cmd.uncertain);
+      const d = cmd.fromUpdate === true ? decideUpdateOne(r) : decideOne(r, cmd.uncertain);
       if (d.deny !== undefined) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
       else if (d.deny !== undefined) missingIn = missingIn ?? cmd.manager;
@@ -1393,6 +1427,32 @@ function decideManifestOne(
   if (typo.status === 'warn' && typo.detail !== undefined) out.warn = `${file}: ${label(r)}: ${typo.detail}`;
   const unknown = [r.checks.exists, r.checks.malicious].find((c) => c.status === 'unknown' && c.detail !== undefined);
   if (unknown !== undefined) out.unverified = unknown.detail ?? '';
+  return out;
+}
+
+/**
+ * One name given to an update verb, in the hook's answer. It is typed on the command line, so a malicious package is denied
+ * as {@link decideOne} does; but an update fetches a package only when it is installed already, so a name the registry does not
+ * have is never a deny — it is a warning that says why. A typosquat suspicion is a warning too; a fresh version, install scripts
+ * and known vulnerabilities are not said (an update repeats them at every run); a lookup that could not run is the "could not vet" line.
+ */
+function decideUpdateOne(r: PackageVetResult): { deny?: string; malicious?: boolean; warn?: string; unverified?: string } {
+  if (r.checks.malicious.status === 'fail') {
+    const why = Object.values(r.checks)
+      .filter((c) => c.status === 'fail' && c.detail !== undefined)
+      .map((c) => c.detail ?? '')
+      .join('; ');
+    return { deny: `'${label(r)}': ${sentence(why)}`, malicious: true };
+  }
+  if (r.not_on_public_registry === true) {
+    const didYouMean = r.similar_to !== undefined ? ` Did you mean '${r.similar_to}'?` : '';
+    return { warn: `'${label(r)}': ${NOT_FOUND}${didYouMean} (${NAMED_TO_UPDATE})` };
+  }
+  const out: { warn?: string; unverified?: string } = {};
+  const typo = r.checks.typosquat;
+  if (typo.status === 'warn' && typo.detail !== undefined) out.warn = `${label(r)}: ${typo.detail}`;
+  const unknown = [r.checks.exists, r.checks.malicious].find((c) => c.status === 'unknown' && c.detail !== undefined);
+  if (unknown !== undefined) out.unverified = `${label(r)} (${unknown.detail ?? ''})`;
   return out;
 }
 

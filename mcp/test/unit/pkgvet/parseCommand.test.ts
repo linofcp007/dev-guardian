@@ -2910,8 +2910,20 @@ describe('install-vet-global-update-by-name', () => {
   );
 
   it("T-01 `bash -c 'npm update -g <P>'` gives what `npm update -g <P>` gives: the nested command is not dropped for having no packages", () => {
-    expect(read(`bash -c 'npm update -g ${P}'`)).toEqual(read(`npm update -g ${P}`));
-    expect(read(`bash -c 'npm update -g ${P}'`).map((c) => c.updateNames)).toEqual([[[P, undefined, P]]]);
+    // The shell guard hands the scripts of `bash -c` to the parser as `nested`: the plain reading of the outer line finds no install.
+    const nested = (line: string, script: string): unknown =>
+      parseInstallCommands(line, { nested: [{ text: script, shell: 'bash' }] }).map((c) => ({
+        packages: c.packages.map((p) => p.name),
+        updateNames: (c as WithUpdateNames).updateNames?.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+        manifest: c.manifest,
+        update: c.update,
+        global: c.global,
+      }));
+    expect(nested(`bash -c 'npm update -g ${P}'`, `npm update -g ${P}`)).toEqual(essence(`npm update -g ${P}`));
+    expect(nested(`bash -c 'npm update -g ${P}'`, `npm update -g ${P}`)).toEqual([
+      { packages: [], updateNames: [[P, undefined, P]], manifest: undefined, update: undefined, global: true },
+    ]);
+    expect(nested("bash -c 'npm update -g'", 'npm update -g')).toEqual(essence('npm update -g'));
   });
 
   it.each(['npm update -g', 'pnpm update -g', 'bun update -g', 'yarn global upgrade'])(
