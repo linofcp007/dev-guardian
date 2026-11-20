@@ -2564,3 +2564,89 @@ describe('install-vet-npm-exec-bool-word', () => {
     expect(saysTwoWays(command), command).toBe(true);
   });
 });
+
+// ───────────────── install-vet-tilde-range-skipped — `pkg@~1.0.0` is a package and a range, not a path that starts with `~`
+
+describe('install-vet-tilde-range-skipped', () => {
+  const skippedOf = (command: string): string[] => parseInstallCommands(command).flatMap((c) => c.skipped.map((s) => s.raw));
+
+  // Every install and launcher line of the npm family, with its subject word.
+  const LINES = [
+    'npm install',
+    'npm i -D',
+    'npm install -g',
+    'pnpm add',
+    'yarn add',
+    'yarn global add',
+    'bun add',
+    'npx',
+    'npm exec',
+    'pnpm dlx',
+    'yarn dlx',
+    'bunx',
+  ] as const;
+
+  const NAME = 'tilde-pkg-zq';
+  const SCOPED = '@scope-zq/tilde-pkg-zq';
+
+  it.each(
+    LINES.flatMap((line) =>
+      (
+        [
+          [`${NAME}@~1.0.0`, NAME, '~1.0.0'],
+          [`${NAME}@~1`, NAME, '~1'],
+          [`${NAME}@~1.0.x`, NAME, '~1.0.x'],
+          [`${SCOPED}@~1.0.0`, SCOPED, '~1.0.0'],
+          [`"${NAME}@~1.2.3 || ~2.0.0"`, NAME, '~1.2.3 || ~2.0.0'],
+        ] as const
+      ).map(([spec, name, range]) => [line, spec, name, range] as const),
+    ),
+  )('T-01 `%s %s`: the package %s with the range %s, nothing skipped', (line, spec, name, range) => {
+    const command = `${line} ${spec}`;
+    expect(vetted(command), command).toEqual([[name, range]]);
+    expect(skippedOf(command), command).toEqual([]);
+  });
+
+  it.each(['npm install', 'pnpm add', 'yarn add', 'bun add', 'npx', 'pnpm dlx'] as const)(
+    'T-01 `%s alias@npm:real@~1.0.0` is the package `real` with the range, nothing skipped',
+    (line) => {
+      const command = `${line} alias-zq@npm:real-zq@~1.0.0`;
+      expect(vetted(command), command).toEqual([['real-zq', '~1.0.0']]);
+      expect(skippedOf(command), command).toEqual([]);
+    },
+  );
+
+  it.each(['npm install', 'pnpm add', 'yarn add', 'bun add', 'npx', 'bunx'] as const)(
+    'T-02 guard: `%s` still skips a path, whole or after the `@`, as a local path',
+    (line) => {
+      for (const word of ['~/pasta', `${NAME}@~/x`, `${NAME}@~user-zq/x`, `${NAME}@./x`, `${NAME}@../x`]) {
+        const command = `${line} ${word}`;
+        expect(vetted(command), command).toEqual([]);
+        expect(skippedOf(command), command).toEqual([word]);
+      }
+    },
+  );
+
+  it.each(['npm install', 'pnpm add', 'yarn add', 'bun add'] as const)(
+    'T-02 guard: `%s` reads `~` alone and `~` with a word as today: skipped',
+    (line) => {
+      for (const word of [`${NAME}@~`, `${NAME}@~abc`]) {
+        const command = `${line} ${word}`;
+        expect(vetted(command), command).toEqual([]);
+        expect(skippedOf(command), command).toEqual([word]);
+      }
+    },
+  );
+
+  it.each(['npm install', 'pnpm add', 'yarn add', 'bun add', 'npx'] as const)('T-02 guard: `%s` reads the other ranges as today', (line) => {
+    expect(vetted(`${line} ${NAME}@^1.0.0`)).toEqual([[NAME, '^1.0.0']]);
+    expect(vetted(`${line} ${NAME}@1.0.0`)).toEqual([[NAME, '1.0.0']]);
+    expect(vetted(`${line} "${NAME}@>=1 <2"`)).toEqual([[NAME, '>=1 <2']]);
+    expect(vetted(`${line} ${NAME}@latest`)).toEqual([[NAME, undefined]]);
+  });
+
+  it('T-02 guard: pip and composer read their own `~` as today, and give the package', () => {
+    expect(vetted(`pip install "${NAME}~=1.0"`)).toEqual([[NAME, '~=1.0']]);
+    expect(vetted('composer require vendor-zq/tilde-pkg-zq:~1.0')).toEqual([['vendor-zq/tilde-pkg-zq', '~1.0']]);
+  });
+});

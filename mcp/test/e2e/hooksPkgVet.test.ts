@@ -1963,3 +1963,45 @@ describe('lockfile-origin-host-from-userinfo', () => {
     expect(r.stdout).not.toContain('a custom registry is configured');
   });
 });
+
+// ───────────────── install-vet-tilde-range-skipped — `pkg@~1.5.0` is vetted through the dispatcher, as `pkg@^1.5.0` is
+
+describe('install-vet-tilde-range-skipped', () => {
+  // Both packages are malicious only here, at one version each, and that version is not the newest (2.0.0, clean).
+  // `~1.5.0` picks 1.5.4; `~1` picks 1.6.0.
+  const doc: Route = {
+    accept: 'install-v1',
+    body: {
+      'dist-tags': { latest: '2.0.0' },
+      modified: '2020-01-01T00:00:00.000Z',
+      versions: { '1.5.0': {}, '1.5.4': {}, '1.6.0': {}, '2.0.0': {} },
+    },
+  };
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/tilde-evil-zq': doc,
+    'https://registry.npmjs.org/tilde-evil-two-zq': doc,
+    'https://registry.npmjs.org/tilde-missing-zq': { status: 404 },
+    [OSV]: { osv: { 'tilde-evil-zq@1.5.4': ['MAL-2026-0096'], 'tilde-evil-two-zq@1.6.0': ['MAL-2026-0095'] } },
+  };
+
+  it.each([
+    ['npm install tilde-evil-zq@~1.5.0', /tilde-evil-zq.*MAL-2026-0096/s],
+    ['pnpm add tilde-evil-two-zq@~1', /tilde-evil-two-zq.*MAL-2026-0095/s],
+    ['npx tilde-evil-zq@~1.5.0', /tilde-evil-zq.*MAL-2026-0096/s],
+  ] as const)('T-03 `%s` is DENIED, naming the package, at the version the range picks', (command, reason) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(reason);
+  });
+
+  it.each(['npm install tilde-missing-zq@~1.0.0', 'npm install tilde-missing-zq@^1.0.0'])(
+    'T-03 `%s`: a name the registry does not have is DENIED, with a tilde as with a caret',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/tilde-missing-zq.*does not exist/s);
+    },
+  );
+});

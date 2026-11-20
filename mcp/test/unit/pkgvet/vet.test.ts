@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
 import { nugetSearchUrl } from '../../../src/pkgvet/registry.js';
 import type { PackageSpec, PackageVetResult, PkgEcosystem } from '../../../src/pkgvet/types.js';
 import { TOOL_BUDGET_MS, vetPackages, type VetOptions } from '../../../src/pkgvet/vet.js';
@@ -1227,5 +1228,36 @@ describe('pkgvet-registry-credentials-said', () => {
     expect(unreadable?.checks.exists.detail).toContain(
       `registry configuration at ${join(project, '.npmrc')} could not be read — possibly a private registry — possibly a private or local package; not vetted.`,
     );
+  });
+});
+
+// ───────────────── install-vet-tilde-range-skipped — the `vet_packages` tool reads `pkg@~1.0.0` as a package with a range
+
+describe('install-vet-tilde-range-skipped', () => {
+  /** What the tool does with one raw spec: read it (`parsePackageSpec`), then vet what it names. */
+  async function readAndVet(raw: string, fake: Fake): Promise<{ parsed: ReturnType<typeof parsePackageSpec>; results: PackageVetResult[] }> {
+    const parsed = parsePackageSpec('npm', raw);
+    const results = await vetPackages('name' in parsed ? [parsed] : [], opts(fake));
+    return { parsed, results };
+  }
+
+  it.each([
+    ['tilde-pkg-zq@~1.0.0', 'tilde-pkg-zq', '~1.0.0', 'https://registry.npmjs.org/tilde-pkg-zq', '1.0.5'],
+    ['@scope-zq/tilde-pkg-zq@~1', '@scope-zq/tilde-pkg-zq', '~1', 'https://registry.npmjs.org/@scope-zq%2Ftilde-pkg-zq', '1.6.0'],
+  ])('T-04 `%s` is the package with its range, vetted at the version the range picks, never skipped', async (raw, name, range, url, picked) => {
+    // The newest version is 2.0.0 and clean; only the one the range picks is malicious.
+    const fake = fakeFetch({
+      [url]: { body: npmAbbrev(name, { versions: ['1.0.0', '1.0.5', '1.6.0', '2.0.0'], latest: '2.0.0' }) },
+      [OSV]: osvRoute({ [`${name}@${picked}`]: ['MAL-2026-0097'] }),
+    });
+    const { parsed, results } = await readAndVet(raw, fake);
+    expect(parsed).toMatchObject({ name, range });
+    expect(results.map((r) => [r.name, r.version, r.verdict])).toEqual([[name, picked, 'block']]);
+  });
+
+  it('T-04 `tilde-pkg-zq@~/x` is still skipped, as a local path', async () => {
+    const { parsed, results } = await readAndVet('tilde-pkg-zq@~/x', fakeFetch({}));
+    expect(parsed).toEqual({ raw: 'tilde-pkg-zq@~/x', reason: 'local path — not looked up' });
+    expect(results).toEqual([]);
   });
 });
