@@ -1001,7 +1001,7 @@
     - Yarn 2 and 3 were not measured, only Yarn 1 and Yarn 4 (and bun 1.4.4): the reading follows Yarn 4.
     - A command with a word read both ways counts as uncertain as a whole, so ANOTHER name on the same line that the registry does not have is a warning and not a deny (a malicious one is still denied).
     - The bun rule is not copied: the two-name reading covers it, at the price of one lookup too many.
-    - A range written without quotes (`name@npm:>=1.0.0`) is read: bash hands the manager `name@npm:` and the hook reads that, and the PowerShell tool is read both ways (see `install-redirect-glued-word`). A range with a space still needs quotes.
+    - A range written without quotes (`name@npm:>=1.0.0`) is read for Yarn and bun — for npm and pnpm `name@npm:` is put aside —: bash hands the manager `name@npm:` and the hook reads that, and the PowerShell tool is read both ways (see `install-redirect-glued-word`). A range with a space still needs quotes.
     - A `package.json` value `"x": "npm:1.0.0"` leaves a "could not vet" line for the name `1.0.0` at every `yarn install`: the public registry answers that name with a document that is no package.
     - `name@NPM:<rest>` in capitals reads as the package `name` under Yarn 1, and bun reads it as a git URL (`https://NPM/<rest>/`): the hook reads it as the lower-case form.
     - `resolutions` and `overrides` of a `package.json` are not read, and neither is a lockfile written by Yarn for these forms.

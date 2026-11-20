@@ -39,7 +39,8 @@ version bump.
   whole word and the part before the operator — and looks an npm, pnpm, Yarn or bun range with `<` or `>` up with the range and
   without it, quoted or not. A line with an unquoted redirection is still uncertain: a name the registry does not have is a
   warning, never a deny, and a malicious package is denied; `npm install '<package>@>=1.0.0'` with the PowerShell tool is
-  denied for a missing name as before, and `npm install <package>@` is denied like `npm install <package>`. Upgrading: lines that
+  denied for a missing name as before, and `npm install <package>@` is denied like `npm install <package>`; the `vet_packages`
+  tool reads `name@` as the name too. Upgrading: lines that
   said nothing before now say what the registry says about the package — a warning for a name it does not have, a refusal for a
   malicious one — `npm ci>out.log` and `pip install -r reqs.txt>out.log` now read the manifest, and with the PowerShell tool the
   target of `<package>> out.txt` is looked up as a package. Under a launcher, `npx <package>@` only warns (not measured). See
