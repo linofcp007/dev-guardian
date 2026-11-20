@@ -22,6 +22,31 @@ version bump.
   typosquat suspicion and the warnings of the packages named on the command line are always listed; and an answer
   with five missing names or fewer is word for word what it was.
 
+### Security
+
+- **The install hook now vets the initializers of the npm family and `npm install-test <package>`.** `npm create`,
+  `npm init <name>`, `npm innit`, `yarn create`, `pnpm create` and `bun create` / `bun c` download `create-<name>`
+  and run it, and `npm install-test <package>` / `npm it <package>` install the package; none of them was looked at
+  (measured 2026-11-20 with a stand-in registry: npm 11.19, Yarn 1.22, 3.8 and 4.18, pnpm 11.24, bun 1.4). The
+  initializer's package is now looked up as `npm exec create-<name>` already was — `create-<name>`, `@scope/create`
+  for `@scope`, `@scope/create-<name>` for `@scope/<name>`, with the version the word carries — and `npm install-test
+  <package>` is read as `npm install <package>`.
+  - **Denied:** a package the public registry does not have, in a plain single statement for `npm create|init|innit`
+    (also with `-y`, `--yes`, `-q`, `--quiet`, `--silent`), `yarn create` (also `-q`, `--quiet`) and `pnpm create`,
+    and for `npm install-test` / `npm it`; and any such package that OSV lists as malicious, in every form.
+  - **Only a warning:** `bun create` / `bun c` for a missing name, because bun uses a template of that name from a
+    `.bun-create` folder when there is one and then does not ask the registry (measured; the hook does not read that
+    folder); a flag that was not measured with the verb (`npm init -w <folder> <name>`, `--registry`); a word that
+    already starts with `create-` for Yarn, the bare word `create`, a scope whose name starts with `create-`, and
+    `yarn create @scope@<version>`, where the managers differ or nothing was measured and both names are looked up.
+  - **Still not read:** `npm init` and `yarn create` with no name (they fetch nothing), an initializer that is not a
+    registry name (`npm init <user>/<repo>`, a path, a URL), `npm link <package>`, `npm init -w <folder>` with no
+    name, and `bun create` templates. The known limit `install-initializers` lists what the initializers leave.
+  - **Upgrading:** `npm create <a name the registry does not have>` and `npm install-test <a missing name>` are now
+    denied, as `npm exec` and `npm install` are, with the escape hatch the deny names. The names `create-<name>` now
+    go to the public registry and to OSV; in a project whose `.npmrc`, `.yarnrc`, `.yarnrc.yml` or `bunfig.toml`
+    sets the default registry, a missing name only warns, with that registry as the reason.
+
 ## [3.14.1] - 2026-11-20
 
 A patch release for one regression of 3.14.0: a lockfile whose entries repeat their own scope could spend the
