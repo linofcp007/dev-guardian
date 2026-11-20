@@ -491,3 +491,109 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
     expect(read(manager, 'npm:user/repo')).toEqual([['evil-pkg-zq', undefined]]);
   });
 });
+
+// ───────────────── install-vet-manifest-value-dropped — a value of a dependency that is no path, URL or protocol is a registry spec
+
+describe('install-vet-manifest-value-dropped', () => {
+  const NAME = 'drop-pkg-zq';
+  const MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const;
+
+  /** What `readNpmManifest(dir, manager)` reads out of one dependency `key: value`. */
+  function read(manager: string, value: unknown, key = NAME): Array<[string, string | undefined]> {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [key]: value } }));
+    const r = readNpmManifest(dir, manager);
+    expect(r.status).toBe('ok');
+    return named(r);
+  }
+
+  const DROPPED_TODAY = ['~x', '~X', '~x.x.x', '^x', '~', '~abc', '~latest', '> 1', '^ 1', '~ 1', '1 . 0'] as const;
+
+  it.each(MANAGERS.flatMap((manager) => DROPPED_TODAY.map((value) => [manager, value] as const)))(
+    'T-01 `%s`: the value `%s` is a registry spec, the dependency is in the list',
+    (manager, value) => {
+      expect(read(manager, value).map(([name]) => name), `${manager} ${value}`).toEqual([NAME]);
+    },
+  );
+
+  const NOT_OF_THE_REGISTRY = [
+    './x',
+    '../x',
+    '/x',
+    '~/x',
+    'C:\\x',
+    'file:x',
+    'link:x',
+    'workspace:*',
+    'catalog:',
+    'portal:x',
+    'patch:x',
+    'https://host.example/x.tgz',
+    'git+https://host.example/r.git',
+    'github:u/r',
+    'u/r',
+  ] as const;
+
+  it.each(MANAGERS.flatMap((manager) => NOT_OF_THE_REGISTRY.map((value) => [manager, value] as const)))(
+    'T-02 guard: `%s`: the value `%s` is no registry spec, the dependency stays out of the list',
+    (manager, value) => {
+      expect(read(manager, value), `${manager} ${value}`).toEqual([]);
+    },
+  );
+
+  it.each(['npm', 'bun'] as const)('T-02 guard: `%s` reads `1.0.0.tgz` as a file, out of the list', (manager) => {
+    expect(read(manager, '1.0.0.tgz')).toEqual([]);
+  });
+
+  it.each(MANAGERS)('T-02 guard: `%s` gives the same dependency and the same range as before for the values it already read', (manager) => {
+    const SAME: ReadonlyArray<readonly [string, string | undefined]> = [
+      ['^1.0.0', '^1.0.0'],
+      ['~1.0.0', '~1.0.0'],
+      ['1.0.0', '1.0.0'],
+      ['*', '*'],
+      ['x', 'x'],
+      ['', undefined],
+      ['latest', undefined],
+      ['next', 'next'],
+      ['stable', 'stable'],
+      ['>=1', '>=1'],
+      ['1.x || 2', '1.x || 2'],
+      ['1.0.0 - 2', '1.0.0 - 2'],
+      ['v1', 'v1'],
+      ['=1.0.0', '=1.0.0'],
+    ];
+    for (const [value, range] of SAME) expect(read(manager, value), `${manager} "${value}"`).toEqual([[NAME, range]]);
+  });
+
+  it.each([1, true, null, { a: 1 }, ['^1.0.0']])('T-02 guard: a value that is no text (%j) is ignored, as before', (value) => {
+    expect(read('npm', value)).toEqual([]);
+  });
+
+  it('T-02 guard: a name that is no package name is dropped, as before', () => {
+    expect(read('npm', '^1.0.0', 'bad name')).toEqual([]);
+    expect(read('npm', '^1.0.0', '.hidden-zq')).toEqual([]);
+  });
+
+  it('T-02 guard: a manifest of 15 ordinary dependencies gives the same list, one by one', () => {
+    const deps: Record<string, string> = {};
+    const expected: Array<[string, string | undefined]> = [];
+    const ranges = ['^1.0.0', '~2.1.0', '3.0.0', '>=4', '*', 'latest', '1.x', 'next', '^0.5.0', '5.0.0-beta.1', '>=1 <3', '', 'v2', '~0.1', '^10.2.3'];
+    ranges.forEach((range, i) => {
+      deps[`common-zq-${i}`] = range;
+      expected.push([`common-zq-${i}`, range === '' || range === 'latest' ? undefined : range]);
+    });
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: deps }));
+    expect(named(readNpmManifest(dir))).toEqual(expected);
+  });
+
+  it.each(MANAGERS)('T-04 `%s`: an alias to `real-zq@~x` and to `real-zq@> 1` is the package `real-zq`', (manager) => {
+    expect(read(manager, 'npm:real-zq@~x', 'alias-zq').map(([name]) => name), `${manager} ~x`).toEqual(['real-zq']);
+    expect(read(manager, 'npm:real-zq@> 1', 'alias-zq').map(([name]) => name), `${manager} > 1`).toEqual(['real-zq']);
+  });
+
+  it.each(MANAGERS)('T-04 `%s`: a value longer than the hook reads as a range is the dependency, with no range', (manager) => {
+    let value = '>=0.0.1';
+    for (let i = 2; value.length < 150; i += 1) value += ` || >=0.0.${i}`;
+    expect(value.length).toBeGreaterThan(100);
+    expect(read(manager, value)).toEqual([[NAME, undefined]]);
+  });
+});

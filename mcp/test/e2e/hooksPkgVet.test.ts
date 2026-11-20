@@ -2017,3 +2017,44 @@ describe('install-vet-tilde-range-skipped', () => {
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/tilde-newest-zq.*MAL-2026-0094/s);
   });
 });
+
+// ───────────────── install-vet-manifest-value-dropped — a manifest value that is no range is vetted through the dispatcher
+
+describe('install-vet-manifest-value-dropped', () => {
+  // `drop-evil-zq` is malicious only here, at its newest version: the value of the manifest asks for no range the hook reads.
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/drop-evil-zq': npmDoc('1.5.0'),
+    [OSV]: { osv: { 'drop-evil-zq@1.5.0': ['MAL-2026-0093'] } },
+  };
+  const manifest = (value: string): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-evil-zq': value } }));
+  const isDenied = (command: string): void => {
+    const r = runHook(command, ROUTES);
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '', command).toMatch(/package\.json.*drop-evil-zq|drop-evil-zq.*package\.json/s);
+  };
+  const COMMANDS = ['npm install', 'npm ci', 'pnpm install', 'yarn install', 'bun install'] as const;
+
+  it.each(COMMANDS)('T-03 guard: `%s` with `"^1.0.0"` in the manifest is DENIED, naming the package and the file', (command) => {
+    manifest('^1.0.0');
+    isDenied(command);
+  });
+
+  it.each(COMMANDS)('T-03 `%s` with `"^x"` in the manifest is DENIED, naming the package and the file', (command) => {
+    manifest('^x');
+    isDenied(command);
+  });
+
+  it.each(['~abc', '> 1'])('T-03 `npm install` with `"%s"` in the manifest is DENIED, naming the package and the file', (value) => {
+    manifest(value);
+    isDenied('npm install');
+  });
+
+  it('T-03 guard: `npm install` with `"./x"` in the manifest is not denied', () => {
+    manifest('./x');
+    const r = runHook('npm install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+  });
+});

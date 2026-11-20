@@ -4123,3 +4123,40 @@ describe('lockfile-origin-host-from-userinfo', () => {
     noToken(line.context);
   });
 });
+
+// ───────────────── install-vet-manifest-value-dropped — the lockfile still covers a dependency with a value that is no range
+
+describe('install-vet-manifest-value-dropped', () => {
+  it('T-04 guard: a dependency whose value is `~abc`, recorded by the lockfile, is covered by it: no registry request, the pinned version goes to OSV', async () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-pkg-zq': '~abc' } }));
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-pkg-zq': '~abc' } },
+          'node_modules/drop-pkg-zq': {
+            version: '1.0.0',
+            resolved: 'https://registry.npmjs.org/drop-pkg-zq/-/drop-pkg-zq-1.0.0.tgz',
+            integrity: `sha512-${'A'.repeat(86)}==`,
+          },
+        },
+      }),
+    );
+    const asked: string[] = [];
+    const f = fakeFetch({
+      [OSV]: (body) => {
+        const queries = (body as { queries: Array<{ package?: { name?: string }; version?: string }> }).queries;
+        asked.push(...queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`));
+        return osvClean(body);
+      },
+    });
+    const d = await decideInstallCommand('npm ci', { ...opts(f.fetchImpl), projectDir: project });
+    expect(d?.deny).toBeUndefined();
+    expect(f.calls.filter((url) => url !== OSV)).toEqual([]);
+    expect(asked).toEqual(['drop-pkg-zq@1.0.0']);
+  });
+});
