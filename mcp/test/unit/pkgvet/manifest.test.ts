@@ -597,3 +597,50 @@ describe('install-vet-manifest-value-dropped', () => {
     expect(read(manager, value)).toEqual([[NAME, undefined]]);
   });
 });
+
+// ── round 1 of the review (T-06): only a protocol the hook knows is dropped; another `word:rest` is a spec of the registry
+
+describe('install-vet-manifest-value-dropped — round 1', () => {
+  const NAME = 'drop-pkg-zq';
+  const MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const;
+  function read(manager: string, value: string): Array<[string, string | undefined]> {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [NAME]: value } }));
+    const r = readNpmManifest(dir, manager);
+    expect(r.status).toBe('ok');
+    return named(r);
+  }
+
+  it.each(MANAGERS.flatMap((manager) => ['foo:^1', 'foo:bar', 'abc:1.0.0'].map((value) => [manager, value] as const)))(
+    'T-06 `%s`: the value `%s` has a word the hook does not know before the colon: the dependency is vetted by its name, with no range',
+    (manager, value) => {
+      expect(read(manager, value), `${manager} ${value}`).toEqual([[NAME, undefined]]);
+    },
+  );
+
+  it.each([
+    'file:x',
+    'link:x',
+    'workspace:*',
+    'workspace:^',
+    'catalog:',
+    'catalog:default',
+    'portal:x',
+    'patch:x',
+    'exec:x',
+    'jsr:^1',
+    'jsr:@scope-zq/x@1',
+    'C:x',
+  ])('T-06 the value `%s` is a protocol the hook knows (or a drive): out of the list, for every manager', (value) => {
+    for (const manager of MANAGERS) expect(read(manager, value), `${manager} ${value}`).toEqual([]);
+  });
+
+  it.each(MANAGERS)('T-06 `%s`: spaces around a value change nothing', (manager) => {
+    expect(read(manager, '  ^1.0.0  ')).toEqual([[NAME, '^1.0.0']]);
+    expect(read(manager, '  latest  ')).toEqual([[NAME, undefined]]);
+    expect(read(manager, '  workspace:*  ')).toEqual([]);
+  });
+
+  it.each(['u/r#branch', 'u/r', '.', '..'])('T-06 the value `%s` stays out of the list (a known limit for `..`), for every manager', (value) => {
+    for (const manager of MANAGERS) expect(read(manager, value), `${manager} ${value}`).toEqual([]);
+  });
+});

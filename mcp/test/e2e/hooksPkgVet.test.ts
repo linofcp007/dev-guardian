@@ -2058,3 +2058,27 @@ describe('install-vet-manifest-value-dropped', () => {
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
   });
 });
+
+describe('install-vet-manifest-value-dropped — round 1', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/drop-evil-zq': npmDoc('1.5.0'),
+    [OSV]: { osv: { 'drop-evil-zq@1.5.0': ['MAL-2026-0093'] } },
+  };
+  const manifest = (value: string): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-evil-zq': value } }));
+
+  it('T-06 `yarn install` with `"foo:bar"` in the manifest is DENIED, naming the package and the file', () => {
+    manifest('foo:bar');
+    const r = runHook('yarn install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/package\.json.*drop-evil-zq|drop-evil-zq.*package\.json/s);
+  });
+
+  it('T-06 guard: `yarn install` with `"workspace:*"` in the manifest is not denied (a known limit)', () => {
+    manifest('workspace:*');
+    const r = runHook('yarn install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+  });
+});

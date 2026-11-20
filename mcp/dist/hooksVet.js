@@ -4610,11 +4610,11 @@ function pushOnce(into, seen, pkg) {
 }
 var NPM_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 var DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
-var PROTOCOL_OR_SHORTHAND = /^(?:[A-Za-z][A-Za-z0-9+.-]*:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/;
+var NOT_OF_THE_REGISTRY = /^(?:(?:file|link|workspace|catalog|portal|patch|exec|jsr):|[A-Za-z]:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/i;
 function npmRange(value, manager) {
   const v = value.trim();
   if (v === "" || v === "latest") return void 0;
-  if (notARegistryRange(v) !== null || PROTOCOL_OR_SHORTHAND.test(v) || readsFileValue(manager, v)) return null;
+  if (notARegistryRange(v) !== null || NOT_OF_THE_REGISTRY.test(v) || readsFileValue(manager, v)) return null;
   if (v.length > MAX_RANGE_LENGTH) return void 0;
   if (DIST_TAG.test(v)) return v;
   return isSemverRange(v) ? v : void 0;

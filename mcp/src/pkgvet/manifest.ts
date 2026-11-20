@@ -145,8 +145,15 @@ const NPM_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies',
 /** A dist-tag: one word that no version can be taken for. */
 const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
-/** A protocol (`catalog:`, `jsr:`, `workspace:` …) or `user/repo`, the GitHub shorthand: a value that names no registry package. */
-const PROTOCOL_OR_SHORTHAND = /^(?:[A-Za-z][A-Za-z0-9+.-]*:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/;
+/**
+ * The protocols the hook knows, a value that names no registry package, and where each comes from: `file:` and `link:` (npm, pnpm,
+ * Yarn, bun), `workspace:` (pnpm, Yarn, bun), `catalog:` (pnpm, Yarn 4, bun), `portal:`, `patch:` and `exec:` (Yarn 2 and later) and
+ * `jsr:` (pnpm, Yarn 4). Most are also in the command line's list of URL and VCS specs ({@link notARegistryRange}); here they are
+ * all in one place. Measured on 2026-11-20 (npm 11.20, pnpm 10.33): none of them is asked of the registry; Yarn 1.22 asks for all but
+ * `file:` and `link:` (a known limit: the word `yarn` does not say which Yarn runs). Any OTHER `word:rest` (`foo:^1`) is a spec of
+ * the registry, vetted by its name; a drive letter (`C:x`) is a path. `user/repo` with an optional `#branch` is the GitHub shorthand.
+ */
+const NOT_OF_THE_REGISTRY = /^(?:(?:file|link|workspace|catalog|portal|patch|exec|jsr):|[A-Za-z]:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/i;
 
 /**
  * What a dependency's value asks the registry for: `undefined` for "the default" (an empty value, `latest`) and for a value the
@@ -157,7 +164,7 @@ const PROTOCOL_OR_SHORTHAND = /^(?:[A-Za-z][A-Za-z0-9+.-]*:|[A-Za-z0-9_.-]+\/[A-
 function npmRange(value: string, manager: string): string | undefined | null {
   const v = value.trim();
   if (v === '' || v === 'latest') return undefined;
-  if (notARegistryRange(v) !== null || PROTOCOL_OR_SHORTHAND.test(v) || readsFileValue(manager, v)) return null;
+  if (notARegistryRange(v) !== null || NOT_OF_THE_REGISTRY.test(v) || readsFileValue(manager, v)) return null;
   if (v.length > MAX_RANGE_LENGTH) return undefined;
   if (DIST_TAG.test(v)) return v;
   return isSemverRange(v) ? v : undefined;

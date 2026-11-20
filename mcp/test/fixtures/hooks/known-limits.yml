@@ -997,8 +997,9 @@
 - id: manifest-value-not-a-range
   area: install-vetting
   doc: |-
-    A dependency of a `package.json` is vetted by its name unless its value is positively something else: a path (`./x`, `../x`, `/x`, `~/x`, a drive letter), a protocol (`file:`, `link:`, `workspace:`, `catalog:`, `portal:`, `patch:` and any other `scheme:`), a URL, a git repository, `user/repo`, or an archive that the manager of the command reads as a file. The value is its range when the hook reads one (a semver range, a dist-tag), and no range when it does not (`~x`, `^x`, `> 1`, `~abc`, a lone `~`, `1 . 0`, a value longer than 100 characters): the package is vetted all the same. Measured on 2026-11-20: npm 11.20 and pnpm 10.33 on Windows, and npm 11.19 and Yarn 1.22 in a Linux container, ask the registry for the package for each of these values and for nothing for `./x`, `~/x` and `file:x`. What stays:
+    A dependency of a `package.json` is vetted by its name unless its value is positively something else: a path (`./x`, `../x`, `/x`, `~/x`, a drive letter such as `C:x`), one of the protocols the hook knows (`file:`, `link:`, `workspace:`, `catalog:`, `portal:`, `patch:`, `exec:` and `jsr:`), a URL, a git repository (`git+…`, `git:`, `github:`, `gitlab:`, `bitbucket:`, `gist:`, the scp form), `user/repo` (with an optional `#branch`), or an archive that the manager of the command reads as a file. The value is its range when the hook reads one (a semver range, a dist-tag), and no range when it does not (`~x`, `^x`, `> 1`, `~abc`, a lone `~`, `1 . 0`, a value longer than 100 characters, `foo:^1`, `foo:bar`, where `foo` is no protocol the hook knows): the package is vetted all the same. Measured on 2026-11-20: npm 11.20 and pnpm 10.33 on Windows, and npm 11.19 and Yarn 1.22 in a Linux container, ask the registry for the package for the values that are no protocol and no path, and for nothing for `./x`, `~/x` and `file:x`. What stays:
 
+    - Under Yarn 1.22 a value with the protocol of another manager (`workspace:`, `portal:`, `patch:`, `exec:`, `catalog:`, `jsr:`), a drive letter (`C:x`), `..` and a value with several slashes (`a/b/c`) are asked of the registry, and the hook does not vet them; under pnpm 10.33 `.` and `..` are. The word `yarn` does not say which Yarn runs, and in a Yarn 4 project each workspace package would give a warning and its name would go to the public registry. For such a value to install anything, the registry would need a dist-tag with that exact name (not measured whether it accepts one).
     - A value that is not text (a number, an object, `null`, a list) is ignored, as before; it was not measured.
     - A value the hook does not read as a range is vetted with no range, so the version checked is the newest, and may not be the one the manager picks.
     - A dependency of that kind that the lockfile records is not "covered" by it: the lockfile covers a dependency only through its range, so the registry is asked for the newest version too, as it is for an empty value or `latest`; the version the lockfile pins is vetted as a pin all the same.
@@ -1012,6 +1013,15 @@
       files:
         package.json: |
           { "name": "app", "version": "1.0.0", "dependencies": { "left-pad-zq": "./vendor/left-pad-zq" } }
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn install
+      files:
+        package.json: |
+          { "name": "app", "version": "1.0.0", "dependencies": { "left-pad-zq": "workspace:*" } }
       expect: { decision: none }
 
 - id: lockfile-origin-host-unsaid
