@@ -7,8 +7,8 @@
  * folder is on the network; it imports nothing of this repository's (the type
  * below is erased by the build).
  *
- * The child is `node -e <fixed text> <path>...`: the paths are arguments, never
- * part of the text, and the child's working folder is the one of the Node
+ * The child is `node -e <fixed text> -- <path>...`: the paths are arguments, never
+ * part of the text nor an option of Node, and the child's working folder is the one of the Node
  * executable — a process cannot even be started with its working folder on a
  * dead share. It asks about every path at once and writes one line per answer
  * as it has it — `<index of the path> there` or `<index> absent` — and what is
@@ -52,7 +52,8 @@ function answersOf(output: string, count: number): Map<number, FolderAnswer> {
 export async function probeFolders(
   paths: readonly string[],
   deadlineMs: number,
-  child: ProbeChild = { command: process.execPath, args: ['-e', CHILD_SCRIPT] },
+  // `--` ends Node's own options: a path is an argument of the script whatever it starts with.
+  child: ProbeChild = { command: process.execPath, args: ['-e', CHILD_SCRIPT, '--'] },
 ): Promise<ReadonlyMap<string, FolderAnswer>> {
   const result = new Map<string, FolderAnswer>(paths.map((path): [string, FolderAnswer] => [path, 'silent']));
   if (paths.length === 0) return result;

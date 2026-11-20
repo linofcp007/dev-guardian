@@ -293,8 +293,13 @@ describe('hook-unc-cwd-hang', () => {
       const ls = dispatch(bash('ls', net), { cwd: local, home, projectDir: local });
       expect(ls.ms).toBeLessThan(hangBound(5000));
       expect(ls.said.additionalContext ?? '').toMatch(/network share/);
+      expect(ls.status).toBe(0);
+      expect(ls.said.permissionDecision).toBeUndefined();
       const rm = dispatch(bash('rm -rf /', net), { cwd: local, home, projectDir: local });
       expect(rm.said.permissionDecision).toBe('deny');
+      // As with a local folder that does not exist: the same refusal, word for word (a refusal carries no context).
+      const gone = dispatch(bash('rm -rf /', join(local, 'does-not-exist')), { cwd: local, home, projectDir: local });
+      expect(rm.stdout).toEqual(gone.stdout);
     });
   });
 

@@ -30,7 +30,7 @@ function answersOf(output, count) {
   }
   return answers;
 }
-async function probeFolders(paths, deadlineMs, child = { command: process.execPath, args: ["-e", CHILD_SCRIPT] }) {
+async function probeFolders(paths, deadlineMs, child = { command: process.execPath, args: ["-e", CHILD_SCRIPT, "--"] }) {
   const result = new Map(paths.map((path) => [path, "silent"]));
   if (paths.length === 0) return result;
   let output = "";
