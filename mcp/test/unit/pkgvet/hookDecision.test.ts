@@ -4202,3 +4202,227 @@ describe('lockfile-own-scope-scan-quadratic', () => {
     expect(d?.context ?? '').not.toContain('sets the default registry');
   });
 });
+
+// ───────────────── install-vet-manifest-warning-volume — the "not found" warnings of manifests have a ceiling per answer
+
+describe('install-vet-manifest-warning-volume', () => {
+  const CEILING = 5;
+  const name = (i: number): string => `dgprobe-zzq7731-${String(i)}`;
+  const names = (n: number): string[] => Array.from({ length: n }, (_, i) => name(i + 1));
+  const writePackageJson = (dir: string, deps: string[]): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: Object.fromEntries(deps.map((d) => [d, '^1.0.0'])) }),
+    );
+  };
+  const writeRequirements = (file: string, deps: string[]): void => writeFileSync(join(project, file), `${deps.join('\n')}\n`);
+  const linesOf = (context: string | undefined): string[] => (context ?? '').split('\n');
+  const notFoundLines = (context: string | undefined): string[] => linesOf(context).filter((l) => l.includes('not found on the public registry'));
+  const countLines = (context: string | undefined): string[] => linesOf(context).filter((l) => l.includes('are not on the public registry either'));
+  /** The package names the "not found" lines say, in the order they come. */
+  const namesSaid = (context: string | undefined): string[] =>
+    notFoundLines(context).map((l) => /'(dgprobe-zzq7731-\d+|lodahs)': not found/.exec(l)?.[1] ?? l);
+  const decide = async (command: string, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(command, opts(reg.fetchImpl));
+
+  describe('T-01 the ceiling of five, and the count line', () => {
+    it('T-01 12 missing names of package.json: five lines, the first five names in manifest order, then `7 more packages of package.json`', async () => {
+      writePackageJson(project, names(12));
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/^dev-guardian: 7 more packages of package\.json are not on the public registry either/);
+    });
+
+    it('T-01 6 missing names: five lines and `1 more package of package.json is not` (singular)', async () => {
+      writePackageJson(project, names(6));
+      const d = await decide('npm install', registry());
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/1 more package of package\.json is not on the public registry either/);
+    });
+
+    it('T-01 a requirements file of 12 missing names, `pip install -r reqs.txt`: five lines and `7 more packages of reqs.txt`', async () => {
+      writeRequirements('reqs.txt', names(12));
+      const d = await decide('pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/7 more packages of reqs\.txt are not on the public registry either/);
+    });
+
+    it('T-01 150 missing names of package.json: seven lines in all, under 1 600 characters', async () => {
+      writePackageJson(project, names(150));
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      const context = d?.context ?? '';
+      expect(countLines(context)).toHaveLength(1);
+      expect(countLines(context)[0]).toMatch(/145 more packages of package\.json/);
+      expect(linesOf(context)).toHaveLength(7);
+      expect(context.length).toBeLessThan(1600);
+    });
+  });
+
+  describe('T-02 the ceiling is per answer, not per file', () => {
+    it('T-02 `npm install && pip install -r reqs.txt`, 7 missing in package.json and 4 in reqs.txt: five lines in all and one count line naming both files', async () => {
+      writePackageJson(project, names(7));
+      writeRequirements(
+        'reqs.txt',
+        Array.from({ length: 4 }, (_, i) => name(i + 101)),
+      );
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/6 more packages of package\.json and reqs\.txt are not on the public registry either/);
+    });
+
+    it('T-02 4 missing in package.json and 7 in reqs.txt: the count line names only the file its six come from', async () => {
+      writePackageJson(project, names(4));
+      writeRequirements(
+        'reqs.txt',
+        Array.from({ length: 7 }, (_, i) => name(i + 101)),
+      );
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual([...names(4), name(101)]);
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/6 more packages of reqs\.txt are not on the public registry either/);
+    });
+
+    it('T-02 two installs in two folders, 4 and 4 missing: five lines and `3 more packages of` the file (today both manifests are called package.json)', async () => {
+      writePackageJson(join(project, 'a'), names(4));
+      writePackageJson(
+        join(project, 'b'),
+        Array.from({ length: 4 }, (_, i) => name(i + 101)),
+      );
+      const d = await decide('(cd a && npm install); (cd b && npm install)', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(notFoundLines(d?.context)).toHaveLength(CEILING);
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/3 more packages of package\.json/);
+    });
+  });
+
+  describe('T-03 what stays outside the ceiling', () => {
+    it('T-03 a package OSV calls malicious at position 40 of 60 is DENIED, with the file and the name (protection)', async () => {
+      const all = names(60);
+      const bad = all[39] ?? '';
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry({ exists: [bad], malicious: [bad] }));
+      expect(d?.deny).toMatch(/package\.json/);
+      expect(d?.deny).toContain(bad);
+      expect(d?.deny).toContain('MAL-2026-77');
+    });
+
+    it('T-03 a name one letter from a popular package that EXISTS, at position 30 of 40, keeps its typosquat warning beside the five lines', async () => {
+      const all = names(40);
+      all[29] = 'lodahs';
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry({ exists: ['lodahs'] }));
+      expect(d?.deny).toBeUndefined();
+      const typo = linesOf(d?.context).filter((l) => l.includes('lodahs'));
+      expect(typo).toHaveLength(1);
+      expect(typo[0]).toContain('lodash');
+      expect(typo[0]).not.toContain('not found on the public registry');
+      expect(notFoundLines(d?.context)).toHaveLength(CEILING);
+      expect(countLines(d?.context)[0]).toMatch(/34 more packages of package\.json/);
+    });
+
+    it('T-03 the "could not vet 3 packages of package.json" line of a registry that does not answer for 3 names is said as today (protection)', async () => {
+      const all = names(12);
+      writePackageJson(project, all);
+      const failing = new Set(all.slice(0, 3).map((n) => `https://registry.npmjs.org/${n}`));
+      const reg = registry();
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+        failing.has(String(input)) ? new Response('', { status: 500 }) : reg.fetchImpl(input, init)) as typeof fetch;
+      const d = await decide('npm install', { fetchImpl });
+      expect(d?.deny).toBeUndefined();
+      const unvetted = linesOf(d?.context).filter((l) => l.includes('could not vet'));
+      expect(unvetted).toHaveLength(1);
+      expect(unvetted[0]).toMatch(/could not vet 3 packages of package\.json/);
+    });
+
+    it('T-03 `npm install <a package that exists and has a warning of its own>` in a project of 12 missing names says that warning beside the five lines', async () => {
+      writePackageJson(project, names(12));
+      const d = await decide('npm install lodahs', registry({ exists: ['lodahs'] }));
+      expect(d?.deny).toBeUndefined();
+      const own = linesOf(d?.context).filter((l) => l.includes('lodahs'));
+      expect(own).toHaveLength(1);
+      expect(own[0]).toContain('lodash');
+      expect(notFoundLines(d?.context)).toHaveLength(CEILING);
+      expect(countLines(d?.context)[0]).toMatch(/7 more packages of package\.json/);
+    });
+  });
+
+  describe('T-04 up to five missing names: the answer is as today', () => {
+    // The answer of the tree before this feature (b8fec499), written out: the header and one line a missing name.
+    const HEADER = '⚠️ dev-guardian package vetting — review before relying on these:';
+    const today = (file: string, pkg: string): string =>
+      `  • ${file}: '${pkg}': not found on the public registry — if it is private or local, ignore this. ` +
+      '(not denied: it is named by a manifest, where a missing name is usually a private or a workspace package)';
+
+    it('T-04 no missing name: nothing is said', async () => {
+      writePackageJson(project, []);
+      expect(await decide('npm install', registry())).toBeNull();
+    });
+
+    it.each([1, 2, 3, 4, 5])('T-04 %i missing names of package.json: the answer of today, line by line', async (n) => {
+      writePackageJson(project, names(n));
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(linesOf(d?.context)).toEqual([HEADER, ...names(n).map((pkg) => today('package.json', pkg))]);
+    });
+
+    it('T-04 5 missing names of package.json and a requirements file of none: the answer of today, line by line', async () => {
+      writePackageJson(project, names(5));
+      writeRequirements('reqs.txt', []);
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(linesOf(d?.context)).toEqual([HEADER, ...names(5).map((pkg) => today('package.json', pkg))]);
+    });
+
+    it('T-04 3 missing names of package.json and 2 of a requirements file: five lines of two files, no count line', async () => {
+      writePackageJson(project, names(3));
+      writeRequirements('reqs.txt', [name(101), name(102)]);
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(linesOf(d?.context)).toEqual([
+        HEADER,
+        ...names(3).map((pkg) => today('package.json', pkg)),
+        today('reqs.txt', name(101)),
+        today('reqs.txt', name(102)),
+      ]);
+    });
+  });
+
+  describe('T-06 a name with a suggestion is never counted', () => {
+    it('T-06 `lodahs` (missing, one letter from `lodash`) at position 9 of 13: the first five lines, its own line with the suggestion, and `7 more`', async () => {
+      const all = [...names(8), 'lodahs', ...Array.from({ length: 4 }, (_, i) => name(i + 9))];
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual([...names(CEILING), 'lodahs']);
+      expect(notFoundLines(d?.context).find((l) => l.includes('lodahs'))).toContain("Did you mean 'lodash'?");
+      expect(countLines(d?.context)[0]).toMatch(/7 more packages of package\.json/);
+    });
+
+    it('T-06 `lodahs` at position 2 of 13: its line and five others, and `7 more`', async () => {
+      const all = [name(1), 'lodahs', ...Array.from({ length: 11 }, (_, i) => name(i + 2))];
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual([name(1), 'lodahs', ...Array.from({ length: 4 }, (_, i) => name(i + 2))]);
+      expect(notFoundLines(d?.context).find((l) => l.includes('lodahs'))).toContain("Did you mean 'lodash'?");
+      expect(countLines(d?.context)[0]).toMatch(/7 more packages of package\.json/);
+    });
+  });
+});

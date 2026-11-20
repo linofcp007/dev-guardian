@@ -2136,3 +2136,26 @@ describe('lockfile-own-scope-scan-quadratic', () => {
     expect(context).not.toContain('vetting time budget exhausted');
   });
 });
+
+// ───────────────── install-vet-manifest-warning-volume — through the real hook process
+
+describe('install-vet-manifest-warning-volume', () => {
+  it('T-05 `npm install` in a project with 20 dependencies the registry does not have: the header, five warnings and the count `15 more` — never a deny', () => {
+    const names = Array.from({ length: 20 }, (_, i) => `dgprobe-zzq7731-${String(i + 1)}`);
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: Object.fromEntries(names.map((n) => [n, '^1.0.0'])) }),
+    );
+    const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+    for (const n of names) routes[`https://registry.npmjs.org/${n}`] = { status: 404 };
+    const r = runHook('npm install', routes);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    const lines = (r.output?.hookSpecificOutput?.additionalContext ?? '').split('\n');
+    expect(lines[0]).toMatch(/package vetting — review before relying on these/);
+    expect(lines.filter((l) => l.includes('not found on the public registry'))).toHaveLength(5);
+    const count = lines.filter((l) => l.includes('are not on the public registry either'));
+    expect(count).toHaveLength(1);
+    expect(count[0]).toMatch(/15 more packages of package\.json/);
+  });
+});
