@@ -4266,6 +4266,23 @@ describe('install-vet-manifest-warning-volume', () => {
       expect(linesOf(context)).toHaveLength(7);
       expect(context.length).toBeLessThan(1600);
     });
+
+    it('T-01 the count line names three files in full, and from the fourth on says how many more files', async () => {
+      writePackageJson(project, names(6));
+      for (const [i, file] of ['a.txt', 'b.txt', 'c.txt'].entries()) writeRequirements(file, [name(i + 101)]);
+      const three = await decide('npm install && pip install -r a.txt && pip install -r b.txt', registry());
+      expect(namesSaid(three?.context)).toEqual(names(CEILING));
+      expect(countLines(three?.context)).toEqual([
+        'dev-guardian: 3 more packages of package.json, a.txt and b.txt are not on the public registry either ' +
+          '(in a manifest that is usually a private or a workspace package) — not listed.',
+      ]);
+      const four = await decide('npm install && pip install -r a.txt && pip install -r b.txt && pip install -r c.txt', registry());
+      expect(namesSaid(four?.context)).toEqual(names(CEILING));
+      expect(countLines(four?.context)).toEqual([
+        'dev-guardian: 4 more packages of package.json, a.txt, b.txt and 1 more file are not on the public registry either ' +
+          '(in a manifest that is usually a private or a workspace package) — not listed.',
+      ]);
+    });
   });
 
   describe('T-02 the ceiling is per answer, not per file', () => {

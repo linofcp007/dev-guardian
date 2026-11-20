@@ -18,9 +18,9 @@ version bump.
   `dev-guardian: 145 more packages of package.json are not on the public registry either (in a manifest that is
   usually a private or a workspace package) — not listed.` The same 150 names now give seven lines and under 1 600
   characters. Nothing else changes: every name is still looked up and still goes to the malware check, so a
-  malicious package at any position is denied; a missing name one letter from a popular package (`Did you mean
-  '…'?`), a typosquat suspicion and the warnings of the packages named on the command line are always listed; and an
-  answer with five missing names or fewer is word for word what it was.
+  malicious package at any position is denied; a missing name close to a popular package's (`Did you mean '…'?`), a
+  typosquat suspicion and the warnings of the packages named on the command line are always listed; and an answer
+  with five missing names or fewer is word for word what it was.
 
 ## [3.14.1] - 2026-11-20
 
