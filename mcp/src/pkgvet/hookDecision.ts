@@ -26,9 +26,12 @@
  *   - **silent** when every package came back `ok`, and for every command
  *     that installs nothing — which never touches the network.
  *
- * **A manifest install** — `npm install` with no package, `npm ci`, `pnpm
- * install`, `yarn`, `bun install`, `pip install -r` — names nothing on the
- * command line: the manifest does. Its direct dependencies (`manifest.ts`)
+ * **A manifest install** — `npm install`, `npm ci`, `pnpm install`, `yarn`,
+ * `bun install`, `pip install -r`, and an install that names a package inside
+ * a project (`npm install <pkg>`, `pnpm add`, `yarn add`, `bun add`: the
+ * manager installs the manifest beside the names; not `-g`, not a launcher) —
+ * reads a manifest, the nearest `package.json` from where the command runs up
+ * to the project or repository root. Its direct dependencies (`manifest.ts`)
  * join the same lookups, under the same cap and budget, and answer by a rule
  * of their own ({@link decideManifestOne}), because a manifest is installed
  * again and again and a missing name in one is usually a private package:
@@ -70,10 +73,11 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } fr
 import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
 import { LOCKFILES, lockFormat, readLock, type LockRead, type Pin, type Source } from './lockfile.js';
 import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
-import { parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
+import { MAX_CANDIDATES_PER_COMMAND, parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
 import {
+  gitRepositoryRoot,
   npmEnvNamesDefaultRegistry,
   npmProjectDefaultRegistry,
   npmScopeRegistryOf,
@@ -171,7 +175,7 @@ function firstLine(r: PackageVetResult): string {
 }
 
 /** The most packages NAMED ON THE COMMAND LINE one hook call looks up; the rest are named as not vetted. */
-export const MAX_VETTED_PACKAGES = 50;
+export const MAX_VETTED_PACKAGES = MAX_CANDIDATES_PER_COMMAND;
 /**
  * The most packages of MANIFESTS one hook call looks up, beside those the
  * command names. Nobody types fifty names, but real applications declare more
@@ -215,21 +219,35 @@ function boundedInstalls(
   nested: ReadonlyArray<{ text: string; shell: CommandShell }> = [],
   cdpath = false,
   withManifests: (parsed: readonly InstallCommand[]) => VetCommand[] = (parsed) => [...parsed],
-): { commands: VetCommand[]; notVetted: number; manifestNotVetted: number; cut: boolean } {
+  pastDeadline: () => boolean = () => false,
+): { commands: VetCommand[]; notVetted: number; manifestNotVetted: number; cut: boolean; unassessed: number } {
   const cut = command.length > MAX_PARSED_LENGTH;
+  // The safety net of the budget (review round 2): past the deadline a launcher is no longer asked whether the project
+  // has a copy of its package — its packages go to the vetting as if fetched, which says "time budget" when it cannot
+  // look them up either. More is vetted, never less; `unassessed` is said.
+  let unassessed = 0;
   const parsed = withManifests(
-    parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) =>
+    parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) => {
       // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
       // fetch nothing: there is nothing to vet (review P1).
-      c.localFirst === true ? { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) } : c,
-    ),
+      if (c.localFirst !== true) return c;
+      if (pastDeadline()) {
+        unassessed += 1;
+        return c;
+      }
+      return { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) };
+    }),
   );
   const key = (pkg: PackageSpec): string => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ''}`;
   const seen = new Set<string>();
   const named: PackageSpec[] = [];
   const ofManifests: PackageSpec[] = [];
+  // A name is certain when some occurrence of it is not only a candidate (the word after a flag the parse does not know).
+  const certainKeys = new Set<string>();
   for (const c of parsed) {
+    const candidates = new Set(c.candidates);
     for (const pkg of c.packages) {
+      if (c.fromManifest === undefined && !candidates.has(pkg)) certainKeys.add(key(pkg));
       if (seen.has(key(pkg))) continue;
       seen.add(key(pkg));
       (c.fromManifest === undefined ? named : ofManifests).push(pkg);
@@ -239,7 +257,13 @@ function boundedInstalls(
   // in front of a malicious one must not push it past the cap.
   const firstOf = (unique: readonly PackageSpec[], cap: number): string[] =>
     [...unique.filter((p) => !isPopular(p)), ...unique.filter(isPopular)].slice(0, cap).map(key);
-  const chosen = new Set([...firstOf(named, MAX_VETTED_PACKAGES), ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
+  // Under the ceiling the packages the command surely names come first; the candidates take what is left, in line order.
+  const certain = firstOf(
+    named.filter((p) => certainKeys.has(key(p))),
+    MAX_VETTED_PACKAGES,
+  );
+  const candidateKeys = named.filter((p) => !certainKeys.has(key(p))).map(key).slice(0, MAX_VETTED_PACKAGES - certain.length);
+  const chosen = new Set([...certain, ...candidateKeys, ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
   const commands: VetCommand[] = [];
   for (const c of parsed) {
     const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
@@ -249,9 +273,11 @@ function boundedInstalls(
   }
   return {
     commands,
-    notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES),
+    // The candidates the parse left out past its own ceiling count as packages not vetted.
+    notVetted: Math.max(0, named.length - MAX_VETTED_PACKAGES) + parsed.reduce((n, c) => n + (c.candidatesDropped ?? 0), 0),
     manifestNotVetted: Math.max(0, ofManifests.length - MAX_MANIFEST_PACKAGES),
     cut,
+    unassessed,
   };
 }
 
@@ -270,9 +296,11 @@ const plural = (n: number): string => (n === 1 ? '1 package' : `${String(n)} pac
  * manifest that is there and was not read, and for the packages a project
  * file keeps from the lookup.
  *
- * A manifest is read only for a command the parser marked as installing one
- * — never for a by-name install beside a `package.json`. It is read where the
- * command runs ({@link commandDir}); a directory flag (`--prefix`, `-C`,
+ * A manifest is read for a command the parser marked as installing one: a
+ * bare install, and a by-name install that is not global for certain (the
+ * manager installs the `package.json` beside the names). A package.json is the
+ * nearest one from where the command runs ({@link commandDir}) up to the project
+ * root ({@link readNearestManifest}); a directory flag (`--prefix`, `-C`,
  * `--dir`, `--cwd`) or a `cd` that may not have run leaves that unknown, and
  * the manifest unread — said, not guessed.
  */
@@ -284,6 +312,8 @@ function withManifestPackages(
   locked: LockedProject[],
 ): VetCommand[] {
   const out: VetCommand[] = [];
+  // The root a manifest or a lockfile is looked for up to: the project directory, or the root of the git repository it is in.
+  const top = opts.projectDir === undefined ? undefined : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
   const lineAsked = new Map<string, string[]>();
   let userRegistries: string[] | undefined;
   const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
@@ -302,8 +332,17 @@ function withManifestPackages(
       continue;
     }
     let reads: ManifestRead[];
+    // Where the project is: the directory of the manifest the manager installs — the nearest above the command's — and,
+    // for a requirements file (its path is on the command line), the command's own.
+    let base = dir;
     try {
-      reads = manifest.kind === 'package-json' ? [readNpmManifest(dir, c.manager)] : readRequirements(dir, manifest.files, c.manager);
+      if (manifest.kind === 'package-json') {
+        const nearest = readNearestManifest(c.manager, dir, opts.projectDir, top);
+        base = nearest.dir;
+        reads = [nearest.read];
+      } else {
+        reads = readRequirements(dir, manifest.files, c.manager);
+      }
     } catch {
       // Fail-open, and said: nothing of the manifest was vetted.
       notes.push('dev-guardian: the manifest was not read (could not be read) — its packages were not vetted.');
@@ -312,7 +351,7 @@ function withManifestPackages(
     for (const read of reads) {
       if (read.status === 'absent') continue;
       // The lockfile is what the manager installs, whether or not the manifest could be read.
-      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, dir, read, opts, registry, notes) : undefined;
+      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, base, read, opts, top, registry, notes) : undefined;
       if (lock !== undefined) locked.push(lock);
       if (read.status === 'unreadable') {
         notes.push(`dev-guardian: ${read.file} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
@@ -321,9 +360,10 @@ function withManifestPackages(
       if (read.incomplete !== undefined) {
         notes.push(`dev-guardian: a file ${read.file} includes was not read (${read.incomplete}) — its packages were not vetted.`);
       }
-      const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: dir }, notes) : read.packages;
+      const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: base }, notes) : read.packages;
       // A direct dependency the lockfile records for this project leaves the registry path: its typosquat check stays.
-      const packages = lock === undefined ? inScope : withoutCovered(inScope, lock);
+      // Not for an update verb: it moves them past the pins, so every direct dependency is vetted by name (the pins still go to OSV).
+      const packages = lock === undefined || c.update === true ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read.registries];
       const custom = c.customRegistry ?? read.registries[0];
@@ -489,15 +529,14 @@ type LockFound =
  * the hooks' bounded reader, below the project root (a link to a network path
  * is refused), so a FIFO, a device or a share in its place cannot hold the hook.
  */
-function findLockfile(manager: string, dir: string, projectDir: string | undefined): LockFound {
+function findLockfile(manager: string, dir: string, projectDir: string | undefined, top: string | undefined): LockFound {
   const names = manager === 'npm' || manager === 'pnpm' || manager === 'yarn' || manager === 'bun' ? LOCKFILES[manager] : [];
   if (names.length === 0) return { status: 'absent' };
-  const root = projectDir !== undefined && isWithin(projectDir, dir) ? resolve(projectDir) : resolve(dir);
+  const { root, dirs } = climb(dir, projectDir, top);
   // The manifest read already says that a directory on the network was not read.
   if (isNetworkPath(dir) || isNetworkPath(root)) return { status: 'absent' };
   const candidates = manager === 'bun' ? [...names, 'bun.lockb'] : names;
-  let at = resolve(dir);
-  for (let i = 0; i < 64; i += 1) {
+  for (const at of dirs) {
     for (const file of candidates) {
       const path = join(at, file);
       if (file === 'bun.lockb') {
@@ -509,11 +548,47 @@ function findLockfile(manager: string, dir: string, projectDir: string | undefin
       if (read.status === 'ok') return { status: 'ok', file, dir: at, text: read.text };
       if (read.status === 'refused') return { status: 'unread', file, why: refusedWhy(read.reason) };
     }
+  }
+  return { status: 'absent' };
+}
+
+/**
+ * `dir` and each directory above it up to the project root, nearest first — the one bound of what a command's
+ * directory may read upward, for the lockfile and the manifest alike. The root is `top` — the root of the git
+ * repository the project directory is in ({@link gitRepositoryRoot}) — or else `projectDir`. With no `projectDir`, or
+ * a `dir` outside that root, only `dir`: nothing above that root is ever read.
+ */
+function climb(dir: string, projectDir: string | undefined, top: string | undefined): { root: string; dirs: string[] } {
+  // Inside the project is inside the repository root when there is one: a sibling folder of the session's is the project's.
+  const bound = top ?? projectDir;
+  const root = bound !== undefined && projectDir !== undefined && isWithin(bound, dir) ? resolve(bound) : resolve(dir);
+  const dirs: string[] = [];
+  let at = resolve(dir);
+  for (let i = 0; i < 64; i += 1) {
+    dirs.push(at);
     const parent = dirname(at);
     if (relative(root, at) === '' || parent === at) break;
     at = parent;
   }
-  return { status: 'absent' };
+  return { root, dirs };
+}
+
+/**
+ * The `package.json` a manager installs from `dir`: the nearest one from `dir` up to the project root, as the
+ * managers find theirs — the first found is the manifest, several are never merged. One that cannot be read is
+ * the answer too (a manager would stop there). None at all: the `absent` of `dir`. A manifest above `dir` is named
+ * by its path from `dir`, in POSIX form (`../package.json`); `dir` of the answer is the directory it was read in.
+ */
+function readNearestManifest(manager: string, dir: string, projectDir: string | undefined, top: string | undefined): { read: ManifestRead; dir: string } {
+  const here = resolve(dir);
+  const absent = readNpmManifest(here, manager);
+  if (absent.status !== 'absent') return { read: absent, dir: here };
+  for (const at of climb(dir, projectDir, top).dirs.slice(1)) {
+    const read = readNpmManifest(at, manager);
+    if (read.status === 'absent') continue;
+    return { read: { ...read, file: `${relative(here, at).split(sep).join('/')}/${read.file}` }, dir: at };
+  }
+  return { read: absent, dir: here };
 }
 
 function refusedWhy(reason: 'not-a-regular-file' | 'too-large' | 'unreadable' | 'remote-link'): string {
@@ -620,11 +695,12 @@ function lockedProject(
   dir: string,
   manifest: ManifestRead,
   opts: HookVetOptions,
+  top: string | undefined,
   registry: RegistryContext,
   notes: string[],
 ): LockedProject | undefined {
   try {
-    const found = findLockfile(c.manager, dir, opts.projectDir);
+    const found = findLockfile(c.manager, dir, opts.projectDir, top);
     if (found.status === 'absent') return undefined;
     if (found.status === 'unread') {
       notes.push(notReadLine(found.file, found.why));
@@ -859,11 +935,17 @@ function installedLocally(name: string, cwd: string, byPackageFlag = false, mana
  * ({@link commandDir}): `cd mcp && npx vitest run` from the repository root ran
  * `mcp`'s own vitest, and the hook warned about the registry's newest one.
  */
-function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions): boolean {
+function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions, memo: Map<string, boolean>): boolean {
   // `--prefix` (`-C`) points npm at another project: where is not read here (review of 3.4.0, finding 5).
   if (pkg.range !== undefined || pkg.raw !== pkg.name || c.prefixed === true) return false;
   const dir = commandDir(c, opts);
-  return dir !== null && installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
+  if (dir === null) return false;
+  const key = `${dir}\0${pkg.name}\0${String(c.byPackageFlag === true)}\0${c.manager}`;
+  const known = memo.get(key);
+  if (known !== undefined) return known;
+  const found = installedLocally(pkg.name, dir, c.byPackageFlag === true, c.manager);
+  memo.set(key, found);
+  return found;
 }
 
 /**
@@ -983,14 +1065,19 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   /** The lockfiles of the manifest installs of the line, read. */
   const locked: LockedProject[] = [];
   const isPopular = popularTest(opts);
-  const { commands, notVetted, manifestNotVetted, cut } = boundedInstalls(
+  // One deadline for the whole call (review I4).
+  const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
+  // One lookup per directory and name, however many statements of the line name them (review round 2: 8 000 x `npx lodash;`).
+  const localCopies = new Map<string, boolean>();
+  const { commands, notVetted, manifestNotVetted, cut, unassessed } = boundedInstalls(
     command,
     shell,
     isPopular,
-    (pkg, c) => runsInstalledCopy(pkg, c, opts),
+    (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies),
     opts.nested,
     cdpath,
     (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked),
+    () => Date.now() > deadlineAt,
   );
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {
@@ -1000,8 +1087,6 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
 
   const offline = env['GUARDIAN_OFFLINE'] === '1';
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
-  // One deadline for the whole call (review I4).
-  const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
   const now = opts.now ?? Date.now();
   // The pairs the lockfiles pin, asked at once and beside the registry path: both share the budget and the deadline.
   const pairs = choosePins(
@@ -1138,6 +1223,11 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   }
   // Two installs of one line may read one lockfile twice: a line is said once.
   lines.push(...new Set([...lockLines, ...manifestNotes]));
+  if (unassessed > 0) {
+    lines.push(
+      `dev-guardian: ${unassessed} launcher commands of this line were not checked for a copy in the project (vetting time budget exhausted) — their packages were vetted as if fetched.`,
+    );
+  }
   if (notVetted > 0) {
     lines.push(
       `dev-guardian: ${notVetted} more packages in this command were not vetted (only the first ${MAX_VETTED_PACKAGES} are) — not verified.`,

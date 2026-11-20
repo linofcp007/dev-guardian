@@ -427,3 +427,220 @@ describe('pkgvet-archive-like-name', () => {
     ]);
   });
 });
+
+// ───────────────── pkgvet-yarn-berry-npm-protocol — a `npm:` value is read by the manager that installs it
+
+describe('pkgvet-yarn-berry-npm-protocol', () => {
+  /** What `readNpmManifest(dir, manager)` reads out of one dependency `key: value`. */
+  function read(manager: string, value: string, key = 'evil-pkg-zq'): Array<[string, string | undefined]> {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [key]: value } }));
+    const r = readNpmManifest(dir, manager);
+    expect(r.status).toBe('ok');
+    return named(r);
+  }
+  const sortedNames = (pairs: Array<[string, string | undefined]>): string[] => pairs.map(([name]) => name).sort();
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a rest that is no package name leaves the key, with the rest as its range', (manager) => {
+    expect(read(manager, 'npm:^1.2.3')).toEqual([['evil-pkg-zq', '^1.2.3']]);
+  });
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a valid name without a range of its own makes both the key and the rest a package', (manager) => {
+    expect(sortedNames(read(manager, 'npm:1.0.0'))).toEqual(['1.0.0', 'evil-pkg-zq']);
+    expect(sortedNames(read(manager, 'npm:latest'))).toEqual(['evil-pkg-zq', 'latest']);
+  });
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a rest with a range of its own is an alias of the rest', (manager) => {
+    expect(read(manager, 'npm:real-zq@1.0.0', 'alias-zq')).toEqual([['real-zq', '1.0.0']]);
+  });
+
+  it.each(['npm', 'pnpm'])('T-03 guard: `%s` reads the value as an alias, as before', (manager) => {
+    expect(read(manager, 'npm:^1.2.3')).toEqual([]);
+    expect(read(manager, 'npm:1.0.0')).toEqual([['1.0.0', undefined]]);
+    expect(read(manager, 'npm:latest')).toEqual([['latest', undefined]]);
+    expect(read(manager, 'npm:real-zq@1.0.0', 'alias-zq')).toEqual([['real-zq', '1.0.0']]);
+  });
+
+  it.each(['yarn', 'bun'])('T-03 `%s`: a key read both ways keeps a rest that is a version or a range as its range, a word leaves it with none', (manager) => {
+    expect(read(manager, 'npm:1.0.0')).toEqual([['evil-pkg-zq', '1.0.0'], ['1.0.0', undefined]]);
+    expect(read(manager, 'npm:1.x')).toEqual([['evil-pkg-zq', '1.x'], ['1.x', undefined]]);
+    expect(read(manager, 'npm:latest')).toEqual([['evil-pkg-zq', undefined], ['latest', undefined]]);
+    expect(read(manager, 'npm:real-zq', 'alias-zq')).toEqual([['alias-zq', undefined], ['real-zq', undefined]]);
+  });
+
+  // ── round 1 of the review (T-06)
+
+  it.each(['yarn', 'bun'])('T-06 `%s`: `npm:~1.2.3` and `npm:~1` are a range for the key; `~/x` and `~user/x` stay paths', (manager) => {
+    expect(read(manager, 'npm:~1.2.3')).toEqual([['evil-pkg-zq', '~1.2.3']]);
+    expect(read(manager, 'npm:~1')).toEqual([['evil-pkg-zq', '~1']]);
+    expect(read(manager, 'npm:~/x')).toEqual([]);
+    expect(read(manager, 'npm:~user-zq/x')).toEqual([]);
+  });
+
+  it('T-06 `bun`: a rest that ends like an archive bun reads as a file gives both names, with no range for the key', () => {
+    for (const value of ['npm:1.0.0.tgz', 'npm:2foo.tar.gz']) {
+      const got = read('bun', value);
+      expect(got.map(([n]) => n).sort(), value).toEqual(['evil-pkg-zq', value.slice(4)].sort());
+      expect(got.find(([n]) => n === 'evil-pkg-zq')?.[1], value).toBeUndefined();
+    }
+  });
+
+  it.each(['yarn', 'bun'])('T-06 `%s`: a value that is a shell expansion, a path or a URL is skipped; a rest that is no range is no range for the key', (manager) => {
+    expect(read(manager, 'npm:$X')).toEqual([]);
+    expect(read(manager, 'npm:./x.tgz')).toEqual([]);
+    expect(read(manager, 'npm:https://example.test/x.tgz')).toEqual([]);
+    expect(read(manager, 'npm:user/repo')).toEqual([['evil-pkg-zq', undefined]]);
+  });
+});
+
+// ───────────────── install-vet-manifest-value-dropped — a value of a dependency that is no path, URL or protocol is a registry spec
+
+describe('install-vet-manifest-value-dropped', () => {
+  const NAME = 'drop-pkg-zq';
+  const MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const;
+
+  /** What `readNpmManifest(dir, manager)` reads out of one dependency `key: value`. */
+  function read(manager: string, value: unknown, key = NAME): Array<[string, string | undefined]> {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [key]: value } }));
+    const r = readNpmManifest(dir, manager);
+    expect(r.status).toBe('ok');
+    return named(r);
+  }
+
+  const DROPPED_TODAY = ['~x', '~X', '~x.x.x', '^x', '~', '~abc', '~latest', '> 1', '^ 1', '~ 1', '1 . 0'] as const;
+
+  it.each(MANAGERS.flatMap((manager) => DROPPED_TODAY.map((value) => [manager, value] as const)))(
+    'T-01 `%s`: the value `%s` is a registry spec, the dependency is in the list',
+    (manager, value) => {
+      expect(read(manager, value).map(([name]) => name), `${manager} ${value}`).toEqual([NAME]);
+    },
+  );
+
+  const NOT_OF_THE_REGISTRY = [
+    './x',
+    '../x',
+    '/x',
+    '~/x',
+    'C:\\x',
+    'file:x',
+    'link:x',
+    'workspace:*',
+    'catalog:',
+    'portal:x',
+    'patch:x',
+    'https://host.example/x.tgz',
+    'git+https://host.example/r.git',
+    'github:u/r',
+    'u/r',
+  ] as const;
+
+  it.each(MANAGERS.flatMap((manager) => NOT_OF_THE_REGISTRY.map((value) => [manager, value] as const)))(
+    'T-02 guard: `%s`: the value `%s` is no registry spec, the dependency stays out of the list',
+    (manager, value) => {
+      expect(read(manager, value), `${manager} ${value}`).toEqual([]);
+    },
+  );
+
+  it.each(['npm', 'bun'] as const)('T-02 guard: `%s` reads `1.0.0.tgz` as a file, out of the list', (manager) => {
+    expect(read(manager, '1.0.0.tgz')).toEqual([]);
+  });
+
+  it.each(MANAGERS)('T-02 guard: `%s` gives the same dependency and the same range as before for the values it already read', (manager) => {
+    const SAME: ReadonlyArray<readonly [string, string | undefined]> = [
+      ['^1.0.0', '^1.0.0'],
+      ['~1.0.0', '~1.0.0'],
+      ['1.0.0', '1.0.0'],
+      ['*', '*'],
+      ['x', 'x'],
+      ['', undefined],
+      ['latest', undefined],
+      ['next', 'next'],
+      ['stable', 'stable'],
+      ['>=1', '>=1'],
+      ['1.x || 2', '1.x || 2'],
+      ['1.0.0 - 2', '1.0.0 - 2'],
+      ['v1', 'v1'],
+      ['=1.0.0', '=1.0.0'],
+    ];
+    for (const [value, range] of SAME) expect(read(manager, value), `${manager} "${value}"`).toEqual([[NAME, range]]);
+  });
+
+  it.each([1, true, null, { a: 1 }, ['^1.0.0']])('T-02 guard: a value that is no text (%j) is ignored, as before', (value) => {
+    expect(read('npm', value)).toEqual([]);
+  });
+
+  it('T-02 guard: a name that is no package name is dropped, as before', () => {
+    expect(read('npm', '^1.0.0', 'bad name')).toEqual([]);
+    expect(read('npm', '^1.0.0', '.hidden-zq')).toEqual([]);
+  });
+
+  it('T-02 guard: a manifest of 15 ordinary dependencies gives the same list, one by one', () => {
+    const deps: Record<string, string> = {};
+    const expected: Array<[string, string | undefined]> = [];
+    const ranges = ['^1.0.0', '~2.1.0', '3.0.0', '>=4', '*', 'latest', '1.x', 'next', '^0.5.0', '5.0.0-beta.1', '>=1 <3', '', 'v2', '~0.1', '^10.2.3'];
+    ranges.forEach((range, i) => {
+      deps[`common-zq-${i}`] = range;
+      expected.push([`common-zq-${i}`, range === '' || range === 'latest' ? undefined : range]);
+    });
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: deps }));
+    expect(named(readNpmManifest(dir))).toEqual(expected);
+  });
+
+  it.each(MANAGERS)('T-04 `%s`: an alias to `real-zq@~x` and to `real-zq@> 1` is the package `real-zq`', (manager) => {
+    expect(read(manager, 'npm:real-zq@~x', 'alias-zq').map(([name]) => name), `${manager} ~x`).toEqual(['real-zq']);
+    expect(read(manager, 'npm:real-zq@> 1', 'alias-zq').map(([name]) => name), `${manager} > 1`).toEqual(['real-zq']);
+  });
+
+  it.each(MANAGERS)('T-04 `%s`: a value longer than the hook reads as a range is the dependency, with no range', (manager) => {
+    let value = '>=0.0.1';
+    for (let i = 2; value.length < 150; i += 1) value += ` || >=0.0.${i}`;
+    expect(value.length).toBeGreaterThan(100);
+    expect(read(manager, value)).toEqual([[NAME, undefined]]);
+  });
+});
+
+// ── round 1 of the review (T-06): only a protocol the hook knows is dropped; another `word:rest` is a spec of the registry
+
+describe('install-vet-manifest-value-dropped — round 1', () => {
+  const NAME = 'drop-pkg-zq';
+  const MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const;
+  function read(manager: string, value: string): Array<[string, string | undefined]> {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [NAME]: value } }));
+    const r = readNpmManifest(dir, manager);
+    expect(r.status).toBe('ok');
+    return named(r);
+  }
+
+  it.each(MANAGERS.flatMap((manager) => ['foo:^1', 'foo:bar', 'abc:1.0.0'].map((value) => [manager, value] as const)))(
+    'T-06 `%s`: the value `%s` has a word the hook does not know before the colon: the dependency is vetted by its name, with no range',
+    (manager, value) => {
+      expect(read(manager, value), `${manager} ${value}`).toEqual([[NAME, undefined]]);
+    },
+  );
+
+  it.each([
+    'file:x',
+    'link:x',
+    'workspace:*',
+    'workspace:^',
+    'catalog:',
+    'catalog:default',
+    'portal:x',
+    'patch:x',
+    'exec:x',
+    'jsr:^1',
+    'jsr:@scope-zq/x@1',
+    'C:x',
+  ])('T-06 the value `%s` is a protocol the hook knows (or a drive): out of the list, for every manager', (value) => {
+    for (const manager of MANAGERS) expect(read(manager, value), `${manager} ${value}`).toEqual([]);
+  });
+
+  it.each(MANAGERS)('T-06 `%s`: spaces around a value change nothing', (manager) => {
+    expect(read(manager, '  ^1.0.0  ')).toEqual([[NAME, '^1.0.0']]);
+    expect(read(manager, '  latest  ')).toEqual([[NAME, undefined]]);
+    expect(read(manager, '  workspace:*  ')).toEqual([]);
+  });
+
+  it.each(['u/r#branch', 'u/r', '.', '..'])('T-06 the value `%s` stays out of the list (a known limit for `..`), for every manager', (value) => {
+    for (const manager of MANAGERS) expect(read(manager, value), `${manager} ${value}`).toEqual([]);
+  });
+});

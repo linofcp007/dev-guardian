@@ -27,6 +27,7 @@
  */
 
 import { parseJsonBounded } from '../platform/boundedJson.js';
+import { writtenStrayAt } from './strayAt.js';
 import { isExactVersion, resolveVersion } from './versions.js';
 
 export type LockFormat = 'package-lock' | 'pnpm-lock' | 'yarn-lock' | 'bun-lock';
@@ -207,7 +208,10 @@ const UNSAFE_URL = /[\u0000-\u0020\u007f-\u009f\u2028\u2029]/;
 /** Where an entry whose URL cannot be read comes from: another source, said without a host. */
 const UNKNOWN_ELSEWHERE: Located = { source: { kind: 'elsewhere', host: '', url: '' }, named: undefined };
 
-function gitHost(spec: string): string {
+/** `host` unless the URL as written has an `@` outside its credentials ({@link writtenStrayAt}): then no host is said. */
+const sayable = (host: string, written: string, name?: string): string => (writtenStrayAt(written, name) ? '' : host);
+
+function gitHost(spec: string, name?: string, written: string = spec): string {
   if (spec.startsWith('github:')) return 'github.com';
   if (spec.startsWith('gitlab:')) return 'gitlab.com';
   if (spec.startsWith('bitbucket:')) return 'bitbucket.org';
@@ -217,7 +221,7 @@ function gitHost(spec: string): string {
     return dnsName(spec.slice(4, colon < 0 ? undefined : colon));
   }
   try {
-    return dnsName(new URL(spec.startsWith('git+') ? spec.slice(4) : spec).hostname);
+    return sayable(dnsName(new URL(spec.startsWith('git+') ? spec.slice(4) : spec).hostname), written, name);
   } catch {
     return '';
   }
@@ -247,20 +251,20 @@ function archivePair(pathname: string): Pin | undefined {
  * The origin of a `resolved`, `tarball:`, registry element or version spec. `'local'` is the project's own code
  * (a path, `link:`, `workspace:`, …); `'bad'` a string no URL parser should be given.
  */
-function locate(spec: string): Located | 'local' | 'bad' {
+function locate(spec: string, name?: string, written: string = spec): Located | 'local' | 'bad' {
   if (spec.length === 0 || spec.length > MAX_LINE) return 'bad';
   // `//host/x.tgz` is a protocol-relative URL, not a path: it is another source, and said.
   if (spec.startsWith('//')) return UNSAFE_URL.test(spec) ? 'bad' : { source: { kind: 'elsewhere', host: '', url: spec }, named: undefined };
   if (LOCAL_SPEC.test(spec) || spec.startsWith('/') || spec.startsWith('./') || spec.startsWith('../')) return 'local';
   if (UNSAFE_URL.test(spec)) return 'bad';
-  if (GIT_SPEC.test(spec)) return { source: { kind: 'git', host: gitHost(spec) }, named: undefined };
+  if (GIT_SPEC.test(spec)) return { source: { kind: 'git', host: gitHost(spec, name, written) }, named: undefined };
   let url: URL;
   try {
     url = new URL(spec);
   } catch {
     return 'bad';
   }
-  const host = dnsName(url.hostname);
+  const host = sayable(dnsName(url.hostname), written, name);
   const web = url.protocol === 'https:' || url.protocol === 'http:';
   if (!web || url.hostname === 'codeload.github.com' || url.pathname.endsWith('.git')) return { source: { kind: 'git', host }, named: undefined };
   // The public registry is an https URL of one of its hosts, no credentials, the default port: `https://registry.npmjs.org:x@evil.example/…` is evil.example.
@@ -307,12 +311,12 @@ function emit(acc: Acc, pin: Pin | undefined, located: Located | undefined): voi
 }
 
 /** An entry whose origin is `spec` (`undefined`: the format states none); a local one is only counted, a URL no parser should read is counted as not recognised. */
-function finish(acc: Acc, pin: Pin | undefined, spec: string | undefined): void {
+function finish(acc: Acc, pin: Pin | undefined, spec: string | undefined, written: string | undefined = spec): void {
   if (spec === undefined) {
     if (pin !== undefined) emit(acc, pin, undefined);
     return;
   }
-  const where = locate(spec);
+  const where = locate(spec, pin?.name, written);
   if (where === 'local') {
     acc.local += 1;
   } else if (where === 'bad') {
@@ -830,6 +834,8 @@ interface YarnBlock {
   keys: string[];
   version?: string;
   resolved?: string;
+  /** `resolved` as written, before the cut at its first `#`. */
+  resolvedWritten?: string;
   resolution?: string;
   /** A `version`, `resolved` or `resolution` line not in the form yarn writes, or written twice. */
   flawed: boolean;
@@ -954,7 +960,10 @@ function scanYarn(lines: readonly string[], odd: boolean, berry: boolean, acc: A
       const value = yarnField(line, berry, field);
       if (value === undefined) continue;
       if (value === null || block[field] !== undefined) block.flawed = true;
-      else block[field] = field === 'resolved' ? value.split('#', 1)[0] ?? '' : value;
+      else {
+        block[field] = field === 'resolved' ? value.split('#', 1)[0] ?? '' : value;
+        if (field === 'resolved') block.resolvedWritten = value;
+      }
       break;
     }
   }
@@ -975,7 +984,7 @@ function yarnClassicBlock(acc: Acc, b: YarnBlock): void {
   const where = b.resolved ?? (SCHEME.test(first.range) ? first.range : undefined);
   const pin = makePin(first.name, b.version);
   if (pin !== undefined) {
-    finish(acc, pin, where);
+    finish(acc, pin, where, b.resolved === undefined ? where : b.resolvedWritten);
     return;
   }
   if (where !== undefined && locate(where) === 'local') acc.local += 1;

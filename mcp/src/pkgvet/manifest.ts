@@ -2,9 +2,11 @@
  * What a manifest install fetches from a registry: the dependencies a
  * `package.json` declares, and the packages a requirements file names.
  *
- * `npm install` with no package, `npm ci`, `pnpm install`, `yarn`, `bun
- * install` and `pip install -r` name nothing on the command line — the
- * manifest does, and the install hook used to say nothing about it: `npm
+ * `npm install` (with or without a package), `npm ci`, `pnpm install`, `yarn`,
+ * `bun install`, `pnpm add`, `yarn add`, `bun add` and `pip install -r` install
+ * a manifest (for npm the nearest `package.json` from where the command runs
+ * up to the project or repository root), and the install hook used to say
+ * nothing about it: `npm
  * install crossenv` was denied while the same package in `package.json`
  * installed in silence. This module turns the manifest into the
  * {@link PackageSpec}s the vetting already knows.
@@ -36,7 +38,7 @@
 import { dirname, resolve } from 'node:path';
 
 import { isNetworkPath, readSmallText, type TextRead } from '../hooks/configFile.js';
-import { parsePackageSpec, readsFileValue } from './parseCommand.js';
+import { isSemverRange, MAX_RANGE_LENGTH, notARegistryRange, npmKeyRange, npmProtocolReading, parsePackageSpec, readsFileValue } from './parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from './types.js';
 
 type ManifestStatus = 'ok' | 'absent' | 'unreadable';
@@ -81,7 +83,6 @@ export const UNKNOWN_DIRECTORY = REASON.unknownDir;
 
 /** npm's own limit on a package name; a longer one is no package. */
 const MAX_NAME_LENGTH = 214;
-const MAX_RANGE_LENGTH = 100;
 /** The most of a file name that is repeated in a message. */
 const MAX_LABEL_LENGTH = 120;
 
@@ -141,38 +142,64 @@ function pushOnce(into: PackageSpec[], seen: Set<string>, pkg: PackageSpec): voi
 /** The sections of a `package.json` an install fetches (npm 7 and later install peers too). */
 const NPM_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies'] as const;
 
-/** One word of a semver range: `||`, a hyphen, a wildcard, or a version with its comparator. */
-const SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
 /** A dist-tag: one word that no version can be taken for. */
 const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
 /**
- * What a dependency's value asks the registry for: `undefined` for "the
- * default" (an empty value, `latest`), the range or tag, or `null` when the
- * value is no registry spec at all — a path, `file:`, `link:`, `workspace:`,
- * `catalog:`, a URL, a git repository, `user/repo`, an archive, or text.
+ * The protocols the hook knows, a value that names no registry package, and where each comes from: `file:` and `link:` (npm, pnpm,
+ * Yarn, bun), `workspace:` (pnpm, Yarn, bun), `catalog:` (pnpm, Yarn 4, bun), `portal:`, `patch:` and `exec:` (Yarn 2 and later) and
+ * `jsr:` (pnpm, Yarn 4). Most are also in the command line's list of URL and VCS specs ({@link notARegistryRange}); here they are
+ * all in one place. Measured on 2026-11-20 (npm 11.20, pnpm 10.33): none of them is asked of the registry; Yarn 1.22 asks for all but
+ * `file:` and `link:` (a known limit: the word `yarn` does not say which Yarn runs). Any OTHER `word:rest` (`foo:^1`) is a spec of
+ * the registry, vetted by its name; a drive letter (`C:x`) is a path. `user/repo` with an optional `#branch` is the GitHub shorthand.
+ */
+const NOT_OF_THE_REGISTRY = /^(?:(?:file|link|workspace|catalog|portal|patch|exec|jsr):|[A-Za-z]:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/i;
+
+/**
+ * What a dependency's value asks the registry for: `undefined` for "the default" (an empty value, `latest`) and for a value the
+ * hook does not read as a range (it is still a spec of the registry: the package is vetted, with no range); the range or tag; or
+ * `null` when the value is positively something else — a path, a protocol (`file:`, `link:`, `workspace:`, `catalog:` …), a URL, a
+ * git repository, `user/repo`, or an archive the manager reads as a file. The reading fails closed: only those are dropped.
  */
 function npmRange(value: string, manager: string): string | undefined | null {
   const v = value.trim();
   if (v === '' || v === 'latest') return undefined;
-  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
+  if (notARegistryRange(v) !== null || NOT_OF_THE_REGISTRY.test(v) || readsFileValue(manager, v)) return null;
+  if (v.length > MAX_RANGE_LENGTH) return undefined;
   if (DIST_TAG.test(v)) return v;
-  return v.split(/\s+/).every((word) => SEMVER_WORD.test(word)) ? v : null;
+  return isSemverRange(v) ? v : undefined;
 }
 
-/** A dependency entry as the package a registry would serve — `"x": "npm:real@^1"` is `real` — or `null`. */
-function npmDependency(key: string, value: string, manager: string): PackageSpec | null {
+/**
+ * A dependency entry as the packages a registry would serve: `"x": "npm:real@^1"` is `real` (an alias); for Yarn and bun
+ * `"x": "npm:^1"` is `x` and `"x": "npm:1.0.0"` is both `x` and `1.0.0` ({@link npmProtocolReading}, the command line's own
+ * rule). Empty when the value is no registry spec.
+ */
+function npmDependency(key: string, value: string, manager: string): PackageSpec[] {
   let name = key;
   let wanted = value.trim();
+  let second: string | undefined;
   if (/^npm:/i.test(wanted)) {
     const real = wanted.slice(4);
-    const at = real.indexOf('@', real.startsWith('@') ? 1 : 0);
-    name = at > 0 ? real.slice(0, at) : real;
-    wanted = at > 0 ? real.slice(at + 1) : '';
+    const reading = npmProtocolReading(manager, real);
+    if (reading === 'alias') {
+      const at = real.indexOf('@', real.startsWith('@') ? 1 : 0);
+      name = at > 0 ? real.slice(0, at) : real;
+      wanted = at > 0 ? real.slice(at + 1) : '';
+    } else if (reading === 'both') {
+      second = real;
+      // The key is asked at that version or range; a word (a tag, a name) or an archive bun reads as a file leaves it with none.
+      wanted = npmKeyRange(manager, real) ?? '';
+    } else {
+      // The key is the package and the rest its range; a rest that is no range still leaves the key vetted.
+      wanted = npmKeyRange(manager, real) ?? '';
+    }
   }
-  if (!validName('npm', name)) return null;
+  if (!validName('npm', name)) return [];
   const range = npmRange(wanted, manager);
-  return range === null ? null : spec('npm', name, range);
+  if (range === null) return [];
+  const own = spec('npm', name, range);
+  return second !== undefined && validName('npm', second) ? [own, spec('npm', second, undefined)] : [own];
 }
 
 /**
@@ -203,8 +230,7 @@ export function readNpmManifest(dir: string, manager = 'npm'): ManifestRead {
     if (entries === null || typeof entries !== 'object' || Array.isArray(entries)) continue;
     for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
       if (typeof value !== 'string') continue;
-      const pkg = npmDependency(key, value, manager);
-      if (pkg !== null) pushOnce(packages, seen, pkg);
+      for (const pkg of npmDependency(key, value, manager)) pushOnce(packages, seen, pkg);
     }
   }
   return { file, status: 'ok', packages, registries: [] };

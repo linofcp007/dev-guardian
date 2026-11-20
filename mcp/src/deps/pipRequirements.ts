@@ -41,6 +41,7 @@
  */
 
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { strayAt } from '../pkgvet/strayAt.js';
 import { describeReadRefusal, isWithinDir, listProjectDir, projectPathKind, readProjectBytes } from '../platform/projectFs.js';
 
 /** What made a requirements file not installable. */
@@ -246,9 +247,17 @@ function optionKind(token: string): PipRefusalKind {
   return SHORT_OPTIONS[token.charAt(1)] ?? 'option';
 }
 
-/** `scheme://host` of a URL, parsed properly — userinfo, port, path and query never shown. */
+/** What a reason says in place of the host of a URL whose host cannot be told from a piece of its credentials ({@link strayAt}). */
+const HOST_NOT_SHOWN = '(host not shown)';
+
+/**
+ * `scheme://host` of a URL, parsed properly — userinfo, port, path and query never shown. A URL with an `@` outside
+ * its credentials (`https://TOKEN/rest@host/…`: the parser reads the start of the credential as the host) is said
+ * with no host: `scheme://(host not shown)`.
+ */
 export function urlHost(url: string): string {
   const unc = /^(?:\\\\|\/\/)([^\\/]+)/.exec(url);
+  if (unc?.[1] !== undefined && url.includes('@')) return `\\\\${HOST_NOT_SHOWN}`;
   if (unc?.[1] !== undefined) return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(unc[1]) ? `\\\\${unc[1]}` : '\\\\(unparseable host)';
   try {
     const u = new URL(url);
@@ -257,6 +266,7 @@ export function urlHost(url: string): string {
     const host = u.hostname;
     // No host: only a file: URL means something here — any other `scheme:` may be a user name (`deploy:S3CRET@…`).
     if (host === '') return scheme.toLowerCase() === 'file' ? 'file:' : '(no host)';
+    if (strayAt(u)) return `${scheme}://${HOST_NOT_SHOWN}`;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? `${scheme}://${host}` : `${scheme}://(unparseable host)`;
   } catch {
     return '(unparseable URL)';
@@ -266,7 +276,9 @@ export function urlHost(url: string): string {
 /** pip's `--trusted-host host[:port]`: the host alone, through the URL parser so a `user:pw@` never survives. */
 function bareHost(value: string): string {
   try {
-    const host = new URL(`http://${value}`).hostname;
+    const u = new URL(`http://${value}`);
+    if (strayAt(u)) return HOST_NOT_SHOWN;
+    const host = u.hostname;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? host : '(unparseable host)';
   } catch {
     return '(unparseable host)';

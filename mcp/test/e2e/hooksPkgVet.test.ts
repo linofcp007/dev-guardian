@@ -685,13 +685,13 @@ describe('guardian-hook PreToolUse — `pnpm install <package>` is vetted as `pn
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv.*security placeholder/s);
   });
 
-  it('T-03 beside a package.json that names another malicious package: only the package of the command line is looked up and named', () => {
+  it('T-03 beside a package.json that names another malicious package: both are looked up and named, the file too (install-vet-named-install-manifest)', () => {
     writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'evil-in-manifest': '*' } }));
     const r = runHook('pnpm install crossenv', { ...PLACEHOLDER, 'https://registry.npmjs.org/evil-in-manifest': npmDoc('0.0.1-security') });
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/crossenv/);
-    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).not.toMatch(/evil-in-manifest|package\.json/);
-    expect(r.requests.filter((u) => u.includes('evil-in-manifest'))).toEqual([]);
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*evil-in-manifest/s);
+    expect(r.requests.filter((u) => u.includes('evil-in-manifest'))).toEqual(['https://registry.npmjs.org/evil-in-manifest']);
   });
 
   it('T-03 a name the registry does not have is denied as missing for `pnpm install <name>`, as it is for `pnpm add <name>`', () => {
@@ -736,7 +736,9 @@ describe('guardian-hook PreToolUse — a manifest install asks only what it repo
     expect(denied.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
     expect(denied.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
 
-    // The request log is one file for the whole test: what the second run added comes after the first run's lines.
+    // The same names typed in a project with no manifest (a by-name install reads the manifest too, and it would add its own
+    // lookup of `fresh-pkg`). The request log is one file for the whole test: what the second run added comes after the first run's.
+    rmSync(join(project, 'package.json'));
     const named = runHook('npm install fresh-pkg scripted-old', routes());
     const added = named.requests.slice(denied.requests.length);
     expect(added.filter((u) => u === 'https://registry.npmjs.org/fresh-pkg')).toHaveLength(2);
@@ -1551,4 +1553,532 @@ describe('install-vet-bare-install-misread', () => {
       expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package.json.*crossenv/s);
     },
   );
+});
+
+// ───────────────── install-vet-unknown-flag-hides-package — through the dispatcher
+
+describe('install-vet-unknown-flag-hides-package', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+    [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+  };
+
+  it.each([
+    'npm install --prefer-dedupe evil-cli-zz',
+    'yarn add --ignore-engines evil-cli-zz',
+    'npx --ignore-scripts evil-cli-zz',
+  ])('T-03 %s is DENIED, naming the package', (command) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/evil-cli-zz.*MAL-2026-0077/s);
+  });
+});
+
+// ───────────────── install-vet-through-corepack — `corepack <manager> …` and `yarnpkg` through the dispatcher
+
+describe('install-vet-through-corepack', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-cli-zz': npmDoc('1.0.0'),
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: { 'evil-cli-zz@1.0.0': ['MAL-2026-0077'] } },
+  };
+
+  it.each(['corepack yarn add evil-cli-zz', 'corepack npx evil-cli-zz', 'yarnpkg add evil-cli-zz'])('T-03 %s is DENIED, naming the package', (command) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/evil-cli-zz.*MAL-2026-0077/s);
+  });
+
+  it.each(['corepack pnpm install', 'corepack use yarn@4.18.1', 'corepack up'])(
+    'T-03 %s in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      writeFileSync(
+        join(project, 'package.json'),
+        JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', crossenv: '*' } }),
+      );
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+
+  it('T-03 `corepack yarn add <a name the registry does not have>` is denied as a missing name, as `yarn add <same>` is', () => {
+    const routes: Record<string, Route> = { 'https://registry.npmjs.org/react-form-autopilot-helperz': { status: 404 }, [OSV]: { osv: {} } };
+    for (const command of ['yarn add react-form-autopilot-helperz', 'corepack yarn add react-form-autopilot-helperz']) {
+      const r = runHook(command, routes);
+      expect({ command, decision: r.output?.hookSpecificOutput?.permissionDecision }).toEqual({ command, decision: 'deny' });
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/does not exist/);
+    }
+  });
+});
+
+// ───────────────── install-vet-named-install-manifest — through the dispatcher
+
+describe('install-vet-named-install-manifest', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+  const manifest = (): void =>
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { lodash: '^4.17.21', crossenv: '*' } }),
+    );
+
+  it.each(['npm install express', 'pnpm add express', 'yarn add express', 'bun add express'])(
+    'T-08 %s in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      manifest();
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+
+  it.each(['npm install -g express', 'npx express'])(
+    'T-08 %s in the same project is not denied: a global install and a launcher do not install the manifest',
+    (command) => {
+      manifest();
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.requests.filter((u) => u.includes('crossenv'))).toEqual([]);
+    },
+  );
+});
+
+// ───────────────── install-vet-manifest-parent-dir — through the dispatcher
+
+describe('install-vet-manifest-parent-dir', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+  const rootManifest = (): void => {
+    mkdirSync(join(project, 'sub'), { recursive: true });
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', crossenv: '*' } }),
+    );
+  };
+  const SESSIONS: ReadonlyArray<readonly [what: string, command: string, cwd: (root: string) => string]> = [
+    ['session in sub/', 'npm install', (root) => join(root, 'sub')],
+    ['`cd sub &&` from the project root', 'cd sub && npm install', (root) => root],
+    ['session in sub/, by name', 'npm install express', (root) => join(root, 'sub')],
+    ['`cd sub &&` from the project root, by name', 'cd sub && npm install express', (root) => root],
+  ];
+
+  it.each(SESSIONS)(
+    'T-03 %s (`%s`): the root package.json names a malicious package, so the install is DENIED, with the file as ../package.json',
+    (_what, command, cwd) => {
+      rootManifest();
+      const r = runHook(command, ROUTES, { cwd: cwd(project) });
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/\.\.\/package\.json.*crossenv/s);
+    },
+  );
+
+  it('T-09 the session in repo/docs/ of a git repository, `cd ../src && npm install`: the manifest of repo/ is read, named ../package.json', () => {
+    const repo = join(project, 'repo');
+    mkdirSync(join(repo, 'docs'), { recursive: true });
+    mkdirSync(join(repo, 'src'), { recursive: true });
+    mkdirSync(join(repo, '.git'));
+    writeFileSync(
+      join(repo, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', crossenv: '*' } }),
+    );
+    const docs = join(repo, 'docs');
+    const r = runHook('cd ../src && npm install', ROUTES, { cwd: docs, env: { CLAUDE_PROJECT_DIR: docs } });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/\.\.\/package\.json.*crossenv/s);
+  });
+});
+
+// ───────────────── install-vet-update-verbs — the update and maintenance verbs through the dispatcher
+
+describe('install-vet-update-verbs', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+
+  it.each([
+    'npm update',
+    'pnpm update',
+    'yarn upgrade',
+    'yarn up lodash',
+    'bun update',
+    'npm dedupe',
+    'npm audit fix',
+    'npm prune',
+    'pnpm dedupe',
+    'yarn dedupe',
+    'yarn up',
+  ])(
+    'T-03 `%s` in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      writeFileSync(
+        join(project, 'package.json'),
+        JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { lodash: '^4.17.21', crossenv: '*' } }),
+      );
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+});
+
+// ───────────────── install-vet-dotnet-forms — `dotnet package add` and `dotnet tool install` through the dispatcher
+
+describe('install-vet-dotnet-forms', () => {
+  // The preload's NuGet fake: the flat container answers 404 for a name nuget.org does not know.
+  const ROUTES: Record<string, Route> = {
+    'https://api.nuget.org/v3-flatcontainer/dgprobe.zzq7731.nope/index.json': { status: 404 },
+    [OSV]: { osv: {} },
+  };
+
+  it.each(['dotnet add package Dgprobe.Zzq7731.Nope', 'dotnet package add Dgprobe.Zzq7731.Nope', 'dotnet tool install Dgprobe.Zzq7731.Nope', 'dotnet tool install -g Dgprobe.Zzq7731.Nope'])(
+    'T-03 `%s`: a name NuGet does not know is DENIED',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    },
+  );
+
+  // A name that ends like an archive file is always a name for dotnet (measured); dotnet is not a measured manager for the
+  // archive rule, so the verdict is a warning, never a deny, and the registry is asked for the whole name.
+  it.each([
+    ['dotnet add package Dgprobe.Zzq7731.Nope.nupkg', 'dgprobe.zzq7731.nope.nupkg'],
+    ['dotnet package add Dgprobe.Zzq7731.Nope.nupkg', 'dgprobe.zzq7731.nope.nupkg'],
+    ['dotnet tool install Dgprobe.Zzq7731.Nope.zip', 'dgprobe.zzq7731.nope.zip'],
+    ['dotnet tool install -g Dgprobe.Zzq7731.Nope.nupkg', 'dgprobe.zzq7731.nope.nupkg'],
+  ])('review 1: `%s`: an archive-like name is a warning, not a deny, and NuGet is asked for the whole name', (command, asked) => {
+    const url = `https://api.nuget.org/v3-flatcontainer/${asked}/index.json`;
+    const r = runHook(command, { [url]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.requests, 'the registry is asked for the name').toContain(url);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain('not found on the public registry');
+  });
+});
+
+// ───────────────── pkgvet-yarn-berry-npm-protocol — `key@npm:rest` for Yarn and bun through the dispatcher
+
+describe('pkgvet-yarn-berry-npm-protocol', () => {
+  // `evil-pkg-zq` is malicious only here; its newest version, 1.5.0, satisfies `^1.2.3`. `1.5.0` is the rest read as a name: not on the registry; the key is asked at that version.
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-pkg-zq': npmDoc('1.5.0'),
+    'https://registry.npmjs.org/1.5.0': { status: 404 },
+    [OSV]: { osv: { 'evil-pkg-zq@1.5.0': ['MAL-2026-0099'] } },
+  };
+  const deniedFor = (r: HookOut): void => {
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/evil-pkg-zq/);
+  };
+
+  it('T-05 `yarn add evil@npm:^1.2.3` is DENIED, naming the package', () => {
+    deniedFor(runHook('yarn add evil-pkg-zq@npm:^1.2.3', ROUTES));
+  });
+
+  it('T-05 `bun add evil@npm:1.5.0` is DENIED, naming the package', () => {
+    deniedFor(runHook('bun add evil-pkg-zq@npm:1.5.0', ROUTES));
+  });
+
+  it('T-05 `yarn install` in a project whose package.json has `"evil": "npm:^1.2.3"` is DENIED, naming the package', () => {
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'evil-pkg-zq': 'npm:^1.2.3' } }),
+    );
+    deniedFor(runHook('yarn install', ROUTES));
+  });
+
+  // ── round 1 of the review (T-06)
+
+  it('T-06 `yarn add evil@npm:~1.5.0` is DENIED, naming the package (a `~` and a version is a range, not a path)', () => {
+    deniedFor(runHook('yarn add evil-pkg-zq@npm:~1.5.0', ROUTES));
+  });
+
+  it('T-06 `yarn add evil@npm:^1.2.3` asks the key at the version the range picks: only that one, not the latest, is malicious', () => {
+    // The newest version is 2.0.0 and clean; the range ^1.2.3 picks 1.5.0, the one the advisory names.
+    const doc: Route = {
+      accept: 'install-v1',
+      body: { 'dist-tags': { latest: '2.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.2.3': {}, '1.5.0': {}, '2.0.0': {} } },
+    };
+    const routes: Record<string, Route> = {
+      'https://registry.npmjs.org/range-pkg-zq': doc,
+      [OSV]: { osv: { 'range-pkg-zq@1.5.0': ['MAL-2026-0098'] } },
+    };
+    const r = runHook('yarn add range-pkg-zq@npm:^1.2.3', routes);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/range-pkg-zq/);
+  });
+});
+
+// ───────────────── install-vet-npm-exec-bool-word — a launcher line is read as the launcher reads it, through the dispatcher
+
+describe('install-vet-npm-exec-bool-word', () => {
+  // `evil-cli-zy` is malicious only here. `true` and `false` have no route: the registry is never asked for them when the line is read right.
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/evil-cli-zy': npmDoc('1.0.0'),
+    [OSV]: { osv: { 'evil-cli-zy@1.0.0': ['MAL-2026-0088'] } },
+  };
+
+  it.each(['npm exec --yes true evil-cli-zy', 'npm exec --prefer-offline false evil-cli-zy', 'pnpm dlx -c evil-cli-zy'])(
+    'T-03 %s is DENIED for the package, not for a `true` / `false` that is a flag value',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/evil-cli-zy.*MAL-2026-0088/s);
+      expect(r.requests.filter((u) => /registry\.npmjs\.org\/(?:true|false)(?:$|[/?])/.test(u))).toEqual([]);
+    },
+  );
+
+  // T-08 (review round 1)
+  it.each(['npm exec -sy false evil-cli-zy', 'npm exec -sy true evil-cli-zy'])(
+    'T-08 %s is DENIED for the package: `-s` is a loglevel flag of npm and the word is the value of `-y`',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/evil-cli-zy.*MAL-2026-0088/s);
+    },
+  );
+
+  it.each(['npm exec --yes dgprobe-missing-zy', 'npm exec -y dgprobe-missing-zy'])('T-08 %s: a name the registry does not have is DENIED (the confident shape)', (command) => {
+    const r = runHook(command, { 'https://registry.npmjs.org/dgprobe-missing-zy': { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/dgprobe-missing-zy.*does not exist/s);
+  });
+
+  describe('`yarn --production true` reads the manifest, and vets no package called `true`', () => {
+    const MANIFEST_ROUTES: Record<string, Route> = {
+      'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+      'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+      [OSV]: { osv: {} },
+    };
+    const manifest = (deps: Record<string, string>): void =>
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+
+    it('T-08 a clean manifest: not denied, and the registry is never asked for `true`', () => {
+      manifest({ express: '^4.21.0' });
+      const r = runHook('yarn --production true', MANIFEST_ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.requests.filter((u) => /registry\.npmjs\.org\/true(?:$|[/?])/.test(u))).toEqual([]);
+    });
+
+    it('T-08 a manifest that names a malicious package: DENIED for it', () => {
+      manifest({ express: '^4.21.0', crossenv: '*' });
+      const r = runHook('yarn --production true', MANIFEST_ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/package\.json.*crossenv/s);
+    });
+  });
+});
+
+// ───────────────── lockfile-origin-host-from-userinfo — through the real hook process
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const REST = ['ken', 'Qq', '88'].join('');
+  const SECRET = ['tk', 'n1'].join('');
+  const ROUTES: Record<string, Route> = { [OSV]: { osv: {} } };
+
+  const lockWith = (resolved: string): string =>
+    `${JSON.stringify(
+      {
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: { probe: '^1.0.0' } },
+          'node_modules/probe': { version: '1.0.0', resolved, integrity: `sha512-${'A'.repeat(86)}==` },
+        },
+      },
+      null,
+      2,
+    )}\n`;
+
+  /** What `npm ci` says, as additionalContext, in a project whose package-lock has one entry fetched from `resolved`. */
+  function said(resolved: string): { context: string; stdout: string; stderr: string; status: number | null } {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { probe: '^1.0.0' } }));
+    writeFileSync(join(project, 'package-lock.json'), lockWith(resolved));
+    const r = runHook('npm ci', ROUTES);
+    return { context: r.output?.hookSpecificOutput?.additionalContext ?? '', stdout: r.stdout, stderr: r.stderr, status: r.status };
+  }
+
+  it('T-05 an entry whose URL has an at-sign outside the credentials: the line says another source, with no host and nothing of the token', () => {
+    const out = said(`https://${TOKEN}/${REST}@host.example/probe/-/probe-1.0.0.tgz`);
+    expect(out.status).toBe(0);
+    expect(out.context).toMatch(/comes from another source — what it serves was not vetted\./);
+    for (const text of [out.context, out.stdout, out.stderr]) {
+      expect(text.includes(TOKEN), 'the token').toBe(false);
+      expect(text.includes(TOKEN.toLowerCase()), 'the token in lower case').toBe(false);
+    }
+  });
+
+  it('T-05 an entry with well formed credentials in its URL: the line names the host', () => {
+    const out = said(`https://user:${SECRET}@host.example/probe/-/probe-1.0.0.tgz`);
+    expect(out.status).toBe(0);
+    expect(out.context).toMatch(/comes from another source \(host\.example\) — what it serves was not vetted\./);
+    expect(out.context.includes(SECRET)).toBe(false);
+  });
+});
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-09 (review round 1) — through the real hook process
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  const MISSING = 'dgprobe-missing-zq';
+  const ROUTES: Record<string, Route> = { [`https://registry.npmjs.org/${MISSING}`]: { status: 404 }, [OSV]: { osv: {} } };
+
+  it.each([['a hash', '#'], ['a semicolon', ';']])('T-09 the public registry and a comment (%s) with an at-sign: a missing name is refused, and no line of registry is said', (_name, mark) => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    writeFileSync(join(project, '.npmrc'), `registry=https://registry.npmjs.org/ ${mark} owner: a@b.example\n`);
+    const r = runHook(`npm install ${MISSING}`, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/does not exist/);
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').not.toContain('sets the default registry');
+    expect(r.stdout).not.toContain('a custom registry is configured');
+  });
+});
+
+// ───────────────── install-vet-tilde-range-skipped — `pkg@~1.5.0` is vetted through the dispatcher, as `pkg@^1.5.0` is
+
+describe('install-vet-tilde-range-skipped', () => {
+  // Both packages are malicious only here, at one version each, and that version is not the newest (2.0.0, clean).
+  // `~1.5.0` picks 1.5.4; `~1` picks 1.6.0.
+  const doc: Route = {
+    accept: 'install-v1',
+    body: {
+      'dist-tags': { latest: '2.0.0' },
+      modified: '2020-01-01T00:00:00.000Z',
+      versions: { '1.5.0': {}, '1.5.4': {}, '1.6.0': {}, '2.0.0': {} },
+    },
+  };
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/tilde-evil-zq': doc,
+    'https://registry.npmjs.org/tilde-evil-two-zq': doc,
+    'https://registry.npmjs.org/tilde-missing-zq': { status: 404 },
+    [OSV]: { osv: { 'tilde-evil-zq@1.5.4': ['MAL-2026-0096'], 'tilde-evil-two-zq@1.6.0': ['MAL-2026-0095'] } },
+  };
+
+  it.each([
+    ['npm install tilde-evil-zq@~1.5.0', /tilde-evil-zq.*MAL-2026-0096/s],
+    ['pnpm add tilde-evil-two-zq@~1', /tilde-evil-two-zq.*MAL-2026-0095/s],
+    ['npx tilde-evil-zq@~1.5.0', /tilde-evil-zq.*MAL-2026-0096/s],
+  ] as const)('T-03 `%s` is DENIED, naming the package, at the version the range picks', (command, reason) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(reason);
+  });
+
+  it.each(['npm install tilde-missing-zq@~1.0.0', 'npm install tilde-missing-zq@^1.0.0'])(
+    'T-03 `%s`: a name the registry does not have is DENIED, with a tilde as with a caret',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/tilde-missing-zq.*does not exist/s);
+    },
+  );
+
+  // Round 1 of the review (T-06): a tilde that is no range is a registry spec; the package is vetted with no range, at its newest version.
+  it.each(['npm install tilde-newest-zq@~x', 'npm install tilde-newest-zq@~abc'])('T-06 `%s` is DENIED, naming the package', (command) => {
+    const routes: Record<string, Route> = {
+      'https://registry.npmjs.org/tilde-newest-zq': npmDoc('2.0.0'),
+      [OSV]: { osv: { 'tilde-newest-zq@2.0.0': ['MAL-2026-0094'] } },
+    };
+    const r = runHook(command, routes);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/tilde-newest-zq.*MAL-2026-0094/s);
+  });
+});
+
+// ───────────────── install-vet-manifest-value-dropped — a manifest value that is no range is vetted through the dispatcher
+
+describe('install-vet-manifest-value-dropped', () => {
+  // `drop-evil-zq` is malicious only here, at its newest version: the value of the manifest asks for no range the hook reads.
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/drop-evil-zq': npmDoc('1.5.0'),
+    [OSV]: { osv: { 'drop-evil-zq@1.5.0': ['MAL-2026-0093'] } },
+  };
+  const manifest = (value: string): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-evil-zq': value } }));
+  const isDenied = (command: string): void => {
+    const r = runHook(command, ROUTES);
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '', command).toMatch(/package\.json.*drop-evil-zq|drop-evil-zq.*package\.json/s);
+  };
+  const COMMANDS = ['npm install', 'npm ci', 'pnpm install', 'yarn install', 'bun install'] as const;
+
+  it.each(COMMANDS)('T-03 guard: `%s` with `"^1.0.0"` in the manifest is DENIED, naming the package and the file', (command) => {
+    manifest('^1.0.0');
+    isDenied(command);
+  });
+
+  it.each(COMMANDS)('T-03 `%s` with `"^x"` in the manifest is DENIED, naming the package and the file', (command) => {
+    manifest('^x');
+    isDenied(command);
+  });
+
+  it.each(['~abc', '> 1'])('T-03 `npm install` with `"%s"` in the manifest is DENIED, naming the package and the file', (value) => {
+    manifest(value);
+    isDenied('npm install');
+  });
+
+  it('T-03 guard: `npm install` with `"./x"` in the manifest is not denied', () => {
+    manifest('./x');
+    const r = runHook('npm install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+  });
+});
+
+describe('install-vet-manifest-value-dropped — round 1', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/drop-evil-zq': npmDoc('1.5.0'),
+    [OSV]: { osv: { 'drop-evil-zq@1.5.0': ['MAL-2026-0093'] } },
+  };
+  const manifest = (value: string): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-evil-zq': value } }));
+
+  it('T-06 `yarn install` with `"foo:bar"` in the manifest is DENIED, naming the package and the file', () => {
+    manifest('foo:bar');
+    const r = runHook('yarn install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/package\.json.*drop-evil-zq|drop-evil-zq.*package\.json/s);
+  });
+
+  it('T-06 guard: `yarn install` with `"workspace:*"` in the manifest is not denied (a known limit)', () => {
+    manifest('workspace:*');
+    const r = runHook('yarn install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+  });
 });

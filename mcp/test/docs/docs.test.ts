@@ -850,3 +850,52 @@ describe('install-vet-project-registry-said', () => {
     expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
   });
 });
+
+// ───────────────── install-vet-named-install-manifest — the prose says an install by name also vets the manifest
+
+describe('install-vet-named-install-manifest', () => {
+  /** The "Install-time package vetting" section of docs/hooks.md, with its line breaks flattened. */
+  const vettingSection = (): string => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at).toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    return hooks.slice(at, end === -1 ? undefined : end).replace(/\s+/g, ' ');
+  };
+  /** A sentence that says an install which names a package also reads the manifest, in the plain words a page would use. */
+  const SAYS_NAMED_READS_MANIFEST = /An install that names a package[^]{0,400}installs the project's `package\.json` beside it/;
+
+  it('T-09 docs/hooks.md no longer says a manifest is read "never for a by-name install", and says a by-name install also reads it', () => {
+    const section = vettingSection();
+    expect(section).not.toMatch(/never for a by-name install/);
+    expect(section).toMatch(SAYS_NAMED_READS_MANIFEST);
+  });
+
+  it('T-09 the "what leaves the machine" paragraph says the manifest names also go for an install that names a package', () => {
+    const section = vettingSection();
+    const at = section.indexOf('**What leaves the machine.**');
+    expect(at).toBeGreaterThan(-1);
+    const paragraph = section.slice(at, section.indexOf('**', at + 30));
+    expect(paragraph).toMatch(/(install that names a package|by[- ]name install|install by name|named package)/i);
+  });
+
+  it('T-09 the description in hooks/hooks.json no longer calls the manifest install a "bare npm install", and covers an install by name', () => {
+    const description = String((JSON.parse(read('hooks/hooks.json')) as { description?: unknown }).description ?? '');
+    expect(description).not.toMatch(/a bare npm install/);
+    expect(description).toMatch(/(by name|names a package|named package|install <pkg>|with a package)/i);
+  });
+
+  it('T-09 the SECURITY.md egress row for the public registries says an install by name inside a project sends the manifest names too', () => {
+    const row = read('SECURITY.md')
+      .split('\n')
+      .find((line) => line.startsWith('| `registry.npmjs.org`'));
+    expect(row, 'the egress row of the public registries').toBeDefined();
+    expect(row).toMatch(/install by name inside a project[^|]*installs the manifest too/);
+  });
+
+  it('T-09 skills/guardian-deps/SKILL.md no longer says the manifest is read only for `npm install` "sem nomes"', () => {
+    const skill = read('skills/guardian-deps/SKILL.md');
+    expect(skill).not.toMatch(/`npm install` sem nomes/);
+    expect(skill).toMatch(/`npm install` com ou sem nomes/);
+  });
+});

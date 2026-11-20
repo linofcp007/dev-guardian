@@ -388,13 +388,23 @@ describe("the hooks' known limits, as data", () => {
 describe('the limits of the manifest vetting, as data', () => {
   const WANTED = [
     'archive-like-names',
+    'corepack-manager-download',
+    'dotnet-other-install-forms',
+    'install-candidates-over-ceiling',
+    'install-other-runners',
+    'launcher-flag-words',
+    'lockfile-origin-host-unsaid',
+    'manifest-above-project-root',
     'manifest-lockfile-and-transitive',
     'manifest-not-from-a-registry',
     'manifest-other-managers',
     'manifest-private-scope',
     'manifest-quiet-checks',
+    'manifest-value-not-a-range',
     'manifest-workspace-members',
     'project-default-registry',
+    'tilde-range-word',
+    'yarn-bun-npm-protocol',
   ];
 
   it('T-25 the install-vetting area has a record for each limit, with an example the hook runs — or the reason none can', () => {

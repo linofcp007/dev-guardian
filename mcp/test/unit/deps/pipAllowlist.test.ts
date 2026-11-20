@@ -450,3 +450,61 @@ describe('npm specs that reach a network path', () => {
     },
   );
 });
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-07 — the reason a requirements.txt is refused with
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const REST = ['ken', 'Qq', '88'].join('');
+  const USER = ['dg', 'userzq'].join('');
+  const SECRET = ['tk', 'n1'].join('');
+  const TAIL = 'simple/probe-1.0.0.tar.gz';
+
+  /** What a refusal of `text` says (the one refusal expected), as the tools write it. */
+  const refusalOf = (text: string): string[] => {
+    const dir = makeTempDir('pip-userinfo-');
+    writeFileSync(join(dir, 'requirements.txt'), `${text}\n`);
+    return checkRequirements(dir, ['requirements.txt'], dir, { stopAtFirst: true }).refusals.map(describePipRefusal);
+  };
+  /** The pieces of a credential in `text`, in either letter case. */
+  const leaks = (text: string): string[] => [TOKEN, USER].filter((piece) => text.toLowerCase().includes(piece.toLowerCase()));
+
+  const HIDDEN: Array<[label: string, line: string, scheme: RegExp]> = [
+    ['--index-url, a slash in the credentials', `--index-url https://${TOKEN}/${REST}@host.example/simple`, /\(--index-url, https:\/\/(?!host\.example)/],
+    ['--index-url, a question mark in the credentials', `--index-url https://${TOKEN}?${REST}@host.example/simple`, /\(--index-url, https:\/\/(?!host\.example)/],
+    ['--index-url, a hash in the credentials', `--index-url https://${TOKEN}#${REST}@host.example/simple`, /\(--index-url, https:\/\/(?!host\.example)/],
+    ['--extra-index-url, a slash and an at-sign', `--extra-index-url https://${TOKEN}/@host.example/simple`, /\(--extra-index-url, https:\/\/(?!host\.example)/],
+    ['--index-url, a password that starts with digits', `--index-url https://${USER}:4455/${REST}@host.example/simple`, /\(--index-url, https:\/\/(?!host\.example)/],
+    ['--find-links', `--find-links https://${TOKEN}/${REST}@host.example/links`, /\(--find-links, https:\/\/(?!host\.example)/],
+    ['--trusted-host', `--trusted-host ${TOKEN}/${REST}@host`, /\(--trusted-host, (?!host\b)/],
+    ['a requirement by URL, a backslash in the credentials', `probe @ https://${TOKEN}\\${REST}@host.example/${TAIL}`, /direct reference \(https:\/\/(?!host\.example)/],
+    ['a VCS requirement', `git+https://${TOKEN}/${REST}@host.example/org/repo.git#egg=probe`, /VCS requirement \(git\+https:\/\/(?!host\.example)/],
+    ['an include of a URL', `-r https://${TOKEN}/${REST}@host.example/more.txt`, /include of a URL \(https:\/\/(?!host\.example)/],
+  ];
+
+  it.each(HIDDEN)('T-07 %s: the reason names the scheme and no host, and nothing of the credentials', (_label, line, shape) => {
+    const got = refusalOf(line);
+    expect(got).toHaveLength(1);
+    const said = got.join('\n');
+    expect({ leaks: leaks(said), hostExample: said.includes('host.example') }).toEqual({ leaks: [], hostExample: false });
+    expect(said).toMatch(shape);
+  });
+
+  it('T-07 urlHost: the scheme without a host for an at-sign outside the credentials; the host for a URL whose credentials are well formed', () => {
+    const hidden = urlHost(`https://${TOKEN}/${REST}@host.example/simple`);
+    expect({ leaks: leaks(hidden), hostExample: hidden.includes('host.example') }).toEqual({ leaks: [], hostExample: false });
+    expect(hidden).toMatch(/^https:\/\//);
+    expect(urlHost(`https://user:${SECRET}@host.example/simple`)).toBe('https://host.example');
+    expect(urlHost('https://host.example/simple')).toBe('https://host.example');
+  });
+
+  it.each([
+    ['--index-url', `--index-url https://user:${SECRET}@host.example/simple`, 'requirements.txt:1: index option (--index-url, https://host.example)'],
+    ['--index-url, no credentials', '--index-url https://host.example/simple', 'requirements.txt:1: index option (--index-url, https://host.example)'],
+    ['--trusted-host', `--trusted-host user:${SECRET}@host.example`, 'requirements.txt:1: trusted-host option (--trusted-host, host.example)'],
+    ['a requirement by URL', `probe @ https://user:${SECRET}@host.example/${TAIL}`, 'requirements.txt:1: direct reference (https://host.example)'],
+  ])('T-07 control, %s: the host is still named', (_label, line, said) => {
+    expect(refusalOf(line)).toEqual([said]);
+  });
+});

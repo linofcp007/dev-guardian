@@ -164,11 +164,21 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
     );
     expect([...ids].sort()).toEqual([
       'archive-like-names',
+      'corepack-manager-download',
+      'dotnet-other-install-forms',
+      'install-candidates-over-ceiling',
+      'install-other-runners',
+      'launcher-flag-words',
+      'lockfile-origin-host-unsaid',
+      'manifest-above-project-root',
       'manifest-lockfile-and-transitive',
       'manifest-not-from-a-registry',
       'manifest-other-managers',
       'manifest-private-scope',
+      'manifest-value-not-a-range',
       'manifest-workspace-members',
+      'tilde-range-word',
+      'yarn-bun-npm-protocol',
     ]);
   });
 
@@ -286,6 +296,77 @@ describe('install-vet-lockfile-pins', () => {
       const judgement = evaluateExample(ref, () => answer(example, { ...exampleEnv(ref.limit), ...traced(log) }));
       expect(judgement, judgement.ok ? '' : judgement.message).toEqual({ ok: true });
       expect({ example: label(ref), requests: requestsIn(log) }).toEqual({ example: label(ref), requests: [] });
+    }
+  });
+});
+
+// ───────────────── install-vet-through-corepack — the two records of what stays
+
+describe('install-vet-through-corepack', () => {
+  it('T-06 the records of the corepack download and of the other runners exist, and every example of theirs is one the dispatcher harness runs', () => {
+    const limits = loadKnownLimits();
+    // The harness above iterates HOOKS.run and HOOKS.skip (named by label, as its tests are): an example outside them would never be checked against the dispatcher.
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const id of ['corepack-manager-download', 'install-other-runners']) {
+      const record = limits.find((l) => l.id === id);
+      expect(record, `the data file has no record ${id}`).toBeDefined();
+      expect(record?.area).toBe('install-vetting');
+      const examples = record?.examples ?? [];
+      expect(examples.filter((e) => e.detector === 'hook').length, id).toBeGreaterThan(0);
+      for (const [index, example] of examples.entries()) {
+        expect({ id, detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ id, detector: 'hook', harnessed: true });
+      }
+    }
+  });
+});
+
+// ───────────────── install-vet-unknown-flag-hides-package — the record of the candidate ceiling
+
+describe('install-vet-unknown-flag-hides-package', () => {
+  it('T-12 the record of the candidate ceiling exists, is an install-vetting record with a hook example, and its example is one the dispatcher harness runs', () => {
+    const id = 'install-candidates-over-ceiling';
+    const record = loadKnownLimits().find((l) => l.id === id);
+    expect(record, `the data file has no record ${id}`).toBeDefined();
+    expect(record?.area).toBe('install-vetting');
+    const examples = record?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+    }
+  });
+});
+
+// ───────────────── install-vet-dotnet-forms — the record of the .NET forms that stay unread
+
+describe('install-vet-dotnet-forms', () => {
+  it('T-05 the record of the other .NET install forms exists, is an install-vetting record with hook examples, and its examples are ones the dispatcher harness runs', () => {
+    const id = 'dotnet-other-install-forms';
+    const record = loadKnownLimits().find((l) => l.id === id);
+    expect(record, `the data file has no record ${id}`).toBeDefined();
+    expect(record?.area).toBe('install-vetting');
+    const examples = record?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+    }
+  });
+});
+
+// ───────────────── install-vet-manifest-parent-dir — the record of the manifest above the project root
+
+describe('install-vet-manifest-parent-dir', () => {
+  it('T-07 the record of a package.json above the project root exists, is an install-vetting record with a hook example, and its example is one the dispatcher harness runs', () => {
+    const id = 'manifest-above-project-root';
+    const record = loadKnownLimits().find((l) => l.id === id);
+    expect(record, `the data file has no record ${id}`).toBeDefined();
+    expect(record?.area).toBe('install-vetting');
+    const examples = record?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
     }
   });
 });

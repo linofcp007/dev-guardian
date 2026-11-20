@@ -227,6 +227,8 @@ interface NpmSourceCheck {
 
 /** A lock or manifest is named at most this many times; the refusal needs one. */
 const MAX_NPM_NAMED = 10;
+/** How much of a line is read to see the `@` of a network path as it was written. */
+const MAX_WRITTEN_PATH = 2048;
 /** Directories the workspace-member walk lists, and how deep it goes. */
 const MAX_WORKSPACE_DIRS = 5_000;
 const MAX_WORKSPACE_DEPTH = 8;
@@ -297,7 +299,9 @@ function scanTextLock(file: string, text: string, out: string[]): void {
     if (/^\/\/localhost(?:\/|$)/i.test(spec)) continue;
     for (let i = text.indexOf('\n', last); i >= 0 && i < at; i = text.indexOf('\n', i + 1)) line += 1;
     last = at;
-    out.push(`${file}:${line} (${urlHost(spec)})`);
+    // The text as written on the line: `spec` stops at the first `/`, so an `@` after it is only seen here.
+    const written = /^[^\s"',]*/.exec(text.slice(at, at + MAX_WRITTEN_PATH))?.[0] ?? spec;
+    out.push(`${file}:${line} (${urlHost(written)})`);
     if (out.length >= MAX_NPM_NAMED) return;
   }
 }

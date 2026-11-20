@@ -1350,11 +1350,17 @@ describe('manifest installs — the packages a manifest names are vetted', () =>
     expect(await decideInstallCommand('npm ci', opts(registry({ exists: ['express', 'lodash'] }).fetchImpl))).toBeNull();
   });
 
-  it('T-18 a by-name install does not read the manifest beside it', async () => {
+  it('T-18 a by-name install reads the manifest beside it, and the named package is asked first (install-vet-named-install-manifest)', async () => {
     pkgJson({ crossenv: '*' });
-    const f = fakeFetch({ 'https://registry.npmjs.org/express': npmDoc('4.21.2'), [OSV]: osvClean });
-    expect(await decideInstallCommand('npm install express', opts(f.fetchImpl))).toBeNull();
-    expect(f.calls).toEqual(['https://registry.npmjs.org/express', OSV]);
+    const f = fakeFetch({
+      'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+      'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+      [OSV]: osvClean,
+    });
+    const d = await decideInstallCommand('npm install express', opts(f.fetchImpl));
+    // The manifest names npm's security placeholder for `crossenv`: denied, with the file and the package.
+    expect(d?.deny).toMatch(/package\.json.*crossenv/s);
+    expect(f.calls.filter((u) => u !== OSV)).toEqual(['https://registry.npmjs.org/express', 'https://registry.npmjs.org/crossenv']);
   });
 
   it('T-19 abuse: only package names and versions leave, and only for the public registry and OSV', async () => {
@@ -2814,6 +2820,8 @@ describe('install-vet-project-registry-said', () => {
     /** What makes it silent, applied after the control. */
     silence?: () => void;
     env?: () => Record<string, string>;
+    /** The directory is not known: the by-name install also says its manifest was not read (install-vet-named-install-manifest). */
+    manifestNotRead?: true;
   }
 
   const SILENT: Silent[] = [
@@ -2877,11 +2885,11 @@ describe('install-vet-project-registry-said', () => {
       command: `bun add ${CLEAN}`,
       env: () => ({ BUN_CONFIG_REGISTRY: 'https://npm.third.example/' }),
     },
-    { label: 'npm --prefix: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install --prefix sub ${CLEAN}` },
-    { label: 'npm -C: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install -C sub ${CLEAN}` },
-    { label: 'pnpm -C: the command\'s directory is not known', control: `pnpm add ${CLEAN}`, command: `pnpm add -C sub ${CLEAN}` },
-    { label: 'yarn --cwd: the command\'s directory is not known', control: `yarn add ${CLEAN}`, command: `yarn add --cwd sub ${CLEAN}` },
-    { label: 'bun --cwd: the command\'s directory is not known', control: `bun add ${CLEAN}`, command: `bun add --cwd sub ${CLEAN}` },
+    { label: 'npm --prefix: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install --prefix sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'npm -C: the command\'s directory is not known', control: `npm install ${CLEAN}`, command: `npm install -C sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'pnpm -C: the command\'s directory is not known', control: `pnpm add ${CLEAN}`, command: `pnpm add -C sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'yarn --cwd: the command\'s directory is not known', control: `yarn add ${CLEAN}`, command: `yarn add --cwd sub ${CLEAN}`, manifestNotRead: true },
+    { label: 'bun --cwd: the command\'s directory is not known', control: `bun add ${CLEAN}`, command: `bun add --cwd sub ${CLEAN}`, manifestNotRead: true },
   ];
 
   it.each(SILENT)('T-04 silent for $label — and said without it', async (s) => {
@@ -2895,7 +2903,9 @@ describe('install-vet-project-registry-said', () => {
     expect(control?.context ?? '', 'the control, with nothing that silences it, says the line').toContain(SAYS);
     s.silence?.();
     const d = await decide(s.command, {}, s.env?.() ?? {});
-    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: undefined });
+    // The only line an unknown directory adds is the manifest's own: the registry line stays silent.
+    const notRead = 'dev-guardian: package.json was not read (where the command runs could not be determined) — its packages were not vetted.';
+    expect({ deny: d?.deny, context: d?.context }).toEqual({ deny: undefined, context: s.manifestNotRead === true ? notRead : undefined });
   });
 
   it('T-04 with no such project file the answer is exactly what it was: silent for a clean package, the usual deny for a missing one', async () => {
@@ -3162,5 +3172,1003 @@ describe('install-vet-bare-install-misread', () => {
     await decideInstallCommand('npm install -D false lodash', opts(reg.fetchImpl));
     expect(reg.calls).toContain('https://registry.npmjs.org/lodash');
     expect(reg.calls.filter((u) => u.endsWith('/false'))).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-unknown-flag-hides-package — a candidate word that the registry does not have is a warning
+
+describe('install-vet-unknown-flag-hides-package', () => {
+  it('T-06 `npm install --dgunknown <a name the registry lacks>` is a warning that says it was not denied because of the unknown flag, never a deny', async () => {
+    const reg = registry({ exists: [] });
+    const d = await decideInstallCommand('npm install --dgunknown zz-no-such-pkg', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/zz-no-such-pkg.*not found on the public registry.*not denied:.*unknown flag --dgunknown/s);
+  });
+
+  // `npm --a x … install p` is read as the launcher `npm x` (npm's `exec` alias): no word of it is `p`, only the cost counts.
+  it('T-09 240 KB of `--a x` pairs before the subcommand (with npm exec alias `x`): the decision comes back inside the hook budget, never a deny', async () => {
+    const reg = registry({ exists: [] });
+    const t0 = performance.now();
+    const d = await decideInstallCommand(`npm ${'--a x '.repeat(40_000)}install p`, opts(reg.fetchImpl, { deadlineAt: Date.now() + HOOK_BUDGET_MS }));
+    expect(performance.now() - t0).toBeLessThan(hangBound(HOOK_BUDGET_MS));
+    expect(d?.deny).toBeUndefined();
+  }, 300_000);
+
+  it.each([
+    ['before the subcommand', `npm ${'--a y '.repeat(40_000)}install p`],
+    ['after the subcommand', `npm install ${'--a y '.repeat(40_000)}p`],
+    ['in a launcher', `npx ${'--a y '.repeat(40_000)}p`],
+  ])('T-09 240 KB of `--a y` pairs %s: the decision comes back inside the hook budget, with the candidates warned about, never denied', async (_label, command) => {
+    const reg = registry({ exists: [] });
+    const t0 = performance.now();
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl, { deadlineAt: Date.now() + HOOK_BUDGET_MS }));
+    expect(performance.now() - t0).toBeLessThan(hangBound(HOOK_BUDGET_MS));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/'p': not found on the public registry.*not denied:.*unknown flag --a/s);
+  }, 300_000);
+
+  it('T-06 `npm install --fetch-retries 3 lodash` is not denied', async () => {
+    const reg = registry({ exists: ['lodash'] });
+    const d = await decideInstallCommand('npm install --fetch-retries 3 lodash', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+  });
+
+  // ── Review round 2: the ceiling of candidates never takes the place of a package the command surely names.
+  const candidates = (n: number): string => Array.from({ length: n }, (_, i) => `--a j${String(i)}`).join(' ');
+  const lookedUp = (calls: readonly string[]): string[] => calls.filter((u) => /^https:\/\/registry\.npmjs\.org\/[^/]+$/.test(u));
+  const notVettedCount = (context: string | undefined): number | undefined => {
+    const m = /(\d+) more packages in this command were not vetted/.exec(context ?? '');
+    return m === null ? undefined : Number(m[1]);
+  };
+
+  it.each([
+    ['npm install, 50 candidates', `npm install ${candidates(50)} real`, 1],
+    ['npm install, 60 candidates', `npm install ${candidates(60)} real`, 11],
+    ['npx, 60 candidates', `npx ${candidates(60)} real`, 11],
+  ])('T-10 %s in front of a certainly named package: it is looked up, and the answer says how many candidates were left out', async (_label, command, left) => {
+    const reg = registry({ exists: ['real'] });
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    expect(lookedUp(reg.calls)).toContain('https://registry.npmjs.org/real');
+    expect(notVettedCount(d?.context)).toBe(left);
+  });
+
+  it.each([`npm install ${candidates(50)} real`, `npm install ${candidates(60)} real`, `npx ${candidates(60)} real`])(
+    'T-10 %s: a malicious `real` is DENIED, however many candidates stand in front of it',
+    async (command) => {
+      const reg = registry({ exists: ['real'], malicious: ['real'] });
+      const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+      expect(d?.deny).toMatch(/real/);
+    },
+  );
+
+  it('T-10 guard: 51 distinct candidates and no certain package — exactly 50 are looked up and 1 is said', async () => {
+    const reg = registry({ exists: [] });
+    const d = await decideInstallCommand(`npm install ${candidates(51)}`, opts(reg.fetchImpl));
+    expect(lookedUp(reg.calls)).toHaveLength(50);
+    expect(notVettedCount(d?.context)).toBe(1);
+  });
+
+  it('T-10 guard: a plain line of 51 certain names keeps its behaviour — 50 are looked up and 1 is said', async () => {
+    const names = Array.from({ length: 51 }, (_, i) => `n${String(i)}`);
+    const reg = registry({ exists: names });
+    const d = await decideInstallCommand(`npm install ${names.join(' ')}`, opts(reg.fetchImpl));
+    expect(lookedUp(reg.calls)).toHaveLength(50);
+    expect(notVettedCount(d?.context)).toBe(1);
+  });
+
+  // ── Review round 2: many statements answer within the hook's budget. The cost is per statement, so the bound is the
+  // hang-vs-fine one of the file, and the shape is read against the same number of statements of an install that has no
+  // launcher in it (8 000 `npm i lodash;` cost ~0.15 s here, 8 000 `npx lodash;` ~6 s before the fix).
+  const timed = async (command: string, reg: ReturnType<typeof registry>): Promise<{ ms: number; context: string | undefined; deny: string | undefined }> => {
+    const t0 = performance.now();
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl, { deadlineAt: Date.now() + HOOK_BUDGET_MS }));
+    return { ms: performance.now() - t0, context: d?.context, deny: d?.deny };
+  };
+  it.each([
+    ['6 000 x `npx --a x p;`', 'npx --a x p;'.repeat(6_000), 'npm install --a x p;'.repeat(6_000)],
+    ['3 000 x `npx --a x1 --b y1 p;`', 'npx --a x1 --b y1 p;'.repeat(3_000), 'npm install --a x1 --b y1 p;'.repeat(3_000)],
+    ['8 000 x `npx lodash;`', 'npx lodash;'.repeat(8_000), 'npm install lodash;'.repeat(8_000)],
+  ])('T-11 %s: the decision comes back within the hook budget, not far above the same count of plain installs, and is no silent allow', async (_label, command, reference) => {
+    const refMs = Math.min(...[await timed(reference, registry({ exists: ['lodash'] })), await timed(reference, registry({ exists: ['lodash'] })), await timed(reference, registry({ exists: ['lodash'] }))].map((r) => r.ms));
+    const reg = registry({ exists: ['lodash'] });
+    const r = await timed(command, reg);
+    expect(r.ms, `${_label}: ${r.ms.toFixed(0)} ms against ${refMs.toFixed(0)} ms for the plain installs`).toBeLessThan(hangBound(HOOK_BUDGET_MS));
+    expect(r.ms, `${_label}: ${r.ms.toFixed(0)} ms against ${refMs.toFixed(0)} ms for the plain installs`).toBeLessThan(Math.max(20 * refMs, 500));
+    expect(r.deny).toBeUndefined();
+    // Every verdict is there, or a line says that part of the command was not vetted.
+    const said = /'p': not found on the public registry/.test(r.context ?? '') || /not vetted|time budget|not verified/.test(r.context ?? '') || command.includes('lodash');
+    expect(said, 'a silent allow').toBe(true);
+  }, 600_000);
+});
+
+// ───────────────── install-vet-named-install-manifest — an install that names a package also vets the manifest
+
+describe('install-vet-named-install-manifest', () => {
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const registryDoc = (name: string): string => `https://registry.npmjs.org/${name}`;
+
+  it('T-04 `npm install <clean>` beside a manifest that names a package with a malware advisory is DENIED, naming the file and that package', async () => {
+    pkgJson({ express: '^4.21.0', 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['express', 'evil-pkg', 'lodash'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install lodash', opts(reg.fetchImpl));
+    expect(d?.deny).toMatch(/package\.json/);
+    expect(d?.deny).toMatch(/evil-pkg/);
+    expect(d?.deny).toMatch(/MAL-2026-77/);
+    // The package the user named is clean, and a clean package of the manifest is not accused.
+    expect(d?.deny).not.toMatch(/lodash|express/);
+  });
+
+  it('T-04 a typosquat in the manifest warns (file, package, the name it resembles) beside a by-name install, and does not deny', async () => {
+    pkgJson({ lodahs: '^1.0.0' });
+    const reg = registry({ exists: ['lodahs', 'express'] });
+    const d = await decideInstallCommand('npm install express', opts(reg.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/package\.json/);
+    expect(d?.context).toMatch(/lodahs/);
+    expect(d?.context).toMatch(/lodash/);
+  });
+
+  it('T-04 a clean manifest beside a by-name install is silence, and its packages were looked up', async () => {
+    pkgJson({ express: '^4.21.0', 'left-pad': '^1.3.0' });
+    const reg = registry({ exists: ['express', 'left-pad', 'lodash'] });
+    expect(await decideInstallCommand('npm install lodash', opts(reg.fetchImpl))).toBeNull();
+    expect(reg.calls, 'the manifest is what is vetted beside the named package').toContain(registryDoc('left-pad'));
+    expect(reg.calls).toContain(registryDoc('lodash'));
+  });
+
+  it('T-04 a named package the registry does not have is still DENIED as today, manifest or not', async () => {
+    pkgJson({ express: '^4.21.0' });
+    const reg = registry({ exists: ['express'] });
+    const d = await decideInstallCommand('npm install react-magic-form-helperz', opts(reg.fetchImpl));
+    expect(d?.deny).toMatch(/react-magic-form-helperz/);
+  });
+
+  it.each(['npm install --prefix other p', 'cd "$WHERE" && npm install p'])(
+    'T-05 %s: `p` is vetted and one line says package.json was not read, with the reason',
+    async (command) => {
+      pkgJson({ crossenv: '*' });
+      mkdirSync(join(project, 'other'));
+      writeFileSync(join(project, 'other', 'package.json'), JSON.stringify({ dependencies: { crossenv: '*' } }));
+      const reg = registry({ exists: ['p', 'crossenv'], malicious: ['crossenv'] });
+      const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+      expect(reg.calls, 'the named package is vetted').toContain(registryDoc('p'));
+      expect(reg.calls, 'no manifest was guessed at').not.toContain(registryDoc('crossenv'));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toMatch(/package\.json was not read \(where the command runs could not be determined\)/);
+    },
+  );
+
+  it('T-06 the named package is asked first, and has its verdict while the manifest lookups never answer: the line says what was left, nothing denies', async () => {
+    pkgJson({ alpha: '^1.0.0', beta: '^1.0.0' });
+    // `lodahs` is one edit from `lodash`: the warning about it is the named package's verdict.
+    const f = fakeFetch({
+      [registryDoc('lodahs')]: npmDoc('1.0.0'),
+      [registryDoc('alpha')]: { hang: true },
+      [registryDoc('beta')]: { hang: true },
+      [OSV]: osvClean,
+    });
+    const d = await decideInstallCommand('npm install lodahs', opts(f.fetchImpl, { budgetMs: 300, popular: { npm: ['lodash'] } }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toMatch(/lodahs.*lodash|lodash.*lodahs/s);
+    expect(d?.context).toMatch(/could not vet 2 packages of package\.json/);
+    const first = (name: string): number => f.calls.indexOf(registryDoc(name));
+    expect(first('alpha'), 'the documents of the manifest were asked').toBeGreaterThan(-1);
+    expect(first('lodahs')).toBeGreaterThan(-1);
+    expect(first('lodahs')).toBeLessThan(first('alpha'));
+    expect(first('lodahs')).toBeLessThan(first('beta'));
+  });
+
+  describe('T-07 what leaves the machine', () => {
+    /** The fetch of `reg`, recording the headers of every request. */
+    const withHeaders = (reg: ReturnType<typeof registry>): { fetchImpl: typeof fetch; headers: string[] } => {
+      const headers: string[] = [];
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        new Headers(init?.headers).forEach((value, key) => headers.push(`${key}: ${value}`));
+        return reg.fetchImpl(input, init);
+      }) as typeof fetch;
+      return { fetchImpl, headers };
+    };
+    /** Every registry document asked and every package name OSV was asked about, as one set of strings. */
+    const requested = (reg: ReturnType<typeof registry>): Set<string> => {
+      const out = new Set<string>();
+      for (const url of reg.calls) if (url !== OSV) out.add(url);
+      for (const body of reg.bodies) {
+        const queries = (JSON.parse(body) as { queries?: Array<{ package?: { name?: string } }> }).queries ?? [];
+        for (const q of queries) out.add(`osv:${q.package?.name ?? ''}`);
+      }
+      return out;
+    };
+
+    const PUBLIC = ['express', 'lodash', 'left-pad', 'chalk', 'zod', 'react', 'debug'];
+    const PRIVATE = ['@acme/billing', '@acme/ui', '@corp/internal-tool'];
+    /** A small deterministic generator, so a failure names the manifest that caused it. */
+    const manifestsOf = (count: number): Array<Record<string, string>> => {
+      let seed = 20261119;
+      const next = (n: number): number => {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        return Math.floor(seed / 65536) % n;
+      };
+      return Array.from({ length: count }, () => {
+        const deps: Record<string, string> = {};
+        for (const name of [...PUBLIC, ...PRIVATE]) if (next(2) === 0) deps[name] = '^1.0.0';
+        deps[PUBLIC[next(PUBLIC.length)] ?? 'express'] = '^1.0.0';
+        deps[PRIVATE[next(PRIVATE.length)] ?? '@acme/ui'] = '^2.0.0';
+        return deps;
+      });
+    };
+
+    it.each(manifestsOf(6).map((deps, i) => [i, deps] as const))(
+      'T-07 manifest %i: the requests of `npm install named` are those of a bare `npm install`, plus the named package; no credential, no private scope',
+      async (_i, deps) => {
+        writeFileSync(
+          join(home, '.npmrc'),
+          ['@acme:registry=https://npm.acme.example/', '@corp:registry=https://npm.corp.example/', '//npm.acme.example/:_authToken=SECRET-TOKEN-123', ''].join('\n'),
+        );
+        pkgJson(deps);
+        const exists = [...PUBLIC, ...PRIVATE, 'named-pkg'];
+        const bare = registry({ exists });
+        const bareSent = withHeaders(bare);
+        await decideInstallCommand('npm install', opts(bareSent.fetchImpl));
+        const byName = registry({ exists });
+        const byNameSent = withHeaders(byName);
+        await decideInstallCommand('npm install named-pkg', opts(byNameSent.fetchImpl));
+
+        const allowed = new Set([...requested(bare), registryDoc('named-pkg'), 'osv:named-pkg']);
+        const extra = [...requested(byName)].filter((r) => !allowed.has(r));
+        expect({ deps, extra }).toEqual({ deps, extra: [] });
+        // Non-vacuous: the manifest IS read, so every public dependency it has is asked of the registry.
+        for (const name of PUBLIC.filter((n) => n in deps)) expect(byName.calls, name).toContain(registryDoc(name));
+        const sent = [...byName.calls, ...byName.bodies, ...byNameSent.headers].join('\n');
+        expect(sent).not.toMatch(/acme|corp\.example|@corp|SECRET-TOKEN/);
+        expect(byNameSent.headers.filter((h) => /^(authorization|cookie|proxy-authorization):/i.test(h))).toEqual([]);
+      },
+    );
+  });
+});
+
+// ───────────────── install-vet-manifest-parent-dir — the manifest a manager installs is the nearest one above the command
+
+describe('install-vet-manifest-parent-dir', () => {
+  const dirOf = (rel: string, base: string = project): string => join(base, ...rel.split('/'));
+  const pkgJson = (deps: Record<string, string>, dir: string = project, extra: Record<string, unknown> = {}): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps, ...extra }));
+  };
+  /** The options of a hook call that runs in `cwd` of a project rooted at `root`, as the dispatcher gives them. */
+  const at = (fetchImpl: typeof fetch, cwd: string, root: string = project): HookVetOptions => opts(fetchImpl, { cwd, projectDir: root });
+  const doc = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const BARE = ['npm install', 'npm ci', 'pnpm install', 'yarn', 'yarn install', 'bun install'];
+  const BY_NAME = ['npm install express', 'pnpm add express', 'yarn add express', 'bun add express'];
+  const FOLDERS = ['sub', 'sub/deeper'];
+  const lines = (context: string | undefined): string[] => (context ?? '').split('\n');
+
+  /** A package-lock.json of lockfileVersion 3 for a project whose one direct dependency is express. */
+  const lockOf = (transitive: string, version: string): string =>
+    JSON.stringify({
+      name: 'fixture-app',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } },
+        'node_modules/express': { version: '4.21.2', resolved: 'https://registry.npmjs.org/express/-/express-4.21.2.tgz' },
+        [`node_modules/${transitive}`]: { version, resolved: `https://registry.npmjs.org/${transitive}/-/${transitive}-${version}.tgz` },
+      },
+    });
+  /** The registry and OSV of the lockfile tests: every document answers, OSV flags `bad-transitive@1.0.0`, and the requests are kept. */
+  function lockNet(): { fetchImpl: typeof fetch; registry: string[]; asked: string[] } {
+    const registryCalls: string[] = [];
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => (p === 'bad-transitive@1.0.0' ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      if (/^https:\/\/registry\.npmjs\.org\/[^/]+$/.test(url)) {
+        registryCalls.push(url);
+        return json(npmDoc('1.0.0').body);
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, registry: registryCalls, asked };
+  }
+
+  // ── T-01: the nearest package.json above the command is the manifest
+
+  it.each(FOLDERS.flatMap((rel) => BARE.map((command) => [command, rel] as const)))(
+    'T-01 `%s` run in %s (no package.json there): the root manifest that names a malicious package is DENIED',
+    async (command, rel) => {
+      mkdirSync(dirOf(rel), { recursive: true });
+      pkgJson({ express: '^4.21.0', 'evil-pkg': '^1.0.0' });
+      const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+      const d = await decideInstallCommand(command, at(reg.fetchImpl, dirOf(rel)));
+      expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+      expect(d?.deny).not.toMatch(/express/);
+    },
+  );
+
+  it.each(FOLDERS.flatMap((rel) => BY_NAME.map((command) => [command, rel] as const)))(
+    'T-01 by name — `%s` run in %s (no package.json there): the root manifest that names a malicious package is DENIED',
+    async (command, rel) => {
+      mkdirSync(dirOf(rel), { recursive: true });
+      pkgJson({ 'evil-pkg': '^1.0.0' });
+      const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+      const d = await decideInstallCommand(command, at(reg.fetchImpl, dirOf(rel)));
+      expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+    },
+  );
+
+  it.each(FOLDERS.flatMap((rel) => BARE.map((command) => [command, rel] as const)))(
+    'T-01 `%s` run in %s with a clean root manifest: the dependencies of the root manifest are asked about',
+    async (command, rel) => {
+      mkdirSync(dirOf(rel), { recursive: true });
+      pkgJson({ express: '^4.21.0', 'left-pad': '^1.3.0' });
+      const reg = registry({ exists: ['express', 'left-pad'] });
+      expect(await decideInstallCommand(command, at(reg.fetchImpl, dirOf(rel)))).toBeNull();
+      expect(reg.calls).toContain(doc('express'));
+      expect(reg.calls).toContain(doc('left-pad'));
+    },
+  );
+
+  // ── T-02: what was right stays (guards — green before the fix and after it)
+
+  it('T-02 guard: a package.json in the directory of the command is the one read, and the root one is not', async () => {
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    pkgJson({ 'left-pad': '^1.3.0' }, dirOf('sub'));
+    const reg = registry({ exists: ['evil-pkg', 'left-pad'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub')))).toBeNull();
+    expect(reg.calls).toContain(doc('left-pad'));
+    expect(reg.calls).not.toContain(doc('evil-pkg'));
+  });
+
+  it.each(['npm install --prefix sub', 'pnpm -C sub install', 'yarn --cwd sub install'])(
+    'T-02 guard: `%s` says package.json was not read, and reads none',
+    async (command) => {
+      pkgJson({ 'evil-pkg': '^1.0.0' });
+      pkgJson({ 'evil-pkg': '^1.0.0' }, dirOf('sub'));
+      const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+      const d = await decideInstallCommand(command, at(reg.fetchImpl, project));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toMatch(/package\.json was not read \(where the command runs could not be determined\)/);
+      expect(reg.calls).toEqual([]);
+    },
+  );
+
+  it('T-02 guard: no package.json from the directory of the command up to the project root is silence', async () => {
+    mkdirSync(dirOf('sub/deeper'), { recursive: true });
+    const reg = registry({});
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub/deeper')))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-02 guard: a command directory outside the project reads that directory alone', async () => {
+    const outside = dirOf('outside');
+    const root = dirOf('inside');
+    mkdirSync(root, { recursive: true });
+    mkdirSync(dirOf('sub', outside), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, outside);
+    // The project root is `inside`; the command runs in `outside`, which has a package.json of its own.
+    const own = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const denied = await decideInstallCommand('npm install', at(own.fetchImpl, outside, root));
+    expect(denied?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg/s);
+    // Below that directory nothing is read: it has no package.json, and the one above it is not looked for.
+    const below = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(below.fetchImpl, dirOf('sub', outside), root))).toBeNull();
+    expect(below.calls).toEqual([]);
+  });
+
+  // ── T-04: the lockfile is looked for from the directory of the manifest found
+
+  it('T-04 the lockfile of the root is read for a command in sub/: what it pins goes to OSV, and the registry is not asked about the covered dependency', async () => {
+    mkdirSync(dirOf('sub'), { recursive: true });
+    pkgJson({ express: '^4.21.0' });
+    writeFileSync(join(project, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, dirOf('sub')))).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
+  });
+
+  it('T-04 a malicious version the lockfile of the root pins is DENIED for a command in sub/, naming the lockfile', async () => {
+    mkdirSync(dirOf('sub'), { recursive: true });
+    pkgJson({ express: '^4.21.0' });
+    writeFileSync(join(project, 'package-lock.json'), lockOf('bad-transitive', '1.0.0'));
+    const net = lockNet();
+    const d = await decideInstallCommand('npm ci', at(net.fetchImpl, dirOf('sub')));
+    expect(d?.deny ?? '(no deny)').toMatch(/package-lock\.json pins 'bad-transitive@1\.0\.0': .*MAL-2026-77/);
+  });
+
+  it('T-04 a package.json above that cannot be read gives the line "was not read", with its path from the directory of the command', async () => {
+    mkdirSync(dirOf('sub'), { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{ "dependencies": ');
+    const reg = registry({});
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub')));
+    expect(d?.deny).toBeUndefined();
+    expect(lines(d?.context)).toHaveLength(1);
+    expect(d?.context ?? '(no context)').toMatch(/^dev-guardian: \.\.\/package\.json was not read \(not valid JSON\) — its packages were not vetted\.$/);
+  });
+
+  // ── T-05: the climb stops at the project root (guard — green before the fix and after it)
+
+  it('T-05 guard: a package.json only above the project root is not read, for a command below the root', async () => {
+    const repo = dirOf('repo');
+    mkdirSync(dirOf('sub', repo), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('sub', repo), repo))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  // ── T-06: a node_modules in the way, and a workspace
+
+  it('T-06 sub/ with an empty node_modules and no package.json: the root manifest is read', async () => {
+    mkdirSync(dirOf('sub/node_modules'), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('yarn install', at(reg.fetchImpl, dirOf('sub')));
+    expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-06 a workspace run from tools/, which is no member: the manifest of the root is read, and the members are not', async () => {
+    mkdirSync(dirOf('tools'), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, project, { workspaces: ['packages/*'] });
+    pkgJson({ 'member-only': '^1.0.0' }, dirOf('packages/web'));
+    const reg = registry({ exists: ['evil-pkg', 'member-only'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, dirOf('tools')));
+    expect(d?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg.*MAL-2026-77/s);
+    expect(reg.calls).not.toContain(doc('member-only'));
+  });
+
+  // ── T-08: a session opened in a subfolder of a git repository — the repository's root is the project's
+
+  const GIT_AS = [
+    ['a directory', (repo: string) => mkdirSync(join(repo, '.git'))],
+    ['a file (worktree, submodule)', (repo: string) => writeFileSync(join(repo, '.git'), 'gitdir: ../elsewhere/.git/worktrees/x\n')],
+  ] as const;
+
+  it.each(GIT_AS)('T-08 .git is %s in repo/: `npm install` in repo/docs/ (the session folder) reads the manifest of repo/ and names it ../package.json', async (_what, mkGit) => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    mkGit(repo);
+    pkgJson({ express: '^4.21.0', 'evil-pkg': '^1.0.0' }, repo);
+    const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, docs, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it.each(GIT_AS)('T-08 .git is %s in repo/: `npm install <clean name>` in repo/docs/ reads the manifest of repo/', async (_what, mkGit) => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    mkGit(repo);
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install express', at(reg.fetchImpl, docs, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-08 .git in repo/: the lockfile of repo/ is read for a command in repo/docs/ — its pins go to OSV', async () => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    mkdirSync(join(repo, '.git'));
+    pkgJson({ express: '^4.21.0' }, repo);
+    writeFileSync(join(repo, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, docs, docs))).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
+  });
+
+  it('T-08 guard: with no .git in any ancestor, a manifest above the project directory is not read', async () => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    mkdirSync(docs, { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, docs, docs))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-08 guard: the directory that holds .git is the home directory: its package.json is not read', async () => {
+    const userHome = dirOf('userhome');
+    const docs = dirOf('docs', userHome);
+    mkdirSync(docs, { recursive: true });
+    mkdirSync(join(userHome, '.git'));
+    pkgJson({ 'evil-pkg': '^1.0.0' }, userHome);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', opts(reg.fetchImpl, { cwd: docs, projectDir: docs, homeDir: userHome }))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  /** A repository with a malicious manifest at its root and a project directory `levels` below it. */
+  const deepRepo = (levels: number): string => {
+    const repo = dirOf('repo');
+    mkdirSync(join(repo, '.git'), { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    const deep = dirOf(Array.from({ length: levels }, (_, i) => `d${String(i)}`).join('/'), repo);
+    mkdirSync(deep, { recursive: true });
+    return deep;
+  };
+
+  it('T-08 guard: a .git more than 16 directories up is not reached', async () => {
+    const far = deepRepo(16);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, far, far))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-08 a .git 16 directories up (the project directory included) is reached', async () => {
+    const near = deepRepo(15);
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, near, near));
+    expect(d?.deny ?? '(no deny)').toMatch(/package\.json names 'evil-pkg/);
+  });
+
+  // ── T-09: a folder of the repository other than the session's is inside the project
+
+  /** `repo/` is a git repository with a malicious manifest; the session is in `repo/docs/`; `repo/src/` is a sibling folder. */
+  const sessionInDocs = (): { repo: string; docs: string; src: string } => {
+    const repo = dirOf('repo');
+    const docs = dirOf('docs', repo);
+    const src = dirOf('src', repo);
+    mkdirSync(docs, { recursive: true });
+    mkdirSync(src, { recursive: true });
+    mkdirSync(join(repo, '.git'));
+    pkgJson({ 'evil-pkg': '^1.0.0' }, repo);
+    return { repo, docs, src };
+  };
+
+  it.each(['npm install', 'npm install express'])('T-09 `%s` run in repo/src/ with the session in repo/docs/: the manifest of repo/ is read, named ../package.json', async (command) => {
+    const { docs, src } = sessionInDocs();
+    const reg = registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand(command, at(reg.fetchImpl, src, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-09 `cd ../src && npm install` from repo/docs/ (the session): the manifest of repo/ is read, named ../package.json', async () => {
+    const { docs } = sessionInDocs();
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    const d = await decideInstallCommand('cd ../src && npm install', at(reg.fetchImpl, docs, docs));
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  it('T-09 guard: a command directory outside the repository reads only that directory', async () => {
+    const { docs } = sessionInDocs();
+    const other = dirOf('other');
+    mkdirSync(other, { recursive: true });
+    pkgJson({ 'evil-pkg': '^1.0.0' });
+    const reg = registry({ exists: ['evil-pkg'], malicious: ['evil-pkg'] });
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, other, docs))).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-update-verbs — an update verb vets the manifest past what the lockfile pins
+
+describe('install-vet-update-verbs', () => {
+  const doc = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  /** A package-lock.json (v3) of a project whose one direct dependency, `d`, is pinned at 1.0.0. */
+  const lockPinningD = (): void =>
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: { d: '^1.0.0' } },
+          'node_modules/d': { version: '1.0.0', resolved: 'https://registry.npmjs.org/d/-/d-1.0.0.tgz' },
+        },
+      }),
+    );
+  /** The registry (every document answers 1.0.0, except `missing`) and OSV (`flagged` name@version pairs are malware); every request is kept. */
+  function net(spec: { missing?: string[]; flagged?: string[] } = {}): { fetchImpl: typeof fetch; registry: string[]; asked: string[] } {
+    const registryCalls: string[] = [];
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => ((spec.flagged ?? []).includes(p) ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      const m = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+      if (m !== null) {
+        registryCalls.push(url);
+        return (spec.missing ?? []).includes(decodeURIComponent(m[1] ?? '')) ? json({ error: 'Not found' }, 404) : json(npmDoc('1.0.0').body);
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, registry: registryCalls, asked };
+  }
+
+  it('T-05 guard: `npm install` with a lockfile that pins the direct dependency `d` does not ask the registry about `d`; the pin goes to OSV', async () => {
+    pkgJson({ d: '^1.0.0' });
+    lockPinningD();
+    const n = net();
+    expect(await decideInstallCommand('npm install', opts(n.fetchImpl))).toBeNull();
+    expect(n.registry).toEqual([]);
+    expect(n.asked).toEqual(['d@1.0.0']);
+  });
+
+  it('T-05 `npm update` with a lockfile that pins `d` at 1.0.0 asks the registry about `d` anyway, and OSV still receives the pinned version', async () => {
+    pkgJson({ d: '^1.0.0' });
+    lockPinningD();
+    const n = net();
+    expect(await decideInstallCommand('npm update', opts(n.fetchImpl))).toBeNull();
+    expect(n.registry).toContain(doc('d'));
+    expect(n.asked).toContain('d@1.0.0');
+  });
+
+  // The lockfile each manager reads, all recording the direct dependency `d` (^1.0.0) pinned at 1.0.0.
+  const INTEGRITY = `sha512-${'A'.repeat(86)}==`;
+  type LockManager = 'npm' | 'pnpm' | 'yarn' | 'bun';
+  const LOCKS: Record<LockManager, { file: string; text: () => string }> = {
+    npm: { file: 'package-lock.json', text: () => JSON.stringify({ name: 'fixture-app', version: '1.0.0', lockfileVersion: 3, requires: true, packages: { '': { name: 'fixture-app', version: '1.0.0', dependencies: { d: '^1.0.0' } }, 'node_modules/d': { version: '1.0.0', resolved: 'https://registry.npmjs.org/d/-/d-1.0.0.tgz' } } }) },
+    pnpm: {
+      file: 'pnpm-lock.yaml',
+      text: () =>
+        ["lockfileVersion: '9.0'", '', 'settings:', '  autoInstallPeers: true', '  excludeLinksFromLockfile: false', '', 'importers:', '', '  .:', '    dependencies:', '      d:', '        specifier: ^1.0.0', '        version: 1.0.0', '', 'packages:', '', '  d@1.0.0:', `    resolution: {integrity: ${INTEGRITY}}`, '', 'snapshots:', '', '  d@1.0.0: {}', ''].join('\n'),
+    },
+    yarn: {
+      file: 'yarn.lock',
+      text: () =>
+        ['# THIS IS AN AUTOGENERATED FILE. DO NOT EDIT THIS FILE DIRECTLY.', '# yarn lockfile v1', '', '', 'd@^1.0.0:', '  version "1.0.0"', `  resolved "https://registry.yarnpkg.com/d/-/d-1.0.0.tgz#${'0'.repeat(40)}"`, `  integrity ${INTEGRITY}`, ''].join('\n'),
+    },
+    bun: {
+      file: 'bun.lock',
+      text: () =>
+        ['{', '  "lockfileVersion": 1,', '  "workspaces": {', '    "": {', '      "name": "fixture-app",', '      "dependencies": {', '        "d": "^1.0.0",', '      },', '    },', '  },', '  "packages": {', `    "d": ["d@1.0.0", "", {}, "${INTEGRITY}"],`, '  }', '}', ''].join('\n'),
+    },
+  };
+
+  it.each<[string, LockManager]>([
+    ['pnpm update', 'pnpm'],
+    ['pnpm up', 'pnpm'],
+    ['yarn upgrade', 'yarn'],
+    ['yarn up d', 'yarn'],
+    ['bun update', 'bun'],
+  ])('T-05 `%s` with the lockfile of %s that pins `d` asks the registry about `d`, and OSV still receives the pin', async (command, manager) => {
+    pkgJson({ d: '^1.0.0' });
+    writeFileSync(join(project, LOCKS[manager].file), LOCKS[manager].text());
+    const n = net();
+    expect(await decideInstallCommand(command, opts(n.fetchImpl))).toBeNull();
+    expect(n.registry).toContain(doc('d'));
+    expect(n.asked).toContain('d@1.0.0');
+  });
+
+  it.each<[string, LockManager]>([
+    ['pnpm install', 'pnpm'],
+    ['yarn install', 'yarn'],
+    ['bun install', 'bun'],
+    ['yarn up', 'yarn'],
+    ['npm dedupe', 'npm'],
+    ['npm prune', 'npm'],
+    ['npm audit fix', 'npm'],
+    ['pnpm dedupe', 'pnpm'],
+    ['yarn dedupe', 'yarn'],
+  ])('T-05 guard: `%s` obeys the lockfile of %s as an install does: the registry is not asked about `d`, OSV receives the pin', async (command, manager) => {
+    pkgJson({ d: '^1.0.0' });
+    writeFileSync(join(project, LOCKS[manager].file), LOCKS[manager].text());
+    const n = net();
+    expect(await decideInstallCommand(command, opts(n.fetchImpl))).toBeNull();
+    expect(n.registry).toEqual([]);
+    expect(n.asked).toEqual(['d@1.0.0']);
+  });
+
+  it.each(['bash', 'powershell'] as const)(
+    'T-05 `npm install; npm update` decided in ONE call (%s): the install obeys the lockfile, and the update statement still asks the registry about `d`',
+    async (shell) => {
+      pkgJson({ d: '^1.0.0' });
+      lockPinningD();
+      const n = net();
+      expect(await decideInstallCommand('npm install; npm update', opts(n.fetchImpl, { shell }))).toBeNull();
+      expect(n.registry).toContain(doc('d'));
+      expect(n.asked).toContain('d@1.0.0');
+    },
+  );
+
+  it('T-05 `npm install; npm<no-break space>update` (PowerShell reads the second statement, the POSIX reading does not): it is a different manifest install from the first, and still asks the registry about `d`', async () => {
+    pkgJson({ d: '^1.0.0' });
+    lockPinningD();
+    const n = net();
+    expect(await decideInstallCommand('npm install; npm update', opts(n.fetchImpl, { shell: 'powershell' }))).toBeNull();
+    expect(n.registry).toContain(doc('d'));
+  });
+
+  it('T-05 `npm update` with a lockfile, where the registry says `d` is malicious by name, is DENIED naming the file and `d`', async () => {
+    pkgJson({ d: '^1.0.0' });
+    lockPinningD();
+    // OSV flags every `d@1.0.0` it is asked about: the version the registry gives for `d` and the one the lockfile pins.
+    const n = net({ flagged: ['d@1.0.0'] });
+    const d = await decideInstallCommand('npm update', opts(n.fetchImpl));
+    expect(d?.deny ?? '(no deny)').toMatch(/'d(@1\.0\.0)?'/);
+    expect(d?.deny).toMatch(/MAL-2026-77/);
+    expect(n.registry).toContain(doc('d'));
+  });
+
+  it('T-06 `npm update <a name the registry does not have>` asks nothing about that name and denies nothing for it; the manifest is vetted', async () => {
+    pkgJson({ express: '^4.21.0' });
+    const n = net({ missing: ['ghost-pkg-zz'] });
+    const d = await decideInstallCommand('npm update ghost-pkg-zz', opts(n.fetchImpl));
+    expect(d?.deny).toBeUndefined();
+    expect(n.registry).not.toContain(doc('ghost-pkg-zz'));
+    expect(n.asked.some((p) => p.startsWith('ghost-pkg-zz@'))).toBe(false);
+    expect(n.registry, 'the manifest is what is vetted').toContain(doc('express'));
+  });
+});
+
+// ───────────────── pkgvet-yarn-berry-npm-protocol — the decision for `key@npm:rest` with Yarn and bun
+
+describe('pkgvet-yarn-berry-npm-protocol', () => {
+  it('T-04 `yarn add alias@npm:real`: `real` exists, `alias` does not — not denied, the warning says both readings', async () => {
+    const reg = registry({ exists: ['real-zq'] });
+    const d = await decideInstallCommand('yarn add alias-zq@npm:real-zq', opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toContain('alias-zq');
+    expect(d?.context).toContain('not found on the public registry');
+    expect(d?.context).toMatch(/not denied:.*real-zq/s);
+  });
+
+  it('T-04 `yarn add evil@npm:1.x` with `evil` on the registry is not denied for `1.x` not existing', async () => {
+    const reg = registry({ exists: ['evil-pkg-zq'] });
+    const d = await decideInstallCommand('yarn add evil-pkg-zq@npm:1.x', opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+  });
+
+  it('T-04 a malicious package is denied under either name of `key@npm:rest`', async () => {
+    const asKey = registry({ exists: ['evil-pkg-zq'], malicious: ['evil-pkg-zq'] });
+    const k = await decideInstallCommand('yarn add evil-pkg-zq@npm:^1', opts(asKey.fetchImpl, { popular: {} }));
+    expect(k?.deny ?? '', 'the key is the package').toMatch(/evil-pkg-zq/);
+    const asRest = registry({ exists: ['alias-zq', 'bad-zq'], malicious: ['bad-zq'] });
+    const r = await decideInstallCommand('yarn add alias-zq@npm:bad-zq', opts(asRest.fetchImpl, { popular: {} }));
+    expect(r?.deny ?? '', 'the rest is the other reading').toMatch(/bad-zq/);
+  });
+
+  it('T-04 `yarn add evil@npm:<version>`: the version asked of the key goes to OSV, so a malicious version is denied and another is not', async () => {
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => (p === 'evil-pkg-zq@1.0.0' ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      if (url === 'https://registry.npmjs.org/evil-pkg-zq') {
+        return json({ 'dist-tags': { latest: '2.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.0.0': {}, '2.0.0': {} } });
+      }
+      return json({ error: 'Not found' }, 404);
+    }) as typeof fetch;
+    const bad = await decideInstallCommand('yarn add evil-pkg-zq@npm:1.0.0', opts(fetchImpl, { popular: {} }));
+    expect(bad?.deny ?? '', 'the malicious version is the one asked').toMatch(/evil-pkg-zq/);
+    const other = await decideInstallCommand('yarn add evil-pkg-zq@npm:2.0.0', opts(fetchImpl, { popular: {} }));
+    expect(other?.deny).toBeUndefined();
+    expect(asked).toContain('evil-pkg-zq@2.0.0');
+  });
+
+  // ── round 1 of the review (T-06)
+
+  it('T-06 a command with 20 words `kN@npm:latest`, every name missing: the reason of the two readings is said once, and the context stays short', async () => {
+    const words = Array.from({ length: 20 }, (_, i) => `k${i}-zq@npm:latest`);
+    const reg = registry();
+    const d = await decideInstallCommand(`yarn add ${words.join(' ')}`, opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    const context = d?.context ?? '';
+    expect(context).toContain('and 19 more words like it');
+    expect(context.length).toBeLessThan(10_000);
+  });
+});
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-03 — a registry= whose comment cut hides an at-sign
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const REST = ['ken', 'Qq', '88'].join('');
+  const CLEAN = 'dgprobe-clean';
+  const MISSING = 'dgprobe-missing';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+
+  /** The line the project default registry is said with: the file by its name, the registry by scheme and host (or no host). */
+  const lineFor = (host: string | null): string =>
+    `dev-guardian: the project's .npmrc sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+
+  /** The public registry has every name but MISSING; OSV calls none malicious; any other URL is an error. */
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    if (url === OSV) return json({ results: (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries.map(() => ({})) });
+    const doc = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+    if (doc !== null) return doc[1] === MISSING ? json({}, 404) : json(npmDoc('1.0.0').body);
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+
+  async function decideWith(registryLine: string, name: string): Promise<string> {
+    writeFileSync(join(project, 'package.json'), MANIFEST);
+    writeFileSync(join(project, '.npmrc'), `${registryLine}\n`);
+    const d = await decideInstallCommand(`npm install ${name}`, opts(fetchImpl, { env: { GUARDIAN_OFFLINE: '0' } }));
+    expect(d?.deny).toBeUndefined();
+    return d?.context ?? '';
+  }
+  const leaked = (text: string): boolean => text.includes(TOKEN) || text.includes(TOKEN.toLowerCase());
+
+  const HIDDEN: Array<[string, string]> = [
+    ['a hash inside the credentials', `registry=https://${TOKEN}#${REST}@host.example/`],
+    ['a semicolon inside the credentials', `registry=https://${TOKEN};${REST}@host.example/`],
+  ];
+
+  it.each(HIDDEN)('T-03 %s: the line of the default registry and the custom registry warning say no host and nothing of the token', async (_label, registryLine) => {
+    const line = await decideWith(registryLine, CLEAN);
+    expect({ line: line.split('\n'), leaked: leaked(line) }).toEqual({ line: [lineFor(null)], leaked: false });
+    const warning = await decideWith(registryLine, MISSING);
+    expect(warning).toContain('a custom registry is configured');
+    expect(warning).toContain(lineFor(null));
+    expect(leaked(warning)).toBe(false);
+    expect(warning).not.toContain('host.example');
+  });
+
+  it('T-03 a registry= whose comment holds an at-sign (a ; after the value) is said without a host', async () => {
+    const line = await decideWith('registry=https://reg.example/ ; admin@corp.example', CLEAN);
+    expect(line).toBe(lineFor(null));
+    const warning = await decideWith('registry=https://reg.example/ ; admin@corp.example', MISSING);
+    expect(warning).not.toContain('corp.example');
+    expect(warning).not.toContain('https://reg.example');
+  });
+
+  it('T-03 a registry= with an ordinary comment still names its host, in the line and in the warning', async () => {
+    const line = await decideWith('registry=https://reg.example/ # nota', CLEAN);
+    expect(line).toBe(lineFor('https://reg.example'));
+    const warning = await decideWith('registry=https://reg.example/ # nota', MISSING);
+    expect(warning).toContain('a custom registry is configured');
+    expect(warning).toContain('https://reg.example');
+  });
+});
+
+// ───────────────── lockfile-origin-host-from-userinfo: T-09 (review round 1) — a comment never changes the decision
+
+describe('lockfile-origin-host-from-userinfo', () => {
+  // Invented values, built in pieces: none of them is written whole in this file.
+  const TOKEN = ['tok', 'ZzQ', '7731'].join('');
+  const CLEAN = 'dgprobe-clean';
+  const MISSING = 'dgprobe-missing';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+  const PUBLIC = 'https://registry.npmjs.org/';
+
+  const lineFor = (file: string, host: string | null): string =>
+    `dev-guardian: the project's ${file} sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+
+  /** The public registry has every name but MISSING; OSV calls none malicious; any other URL is an error. */
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    if (url === OSV) return json({ results: (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries.map(() => ({})) });
+    const doc = /^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url);
+    if (doc !== null) return doc[1] === MISSING ? json({}, 404) : json(npmDoc('1.0.0').body);
+    throw new Error(`unexpected network call: ${url}`);
+  }) as typeof fetch;
+
+  /** The decision for `command`, with `text` as the registry file `file` of the project (or of the user's home). */
+  async function decideWith(file: string, text: string, command: string, where: 'project' | 'user' = 'project'): Promise<{ deny: string; context: string }> {
+    writeFileSync(join(project, 'package.json'), MANIFEST);
+    writeFileSync(join(where === 'project' ? project : home, file), text);
+    const d = await decideInstallCommand(command, opts(fetchImpl, { env: { GUARDIAN_OFFLINE: '0' } }));
+    return { deny: d?.deny ?? '', context: d?.context ?? '' };
+  }
+  const noToken = (text: string): void => {
+    expect(text.includes(TOKEN), 'the token').toBe(false);
+    expect(text.includes(TOKEN.toLowerCase()), 'the token in lower case').toBe(false);
+  };
+
+  describe.each([['project', 'the .npmrc of the project'], ['user', 'the .npmrc of the user']] as const)('%s', (where, label) => {
+    it.each([['a hash', '#'], ['a semicolon', ';']])(`T-09 ${label}: the public registry and a comment (%s) with an at-sign: a missing name is still refused, and no line of registry is said`, async (_name, mark) => {
+      const text = `registry=${PUBLIC} ${mark} owner: a@b.example\n`;
+      const refused = await decideWith('.npmrc', text, `npm install ${MISSING}`, where);
+      expect(refused.deny).toMatch(/does not exist/);
+      expect(refused.context).not.toContain('a custom registry is configured');
+      expect(refused.context).not.toContain('sets the default registry');
+      const clean = await decideWith('.npmrc', text, `npm install ${CLEAN}`, where);
+      expect(clean.deny).toBe('');
+      expect(clean.context).not.toContain('sets the default registry');
+    });
+  });
+
+  it.each([['a space', ' '], ['a tab', '\t']])('T-09 .npmrc: %s before the hash that hides the rest of the credentials: no host, no token', async (_name, gap) => {
+    const text = `registry=https://${TOKEN}${gap}#rest@host.example/\n`;
+    const line = await decideWith('.npmrc', text, `npm install ${CLEAN}`);
+    expect(line.context).toBe(lineFor('.npmrc', null));
+    const warning = await decideWith('.npmrc', text, `npm install ${MISSING}`);
+    expect(warning.deny).toBe('');
+    expect(warning.context).toContain('a custom registry is configured');
+    noToken(`${line.context}\n${warning.context}\n${warning.deny}`);
+  });
+
+  it.each([['a space', ' '], ['a tab', '\t']])('T-09 .yarnrc.yml: npmRegistryServer with %s before the hash that hides the rest of the credentials: no host, no token', async (_name, gap) => {
+    const text = `npmRegistryServer: https://${TOKEN}${gap}#rest@reg.example/\n`;
+    const line = await decideWith('.yarnrc.yml', text, `yarn add ${CLEAN}`);
+    expect(line.context).toBe(lineFor('.yarnrc.yml', null));
+    const warning = await decideWith('.yarnrc.yml', text, `yarn add ${MISSING}`);
+    expect(warning.context).toContain('a custom registry is configured');
+    noToken(`${line.context}\n${warning.context}\n${warning.deny}`);
+  });
+
+  it.each([['without quotes', `registry https://${TOKEN} #rest@reg.example/\n`], ['with quotes', `registry "https://${TOKEN}" #rest@reg.example/\n`]])(
+    'T-09 .yarnrc %s, a comment that holds the rest of the credentials: no host, no token',
+    async (_name, text) => {
+      const line = await decideWith('.yarnrc', text, `yarn add ${CLEAN}`);
+      expect(line.context).toBe(lineFor('.yarnrc', null));
+      const warning = await decideWith('.yarnrc', text, `yarn add ${MISSING}`);
+      expect(warning.context).toContain('a custom registry is configured');
+      noToken(`${line.context}\n${warning.context}\n${warning.deny}`);
+    },
+  );
+
+  it('T-09 bunfig.toml: an unquoted registry and a comment that holds the rest of the credentials: no host, no token', async () => {
+    const text = `[install]\nregistry = https://${TOKEN} #rest@reg.example/\n`;
+    const line = await decideWith('bunfig.toml', text, `bun add ${CLEAN}`);
+    expect(line.context).toBe(lineFor('bunfig.toml', null));
+    noToken(line.context);
+  });
+});
+
+// ───────────────── install-vet-manifest-value-dropped — the lockfile still covers a dependency with a value that is no range
+
+describe('install-vet-manifest-value-dropped', () => {
+  it('T-04 a dependency whose value is `~abc`, recorded by the lockfile, is read like one whose value is `latest`: its pin goes to OSV and its name to the registry', async () => {
+    // Two dependencies side by side: `latest` is what the tree does today for a value with no range, `~abc` must do the same.
+    const deps = { 'drop-pkg-zq': '~abc', 'latest-pkg-zq': 'latest' };
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+    const pin = (name: string): Record<string, unknown> => ({
+      version: '1.0.0',
+      resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz`,
+      integrity: `sha512-${'A'.repeat(86)}==`,
+    });
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: deps },
+          'node_modules/drop-pkg-zq': pin('drop-pkg-zq'),
+          'node_modules/latest-pkg-zq': pin('latest-pkg-zq'),
+        },
+      }),
+    );
+    const asked: string[] = [];
+    const f = fakeFetch({
+      'https://registry.npmjs.org/drop-pkg-zq': npmDoc('1.0.0'),
+      'https://registry.npmjs.org/latest-pkg-zq': npmDoc('1.0.0'),
+      [OSV]: (body) => {
+        const queries = (body as { queries: Array<{ package?: { name?: string }; version?: string }> }).queries;
+        asked.push(...queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`));
+        return osvClean(body);
+      },
+    });
+    const d = await decideInstallCommand('npm ci', { ...opts(f.fetchImpl), projectDir: project });
+    // (3) both versions are clean: the command is not refused.
+    expect(d?.deny).toBeUndefined();
+    // (1) what the lockfile pins is vetted.
+    expect(asked).toContain('drop-pkg-zq@1.0.0');
+    expect(asked).toContain('latest-pkg-zq@1.0.0');
+    // (2) the name is asked of the registry as it is for `latest`: the same requests, by comparison and not by a pasted value.
+    const registryFor = (name: string): string[] => f.calls.filter((url) => url.endsWith(`/${name}`));
+    expect(registryFor('latest-pkg-zq').length).toBeGreaterThan(0);
+    expect(registryFor('drop-pkg-zq').map((url) => url.replace('drop-pkg-zq', 'X'))).toEqual(registryFor('latest-pkg-zq').map((url) => url.replace('latest-pkg-zq', 'X')));
   });
 });

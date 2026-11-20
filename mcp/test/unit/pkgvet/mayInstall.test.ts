@@ -119,3 +119,13 @@ describe('mayInstall', () => {
     },
   );
 });
+
+describe('install-vet-through-corepack', () => {
+  it.each(['corepack up', 'corepack use yarn@4', 'yarnpkg install', 'env X=1 corepack yarn add p'])('T-05 %s: the gate lets it through to the parser', (command) => {
+    expect(mayInstall(command)).toBe(true);
+  });
+
+  it.each(['git status', 'echo corepackage'])('T-05 %s is still not an install', (command) => {
+    expect(mayInstall(command)).toBe(false);
+  });
+});

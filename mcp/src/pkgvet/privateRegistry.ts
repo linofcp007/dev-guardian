@@ -69,6 +69,7 @@ import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { climbsOut, isRemoteOrDeviceTarget, readSmallText, walkLinksUnder, type TextRead } from '../hooks/configFile.js';
+import { withCommentAt } from './strayAt.js';
 import type { PkgEcosystem } from './types.js';
 
 /**
@@ -355,6 +356,16 @@ function ancestors(ctx: RegistryContext): string[] {
   return out;
 }
 
+/**
+ * The root of the git repository the project directory is in — the first of {@link ancestors} that holds a `.git` (a
+ * directory, or a file as in a worktree or a submodule) — or `undefined`: no repository, or one above the user's home,
+ * 16 directories up or more. The same limits as the registry files', so both walks agree on the project.
+ */
+export function gitRepositoryRoot(ctx: RegistryContext): string | undefined {
+  const top = ancestors(ctx).at(-1);
+  return top !== undefined && present(join(top, '.git')) ? top : undefined;
+}
+
 function envOf(ctx: RegistryContext): Readonly<Record<string, string | undefined>> {
   return ctx.env ?? process.env;
 }
@@ -395,7 +406,7 @@ function npmrcValue(raw: string): string {
       break;
     }
   }
-  return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, '$2');
+  return withCommentAt(value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, '$2'), value.slice(end));
 }
 
 /** What a registry value the reader cannot judge is read as: never the public registry (as `fromBunfig`'s). */
@@ -422,10 +433,10 @@ function yamlServer(lines: string[], at: number, keyIndent: number, raw: string)
     const content = value.slice(1, close);
     const rest = value.slice(close + 1);
     if (content.includes('\\') || (rest.trim() !== '' && !/^\s+#/.test(rest))) return UNREADABLE_VALUE;
-    return content;
+    return withCommentAt(content, rest);
   }
   const comment = value.search(/\s#/);
-  return (comment === -1 ? value : value.slice(0, comment)).trim();
+  return comment === -1 ? value.trim() : withCommentAt(value.slice(0, comment).trim(), value.slice(comment));
 }
 
 /** `.npmrc`: `registry=` and `@scope:registry=`. A key repeated in the file is read at its LAST line, as the managers do. */
@@ -488,9 +499,10 @@ function fromYarnrc(text: string, scope: string | undefined, all?: string[]): st
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    all?.push(m[2] ?? '');
-    if (lineScope === undefined) found = m[2];
-    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
+    const value = withCommentAt(m[2] ?? '', raw.slice(m[0].length));
+    all?.push(value);
+    if (lineScope === undefined) found = value;
+    else if (scope !== undefined && lineScope.toLowerCase() === scope.toLowerCase()) scoped = value;
   }
   return scoped ?? found;
 }
@@ -506,7 +518,10 @@ function fromBunfig(text: string, scope: string | undefined, all?: string[]): st
       section = (header[1] ?? '').trim();
       continue;
     }
-    const url = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? '(configured)';
+    const match = /https?:\/\/[^"'\s}]+/.exec(line);
+    // An unquoted value ends at a space: what follows may be the rest of a credential written after a `#`.
+    const unquoted = match !== null && !/["']/.test(line.charAt(match.index - 1));
+    const url = match === null ? '(configured)' : withCommentAt(match[0], unquoted ? line.slice(match.index + match[0].length) : '');
     if (section === 'install' && /^registry\s*=/.test(line)) {
       all?.push(url);
       found = found ?? url;

@@ -56718,6 +56718,32 @@ var init_npmPlanningCopy = __esm({
   }
 });
 
+// src/pkgvet/strayAt.ts
+function strayAt(url2, ownName) {
+  let path3 = url2.pathname;
+  const slash = ownName === void 0 ? -1 : ownName.indexOf("/");
+  if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
+    const scope = ownName.slice(0, slash).toLowerCase();
+    const rest = ownName.slice(slash + 1).toLowerCase();
+    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) {
+      for (let at = path3.toLowerCase().indexOf(form); at >= 0; at = path3.toLowerCase().indexOf(form)) {
+        path3 = `${path3.slice(0, at)}/${path3.slice(at + form.length)}`;
+      }
+    }
+  }
+  return path3.includes("@") || url2.search.includes("@") || url2.hash.includes("@");
+}
+function withCommentAt(value, cutOff) {
+  return cutOff.includes("@") ? `${value}${COMMENT_HOLDS_AT}` : value;
+}
+var COMMENT_HOLDS_AT;
+var init_strayAt = __esm({
+  "src/pkgvet/strayAt.ts"() {
+    "use strict";
+    COMMENT_HOLDS_AT = "#@";
+  }
+});
+
 // src/deps/pipRequirements.ts
 import { dirname as dirname17, join as join43, relative as relative13, resolve as resolve16, sep as sep11 } from "node:path";
 function describePipRefusal(r) {
@@ -56795,6 +56821,7 @@ function optionKind(token) {
 }
 function urlHost(url2) {
   const unc = /^(?:\\\\|\/\/)([^\\/]+)/.exec(url2);
+  if (unc?.[1] !== void 0 && url2.includes("@")) return `\\\\${HOST_NOT_SHOWN}`;
   if (unc?.[1] !== void 0) return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(unc[1]) ? `\\\\${unc[1]}` : "\\\\(unparseable host)";
   try {
     const u = new URL(url2);
@@ -56802,6 +56829,7 @@ function urlHost(url2) {
     if (!/^[a-z][a-z0-9+.-]{0,30}$/i.test(scheme)) return "(unparseable URL)";
     const host = u.hostname;
     if (host === "") return scheme.toLowerCase() === "file" ? "file:" : "(no host)";
+    if (strayAt(u)) return `${scheme}://${HOST_NOT_SHOWN}`;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? `${scheme}://${host}` : `${scheme}://(unparseable host)`;
   } catch {
     return "(unparseable URL)";
@@ -56809,7 +56837,9 @@ function urlHost(url2) {
 }
 function bareHost(value) {
   try {
-    const host = new URL(`http://${value}`).hostname;
+    const u = new URL(`http://${value}`);
+    if (strayAt(u)) return HOST_NOT_SHOWN;
+    const host = u.hostname;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? host : "(unparseable host)";
   } catch {
     return "(unparseable host)";
@@ -57027,10 +57057,11 @@ function requirementMentions(text3) {
   }
   return out;
 }
-var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
+var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, HOST_NOT_SHOWN, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
 var init_pipRequirements = __esm({
   "src/deps/pipRequirements.ts"() {
     "use strict";
+    init_strayAt();
     init_projectFs();
     MAX_REQUIREMENT_FILES = 200;
     MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
@@ -57066,6 +57097,7 @@ var init_pipRequirements = __esm({
       f: "find-links option",
       e: "editable requirement"
     };
+    HOST_NOT_SHOWN = "(host not shown)";
     MAX_REFUSALS = 50;
     INDEX_KINDS = /* @__PURE__ */ new Set(["index option", "find-links option", "trusted-host option"]);
     SOURCE_KINDS = /* @__PURE__ */ new Set([
@@ -69110,7 +69142,8 @@ function scanTextLock(file2, text3, out) {
     if (/^\/\/localhost(?:\/|$)/i.test(spec)) continue;
     for (let i = text3.indexOf("\n", last); i >= 0 && i < at; i = text3.indexOf("\n", i + 1)) line += 1;
     last = at;
-    out.push(`${file2}:${line} (${urlHost(spec)})`);
+    const written = /^[^\s"',]*/.exec(text3.slice(at, at + MAX_WRITTEN_PATH))?.[0] ?? spec;
+    out.push(`${file2}:${line} (${urlHost(written)})`);
     if (out.length >= MAX_NPM_NAMED) return;
   }
 }
@@ -69221,7 +69254,7 @@ function installRefusal(opts) {
   }
   return null;
 }
-var TOP_LEVEL, NESTED, NPM_SPEC_FIELDS, MAX_NPM_NAMED, MAX_WORKSPACE_DIRS, MAX_WORKSPACE_DEPTH;
+var TOP_LEVEL, NESTED, NPM_SPEC_FIELDS, MAX_NPM_NAMED, MAX_WRITTEN_PATH, MAX_WORKSPACE_DIRS, MAX_WORKSPACE_DEPTH;
 var init_repoPackageConfig = __esm({
   "src/fixpr/repoPackageConfig.ts"() {
     "use strict";
@@ -69237,6 +69270,7 @@ var init_repoPackageConfig = __esm({
     };
     NPM_SPEC_FIELDS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies", "overrides", "resolutions"];
     MAX_NPM_NAMED = 10;
+    MAX_WRITTEN_PATH = 2048;
     MAX_WORKSPACE_DIRS = 5e3;
     MAX_WORKSPACE_DEPTH = 8;
   }
@@ -115641,6 +115675,26 @@ function withRange(spec, range) {
   const r = range?.trim();
   return r !== void 0 && r !== "" ? { ...spec, range: r } : spec;
 }
+function isSemverRange(text3) {
+  return text3.split(/\s+/).every((word) => SEMVER_WORD.test(word));
+}
+function npmProtocolReading(manager, rest) {
+  if (manager !== "yarn" && manager !== "bun") return "alias";
+  if (/[$`]/.test(rest)) return "alias";
+  if (rest.indexOf("@", rest.startsWith("@") ? 1 : 0) > 0) return "alias";
+  if (rest !== "" && !isSemverRange(rest) && notAPackage(rest, null) !== null) return "alias";
+  return NAME_RE.npm.test(rest) ? "both" : "key";
+}
+function npmKeyRange(manager, rest) {
+  return rest.length <= MAX_RANGE_LENGTH && isSemverRange(rest) && !readsFileValue(manager, rest) ? rest : void 0;
+}
+function isTildeWord(word) {
+  return word.startsWith("~") && !/[\\/]/.test(word);
+}
+function notARegistryRange(text3) {
+  if (isSemverRange(text3) || isTildeWord(text3)) return null;
+  return notAPackage(text3, null) ?? (URL_OR_VCS.test(text3) ? "URL / VCS / protocol spec \u2014 not looked up" : null);
+}
 function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const scoped = raw.startsWith("@");
@@ -115652,12 +115706,16 @@ function parseNpm(raw, manager, alias = false) {
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
   if (range !== void 0) {
     if (/^npm:/i.test(range)) {
+      const rest = range.slice(4);
+      const reading = alias ? "alias" : npmProtocolReading(manager, rest);
+      if (reading !== "alias") return withRange(checkName("npm", name, raw), npmKeyRange(manager, rest));
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const rangeBad = notAPackage(range, null);
-    if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
+    const rangeBad = notARegistryRange(range);
+    if (rangeBad !== null) return skip(raw, rangeBad);
     if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
+    if (isTildeWord(range) && !isSemverRange(range)) range = void 0;
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);
@@ -115728,7 +115786,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115751,6 +115809,8 @@ var init_parseCommand = __esm({
     POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
     ARCHIVE2 = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
     SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
+    SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
+    MAX_RANGE_LENGTH = 100;
     PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;
     set2 = (...xs) => new Set(xs);
     NPM_COMMON_BOOL = [
@@ -115820,39 +115880,63 @@ var init_parseCommand = __esm({
       "--frozen-lockfile",
       "--no-frozen-lockfile"
     ];
-    LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
+    LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d", "-s"]);
+    NPM_TABLE = {
+      // `-C` is npm's short form of `--prefix`.
+      value: set2(
+        "--registry",
+        "--prefix",
+        "-C",
+        "--tag",
+        "--workspace",
+        "-w",
+        "--omit",
+        "--include",
+        "--install-strategy",
+        "--cache",
+        "--userconfig",
+        "--globalconfig",
+        "--before",
+        "--loglevel",
+        "--save-prefix",
+        "--otp",
+        "--scope",
+        "--cpu",
+        "--os",
+        "--libc",
+        "--location",
+        // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+        "--fetch-retries",
+        "--fetch-retry-factor",
+        "--fetch-retry-mintimeout",
+        "--fetch-retry-maxtimeout",
+        "--fetch-timeout",
+        "--cache-min",
+        "--cache-max",
+        "--maxsockets",
+        "--depth",
+        "--node-options",
+        "--script-shell",
+        "--auth-type",
+        "--cafile",
+        "--https-proxy",
+        "--proxy",
+        "--noproxy",
+        "--local-address",
+        "--user-agent",
+        "--min-release-age"
+      ),
+      // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
+      // regression tests of this fix use them as the examples of a flag the table lacks.)
+      // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
+      bool: set2(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl", "-s"),
+      registry: set2("--registry"),
+      dir: set2("--prefix", "-C"),
+      workspace: set2("--workspace", "-w", "--workspaces"),
+      boolWord: { except: LOGLEVEL_FLAGS }
+    };
     FLAGS = {
-      npm: {
-        // `-C` is npm's short form of `--prefix`.
-        value: set2(
-          "--registry",
-          "--prefix",
-          "-C",
-          "--tag",
-          "--workspace",
-          "-w",
-          "--omit",
-          "--include",
-          "--install-strategy",
-          "--cache",
-          "--userconfig",
-          "--globalconfig",
-          "--before",
-          "--loglevel",
-          "--save-prefix",
-          "--otp",
-          "--scope",
-          "--cpu",
-          "--os",
-          "--libc",
-          "--location"
-        ),
-        bool: set2(...NPM_COMMON_BOOL),
-        registry: set2("--registry"),
-        dir: set2("--prefix", "-C"),
-        workspace: set2("--workspace", "-w", "--workspaces"),
-        boolWord: { except: LOGLEVEL_FLAGS }
-      },
+      npm: NPM_TABLE,
       pnpm: {
         value: set2(
           "--registry",
@@ -115869,9 +115953,46 @@ var init_parseCommand = __esm({
           "--network-concurrency",
           "--config",
           "--loglevel",
-          "--allow-build"
+          "--allow-build",
+          // pnpm 10.33.2 `add --help` / `install --help` (measurements/flags/pnpm-*-help.txt): shown with an argument.
+          "--child-concurrency",
+          "--hoist-pattern",
+          "--public-hoist-pattern",
+          "--filter-prod",
+          "--test-pattern",
+          "--changed-files-ignore-pattern",
+          "--trust-policy-exclude",
+          "--trust-policy-ignore-after"
         ),
-        bool: set2(...NPM_COMMON_BOOL, "--workspace", "-w", "--workspace-root", "--recursive", "-r"),
+        // pnpm 10.33.2 `add --help` / `install --help`: shown without one. (`--shamefully-hoist` is one too and left
+        // unknown, like npm's `--prefer-dedupe`: the regression tests use it as the example of a flag the table lacks.)
+        bool: set2(
+          ...NPM_COMMON_BOOL,
+          "--workspace",
+          "-w",
+          "--workspace-root",
+          "--recursive",
+          "-r",
+          "--ignore-pnpmfile",
+          "--prefer-frozen-lockfile",
+          "--fix-lockfile",
+          "--ignore-workspace",
+          "--lockfile-only",
+          "--merge-git-branch-lockfiles",
+          "--optimistic-repeat-install",
+          "--resolution-only",
+          "--side-effects-cache",
+          "--side-effects-cache-readonly",
+          "--strict-peer-dependencies",
+          "--use-running-store-server",
+          "--use-store-server",
+          "--use-stderr",
+          "--stream",
+          "--aggregate-output",
+          "--fail-if-no-match",
+          "--save-catalog",
+          "--prod"
+        ),
         registry: set2("--registry"),
         dir: set2("--dir", "-C"),
         workspace: set2("--workspace", "--filter", "-F"),
@@ -115886,8 +116007,20 @@ var init_parseCommand = __esm({
           "--cache-folder",
           "--mutex",
           "--scope",
-          "--mode"
+          "--mode",
+          // Yarn 1.22.22 `yarn --help` (measurements/flags/yarn-1.22.22-help.txt): shown with an argument.
+          "--network-concurrency",
+          "--link-folder",
+          "--global-folder",
+          "--preferred-cache-folder",
+          "--use-yarnrc",
+          "--https-proxy",
+          "--proxy",
+          "--otp"
         ),
+        // Yarn 1.22.22 `yarn --help`: shown without one. Left out: `--emoji`, `--scripts-prepend-node-path` and `--prod` /
+        // `--production`, whose argument is optional (`[bool]`, `[prod]`), and `--ignore-engines`, the example of a flag the
+        // table lacks in the regression tests of this fix.
         bool: set2(
           ...NPM_COMMON_BOOL,
           "--ignore-workspace-root-check",
@@ -115895,7 +116028,25 @@ var init_parseCommand = __esm({
           "--cached",
           "--interactive",
           "-i",
-          "--prefer-dev"
+          "--prefer-dev",
+          "--check-files",
+          "--disable-pnp",
+          "--enable-pnp",
+          "--pnp",
+          "--flat",
+          "--focus",
+          "--har",
+          "--ignore-optional",
+          "--ignore-platform",
+          "--link-duplicates",
+          "--no-default-rc",
+          "--non-interactive",
+          "--no-node-version-check",
+          "--pure-lockfile",
+          "--skip-integrity-check",
+          "--strict-semver",
+          "--update-checksums",
+          "-A"
         ),
         registry: set2("--registry"),
         dir: set2("--cwd")
@@ -115979,7 +116130,17 @@ var init_parseCommand = __esm({
           "-p",
           "--prerelease",
           "--resolution",
-          "--requirements"
+          "--requirements",
+          // pip 26.2.1 `install --help` (measurements/flags/pip-install-help.txt): shown with an argument.
+          "--use-feature",
+          "--use-deprecated",
+          "--all-releases",
+          "--build-constraint",
+          "--only-final",
+          "--resume-retries",
+          "--refresh-package",
+          "--requirements-from-script",
+          "--uploaded-prior-to"
         ),
         bool: set2(
           "-U",
@@ -116014,7 +116175,10 @@ var init_parseCommand = __esm({
           "--system",
           "--all-extras",
           "--no-index",
-          "--compile-bytecode"
+          "--compile-bytecode",
+          // pip 26.2.1 `install --help`: shown without one.
+          "--debug",
+          "--only-deps"
         ),
         registry: set2("-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--index", "--default-index"),
         registryBool: set2("--no-index"),
@@ -116154,7 +116318,9 @@ var init_parseCommand = __esm({
       },
       composer: {
         dir: set2("--working-dir", "-d"),
-        value: set2("--working-dir", "-d"),
+        // composer 2.10.3 `require --help` (measurements/flags/composer-require-help.txt): these options take a value
+        // (`--prefer-install` was listed below as a boolean: it is `--prefer-install=PREFER-INSTALL`).
+        value: set2("--working-dir", "-d", "--prefer-install", "--ignore-platform-req", "--audit-format", "--apcu-autoloader-prefix"),
         bool: set2(
           "--dev",
           "--no-dev",
@@ -116170,7 +116336,6 @@ var init_parseCommand = __esm({
           "--with-all-dependencies",
           "--prefer-dist",
           "--prefer-source",
-          "--prefer-install",
           "--dry-run",
           "--no-progress",
           "--no-scripts",
@@ -116197,14 +116362,50 @@ var init_parseCommand = __esm({
           "--no-ansi",
           "--no-cache",
           "--minimal-changes",
-          "-m"
+          "-m",
+          "--profile",
+          "--no-blocking",
+          "--no-suggest"
         ),
         registry: set2()
       },
       dotnet: {
-        value: set2("-v", "--version", "-f", "--framework", "-s", "--source", "--package-directory"),
+        // dotnet 10.0.404 `add package --help` (measurements/flags/dotnet-add-package-help.txt): `--project` and `--file` take one.
+        value: set2("-v", "--version", "-f", "--framework", "-s", "--source", "--package-directory", "--project", "--file"),
         bool: set2("-n", "--no-restore", "--interactive", "--prerelease"),
         registry: set2("-s", "--source")
+      },
+      // dotnet 10.0.404 `tool install --help` (.specs/install-vet-dotnet-forms/measurements/help/dotnet-tool-install-help.txt):
+      // `-v` is the MSBuild verbosity here (a version in `add package`), and the sources are `--add-source` and `--source`;
+      // `--configfile` names a NuGet configuration, which may hold a private source: it is read as one.
+      "dotnet-tool": {
+        value: set2(
+          "--tool-path",
+          "--version",
+          "--configfile",
+          "--tool-manifest",
+          "--add-source",
+          "--source",
+          "--framework",
+          "-v",
+          "--verbosity",
+          "-a",
+          "--arch"
+        ),
+        bool: set2(
+          "-g",
+          "--global",
+          "--local",
+          "--prerelease",
+          "--disable-parallel",
+          "--ignore-failed-sources",
+          "--no-http-cache",
+          "--interactive",
+          "--allow-downgrade",
+          "--create-manifest-if-needed",
+          "--allow-roll-forward"
+        ),
+        registry: set2("--add-source", "--source", "--configfile")
       }
     };
     UV_VALUED = [
@@ -116287,33 +116488,59 @@ var init_parseCommand = __esm({
           "--offline",
           "--workspaces",
           "--include-workspace-root",
-          "--verbose"
+          "--verbose",
+          "--no-yes"
         ),
         registry: set2("--registry"),
         workspace: set2("--workspace", "-w", "--workspaces"),
         packageFlags: set2("--package", "-p"),
         shellFlags: set2("--call", "-c"),
-        noFetchFlags: set2("--no", "--no-install", "--offline")
+        noFetchFlags: set2("--no", "--no-install", "--offline"),
+        // Measured 2026-11-19 (npx, npm 11.20.0): `--no false P` and `--no-yes false P` ask for P; the word is their value.
+        // `--no-install false P` and `--offline false P` fetch nothing (measured); they are read like `--no` (the word is their
+        // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
+        optionalWord: set2("--no", "--no-yes", "--no-install", "--offline"),
+        bothWays: "clusters"
+      },
+      // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
+      // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+      "npm-exec": {
+        value: set2(...NPM_TABLE.value, "--package", "--call", "-c"),
+        bool: set2(...NPM_TABLE.bool, "-p", "--no", "--no-install", "--no-yes", "--ignore-existing"),
+        registry: NPM_TABLE.registry,
+        workspace: NPM_TABLE.workspace,
+        packageFlags: set2("--package"),
+        shellFlags: set2("--call", "-c"),
+        noFetchFlags: set2("--no", "--offline"),
+        boolWord: { except: LOGLEVEL_FLAGS }
       },
       "pnpm-dlx": {
         value: set2("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
-        bool: set2("--silent", "-s", "--shell-mode", "-c"),
+        // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
+        bool: set2("--silent", "-s", "--shell-mode", "-c", "--quiet", "--verbose", "-p"),
         registry: set2("--registry"),
         dir: set2("--dir", "-C"),
         packageFlags: set2("--package"),
-        shellFlags: set2("--shell-mode", "-c")
+        shellFlags: set2("--shell-mode", "-c"),
+        // Measured 2026-11-19 (pnpm 10.33.2): `-c P`, `--shell-mode P`, `-c false P` and `-p false P` ask for P.
+        optionalWord: set2("--shell-mode", "-c", "-p"),
+        shellWord: true,
+        bothWays: "flags"
       },
       "yarn-dlx": {
         value: set2("--package", "-p"),
         bool: set2("--quiet", "-q"),
         registry: set2(),
-        packageFlags: set2("--package", "-p")
+        packageFlags: set2("--package", "-p"),
+        bothWays: "flags"
       },
       bunx: {
         value: set2("--package", "-p"),
-        bool: set2("--bun", "--silent", "--verbose"),
+        // `--quiet` (bun 1.4.4, measured 2026-11-19: `bunx --quiet false P` asks for `false`).
+        bool: set2("--bun", "--silent", "--verbose", "--quiet"),
         registry: set2(),
-        packageFlags: set2("--package", "-p")
+        packageFlags: set2("--package", "-p"),
+        bothWays: "flags"
       },
       uvx: {
         value: set2(...UV_VALUED, "--from", "--with", "-w"),
@@ -116361,6 +116588,38 @@ var init_parseCommand = __esm({
         registry: set2("--index-url", "-i"),
         packageFlags: set2("--spec")
       }
+    };
+    NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall"]);
+    NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
+      "ci",
+      "clean-install",
+      "ic",
+      "install-clean",
+      "isntall-clean",
+      "install-test",
+      "it",
+      "install-ci-test",
+      "cit",
+      "clean-install-test",
+      "sit"
+    ]);
+    NPM_UPDATE = /* @__PURE__ */ new Set(["update", "u", "up", "upgrade", "udpate"]);
+    NPM_MAINTENANCE = /* @__PURE__ */ new Set(["dedupe", "ddp", "prune"]);
+    PNPM_UPDATE = /* @__PURE__ */ new Set(["update", "up", "upgrade"]);
+    YARN_UPDATE = /* @__PURE__ */ new Set(["upgrade", "upgrade-interactive"]);
+    COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
+    BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
+    PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
+    SUBCOMMANDS = {
+      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x"]),
+      pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE]),
+      bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x"]),
+      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE]),
+      pip: /* @__PURE__ */ new Set(["install"]),
+      uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
+      poetry: /* @__PURE__ */ new Set(["add"]),
+      composer: COMPOSER_REQUIRE,
+      dotnet: /* @__PURE__ */ new Set(["add", "package", "tool"])
     };
     NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
     ALLOW = {
@@ -116486,10 +116745,17 @@ var init_parseCommand = __esm({
         value: set2()
       },
       dotnet: { bool: set2("--prerelease"), value: set2("-v", "--version", "-f", "--framework") },
+      // `dotnet tool install`: no source, configuration file or verbosity flag; a tool is global, local or in a folder.
+      "dotnet-tool": {
+        bool: set2("--prerelease", "-g", "--global", "--local", "--allow-downgrade", "--create-manifest-if-needed", "--allow-roll-forward"),
+        value: set2("--version", "--framework", "--tool-path")
+      },
       // The launchers (review P1): consent and verbosity only. A package flag
       // (`-p`, `--from`, `--spec`), a registry or `--pip-args` takes the command
       // out of the confident shape.
       npx: { bool: set2("-y", "--yes", "-q", "--quiet", "--silent"), value: set2() },
+      // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
+      "npm-exec": { bool: set2("-y", "--yes", "-q", "--quiet", "--silent", "--ignore-scripts"), value: set2() },
       "pnpm-dlx": { bool: set2("--silent", "-s"), value: set2() },
       "yarn-dlx": { bool: set2("-q", "--quiet"), value: set2() },
       bunx: { bool: set2("--bun", "--silent", "--verbose"), value: set2() },
@@ -116800,7 +117066,7 @@ function npmrcValue(raw) {
       break;
     }
   }
-  return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
+  return withCommentAt(value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2"), value.slice(end));
 }
 function yamlServer(lines, at, keyIndent, raw) {
   const next = lines.slice(at + 1).find((l) => l.trim() !== "" && !l.trim().startsWith("#"));
@@ -116813,10 +117079,10 @@ function yamlServer(lines, at, keyIndent, raw) {
     const content = value.slice(1, close);
     const rest = value.slice(close + 1);
     if (content.includes("\\") || rest.trim() !== "" && !/^\s+#/.test(rest)) return UNREADABLE_VALUE;
-    return content;
+    return withCommentAt(content, rest);
   }
   const comment = value.search(/\s#/);
-  return (comment === -1 ? value : value.slice(0, comment)).trim();
+  return comment === -1 ? value.trim() : withCommentAt(value.slice(0, comment).trim(), value.slice(comment));
 }
 function fromNpmrc(text3, scope, all) {
   let found2;
@@ -116873,9 +117139,10 @@ function fromYarnrc(text3, scope, all) {
     const m = /^\s*["']?(@[^:"']+:)?registry["']?\s+["']?([^"'\s]+)["']?/.exec(raw);
     if (m === null) continue;
     const lineScope = m[1]?.slice(1, -1);
-    all?.push(m[2] ?? "");
-    if (lineScope === void 0) found2 = m[2];
-    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = m[2];
+    const value = withCommentAt(m[2] ?? "", raw.slice(m[0].length));
+    all?.push(value);
+    if (lineScope === void 0) found2 = value;
+    else if (scope !== void 0 && lineScope.toLowerCase() === scope.toLowerCase()) scoped = value;
   }
   return scoped ?? found2;
 }
@@ -116889,7 +117156,9 @@ function fromBunfig(text3, scope, all) {
       section = (header[1] ?? "").trim();
       continue;
     }
-    const url2 = /https?:\/\/[^"'\s}]+/.exec(line)?.[0] ?? "(configured)";
+    const match = /https?:\/\/[^"'\s}]+/.exec(line);
+    const unquoted = match !== null && !/["']/.test(line.charAt(match.index - 1));
+    const url2 = match === null ? "(configured)" : withCommentAt(match[0], unquoted ? line.slice(match.index + match[0].length) : "");
     if (section === "install" && /^registry\s*=/.test(line)) {
       all?.push(url2);
       found2 = found2 ?? url2;
@@ -117284,6 +117553,7 @@ var init_privateRegistry = __esm({
   "src/pkgvet/privateRegistry.ts"() {
     "use strict";
     init_configFile();
+    init_strayAt();
     MAX_WORKSPACE_DIRS2 = 3e3;
     PUBLIC_HOSTS = {
       npm: ["registry.npmjs.org", "registry.npmjs.com", "registry.yarnpkg.com"],
@@ -117521,7 +117791,7 @@ function registryHost(ecosystem, value) {
       if (candidate.includes("@")) return void 0;
       continue;
     }
-    if (url2.pathname.includes("@") || url2.search.includes("@") || url2.hash.includes("@")) return void 0;
+    if (strayAt(url2)) return void 0;
     if (named2 === void 0 && !isPublicRegistryUrl(ecosystem, candidate)) named2 = `${url2.protocol}//${url2.hostname}`;
   }
   return named2;
@@ -117897,6 +118167,7 @@ var init_vet = __esm({
     init_popular();
     init_privateRegistry();
     init_registry();
+    init_strayAt();
     init_typosquat();
     init_types7();
     init_versions2();
@@ -122011,6 +122282,7 @@ var init_lockfile = __esm({
   "src/pkgvet/lockfile.ts"() {
     "use strict";
     init_boundedJson();
+    init_strayAt();
     init_versions2();
     JSON_PLAIN = Array.from({ length: 128 }, (_, c) => " 	\n\r,:+-.eE0123456789".includes(String.fromCharCode(c)));
   }

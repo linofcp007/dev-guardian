@@ -2,9 +2,9 @@
 # reports the finding again. Reviewed like code — `review_pr` warns when a diff edits this file — and never
 # silent: every scan names what this file suppressed (`suppressed_by_repo_config`, docs/ci.md).
 #
-# All four are in dependencies of Semgrep, in configs/ci/python/<X.Y>/requirements.txt: the hashed
+# All five are in dependencies of Semgrep, in configs/ci/python/<X.Y>/requirements.txt: the hashed
 # requirements the ci-init pipelines install to run `semgrep scan`, Bandit and zizmor. No upgrade exists:
-# every Semgrep release up to 1.185.0 (checked 2026-11-13) pins `mcp==1.29.0` and
+# every Semgrep release up to 1.186.0 (checked 2026-11-20) pins `mcp==1.29.0` and
 # `opentelemetry-api>=1.37.0,<1.38`. When Semgrep moves either pin, bump it (docs/maintainers/conventions.md,
 # "Pinned versions") and delete the entry.
 
@@ -16,6 +16,13 @@
 CVE-2026-116684 exp:2027-02-13
 CVE-2026-116685 exp:2027-02-13
 CVE-2026-116686 exp:2027-02-13
+
+# The same mcp 1.29.0, fixed in 1.30.0 — CVE-2026-115563, published on 2026-11-16: the SDK's OAuth client
+# (mcp.client.auth) can send credentials to an authorization server that an untrusted MCP server names. The
+# advisory says MCP servers are not affected, and Semgrep uses the SDK as a server only: in Semgrep 1.182.0 no
+# file imports `mcp.client` (measured on 2026-11-20 in the test image: every .py file under semgrep/ read as
+# text). Accepted by the maintainer on 2026-11-20.
+CVE-2026-115563 exp:2027-02-13
 
 # opentelemetry-api 1.37.0, fixed in 1.45.2 — quadratic-time parsing of a malformed `traceparent` in
 # TraceContextTextMapPropagator.extract(), which needs a carrier an attacker controls. Semgrep's one call

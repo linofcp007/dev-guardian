@@ -58,7 +58,7 @@ Antes de `npm install <x>`, `pip install <x>`, `composer require <x>` ou `dotnet
 
 O veredicto é `block`, `warn`, `unknown` ou `ok`. `unknown` quer dizer que uma verificação não correu (offline, timeout, rate limit, `GUARDIAN_OFFLINE=1`) — nunca o leias como `ok`. Com `block` não instales; com `warn` mostra o motivo e pede confirmação. No Claude Code, o hook de install do plugin faz as mesmas verificações sozinho; noutros hosts só esta chamada as faz. Cargo, gem e Go não estão cobertos — aí ficam as heurísticas da secção 5.
 
-Numa instalação a partir do manifesto (`npm ci`, `npm install` sem nomes, `pip install -r`) o hook lê o lockfile (npm, pnpm, yarn, bun) e pergunta ao OSV todos os pares fixados, diretos e transitivos. O registo só é perguntado pelas diretas que o lockfile não cobre. Só diz o que é malicioso, um typosquatting provável ou um nome que o registo não tem; o silêncio dele não fala de vulnerabilidades: num projeto que não conheces, corre `deps_audit` antes de instalar.
+Numa instalação a partir do manifesto (`npm ci`, `npm install` com ou sem nomes, `pnpm add`, `yarn add`, `bun add`, `pip install -r`; não `-g` nem `npx`) o hook lê o manifesto e o lockfile (npm, pnpm, yarn, bun) e pergunta ao OSV todos os pares fixados, diretos e transitivos. O registo só é perguntado pelas diretas que o lockfile não cobre. Só diz o que é malicioso, um typosquatting provável ou um nome que o registo não tem; o silêncio dele não fala de vulnerabilidades: num projeto que não conheces, corre `deps_audit` antes de instalar.
 
 ## 4. Depois de um install (o que acabou de entrar)
 

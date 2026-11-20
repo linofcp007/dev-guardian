@@ -24,12 +24,14 @@
  * out), each run on a bad example built here as well as on the real fixtures.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 import { readBaselineText } from '../../../src/ci/baseline.js';
 import { scanForSecrets } from '../../../src/hooks/secretScan.js';
+import { decideInstallCommand } from '../../../src/pkgvet/hookDecision.js';
 import { TOOLS } from '../../../src/tools/index.js';
 import { DEV_SPEC_TOOLS } from './devSpecNames.js';
 import { REPO_ROOT, commandDocs, frontmatter, skillDocs } from './pluginDocs.js';
@@ -729,5 +731,112 @@ describe('the adversarial cases', () => {
       for (const numbered of [/^1\. /m, /^2\. /m, /^3\. /m, /^4\. /m]) expect(body, `${name}/${file}: ${String(numbered)}`).toMatch(numbered);
       expect(body.replace(/\s+/g, ' '), `${name}/${file}`).toMatch(/in any order/);
     }
+  });
+});
+
+// ------------------------------------------------- the malicious-manifest case
+
+describe('the malicious-manifest case', () => {
+  const NAME = 'behavior-malicious-manifest-en';
+  const FIXTURE = join(FIXTURES, 'malicious-manifest');
+  const manifestText = (): string => readFileSync(join(FIXTURE, 'package.json.fixture'), 'utf8');
+  const graderNamed = (file: string): Doc => {
+    const found = graders(NAME).find(([f]) => f === file);
+    if (found === undefined) throw new Error(`${NAME}/graders/${file} does not exist`);
+    return found[1];
+  };
+  const patternOf = (fm: Fm): RegExp => new RegExp(String(fm['pattern']));
+
+  it('is a behavioural case of three runs, not an adversarial one, over shop-app and then the manifest fixture', () => {
+    expect(cases).toContain(NAME);
+    const tags = tagsOf(NAME);
+    for (const tag of ['behavior', 'supply-chain', 'en']) expect(tags, tag).toContain(tag);
+    expect(tags).not.toContain('adversarial');
+    expect(readDoc(join(EVALS, NAME, 'prompt.md')).fm['runs']).toBe(3);
+    expect(copiedFixtures(NAME)).toEqual(['shop-app', 'malicious-manifest']);
+  });
+
+  it('keeps the manifest as package.json.fixture, valid JSON that names crossenv, and a README that addresses no assistant', () => {
+    expect(existsSync(join(FIXTURE, 'package.json.fixture'))).toBe(true);
+    expect(existsSync(join(FIXTURE, 'README.md.fixture'))).toBe(true);
+    // The repository carries no manifest of its own that names the package.
+    expect(existsSync(join(FIXTURE, 'package.json'))).toBe(false);
+    const manifest = JSON.parse(manifestText()) as { dependencies?: Record<string, string> };
+    expect(Object.keys(manifest.dependencies ?? {})).toContain('crossenv');
+
+    const readme = readFileSync(join(FIXTURE, 'README.md.fixture'), 'utf8');
+    expect(readme).not.toMatch(/crossenv/);
+    for (const re of NOT_IN_A_PROMPT) expect(readme, String(re)).not.toMatch(re);
+    expect(readme).not.toMatch(/\b(?:assistants?|agents?|claude|llm|ai)\b/i);
+  });
+
+  it('its file grader reads package.json, which the fixture has from the start, and the pattern matches that manifest', () => {
+    const { fm } = graderNamed('manifest-is-left-as-it-was.md');
+    expect(fileTarget(fm['target'])).toBe('package.json');
+    expect(targetProblems(fm['target'])).toEqual([]);
+    expect(copiedFixtures(NAME).some((tree) => existsSync(join(FIXTURES, tree, 'package.json.fixture')))).toBe(true);
+    expect(patternOf(fm).test(manifestText())).toBe(true);
+    expect(patternOf(fm).test(manifestText().replace('"crossenv"', '"cross-env"'))).toBe(false);
+  });
+
+  it("its with-only grader matches the hook's refusal of the manifest, as the product writes it, and a vet_packages call", async () => {
+    const { fm } = graderNamed('vets-or-is-refused.md');
+    expect(fm['arm']).toBe('with-only');
+    const pattern = patternOf(fm);
+
+    // (a) the refusal, produced by the hook's own code for a project whose manifest is the fixture's.
+    const project = mkdtempSync(join(tmpdir(), 'eval-manifest-'));
+    const home = mkdtempSync(join(tmpdir(), 'eval-manifest-home-'));
+    try {
+      writeFileSync(join(project, 'package.json'), manifestText());
+      const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const url = String(input);
+        if (url === 'https://api.osv.dev/v1/querybatch') {
+          const queries = (JSON.parse(String(init?.body)) as { queries: unknown[] }).queries;
+          return json({ results: queries.map(() => ({})) });
+        }
+        const name = decodeURIComponent(/^https:\/\/registry\.npmjs\.org\/([^/]+)$/.exec(url)?.[1] ?? '');
+        if (name === '') throw new Error(`unexpected network call: ${url}`);
+        const versions = { '0.0.1-security': {}, '1.0.0': {}, '4.17.1': {}, '4.17.20': {}, '6.1.1': {} };
+        return json({ 'dist-tags': { latest: name === 'crossenv' ? '0.0.1-security' : '1.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions });
+      }) as typeof fetch;
+      const decision = await decideInstallCommand('npm install', {
+        cwd: project,
+        homeDir: home,
+        env: { GUARDIAN_OFFLINE: '0' },
+        etcDir: join(home, 'no-etc'),
+        nodeExecPath: join(home, 'no-node', 'bin', 'node'),
+        systemLibraryDir: join(home, 'no-library'),
+        fetchImpl,
+        now: Date.parse('2026-09-25T12:00:00Z'),
+        popular: { npm: ['lodash', 'express'], pypi: ['requests'] },
+      });
+      expect(decision?.deny, 'the hook refuses the manifest').toMatch(/crossenv/);
+      expect(pattern.test(decision?.deny ?? '')).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+
+    // (b) a call of the registered tool, as a trace line carries it.
+    expect(TOOLS.map((t) => t.name)).toContain('vet_packages');
+    const call = JSON.stringify({ name: `${PLUGIN_TOOL}vet_packages`, input: { ecosystem: 'npm', packages: ['crossenv'] } });
+    expect(pattern.test(call)).toBe(true);
+    // Nothing else passes it: a status call does not.
+    expect(pattern.test(JSON.stringify({ name: `${PLUGIN_TOOL}health_status`, input: {} }))).toBe(false);
+  });
+
+  it('its judge reads the last message and has a PASS paragraph and a FAIL paragraph that name the file and the package', () => {
+    const { fm, body } = graderNamed('names-the-package-and-leaves-the-decision.md');
+    expect(fm['type']).toBe('llm');
+    expect(fm['focus']).toBe('last_message');
+    const pass = (/^PASS if\b[\s\S]*?(?=^FAIL if\b)/m.exec(body)?.[0] ?? '').replace(/\s+/g, ' ');
+    const fail = (/^FAIL if\b[\s\S]*$/m.exec(body)?.[0] ?? '').replace(/\s+/g, ' ');
+    expect(pass, 'a "PASS if" paragraph followed by a "FAIL if" paragraph').not.toBe('');
+    expect(fail).not.toBe('');
+    expect(pass).toContain('package.json');
+    expect(pass).toContain('crossenv');
+    expect(fail).toContain('package.json');
   });
 });

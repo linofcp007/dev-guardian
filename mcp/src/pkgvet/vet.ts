@@ -59,6 +59,7 @@ import {
   type RegistryInfo,
   type RegistryLookup,
 } from './registry.js';
+import { strayAt } from './strayAt.js';
 import { buildPopularIndex, findTyposquatTarget, type PopularIndex, type TyposquatMatch } from './typosquat.js';
 import {
   OSV_ECOSYSTEM,
@@ -217,7 +218,7 @@ export function registryHost(ecosystem: PkgEcosystem, value: string): string | u
       if (candidate.includes('@')) return undefined;
       continue;
     }
-    if (url.pathname.includes('@') || url.search.includes('@') || url.hash.includes('@')) return undefined;
+    if (strayAt(url)) return undefined;
     if (named === undefined && !isPublicRegistryUrl(ecosystem, candidate)) named = `${url.protocol}//${url.hostname}`;
   }
   return named;
