@@ -54,12 +54,13 @@ of it committed:
   (`SERVER_JS` in `scripts/bundleOptions.mjs`), at the path `plugin.json` and
   every host configuration name.
 - `hooks.js` — the bundle of `src/hooksEntry.ts`: what every hook event needs
-  (the configuration reader, the guarded-path resolution) and the `load*`
-  loaders of the detectors, which live in four parts of their own, each a
+  (the configuration reader, the guarded-path resolution, the choice of the session's and the project's folder) and the `load*`
+  loaders of the detectors, which live in five parts of their own, each a
   self-contained bundle of what one kind of event runs (3.4.0):
   `hooksBash.js` (the shell guard and the install gate), `hooksVet.js`
   (install vetting), `hooksWrite.js` (the write guards and the secret scan),
-  `hooksSession.js` (SessionStart's git, database registry and engine check).
+  `hooksSession.js` (SessionStart's git, database registry and engine check),
+  `hooksProbe.js` (the child process that asks whether a network folder answers — only a call with one loads it).
   The entry's `import('./hooksBash.js')` is left to the runtime (the
   `hook-parts` plugin in `bundleOptions.mjs`); under tsx and vitest it is the
   source `src/hooksBash.ts`. An event parses only its parts: 3.3.0's one file

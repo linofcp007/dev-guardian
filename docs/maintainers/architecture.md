@@ -36,7 +36,7 @@ quality, deps, observability, performance and compliance. Two halves:
   with the `dev-guardian check` CLI subcommand; the dispatcher loads it from
   its own bundle, `mcp/dist/hooks.js` (`src/hooksEntry.ts`), and that bundle's
   per-event parts (`hooksBash.js`, `hooksVet.js`, `hooksWrite.js`,
-  `hooksSession.js` — build-and-test.md). The shell guard's reading of a
+  `hooksSession.js`, `hooksProbe.js` — build-and-test.md). The shell guard's reading of a
   command lives in `mcp/src/hooks/shell/` — the tokenizer (`split.ts`), the
   command word (`command.ts`), cmd.exe's line (`cmd.ts`), paths as the command
   moves (`paths.ts`), where each command of the line runs (`workdir.ts`, which the

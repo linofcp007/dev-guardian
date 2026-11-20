@@ -5,14 +5,15 @@
  * output — 27 modules of the 355 `dist/` shipped for it — and an install now
  * ships no per-file output at all.
  *
- * What every event needs — reading the hook configuration, and the paths a
- * write reaches — is in this file. Everything else is in one of four parts,
+ * What every event needs — reading the hook configuration, the paths a
+ * write reaches, and the choice of the session's and the project's folder — is in this file. Everything else is in one of five parts,
  * each a self-contained bundle of its own beside it (3.4.0), loaded by the
  * event that runs it: `dist/hooksBash.js` (the shell guard and the install
  * gate — every Bash call), `dist/hooksVet.js` (install vetting — a command that
  * may install), `dist/hooksWrite.js` (the write guards and the secret scan —
  * every write), `dist/hooksSession.js` (SessionStart's git, database registry
- * and engine check). 3.3.0's one-file bundle made every write parse all
+ * and engine check), `dist/hooksProbe.js` (the question "does this network folder
+ * answer?", asked in a child process — only a call with a folder on the network). 3.3.0's one-file bundle made every write parse all
  * 368 KB, the shell guard and `node:crypto` / `node:child_process` included
  * (PostToolUse 66 → 76 ms); a chunk per module (esbuild's code splitting)
  * made each event open a dozen files, slower still on Windows. The parts are
@@ -30,10 +31,15 @@
 
 import * as configFile from './hooks/configFile.js';
 import * as guardedPath from './hooks/guardedPath.js';
+import * as sessionDirs from './hooks/sessionDirs.js';
 
 /** Every event: reading the hook configuration, and the paths a write reaches. */
 export const loadConfigFile = async (): Promise<typeof configFile> => configFile;
 export const loadGuardedPath = async (): Promise<typeof guardedPath> => guardedPath;
+export const loadSessionDirs = async (): Promise<typeof sessionDirs> => sessionDirs;
+
+/** A call whose session or project folder is on the network: the child process that asks whether it answers. */
+export const loadFolderProbe = async () => (await import('./hooksProbe.js')).folderProbe;
 
 /** PreToolUse on Bash / PowerShell: the catastrophic-command guard, then install vetting behind its cheap gate. */
 export const loadBashGuard = async () => (await import('./hooksBash.js')).bashGuard;

@@ -24,6 +24,27 @@ version bump.
 
 ### Security
 
+- **A session or project folder on a network share that does not answer no longer holds every hook for 21 s.** The
+  dispatcher asked the disk about the payload's `cwd` and about `CLAUDE_PROJECT_DIR` in its own process, and Windows
+  waits about 21 s for a host that is down: on Windows 11, with each case on a host of its own in 198.51.100.0/24,
+  nine of twelve measured calls took 21.1 to 21.3 s — past the 15 s timeout of `hooks.json` — and no guard answered
+  in time (`npm install crossenv`, refused in 0.8 s from a local folder, got only the typosquat warning). A folder on
+  the network (`\\host\share`, `//host/share`, `\\?\UNC\…`) is now asked about in a child process that the hook gives
+  a 2 s deadline, one for all of them, and is never opened in the hook's own process; one that does not answer, does
+  not exist or could not be asked is treated as a folder that does not exist (the session works from the hook's own
+  folder, `CLAUDE_PROJECT_DIR` is ignored), and a line says so — which share, which of the two folders, that its hook
+  settings and registry configuration were not read — in the context of a Bash or PowerShell command that is not
+  refused and in the SessionStart notice (also with `sessionStart: false`). A refusal carries no context, as before.
+  The probe is a fifth part of the hooks bundle, `mcp/dist/hooksProbe.js`, loaded only by a call that has such a
+  folder. **What this does not reach:** a hook that Claude Code itself starts in a folder on a dead share waits at
+  its start, before any code of the plugin runs (measured with a plain program, not with Claude Code); the home and
+  temporary folders on a dead share; a mapped drive letter or a directory link to a share, which the path's
+  spelling does not tell from a local one; and a share that dies between the question and a later read. Nothing was
+  measured in a real Claude Code session: the measurement feeds the payload to the dispatcher, and a real, slow share
+  (cold SMB session, VPN) was not tried against the 2 s deadline — such a share is treated as not answering for that
+  call. A project on a share that answers is read as before. **For whoever upgrades:** every hook call of a session
+  whose folder or project is on a network share starts one more process — 70 to 90 ms measured on a minimal
+  program, twice per file write (before and after) — and, while the share is down, waits up to 2 s for it.
 - **The install hook asks the user when a call passes a ceiling, instead of saying a line and letting it run.** The hook
   vets at most 50 packages per call, 150 dependencies of manifests and the first 512 KB of a command, and said "N more
   packages … were not vetted" for the rest: padding a line with 51 names, a manifest with 150 dependencies ahead of

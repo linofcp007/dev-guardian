@@ -47,6 +47,8 @@ const USED: Readonly<Record<string, readonly string[]>> = {
   loadDbRegistry: ['databaseRegistration'],
   loadDistCheck: ['engineDamage'],
   loadHeartbeat: ['writeHeartbeat', 'pruneHeartbeats'],
+  loadSessionDirs: ['chooseSessionDirs', 'unreachableLines'],
+  loadFolderProbe: ['probeFolders'],
 };
 
 /** Every loader the dispatcher names: `detector('loadX')` calls and the `GUARD_MODULES` table. */
@@ -153,13 +155,12 @@ describe('the hooks bundle has what the dispatcher loads', () => {
 
 // Bugfix `hook-unc-cwd-hang`: which folders a call works in is chosen by a module of the common part, and a folder on
 // the network is asked about by a part of its own (`hooksProbe`), so that only a call with such a folder parses it
-// and its `node:child_process`. Task 2 merges these two loaders into `USED` above; until then they are held here, so
-// that the loaders the dispatcher does not name yet leave the two tests over `USED` as they are.
+// and its `node:child_process`. Its two loaders are in `USED` above.
 describe('hook-unc-cwd-hang', () => {
-  const UNC_LOADERS: Readonly<Record<string, readonly string[]>> = {
-    loadSessionDirs: ['chooseSessionDirs', 'unreachableLines'],
-    loadFolderProbe: ['probeFolders'],
-  };
+  // The two loaders, with the functions `USED` says the dispatcher takes from each.
+  const UNC_LOADERS: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+    Object.entries(USED).filter(([loader]) => loader === 'loadSessionDirs' || loader === 'loadFolderProbe'),
+  );
 
   it('T-09 the bundle gives the dispatcher what it loads: loadSessionDirs and loadFolderProbe, named by the dispatcher and resolving to the two functions', async () => {
     expect(dispatcherLoaders()).toEqual(expect.arrayContaining(Object.keys(UNC_LOADERS)));
@@ -174,6 +175,7 @@ describe('hook-unc-cwd-hang', () => {
       const mod = (await (load as () => Promise<Record<string, unknown>>)()) as Record<string, unknown>;
       for (const name of names) if (typeof mod[name] !== 'function') missing.push(`${loader}: ${name}`);
     }
+    expect(Object.keys(UNC_LOADERS)).toHaveLength(2);
     expect(missing).toEqual([]);
   });
 

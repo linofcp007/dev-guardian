@@ -13,7 +13,7 @@
  *
  * - `scripts/bundle.mjs`: the bundles `dist/engine.js`, and `dist/hooks.js`
  *   with its parts `dist/hooksBash.js`, `hooksVet.js`, `hooksWrite.js`,
- *   `hooksSession.js` (3.4.0) — rebuilt in memory by the same function
+ *   `hooksSession.js` (3.4.0), `hooksProbe.js` — rebuilt in memory by the same function
  *   (`buildDist` in `scripts/bundleOptions.mjs`, shared with the build so the
  *   two cannot differ) and compared — and `dist/server.js`, the two lines that
  *   start the server from the engine (`SERVER_JS` there). The bundles inline
@@ -108,7 +108,7 @@ describe('the committed mcp/dist is the build of mcp/src', () => {
   it('the bundles: dist/engine.js, dist/hooks.js and its parts are what scripts/bundle.mjs makes of src/', async () => {
     const { texts } = await bundles();
     expect([...texts.keys()].map(rel).sort()).toEqual(BUNDLE_NAMES);
-    expect(BUNDLE_NAMES).toEqual(['engine.js', 'hooks.js', 'hooksBash.js', 'hooksSession.js', 'hooksVet.js', 'hooksWrite.js']);
+    expect(BUNDLE_NAMES).toEqual(['engine.js', 'hooks.js', 'hooksBash.js', 'hooksProbe.js', 'hooksSession.js', 'hooksVet.js', 'hooksWrite.js']);
     // Not toBe on megabytes of text: the failure should be a sentence.
     expect(drift(texts)).toEqual([]);
   });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Build `mcp/dist/`: the two self-contained bundles — the engine, and the
- * hooks bundle with its four per-event parts — the server's entry file and
+ * hooks bundle with its five per-event parts — the server's entry file and
  * the two bundles' type declarations (`scripts/bundleOptions.mjs` says what
  * each is). It empties `dist/` first, so it holds only what this build makes
  * — then `copy-assets.mjs` adds the files the code reads at run time (the SQL

@@ -257,9 +257,82 @@ function guardedPath(abs, opts = {}) {
   }
 }
 
+// src/hooks/sessionDirs.ts
+var sessionDirs_exports = {};
+__export(sessionDirs_exports, {
+  NETWORK_PROBE_DEADLINE_MS: () => NETWORK_PROBE_DEADLINE_MS,
+  chooseSessionDirs: () => chooseSessionDirs,
+  unreachableLines: () => unreachableLines
+});
+var NETWORK_PROBE_DEADLINE_MS = 2e3;
+var MAX_LINES = 2;
+var MAX_NAME = 64;
+async function askAbout(paths, probe) {
+  if (paths.length === 0 || probe === void 0) return /* @__PURE__ */ new Map();
+  try {
+    return await probe(paths, NETWORK_PROBE_DEADLINE_MS);
+  } catch {
+    return /* @__PURE__ */ new Map();
+  }
+}
+async function chooseSessionDirs(input, deps) {
+  const { payloadCwd, envProjectDir, processCwd } = input;
+  try {
+    const session = typeof payloadCwd === "string" && payloadCwd !== "" ? payloadCwd : void 0;
+    const project = envProjectDir !== void 0 && envProjectDir !== "" ? envProjectDir : void 0;
+    const network = [...new Set([session, project].filter((p) => p !== void 0 && deps.isNetworkPath(p)))];
+    const answers = await askAbout(network, deps.probe);
+    const usable = (path) => deps.isNetworkPath(path) ? answers.get(path) === "there" : deps.exists(path);
+    const sessionUsable = session !== void 0 && usable(session);
+    const projectUsable = project !== void 0 && usable(project);
+    const unreachable = [];
+    for (const path of network) {
+      if (answers.get(path) === "there") continue;
+      const isSession = path === session;
+      const isProject = path === project;
+      unreachable.push({ path, role: isSession && isProject ? "both" : isSession ? "session" : "project" });
+    }
+    return {
+      cwd: sessionUsable && session !== void 0 ? session : processCwd,
+      projectDir: projectUsable ? project : void 0,
+      unreachable
+    };
+  } catch {
+    return { cwd: processCwd, projectDir: void 0, unreachable: [] };
+  }
+}
+var cleanName = (name) => name.replace(/[^A-Za-z0-9._$-]/g, "").slice(0, MAX_NAME);
+function shareOf(path) {
+  const device = /^(?:[\\/]{2}[?.]|\\\?\?)[\\/]UNC[\\/]/i.exec(path);
+  const rest = device === null ? path.replace(/^[\\/]{2}/, "") : path.slice(device[0].length);
+  const [host = "", share = ""] = rest.split(/[\\/]/);
+  const bs = String.fromCharCode(92);
+  return `${bs}${bs}${cleanName(host)}${bs}${cleanName(share)}`;
+}
+function subjectOf(role) {
+  if (role === "session") return { who: "the session's folder", be: "is", their: "its" };
+  if (role === "project") return { who: "the project folder (CLAUDE_PROJECT_DIR)", be: "is", their: "its" };
+  return { who: "the session's folder and the project folder", be: "are", their: "their" };
+}
+function unreachableLines(unreachable) {
+  const roles = /* @__PURE__ */ new Map();
+  for (const { path, role } of unreachable) {
+    const share = shareOf(path);
+    const seen = roles.get(share) ?? /* @__PURE__ */ new Set();
+    seen.add(role);
+    roles.set(share, seen);
+  }
+  return [...roles].slice(0, MAX_LINES).map(([share, seen]) => {
+    const { who, be, their } = subjectOf(seen.size > 1 || seen.has("both") ? "both" : seen.values().next().value ?? "session");
+    return `dev-guardian: ${who} ${be} on a network share that could not be reached or does not exist (${share}) \u2014 ${their} hook settings and registry configuration were not read; the hook's own folder is used instead.`;
+  });
+}
+
 // src/hooksEntry.ts
 var loadConfigFile = async () => configFile_exports;
 var loadGuardedPath = async () => guardedPath_exports;
+var loadSessionDirs = async () => sessionDirs_exports;
+var loadFolderProbe = async () => (await import("./hooksProbe.js")).folderProbe;
 var loadBashGuard = async () => (await import("./hooksBash.js")).bashGuard;
 var loadInstallGate = async () => (await import("./hooksBash.js")).installGate;
 var loadInstallVetting = async () => (await import("./hooksVet.js")).installVetting;
@@ -276,11 +349,13 @@ export {
   loadDataRegistry,
   loadDbRegistry,
   loadDistCheck,
+  loadFolderProbe,
   loadGitSafety,
   loadGuardedPath,
   loadHeartbeat,
   loadInstallGate,
   loadInstallVetting,
   loadSecretScan,
+  loadSessionDirs,
   loadSettingsGuard
 };
