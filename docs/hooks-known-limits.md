@@ -4,7 +4,7 @@
 
 What the guardrail hooks of [hooks.md](hooks.md) do **not** cover, recorded so that nobody reads the guards as covering it. Each of these can change what the hooks do, and switching the guardrails off stays the user's decision.
 
-This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **39 limits**, 35 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
+This page is rendered from [`mcp/test/fixtures/hooks/known-limits.yml`](../mcp/test/fixtures/hooks/known-limits.yml): **40 limits**, 36 with at least one example and 4 with none, which says why. An example is an input and the verdict the guard gives it today — `ok`, `warn` or `block` from the shell guard, a number of findings from the secret scan, `deny`, `ask`, `warn` or `none` from a hook call — and every one is a test, run against the real detector (`mcp/test/unit/hooks/knownLimits.test.ts`) or the real dispatcher (`mcp/test/e2e/knownLimitsHook.test.ts`). A guard that comes to cover a limit fails its test until the record leaves this list. An example given for contrast says so.
 
 ## Configuration and guarded files
 
@@ -174,6 +174,13 @@ A launcher that runs corepack or a package manager — `npx corepack yarn add �
   - `Bash` on PreToolUse, input `{"command":"npx --ignore-scripts false dgprobe-zzq7731"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"yarn dlx -y false dgprobe-zzq7731"}` → `warn`
   - `Bash` on PreToolUse, input `{"command":"pnpm dlx -c dgprobe-zzq7731 --version"}` → `none` (no answer)
+- The line for a lockfile entry (`comes from another source (host)`) and the line for the project's default registry name a host read from a URL of a project file only when that URL, as written, has no `@` outside its credentials. A credential written with a `/`, `?`, `#` or `\` in it (`https://TOKEN/rest@host.example/…`) makes the URL parser read the start of the credential as the host, and the line is kept in the session log: when an `@` is left in the path, the query or the fragment (the part of a yarn.lock v1 `resolved` after its `#` included; the part of a `.npmrc` value that a `#` or a `;` starts, included), the line says `comes from another source` or `sets the default registry` with no host, and the entry is still counted. The one `@` that does not count is the one that opens the scope of the entry's own package (`/@scope/name/-/name-1.0.0.tgz` for `@scope/name`). What stays:
+
+- The host that is left unsaid is the one the package manager contacts (measured with npm 11.20, pnpm 10.33 and Yarn 1.22: the piece before the `@`; the host after it is never contacted), so the line says less than the hook knows, on purpose.
+- An `@` that belongs to a plain URL (a path with an email address, a git ref with an `@`) also leaves the host unsaid: when in doubt, no host.
+- A `.npmrc` `registry=` whose comment holds an `@` (`registry=https://reg.example/ # mail me@corp.example`) is read as a registry the hook cannot judge: the line is said with no host.
+- A URL the parser rejects was never named and still is not.
+  - `Bash` on PreToolUse, input `{"command":"npm ci"}`, with `package.json`, `package-lock.json` present → `warn`
 
 ## The write guards
 

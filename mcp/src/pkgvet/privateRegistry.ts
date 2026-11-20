@@ -405,6 +405,9 @@ function npmrcValue(raw: string): string {
       break;
     }
   }
+  // An `@` in the part cut off as a comment is read by the manager as a comment too, but it may be the rest of a
+  // credential written with a `#` or a `;` in it: the value is then not judged, and no host is said of it.
+  if (value.slice(end).includes('@')) return UNREADABLE_VALUE;
   return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, '$2');
 }
 

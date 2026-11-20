@@ -56718,6 +56718,30 @@ var init_npmPlanningCopy = __esm({
   }
 });
 
+// src/pkgvet/strayAt.ts
+function strayAt(url2, ownName) {
+  let path3 = url2.pathname;
+  const slash = ownName === void 0 ? -1 : ownName.indexOf("/");
+  if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
+    const scope = ownName.slice(0, slash).toLowerCase();
+    const rest = ownName.slice(slash + 1).toLowerCase();
+    const lower = path3.toLowerCase();
+    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) {
+      const at = lower.indexOf(form);
+      if (at >= 0) {
+        path3 = `${path3.slice(0, at)}/${path3.slice(at + form.length)}`;
+        break;
+      }
+    }
+  }
+  return path3.includes("@") || url2.search.includes("@") || url2.hash.includes("@");
+}
+var init_strayAt = __esm({
+  "src/pkgvet/strayAt.ts"() {
+    "use strict";
+  }
+});
+
 // src/deps/pipRequirements.ts
 import { dirname as dirname17, join as join43, relative as relative13, resolve as resolve16, sep as sep11 } from "node:path";
 function describePipRefusal(r) {
@@ -56795,6 +56819,7 @@ function optionKind(token) {
 }
 function urlHost(url2) {
   const unc = /^(?:\\\\|\/\/)([^\\/]+)/.exec(url2);
+  if (unc?.[1] !== void 0 && url2.includes("@")) return `\\\\${HOST_NOT_SHOWN}`;
   if (unc?.[1] !== void 0) return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(unc[1]) ? `\\\\${unc[1]}` : "\\\\(unparseable host)";
   try {
     const u = new URL(url2);
@@ -56802,6 +56827,7 @@ function urlHost(url2) {
     if (!/^[a-z][a-z0-9+.-]{0,30}$/i.test(scheme)) return "(unparseable URL)";
     const host = u.hostname;
     if (host === "") return scheme.toLowerCase() === "file" ? "file:" : "(no host)";
+    if (strayAt(u)) return `${scheme}://${HOST_NOT_SHOWN}`;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? `${scheme}://${host}` : `${scheme}://(unparseable host)`;
   } catch {
     return "(unparseable URL)";
@@ -56809,7 +56835,9 @@ function urlHost(url2) {
 }
 function bareHost(value) {
   try {
-    const host = new URL(`http://${value}`).hostname;
+    const u = new URL(`http://${value}`);
+    if (strayAt(u)) return HOST_NOT_SHOWN;
+    const host = u.hostname;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? host : "(unparseable host)";
   } catch {
     return "(unparseable host)";
@@ -57027,10 +57055,11 @@ function requirementMentions(text3) {
   }
   return out;
 }
-var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
+var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, HOST_NOT_SHOWN, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
 var init_pipRequirements = __esm({
   "src/deps/pipRequirements.ts"() {
     "use strict";
+    init_strayAt();
     init_projectFs();
     MAX_REQUIREMENT_FILES = 200;
     MAX_REQUIREMENTS_BYTES = 4 * 1024 * 1024;
@@ -57066,6 +57095,7 @@ var init_pipRequirements = __esm({
       f: "find-links option",
       e: "editable requirement"
     };
+    HOST_NOT_SHOWN = "(host not shown)";
     MAX_REFUSALS = 50;
     INDEX_KINDS = /* @__PURE__ */ new Set(["index option", "find-links option", "trusted-host option"]);
     SOURCE_KINDS = /* @__PURE__ */ new Set([
@@ -117023,6 +117053,7 @@ function npmrcValue(raw) {
       break;
     }
   }
+  if (value.slice(end).includes("@")) return UNREADABLE_VALUE;
   return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
 }
 function yamlServer(lines, at, keyIndent, raw) {
@@ -117744,7 +117775,7 @@ function registryHost(ecosystem, value) {
       if (candidate.includes("@")) return void 0;
       continue;
     }
-    if (url2.pathname.includes("@") || url2.search.includes("@") || url2.hash.includes("@")) return void 0;
+    if (strayAt(url2)) return void 0;
     if (named2 === void 0 && !isPublicRegistryUrl(ecosystem, candidate)) named2 = `${url2.protocol}//${url2.hostname}`;
   }
   return named2;
@@ -118120,6 +118151,7 @@ var init_vet = __esm({
     init_popular();
     init_privateRegistry();
     init_registry();
+    init_strayAt();
     init_typosquat();
     init_types7();
     init_versions2();
@@ -122234,6 +122266,7 @@ var init_lockfile = __esm({
   "src/pkgvet/lockfile.ts"() {
     "use strict";
     init_boundedJson();
+    init_strayAt();
     init_versions2();
     JSON_PLAIN = Array.from({ length: 128 }, (_, c) => " 	\n\r,:+-.eE0123456789".includes(String.fromCharCode(c)));
   }

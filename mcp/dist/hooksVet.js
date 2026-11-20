@@ -169,6 +169,32 @@ function parseJsonBounded(text, maxNodes = JSON_MAX_NODES) {
   }
 }
 
+// src/pkgvet/strayAt.ts
+function strayAt(url, ownName) {
+  let path = url.pathname;
+  const slash = ownName === void 0 ? -1 : ownName.indexOf("/");
+  if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
+    const scope = ownName.slice(0, slash).toLowerCase();
+    const rest = ownName.slice(slash + 1).toLowerCase();
+    const lower = path.toLowerCase();
+    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) {
+      const at = lower.indexOf(form);
+      if (at >= 0) {
+        path = `${path.slice(0, at)}/${path.slice(at + form.length)}`;
+        break;
+      }
+    }
+  }
+  return path.includes("@") || url.search.includes("@") || url.hash.includes("@");
+}
+function writtenStrayAt(text, ownName) {
+  try {
+    return strayAt(new URL(text.startsWith("git+") ? text.slice(4) : text), ownName);
+  } catch {
+    return text.includes("@");
+  }
+}
+
 // src/pkgvet/versions.ts
 var POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
 var DEV_REST = /(?:^|[-._])dev/i;
@@ -548,7 +574,8 @@ var LOCAL_SPEC = /^(?:file:|link:|workspace:|portal:|patch:)/i;
 var GIT_SPEC = /^(?:git\+|git:|git@|github:|gitlab:|bitbucket:|gist:|ssh:)/i;
 var UNSAFE_URL = /[\u0000-\u0020\u007f-\u009f\u2028\u2029]/;
 var UNKNOWN_ELSEWHERE = { source: { kind: "elsewhere", host: "", url: "" }, named: void 0 };
-function gitHost(spec2) {
+var sayable = (host, written, name) => writtenStrayAt(written, name) ? "" : host;
+function gitHost(spec2, name, written = spec2) {
   if (spec2.startsWith("github:")) return "github.com";
   if (spec2.startsWith("gitlab:")) return "gitlab.com";
   if (spec2.startsWith("bitbucket:")) return "bitbucket.org";
@@ -558,7 +585,7 @@ function gitHost(spec2) {
     return dnsName(spec2.slice(4, colon < 0 ? void 0 : colon));
   }
   try {
-    return dnsName(new URL(spec2.startsWith("git+") ? spec2.slice(4) : spec2).hostname);
+    return sayable(dnsName(new URL(spec2.startsWith("git+") ? spec2.slice(4) : spec2).hostname), written, name);
   } catch {
     return "";
   }
@@ -581,19 +608,19 @@ function archivePair(pathname) {
   if (!file.startsWith(`${bare}-`)) return void 0;
   return makePin(name, file.slice(bare.length + 1));
 }
-function locate(spec2) {
+function locate(spec2, name, written = spec2) {
   if (spec2.length === 0 || spec2.length > MAX_LINE) return "bad";
   if (spec2.startsWith("//")) return UNSAFE_URL.test(spec2) ? "bad" : { source: { kind: "elsewhere", host: "", url: spec2 }, named: void 0 };
   if (LOCAL_SPEC.test(spec2) || spec2.startsWith("/") || spec2.startsWith("./") || spec2.startsWith("../")) return "local";
   if (UNSAFE_URL.test(spec2)) return "bad";
-  if (GIT_SPEC.test(spec2)) return { source: { kind: "git", host: gitHost(spec2) }, named: void 0 };
+  if (GIT_SPEC.test(spec2)) return { source: { kind: "git", host: gitHost(spec2, name, written) }, named: void 0 };
   let url;
   try {
     url = new URL(spec2);
   } catch {
     return "bad";
   }
-  const host = dnsName(url.hostname);
+  const host = sayable(dnsName(url.hostname), written, name);
   const web = url.protocol === "https:" || url.protocol === "http:";
   if (!web || url.hostname === "codeload.github.com" || url.pathname.endsWith(".git")) return { source: { kind: "git", host }, named: void 0 };
   const isPublic2 = url.protocol === "https:" && PUBLIC_HOSTS.has(url.hostname) && url.username === "" && url.password === "" && url.port === "";
@@ -623,12 +650,12 @@ function emit(acc, pin, located) {
   if (fetched !== void 0) entry.fetched = fetched;
   acc.entries.push(entry);
 }
-function finish(acc, pin, spec2) {
+function finish(acc, pin, spec2, written = spec2) {
   if (spec2 === void 0) {
     if (pin !== void 0) emit(acc, pin, void 0);
     return;
   }
-  const where = locate(spec2);
+  const where = locate(spec2, pin?.name, written);
   if (where === "local") {
     acc.local += 1;
   } else if (where === "bad") {
@@ -1170,7 +1197,10 @@ function scanYarn(lines, odd, berry, acc, onBlock) {
       const value = yarnField(line, berry, field);
       if (value === void 0) continue;
       if (value === null || block[field] !== void 0) block.flawed = true;
-      else block[field] = field === "resolved" ? value.split("#", 1)[0] ?? "" : value;
+      else {
+        block[field] = field === "resolved" ? value.split("#", 1)[0] ?? "" : value;
+        if (field === "resolved") block.resolvedWritten = value;
+      }
       break;
     }
   }
@@ -1189,7 +1219,7 @@ function yarnClassicBlock(acc, b) {
   const where = b.resolved ?? (SCHEME.test(first.range) ? first.range : void 0);
   const pin = makePin(first.name, b.version);
   if (pin !== void 0) {
-    finish(acc, pin, where);
+    finish(acc, pin, where, b.resolved === void 0 ? where : b.resolvedWritten);
     return;
   }
   if (where !== void 0 && locate(where) === "local") acc.local += 1;
@@ -5178,6 +5208,7 @@ function npmrcValue(raw) {
       break;
     }
   }
+  if (value.slice(end).includes("@")) return UNREADABLE_VALUE;
   return value.slice(0, end).trim().replace(/^(["'])(.*)\1$/, "$2");
 }
 var UNREADABLE_VALUE = "(configured)";
@@ -6015,7 +6046,7 @@ function registryHost(ecosystem, value) {
       if (candidate.includes("@")) return void 0;
       continue;
     }
-    if (url.pathname.includes("@") || url.search.includes("@") || url.hash.includes("@")) return void 0;
+    if (strayAt(url)) return void 0;
     if (named === void 0 && !isPublicRegistryUrl(ecosystem, candidate)) named = `${url.protocol}//${url.hostname}`;
   }
   return named;

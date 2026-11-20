@@ -169,6 +169,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'install-candidates-over-ceiling',
       'install-other-runners',
       'launcher-flag-words',
+      'lockfile-origin-host-unsaid',
       'manifest-above-project-root',
       'manifest-lockfile-and-transitive',
       'manifest-not-from-a-registry',
