@@ -400,6 +400,7 @@ describe('the limits of the manifest vetting, as data', () => {
     'manifest-other-managers',
     'manifest-private-scope',
     'manifest-quiet-checks',
+    'manifest-value-not-a-range',
     'manifest-workspace-members',
     'project-default-registry',
     'tilde-range-word',

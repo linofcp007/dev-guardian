@@ -310,6 +310,21 @@ function npmReadings(spec: PackageSpec, manager: string | undefined): { packages
   return second === undefined ? { packages: [spec] } : { packages: [spec, second], pair: [spec, second] };
 }
 
+/** A `~` word with no slash or backslash after it: a spec of the registry, never a path (`~x`, `~abc`, a lone `~`); `~/x` and `~user/x` are paths. */
+function isTildeWord(word: string): boolean {
+  return word.startsWith('~') && !/[\\/]/.test(word);
+}
+
+/**
+ * Why the text after the `@` of `name@<text>`, or the value of a `package.json` dependency, is no spec of the registry — a path,
+ * a URL or VCS spec, an SSH git spec — or `null` when it is one. A version or a range is a range before it is a path, and a `~`
+ * opens a path only with a slash after it. The one rule of the command line and of the manifest.
+ */
+export function notARegistryRange(text: string): string | null {
+  if (isSemverRange(text) || isTildeWord(text)) return null;
+  return notAPackage(text, null) ?? (URL_OR_VCS.test(text) ? 'URL / VCS / protocol spec — not looked up' : null);
+}
+
 /** `alias`: the word is the real name after `npm:` (read in any letter case, as npm does) — a name for every manager, whatever it ends in. */
 function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
@@ -334,11 +349,10 @@ function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | S
     // A `~` opens a path only with a slash after it (`~/x`, `~user/x`): the managers ask the registry for `~1.0.0`, `~x`, `~abc` and a lone `~`
     // (measured). A version or a range is a range before it is a path; a `~` word with no slash is a registry spec the hook does not read
     // as a range, so the package is vetted with none.
-    const tildeSpec = range.startsWith('~') && !/[\\/]/.test(range);
-    const rangeBad = tildeSpec || isSemverRange(range) ? null : notAPackage(range, null);
-    if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? 'URL / VCS / protocol spec — not looked up');
+    const rangeBad = notARegistryRange(range);
+    if (rangeBad !== null) return skip(raw, rangeBad);
     if (readsFileValue(manager, range)) return skip(raw, 'archive file — not looked up');
-    if (tildeSpec && !isSemverRange(range)) range = undefined;
+    if (isTildeWord(range) && !isSemverRange(range)) range = undefined;
     if (range === 'latest') range = undefined;
   }
   return withRange(checkName('npm', name, raw), range);

@@ -4127,8 +4127,15 @@ describe('lockfile-origin-host-from-userinfo', () => {
 // ───────────────── install-vet-manifest-value-dropped — the lockfile still covers a dependency with a value that is no range
 
 describe('install-vet-manifest-value-dropped', () => {
-  it('T-04 guard: a dependency whose value is `~abc`, recorded by the lockfile, is covered by it: no registry request, the pinned version goes to OSV', async () => {
-    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-pkg-zq': '~abc' } }));
+  it('T-04 a dependency whose value is `~abc`, recorded by the lockfile, is read like one whose value is `latest`: its pin goes to OSV and its name to the registry', async () => {
+    // Two dependencies side by side: `latest` is what the tree does today for a value with no range, `~abc` must do the same.
+    const deps = { 'drop-pkg-zq': '~abc', 'latest-pkg-zq': 'latest' };
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+    const pin = (name: string): Record<string, unknown> => ({
+      version: '1.0.0',
+      resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz`,
+      integrity: `sha512-${'A'.repeat(86)}==`,
+    });
     writeFileSync(
       join(project, 'package-lock.json'),
       JSON.stringify({
@@ -4137,17 +4144,16 @@ describe('install-vet-manifest-value-dropped', () => {
         lockfileVersion: 3,
         requires: true,
         packages: {
-          '': { name: 'fixture-app', version: '1.0.0', dependencies: { 'drop-pkg-zq': '~abc' } },
-          'node_modules/drop-pkg-zq': {
-            version: '1.0.0',
-            resolved: 'https://registry.npmjs.org/drop-pkg-zq/-/drop-pkg-zq-1.0.0.tgz',
-            integrity: `sha512-${'A'.repeat(86)}==`,
-          },
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: deps },
+          'node_modules/drop-pkg-zq': pin('drop-pkg-zq'),
+          'node_modules/latest-pkg-zq': pin('latest-pkg-zq'),
         },
       }),
     );
     const asked: string[] = [];
     const f = fakeFetch({
+      'https://registry.npmjs.org/drop-pkg-zq': npmDoc('1.0.0'),
+      'https://registry.npmjs.org/latest-pkg-zq': npmDoc('1.0.0'),
       [OSV]: (body) => {
         const queries = (body as { queries: Array<{ package?: { name?: string }; version?: string }> }).queries;
         asked.push(...queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`));
@@ -4155,8 +4161,14 @@ describe('install-vet-manifest-value-dropped', () => {
       },
     });
     const d = await decideInstallCommand('npm ci', { ...opts(f.fetchImpl), projectDir: project });
+    // (3) both versions are clean: the command is not refused.
     expect(d?.deny).toBeUndefined();
-    expect(f.calls.filter((url) => url !== OSV)).toEqual([]);
-    expect(asked).toEqual(['drop-pkg-zq@1.0.0']);
+    // (1) what the lockfile pins is vetted.
+    expect(asked).toContain('drop-pkg-zq@1.0.0');
+    expect(asked).toContain('latest-pkg-zq@1.0.0');
+    // (2) the name is asked of the registry as it is for `latest`: the same requests, by comparison and not by a pasted value.
+    const registryFor = (name: string): string[] => f.calls.filter((url) => url.endsWith(`/${name}`));
+    expect(registryFor('latest-pkg-zq').length).toBeGreaterThan(0);
+    expect(registryFor('drop-pkg-zq').map((url) => url.replace('drop-pkg-zq', 'X'))).toEqual(registryFor('latest-pkg-zq').map((url) => url.replace('latest-pkg-zq', 'X')));
   });
 });

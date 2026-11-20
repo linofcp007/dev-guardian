@@ -175,6 +175,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'manifest-not-from-a-registry',
       'manifest-other-managers',
       'manifest-private-scope',
+      'manifest-value-not-a-range',
       'manifest-workspace-members',
       'tilde-range-word',
       'yarn-bun-npm-protocol',

@@ -2605,6 +2605,13 @@ function npmReadings(spec2, manager) {
   const second = npmProtocolRest(spec2.raw, manager);
   return second === void 0 ? { packages: [spec2] } : { packages: [spec2, second], pair: [spec2, second] };
 }
+function isTildeWord(word) {
+  return word.startsWith("~") && !/[\\/]/.test(word);
+}
+function notARegistryRange(text) {
+  if (isSemverRange(text) || isTildeWord(text)) return null;
+  return notAPackage(text, null) ?? (URL_OR_VCS.test(text) ? "URL / VCS / protocol spec \u2014 not looked up" : null);
+}
 function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const scoped = raw.startsWith("@");
@@ -2622,11 +2629,10 @@ function parseNpm(raw, manager, alias = false) {
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const tildeSpec = range.startsWith("~") && !/[\\/]/.test(range);
-    const rangeBad = tildeSpec || isSemverRange(range) ? null : notAPackage(range, null);
-    if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
+    const rangeBad = notARegistryRange(range);
+    if (rangeBad !== null) return skip(raw, rangeBad);
     if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
-    if (tildeSpec && !isSemverRange(range)) range = void 0;
+    if (isTildeWord(range) && !isSemverRange(range)) range = void 0;
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);
@@ -4604,12 +4610,14 @@ function pushOnce(into, seen, pkg) {
 }
 var NPM_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 var DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
+var PROTOCOL_OR_SHORTHAND = /^(?:[A-Za-z][A-Za-z0-9+.-]*:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/;
 function npmRange(value, manager) {
   const v = value.trim();
   if (v === "" || v === "latest") return void 0;
-  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
+  if (notARegistryRange(v) !== null || PROTOCOL_OR_SHORTHAND.test(v) || readsFileValue(manager, v)) return null;
+  if (v.length > MAX_RANGE_LENGTH) return void 0;
   if (DIST_TAG.test(v)) return v;
-  return isSemverRange(v) ? v : null;
+  return isSemverRange(v) ? v : void 0;
 }
 function npmDependency(key, value, manager) {
   let name = key;

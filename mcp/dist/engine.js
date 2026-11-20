@@ -115688,6 +115688,13 @@ function npmProtocolReading(manager, rest) {
 function npmKeyRange(manager, rest) {
   return rest.length <= MAX_RANGE_LENGTH && isSemverRange(rest) && !readsFileValue(manager, rest) ? rest : void 0;
 }
+function isTildeWord(word) {
+  return word.startsWith("~") && !/[\\/]/.test(word);
+}
+function notARegistryRange(text3) {
+  if (isSemverRange(text3) || isTildeWord(text3)) return null;
+  return notAPackage(text3, null) ?? (URL_OR_VCS.test(text3) ? "URL / VCS / protocol spec \u2014 not looked up" : null);
+}
 function parseNpm(raw, manager, alias = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
   const scoped = raw.startsWith("@");
@@ -115705,11 +115712,10 @@ function parseNpm(raw, manager, alias = false) {
       const real = parseNpm(range.slice(4), manager, true);
       return "name" in real ? { ...real, raw } : skip(raw, real.reason);
     }
-    const tildeSpec = range.startsWith("~") && !/[\\/]/.test(range);
-    const rangeBad = tildeSpec || isSemverRange(range) ? null : notAPackage(range, null);
-    if (rangeBad !== null || URL_OR_VCS.test(range)) return skip(raw, rangeBad ?? "URL / VCS / protocol spec \u2014 not looked up");
+    const rangeBad = notARegistryRange(range);
+    if (rangeBad !== null) return skip(raw, rangeBad);
     if (readsFileValue(manager, range)) return skip(raw, "archive file \u2014 not looked up");
-    if (tildeSpec && !isSemverRange(range)) range = void 0;
+    if (isTildeWord(range) && !isSemverRange(range)) range = void 0;
     if (range === "latest") range = void 0;
   }
   return withRange(checkName("npm", name, raw), range);

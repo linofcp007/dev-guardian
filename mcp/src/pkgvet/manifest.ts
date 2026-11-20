@@ -38,7 +38,7 @@
 import { dirname, resolve } from 'node:path';
 
 import { isNetworkPath, readSmallText, type TextRead } from '../hooks/configFile.js';
-import { isSemverRange, MAX_RANGE_LENGTH, npmKeyRange, npmProtocolReading, parsePackageSpec, readsFileValue } from './parseCommand.js';
+import { isSemverRange, MAX_RANGE_LENGTH, notARegistryRange, npmKeyRange, npmProtocolReading, parsePackageSpec, readsFileValue } from './parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from './types.js';
 
 type ManifestStatus = 'ok' | 'absent' | 'unreadable';
@@ -145,18 +145,22 @@ const NPM_SECTIONS = ['dependencies', 'devDependencies', 'optionalDependencies',
 /** A dist-tag: one word that no version can be taken for. */
 const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
+/** A protocol (`catalog:`, `jsr:`, `workspace:` …) or `user/repo`, the GitHub shorthand: a value that names no registry package. */
+const PROTOCOL_OR_SHORTHAND = /^(?:[A-Za-z][A-Za-z0-9+.-]*:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/;
+
 /**
- * What a dependency's value asks the registry for: `undefined` for "the
- * default" (an empty value, `latest`), the range or tag, or `null` when the
- * value is no registry spec at all — a path, `file:`, `link:`, `workspace:`,
- * `catalog:`, a URL, a git repository, `user/repo`, an archive, or text.
+ * What a dependency's value asks the registry for: `undefined` for "the default" (an empty value, `latest`) and for a value the
+ * hook does not read as a range (it is still a spec of the registry: the package is vetted, with no range); the range or tag; or
+ * `null` when the value is positively something else — a path, a protocol (`file:`, `link:`, `workspace:`, `catalog:` …), a URL, a
+ * git repository, `user/repo`, or an archive the manager reads as a file. The reading fails closed: only those are dropped.
  */
 function npmRange(value: string, manager: string): string | undefined | null {
   const v = value.trim();
   if (v === '' || v === 'latest') return undefined;
-  if (v.length > MAX_RANGE_LENGTH || readsFileValue(manager, v)) return null;
+  if (notARegistryRange(v) !== null || PROTOCOL_OR_SHORTHAND.test(v) || readsFileValue(manager, v)) return null;
+  if (v.length > MAX_RANGE_LENGTH) return undefined;
   if (DIST_TAG.test(v)) return v;
-  return isSemverRange(v) ? v : null;
+  return isSemverRange(v) ? v : undefined;
 }
 
 /**
