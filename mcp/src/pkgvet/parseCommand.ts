@@ -492,7 +492,7 @@ const NPM_COMMON_BOOL = [
 ];
 
 /** The loglevel shorthands of npm and pnpm: boolean flags that take no `true` / `false` word (measured 2026-11-19). */
-const LOGLEVEL_FLAGS: ReadonlySet<string> = new Set(['--silent', '--quiet', '-q', '--verbose', '-d']);
+const LOGLEVEL_FLAGS: ReadonlySet<string> = new Set(['--silent', '--quiet', '-q', '--verbose', '-d', '-s']);
 
 const NPM_TABLE: FlagTable = {
   // `-C` is npm's short form of `--prefix`.
@@ -506,7 +506,8 @@ const NPM_TABLE: FlagTable = {
     '--min-release-age'),
   // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
   // regression tests of this fix use them as the examples of a flag the table lacks.)
-  bool: set(...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl'),
+  // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
+  bool: set(...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl', '-s'),
   registry: set('--registry'),
   dir: set('--prefix', '-C'),
   workspace: set('--workspace', '-w', '--workspaces'),
@@ -785,7 +786,7 @@ interface WalkResult {
   /** Reasons a missing name in this command must not be denied (ruling (a), (c), (f)). */
   uncertain: string[];
   /** Every flag seen, with its value when it took one — what a launcher's packages are read from. */
-  flags: Array<{ flag: string; value?: string }>;
+  flags: Array<{ flag: string; value?: string; eq?: true }>;
   /** How many flags the table of the manager does not know: npm reads abbreviations (`--loc=project`) that it does not hold. */
   unknownFlags: number;
 }
@@ -864,6 +865,10 @@ function readsBothWays(v: string, next: string | undefined, table: FlagTable): b
 const bothWaysReason = (word: string, flag: string): string =>
   `\`${word}\` after \`${flag}\`${TWO_READINGS} — the value of the flag, or the package — both are looked up`;
 
+/** Why a Yarn line with a `true` / `false` between `--production` and the subcommand is uncertain: no manager installs the word as a package. */
+const productionWordReason = (word: string): string =>
+  `\`${word}\` after \`--production\`${TWO_READINGS} — Yarn 1 takes it as the value of the flag and Yarn 4 as the subcommand; no manager installs it as a package, so it is not looked up and the manifest is read`;
+
 /**
  * Separates flags (and their values) from positional words.
  *
@@ -882,9 +887,9 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   let unknownFlags = 0;
   let customRegistry: string | undefined;
   const registries: string[] = [];
-  const flags: Array<{ flag: string; value?: string }> = [];
-  const note = (flag: string, value: string | undefined): void => {
-    flags.push(value === undefined ? { flag } : { flag, value });
+  const flags: Array<{ flag: string; value?: string; eq?: true }> = [];
+  const note = (flag: string, value: string | undefined, eq?: true): void => {
+    flags.push(value === undefined ? { flag } : eq === true ? { flag, value, eq } : { flag, value });
     if (table.registry.has(flag) && value !== undefined) {
       registries.push(value);
       customRegistry = customRegistry ?? value;
@@ -916,7 +921,7 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
         uncertain.push(`unknown flag ${flag}`);
         unknownFlags += 1;
       }
-      note(flag, v.slice(eqAt + 1));
+      note(flag, v.slice(eqAt + 1), true);
       continue;
     }
     if (table.value.has(v)) {
@@ -1107,8 +1112,6 @@ interface Detected {
    * the manager installs the manifest beside what the command names.
    */
   manifest?: 'always' | 'bare';
-  /** Yarn: the `true` / `false` after `--production`, the value of that flag for Yarn 1 and a word to vet for the others ({@link bothWaysReason}). */
-  twoWays?: ShellWord;
   /** An update verb: a manifest install that moves the direct dependencies past the lockfile's pins ({@link InstallCommand.update}). */
   update?: true;
 }
@@ -1236,18 +1239,19 @@ function detect(input: readonly ShellWord[]): Detected | null {
   if (table === undefined) return null;
   let sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
   // Yarn 1 reads a `true` / `false` after `--production` as that flag's value (measured 2026-11-19), Yarn 4 and the scan above
-  // as the subcommand: the word is taken out of the line, and vetted as a possible package beside the manifest it then installs.
-  let productionWord: ShellWord | undefined;
+  // as the subcommand, and no measured manager installs it as a package (EC-5): the word is taken out of the line, the rest is
+  // read as the subcommand says, and the command says it has two readings.
+  let productionWord: string | undefined;
   const wordAt = words[sub];
   if (head === 'yarn' && wordAt !== undefined && isBoolWord(wordAt.value) && words[sub - 1]?.value === '--production') {
-    productionWord = wordAt;
+    productionWord = wordAt.value;
     words = [...words.slice(0, sub), ...words.slice(sub + 1)];
     sub = nextPositional(words, sub, table, SUBCOMMANDS[head]);
   }
   const tag = (d: Detected): Detected =>
     productionWord === undefined
       ? d
-      : { ...d, twoWays: productionWord, uncertain: [...d.uncertain, bothWaysReason(productionWord.value, '--production')] };
+      : { ...d, uncertain: [...d.uncertain, productionWordReason(productionWord)] };
   if (sub < 0) {
     // A bare `yarn` — flags only — installs the project's manifest, unless a flag only prints.
     if (head === 'yarn' && !rest.some((w) => YARN_PRINTS.has(w.value))) {
@@ -1406,8 +1410,9 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   // positional after it is looked up, the command being uncertain (the word may be read the other way).
   const has = (names: ReadonlySet<string> | undefined): boolean =>
     names !== undefined && flags.some((f) => names.has(f.flag) && !isBoolWord(f.value));
+  // A flag written with `=` takes no word after it: there are not two readings.
   const wordFlags = (names: ReadonlySet<string> | undefined): Array<{ flag: string; value?: string }> =>
-    names === undefined ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value));
+    names === undefined ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value) && f.eq !== true);
   const values = (names: ReadonlySet<string> | undefined): string[] =>
     names === undefined
       ? []
@@ -1537,13 +1542,6 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     }
   }
 
-  if (d.twoWays !== undefined) {
-    const spec = parseNpm(d.twoWays.value, d.manager);
-    if ('name' in spec) {
-      packages.push(spec);
-      candidatePackages.push(spec);
-    }
-  }
   const bothWhy = bothReadings(bothPairs);
   if (bothWhy !== undefined) out.uncertain.push(bothWhy);
   if (candidatePackages.length > 0) out.candidates = candidatePackages;

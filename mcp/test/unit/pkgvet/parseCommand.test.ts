@@ -2451,8 +2451,9 @@ describe('install-vet-npm-exec-bool-word', () => {
     },
   );
 
-  it.each(['yarn --production false', 'yarn --production true'])('T-07 `%s` also vets the word as a package (AC-7: the line is read both ways)', (command) => {
-    expect(namesOf(command)).toEqual([command.endsWith('true') ? 'true' : 'false']);
+  // EC-5 (review round 1): no measured manager installs the word between `--production` and the subcommand as a package.
+  it.each(['yarn --production false', 'yarn --production true'])('T-07 `%s` reads the manifest and vets no package (EC-5)', (command) => {
+    expect(namesOf(command)).toEqual([]);
   });
 
   it('T-07 `bun install --production true` still vets the word `true` as a package', () => {
@@ -2468,5 +2469,98 @@ describe('install-vet-npm-exec-bool-word', () => {
   it.each(['yarn --production', 'bun install --production'])('T-07 `%s` without a word is read as before: the manifest, no package', (command) => {
     expect(manifestsOf(command), command).toEqual([MANIFEST]);
     expect(namesOf(command)).toEqual([]);
+  });
+
+  // ── T-08 (review round 1)
+  const TWO_WAYS = 'is read two ways';
+  const saysTwoWays = (command: string): boolean => uncertainOf(command).some((u) => u.includes(TWO_WAYS));
+
+  it.each(['npm exec -sy true p', 'npm exec -sy false p', 'npm x -sy true p', 'npm install -sD true p'])(
+    'T-08 `%s`: `-s` is a boolean flag of npm; a group that does not end in a loglevel letter takes the word as its value, p is the package',
+    (command) => {
+      // npm 11.20.0 (measured 2026-11-20): -sy / -sD ask for P; the LAST letter decides.
+      expect(namesOf(command), command).toEqual(['p']);
+    },
+  );
+
+  it('T-08 `npm exec -ys false p` and `npm install -Ds true p`: `-s` last is a loglevel flag, the word is a package', () => {
+    expect(namesOf('npm exec -ys false p')).toEqual(['false']);
+    expect(namesOf('npm install -Ds true p')).toEqual(['p', 'true']);
+  });
+
+  it.each(['yarn --production true', 'yarn --production false'])('T-08 `%s`: the manifest is read, no package, uncertain with the two readings said (EC-5)', (command) => {
+    expect(manifestsOf(command)).toEqual([MANIFEST]);
+    expect(namesOf(command)).toEqual([]);
+    expect(saysTwoWays(command), 'the reason names the two readings').toBe(true);
+  });
+
+  it.each(['yarn --production true add p', 'yarn --production false add p'])('T-08 `%s`: the rest is read as the subcommand says, p is vetted, the word is not (EC-5)', (command) => {
+    expect(namesOf(command)).toEqual(['p']);
+    expect(manifestsOf(command)).toEqual([MANIFEST]);
+    expect(saysTwoWays(command)).toBe(true);
+  });
+
+  it.each(['yarn --production false upgrade', 'yarn --production false install'])('T-08 `%s`: the manifest, no package, uncertain (EC-5)', (command) => {
+    expect(manifestsOf(command)).toEqual([MANIFEST]);
+    expect(namesOf(command)).toEqual([]);
+    expect(saysTwoWays(command)).toBe(true);
+  });
+
+  it('T-08 guard: after the subcommand the word is looked up, for Yarn and for bun (EC-4)', () => {
+    expect(namesOf('bun install --production true')).toEqual(['true']);
+    expect(namesOf('yarn add --production true p')).toEqual(['p', 'true']);
+    expect(manifestsOf('bun install --production true')).toEqual([MANIFEST]);
+  });
+
+  it.each(['npx --no=true p', 'npx --no=false p', 'npx --offline=false p'])('T-08 `%s`: p is vetted and no reason says two readings (a flag with `=` takes no word)', (command) => {
+    expect(namesOf(command)).toEqual(['p']);
+    expect(saysTwoWays(command)).toBe(false);
+  });
+
+  it('T-08 `yarn dlx -q false p`: both words are vetted, uncertain with the two readings said', () => {
+    expect(namesOf('yarn dlx -q false p')).toEqual(['false', 'p']);
+    expect(saysTwoWays('yarn dlx -q false p')).toBe(true);
+  });
+
+  it.each(['pnpm dlx --quiet false p', 'pnpm dlx --verbose false p'])('T-08 `%s`: the word and p are vetted, uncertain with the two readings said', (command) => {
+    expect(namesOf(command)).toEqual(['false', 'p']);
+    expect(saysTwoWays(command)).toBe(true);
+  });
+
+  it('T-08 `pnpm dlx -p false p`: `-p` is a boolean flag, p is the package', () => {
+    expect(namesOf('pnpm dlx -p false p')).toEqual(['p']);
+  });
+
+  it('T-08 `pnpm dlx -c \'p --version\'` names nothing and skips nothing (a command, not a name)', () => {
+    const cmds = parseInstallCommands("pnpm dlx -c 'p --version'");
+    expect(cmds).toHaveLength(1);
+    expect(cmds.flatMap((c) => c.skipped)).toEqual([]);
+  });
+
+  it.each(['npm exec -c p', 'npm exec --call p', 'npm exec --no p', 'npm exec --offline p', 'npm x --no p'])('T-08 `%s` names no package', (command) => {
+    expect(namesOf(command)).toEqual([]);
+    expect(parseInstallCommands(command)).toHaveLength(1);
+  });
+
+  it('T-08 `npm exec --registry <url> p` is a registry of its own; `-w ws p` is a workspace context', () => {
+    const url = 'https://reg.example/';
+    expect(parseInstallCommands(`npm exec --registry ${url} p`).map((c) => c.customRegistry)).toEqual([url]);
+    expect(uncertainOf('npm exec -w ws p')).toContain('workspace context (-w)');
+    expect(namesOf('npm exec -w ws p')).toEqual(['p']);
+  });
+
+  it.each([
+    'npm exec --no false p',
+    'npm exec --offline false p',
+    'npx --no false p',
+    'npx --no-install false p',
+    'pnpm dlx -c false p',
+    'pnpm dlx --shell-mode false p',
+    'npx -qy false p',
+    'bunx --quiet false p',
+    'pnpm dlx --silent false p',
+    'yarn --production false',
+  ])('T-08 `%s`: the uncertainty says the two readings, in words', (command) => {
+    expect(saysTwoWays(command), command).toBe(true);
   });
 });

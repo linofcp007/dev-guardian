@@ -2763,7 +2763,7 @@ var NPM_COMMON_BOOL = [
   "--frozen-lockfile",
   "--no-frozen-lockfile"
 ];
-var LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
+var LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d", "-s"]);
 var NPM_TABLE = {
   // `-C` is npm's short form of `--prefix`.
   value: set(
@@ -2811,7 +2811,8 @@ var NPM_TABLE = {
   ),
   // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
   // regression tests of this fix use them as the examples of a flag the table lacks.)
-  bool: set(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl"),
+  // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
+  bool: set(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl", "-s"),
   registry: set("--registry"),
   dir: set("--prefix", "-C"),
   workspace: set("--workspace", "-w", "--workspaces"),
@@ -3517,6 +3518,7 @@ function readsBothWays(v, next, table) {
   return table.bothWays === "flags" && table.bool.has(v);
 }
 var bothWaysReason = (word, flag) => `\`${word}\` after \`${flag}\`${TWO_READINGS} \u2014 the value of the flag, or the package \u2014 both are looked up`;
+var productionWordReason = (word) => `\`${word}\` after \`--production\`${TWO_READINGS} \u2014 Yarn 1 takes it as the value of the flag and Yarn 4 as the subcommand; no manager installs it as a package, so it is not looked up and the manifest is read`;
 function walk(words, table) {
   const positionals = [];
   const skipped = [];
@@ -3525,8 +3527,8 @@ function walk(words, table) {
   let customRegistry;
   const registries = [];
   const flags = [];
-  const note = (flag, value) => {
-    flags.push(value === void 0 ? { flag } : { flag, value });
+  const note = (flag, value, eq2) => {
+    flags.push(value === void 0 ? { flag } : eq2 === true ? { flag, value, eq: eq2 } : { flag, value });
     if (table.registry.has(flag) && value !== void 0) {
       registries.push(value);
       customRegistry = customRegistry ?? value;
@@ -3558,7 +3560,7 @@ function walk(words, table) {
         uncertain.push(`unknown flag ${flag}`);
         unknownFlags += 1;
       }
-      note(flag, v.slice(eqAt + 1));
+      note(flag, v.slice(eqAt + 1), true);
       continue;
     }
     if (table.value.has(v)) {
@@ -3775,11 +3777,11 @@ function detect(input) {
   let productionWord;
   const wordAt = words[sub];
   if (head === "yarn" && wordAt !== void 0 && isBoolWord(wordAt.value) && words[sub - 1]?.value === "--production") {
-    productionWord = wordAt;
+    productionWord = wordAt.value;
     words = [...words.slice(0, sub), ...words.slice(sub + 1)];
     sub = nextPositional(words, sub, table, SUBCOMMANDS[head]);
   }
-  const tag = (d) => productionWord === void 0 ? d : { ...d, twoWays: productionWord, uncertain: [...d.uncertain, bothWaysReason(productionWord.value, "--production")] };
+  const tag = (d) => productionWord === void 0 ? d : { ...d, uncertain: [...d.uncertain, productionWordReason(productionWord)] };
   if (sub < 0) {
     if (head === "yarn" && !rest.some((w) => YARN_PRINTS.has(w.value))) {
       return tag({ manager: head, ecosystem: "npm", args: rest, pre: [], uncertain: [], manifest: "always" });
@@ -3907,7 +3909,7 @@ function collectLaunch(d, launch, context) {
   const w = walk(body, table);
   const flags = [...pre.flags, ...w.flags];
   const has2 = (names) => names !== void 0 && flags.some((f) => names.has(f.flag) && !isBoolWord(f.value));
-  const wordFlags = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value));
+  const wordFlags = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value) && f.eq !== true);
   const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
   const limited = limitCandidates(w.positionals);
@@ -4020,13 +4022,6 @@ function collect(d, context) {
     } else {
       skipped.push(spec2);
       lastComposer = void 0;
-    }
-  }
-  if (d.twoWays !== void 0) {
-    const spec2 = parseNpm(d.twoWays.value, d.manager);
-    if ("name" in spec2) {
-      packages.push(spec2);
-      candidatePackages.push(spec2);
     }
   }
   const bothWhy = bothReadings(bothPairs);

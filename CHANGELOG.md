@@ -22,9 +22,13 @@ version bump.
   bun 1.4 on Linux only), present since 3.1.0, when launcher vetting began. `npm exec` and `npm x` are now read with npm's flags and npm's rule
   for the word; in the other launchers the word and the next one are both looked up and the command is uncertain (a name
   the registry lacks is a warning, a malicious package is denied as always); `pnpm dlx -c <one word>` looks the word up.
-  In Yarn and bun a `true` / `false` after `--production` is read both ways: looked up as a package, and the manifest read
-  as for an install in which the word is the flag's value (`yarn --production false` installed the manifest unvetted).
-  The known limits list what stays unmeasured. Update; there is nothing to rotate.
+  In Yarn and bun a `true` / `false` after `--production` is read both ways: after the subcommand (`yarn add`, `bun add`,
+  `bun install`) the word is looked up as a package and the manifest is read; between `--production` and the subcommand
+  (`yarn --production true`, present since 3.10.0, when the manifest began to be read) only the manifest is read and the
+  rest of the line as the subcommand says, because no manager measured installs that word as a package (`yarn
+  --production false` installed the manifest unvetted). The `-s` shorthand of npm (`npm exec -sy false <package>`, `npm
+  install -sD true <package>`) was unknown to the hook and is now a boolean loglevel flag, like `-q` and `-d`. The known
+  limits list what stays unmeasured. Update; there is nothing to rotate.
 - **`yarn add evil@npm:^1.2.3` and `bun add evil@npm:1.0.0` installed a package the hook never looked up.** The hook read `name@npm:rest` as an npm alias for every manager and vetted only `rest`. Under Yarn 4 `npm:` is the registry protocol and the package is `name` (bun asks for `name` only for a full version or a range that starts with an operator, and for the word after `npm:`, an alias, for `latest`, `1`, `1.x` or another word): a range after `npm:` (`^1.2.3`, `*`) vetted nobody, a version or a tag (`1.0.0`, `latest`) vetted the wrong word, and `yarn add evil@npm:1.x` was denied for a name nobody asked for. The same reading was applied to a `package.json` value `"evil": "npm:^1.2.3"`. Present since 3.0.0. Now, for Yarn and bun, a word after `npm:` that is no package name is read as `name`, one that is a valid name with no range is read both ways (`name`, at the word when that is a version or a range, and the word are looked up, a missing one is a warning, a malicious one is denied), and one with a `@range` of its own stays an alias; npm and pnpm read it as before. Yarn 2 and 3, `resolutions` and `overrides` were not measured or read, and the known limits say so. Update; there is nothing to rotate.
 - **`dotnet package add` and `dotnet tool install` fetched a NuGet package without being vetted.** The hook read one
   .NET form, `dotnet add package <name>`. The .NET 10 form `dotnet package add <name>` and `dotnet tool install <name>`

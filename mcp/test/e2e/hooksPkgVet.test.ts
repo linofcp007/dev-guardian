@@ -1849,6 +1849,50 @@ describe('install-vet-npm-exec-bool-word', () => {
       expect(r.requests.filter((u) => /registry\.npmjs\.org\/(?:true|false)(?:$|[/?])/.test(u))).toEqual([]);
     },
   );
+
+  // T-08 (review round 1)
+  it.each(['npm exec -sy false evil-cli-zy', 'npm exec -sy true evil-cli-zy'])(
+    'T-08 %s is DENIED for the package: `-s` is a loglevel flag of npm and the word is the value of `-y`',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/evil-cli-zy.*MAL-2026-0088/s);
+    },
+  );
+
+  it.each(['npm exec --yes dgprobe-missing-zy', 'npm exec -y dgprobe-missing-zy'])('T-08 %s: a name the registry does not have is DENIED (the confident shape)', (command) => {
+    const r = runHook(command, { 'https://registry.npmjs.org/dgprobe-missing-zy': { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/dgprobe-missing-zy.*does not exist/s);
+  });
+
+  describe('`yarn --production true` reads the manifest, and vets no package called `true`', () => {
+    const MANIFEST_ROUTES: Record<string, Route> = {
+      'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+      'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+      [OSV]: { osv: {} },
+    };
+    const manifest = (deps: Record<string, string>): void =>
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+
+    it('T-08 a clean manifest: not denied, and the registry is never asked for `true`', () => {
+      manifest({ express: '^4.21.0' });
+      const r = runHook('yarn --production true', MANIFEST_ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.requests.filter((u) => /registry\.npmjs\.org\/true(?:$|[/?])/.test(u))).toEqual([]);
+    });
+
+    it('T-08 a manifest that names a malicious package: DENIED for it', () => {
+      manifest({ express: '^4.21.0', crossenv: '*' });
+      const r = runHook('yarn --production true', MANIFEST_ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toMatch(/package\.json.*crossenv/s);
+    });
+  });
 });
 
 // ───────────────── lockfile-origin-host-from-userinfo — through the real hook process

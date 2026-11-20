@@ -115868,7 +115868,7 @@ var init_parseCommand = __esm({
       "--frozen-lockfile",
       "--no-frozen-lockfile"
     ];
-    LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d"]);
+    LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d", "-s"]);
     NPM_TABLE = {
       // `-C` is npm's short form of `--prefix`.
       value: set2(
@@ -115916,7 +115916,8 @@ var init_parseCommand = __esm({
       ),
       // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
       // regression tests of this fix use them as the examples of a flag the table lacks.)
-      bool: set2(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl"),
+      // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
+      bool: set2(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl", "-s"),
       registry: set2("--registry"),
       dir: set2("--prefix", "-C"),
       workspace: set2("--workspace", "-w", "--workspaces"),

@@ -953,22 +953,17 @@
     A `true` or `false` after a flag of a launcher (`npx`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bunx`) is read as the manager reads it where that was measured (npm 11.20, pnpm 10.33, Yarn 4.18, bun 1.4, 2026-11-19), and looked up both ways, with the command uncertain, where it was not. What stays out:
 
     - `yarn dlx` and `bunx` were measured only in a Linux container, not on Windows (neither is installed there), and nothing was measured on macOS or in a session with a terminal: with one, npm asks before it installs a package that `npm exec --yes false <package>` would otherwise leave alone.
-    - A `true` / `false` after a long flag the hook's table does not know is read as that flag's value, as for every manager: `npx --ignore-scripts false <package>` and `pnpm dlx --loglevel silent false <package>` fetch `false`, which is then not looked up (the package after it is, as a possible package). The only packages with those names are npm's security placeholder and a harmless one.
+    - A `true` / `false` after a long flag the hook's table does not know is read as that flag's value, as for every manager: `npx --ignore-scripts false <package>` fetches `false`, which is then not looked up (the package after it is, as a possible package). With `pnpm dlx --loglevel silent false <package>` the hook looks up `false` and `silent`, and not `<package>`, which the manager does not ask for either. The only packages named `true` or `false` are npm's security placeholder and a harmless one.
     - The hook looks up more than the manager asks for where it cannot tell the readings apart, and where the manager refuses the line: `yarn dlx -y false <package>`, `pnpm dlx --yes <package>` and every `bunx` line with `false` in it on a system where `false` is a program. The extra lookup is a warning for a name the registry does not have, never a deny.
     - With `npx`, `--no-install false <package>` and `--offline false <package>` fetch nothing (measured), and the hook looks `<package>` up all the same.
     - `pnpm dlx -c <word> <more words>` is a shell command, and no package is looked up for it.
+    - A `true` / `false` between `--production` and the subcommand of Yarn (`yarn --production true add <package>`) is not looked up: no manager measured installs it as a package. After the subcommand (`yarn add --production true <package>`, `bun install --production true`) it is looked up.
   examples:
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
         command: npx --ignore-scripts false dgprobe-zzq7731
-      expect: { decision: warn }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: yarn dlx -y false dgprobe-zzq7731
       expect: { decision: warn }
     - detector: hook
       event: PreToolUse
