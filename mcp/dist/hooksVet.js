@@ -4204,6 +4204,7 @@ function collect(d, context) {
       if ("name" in spec2) out.updateNames.push(spec2);
       else skipped.push(spec2);
     }
+    if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   }
   if (d.global === true || knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args)) out.global = true;
   if (d.manager === "pip" || d.manager === "uv-pip") {
@@ -6742,9 +6743,15 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
   );
   const candidateKeys = named.filter((p) => !certainKeys.has(key(p))).map(key).slice(0, MAX_VETTED_PACKAGES - certain.length);
   const chosen = /* @__PURE__ */ new Set([...certain, ...candidateKeys, ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
+  const taken = /* @__PURE__ */ new Map();
+  for (const updates of [false, true]) {
+    for (const c of parsed) {
+      if (c.fromUpdate === true === updates) taken.set(c, c.packages.filter((pkg) => chosen.delete(key(pkg))));
+    }
+  }
   const commands = [];
   for (const c of parsed) {
-    const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
+    const packages = taken.get(c) ?? [];
     if (packages.length === 0) continue;
     const uncertain = cut ? [...c.uncertain, "the command is over 512 KB and only its start was read"] : c.uncertain;
     commands.push({ ...c, packages, uncertain });

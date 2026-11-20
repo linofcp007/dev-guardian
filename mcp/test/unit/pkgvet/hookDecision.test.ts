@@ -4747,6 +4747,30 @@ describe('install-vet-global-update-by-name', () => {
     expect(d?.deny).toBeUndefined();
     expect(d?.context ?? '').toContain(NOT_FOUND);
   });
+
+  // Review of the execution (2026-11-20): a name that an update AND an install of one line give is the install's. An update
+  // says less — no fresh version, no install scripts, its own reason for a missing name — and must not take the install's answer.
+  it.each(['npm update -g fresh-pkg; npm install fresh-pkg', 'npm install fresh-pkg; npm update -g fresh-pkg'])(
+    'T-04 `%s`: the install keeps its warnings (a version published an hour ago, install scripts)',
+    async (command) => {
+      const reg = lookupRegistry();
+      const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+      expect(d?.deny, command).toBeUndefined();
+      expect(d?.context ?? '', command).toMatch(/fresh-pkg.*published 1 h ago/s);
+      expect(d?.context ?? '', command).toMatch(/fresh-pkg.*runs install scripts on install: postinstall/s);
+    },
+  );
+
+  it.each([`npm update -g ${P} && npm install ${P}`, `yarn global upgrade ${P}; npm i ${P}`])(
+    "T-04 `%s` with a name the registry does not have: the warning is the install's, not the update's",
+    async (command) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      expect(d?.deny, command).toBeUndefined();
+      expect(d?.context ?? '', command).toContain(NOT_FOUND);
+      expect(d?.context ?? '', command).not.toContain(NOT_DENIED);
+    },
+  );
 });
 
 // ───────────────── install-vet-launcher-runs-manager — what a launcher runs, when it is a package manager, is vetted

@@ -264,9 +264,18 @@ function boundedInstalls(
   );
   const candidateKeys = named.filter((p) => !certainKeys.has(key(p))).map(key).slice(0, MAX_VETTED_PACKAGES - certain.length);
   const chosen = new Set([...certain, ...candidateKeys, ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
+  // Each name goes to ONE command of the line. A name that an update and an install both give is the install's, wherever
+  // each stands: an update says less of it (no fresh version, no install scripts, its own reason for a missing name), and
+  // `npm update -g x; npm install x` must not take the install's answer away. So the other commands choose first.
+  const taken = new Map<VetCommand, PackageSpec[]>();
+  for (const updates of [false, true]) {
+    for (const c of parsed) {
+      if ((c.fromUpdate === true) === updates) taken.set(c, c.packages.filter((pkg) => chosen.delete(key(pkg))));
+    }
+  }
   const commands: VetCommand[] = [];
   for (const c of parsed) {
-    const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
+    const packages = taken.get(c) ?? [];
     if (packages.length === 0) continue;
     const uncertain = cut ? [...c.uncertain, 'the command is over 512 KB and only its start was read'] : c.uncertain;
     commands.push({ ...c, packages, uncertain });

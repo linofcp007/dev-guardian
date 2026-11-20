@@ -1821,6 +1821,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
       if ('name' in spec) out.updateNames.push(spec);
       else skipped.push(spec);
     }
+    // The candidate words left out past the ceiling of one command are counted, as they are for an install.
+    if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   }
   if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {

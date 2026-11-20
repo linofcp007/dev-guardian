@@ -2993,6 +2993,16 @@ describe('install-vet-global-update-by-name', () => {
   it.each(['yarn up lodash', "yarn up '*'", 'corepack yarn@4.18.1 up lodash'])('T-06 `%s` keeps `packages` empty and the manifest read, as today', (command) => {
     expect(read(command).map((c) => ({ packages: c.packages, manifest: c.manifest, update: c.update }))).toEqual([{ packages: [], manifest: MANIFEST, update: true }]);
   });
+
+  // Review of the execution (2026-11-20): the candidate words of an update past the per-command ceiling were dropped uncounted.
+  it('T-01 the candidates of a global update past the per-command ceiling are counted, as those of an install are', () => {
+    const words = Array.from({ length: 60 }, (_, i) => `--dgq${String(i)} dgprobe-zzq7731-c${String(i)}`).join(' ');
+    const dropped = (command: string): Array<number | undefined> => parseInstallCommands(command).map((c) => c.candidatesDropped);
+    const install = dropped(`npm install -g ${words}`);
+    expect(install).toHaveLength(1);
+    expect(install[0] ?? 0).toBeGreaterThan(0);
+    expect(dropped(`npm update -g ${words}`)).toEqual(install);
+  });
 });
 
 // ───────────────── install-vet-launcher-runs-manager — what a launcher of the npm family runs, when it is a package manager
