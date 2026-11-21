@@ -141,6 +141,7 @@ export class ScansRepo {
   private readonly finalizeStmt: Statement<[
     string, string, string, string, string | null, string | null, string | null, string
   ]>;
+  private readonly rewriteBookkeepingStmt: Statement<[string, string, string]>;
   private readonly markCancelledStmt: Statement<[string, string]>;
   private readonly listRunningStmt: Statement<[], RunningRow>;
   private readonly reapOneStmt: Statement<[string, string, string]>;
@@ -170,6 +171,10 @@ export class ScansRepo {
           report_dir = COALESCE(?, report_dir), error = ?,
           meta = COALESCE(?, meta)
       WHERE id = ?
+    `);
+
+    this.rewriteBookkeepingStmt = db.prepare(`
+      UPDATE scans SET tools_run = ?, missing_tools = ? WHERE id = ?
     `);
 
     this.markCancelledStmt = db.prepare(`
@@ -308,6 +313,18 @@ export class ScansRepo {
       input.scan_id,
     );
     return finishedAt;
+  }
+
+  /**
+   * Rewrites what a scan says it ran — `tools_run` and `missing_tools`, from
+   * which its coverage is judged — and nothing else: its status and finish
+   * date stay as {@link finalize} wrote them, which writing it again would
+   * move. For a record that measures more after it was finalized: an
+   * `llm_scan` plan's, completed at the plan's start and kept up to date as
+   * its hunt tasks are answered (`llmscan/planRecord.ts`).
+   */
+  rewriteBookkeeping(scanId: string, bookkeeping: Pick<ScanRecord, 'tools_run' | 'missing_tools'>): void {
+    this.rewriteBookkeepingStmt.run(JSON.stringify(bookkeeping.tools_run), JSON.stringify(bookkeeping.missing_tools), scanId);
   }
 
   markCancelled(scanId: string): void {

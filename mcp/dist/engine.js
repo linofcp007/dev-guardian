@@ -13489,6 +13489,9 @@ var init_scansRepo = __esm({
           meta = COALESCE(?, meta)
       WHERE id = ?
     `);
+        this.rewriteBookkeepingStmt = db.prepare(`
+      UPDATE scans SET tools_run = ?, missing_tools = ? WHERE id = ?
+    `);
         this.markCancelledStmt = db.prepare(`
       UPDATE scans
       SET status = 'cancelled', finished_at = ?
@@ -13544,6 +13547,7 @@ var init_scansRepo = __esm({
       db;
       insertStmt;
       finalizeStmt;
+      rewriteBookkeepingStmt;
       markCancelledStmt;
       listRunningStmt;
       reapOneStmt;
@@ -13600,6 +13604,17 @@ var init_scansRepo = __esm({
           input2.scan_id
         );
         return finishedAt;
+      }
+      /**
+       * Rewrites what a scan says it ran — `tools_run` and `missing_tools`, from
+       * which its coverage is judged — and nothing else: its status and finish
+       * date stay as {@link finalize} wrote them, which writing it again would
+       * move. For a record that measures more after it was finalized: an
+       * `llm_scan` plan's, completed at the plan's start and kept up to date as
+       * its hunt tasks are answered (`llmscan/planRecord.ts`).
+       */
+      rewriteBookkeeping(scanId, bookkeeping) {
+        this.rewriteBookkeepingStmt.run(JSON.stringify(bookkeeping.tools_run), JSON.stringify(bookkeeping.missing_tools), scanId);
       }
       markCancelled(scanId) {
         this.markCancelledStmt.run(nowIso(), scanId);
@@ -119271,6 +119286,33 @@ var init_report2 = __esm({
   }
 });
 
+// src/llmscan/planRecord.ts
+function huntRun(run2) {
+  return { name: "llm-hunt", status: run2.status, ...run2.reason !== void 0 ? { reason: run2.reason } : {} };
+}
+function planRecordBookkeeping(plan, tasks) {
+  if (!plan.modes.includes("hunt")) return { tools_run: [], missing_tools: [] };
+  const hunts = tasks.filter((t) => t.kind === "hunt" || t.kind === "crosscut");
+  const report = computeReport(plan, tasks);
+  const unanswered2 = new Set(report.missing);
+  const answered2 = hunts.filter((t) => !unanswered2.has(t.task_id)).length;
+  if (answered2 === 0) {
+    const reason = hunts.length === 0 ? "the plan has no hunt task: nothing in the project was eligible for one" : `none of the plan's ${String(hunts.length)} hunt task(s) has a valid answer`;
+    return { tools_run: [huntRun({ status: "skipped", reason })], missing_tools: [LLM_HUNT_TOOL] };
+  }
+  const whole = answered2 === hunts.length && report.coverage === "full";
+  return { tools_run: [huntRun({ status: "ok" })], missing_tools: whole ? [] : [OPEN_TASKS] };
+}
+var OPEN_TASKS;
+var init_planRecord = __esm({
+  "src/llmscan/planRecord.ts"() {
+    "use strict";
+    init_scanRoles();
+    init_report2();
+    OPEN_TASKS = `${LLM_HUNT_TOOL}:open-tasks`;
+  }
+});
+
 // src/llmscan/service.ts
 import { createHash as createHash21, randomUUID as randomUUID22 } from "node:crypto";
 import { posix as posix5, relative as relative40, isAbsolute as isAbsolute27 } from "node:path";
@@ -119298,9 +119340,17 @@ function loadPlan(storage, planId, opts = {}) {
   }
   return { ok: true, plan };
 }
+function rewritePlanRecord(storage, plan) {
+  const tasks = storage.llmScan.listTasks(plan.id);
+  const next = planRecordBookkeeping(plan, tasks);
+  const now = storage.scans.getById(plan.scan_id);
+  const same = now !== null && JSON.stringify(now.tools_run) === JSON.stringify(next.tools_run) && JSON.stringify(now.missing_tools) === JSON.stringify(next.missing_tools);
+  if (!same) storage.scans.rewriteBookkeeping(plan.scan_id, next);
+  return tasks;
+}
 function settlePlan(storage, plan) {
   if (plan.status !== "open") return plan;
-  const tasks = storage.llmScan.listTasks(plan.id);
+  const tasks = storage.rawHandle().transaction(() => rewritePlanRecord(storage, plan))();
   if (tasks.length > 0 && tasks.every((t) => t.status === "closed")) {
     storage.llmScan.updatePlan(plan.id, "complete", nowIso2());
     return storage.llmScan.getPlan(plan.id) ?? plan;
@@ -119351,9 +119401,9 @@ function findingsToVerify(storage, input2) {
   if (input2.scan_id !== void 0) {
     const scan2 = storage.scans.getById(input2.scan_id);
     if (scan2 === null || scan2.project_path !== input2.project) return fail5("unknown_scan_id", `No scan ${input2.scan_id} for this project.`);
-    return { ok: true, findings: storage.findings.listByScan(input2.scan_id).filter((f) => f.tool !== "llm-hunt"), unknown: [] };
+    return { ok: true, findings: storage.findings.listByScan(input2.scan_id).filter((f) => !isHuntFinding(f)), unknown: [] };
   }
-  return { ok: true, findings: openSetForProject(storage, input2.project).findings.filter((f) => f.tool !== "llm-hunt"), unknown: [] };
+  return { ok: true, findings: openSetForProject(storage, input2.project).findings.filter((f) => !isHuntFinding(f)), unknown: [] };
 }
 async function startPlan(storage, input2) {
   const { project, modes } = input2;
@@ -119450,12 +119500,7 @@ async function startPlan(storage, input2) {
   };
   storage.rawHandle().transaction(() => {
     storage.scans.insert({ scan_id: scanId, scan_type: "llm_scan", project_path: project, tree_hash: treeHash, meta: { plan_id: planId, modes } });
-    storage.scans.finalize({
-      scan_id: scanId,
-      status: "completed",
-      tools_run: hunting ? [{ name: "llm-hunt", status: "ok" }] : [],
-      missing_tools: []
-    });
+    storage.scans.finalize({ scan_id: scanId, status: "completed", ...planRecordBookkeeping(stored, tasks) });
     storage.llmScan.insertPlan(stored, tasks);
   })();
   const byKind = {};
@@ -119517,7 +119562,7 @@ function briefFor(storage, plan, task) {
   const files = new Set(task.target.files);
   const known = files.size === 0 ? [] : openSetForProject(storage, root).findings.filter((f) => {
     const rel2 = f.file_path === void 0 ? null : relPosix(root, f.file_path);
-    return f.tool !== "llm-hunt" && rel2 !== null && files.has(rel2);
+    return !isHuntFinding(f) && rel2 !== null && files.has(rel2);
   });
   return renderBrief(task, { ...base2, entry_points: routes, scanner_findings: known }).text;
 }
@@ -119618,6 +119663,7 @@ function lostRace(storage, input2) {
 }
 function huntFindingRow(f) {
   return makeFinding({
+    // LLM_HUNT_TOOL, written out: `test/unit/history/runNames.test.ts` reads every finding tool from the source.
     tool: "llm-hunt",
     rule_id: f.class,
     severity: huntSeverity(f.class),
@@ -119725,6 +119771,7 @@ function acceptHunt(storage, plan, task, input2, value, rejected, responseChars,
       closed_at: null
     }));
     if (verifyTasks.length > 0 && !repo.appendTasks(plan.id, verifyTasks)) throw new Error("the plan is no longer open");
+    rewritePlanRecord(storage, plan);
     return { stored: withIdentity.length, verify: verifyTasks.length };
   })();
   if (stored === null) return lostRace(storage, input2);
@@ -119750,6 +119797,7 @@ var init_service = __esm({
     init_briefs();
     init_classes();
     init_plan2();
+    init_planRecord();
     init_report2();
     init_submission();
     init_types8();

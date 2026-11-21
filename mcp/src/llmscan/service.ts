@@ -19,7 +19,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { posix, relative, isAbsolute } from 'node:path';
 import { assignIdentities, makeSourceReader } from '../fingerprint/findingIdentity.js';
-import { openSetForProject } from '../history/openSet.js';
+import { isHuntFinding, openSetForProject } from '../history/openSet.js';
 import { readProjectBytes, readProjectText } from '../platform/projectFs.js';
 import { listProjectFiles } from '../runners/projectFiles.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
@@ -29,6 +29,7 @@ import type { DomainError, Finding, ToolResult } from '../types.js';
 import { CURRENT_PROMPT_VERSION, randomBoundary, renderBrief, responseSchema } from './briefs.js';
 import { huntSeverity } from './classes.js';
 import { buildPlan, DEFAULT_BRIEF_TOKENS, entryPointId, OVER_LIMIT_REASON_PREFIX } from './plan.js';
+import { planRecordBookkeeping } from './planRecord.js';
 import { computeReport, type LlmScanReport } from './report.js';
 import { toFindingValidation, validateHuntSubmission, validateVerifySubmission, type SubmissionError } from './submission.js';
 import {
@@ -112,10 +113,34 @@ export function loadPlan(storage: Storage, planId: string, opts: { allowAbandone
   return { ok: true, plan };
 }
 
-/** `open` -> `complete` once every task is closed. Returns the plan as it now stands. */
+/**
+ * Rewrites what the plan's scan record says was hunted (`planRecord.ts`) from its tasks as they stand, and returns
+ * them. Written only when it changed: `settlePlan` also runs when the plan is only read (its status, the next task),
+ * which then takes no write.
+ */
+function rewritePlanRecord(storage: Storage, plan: LlmScanPlan): LlmScanTask[] {
+  const tasks = storage.llmScan.listTasks(plan.id);
+  const next = planRecordBookkeeping(plan, tasks);
+  const now = storage.scans.getById(plan.scan_id);
+  const same =
+    now !== null &&
+    JSON.stringify(now.tools_run) === JSON.stringify(next.tools_run) &&
+    JSON.stringify(now.missing_tools) === JSON.stringify(next.missing_tools);
+  if (!same) storage.scans.rewriteBookkeeping(plan.scan_id, next);
+  return tasks;
+}
+
+/**
+ * `open` -> `complete` once every task is closed. While the plan is open its
+ * scan record is brought up to date first — an answer, a limit or a stale task
+ * may have changed what was hunted — with the tasks read and the record
+ * written in one transaction, so two servers answering one plan cannot leave
+ * an older reading behind. A plan no longer open keeps the record it has.
+ * Returns the plan as it now stands.
+ */
 export function settlePlan(storage: Storage, plan: LlmScanPlan): LlmScanPlan {
   if (plan.status !== 'open') return plan;
-  const tasks = storage.llmScan.listTasks(plan.id);
+  const tasks = storage.rawHandle().transaction(() => rewritePlanRecord(storage, plan))();
   if (tasks.length > 0 && tasks.every((t) => t.status === 'closed')) {
     storage.llmScan.updatePlan(plan.id, 'complete', nowIso());
     return storage.llmScan.getPlan(plan.id) ?? plan;
@@ -211,9 +236,9 @@ function findingsToVerify(storage: Storage, input: StartInput): { ok: true; find
   if (input.scan_id !== undefined) {
     const scan = storage.scans.getById(input.scan_id);
     if (scan === null || scan.project_path !== input.project) return fail('unknown_scan_id', `No scan ${input.scan_id} for this project.`);
-    return { ok: true, findings: storage.findings.listByScan(input.scan_id).filter((f) => f.tool !== 'llm-hunt'), unknown: [] };
+    return { ok: true, findings: storage.findings.listByScan(input.scan_id).filter((f) => !isHuntFinding(f)), unknown: [] };
   }
-  return { ok: true, findings: openSetForProject(storage, input.project).findings.filter((f) => f.tool !== 'llm-hunt'), unknown: [] };
+  return { ok: true, findings: openSetForProject(storage, input.project).findings.filter((f) => !isHuntFinding(f)), unknown: [] };
 }
 
 /** US-1.AC-1, US-2.AC-1: the plan and its tasks, estimated and stored before anything is handed out. */
@@ -326,15 +351,11 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
   };
 
   // The plan's scan holds the hunt's findings (tool `llm-hunt`); it is
-  // completed at once, and the findings are added as hunt tasks close.
+  // completed at once, and the findings are added as hunt tasks close. Its
+  // bookkeeping says what was hunted (planRecord.ts): nothing yet.
   storage.rawHandle().transaction(() => {
     storage.scans.insert({ scan_id: scanId, scan_type: 'llm_scan', project_path: project, tree_hash: treeHash, meta: { plan_id: planId, modes } });
-    storage.scans.finalize({
-      scan_id: scanId,
-      status: 'completed',
-      tools_run: hunting ? [{ name: 'llm-hunt', status: 'ok' }] : [],
-      missing_tools: [],
-    });
+    storage.scans.finalize({ scan_id: scanId, status: 'completed', ...planRecordBookkeeping(stored, tasks) });
     storage.llmScan.insertPlan(stored, tasks);
   })();
 
@@ -405,7 +426,7 @@ function briefFor(storage: Storage, plan: LlmScanPlan, task: LlmScanTask): strin
   const files = new Set(task.target.files);
   const known = files.size === 0 ? [] : openSetForProject(storage, root).findings.filter((f) => {
     const rel = f.file_path === undefined ? null : relPosix(root, f.file_path);
-    return f.tool !== 'llm-hunt' && rel !== null && files.has(rel);
+    return !isHuntFinding(f) && rel !== null && files.has(rel);
   });
   return renderBrief(task, { ...base, entry_points: routes, scanner_findings: known }).text;
 }
@@ -540,6 +561,7 @@ function lostRace(storage: Storage, input: SubmitInput): Out {
 
 function huntFindingRow(f: HuntFinding): Finding {
   return makeFinding({
+    // LLM_HUNT_TOOL, written out: `test/unit/history/runNames.test.ts` reads every finding tool from the source.
     tool: 'llm-hunt',
     rule_id: f.class,
     severity: huntSeverity(f.class),
@@ -681,6 +703,8 @@ function acceptHunt(
       closed_at: null,
     }));
     if (verifyTasks.length > 0 && !repo.appendTasks(plan.id, verifyTasks)) throw new Error('the plan is no longer open');
+    // With the findings, never after them: the record says this task was hunted, and that its findings' checks are open.
+    rewritePlanRecord(storage, plan);
     return { stored: withIdentity.length, verify: verifyTasks.length };
   })();
   if (stored === null) return lostRace(storage, input);
