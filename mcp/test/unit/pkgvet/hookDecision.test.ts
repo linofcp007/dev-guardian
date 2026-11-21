@@ -5339,3 +5339,92 @@ describe('install-vet-over-ceiling-asks', () => {
     });
   });
 });
+
+// ───────────────── install-vet-manifest-protocol-values — the names a `catalog:` or a `patch:` value adds go through the rules of every dependency
+
+describe('install-vet-manifest-protocol-values', () => {
+  const dep = (n: number): string => `dgprobe-zzq7731-p${String(n)}`;
+  const writeDeps = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  /** The registry URLs asked, OSV's batch left out. */
+  const ofRegistry = (calls: readonly string[]): string[] => calls.filter((url) => url !== OSV);
+
+  it('T-05 (a) 151 dependencies `catalog:`: 150 are asked of the registry, the count line of the ceiling is said, and the answer asks the user (install-vet-over-ceiling-asks)', async () => {
+    const names = Array.from({ length: 151 }, (_, i) => dep(i + 1));
+    writeDeps(Object.fromEntries(names.map((name) => [name, 'catalog:'])));
+    const reg = registry({ exists: names });
+    const d = await decideInstallCommand('pnpm install', opts(reg.fetchImpl, { popular: {} }));
+    expect(new Set(ofRegistry(reg.calls)).size).toBe(150);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toContain('1 more packages of the manifest were not vetted (only the first 150 are) — not verified.');
+    expect(d?.ask ?? '(no ask)').toContain('the manifests this command installs');
+    expect(d?.ask ?? '(no ask)').toContain('1 was not vetted (only the first 150 are)');
+  });
+
+  it('T-05 (b) a `catalog:` dependency the lockfile pins: its name is asked of the registry as for `latest`, and the pinned version still goes to OSV', async () => {
+    // Side by side: `latest` is what the tree does today for a value with no range; the `catalog:` key must do the same.
+    const deps = { 'cat-pkg-zq': 'catalog:', 'latest-pkg-zq': 'latest' };
+    writeDeps(deps);
+    const pin = (name: string): Record<string, unknown> => ({
+      version: '1.0.0',
+      resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz`,
+      integrity: `sha512-${'A'.repeat(86)}==`,
+    });
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: deps },
+          'node_modules/cat-pkg-zq': pin('cat-pkg-zq'),
+          'node_modules/latest-pkg-zq': pin('latest-pkg-zq'),
+        },
+      }),
+    );
+    const asked: string[] = [];
+    const f = fakeFetch({
+      'https://registry.npmjs.org/cat-pkg-zq': npmDoc('1.0.0'),
+      'https://registry.npmjs.org/latest-pkg-zq': npmDoc('1.0.0'),
+      [OSV]: (body) => {
+        const queries = (body as { queries: Array<{ package?: { name?: string }; version?: string }> }).queries;
+        asked.push(...queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`));
+        return osvClean(body);
+      },
+    });
+    const d = await decideInstallCommand('npm ci', { ...opts(f.fetchImpl), projectDir: project });
+    expect(d?.deny).toBeUndefined();
+    // What the lockfile pins is vetted (today too).
+    expect(asked).toContain('cat-pkg-zq@1.0.0');
+    expect(asked).toContain('latest-pkg-zq@1.0.0');
+    // The key is asked of the registry as `latest` is: the same requests, by comparison and not by a pasted value.
+    const registryFor = (name: string): string[] => f.calls.filter((url) => url.endsWith(`/${name}`));
+    expect(registryFor('latest-pkg-zq').length).toBeGreaterThan(0);
+    expect(registryFor('cat-pkg-zq').map((url) => url.replace('cat-pkg-zq', 'X'))).toEqual(registryFor('latest-pkg-zq').map((url) => url.replace('latest-pkg-zq', 'X')));
+  });
+
+  it('T-05 (c) a scope the project’s .npmrc gives a registry of its own: neither the key `@acme-zq/x: catalog:` nor the source `@acme-zq/y` of a patch leaves, one line counts them, and `left-pad-zq` is asked', async () => {
+    writeFileSync(join(project, '.npmrc'), '@acme-zq:registry=https://npm.acme-zq.example/\n');
+    writeDeps({ '@acme-zq/x': 'catalog:', 'left-pad-zq': 'patch:@acme-zq/y@npm%3A1.0.0#f' });
+    const reg = registry({ exists: ['left-pad-zq'] });
+    const d = await decideInstallCommand('yarn install', opts(reg.fetchImpl, { popular: {} }));
+    expect([...reg.calls, ...reg.bodies].filter((sent) => /acme-zq/i.test(sent))).toEqual([]);
+    expect(reg.calls).toContain('https://registry.npmjs.org/left-pad-zq');
+    expect(d?.deny).toBeUndefined();
+    expect((d?.context ?? '').split('\n')).toContain(
+      "dev-guardian: 2 packages of package.json are in a scope (@acme-zq) the project's .npmrc gives a registry of its own — not vetted.",
+    );
+  });
+
+  it('T-05 (d) `real-zq: patch:real-zq@npm:1.0.0#f` under `yarn install`, with `real-zq` not on the registry: ONE warning line', async () => {
+    writeDeps({ 'real-zq': 'patch:real-zq@npm:1.0.0#f' });
+    const reg = registry({});
+    const d = await decideInstallCommand('yarn install', opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    const warned = (d?.context ?? '').split('\n').filter((l) => l.includes('not found on the public registry'));
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("'real-zq");
+  });
+});

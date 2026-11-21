@@ -2536,3 +2536,85 @@ describe('install-vet-over-ceiling-asks', () => {
     });
   });
 });
+
+// ───────────────── install-vet-manifest-protocol-values — `catalog:`, `patch:` and `npm:<rest>` in a manifest, through the dispatcher
+
+describe('install-vet-manifest-protocol-values', () => {
+  // `proto-evil-zq` is malicious only here, at both its versions; `proto-missing-zq` is on no registry; the others are clean.
+  const EVIL = 'proto-evil-zq';
+  const MISSING = 'proto-missing-zq';
+  const ADVISORY = 'MAL-2026-0089';
+  const ROUTES: Record<string, Route> = {
+    [`https://registry.npmjs.org/${EVIL}`]: {
+      accept: 'install-v1',
+      body: { 'dist-tags': { latest: '1.5.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.0.0': {}, '1.5.0': {} } },
+    },
+    [`https://registry.npmjs.org/${MISSING}`]: { status: 404 },
+    'https://registry.npmjs.org/x': npmDoc('1.0.0'),
+    'https://registry.npmjs.org/left-pad-zq': npmDoc('1.0.0'),
+    'https://registry.npmjs.org/real-zq': npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: [ADVISORY], [`${EVIL}@1.5.0`]: [ADVISORY] } },
+  };
+  const manifest = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const isDenied = (command: string): void => {
+    const r = runHook(command, ROUTES);
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain('package.json');
+    expect(reason, command).toContain(EVIL);
+  };
+  const isWarned = (command: string): void => {
+    const r = runHook(command, ROUTES);
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).not.toBe('deny');
+    const warned = (r.output?.hookSpecificOutput?.additionalContext ?? '')
+      .split('\n')
+      .filter((l) => l.includes(`'${MISSING}`) && l.includes('not found on the public registry'));
+    expect(warned, command).toHaveLength(1);
+    expect(warned[0], command).toContain('package.json');
+  };
+
+  const CASES = (['pnpm install', 'yarn install', 'bun install'] as const).flatMap((command) =>
+    (['catalog:', 'patch:x', 'npm:~x'] as const).map((value) => [command, value] as const),
+  );
+
+  it.each(CASES)('T-04 `%s` with `"<malicious>": "%s"` is DENIED, naming the package and the file', (command, value) => {
+    manifest({ [EVIL]: value });
+    isDenied(command);
+  });
+
+  it.each(CASES)('T-04 `%s` with `"<a name the registry does not have>": "%s"`: the warning of the manifest, never a deny', (command, value) => {
+    manifest({ [MISSING]: value });
+    isWarned(command);
+  });
+
+  it('T-04 `yarn install` with `"left-pad-zq": "patch:<malicious>@npm%3A1.0.0#./fix.patch"` is DENIED for the package of the source', () => {
+    manifest({ 'left-pad-zq': `patch:${EVIL}@npm%3A1.0.0#./fix.patch` });
+    isDenied('yarn install');
+  });
+
+  it('T-04 `yarn install` with `"left-pad-zq": "patch:<a name the registry does not have>@npm%3A1.0.0#./fix.patch"`: the warning, never a deny', () => {
+    manifest({ 'left-pad-zq': `patch:${MISSING}@npm%3A1.0.0#./fix.patch` });
+    isWarned('yarn install');
+  });
+
+  it('T-04 `pnpm install` with `"<malicious>": "npm:^1.0.0"` is DENIED, naming the package and the file', () => {
+    manifest({ [EVIL]: 'npm:^1.0.0' });
+    isDenied('pnpm install');
+  });
+
+  it('T-04 `pnpm install` with `"<a name the registry does not have>": "npm:^1.0.0"`: the warning, never a deny', () => {
+    manifest({ [MISSING]: 'npm:^1.0.0' });
+    isWarned('pnpm install');
+  });
+
+  it('T-04 `pnpm install` with `"my-alias-zq": "npm:real-zq"` gives what it gives today: `real-zq` is asked, `my-alias-zq` is not, nothing is denied', () => {
+    manifest({ 'my-alias-zq': 'npm:real-zq' });
+    const r = runHook('pnpm install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.requests.filter((url) => url.startsWith('https://registry.npmjs.org/'))).toEqual(['https://registry.npmjs.org/real-zq']);
+  });
+});
