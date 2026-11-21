@@ -4899,6 +4899,87 @@ var MEASURED_LAUNCHES = [
   { spelling: "yarn dlx", launched: "pnpm", flags: [], dash: "none", prefix: true },
   { spelling: "bunx", launched: "pnpm", flags: [], dash: "none" }
 ];
+var MEASURED_PYTHON_FORMS = [
+  ["pip", "download", "<P>"],
+  ["pip", "wheel", "<P>"],
+  ["pip", "download", "--no-deps", "<P>"],
+  ["pip", "download", "--no-binary", ":all:", "<P>"],
+  ["pip", "install", "--dry-run", "<P>"],
+  ["pipx", "inject", "<ENV>", "<P>"],
+  ["pipx", "upgrade", "--install", "<P>"],
+  ["pipx", "runpip", "<ENV>", "install", "<P>"],
+  ["pipx", "run", "--spec", "<P>", "<CMD>"],
+  ["pipx", "run", "--with", "<D>", "<P>"],
+  ["uvx", "--from", "<P>", "<CMD>"],
+  ["uv", "tool", "run", "--from", "<P>", "<CMD>"],
+  ["uvx", "--with", "<P>", "<T>"],
+  ["uv", "tool", "install", "--with", "<P>", "<T>"],
+  ["python", "-m", "pip", "download", "<P>"],
+  ["pip3", "wheel", "<P>"],
+  ["python", "-m", "pip", "install", "--dry-run", "<P>"],
+  ["pip", "download", "<P>", "<D>"],
+  ["pip", "download", "<P>==<V>"],
+  ["pip", "download", "-d", "<DIR>", "<P>"],
+  ["pip", "wheel", "--no-deps", "<P>"],
+  ["pip", "download", "<P>", "--no-deps"],
+  ["pipx", "inject", "<ENV>", "<P>", "<D>"],
+  ["uvx", "--from=<P>", "<CMD>"],
+  ["uv", "tool", "run", "--with", "<P>", "<T>"],
+  ["uvx", "-w", "<P>", "<T>"],
+  ["uv", "tool", "install", "<T>", "--with", "<P>"],
+  ["pipx", "run", "--spec=<P>", "<CMD>"],
+  ["uvx", "--from", "<P>", "<CMD>", "<ARG>"],
+  ["pipx", "run", "--spec", "<P>", "<CMD>", "<ARG>"],
+  ["uvx", "--with", "<P>", "<T>", "<ARG>"],
+  ["pipx", "run", "--with", "<D>", "<P>", "<ARG>"]
+];
+var PLAIN_VERSION = /^\d+(?:\.\d+)*$/;
+function isPlainName(word) {
+  if (word.startsWith("-")) return false;
+  const spec2 = parsePython(word, false);
+  return "name" in spec2 && spec2.name === word && spec2.range === void 0;
+}
+function fitsPlace(token, word) {
+  const at = token.indexOf("<");
+  if (at < 0) return token === word;
+  const prefix = token.slice(0, at);
+  if (!word.startsWith(prefix)) return false;
+  const rest = word.slice(prefix.length);
+  switch (token.slice(at)) {
+    case "<P>":
+    case "<D>":
+    case "<T>":
+      return isPlainName(rest);
+    case "<ENV>":
+    case "<CMD>":
+    case "<DIR>":
+      return rest !== "" && !rest.startsWith("-");
+    case "<ARG>":
+      return true;
+    case "<P>==<V>": {
+      const eq2 = rest.indexOf("==");
+      return eq2 > 0 && isPlainName(rest.slice(0, eq2)) && PLAIN_VERSION.test(rest.slice(eq2 + 2));
+    }
+    default:
+      return false;
+  }
+}
+function isMeasuredPythonForm(words) {
+  return MEASURED_PYTHON_FORMS.some((form) => form.length === words.length && form.every((token, k) => fitsPlace(token, words[k] ?? "")));
+}
+function unmeasuredVerb(words) {
+  const [tool = "", first = "", second = "", third = ""] = words;
+  if (isMeasuredPythonForm(words)) return void 0;
+  const verb = (name) => `this form of '${name}' was not measured`;
+  if (tool === "pipx") {
+    if (first === "inject" || first === "runpip") return verb(`pipx ${first}`);
+    return first === "upgrade" && words.includes("--install") ? verb("pipx upgrade --install") : void 0;
+  }
+  if ((tool === "pip" || tool === "pip3") && (first === "download" || first === "wheel")) return verb(`pip ${first}`);
+  const viaPython = tool === "python" || tool === "python3" || tool === "py";
+  if (viaPython && first === "-m" && (second === "pip" || second === "pip3") && (third === "download" || third === "wheel")) return verb(`pip ${third}`);
+  return void 0;
+}
 var MEASURED_VERB = "add";
 var NPM_LAUNCH_TABLES = /* @__PURE__ */ new Set(["npx", "npm-exec", "pnpm-dlx", "yarn-dlx", "bunx"]);
 var LAUNCHED_MANAGERS = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "yarnpkg", "bun", "corepack"]);
@@ -4984,7 +5065,8 @@ function parseReading(text, forced, cdpath) {
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
         const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
-        c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
+        const unmeasuredVerbReason = notConfident === null ? void 0 : unmeasuredVerb(words.map((word) => word.value));
+        c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...unmeasuredVerbReason === void 0 ? [] : [unmeasuredVerbReason], ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         const elsewhere = runsElsewhere(words);
         const place = (command) => {
@@ -5264,6 +5346,9 @@ function confidentWords(words) {
   const [named, ...rest] = viaCorepack === void 0 ? words : [viaCorepack, ...words.slice(2)];
   const tool = named === "yarnpkg" ? "yarn" : named;
   if (tool === void 0) return notSingle("empty");
+  if (isMeasuredPythonForm([tool, ...rest])) return null;
+  const unmeasured = unmeasuredVerb([tool, ...rest]);
+  if (unmeasured !== void 0) return unmeasured;
   const at = (k) => rest[k] ?? "";
   let key;
   let args;

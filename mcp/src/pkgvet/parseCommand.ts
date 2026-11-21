@@ -2465,6 +2465,112 @@ const MEASURED_LAUNCHES: readonly MeasuredLaunch[] = [
   { spelling: 'yarn dlx', launched: 'pnpm', flags: [], dash: 'none', prefix: true },
   { spelling: 'bunx', launched: 'pnpm', flags: [], dash: 'none' },
 ];
+/**
+ * The lines of the Python managers whose inner command may DENY a name the index does not have: the 32 forms measured on 2026-11-20
+ * and 2026-11-21 (pip 23.0.1, pipx and uv in a Linux container against an index that logged every request; the 14 of the first
+ * date, F1-F14 and F27-F30 of the second), each a list of words in the measured order with nothing after the last one. A place stands
+ * for a kind of word — `<P>`, `<D>`, `<T>`: a plain PyPI name (no version, range, extras or comma, no leading `-`); `<ENV>`, `<CMD>`,
+ * `<DIR>`: a word that does not start with `-`; `<V>`: `==` and a version of digits and dots, as `<P>==<V>`; `<ARG>`: any word, a
+ * flag too (the program gets all that follows its name) — and a place may follow a literal prefix (`--from=<P>`). `<DIR>`, `<V>` and
+ * `<ARG>` were each measured with one value and are widened (the owner's answer 2-A). `pipx runpip <ENV> download` is not here: with
+ * the `auto` engine it asks for nothing. A line that is none of them keeps the reason of its flags, or says it was not measured.
+ */
+const MEASURED_PYTHON_FORMS: ReadonlyArray<readonly string[]> = [
+  ['pip', 'download', '<P>'],
+  ['pip', 'wheel', '<P>'],
+  ['pip', 'download', '--no-deps', '<P>'],
+  ['pip', 'download', '--no-binary', ':all:', '<P>'],
+  ['pip', 'install', '--dry-run', '<P>'],
+  ['pipx', 'inject', '<ENV>', '<P>'],
+  ['pipx', 'upgrade', '--install', '<P>'],
+  ['pipx', 'runpip', '<ENV>', 'install', '<P>'],
+  ['pipx', 'run', '--spec', '<P>', '<CMD>'],
+  ['pipx', 'run', '--with', '<D>', '<P>'],
+  ['uvx', '--from', '<P>', '<CMD>'],
+  ['uv', 'tool', 'run', '--from', '<P>', '<CMD>'],
+  ['uvx', '--with', '<P>', '<T>'],
+  ['uv', 'tool', 'install', '--with', '<P>', '<T>'],
+  ['python', '-m', 'pip', 'download', '<P>'],
+  ['pip3', 'wheel', '<P>'],
+  ['python', '-m', 'pip', 'install', '--dry-run', '<P>'],
+  ['pip', 'download', '<P>', '<D>'],
+  ['pip', 'download', '<P>==<V>'],
+  ['pip', 'download', '-d', '<DIR>', '<P>'],
+  ['pip', 'wheel', '--no-deps', '<P>'],
+  ['pip', 'download', '<P>', '--no-deps'],
+  ['pipx', 'inject', '<ENV>', '<P>', '<D>'],
+  ['uvx', '--from=<P>', '<CMD>'],
+  ['uv', 'tool', 'run', '--with', '<P>', '<T>'],
+  ['uvx', '-w', '<P>', '<T>'],
+  ['uv', 'tool', 'install', '<T>', '--with', '<P>'],
+  ['pipx', 'run', '--spec=<P>', '<CMD>'],
+  ['uvx', '--from', '<P>', '<CMD>', '<ARG>'],
+  ['pipx', 'run', '--spec', '<P>', '<CMD>', '<ARG>'],
+  ['uvx', '--with', '<P>', '<T>', '<ARG>'],
+  ['pipx', 'run', '--with', '<D>', '<P>', '<ARG>'],
+];
+
+/** A version of digits separated by dots, and nothing else: `1.0`, `2.0.0` (not `1.*`, `1.0rc1`, `1.0+x`). */
+const PLAIN_VERSION = /^\d+(?:\.\d+)*$/;
+
+/** Whether `word` is a plain PyPI name: `parsePython` reads it as a name written whole, with no range. */
+function isPlainName(word: string): boolean {
+  if (word.startsWith('-')) return false;
+  const spec = parsePython(word, false);
+  return 'name' in spec && spec.name === word && spec.range === undefined;
+}
+
+/** Whether `word` is what the place `token` of a measured form stands for (a token without `<` is the word itself). */
+function fitsPlace(token: string, word: string): boolean {
+  const at = token.indexOf('<');
+  if (at < 0) return token === word;
+  const prefix = token.slice(0, at);
+  if (!word.startsWith(prefix)) return false;
+  const rest = word.slice(prefix.length);
+  switch (token.slice(at)) {
+    case '<P>':
+    case '<D>':
+    case '<T>':
+      return isPlainName(rest);
+    case '<ENV>':
+    case '<CMD>':
+    case '<DIR>':
+      return rest !== '' && !rest.startsWith('-');
+    case '<ARG>':
+      return true;
+    case '<P>==<V>': {
+      const eq = rest.indexOf('==');
+      return eq > 0 && isPlainName(rest.slice(0, eq)) && PLAIN_VERSION.test(rest.slice(eq + 2));
+    }
+    default:
+      return false;
+  }
+}
+
+/** Whether the words are, word by word and with nothing after the last, one of the {@link MEASURED_PYTHON_FORMS}. */
+function isMeasuredPythonForm(words: readonly string[]): boolean {
+  return MEASURED_PYTHON_FORMS.some((form) => form.length === words.length && form.every((token, k) => fitsPlace(token, words[k] ?? '')));
+}
+
+/**
+ * Why a line of a verb read since the Python forms were measured — `pip download`, `pip wheel` (also as `pip3` and `python -m pip`),
+ * `pipx inject`, `pipx runpip`, `pipx upgrade --install` — that is none of the {@link MEASURED_PYTHON_FORMS} may not deny; `undefined`
+ * for any other line. Also asked when the shape already fails on a character (`X==1.*` is a glob): both reasons are then said.
+ */
+function unmeasuredVerb(words: readonly string[]): string | undefined {
+  const [tool = '', first = '', second = '', third = ''] = words;
+  if (isMeasuredPythonForm(words)) return undefined;
+  const verb = (name: string): string => `this form of '${name}' was not measured`;
+  if (tool === 'pipx') {
+    if (first === 'inject' || first === 'runpip') return verb(`pipx ${first}`);
+    return first === 'upgrade' && words.includes('--install') ? verb('pipx upgrade --install') : undefined;
+  }
+  if ((tool === 'pip' || tool === 'pip3') && (first === 'download' || first === 'wheel')) return verb(`pip ${first}`);
+  const viaPython = tool === 'python' || tool === 'python3' || tool === 'py';
+  if (viaPython && first === '-m' && (second === 'pip' || second === 'pip3') && (third === 'download' || third === 'wheel')) return verb(`pip ${third}`);
+  return undefined;
+}
+
 /** The verb of the measured lines. */
 const MEASURED_VERB = 'add';
 /** The launchers of the npm family ({@link LAUNCH_FLAGS} names): the only ones whose launched package may be a package manager. */
@@ -2596,7 +2702,8 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does,
         // and so does a `key@npm:rest` that Yarn and bun read as either of two packages.
         const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
-        c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
+        const unmeasuredVerbReason = notConfident === null ? undefined : unmeasuredVerb(words.map((word) => word.value));
+        c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...(unmeasuredVerbReason === undefined ? [] : [unmeasuredVerbReason]), ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         const elsewhere = runsElsewhere(words);
         const place = (command: InstallCommand): void => {
@@ -2850,6 +2957,10 @@ function confidentWords(words: readonly string[]): string | null {
   const [named, ...rest] = viaCorepack === undefined ? words : [viaCorepack, ...words.slice(2)];
   const tool = named === 'yarnpkg' ? 'yarn' : named;
   if (tool === undefined) return notSingle('empty');
+  // One of the 32 measured Python forms has the confident shape, and no other line of the forms read since does.
+  if (isMeasuredPythonForm([tool, ...rest])) return null;
+  const unmeasured = unmeasuredVerb([tool, ...rest]);
+  if (unmeasured !== undefined) return unmeasured;
   const at = (k: number): string => rest[k] ?? '';
   let key: string;
   let args: string[];

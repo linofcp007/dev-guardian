@@ -660,7 +660,6 @@ describe('parseInstallCommands — launchers that download and run a package (re
 
   it.each([
     ['npx -p typescript tsc', /-p/],
-    ['uvx --from httpie-zz http', /--from/],
     ['pipx install --pip-args="--index-url https://corp" tool-zz', /pip-args/],
     ['npx --registry https://npm.corp tool-zz', /registry|--registry/],
   ])('%s is not confident', (command, why) => {
