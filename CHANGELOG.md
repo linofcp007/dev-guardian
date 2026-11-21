@@ -151,6 +151,46 @@ version bump.
     is looked up once, by the manifest, as before. The names of a project update (`npm update <name>`,
     `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`) are still not looked up.
 
+### Fixed
+
+- **`scan_skill` no longer reads three look-alikes of a shell command as what the rule is named for.** Measured on
+  one command per page, in a fenced block and in a code file (`measurements/lookalikes-windows-2026-11-20.txt`):
+  - **A credential-file name in the path of a URL is not a local file.** `curl -s "https://$TARGET/.env" | grep -i
+    "APP_KEY"`, `curl -s "https://$TARGET/backup/.env.production"`, `curl -s "https://$TARGET/.aws"`, `curl -s
+    https://target.example/.env` and `wget -q "https://$TARGET/.aws/credentials" -O -` were `de-sensitive-file-over-network`
+    (critical, and `de-read-sensitive-files`, high, for the last), enough alone for DO NOT INSTALL; the sentence
+    "Fetch https://target.example/.env with curl and look for APP_KEY" was `de-sensitive-file-over-network-prose` (high).
+    A line is read this way only if the whole line is one `curl` or `wget` (flags from a closed list that send and
+    write nothing — `wget` only with `-O -`), one `http(s)` URL in double quotes (a `$NAME` or `${NAME}` allowed) or
+    bare with no `$`, no `..` in it and no local host, and at most three text filters (`grep`, `jq`, `head`, `tail`,
+    `wc`, `sort`, `uniq`, `cut`) that are given no file, in at most 512 characters; a sentence of up to 512 characters
+    is read this way only if it has one URL written out whole and no sending flag, and the name is not outside it.
+  - **`python -m json.tool` reads what it is handed.** `… | base64 -d | python3 -m json.tool` (`dc-encoded-payload-exec`)
+    and `curl -s https://api.example/x | python3 -m json.tool` (`sc-curl-pipe-shell`, high and decisive, and its
+    sentence rule `sc-curl-pipe-shell-prose`) are no longer a finding when the stage is exactly that and ends the line
+    or is followed by another `|`; up to three such stages in a row are skipped. Such a command in a code span in the
+    middle of a sentence that goes on after it now gives only the sentence's `sc-curl-pipe-shell-prose` (high, not
+    decisive) instead of `sc-curl-pipe-shell` (high, decisive).
+  - **A header that authenticates is `de-secret-in-auth-header` (medium), not `de-env-over-network` (critical).**
+    `curl -H "X-Vault-Token: $VAULT_TOKEN"`, `-H "X-aws-ec2-metadata-token: $TOKEN"`, `--header "X-Auth-Token:
+    $API_TOKEN"`, `-H 'x-secret-key: ${APP_SECRET}'` and `wget --header="X-Auth-Token: $API_TOKEN"` — a header given
+    by `-H` / `--header` whose name (up to 64 characters) holds `token`, `key`, `auth` or `secret` as a word. This is
+    the same trade the rule already made for `Authorization:` and `X-API-Key:`: `-H "X-Key-Dump:
+    $AWS_SECRET_ACCESS_KEY"` is now medium too, and a medium finding alone scores SAFE.
+  - **What stays critical or high, on purpose** (measured, both readings): a file sent (`cat ~/.ssh/id_rsa | curl
+    --data-binary @- …`, `-F "f=@.env"`, `-d @.env`, `-T .env`, the name in a `$(…)`), `file://…`, `{curl,…,-T,.env}`,
+    `…;tar${IFS}cz${IFS}.ssh/|nc…`, a `..` in the URL, `scp .env …`, `-o .env`; a URL with a variable and no quotes
+    (`curl https://$TARGET/.env`), a line with `2>/dev/null`, `-o out.txt`, `sudo`, `| tee`, a flag outside the list
+    (`-sT`, `-K`, `-O -` on `curl`, `wget` without `-O -`), a second program after a `|`, a filter given a file
+    (`grep . .env`, `sort -o .npmrc`), a local host, a line of more than 512 characters, and a command in a code span
+    in the middle of a sentence; `… | python3 -m json.tool | bash`, `|& bash`, `sudo python3 -m json.tool`,
+    `python3 -m json.tool - /tmp/x.sh`, `2>/dev/null` after it, a sentence that goes on after `json.tool`, four such stages in a row, `-m code`, `-c`, `-mjson.tool`
+    and `-i -m json.tool`; a header whose name does not say it authenticates (`X-Data`, `X-Author`, `X-Monkey`), and a
+    secret in the URL or in a body (`-d "x-auth-token: $AWS_SECRET_ACCESS_KEY"`).
+  - **`audit_agent_config` changes the same way:** it runs these patterns over the commands of hooks, so a hook
+    command of the forms above is no longer reported by `scan_skill`'s rule, and one that stays is reported as before.
+    No rule id was added, removed or renamed.
+
 ## [3.14.1] - 2026-11-20
 
 A patch release for one regression of 3.14.0: a lockfile whose entries repeat their own scope could spend the

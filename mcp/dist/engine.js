@@ -99980,6 +99980,22 @@ function writesInto(path3) {
 function hasFetchTarget(text3) {
   return REMOTE_DESTINATION_RE.test(text3) || keywordThenTail(text3, SHELL_NET_CLIENT, NET_TARGET).length > 0;
 }
+function isUrlOnlySentence(text3) {
+  const urls = text3.match(SENTENCE_URL);
+  if (urls === null || urls.length !== 1) return false;
+  if ((text3.match(/https?:\/\//gi) ?? []).length !== 1) return false;
+  const at = text3.indexOf(urls[0]);
+  const after2 = text3.charAt(at + urls[0].length);
+  if (after2 === "$" || after2 === "{") return false;
+  if (SENDING_FLAG.test(text3)) return false;
+  return !SENSITIVE_FILE_RE.test(text3.slice(0, at) + " " + text3.slice(at + urls[0].length));
+}
+function isPlainFetchLine(text3) {
+  return PLAIN_FETCH_LINE.test(text3);
+}
+function isPlainFetchOrUrlSentence(text3) {
+  return PLAIN_FETCH_LINE.test(text3) || isUrlOnlySentence(text3);
+}
 function scanContent(content, isCode, opts = {}) {
   const lines = content.split(/\r?\n/);
   if (isCode) {
@@ -100332,6 +100348,7 @@ function matchUnits(rules2, units) {
       let best = null;
       for (const unit of units) {
         if (rule.requires !== void 0 && !rule.requires.test(unit.text)) continue;
+        if (rule.exemptLine !== void 0 && unit.source !== "inline" && unit.text.length <= PLAIN_FETCH_MAX && rule.exemptLine(unit.text)) continue;
         pattern.lastIndex = 0;
         let line = unit.line;
         let snippet = null;
@@ -100495,7 +100512,7 @@ function finalize2(matches3) {
 function severityOfRule(rule) {
   return rule.severity ?? THREAT_CATEGORY_META[rule.category].defaultSeverity;
 }
-var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_TARGET, INTERPRETER, PROSE_TARGET, AUTH_HEADER, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL, WGET, POWERSHELL_FETCH, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_NAMES_FILE, POWERSHELL_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
+var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_TARGET, INTERPRETER, PROSE_TARGET, AUTH_HEADER, AUTH_HEADER_FLAG, AUTHENTICATES, JSON_TOOL_STAGE, READING_STAGE, NOT_A_READING_STAGE, RUNS_A_PROGRAM, PIPE_TO_INTERPRETER, PLAIN_URL_CHARS, PLAIN_LOCAL_HOST, PLAIN_NOT_LOCAL, PLAIN_URL, PLAIN_CURL_FLAG, PLAIN_WGET_FLAG, PLAIN_WGET_STDOUT, PLAIN_OPERAND, PLAIN_FILTER, PLAIN_CURL, PLAIN_WGET, PLAIN_FETCH_LINE, PLAIN_FETCH_MAX, SENTENCE_URL, SENDING_FLAG, SENSITIVE_FILE_RE, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL, WGET, POWERSHELL_FETCH, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_NAMES_FILE, POWERSHELL_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
 var init_patterns = __esm({
   "src/skillaudit/patterns.ts"() {
     "use strict";
@@ -100524,6 +100541,31 @@ var init_patterns = __esm({
     INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
     PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
     AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
+    AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]{1,64}:)(?=[\w-]*?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]+:\s*(?:(?:bearer|basic|token)\s+)?`;
+    AUTHENTICATES = `(?:${AUTH_HEADER}|${AUTH_HEADER_FLAG})`;
+    JSON_TOOL_STAGE = String.raw`python3?[ \t]+-m[ \t]+json\.tool[ \t]{0,16}`;
+    READING_STAGE = String.raw`\|[ \t]*${JSON_TOOL_STAGE}(?=\|(?!&))`;
+    NOT_A_READING_STAGE = String.raw`(?!${JSON_TOOL_STAGE}(?=\r?$))`;
+    RUNS_A_PROGRAM = String.raw`(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`;
+    PIPE_TO_INTERPRETER = String.raw`(?:(?:${READING_STAGE}){3}\|\s*${RUNS_A_PROGRAM}|(?=(?<skippedReads>(?:${READING_STAGE}){0,2}(?!${READING_STAGE})))\k<skippedReads>\|\s*${NOT_A_READING_STAGE}${RUNS_A_PROGRAM})`;
+    PLAIN_URL_CHARS = String.raw`[\w.~%/:?#=+-]`;
+    PLAIN_LOCAL_HOST = String.raw`(?:[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:[Ll][Oo][Cc][Aa][Ll](?:[Hh][Oo][Ss][Tt])?|[Ii][Nn][Tt][Ee][Rr][Nn][Aa][Ll]|[Ll][Aa][Nn]|[Hh][Oo][Mm][Ee]\.[Aa][Rr][Pp][Aa]))`;
+    PLAIN_NOT_LOCAL = String.raw`(?!${PLAIN_LOCAL_HOST}(?![\w.-]))`;
+    PLAIN_URL = String.raw`(?:"https?://${PLAIN_NOT_LOCAL}(?![^"]*\.\.)(?:${PLAIN_URL_CHARS}|\$\w+(?!\w)|\$\{\w+\})*"|https?://${PLAIN_NOT_LOCAL}(?![^\s|]*\.\.)${PLAIN_URL_CHARS}+)`;
+    PLAIN_CURL_FLAG = String.raw`(?:-[sSLkfiIvg46]+|-o[ \t]+/dev/null|--(?:silent|location|insecure|fail|head)|(?:-m|--max-time|--connect-timeout)[ \t]+\d+)`;
+    PLAIN_WGET_FLAG = String.raw`-[qSv46]+`;
+    PLAIN_WGET_STDOUT = String.raw`-O[ \t]+-`;
+    PLAIN_OPERAND = String.raw`(?:"(?!-)[\w ,.:=^*+?\[\]-]*"|[\w.,:=^+][\w.,:=^+-]*)`;
+    PLAIN_FILTER = String.raw`(?:e?grep(?:[ \t]+-[ivcnowEFq]+)?[ \t]+${PLAIN_OPERAND}|jq(?:[ \t]+-[rc]+)?[ \t]+${PLAIN_OPERAND}|(?:head|tail)(?:[ \t]+(?:-n[ \t]+\d+|-\d+))?|wc(?:[ \t]+-[lcw]+)?|sort(?:[ \t]+-[unr]+)?|uniq(?:[ \t]+-[cd]+)?|cut[ \t]+-d[\w:,=.-][ \t]+-f[\d,-]+)`;
+    PLAIN_CURL = String.raw`curl(?:[ \t]+${PLAIN_CURL_FLAG})*[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_CURL_FLAG})*`;
+    PLAIN_WGET = String.raw`wget(?:[ \t]+${PLAIN_WGET_FLAG})*(?:[ \t]+${PLAIN_WGET_STDOUT}(?:[ \t]+${PLAIN_WGET_FLAG})*[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_WGET_FLAG})*|[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_WGET_FLAG})*[ \t]+${PLAIN_WGET_STDOUT}(?:[ \t]+${PLAIN_WGET_FLAG})*)`;
+    PLAIN_FETCH_LINE = new RegExp(
+      String.raw`^[ \t]*(?:${PLAIN_CURL}|${PLAIN_WGET})(?:[ \t]*\|(?!&)[ \t]*${PLAIN_FILTER}){0,3}[ \t]*$`
+    );
+    PLAIN_FETCH_MAX = 512;
+    SENTENCE_URL = /\bhttps?:\/\/[\w.~%/:?#=+-]+/gi;
+    SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form))/;
+    SENSITIVE_FILE_RE = new RegExp(SENSITIVE_FILE, "i");
     SKILL_RULES = [
       // ───────────────────────────── prompt_injection ─────────────────────────
       {
@@ -100710,7 +100752,7 @@ var init_patterns = __esm({
           // rule. Measured: an official plugin's `curl -H "Authorization: Bearer
           // $API_TOKEN" https://api.example.com/mcp/health`, a health check in a
           // reference doc, read critical and took its skill to DO_NOT_INSTALL.
-          new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTH_HEADER}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, "i"),
+          new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTHENTICATES}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, "i"),
           // The whole environment (wave 2 of the 3.0 review: `env | curl -X POST
           // --data-binary @- https://…` read SAFE): piped into a sender, or
           // substituted into its arguments — `curl -d "$(env)"`, `@<(printenv)`.
@@ -100744,7 +100786,7 @@ var init_patterns = __esm({
         target: "code",
         patterns: [
           new RegExp(
-            `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTH_HEADER}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
+            `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTHENTICATES}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
             "i"
           )
         ]
@@ -100756,7 +100798,8 @@ var init_patterns = __esm({
         title: "Reads sensitive local credential files",
         message: "Code references SSH keys, cloud credentials, browser data or .env \u2014 sensitive material a skill rarely needs.",
         target: "code",
-        patterns: [new RegExp(SENSITIVE_FILE_STRONG, "i"), new RegExp(ENV_READ, "i")]
+        patterns: [new RegExp(SENSITIVE_FILE_STRONG, "i"), new RegExp(ENV_READ, "i")],
+        exemptLine: isPlainFetchLine
       },
       {
         id: "de-sensitive-file-over-network",
@@ -100767,7 +100810,8 @@ var init_patterns = __esm({
         title: "Credential file sent over the network",
         message: "One command both names a credential file (SSH key, cloud credentials, .netrc/.npmrc, browser data, .env) and a network client \u2014 the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://\u2026`.",
         target: "code",
-        patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, "i")]
+        patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, "i")],
+        exemptLine: isPlainFetchLine
       },
       {
         id: "de-sensitive-file-over-network-prose",
@@ -100779,7 +100823,8 @@ var init_patterns = __esm({
         target: "prose",
         patterns: [
           new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*(${NETWORK_SENDER}|${SEND_VERB}))(?=.*${REMOTE_DESTINATION})`, "i")
-        ]
+        ],
+        exemptLine: isPlainFetchOrUrlSentence
       },
       {
         id: "de-dns-or-raw-egress",
@@ -100836,7 +100881,7 @@ var init_patterns = __esm({
         message: "Downloads a remote script and executes it unverified (curl|bash and friends).",
         target: "code",
         patterns: [
-          new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
+          new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}${PIPE_TO_INTERPRETER}`, "i"),
           /\beval\s+"\$\(\s*(curl|wget)\b/i,
           /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
           // `bash <(curl …)`, `sh -c "$(curl …)"`, and the same with any
@@ -100860,7 +100905,7 @@ var init_patterns = __esm({
           // get.docker.com shape), or a variable (`URL=https://…`, then
           // `curl -s $URL | bash`) as the target.
           new RegExp(
-            String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`,
+            String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}${PIPE_TO_INTERPRETER}`,
             "i"
           ),
           new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, "i"),
@@ -101020,7 +101065,7 @@ var init_patterns = __esm({
           // skills of 2026-02, whose download hides inside the blob. The pipe is
           // looked for in the 300 characters after the flag, as every run here:
           // unbounded, the line was read again from every `base64 -d` on it.
-          new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
+          new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}${PIPE_TO_INTERPRETER}`, "i"),
           /FromBase64String[^\n]{0,200}\b(iex|Invoke-Expression)\b|\b(iex|Invoke-Expression)\b[^\n]{0,120}FromBase64String/i
         ]
       },
