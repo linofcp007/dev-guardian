@@ -7620,6 +7620,7 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
 }
 var NAMED_TO_UPDATE = "not denied: a package named to an update is fetched only when it is already installed";
 var UPDATES_EVERY_GLOBAL = "dev-guardian: this command updates every globally installed package \u2014 none of them was vetted.";
+var UPDATES_EVERY_TOOL = "dev-guardian: this command updates every tool pipx or uv installed \u2014 none of them was vetted.";
 function updateCommand(c, inManifest) {
   const packages = (c.updateNames ?? []).filter((n) => n.range !== void 0 || !inManifest.has(n.name));
   if (packages.length === 0) return void 0;
@@ -7651,6 +7652,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
       if (more !== void 0) out.push(more);
     };
     if (c.global === true && c.updateNames?.length === 0 && c.skipped.length === 0) notes.push(UPDATES_EVERY_GLOBAL);
+    if (c.updatesEveryTool === true) notes.push(UPDATES_EVERY_TOOL);
     const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}\0${String(c.global === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
     notes.push(...lineAsked.get(key) ?? []);

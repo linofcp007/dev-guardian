@@ -309,6 +309,9 @@ const NAMED_TO_UPDATE = 'not denied: a package named to an update is fetched onl
 /** Said for a global update that names nothing: the managers update every globally installed package (measured 2026-11-20). */
 const UPDATES_EVERY_GLOBAL = 'dev-guardian: this command updates every globally installed package — none of them was vetted.';
 
+/** Said for `pipx upgrade-all` and `uv tool upgrade --all`: every tool the manager installed is updated, and none is on the command line. */
+const UPDATES_EVERY_TOOL = 'dev-guardian: this command updates every tool pipx or uv installed — none of them was vetted.';
+
 /**
  * The names an update verb is given, as one more command to vet (`fromUpdate`): those that no manifest read for the command
  * has, and those with a version or a range (the manifest's own check is not that version); all of them when no manifest was
@@ -395,6 +398,8 @@ function withManifestPackages(
       if (more !== undefined) out.push(more);
     };
     if (c.global === true && c.updateNames?.length === 0 && c.skipped.length === 0) notes.push(UPDATES_EVERY_GLOBAL);
+    // `pipx upgrade-all` and `uv tool upgrade --all` (also with names beside `--all`): said before any request is made.
+    if (c.updatesEveryTool === true) notes.push(UPDATES_EVERY_TOOL);
     // A line of thousands of commands asks once per manager and directory: the answer is the same.
     const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
