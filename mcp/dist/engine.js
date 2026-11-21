@@ -115865,7 +115865,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_VALUE_FLAGS, NPM_BOOL_FLAGS, NPM_WORKSPACE_FLAGS, NPM_LONG, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_VALUE_FLAGS, NPM_BOOL_FLAGS, NPM_WORKSPACE_FLAGS, NPM_LONG, NPM_TABLE, PIP_REQUIREMENTS_REASON, PIP_CONSTRAINTS_REASON, PIP_EDITABLE_REASON, PIP_FETCH_VALUE, PIP_FETCH_BOOL, PIP_FETCH_REGISTRY, PIP_FETCH_REPORTED, PIP_DOWNLOAD_TABLE, PIP_WHEEL_TABLE, PIPX_UPGRADE_TABLE, UV_TOOL_UPGRADE_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -116022,6 +116022,197 @@ var init_parseCommand = __esm({
       long: NPM_LONG,
       stringValue: set2("-m", "-c", "-call"),
       groups: "npm"
+    };
+    PIP_REQUIREMENTS_REASON = "requirements file (-r) \u2014 read as a manifest, not as a package name";
+    PIP_CONSTRAINTS_REASON = "constraints file (-c) \u2014 not vetted";
+    PIP_EDITABLE_REASON = "editable install (-e) \u2014 local or VCS source, not looked up";
+    PIP_FETCH_VALUE = [
+      "-c",
+      "--constraint",
+      "-r",
+      "--requirement",
+      "--global-option",
+      "--no-binary",
+      "--only-binary",
+      "--src",
+      "--source",
+      "--source-dir",
+      "--source-directory",
+      "--progress-bar",
+      "-i",
+      "--index-url",
+      "--pypi-url",
+      "--extra-index-url",
+      "-f",
+      "--find-links",
+      "--python",
+      "--log",
+      "--log-file",
+      "--local-log",
+      "--proxy",
+      "--retries",
+      "--timeout",
+      "--default-timeout",
+      "--exists-action",
+      "--trusted-host",
+      "--cert",
+      "--client-cert",
+      "--cache-dir",
+      "--use-feature",
+      "--use-deprecated"
+    ];
+    PIP_FETCH_BOOL = [
+      "--no-deps",
+      "--no-dependencies",
+      "--prefer-binary",
+      "--pre",
+      "--require-hashes",
+      "--no-build-isolation",
+      "--use-pep517",
+      "--no-use-pep517",
+      "--check-build-dependencies",
+      "--ignore-requires-python",
+      "--no-clean",
+      "--no-index",
+      "--debug",
+      "--isolated",
+      "--require-virtualenv",
+      "--require-venv",
+      "-v",
+      "--verbose",
+      "-V",
+      "--version",
+      "-q",
+      "--quiet",
+      "--no-input",
+      "--no-cache-dir",
+      "--disable-pip-version-check",
+      "--no-color",
+      "--no-python-version-warning"
+    ];
+    PIP_FETCH_REGISTRY = ["-i", "--index-url", "--pypi-url", "--extra-index-url", "-f", "--find-links"];
+    PIP_FETCH_REPORTED = [
+      ["-r", PIP_REQUIREMENTS_REASON],
+      ["--requirement", PIP_REQUIREMENTS_REASON],
+      ["-c", PIP_CONSTRAINTS_REASON],
+      ["--constraint", PIP_CONSTRAINTS_REASON]
+    ];
+    PIP_DOWNLOAD_TABLE = {
+      value: set2(
+        ...PIP_FETCH_VALUE,
+        "-d",
+        "--dest",
+        "--destination-dir",
+        "--destination-directory",
+        "--platform",
+        "--python-version",
+        "--implementation",
+        "--abi"
+      ),
+      bool: set2(...PIP_FETCH_BOOL),
+      registry: set2(...PIP_FETCH_REGISTRY),
+      registryBool: set2("--no-index"),
+      reported: new Map(PIP_FETCH_REPORTED)
+    };
+    PIP_WHEEL_TABLE = {
+      value: set2(...PIP_FETCH_VALUE, "-w", "--wheel-dir", "-e", "--editable", "--config-settings", "--build-option"),
+      bool: set2(...PIP_FETCH_BOOL, "--no-verify"),
+      registry: set2(...PIP_FETCH_REGISTRY),
+      registryBool: set2("--no-index"),
+      reported: new Map([...PIP_FETCH_REPORTED, ["-e", PIP_EDITABLE_REASON], ["--editable", PIP_EDITABLE_REASON]])
+    };
+    PIPX_UPGRADE_TABLE = {
+      value: set2("--python", "--index-url", "-i", "--pip-args", "--cooldown", "--backend", "--fetch-python", "--output"),
+      bool: set2(
+        "--install",
+        "--include-injected",
+        "--force",
+        "-f",
+        "--system-site-packages",
+        "--editable",
+        "-e",
+        "--quiet",
+        "-q",
+        "--verbose",
+        "-v",
+        "--skip-maintenance",
+        "--global",
+        "--fetch-missing-python"
+      ),
+      registry: set2("--index-url", "-i")
+    };
+    UV_TOOL_UPGRADE_TABLE = {
+      value: set2(
+        "--python",
+        "-p",
+        "--index",
+        "--index-url",
+        "-i",
+        "--default-index",
+        "--extra-index-url",
+        "--find-links",
+        "-f",
+        "--index-strategy",
+        "--keyring-provider",
+        "--resolution",
+        "--prerelease",
+        "--prerelease-package",
+        "--fork-strategy",
+        "--exclude-newer",
+        "--exclude-newer-package",
+        "--link-mode",
+        "--directory",
+        "--project",
+        "--config-file",
+        "--cache-dir",
+        "--color",
+        "--python-platform",
+        "--no-sources-package",
+        "--reinstall-package",
+        "-C",
+        "--config-setting",
+        "--config-settings",
+        "--config-setting-package",
+        "--no-build-isolation-package",
+        "--no-build-package",
+        "--no-binary-package",
+        "--allow-insecure-host",
+        "--python-preference"
+      ),
+      bool: set2(
+        "--all",
+        "--offline",
+        "-q",
+        "--quiet",
+        "-v",
+        "--verbose",
+        "--no-cache",
+        "-n",
+        "--reinstall",
+        "--no-config",
+        "--no-progress",
+        "--no-python-downloads",
+        "--no-index",
+        "--compile-bytecode",
+        "--managed-python",
+        "--no-managed-python",
+        "--no-sources",
+        "--no-build-isolation",
+        "--no-build",
+        "--no-binary",
+        "--require-build-hashes",
+        "--no-require-build-hashes",
+        "--system-certs",
+        "--isolated",
+        "--upgrade",
+        "-U",
+        "--native-tls",
+        "--no-offline",
+        "--force-reinstall"
+      ),
+      registry: set2("--index", "--index-url", "-i", "--default-index", "--extra-index-url", "--find-links", "-f"),
+      registryBool: set2("--no-index"),
+      dir: set2("--directory", "--project")
     };
     FLAGS = {
       npm: NPM_TABLE,
@@ -116271,16 +116462,43 @@ var init_parseCommand = __esm({
         registry: set2("-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--index", "--default-index"),
         registryBool: set2("--no-index"),
         reported: /* @__PURE__ */ new Map([
-          ["-r", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
-          ["--requirement", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
+          ["-r", PIP_REQUIREMENTS_REASON],
+          ["--requirement", PIP_REQUIREMENTS_REASON],
           // `uv pip install` spells it in the plural.
-          ["--requirements", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
-          ["-c", "constraints file (-c) \u2014 not vetted"],
-          ["--constraint", "constraints file (-c) \u2014 not vetted"],
-          ["-e", "editable install (-e) \u2014 local or VCS source, not looked up"],
-          ["--editable", "editable install (-e) \u2014 local or VCS source, not looked up"]
+          ["--requirements", PIP_REQUIREMENTS_REASON],
+          ["-c", PIP_CONSTRAINTS_REASON],
+          ["--constraint", PIP_CONSTRAINTS_REASON],
+          ["-e", PIP_EDITABLE_REASON],
+          ["--editable", PIP_EDITABLE_REASON]
         ])
       },
+      "pip-download": PIP_DOWNLOAD_TABLE,
+      "pip-wheel": PIP_WHEEL_TABLE,
+      "pipx-upgrade": PIPX_UPGRADE_TABLE,
+      "pipx-reinstall": {
+        value: set2("--python", "--fetch-python", "--backend", "--output"),
+        bool: set2("--quiet", "-q", "--verbose", "-v", "--skip-maintenance", "--global", "--fetch-missing-python"),
+        registry: set2()
+      },
+      "pipx-upgrade-all": {
+        value: set2("--skip", "--pip-args", "--backend", "--index-url", "-i", "--cooldown", "--output"),
+        bool: set2(
+          "--include-injected",
+          "--force",
+          "-f",
+          "--quiet",
+          "-q",
+          "--verbose",
+          "-v",
+          "--skip-maintenance",
+          "--global",
+          "--system-site-packages",
+          "--editable",
+          "-e"
+        ),
+        registry: set2("--index-url", "-i")
+      },
+      "uv-tool-upgrade": UV_TOOL_UPGRADE_TABLE,
       uv: {
         value: set2(
           "--group",
@@ -116724,11 +116942,43 @@ var init_parseCommand = __esm({
         extraPackageFlags: set2("--preinstall", "--spec")
       },
       "pipx-run": {
-        value: set2("--spec", "--index-url", "-i", "--python", "--path"),
+        value: set2("--spec", "--index-url", "-i", "--python", "--path", "--with"),
         bool: set2("--no-cache", "--quiet", "-q", "--verbose", "-v", "--system-site-packages", "--fetch-missing-python"),
         registry: set2("--index-url", "-i"),
-        packageFlags: set2("--spec")
-      }
+        packageFlags: set2("--spec"),
+        extraPackageFlags: set2("--with")
+      },
+      // `pipx inject <environment> <package>…` (pipx, the parser dumped 2026-11-21, 23 spellings): `--include-resources-from` names a
+      // package pipx fetches as well, and `-r` a requirements file pip reads (its manifest is read, `collectLaunch`).
+      "pipx-inject": {
+        value: set2("-r", "--requirement", "--include-resources-from", "--index-url", "-i", "--pip-args", "--cooldown", "--backend", "--output"),
+        bool: set2(
+          "--quiet",
+          "-q",
+          "--verbose",
+          "-v",
+          "--skip-maintenance",
+          "--global",
+          "--include-apps",
+          "--include-deps",
+          "--system-site-packages",
+          "--editable",
+          "-e",
+          "--force",
+          "-f",
+          "--with-suffix"
+        ),
+        registry: set2("--index-url", "-i"),
+        reported: /* @__PURE__ */ new Map([["-r", PIP_REQUIREMENTS_REASON], ["--requirement", PIP_REQUIREMENTS_REASON]]),
+        extraPackageFlags: set2("--include-resources-from")
+      },
+      // `pipx runpip <environment> <pip arguments>`: only pipx's own flags, the rest is a pip command ({@link runpipDetected}).
+      "pipx-runpip": {
+        value: set2(),
+        bool: set2("--quiet", "-q", "--verbose", "-v", "--global", "--skip-maintenance"),
+        registry: set2()
+      },
+      "pipx-upgrade": PIPX_UPGRADE_TABLE
     };
     NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "install-test", "it"]);
     NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
@@ -116757,7 +117007,7 @@ var init_parseCommand = __esm({
       pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
       bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x", ...BUN_INITIALIZER]),
       yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "workspaces", "dlx", "dedupe", "up", ...YARN_UPDATE, ...CREATE_ONLY]),
-      pip: /* @__PURE__ */ new Set(["install"]),
+      pip: /* @__PURE__ */ new Set(["install", "download", "wheel"]),
       uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
       poetry: /* @__PURE__ */ new Set(["add"]),
       composer: COMPOSER_REQUIRE,

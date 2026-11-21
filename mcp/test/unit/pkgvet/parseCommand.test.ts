@@ -791,7 +791,6 @@ describe('manifest installs — a command that installs what a manifest says', (
     'npm test',
     'pip install requests',
     'pip install -c constraints.txt requests',
-    'pip download -r a.txt',
     'echo npm ci',
     'git commit -m "npm ci"',
   ])('T-03 %s is no manifest install', (command) => {

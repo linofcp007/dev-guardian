@@ -136,6 +136,12 @@ export interface InstallCommand {
    * upgrade` and for Yarn's `up` forms; `[]` when the verb has no positional word. A glob pattern, a path and a URL are no name.
    */
   updateNames?: PackageSpec[];
+  /**
+   * The command updates EVERY tool the manager installed — `pipx upgrade-all`, `uv tool upgrade --all` — and names no package for
+   * it: the tools are the machine's, not the command line's, so none of them is vetted (measured 2026-11-20 and 2026-11-21 in a
+   * Linux container: each installed tool is asked of the index). `updateNames` is then `[]`, or the names given beside `--all`.
+   */
+  updatesEveryTool?: true;
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -618,6 +624,75 @@ const NPM_TABLE: FlagTable = {
   groups: 'npm',
 };
 
+const PIP_REQUIREMENTS_REASON = 'requirements file (-r) — read as a manifest, not as a package name';
+const PIP_CONSTRAINTS_REASON = 'constraints file (-c) — not vetted';
+const PIP_EDITABLE_REASON = 'editable install (-e) — local or VCS source, not looked up';
+
+// `pip download` and `pip wheel` (pip 23.0.1, the parser of each verb dumped flag by flag, measured 2026-11-21: 68 and 67 spellings).
+// The flags the two share; each verb adds its own below. A flag of `pip install` that the verb does not have (`-U`, `--user`, `-t`,
+// `--dry-run`, …) is not here: pip refuses it, and a line that has one is uncertain and only warns.
+const PIP_FETCH_VALUE = [
+  '-c', '--constraint', '-r', '--requirement', '--global-option', '--no-binary', '--only-binary', '--src', '--source',
+  '--source-dir', '--source-directory', '--progress-bar', '-i', '--index-url', '--pypi-url', '--extra-index-url', '-f',
+  '--find-links', '--python', '--log', '--log-file', '--local-log', '--proxy', '--retries', '--timeout', '--default-timeout',
+  '--exists-action', '--trusted-host', '--cert', '--client-cert', '--cache-dir', '--use-feature', '--use-deprecated',
+];
+const PIP_FETCH_BOOL = [
+  '--no-deps', '--no-dependencies', '--prefer-binary', '--pre', '--require-hashes', '--no-build-isolation', '--use-pep517',
+  '--no-use-pep517', '--check-build-dependencies', '--ignore-requires-python', '--no-clean', '--no-index', '--debug',
+  '--isolated', '--require-virtualenv', '--require-venv', '-v', '--verbose', '-V', '--version', '-q', '--quiet', '--no-input',
+  '--no-cache-dir', '--disable-pip-version-check', '--no-color', '--no-python-version-warning',
+];
+const PIP_FETCH_REGISTRY = ['-i', '--index-url', '--pypi-url', '--extra-index-url', '-f', '--find-links'];
+const PIP_FETCH_REPORTED: Array<[string, string]> = [
+  ['-r', PIP_REQUIREMENTS_REASON],
+  ['--requirement', PIP_REQUIREMENTS_REASON],
+  ['-c', PIP_CONSTRAINTS_REASON],
+  ['--constraint', PIP_CONSTRAINTS_REASON],
+];
+const PIP_DOWNLOAD_TABLE: FlagTable = {
+  value: set(...PIP_FETCH_VALUE, '-d', '--dest', '--destination-dir', '--destination-directory', '--platform',
+    '--python-version', '--implementation', '--abi'),
+  bool: set(...PIP_FETCH_BOOL),
+  registry: set(...PIP_FETCH_REGISTRY),
+  registryBool: set('--no-index'),
+  reported: new Map(PIP_FETCH_REPORTED),
+};
+const PIP_WHEEL_TABLE: FlagTable = {
+  value: set(...PIP_FETCH_VALUE, '-w', '--wheel-dir', '-e', '--editable', '--config-settings', '--build-option'),
+  bool: set(...PIP_FETCH_BOOL, '--no-verify'),
+  registry: set(...PIP_FETCH_REGISTRY),
+  registryBool: set('--no-index'),
+  reported: new Map([...PIP_FETCH_REPORTED, ['-e', PIP_EDITABLE_REASON], ['--editable', PIP_EDITABLE_REASON]]),
+};
+
+// `pipx upgrade` (pipx, the parser dumped 2026-11-21): the one object of the reading of the verb and of `--install`, which reads it
+// as an install.
+const PIPX_UPGRADE_TABLE: FlagTable = {
+  value: set('--python', '--index-url', '-i', '--pip-args', '--cooldown', '--backend', '--fetch-python', '--output'),
+  bool: set('--install', '--include-injected', '--force', '-f', '--system-site-packages', '--editable', '-e', '--quiet', '-q',
+    '--verbose', '-v', '--skip-maintenance', '--global', '--fetch-missing-python'),
+  registry: set('--index-url', '-i'),
+};
+
+// `uv tool upgrade` (uv, the 64 flags its parser knows, the hidden ones among them, probed 2026-11-21): not `UV_VALUED` / `UV_BOOL`,
+// which hold seven flags the verb refuses.
+const UV_TOOL_UPGRADE_TABLE: FlagTable = {
+  value: set('--python', '-p', '--index', '--index-url', '-i', '--default-index', '--extra-index-url', '--find-links', '-f',
+    '--index-strategy', '--keyring-provider', '--resolution', '--prerelease', '--prerelease-package', '--fork-strategy',
+    '--exclude-newer', '--exclude-newer-package', '--link-mode', '--directory', '--project', '--config-file', '--cache-dir',
+    '--color', '--python-platform', '--no-sources-package', '--reinstall-package', '-C', '--config-setting',
+    '--config-settings', '--config-setting-package', '--no-build-isolation-package', '--no-build-package',
+    '--no-binary-package', '--allow-insecure-host', '--python-preference'),
+  bool: set('--all', '--offline', '-q', '--quiet', '-v', '--verbose', '--no-cache', '-n', '--reinstall', '--no-config',
+    '--no-progress', '--no-python-downloads', '--no-index', '--compile-bytecode', '--managed-python', '--no-managed-python',
+    '--no-sources', '--no-build-isolation', '--no-build', '--no-binary', '--require-build-hashes', '--no-require-build-hashes',
+    '--system-certs', '--isolated', '--upgrade', '-U', '--native-tls', '--no-offline', '--force-reinstall'),
+  registry: set('--index', '--index-url', '-i', '--default-index', '--extra-index-url', '--find-links', '-f'),
+  registryBool: set('--no-index'),
+  dir: set('--directory', '--project'),
+};
+
 const FLAGS: Record<string, FlagTable> = {
   npm: NPM_TABLE,
   pnpm: {
@@ -687,16 +762,31 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('-i', '--index-url', '--extra-index-url', '-f', '--find-links', '--index', '--default-index'),
     registryBool: set('--no-index'),
     reported: new Map([
-      ['-r', 'requirements file (-r) — read as a manifest, not as a package name'],
-      ['--requirement', 'requirements file (-r) — read as a manifest, not as a package name'],
+      ['-r', PIP_REQUIREMENTS_REASON],
+      ['--requirement', PIP_REQUIREMENTS_REASON],
       // `uv pip install` spells it in the plural.
-      ['--requirements', 'requirements file (-r) — read as a manifest, not as a package name'],
-      ['-c', 'constraints file (-c) — not vetted'],
-      ['--constraint', 'constraints file (-c) — not vetted'],
-      ['-e', 'editable install (-e) — local or VCS source, not looked up'],
-      ['--editable', 'editable install (-e) — local or VCS source, not looked up'],
+      ['--requirements', PIP_REQUIREMENTS_REASON],
+      ['-c', PIP_CONSTRAINTS_REASON],
+      ['--constraint', PIP_CONSTRAINTS_REASON],
+      ['-e', PIP_EDITABLE_REASON],
+      ['--editable', PIP_EDITABLE_REASON],
     ]),
   },
+  'pip-download': PIP_DOWNLOAD_TABLE,
+  'pip-wheel': PIP_WHEEL_TABLE,
+  'pipx-upgrade': PIPX_UPGRADE_TABLE,
+  'pipx-reinstall': {
+    value: set('--python', '--fetch-python', '--backend', '--output'),
+    bool: set('--quiet', '-q', '--verbose', '-v', '--skip-maintenance', '--global', '--fetch-missing-python'),
+    registry: set(),
+  },
+  'pipx-upgrade-all': {
+    value: set('--skip', '--pip-args', '--backend', '--index-url', '-i', '--cooldown', '--output'),
+    bool: set('--include-injected', '--force', '-f', '--quiet', '-q', '--verbose', '-v', '--skip-maintenance', '--global',
+      '--system-site-packages', '--editable', '-e'),
+    registry: set('--index-url', '-i'),
+  },
+  'uv-tool-upgrade': UV_TOOL_UPGRADE_TABLE,
   uv: {
     value: set('--group', '--optional', '--index', '--index-url', '--default-index', '--extra-index-url', '--extra',
       '--package', '--script', '-r', '--requirements', '--constraints', '-c', '--rev', '--tag', '--branch',
@@ -904,11 +994,29 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     extraPackageFlags: set('--preinstall', '--spec'),
   },
   'pipx-run': {
-    value: set('--spec', '--index-url', '-i', '--python', '--path'),
+    value: set('--spec', '--index-url', '-i', '--python', '--path', '--with'),
     bool: set('--no-cache', '--quiet', '-q', '--verbose', '-v', '--system-site-packages', '--fetch-missing-python'),
     registry: set('--index-url', '-i'),
     packageFlags: set('--spec'),
+    extraPackageFlags: set('--with'),
   },
+  // `pipx inject <environment> <package>…` (pipx, the parser dumped 2026-11-21, 23 spellings): `--include-resources-from` names a
+  // package pipx fetches as well, and `-r` a requirements file pip reads (its manifest is read, `collectLaunch`).
+  'pipx-inject': {
+    value: set('-r', '--requirement', '--include-resources-from', '--index-url', '-i', '--pip-args', '--cooldown', '--backend', '--output'),
+    bool: set('--quiet', '-q', '--verbose', '-v', '--skip-maintenance', '--global', '--include-apps', '--include-deps',
+      '--system-site-packages', '--editable', '-e', '--force', '-f', '--with-suffix'),
+    registry: set('--index-url', '-i'),
+    reported: new Map([['-r', PIP_REQUIREMENTS_REASON], ['--requirement', PIP_REQUIREMENTS_REASON]]),
+    extraPackageFlags: set('--include-resources-from'),
+  },
+  // `pipx runpip <environment> <pip arguments>`: only pipx's own flags, the rest is a pip command ({@link runpipDetected}).
+  'pipx-runpip': {
+    value: set(),
+    bool: set('--quiet', '-q', '--verbose', '-v', '--global', '--skip-maintenance'),
+    registry: set(),
+  },
+  'pipx-upgrade': PIPX_UPGRADE_TABLE,
 };
 
 /**
@@ -920,6 +1028,8 @@ export const MAX_CANDIDATES_PER_COMMAND = 50;
 
 interface Positional {
   value: string;
+  /** The index of the word among the words that were walked. */
+  at: number;
   /** The word after a long flag the table does not know: a possible package, or that flag's value ({@link afterUnknownFlag}). */
   candidate?: true;
 }
@@ -1109,7 +1219,7 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
     const v = w.value;
     if (v === '--') continue;
     if (!v.startsWith('-') || v.length === 1) {
-      positionals.push(i === candidateAt ? { value: v, candidate: true } : { value: v });
+      positionals.push(i === candidateAt ? { value: v, at: i, candidate: true } : { value: v, at: i });
       continue;
     }
     const eqAt = v.indexOf('=');
@@ -1162,7 +1272,7 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
           i += 1;
         } else note(f.flag, undefined);
       }
-      for (const value of group.positionals) positionals.push({ value });
+      for (const value of group.positionals) positionals.push({ value, at: i });
       continue;
     }
     if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
@@ -1385,6 +1495,16 @@ interface Detected {
   update?: true;
   /** An update verb that keeps the names it is given ({@link InstallCommand.updateNames}): always, or only with a global flag word on the line. */
   names?: 'always' | 'global-word';
+  /**
+   * An update verb that updates every installed tool ({@link InstallCommand.updatesEveryTool}): `always` (`pipx upgrade-all`, which
+   * takes no name: its words are read as none), or `all-flag` when the line has `--all` (`uv tool upgrade --all`).
+   */
+  everyTool?: 'always' | 'all-flag';
+  /**
+   * The first word of `args` is only a candidate: it follows a flag the table does not know, so the word before it (the
+   * environment of `pipx inject`, which `pre` holds) may have been that flag's value ({@link afterUnknownFlag}).
+   */
+  firstIsCandidate?: true;
 }
 
 /** A launcher as `detect` returns it. */
@@ -1456,13 +1576,18 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   pnpm: new Set(['add', 'dlx', 'dedupe', ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
   bun: new Set([...BUN_ADD, 'update', 'x', ...BUN_INITIALIZER]),
   yarn: new Set(['install', 'add', 'global', 'workspace', 'workspaces', 'dlx', 'dedupe', 'up', ...YARN_UPDATE, ...CREATE_ONLY]),
-  pip: new Set(['install']),
+  pip: new Set(['install', 'download', 'wheel']),
   uv: new Set(['add', 'pip', 'tool']),
   poetry: new Set(['add']),
   composer: COMPOSER_REQUIRE,
   dotnet: new Set(['add', 'package', 'tool']),
 };
-const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run']);
+/** The verbs of pipx the hook reads: the ones that fetch a package, or an update of one that is installed. */
+const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run', 'inject', 'upgrade', 'reinstall', 'runpip', 'upgrade-all']);
+/** The verbs of `uv tool` the hook reads. */
+const UV_TOOL_SUBCOMMANDS: ReadonlySet<string> = new Set(['run', 'install', 'upgrade']);
+/** The verbs of pip that fetch a package, and the {@link FLAGS} table of the flags of each (`install`: pip's own). */
+const PIP_FETCH_TABLES: ReadonlyMap<string, string | undefined> = new Map([['install', undefined], ['download', 'pip-download'], ['wheel', 'pip-wheel']]);
 const ADD_ONLY: ReadonlySet<string> = new Set(['add']);
 const ADD_OR_UP: ReadonlySet<string> = new Set(['add', 'up']);
 const ADD_OR_UPGRADE: ReadonlySet<string> = new Set(['add', 'upgrade']);
@@ -1506,6 +1631,54 @@ function yarnWorkspaceVerb(
   }
   if (verb !== 'add') return null;
   return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare' });
+}
+/**
+ * `pipx inject <environment> <package>…`: an install into an environment that exists. The environment is the first positional word
+ * `walk` gives with the flags of the verb — a group of letters is opened (`-fr reqs.txt T P`, `-qi URL T P`), which `scanPositional`
+ * does not do — and it is never looked up: the words before it (flags and their values) are `pre`, the ones after it the packages.
+ * When that first word follows a flag the table does not know it may be that flag's value, and the next word the environment: the
+ * first package is then only a candidate ({@link Detected.firstIsCandidate}).
+ */
+function injectDetected(after: ShellWord[], before: ShellWord[]): Detected | null {
+  const table = LAUNCH_FLAGS['pipx-inject'];
+  const environment = table === undefined ? undefined : walk(after, table).positionals[0];
+  if (environment === undefined) return null;
+  const d = launcher('pipx', 'pypi', after.slice(environment.at + 1), [...before, ...after.slice(0, environment.at + 1)], {
+    style: 'install',
+    flags: 'pipx-inject',
+  });
+  return environment.candidate === true ? { ...d, firstIsCandidate: true } : d;
+}
+
+/**
+ * `pipx runpip <environment> <pip arguments>`: the arguments after the environment are a pip command, read as one (`null` when its
+ * verb is not one pip fetches a package with). The environment is the first positional word, never looked up. After a flag of pipx
+ * the table does not know the first word may be that flag's value: the pip command then starts at the first of its verbs that is
+ * the second or the third positional word, and the environment is the word before it.
+ */
+function runpipDetected(after: ShellWord[], before: ShellWord[]): Detected | null {
+  const table = LAUNCH_FLAGS['pipx-runpip'];
+  const [first, second, third] = table === undefined ? [] : walk(after, table).positionals;
+  if (table === undefined || first === undefined) return null;
+  let environment = first;
+  if (first.candidate === true && !(second !== undefined && PIP_FETCH_TABLES.has(second.value))) {
+    if (second === undefined || third === undefined || !PIP_FETCH_TABLES.has(third.value)) return null;
+    environment = second;
+  }
+  const word = after[environment.at];
+  if (word === undefined) return null;
+  const inner = detect([{ ...word, value: 'pip' }, ...after.slice(environment.at + 1)]);
+  if (inner === null) return null;
+  const own = walk([...before, ...after.slice(0, environment.at + 1)], table).uncertain;
+  return { ...inner, uncertain: [...own, ...inner.uncertain] };
+}
+
+/** `pipx upgrade`: with `--install` it installs what is not installed, so it is read as an install; without, the words are names given to an update. */
+function upgradeDetected(after: ShellWord[], before: ShellWord[]): Detected {
+  if (walk(after, PIPX_UPGRADE_TABLE).flags.some((f) => f.flag === '--install')) {
+    return launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-upgrade' });
+  }
+  return { manager: 'pipx', ecosystem: 'pypi', args: after, pre: before, uncertain: [], flagTable: 'pipx-upgrade', names: 'always' };
 }
 const INSTALL_ONLY: ReadonlySet<string> = new Set(['install']);
 const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
@@ -1565,9 +1738,28 @@ function detect(input: readonly ShellWord[]): Detected | null {
   if (head === 'pipx') {
     const sub = nextPositional(words, i, LAUNCH_FLAGS['pipx-run'] ?? FLAGS['pip'] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
     const subWord = sub < 0 ? '' : (words[sub]?.value ?? '');
-    if (subWord === 'install') return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'install', flags: 'pipx-install' });
-    if (subWord === 'run') return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'run', flags: 'pipx-run' });
-    return null;
+    const after = words.slice(sub + 1);
+    const before = words.slice(i, sub);
+    switch (subWord) {
+      case 'install':
+        return launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-install' });
+      case 'run':
+        return launcher('pipx', 'pypi', after, before, { style: 'run', flags: 'pipx-run' });
+      case 'inject':
+        return injectDetected(after, before);
+      case 'runpip':
+        return runpipDetected(after, before);
+      case 'upgrade':
+        return upgradeDetected(after, before);
+      // The names of an update (`names`), read with the flags of the verb ({@link FLAGS}).
+      case 'reinstall':
+        return { manager: 'pipx', ecosystem: 'pypi', args: after, pre: before, uncertain: [], flagTable: 'pipx-reinstall', names: 'always' };
+      // `pipx upgrade-all` takes no name: its words are none (a word after `--skip a` is another value of `--skip`).
+      case 'upgrade-all':
+        return { manager: 'pipx', ecosystem: 'pypi', args: after, pre: before, uncertain: [], flagTable: 'pipx-upgrade-all', everyTool: 'always' };
+      default:
+        return null;
+    }
   }
 
   const table = FLAGS[head];
@@ -1619,11 +1811,14 @@ function detect(input: readonly ShellWord[]): Detected | null {
   if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === 'uv' && subName === 'tool') {
     const toolTable = LAUNCH_FLAGS['uvx'] ?? table;
-    const verb = nextPositional(words, sub + 1, toolTable, PIPX_SUBCOMMANDS);
+    const verb = nextPositional(words, sub + 1, toolTable, UV_TOOL_SUBCOMMANDS);
     const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
     const tail = words.slice(verb + 1);
     if (verbName === 'run') return launcher('uv', 'pypi', tail, before, { style: 'run', flags: 'uvx' });
     if (verbName === 'install') return launcher('uv', 'pypi', tail, before, { style: 'install', flags: 'uv-tool-install' });
+    if (verbName === 'upgrade') {
+      return { manager: 'uv', ecosystem: 'pypi', args: tail, pre: before, uncertain: [], flagTable: 'uv-tool-upgrade', names: 'always', everyTool: 'all-flag' };
+    }
     return null;
   }
   const subWord = words[sub]?.value ?? '';
@@ -1694,8 +1889,13 @@ function detect(input: readonly ShellWord[]): Detected | null {
       }
       return yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag);
     }
-    case 'pip':
-      return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
+    case 'pip': {
+      // `pip download` and `pip wheel` fetch the package (and build its sdist) as `install` does, with the flags of their own verb.
+      if (!PIP_FETCH_TABLES.has(subWord)) return null;
+      const flagTable = PIP_FETCH_TABLES.get(subWord);
+      const d: Detected = { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
+      return flagTable === undefined ? d : { ...d, flagTable };
+    }
     case 'uv': {
       if (subWord === 'add') return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
       if (subWord === 'pip') {
@@ -1851,6 +2051,9 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
     if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
+  // The environment `pipx inject` skipped may have been a flag's value: the first word after it is then no more than a candidate.
+  const firstWord = w.positionals[0];
+  if (d.firstIsCandidate === true && firstWord !== undefined) w.positionals[0] = { ...firstWord, candidate: true };
   const flags = [...pre.flags, ...w.flags];
   // A flag of `names` is ON unless it carries a `true` / `false` word (`--no false`, `-c false`): then it is off, and the
   // positional after it is looked up, the command being uncertain (the word may be read the other way).
@@ -1864,7 +2067,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
       ? []
       : flags
           .filter((f) => names.has(f.flag))
-          .flatMap((f) => (f.value ?? '').split(','))
+          .flatMap((f) => (d.ecosystem === 'pypi' ? splitOutsideBrackets(f.value ?? '') : (f.value ?? '').split(',')))
           .map((v) => v.trim())
           .filter((v) => v !== '');
   const raws: string[] = [];
@@ -1938,7 +2141,42 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
+  // The requirements files `pipx inject -r` hands to pip, as `pip install -r` hands them, in the order written.
+  if (launch.flags === 'pipx-inject') {
+    const files = requirementFiles(flags, PIPX_REQUIREMENT_FLAGS);
+    if (files.length > 0) out.manifest = { kind: 'requirements', files };
+  }
   return out;
+}
+
+/** The flags of `pipx inject` that name a requirements file. */
+const PIPX_REQUIREMENT_FLAGS: ReadonlySet<string> = new Set(['-r', '--requirement']);
+
+/** The values of the flags `names` among `flags`, in order, none empty. */
+function requirementFiles(flags: ReadonlyArray<{ flag: string; value?: string }>, names: ReadonlySet<string>): string[] {
+  return flags.flatMap((f) => (names.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
+}
+
+/**
+ * The value of a package flag of a launcher of the PyPI split at its commas outside `[...]` (`uvx --with "P[x,y],D"` is `P[x,y]` and
+ * `D`; measured 2026-11-21, M-02 F16: uv reads the extras of one package as one). A counter that a `[` raises and a `]` lowers, never
+ * below 0: a comma at depth 0 separates. A range with a comma (`P>=1,<2`) stays split.
+ */
+function splitOutsideBrackets(value: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let k = 0; k < value.length; k += 1) {
+    const ch = value.charAt(k);
+    if (ch === '[') depth += 1;
+    else if (ch === ']') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) {
+      parts.push(value.slice(start, k));
+      start = k + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
 }
 
 function collect(d: Detected, context: readonly string[]): InstallCommand {
@@ -1951,7 +2189,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   // A subcommand that takes no package names none: its positional words are not looked up.
   const limited = limitCandidates(walked.positionals);
   // The words after an update verb are its names ({@link InstallCommand.updateNames}), never packages.
-  const positionals = d.manifest === 'always' || d.names !== undefined ? [] : limited.kept;
+  const readsNoPackage = d.manifest === 'always' || d.names !== undefined || d.everyTool === 'always';
+  const positionals = readsNoPackage ? [] : limited.kept;
   const allFlags = [...preWalk.flags, ...walked.flags];
   const packages: PackageSpec[] = [];
   const out: InstallCommand = {
@@ -1964,7 +2203,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
-  if (limited.dropped > 0 && d.manifest !== 'always' && d.names === undefined) out.candidatesDropped = limited.dropped;
+  if (limited.dropped > 0 && !readsNoPackage) out.candidatesDropped = limited.dropped;
 
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
   // thing the command surely names, so it does not stop the manifest from being read.
@@ -2034,17 +2273,18 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.names === 'always' || (d.names === 'global-word' && hasGlobalFlagWord(d.pre, d.args))) {
     out.updateNames = [];
     for (const p of limited.kept) {
-      const spec = parseNpm(p.value, d.manager);
+      const spec = d.ecosystem === 'pypi' ? parsePython(p.value, false, d.manager) : parseNpm(p.value, d.manager);
       // A pattern, a path or a URL is no name; it is kept as a skipped word, so that "no word at all" can be told from it.
       if ('name' in spec) out.updateNames.push(spec);
       else skipped.push(spec);
     }
     // The candidate words left out past the ceiling of one command are counted, as they are for an install.
     if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
-  }
+  } else if (d.everyTool === 'always') out.updateNames = [];
+  if (d.everyTool === 'always' || (d.everyTool === 'all-flag' && allFlags.some((f) => f.flag === '--all'))) out.updatesEveryTool = true;
   if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
-    const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
+    const files = requirementFiles(walked.flags, REQUIREMENT_FLAGS);
     if (files.length > 0) out.manifest = { kind: 'requirements', files };
   } else if (d.manifest !== undefined && out.global !== true) {
     // The manifest is left unread only for an install that is global FOR CERTAIN (`out.global`); in doubt — `-g $X`,

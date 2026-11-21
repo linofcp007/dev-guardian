@@ -2982,6 +2982,197 @@ var NPM_TABLE = {
   stringValue: set("-m", "-c", "-call"),
   groups: "npm"
 };
+var PIP_REQUIREMENTS_REASON = "requirements file (-r) \u2014 read as a manifest, not as a package name";
+var PIP_CONSTRAINTS_REASON = "constraints file (-c) \u2014 not vetted";
+var PIP_EDITABLE_REASON = "editable install (-e) \u2014 local or VCS source, not looked up";
+var PIP_FETCH_VALUE = [
+  "-c",
+  "--constraint",
+  "-r",
+  "--requirement",
+  "--global-option",
+  "--no-binary",
+  "--only-binary",
+  "--src",
+  "--source",
+  "--source-dir",
+  "--source-directory",
+  "--progress-bar",
+  "-i",
+  "--index-url",
+  "--pypi-url",
+  "--extra-index-url",
+  "-f",
+  "--find-links",
+  "--python",
+  "--log",
+  "--log-file",
+  "--local-log",
+  "--proxy",
+  "--retries",
+  "--timeout",
+  "--default-timeout",
+  "--exists-action",
+  "--trusted-host",
+  "--cert",
+  "--client-cert",
+  "--cache-dir",
+  "--use-feature",
+  "--use-deprecated"
+];
+var PIP_FETCH_BOOL = [
+  "--no-deps",
+  "--no-dependencies",
+  "--prefer-binary",
+  "--pre",
+  "--require-hashes",
+  "--no-build-isolation",
+  "--use-pep517",
+  "--no-use-pep517",
+  "--check-build-dependencies",
+  "--ignore-requires-python",
+  "--no-clean",
+  "--no-index",
+  "--debug",
+  "--isolated",
+  "--require-virtualenv",
+  "--require-venv",
+  "-v",
+  "--verbose",
+  "-V",
+  "--version",
+  "-q",
+  "--quiet",
+  "--no-input",
+  "--no-cache-dir",
+  "--disable-pip-version-check",
+  "--no-color",
+  "--no-python-version-warning"
+];
+var PIP_FETCH_REGISTRY = ["-i", "--index-url", "--pypi-url", "--extra-index-url", "-f", "--find-links"];
+var PIP_FETCH_REPORTED = [
+  ["-r", PIP_REQUIREMENTS_REASON],
+  ["--requirement", PIP_REQUIREMENTS_REASON],
+  ["-c", PIP_CONSTRAINTS_REASON],
+  ["--constraint", PIP_CONSTRAINTS_REASON]
+];
+var PIP_DOWNLOAD_TABLE = {
+  value: set(
+    ...PIP_FETCH_VALUE,
+    "-d",
+    "--dest",
+    "--destination-dir",
+    "--destination-directory",
+    "--platform",
+    "--python-version",
+    "--implementation",
+    "--abi"
+  ),
+  bool: set(...PIP_FETCH_BOOL),
+  registry: set(...PIP_FETCH_REGISTRY),
+  registryBool: set("--no-index"),
+  reported: new Map(PIP_FETCH_REPORTED)
+};
+var PIP_WHEEL_TABLE = {
+  value: set(...PIP_FETCH_VALUE, "-w", "--wheel-dir", "-e", "--editable", "--config-settings", "--build-option"),
+  bool: set(...PIP_FETCH_BOOL, "--no-verify"),
+  registry: set(...PIP_FETCH_REGISTRY),
+  registryBool: set("--no-index"),
+  reported: new Map([...PIP_FETCH_REPORTED, ["-e", PIP_EDITABLE_REASON], ["--editable", PIP_EDITABLE_REASON]])
+};
+var PIPX_UPGRADE_TABLE = {
+  value: set("--python", "--index-url", "-i", "--pip-args", "--cooldown", "--backend", "--fetch-python", "--output"),
+  bool: set(
+    "--install",
+    "--include-injected",
+    "--force",
+    "-f",
+    "--system-site-packages",
+    "--editable",
+    "-e",
+    "--quiet",
+    "-q",
+    "--verbose",
+    "-v",
+    "--skip-maintenance",
+    "--global",
+    "--fetch-missing-python"
+  ),
+  registry: set("--index-url", "-i")
+};
+var UV_TOOL_UPGRADE_TABLE = {
+  value: set(
+    "--python",
+    "-p",
+    "--index",
+    "--index-url",
+    "-i",
+    "--default-index",
+    "--extra-index-url",
+    "--find-links",
+    "-f",
+    "--index-strategy",
+    "--keyring-provider",
+    "--resolution",
+    "--prerelease",
+    "--prerelease-package",
+    "--fork-strategy",
+    "--exclude-newer",
+    "--exclude-newer-package",
+    "--link-mode",
+    "--directory",
+    "--project",
+    "--config-file",
+    "--cache-dir",
+    "--color",
+    "--python-platform",
+    "--no-sources-package",
+    "--reinstall-package",
+    "-C",
+    "--config-setting",
+    "--config-settings",
+    "--config-setting-package",
+    "--no-build-isolation-package",
+    "--no-build-package",
+    "--no-binary-package",
+    "--allow-insecure-host",
+    "--python-preference"
+  ),
+  bool: set(
+    "--all",
+    "--offline",
+    "-q",
+    "--quiet",
+    "-v",
+    "--verbose",
+    "--no-cache",
+    "-n",
+    "--reinstall",
+    "--no-config",
+    "--no-progress",
+    "--no-python-downloads",
+    "--no-index",
+    "--compile-bytecode",
+    "--managed-python",
+    "--no-managed-python",
+    "--no-sources",
+    "--no-build-isolation",
+    "--no-build",
+    "--no-binary",
+    "--require-build-hashes",
+    "--no-require-build-hashes",
+    "--system-certs",
+    "--isolated",
+    "--upgrade",
+    "-U",
+    "--native-tls",
+    "--no-offline",
+    "--force-reinstall"
+  ),
+  registry: set("--index", "--index-url", "-i", "--default-index", "--extra-index-url", "--find-links", "-f"),
+  registryBool: set("--no-index"),
+  dir: set("--directory", "--project")
+};
 var FLAGS = {
   npm: NPM_TABLE,
   pnpm: {
@@ -3230,16 +3421,43 @@ var FLAGS = {
     registry: set("-i", "--index-url", "--extra-index-url", "-f", "--find-links", "--index", "--default-index"),
     registryBool: set("--no-index"),
     reported: /* @__PURE__ */ new Map([
-      ["-r", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
-      ["--requirement", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
+      ["-r", PIP_REQUIREMENTS_REASON],
+      ["--requirement", PIP_REQUIREMENTS_REASON],
       // `uv pip install` spells it in the plural.
-      ["--requirements", "requirements file (-r) \u2014 read as a manifest, not as a package name"],
-      ["-c", "constraints file (-c) \u2014 not vetted"],
-      ["--constraint", "constraints file (-c) \u2014 not vetted"],
-      ["-e", "editable install (-e) \u2014 local or VCS source, not looked up"],
-      ["--editable", "editable install (-e) \u2014 local or VCS source, not looked up"]
+      ["--requirements", PIP_REQUIREMENTS_REASON],
+      ["-c", PIP_CONSTRAINTS_REASON],
+      ["--constraint", PIP_CONSTRAINTS_REASON],
+      ["-e", PIP_EDITABLE_REASON],
+      ["--editable", PIP_EDITABLE_REASON]
     ])
   },
+  "pip-download": PIP_DOWNLOAD_TABLE,
+  "pip-wheel": PIP_WHEEL_TABLE,
+  "pipx-upgrade": PIPX_UPGRADE_TABLE,
+  "pipx-reinstall": {
+    value: set("--python", "--fetch-python", "--backend", "--output"),
+    bool: set("--quiet", "-q", "--verbose", "-v", "--skip-maintenance", "--global", "--fetch-missing-python"),
+    registry: set()
+  },
+  "pipx-upgrade-all": {
+    value: set("--skip", "--pip-args", "--backend", "--index-url", "-i", "--cooldown", "--output"),
+    bool: set(
+      "--include-injected",
+      "--force",
+      "-f",
+      "--quiet",
+      "-q",
+      "--verbose",
+      "-v",
+      "--skip-maintenance",
+      "--global",
+      "--system-site-packages",
+      "--editable",
+      "-e"
+    ),
+    registry: set("--index-url", "-i")
+  },
+  "uv-tool-upgrade": UV_TOOL_UPGRADE_TABLE,
   uv: {
     value: set(
       "--group",
@@ -3683,11 +3901,43 @@ var LAUNCH_FLAGS = {
     extraPackageFlags: set("--preinstall", "--spec")
   },
   "pipx-run": {
-    value: set("--spec", "--index-url", "-i", "--python", "--path"),
+    value: set("--spec", "--index-url", "-i", "--python", "--path", "--with"),
     bool: set("--no-cache", "--quiet", "-q", "--verbose", "-v", "--system-site-packages", "--fetch-missing-python"),
     registry: set("--index-url", "-i"),
-    packageFlags: set("--spec")
-  }
+    packageFlags: set("--spec"),
+    extraPackageFlags: set("--with")
+  },
+  // `pipx inject <environment> <package>…` (pipx, the parser dumped 2026-11-21, 23 spellings): `--include-resources-from` names a
+  // package pipx fetches as well, and `-r` a requirements file pip reads (its manifest is read, `collectLaunch`).
+  "pipx-inject": {
+    value: set("-r", "--requirement", "--include-resources-from", "--index-url", "-i", "--pip-args", "--cooldown", "--backend", "--output"),
+    bool: set(
+      "--quiet",
+      "-q",
+      "--verbose",
+      "-v",
+      "--skip-maintenance",
+      "--global",
+      "--include-apps",
+      "--include-deps",
+      "--system-site-packages",
+      "--editable",
+      "-e",
+      "--force",
+      "-f",
+      "--with-suffix"
+    ),
+    registry: set("--index-url", "-i"),
+    reported: /* @__PURE__ */ new Map([["-r", PIP_REQUIREMENTS_REASON], ["--requirement", PIP_REQUIREMENTS_REASON]]),
+    extraPackageFlags: set("--include-resources-from")
+  },
+  // `pipx runpip <environment> <pip arguments>`: only pipx's own flags, the rest is a pip command ({@link runpipDetected}).
+  "pipx-runpip": {
+    value: set(),
+    bool: set("--quiet", "-q", "--verbose", "-v", "--global", "--skip-maintenance"),
+    registry: set()
+  },
+  "pipx-upgrade": PIPX_UPGRADE_TABLE
 };
 var MAX_CANDIDATES_PER_COMMAND = 50;
 function limitCandidates(positionals) {
@@ -3790,7 +4040,7 @@ function walk(words, table) {
     const v = w.value;
     if (v === "--") continue;
     if (!v.startsWith("-") || v.length === 1) {
-      positionals.push(i === candidateAt ? { value: v, candidate: true } : { value: v });
+      positionals.push(i === candidateAt ? { value: v, at: i, candidate: true } : { value: v, at: i });
       continue;
     }
     const eqAt = v.indexOf("=");
@@ -3841,7 +4091,7 @@ function walk(words, table) {
           i += 1;
         } else note(f.flag, void 0);
       }
-      for (const value of group.positionals) positionals.push({ value });
+      for (const value of group.positionals) positionals.push({ value, at: i });
       continue;
     }
     if (!v.startsWith("--") && SHORT_CLUSTER.test(v)) {
@@ -4001,13 +4251,15 @@ var SUBCOMMANDS = {
   pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
   bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x", ...BUN_INITIALIZER]),
   yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "workspaces", "dlx", "dedupe", "up", ...YARN_UPDATE, ...CREATE_ONLY]),
-  pip: /* @__PURE__ */ new Set(["install"]),
+  pip: /* @__PURE__ */ new Set(["install", "download", "wheel"]),
   uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
   poetry: /* @__PURE__ */ new Set(["add"]),
   composer: COMPOSER_REQUIRE,
   dotnet: /* @__PURE__ */ new Set(["add", "package", "tool"])
 };
-var PIPX_SUBCOMMANDS = /* @__PURE__ */ new Set(["install", "run"]);
+var PIPX_SUBCOMMANDS = /* @__PURE__ */ new Set(["install", "run", "inject", "upgrade", "reinstall", "runpip", "upgrade-all"]);
+var UV_TOOL_SUBCOMMANDS = /* @__PURE__ */ new Set(["run", "install", "upgrade"]);
+var PIP_FETCH_TABLES = /* @__PURE__ */ new Map([["install", void 0], ["download", "pip-download"], ["wheel", "pip-wheel"]]);
 var ADD_ONLY = /* @__PURE__ */ new Set(["add"]);
 var ADD_OR_UP = /* @__PURE__ */ new Set(["add", "up"]);
 var ADD_OR_UPGRADE = /* @__PURE__ */ new Set(["add", "upgrade"]);
@@ -4035,6 +4287,38 @@ function yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag) {
   }
   if (verb !== "add") return null;
   return tag({ manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "bare" });
+}
+function injectDetected(after, before) {
+  const table = LAUNCH_FLAGS["pipx-inject"];
+  const environment = table === void 0 ? void 0 : walk(after, table).positionals[0];
+  if (environment === void 0) return null;
+  const d = launcher("pipx", "pypi", after.slice(environment.at + 1), [...before, ...after.slice(0, environment.at + 1)], {
+    style: "install",
+    flags: "pipx-inject"
+  });
+  return environment.candidate === true ? { ...d, firstIsCandidate: true } : d;
+}
+function runpipDetected(after, before) {
+  const table = LAUNCH_FLAGS["pipx-runpip"];
+  const [first, second, third] = table === void 0 ? [] : walk(after, table).positionals;
+  if (table === void 0 || first === void 0) return null;
+  let environment = first;
+  if (first.candidate === true && !(second !== void 0 && PIP_FETCH_TABLES.has(second.value))) {
+    if (second === void 0 || third === void 0 || !PIP_FETCH_TABLES.has(third.value)) return null;
+    environment = second;
+  }
+  const word = after[environment.at];
+  if (word === void 0) return null;
+  const inner = detect([{ ...word, value: "pip" }, ...after.slice(environment.at + 1)]);
+  if (inner === null) return null;
+  const own = walk([...before, ...after.slice(0, environment.at + 1)], table).uncertain;
+  return { ...inner, uncertain: [...own, ...inner.uncertain] };
+}
+function upgradeDetected(after, before) {
+  if (walk(after, PIPX_UPGRADE_TABLE).flags.some((f) => f.flag === "--install")) {
+    return launcher("pipx", "pypi", after, before, { style: "install", flags: "pipx-upgrade" });
+  }
+  return { manager: "pipx", ecosystem: "pypi", args: after, pre: before, uncertain: [], flagTable: "pipx-upgrade", names: "always" };
 }
 var INSTALL_ONLY = /* @__PURE__ */ new Set(["install"]);
 var PACKAGE_ONLY = /* @__PURE__ */ new Set(["package"]);
@@ -4082,9 +4366,28 @@ function detect(input) {
   if (head === "pipx") {
     const sub2 = nextPositional(words, i, LAUNCH_FLAGS["pipx-run"] ?? FLAGS["pip"] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
     const subWord2 = sub2 < 0 ? "" : words[sub2]?.value ?? "";
-    if (subWord2 === "install") return launcher("pipx", "pypi", words.slice(sub2 + 1), words.slice(i, sub2), { style: "install", flags: "pipx-install" });
-    if (subWord2 === "run") return launcher("pipx", "pypi", words.slice(sub2 + 1), words.slice(i, sub2), { style: "run", flags: "pipx-run" });
-    return null;
+    const after2 = words.slice(sub2 + 1);
+    const before2 = words.slice(i, sub2);
+    switch (subWord2) {
+      case "install":
+        return launcher("pipx", "pypi", after2, before2, { style: "install", flags: "pipx-install" });
+      case "run":
+        return launcher("pipx", "pypi", after2, before2, { style: "run", flags: "pipx-run" });
+      case "inject":
+        return injectDetected(after2, before2);
+      case "runpip":
+        return runpipDetected(after2, before2);
+      case "upgrade":
+        return upgradeDetected(after2, before2);
+      // The names of an update (`names`), read with the flags of the verb ({@link FLAGS}).
+      case "reinstall":
+        return { manager: "pipx", ecosystem: "pypi", args: after2, pre: before2, uncertain: [], flagTable: "pipx-reinstall", names: "always" };
+      // `pipx upgrade-all` takes no name: its words are none (a word after `--skip a` is another value of `--skip`).
+      case "upgrade-all":
+        return { manager: "pipx", ecosystem: "pypi", args: after2, pre: before2, uncertain: [], flagTable: "pipx-upgrade-all", everyTool: "always" };
+      default:
+        return null;
+    }
   }
   const table = FLAGS[head];
   if (table === void 0) return null;
@@ -4124,11 +4427,14 @@ function detect(input) {
   if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === "uv" && subName === "tool") {
     const toolTable = LAUNCH_FLAGS["uvx"] ?? table;
-    const verb = nextPositional(words, sub + 1, toolTable, PIPX_SUBCOMMANDS);
+    const verb = nextPositional(words, sub + 1, toolTable, UV_TOOL_SUBCOMMANDS);
     const verbName = verb < 0 ? "" : words[verb]?.value ?? "";
     const tail = words.slice(verb + 1);
     if (verbName === "run") return launcher("uv", "pypi", tail, before, { style: "run", flags: "uvx" });
     if (verbName === "install") return launcher("uv", "pypi", tail, before, { style: "install", flags: "uv-tool-install" });
+    if (verbName === "upgrade") {
+      return { manager: "uv", ecosystem: "pypi", args: tail, pre: before, uncertain: [], flagTable: "uv-tool-upgrade", names: "always", everyTool: "all-flag" };
+    }
     return null;
   }
   const subWord = words[sub]?.value ?? "";
@@ -4189,8 +4495,12 @@ function detect(input) {
       }
       return yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag);
     }
-    case "pip":
-      return subWord === "install" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] } : null;
+    case "pip": {
+      if (!PIP_FETCH_TABLES.has(subWord)) return null;
+      const flagTable = PIP_FETCH_TABLES.get(subWord);
+      const d = { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] };
+      return flagTable === void 0 ? d : { ...d, flagTable };
+    }
     case "uv": {
       if (subWord === "add") return { manager: "uv", ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] };
       if (subWord === "pip") {
@@ -4303,10 +4613,12 @@ function collectLaunch(d, launch, context) {
     if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
+  const firstWord = w.positionals[0];
+  if (d.firstIsCandidate === true && firstWord !== void 0) w.positionals[0] = { ...firstWord, candidate: true };
   const flags = [...pre.flags, ...w.flags];
   const has2 = (names) => names !== void 0 && flags.some((f) => names.has(f.flag) && !isBoolWord(f.value));
   const wordFlags = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value) && f.eq !== true);
-  const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
+  const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => d.ecosystem === "pypi" ? splitOutsideBrackets(f.value ?? "") : (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
   const initializer = launch.initializer === true;
   const limited = limitCandidates(initializer ? w.positionals.filter((p) => isInitializerName(p.value, d.manager)) : w.positionals);
@@ -4373,7 +4685,31 @@ function collectLaunch(d, launch, context) {
   if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === "--prefix" || f.flag === "-C")) out.prefixed = true;
+  if (launch.flags === "pipx-inject") {
+    const files = requirementFiles(flags, PIPX_REQUIREMENT_FLAGS);
+    if (files.length > 0) out.manifest = { kind: "requirements", files };
+  }
   return out;
+}
+var PIPX_REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement"]);
+function requirementFiles(flags, names) {
+  return flags.flatMap((f) => names.has(f.flag) && f.value !== void 0 && f.value !== "" ? [f.value] : []);
+}
+function splitOutsideBrackets(value) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let k = 0; k < value.length; k += 1) {
+    const ch = value.charAt(k);
+    if (ch === "[") depth += 1;
+    else if (ch === "]") depth = Math.max(0, depth - 1);
+    else if (ch === "," && depth === 0) {
+      parts.push(value.slice(start, k));
+      start = k + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
 }
 function collect(d, context) {
   if (d.launch !== void 0) return collectLaunch(d, d.launch, context);
@@ -4383,7 +4719,8 @@ function collect(d, context) {
   const walked = walk(d.args, flagTable);
   const { skipped, customRegistry, uncertain, registries } = walked;
   const limited = limitCandidates(walked.positionals);
-  const positionals = d.manifest === "always" || d.names !== void 0 ? [] : limited.kept;
+  const readsNoPackage = d.manifest === "always" || d.names !== void 0 || d.everyTool === "always";
+  const positionals = readsNoPackage ? [] : limited.kept;
   const allFlags = [...preWalk.flags, ...walked.flags];
   const packages = [];
   const out = {
@@ -4396,7 +4733,7 @@ function collect(d, context) {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== void 0) out.customRegistry = registry;
-  if (limited.dropped > 0 && d.manifest !== "always" && d.names === void 0) out.candidatesDropped = limited.dropped;
+  if (limited.dropped > 0 && !readsNoPackage) out.candidatesDropped = limited.dropped;
   const candidatePackages = [];
   const bothPairs = [];
   let lastComposer;
@@ -4452,15 +4789,16 @@ function collect(d, context) {
   if (d.names === "always" || d.names === "global-word" && hasGlobalFlagWord(d.pre, d.args)) {
     out.updateNames = [];
     for (const p of limited.kept) {
-      const spec2 = parseNpm(p.value, d.manager);
+      const spec2 = d.ecosystem === "pypi" ? parsePython(p.value, false, d.manager) : parseNpm(p.value, d.manager);
       if ("name" in spec2) out.updateNames.push(spec2);
       else skipped.push(spec2);
     }
     if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
-  }
+  } else if (d.everyTool === "always") out.updateNames = [];
+  if (d.everyTool === "always" || d.everyTool === "all-flag" && allFlags.some((f) => f.flag === "--all")) out.updatesEveryTool = true;
   if (d.global === true || knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args)) out.global = true;
   if (d.manager === "pip" || d.manager === "uv-pip") {
-    const files = walked.flags.flatMap((f) => REQUIREMENT_FLAGS.has(f.flag) && f.value !== void 0 && f.value !== "" ? [f.value] : []);
+    const files = requirementFiles(walked.flags, REQUIREMENT_FLAGS);
     if (files.length > 0) out.manifest = { kind: "requirements", files };
   } else if (d.manifest !== void 0 && out.global !== true) {
     out.manifest = { kind: "package-json" };
