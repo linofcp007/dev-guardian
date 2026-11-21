@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-localtgz": "./vendor/dgprobe-zzq7731-localtgz-1.0.0.tgz",
+      },
+    },
+  },
+  "packages": {
+    "dgprobe-zzq7731-localtgz": ["dgprobe-zzq7731-localtgz@./vendor/dgprobe-zzq7731-localtgz-1.0.0.tgz", {}, "sha512-kYqghamq+YeDU/Ao3nH7VrY8z+kMIGSm//sBk3xncXlnSupqeNLt7nrzxETDOmj52OHLgpmEMvYLiNUDzw66yg=="],
+  }
+}

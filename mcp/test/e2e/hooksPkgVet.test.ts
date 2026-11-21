@@ -1182,6 +1182,60 @@ describe('install-vet-lockfile-pins', () => {
     // The request log is one file for the whole test: what the second run added comes after the first run's lines.
     expect(asked(own.requests.slice(above.requests.length))).toEqual(ONLY_OSV);
   });
+
+  // ── lockfile-bun-lock-v2, T-02: the bun.lock bun 1.4.4 writes, through the real hook process (the helpers above)
+  describe('lockfile-bun-lock-v2', () => {
+    /** A well-formed sha512 of another last character: 85 of its alphabet, then `Q`. */
+    const INTEGRITY_Q = `sha512-${'B'.repeat(85)}Q==`;
+    /** The bun.lock above as bun 1.4.4 writes it: lockfileVersion 2 (or `label`), configVersion 1, four elements, an empty registry, well-formed sha512. */
+    const bunLockV2 = (transitive: string, label = 2): string =>
+      [
+        '{',
+        `  "lockfileVersion": ${label},`,
+        '  "configVersion": 1,',
+        '  "workspaces": {',
+        '    "": {',
+        '      "name": "fixture-app",',
+        '      "dependencies": {',
+        '        "express": "^4.21.0",',
+        '      },',
+        '    },',
+        '  },',
+        '  "packages": {',
+        `    "eslint-config-prettier": ["eslint-config-prettier@${transitive}", "", { "bin": { "eslint-config-prettier": "bin/cli.js" } }, "${INTEGRITY_A}"],`,
+        '',
+        `    "express": ["express@4.21.2", "", { "dependencies": { "eslint-config-prettier": "^10.1.0" } }, "${INTEGRITY_Q}"],`,
+        '  }',
+        '}',
+        '',
+      ].join('\n');
+
+    it('T-02 `bun install` with a bun.lock of lockfileVersion 2 that pins a malicious version of a TRANSITIVE dependency: DENIED, naming the pair — and nothing but OSV is asked', () => {
+      manifest();
+      writeFileSync(join(project, 'bun.lock'), bunLockV2(MALICIOUS));
+      const r = runHook('bun install', ROUTES);
+      expect(context(r)).not.toContain('bun.lock was not read');
+      expect({ status: r.status, decision: decision(r) }).toEqual({ status: 0, decision: 'deny' });
+      expectPinned(reason(r), 'bun.lock', MALICIOUS);
+      expect(asked(r.requests)).toEqual(ONLY_OSV);
+    });
+
+    it('T-02 the same bun.lock with the version that has no advisory: no answer, and no request to the registry for the direct dependency it covers', () => {
+      manifest();
+      writeFileSync(join(project, 'bun.lock'), bunLockV2(CLEAN));
+      const r = runHook('bun install', ROUTES);
+      expect({ status: r.status, output: r.output, requests: asked(r.requests) }).toEqual({ status: 0, output: undefined, requests: ONLY_OSV });
+    });
+
+    it('T-02 lockfileVersion 3 with the malicious version: DENIED all the same', () => {
+      manifest();
+      writeFileSync(join(project, 'bun.lock'), bunLockV2(MALICIOUS, 3));
+      const r = runHook('bun install', ROUTES);
+      expect(context(r)).not.toContain('bun.lock was not read');
+      expect({ status: r.status, decision: decision(r) }).toEqual({ status: 0, decision: 'deny' });
+      expectPinned(reason(r), 'bun.lock', MALICIOUS);
+    });
+  });
 });
 
 // ───────────────── install-vet-slow-first-round — a registry document that never arrives, through the real hook process

@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "@dgprobe-zzq7731/scoped": "^1.0.0",
+      },
+    },
+  },
+  "packages": {
+    "@dgprobe-zzq7731/scoped": ["@dgprobe-zzq7731/scoped@1.0.0", "https://packages.example.invalid/@dgprobe-zzq7731/scoped/-/scoped-1.0.0.tgz", {}, "sha512-oufF2NRXa3HzU+2YOoS26jxRFyvyZ6yvHjZXu+rPMGJTHcPAF/XwpiVe7pEdi9JruonTAPRdiaDwr5DhAN+SXQ=="],
+  }
+}

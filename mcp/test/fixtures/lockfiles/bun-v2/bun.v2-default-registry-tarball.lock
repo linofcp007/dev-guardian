@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-pubtar": "^1.0.0",
+      },
+    },
+  },
+  "packages": {
+    "dgprobe-zzq7731-pubtar": ["dgprobe-zzq7731-pubtar@1.0.0", "", {}, "sha512-Bw8LWnEbd2biWd9i7JfPuCMLYf/BKkypBq6WBV+Fk0BRCktHYhoBb6djOjHasO2zF/upjaTDgjV7LVyiBB1FuQ=="],
+  }
+}

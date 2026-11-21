@@ -1580,11 +1580,12 @@ describe('install-vet-lockfile-pins', () => {
 
   /**
    * The network of these tests. The public registry answers for every name: `placeholder` names with npm's security
-   * placeholder, the others with {@link LATEST}. OSV answers `MAL-2025-6022` for {@link BAD} alone, another advisory
-   * for the `vulnerable` pairs, and HTTP 500 for a request `fails` picks. Any other URL is an error — and is in `calls`.
+   * placeholder, the others with {@link LATEST}. OSV answers `MAL-2025-6022` for {@link BAD} alone, `MAL-2026-0100`
+   * for the `malicious` pairs, another advisory for the `vulnerable` pairs, and HTTP 500 for a request `fails` picks.
+   * Any other URL is an error — and is in `calls`.
    */
   function lockNet(
-    spec: { placeholder?: readonly string[]; vulnerable?: readonly string[]; fails?: (pairs: readonly string[]) => boolean } = {},
+    spec: { placeholder?: readonly string[]; malicious?: readonly string[]; vulnerable?: readonly string[]; fails?: (pairs: readonly string[]) => boolean } = {},
   ): LockNet {
     const net: Omit<LockNet, 'fetchImpl'> = { calls: [], bodies: [], registry: [], asked: [], batches: [] };
     const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
@@ -1602,6 +1603,7 @@ describe('install-vet-lockfile-pins', () => {
           results: queries.map((q, i) => {
             const pair = pairs[i] ?? '';
             if (q.package?.ecosystem === 'npm' && pair === BAD) return { vulns: [{ id: 'MAL-2025-6022' }] };
+            if (q.package?.ecosystem === 'npm' && spec.malicious?.includes(pair) === true) return { vulns: [{ id: 'MAL-2026-0100' }] };
             return spec.vulnerable?.includes(pair) === true ? { vulns: [{ id: 'GHSA-aaaa-bbbb-cccc' }] } : {};
           }),
         });
@@ -2038,10 +2040,10 @@ describe('install-vet-lockfile-pins', () => {
       /\S/,
     ],
     [
-      'a bun.lock of lockfileVersion 2',
+      'a bun.lock of lockfileVersion 4',
       'bun install',
       'bun.lock',
-      (path) => writeFileSync(path, bunLock(BAD_LOCK).replace('"lockfileVersion": 1,', '"lockfileVersion": 2,')),
+      (path) => writeFileSync(path, bunLock(BAD_LOCK).replace('"lockfileVersion": 1,', '"lockfileVersion": 4,')),
       /\S/,
     ],
     [
@@ -2522,6 +2524,78 @@ describe('install-vet-lockfile-pins', () => {
     expect(lines(d?.context).filter((l) => /lodahs/.test(l))).toHaveLength(1);
   });
 
+  // ── lockfile-bun-lock-v2, T-07: a bun.lock outside the form bun writes, through the decision (the helpers above)
+  describe('lockfile-bun-lock-v2', () => {
+    const DEP = { dep: '^1.0.0' };
+    const DOC = `${PUBLIC}/dep`;
+    const I = JSON.stringify(INTEGRITY);
+    const NOT_RECOGNISED = 'dev-guardian: 1 entry of bun.lock was not recognised — not vetted.';
+    const ANOTHER_SOURCE = 'dev-guardian: 1 package of bun.lock comes from another source — what it serves was not vetted.';
+    /** A bun.lock of lockfileVersion `label` whose workspace records `dep: ^1.0.0`; its entries are `entries`, the first one `dep`'s. */
+    const depLock = (label: number, entries: readonly string[]): string => {
+      const text = bunLock({ root: DEP, pins: [] }, entries).replace('"lockfileVersion": 1,', `"lockfileVersion": ${label},`);
+      expect(text).toContain(`"lockfileVersion": ${label},`);
+      return text;
+    };
+    /** What `bun install` decided and asked: the deny, the lines of the context, the registry documents and the OSV pairs. */
+    async function install(lockfile: string, net: LockNet = lockNet()): Promise<{ deny: string | undefined; lines: string[]; registry: string[]; asked: string[] }> {
+      pkgJson(DEP);
+      put('bun.lock', lockfile);
+      const d = await decideInstallCommand('bun install', at(net.fetchImpl));
+      return { deny: d?.deny, lines: d?.context === undefined ? [] : lines(d.context), registry: net.registry, asked: sorted(net.asked) };
+    }
+
+    it('T-07 (1) label 1, the entry of `dep` without its integrity: the one lockfile line says it was not recognised, `dep` is asked of the registry by name and its pin of OSV — and a malicious pin is denied', async () => {
+      const lockfile = depLock(1, ['    "dep": ["dep@1.2.3", "", {}],']);
+      expect(await install(lockfile)).toEqual({ deny: undefined, lines: [NOT_RECOGNISED], registry: [DOC], asked: ['dep@1.0.0', 'dep@1.2.3'] });
+      const denied = await install(lockfile, lockNet({ malicious: ['dep@1.2.3'] }));
+      expect(denied.deny ?? '(no deny)').toContain("bun.lock pins 'dep@1.2.3'");
+    });
+
+    it('T-07 (2) label 1, a path in the second element of `dep`: another source said without a host, then not recognised — `dep` is asked of the registry, its pin of OSV', async () => {
+      expect(await install(depLock(1, [`    "dep": ["dep@1.2.3", "./x", {}, ${I}],`]))).toEqual({
+        deny: undefined,
+        lines: [ANOTHER_SOURCE, NOT_RECOGNISED],
+        registry: [DOC],
+        asked: ['dep@1.0.0', 'dep@1.2.3'],
+      });
+    });
+
+    it('T-07 (3) label 1, the entry of `dep` fetching evil@6.6.6, without a space before its object: denied for what it fetches, and `dep` is asked of the registry', async () => {
+      const lockfile = depLock(1, [`    "dep": ["dep@1.2.3", "https://evil.example/evil/-/evil-6.6.6.tgz",{}, ${I}],`]);
+      const read = await install(lockfile, lockNet({ malicious: ['evil@6.6.6'] }));
+      expect(read.deny ?? '(no deny)').toContain("bun.lock names 'dep@1.2.3' and fetches 'evil@6.6.6'");
+      expect(read.registry).toEqual([DOC]);
+    });
+
+    it('T-07 (4) label 2, an md5 integrity: no lockfile line — `dep` is asked of the registry by name, its pin of OSV', async () => {
+      expect(await install(depLock(2, [`    "dep": ["dep@1.2.3", "", {}, "md5-${'A'.repeat(22)}=="],`]))).toEqual({
+        deny: undefined,
+        lines: [],
+        registry: [DOC],
+        asked: ['dep@1.0.0', 'dep@1.2.3'],
+      });
+    });
+
+    it('T-07 (5) label 1, a pin of a scope the project’s .npmrc gives a registry of its own, the public registry’s URL written without spaces: it IS sent to OSV, and the one lockfile line is not recognised — no "own scope"', async () => {
+      put('.npmrc', ACME_REGISTRY);
+      const acme = `    "@acme/billing": ["@acme/billing@3.0.1","https://registry.npmjs.org/@acme/billing/-/billing-3.0.1.tgz",{},${I}],`;
+      expect(await install(depLock(1, [`    "dep": ["dep@1.2.3", "", {}, ${I}],`, acme]))).toEqual({
+        deny: undefined,
+        lines: [NOT_RECOGNISED],
+        registry: [DOC],
+        asked: ['@acme/billing@3.0.1', 'dep@1.0.0', 'dep@1.2.3'],
+      });
+    });
+
+    it.each([1, 2])('T-07 `bun update` with a bun.lock of label %i that covers `dep`: as today — `dep` is asked of the registry by name, and its pin of OSV', async (label) => {
+      pkgJson(DEP);
+      put('bun.lock', depLock(label, [`    "dep": ["dep@1.2.3", "", {}, ${I}],`]));
+      const net = lockNet();
+      expect(await decideInstallCommand('bun update', at(net.fetchImpl))).toBeNull();
+      expect({ registry: net.registry, pinned: net.asked.includes('dep@1.2.3') }).toEqual({ registry: [DOC], pinned: true });
+    });
+  });
 });
 
 // ───────────────── install-vet-slow-first-round — a document that does not arrive costs its package, not the manifest
