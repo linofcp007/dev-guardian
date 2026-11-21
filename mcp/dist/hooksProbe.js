@@ -30,12 +30,12 @@ function answersOf(output, count) {
   }
   return answers;
 }
-async function probeFolders(paths, deadlineMs, child = { command: process.execPath, args: ["-e", CHILD_SCRIPT, "--"] }) {
+async function probeFolders(paths, deadlineMs) {
   const result = new Map(paths.map((path) => [path, "silent"]));
   if (paths.length === 0) return result;
   let output = "";
   try {
-    const run = spawnSync(child.command, [...child.args, ...paths], {
+    const run = spawnSync(process.execPath, ["-e", CHILD_SCRIPT, "--", ...paths], {
       timeout: deadlineMs,
       windowsHide: true,
       encoding: "utf8",

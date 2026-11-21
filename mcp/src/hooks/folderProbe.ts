@@ -7,7 +7,9 @@
  * folder is on the network; it imports nothing of this repository's (the type
  * below is erased by the build).
  *
- * The child is `node -e <fixed text> -- <path>...`: the paths are arguments, never
+ * The child is `node -e <fixed text> -- <path>...`, always this Node executable: the
+ * program is never taken from an argument (the tests swap it by mocking
+ * `node:child_process`). The paths are arguments, never
  * part of the text nor an option of Node, and the child's working folder is the one of the Node
  * executable — a process cannot even be started with its working folder on a
  * dead share. It asks about every path at once and writes one line per answer
@@ -19,12 +21,6 @@
 import { spawnSync } from 'node:child_process';
 import { dirname } from 'node:path';
 import type { FolderAnswer } from './sessionDirs.js';
-
-/** The program that asks, with the arguments it takes before the paths. */
-export interface ProbeChild {
-  command: string;
-  args: readonly string[];
-}
 
 /** The text the child runs: a stat of every path, side by side, each answer written as soon as it is known. */
 const CHILD_SCRIPT = [
@@ -49,17 +45,13 @@ function answersOf(output: string, count: number): Map<number, FolderAnswer> {
 }
 
 /** One answer per path, as given; never throws. */
-export async function probeFolders(
-  paths: readonly string[],
-  deadlineMs: number,
-  // `--` ends Node's own options: a path is an argument of the script whatever it starts with.
-  child: ProbeChild = { command: process.execPath, args: ['-e', CHILD_SCRIPT, '--'] },
-): Promise<ReadonlyMap<string, FolderAnswer>> {
+export async function probeFolders(paths: readonly string[], deadlineMs: number): Promise<ReadonlyMap<string, FolderAnswer>> {
   const result = new Map<string, FolderAnswer>(paths.map((path): [string, FolderAnswer] => [path, 'silent']));
   if (paths.length === 0) return result;
   let output = '';
   try {
-    const run = spawnSync(child.command, [...child.args, ...paths], {
+    // `--` ends Node's own options: a path is an argument of the script whatever it starts with.
+    const run = spawnSync(process.execPath, ['-e', CHILD_SCRIPT, '--', ...paths], {
       timeout: deadlineMs,
       windowsHide: true,
       encoding: 'utf8',

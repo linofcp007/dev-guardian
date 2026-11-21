@@ -22,6 +22,25 @@ import {
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 import { hangBound } from '../../helpers/timing.js';
 
+// `probeFolders` always runs this Node executable (a program taken from an argument is what the release scan gate of
+// 3.15.0 reported). The T-03 cases that need another child swap it here: `swap` holds the program and the arguments
+// that replace `-e <the probe's text> --`; the paths the probe hands over are kept. With no swap, the real call runs,
+// and every call is recorded so the tests can see what the probe ran.
+const child = vi.hoisted(() => ({
+  swap: undefined as { command: string; args: readonly string[] } | undefined,
+  calls: [] as Array<{ command: string; args: readonly string[] }>,
+}));
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:child_process')>();
+  const spawnSync = (command: string, args: readonly string[], options: import('node:child_process').SpawnSyncOptionsWithStringEncoding) => {
+    child.calls.push({ command, args });
+    const swap = child.swap;
+    if (swap === undefined) return real.spawnSync(command, args, options);
+    return real.spawnSync(swap.command, [...swap.args, ...args.slice(3)], options);
+  };
+  return { ...real, spawnSync };
+});
+
 afterAll(cleanupTempDirs);
 
 const BS = String.fromCharCode(92);
@@ -189,32 +208,53 @@ describe('hook-unc-cwd-hang', () => {
       const missing = join(dir, 'nope');
       expect((await probeFolders([withSeparator], 2000)).get(withSeparator)).toBe('there');
       expect((await probeFolders([missing], 2000)).get(missing)).toBe('absent');
+      child.calls.length = 0;
       const both = await probeFolders([dir, missing], 2000);
       expect([...both.entries()]).toEqual([
         [dir, 'there'],
         [missing, 'absent'],
       ]);
+      // The probe runs this Node executable with its fixed text, and the paths after `--`.
+      expect(child.calls).toHaveLength(1);
+      expect(child.calls[0]?.command).toBe(process.execPath);
+      expect(child.calls[0]?.args.slice(2)).toEqual(['--', dir, missing]);
     });
 
     it('T-03 a child that answers the first folder and then waits past the deadline: "there" for the first, "silent" for the second', async () => {
       const first = join('x', 'first');
       const second = join('x', 'second');
-      const got = await probeFolders([first, second], 2000, { command: process.execPath, args: ['-e', answersFirstThenWaits] });
-      expect(got.get(first)).toBe('there');
-      expect(got.get(second)).toBe('silent');
+      child.swap = { command: process.execPath, args: ['-e', answersFirstThenWaits] };
+      try {
+        const got = await probeFolders([first, second], 2000);
+        expect(got.get(first)).toBe('there');
+        expect(got.get(second)).toBe('silent');
+      } finally {
+        child.swap = undefined;
+      }
     });
 
     it('T-03 a child that waits 30 s, with a deadline of 300 ms: "silent" for all, back within the hang bound', async () => {
       const paths = [join('x', 'a'), join('x', 'b')];
-      const t0 = Date.now();
-      const got = await probeFolders(paths, 300, { command: process.execPath, args: ['-e', wait] });
-      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
-      expect(paths.map((p) => got.get(p))).toEqual(['silent', 'silent']);
+      child.swap = { command: process.execPath, args: ['-e', wait] };
+      try {
+        const t0 = Date.now();
+        const got = await probeFolders(paths, 300);
+        expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+        expect(paths.map((p) => got.get(p))).toEqual(['silent', 'silent']);
+      } finally {
+        child.swap = undefined;
+      }
     });
 
     it('T-03 a program that does not exist, and a path with a NUL character: "silent", no throw', async () => {
       const gone = join('x', 'a');
-      const missingProgram = await probeFolders([gone], 2000, { command: join(makeTempDir('dg probe '), 'no-such-program'), args: [] });
+      child.swap = { command: join(makeTempDir('dg probe '), 'no-such-program'), args: [] };
+      let missingProgram: ReadonlyMap<string, FolderAnswer>;
+      try {
+        missingProgram = await probeFolders([gone], 2000);
+      } finally {
+        child.swap = undefined;
+      }
       expect(missingProgram.get(gone)).toBe('silent');
       const nul = `a${String.fromCharCode(0)}b`;
       const withNul = await probeFolders([nul], 2000);
