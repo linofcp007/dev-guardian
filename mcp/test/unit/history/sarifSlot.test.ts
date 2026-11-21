@@ -1,10 +1,15 @@
 /**
  * T-07 (slot): the readers of an imported log's slot — previous scan,
  * baselines, the slot list — each stay inside one source tool.
+ *
+ * llm-scan-plan-record-default-scan T-04: the same search, and the
+ * carry-forward walk, pass over a verify-only plan's `llm_scan` record.
  */
 import { afterAll, describe, expect, it } from 'vitest';
 import { latestStateScan, openSetForProject } from '../../../src/history/openSet.js';
-import { freshPlugin, seedScan, type Seeded } from '../../helpers/historySeed.js';
+import { toFindingValidation } from '../../../src/llmscan/submission.js';
+import type { ToolRun } from '../../../src/types.js';
+import { freshPlugin, seedOrchestratedRun, seedScan, type Seeded } from '../../helpers/historySeed.js';
 import { cleanupTempDirs } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -109,5 +114,90 @@ describe('T-07 (slot) baselines', () => {
     expect(s.storage.baselines.getActiveForProject(P, 'sarif_import')?.scan_id).toBe('snyk-1');
     expect(s.storage.baselines.getActiveForProject(P, 'sarif_import', 'sarif_import:Snyk')?.scan_id).toBe('snyk-1');
     expect(s.storage.baselines.getActiveForProject(P, 'sarif_import', 'sarif_import:CodeQL')).toBeNull();
+  });
+});
+
+describe('llm-scan-plan-record-default-scan', () => {
+  // A verify-only plan's record, seeded with its bookkeeping written out: the
+  // helper's default is `[semgrep ok]`, and `start` writes it empty.
+  const verifyRecord = (s: Seeded, id: string): void => {
+    seedScan(s, { id, type: 'llm_scan', project: P, tools_run: [], missing_tools: [], meta: { plan_id: `plan-${id}`, modes: ['verify'] } });
+  };
+  const HUNT_OK: ToolRun[] = [{ name: 'llm-hunt', status: 'ok' }];
+  // Semgrep, gitleaks and Trivy absent, no IaC: the iac child skipped everything with nothing to scan
+  // (coverage full), its parent measured nothing (none) — the search passes over it and searches again below.
+  const BLIND_RUN = {
+    sast: { blind: true },
+    secrets: { blind: true },
+    deps: { blind: true },
+    iac: { runs: [{ name: 'trivy-config', status: 'skipped', reason: 'nothing to scan' }] satisfies ToolRun[], missing: [] },
+  };
+
+  it('T-04 latestStateScan, without a type and with scan_type llm_scan, never answers with a verify-only plan\'s record (tools_run: []) in either of its searches; a hunt\'s record is answered', () => {
+    // SAST < verify-only record < an orchestrated run judged none: the record is reached by the second search.
+    const s = freshPlugin();
+    seedScan(s, { id: 'sast', type: 'sast', project: P });
+    verifyRecord(s, 'verify');
+    seedOrchestratedRun(s, 'blind-run', P, BLIND_RUN);
+    expect(latestStateScan(s.storage, P).scan?.scan_id, 'any type').toBe('sast');
+    expect(latestStateScan(s.storage, P, 'llm_scan').scan, 'scan_type llm_scan').toBeNull();
+
+    // Only verify-only records: no scan at all.
+    const only = freshPlugin();
+    verifyRecord(only, 'verify-1');
+    verifyRecord(only, 'verify-2');
+    expect(latestStateScan(only.storage, P).scan, 'any type, verify-only records only').toBeNull();
+    expect(latestStateScan(only.storage, P, 'llm_scan').scan, 'scan_type llm_scan, verify-only records only').toBeNull();
+
+    // A hunt's record (llm-hunt ok) is a scan of the project, also under a newer verify-only record.
+    const hunted = freshPlugin();
+    seedScan(hunted, { id: 'sast', type: 'sast', project: P });
+    seedScan(hunted, { id: 'hunt', type: 'llm_scan', project: P, tools_run: HUNT_OK });
+    verifyRecord(hunted, 'verify');
+    expect(latestStateScan(hunted.storage, P).scan?.scan_id, 'any type, a hunt under a verify-only record').toBe('hunt');
+    expect(latestStateScan(hunted.storage, P, 'llm_scan').scan?.scan_id, 'scan_type llm_scan, a hunt under a verify-only record').toBe('hunt');
+    seedScan(hunted, { id: 'hunt-2', type: 'llm_scan', project: P, tools_run: HUNT_OK });
+    expect(latestStateScan(hunted.storage, P, 'llm_scan').scan?.scan_id, 'the newest hunt').toBe('hunt-2');
+    expect(latestStateScan(hunted.storage, P, 'llm_scan', { beforeScanId: 'hunt-2' }).scan?.scan_id, 'the hunt before it').toBe('hunt');
+  });
+
+  it('T-04 the carry-forward walk passes over an older verify-only plan\'s record and carries a complete hunt\'s confirmed findings past a partial hunt', () => {
+    const s = freshPlugin();
+    const confirmedFps = ['a'.repeat(64), 'b'.repeat(64)];
+    // A complete hunt: two findings confirmed by an independent `exploitable`, one left unconfirmed (never shown).
+    seedScan(s, {
+      id: 'hunt-1',
+      type: 'llm_scan',
+      project: P,
+      tools_run: HUNT_OK,
+      findings: [
+        { fp: 'a'.repeat(64), tool: 'llm-hunt', rule_id: 'path-traversal', file: 'src/routes/files.ts', line: 11 },
+        { fp: 'b'.repeat(64), tool: 'llm-hunt', rule_id: 'broken-access-control', file: 'src/routes/admin.ts', line: 7 },
+        { fp: 'c'.repeat(64), tool: 'llm-hunt', rule_id: 'ssrf', file: 'src/routes/users.ts', line: 3 },
+      ],
+    });
+    for (const fingerprint of confirmedFps) {
+      s.storage.validations.upsert(P, [
+        toFindingValidation({
+          fingerprint,
+          verdict: 'exploitable',
+          independence: 'subagent',
+          decisive_line: 'src/routes/files.ts:11 — the fixture verdict',
+          reasoning: 'Followed the value.',
+          prompt_version: 'v1',
+          tree_hash: 'tree-under-test',
+          computed_at: '2026-10-02T12:00:00.000Z',
+        }),
+      ]);
+    }
+    verifyRecord(s, 'verify');
+    // A partial hunt, as rule 2 records one with some hunt tasks still unanswered.
+    seedScan(s, { id: 'hunt-2', type: 'llm_scan', project: P, tools_run: HUNT_OK, missing_tools: ['llm-hunt:open-tasks'] });
+
+    const set = openSetForProject(s.storage, P);
+    expect(set.sources.find((x) => x.slot === 'llm_scan' && x.carried_for === undefined)?.scan_id, "the llm_scan slot's source").toBe('hunt-2');
+    const hunted = set.findings.filter((f) => f.tool === 'llm-hunt');
+    expect(hunted.map((f) => f.fingerprint).sort(), 'the confirmed findings, carried past the partial hunt').toEqual(confirmedFps);
+    expect(hunted.map((f) => f.scan_id)).toEqual(['hunt-1', 'hunt-1']);
   });
 });
