@@ -5101,6 +5101,7 @@ function sourcePackage(name, rest, manager) {
     const range = wanted.slice(at + 1);
     return validName2("npm", real) && npmRange(range, manager) !== null ? spec("npm", real, npmKeyRange(manager, range)) : void 0;
   }
+  if (isAlias && wanted.indexOf("@", 1) > 0) return void 0;
   return npmRange(wanted, manager) === null ? void 0 : spec("npm", name, npmKeyRange(manager, wanted));
 }
 function patchDependency(key, value, manager) {

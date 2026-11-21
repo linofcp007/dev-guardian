@@ -330,7 +330,11 @@ function patchSource(value: string, manager: string): PackageSpec | undefined {
   }
 }
 
-/** Steps 6 to 8 of {@link patchSource}, on the last level of the source: its name `name` and its rest `rest`. */
+/**
+ * Steps 6 to 8 of {@link patchSource}, on the last level of the source: its name `name` and its rest `rest`. An alias whose `@`
+ * lies past the window {@link nameEnd} looks in has a `P` too long to be a name, so it names nothing (step 6) — the one search
+ * for that `@` runs once, as steps 6 to 8 do.
+ */
 function sourcePackage(name: string, rest: string, manager: string): PackageSpec | undefined {
   const isAlias = NPM_PROTOCOL.test(rest);
   const wanted = isAlias ? rest.slice(4) : rest;
@@ -340,6 +344,7 @@ function sourcePackage(name: string, rest: string, manager: string): PackageSpec
     const range = wanted.slice(at + 1);
     return validName('npm', real) && npmRange(range, manager) !== null ? spec('npm', real, npmKeyRange(manager, range)) : undefined;
   }
+  if (isAlias && wanted.indexOf('@', 1) > 0) return undefined;
   return npmRange(wanted, manager) === null ? undefined : spec('npm', name, npmKeyRange(manager, wanted));
 }
 

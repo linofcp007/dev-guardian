@@ -1107,7 +1107,7 @@
     - A value that is not text (a number, an object, `null`, a list) is ignored, as before; it was not measured.
     - A value the hook does not read as a range is vetted with no range, so the version checked is the newest, and may not be the one the manager picks.
     - A dependency of that kind that the lockfile records is not "covered" by it: the lockfile covers a dependency only through its range, so the registry is asked for the newest version too, as it is for an empty value or `latest`; the version the lockfile pins is vetted as a pin all the same.
-    - Yarn 4 and bun were not measured for these values: the hook reads them as it reads the others. macOS was not measured.
+    - Yarn 3.8.7, Yarn 4.18.1 and bun 1.4.4 were measured for the protocol values in a Linux container only (2026-11-20); macOS was not measured.
   examples:
     - detector: hook
       event: PreToolUse

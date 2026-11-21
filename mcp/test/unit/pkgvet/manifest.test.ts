@@ -751,6 +751,17 @@ describe('install-vet-manifest-protocol-values', () => {
       expect(readBy(MANAGERS, `patch:${name}@1.0.0#f`, KEY)).toEqual(sameFor(MANAGERS, [key]));
     });
 
+    it('T-01 (step 6) an alias whose P has 215 characters, then `@1.0.0` or `@workspace:*`: P is not valid, so only the key and no a-zq; a P of 214 is read', () => {
+      const long = `real-zq-${'n'.repeat(207)}`;
+      const longest = long.slice(0, 214);
+      expect([long.length, longest.length]).toEqual([215, 214]);
+      expect({
+        range: readBy(MANAGERS, `patch:a-zq@npm:${long}@1.0.0#f`, KEY),
+        workspace: readBy(MANAGERS, `patch:a-zq@npm:${long}@workspace:*#f`, KEY),
+        longest: readBy(MANAGERS, `patch:a-zq@npm:${longest}@1.0.0#f`, KEY),
+      }).toEqual({ range: sameFor(MANAGERS, [key]), workspace: sameFor(MANAGERS, [key]), longest: sameFor(MANAGERS, [key, [longest, '1.0.0']]) });
+    });
+
     it('T-01 ("O que sai do valor") under the key `real-zq`, `patch:real-zq@npm:1.0.0#f` is one entry: at 1.0.0 for yarn, with no range for bun, npm and pnpm', () => {
       expect(readBy(MANAGERS, 'patch:real-zq@npm:1.0.0#f', 'real-zq')).toEqual({
         npm: bag([real()]),
