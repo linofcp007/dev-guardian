@@ -199,13 +199,15 @@ version bump.
 - **Starting an `llm_scan` plan no longer hides a hunt's confirmed findings, and its record is no longer the
   project's latest scan.** Every plan wrote at its start a completed `llm_scan` record that said it had measured
   everything. Measured on 3.14.1's sources, with a SAST scan of 3 findings and a complete hunt that confirmed 2 (5
-  open, `risk_score` 33): starting a verify-only plan, or a second hunt plan, with no task answered left 3 open,
-  `risk_score` 23, the two gone from `prioritize_findings` and the dashboard, and `diff_scans` (with and without
-  `scan_type`) gave them as `resolved: 2`. `report_export {}` exported the plan's empty record (`Findings (0)`, no LLM
-  verification section) and `set_baseline {}` pinned it; in a project whose only scan was scoped, the open set went
-  from coverage `none` to `full`. Nothing was deleted, but the hunt's record was no longer a source of the open set,
-  which retention never deletes: once enough newer `llm_scan` records existed, a retention run could have removed it.
-  The same runs, repeated on the fixed tree, keep 5 open and 33, and no `diff_scans` answer resolves anything. Now:
+  open, `risk_score` 33): starting a verify-only plan with no task answered left 3 open, `risk_score` 23, the two gone
+  from `prioritize_findings` and the dashboard, and `diff_scans` (with and without `scan_type`) gave them as
+  `resolved: 2`; for a second hunt plan only started, the measurement covered the open set (3), `risk_score` (23) and
+  `diff_scans { scan_type: "llm_scan" }` (`resolved: 2`). `report_export {}` exported the plan's empty record
+  (`Findings (0)`, no LLM verification section) and `set_baseline {}` pinned it; in a project whose only scan was
+  scoped, the open set went from coverage `none` to `full`. Nothing was deleted, but the hunt's record was no longer a
+  source of the open set, which retention never deletes: once enough newer `llm_scan` records existed, a retention
+  run could have removed it. The same runs, repeated on the fixed tree, keep 5 open and 33, and no `diff_scans`
+  answer resolves anything. Now:
   - A verify-only plan's record is never the latest scan nor a source of the open set (`report_export {}`,
     `set_baseline {}`, `diff_scans` without ids, `risk_score`, `prioritize_findings`, the dashboard), and is still
     reached by its `scan_id`. `diff_scans { scan_type: "llm_scan" }` compares the two newest hunts that ran — no
@@ -219,6 +221,14 @@ version bump.
     tasks still open, or an entry point set aside or not visited, keep it `partial`. Until a later hunt answers every
     task, a hunt that was only started keeps `risk_score` and `prioritize_findings` at coverage `partial`, naming it,
     and the findings of the next hunt compared with it are `not_previously_measured`, not new.
+  - **Some hunts stay `partial` for good, and never resolve anything:** a plan with a verify task closed as stale (its
+    file changed after the plan was made), after three invalid answers, or never delivered; a plan that left a finding
+    out because it was full; and every hunt of a project whose attack surface has no entry points (its own report is
+    never `full`). The earlier hunts' confirmed findings such a hunt does not find again stay open, `not_remeasured` —
+    measured in a project with no entry points: a second hunt that answered every task and did not find the first
+    one's confirmed finding gave `resolved: 0`, and the finding stayed in the open set. The way out today is a verdict:
+    `llm_scan { step: "start", modes: ["verify"], fingerprints: [<the finding's fingerprint>] }`, answered `not_real`
+    by a fresh context, takes a hunt finding out of the open set (measured).
   - No migration: a verify-only record of an earlier version is recognised as it is read; an earlier hunt record
     of a plan still open is corrected the next time the plan is read or answered, and one of a plan no longer open
     (abandoned, or complete after a limit) keeps saying `full`. A baseline already set on a verify-only record stays

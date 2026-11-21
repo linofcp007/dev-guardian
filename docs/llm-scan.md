@@ -144,6 +144,17 @@ for the hunt's findings, or an entry point set aside or not visited, keep it
 `partial`. It is brought up to date as answers are taken, when delivery stops
 and when the plan's status is read; its finish date does not move.
 
+Some reports stay `partial` for good, and their record with them: a plan with a
+verify task closed as stale (its file changed after the plan was made), after
+three invalid answers, or never delivered; a plan that left a finding out
+because it was full; and **every** hunt of a project whose attack surface has no
+entry points (the hunt goes by groups of code files, and its report is never
+`full`). Such a hunt never resolves anything: the earlier hunts' confirmed
+findings it did not find again stay open, `not_remeasured`, however many times
+it runs — after the code is fixed too. The way out today is a verdict:
+`llm_scan { step: "start", modes: ["verify"], fingerprints: [<the finding's fingerprint>] }`,
+answered `not_real` by a fresh context, takes a hunt finding out of the open set.
+
 So a hunt that was only started is passed over and named, and `risk_score` and
 `prioritize_findings` say coverage `partial` until a later hunt answers every
 task — for good, if none does. The findings of a hunt compared with one that

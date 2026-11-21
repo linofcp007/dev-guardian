@@ -71200,6 +71200,9 @@ var init_runNames = __esm({
       "mcp-tool-audit": scanner("mcp-tool-audit"),
       // llm_scan: the hunt's findings (tool `llm-hunt`); written by the submit step of llm_scan.
       "llm-hunt": scanner("llm-hunt"),
+      // A hunt plan with hunt tasks still without a valid answer, or whose own report is partial
+      // (`llmscan/planRecord.ts`, in missing_tools beside an ok `llm-hunt`): the hunt's findings are not re-measured.
+      "llm-hunt:open-tasks": scanner("llm-hunt"),
       // import_sarif: the importer's own pass. It speaks for no key: an import's
       // findings carry the TOOL that wrote the log (an open set of names), and
       // only an import of the same source tool measures them
@@ -119340,17 +119343,22 @@ function loadPlan(storage, planId, opts = {}) {
   }
   return { ok: true, plan };
 }
-function rewritePlanRecord(storage, plan) {
-  const tasks = storage.llmScan.listTasks(plan.id);
+function recordUpdate(storage, plan, tasks) {
   const next = planRecordBookkeeping(plan, tasks);
   const now = storage.scans.getById(plan.scan_id);
   const same = now !== null && JSON.stringify(now.tools_run) === JSON.stringify(next.tools_run) && JSON.stringify(now.missing_tools) === JSON.stringify(next.missing_tools);
-  if (!same) storage.scans.rewriteBookkeeping(plan.scan_id, next);
+  return same ? null : next;
+}
+function rewritePlanRecord(storage, plan) {
+  const tasks = storage.llmScan.listTasks(plan.id);
+  const next = recordUpdate(storage, plan, tasks);
+  if (next !== null) storage.scans.rewriteBookkeeping(plan.scan_id, next);
   return tasks;
 }
 function settlePlan(storage, plan) {
   if (plan.status !== "open") return plan;
-  const tasks = storage.rawHandle().transaction(() => rewritePlanRecord(storage, plan))();
+  const seen = storage.llmScan.listTasks(plan.id);
+  const tasks = recordUpdate(storage, plan, seen) === null ? seen : storage.rawHandle().transaction(() => rewritePlanRecord(storage, plan))();
   if (tasks.length > 0 && tasks.every((t) => t.status === "closed")) {
     storage.llmScan.updatePlan(plan.id, "complete", nowIso2());
     return storage.llmScan.getPlan(plan.id) ?? plan;

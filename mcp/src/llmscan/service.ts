@@ -20,6 +20,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { posix, relative, isAbsolute } from 'node:path';
 import { assignIdentities, makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { isHuntFinding, openSetForProject } from '../history/openSet.js';
+import type { Bookkeeping } from '../history/runCompare.js';
 import { readProjectBytes, readProjectText } from '../platform/projectFs.js';
 import { listProjectFiles } from '../runners/projectFiles.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
@@ -113,34 +114,44 @@ export function loadPlan(storage: Storage, planId: string, opts: { allowAbandone
   return { ok: true, plan };
 }
 
-/**
- * Rewrites what the plan's scan record says was hunted (`planRecord.ts`) from its tasks as they stand, and returns
- * them. Written only when it changed: `settlePlan` also runs when the plan is only read (its status, the next task),
- * which then takes no write.
- */
-function rewritePlanRecord(storage: Storage, plan: LlmScanPlan): LlmScanTask[] {
-  const tasks = storage.llmScan.listTasks(plan.id);
+/** What the plan's scan record should say from `tasks` (`planRecord.ts`), or null when it says that already. */
+function recordUpdate(storage: Storage, plan: LlmScanPlan, tasks: readonly LlmScanTask[]): Bookkeeping | null {
   const next = planRecordBookkeeping(plan, tasks);
   const now = storage.scans.getById(plan.scan_id);
   const same =
     now !== null &&
     JSON.stringify(now.tools_run) === JSON.stringify(next.tools_run) &&
     JSON.stringify(now.missing_tools) === JSON.stringify(next.missing_tools);
-  if (!same) storage.scans.rewriteBookkeeping(plan.scan_id, next);
+  return same ? null : next;
+}
+
+/**
+ * Rewrites what the plan's scan record says was hunted from its tasks as they stand, when that changed, and returns
+ * the tasks. Called inside a transaction: the tasks it reads are the ones the record it writes speaks for.
+ */
+function rewritePlanRecord(storage: Storage, plan: LlmScanPlan): LlmScanTask[] {
+  const tasks = storage.llmScan.listTasks(plan.id);
+  const next = recordUpdate(storage, plan, tasks);
+  if (next !== null) storage.scans.rewriteBookkeeping(plan.scan_id, next);
   return tasks;
 }
 
 /**
  * `open` -> `complete` once every task is closed. While the plan is open its
  * scan record is brought up to date first — an answer, a limit or a stale task
- * may have changed what was hunted — with the tasks read and the record
- * written in one transaction, so two servers answering one plan cannot leave
- * an older reading behind. A plan no longer open keeps the record it has.
- * Returns the plan as it now stands.
+ * may have changed what was hunted. The check is made without the write lock,
+ * so a read of the plan (its status, the next task) whose record is up to date
+ * takes none; only a record that needs rewriting opens a transaction, which
+ * reads the tasks and the record again and writes only if they still differ —
+ * so two servers answering one plan cannot leave an older reading behind. A
+ * plan no longer open keeps the record it has. Returns the plan as it now
+ * stands.
  */
 export function settlePlan(storage: Storage, plan: LlmScanPlan): LlmScanPlan {
   if (plan.status !== 'open') return plan;
-  const tasks = storage.rawHandle().transaction(() => rewritePlanRecord(storage, plan))();
+  const seen = storage.llmScan.listTasks(plan.id);
+  const tasks =
+    recordUpdate(storage, plan, seen) === null ? seen : storage.rawHandle().transaction(() => rewritePlanRecord(storage, plan))();
   if (tasks.length > 0 && tasks.every((t) => t.status === 'closed')) {
     storage.llmScan.updatePlan(plan.id, 'complete', nowIso());
     return storage.llmScan.getPlan(plan.id) ?? plan;

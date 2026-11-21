@@ -15,8 +15,9 @@
 
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { classifyDiff, compareScansFor } from '../../../src/history/runCompare.js';
 import { leaseNext, MAX_INVALID_SUBMISSIONS, settlePlan, startPlan, submitAnswer, type Out } from '../../../src/llmscan/service.js';
-import { LLM_SCAN_DEFAULTS, type PlanLimits, type ScanMode, type TaskKind } from '../../../src/llmscan/types.js';
+import { LLM_SCAN_DEFAULTS, type HuntFinding, type HuntResult, type PlanLimits, type ScanMode, type TaskKind } from '../../../src/llmscan/types.js';
 import { computeCoverage } from '../../../src/tools/scanCoverage.js';
 import type { ScanCoverage, ScanRecord, ToolRun } from '../../../src/types.js';
 import {
@@ -29,6 +30,7 @@ import {
   locOfTask,
   seedScan,
   seedSurface,
+  submissionFixture,
   verdictAt,
   type Harness,
   type Loc,
@@ -126,6 +128,50 @@ function answerToEnd(h: Harness, planId: string, locs?: ReadonlyMap<string, Loc>
     answerValid(h, planId, t, locs);
   }
   throw new Error(`plan ${planId} did not end within 60 tasks`);
+}
+
+/**
+ * Leases and validly answers every hunt and cross-cutting task of plan `planId` — the first hunt task reports
+ * `findings`, the others nothing — and leaves the verify tasks those findings get open.
+ */
+function answerHuntTasks(h: Harness, planId: string, findings: readonly HuntFinding[]): void {
+  let reported = false;
+  for (let n = 0; n < 60; n += 1) {
+    const r: Out = leaseNext(h.storage, planId, { kinds: ['hunt', 'crosscut'] });
+    if (!r.ok) throw new Error(`plan ${planId}: ${r.error.code}`);
+    if (typeof r['task_id'] !== 'string') return;
+    const t: Leased = { task_id: r['task_id'], kind: r['kind'] as TaskKind, lease_token: String(r['lease_token']) };
+    const give = !reported && t.kind === 'hunt';
+    if (give) reported = true;
+    const done = answer(h, planId, t, { ...emptyHunt(h, planId, t.task_id), findings: give ? [...findings] : [] });
+    expect(done.ok && done['accepted'], JSON.stringify(done)).toBe(true);
+  }
+  throw new Error(`plan ${planId}: its hunt tasks did not end within 60`);
+}
+
+/** Answers `real` every verify task of `p` that checks one of its own hunt findings. */
+function confirmHuntFindings(h: Harness, p: Plan): void {
+  for (let n = 0; n < 60; n += 1) {
+    const t = leaseOne(h, p.planId);
+    if (t === 'done') return;
+    if ('refused' in t) throw new Error(`plan ${p.planId}: ${t.refused}`);
+    const fp = h.repo.getTask(p.planId, t.task_id)?.target.fingerprint;
+    const row = h.storage.findings.listByScan(p.scanId).find((f) => f.fingerprint === fp);
+    if (row === undefined) throw new Error(`task ${t.task_id} checks no finding of plan ${p.planId}`);
+    const r = answer(h, p.planId, t, verdictAt({ file: row.file_path ?? '', line: row.line_start ?? 0 }, 'real'));
+    expect(r.ok && r['accepted'], JSON.stringify(r)).toBe(true);
+  }
+  throw new Error(`plan ${p.planId} did not end within 60 tasks`);
+}
+
+/** What a comparison of two plans' records calls resolved and not re-measured (`history/runCompare.ts`). */
+function compared(h: Harness, fromScanId: string, toScanId: string): { resolved: number; not_remeasured: number } {
+  const d = classifyDiff(
+    compareScansFor(h.storage, record(h, fromScanId), record(h, toScanId)),
+    h.storage.findings.listByScan(fromScanId),
+    h.storage.findings.listByScan(toScanId),
+  );
+  return { resolved: d.resolved.length, not_remeasured: d.notRemeasured.length };
 }
 
 /** The fixture's three SAST findings; where each sits, by fingerprint. */
@@ -256,5 +302,31 @@ describe('llm-scan-plan-record-default-scan', () => {
     settlePlan(h.storage, open);
     expect(bookkeeping(h, p.scanId), 'after settlePlan, one of the hunt tasks answered').toEqual(PARTLY_HUNTED);
     expect(record(h, p.scanId).finished_at, 'the finish date').toBe(finished);
+  });
+
+  it('T-06 a hunt that answered every hunt and cross-cutting task while the checks of its own findings are open stays partial and resolves nothing; its checks answered, it is full', async () => {
+    const h = harness();
+    await seedSurface(h);
+    const [earlierFinding, laterFinding] = (submissionFixture('hunt-valid.json') as HuntResult).findings;
+    if (earlierFinding === undefined || laterFinding === undefined) throw new Error('the fixture has two hunt findings');
+
+    // An earlier hunt, complete: it found one finding, and the check of it said real.
+    const earlier = await plan(h, ['hunt']);
+    answerHuntTasks(h, earlier.planId, [earlierFinding]);
+    confirmHuntFindings(h, earlier);
+    expect(bookkeeping(h, earlier.scanId), 'the earlier hunt, every task answered').toEqual(HUNTED);
+
+    // A later hunt finds the other one instead: every hunt and cross-cutting task answered, its own check open.
+    await seedSurface(h);
+    const later = await plan(h, ['hunt']);
+    answerHuntTasks(h, later.planId, [laterFinding]);
+    expect(h.repo.listTasks(later.planId).filter((t) => t.status !== 'closed').map((t) => t.kind), 'what is still open').toEqual(['verify']);
+    expect(bookkeeping(h, later.scanId), 'every hunt task answered, the check of its finding open').toEqual(PARTLY_HUNTED);
+    expect(compared(h, earlier.scanId, later.scanId), 'the earlier hunt compared with it').toEqual({ resolved: 0, not_remeasured: 1 });
+
+    // Its check answered: the plan's report is full, and so is the record — which now resolves what it did not find again.
+    confirmHuntFindings(h, later);
+    expect(bookkeeping(h, later.scanId), 'the check of its finding answered').toEqual(HUNTED);
+    expect(compared(h, earlier.scanId, later.scanId), 'the earlier hunt compared with it, now').toEqual({ resolved: 1, not_remeasured: 0 });
   });
 });

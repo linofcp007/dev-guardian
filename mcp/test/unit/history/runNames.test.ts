@@ -123,6 +123,12 @@ function bookkeepingNames(): string[] {
     found.push({ file: 'tools/scanDast.ts', value: engine });
     for (const x of collect(/\$\{DAST_ENGINE\}(:[a-z-]+)/g)) found.push({ file: x.file, value: `${engine}${x.value}` });
   }
+  // llm_scan: `export const LLM_HUNT_TOOL = 'llm-hunt'` and the hunt plan's pass `${LLM_HUNT_TOOL}:open-tasks`
+  // (llmscan/planRecord.ts), which goes to missing_tools in an array — no `.push(…)` nor `{ name, status }` above.
+  const hunt = collect(/export const LLM_HUNT_TOOL\s*=\s*'([^']+)'/g)[0]?.value;
+  if (hunt !== undefined) {
+    for (const x of collect(/\$\{LLM_HUNT_TOOL\}(:[a-z-]+)/g)) found.push({ file: x.file, value: `${hunt}${x.value}` });
+  }
   // scan_skill's OSV entry: `name: 'osv.dev', status: report.osv.online ? …`.
   found.push(...collect(/name:\s*'(osv\.dev)'/g));
   // audit_mcp_tools: one `${MCP_AUDIT_TOOL_NAME}:<source>::<server>` per server
