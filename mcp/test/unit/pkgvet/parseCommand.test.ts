@@ -3392,3 +3392,373 @@ describe('install-vet-redirect-glued-word', () => {
     expect({ packages: npm.map((c) => c.packages), skipped: npm.map((c) => c.skipped.map((s) => s.raw)) }).toEqual({ packages: [[]], skipped: [[`${P}@npm:`]] });
   });
 });
+
+// ───────────────── install-vet-global-in-short-cluster — npm's groups of short flags read as npm reads them
+
+describe('install-vet-global-in-short-cluster', () => {
+  // The names of the measurement (.specs/install-vet-global-in-short-cluster/measurements/, npm 11.19.0).
+  const P = 'dgprobe-zzq7731-named';
+  const W = 'dgprobe-zzq7731-ws';
+  const INIT = 'dgprobe-zzq7731-init';
+  const MANIFEST = { kind: 'package-json' };
+  /**
+   * The letters of npm 11.19.0 that take no value (`explore-linux-container-2026-11-20.txt:305-366`, confirmed in
+   * `single-dash-words-linux-container-2026-11-21.txt:11`), written here and not taken from the parser.
+   */
+  const NO_VALUE = ['a', 'f', 'g', 'l', 'p', 'S', 'B', 'D', 'E', 'O', 'P', 'y', 'h', 'H', 'v', 'd', 's', 'q', 'n'];
+
+  type Reading = {
+    manager: string;
+    packages: string[];
+    updateNames: string[] | undefined;
+    manifest: unknown;
+    global: boolean | undefined;
+    uncertain: string[];
+    prefixed: boolean | undefined;
+    customRegistry: string | undefined;
+    skipped: string[];
+    localFirst: boolean | undefined;
+  };
+  /** What each install command of a line gives. */
+  const readAll = (command: string): Reading[] =>
+    parseInstallCommands(command).map((c) => ({
+      manager: c.manager,
+      packages: c.packages.map((p) => p.name),
+      updateNames: c.updateNames?.map((p) => p.name),
+      manifest: c.manifest,
+      global: c.global,
+      uncertain: c.uncertain,
+      prefixed: c.prefixed,
+      customRegistry: c.customRegistry,
+      skipped: c.skipped.map((s) => s.raw),
+      localFirst: c.localFirst,
+    }));
+  const NONE: Reading = {
+    manager: '',
+    packages: [],
+    updateNames: undefined,
+    manifest: undefined,
+    global: undefined,
+    uncertain: [],
+    prefixed: undefined,
+    customRegistry: undefined,
+    skipped: [],
+    localFirst: undefined,
+  };
+  /** What the single install command of `command` gives. */
+  const one = (command: string): Reading => {
+    const all = readAll(command);
+    expect(all.length, command).toBe(1);
+    return all[0] ?? NONE;
+  };
+  /** The five fields the reading of a group and of its letters written apart must share. */
+  const essence = (command: string): unknown =>
+    readAll(command).map((r) => ({ packages: r.packages, updateNames: r.updateNames, manifest: r.manifest, global: r.global, uncertain: r.uncertain }));
+  /** The same letters, written one by one in the same order: `-gD` → `-g -D`. */
+  const apart = (group: string): string => [...group].map((c) => `-${c}`).join(' ');
+
+  // ── T-01: a group of no-value letters reads as the same letters written apart
+
+  const TWOS = NO_VALUE.flatMap((a) => NO_VALUE.filter((b) => b !== a).map((b) => `${a}${b}`));
+  const THREES = NO_VALUE.flatMap((a) =>
+    NO_VALUE.flatMap((b) => NO_VALUE.filter((c) => a !== b && a !== c && b !== c && (a === 'g' || b === 'g' || c === 'g')).map((c) => `${a}${b}${c}`)),
+  );
+
+  it.each<[label: string, groups: readonly string[], count: number]>([
+    ['every group of two different letters', TWOS, 342],
+    ['every group of three different letters with a `g`', THREES, 918],
+  ])(
+    'T-01 %s of the npm 11.19.0 no-value list, in every order, gives in `npm i` and `npm update` what the same letters written apart give',
+    (_label, groups, count) => {
+      expect(groups.length).toBe(count);
+      const differing: string[] = [];
+      let first: unknown;
+      for (const group of groups) {
+        for (const verb of ['i', 'update']) {
+          const line = `npm ${verb} -${group} ${P}`;
+          const control = `npm ${verb} ${apart(group)} ${P}`;
+          const got = essence(line);
+          const want = essence(control);
+          if (JSON.stringify(got) !== JSON.stringify(want)) {
+            differing.push(line);
+            first = first ?? { line, got, control, want };
+          }
+        }
+      }
+      expect({ differing: differing.length, examples: differing.slice(0, 8) }, JSON.stringify(first)).toEqual({ differing: 0, examples: [] });
+    },
+  );
+
+  it.each<[command: string, updateNames: string[] | undefined]>([
+    [`npm install-test -gD ${P}`, undefined],
+    // An update that names nobody: `updateNames` is empty.
+    ['npm update -gD', []],
+  ])('T-01 `%s` is global for certain and reads no manifest (`updateNames`: %j)', (command, updateNames) => {
+    const r = one(command);
+    expect({ updateNames: r.updateNames, global: r.global, manifest: r.manifest }).toEqual({ updateNames, global: true, manifest: undefined });
+  });
+
+  it('T-01 the second command of `npx npm i -gD <P>` is global for certain and reads no manifest', () => {
+    const all = readAll(`npx npm i -gD ${P}`);
+    expect(all.map((r) => r.manager)).toEqual(['npx', 'npm']);
+    const second = all[1] ?? NONE;
+    expect({ global: second.global, manifest: second.manifest }).toEqual({ global: true, manifest: undefined });
+  });
+
+  // ── T-02: the letters npm has and the table had not
+
+  it.each([
+    `npm i -g -a ${P}`,
+    `npm i -g -l ${P}`,
+    `npm i -g -p ${P}`,
+    `npm i -g -n ${P}`,
+    `npm i -g -h ${P}`,
+    `npm i -g -v ${P}`,
+    `npm i -g -H ${P}`,
+    `npm i -ga ${P}`,
+    `npm i -ag ${P}`,
+    `npm i -gl ${P}`,
+    `npm i -gp ${P}`,
+    `npm i -gn ${P}`,
+    `npm i -gh ${P}`,
+    `npm i -gv ${P}`,
+    `npm i -gH ${P}`,
+  ])('T-02 `%s` gives [P], global for certain, no manifest, and no reason "unknown flag"', (command) => {
+    const r = one(command);
+    expect({
+      packages: r.packages,
+      global: r.global,
+      manifest: r.manifest,
+      unknown: r.uncertain.filter((u) => u.startsWith('unknown flag')),
+    }).toEqual({ packages: [P], global: true, manifest: undefined, unknown: [] });
+  });
+
+  // ── T-03: the letters that take a value — `-L`, `-m`, `-c` — alone, last of a group, and inside one
+
+  /** The reasons `-L`, `-m` and `-c` gave as flags the table did not know. */
+  const unknownValueLetters = (r: Reading): string[] => r.uncertain.filter((u) => ['unknown flag -L', 'unknown flag -m', 'unknown flag -c'].includes(u));
+
+  it.each([`npm i -L global ${P}`, `npm i -gL global ${P}`])('T-03 `%s` gives [P], global for certain, no manifest', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, global: r.global, manifest: r.manifest, unknown: unknownValueLetters(r) }).toEqual({
+      packages: [P],
+      global: true,
+      manifest: undefined,
+      unknown: [],
+    });
+  });
+
+  it.each<[command: string, packages: string[]]>([
+    [`npm i -gm dgprobe-msg ${P}`, [P]],
+    [`npm i -gc dgprobe-call ${P}`, [P]],
+    [`npm i -mg dgprobe-msg ${P}`, ['dgprobe-msg', P]],
+    [`npm i -cg dgprobe-call ${P}`, ['dgprobe-call', P]],
+    // The String rule (question 5, the owner's answer A): `-m` and `-c` take no word that starts with `-` and another character.
+    [`npm i -m -g ${P}`, [P]],
+    [`npm i -c -g ${P}`, [P]],
+  ])('T-03 `%s` gives %j, global for certain', (command, packages) => {
+    const r = one(command);
+    expect({ packages: r.packages, global: r.global, unknown: unknownValueLetters(r) }).toEqual({ packages, global: true, unknown: [] });
+  });
+
+  it.each([`npm i -gL project ${P}`, `npm i -gL user ${P}`, `npm i -L project -g ${P}`])(
+    'T-03 `%s` gives [P], is not global for certain (`--location` beside `-g` stays a doubt), and the manifest is read',
+    (command) => {
+      const r = one(command);
+      expect({ packages: r.packages, global: r.global === true, manifest: r.manifest, unknown: unknownValueLetters(r) }).toEqual({
+        packages: [P],
+        global: false,
+        manifest: MANIFEST,
+        unknown: [],
+      });
+    },
+  );
+
+  it.each([`npm i -L project ${P}`, `npm i -m dgprobe-msg ${P}`, `npm i -c dgprobe-call ${P}`])('T-03 `%s` gives [P], and the manifest is read', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest, unknown: unknownValueLetters(r) }).toEqual({ packages: [P], manifest: MANIFEST, unknown: [] });
+  });
+
+  it.each([`npm i -mc dgprobe-call ${P}`, `npm i -CgL project ${P}`])('T-03 `%s` gives [P]: the word is the value of the last letter', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, unknown: unknownValueLetters(r) }).toEqual({ packages: [P], unknown: [] });
+  });
+
+  // ── T-04: a word with a letter npm does not have is one flag npm does not know, the whole word
+
+  it.each<[command: string, word: string, letter: string]>([
+    [`npm i -gx ${P}`, '-gx', 'x'],
+    [`npm i -xg ${P}`, '-xg', 'x'],
+    [`npm i -gT ${P}`, '-gT', 'T'],
+    [`npm i -gZ ${P}`, '-gZ', 'Z'],
+    [`npm i -gDx ${P}`, '-gDx', 'x'],
+  ])('T-04 `%s` gives [P], not global for certain, the manifest read, and the reason `unknown flag %s` (the whole word)', (command, word, letter) => {
+    const r = one(command);
+    expect({
+      packages: r.packages,
+      global: r.global === true,
+      manifest: r.manifest,
+      whole: r.uncertain.includes(`unknown flag ${word}`),
+      letter: r.uncertain.includes(`unknown flag -${letter}`),
+    }).toEqual({ packages: [P], global: false, manifest: MANIFEST, whole: true, letter: false });
+  });
+
+  // ── T-05: the flags before the verb (M-3)
+
+  it.each([
+    `npm -L global install ${P}`,
+    `npm -L project -g install ${P}`,
+    `npm -m dgprobe-msg install ${P}`,
+    `npm -c dgprobe-call i ${P}`,
+    `npm -gL project install ${P}`,
+    `npm -gm dgprobe-msg i ${P}`,
+  ])('T-05 `%s` gives an npm command with [P]', (command) => {
+    expect(readAll(command).map((r) => ({ manager: r.manager, packages: r.packages }))).toEqual([{ manager: 'npm', packages: [P] }]);
+  });
+
+  it.each([`npm -L global install ${P}`, `npm -gm dgprobe-msg i ${P}`])('T-05 `%s` is global for certain and reads no manifest', (command) => {
+    const r = one(command);
+    expect({ global: r.global, manifest: r.manifest }).toEqual({ global: true, manifest: undefined });
+  });
+
+  it.each([`npm -m dgprobe-msg install ${P}`, `npm -c dgprobe-call i ${P}`])('T-05 `%s` reads the manifest', (command) => {
+    expect(one(command).manifest).toEqual(MANIFEST);
+  });
+
+  it('T-05 `npm -L global exec <P>` gives the launcher `npm exec` with [P]', () => {
+    expect(readAll(`npm -L global exec ${P}`).map((r) => ({ manager: r.manager, packages: r.packages, manifest: r.manifest, localFirst: r.localFirst }))).toEqual([
+      { manager: 'npm', packages: [P], manifest: undefined, localFirst: true },
+    ]);
+  });
+
+  // ── T-12: the words npm reads whole, and the letters that expand to two words (M-2)
+
+  it.each([`npm i -call dgprobe-call ${P}`, `npm i -ca dgprobe-call ${P}`])('T-12 `%s` gives [P], and the manifest is read: the word is the value of the whole word', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [P], manifest: MANIFEST });
+  });
+
+  it('T-12 `npm i -ca --registry=https://r.example/ <P>` gives [P] and no custom registry: `-ca` takes the next word, whatever it is', () => {
+    const r = one(`npm i -ca --registry=https://r.example/ ${P}`);
+    expect({ packages: r.packages, customRegistry: r.customRegistry }).toEqual({ packages: [P], customRegistry: undefined });
+  });
+
+  it('T-12 `npm i -Cd dgprobe-dir <P>` gives [info, dgprobe-dir, P] and is prefixed (question 6, the owner\'s answer A)', () => {
+    const r = one(`npm i -Cd dgprobe-dir ${P}`);
+    expect({ packages: r.packages, prefixed: r.prefixed }).toEqual({ packages: ['info', 'dgprobe-dir', P], prefixed: true });
+  });
+
+  it('T-12 `npm i -Lq <P>` gives [warn, P], is not global for certain, and the manifest is read', () => {
+    const r = one(`npm i -Lq ${P}`);
+    expect({ packages: r.packages, global: r.global === true, manifest: r.manifest }).toEqual({ packages: ['warn', P], global: false, manifest: MANIFEST });
+  });
+
+  // ── T-13: the launchers with `-L` and `-m` (M-4; question 4, the owner's answer B)
+
+  it.each<[command: string, packages: string[]]>([
+    [`npm exec -L global ${P}`, [P]],
+    [`npx -L global ${P}`, [P]],
+    [`npm exec -m dgprobe-msg ${P}`, [P]],
+    [`npm init -L global ${INIT}`, [`create-${INIT}`]],
+    [`npm create -L global ${INIT}`, [`create-${INIT}`]],
+  ])('T-13 `%s` gives %j, and never `global`, `dgprobe-msg` or `create-global`', (command, packages) => {
+    const names = readAll(command).flatMap((r) => r.packages);
+    expect({ names, values: names.filter((n) => ['global', 'dgprobe-msg', 'create-global'].includes(n)) }).toEqual({ names: packages, values: [] });
+  });
+
+  // ── T-09: protection — what stays as it is, with the values written here
+
+  it.each([`pnpm add -gD ${P}`, `pnpm add -Dg ${P}`, `bun add -gD ${P}`])('T-09 `%s` is not global for certain: pnpm and bun keep the rule of today', (command) => {
+    expect(one(command).global === true).toBe(false);
+  });
+
+  it.each<[command: string, packages: string[], prefixed: boolean | undefined]>([
+    [`npm i -Cg dgprobe-dir ${P}`, ['dgprobe-dir', P], true],
+    [`npm i -gC dgprobe-dir ${P}`, [P], true],
+    [`npm i -Cm dgprobe-call ${P}`, ['dgprobe-call', P], true],
+    [`npm i -wg ${W} ${P}`, [W, P], undefined],
+    [`npm i -gw ${W} ${P}`, [P], undefined],
+  ])('T-09 `%s` gives %j (prefixed: %s)', (command, packages, prefixed) => {
+    const r = one(command);
+    expect({ packages: r.packages, prefixed: r.prefixed }).toEqual({ packages, prefixed });
+  });
+
+  it('T-09 `npm i -Lg project <P>` gives [project, P], is not global, and the manifest is read (M-1, 438)', () => {
+    const r = one(`npm i -Lg project ${P}`);
+    expect({ packages: r.packages, global: r.global === true, manifest: r.manifest }).toEqual({ packages: ['project', P], global: false, manifest: MANIFEST });
+  });
+
+  it.each(['npm install -Dg false', 'npm install -g -Dg false'])('T-09 `%s` names no package and reads the manifest', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: MANIFEST });
+  });
+
+  it.each([`npm i -Da false ${P}`, `npm i -a false ${P}`, `npm i -all false ${P}`])('T-09 `%s` has `false` among its packages', (command) => {
+    expect(one(command).packages).toContain('false');
+  });
+
+  it.each([
+    `npm install ${P} -- -gD`,
+    `npm install -g $FLAGS ${P}`,
+    `npm i -local -g ${P}`,
+    `npm i -global ${P}`,
+  ])('T-09 `%s` is not global for certain', (command) => {
+    expect(one(command).global === true).toBe(false);
+  });
+
+  it('T-09 `npm i -ws <P>` gives [P], reads the manifest, and is uncertain for the workspace context (M-2, 170)', () => {
+    const r = one(`npm i -ws ${P}`);
+    expect({ packages: r.packages, manifest: r.manifest, workspace: r.uncertain.some((u) => u.startsWith('workspace context')) }).toEqual({
+      packages: [P],
+      manifest: MANIFEST,
+      workspace: true,
+    });
+  });
+
+  it.each([`npm i -dd ${P}`, `npm i -ddd ${P}`, `npm i -all ${P}`])('T-09 `%s` gives [P] and reads the manifest', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [P], manifest: MANIFEST });
+  });
+
+  it.each([`npm i -g -dd ${P}`, `npm i -g -ws ${P}`])('T-09 `%s` gives [P], global for certain', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, global: r.global }).toEqual({ packages: [P], global: true });
+  });
+
+  it.each([`npm i -m --registry=https://r.example/ ${P}`, `npm i -call --registry=https://r.example/ ${P}`])(
+    'T-09 `%s` gives [P] and the registry of the line (question 5, the owner\'s answer A)',
+    (command) => {
+      const r = one(command);
+      expect({ packages: r.packages, customRegistry: r.customRegistry }).toEqual({ packages: [P], customRegistry: 'https://r.example/' });
+    },
+  );
+
+  it('T-09 `npm i -gL=project <P>` is uncertain for a flag the table does not know', () => {
+    expect(one(`npm i -gL=project ${P}`).uncertain.some((u) => u.startsWith('unknown flag'))).toBe(true);
+  });
+
+  it.each(['pip install -qr req.txt', 'pip install -rreq.txt'])('T-09 `%s` names no package and puts `req.txt` aside: the rule of pip stays', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, skipped: r.skipped }).toEqual({ packages: [], skipped: ['req.txt'] });
+  });
+
+  it.each<[command: string, packages: string[]]>([
+    [`npm exec -sy true ${P}`, [P]],
+    [`npx -y ${P}`, [P]],
+    [`npm exec --yes ${P}`, [P]],
+    [`npm init -y ${P}`, [`create-${P}`]],
+  ])('T-09 `%s` gives %j, as today', (command, packages) => {
+    expect(readAll(command).flatMap((r) => r.packages)).toEqual(packages);
+  });
+
+  // ── T-11: protection — the cost of a line of groups stays linear
+
+  // `n` groups and one package: eight times as many cost well under 22.6 times as much (linear reads ~8, quadratic ~64;
+  // see test/helpers/timing.ts). Guards the function that opens an npm group, which `saysGlobal` calls too.
+  it.each<[label: string, make: (n: number) => string]>([
+    ['`-gDEOPSB` groups', (n) => `npm i ${'-gDEOPSB '.repeat(n)}${P}`],
+    ['`-gL project` pairs', (n) => `npm i ${'-gL project '.repeat(n)}${P}`],
+  ])('T-11 eight times as many %s in one `npm i` line cost well under 22.6 times as much', (label, make) => {
+    expectLinear(`install-vet-global-in-short-cluster ${label}`, (n) => void parseInstallCommands(make(n)), 400);
+  }, 120_000);
+});

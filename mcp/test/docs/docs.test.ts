@@ -954,3 +954,59 @@ describe('install-vet-over-ceiling-asks', () => {
     expect(page).toContain('when no one can answer, the call is refused and the model reads the reason');
   });
 });
+
+// ───────────────── install-vet-global-in-short-cluster — the docs say an npm group reads as its letters apart, and what stays
+
+describe('install-vet-global-in-short-cluster', () => {
+  // A one-dash word, not the tail of a two-dash one: `-global`, never the `-global` inside `--global`.
+  const ONE_DASH_GLOBAL = /(?<![\w-])-global(?![\w-])/;
+  const ONE_DASH_LOCAL = /(?<![\w-])-local(?![\w-])/;
+  const GROUP_GD = /(?<![\w-])-gD(?![\w-])/;
+  const APART_G_D = /(?<![\w-])-g -D(?![\w-])/;
+
+  it('T-08 the "Install-time package vetting" section of docs/hooks.md no longer says a cluster with a `g` is never global, and has a sentence that reads `-gD` as `-g -D`', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end).replace(/\s+/g, ' ');
+    const sameReading = section.split(/(?<=[.!?])\s+/).some((s) => GROUP_GD.test(s) && APART_G_D.test(s));
+    expect({ neverGlobal: section.includes('a cluster that holds a `g` is never read as global'), sameReading }).toEqual({
+      neverGlobal: false,
+      sameReading: true,
+    });
+  });
+
+  it('T-08 the record project-default-registry no longer names "a short cluster such as `-gD`", and names `-gL project` and `-global`; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'project-default-registry');
+    expect(limit, 'the record project-default-registry').toBeDefined();
+    const doc = limit?.doc ?? '';
+    expect({ cluster: doc.includes('a short cluster such as `-gD`'), gLProject: doc.includes('-gL project'), oneDashGlobal: ONE_DASH_GLOBAL.test(doc) }).toEqual({
+      cluster: false,
+      gLProject: true,
+      oneDashGlobal: true,
+    });
+    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(doc.trim());
+  });
+
+  it('T-08 a record npm-short-flag-groups (install-vetting) names `-global`, `-local` and the groups inside the launchers, with its two examples; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'npm-short-flag-groups');
+    expect(limit, 'a record with the id npm-short-flag-groups in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    expect({ oneDashGlobal: ONE_DASH_GLOBAL.test(limit.doc), oneDashLocal: ONE_DASH_LOCAL.test(limit.doc), launchers: /\blaunchers?\b/i.test(limit.doc) }).toEqual({
+      oneDashGlobal: true,
+      oneDashLocal: true,
+      launchers: true,
+    });
+    // The harness runs offline: the hook says what it could not verify, a warning.
+    const examples = limit.examples.flatMap((e) => (e.detector === 'hook' ? [{ command: e.input['command'], decision: e.expect.decision }] : []));
+    expect(examples).toEqual(
+      expect.arrayContaining([
+        { command: 'npm install -global dgprobe-zzq7731', decision: 'warn' },
+        { command: 'npx -yL global dgprobe-zzq7731', decision: 'warn' },
+      ]),
+    );
+    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
+  });
+});

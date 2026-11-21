@@ -5428,3 +5428,118 @@ describe('install-vet-manifest-protocol-values', () => {
     expect(warned[0]).toContain("'real-zq");
   });
 });
+
+// ───────────────── install-vet-global-in-short-cluster — npm's groups of short flags decide as the same flags written apart
+
+describe('install-vet-global-in-short-cluster', () => {
+  // The names of the measurement (.specs/install-vet-global-in-short-cluster/measurements/, npm 11.19.0).
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const INIT = 'dgprobe-zzq7731-init';
+  const DENIED = 'does not exist on the npm registry';
+  const notFound = (name: string): string => `'${name}': not found on the public registry`;
+  const NAMED_TO_UPDATE = 'a package named to an update is fetched only when it is already installed';
+  const EVERY_GLOBAL = 'this command updates every globally installed package — none of them was vetted.';
+  const allowlist = (flag: string): string => `flag ${flag} is not on the confident-shape allowlist`;
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === `https://registry.npmjs.org/${name}`).length;
+
+  /** The decision for `command` in the project of the measurement — its package.json names D at ^1.0.0 — with a registry that has neither P nor D. */
+  const decide = async (command: string): Promise<{ d: Awaited<ReturnType<typeof decideInstallCommand>>; reg: ReturnType<typeof registry> }> => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [DEP]: '^1.0.0' } }));
+    const reg = registry();
+    return { d: await decideInstallCommand(command, opts(reg.fetchImpl)), reg };
+  };
+
+  // ── T-06: the decision of a group is the decision of its letters written apart
+
+  it.each([`npm i -gD ${P}`, `npm i -Dg ${P}`, `npm i -gE ${P}`, `npm i -gS ${P}`, `npm i -gDE ${P}`])(
+    'T-06 `%s` DENIES the missing P and does not ask the registry for D: npm installs globally and reads no manifest',
+    async (command) => {
+      const { d, reg } = await decide(command);
+      const deny = d?.deny ?? '';
+      expect({ deniesP: deny.includes(`'${P}'`) && deny.includes(DENIED), askedDep: asked(reg, DEP) }).toEqual({ deniesP: true, askedDep: 0 });
+    },
+  );
+
+  it.each<[command: string, flag: string]>([
+    [`npm i -gf ${P}`, '-f'],
+    [`npm i -gy ${P}`, '-y'],
+    [`npm i -ga ${P}`, '-a'],
+    [`npm i -gn ${P}`, '-n'],
+  ])('T-06 `%s` warns, for `flag %s is not on the confident-shape allowlist`, and does not ask the registry for D', async (command, flag) => {
+    const { d, reg } = await decide(command);
+    expect({ deny: d?.deny, reason: (d?.context ?? '').includes(allowlist(flag)), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      reason: true,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm i -L global <P>` warns about P, and asks the registry neither for `global` nor for D', async () => {
+    const { d, reg } = await decide(`npm i -L global ${P}`);
+    expect({ deny: d?.deny, warnsP: (d?.context ?? '').includes(notFound(P)), askedGlobal: asked(reg, 'global'), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      warnsP: true,
+      askedGlobal: 0,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm -L global install <P>` is read: P is asked, and the answer is a warning, never a deny', async () => {
+    const { d, reg } = await decide(`npm -L global install ${P}`);
+    expect({ deny: d?.deny, warnsP: (d?.context ?? '').includes(notFound(P)), askedP: asked(reg, P) > 0 }).toEqual({
+      deny: undefined,
+      warnsP: true,
+      askedP: true,
+    });
+  });
+
+  it('T-06 `npm update -gD` says it updates every globally installed package, and does not ask the registry for D', async () => {
+    const { d, reg } = await decide('npm update -gD');
+    expect({ deny: d?.deny, everyGlobal: (d?.context ?? '').includes(EVERY_GLOBAL), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      everyGlobal: true,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm update -gD <P>` warns about P as a name given to an update, and does not ask the registry for D', async () => {
+    const { d, reg } = await decide(`npm update -gD ${P}`);
+    const context = d?.context ?? '';
+    expect({ deny: d?.deny, warnsP: context.includes(notFound(P)), named: context.includes(NAMED_TO_UPDATE), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      warnsP: true,
+      named: true,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm i -gC dgprobe-dir <P>` warns with `directory changed by -C`, and without the note that the package.json was not read', async () => {
+    const { d } = await decide(`npm i -gC dgprobe-dir ${P}`);
+    const context = d?.context ?? '';
+    expect({ deny: d?.deny, directory: context.includes('directory changed by -C'), notRead: context.includes('package.json was not read') }).toEqual({
+      deny: undefined,
+      directory: true,
+      notRead: false,
+    });
+  });
+
+  // ── T-13: a launcher with `-L` or `-m` vets the package it fetches (question 4, the owner's answer B)
+
+  it.each<[command: string, fetched: string, flag: string]>([
+    [`npm exec -L global ${P}`, P, '-L'],
+    [`npx -L global ${P}`, P, '-L'],
+    [`npm exec -m dgprobe-msg ${P}`, P, '-m'],
+    [`npm init -L global ${INIT}`, `create-${INIT}`, '-L'],
+    [`npm create -L global ${INIT}`, `create-${INIT}`, '-L'],
+  ])('T-13 `%s` with %s missing from the registry warns about it, for `flag %s is not on the confident-shape allowlist`, and never denies', async (command, fetched, flag) => {
+    const reg = registry();
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    const context = d?.context ?? '';
+    expect({ deny: d?.deny, warns: context.includes(notFound(fetched)), reason: context.includes(allowlist(flag)) }).toEqual({
+      deny: undefined,
+      warns: true,
+      reason: true,
+    });
+  });
+});

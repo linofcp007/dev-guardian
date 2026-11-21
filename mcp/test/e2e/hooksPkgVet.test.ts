@@ -2618,3 +2618,82 @@ describe('install-vet-manifest-protocol-values', () => {
     expect(r.requests.filter((url) => url.startsWith('https://registry.npmjs.org/'))).toEqual(['https://registry.npmjs.org/real-zq']);
   });
 });
+
+// ───────────────── install-vet-global-in-short-cluster — npm's groups of short flags through the dispatcher
+
+describe('install-vet-global-in-short-cluster', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+  /** The project: its package.json names `lodash` and `crossenv`, npm's security placeholder. */
+  const manifest = (): void =>
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { lodash: '^4.17.21', crossenv: '*' } }),
+    );
+  const askedFor = (r: HookOut, name: string): string[] => r.requests.filter((u) => u.includes(name));
+
+  // ── T-07: a global install written with a group, or with `-L` / `-m`, is read as npm reads it
+
+  it.each([
+    'npm install -gD express',
+    'npm install -Dg express',
+    'npm i -gE express',
+    'npm i -gDE express',
+    'npm install -L global express',
+    'npm install -gm dgprobe-msg express',
+    'npm update -gD',
+  ])('T-07 `%s` in a project whose package.json names a malicious package is not denied, and crossenv is not asked: npm installs globally', (command) => {
+    manifest();
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect({ denied: r.output?.hookSpecificOutput?.permissionDecision === 'deny', crossenv: askedFor(r, 'crossenv') }).toEqual({ denied: false, crossenv: [] });
+  });
+
+  it('T-07 `npm -L global install express` is read: not denied, express is asked and crossenv is not', () => {
+    manifest();
+    const r = runHook('npm -L global install express', ROUTES);
+    expect(r.status).toBe(0);
+    expect({
+      denied: r.output?.hookSpecificOutput?.permissionDecision === 'deny',
+      express: r.requests.includes('https://registry.npmjs.org/express'),
+      crossenv: askedFor(r, 'crossenv'),
+    }).toEqual({ denied: false, express: true, crossenv: [] });
+  });
+
+  // `npm -m <v> install` installs the manifest (M-3, 94); `npm -gL project install` does not (M-3, 96), and the hook reads it
+  // anyway: `--location` beside `-g` stays a doubt (EC-9).
+  it.each(['npm -m dgprobe-msg install express', 'npm -gL project install express'])(
+    'T-07 `%s` in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      manifest();
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+
+  // ── T-10: protection — what npm installs the manifest for stays denied, and `-g` stays global
+
+  it.each(['npm install express', 'npm install -Dg false', 'npm install -gx express'])(
+    'T-10 `%s` in a project whose package.json names a malicious package stays DENIED, naming the file and the package',
+    (command) => {
+      manifest();
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+
+  it('T-10 `npm install -g express` in the same project stays not denied, and crossenv is not asked', () => {
+    manifest();
+    const r = runHook('npm install -g express', ROUTES);
+    expect(r.status).toBe(0);
+    expect({ denied: r.output?.hookSpecificOutput?.permissionDecision === 'deny', crossenv: askedFor(r, 'crossenv') }).toEqual({ denied: false, crossenv: [] });
+  });
+});
