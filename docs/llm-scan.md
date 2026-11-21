@@ -129,29 +129,30 @@ the newer side of `diff_scans { from_scan_id, to_scan_id }`, it measured
 nothing: the other side's findings are `not_remeasured`, never resolved. Named
 as the older side, the newer scan's findings are new.
 
-**A hunt plan** measures what its hunt and cross-cutting tasks with a valid
-answer measured. A task closed as not delivered (a limit stopped delivery), or
-after its three invalid answers, does not count.
+**A hunt plan's** record counts what was hunted: its hunt and cross-cutting
+tasks with a valid answer, and its entry points. A task closed as not delivered
+(a limit stopped delivery), or after its three invalid answers, does not count.
 
 | Hunt and cross-cutting tasks with a valid answer | The record's coverage | How the history reads it |
 | --- | --- | --- |
 | none, or the plan has none | `none` | passed over like a scanner that did not run, and named in `skipped`; `set_baseline` refuses it |
-| some | `partial` | the earlier hunts' confirmed findings stay open, `not_remeasured`, never resolved |
-| all | `full` | it resolves what it did not find again |
+| some — or all, with an entry point set aside or not visited | `partial` | the earlier hunts' confirmed findings stay open, `not_remeasured`, never resolved |
+| all, and no entry point set aside or not visited | `full` | it resolves what it did not find again |
 
-The record is never better than the plan's own report: verify tasks still open
-for the hunt's findings, or an entry point set aside or not visited, keep it
-`partial`. It is brought up to date as answers are taken, when delivery stops
-and when the plan's status is read; its finish date does not move.
+The verify tasks do not hold the record back — open, or closed stale, not
+delivered or after three invalid answers — nor does a finding left out of a
+full plan, nor a hunt by groups of code files in a project whose attack surface
+has no entry points: the plan's own report may still say `partial` for each of
+these, the record does not. It is brought up to date as answers are taken, when
+delivery stops and when the plan's status is read; its finish date does not
+move.
 
-Some reports stay `partial` for good, and their record with them: a plan with a
-verify task closed as stale (its file changed after the plan was made), after
-three invalid answers, or never delivered; a plan that left a finding out
-because it was full; and **every** hunt of a project whose attack surface has no
-entry points (the hunt goes by groups of code files, and its report is never
-`full`). Such a hunt never resolves anything: the earlier hunts' confirmed
-findings it did not find again stay open, `not_remeasured`, however many times
-it runs — after the code is fixed too. The way out today is a verdict:
+A record stays `partial` for good when one of its hunt or cross-cutting tasks
+was closed as not delivered or after three invalid answers, or when an entry
+point was set aside — and a route whose handler file is outside the project is
+set aside by **every** hunt of that project, so none of them resolves anything
+there. The earlier hunts' confirmed findings such a hunt does not find again
+stay open, `not_remeasured`. The way out today is a verdict:
 `llm_scan { step: "start", modes: ["verify"], fingerprints: [<the finding's fingerprint>] }`,
 answered `not_real` by a fresh context, takes a hunt finding out of the open set.
 

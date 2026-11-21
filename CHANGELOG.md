@@ -214,21 +214,23 @@ version bump.
     longer a hunt with a verify-only record. By ids, `diff_scans { from_scan_id: <hunt>, to_scan_id: <verify-only
     record> }` gives the hunt's findings as `not_remeasured` instead of resolved; the other way round they are new,
     as before.
-  - A hunt plan's record follows its hunt and cross-cutting tasks with a valid answer (one closed as not delivered,
-    or after three invalid answers, does not count): `none` while none has one — passed over and named, and
-    `set_baseline { scan_id }` refuses it —, `partial` while some lack one — the earlier hunts' confirmed findings
-    stay open, `not_remeasured` —, `full` when all have one; and never better than the plan's own report: verify
-    tasks still open, or an entry point set aside or not visited, keep it `partial`. Until a later hunt answers every
-    task, a hunt that was only started keeps `risk_score` and `prioritize_findings` at coverage `partial`, naming it,
-    and the findings of the next hunt compared with it are `not_previously_measured`, not new.
-  - **Some hunts stay `partial` for good, and never resolve anything:** a plan with a verify task closed as stale (its
-    file changed after the plan was made), after three invalid answers, or never delivered; a plan that left a finding
-    out because it was full; and every hunt of a project whose attack surface has no entry points (its own report is
-    never `full`). The earlier hunts' confirmed findings such a hunt does not find again stay open, `not_remeasured` —
-    measured in a project with no entry points: a second hunt that answered every task and did not find the first
-    one's confirmed finding gave `resolved: 0`, and the finding stayed in the open set. The way out today is a verdict:
-    `llm_scan { step: "start", modes: ["verify"], fingerprints: [<the finding's fingerprint>] }`, answered `not_real`
-    by a fresh context, takes a hunt finding out of the open set (measured).
+  - A hunt plan's record counts what was hunted: its hunt and cross-cutting tasks with a valid answer (one closed as
+    not delivered, or after three invalid answers, does not count) and its entry points. `none` while none has one —
+    passed over and named, and `set_baseline { scan_id }` refuses it —; `partial` while some lack one, or while an
+    entry point is set aside or not visited — the earlier hunts' confirmed findings stay open, `not_remeasured` —;
+    `full` when all have one and no entry point is set aside or not visited. The verify tasks (open, or closed stale,
+    not delivered or after three invalid answers), a finding left out of a full plan, and a hunt by groups of code
+    files in a project with no entry points do not hold it back, although the plan's own report says `partial` for
+    them. Until a later hunt answers every task, a hunt that was only started keeps `risk_score` and
+    `prioritize_findings` at coverage `partial`, naming it, and the findings of the next hunt compared with it are
+    `not_previously_measured`, not new.
+  - **A record stays `partial` for good** when one of its hunt or cross-cutting tasks was closed as not delivered or
+    after three invalid answers, or when an entry point was set aside; and a route whose handler file is outside the
+    project is set aside by every hunt of that project — measured: a second hunt there that answered every task and
+    did not find the first one's confirmed finding gave `resolved: 0`, and the finding stayed in the open set. The
+    way out today is a verdict:
+    `llm_scan { step: "start", modes: ["verify"], fingerprints: [<the finding's fingerprint>] }`, answered
+    `not_real` by a fresh context, takes a hunt finding out of the open set (measured).
   - No migration: a verify-only record of an earlier version is recognised as it is read; an earlier hunt record
     of a plan still open is corrected the next time the plan is read or answered, and one of a plan no longer open
     (abandoned, or complete after a limit) keeps saying `full`. A baseline already set on a verify-only record stays

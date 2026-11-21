@@ -5,7 +5,9 @@
  * delivered, or after its invalid answers ran out, is not answered:
  *   - none answered, or no hunt task at all: `[{ llm-hunt, skipped, reason }]`, missing `['llm-hunt']` — none;
  *   - some: `[{ llm-hunt, ok }]`, missing `['llm-hunt:open-tasks']` — partial (the plan's own report says so too);
- *   - all, and no entry point set aside or left unvisited: `[{ llm-hunt, ok }]`, `[]` — full.
+ *   - all, and no entry point set aside or left unvisited: `[{ llm-hunt, ok }]`, `[]` — full. Verify tasks, open or
+ *     closed without a verdict, and a project without entry points do not keep it partial (the owner's ruling of
+ *     2026-11-21), though the plan's own report may still say partial for them.
  * It is written at start, rewritten when a hunt answer is accepted and when an open plan is settled, and its
  * finish date never moves. A verify-only plan's record stays `tools_run: []`.
  *
@@ -13,10 +15,11 @@
  * in-memory database, the attack surface seeded, every answer a fixture. No model.
  */
 
+import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { classifyDiff, compareScansFor } from '../../../src/history/runCompare.js';
-import { leaseNext, MAX_INVALID_SUBMISSIONS, settlePlan, startPlan, submitAnswer, type Out } from '../../../src/llmscan/service.js';
+import { leaseNext, MAX_INVALID_SUBMISSIONS, reportOf, settlePlan, startPlan, submitAnswer, type Out } from '../../../src/llmscan/service.js';
 import { LLM_SCAN_DEFAULTS, type HuntFinding, type HuntResult, type PlanLimits, type ScanMode, type TaskKind } from '../../../src/llmscan/types.js';
 import { computeCoverage } from '../../../src/tools/scanCoverage.js';
 import type { ScanCoverage, ScanRecord, ToolRun } from '../../../src/types.js';
@@ -164,6 +167,13 @@ function confirmHuntFindings(h: Harness, p: Plan): void {
   throw new Error(`plan ${p.planId} did not end within 60 tasks`);
 }
 
+/** The coverage of the plan's own report (`llmscan/report.ts`), as `llm_scan { step: "start", plan_id }` gives it. */
+function planStatusCoverage(h: Harness, planId: string): ScanCoverage {
+  const p = h.repo.getPlan(planId);
+  if (p === null) throw new Error(`no plan ${planId}`);
+  return reportOf(h.storage, p).coverage;
+}
+
 /** What a comparison of two plans' records calls resolved and not re-measured (`history/runCompare.ts`). */
 function compared(h: Harness, fromScanId: string, toScanId: string): { resolved: number; not_remeasured: number } {
   const d = classifyDiff(
@@ -304,7 +314,10 @@ describe('llm-scan-plan-record-default-scan', () => {
     expect(record(h, p.scanId).finished_at, 'the finish date').toBe(finished);
   });
 
-  it('T-06 a hunt that answered every hunt and cross-cutting task while the checks of its own findings are open stays partial and resolves nothing; its checks answered, it is full', async () => {
+  // The owner's ruling of 2026-11-21 ("Conta o que foi caçado"): the record counts what was hunted. Verify tasks,
+  // open or closed without a verdict, and a project without entry points do not keep it partial — the plan's own
+  // report may still say partial for them.
+  it('T-06 a hunt whose every hunt and cross-cutting task is answered is full while the checks of its own findings are open, and resolves what it did not find again (the owner\'s ruling of 2026-11-21)', async () => {
     const h = harness();
     await seedSurface(h);
     const [earlierFinding, laterFinding] = (submissionFixture('hunt-valid.json') as HuntResult).findings;
@@ -321,12 +334,49 @@ describe('llm-scan-plan-record-default-scan', () => {
     const later = await plan(h, ['hunt']);
     answerHuntTasks(h, later.planId, [laterFinding]);
     expect(h.repo.listTasks(later.planId).filter((t) => t.status !== 'closed').map((t) => t.kind), 'what is still open').toEqual(['verify']);
-    expect(bookkeeping(h, later.scanId), 'every hunt task answered, the check of its finding open').toEqual(PARTLY_HUNTED);
-    expect(compared(h, earlier.scanId, later.scanId), 'the earlier hunt compared with it').toEqual({ resolved: 0, not_remeasured: 1 });
+    expect(planStatusCoverage(h, later.planId), "the plan's own report, its check open").toBe('partial');
+    expect(bookkeeping(h, later.scanId), 'every hunt task answered, the check of its finding open').toEqual(HUNTED);
+    expect(compared(h, earlier.scanId, later.scanId), 'the earlier hunt compared with it').toEqual({ resolved: 1, not_remeasured: 0 });
 
-    // Its check answered: the plan's report is full, and so is the record — which now resolves what it did not find again.
+    // Its check answered: nothing changes for the record.
     confirmHuntFindings(h, later);
     expect(bookkeeping(h, later.scanId), 'the check of its finding answered').toEqual(HUNTED);
     expect(compared(h, earlier.scanId, later.scanId), 'the earlier hunt compared with it, now').toEqual({ resolved: 1, not_remeasured: 0 });
+  });
+
+  it('T-06 in a project with no entry points, a hunt whose every task is answered is full and resolves an earlier hunt\'s confirmed finding it did not find again (the owner\'s ruling of 2026-11-21)', async () => {
+    const h = harness();
+    // The attack surface found no route: the hunt goes by groups of code files, and the plan's report is never full.
+    await seedSurface(h, []);
+    const [finding] = (submissionFixture('hunt-valid.json') as HuntResult).findings;
+    if (finding === undefined) throw new Error('the fixture has a hunt finding');
+
+    const earlier = await plan(h, ['hunt']);
+    expect(h.repo.listTasks(earlier.planId).every((t) => t.target.entry_points === undefined), 'hunt tasks by groups of files').toBe(true);
+    answerHuntTasks(h, earlier.planId, [finding]);
+    confirmHuntFindings(h, earlier);
+    expect(planStatusCoverage(h, earlier.planId), "the plan's own report").toBe('partial');
+    expect(bookkeeping(h, earlier.scanId), 'the earlier hunt, every task answered').toEqual(HUNTED);
+
+    const later = await plan(h, ['hunt']);
+    answerHuntTasks(h, later.planId, []);
+    expect(bookkeeping(h, later.scanId), 'the later hunt, every task answered, nothing found').toEqual(HUNTED);
+    expect(compared(h, earlier.scanId, later.scanId), 'the earlier hunt compared with it').toEqual({ resolved: 1, not_remeasured: 0 });
+  });
+
+  it('T-06 a hunt whose every hunt and cross-cutting task is answered stays full when the check of its finding closes stale (the owner\'s ruling of 2026-11-21)', async () => {
+    const h = harness();
+    await seedSurface(h);
+    const [finding] = (submissionFixture('hunt-valid.json') as HuntResult).findings;
+    if (finding === undefined) throw new Error('the fixture has a hunt finding');
+
+    const p = await plan(h, ['hunt']);
+    answerHuntTasks(h, p.planId, [finding]);
+    // The file of the finding changes before its check is handed out: the check closes stale, with no verdict.
+    appendFileSync(join(h.project, finding.file), '\n// changed after the plan was made\n');
+    expect(leaseOne(h, p.planId), 'the plan, once its check closed stale').toBe('done');
+    expect(h.repo.listTasks(p.planId).filter((t) => t.kind === 'verify').map((t) => t.closed_reason), 'its check').toEqual(['stale']);
+    expect(planStatusCoverage(h, p.planId), "the plan's own report").toBe('partial');
+    expect(bookkeeping(h, p.scanId), 'every hunt task answered, its check stale').toEqual(HUNTED);
   });
 });

@@ -20,13 +20,18 @@
  *     (`history/runNames.ts`), so the hunt's findings read as not re-measured,
  *     never resolved. Never `llm-hunt` ok AND missing: that is the retry shape,
  *     which reads as measured;
- *   - all of them: `llm-hunt` ok, nothing missing — `full` — but only when
- *     the plan's own report is `full` too: the record is never better than
- *     the report (open verify tasks for the hunt's findings, an entry point
- *     set aside or not visited keep it `partial`).
+ *   - all of them: `llm-hunt` ok, nothing missing — `full` — when no entry
+ *     point of the plan's report is set aside or not visited; one that is
+ *     keeps it `partial`.
  *
- * "Answered" and the report's coverage are both read off the plan's report
- * (`report.ts#computeReport`), never decided a second time here. A plan that
+ * The record counts what was HUNTED (the owner's ruling of 2026-11-21): the
+ * verify tasks — open, or closed stale, not delivered or after their invalid
+ * answers — findings left out of a full plan, and a hunt by groups of files
+ * in a project with no entry points do not hold it back, although the plan's
+ * own report says `partial` for each of them.
+ *
+ * "Answered" and the entry points' accounts are both read off the plan's
+ * report (`report.ts#computeReport`), never decided a second time here. A plan that
  * does not hunt writes no bookkeeping, and its record is never a state scan
  * (`history/scanRoles.ts#isVerifyOnlyPlanRecord`).
  */
@@ -64,6 +69,7 @@ export function planRecordBookkeeping(plan: LlmScanPlan, tasks: readonly LlmScan
         : `none of the plan's ${String(hunts.length)} hunt task(s) has a valid answer`;
     return { tools_run: [huntRun({ status: 'skipped', reason })], missing_tools: [LLM_HUNT_TOOL] };
   }
-  const whole = answered === hunts.length && report.coverage === 'full';
+  // What was hunted, not the whole plan: verify tasks and a hunt by groups of files (no entry points) do not count.
+  const whole = answered === hunts.length && report.entry_points.every((e) => e.status === 'visited');
   return { tools_run: [huntRun({ status: 'ok' })], missing_tools: whole ? [] : [OPEN_TASKS] };
 }

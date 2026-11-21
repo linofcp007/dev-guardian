@@ -71200,7 +71200,7 @@ var init_runNames = __esm({
       "mcp-tool-audit": scanner("mcp-tool-audit"),
       // llm_scan: the hunt's findings (tool `llm-hunt`); written by the submit step of llm_scan.
       "llm-hunt": scanner("llm-hunt"),
-      // A hunt plan with hunt tasks still without a valid answer, or whose own report is partial
+      // A hunt plan with hunt tasks still without a valid answer, or an entry point set aside or not visited
       // (`llmscan/planRecord.ts`, in missing_tools beside an ok `llm-hunt`): the hunt's findings are not re-measured.
       "llm-hunt:open-tasks": scanner("llm-hunt"),
       // import_sarif: the importer's own pass. It speaks for no key: an import's
@@ -119303,7 +119303,7 @@ function planRecordBookkeeping(plan, tasks) {
     const reason = hunts.length === 0 ? "the plan has no hunt task: nothing in the project was eligible for one" : `none of the plan's ${String(hunts.length)} hunt task(s) has a valid answer`;
     return { tools_run: [huntRun({ status: "skipped", reason })], missing_tools: [LLM_HUNT_TOOL] };
   }
-  const whole = answered2 === hunts.length && report.coverage === "full";
+  const whole = answered2 === hunts.length && report.entry_points.every((e) => e.status === "visited");
   return { tools_run: [huntRun({ status: "ok" })], missing_tools: whole ? [] : [OPEN_TASKS] };
 }
 var OPEN_TASKS;
