@@ -3765,3 +3765,261 @@ describe('install-vet-global-in-short-cluster', () => {
     expectLinear(`install-vet-global-in-short-cluster ${label}`, (n) => void parseInstallCommands(make(n)), 400);
   }, 120_000);
 });
+
+// ───────────────── install-vet-python-tool-forms — the Python forms that fetch a package and build it, read as their managers read them
+
+describe('install-vet-python-tool-forms', () => {
+  // The names of the measurement (.specs/install-vet-python-tool-forms/measurements/, pip 23.0.1).
+  const P = 'dgprobe-zzq7731-named';
+  const D = 'dgprobe-zzq7731-dep';
+  const T = 'dgprobe-zzq7731-tool';
+  const CMD = 'dgprobe-zzq7731-cmd';
+  const URL = 'https://x.test/simple';
+  const NOT_MEASURED = 'this package manager was not measured';
+
+  /** What the feature adds to a command; read through a type that has it, so the file type-checks before the field exists. */
+  type WithEveryTool = { updatesEveryTool?: boolean };
+
+  interface Reading {
+    manager: string;
+    packages: string[];
+    candidates: string[];
+    updateNames: string[] | undefined;
+    updatesEveryTool: boolean | undefined;
+    manifest: unknown;
+    registries: string[];
+    uncertain: string[];
+    skipped: string[];
+  }
+  const NONE: Reading = {
+    manager: '(no command)',
+    packages: [],
+    candidates: [],
+    updateNames: undefined,
+    updatesEveryTool: undefined,
+    manifest: undefined,
+    registries: [],
+    uncertain: [],
+    skipped: [],
+  };
+  /** The packages are sorted: which of two names comes first is no part of what a form promises. */
+  const readAll = (command: string): Reading[] =>
+    parseInstallCommands(command).map((c) => ({
+      manager: c.manager,
+      packages: c.packages.map((p) => p.name).sort(),
+      candidates: (c.candidates ?? []).map((p) => p.name).sort(),
+      updateNames: c.updateNames?.map((p) => p.name),
+      updatesEveryTool: (c as typeof c & WithEveryTool).updatesEveryTool,
+      manifest: c.manifest,
+      registries: c.registries,
+      uncertain: c.uncertain,
+      skipped: c.skipped.map((s) => s.raw),
+    }));
+  /** The single install command of `command`: exactly one, or the test fails on the count. */
+  const one = (command: string): Reading => {
+    const all = readAll(command);
+    expect(all.length, `${command}: the number of commands read`).toBe(1);
+    return all[0] ?? NONE;
+  };
+  const sorted = (...names: string[]): string[] => [...names].sort();
+
+  describe('parse', () => {
+    // ── T-01: the commands that fetch a package, each read with its own flags
+
+    it.each<[command: string, manager: string, packages: string[]]>([
+      [`pip download ${P}`, 'pip', [P]],
+      [`pip wheel ${P}`, 'pip', [P]],
+      [`python -m pip download ${P}`, 'pip', [P]],
+      [`py -m pip wheel ${P}`, 'pip', [P]],
+      [`pip3 download ${P}==2.0.0`, 'pip', [P]],
+      [`pip download --no-deps -d out ${P}`, 'pip', [P]],
+      [`pip download -dout ${P}`, 'pip', [P]],
+      [`pip download --dest=out ${P}`, 'pip', [P]],
+      [`pip download --destination-directory out ${P}`, 'pip', [P]],
+      [`pip wheel -w out ${P}`, 'pip', [P]],
+      [`pipx inject ${T} ${P} ${D}`, 'pipx', sorted(P, D)],
+      [`pipx inject --force ${T} ${P}`, 'pipx', [P]],
+      [`pipx inject --include-resources-from ${D} ${T} ${P}`, 'pipx', sorted(D, P)],
+      [`pipx upgrade --install ${P}`, 'pipx', [P]],
+      [`pipx runpip ${T} install ${P} ${D}`, 'pip', sorted(P, D)],
+      [`pipx runpip ${T} -q install ${P}`, 'pip', [P]],
+      [`pipx run --with ${D} ${P} arg`, 'pipx', sorted(D, P)],
+      [`pipx run --with "${D}[x,y]" ${P}`, 'pipx', sorted(D, P)],
+      [`uvx --with "${P}[x,y]" ${T}`, 'uv', sorted(P, T)],
+      [`uvx --from "${P}[x,y]" ${CMD}`, 'uv', [P]],
+      [`pipx run --spec "${P}[x,y]" ${CMD}`, 'pipx', [P]],
+      [`pipx install --preinstall "${D}[x,y]" ${T}`, 'pipx', sorted(D, T)],
+    ])('T-01 `%s`: one command of %s with the packages %j and no other', (command, manager, packages) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages }).toEqual({ manager, packages });
+    });
+
+    it('T-01 `pip3 download P==2.0.0` keeps the range `==2.0.0` of P', () => {
+      const c = parseInstallCommands(`pip3 download ${P}==2.0.0`);
+      expect(c.length, 'the number of commands read').toBe(1);
+      expect(c[0]?.packages.map((p) => [p.name, p.range])).toEqual([[P, '==2.0.0']]);
+    });
+
+    it.each([`pip download --pypi-url ${URL} ${P}`, `pip download -i ${URL} ${P}`])('T-01 `%s` names the index as a registry', (command) => {
+      const r = one(command);
+      expect({ packages: r.packages, registries: r.registries }).toEqual({ packages: [P], registries: [URL] });
+    });
+
+    it('T-01 `pipx inject -qi URL T P` names the index as a registry and never takes T for a package', () => {
+      const r = one(`pipx inject -qi ${URL} ${T} ${P}`);
+      expect({ manager: r.manager, packages: r.packages, registries: r.registries }).toEqual({ manager: 'pipx', packages: [P], registries: [URL] });
+    });
+
+    it('T-01 `pipx inject -fr reqs.txt T P` reads P and the requirements file, and takes neither T nor reqs.txt for a package', () => {
+      const r = one(`pipx inject -fr reqs.txt ${T} ${P}`);
+      expect({ manager: r.manager, packages: r.packages, manifest: r.manifest }).toEqual({
+        manager: 'pipx',
+        packages: [P],
+        manifest: { kind: 'requirements', files: ['reqs.txt'] },
+      });
+    });
+
+    it('T-01 `pipx inject --dgunknown x T P`: T is a candidate, P is a package, x is neither, and the line says `unknown flag --dgunknown`', () => {
+      const r = one(`pipx inject --dgunknown x ${T} ${P}`);
+      expect({ manager: r.manager, packages: r.packages, candidates: r.candidates, unknown: r.uncertain.includes('unknown flag --dgunknown') }).toEqual({
+        manager: 'pipx',
+        packages: sorted(T, P),
+        candidates: [T],
+        unknown: true,
+      });
+    });
+
+    it('T-01 `pipx runpip --dgunknown x T install P` reads P only, and is uncertain: neither x nor T is looked up', () => {
+      const r = one(`pipx runpip --dgunknown x ${T} install ${P}`);
+      expect({ manager: r.manager, packages: r.packages, uncertain: r.uncertain.length > 0 }).toEqual({ manager: 'pip', packages: [P], uncertain: true });
+    });
+
+    it('T-01 `pipx inject T x.zip` looks up x.zip and says why it is uncertain: the manager was not measured', () => {
+      const r = one(`pipx inject ${T} x.zip`);
+      expect({ manager: r.manager, packages: r.packages, reason: r.uncertain.join(' | ').includes(NOT_MEASURED) }).toEqual({
+        manager: 'pipx',
+        packages: ['x.zip'],
+        reason: true,
+      });
+    });
+
+    it('T-01 `pip download x.zip` is a command of pip with no package: x.zip is a file for pip', () => {
+      const r = one('pip download x.zip');
+      expect({ manager: r.manager, packages: r.packages }).toEqual({ manager: 'pip', packages: [] });
+    });
+
+    it.each([`pipx run --with ${D} ${P} arg`, `pipx run --with "${D}[x,y]" ${P}`])(
+      'T-01 `%s` does not say `unknown flag --with`, and D is not a candidate',
+      (command) => {
+        const r = one(command);
+        expect({ unknownWith: r.uncertain.includes('unknown flag --with'), candidates: r.candidates, skipped: r.skipped }).toEqual({
+          unknownWith: false,
+          candidates: [],
+          skipped: [],
+        });
+      },
+    );
+
+    it.each([`uvx --with "${P}[x,y]" ${T}`, `pipx install --preinstall "${D}[x,y]" ${T}`, `uvx --from "${P}[x,y]" ${CMD}`, `pipx run --spec "${P}[x,y]" ${CMD}`])(
+      'T-01 `%s` skips no half of the name: the commas inside [...] do not split it',
+      (command) => {
+        expect(one(command).skipped).toEqual([]);
+      },
+    );
+
+    // ── T-01: the names given to an update, and the updates of every tool
+
+    it.each<[command: string, manager: string, names: string[]]>([
+      [`pipx upgrade ${P}`, 'pipx', [P]],
+      [`pipx reinstall ${P}`, 'pipx', [P]],
+      [`uv tool upgrade ${P} ${D}`, 'uv', [P, D]],
+      [`uv tool upgrade --python 3.12 ${P}`, 'uv', [P]],
+      [`uv tool upgrade -i ${URL} ${P}`, 'uv', [P]],
+    ])('T-01 `%s`: one command of %s, no package, and the names given to the update %j', (command, manager, names) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages, updateNames: r.updateNames }).toEqual({ manager, packages: [], updateNames: names });
+    });
+
+    it('T-01 `uv tool upgrade -i URL P` names the index as a registry, and the URL is no name', () => {
+      expect(one(`uv tool upgrade -i ${URL} ${P}`).registries).toEqual([URL]);
+    });
+
+    it.each([
+      ['pipx upgrade-all', 'pipx'],
+      ['pipx upgrade-all --skip a b', 'pipx'],
+      ['uv tool upgrade --all', 'uv'],
+    ])('T-01 `%s` is one command of %s that updates every tool: no name given, none of a or b', (command, manager) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages, updateNames: r.updateNames, updatesEveryTool: r.updatesEveryTool }).toEqual({
+        manager,
+        packages: [],
+        updateNames: [],
+        updatesEveryTool: true,
+      });
+    });
+
+    // ── T-07: the files of `-r` of the four commands are read as the one of `pip install -r`
+
+    it.each<[command: string, files: string[]]>([
+      ['pip download -r a.txt', ['a.txt']],
+      ['pip wheel -r a.txt -r b.txt', ['a.txt', 'b.txt']],
+      [`pipx runpip ${T} install -r a.txt`, ['a.txt']],
+      [`pipx inject ${T} -r a.txt`, ['a.txt']],
+      [`pipx inject -fr a.txt ${T} ${P}`, ['a.txt']],
+    ])('T-07 `%s` gives the manifest of requirements files %j, in order', (command, files) => {
+      expect(one(command).manifest).toEqual({ kind: 'requirements', files });
+    });
+
+    // ── T-05: protection — what the readers give today, written here
+
+    it.each<[command: string, manager: string, packages: string[], uncertain: string[]]>([
+      [`pip install ${P}`, 'pip', [P], []],
+      [`pipx install ${P}`, 'pipx', [P], []],
+      [`pipx run ${P}`, 'pipx', [P], []],
+      [`uvx ${P}`, 'uv', [P], []],
+      [`uv tool install ${P}`, 'uv', [P], []],
+      [`uv tool run ${P}`, 'uv', [P], []],
+      // The commas outside [...] split today, and the line says it is not one plain statement.
+      [`uvx --with ${P},${D} ${T}`, 'uv', sorted(P, D, T), ["not a single plain install statement (',' outside quotes)"]],
+    ])('T-05 `%s` is one command of %s with the packages %j and the reasons %j, as today', (command, manager, packages, uncertain) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages, uncertain: r.uncertain }).toEqual({ manager, packages, uncertain });
+    });
+
+    it('T-05 `pip install -r a.txt` gives the manifest of requirements files and no package, as today', () => {
+      const r = one('pip install -r a.txt');
+      expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: { kind: 'requirements', files: ['a.txt'] } });
+    });
+
+    it.each([
+      'pip index versions P',
+      'pip list',
+      'pip show P',
+      'pipx list',
+      'uv tool list',
+      `pipx runpip ${T} list`,
+      `pipx runpip ${T} uninstall ${P}`,
+      'pipx upgrade-shared',
+      'pipx reinstall-all',
+      'pipx install-all spec.json',
+    ])('T-05 `%s` is no install command: none is read, as today', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it('T-05 `pipx install x.zip` looks up x.zip and says the manager was not measured, as today', () => {
+      const r = one('pipx install x.zip');
+      expect({ packages: r.packages, reason: r.uncertain.join(' | ').includes(NOT_MEASURED) }).toEqual({ packages: ['x.zip'], reason: true });
+    });
+
+    // ── T-08: protection — the cost of the new readers is linear in the line
+
+    it.each<[label: string, make: (n: number) => string]>([
+      ['pipx inject T P;', (n) => `pipx inject ${T} ${P};`.repeat(n)],
+      ['pip download --no-deps P;', (n) => `pip download --no-deps ${P};`.repeat(n)],
+      ['pipx runpip T install P;', (n) => `pipx runpip ${T} install ${P};`.repeat(n)],
+      ['pipx inject T and n times P', (n) => `pipx inject ${T} ${'P '.repeat(n)}`],
+    ])('T-08 parseInstallCommands of %s costs linear time: eight times the input, well under 22.6 times the time', (label, make) => {
+      expectLinear(`install-vet-python-tool-forms ${label}`, (n) => void parseInstallCommands(make(n)), 500);
+    });
+  });
+});

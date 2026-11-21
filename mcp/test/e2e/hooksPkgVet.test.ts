@@ -2697,3 +2697,56 @@ describe('install-vet-global-in-short-cluster', () => {
     expect({ denied: r.output?.hookSpecificOutput?.permissionDecision === 'deny', crossenv: askedFor(r, 'crossenv') }).toEqual({ denied: false, crossenv: [] });
   });
 });
+
+// ───────────────── install-vet-python-tool-forms — the Python forms that fetch a package and build it, through the dispatcher
+
+describe('install-vet-python-tool-forms', () => {
+  const X = 'zz-no-such-pkg';
+  const EVIL = 'zz-evil-pkg';
+  const T = 'dgprobe-zzq7731-tool';
+  const pypiDoc = (version: string): Route => ({
+    body: { info: { version }, releases: { [version]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+  });
+  /** The PyPI answers 404 for X and has nothing to say about it at OSV. */
+  const MISSING: Record<string, Route> = { [`https://pypi.org/pypi/${X}/json`]: { status: 404 }, [OSV]: { osv: {} } };
+  /** The PyPI has EVIL, and OSV lists its 1.0.0 as malicious. */
+  const MALICIOUS: Record<string, Route> = {
+    [`https://pypi.org/pypi/${EVIL}/json`]: pypiDoc('1.0.0'),
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-7'] } },
+  };
+
+  describe('dispatcher', () => {
+    it.each([
+      `pip download ${X}`,
+      `pip wheel ${X}`,
+      `python -m pip download ${X}`,
+      `pip install --dry-run ${X}`,
+      `pipx inject ${T} ${X}`,
+      `pipx runpip ${T} install ${X}`,
+      `uvx --from ${X} zz-cmd`,
+      `uvx --from ${X} zz-cmd --help`,
+      `pipx run --spec ${X} zz-cmd`,
+    ])('T-02 `%s` is DENIED, naming the package and saying it does not exist on PyPI; the environment is never asked of the registry', (command) => {
+      const r = runHook(command, MISSING);
+      expect(r.status).toBe(0);
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({
+        decision: r.output?.hookSpecificOutput?.permissionDecision,
+        named: reason.includes(X),
+        doesNotExist: reason.includes('does not exist on PyPI'),
+        askedEnvironment: r.requests.filter((u) => u.includes(T)),
+      }).toEqual({ decision: 'deny', named: true, doesNotExist: true, askedEnvironment: [] });
+    });
+
+    it.each([`pipx upgrade ${EVIL}`, `uv tool upgrade ${EVIL}`, `python -m pip download ${EVIL}`])('T-02 `%s` is DENIED with the OSV identifier of the malicious package', (command) => {
+      const r = runHook(command, MALICIOUS);
+      expect(r.status).toBe(0);
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({ decision: r.output?.hookSpecificOutput?.permissionDecision, named: reason.includes(EVIL), id: reason.includes('MAL-2026-7') }).toEqual({
+        decision: 'deny',
+        named: true,
+        id: true,
+      });
+    });
+  });
+});

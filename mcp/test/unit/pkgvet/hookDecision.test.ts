@@ -5543,3 +5543,284 @@ describe('install-vet-global-in-short-cluster', () => {
     });
   });
 });
+
+// ───────────────── install-vet-python-tool-forms — the decision for the Python forms that fetch a package and build it
+
+describe('install-vet-python-tool-forms', () => {
+  // The names of the plan: absent from the registry, unless a test says they exist.
+  const X = 'zz-no-such-pkg';
+  const Y = 'dgprobe-zzq7731-y';
+  const Z = 'dgprobe-zzq7731-z';
+  const T = 'dgprobe-zzq7731-tool';
+  const P = 'dgprobe-zzq7731-named';
+  const CMD = 'dgprobe-zzq7731-cmd';
+  const EVIL = 'zz-evil-pkg';
+  const UPDATES_EVERY_TOOL = 'dev-guardian: this command updates every tool pipx or uv installed — none of them was vetted.';
+  const NAMED_TO_UPDATE = 'a package named to an update is fetched only when it is already installed';
+  const NOT_FOUND = 'not found on the public registry';
+  const notFound = (name: string): string => `'${name}': ${NOT_FOUND}`;
+  const notMeasured = (verb: string): string => `this form of '${verb}' was not measured`;
+  const allowlist = (flag: string): string => `flag ${flag} is not on the confident-shape allowlist`;
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  /** The question of the answer: read through a type that has it, so the file type-checks whatever the answer type is. */
+  const askOf = (d: Decided): string | undefined => (d as (NonNullable<Decided> & { ask?: string }) | null)?.ask;
+  const decide = (command: string, reg: { fetchImpl: typeof fetch }, extra: Partial<HookVetOptions> = {}): Promise<Decided> =>
+    decideInstallCommand(command, opts(reg.fetchImpl, { popular: {}, ...extra }));
+
+  /** The flag the refusal names for the manager of a line: `--index <url>` for uv, `--index-url <url>` for pip and pipx. */
+  const indexFlag = (command: string): string => (/^uvx? /.test(command) ? '`--index <url>`' : '`--index-url <url>`');
+
+  describe('decision', () => {
+    // ── T-03: the confident shape — what is refused, what only warns, what is asked
+
+    const REFUSED = [
+      // The 14 forms of 2026-11-20, one by one.
+      `pip download ${X}`,
+      `pip wheel ${X}`,
+      `pip download --no-deps ${X}`,
+      `pip download --no-binary :all: ${X}`,
+      `pip install --dry-run ${X}`,
+      `pipx inject ${T} ${X}`,
+      `pipx upgrade --install ${X}`,
+      `pipx runpip ${T} install ${X}`,
+      `pipx run --spec ${X} ${CMD}`,
+      `pipx run --with ${Y} ${X}`,
+      `uvx --from ${X} ${CMD}`,
+      `uv tool run --from ${X} ${CMD}`,
+      `uvx --with ${Y} ${X}`,
+      `uv tool install --with ${Y} ${X}`,
+      // The 18 of the M-02 of 2026-11-21.
+      `python -m pip download ${X}`,
+      `pip3 wheel ${X}`,
+      `python -m pip install --dry-run ${X}`,
+      `pip download ${X} ${Y}`,
+      `pip download ${X}==1.0`,
+      `pip download -d out ${X}`,
+      `pip wheel --no-deps ${X}`,
+      `pip download ${X} --no-deps`,
+      `pipx inject ${T} ${X} ${Y}`,
+      `uvx --from=${X} ${CMD}`,
+      `uv tool run --with ${Y} ${X}`,
+      `uvx -w ${Y} ${X}`,
+      `uv tool install ${X} --with ${Y}`,
+      `pipx run --spec=${X} ${CMD}`,
+      `uvx --from ${X} ${CMD} --help`,
+      `pipx run --spec ${X} ${CMD} a`,
+      `uvx --with ${Y} ${X} --version`,
+      `pipx run --with ${Y} ${X} --help`,
+      // The places widened by the owner's answer 2-A.
+      `pip download -d build ${X}`,
+      `uvx --from ${X} ${CMD} --verbose`,
+    ];
+    it.each([...new Set(REFUSED)])('T-03 `%s` DENIES the missing name, and names the index flag of its manager and `GUARDIAN_PKG_VET=0`', async (command) => {
+      const d = await decide(command, registry());
+      const deny = d?.deny ?? '(no deny)';
+      expect({
+        named: deny.includes(`'${X}'`),
+        reason: deny.includes('does not exist on PyPI'),
+        indexFlag: deny.includes(indexFlag(command)),
+        prefix: deny.includes('GUARDIAN_PKG_VET=0'),
+      }).toEqual({ named: true, reason: true, indexFlag: true, prefix: true });
+    });
+
+    it.each<[command: string, reason: string]>([
+      [`pip3 download ${X}`, notMeasured('pip download')],
+      [`python3 -m pip download ${X}`, notMeasured('pip download')],
+      [`py -m pip wheel ${X}`, notMeasured('pip wheel')],
+      [`pip download ${X} ${Y} ${Z}`, notMeasured('pip download')],
+      [`pip download --dest out ${X}`, notMeasured('pip download')],
+      [`pip download ${X}==1.*`, notMeasured('pip download')],
+      [`pip download ${X}===1.0`, notMeasured('pip download')],
+      [`pip download ${X}==1.0rc1`, notMeasured('pip download')],
+      [`pipx inject --force ${T} ${X}`, notMeasured('pipx inject')],
+      [`pipx runpip ${T} download ${X}`, notMeasured('pipx runpip')],
+      [`pipx runpip ${T} install -q ${X}`, notMeasured('pipx runpip')],
+      [`pipx upgrade --install --force ${X}`, notMeasured('pipx upgrade --install')],
+      [`uvx --from ${X} ${CMD} a b`, allowlist('--from')],
+      [`pipx run --spec ${X} ${CMD} a b`, allowlist('--spec')],
+      [`sudo pip download ${X}`, "not a plain install command ('sudo' is not a bare package-manager name)"],
+      [`pip download ${X} && ls`, "not a single plain install statement ('&' outside quotes)"],
+    ])('T-03 `%s` WARNS that the name was not found, with its reason, and does not deny', async (command, reason) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      const context = d?.context ?? '(no context)';
+      expect({ deny: d?.deny, notFound: context.includes(notFound(X)), reason: context.includes(reason), askedX: reg.calls.includes(pypiUrl(X)) }).toEqual({
+        deny: undefined,
+        notFound: true,
+        reason: true,
+        askedX: true,
+      });
+    });
+
+    it('T-03 `pipx inject --include-resources-from Y T X` warns about X and Y, both asked of the registry, and never T', async () => {
+      const reg = registry();
+      const d = await decide(`pipx inject --include-resources-from ${Y} ${T} ${X}`, reg);
+      const context = d?.context ?? '(no context)';
+      expect({
+        deny: d?.deny,
+        x: context.includes(notFound(X)),
+        y: context.includes(notFound(Y)),
+        reason: context.includes(notMeasured('pipx inject')),
+        askedT: reg.calls.includes(pypiUrl(T)),
+      }).toEqual({ deny: undefined, x: true, y: true, reason: true, askedT: false });
+    });
+
+    it('T-03 `pipx inject --dgunknown x T X` warns, for `unknown flag --dgunknown`: T and X are asked of the registry, and x never', async () => {
+      const reg = registry();
+      const d = await decide(`pipx inject --dgunknown x ${T} ${X}`, reg);
+      const context = d?.context ?? '(no context)';
+      expect({
+        deny: d?.deny,
+        reason: context.includes('unknown flag --dgunknown'),
+        x: context.includes(notFound(X)),
+        askedT: reg.calls.includes(pypiUrl(T)),
+        askedLowerX: reg.calls.includes(pypiUrl('x')),
+      }).toEqual({ deny: undefined, reason: true, x: true, askedT: true, askedLowerX: false });
+    });
+
+    it('T-03 `pipx inject T X` never asks the registry for T, the environment', async () => {
+      const reg = registry();
+      await decide(`pipx inject ${T} ${X}`, reg);
+      expect({ askedX: reg.calls.includes(pypiUrl(X)), askedT: reg.calls.filter((u) => u.includes(T)) }).toEqual({ askedX: true, askedT: [] });
+    });
+
+    it('T-03 `pip download` with 51 distinct names the registry has asks the user: 1 was not vetted (only the first 50 are)', async () => {
+      const names = Array.from({ length: 51 }, (_, i) => `dgprobe-zzq7731-c${String(i + 1)}`);
+      const d = await decide(`pip download ${names.join(' ')}`, registry({ exists: names }));
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain('this command names more packages than the hook vets');
+      expect(askOf(d) ?? '(no ask)').toContain('1 was not vetted (only the first 50 are)');
+    });
+
+    // ── T-04: the names given to an update, and the updates of every tool
+
+    it.each([`pipx upgrade ${X}`, `pipx reinstall ${X}`, `uv tool upgrade ${X}`])(
+      'T-04 `%s` warns that the name was not found, says a package named to an update is fetched only when it is already installed, and never denies',
+      async (command) => {
+        const d = await decide(command, registry());
+        const context = d?.context ?? '(no context)';
+        expect({ deny: d?.deny, notFound: context.includes(notFound(X)), named: context.includes(NAMED_TO_UPDATE) }).toEqual({
+          deny: undefined,
+          notFound: true,
+          named: true,
+        });
+      },
+    );
+
+    it.each([`pipx upgrade ${EVIL}`, `pipx reinstall ${EVIL}`, `uv tool upgrade ${EVIL}`])('T-04 `%s` DENIES a package OSV lists as malicious', async (command) => {
+      const d = await decide(command, registry({ exists: [EVIL], malicious: [EVIL] }));
+      const deny = d?.deny ?? '(no deny)';
+      expect({ evil: deny.includes(EVIL), mal: deny.includes('MAL-2026-77') }).toEqual({ evil: true, mal: true });
+    });
+
+    it.each(['pipx upgrade-all', 'uv tool upgrade --all', `pipx upgrade-all --skip ${X}`])(
+      'T-04 `%s` says in one line that it updates every tool and none was vetted: no deny, and no request to the network',
+      async (command) => {
+        const reg = registry();
+        const d = await decide(command, reg);
+        expect({ deny: d?.deny, line: d?.context?.includes(UPDATES_EVERY_TOOL), calls: reg.calls }).toEqual({ deny: undefined, line: true, calls: [] });
+      },
+    );
+
+    it.each(['pipx upgrade-all', 'uv tool upgrade --all', `pipx upgrade-all --skip ${X}`])('T-04 `%s` says the same with GUARDIAN_OFFLINE=1', async (command) => {
+      const reg = registry();
+      const d = await decide(command, reg, { env: { GUARDIAN_OFFLINE: '1' } });
+      expect({ deny: d?.deny, line: d?.context?.includes(UPDATES_EVERY_TOOL), calls: reg.calls }).toEqual({ deny: undefined, line: true, calls: [] });
+    });
+
+    it('T-04 `uv tool upgrade --all X` says the line of every tool and the warning for X', async () => {
+      const d = await decide(`uv tool upgrade --all ${X}`, registry());
+      const context = d?.context ?? '(no context)';
+      expect({ deny: d?.deny, line: context.includes(UPDATES_EVERY_TOOL), x: context.includes(notFound(X)) }).toEqual({ deny: undefined, line: true, x: true });
+    });
+
+    // ── T-07: the files of `-r` are read as the one of `pip install -r`
+
+    const REQ_COMMANDS = [
+      'pip download -r a.txt',
+      'pip wheel -r a.txt',
+      `pipx runpip ${T} install -r a.txt`,
+      `pipx inject ${T} -r a.txt`,
+      `pipx inject -fr a.txt ${T} ${P}`,
+    ];
+    it.each(REQ_COMMANDS)('T-07 `%s` DENIES the malicious package a.txt names, naming the file; the missing one is never refused', async (command) => {
+      writeFileSync(join(project, 'a.txt'), `${EVIL}==1.0.0\n${X}\n`);
+      const d = await decide(command, registry({ exists: [EVIL, P], malicious: [EVIL] }));
+      const deny = d?.deny ?? '(no deny)';
+      expect({ file: deny.includes('a.txt'), evil: deny.includes(EVIL), mal: deny.includes('MAL-2026-77'), refusesMissing: deny.includes(`'${X}'`) }).toEqual({
+        file: true,
+        evil: true,
+        mal: true,
+        refusesMissing: false,
+      });
+    });
+
+    it.each(REQ_COMMANDS)('T-07 `%s` with a.txt naming only a missing package warns about it and never denies', async (command) => {
+      writeFileSync(join(project, 'a.txt'), `${X}\n`);
+      const d = await decide(command, registry({ exists: [P] }));
+      expect({ deny: d?.deny, warns: (d?.context ?? '(no context)').includes(notFound(X)) }).toEqual({ deny: undefined, warns: true });
+    });
+
+    it('T-07 `pipx inject T -r n.txt`, with n.txt including `-r a.txt`, DENIES for the malicious package of a.txt: the reader follows the inner -r, which pipx does not', async () => {
+      writeFileSync(join(project, 'a.txt'), `${EVIL}==1.0.0\n`);
+      writeFileSync(join(project, 'n.txt'), '-r a.txt\n');
+      const d = await decide(`pipx inject ${T} -r n.txt`, registry({ exists: [EVIL], malicious: [EVIL] }));
+      const deny = d?.deny ?? '(no deny)';
+      expect({ evil: deny.includes(EVIL), mal: deny.includes('MAL-2026-77') }).toEqual({ evil: true, mal: true });
+    });
+
+    // ── T-05: protection — the reasons of today, written here, without a refusal
+
+    it.each<[command: string, reason: string]>([
+      [`uvx --from=${X} cmd --help`, allowlist('--from')],
+      [`uvx -w ${Y} ${X} --version`, allowlist('-w')],
+      [`uv tool run --with ${Y} ${X} --help`, allowlist('--with')],
+      [`uv tool install -q ${X} --with ${Y}`, allowlist('--with')],
+      [`uvx --with ${Y},${Z} ${X} --help`, "not a single plain install statement (',' outside quotes)"],
+      [`pipx run --spec=${X} cmd a`, allowlist('--spec')],
+      [`python3 -m pip install --dry-run -q ${X}`, allowlist('--dry-run')],
+      [`pip install --dry-run -q ${X}`, allowlist('--dry-run')],
+    ])('T-05 `%s` warns that the name was not found, for `%s`, and does not deny', async (command, reason) => {
+      const d = await decide(command, registry());
+      const context = d?.context ?? '(no context)';
+      expect({ deny: d?.deny, notFound: context.includes(notFound(X)), reason: context.includes(reason) }).toEqual({ deny: undefined, notFound: true, reason: true });
+    });
+
+    it('T-05 `pip install -r https://x.test/r.txt` says nothing about the file, as today', async () => {
+      const reg = registry();
+      expect(await decide('pip install -r https://x.test/r.txt', reg)).toBeNull();
+      expect(reg.calls).toEqual([]);
+    });
+
+    // ── T-08: protection — the decision's own cost, with `-r` files read once per command, is linear in the line
+
+    /** The cost of the cheapest of `runs` calls, in ms. */
+    async function cheapest(runs: number, run: () => Promise<unknown>): Promise<number> {
+      let best = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < runs; i += 1) {
+        const t0 = performance.now();
+        await run();
+        best = Math.min(best, performance.now() - t0);
+      }
+      return best;
+    }
+
+    it.each([
+      ['pip install -r a.txt;', 'pip install -r a.txt;'],
+      ['pip download -r a.txt;', 'pip download -r a.txt;'],
+    ])(
+      'T-08 the decision of `%s` repeated costs linear time: eight times the lines, well under 22.6 times the time',
+      async (_label, line) => {
+        writeFileSync(join(project, 'a.txt'), `${P}\n`);
+        const run = (n: number) => async (): Promise<unknown> => decide(line.repeat(n), registry({ exists: [P] }));
+        const base = await cheapest(2, run(100));
+        const large = await cheapest(1, run(800));
+        // Linear reads about 8, quadratic about 64: the geometric middle is 22.6.
+        expect(large / base, `800 lines cost ${large.toFixed(0)} ms against ${base.toFixed(0)} ms for 100`).toBeLessThan(22.6);
+      },
+      300_000,
+    );
+  });
+});

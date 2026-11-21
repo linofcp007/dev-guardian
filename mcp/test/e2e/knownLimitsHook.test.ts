@@ -561,3 +561,81 @@ describe('install-vet-over-ceiling-asks', () => {
     expect(given).toEqual(['ask']);
   });
 });
+
+// ───────────────── install-vet-python-tool-forms — what the Python forms that fetch a package and build it leave unverified
+
+describe('install-vet-python-tool-forms', () => {
+  const record = (id: string): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === id);
+  const commandOf = (e: { detector: string; input?: Record<string, unknown> }): string => (e.detector === 'hook' ? String(e.input?.['command']) : '');
+  const decisionOf = (e: { detector: string; expect: unknown }): unknown => (e.detector === 'hook' ? (e.expect as { decision?: unknown }).decision : undefined);
+  /** The records' examples as the commands and the decisions they state, in the order of the data file. */
+  const stated = (id: string): Array<{ command: string; decision: unknown }> =>
+    (record(id)?.examples ?? []).map((e) => ({ command: commandOf(e), decision: decisionOf(e) }));
+  const harnessed = (): Set<string> => new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+
+  describe('known limits', () => {
+    it('T-06 the record `install-python-tool-forms` exists in the area install-vetting and says what stays: the symbols and the measurements it names', () => {
+      const id = 'install-python-tool-forms';
+      const limit = record(id);
+      expect(limit, `the data file has no record ${id}`).toBeDefined();
+      expect(limit?.area).toBe('install-vetting');
+      const doc = (limit?.doc ?? '').replace(/\s+/g, ' ');
+      expect(doc).toMatch(/not measured|unmeasured/i);
+      for (const symbol of [
+        'sdist',
+        '--suffix',
+        'pipx reinstall',
+        'pipx runpip',
+        '--with-requirements',
+        '-r https://',
+        'upgrade-shared',
+        'reinstall-all',
+        'install-all',
+        'uv tool upgrade --all',
+        'pipx upgrade-all',
+      ]) {
+        expect({ symbol, named: doc.includes(symbol) }).toEqual({ symbol, named: true });
+      }
+    });
+
+    it('T-06 the record `install-python-tool-forms` has the five hook examples the dispatcher harness runs, each with the decision it states', () => {
+      const id = 'install-python-tool-forms';
+      expect(stated(id)).toEqual(
+        expect.arrayContaining([
+          { command: 'pipx upgrade-all', decision: 'warn' },
+          { command: 'py -m pip download dgprobe-zzq7731-named', decision: 'warn' },
+          { command: 'pipx runpip dgprobe-zzq7731-tool list', decision: 'none' },
+          { command: 'pipx upgrade-shared', decision: 'none' },
+          { command: 'pipx reinstall-all', decision: 'none' },
+        ]),
+      );
+      const run = harnessed();
+      for (const index of (record(id)?.examples ?? []).keys()) {
+        expect({ example: index + 1, harnessed: run.has(`${id} #${String(index + 1)}`) }).toEqual({ example: index + 1, harnessed: true });
+      }
+    });
+
+    it('T-06 the record `install-python-option-parsing` exists in the same area, with the two examples of the disagreements, which warn', () => {
+      const id = 'install-python-option-parsing';
+      const limit = record(id);
+      expect(limit, `the data file has no record ${id}`).toBeDefined();
+      expect(limit?.area).toBe('install-vetting');
+      expect(stated(id)).toEqual(
+        expect.arrayContaining([
+          { command: 'pipx upgrade --inst dgprobe-zzq7731-named', decision: 'warn' },
+          { command: 'pip download --no-bin :all: dgprobe-zzq7731-named', decision: 'warn' },
+        ]),
+      );
+      const run = harnessed();
+      for (const index of (limit?.examples ?? []).keys()) {
+        expect({ example: index + 1, harnessed: run.has(`${id} #${String(index + 1)}`) }).toEqual({ example: index + 1, harnessed: true });
+      }
+    });
+
+    it('T-06 the record `manifest-other-managers` names `pip download -r`', () => {
+      const limit = record('manifest-other-managers');
+      expect(limit, 'the data file has no record manifest-other-managers').toBeDefined();
+      expect(limit?.doc ?? '').toContain('pip download -r');
+    });
+  });
+});
