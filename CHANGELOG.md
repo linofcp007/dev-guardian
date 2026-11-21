@@ -196,6 +196,37 @@ version bump.
     only when its one URL is not on a local host and it has no sending flag (`-T`, `-d`, `-F`, `-K`, `--upload`,
     `--post`, `--data`, `--form`, `--json`, `--url-query`, `--variable`). An authenticating header name is read only up
     to 64 characters, which also keeps a hostile line of the header form linear.
+- **Starting an `llm_scan` plan no longer hides a hunt's confirmed findings, and its record is no longer the
+  project's latest scan.** Every plan wrote at its start a completed `llm_scan` record that said it had measured
+  everything. Measured on 3.14.1's sources, with a SAST scan of 3 findings and a complete hunt that confirmed 2 (5
+  open, `risk_score` 33): starting a verify-only plan, or a second hunt plan, with no task answered left 3 open,
+  `risk_score` 23, the two gone from `prioritize_findings` and the dashboard, and `diff_scans` (with and without
+  `scan_type`) gave them as `resolved: 2`. `report_export {}` exported the plan's empty record (`Findings (0)`, no LLM
+  verification section) and `set_baseline {}` pinned it; in a project whose only scan was scoped, the open set went
+  from coverage `none` to `full`. Nothing was deleted, but the hunt's record was no longer a source of the open set,
+  which retention never deletes: once enough newer `llm_scan` records existed, a retention run could have removed it.
+  The same runs, repeated on the fixed tree, keep 5 open and 33, and no `diff_scans` answer resolves anything. Now:
+  - A verify-only plan's record is never the latest scan nor a source of the open set (`report_export {}`,
+    `set_baseline {}`, `diff_scans` without ids, `risk_score`, `prioritize_findings`, the dashboard), and is still
+    reached by its `scan_id`. `diff_scans { scan_type: "llm_scan" }` compares the two newest hunts that ran — no
+    longer a hunt with a verify-only record. By ids, `diff_scans { from_scan_id: <hunt>, to_scan_id: <verify-only
+    record> }` gives the hunt's findings as `not_remeasured` instead of resolved; the other way round they are new,
+    as before.
+  - A hunt plan's record follows its hunt and cross-cutting tasks with a valid answer (one closed as not delivered,
+    or after three invalid answers, does not count): `none` while none has one — passed over and named, and
+    `set_baseline { scan_id }` refuses it —, `partial` while some lack one — the earlier hunts' confirmed findings
+    stay open, `not_remeasured` —, `full` when all have one; and never better than the plan's own report: verify
+    tasks still open, or an entry point set aside or not visited, keep it `partial`. Until a later hunt answers every
+    task, a hunt that was only started keeps `risk_score` and `prioritize_findings` at coverage `partial`, naming it,
+    and the findings of the next hunt compared with it are `not_previously_measured`, not new.
+  - No migration: a verify-only record of an earlier version is recognised as it is read; an earlier hunt record
+    of a plan still open is corrected the next time the plan is read or answered, and one of a plan no longer open
+    (abandoned, or complete after a limit) keeps saying `full`. A baseline already set on a verify-only record stays
+    and still reads, and `set_baseline { scan_id }` still accepts one. `health_status.last_scan` and
+    `guardian://scans/latest` still show a plan's record (the latest activity). See
+    [docs/llm-scan.md](docs/llm-scan.md#the-plans-scan-record).
+  - **For whoever upgrades:** a baseline set with `set_baseline {}`, or a report exported without `scan_id`, while a
+    plan existed may be that plan's empty record: check its scan type (`llm_scan`) and set or export it again.
 
 ## [3.14.1] - 2026-11-20
 
