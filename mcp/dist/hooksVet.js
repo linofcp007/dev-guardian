@@ -1772,14 +1772,20 @@ function cdOperand(args) {
 }
 
 // src/hooks/shell/effects.ts
-function withoutRedirectWords(words) {
+var NOT_A_WORD_PREFIX_OR_STREAMS = /^(?:\d*|&|\*)$/;
+function wordsWithoutRedirections(words) {
   const out = [];
   for (let i = 0; i < words.length; i += 1) {
     const word = words[i];
     if (word === void 0) continue;
     const r = parseRedirect(word);
-    if (r === null) out.push(word);
-    else if (r.inline === "") i += 1;
+    if (r === null) {
+      out.push(word);
+      continue;
+    }
+    const prefix = r.prefix.endsWith("&") ? r.prefix.slice(0, -1) : r.prefix;
+    if (!NOT_A_WORD_PREFIX_OR_STREAMS.test(prefix)) out.push({ value: prefix, quoted: word.quoted });
+    if (r.inline === "") i += 1;
   }
   return out;
 }
@@ -2394,14 +2400,20 @@ function blockCommentEnd(text, i) {
   return end < 0 ? text.length : end + 2;
 }
 var PLAIN_BRACED_VARIABLE = /^\$\{[\w:.?\\/-]*\}$/;
-function powershellAsPosix(text) {
+function powershellAsPosix(text, options = {}) {
   const seen = hereStrings();
+  let token = "";
+  let glued = null;
   const braces = [];
   let out = "";
   let i = 0;
   while (i < text.length) {
     const ch = text.charAt(i);
     const boundary = atBoundary(text, i);
+    if (boundary || UNICODE_SPACE.test(text.charAt(i - 1))) {
+      token = "";
+      glued = null;
+    }
     if (boundary && text.startsWith("<#", i)) {
       i = blockCommentEnd(text, i);
       out += " ";
@@ -2457,6 +2469,7 @@ function powershellAsPosix(text) {
         j += 1;
       }
       out += posixSingle(lit);
+      token += lit === "" ? '""' : lit;
       i = j + 1;
       continue;
     }
@@ -2495,7 +2508,11 @@ function powershellAsPosix(text) {
     }
     if (ch === "\\") out += "\\\\";
     else if (ch === "," || UNICODE_SPACE.test(ch)) out += " ";
-    else out += ch;
+    else if (options.literalGluedRedirects === true && (ch === "<" || ch === ">")) {
+      glued ??= !/^(?:\d*|\*|&)$/.test(token);
+      out += glued ? posixSingle(ch) : ch;
+    } else out += ch;
+    token += ch;
     i += 1;
   }
   return out;
@@ -2517,6 +2534,7 @@ var POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz
 var ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
 var UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 var UNMEASURED = /* @__PURE__ */ new Set(["pipx", "composer", "dotnet"]);
+var LAUNCHER_NAME_AT = "a name ending in @ under a launcher was not measured";
 var UNMEASURED_ARCHIVE = "a name that ends like an archive file \u2014 this package manager was not measured, so whether it reads the word as a file or as a registry name is not known";
 function readsFileValue(manager, value) {
   return (manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
@@ -2617,6 +2635,7 @@ function parseNpm(raw, manager, alias = false) {
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
+  if (range === "") range = void 0;
   if (range !== void 0) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);
@@ -3402,6 +3421,33 @@ var LAUNCH_FLAGS = {
     noFetchFlags: set("--no", "--offline"),
     boolWord: { except: LOGLEVEL_FLAGS }
   },
+  // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
+  // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
+  // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+  "npm-init": {
+    value: set(...NPM_TABLE.value, "--init-author-name", "--init-author-url", "--init-license", "--init-module", "--init-type", "--init-version"),
+    bool: set(...NPM_TABLE.bool, "--init-private", "--no-workspaces-update"),
+    registry: NPM_TABLE.registry,
+    dir: NPM_TABLE.dir,
+    workspace: NPM_TABLE.workspace,
+    boolWord: { except: LOGLEVEL_FLAGS }
+  },
+  // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
+  "yarn-create": {
+    value: set("--package", "-p"),
+    bool: set("--quiet", "-q"),
+    registry: set(),
+    packageFlags: set("--package", "-p")
+  },
+  // `pnpm create` (pnpm 11.24.0): the flags of `pnpm dlx` that are no package flags; no flag was measured with it.
+  "pnpm-create": {
+    value: set("--allow-build", "--registry", "--dir", "-C", "--reporter"),
+    bool: set("--silent", "-s", "--quiet", "--verbose"),
+    registry: set("--registry"),
+    dir: set("--dir", "-C")
+  },
+  // `bun create` / `bun c`: no flag was measured.
+  "bun-create": { value: set(), bool: set(), registry: set() },
   "pnpm-dlx": {
     value: set("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
     // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
@@ -3644,15 +3690,13 @@ function corepackManager(word) {
   const at = word.indexOf("@");
   return COREPACK_MANAGERS.get(at < 0 ? word : word.slice(0, at));
 }
-var NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall"]);
+var NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "install-test", "it"]);
 var NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
   "ci",
   "clean-install",
   "ic",
   "install-clean",
   "isntall-clean",
-  "install-test",
-  "it",
   "install-ci-test",
   "cit",
   "clean-install-test",
@@ -3668,6 +3712,8 @@ var PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
 var YARN_PRINTS = /* @__PURE__ */ new Set(["--version", "-v", "-V", "--help", "-h"]);
 var REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement", "--requirements"]);
 var isGlobalFlag = (f) => (f.flag === "-g" || f.flag === "--global") && f.value !== "false" || f.flag === "--location" && f.value === "global";
+var GLOBAL_FLAG_WORD = /^(?:--global(?:=.*)?|--location(?:=.*)?|-[A-Za-z]*g[A-Za-z]*)$/;
+var hasGlobalFlagWord = (pre, args) => [...beforeDoubleDash(pre), ...beforeDoubleDash(args)].some((w) => GLOBAL_FLAG_WORD.test(w.value));
 var beforeDoubleDash = (words) => {
   const at = words.findIndex((w) => w.value === "--");
   return at < 0 ? [...words] : words.slice(0, at);
@@ -3716,11 +3762,16 @@ function scanPositional(words, from, table, subcommands) {
   }
   return { at: -1, candidate: false };
 }
+var NPM_INITIALIZER = /* @__PURE__ */ new Set(["create", "init", "innit"]);
+var CREATE_ONLY = /* @__PURE__ */ new Set(["create"]);
+var BUN_INITIALIZER = /* @__PURE__ */ new Set(["create", "c"]);
+var INITIALIZER_VERBS = { npm: NPM_INITIALIZER, pnpm: CREATE_ONLY, yarn: CREATE_ONLY, bun: BUN_INITIALIZER };
+var INITIALIZER_FLAGS = { npm: "npm-init", pnpm: "pnpm-create", yarn: "yarn-create", bun: "bun-create" };
 var SUBCOMMANDS = {
-  npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x"]),
-  pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE]),
-  bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x"]),
-  yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE]),
+  npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x", ...NPM_INITIALIZER]),
+  pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
+  bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x", ...BUN_INITIALIZER]),
+  yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "workspaces", "dlx", "dedupe", "up", ...YARN_UPDATE, ...CREATE_ONLY]),
   pip: /* @__PURE__ */ new Set(["install"]),
   uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
   poetry: /* @__PURE__ */ new Set(["add"]),
@@ -3729,11 +3780,38 @@ var SUBCOMMANDS = {
 };
 var PIPX_SUBCOMMANDS = /* @__PURE__ */ new Set(["install", "run"]);
 var ADD_ONLY = /* @__PURE__ */ new Set(["add"]);
+var ADD_OR_UP = /* @__PURE__ */ new Set(["add", "up"]);
+var ADD_OR_UPGRADE = /* @__PURE__ */ new Set(["add", "upgrade"]);
+var FOREACH_ONLY = /* @__PURE__ */ new Set(["foreach"]);
+var FOREACH_UNKNOWN_FLAG = "a flag of yarn workspaces foreach the hook does not know";
+var FOREACH_VALUE = /* @__PURE__ */ new Set(["--from", "--include", "--exclude", "-j", "--jobs"]);
+var FOREACH_BOOL = /* @__PURE__ */ new Set(["-A", "--all", "-R", "--recursive", "-W", "--worktree", "-v", "--verbose", "-p", "--parallel", "-i", "--interlaced", "-t", "--topological", "--topological-dev", "--no-private", "-n", "--dry-run"]);
+function foreachVerb(words, from) {
+  let unknown2 = false;
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? "";
+    if (!v.startsWith("-") || v.length === 1) return ADD_OR_UP.has(v) ? { at: i, unknown: unknown2 } : { at: -1, unknown: unknown2 };
+    const flag = v.includes("=") ? v.slice(0, v.indexOf("=")) : v;
+    if (FOREACH_VALUE.has(flag)) {
+      if (!v.includes("=")) i += 1;
+    } else if (!FOREACH_BOOL.has(flag)) unknown2 = true;
+  }
+  return { at: -1, unknown: unknown2 };
+}
+function yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag) {
+  const verb = words[at]?.value;
+  if (verb === "up") {
+    const update = scanPositional(words, at + 1, table).at >= 0;
+    return tag({ manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "always", names: "always", ...update ? { update: true } : {} });
+  }
+  if (verb !== "add") return null;
+  return tag({ manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "bare" });
+}
 var INSTALL_ONLY = /* @__PURE__ */ new Set(["install"]);
 var PACKAGE_ONLY = /* @__PURE__ */ new Set(["package"]);
 function detect(input) {
   let words = input;
-  const nextPositional = (ws, from, table2, subcommands) => scanPositional(ws, from, table2, subcommands).at;
+  const nextPositional = (ws, from, table2, subcommands2) => scanPositional(ws, from, table2, subcommands2).at;
   const start = commandStart(words);
   const headWord = words[start];
   if (headWord === void 0) return null;
@@ -3754,20 +3832,23 @@ function detect(input) {
   if (/^pip[0-9.]*$/.test(head)) head = "pip";
   if (head === "composer.phar") head = "composer";
   if (head === "yarnpkg") head = "yarn";
+  let viaCorepack = false;
   if (head === "corepack") {
-    const first = words[start + 1]?.value;
-    const via = corepackManager(first);
+    const first2 = words[start + 1]?.value;
+    const via = corepackManager(first2);
     if (via !== void 0) {
       head = via;
+      viaCorepack = true;
       i = start + 2;
-    } else if (first === "up" || first === "use" && corepackManager(words[start + 2]?.value) !== void 0) {
+    } else if (first2 === "up" || first2 === "use" && corepackManager(words[start + 2]?.value) !== void 0) {
       return { manager: "npm", ecosystem: "npm", args: [], pre: [], uncertain: [], manifest: "always" };
     } else return null;
   }
   const rest = words.slice(i);
-  if (head === "npx") return launcher("npx", "npm", rest, [], { style: "run", flags: "npx", localFirst: true });
-  if (head === "pnpx") return launcher("pnpm", "npm", rest, [], { style: "run", flags: "pnpm-dlx" });
-  if (head === "bunx") return launcher("bun", "npm", rest, [], { style: "run", flags: "bunx", localFirst: true });
+  const corepackMark = viaCorepack ? { viaCorepack: true } : {};
+  if (head === "npx") return launcher("npx", "npm", rest, [], { style: "run", flags: "npx", localFirst: true, spelling: "npx", ...corepackMark });
+  if (head === "pnpx") return launcher("pnpm", "npm", rest, [], { style: "run", flags: "pnpm-dlx", spelling: "pnpx", ...corepackMark });
+  if (head === "bunx") return launcher("bun", "npm", rest, [], { style: "run", flags: "bunx", localFirst: true, spelling: "bunx", ...corepackMark });
   if (head === "uvx") return launcher("uv", "pypi", rest, [], { style: "run", flags: "uvx" });
   if (head === "pipx") {
     const sub2 = nextPositional(words, i, LAUNCH_FLAGS["pipx-run"] ?? FLAGS["pip"] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
@@ -3778,7 +3859,16 @@ function detect(input) {
   }
   const table = FLAGS[head];
   if (table === void 0) return null;
-  let sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
+  const initVerbs = INITIALIZER_VERBS[head];
+  const subcommands = SUBCOMMANDS[head];
+  let first = scanPositional(words, i, table, subcommands);
+  while (initVerbs !== void 0 && first.at >= 0 && first.candidate && initVerbs.has(words[first.at]?.value ?? "")) {
+    const following = scanPositional(words, first.at + 1, table, subcommands).at;
+    const followingWord = following < 0 ? void 0 : words[following]?.value ?? "";
+    if (followingWord !== void 0 && !(subcommands?.has(followingWord) === true && !initVerbs.has(followingWord))) break;
+    first = scanPositional(words, first.at + 1, table, subcommands);
+  }
+  let sub = first.at;
   let productionWord;
   const wordAt = words[sub];
   if (head === "yarn" && wordAt !== void 0 && isBoolWord(wordAt.value) && words[sub - 1]?.value === "--production") {
@@ -3797,11 +3887,12 @@ function detect(input) {
   const after = words.slice(sub + 1);
   const before = words.slice(i, sub);
   if (head === "npm" && (subName === "exec" || subName === "x")) {
-    return launcher("npm", "npm", after, before, { style: "run", flags: "npm-exec", localFirst: true });
+    return launcher("npm", "npm", after, before, { style: "run", flags: "npm-exec", localFirst: true, spelling: `npm ${subName}`, ...corepackMark });
   }
-  if (head === "pnpm" && subName === "dlx") return launcher("pnpm", "npm", after, before, { style: "run", flags: "pnpm-dlx" });
-  if (head === "yarn" && subName === "dlx") return launcher("yarn", "npm", after, before, { style: "run", flags: "yarn-dlx" });
-  if (head === "bun" && subName === "x") return launcher("bun", "npm", after, before, { style: "run", flags: "bunx", localFirst: true });
+  if (head === "pnpm" && subName === "dlx") return launcher("pnpm", "npm", after, before, { style: "run", flags: "pnpm-dlx", spelling: "pnpm dlx", ...corepackMark });
+  if (head === "yarn" && subName === "dlx") return launcher("yarn", "npm", after, before, { style: "run", flags: "yarn-dlx", spelling: "yarn dlx", ...corepackMark });
+  if (head === "bun" && subName === "x") return launcher("bun", "npm", after, before, { style: "run", flags: "bunx", localFirst: true, spelling: "bun x", ...corepackMark });
+  if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === "uv" && subName === "tool") {
     const toolTable = LAUNCH_FLAGS["uvx"] ?? table;
     const verb = nextPositional(words, sub + 1, toolTable, PIPX_SUBCOMMANDS);
@@ -3819,7 +3910,7 @@ function detect(input) {
       if (NPM_MANIFEST_INSTALL.has(subWord) || NPM_MAINTENANCE.has(subWord)) {
         return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
       }
-      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
+      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true, names: "global-word" };
       if (subWord === "audit" && words[nextPositional(words, sub + 1, table)]?.value === "fix") {
         return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
       }
@@ -3828,10 +3919,10 @@ function detect(input) {
       if (subWord === "add") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
       if (subWord === "dedupe") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" };
-      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
+      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true, names: "global-word" };
       return null;
     case "bun": {
-      if (subWord === "update") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true };
+      if (subWord === "update") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true, names: "global-word" };
       if (!BUN_ADD.has(subWord)) return null;
       return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
     }
@@ -3840,18 +3931,34 @@ function detect(input) {
       if (YARN_UPDATE.has(subWord)) return tag({ manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true });
       if (subWord === "up") {
         const update = nextPositional(words, sub + 1, table) >= 0;
-        return tag({ manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", ...update ? { update: true } : {} });
+        return tag({ manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", names: "always", ...update ? { update: true } : {} });
       }
       let at = sub;
       const uncertain = [];
-      if (subWord === "global") at = nextPositional(words, sub + 1, table, ADD_ONLY);
+      if (subWord === "workspaces") {
+        const foreach = nextPositional(words, sub + 1, table, FOREACH_ONLY);
+        if (foreach < 0 || words[foreach]?.value !== "foreach") return null;
+        const verb = foreachVerb(words, foreach + 1);
+        if (verb.at < 0) return null;
+        uncertain.push("workspace context (yarn workspaces)");
+        if (verb.unknown) uncertain.push(FOREACH_UNKNOWN_FLAG);
+        return yarnWorkspaceVerb(words, verb.at, table, head, pre, uncertain, tag);
+      }
+      if (subWord === "global") at = nextPositional(words, sub + 1, table, ADD_OR_UPGRADE);
       else if (subWord === "workspace") {
         const ws = nextPositional(words, sub + 1, table);
-        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table, ADD_ONLY);
+        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table, ADD_OR_UP);
         uncertain.push("workspace context (yarn workspace)");
       }
-      if (at < 0 || words[at]?.value !== "add") return null;
-      return tag({ manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "bare", ...subWord === "global" ? { global: true } : {} });
+      if (at < 0) return null;
+      if (subWord === "global" && words[at]?.value === "upgrade") {
+        return tag({ manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, global: true, names: "always" });
+      }
+      if (subWord === "global") {
+        if (words[at]?.value !== "add") return null;
+        return tag({ manager: head, ecosystem: "npm", args: words.slice(at + 1), pre, uncertain, manifest: "bare", global: true });
+      }
+      return yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag);
     }
     case "pip":
       return subWord === "install" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -3898,17 +4005,72 @@ function detect(input) {
   }
 }
 var COMPOSER_CONSTRAINT = /^(?:[\^~<>=!*]|v?\d|dev-|@)/;
+function launchEnd(args, table) {
+  let scan = scanPositional(args, 0, table);
+  let end = scan.at;
+  while (scan.at >= 0 && scan.candidate) {
+    scan = scanPositional(args, scan.at + 1, table);
+    if (scan.at >= 0) end = scan.at;
+  }
+  return end;
+}
+function isInitializerName(word, manager) {
+  const scoped = word.startsWith("@");
+  const versioned = word.indexOf("@", scoped ? 1 : 0) > 0;
+  if (notAPackage(word, versioned ? null : fileEndings(manager, scoped)) !== null) return false;
+  return "name" in parseNpm(initializerNames(word, manager).names[0] ?? word, manager);
+}
+function initializerLaunch(head, after, before) {
+  const flags = INITIALIZER_FLAGS[head];
+  const table = flags === void 0 ? void 0 : LAUNCH_FLAGS[flags];
+  if (flags === void 0 || table === void 0) return null;
+  const end = launchEnd(after, table);
+  if (end < 0) return null;
+  if (!walk(after.slice(0, end + 1), table).positionals.some((p) => isInitializerName(p.value, head))) return null;
+  return launcher(head, "npm", after, before, { style: "run", flags, initializer: true });
+}
+function initializerNames(word, manager) {
+  const scoped = word.startsWith("@");
+  const at = word.indexOf("@", scoped ? 1 : 0);
+  const bare = at > 0 ? word.slice(0, at) : word;
+  const version = at > 0 ? word.slice(at) : "";
+  const unmeasured = (names) => ({
+    names,
+    why: `\`${word}\`${TWO_READINGS} \u2014 with the \`create-\` prefix added again, or as written (not measured) \u2014 both are looked up`
+  });
+  if (scoped) {
+    const slash = bare.indexOf("/");
+    if (slash < 0) {
+      const names = [`${bare}/create${version}`];
+      if (manager !== "yarn" || version === "") return { names };
+      return {
+        names,
+        why: `\`${word}\`${TWO_READINGS} \u2014 Yarn 3 and 4 ask the registry for \`${bare}/create\`, Yarn 1 does not ask it \u2014 \`${bare}/create\` is looked up`
+      };
+    }
+    const scope = bare.slice(0, slash);
+    const rest = bare.slice(slash + 1);
+    if (rest === "create" || rest.startsWith("create-")) return unmeasured([`${scope}/create-${rest}${version}`, `${bare}${version}`]);
+    return { names: [`${scope}/create-${rest}${version}`] };
+  }
+  if (bare === "create") return unmeasured([`create-create${version}`, `create${version}`]);
+  if (bare.startsWith("create-")) {
+    if (manager === "pnpm") return { names: [`${bare}${version}`] };
+    if (manager === "yarn") {
+      return {
+        names: [`create-${bare}${version}`, `${bare}${version}`],
+        why: `\`${word}\`${TWO_READINGS} \u2014 Yarn 1 and 3 ask the registry for \`create-${bare}\`, Yarn 4 for \`${bare}\` \u2014 both are looked up`
+      };
+    }
+  }
+  return { names: [`create-${bare}${version}`] };
+}
 function collectLaunch(d, launch, context) {
   const table = LAUNCH_FLAGS[launch.flags] ?? { value: set(), bool: set(), registry: set() };
   const pre = walk(d.pre, table);
   let body = d.args;
   if (launch.style === "run") {
-    let scan = scanPositional(d.args, 0, table);
-    let end = scan.at;
-    while (scan.at >= 0 && scan.candidate) {
-      scan = scanPositional(d.args, scan.at + 1, table);
-      if (scan.at >= 0) end = scan.at;
-    }
+    const end = launchEnd(d.args, table);
     if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
@@ -3917,9 +4079,22 @@ function collectLaunch(d, launch, context) {
   const wordFlags = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value) && f.eq !== true);
   const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
-  const limited = limitCandidates(w.positionals);
+  const initializer = launch.initializer === true;
+  const limited = limitCandidates(initializer ? w.positionals.filter((p) => isInitializerName(p.value, d.manager)) : w.positionals);
+  const written = /* @__PURE__ */ new Map();
+  const initWhy = [];
   let byPackageFlag = false;
-  if (!has2(table.noFetchFlags)) {
+  if (initializer) {
+    raws.push(...values(table.packageFlags));
+    for (const p of limited.kept) {
+      const read2 = initializerNames(p.value, d.manager);
+      for (const name of read2.names) {
+        raws.push(name);
+        written.set(name, p.value);
+      }
+      if (read2.why !== void 0) initWhy.push(read2.why);
+    }
+  } else if (!has2(table.noFetchFlags)) {
     const named = values(table.packageFlags);
     if (named.length > 0) {
       raws.push(...named);
@@ -3936,20 +4111,24 @@ function collectLaunch(d, launch, context) {
   const unsure = [...wordFlags(table.noFetchFlags), ...wordFlags(table.shellFlags)].map((f) => bothWaysReason(f.value ?? "", f.flag));
   const bothPairs = [];
   for (const raw of raws) {
-    const spec2 = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    const parsed = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    const asWritten = written.get(raw) ?? raw;
+    const spec2 = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
     if ("name" in spec2) {
       const read2 = d.ecosystem === "npm" ? npmReadings(spec2, d.manager) : { packages: [spec2] };
       for (const each of read2.packages) {
         packages.push(each);
-        if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(each);
+        if (!byPackageFlag && candidateRaws.has(asWritten) && !certainRaws.has(asWritten)) candidates.push(each);
       }
       if ("pair" in read2 && read2.pair !== void 0) bothPairs.push(read2.pair);
       const why = unmeasuredReason(d.manager, spec2);
       if (why !== void 0) unsure.push(why);
+      if (d.ecosystem === "npm" && asWritten.endsWith("@")) unsure.push(LAUNCHER_NAME_AT);
     } else skipped.push(spec2);
   }
   const bothWhy = bothReadings(bothPairs);
   if (bothWhy !== void 0) unsure.push(bothWhy);
+  unsure.push(...initWhy);
   const out = {
     ecosystem: d.ecosystem,
     manager: d.manager,
@@ -3975,7 +4154,7 @@ function collect(d, context) {
   const walked = walk(d.args, flagTable);
   const { skipped, customRegistry, uncertain, registries } = walked;
   const limited = limitCandidates(walked.positionals);
-  const positionals = d.manifest === "always" ? [] : limited.kept;
+  const positionals = d.manifest === "always" || d.names !== void 0 ? [] : limited.kept;
   const allFlags = [...preWalk.flags, ...walked.flags];
   const packages = [];
   const out = {
@@ -3988,7 +4167,7 @@ function collect(d, context) {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== void 0) out.customRegistry = registry;
-  if (limited.dropped > 0 && d.manifest !== "always") out.candidatesDropped = limited.dropped;
+  if (limited.dropped > 0 && d.manifest !== "always" && d.names === void 0) out.candidatesDropped = limited.dropped;
   const candidatePackages = [];
   const bothPairs = [];
   let lastComposer;
@@ -4041,6 +4220,15 @@ function collect(d, context) {
   }
   if (allFlags.some((f) => flagTable.dir?.has(f.flag) === true)) out.prefixed = true;
   const knownFlagsOnly = preWalk.unknownFlags + walked.unknownFlags === 0;
+  if (d.names === "always" || d.names === "global-word" && hasGlobalFlagWord(d.pre, d.args)) {
+    out.updateNames = [];
+    for (const p of limited.kept) {
+      const spec2 = parseNpm(p.value, d.manager);
+      if ("name" in spec2) out.updateNames.push(spec2);
+      else skipped.push(spec2);
+    }
+    if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
+  }
   if (d.global === true || knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args)) out.global = true;
   if (d.manager === "pip" || d.manager === "uv-pip") {
     const files = walked.flags.flatMap((f) => REQUIREMENT_FLAGS.has(f.flag) && f.value !== void 0 && f.value !== "" ? [f.value] : []);
@@ -4061,7 +4249,7 @@ function flagValue(words, names) {
   }
   return void 0;
 }
-var POWERSHELL_READING = "found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space) \u2014 vetted for malicious versions only";
+var POWERSHELL_READING = "found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space, a `>` or `<` glued to a word) \u2014 vetted for malicious versions only";
 function packageKey(p) {
   return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ""}`;
 }
@@ -4074,7 +4262,7 @@ function parseInstallCommands(command, opts = {}) {
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === void 0) continue;
+      if (packages.length === 0 && c.manifest === void 0 && c.updateNames === void 0) continue;
       for (const p of packages) seen.add(packageKey(p));
       const unknownDir = moved2 && (c.localFirst === true || c.manifest !== void 0);
       out.push({ ...c, packages, ...unknownDir ? { workdir: null } : {} });
@@ -4092,20 +4280,40 @@ function readingsOf(command, shell, forced, cdpath) {
   const text = stripComments(command);
   const out = parseReading(text, forced, cdpath);
   if (shell !== "powershell") return out;
-  const asPowerShell = powershellAsPosix(text);
-  if (asPowerShell === text) return out;
+  const asPowerShell = powershellAsPosix(text, { literalGluedRedirects: true });
+  if (asPowerShell === text) return withoutRanges(out);
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const seenManifests = new Set(out.map(manifestKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     const newManifest = c.manifest !== void 0 && !seenManifests.has(manifestKey(c));
-    if (packages.length === 0 && !newManifest) continue;
+    if (packages.length === 0 && !newManifest && c.updateNames === void 0) continue;
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
     const { manifest: _same, ...withoutManifest } = c;
     out.push({ ...newManifest ? c : withoutManifest, packages, skipped: [] });
   }
-  return out;
+  return withoutRanges(out);
+}
+var NPM_FAMILY = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "bun"]);
+function withoutRanges(commands) {
+  const seen = new Set(commands.flatMap((c) => c.packages.map(packageKey)));
+  const extra = [];
+  for (const c of commands) {
+    if (c.ecosystem !== "npm" || !NPM_FAMILY.has(c.manager)) continue;
+    const packages = [];
+    for (const p of c.packages) {
+      if (p.range === void 0 || !/[<>]/.test(p.range)) continue;
+      const bare = { ecosystem: p.ecosystem, name: p.name, raw: p.name };
+      if (seen.has(packageKey(bare))) continue;
+      seen.add(packageKey(bare));
+      packages.push(bare);
+    }
+    if (packages.length === 0) continue;
+    const { manifest: _manifest, updateNames: _names, ...rest } = c;
+    extra.push({ ...rest, packages, skipped: [] });
+  }
+  return [...commands, ...extra];
 }
 function movesDirectory(text) {
   try {
@@ -4113,6 +4321,80 @@ function movesDirectory(text) {
   } catch {
     return true;
   }
+}
+var MEASURED_LAUNCHES = [
+  { spelling: "npx", launched: "pnpm", flags: ["-y"], dash: "none" },
+  { spelling: "npx", launched: "yarn", flags: ["-y"], dash: "none" },
+  { spelling: "npx", launched: "corepack", flags: ["-y"], dash: "none", behindCorepack: "yarn" },
+  { spelling: "npm exec", launched: "pnpm", flags: [], dash: "before" },
+  { spelling: "npm exec", launched: "corepack", flags: [], dash: "after", behindCorepack: "yarn" },
+  { spelling: "pnpm dlx", launched: "yarn", flags: [], dash: "none", prefix: true },
+  { spelling: "yarn dlx", launched: "pnpm", flags: [], dash: "none", prefix: true },
+  { spelling: "bunx", launched: "pnpm", flags: [], dash: "none" }
+];
+var MEASURED_VERB = "add";
+var NPM_LAUNCH_TABLES = /* @__PURE__ */ new Set(["npx", "npm-exec", "pnpm-dlx", "yarn-dlx", "bunx"]);
+var LAUNCHED_MANAGERS = /* @__PURE__ */ new Set(["npm", "pnpm", "yarn", "yarnpkg", "bun", "corepack"]);
+var MOVING_FLAGS = ["--prefix", "-C", "--dir", "--cwd", "-w", "--workspace", "--workspaces", "--filter", "-F"];
+function unmeasuredLaunch(why) {
+  return `a package manager run by a launcher \u2014 this form was not measured (${why})`;
+}
+function unmeasuredForm(launch, launched, ownFlags, dash, inner) {
+  const spelling = launch.spelling ?? "";
+  const ofSpelling = MEASURED_LAUNCHES.filter((m2) => m2.spelling === spelling);
+  if (ofSpelling.length === 0) return unmeasuredLaunch(`the launcher's spelling: ${spelling}`);
+  const m = ofSpelling.find((each) => each.launched === launched);
+  if (m === void 0 || launch.viaCorepack === true && m.prefix !== true) return unmeasuredLaunch(`the pair: ${spelling} ${launched}`);
+  const stray = ownFlags.find((f) => !m.flags.includes(f));
+  if (stray !== void 0) return unmeasuredLaunch(`a flag of the launcher: ${stray}`);
+  const placed = dash.before ? dash.after ? "both" : "before" : dash.after ? "after" : "none";
+  if (placed !== m.dash) return unmeasuredLaunch(`a flag of the launcher: the \`--\` is ${placed === "none" ? "missing" : "not where it was measured"}`);
+  if (m.behindCorepack !== void 0 && inner[0] !== m.behindCorepack) return unmeasuredLaunch(`the pair: ${spelling} ${launched} ${inner[0] ?? ""}`);
+  const verb = inner[m.behindCorepack === void 0 ? 0 : 1];
+  if (verb !== MEASURED_VERB) return unmeasuredLaunch(`the inner verb: ${verb ?? "none"}`);
+  return void 0;
+}
+function readLaunchedManager(d, context, notConfident) {
+  const launch = d.launch;
+  if (launch === void 0 || launch.style !== "run" || launch.initializer === true || d.ecosystem !== "npm" || !NPM_LAUNCH_TABLES.has(launch.flags)) {
+    return void 0;
+  }
+  const table = LAUNCH_FLAGS[launch.flags];
+  if (table === void 0) return void 0;
+  const found = scanPositional(d.args, 0, table);
+  if (found.at < 0 || found.candidate) return void 0;
+  const launchedWord = d.args[found.at];
+  if (launchedWord === void 0) return void 0;
+  const before = [...d.pre, ...d.args.slice(0, found.at)];
+  if (before.some((w) => table.shellFlags?.has(w.value) === true)) return void 0;
+  const spec2 = parseNpm(launchedWord.value, d.manager);
+  if (!("name" in spec2) || !LAUNCHED_MANAGERS.has(spec2.name)) return void 0;
+  const dash = { before: before.some((w) => w.value === "--"), after: d.args[found.at + 1]?.value === "--" };
+  const words = d.args.slice(found.at + (dash.after ? 2 : 1));
+  const head = { ...launchedWord, value: spec2.name };
+  const innerDetected = detect([head, ...words]);
+  if (innerDetected === null) return void 0;
+  const c = collect(innerDetected, context);
+  const moving = /* @__PURE__ */ new Set([...MOVING_FLAGS, ...table.dir ?? [], ...table.workspace ?? [], ...FLAGS[d.manager]?.dir ?? [], ...FLAGS[d.manager]?.workspace ?? []]);
+  const named = (w) => {
+    const eq2 = w.value.indexOf("=");
+    return moving.has(eq2 > 0 ? w.value.slice(0, eq2) : w.value);
+  };
+  if (before.some(named)) c.prefixed = true;
+  if (launch.flags === "npm-exec" && !dash.before && !dash.after && c.global === true) {
+    delete c.global;
+    if (innerDetected.manifest !== void 0) {
+      c.manifest = { kind: "package-json" };
+      if (innerDetected.update === true) c.update = true;
+    }
+  }
+  const ownFlags = before.filter((w) => w.value !== "--").map((w) => w.value);
+  const innerWords = words.map((w) => w.value);
+  const unmeasured = unmeasuredForm(launch, spec2.name, ownFlags, dash, innerWords);
+  const shape = notConfident ?? unmeasured ?? confidentWords(spec2.name === "corepack" ? ["corepack", ...innerWords] : [spec2.name, ...innerWords]);
+  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
+  c.uncertain = shape === null ? keep : [.../* @__PURE__ */ new Set([shape, ...c.uncertain])];
+  return c;
 }
 function parseReading(text, forced, cdpath) {
   const out = [];
@@ -4128,18 +4410,27 @@ function parseReading(text, forced, cdpath) {
   let dirChanged = false;
   split.statements.forEach((statement, s) => {
     statement.commands.forEach((words, w) => {
-      const d = detect(withoutRedirectWords(words));
+      const d = detect(wordsWithoutRedirections(words));
       if (d !== null) {
         const context = [];
         if (envChange) context.push("inline environment assignment in the command (it can redirect the registry)");
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
-        if (runsElsewhere(words)) c.workdir = null;
-        else if (sure === null || sure.length > 0) c.workdir = sure;
+        const elsewhere = runsElsewhere(words);
+        const place = (command) => {
+          if (elsewhere) command.workdir = null;
+          else if (sure === null || sure.length > 0) command.workdir = sure;
+        };
+        place(c);
         out.push(c);
+        const inner = readLaunchedManager(d, context, notConfident);
+        if (inner !== void 0) {
+          place(inner);
+          out.push(inner);
+        }
       }
       if (changesDirectory(words)) dirChanged = true;
     });
@@ -4343,6 +4634,10 @@ var ALLOW = {
   // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
   "npm-exec": { bool: set("-y", "--yes", "-q", "--quiet", "--silent", "--ignore-scripts"), value: set() },
   "pnpm-dlx": { bool: set("--silent", "-s"), value: set() },
+  // The initializers (measured 2026-11-20): consent and verbosity only; pnpm none, bun has no entry (it never denies).
+  "npm-init": { bool: set("-y", "--yes", "-q", "--quiet", "--silent"), value: set() },
+  "yarn-create": { bool: set("-q", "--quiet"), value: set() },
+  "pnpm-create": { bool: set(), value: set() },
   "yarn-dlx": { bool: set("-q", "--quiet"), value: set() },
   bunx: { bool: set("--bun", "--silent", "--verbose"), value: set() },
   uvx: { bool: set("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set() },
@@ -4351,6 +4646,7 @@ var ALLOW = {
   "pipx-run": { bool: set("-q", "--quiet", "-v", "--verbose", "--no-cache"), value: set() }
 };
 var NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\],]/;
+var BUN_TEMPLATE_REASON = "`bun create` uses a template of that name from a `.bun-create` folder when there is one, which was not looked for";
 function notSingle(why) {
   return `not a single plain install statement (${why})`;
 }
@@ -4394,6 +4690,9 @@ function confidentShape(text) {
   }
   if (quote !== null) return notSingle("unterminated quote");
   if (has2) words.push(cur);
+  return confidentWords(words);
+}
+function confidentWords(words) {
   const viaCorepack = words[0] === "corepack" ? corepackManager(words[1]) : void 0;
   const [named, ...rest] = viaCorepack === void 0 ? words : [viaCorepack, ...words.slice(2)];
   const tool = named === "yarnpkg" ? "yarn" : named;
@@ -4421,6 +4720,10 @@ function confidentShape(text) {
         [key, args, launch] = ["npm-exec", rest.slice(1), true];
         break;
       }
+      if (NPM_INITIALIZER.has(at(0))) {
+        [key, args, launch] = ["npm-init", rest.slice(1), true];
+        break;
+      }
       if (!NPM_INSTALL.has(at(0))) return notPlain(`'npm ${at(0)}'`);
       [key, args] = ["npm", rest.slice(1)];
       break;
@@ -4428,6 +4731,10 @@ function confidentShape(text) {
     case "yarn":
       if (at(0) === "dlx") {
         [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
+        break;
+      }
+      if (at(0) === "create") {
+        [key, args, launch] = [`${tool}-create`, rest.slice(1), true];
         break;
       }
       if (at(0) !== "add" && !(tool === "pnpm" && PNPM_INSTALL.has(at(0)))) return notPlain(`'${tool} ${at(0)}'`);
@@ -4438,6 +4745,7 @@ function confidentShape(text) {
         [key, args, launch] = ["bunx", rest.slice(1), true];
         break;
       }
+      if (BUN_INITIALIZER.has(at(0))) return BUN_TEMPLATE_REASON;
       if (!BUN_ADD.has(at(0))) return notPlain(`'bun ${at(0)}'`);
       [key, args] = ["bun", rest.slice(1)];
       break;
@@ -4642,28 +4950,30 @@ function npmDependency(key, value, manager) {
 function readNpmManifest(dir, manager = "npm") {
   const file = "package.json";
   const read2 = readManifestText(resolve2(dir, file), dir);
-  if (read2.status === "absent") return { file, status: "absent", packages: [], registries: [] };
-  if (read2.status === "unreadable") return { file, status: "unreadable", packages: [], registries: [], reason: read2.reason };
+  if (read2.status === "absent") return { file, status: "absent", packages: [], names: [], registries: [] };
+  if (read2.status === "unreadable") return { file, status: "unreadable", packages: [], names: [], registries: [], reason: read2.reason };
   let manifest;
   try {
     manifest = JSON.parse(read2.text);
   } catch {
-    return { file, status: "unreadable", packages: [], registries: [], reason: REASON.notJson };
+    return { file, status: "unreadable", packages: [], names: [], registries: [], reason: REASON.notJson };
   }
   if (manifest === null || typeof manifest !== "object" || Array.isArray(manifest)) {
-    return { file, status: "unreadable", packages: [], registries: [], reason: REASON.notManifest };
+    return { file, status: "unreadable", packages: [], names: [], registries: [], reason: REASON.notManifest };
   }
   const packages = [];
+  const names = /* @__PURE__ */ new Set();
   const seen = /* @__PURE__ */ new Set();
   for (const section of NPM_SECTIONS) {
     const entries = manifest[section];
     if (entries === null || typeof entries !== "object" || Array.isArray(entries)) continue;
     for (const [key, value] of Object.entries(entries)) {
+      names.add(key);
       if (typeof value !== "string") continue;
       for (const pkg of npmDependency(key, value, manager)) pushOnce(packages, seen, pkg);
     }
   }
-  return { file, status: "ok", packages, registries: [] };
+  return { file, status: "ok", packages, names: [...names], registries: [] };
 }
 var PEP440_SPECIFIER = /^(?:===|==|~=|!=|<=|>=|<|>)v?(?:\d+!)?\d+(?:\.\d+)*(?:[._-]?(?:a|b|c|rc|alpha|beta|pre|preview)[._-]?\d*)?(?:[._-]?(?:post|rev|r)[._-]?\d*)?(?:[._-]?dev[._-]?\d*)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?(?:\.\*)?$/i;
 function pypiRange(range) {
@@ -4735,12 +5045,12 @@ function readRequirements(dir, files, manager = "pip") {
   const walk2 = { files: 0, visited: /* @__PURE__ */ new Set(), manager };
   return files.map((given) => {
     const file = label(given);
-    if (isNetworkPath(given)) return { file, status: "unreadable", packages: [], registries: [], reason: REASON.network };
+    if (isNetworkPath(given)) return { file, status: "unreadable", packages: [], names: [], registries: [], reason: REASON.network };
     const found = { packages: [], registries: [], seen: /* @__PURE__ */ new Set() };
     const read2 = readRequirementFile(resolve2(dir, given), dir, 0, walk2, found);
-    if (read2.status === "absent") return { file, status: "absent", packages: [], registries: [] };
-    if (read2.status === "unreadable") return { file, status: "unreadable", packages: [], registries: [], reason: read2.reason };
-    const out = { file, status: "ok", packages: found.packages, registries: found.registries };
+    if (read2.status === "absent") return { file, status: "absent", packages: [], names: [], registries: [] };
+    if (read2.status === "unreadable") return { file, status: "unreadable", packages: [], names: [], registries: [], reason: read2.reason };
+    const out = { file, status: "ok", packages: found.packages, names: found.packages.map((p) => p.name), registries: found.registries };
     if (found.incomplete !== void 0) out.incomplete = found.incomplete;
     return out;
   });
@@ -6562,9 +6872,15 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
   );
   const candidateKeys = named.filter((p) => !certainKeys.has(key(p))).map(key).slice(0, MAX_VETTED_PACKAGES - certain.length);
   const chosen = /* @__PURE__ */ new Set([...certain, ...candidateKeys, ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
+  const taken = /* @__PURE__ */ new Map();
+  for (const updates of [false, true]) {
+    for (const c of parsed) {
+      if (c.fromUpdate === true === updates) taken.set(c, c.packages.filter((pkg) => chosen.delete(key(pkg))));
+    }
+  }
   const commands = [];
   for (const c of parsed) {
-    const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
+    const packages = taken.get(c) ?? [];
     if (packages.length === 0) continue;
     const uncertain = cut ? [...c.uncertain, "the command is over 512 KB and only its start was read"] : c.uncertain;
     commands.push({ ...c, packages, uncertain });
@@ -6578,8 +6894,26 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
     unassessed
   };
 }
+var NAMED_TO_UPDATE = "not denied: a package named to an update is fetched only when it is already installed";
+var UPDATES_EVERY_GLOBAL = "dev-guardian: this command updates every globally installed package \u2014 none of them was vetted.";
+function updateCommand(c, inManifest) {
+  const packages = (c.updateNames ?? []).filter((n) => n.range !== void 0 || !inManifest.has(n.name));
+  if (packages.length === 0) return void 0;
+  const { manifest: _manifest, update: _update, updateNames: _names, ...rest } = c;
+  return { ...rest, packages, skipped: [], fromUpdate: true };
+}
 var NAMED_BY_MANIFEST = "it is named by a manifest, where a missing name is usually a private or a workspace package";
 var plural = (n) => n === 1 ? "1 package" : `${String(n)} packages`;
+var MAX_MANIFEST_MISSING_LINES = 5;
+var MAX_COUNTED_FILES = 3;
+function missingCountLine(counted) {
+  const files = [...counted.keys()];
+  const total = [...counted.values()].reduce((sum, n) => sum + n, 0);
+  const shown = files.slice(0, MAX_COUNTED_FILES);
+  const rest = files.length - shown.length;
+  const named = rest > 0 ? `${shown.join(", ")} and ${String(rest)} more file${rest === 1 ? "" : "s"}` : shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1] ?? ""}` : shown[0] ?? "";
+  return `dev-guardian: ${String(total)} more package${total === 1 ? "" : "s"} of ${named} ${total === 1 ? "is" : "are"} not on the public registry either (in a manifest that is usually a private or a workspace package) \u2014 not listed.`;
+}
 function withManifestPackages(parsed, opts, registry, notes, locked) {
   const out = [];
   const top = opts.projectDir === void 0 ? void 0 : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
@@ -6588,15 +6922,24 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
   const user = () => userRegistries ??= npmUserRegistries(registry);
   for (const c of parsed) {
     out.push(c);
+    const pushUpdate = (inManifest) => {
+      const more = updateCommand(c, inManifest);
+      if (more !== void 0) out.push(more);
+    };
+    if (c.global === true && c.updateNames?.length === 0 && c.skipped.length === 0) notes.push(UPDATES_EVERY_GLOBAL);
     const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}\0${String(c.global === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
     notes.push(...lineAsked.get(key) ?? []);
     const manifest = c.manifest;
-    if (manifest === void 0) continue;
+    if (manifest === void 0) {
+      pushUpdate(/* @__PURE__ */ new Set());
+      continue;
+    }
     const dir = c.prefixed === true ? null : commandDir(c, opts);
     if (dir === null) {
       const what = manifest.kind === "package-json" ? "package.json" : "the requirements file";
       notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) \u2014 its packages were not vetted.`);
+      pushUpdate(/* @__PURE__ */ new Set());
       continue;
     }
     let reads;
@@ -6611,8 +6954,10 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
       }
     } catch {
       notes.push("dev-guardian: the manifest was not read (could not be read) \u2014 its packages were not vetted.");
+      pushUpdate(/* @__PURE__ */ new Set());
       continue;
     }
+    pushUpdate(new Set(reads.flatMap((r) => r.status === "ok" ? r.names : [])));
     for (const read2 of reads) {
       if (read2.status === "absent") continue;
       const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, base2, read2, opts, top, registry, notes) : void 0;
@@ -7057,6 +7402,24 @@ function plainMove(dir, real, target, windows) {
 }
 var COULD_NOT_VET = "dev-guardian could not vet ";
 var NOT_VERIFIED = " \u2014 not verified.";
+function askReason(signals) {
+  const verb = (n) => n === 1 ? "1 was" : `${String(n)} were`;
+  const reasons = [];
+  if (signals.notVetted > 0) {
+    reasons.push(
+      `this command names more packages than the hook vets \u2014 ${verb(signals.notVetted)} not vetted (only the first ${String(MAX_VETTED_PACKAGES)} are); allow it only if you expected a command this long`
+    );
+  }
+  if (signals.manifestNotVetted > 0) {
+    reasons.push(
+      `the manifests this command installs name more dependencies than the hook vets \u2014 ${verb(signals.manifestNotVetted)} not vetted (only the first ${String(MAX_MANIFEST_PACKAGES)} are); allow it only if you expected that`
+    );
+  }
+  if (signals.cut) {
+    reasons.push("this command is longer than the hook reads \u2014 installs past the first 512 KB were not looked for; allow it only if you expected a command this long");
+  }
+  return reasons.length > 0 ? reasons.join("; ") : void 0;
+}
 var CUT_NOTE = "dev-guardian: installs past the first 512 KB of this command were not looked for \u2014 not verified.";
 async function decideInstallCommand(command, opts) {
   const shell = opts.shell ?? "bash";
@@ -7089,7 +7452,9 @@ async function decideInstallCommand(command, opts) {
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];
-    return said2.length > 0 ? { context: said2.join("\n") } : null;
+    if (said2.length === 0) return null;
+    const question2 = askReason({ notVetted, manifestNotVetted, cut });
+    return question2 === void 0 ? { context: said2.join("\n") } : { context: said2.join("\n"), ask: question2 };
   }
   const offline = env["GUARDIAN_OFFLINE"] === "1";
   const budgetMs = opts.budgetMs ?? HOOK_BUDGET_MS;
@@ -7120,7 +7485,8 @@ async function decideInstallCommand(command, opts) {
           commandRegistries: c.registries,
           // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
           // what only those two checks need is not asked of the registry.
-          ...c.fromManifest !== void 0 ? { unreported: MANIFEST_UNREPORTED } : {},
+          // The names given to an update are told neither of them: an update repeats them at every run.
+          ...c.fromManifest !== void 0 || c.fromUpdate === true ? { unreported: MANIFEST_UNREPORTED } : {},
           ...opts.fetchImpl !== void 0 ? { fetchImpl: opts.fetchImpl } : {},
           ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
           ...opts.popular !== void 0 ? { popular: opts.popular } : {}
@@ -7142,6 +7508,19 @@ async function decideInstallCommand(command, opts) {
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v]));
   const counted = /* @__PURE__ */ new Set();
   const warnedCovered = /* @__PURE__ */ new Set();
+  let missingListed = 0;
+  const missingCounted = /* @__PURE__ */ new Map();
+  const warnOfManifest = (d, file) => {
+    if (d.warn === void 0) return;
+    if (d.plainMissing === true) {
+      if (missingListed >= MAX_MANIFEST_MISSING_LINES) {
+        missingCounted.set(file, (missingCounted.get(file) ?? 0) + 1);
+        return;
+      }
+      missingListed += 1;
+    }
+    warnings.push(d.warn);
+  };
   for (const lock of locked) {
     try {
       const covered = lock.covered.filter((pkg) => !warnedCovered.has(`${lock.manifestFile}\0${pkg.name}\0${pkg.range ?? ""}`));
@@ -7150,8 +7529,7 @@ async function decideInstallCommand(command, opts) {
         ...opts.popularDir !== void 0 ? { popularDir: opts.popularDir } : {},
         ...opts.popular !== void 0 ? { popular: opts.popular } : {}
       })) {
-        const d = decideManifestOne(r, lock.manifestFile);
-        if (d.warn !== void 0) warnings.push(d.warn);
+        warnOfManifest(decideManifestOne(r, lock.manifestFile), lock.manifestFile);
       }
       const outcome = lockOutcome(lock, verdictOf, counted);
       for (const text of outcome.denies) lockDenies.add(text);
@@ -7171,14 +7549,14 @@ async function decideInstallCommand(command, opts) {
       if (cmd.fromManifest !== void 0) {
         const d2 = decideManifestOne(r, cmd.fromManifest);
         if (d2.deny !== void 0) manifestDenies.push(d2.deny);
-        if (d2.warn !== void 0) warnings.push(d2.warn);
+        warnOfManifest(d2, cmd.fromManifest);
         if (d2.unverified !== void 0) {
           const sofar = unverifiedIn.get(cmd.fromManifest);
           unverifiedIn.set(cmd.fromManifest, { count: (sofar?.count ?? 0) + 1, why: sofar?.why ?? d2.unverified });
         }
         continue;
       }
-      const d = decideOne(r, cmd.uncertain);
+      const d = cmd.fromUpdate === true ? decideUpdateOne(r) : decideOne(r, cmd.uncertain);
       if (d.deny !== void 0) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
       else if (d.deny !== void 0) missingIn = missingIn ?? cmd.manager;
@@ -7212,6 +7590,7 @@ ${counts.join(`
     lines.push("\u26A0\uFE0F dev-guardian package vetting \u2014 review before relying on these:");
     for (const w of warnings) lines.push(`  \u2022 ${w}`);
   }
+  if (missingCounted.size > 0) lines.push(missingCountLine(missingCounted));
   if (unverified.length > 0) lines.push(`${COULD_NOT_VET}${unverified.join(", ")}${NOT_VERIFIED}`);
   for (const [file, { count, why }] of unverifiedIn) {
     lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
@@ -7233,7 +7612,9 @@ ${counts.join(`
     );
   }
   if (cut) lines.push(CUT_NOTE);
-  return lines.length > 0 ? { context: lines.join("\n") } : null;
+  if (lines.length === 0) return null;
+  const question = askReason({ notVetted, manifestNotVetted, cut });
+  return question === void 0 ? { context: lines.join("\n") } : { context: lines.join("\n"), ask: question };
 }
 var NOT_FOUND = "not found on the public registry \u2014 if it is private or local, ignore this.";
 var REGISTRY_FLAG = {
@@ -7279,13 +7660,32 @@ function decideManifestOne(r, file) {
   if (r.not_on_public_registry === true) {
     const didYouMean = r.similar_to !== void 0 ? ` Did you mean '${r.similar_to}'?` : "";
     const why = r.verdict === "block" ? `not denied: ${NAMED_BY_MANIFEST}` : r.checks.exists.detail ?? "";
-    return { warn: `${file}: '${label2(r)}': ${NOT_FOUND}${didYouMean} (${why})` };
+    return {
+      warn: `${file}: '${label2(r)}': ${NOT_FOUND}${didYouMean} (${why})`,
+      ...r.similar_to === void 0 ? { plainMissing: true } : {}
+    };
   }
   const out = {};
   const typo = r.checks.typosquat;
   if (typo.status === "warn" && typo.detail !== void 0) out.warn = `${file}: ${label2(r)}: ${typo.detail}`;
   const unknown2 = [r.checks.exists, r.checks.malicious].find((c) => c.status === "unknown" && c.detail !== void 0);
   if (unknown2 !== void 0) out.unverified = unknown2.detail ?? "";
+  return out;
+}
+function decideUpdateOne(r) {
+  if (r.checks.malicious.status === "fail") {
+    const why = Object.values(r.checks).filter((c) => c.status === "fail" && c.detail !== void 0).map((c) => c.detail ?? "").join("; ");
+    return { deny: `'${label2(r)}': ${sentence(why)}`, malicious: true };
+  }
+  if (r.not_on_public_registry === true) {
+    const didYouMean = r.similar_to !== void 0 ? ` Did you mean '${r.similar_to}'?` : "";
+    return { warn: `'${label2(r)}': ${NOT_FOUND}${didYouMean} (${NAMED_TO_UPDATE})` };
+  }
+  const out = {};
+  const typo = r.checks.typosquat;
+  if (typo.status === "warn" && typo.detail !== void 0) out.warn = `${label2(r)}: ${typo.detail}`;
+  const unknown2 = [r.checks.exists, r.checks.malicious].find((c) => c.status === "unknown" && c.detail !== void 0);
+  if (unknown2 !== void 0) out.unverified = `${label2(r)} (${unknown2.detail ?? ""})`;
   return out;
 }
 function decideOne(r, uncertain) {

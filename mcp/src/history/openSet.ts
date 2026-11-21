@@ -8,11 +8,16 @@
  * side has none (`fingerprint/findingIdentity.ts#indexFindings`) — minus the
  * suppressions active at `now`.
  *
- * "Usable" means three things, each a defect when missing:
+ * "Usable" means four things, each a defect when missing:
  *   - scoped to P by an exact `project_path` match, never "the newest row in
  *     the database": that answered for whichever project scanned last;
  *   - not scoped to part of the project (`meta.scope`): a diff review's
  *     silence about a file is not evidence about it;
+ *   - not the record of a verify-only `llm_scan` plan
+ *     (`scanRoles.ts#isVerifyOnlyPlanRecord`): it analysed no code, and its
+ *     empty bookkeeping read as a full, zero-finding scan. Like a scoped scan
+ *     it is passed over everywhere here — the search and the carry-forward
+ *     walk below — without being counted as skipped;
  *   - coverage is not `none`: a run whose scanner was missing measured
  *     nothing, and its empty result would otherwise read as "all fixed".
  *     Such a scan is SKIPPED — the one before it answers — and every skip is
@@ -103,12 +108,14 @@ import {
 } from './runCompare.js';
 import { findingKey, toolsOfKey } from './runNames.js';
 import {
+  LLM_HUNT_TOOL,
   STATE_SCAN_TYPES,
   findingInSlot,
   isOrchestratedFullScan,
   isScopedScan,
   isScriptEraFullScan,
   isSarifSlot,
+  isVerifyOnlyPlanRecord,
   sarifSlot,
   sarifSlotOfScan,
   slotView,
@@ -122,9 +129,6 @@ const PAGE = 25;
 
 /** How many skipped scans a summary names, per reason. The count is exact. */
 export const SKIPPED_SAMPLE = 5;
-
-/** The tool name of a finding the LLM hunt wrote (`llm_scan { step: "submit" }`). */
-const HUNT_TOOL = 'llm-hunt';
 
 export type SkipReason = 'coverage_none';
 
@@ -311,7 +315,8 @@ function search(
       ...(opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}),
     });
     for (const scan of page) {
-      if (isScopedScan(scan)) continue;
+      // Neither speaks for the project's state: passed over, not skipped.
+      if (isScopedScan(scan) || isVerifyOnlyPlanRecord(scan)) continue;
       if (opts.predicate !== undefined && !opts.predicate(scan)) continue;
       const judged = judge(scan, opts.slot);
       if (judged === null) continue;
@@ -682,7 +687,9 @@ function carryForward(
     if (last !== undefined) before = last.scan_id;
     for (const scan of page) {
       if (walked >= CARRY_WALK_LIMIT) break;
-      if (isScopedScan(scan)) continue;
+      // A verify-only plan's record looked at nothing: its empty bookkeeping
+      // would read "measured everything" and stop the walk (`StillCarry`).
+      if (isScopedScan(scan) || isVerifyOnlyPlanRecord(scan)) continue;
       const coverage = judge(scan, slot);
       // Measured nothing (or nothing of this slot): no finding to carry, and
       // no evidence either way about the ones older than it.
@@ -856,9 +863,9 @@ export function isConfirming(marker: LlmMarker | undefined): marker is LlmMarker
   return marker !== undefined && marker.independent && marker.verdict === 'exploitable';
 }
 
-/** Whether a finding is one the LLM hunt wrote — a candidate until confirmed. */
+/** Whether a finding is one the LLM hunt wrote (`llm_scan { step: "submit" }`) — a candidate until confirmed. */
 export function isHuntFinding(f: Pick<Finding, 'tool'>): boolean {
-  return f.tool === HUNT_TOOL;
+  return f.tool === LLM_HUNT_TOOL;
 }
 
 /**

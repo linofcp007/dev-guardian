@@ -917,7 +917,8 @@ function presentNoFollow(path) {
 
 /**
  * The project this hook call belongs to (review I5): `CLAUDE_PROJECT_DIR`,
- * which Claude Code sets for every hook, when it names a directory; else the
+ * which Claude Code sets for every hook, when it names a directory ({@link chooseDirs}
+ * asked, and passes it as `projectDir`: a network folder is never opened here); else the
  * nearest ancestor of `cwd` holding `.guardian` or `.git`; else `cwd`. The
  * payload's `cwd` is wherever the session has `cd`-ed to — reading the
  * project's configuration from there, and guarding its hook configuration
@@ -926,10 +927,10 @@ function presentNoFollow(path) {
  * off there.
  *
  * @param {string} cwd
+ * @param {string | undefined} projectDir `CLAUDE_PROJECT_DIR` when it names a folder that answers
  */
-function projectRootOf(cwd) {
-  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
-  if (fromEnv && existsSync(fromEnv)) return resolve(fromEnv);
+function projectRootOf(cwd, projectDir) {
+  if (projectDir) return resolve(projectDir);
   // Never the home directory or an ancestor of it, nor the temp dir itself
   // (review round 2): a stray `.guardian` there — this machine has one in
   // each — made every unmarked project below it take its configuration from
@@ -1188,7 +1189,7 @@ async function handleSessionStart(root, cfg, marked) {
   // Before any answer: the hook exits with it, and the mark must be whole by then.
   await marked;
   const guardsOff = off !== null;
-  const notice = [ignoredSettingsNotice(cfg), off, engine, session].filter(Boolean).join('\n') || null;
+  const notice = [ignoredSettingsNotice(cfg), ...unreachableNotice, off, engine, session].filter(Boolean).join('\n') || null;
   if (!cfg.sessionStart) {
     // The briefing is advisory and a project may turn it off — but not the
     // notice that the same project asked to loosen the guardrails.
@@ -1350,7 +1351,7 @@ async function handlePostToolUse(write, cwd, root, cfg, allowlist) {
  *   from the command's directory up to it and never beyond — a workspace keeps its lockfile at the root.
  * @param {string} toolName
  * @param {ReadonlyArray<{ text: string, shell: 'bash' | 'powershell' }>} [nested]
- * @returns {Promise<{ deny?: string, context?: string } | null>}
+ * @returns {Promise<{ deny?: string, context?: string, ask?: string } | null>}
  */
 async function vetInstallCommand(command, cwd, root, toolName, nested = []) {
   if (process.env.GUARDIAN_PKG_VET === '0') return null;
@@ -1454,6 +1455,7 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
     return respond('PreToolUse', { permissionDecision: 'deny', permissionDecisionReason: vet.deny });
   }
   if (vet?.context) notes.push(vet.context);
+  notes.push(...unreachableNotice);
   const context = notes.length > 0 ? { additionalContext: notes.join('\n') } : {};
   // The user's decision, not a hazard (review 8, C2: an agent-run `baseline
   // update`; review of 3.6.0, finding 9: a command a cap or the time budget
@@ -1461,8 +1463,12 @@ async function handlePreToolUseBash(input, cfg, cwd, root, toolName) {
   // Claude Code asks the user, showing them why. With the block switched off
   // it is only the warning above, as a block would be. An internal error of
   // the guard is no question — it fails open, as every hook does.
-  if (a.ask && cfg.bash.block) {
-    return respond('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: `dev-guardian: ${a.ask}.`, ...context });
+  // One question for the command: the guard's reason first (only with the block on), the install
+  // vetting's after it. The vetting's never follows that switch, as its deny does not: a ceiling
+  // passed or a command cut short would otherwise run with only a line to say what was not vetted.
+  const questions = [...(a.ask && cfg.bash.block ? [a.ask] : []), ...(vet?.ask ? [vet.ask] : [])];
+  if (questions.length > 0) {
+    return respond('PreToolUse', { permissionDecision: 'ask', permissionDecisionReason: `dev-guardian: ${questions.join('; ')}.`, ...context });
   }
   return respond('PreToolUse', notes.length > 0 ? context : undefined);
 }
@@ -2235,6 +2241,54 @@ async function claudeSettingsRemoveAsk(rawPath, cwd, toolName) {
 
 // ─────────────────────────────────── main ──────────────────────────────────
 
+/**
+ * The notice lines for a session or project folder on a network share that did
+ * not answer (bug `hook-unc-cwd-hang`): said in the context of a shell command
+ * that is not refused, and in SessionStart's notice.
+ *
+ * @type {string[]}
+ */
+let unreachableNotice = [];
+
+/**
+ * The session's folder and the project's, chosen by `mcp/src/hooks/sessionDirs.ts`
+ * (in the bundle): a folder on the network is never opened in this process —
+ * Windows holds it about 21 s when the host is down — but asked about in a child
+ * process with a deadline, loaded only for a call that has one. Without the
+ * bundle's main file the choice is the one this dispatcher always made.
+ *
+ * @param {unknown} payloadCwd
+ * @returns {Promise<{ cwd: string, projectDir: string | undefined }>}
+ */
+async function chooseDirs(payloadCwd) {
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  try {
+    const sessionDirs = await detector('loadSessionDirs');
+    const onNetwork = (/** @type {unknown} */ p) => typeof p === 'string' && p !== '' && isNetworkPath(p);
+    /** @type {Awaited<ReturnType<HooksBundle['loadFolderProbe']>>['probeFolders'] | undefined} */
+    let probe;
+    if (onNetwork(payloadCwd) || onNetwork(fromEnv)) {
+      try {
+        probe = (await detector('loadFolderProbe')).probeFolders;
+      } catch (err) {
+        debug(`folder probe unavailable — network folders are not reached: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    const dirs = await sessionDirs.chooseSessionDirs(
+      { payloadCwd, envProjectDir: fromEnv, processCwd: process.cwd() },
+      { exists: existsSync, isNetworkPath, probe },
+    );
+    unreachableNotice = sessionDirs.unreachableLines(dirs.unreachable);
+    return { cwd: dirs.cwd, projectDir: dirs.projectDir };
+  } catch (err) {
+    debug(`folder choice unavailable — as before: ${err instanceof Error ? err.message : String(err)}`);
+    return {
+      cwd: typeof payloadCwd === 'string' && payloadCwd !== '' && existsSync(payloadCwd) ? payloadCwd : process.cwd(),
+      projectDir: fromEnv && existsSync(fromEnv) ? fromEnv : undefined,
+    };
+  }
+}
+
 async function main() {
   // Switched off, a hook does nothing — except that SessionStart still leaves
   // its mark, saying so: without it health_status could not tell "switched off
@@ -2251,13 +2305,13 @@ async function main() {
   const toolName = typeof payload.tool_name === 'string' ? payload.tool_name : '';
   /** @type {ToolInput} */
   const input = isPlainObject(payload.tool_input) ? payload.tool_input : {};
-  const cwd = typeof payload.cwd === 'string' && payload.cwd !== '' && existsSync(payload.cwd) ? payload.cwd : process.cwd();
 
   await loadConfigReader();
+  const { cwd, projectDir } = await chooseDirs(payload.cwd);
   /** @type {string[]} */
   const unread = [];
   // The project is its root, not wherever the session has cd-ed to (review I5).
-  const root = projectRootOf(cwd);
+  const root = projectRootOf(cwd, projectDir);
   if (off) {
     await sessionMark(root, payload, 'disabled', 'GUARDIAN_HOOKS');
     noop();

@@ -161,7 +161,7 @@ describe.skipIf(!IN_CHECKOUT)('a plugin install — a git archive, at a path wit
       .split('\0')
       .filter((f) => f !== '')
       .map((f) => f.slice('mcp/dist/'.length));
-    const bundles = ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksSession.js', 'hooksVet.js', 'hooksWrite.js', 'server.js'];
+    const bundles = ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksProbe.js', 'hooksSession.js', 'hooksVet.js', 'hooksWrite.js', 'server.js'];
     // One `export *` line each, for the type check of the CLI and the hook (3.4.0).
     const declarations = ['engine.d.ts', 'hooks.d.ts'];
     expect(shipped.filter((f) => f.endsWith('.js')).sort()).toEqual(bundles);
@@ -427,7 +427,7 @@ describe.skipIf(!IN_CHECKOUT)('a plugin install — a git archive, at a path wit
       for (const part of ['cli', 'hooks', '.claude-plugin', join('mcp', 'dist'), join('mcp', 'package.json')]) {
         cpSync(join(install, part), join(damaged, part), { recursive: true });
       }
-      for (const bundle of ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksVet.js', 'hooksWrite.js', 'hooksSession.js']) {
+      for (const bundle of ['engine.js', 'hooks.js', 'hooksBash.js', 'hooksVet.js', 'hooksWrite.js', 'hooksSession.js', 'hooksProbe.js']) {
         const path = join(damaged, 'mcp', 'dist', bundle);
         const text = readFileSync(path, 'utf8');
         writeFileSync(path, text.slice(0, Math.min(200_000, Math.floor(text.length / 2))));

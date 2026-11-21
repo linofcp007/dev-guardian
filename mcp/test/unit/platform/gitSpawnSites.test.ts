@@ -89,6 +89,7 @@ const SITES: Readonly<Record<string, { count: number; kind: Kind; reason: string
   },
   'mcp/src/runners/trivyRun.ts': { count: 1, kind: 'no-repository', reason: '`trivy --version`: reads no project' },
   'mcp/src/platform/shellProbe.ts': { count: 1, kind: 'no-repository', reason: "a shell's own version probe" },
+  'mcp/src/hooks/folderProbe.ts': { count: 1, kind: 'no-repository', reason: 'asks whether a folder exists, in a child with a deadline: starts no git and reads no project' },
   'mcp/src/mcpaudit/launch.ts': { count: 1, kind: 'no-repository', reason: '`node -e statSync`: is a command path a file' },
   'mcp/src/tools/installToolchain.ts': { count: 1, kind: 'no-repository', reason: '`wsl -l`: the installer, in no project' },
   'mcp/src/selftest/hookRunner.ts': {

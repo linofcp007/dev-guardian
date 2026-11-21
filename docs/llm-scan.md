@@ -112,6 +112,70 @@ command, code, template), deserialization, XXE, SSRF, path traversal, broken
 access control, authentication and secrets are `high`; every other class is
 `medium`. A verdict decides whether a hunt finding counts, never its severity.
 
+## The plan's scan record
+
+Every plan writes one scan record of type `llm_scan`, completed as soon as the
+plan starts: it is the `scan_id` of `start`'s answer, and a hunt's findings are
+stored in it as its answers are accepted. What the record says it measured
+decides how the project's history reads it.
+
+**A verify-only plan** (no `hunt` in `modes`) analyses no code; its verdicts are
+stored on the findings of the scan it checked. Its record is never "the latest
+scan" and never a source of the open set: `report_export {}`, `set_baseline {}`,
+`diff_scans` without ids (both modes), `risk_score`, `prioritize_findings` and
+the dashboard answer as they would without it, and
+`diff_scans { scan_type: "llm_scan" }` compares the two newest hunts that ran. Named as
+the newer side of `diff_scans { from_scan_id, to_scan_id }`, it measured
+nothing: the other side's findings are `not_remeasured`, never resolved. Named
+as the older side, the newer scan's findings are new.
+
+**A hunt plan's** record counts what was hunted: its hunt and cross-cutting
+tasks with a valid answer, and its entry points. A task closed as not delivered
+(a limit stopped delivery), or after its three invalid answers, does not count.
+
+| Hunt and cross-cutting tasks with a valid answer | The record's coverage | How the history reads it |
+| --- | --- | --- |
+| none, or the plan has none | `none` | passed over like a scanner that did not run, and named in `skipped`; `set_baseline` refuses it |
+| some — or all, with an entry point set aside or not visited | `partial` | the earlier hunts' confirmed findings stay open, `not_remeasured`, never resolved |
+| all, and no entry point set aside or not visited | `full` | it resolves what it did not find again |
+
+The verify tasks do not hold the record back — open, or closed stale, not
+delivered or after three invalid answers — nor does a finding left out of a
+full plan, nor a hunt by groups of code files in a project whose attack surface
+has no entry points: the plan's own report may still say `partial` for each of
+these, the record does not. It is brought up to date as answers are taken, when
+delivery stops and when the plan's status is read; its finish date does not
+move.
+
+A record stays `partial` for good when one of its hunt or cross-cutting tasks
+was closed as not delivered or after three invalid answers, or when an entry
+point was set aside — and a route whose handler file is outside the project is
+set aside by **every** hunt of that project, so none of them resolves anything
+there. The earlier hunts' confirmed findings such a hunt does not find again
+stay open, `not_remeasured`. The way out today is a verdict:
+`llm_scan { step: "start", modes: ["verify"], fingerprints: [<the finding's fingerprint>] }`,
+answered `not_real` by a fresh context, takes a hunt finding out of the open set.
+
+So a hunt that was only started is passed over and named, and `risk_score` and
+`prioritize_findings` say coverage `partial` until a later hunt answers every
+task — for good, if none does. The findings of a hunt compared with one that
+never ran are `not_previously_measured`, not new.
+
+**What stays the same.** A record is still reached by its `scan_id`
+(`report_export { scan_id }`, `diff_scans` by ids, `set_baseline { scan_id }`).
+`health_status.last_scan` and `guardian://scans/latest` show the latest
+activity, a plan's record included, and the dashboard can show a hunt that was
+only started as its scan. A baseline already set on a verify-only record stays
+(baselines are per scan type) and still reads: compared from it, the hunt's
+findings are new. The CI gate (`scan`) reads the history another way and runs no
+`llm_scan`.
+
+**Records of earlier versions.** There is no migration. A verify-only plan's
+record is recognised as it is read. A hunt's record said `full` from the plan's
+start: the record of a plan still open is corrected the next time the plan is
+read or answered, and the record of a plan that is no longer open — abandoned,
+or complete after a limit stopped delivery — keeps saying `full`.
+
 ## Limits
 
 | Limit | Value | When it is reached |

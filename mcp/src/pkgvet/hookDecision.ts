@@ -29,7 +29,8 @@
  * **A manifest install** — `npm install`, `npm ci`, `pnpm install`, `yarn`,
  * `bun install`, `pip install -r`, and an install that names a package inside
  * a project (`npm install <pkg>`, `pnpm add`, `yarn add`, `bun add`: the
- * manager installs the manifest beside the names; not `-g`, not a launcher) —
+ * manager installs the manifest beside the names; not `-g`, not a launcher of another package — a launcher that runs a
+ * package manager, `npx pnpm add <pkg>`, reads it as that manager does, as a command of its own in the list) —
  * reads a manifest, the nearest `package.json` from where the command runs up
  * to the project or repository root. Its direct dependencies (`manifest.ts`)
  * join the same lookups, under the same cap and budget, and answer by a rule
@@ -164,6 +165,12 @@ export interface HookDecision {
   deny?: string;
   /** Warnings and notes for the model, when there is anything to say. */
   context?: string;
+  /**
+   * The reason of a question to the user, without the `dev-guardian: ` prefix and the final full stop (the
+   * dispatcher adds them): a ceiling was passed or the command was cut, so some packages were not vetted. Never set
+   * with `deny`; it does not depend on the network or the deadline.
+   */
+  ask?: string;
 }
 
 function label(r: PackageVetResult): string {
@@ -264,9 +271,18 @@ function boundedInstalls(
   );
   const candidateKeys = named.filter((p) => !certainKeys.has(key(p))).map(key).slice(0, MAX_VETTED_PACKAGES - certain.length);
   const chosen = new Set([...certain, ...candidateKeys, ...firstOf(ofManifests, MAX_MANIFEST_PACKAGES)]);
+  // Each name goes to ONE command of the line. A name that an update and an install both give is the install's, wherever
+  // each stands: an update says less of it (no fresh version, no install scripts, its own reason for a missing name), and
+  // `npm update -g x; npm install x` must not take the install's answer away. So the other commands choose first.
+  const taken = new Map<VetCommand, PackageSpec[]>();
+  for (const updates of [false, true]) {
+    for (const c of parsed) {
+      if ((c.fromUpdate === true) === updates) taken.set(c, c.packages.filter((pkg) => chosen.delete(key(pkg))));
+    }
+  }
   const commands: VetCommand[] = [];
   for (const c of parsed) {
-    const packages = c.packages.filter((pkg) => chosen.delete(key(pkg)));
+    const packages = taken.get(c) ?? [];
     if (packages.length === 0) continue;
     const uncertain = cut ? [...c.uncertain, 'the command is over 512 KB and only its start was read'] : c.uncertain;
     commands.push({ ...c, packages, uncertain });
@@ -281,13 +297,67 @@ function boundedInstalls(
   };
 }
 
-/** An install command as it is vetted: the packages a manifest names carry the file that names them. */
-type VetCommand = InstallCommand & { fromManifest?: string };
+/**
+ * An install command as it is vetted: the packages a manifest names carry the file that names them, and the names an update
+ * verb is given ({@link InstallCommand.updateNames}) are marked `fromUpdate`.
+ */
+type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true };
+
+/** Why the name given to an update is never denied as missing (measured 2026-11-20: an update fetches only what is installed already). */
+const NAMED_TO_UPDATE = 'not denied: a package named to an update is fetched only when it is already installed';
+
+/** Said for a global update that names nothing: the managers update every globally installed package (measured 2026-11-20). */
+const UPDATES_EVERY_GLOBAL = 'dev-guardian: this command updates every globally installed package — none of them was vetted.';
+
+/**
+ * The names an update verb is given, as one more command to vet (`fromUpdate`): those that no manifest read for the command
+ * has, and those with a version or a range (the manifest's own check is not that version); all of them when no manifest was
+ * read. `undefined` when there is nothing to vet.
+ */
+function updateCommand(c: InstallCommand, inManifest: ReadonlySet<string>): VetCommand | undefined {
+  const packages = (c.updateNames ?? []).filter((n) => n.range !== undefined || !inManifest.has(n.name));
+  if (packages.length === 0) return undefined;
+  const { manifest: _manifest, update: _update, updateNames: _names, ...rest } = c;
+  return { ...rest, packages, skipped: [], fromUpdate: true };
+}
 
 /** Why a package a manifest names is never denied as missing. */
 const NAMED_BY_MANIFEST = 'it is named by a manifest, where a missing name is usually a private or a workspace package';
 
 const plural = (n: number): string => (n === 1 ? '1 package' : `${String(n)} packages`);
+
+/**
+ * The most "not found on the public registry" warnings of manifests ONE ANSWER lists; the rest are counted in one
+ * line ({@link missingCountLine}). A project whose private packages have no scope configured gets one such warning a
+ * dependency at every install — 150 of them were 151 lines and 33 000 characters. Per answer, not per file, so the
+ * size has a known maximum whatever the line installs. A missing name that comes with a "Did you mean" is never
+ * counted: that one is the sign of a mistyped dependency.
+ */
+const MAX_MANIFEST_MISSING_LINES = 5;
+/** The most manifest files the count line names; the others are counted too. */
+const MAX_COUNTED_FILES = 3;
+
+/**
+ * The one line for the missing names of manifests past {@link MAX_MANIFEST_MISSING_LINES}: how many, and of which
+ * files (as the warnings call them). They were asked of the registry and of the malware check like the listed ones —
+ * only their lines are left out.
+ */
+function missingCountLine(counted: ReadonlyMap<string, number>): string {
+  const files = [...counted.keys()];
+  const total = [...counted.values()].reduce((sum, n) => sum + n, 0);
+  const shown = files.slice(0, MAX_COUNTED_FILES);
+  const rest = files.length - shown.length;
+  const named =
+    rest > 0
+      ? `${shown.join(', ')} and ${String(rest)} more file${rest === 1 ? '' : 's'}`
+      : shown.length > 1
+        ? `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1] ?? ''}`
+        : (shown[0] ?? '');
+  return (
+    `dev-guardian: ${String(total)} more package${total === 1 ? '' : 's'} of ${named} ${total === 1 ? 'is' : 'are'} ` +
+    'not on the public registry either (in a manifest that is usually a private or a workspace package) — not listed.'
+  );
+}
 
 /**
  * The commands to vet, with what each manifest install reads beside what it
@@ -319,16 +389,26 @@ function withManifestPackages(
   const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
   for (const c of parsed) {
     out.push(c);
+    // The names of an update are vetted whatever happens to the manifest below: every early `continue` comes after this.
+    const pushUpdate = (inManifest: ReadonlySet<string>): void => {
+      const more = updateCommand(c, inManifest);
+      if (more !== undefined) out.push(more);
+    };
+    if (c.global === true && c.updateNames?.length === 0 && c.skipped.length === 0) notes.push(UPDATES_EVERY_GLOBAL);
     // A line of thousands of commands asks once per manager and directory: the answer is the same.
     const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
     notes.push(...(lineAsked.get(key) ?? []));
     const manifest = c.manifest;
-    if (manifest === undefined) continue;
+    if (manifest === undefined) {
+      pushUpdate(new Set());
+      continue;
+    }
     const dir = c.prefixed === true ? null : commandDir(c, opts);
     if (dir === null) {
       const what = manifest.kind === 'package-json' ? 'package.json' : 'the requirements file';
       notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) — its packages were not vetted.`);
+      pushUpdate(new Set());
       continue;
     }
     let reads: ManifestRead[];
@@ -346,8 +426,10 @@ function withManifestPackages(
     } catch {
       // Fail-open, and said: nothing of the manifest was vetted.
       notes.push('dev-guardian: the manifest was not read (could not be read) — its packages were not vetted.');
+      pushUpdate(new Set());
       continue;
     }
+    pushUpdate(new Set(reads.flatMap((r) => (r.status === 'ok' ? r.names : []))));
     for (const read of reads) {
       if (read.status === 'absent') continue;
       // The lockfile is what the manager installs, whether or not the manifest could be read.
@@ -1036,8 +1118,32 @@ function plainMove(dir: string, real: string, target: string, windows: boolean):
 export const COULD_NOT_VET = 'dev-guardian could not vet ';
 export const NOT_VERIFIED = ' — not verified.';
 
+/**
+ * The reasons to ask the user, one per signal of {@link boundedInstalls} — the names of the commands past the
+ * ceiling, the dependencies of the manifests past theirs, the cut at 512 KB — in that order, joined by `; `.
+ * `undefined` when none holds. Fixed sentences with two integers and the ceilings: nothing of the project is in them.
+ */
+function askReason(signals: { notVetted: number; manifestNotVetted: number; cut: boolean }): string | undefined {
+  const verb = (n: number): string => (n === 1 ? '1 was' : `${String(n)} were`);
+  const reasons: string[] = [];
+  if (signals.notVetted > 0) {
+    reasons.push(
+      `this command names more packages than the hook vets — ${verb(signals.notVetted)} not vetted (only the first ${String(MAX_VETTED_PACKAGES)} are); allow it only if you expected a command this long`,
+    );
+  }
+  if (signals.manifestNotVetted > 0) {
+    reasons.push(
+      `the manifests this command installs name more dependencies than the hook vets — ${verb(signals.manifestNotVetted)} not vetted (only the first ${String(MAX_MANIFEST_PACKAGES)} are); allow it only if you expected that`,
+    );
+  }
+  if (signals.cut) {
+    reasons.push('this command is longer than the hook reads — installs past the first 512 KB were not looked for; allow it only if you expected a command this long');
+  }
+  return reasons.length > 0 ? reasons.join('; ') : undefined;
+}
+
 /** The note for a command read only to its first 512 KB. */
-const CUT_NOTE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
+const CUT_NOTE ='dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
 
 /**
  * `null` when there is nothing to say: no install command, or every package
@@ -1082,7 +1188,9 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {
     const said = [...manifestNotes, ...(cut ? [CUT_NOTE] : [])];
-    return said.length > 0 ? { context: said.join('\n') } : null;
+    if (said.length === 0) return null;
+    const question = askReason({ notVetted, manifestNotVetted, cut });
+    return question === undefined ? { context: said.join('\n') } : { context: said.join('\n'), ask: question };
   }
 
   const offline = env['GUARDIAN_OFFLINE'] === '1';
@@ -1115,7 +1223,8 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           commandRegistries: c.registries,
           // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
           // what only those two checks need is not asked of the registry.
-          ...(c.fromManifest !== undefined ? { unreported: MANIFEST_UNREPORTED } : {}),
+          // The names given to an update are told neither of them: an update repeats them at every run.
+          ...(c.fromManifest !== undefined || c.fromUpdate === true ? { unreported: MANIFEST_UNREPORTED } : {}),
           ...(opts.fetchImpl !== undefined ? { fetchImpl: opts.fetchImpl } : {}),
           ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
           ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
@@ -1140,6 +1249,20 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v] as const));
   const counted = new Set<string>();
   const warnedCovered = new Set<string>();
+  // The plain missing-name warnings of manifests: the first of the answer are listed, the others counted per file.
+  let missingListed = 0;
+  const missingCounted = new Map<string, number>();
+  const warnOfManifest = (d: { warn?: string; plainMissing?: true }, file: string): void => {
+    if (d.warn === undefined) return;
+    if (d.plainMissing === true) {
+      if (missingListed >= MAX_MANIFEST_MISSING_LINES) {
+        missingCounted.set(file, (missingCounted.get(file) ?? 0) + 1);
+        return;
+      }
+      missingListed += 1;
+    }
+    warnings.push(d.warn);
+  };
   for (const lock of locked) {
     try {
       // Two installs of one line may read one manifest twice: a covered dependency is judged once.
@@ -1149,8 +1272,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         ...(opts.popularDir !== undefined ? { popularDir: opts.popularDir } : {}),
         ...(opts.popular !== undefined ? { popular: opts.popular } : {}),
       })) {
-        const d = decideManifestOne(r, lock.manifestFile);
-        if (d.warn !== undefined) warnings.push(d.warn);
+        warnOfManifest(decideManifestOne(r, lock.manifestFile), lock.manifestFile);
       }
       const outcome = lockOutcome(lock, verdictOf, counted);
       for (const text of outcome.denies) lockDenies.add(text);
@@ -1170,14 +1292,14 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
       if (cmd.fromManifest !== undefined) {
         const d = decideManifestOne(r, cmd.fromManifest);
         if (d.deny !== undefined) manifestDenies.push(d.deny);
-        if (d.warn !== undefined) warnings.push(d.warn);
+        warnOfManifest(d, cmd.fromManifest);
         if (d.unverified !== undefined) {
           const sofar = unverifiedIn.get(cmd.fromManifest);
           unverifiedIn.set(cmd.fromManifest, { count: (sofar?.count ?? 0) + 1, why: sofar?.why ?? d.unverified });
         }
         continue;
       }
-      const d = decideOne(r, cmd.uncertain);
+      const d = cmd.fromUpdate === true ? decideUpdateOne(r) : decideOne(r, cmd.uncertain);
       if (d.deny !== undefined) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
       else if (d.deny !== undefined) missingIn = missingIn ?? cmd.manager;
@@ -1217,6 +1339,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     lines.push('⚠️ dev-guardian package vetting — review before relying on these:');
     for (const w of warnings) lines.push(`  • ${w}`);
   }
+  if (missingCounted.size > 0) lines.push(missingCountLine(missingCounted));
   if (unverified.length > 0) lines.push(`${COULD_NOT_VET}${unverified.join(', ')}${NOT_VERIFIED}`);
   for (const [file, { count, why }] of unverifiedIn) {
     lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
@@ -1239,7 +1362,9 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     );
   }
   if (cut) lines.push(CUT_NOTE);
-  return lines.length > 0 ? { context: lines.join('\n') } : null;
+  if (lines.length === 0) return null;
+  const question = askReason({ notVetted, manifestNotVetted, cut });
+  return question === undefined ? { context: lines.join('\n') } : { context: lines.join('\n'), ask: question };
 }
 
 const NOT_FOUND = 'not found on the public registry — if it is private or local, ignore this.';
@@ -1308,7 +1433,9 @@ function sentence(text: string): string {
  *     takedown placeholder) → deny, with the file that names it;
  *   - missing from the public registry → a warning, never a deny: a missing
  *     name in a manifest is usually a private or a workspace package, and a
- *     deny would stop every install of the project;
+ *     deny would stop every install of the project. `plainMissing` says the
+ *     warning is that one and carries no "Did you mean": the caller lists the
+ *     first {@link MAX_MANIFEST_MISSING_LINES} of an answer and counts the rest;
  *   - a typosquat suspicion → a warning;
  *   - a fresh version, install scripts, known vulnerabilities, an exact
  *     version nobody published → nothing: said once at `npm install <name>`,
@@ -1320,7 +1447,10 @@ function sentence(text: string): string {
  * Nothing of the manifest is in the text but the file's name, the package's
  * name and a version: `manifest.ts` lets nothing else through.
  */
-function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; warn?: string; unverified?: string } {
+function decideManifestOne(
+  r: PackageVetResult,
+  file: string,
+): { deny?: string; warn?: string; plainMissing?: true; unverified?: string } {
   if (r.checks.malicious.status === 'fail') {
     const why = Object.values(r.checks)
       .filter((c) => c.status === 'fail' && c.detail !== undefined)
@@ -1331,13 +1461,42 @@ function decideManifestOne(r: PackageVetResult, file: string): { deny?: string; 
   if (r.not_on_public_registry === true) {
     const didYouMean = r.similar_to !== undefined ? ` Did you mean '${r.similar_to}'?` : '';
     const why = r.verdict === 'block' ? `not denied: ${NAMED_BY_MANIFEST}` : (r.checks.exists.detail ?? '');
-    return { warn: `${file}: '${label(r)}': ${NOT_FOUND}${didYouMean} (${why})` };
+    return {
+      warn: `${file}: '${label(r)}': ${NOT_FOUND}${didYouMean} (${why})`,
+      ...(r.similar_to === undefined ? { plainMissing: true as const } : {}),
+    };
   }
   const out: { warn?: string; unverified?: string } = {};
   const typo = r.checks.typosquat;
   if (typo.status === 'warn' && typo.detail !== undefined) out.warn = `${file}: ${label(r)}: ${typo.detail}`;
   const unknown = [r.checks.exists, r.checks.malicious].find((c) => c.status === 'unknown' && c.detail !== undefined);
   if (unknown !== undefined) out.unverified = unknown.detail ?? '';
+  return out;
+}
+
+/**
+ * One name given to an update verb, in the hook's answer. It is typed on the command line, so a malicious package is denied
+ * as {@link decideOne} does; but an update fetches a package only when it is installed already, so a name the registry does not
+ * have is never a deny — it is a warning that says why. A typosquat suspicion is a warning too; a fresh version, install scripts
+ * and known vulnerabilities are not said (an update repeats them at every run); a lookup that could not run is the "could not vet" line.
+ */
+function decideUpdateOne(r: PackageVetResult): { deny?: string; malicious?: boolean; warn?: string; unverified?: string } {
+  if (r.checks.malicious.status === 'fail') {
+    const why = Object.values(r.checks)
+      .filter((c) => c.status === 'fail' && c.detail !== undefined)
+      .map((c) => c.detail ?? '')
+      .join('; ');
+    return { deny: `'${label(r)}': ${sentence(why)}`, malicious: true };
+  }
+  if (r.not_on_public_registry === true) {
+    const didYouMean = r.similar_to !== undefined ? ` Did you mean '${r.similar_to}'?` : '';
+    return { warn: `'${label(r)}': ${NOT_FOUND}${didYouMean} (${NAMED_TO_UPDATE})` };
+  }
+  const out: { warn?: string; unverified?: string } = {};
+  const typo = r.checks.typosquat;
+  if (typo.status === 'warn' && typo.detail !== undefined) out.warn = `${label(r)}: ${typo.detail}`;
+  const unknown = [r.checks.exists, r.checks.malicious].find((c) => c.status === 'unknown' && c.detail !== undefined);
+  if (unknown !== undefined) out.unverified = `${label(r)} (${unknown.detail ?? ''})`;
   return out;
 }
 

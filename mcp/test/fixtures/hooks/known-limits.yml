@@ -433,7 +433,7 @@
 - id: manifest-other-managers
   area: install-vetting
   doc: |-
-    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-test`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies, they are not looked up; the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`. The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it.
+    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `yarn workspaces foreach … add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn workspace <w> up`, `yarn workspaces foreach … up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies of the manifest: in a project update they are not looked up (`npm update <name>`, `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`), while the names given to a global update and to the `up` forms of Yarn are vetted as a package named to an update (see `install-global-update-by-name`); the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`. The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it. `npm install-test` and `npm it` install the manifest as `npm install` does, and a package given to `npm install-test` is vetted like one given to `npm install` (a name the registry does not have is denied in the same forms).
   examples:
     - detector: hook
       event: PreToolUse
@@ -718,7 +718,7 @@
 - id: manifest-quiet-checks
   area: install-vetting
   doc: |-
-    A manifest install is told less than `npm install <name>` is. A package the manifest names is denied when it is malicious and warned about when it looks like a typosquat or the public registry does not have it. It is not warned about a version published under 72 hours ago, install scripts or known vulnerabilities: a manifest is installed again and again, and each of those would be repeated every time. So a fresh, compromised release of a legitimate dependency is installed from a manifest in silence until an advisory names it. A missing name never denies a manifest install either — in a manifest it is usually a private or a workspace package.
+    A manifest install is told less than `npm install <name>` is. A package the manifest names is denied when it is malicious and warned about when it looks like a typosquat or the public registry does not have it. It is not warned about a version published under 72 hours ago, install scripts or known vulnerabilities: a manifest is installed again and again, and each of those would be repeated every time. So a fresh, compromised release of a legitimate dependency is installed from a manifest in silence until an advisory names it. A missing name never denies a manifest install either — in a manifest it is usually a private or a workspace package. And one answer names only the first five missing names of its manifests: the others are looked up like them and said as a count, by file, unless the name is close to a popular package's.
   examples: []
   not_executable: |-
     Each of these shows only in what a registry answers — a publish date, a version's scripts, an advisory — and the suite asks nothing of the network. `hookDecision.test.ts` (T-17) holds it with a registry stand-in: the same package warns by name and is silent from a manifest.
@@ -794,8 +794,6 @@
   area: install-vetting
   doc: |-
     Tool runners in front of a package manager, other than `corepack` and the shell's own (`sudo`, `env`, `time`, …), are not followed: `volta run`, `fnm exec`, `mise exec --`, `asdf exec`, `nvm exec`, `dotenv --`, `cross-env VAR=x`, `doppler run --` and `op run --`. An install behind one of them is not vetted. Their syntax is taken from their documentation: none of them was run here.
-
-    A launcher that runs corepack or a package manager — `npx corepack yarn add …`, `npm exec corepack -- yarn add …`, `pnpm dlx corepack …`, `npx pnpm add …`, `npx yarn add …` — has the package it launches (`corepack`, `pnpm`, `yarn`) vetted, and the rest of the line is taken as that program's arguments: the package the manager then installs is not vetted. Offline the hook warns that the launched package was not verified, and nothing about the package after it.
   examples:
     - detector: hook
       event: PreToolUse
@@ -833,41 +831,112 @@
       input:
         command: cross-env VAR=x npm install left-pad
       expect: { decision: none }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: npx corepack yarn add left-pad
-      expect: { decision: warn }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: npm exec corepack -- yarn add left-pad
-      expect: { decision: warn }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: pnpm dlx corepack yarn add left-pad
-      expect: { decision: warn }
+
+- id: install-launcher-runs-manager
+  area: install-vetting
+  doc: |-
+    A launcher of the npm family that runs a package manager — `npx pnpm add <p>`, `npm exec -- pnpm add <p>`, `pnpm dlx yarn add <p>`, `yarn dlx pnpm add <p>`, `bunx pnpm add <p>`, `npx corepack yarn add <p>` — has the words after the manager read as a command of that manager, and `<p>` and the project's manifest are vetted (measured 2026-11-20 with a stand-in registry: npm 11.19, pnpm 11.24, Yarn 1.22 and 4.18, bun 1.4, corepack 0.36). A name the registry does not have is denied only in the nine lines measured; everywhere else it is a warning, because the form was not measured. What stays:
+
+    - Forms that were not measured only warn for a missing name (a malicious package is denied in all of them): another pair (`bunx yarn add <p>`, `npx npm install <p>`, `npm exec yarn …`), another spelling of the launcher (`npm x`, `bun x`, `pnpx`), a flag of the launcher (`--yes`, `--no-install`, `-p`), a `--` in another place (`npm exec pnpm -- add <p>`, `npx pnpm -- add <p>`), another inner verb (`npx pnpm install left-pad`), another manager or a version behind `corepack` (`npx corepack pnpm add <p>`, `npx corepack yarn@4 add <p>`), and an inner flag outside the manager's confident list.
+    - One level only: behind `npx npx pnpm add <p>` only the first `npx` is vetted (neither `pnpm` nor `<p>`), and behind `npx pnpm dlx yarn add <p>` `pnpm` and `yarn` are vetted and `<p>` is not.
+    - `@pnpm/exe` and `@yarnpkg/cli-dist` (`npx @pnpm/exe add <p>`) are packages that run a manager too, and are not read as managers; `pnpm exec <manager> …` and `yarn exec` run what the project already has installed and are not read.
+    - The Python launchers in front of a manager (`uvx pip install <p>`, `pipx run pip install <p>`) are not read: only the launched package is vetted. `.yarnrc.yml` and `bunfig.toml` behind a launcher were not measured, and neither was `pnpm` 12, which `npx pnpm` fetches today.
+    - With the manager already in the project (`node_modules/pnpm`), the launcher runs that copy and its own package is not vetted; the words after it still are.
+  examples:
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
         command: npx pnpm add left-pad
+      files:
+        node_modules/pnpm/package.json: '{"name":"pnpm","version":"11.24.0"}'
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx npx pnpm add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx pnpm dlx yarn add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx @pnpm/exe add left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx pnpm exec tsc
       expect: { decision: warn }
 
 - id: install-candidates-over-ceiling
   area: install-vetting
   doc: |-
-    A word after a flag the hook does not know is vetted as a possible package (it may be the flag's value), and a command contributes at most 50 such words. Packages the command certainly names are chosen first, but a package that is itself such a word — it follows an unknown flag — can be left out when 50 or more others stand before it on the line. The hook says how many packages of the command were not vetted; it does not deny or ask.
+    A word after a flag the hook does not know is vetted as a possible package (it may be the flag's value), and a command contributes at most 50 such words. Packages the command certainly names are chosen first, but a package that is itself such a word — it follows an unknown flag — can be left out when 50 or more others stand before it on the line. What is left out is not hidden: the hook says how many packages of the command were not vetted and asks the user before the install runs (also with the shell block switched off, offline and past the vetting deadline: the count comes before any request).
   examples:
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
         command: npm install --a j0 --a j1 --a j2 --a j3 --a j4 --a j5 --a j6 --a j7 --a j8 --a j9 --a j10 --a j11 --a j12 --a j13 --a j14 --a j15 --a j16 --a j17 --a j18 --a j19 --a j20 --a j21 --a j22 --a j23 --a j24 --a j25 --a j26 --a j27 --a j28 --a j29 --a j30 --a j31 --a j32 --a j33 --a j34 --a j35 --a j36 --a j37 --a j38 --a j39 --a j40 --a j41 --a j42 --a j43 --a j44 --a j45 --a j46 --a j47 --a j48 --a j49 --a j50 --a j51 --a j52 --a j53 --a j54 --a j55 --a j56 --a j57 --a j58 --a j59 --b last-pkg
+      expect: { decision: ask }
+
+- id: install-initializers
+  area: install-vetting
+  doc: |-
+    The initializers of the npm family (`npm create`, `npm init <name>`, `npm innit`, `yarn create`, `pnpm create`, `bun create` and `bun c`) download `create-<name>` and run it (measured 2026-11-20: npm 11.19, Yarn 1.22, 3.8 and 4.18, pnpm 11.24, bun 1.4), and the hook looks that package up: `<name>` is `create-<name>`, `@scope` is `@scope/create`, `@scope/<name>` is `@scope/create-<name>`, with the version, range or tag the word carries; the words after it are the initializer's own arguments and are not looked up. A name the registry does not have is denied for `npm`, `yarn` and `pnpm` when the line is one plain statement with only the flags measured for that verb (`-y`, `--yes`, `-q`, `--quiet`, `--silent` for npm; `-q`, `--quiet` for Yarn; none for pnpm). What is left out, or only warned about:
+
+    - An initializer that is not a registry name — `npm init <user>/<repo>`, a path, a URL, an archive — is not read: nothing is looked up and nothing is said. `npm init` and `yarn create` with no name fetch nothing and are not read either.
+    - `bun create <name>` and `bun c <name>` only warn for a name the registry does not have, because bun uses a template of that name from a `.bun-create` folder when there is one, and then does not ask the registry for `create-<name>`; the hook does not look for that folder. A `create-<name>` that OSV lists as malicious is denied all the same. Templates from GitHub, from the home folder and from `BUN_CREATE_DIR` are not read either.
+    - `yarn create @scope@<version>`: Yarn 3 and 4 ask the registry for `@scope/create`, Yarn 1 asks nothing and tries to reach GitHub. `@scope/create` is looked up and a missing name only warns.
+    - A word that already starts with `create-` is read by the managers in different ways (npm and bun ask for `create-create-<name>`, pnpm for `create-<name>`, Yarn 1 and 3 for the first and Yarn 4 for the second); for Yarn, and for the bare word `create` and a scope whose name starts with `create-`, which were not measured, both names are looked up and a missing one only warns.
+    - `yarn create -p <package> <command>` (the help of Yarn 3 and 4; not measured): `<package>` and `create-<command>` are both looked up and a missing name only warns.
+    - An initializer with a flag that was not measured with that verb (`npm init -w <folder> <name>`, `--registry`, `--scope`, `-f`, `pnpm create --allow-build=<x>`, an unknown flag), or in a line that is more than one statement, only warns for a missing name; a malicious one is denied.
+    - After a flag the hook does not know, `create` is the verb, unless the word after it is another subcommand the hook reads (`npm --unknown-flag create install <package>`) or none follows (`yarn --unknown-flag create`): the line is then read as it was before, with `create` the value of the flag.
+    - The hook looks up `create-<name>` in the public registry even when the project's configuration names another one: a name missing there only warns, with that registry as the reason.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm init dgprobe-zzq7731/dgprobe-repo
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: bun create dgprobe-zzq7731
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn create @dgprobe-zzq7731@1.2.3
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn create create-dgprobe-zzq7731
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn create -p dgprobe-zzq7731-pkg dgprobe-zzq7731
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm --dgunknown create install dgprobe-zzq7731
       expect: { decision: warn }
 
 - id: dotnet-other-install-forms
@@ -932,7 +1001,7 @@
     - Yarn 2 and 3 were not measured, only Yarn 1 and Yarn 4 (and bun 1.4.4): the reading follows Yarn 4.
     - A command with a word read both ways counts as uncertain as a whole, so ANOTHER name on the same line that the registry does not have is a warning and not a deny (a malicious one is still denied).
     - The bun rule is not copied: the two-name reading covers it, at the price of one lookup too many.
-    - A range with an operator or a space is read only inside quotes (`'name@npm:>=1.0.0'`): unquoted, the shell takes `>` for a redirection, which is a general limit and not of this form.
+    - A range written without quotes (`name@npm:>=1.0.0`) is read for Yarn and bun — for npm and pnpm `name@npm:` is put aside —: bash hands the manager `name@npm:` and the hook reads that, and the PowerShell tool is read both ways (see `install-redirect-glued-word`). A range with a space still needs quotes.
     - A `package.json` value `"x": "npm:1.0.0"` leaves a "could not vet" line for the name `1.0.0` at every `yarn install`: the public registry answers that name with a document that is no package.
     - `name@NPM:<rest>` in capitals reads as the package `name` under Yarn 1, and bun reads it as a git URL (`https://NPM/<rest>/`): the hook reads it as the lower-case form.
     - `resolutions` and `overrides` of a `package.json` are not read, and neither is a lockfile written by Yarn for these forms.
@@ -946,6 +1015,30 @@
         package.json: |
           { "name": "app", "version": "1.0.0", "resolutions": { "left-pad-zq": "npm:evil-pkg-zq@1.0.0" }, "overrides": { "left-pad-zq": "npm:evil-pkg-zq@1.0.0" } }
       expect: { decision: none }
+
+- id: install-redirect-glued-word
+  area: install-vetting
+  doc: |-
+    A word of an install line that has a `>` or a `<` glued to text (`name@>=1.0.0`, `name@<2`, `name>=1`, `name> out.txt`) is read as the shell hands it to the program (measured 2026-11-20: bash gives `name@` to npm, pnpm, bun and Yarn 1, which install the latest; PowerShell 7.6 and 5.1 give the whole word, and a `>` is a redirection there only at the start of a word or after digits or `*`; `<` never is). Bash and the PowerShell tool: the text before the operator is the word, and the target of the redirection is never looked up. PowerShell tool: the whole word is read as well, and so is the next word as an argument; an npm, pnpm, Yarn or bun range with a `<` or a `>` is looked up with the range and without it (a `.cmd` shim makes cmd.exe read the line again and hand the manager `name@`). `name@` is the package `name` with no range. A line with an unquoted redirection stays uncertain: a name the registry does not have is a warning and never a deny; a malicious package is denied. What stays:
+
+    - With the PowerShell tool the target of `name> out.txt` is looked up as a package: PowerShell hands the program `name>` and `out.txt` (measured), and `out.txt` is read by the rules of any install word. A lookup too many, a warning at most.
+    - `name@` after a launcher (`npx name@`, `pnpm dlx name@`) was not measured: `name` is looked up and the command is uncertain, so a missing name is a warning.
+    - `name@npm:` was measured only for Yarn 4: for npm and pnpm the word is put aside, and nothing is looked up.
+    - Nothing was measured behind PowerShell with a real package manager, only how the line is split; cmd.exe and Git Bash as the shell that writes the line were not measured either; nor was a prefix that ends in a digit under bash (`name2>out.txt`, `name@1>out.txt`: read as a word, the rule of bash).
+    - The pip reading of `name>=1.0` and `name>out.log` in PowerShell follows the shell's split (measured), not a run of pip.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: PowerShell
+      input:
+        command: npm install dgprobe-zzq7731-named> out.txt
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx dgprobe-zzq7731-named@
+      expect: { decision: warn }
 
 - id: launcher-flag-words
   area: install-vetting
@@ -1054,3 +1147,32 @@
             }
           }
       expect: { decision: warn }
+
+- id: install-global-update-by-name
+  area: install-vetting
+  doc: |-
+    A package named to an update that fetches it is vetted by name (measured 2026-11-20: npm 11.19, pnpm 11.24, Yarn 1.22, 3.8 and 4.18, bun 1.4): `npm update -g <name>`, `npm up` and `npm upgrade` with it, `pnpm update -g <name>`, `bun update -g <name>`, `yarn global upgrade <name>` (a global update, where the manager asks the registry only for a name that is installed globally already) and `yarn up <name>`, `yarn workspace <w> up <name>` and `yarn workspaces foreach … up <name>` (which move a dependency of the workspace). The name is looked up, with the version or range it carries: a malicious package is denied, a typosquat suspicion is a warning, and a name the registry does not have only warns. A global update with no name says in one line that it updates every globally installed package and that none was vetted. What stays:
+
+    - The hook does not know what is installed globally, and answers the same whether or not the package is: a name the registry does not have warns where the manager would do nothing, and is never denied for that.
+    - The version an update fetches is not the one the hook looks at, and a recent version, install scripts and known vulnerabilities of the package are not said: an update repeats them at every run, and the name is only asked for its malware check and its typosquat check.
+    - The names given to a project update in a workspace of npm or pnpm (`npm update <name> -w <workspace>`, `pnpm update <name> -r`) are not looked up, as the names of any project update are not; and `yarn workspace <w> upgrade <P>` (Yarn 1) is not read at all.
+    - A pattern (`yarn up '*'`), a path and a URL are no name and are not looked up.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm update -g left-pad
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm update -g
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: yarn workspace docs upgrade left-pad
+      expect: { decision: none }

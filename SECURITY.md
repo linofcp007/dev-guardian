@@ -9,8 +9,8 @@ upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 3.14.x  | ✅        |
-| < 3.14  | ❌        |
+| 3.15.x  | ✅        |
+| < 3.15  | ❌        |
 
 ## Reporting a vulnerability
 
@@ -792,7 +792,7 @@ project's own build and test commands.
 | Destination | Who contacts it | When |
 | --- | --- | --- |
 | `api.osv.dev` | `vet_packages` ★, the install hook ★, `scan_skill` with `check_deps` ★ (offline, `osv.dev` reads `skipped`) | per call |
-| `registry.npmjs.org`, `pypi.org`, `repo.packagist.org`, `api.nuget.org`, `azuresearch-usnc.nuget.org` | `vet_packages` ★, the install hook ★ (3 s budget) | per call; the hook for a command that installs a package by name, and for a manifest install (`npm ci`, `npm install`, `pnpm install`, `yarn`, `bun install`, `pip install -r`) — also for an install by name inside a project (`npm install <package>`, `pnpm add`, `yarn add`, `bun add`), which installs the manifest too — then the names and ranges of the manifest's direct dependencies, never those of a scope the npm configuration gives a registry of its own |
+| `registry.npmjs.org`, `pypi.org`, `repo.packagist.org`, `api.nuget.org`, `azuresearch-usnc.nuget.org` | `vet_packages` ★, the install hook ★ (3 s budget) | per call; the hook for a command that installs a package by name, and for a manifest install (`npm ci`, `npm install`, `pnpm install`, `yarn`, `bun install`, `pip install -r`) — also for an install by name inside a project (`npm install <package>`, `pnpm add`, `yarn add`, `bun add`), which installs the manifest too, and for a launcher that runs a package manager (`npx pnpm add <package>`, `npx yarn`, `bunx pnpm install`), which sends the manifest names too — then the names and ranges of the manifest's direct dependencies, never those of a scope the npm configuration gives a registry of its own; and the names given to a global update (`npm update -g <package>`) or to `yarn up` |
 | `www.cisa.gov` (KEV catalog), `api.first.org` (EPSS) | `prioritize_findings` ★, `risk_score` ★, `create_fix_pr` ★ | at most once per 24 h per CVE and for the catalog; `guardian://cves/active` only reads the cache |
 | The secret's own provider: `api.github.com`, `gitlab.com`, `slack.com`, `api.stripe.com`, `api.openai.com`, `api.anthropic.com`, `registry.npmjs.org`, `api.sendgrid.com` | `scan_secrets` with `verify_live: true` ★ | **off by default**. Each secret goes only to its own provider's read-only identity endpoint (a fixed URL per rule, never a host from the repository), 5 s timeout, at most 4 in flight and 50 per scan; `security_scan_full` never verifies |
 | `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check` (`mode: "source"`) ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |

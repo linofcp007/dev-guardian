@@ -2136,3 +2136,349 @@ describe('lockfile-own-scope-scan-quadratic', () => {
     expect(context).not.toContain('vetting time budget exhausted');
   });
 });
+
+// ───────────────── install-vet-manifest-warning-volume — through the real hook process
+
+describe('install-vet-manifest-warning-volume', () => {
+  it('T-05 `npm install` in a project with 20 dependencies the registry does not have: the header, five warnings and the count `15 more` — never a deny', () => {
+    const names = Array.from({ length: 20 }, (_, i) => `dgprobe-zzq7731-${String(i + 1)}`);
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: Object.fromEntries(names.map((n) => [n, '^1.0.0'])) }),
+    );
+    const routes: Record<string, Route> = { [OSV]: { osv: {} } };
+    for (const n of names) routes[`https://registry.npmjs.org/${n}`] = { status: 404 };
+    const r = runHook('npm install', routes);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    const lines = (r.output?.hookSpecificOutput?.additionalContext ?? '').split('\n');
+    expect(lines[0]).toMatch(/package vetting — review before relying on these/);
+    expect(lines.filter((l) => l.includes('not found on the public registry'))).toHaveLength(5);
+    const count = lines.filter((l) => l.includes('are not on the public registry either'));
+    expect(count).toHaveLength(1);
+    expect(count[0]).toMatch(/15 more packages of package\.json/);
+  });
+});
+
+// ───────────────── install-vet-npm-unread-verbs — the initializers, through the dispatcher
+
+describe('install-vet-npm-unread-verbs', () => {
+  describe('initializers', () => {
+    const X = 'dgprobe-zzq7731-init';
+    const URL_OF = `https://registry.npmjs.org/create-${X}`;
+    const missing: Record<string, Route> = { [URL_OF]: { status: 404 }, [OSV]: { osv: {} } };
+    const malicious: Record<string, Route> = { [URL_OF]: npmDoc('1.0.0'), [OSV]: { osv: { [`create-${X}@1.0.0`]: ['MAL-2026-0731'] } } };
+
+    it.each([`npm create ${X}`, `npm create ${X}@latest`, `npm init -y ${X}`, `pnpm create ${X}`, `yarn create ${X}`])(
+      'T-02 `%s` with a name the registry does not have is DENIED, naming create-<name>',
+      (command) => {
+        const r = runHook(command, missing);
+        expect(r.status, command).toBe(0);
+        expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+        const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+        expect(reason, command).toContain(`create-${X}`);
+        expect(reason, command).toContain('does not exist on the npm registry');
+      },
+    );
+
+    it(`T-02 \`bun create ${X}\` with a name the registry does not have is not denied: it says so, naming create-<name>`, () => {
+      const r = runHook(`bun create ${X}`, missing);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+      expect(context).toContain(`create-${X}`);
+      expect(context).toContain('not found on the public registry');
+    });
+
+    it.each([`npm create ${X}`, `npm init -y ${X}`, `npm init -w folder ${X}`, `pnpm create ${X}`, `yarn create ${X}`, `bun create ${X}`])(
+      'T-02 `%s` with a create-<name> that OSV lists as malicious is DENIED, with the advisory',
+      (command) => {
+        const r = runHook(command, malicious);
+        expect(r.status, command).toBe(0);
+        expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+        const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+        expect(reason, command).toContain(`create-${X}`);
+        expect(reason, command).toContain('MAL-2026-0731');
+      },
+    );
+  });
+});
+
+// ───────────────── install-vet-global-update-by-name — the names given to a global update, through the dispatcher
+
+describe('install-vet-global-update-by-name', () => {
+  const M = 'dgprobe-zzq7731-evil';
+  const ABSENT = 'dgprobe-zzq7731-absent';
+  const FRESH = 'dgprobe-zzq7731-fresh';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const hourAgo = (): string => new Date(Date.now() - 3600 * 1000).toISOString();
+  /** A project whose manifest has a dependency the registry does not have: a global update must not read it. */
+  const manifest = (): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [DEP]: '^1.0.0' } }));
+  const routes = (): Record<string, Route | Route[]> => ({
+    [url(M)]: npmDoc('1.0.0'),
+    [url(ABSENT)]: { status: 404 },
+    // Published an hour ago, with install scripts: a manifest-style lookup says nothing about either.
+    [url(FRESH)]: [
+      { accept: 'install-v1', body: { 'dist-tags': { latest: '2.0.0' }, modified: hourAgo(), versions: { '2.0.0': { hasInstallScript: true } } } },
+      { body: { time: { '2.0.0': hourAgo() }, versions: { '2.0.0': { scripts: { postinstall: 'node build.js' } } } } },
+    ],
+    [url(DEP)]: { status: 404 },
+    [OSV]: { osv: { [`${M}@1.0.0`]: ['MAL-2026-0731'] } },
+  });
+
+  it.each([`npm update -g ${M}`, `yarn global upgrade ${M}`])('T-02 `%s` with a package OSV lists as malicious is DENIED, with the advisory', (command) => {
+    manifest();
+    const r = runHook(command, routes());
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain('MAL-2026-0731');
+    expect(reason, command).toContain(M);
+    expect(r.requests.filter((u) => u === url(DEP)), 'the manifest of the project is not read').toEqual([]);
+  });
+
+  it('T-02 `npm update -g <a name the registry does not have>` warns that it was not found, says why it is not denied, and the manifest dependency is not asked', () => {
+    manifest();
+    const r = runHook(`npm update -g ${ABSENT}`, routes());
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    const context = r.output?.hookSpecificOutput?.additionalContext ?? '';
+    expect(context).toContain(`'${ABSENT}': not found on the public registry`);
+    expect(context).toContain('a package named to an update is fetched only when it is already installed');
+    expect(r.requests).toContain(url(ABSENT));
+    expect(r.requests.filter((u) => u === url(DEP))).toEqual([]);
+  });
+
+  it('T-02 `npm update -g <a package published an hour ago, with install scripts>`: the registry WAS asked about it, and the answer has no line about it', () => {
+    manifest();
+    const r = runHook(`npm update -g ${FRESH}`, routes());
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(FRESH));
+    expect(r.requests.filter((u) => u === url(DEP))).toEqual([]);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '').not.toContain(FRESH);
+  });
+});
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher runs, when it is a package manager, through the dispatcher
+
+describe('install-vet-launcher-runs-manager', () => {
+  const ABSENT = 'dgprobe-zzq7731-absent';
+  const EXISTS = 'dgprobe-zzq7731-exists';
+  const M = 'dgprobe-zzq7731-evil';
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  /** The managers the launcher runs exist; `named` is the package the manager is told to install; OSV calls `M` malicious. */
+  const routes = (named: string): Record<string, Route | Route[]> => ({
+    [url('pnpm')]: npmDoc('1.0.0'),
+    [url('yarn')]: npmDoc('1.0.0'),
+    [url('corepack')]: npmDoc('1.0.0'),
+    [url(named)]: named === ABSENT ? { status: 404 } : npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${M}@1.0.0`]: ['MAL-2026-0731'] } },
+  });
+
+  // The nine lines measured on 2026-11-20 with a substitute registry (bug.md): each one installs `<P>`.
+  it.each([
+    `npx pnpm add ${ABSENT}`,
+    `npx yarn add ${ABSENT}`,
+    `npx -y pnpm@11 add ${ABSENT}`,
+    `npm exec -- pnpm add ${ABSENT}`,
+    `pnpm dlx yarn add ${ABSENT}`,
+    `yarn dlx pnpm add ${ABSENT}`,
+    `bunx pnpm add ${ABSENT}`,
+    `npx corepack yarn add ${ABSENT}`,
+    `npm exec corepack -- yarn add ${ABSENT}`,
+  ])('T-02 `%s` with a name the registry does not have is DENIED, naming the package, and the launched manager was asked about too', (command) => {
+    const r = runHook(command, routes(ABSENT));
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain(ABSENT);
+    expect(reason, command).toContain('does not exist on the npm registry');
+    expect(r.requests, command).toContain(url(ABSENT));
+    expect(
+      r.requests.some((u) => u === url('pnpm') || u === url('yarn') || u === url('corepack')),
+      `${command}: the launched manager is asked about as well`,
+    ).toBe(true);
+  });
+
+  it.each([`npx pnpm add ${M}`, `npm exec corepack -- yarn add ${M}`])('T-02 `%s` with a package OSV lists as malicious is DENIED, with the advisory', (command) => {
+    const r = runHook(command, routes(M));
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain('MAL-2026-0731');
+    expect(reason, command).toContain(M);
+  });
+
+  it('T-02 `npx pnpm add <a package that exists>`: the package is asked about, and what the answer says of the launched manager is what it says of `npx pnpm --version`', () => {
+    const r = runHook(`npx pnpm add ${EXISTS}`, routes(EXISTS));
+    expect(r.requests, 'the package named to the manager is asked about').toContain(url(EXISTS));
+    const control = runHook('npx pnpm --version', routes(EXISTS));
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toEqual(control.output?.hookSpecificOutput?.additionalContext);
+  });
+});
+
+// ───────────────── install-vet-redirect-glued-word — a range written without quotes, and `name@`, through the dispatcher
+
+describe('install-vet-redirect-glued-word', () => {
+  const ABSENT = 'dgprobe-zzq7731-absent';
+  const M = 'dgprobe-zzq7731-evil';
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const routes = (name: string): Record<string, Route | Route[]> => ({
+    [url(name)]: name === ABSENT ? { status: 404 } : npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${M}@1.0.0`]: ['MAL-2026-0731'] } },
+  });
+  const TOOLS = ['Bash', 'PowerShell'];
+  /** The lines of a warning that name `name` as missing from the registry. */
+  const notFoundLines = (context: string | undefined, name: string): string[] =>
+    (context ?? '').split('\n').filter((l) => l.includes(`'${name}'`) && l.includes('not found on the public registry'));
+
+  it.each(TOOLS)('T-04 `npm install <malicious>@>=1.0.0` with the %s tool is DENIED, with the advisory', (tool) => {
+    const r = runHook(`npm install ${M}@>=1.0.0`, routes(M), { tool });
+    expect(r.status, tool).toBe(0);
+    expect(r.requests, tool).toContain(url(M));
+    expect(r.output?.hookSpecificOutput?.permissionDecision, tool).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, tool).toContain('MAL-2026-0731');
+    expect(reason, tool).toContain(M);
+  });
+
+  it('T-04 `npm install <absent name>@>=1.0.0` with the Bash tool WARNS once, and does not deny', () => {
+    const r = runHook(`npm install ${ABSENT}@>=1.0.0`, routes(ABSENT), { tool: 'Bash' });
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(ABSENT));
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(notFoundLines(r.output?.hookSpecificOutput?.additionalContext, ABSENT)).toHaveLength(1);
+  });
+
+  it('T-04 `npm install <absent name>@>=1.0.0` with the PowerShell tool WARNS in two lines naming the same package, and does not deny', () => {
+    const r = runHook(`npm install ${ABSENT}@>=1.0.0`, routes(ABSENT), { tool: 'PowerShell' });
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(ABSENT));
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(notFoundLines(r.output?.hookSpecificOutput?.additionalContext, ABSENT)).toHaveLength(2);
+  });
+
+  it("T-04 `npm install '<absent name>@>=1.0.0'` with the PowerShell tool is DENIED, as today", () => {
+    const r = runHook(`npm install '${ABSENT}@>=1.0.0'`, routes(ABSENT), { tool: 'PowerShell' });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '').toContain(ABSENT);
+  });
+
+  it.each(TOOLS)('T-04 `npm install <absent name>@` with the %s tool is DENIED, as `npm install <absent name>` is', (tool) => {
+    const control = runHook(`npm install ${ABSENT}`, routes(ABSENT), { tool });
+    expect(control.output?.hookSpecificOutput?.permissionDecision, `the control, ${tool}`).toBe('deny');
+    const r = runHook(`npm install ${ABSENT}@`, routes(ABSENT), { tool });
+    expect(r.status, tool).toBe(0);
+    expect(r.requests, tool).toContain(url(ABSENT));
+    expect(r.output?.hookSpecificOutput?.permissionDecision, tool).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, tool).toContain(ABSENT);
+    expect(reason, tool).toContain('does not exist on the npm registry');
+  });
+});
+
+// ───────────────── install-vet-over-ceiling-asks — past a ceiling, the dispatcher asks the user
+
+describe('install-vet-over-ceiling-asks', () => {
+  const url = (name: string): string => `https://registry.npmjs.org/${name}`;
+  const TYPO = 'lodahs';
+  const named = (n: number): string => `dgprobe-zzq7731-c${String(n)}`;
+  /** `lodahs` first, then 50 more: 51 names, the registry has them all, and the 51st is the one that is not vetted. */
+  const NAMES = [TYPO, ...Array.from({ length: 50 }, (_, i) => named(i + 1))];
+  const INSTALL = `npm install ${NAMES.join(' ')}`;
+  const ROUTES: Record<string, Route> = { [OSV]: { osv: {} }, ...Object.fromEntries(NAMES.map((n) => [url(n), npmDoc('1.0.0')])) };
+  const VET_REASON = 'this command names more packages than the hook vets';
+  const GUARD_REASON = "this command deletes or moves away Claude Code's settings";
+  const userConfig = (config: Record<string, unknown>): void => {
+    mkdirSync(join(home, '.config', 'dev-guardian'), { recursive: true });
+    writeFileSync(join(home, '.config', 'dev-guardian', 'hooks.json'), JSON.stringify(config));
+  };
+  const reasonOf = (r: HookOut): string => r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+  const contextOf = (r: HookOut): string => r.output?.hookSpecificOutput?.additionalContext ?? '(no context)';
+
+  it('T-05 `npm install` with 51 names the registry has, the typosquat `lodahs` among the first 50: `ask`, the reason starts with the vetting\'s, the context keeps the warning and the count line', () => {
+    const r = runHook(INSTALL, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(url(TYPO));
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(r)).toMatch(/^dev-guardian: this command names more packages than the hook vets/);
+    expect(contextOf(r)).toMatch(/lodahs.*lodash/s);
+    expect(contextOf(r)).toContain('1 more packages in this command were not vetted');
+  });
+
+  it('T-05 the same command from the PowerShell tool: `ask`', () => {
+    const r = runHook(INSTALL, ROUTES, { tool: 'PowerShell' });
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(r)).toContain(VET_REASON);
+  });
+
+  it('T-05 with `bash.block: false` in the user configuration: `ask` all the same (the question is the vetting\'s, not the guard\'s)', () => {
+    userConfig({ bash: { block: false } });
+    const r = runHook(INSTALL, ROUTES);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(r)).toContain(VET_REASON);
+  });
+
+  it('T-05 a command the shell guard also asks about, then the install: ONE question, the guard\'s reason first and the vetting\'s after it; with `bash.block: false` only the vetting\'s', () => {
+    const command = `rm .claude/settings.json; ${INSTALL}`;
+    const both = runHook(command, ROUTES);
+    expect(both.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    const reason = reasonOf(both);
+    expect(reason).toMatch(/^dev-guardian: this command deletes or moves away Claude Code's settings/);
+    expect(reason.indexOf(GUARD_REASON)).toBeGreaterThanOrEqual(0);
+    expect(reason.indexOf(VET_REASON)).toBeGreaterThan(reason.indexOf(GUARD_REASON));
+
+    userConfig({ bash: { block: false } });
+    const vetOnly = runHook(command, ROUTES);
+    expect(vetOnly.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(vetOnly)).toMatch(/^dev-guardian: this command names more packages than the hook vets/);
+    expect(reasonOf(vetOnly)).not.toContain(GUARD_REASON);
+    expect(contextOf(vetOnly)).toContain("deletes or moves away Claude Code's settings");
+  });
+
+  it('T-05 with `GUARDIAN_PKG_VET=0` the vetting asks nothing: no request, no question', () => {
+    const r = runHook(INSTALL, ROUTES, { env: { GUARDIAN_PKG_VET: '0' } });
+    expect(r.output).toBeUndefined();
+    expect(r.requests).toEqual([]);
+    const guarded = runHook(`rm .claude/settings.json; ${INSTALL}`, ROUTES, { env: { GUARDIAN_PKG_VET: '0' } });
+    expect(guarded.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+    expect(reasonOf(guarded)).not.toContain(VET_REASON);
+  });
+
+  describe('T-08 a command cut at 512 KB, through the dispatcher', () => {
+    const CUT_REASON = 'installs past the first 512 KB were not looked for';
+    const GUARD_CUT = 'too large or too deeply nested to assess in full';
+    const padded = `${'echo x; '.repeat(70_000)}npm i ${named(1)}`;
+
+    it('T-08 `echo x; ` 70 000 times then `npm i <name>`, with `bash.block: false`: the question carries only the vetting\'s reason', () => {
+      userConfig({ bash: { block: false } });
+      const r = runHook(padded, {});
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(reasonOf(r)).toContain(CUT_REASON);
+      expect(reasonOf(r)).not.toContain(GUARD_CUT);
+    });
+
+    it('T-08 the same with the guard on: the guard\'s reason first, the vetting\'s after it', () => {
+      const r = runHook(padded, {});
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+      const reason = reasonOf(r);
+      expect(reason).toContain(GUARD_CUT);
+      expect(reason.indexOf(CUT_REASON)).toBeGreaterThan(reason.indexOf(GUARD_CUT));
+    });
+
+    it('T-08 a 600 KB command with no installer word and `bash.block: false`: no question (a protection)', () => {
+      userConfig({ bash: { block: false } });
+      const command = 'echo x; '.repeat(75_000);
+      expect(command.length).toBeGreaterThan(512 * 1024);
+      const r = runHook(command, {});
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+      expect(r.requests).toEqual([]);
+    });
+  });
+});

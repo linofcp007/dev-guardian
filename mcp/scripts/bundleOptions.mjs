@@ -7,8 +7,8 @@
  * - `dist/engine.js` — `src/engine.ts`: the MCP server and everything the CLI
  *   uses, one self-contained bundle (review 8, finding 2).
  * - `dist/hooks.js` — `src/hooksEntry.ts`: what every hook event needs, and
- *   the loaders of the four parts ({@link HOOK_PARTS}) — `dist/hooksBash.js`,
- *   `hooksVet.js`, `hooksWrite.js`, `hooksSession.js` — each a self-contained
+ *   the loaders of the five parts ({@link HOOK_PARTS}) — `dist/hooksBash.js`,
+ *   `hooksVet.js`, `hooksWrite.js`, `hooksSession.js`, `hooksProbe.js` — each a self-contained
  *   bundle of what one kind of event runs (3.4.0), so a write no longer parses
  *   the 144 KB shell guard, nor any event the `node:crypto` and
  *   `node:child_process` only SessionStart needs. The entry's `import()` of a
@@ -41,7 +41,7 @@ export const BUNDLES = [
 ];
 
 /** The hooks bundle's parts: `dist/<part>.js` from `src/<part>.ts`, each loaded by `src/hooksEntry.ts`. */
-export const HOOK_PARTS = ['hooksBash', 'hooksVet', 'hooksWrite', 'hooksSession'];
+export const HOOK_PARTS = ['hooksBash', 'hooksVet', 'hooksWrite', 'hooksSession', 'hooksProbe'];
 
 /**
  * The type declarations of the bundles the hand-written JavaScript imports —

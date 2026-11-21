@@ -26,7 +26,7 @@
  */
 
 import { commandWordIndex, resolveCommand } from '../hooks/shell/command.js';
-import { withoutRedirectWords } from '../hooks/shell/effects.js';
+import { wordsWithoutRedirections } from '../hooks/shell/effects.js';
 import { splitShell, type ShellWord } from '../hooks/shell/split.js';
 import { workdirs } from '../hooks/shell/workdir.js';
 import { powershellAsPosix } from '../hooks/powershellText.js';
@@ -129,6 +129,13 @@ export interface InstallCommand {
    * together with `manifest`.
    */
   update?: true;
+  /**
+   * The names given to an update verb, read apart from `packages` (which stays empty for one): what the manager fetches
+   * when they are installed already (measured 2026-11-20: npm 11.19, pnpm 11.24, bun 1.4, Yarn 1.22 / 3.8 / 4.18). Present
+   * only for an npm, pnpm or bun update with a global flag word on the line ({@link hasGlobalFlagWord}), for `yarn global
+   * upgrade` and for Yarn's `up` forms; `[]` when the verb has no positional word. A glob pattern, a path and a URL are no name.
+   */
+  updateNames?: PackageSpec[];
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -157,6 +164,8 @@ const ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
 const UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 /** The managers nobody measured: a word that ends like an archive is vetted as a name, and the command is uncertain. */
 const UNMEASURED = new Set(['pipx', 'composer', 'dotnet']);
+/** Why `npx name@` and the other launchers may not deny a missing name: what a launcher does with a word that ends in `@` was not measured. */
+const LAUNCHER_NAME_AT = 'a name ending in @ under a launcher was not measured';
 const UNMEASURED_ARCHIVE =
   'a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known';
 
@@ -336,6 +345,8 @@ function parseNpm(raw: string, manager?: string, alias = false): PackageSpec | S
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : undefined;
   if (!scoped && name.includes('/')) return skip(raw, 'GitHub shorthand (user/repo) — not looked up');
+  // `name@` with nothing after the @ is the package with no range: npm, pnpm, bun and Yarn 1 install the latest (measured 2026-11-20).
+  if (range === '') range = undefined;
   if (range !== undefined) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);
@@ -720,6 +731,33 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     noFetchFlags: set('--no', '--offline'),
     boolWord: { except: LOGLEVEL_FLAGS },
   },
+  // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
+  // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
+  // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+  'npm-init': {
+    value: set(...NPM_TABLE.value, '--init-author-name', '--init-author-url', '--init-license', '--init-module', '--init-type', '--init-version'),
+    bool: set(...NPM_TABLE.bool, '--init-private', '--no-workspaces-update'),
+    registry: NPM_TABLE.registry,
+    dir: NPM_TABLE.dir,
+    workspace: NPM_TABLE.workspace,
+    boolWord: { except: LOGLEVEL_FLAGS },
+  },
+  // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
+  'yarn-create': {
+    value: set('--package', '-p'),
+    bool: set('--quiet', '-q'),
+    registry: set(),
+    packageFlags: set('--package', '-p'),
+  },
+  // `pnpm create` (pnpm 11.24.0): the flags of `pnpm dlx` that are no package flags; no flag was measured with it.
+  'pnpm-create': {
+    value: set('--allow-build', '--registry', '--dir', '-C', '--reporter'),
+    bool: set('--silent', '-s', '--quiet', '--verbose'),
+    registry: set('--registry'),
+    dir: set('--dir', '-C'),
+  },
+  // `bun create` / `bun c`: no flag was measured.
+  'bun-create': { value: set(), bool: set(), registry: set() },
   'pnpm-dlx': {
     value: set('--package', '--allow-build', '--registry', '--dir', '-C', '--reporter'),
     // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
@@ -1034,10 +1072,10 @@ function corepackManager(word: string | undefined): string | undefined {
   return COREPACK_MANAGERS.get(at < 0 ? word : word.slice(0, at));
 }
 
-const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall']);
-/** npm's subcommands that install the manifest and take no package: `ci`, `install-test`, `install-ci-test` and their aliases. */
+const NPM_INSTALL = new Set(['install', 'i', 'add', 'in', 'ins', 'inst', 'insta', 'instal', 'isnt', 'isnta', 'isntal', 'isntall', 'install-test', 'it']);
+/** npm's subcommands that install the manifest and take no package: `ci`, `install-ci-test` and their aliases (`install-test` and `it` take a package, as `install` does: they are in {@link NPM_INSTALL}). */
 const NPM_MANIFEST_INSTALL = new Set([
-  'ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean', 'install-test', 'it', 'install-ci-test', 'cit', 'clean-install-test', 'sit',
+  'ci', 'clean-install', 'ic', 'install-clean', 'isntall-clean', 'install-ci-test', 'cit', 'clean-install-test', 'sit',
 ]);
 /** npm's `update` and its aliases (`npm help update`: u, up, upgrade, udpate): the direct dependencies move past the lockfile's pins. */
 const NPM_UPDATE = new Set(['update', 'u', 'up', 'upgrade', 'udpate']);
@@ -1057,6 +1095,15 @@ const REQUIREMENT_FLAGS = new Set(['-r', '--requirement', '--requirements']);
 /** The flags that make an npm-family install a global one: no project manifest is installed. */
 const isGlobalFlag = (f: { flag: string; value?: string }): boolean =>
   ((f.flag === '-g' || f.flag === '--global') && f.value !== 'false') || (f.flag === '--location' && f.value === 'global');
+
+/**
+ * Whether the line has a word that may say GLOBAL, before a `--` word: `-g`, `--global`, `--global=<value>`, `--location`,
+ * `--location=<value>`, or a short cluster that holds a `g`. It only decides whether an update verb keeps the names it is
+ * given ({@link InstallCommand.updateNames}); whether the command IS global stays {@link saysGlobal}'s answer.
+ */
+const GLOBAL_FLAG_WORD = /^(?:--global(?:=.*)?|--location(?:=.*)?|-[A-Za-z]*g[A-Za-z]*)$/;
+const hasGlobalFlagWord = (pre: readonly ShellWord[], args: readonly ShellWord[]): boolean =>
+  [...beforeDoubleDash(pre), ...beforeDoubleDash(args)].some((w) => GLOBAL_FLAG_WORD.test(w.value));
 
 /** The words a flag can come from: what follows a `--` word is no flag. */
 const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
@@ -1122,7 +1169,16 @@ interface Detected {
    * and hands every later word to the program; `install` installs every
    * positional word, as an install command does.
    */
-  launch?: { style: 'run' | 'install'; flags: string; localFirst?: boolean };
+  launch?: {
+    style: 'run' | 'install';
+    flags: string;
+    localFirst?: boolean;
+    initializer?: true;
+    /** How the launcher is written (`npx`, `npm exec`, `npm x`, `pnpm dlx`, `pnpx`, `yarn dlx`, `bunx`, `bun x`): `flags` joins spellings. */
+    spelling?: string;
+    /** The line began `corepack <manager>[@version]` before the launcher. */
+    viaCorepack?: true;
+  };
   /**
    * An install of the project's `package.json`: `always` for a subcommand
    * that takes no package (`npm ci`, `pnpm install`, `yarn install`, a bare
@@ -1133,6 +1189,8 @@ interface Detected {
   manifest?: 'always' | 'bare';
   /** An update verb: a manifest install that moves the direct dependencies past the lockfile's pins ({@link InstallCommand.update}). */
   update?: true;
+  /** An update verb that keeps the names it is given ({@link InstallCommand.updateNames}): always, or only with a global flag word on the line. */
+  names?: 'always' | 'global-word';
 }
 
 /** A launcher as `detect` returns it. */
@@ -1180,12 +1238,23 @@ function scanPositional(
   return { at: -1, candidate: false };
 }
 
+const NPM_INITIALIZER: ReadonlySet<string> = new Set(['create', 'init', 'innit']);
+const CREATE_ONLY: ReadonlySet<string> = new Set(['create']);
+const BUN_INITIALIZER: ReadonlySet<string> = new Set(['create', 'c']);
+
+/**
+ * The verbs that run an initializer — they download `create-<x>` and run it (measured 2026-11-20: npm 11.20.0, Yarn 1.22.22 / 3.8.7 /
+ * 4.18.1, pnpm 11.24.0, bun 1.4.4) — and the {@link LAUNCH_FLAGS} table of each manager's.
+ */
+const INITIALIZER_VERBS: Record<string, ReadonlySet<string>> = { npm: NPM_INITIALIZER, pnpm: CREATE_ONLY, yarn: CREATE_ONLY, bun: BUN_INITIALIZER };
+const INITIALIZER_FLAGS: Record<string, string> = { npm: 'npm-init', pnpm: 'pnpm-create', yarn: 'yarn-create', bun: 'bun-create' };
+
 /** The subcommands `detect` reads for each manager: a word after an unknown flag that is none of them is that flag's value. */
 const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
-  npm: new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, 'audit', 'exec', 'x']),
-  pnpm: new Set(['add', 'dlx', 'dedupe', ...PNPM_INSTALL, ...PNPM_UPDATE]),
-  bun: new Set([...BUN_ADD, 'update', 'x']),
-  yarn: new Set(['install', 'add', 'global', 'workspace', 'dlx', 'dedupe', 'up', ...YARN_UPDATE]),
+  npm: new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, 'audit', 'exec', 'x', ...NPM_INITIALIZER]),
+  pnpm: new Set(['add', 'dlx', 'dedupe', ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
+  bun: new Set([...BUN_ADD, 'update', 'x', ...BUN_INITIALIZER]),
+  yarn: new Set(['install', 'add', 'global', 'workspace', 'workspaces', 'dlx', 'dedupe', 'up', ...YARN_UPDATE, ...CREATE_ONLY]),
   pip: new Set(['install']),
   uv: new Set(['add', 'pip', 'tool']),
   poetry: new Set(['add']),
@@ -1194,6 +1263,49 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
 };
 const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run']);
 const ADD_ONLY: ReadonlySet<string> = new Set(['add']);
+const ADD_OR_UP: ReadonlySet<string> = new Set(['add', 'up']);
+const ADD_OR_UPGRADE: ReadonlySet<string> = new Set(['add', 'upgrade']);
+const FOREACH_ONLY: ReadonlySet<string> = new Set(['foreach']);
+const FOREACH_UNKNOWN_FLAG = 'a flag of yarn workspaces foreach the hook does not know';
+/**
+ * The flags of `yarn workspaces foreach` (the help of Yarn 4.18.1, `.specs/_findings-2026-11-20/measurements/cmd-forms/explore-linux-container-2026-11-20.txt`):
+ * its own table, not Yarn's own. `--since` takes an optional value, so it is not here.
+ */
+const FOREACH_VALUE: ReadonlySet<string> = new Set(['--from', '--include', '--exclude', '-j', '--jobs']);
+const FOREACH_BOOL: ReadonlySet<string> = new Set(['-A', '--all', '-R', '--recursive', '-W', '--worktree', '-v', '--verbose', '-p', '--parallel', '-i', '--interlaced', '-t', '--topological', '--topological-dev', '--no-private', '-n', '--dry-run']);
+
+/** The verb (`up` or `add`) after the flags of `yarn workspaces foreach`, from `from`; `unknown` when a flag is not in the table. */
+function foreachVerb(words: readonly ShellWord[], from: number): { at: number; unknown: boolean } {
+  let unknown = false;
+  for (let i = from; i < words.length; i += 1) {
+    const v = words[i]?.value ?? '';
+    if (!v.startsWith('-') || v.length === 1) return ADD_OR_UP.has(v) ? { at: i, unknown } : { at: -1, unknown };
+    const flag = v.includes('=') ? v.slice(0, v.indexOf('=')) : v;
+    if (FOREACH_VALUE.has(flag)) {
+      if (!v.includes('=')) i += 1;
+    } else if (!FOREACH_BOOL.has(flag)) unknown = true;
+  }
+  return { at: -1, unknown };
+}
+
+/** What `yarn workspace <w>` and `yarn workspaces foreach` give after their words: `up` is read as `yarn up`, `add` as `yarn add`; any other verb is not read. */
+function yarnWorkspaceVerb(
+  words: readonly ShellWord[],
+  at: number,
+  table: FlagTable,
+  head: string,
+  pre: ShellWord[],
+  uncertain: string[],
+  tag: (d: Detected) => Detected,
+): Detected | null {
+  const verb = words[at]?.value;
+  if (verb === 'up') {
+    const update = scanPositional(words, at + 1, table).at >= 0;
+    return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'always', names: 'always', ...(update ? { update: true as const } : {}) });
+  }
+  if (verb !== 'add') return null;
+  return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare' });
+}
 const INSTALL_ONLY: ReadonlySet<string> = new Set(['install']);
 const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
 
@@ -1228,12 +1340,14 @@ function detect(input: readonly ShellWord[]): Detected | null {
   if (/^pip[0-9.]*$/.test(head)) head = 'pip';
   if (head === 'composer.phar') head = 'composer';
   if (head === 'yarnpkg') head = 'yarn';
+  let viaCorepack = false;
   if (head === 'corepack') {
     // `corepack <manager>[@version] <rest>` runs the manager on <rest>; `use <manager>` and `up` install the project's manifest.
     const first = words[start + 1]?.value;
     const via = corepackManager(first);
     if (via !== undefined) {
       head = via;
+      viaCorepack = true;
       i = start + 2;
     } else if (first === 'up' || (first === 'use' && corepackManager(words[start + 2]?.value) !== undefined)) {
       return { manager: 'npm', ecosystem: 'npm', args: [], pre: [], uncertain: [], manifest: 'always' };
@@ -1242,9 +1356,10 @@ function detect(input: readonly ShellWord[]): Detected | null {
 
   // The launchers named by themselves (review P1).
   const rest = words.slice(i);
-  if (head === 'npx') return launcher('npx', 'npm', rest, [], { style: 'run', flags: 'npx', localFirst: true });
-  if (head === 'pnpx') return launcher('pnpm', 'npm', rest, [], { style: 'run', flags: 'pnpm-dlx' });
-  if (head === 'bunx') return launcher('bun', 'npm', rest, [], { style: 'run', flags: 'bunx', localFirst: true });
+  const corepackMark = viaCorepack ? ({ viaCorepack: true } as const) : {};
+  if (head === 'npx') return launcher('npx', 'npm', rest, [], { style: 'run', flags: 'npx', localFirst: true, spelling: 'npx', ...corepackMark });
+  if (head === 'pnpx') return launcher('pnpm', 'npm', rest, [], { style: 'run', flags: 'pnpm-dlx', spelling: 'pnpx', ...corepackMark });
+  if (head === 'bunx') return launcher('bun', 'npm', rest, [], { style: 'run', flags: 'bunx', localFirst: true, spelling: 'bunx', ...corepackMark });
   if (head === 'uvx') return launcher('uv', 'pypi', rest, [], { style: 'run', flags: 'uvx' });
   if (head === 'pipx') {
     const sub = nextPositional(words, i, LAUNCH_FLAGS['pipx-run'] ?? FLAGS['pip'] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
@@ -1256,7 +1371,19 @@ function detect(input: readonly ShellWord[]): Detected | null {
 
   const table = FLAGS[head];
   if (table === undefined) return null;
-  let sub = nextPositional(words, i, table, SUBCOMMANDS[head]);
+  // An initializer verb after a flag the table does not know may be that flag's value (`npm --dgunknown create install p`,
+  // `yarn --dgunknown create`): it is the verb unless the positional after it is a subcommand of the manager that is no
+  // initializer, or none follows; then the line is read as before these verbs were read, from the word after it.
+  const initVerbs = INITIALIZER_VERBS[head];
+  const subcommands = SUBCOMMANDS[head];
+  let first = scanPositional(words, i, table, subcommands);
+  while (initVerbs !== undefined && first.at >= 0 && first.candidate && initVerbs.has(words[first.at]?.value ?? '')) {
+    const following = scanPositional(words, first.at + 1, table, subcommands).at;
+    const followingWord = following < 0 ? undefined : (words[following]?.value ?? '');
+    if (followingWord !== undefined && !(subcommands?.has(followingWord) === true && !initVerbs.has(followingWord))) break;
+    first = scanPositional(words, first.at + 1, table, subcommands);
+  }
+  let sub = first.at;
   // Yarn 1 reads a `true` / `false` after `--production` as that flag's value (measured 2026-11-19), Yarn 4 and the scan above
   // as the subcommand, and no measured manager installs it as a package (EC-5): the word is taken out of the line, the rest is
   // read as the subcommand says, and the command says it has two readings.
@@ -1283,11 +1410,12 @@ function detect(input: readonly ShellWord[]): Detected | null {
   const after = words.slice(sub + 1);
   const before = words.slice(i, sub);
   if (head === 'npm' && (subName === 'exec' || subName === 'x')) {
-    return launcher('npm', 'npm', after, before, { style: 'run', flags: 'npm-exec', localFirst: true });
+    return launcher('npm', 'npm', after, before, { style: 'run', flags: 'npm-exec', localFirst: true, spelling: `npm ${subName}`, ...corepackMark });
   }
-  if (head === 'pnpm' && subName === 'dlx') return launcher('pnpm', 'npm', after, before, { style: 'run', flags: 'pnpm-dlx' });
-  if (head === 'yarn' && subName === 'dlx') return launcher('yarn', 'npm', after, before, { style: 'run', flags: 'yarn-dlx' });
-  if (head === 'bun' && subName === 'x') return launcher('bun', 'npm', after, before, { style: 'run', flags: 'bunx', localFirst: true });
+  if (head === 'pnpm' && subName === 'dlx') return launcher('pnpm', 'npm', after, before, { style: 'run', flags: 'pnpm-dlx', spelling: 'pnpm dlx', ...corepackMark });
+  if (head === 'yarn' && subName === 'dlx') return launcher('yarn', 'npm', after, before, { style: 'run', flags: 'yarn-dlx', spelling: 'yarn dlx', ...corepackMark });
+  if (head === 'bun' && subName === 'x') return launcher('bun', 'npm', after, before, { style: 'run', flags: 'bunx', localFirst: true, spelling: 'bun x', ...corepackMark });
+  if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === 'uv' && subName === 'tool') {
     const toolTable = LAUNCH_FLAGS['uvx'] ?? table;
     const verb = nextPositional(words, sub + 1, toolTable, PIPX_SUBCOMMANDS);
@@ -1308,7 +1436,7 @@ function detect(input: readonly ShellWord[]): Detected | null {
         return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
       }
       // The names after an update verb select dependencies of the manifest: none is a package (`manifest: 'always'`).
-      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (NPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       // `npm audit fix` installs the lockfile's packages; `npm audit` and `npm audit signatures` install nothing.
       if (subWord === 'audit' && words[nextPositional(words, sub + 1, table)]?.value === 'fix') {
         return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
@@ -1320,11 +1448,11 @@ function detect(input: readonly ShellWord[]): Detected | null {
       // dependency), and installs the manifest too. Up to and including 3.10.0 the form with a package was not read at all.
       if (PNPM_INSTALL.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
       if (subWord === 'dedupe') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' };
-      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (PNPM_UPDATE.has(subWord)) return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       return null;
     case 'bun': {
       // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too, and install the manifest.
-      if (subWord === 'update') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true };
+      if (subWord === 'update') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       if (!BUN_ADD.has(subWord)) return null;
       return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
     }
@@ -1334,18 +1462,36 @@ function detect(input: readonly ShellWord[]): Detected | null {
       if (subWord === 'up') {
         // Yarn 4: `yarn up <pattern>` moves that dependency to its latest; without a pattern it installs the manifest as `install` does.
         const update = nextPositional(words, sub + 1, table) >= 0;
-        return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', ...(update ? { update: true as const } : {}) });
+        return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', names: 'always', ...(update ? { update: true as const } : {}) });
       }
       let at = sub;
       const uncertain: string[] = [];
-      if (subWord === 'global') at = nextPositional(words, sub + 1, table, ADD_ONLY);
+      if (subWord === 'workspaces') {
+        // `yarn workspaces foreach <flags> up|add …` (Yarn 4.18; Yarn 3.8 has no such command): read as `yarn up` and `yarn workspace <w> add`.
+        const foreach = nextPositional(words, sub + 1, table, FOREACH_ONLY);
+        if (foreach < 0 || words[foreach]?.value !== 'foreach') return null;
+        const verb = foreachVerb(words, foreach + 1);
+        if (verb.at < 0) return null;
+        uncertain.push('workspace context (yarn workspaces)');
+        if (verb.unknown) uncertain.push(FOREACH_UNKNOWN_FLAG);
+        return yarnWorkspaceVerb(words, verb.at, table, head, pre, uncertain, tag);
+      }
+      if (subWord === 'global') at = nextPositional(words, sub + 1, table, ADD_OR_UPGRADE);
       else if (subWord === 'workspace') {
         const ws = nextPositional(words, sub + 1, table);
-        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table, ADD_ONLY);
+        at = ws < 0 ? -1 : nextPositional(words, ws + 1, table, ADD_OR_UP);
         uncertain.push('workspace context (yarn workspace)');
       }
-      if (at < 0 || words[at]?.value !== 'add') return null;
-      return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare', ...(subWord === 'global' ? { global: true } : {}) });
+      if (at < 0) return null;
+      if (subWord === 'global' && words[at]?.value === 'upgrade') {
+        // Measured 2026-11-20 (Yarn 1.22): `yarn global upgrade <P>` fetches P when it is installed globally; the project is not read.
+        return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, global: true, names: 'always' });
+      }
+      if (subWord === 'global') {
+        if (words[at]?.value !== 'add') return null;
+        return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare', global: true });
+      }
+      return yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag);
     }
     case 'pip':
       return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
@@ -1403,6 +1549,91 @@ function detect(input: readonly ShellWord[]): Detected | null {
 const COMPOSER_CONSTRAINT = /^(?:[\^~<>=!*]|v?\d|dev-|@)/;
 
 /**
+ * The index of the last word of a launcher's arguments its package may be: the first positional, and past it while that word
+ * follows a flag the table does not know (it may be that flag's value, so the next positional is a candidate too). `-1` when
+ * there is no positional.
+ */
+function launchEnd(args: readonly ShellWord[], table: FlagTable): number {
+  let scan = scanPositional(args, 0, table);
+  let end = scan.at;
+  while (scan.at >= 0 && scan.candidate) {
+    scan = scanPositional(args, scan.at + 1, table);
+    if (scan.at >= 0) end = scan.at;
+  }
+  return end;
+}
+
+/** Whether a word given to an initializer is a registry name: not a path, a URL, an archive, `user/repo` or a bad range. */
+function isInitializerName(word: string, manager: string): boolean {
+  // The word as written decides first: a path, a URL, an SSH spec or an archive is no registry name, whatever a `create-` in
+  // front would make of it (`npm init .` is not the package `create-.`, nor `npm init ~` the package `create-~`).
+  const scoped = word.startsWith('@');
+  const versioned = word.indexOf('@', scoped ? 1 : 0) > 0;
+  if (notAPackage(word, versioned ? null : fileEndings(manager, scoped)) !== null) return false;
+  // Then it is judged by the package it is made into: a lone scope (`@s`) is no name by itself, but `@s/create` is one.
+  return 'name' in parseNpm(initializerNames(word, manager).names[0] ?? word, manager);
+}
+
+/**
+ * `<verb> <x>` of an initializer verb: the launcher that fetches what the manager asks the registry for (`create-<x>`). `null`
+ * (nothing is read, as before these verbs were) when no word it would read is a registry name: no word at all (`npm init`,
+ * `yarn create`), a path, a URL, `user/repo`. A candidate after a flag the table does not know that is no name stays that flag's value.
+ */
+function initializerLaunch(head: string, after: ShellWord[], before: ShellWord[]): Detected | null {
+  const flags = INITIALIZER_FLAGS[head];
+  const table = flags === undefined ? undefined : LAUNCH_FLAGS[flags];
+  if (flags === undefined || table === undefined) return null;
+  const end = launchEnd(after, table);
+  if (end < 0) return null;
+  if (!walk(after.slice(0, end + 1), table).positionals.some((p) => isInitializerName(p.value, head))) return null;
+  return launcher(head, 'npm', after, before, { style: 'run', flags, initializer: true });
+}
+
+/**
+ * What the registry is asked for when `word` follows an initializer verb (measured 2026-11-20): `<x>[@v]` is `create-<x>[@v]`,
+ * `@s[@v]` is `@s/create[@v]`, `@s/<x>[@v]` is `@s/create-<x>[@v]`. A word that already starts with `create-` is `create-create-<x>`
+ * for npm and bun, `create-<x>` for pnpm, and either for Yarn (1 and 3 the first, 4 the second: both are looked up). Not measured, so
+ * both are looked up: the word `create` alone and a scope whose name starts with `create-`; and `yarn create @s@<v>`, which Yarn 1
+ * does not send to the registry. `why` is the reason the command is then uncertain ({@link TWO_READINGS}, which a confident command keeps).
+ */
+function initializerNames(word: string, manager: string): { names: string[]; why?: string } {
+  const scoped = word.startsWith('@');
+  const at = word.indexOf('@', scoped ? 1 : 0);
+  const bare = at > 0 ? word.slice(0, at) : word;
+  const version = at > 0 ? word.slice(at) : '';
+  const unmeasured = (names: string[]): { names: string[]; why: string } => ({
+    names,
+    why: `\`${word}\`${TWO_READINGS} — with the \`create-\` prefix added again, or as written (not measured) — both are looked up`,
+  });
+  if (scoped) {
+    const slash = bare.indexOf('/');
+    if (slash < 0) {
+      const names = [`${bare}/create${version}`];
+      if (manager !== 'yarn' || version === '') return { names };
+      return {
+        names,
+        why: `\`${word}\`${TWO_READINGS} — Yarn 3 and 4 ask the registry for \`${bare}/create\`, Yarn 1 does not ask it — \`${bare}/create\` is looked up`,
+      };
+    }
+    const scope = bare.slice(0, slash);
+    const rest = bare.slice(slash + 1);
+    if (rest === 'create' || rest.startsWith('create-')) return unmeasured([`${scope}/create-${rest}${version}`, `${bare}${version}`]);
+    return { names: [`${scope}/create-${rest}${version}`] };
+  }
+  if (bare === 'create') return unmeasured([`create-create${version}`, `create${version}`]);
+  if (bare.startsWith('create-')) {
+    if (manager === 'pnpm') return { names: [`${bare}${version}`] };
+    if (manager === 'yarn') {
+      return {
+        names: [`create-${bare}${version}`, `${bare}${version}`],
+        why: `\`${word}\`${TWO_READINGS} — Yarn 1 and 3 ask the registry for \`create-${bare}\`, Yarn 4 for \`${bare}\` — both are looked up`,
+      };
+    }
+  }
+  return { names: [`create-${bare}${version}`] };
+}
+
+/**
  * A launcher's packages (review P1): the values of its package flags, else —
  * unless it runs shell text (`npx -c`) or may fetch nothing (`npx
  * --no-install`) — its positional words: for `run`, only the first, the rest
@@ -1415,12 +1646,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   let body = d.args;
   if (launch.style === 'run') {
     // The word after a flag the table does not know may be that flag's value: then the next positional is a package too.
-    let scan = scanPositional(d.args, 0, table);
-    let end = scan.at;
-    while (scan.at >= 0 && scan.candidate) {
-      scan = scanPositional(d.args, scan.at + 1, table);
-      if (scan.at >= 0) end = scan.at;
-    }
+    const end = launchEnd(d.args, table);
     if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
@@ -1441,9 +1667,24 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
           .map((v) => v.trim())
           .filter((v) => v !== '');
   const raws: string[] = [];
-  const limited = limitCandidates(w.positionals);
+  // An initializer's words are rewritten to the package the manager asks for; a candidate that is no registry name is a flag's value.
+  const initializer = launch.initializer === true;
+  const limited = limitCandidates(initializer ? w.positionals.filter((p) => isInitializerName(p.value, d.manager)) : w.positionals);
+  const written = new Map<string, string>();
+  const initWhy: string[] = [];
   let byPackageFlag = false;
-  if (!has(table.noFetchFlags)) {
+  if (initializer) {
+    // The value of a package flag (`yarn create -p pkg`) is looked up as written; the command word too, with its prefix.
+    raws.push(...values(table.packageFlags));
+    for (const p of limited.kept) {
+      const read = initializerNames(p.value, d.manager);
+      for (const name of read.names) {
+        raws.push(name);
+        written.set(name, p.value);
+      }
+      if (read.why !== undefined) initWhy.push(read.why);
+    }
+  } else if (!has(table.noFetchFlags)) {
     const named = values(table.packageFlags);
     if (named.length > 0) {
       raws.push(...named);
@@ -1462,20 +1703,25 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   const unsure: string[] = [...wordFlags(table.noFetchFlags), ...wordFlags(table.shellFlags)].map((f) => bothWaysReason(f.value ?? '', f.flag));
   const bothPairs: Array<readonly [PackageSpec, PackageSpec]> = [];
   for (const raw of raws) {
-    const spec = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    const parsed = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
+    // The `raw` of an initializer's package is the word as written, not the name made of it.
+    const asWritten = written.get(raw) ?? raw;
+    const spec = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
     if ('name' in spec) {
       const read = d.ecosystem === 'npm' ? npmReadings(spec, d.manager) : { packages: [spec] };
       for (const each of read.packages) {
         packages.push(each);
-        if (!byPackageFlag && candidateRaws.has(raw) && !certainRaws.has(raw)) candidates.push(each);
+        if (!byPackageFlag && candidateRaws.has(asWritten) && !certainRaws.has(asWritten)) candidates.push(each);
       }
       if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
       const why = unmeasuredReason(d.manager, spec);
       if (why !== undefined) unsure.push(why);
+      if (d.ecosystem === 'npm' && asWritten.endsWith('@')) unsure.push(LAUNCHER_NAME_AT);
     } else skipped.push(spec);
   }
   const bothWhy = bothReadings(bothPairs);
   if (bothWhy !== undefined) unsure.push(bothWhy);
+  unsure.push(...initWhy);
   const out: InstallCommand = {
     ecosystem: d.ecosystem,
     manager: d.manager,
@@ -1503,7 +1749,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   const { skipped, customRegistry, uncertain, registries } = walked;
   // A subcommand that takes no package names none: its positional words are not looked up.
   const limited = limitCandidates(walked.positionals);
-  const positionals = d.manifest === 'always' ? [] : limited.kept;
+  // The words after an update verb are its names ({@link InstallCommand.updateNames}), never packages.
+  const positionals = d.manifest === 'always' || d.names !== undefined ? [] : limited.kept;
   const allFlags = [...preWalk.flags, ...walked.flags];
   const packages: PackageSpec[] = [];
   const out: InstallCommand = {
@@ -1516,7 +1763,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
-  if (limited.dropped > 0 && d.manifest !== 'always') out.candidatesDropped = limited.dropped;
+  if (limited.dropped > 0 && d.manifest !== 'always' && d.names === undefined) out.candidatesDropped = limited.dropped;
 
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
   // thing the command surely names, so it does not stop the manifest from being read.
@@ -1582,6 +1829,18 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   // global flag back; and every flag must be one the manager's table knows, because npm reads abbreviations and
   // shorthands the table does not hold (`-g --loc=project` and `-g --g=false` obey the project's file). In doubt: no.
   const knownFlagsOnly = preWalk.unknownFlags + walked.unknownFlags === 0;
+  // The names of an update verb (not a package: `packages` stays empty for one): a pattern, a path and a URL are none.
+  if (d.names === 'always' || (d.names === 'global-word' && hasGlobalFlagWord(d.pre, d.args))) {
+    out.updateNames = [];
+    for (const p of limited.kept) {
+      const spec = parseNpm(p.value, d.manager);
+      // A pattern, a path or a URL is no name; it is kept as a skipped word, so that "no word at all" can be told from it.
+      if ('name' in spec) out.updateNames.push(spec);
+      else skipped.push(spec);
+    }
+    // The candidate words left out past the ceiling of one command are counted, as they are for an install.
+    if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
+  }
   if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
     const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
@@ -1613,7 +1872,7 @@ export type CommandShell = 'bash' | 'powershell';
 
 /** Why a package found only by reading the command as PowerShell does is never denied as missing. */
 const POWERSHELL_READING =
-  'found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space) — vetted for malicious versions only';
+  'found by reading the command as PowerShell does (a comma list, a backtick escape or continuation, a doubled quote, a Unicode space, a `>` or `<` glued to a word) — vetted for malicious versions only';
 
 function packageKey(p: PackageSpec): string {
   return `${p.ecosystem}\0${p.name.toLowerCase()}\0${p.range ?? ''}`;
@@ -1653,7 +1912,7 @@ export function parseInstallCommands(
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === undefined) continue;
+      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined) continue;
       for (const p of packages) seen.add(packageKey(p));
       // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest read.
       const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined);
@@ -1678,21 +1937,50 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
   const text = stripComments(command);
   const out = parseReading(text, forced, cdpath);
   if (shell !== 'powershell') return out;
-  const asPowerShell = powershellAsPosix(text);
-  if (asPowerShell === text) return out;
+  // `>` and `<` after text are part of the word for PowerShell (measured, 7.6 and 5.1): the word reaches the program whole.
+  const asPowerShell = powershellAsPosix(text, { literalGluedRedirects: true });
+  if (asPowerShell === text) return withoutRanges(out);
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const seenManifests = new Set(out.map(manifestKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     // A manifest install only this reading finds is kept; one both readings find is the same install.
     const newManifest = c.manifest !== undefined && !seenManifests.has(manifestKey(c));
-    if (packages.length === 0 && !newManifest) continue;
+    if (packages.length === 0 && !newManifest && c.updateNames === undefined) continue;
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
     const { manifest: _same, ...withoutManifest } = c;
     out.push({ ...(newManifest ? c : withoutManifest), packages, skipped: [] });
   }
-  return out;
+  return withoutRanges(out);
+}
+
+/** The managers of the npm family: a range with `<` or `>` written for them reaches a `.cmd` shim, which hands the cmd.exe-read word on (measured: `P@>=1.0.0` becomes `P@`). */
+const NPM_FAMILY = new Set(['npm', 'pnpm', 'yarn', 'bun']);
+
+/**
+ * For the PowerShell tool: each package of the npm family read with a range that has `<` or `>` is looked up a second time with none,
+ * because behind a `.cmd` the cmd.exe reads the line again and hands the manager `name@`, which installs the latest. The second ones come
+ * after every package of the line, as commands of their own that keep the certainty of the command they came from.
+ */
+function withoutRanges(commands: InstallCommand[]): InstallCommand[] {
+  const seen = new Set(commands.flatMap((c) => c.packages.map(packageKey)));
+  const extra: InstallCommand[] = [];
+  for (const c of commands) {
+    if (c.ecosystem !== 'npm' || !NPM_FAMILY.has(c.manager)) continue;
+    const packages: PackageSpec[] = [];
+    for (const p of c.packages) {
+      if (p.range === undefined || !/[<>]/.test(p.range)) continue;
+      const bare: PackageSpec = { ecosystem: p.ecosystem, name: p.name, raw: p.name };
+      if (seen.has(packageKey(bare))) continue;
+      seen.add(packageKey(bare));
+      packages.push(bare);
+    }
+    if (packages.length === 0) continue;
+    const { manifest: _manifest, updateNames: _names, ...rest } = c;
+    extra.push({ ...rest, packages, skipped: [] });
+  }
+  return [...commands, ...extra];
 }
 
 /** Whether any statement of `text` changes directory ({@link changesDirectory}); an unreadable text may. */
@@ -1702,6 +1990,135 @@ function movesDirectory(text: string): boolean {
   } catch {
     return true;
   }
+}
+
+/**
+ * The launcher lines whose inner command may DENY a name the registry does not have. Measured 2026-11-20 in a Linux container
+ * (Node 24.21.0, npm 11.19.0, pnpm 11.24.0, Yarn 1.22.22 and 4.18.1, bun 1.4.4, corepack 0.36.0) against a substitute registry
+ * that logged every request: each pair below, run with `add <P>` and no flag of its own, asked the registry for `P` and for the
+ * manifest's dependency and installed both. `npx` also with `-y`; `npm exec` only with a `--` before the launched word, or after
+ * `corepack`; behind `corepack` the manager that ran was Yarn 1.22.22. `pnpm dlx` and `yarn dlx` were started as `corepack pnpm@11.24.0
+ * dlx …` and `corepack yarn@4.18.1 dlx …`: a `corepack <manager>[@version]` before them is read as the same line. Nothing else was
+ * measured: another pair, spelling, launcher flag, `--` or inner verb leaves the inner command uncertain (it only warns).
+ */
+interface MeasuredLaunch {
+  spelling: string;
+  /** The launched word, without its version. */
+  launched: string;
+  /** The launcher's own flags that were part of the measurement. */
+  flags: readonly string[];
+  /** Where the `--` stood: before the launched word, after it, or nowhere. */
+  dash: 'before' | 'after' | 'none';
+  /** The manager `corepack` ran (written without a version) when the launched word is `corepack`. */
+  behindCorepack?: string;
+  /** Whether `corepack <manager>[@version]` may stand before the launcher. */
+  prefix?: true;
+}
+const MEASURED_LAUNCHES: readonly MeasuredLaunch[] = [
+  { spelling: 'npx', launched: 'pnpm', flags: ['-y'], dash: 'none' },
+  { spelling: 'npx', launched: 'yarn', flags: ['-y'], dash: 'none' },
+  { spelling: 'npx', launched: 'corepack', flags: ['-y'], dash: 'none', behindCorepack: 'yarn' },
+  { spelling: 'npm exec', launched: 'pnpm', flags: [], dash: 'before' },
+  { spelling: 'npm exec', launched: 'corepack', flags: [], dash: 'after', behindCorepack: 'yarn' },
+  { spelling: 'pnpm dlx', launched: 'yarn', flags: [], dash: 'none', prefix: true },
+  { spelling: 'yarn dlx', launched: 'pnpm', flags: [], dash: 'none', prefix: true },
+  { spelling: 'bunx', launched: 'pnpm', flags: [], dash: 'none' },
+];
+/** The verb of the measured lines. */
+const MEASURED_VERB = 'add';
+/** The launchers of the npm family ({@link LAUNCH_FLAGS} names): the only ones whose launched package may be a package manager. */
+const NPM_LAUNCH_TABLES: ReadonlySet<string> = new Set(['npx', 'npm-exec', 'pnpm-dlx', 'yarn-dlx', 'bunx']);
+/** The package managers (and corepack) the hook reads behind a launcher, by the name of the launched word without its version. */
+const LAUNCHED_MANAGERS: ReadonlySet<string> = new Set(['npm', 'pnpm', 'yarn', 'yarnpkg', 'bun', 'corepack']);
+/** The flags that move a launcher, or its manager, away from where the command runs, or into a workspace (the `dir` and `workspace` sets). */
+const MOVING_FLAGS = ['--prefix', '-C', '--dir', '--cwd', '-w', '--workspace', '--workspaces', '--filter', '-F'];
+
+function unmeasuredLaunch(why: string): string {
+  return `a package manager run by a launcher — this form was not measured (${why})`;
+}
+
+/** What the measurement does not cover about this launcher line, or `undefined` when it is one of the measured forms. */
+function unmeasuredForm(
+  launch: NonNullable<Detected['launch']>,
+  launched: string,
+  ownFlags: readonly string[],
+  dash: { before: boolean; after: boolean },
+  inner: readonly string[],
+): string | undefined {
+  const spelling = launch.spelling ?? '';
+  const ofSpelling = MEASURED_LAUNCHES.filter((m) => m.spelling === spelling);
+  if (ofSpelling.length === 0) return unmeasuredLaunch(`the launcher's spelling: ${spelling}`);
+  const m = ofSpelling.find((each) => each.launched === launched);
+  if (m === undefined || (launch.viaCorepack === true && m.prefix !== true)) return unmeasuredLaunch(`the pair: ${spelling} ${launched}`);
+  const stray = ownFlags.find((f) => !m.flags.includes(f));
+  if (stray !== undefined) return unmeasuredLaunch(`a flag of the launcher: ${stray}`);
+  const placed = dash.before ? (dash.after ? 'both' : 'before') : dash.after ? 'after' : 'none';
+  if (placed !== m.dash) return unmeasuredLaunch(`a flag of the launcher: the \`--\` is ${placed === 'none' ? 'missing' : 'not where it was measured'}`);
+  if (m.behindCorepack !== undefined && inner[0] !== m.behindCorepack) return unmeasuredLaunch(`the pair: ${spelling} ${launched} ${inner[0] ?? ''}`);
+  const verb = inner[m.behindCorepack === undefined ? 0 : 1];
+  if (verb !== MEASURED_VERB) return unmeasuredLaunch(`the inner verb: ${verb ?? 'none'}`);
+  return undefined;
+}
+
+/**
+ * The command a launcher of the npm family runs, when what it launches is a package manager the hook reads: the words after the
+ * launched word, read as that manager reads them — `npx pnpm add p` is also `pnpm add p`, and `npx corepack yarn add p` is also
+ * `corepack yarn add p` (measured 2026-11-20: the manager fetches `p` and installs the project's manifest). One level: this reads
+ * the inner command once and never looks inside it for another launcher. `undefined` when the launcher launches anything else, runs
+ * shell text (`npx -c`), or the words after the manager are no command the hook reads (`npx pnpm --version`).
+ *
+ * It is a command of its own: its manager, flags, manifest and registry are the manager's, it has no `localFirst`, and it takes the
+ * directory flags of the launcher (`--prefix`, `--dir`, `-w`, …) as its own `prefixed`. It may deny a missing name only when the
+ * whole line is plain (`notConfident`, the outer judgement) and is one of the forms measured ({@link MEASURED_LAUNCHES}) with a plain
+ * inner command ({@link confidentWords}); otherwise it carries the reason.
+ */
+function readLaunchedManager(d: Detected, context: readonly string[], notConfident: string | null): InstallCommand | undefined {
+  const launch = d.launch;
+  if (launch === undefined || launch.style !== 'run' || launch.initializer === true || d.ecosystem !== 'npm' || !NPM_LAUNCH_TABLES.has(launch.flags)) {
+    return undefined;
+  }
+  const table = LAUNCH_FLAGS[launch.flags];
+  if (table === undefined) return undefined;
+  const found = scanPositional(d.args, 0, table);
+  // The word after a flag the table does not know may be that flag's value: it is only a candidate, nothing is read behind it.
+  if (found.at < 0 || found.candidate) return undefined;
+  const launchedWord = d.args[found.at];
+  if (launchedWord === undefined) return undefined;
+  const before = [...d.pre, ...d.args.slice(0, found.at)];
+  // A shell-text flag (`-c`, `--call`, `--shell-mode`): the word is a command line, not a package.
+  if (before.some((w) => table.shellFlags?.has(w.value) === true)) return undefined;
+  const spec = parseNpm(launchedWord.value, d.manager);
+  if (!('name' in spec) || !LAUNCHED_MANAGERS.has(spec.name)) return undefined;
+  const dash = { before: before.some((w) => w.value === '--'), after: d.args[found.at + 1]?.value === '--' };
+  const words = d.args.slice(found.at + (dash.after ? 2 : 1));
+  const head: ShellWord = { ...launchedWord, value: spec.name };
+  const innerDetected = detect([head, ...words]);
+  if (innerDetected === null) return undefined;
+
+  const c = collect(innerDetected, context);
+  // The directory flags of the launcher make the manifest it installs not the one where the command runs.
+  const moving = new Set([...MOVING_FLAGS, ...(table.dir ?? []), ...(table.workspace ?? []), ...(FLAGS[d.manager]?.dir ?? []), ...(FLAGS[d.manager]?.workspace ?? [])]);
+  const named = (w: ShellWord): boolean => {
+    const eq = w.value.indexOf('=');
+    return moving.has(eq > 0 ? w.value.slice(0, eq) : w.value);
+  };
+  if (before.some(named)) c.prefixed = true;
+  // `npm exec` reads the flags after the manager itself unless a `--` stands before them (npm's documentation; not run): `-g` there
+  // may be npm's, so the inner command is never global for certain and its manifest is read.
+  if (launch.flags === 'npm-exec' && !dash.before && !dash.after && c.global === true) {
+    delete c.global;
+    if (innerDetected.manifest !== undefined) {
+      c.manifest = { kind: 'package-json' };
+      if (innerDetected.update === true) c.update = true;
+    }
+  }
+  const ownFlags = before.filter((w) => w.value !== '--').map((w) => w.value);
+  const innerWords = words.map((w) => w.value);
+  const unmeasured = unmeasuredForm(launch, spec.name, ownFlags, dash, innerWords);
+  const shape = notConfident ?? unmeasured ?? confidentWords(spec.name === 'corepack' ? ['corepack', ...innerWords] : [spec.name, ...innerWords]);
+  const keep = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
+  c.uncertain = shape === null ? keep : [...new Set([shape, ...c.uncertain])];
+  return c;
 }
 
 /**
@@ -1729,7 +2146,7 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
     statement.commands.forEach((words, w) => {
       // A redirection is no package: `pip install x 2>&1` named a package `2`
       // (PEP 508 reads `2>&1` as `2` at a version `>&1`), `2> err.log` two.
-      const d = detect(withoutRedirectWords(words));
+      const d = detect(wordsWithoutRedirections(words));
       if (d !== null) {
         const context: string[] = [];
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
@@ -1737,12 +2154,22 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         const c = collect(d, context);
         // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does,
         // and so does a `key@npm:rest` that Yarn and bun read as either of two packages.
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r.includes(TWO_READINGS));
+        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
         c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
-        if (runsElsewhere(words)) c.workdir = null;
-        else if (sure === null || sure.length > 0) c.workdir = sure;
+        const elsewhere = runsElsewhere(words);
+        const place = (command: InstallCommand): void => {
+          if (elsewhere) command.workdir = null;
+          else if (sure === null || sure.length > 0) command.workdir = sure;
+        };
+        place(c);
         out.push(c);
+        // A launcher that runs a package manager: the words after it are a command of that manager, read once and joined to the line.
+        const inner = readLaunchedManager(d, context, notConfident);
+        if (inner !== undefined) {
+          place(inner);
+          out.push(inner);
+        }
       }
       if (changesDirectory(words)) dirChanged = true;
     });
@@ -1891,6 +2318,10 @@ const ALLOW: Record<string, Allow> = {
   // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
   'npm-exec': { bool: set('-y', '--yes', '-q', '--quiet', '--silent', '--ignore-scripts'), value: set() },
   'pnpm-dlx': { bool: set('--silent', '-s'), value: set() },
+  // The initializers (measured 2026-11-20): consent and verbosity only; pnpm none, bun has no entry (it never denies).
+  'npm-init': { bool: set('-y', '--yes', '-q', '--quiet', '--silent'), value: set() },
+  'yarn-create': { bool: set('-q', '--quiet'), value: set() },
+  'pnpm-create': { bool: set(), value: set() },
   'yarn-dlx': { bool: set('-q', '--quiet'), value: set() },
   bunx: { bool: set('--bun', '--silent', '--verbose'), value: set() },
   uvx: { bool: set('-q', '--quiet', '-v', '--verbose', '--isolated'), value: set() },
@@ -1905,6 +2336,8 @@ const ALLOW: Record<string, Allow> = {
  * element of `a,b` as its own argument.
  */
 const NOT_SIMPLE = /[;&|()<>`$\\\n\r{}*?[\],]/;
+
+const BUN_TEMPLATE_REASON = '`bun create` uses a template of that name from a `.bun-create` folder when there is one, which was not looked for';
 
 function notSingle(why: string): string {
   return `not a single plain install statement (${why})`;
@@ -1962,7 +2395,15 @@ function confidentShape(text: string): string | null {
   }
   if (quote !== null) return notSingle('unterminated quote');
   if (has) words.push(cur);
+  return confidentWords(words);
+}
 
+/**
+ * The word half of {@link confidentShape}: whether the words — the command's own, already split and unquoted — are one plain
+ * install statement of a tool with only allowlisted flags. The command inside a launcher (`npx pnpm add p`) is judged by the
+ * words after the launcher ({@link readLaunchedManager}).
+ */
+function confidentWords(words: readonly string[]): string | null {
   // `corepack yarn@4 add p` is as plain as `yarn add p`; `yarnpkg` is `yarn`.
   const viaCorepack = words[0] === 'corepack' ? corepackManager(words[1]) : undefined;
   const [named, ...rest] = viaCorepack === undefined ? words : [viaCorepack, ...words.slice(2)];
@@ -1993,6 +2434,11 @@ function confidentShape(text: string): string | null {
         [key, args, launch] = ['npm-exec', rest.slice(1), true];
         break;
       }
+      // An initializer (`npm create|init|innit <x>`) is a launcher of `create-<x>`: the first positional closes the judgement.
+      if (NPM_INITIALIZER.has(at(0))) {
+        [key, args, launch] = ['npm-init', rest.slice(1), true];
+        break;
+      }
       if (!NPM_INSTALL.has(at(0))) return notPlain(`'npm ${at(0)}'`);
       [key, args] = ['npm', rest.slice(1)];
       break;
@@ -2000,6 +2446,10 @@ function confidentShape(text: string): string | null {
     case 'yarn':
       if (at(0) === 'dlx') {
         [key, args, launch] = [`${tool}-dlx`, rest.slice(1), true];
+        break;
+      }
+      if (at(0) === 'create') {
+        [key, args, launch] = [`${tool}-create`, rest.slice(1), true];
         break;
       }
       // `pnpm install <pkg>` is as plain an install statement as `pnpm add <pkg>`; yarn's `install` takes no package.
@@ -2011,6 +2461,9 @@ function confidentShape(text: string): string | null {
         [key, args, launch] = ['bunx', rest.slice(1), true];
         break;
       }
+      // `bun create <x>` uses a template of that name from a `.bun-create` folder when there is one and then asks the registry
+      // for nothing (measured 2026-11-20, bun 1.4.4): the hook does not read that folder, so a missing name never denies.
+      if (BUN_INITIALIZER.has(at(0))) return BUN_TEMPLATE_REASON;
       if (!BUN_ADD.has(at(0))) return notPlain(`'bun ${at(0)}'`);
       [key, args] = ['bun', rest.slice(1)];
       break;

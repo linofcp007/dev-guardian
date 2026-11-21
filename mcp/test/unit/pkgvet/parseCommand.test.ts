@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
+import { powershellAsPosix } from '../../../src/hooks/powershellText.js';
+import { withoutRedirectWords } from '../../../src/hooks/shell/effects.js';
+import { splitShell } from '../../../src/hooks/shell/split.js';
 import { parseInstallCommands, parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from '../../../src/pkgvet/types.js';
 import { expectLinear, PERF_STRICT } from '../../helpers/timing.js';
@@ -2683,5 +2686,709 @@ describe('install-vet-tilde-range-skipped', () => {
   it('T-02 guard: pip and composer read their own `~` as today, and give the package', () => {
     expect(vetted(`pip install "${NAME}~=1.0"`)).toEqual([[NAME, '~=1.0']]);
     expect(vetted('composer require vendor-zq/tilde-pkg-zq:~1.0')).toEqual([['vendor-zq/tilde-pkg-zq', '~1.0']]);
+  });
+});
+
+// ───────────────── install-vet-npm-unread-verbs — the initializers and `npm install-test <package>` are read
+
+describe('install-vet-npm-unread-verbs', () => {
+  const X = 'dgprobe-zzq7731-init';
+  const S = '@dgprobe-zzq7731';
+  const MANIFEST = { kind: 'package-json' };
+
+  /** What each install command of a line gives: the packages as `[name, range, raw]`, the manifest and whether it is a launch that looks in the project first. */
+  const shapes = (command: string): Array<{ packages: Array<[string, string | undefined, string]>; manifest: unknown; localFirst: unknown }> =>
+    parseInstallCommands(command).map((c) => ({
+      packages: c.packages.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+      manifest: c.manifest,
+      localFirst: c.localFirst,
+    }));
+  /** The one command an initializer line is: one package, no manifest, no `localFirst`. */
+  const initializer = (name: string, range: string | undefined, raw: string): unknown[] => [
+    { packages: [[name, range, raw]], manifest: undefined, localFirst: undefined },
+  ];
+
+  describe('initializers', () => {
+    /** The words an initializer takes, each with what the manager looks up for it (`create-<x>`, `@s/create`, `@s/create-<x>`). */
+    const WORDS: Array<[string, string, string | undefined]> = [
+      [X, `create-${X}`, undefined],
+      [`${X}@1.2.3`, `create-${X}`, '1.2.3'],
+      [`${X}@latest`, `create-${X}`, undefined],
+      [`${X}@^1`, `create-${X}`, '^1'],
+      [S, `${S}/create`, undefined],
+      [`${S}@1.2.3`, `${S}/create`, '1.2.3'],
+      [`${S}/${X}`, `${S}/create-${X}`, undefined],
+      [`${S}/${X}@1.2.3`, `${S}/create-${X}`, '1.2.3'],
+    ];
+    const LINES: Array<[string, string]> = [
+      ['npm create', ''],
+      ['npm init', ''],
+      ['npm innit', ''],
+      ['yarn create', ''],
+      ['pnpm create', ' my-app'],
+      ['bun create', ' dest'],
+      ['bun c', ''],
+    ];
+
+    it.each(LINES.flatMap(([line, after]) => WORDS.map(([word, name, range]) => [line, word, after, name, range] as const)))(
+      'T-01 `%s %s%s` gives one command, the package %s with the range %s and the word as written',
+      (line, word, after, name, range) => {
+        expect(shapes(`${line} ${word}${after}`), `${line} ${word}${after}`).toEqual(initializer(name, range, word));
+      },
+    );
+
+    it.each([
+      [`npm init -y ${X}`, `create-${X}`, X],
+      [`npm init --silent ${X} my-app`, `create-${X}`, X],
+      [`npm init ${X} -- --template react`, `create-${X}`, X],
+      ['bun create App.tsx', 'create-App.tsx', 'App.tsx'],
+      [`pnpm create -C sub ${X}`, `create-${X}`, X],
+      [`yarn create --cwd ./sub ${X}`, `create-${X}`, X],
+      [`npm --dgunknown create ${X}`, `create-${X}`, X],
+      [`corepack yarn@4 create ${X}`, `create-${X}`, X],
+      [`yarnpkg create ${X}`, `create-${X}`, X],
+    ])('T-01 `%s` gives one command, which looks up %s, with nothing of the initializer arguments', (command, name, raw) => {
+      expect(shapes(command), command).toEqual(initializer(name, undefined, raw));
+    });
+
+    // What today's parser answers, written out: the forms that fetch nothing, and the verbs the work leaves as they are.
+    it.each(['npm init', 'npm init -y', 'yarn create', 'pnpm create'])('T-05 `%s` names no initializer: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each(['npm link', 'npm link P', 'npm pack P', 'npm view P'])('T-05 `%s` is not an install command: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each(['npm init user/repo', 'npm init ./folder', 'bun create user/repo'])('T-05 `%s` is not a registry name: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    // The word as written decides, not what a `create-` in front would make of it: `npm init .` is not the package `create-.`.
+    it.each([
+      'npm init .',
+      'npm init ..',
+      'npm init ~',
+      'npm create ~/templates/app',
+      'yarn create .',
+      'pnpm create ..',
+      'bun create .',
+      'npm init template.tgz',
+      'npm init https://example.invalid/template.tgz',
+    ])('T-05 `%s` names a path, an archive or a URL, not a registry name: no command', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each(['npm --dgunknown create install P', 'npm --dgunknown init install P', 'bun --dgunknown c install P'])(
+      'T-05 `%s` stays the `install` command with P, as today',
+      (command) => {
+        expect(shapes(command), command).toEqual([{ packages: [['P', undefined, 'P']], manifest: MANIFEST, localFirst: undefined }]);
+      },
+    );
+
+    it('T-05 `yarn --dgunknown create` stays the manifest install of the verbless `yarn`, as today', () => {
+      expect(shapes('yarn --dgunknown create')).toEqual([{ packages: [], manifest: MANIFEST, localFirst: undefined }]);
+    });
+
+    it.each(['npm install-test', 'npm it'])('T-05 `%s` with no package: the manifest and no package', (command) => {
+      expect(shapes(command)).toEqual([{ packages: [], manifest: MANIFEST, localFirst: undefined }]);
+    });
+
+    it('T-05 `pnpm install-test left-pad` is not read: no command', () => {
+      expect(parseInstallCommands('pnpm install-test left-pad')).toEqual([]);
+    });
+
+    it.each([
+      [`npx create-${X}`, true],
+      [`npm exec create-${X}`, true],
+      [`pnpm dlx create-${X}`, undefined],
+    ])('T-05 `%s` stays a launcher of that package, as today', (command, localFirst) => {
+      expect(shapes(command), command).toEqual([{ packages: [[`create-${X}`, undefined, `create-${X}`]], manifest: undefined, localFirst }]);
+    });
+  });
+
+  describe('install-test', () => {
+    const P = 'dgprobe-zzq7731-pkg';
+    /** What a line gives except its verb: the packages, the manifest, the global flag and the reasons it is uncertain (the verb named in a reason is left out). */
+    const reading = (command: string): unknown[] =>
+      parseInstallCommands(command).map((c) => ({
+        packages: c.packages.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+        manifest: c.manifest,
+        global: c.global,
+        uncertain: c.uncertain.map((u) => u.replace(/\('npm [a-z-]+'\)/, "('npm <verb>')")),
+      }));
+
+    it.each(['install-test', 'it'].flatMap((verb) => ['', '-D ', '--no-save ', '-g '].map((flags) => [verb, flags] as const)))(
+      'T-04 `npm %s %s<P>` is read as `npm install` with the same flags: packages, manifest, global and uncertain',
+      (verb, flags) => {
+        expect(reading(`npm ${verb} ${flags}${P}`), `npm ${verb} ${flags}${P}`).toEqual(reading(`npm install ${flags}${P}`));
+      },
+    );
+
+    it.each(['install-test', 'it'])('T-04 `npm %s <P>@1.2.3` is read as `npm install <P>@1.2.3`, with the range', (verb) => {
+      expect(reading(`npm ${verb} ${P}@1.2.3`)).toEqual(reading(`npm install ${P}@1.2.3`));
+      expect(vetted(`npm ${verb} ${P}@1.2.3`)).toEqual([[P, '1.2.3']]);
+    });
+
+    it.each(['install-test', 'it'])('T-04 `npm %s -g <P>` names the package and reads no manifest (global)', (verb) => {
+      const [c] = parseInstallCommands(`npm ${verb} -g ${P}`);
+      expect({ packages: c?.packages.map((p) => p.name), manifest: c?.manifest, global: c?.global }).toEqual({
+        packages: [P],
+        manifest: undefined,
+        global: true,
+      });
+    });
+  });
+});
+
+// ───────────────── install-vet-global-update-by-name — the names given to a global update, or to `yarn up`, are read
+
+describe('install-vet-global-update-by-name', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const MANIFEST = { kind: 'package-json' };
+  type Parsed = ReturnType<typeof parseInstallCommands>[number];
+  /** `updateNames` is the field this work adds: read through a type that has it, so a parser without it fails by its assertion, not by the compiler. */
+  type WithUpdateNames = Parsed & { updateNames?: readonly PackageSpec[] };
+  /** What a line gives, per command: the packages, the names given to an update verb as `[name, range, raw]`, the manifest, the update flag, whether it is global and why it is uncertain. */
+  const read = (
+    command: string,
+  ): Array<{
+    packages: string[];
+    updateNames: Array<[string, string | undefined, string]> | undefined;
+    manifest: unknown;
+    update: unknown;
+    global: unknown;
+    uncertain: string[];
+  }> =>
+    parseInstallCommands(command).map((c) => ({
+      packages: c.packages.map((p) => p.name),
+      updateNames: (c as WithUpdateNames).updateNames?.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+      manifest: c.manifest,
+      update: c.update,
+      global: c.global,
+      uncertain: c.uncertain,
+    }));
+  /** The same, without the reasons the command is uncertain: the words of the verb differ between two spellings of one command. */
+  const essence = (command: string): unknown => read(command).map(({ uncertain: _uncertain, ...rest }) => rest);
+  const workspaceReason = (command: string): boolean => read(command).some((c) => c.uncertain.some((u) => u.startsWith('workspace context')));
+
+  it.each([
+    `npm update -g ${P}`,
+    `npm up -g ${P}`,
+    `npm upgrade -g ${P}`,
+    `npm update ${P} --global`,
+    `npm -g update ${P}`,
+    `npm update --location=global ${P}`,
+    `pnpm update -g ${P}`,
+    `pnpm up -g ${P}`,
+    `pnpm upgrade -g ${P}`,
+    `bun update -g ${P}`,
+    `yarn global upgrade ${P}`,
+    `yarn global upgrade ${P} --latest`,
+  ])('T-01 `%s` gives the name in `updateNames` and not in `packages`; global for certain, no manifest', (command) => {
+    expect(read(command), command).toEqual([
+      { packages: [], updateNames: [[P, undefined, P]], manifest: undefined, update: undefined, global: true, uncertain: expect.any(Array) },
+    ]);
+  });
+
+  it('T-01 `npm update -g <P>@2` gives the name with its range', () => {
+    expect(read(`npm update -g ${P}@2`).map((c) => ({ packages: c.packages, updateNames: c.updateNames, manifest: c.manifest }))).toEqual([
+      { packages: [], updateNames: [[P, '2', `${P}@2`]], manifest: undefined },
+    ]);
+  });
+
+  it.each([`pnpm update -g --latest ${P}`, `npm update -gD ${P}`, `npm update -g false ${P}`, `npm update --global=false ${P}`])(
+    'T-01 `%s` is global but not for certain: `updateNames` has the name AND the manifest is read',
+    (command) => {
+      const parsed = read(command);
+      expect(parsed.length, command).toBe(1);
+      expect({
+        command,
+        packages: parsed.map((c) => c.packages),
+        named: parsed.map((c) => (c.updateNames ?? []).filter((n) => n[0] === P).length),
+        manifest: parsed.map((c) => c.manifest),
+        update: parsed.map((c) => c.update),
+      }).toEqual({ command, packages: [[]], named: [1], manifest: [MANIFEST], update: [true] });
+    },
+  );
+
+  it("T-01 `bash -c 'npm update -g <P>'` gives what `npm update -g <P>` gives: the nested command is not dropped for having no packages", () => {
+    // The shell guard hands the scripts of `bash -c` to the parser as `nested`: the plain reading of the outer line finds no install.
+    const nested = (line: string, script: string): unknown =>
+      parseInstallCommands(line, { nested: [{ text: script, shell: 'bash' }] }).map((c) => ({
+        packages: c.packages.map((p) => p.name),
+        updateNames: (c as WithUpdateNames).updateNames?.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+        manifest: c.manifest,
+        update: c.update,
+        global: c.global,
+      }));
+    expect(nested(`bash -c 'npm update -g ${P}'`, `npm update -g ${P}`)).toEqual(essence(`npm update -g ${P}`));
+    expect(nested(`bash -c 'npm update -g ${P}'`, `npm update -g ${P}`)).toEqual([
+      { packages: [], updateNames: [[P, undefined, P]], manifest: undefined, update: undefined, global: true },
+    ]);
+    expect(nested("bash -c 'npm update -g'", 'npm update -g')).toEqual(essence('npm update -g'));
+  });
+
+  it.each(['npm update -g', 'pnpm update -g', 'bun update -g', 'yarn global upgrade'])(
+    'T-01 `%s` has no names: `updateNames` is empty, global for certain, no manifest',
+    (command) => {
+      expect(read(command), command).toEqual([
+        { packages: [], updateNames: [], manifest: undefined, update: undefined, global: true, uncertain: expect.any(Array) },
+      ]);
+    },
+  );
+
+  // ── the Yarn forms (T-03)
+
+  it.each([
+    [`yarn workspace W up ${P}`, `yarn up ${P}`],
+    ['yarn workspace W up', 'yarn up'],
+    [`yarn workspaces foreach -A up ${P}`, `yarn up ${P}`],
+    [`yarn workspaces foreach --all -p up ${P}`, `yarn up ${P}`],
+  ])('T-03 `%s` gives what `%s` gives, and is uncertain for the workspace context', (command, plain) => {
+    expect(essence(command), command).toEqual(essence(plain));
+    expect(essence(command), command).not.toEqual([]);
+    expect(workspaceReason(command), command).toBe(true);
+  });
+
+  it('T-03 `yarn up <P>` gives the name in `updateNames`, the manifest and the update, and no package', () => {
+    expect(essence(`yarn up ${P}`)).toEqual([{ packages: [], updateNames: [[P, undefined, P]], manifest: MANIFEST, update: true, global: undefined }]);
+  });
+
+  it.each([
+    [`yarn workspace W up ${P}`, [[P, undefined, P]]],
+    [`yarn workspaces foreach -A up ${P}`, [[P, undefined, P]]],
+    ['yarn workspace W up', []],
+  ])('T-03 `%s`: `updateNames` is %j and `packages` is empty', (command, names) => {
+    expect(read(command).map((c) => ({ packages: c.packages, updateNames: c.updateNames }))).toEqual([{ packages: [], updateNames: names }]);
+  });
+
+  it('T-03 `yarn workspaces foreach -A add <P>` gives what `yarn workspace W add <P>` gives: the package in `packages`', () => {
+    expect(essence(`yarn workspaces foreach -A add ${P}`)).toEqual(essence(`yarn workspace W add ${P}`));
+    expect(essence(`yarn workspaces foreach -A add ${P}`)).toEqual([{ packages: [P], updateNames: undefined, manifest: MANIFEST, update: undefined, global: undefined }]);
+    expect(workspaceReason(`yarn workspaces foreach -A add ${P}`)).toBe(true);
+  });
+
+  it('T-03 `yarn workspaces foreach --dgunknown-flag up <P>` is uncertain for the flag the hook does not know', () => {
+    const reasons = read(`yarn workspaces foreach --dgunknown-flag up ${P}`).flatMap((c) => c.uncertain);
+    expect(
+      reasons.some((u) => u.includes('a flag of yarn workspaces foreach the hook does not know')),
+      reasons.join(' | '),
+    ).toBe(true);
+  });
+
+  it('T-03 `yarn up <P>@^3` gives the name with its range', () => {
+    expect(read(`yarn up ${P}@^3`).map((c) => ({ packages: c.packages, updateNames: c.updateNames }))).toEqual([
+      { packages: [], updateNames: [[P, '^3', `${P}@^3`]] },
+    ]);
+  });
+
+  it.each([`yarn up '*'`, `yarn up '@babel/*'`])('T-03 `%s` gives no name: a pattern is not a package', (command) => {
+    expect(read(command).map((c) => ({ packages: c.packages, updateNames: c.updateNames }))).toEqual([{ packages: [], updateNames: [] }]);
+  });
+
+  it.each(['yarn workspace W run build', 'yarn workspaces list', `yarn workspace W upgrade ${P}`])('T-03 `%s` stays unread: no command', (command) => {
+    expect(parseInstallCommands(command)).toEqual([]);
+  });
+
+  // ── protection (T-06): the parser clause
+
+  it.each(['yarn up lodash', "yarn up '*'", 'corepack yarn@4.18.1 up lodash'])('T-06 `%s` keeps `packages` empty and the manifest read, as today', (command) => {
+    expect(read(command).map((c) => ({ packages: c.packages, manifest: c.manifest, update: c.update }))).toEqual([{ packages: [], manifest: MANIFEST, update: true }]);
+  });
+
+  // Review of the execution (2026-11-20): the candidate words of an update past the per-command ceiling were dropped uncounted.
+  it('T-01 the candidates of a global update past the per-command ceiling are counted, as those of an install are', () => {
+    const words = Array.from({ length: 60 }, (_, i) => `--dgq${String(i)} dgprobe-zzq7731-c${String(i)}`).join(' ');
+    const dropped = (command: string): Array<number | undefined> => parseInstallCommands(command).map((c) => c.candidatesDropped);
+    const install = dropped(`npm install -g ${words}`);
+    expect(install).toHaveLength(1);
+    expect(install[0] ?? 0).toBeGreaterThan(0);
+    expect(dropped(`npm update -g ${words}`)).toEqual(install);
+  });
+});
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher of the npm family runs, when it is a package manager
+
+describe('install-vet-launcher-runs-manager', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const Q = 'dgprobe-zzq7731-second';
+  const MANIFEST = { kind: 'package-json' };
+  type Shape = {
+    manager: string;
+    packages: Array<[string, string | undefined, string]>;
+    manifest: unknown;
+    global: unknown;
+    localFirst: unknown;
+  };
+  /** What each install command of a line gives: the manager, the packages as `[name, range, raw]`, the manifest, whether it is global and whether it looks in the project first. */
+  const shapes = (command: string): Shape[] =>
+    parseInstallCommands(command).map((c) => ({
+      manager: c.manager,
+      packages: c.packages.map((p): [string, string | undefined, string] => [p.name, p.range, p.raw]),
+      manifest: c.manifest,
+      global: c.global,
+      localFirst: c.localFirst,
+    }));
+  /** The command of the launcher itself, as the parser gives it today: the launcher's manager and the one word it launches. */
+  const outer = (manager: string, launched: [string, string | undefined, string] | undefined, localFirst: boolean): Shape => ({
+    manager,
+    packages: launched === undefined ? [] : [launched],
+    manifest: undefined,
+    global: undefined,
+    localFirst: localFirst ? true : undefined,
+  });
+  const word = (name: string, range?: string): [string, string | undefined, string] => [name, range, range === undefined ? name : `${name}@${range}`];
+
+  // ── T-01: the second command is the line without the launcher
+
+  const LAUNCHED: Array<[line: string, first: Shape, inner: string]> = [
+    [`npx pnpm add ${P}`, outer('npx', word('pnpm'), true), `pnpm add ${P}`],
+    [`npx yarn add ${P}`, outer('npx', word('yarn'), true), `yarn add ${P}`],
+    [`npx -y pnpm@11 add ${P}`, outer('npx', word('pnpm', '11'), true), `pnpm add ${P}`],
+    [`npm exec -- pnpm add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`npm exec pnpm -- add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`npm exec pnpm add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`npm x pnpm add ${P}`, outer('npm', word('pnpm'), true), `pnpm add ${P}`],
+    [`pnpm dlx yarn add ${P}`, outer('pnpm', word('yarn'), false), `yarn add ${P}`],
+    [`corepack pnpm@11 dlx yarn add ${P}`, outer('pnpm', word('yarn'), false), `yarn add ${P}`],
+    [`pnpx yarn add ${P}`, outer('pnpm', word('yarn'), false), `yarn add ${P}`],
+    [`yarn dlx pnpm add ${P}`, outer('yarn', word('pnpm'), false), `pnpm add ${P}`],
+    [`bunx pnpm add ${P}`, outer('bun', word('pnpm'), true), `pnpm add ${P}`],
+    [`bun x pnpm add ${P}`, outer('bun', word('pnpm'), true), `pnpm add ${P}`],
+    [`npx npm install ${P}`, outer('npx', word('npm'), true), `npm install ${P}`],
+    [`npx bun add ${P}`, outer('npx', word('bun'), true), `bun add ${P}`],
+    [`npx yarnpkg add ${P}`, outer('npx', word('yarnpkg'), true), `yarnpkg add ${P}`],
+    [`npx pnpm add -D ${P} ${Q}`, outer('npx', word('pnpm'), true), `pnpm add -D ${P} ${Q}`],
+    [`npx -p pnpm pnpm add ${P}`, outer('npx', word('pnpm'), true), `pnpm add ${P}`],
+    [`npx -p cowsay pnpm add ${P}`, outer('npx', word('cowsay'), true), `pnpm add ${P}`],
+    [`npx --no-install pnpm add ${P}`, outer('npx', undefined, true), `pnpm add ${P}`],
+  ];
+
+  it.each(LAUNCHED)('T-01 `%s` gives the launcher command, as today, and a second one equal to the line without the launcher', (line, first, inner) => {
+    const expected = shapes(inner);
+    expect(expected.length, `the line without the launcher: ${inner}`).toBe(1);
+    expect(shapes(line), line).toEqual([first, { ...expected[0], localFirst: undefined }]);
+  });
+
+  it(`T-01 \`npm exec pnpm add -g ${P}\`: the second command is not global, and it has the manifest`, () => {
+    expect(shapes(`npm exec pnpm add -g ${P}`)).toEqual([
+      outer('npm', word('pnpm'), true),
+      { manager: 'pnpm', packages: [word(P)], manifest: MANIFEST, global: undefined, localFirst: undefined },
+    ]);
+  });
+
+  // ── T-03: behind the corepack
+
+  const COREPACK: Array<[line: string, first: Shape, inner: string]> = [
+    [`npx corepack yarn add ${P}`, outer('npx', word('corepack'), true), `corepack yarn add ${P}`],
+    [`npm exec corepack -- yarn add ${P}`, outer('npm', word('corepack'), true), `corepack yarn add ${P}`],
+    [`npx corepack pnpm@11 add ${P}`, outer('npx', word('corepack'), true), `corepack pnpm@11 add ${P}`],
+    [`pnpm dlx corepack yarn add ${P}`, outer('pnpm', word('corepack'), false), `corepack yarn add ${P}`],
+    ['npx corepack up', outer('npx', word('corepack'), true), 'corepack up'],
+    ['npx corepack use pnpm@11', outer('npx', word('corepack'), true), 'corepack up'],
+  ];
+
+  it.each(COREPACK)('T-03 `%s` gives the launcher command, as today, and a second one equal to the line without the launcher', (line, first, inner) => {
+    const expected = shapes(inner);
+    expect(expected.length, `the line without the launcher: ${inner}`).toBe(1);
+    expect(shapes(line), line).toEqual([first, { ...expected[0], localFirst: undefined }]);
+  });
+
+  it.each(['npx corepack enable', 'npx corepack --version'])('T-03 `%s` is one command, the launcher of corepack, as today', (line) => {
+    expect(shapes(line), line).toEqual([outer('npx', word('corepack'), true)]);
+  });
+
+  // ── T-05: protection — what stays one command, with the values written here
+
+  const ONE: Array<[line: string, command: Shape]> = [
+    ['npx cowsay hello', outer('npx', word('cowsay'), true)],
+    ['pnpm dlx create-thing x', outer('pnpm', word('create-thing'), false)],
+    ['bunx tsc --noEmit', outer('bun', word('tsc'), true)],
+    ['npx -p typescript tsc', outer('npx', word('typescript'), true)],
+    ['npx pnpm-lock-tool add x', outer('npx', word('pnpm-lock-tool'), true)],
+    ['npx @pnpm/exe add x', outer('npx', word('@pnpm/exe'), true)],
+    ['npx pnpm --version', outer('npx', word('pnpm'), true)],
+    ['npx yarn run build', outer('npx', word('yarn'), true)],
+    ['npx pnpm exec tsc', outer('npx', word('pnpm'), true)],
+    ['npx corepack enable', outer('npx', word('corepack'), true)],
+    [`npx npx pnpm add ${P}`, outer('npx', word('npx'), true)],
+    // The word after a flag the table does not know is only a candidate: the words are looked up and nothing is read behind them.
+    [`npx --foo pnpm add ${P}`, { ...outer('npx', word('pnpm'), true), packages: [word('pnpm'), word('add')] }],
+    [`npx -c 'pnpm add ${P}'`, outer('npx', undefined, true)],
+    [`uvx npm install ${P}`, outer('uv', word('npm'), false)],
+    [`pipx run yarn add ${P}`, outer('pipx', word('yarn'), false)],
+  ];
+
+  it.each(ONE)('T-05 `%s` is one command, as today', (line, command) => {
+    expect(shapes(line), line).toEqual([command]);
+  });
+
+  it.each([`uvx npm install ${P}`, `pipx run yarn add ${P}`])('T-05 `%s` is a Python launcher: one command, of the Python ecosystem, and no command of the npm family follows', (line) => {
+    expect(parseInstallCommands(line).map((c) => c.ecosystem)).toEqual(['pypi']);
+  });
+
+  // ── T-09: protection — the cost of the line stays linear (one level, one reading)
+
+  // `n` times the statement `npx pnpm add p;`: eight times as many cost well under 22.6 times as much (linear reads ~8,
+  // quadratic ~64; see test/helpers/timing.ts). Guards the rule "one level, one reading" against a re-reading per command.
+  it('T-09 eight times as many `npx pnpm add p;` statements cost well under 22.6 times as much', () => {
+    expectLinear('npx pnpm add p; repeated', (n) => void parseInstallCommands('npx pnpm add p;'.repeat(n)), 100);
+  }, 120_000);
+});
+
+// ───────────────── install-vet-redirect-glued-word — a word glued to a redirection operator, and `name@` with no range
+
+describe('install-vet-redirect-glued-word', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const Q = 'dgprobe-zzq7731-second';
+  const PIP = 'dgprobe-zzq7731-pip';
+  const PJ = { kind: 'package-json' };
+  /** The words these lines must never leave as packages: a redirection target, or what follows the operator in a glued word. */
+  const NEVER = ['=1.0.0', '2', '=1.0', 'out.txt', 'out.log', 'out'];
+
+  type Pair = [name: string, range: string | undefined];
+  type Reading = { packages: Pair[]; manifest: unknown; uncertain: boolean };
+  /** What each install command of a line gives: its packages as `[name, range]`, its manifest, and whether it is uncertain. */
+  const readings = (command: string, shell?: 'bash' | 'powershell'): Reading[] =>
+    parseInstallCommands(command, shell === undefined ? {} : { shell }).map((c) => ({
+      packages: c.packages.map((p): Pair => [p.name, p.range]),
+      manifest: c.manifest,
+      uncertain: c.uncertain.length > 0,
+    }));
+  const flat = (rs: readonly Reading[]): Pair[] => rs.flatMap((r) => r.packages);
+
+  // ── T-01: the bash reading keeps the word the shell hands the program
+
+  const GLUED: Array<[line: string, packages: Pair[]]> = [
+    [`npm install ${P}@>=1.0.0`, [[P, undefined]]],
+    [`pnpm add ${P}@>=1.0.0`, [[P, undefined]]],
+    [`bun add ${P}@>=1.0.0`, [[P, undefined]]],
+    [`yarn add ${P}@>=1.0.0`, [[P, undefined]]],
+    [`npm install ${P}@<2`, [[P, undefined]]],
+    [`npm install ${P}@>=1<2`, [[P, undefined]]],
+    [`npm install ${P}> out.txt`, [[P, undefined]]],
+    [
+      `npm install ${P}>out.txt ${Q}`,
+      [
+        [P, undefined],
+        [Q, undefined],
+      ],
+    ],
+    [`npm install ${P}&>out`, [[P, undefined]]],
+    [`npm install ${P}2>out.txt`, [[`${P}2`, undefined]]],
+    [`npm install ${P}@1>out.txt`, [[P, '1']]],
+    [`npm install ${P}>&2`, [[P, undefined]]],
+    [`npm install ${P}@<(echo 1)`, [[P, undefined]]],
+    [`yarn add ${P}@npm:>=1.0.0`, [[P, undefined]]],
+  ];
+
+  it.each(GLUED)('T-01 `%s` (bash) reads the word before the operator: the packages are the ones listed, the manifest is read, the command is uncertain', (line, packages) => {
+    expect(readings(line, 'bash'), line).toEqual([{ packages, manifest: PJ, uncertain: true }]);
+    expect(
+      flat(readings(line, 'bash')).filter(([name]) => NEVER.includes(name)),
+      `${line}: a redirection target or the rest of a glued word is no package`,
+    ).toEqual([]);
+  });
+
+  it.each<[line: string, packages: Pair[]]>([
+    [`pip install ${PIP}>=1.0`, [[PIP, undefined]]],
+    [`pip install ${PIP}>out.log`, [[PIP, undefined]]],
+  ])('T-01 `%s` (bash) reads the Python name before the operator, and the command is uncertain', (line, packages) => {
+    expect(readings(line, 'bash'), line).toEqual([{ packages, manifest: undefined, uncertain: true }]);
+  });
+
+  it('T-01 `npm install>out.log <P>` reads `npm install <P>`: the package and the manifest, and the command is uncertain', () => {
+    expect(readings(`npm install>out.log ${P}`, 'bash')).toEqual([{ packages: [[P, undefined]], manifest: PJ, uncertain: true }]);
+  });
+
+  it('T-01 `npm ci>out.log` reads `npm ci`: no package, one install of the manifest, and the command is uncertain', () => {
+    expect(readings('npm ci>out.log', 'bash')).toEqual([{ packages: [], manifest: PJ, uncertain: true }]);
+  });
+
+  it('T-01 `pip install -r reqs.txt>out.log` reads `pip install -r reqs.txt`: no package, the file `reqs.txt` as the manifest, and the command is uncertain', () => {
+    expect(readings('pip install -r reqs.txt>out.log', 'bash')).toEqual([
+      { packages: [], manifest: { kind: 'requirements', files: ['reqs.txt'] }, uncertain: true },
+    ]);
+  });
+
+  // ── T-02: the PowerShell reading keeps the whole word, and the part before the operator is read too
+
+  type Viewed = [name: string, range: string | undefined, uncertain: boolean, powershellReason: boolean];
+  /** Per package of a line read for the PowerShell tool: its name and range, whether its command is uncertain and whether it carries the reason of the PowerShell reading. */
+  const viewed = (command: string): Viewed[] =>
+    parseInstallCommands(command, { shell: 'powershell' }).flatMap((c) =>
+      c.packages.map((p): Viewed => [p.name, p.range, c.uncertain.length > 0, c.uncertain.some((u) => u.includes('PowerShell'))]),
+    );
+
+  it.each<[line: string, expected: Viewed[]]>([
+    // The bash reading gives the name without the range, the PowerShell reading the whole word: `name@range`.
+    [
+      `npm install ${P}@>=1.0.0`,
+      [
+        [P, undefined, true, false],
+        [P, '>=1.0.0', true, true],
+      ],
+    ],
+    [
+      `npm install ${P}@<2`,
+      [
+        [P, undefined, true, false],
+        [P, '<2', true, true],
+      ],
+    ],
+    [
+      `pip install ${PIP}>=1.0`,
+      [
+        [PIP, undefined, true, false],
+        [PIP, '>=1.0', true, true],
+      ],
+    ],
+    [
+      `pip install ${PIP}>out.log`,
+      [
+        [PIP, undefined, true, false],
+        [PIP, '>out.log', true, true],
+      ],
+    ],
+    // `P>` is no package name: the next word is an argument, read by the rules of any install word.
+    [
+      `npm install ${P}> out.txt`,
+      [
+        [P, undefined, true, false],
+        ['out.txt', undefined, true, true],
+      ],
+    ],
+    // The whole word `P2>out.txt` is no package; `P2` is the bash reading's.
+    [`npm install ${P}2>out.txt`, [[`${P}2`, undefined, true, false]]],
+  ])('T-02 `%s` (PowerShell tool) lists the packages of both readings, the command is uncertain, and the PowerShell reading carries its own reason', (line, expected) => {
+    expect(viewed(line), line).toEqual(expected);
+  });
+
+  it("T-02 `npm install '<P>@>=1.0.0'` (PowerShell tool) gives the quoted word, then the same package without the range, and the command stays confident", () => {
+    expect(viewed(`npm install '${P}@>=1.0.0'`)).toEqual([
+      [P, '>=1.0.0', false, false],
+      [P, undefined, false, false],
+    ]);
+  });
+
+  it('T-02 the packages without a range come after every other package of the line, and the command keeps its certainty', () => {
+    expect(viewed(`npm install '${P}@>=1.0.0' '${Q}@<2'`)).toEqual([
+      [P, '>=1.0.0', false, false],
+      [Q, '<2', false, false],
+      [P, undefined, false, false],
+      [Q, undefined, false, false],
+    ]);
+  });
+
+  it('T-02 `pip install "<pkg>>=1.0"` (PowerShell tool) gives the quoted word only, as today', () => {
+    expect(viewed(`pip install "${PIP}>=1.0"`)).toEqual([[PIP, '>=1.0', false, false]]);
+  });
+
+  // ── T-03: protection — what stays out of the reading, and the words that stay as they are
+
+  const BOTH = ['2>&1', '2> err.log', '2>err.log', '1>out.txt', '> out.txt', '>out.txt', '&> all.log', '< in.txt', '<<< texto', '>> log.txt', '2>>err.log'];
+  const POWERSHELL_ONLY = ['3>&1', '*> all.log'];
+  const BASES = [`npm install ${P}`, `npm install ${P} ${Q}`, `pip install ${PIP}`, 'npm ci'];
+  /** The command with the redirection at the end, between the manager and the verb, after the verb, and at the start. */
+  const placed = (base: string, redirection: string): string[] => {
+    const [manager = '', verb = '', ...rest] = base.split(' ');
+    const tail = rest.join(' ');
+    return [`${base} ${redirection}`, `${manager} ${redirection} ${verb} ${tail}`.trim(), `${manager} ${verb} ${redirection} ${tail}`.trim(), `${redirection} ${base}`];
+  };
+  const withoutUncertainty = (rs: readonly Reading[]): Array<Omit<Reading, 'uncertain'>> => rs.map(({ packages, manifest }) => ({ packages, manifest }));
+
+  it.each<[shell: 'bash' | 'powershell', redirections: string[]]>([
+    ['bash', BOTH],
+    ['powershell', [...BOTH, ...POWERSHELL_ONLY]],
+  ])(
+    'T-03 (%s) a descriptor, a redirection that starts a word, `&>`, `<`, `<<<` and `>>` leave the packages and the manifest as the command without them, in any position, and the command is uncertain',
+    (shell, redirections) => {
+      let checked = 0;
+      for (const base of BASES) {
+        const control = withoutUncertainty(readings(base, shell));
+        expect(control.length, base).toBeGreaterThan(0);
+        for (const redirection of redirections) {
+          for (const line of placed(base, redirection)) {
+            checked += 1;
+            const got = readings(line, shell);
+            expect({ line, reading: withoutUncertainty(got) }, line).toEqual({ line, reading: control });
+            expect({ line, uncertain: got.map((r) => r.uncertain) }, line).toEqual({ line, uncertain: got.map(() => true) });
+          }
+        }
+      }
+      expect(checked, 'lines checked').toBe(BASES.length * redirections.length * 4);
+    },
+  );
+
+  it('T-03 `npm *> all.log install <P>` (PowerShell tool) reads `npm install <P>`', () => {
+    // The raw line, as the parser gets it: npm *> all.log install dgprobe-zzq7731-named
+    const line = `npm *> all.log install ${P}`;
+    expect(line).toBe('npm *> all.log install dgprobe-zzq7731-named');
+    expect(withoutUncertainty(readings(line, 'powershell'))).toEqual(withoutUncertainty(readings(`npm install ${P}`, 'powershell')));
+  });
+
+  it("T-03 a quoted word is read as today with the bash reading: `'<P>@>=1.0.0'` and `\"<pkg>>=1.0\"` keep their range", () => {
+    expect(readings(`npm install '${P}@>=1.0.0'`, 'bash')).toEqual([{ packages: [[P, '>=1.0.0']], manifest: PJ, uncertain: false }]);
+    expect(readings(`pip install "${PIP}>=1.0"`, 'bash')).toEqual([{ packages: [[PIP, '>=1.0']], manifest: undefined, uncertain: false }]);
+  });
+
+  it('T-03 `withoutRedirectWords` takes the glued word and the descriptor out of the words of `npm install <P>@>=1.0.0 2>&1`, as the command guard reads them', () => {
+    const words = splitShell(`npm install ${P}@>=1.0.0 2>&1`).statements[0]?.commands[0] ?? [];
+    expect(words.map((w) => w.value)).toEqual(['npm', 'install', `${P}@>=1.0.0`, '2>&1']);
+    expect(withoutRedirectWords(words).map((w) => w.value)).toEqual(['npm', 'install']);
+  });
+
+  it('T-03 `powershellAsPosix` without an option gives the text of today for `npm install <P>@>=1.0.0`: the text unchanged', () => {
+    const line = `npm install ${P}@>=1.0.0`;
+    expect(powershellAsPosix(line)).toBe(line);
+  });
+
+  // ── T-05: `name@` is the package `name`
+
+  const OPEN: Array<[line: string, packages: Pair[]]> = [
+    [`npm install ${P}@`, [[P, undefined]]],
+    [`pnpm add ${P}@`, [[P, undefined]]],
+    [`bun add ${P}@`, [[P, undefined]]],
+    [`yarn add ${P}@`, [[P, undefined]]],
+    ['npm install @s/n@', [['@s/n', undefined]]],
+    [
+      `npm install ${P}@ ${Q}`,
+      [
+        [P, undefined],
+        [Q, undefined],
+      ],
+    ],
+  ];
+
+  it.each(OPEN)('T-05 `%s` gives the packages listed, with no range, and no word put aside as empty', (line, packages) => {
+    const commands = parseInstallCommands(line);
+    expect(
+      { packages: commands.map((c) => c.packages.map((p): Pair => [p.name, p.range])), skipped: commands.map((c) => c.skipped.map((s) => s.raw)) },
+      line,
+    ).toEqual({ packages: [packages], skipped: [[]] });
+  });
+
+  it("T-05 `parsePackageSpec('npm', '<P>@')` gives the package, with no range", () => {
+    const spec = parsePackageSpec('npm', `${P}@`);
+    expect('name' in spec ? { name: spec.name, range: spec.range ?? null } : { skipped: spec.reason }).toEqual({ name: P, range: null });
+  });
+
+  it.each([`npx ${P}@`, `pnpm dlx ${P}@`])('T-05 `%s` gives the package, and the command is uncertain for the reason of the launcher, which a confident command keeps', (line) => {
+    const commands = parseInstallCommands(line);
+    expect(
+      commands.map((c) => c.packages.map((p): Pair => [p.name, p.range])),
+      line,
+    ).toEqual([[[P, undefined]]]);
+    expect(
+      commands.flatMap((c) => c.uncertain),
+      line,
+    ).toContain('a name ending in @ under a launcher was not measured');
+  });
+
+  it('T-05 `yarn add <P>@npm:` gives the package, and `npm install <P>@npm:` is still put aside, as today', () => {
+    expect(readings(`yarn add ${P}@npm:`).map((r) => r.packages)).toEqual([[[P, undefined]]]);
+    const npm = parseInstallCommands(`npm install ${P}@npm:`);
+    expect({ packages: npm.map((c) => c.packages), skipped: npm.map((c) => c.skipped.map((s) => s.raw)) }).toEqual({ packages: [[]], skipped: [[`${P}@npm:`]] });
   });
 });

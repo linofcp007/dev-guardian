@@ -10,6 +10,7 @@ import {
   vetDeadlineMs,
   type HookVetOptions,
 } from '../../../src/pkgvet/hookDecision.js';
+import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
 import { hangBound } from '../../helpers/timing.js';
 
@@ -4200,5 +4201,1058 @@ describe('lockfile-own-scope-scan-quadratic', () => {
     expect(d?.deny ?? '').toMatch(/does not exist/);
     expect(d?.context ?? '').not.toContain('a custom registry is configured');
     expect(d?.context ?? '').not.toContain('sets the default registry');
+  });
+});
+
+// ───────────────── install-vet-manifest-warning-volume — the "not found" warnings of manifests have a ceiling per answer
+
+describe('install-vet-manifest-warning-volume', () => {
+  const CEILING = 5;
+  const name = (i: number): string => `dgprobe-zzq7731-${String(i)}`;
+  const names = (n: number): string[] => Array.from({ length: n }, (_, i) => name(i + 1));
+  const writePackageJson = (dir: string, deps: string[]): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: Object.fromEntries(deps.map((d) => [d, '^1.0.0'])) }),
+    );
+  };
+  const writeRequirements = (file: string, deps: string[]): void => writeFileSync(join(project, file), `${deps.join('\n')}\n`);
+  const linesOf = (context: string | undefined): string[] => (context ?? '').split('\n');
+  const notFoundLines = (context: string | undefined): string[] => linesOf(context).filter((l) => l.includes('not found on the public registry'));
+  const countLines = (context: string | undefined): string[] => linesOf(context).filter((l) => l.includes('not on the public registry either'));
+  /** The package names the "not found" lines say, in the order they come. */
+  const namesSaid = (context: string | undefined): string[] =>
+    notFoundLines(context).map((l) => /'(dgprobe-zzq7731-\d+|lodahs)': not found/.exec(l)?.[1] ?? l);
+  const decide = async (command: string, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(command, opts(reg.fetchImpl));
+
+  describe('T-01 the ceiling of five, and the count line', () => {
+    it('T-01 12 missing names of package.json: five lines, the first five names in manifest order, then `7 more packages of package.json`', async () => {
+      writePackageJson(project, names(12));
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/^dev-guardian: 7 more packages of package\.json are not on the public registry either/);
+    });
+
+    it('T-01 6 missing names: five lines and `1 more package of package.json is not` (singular)', async () => {
+      writePackageJson(project, names(6));
+      const d = await decide('npm install', registry());
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/1 more package of package\.json is not on the public registry either/);
+    });
+
+    it('T-01 a requirements file of 12 missing names, `pip install -r reqs.txt`: five lines and `7 more packages of reqs.txt`', async () => {
+      writeRequirements('reqs.txt', names(12));
+      const d = await decide('pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/7 more packages of reqs\.txt are not on the public registry either/);
+    });
+
+    it('T-01 150 missing names of package.json: seven lines in all, under 1 600 characters', async () => {
+      writePackageJson(project, names(150));
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      const context = d?.context ?? '';
+      expect(countLines(context)).toHaveLength(1);
+      expect(countLines(context)[0]).toMatch(/145 more packages of package\.json/);
+      expect(linesOf(context)).toHaveLength(7);
+      expect(context.length).toBeLessThan(1600);
+    });
+
+    it('T-01 the count line names three files in full, and from the fourth on says how many more files', async () => {
+      writePackageJson(project, names(6));
+      for (const [i, file] of ['a.txt', 'b.txt', 'c.txt'].entries()) writeRequirements(file, [name(i + 101)]);
+      const three = await decide('npm install && pip install -r a.txt && pip install -r b.txt', registry());
+      expect(namesSaid(three?.context)).toEqual(names(CEILING));
+      expect(countLines(three?.context)).toEqual([
+        'dev-guardian: 3 more packages of package.json, a.txt and b.txt are not on the public registry either ' +
+          '(in a manifest that is usually a private or a workspace package) — not listed.',
+      ]);
+      const four = await decide('npm install && pip install -r a.txt && pip install -r b.txt && pip install -r c.txt', registry());
+      expect(namesSaid(four?.context)).toEqual(names(CEILING));
+      expect(countLines(four?.context)).toEqual([
+        'dev-guardian: 4 more packages of package.json, a.txt, b.txt and 1 more file are not on the public registry either ' +
+          '(in a manifest that is usually a private or a workspace package) — not listed.',
+      ]);
+    });
+  });
+
+  describe('T-02 the ceiling is per answer, not per file', () => {
+    it('T-02 `npm install && pip install -r reqs.txt`, 7 missing in package.json and 4 in reqs.txt: five lines in all and one count line naming both files', async () => {
+      writePackageJson(project, names(7));
+      writeRequirements(
+        'reqs.txt',
+        Array.from({ length: 4 }, (_, i) => name(i + 101)),
+      );
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual(names(CEILING));
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/6 more packages of package\.json and reqs\.txt are not on the public registry either/);
+    });
+
+    it('T-02 4 missing in package.json and 7 in reqs.txt: the count line names only the file its six come from', async () => {
+      writePackageJson(project, names(4));
+      writeRequirements(
+        'reqs.txt',
+        Array.from({ length: 7 }, (_, i) => name(i + 101)),
+      );
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual([...names(4), name(101)]);
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/6 more packages of reqs\.txt are not on the public registry either/);
+    });
+
+    it('T-02 two installs in two folders, 4 and 4 missing: five lines and `3 more packages of` the file (today both manifests are called package.json)', async () => {
+      writePackageJson(join(project, 'a'), names(4));
+      writePackageJson(
+        join(project, 'b'),
+        Array.from({ length: 4 }, (_, i) => name(i + 101)),
+      );
+      const d = await decide('(cd a && npm install); (cd b && npm install)', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(notFoundLines(d?.context)).toHaveLength(CEILING);
+      const count = countLines(d?.context);
+      expect(count).toHaveLength(1);
+      expect(count[0]).toMatch(/3 more packages of package\.json/);
+    });
+  });
+
+  describe('T-03 what stays outside the ceiling', () => {
+    it('T-03 a package OSV calls malicious at position 40 of 60 is DENIED, with the file and the name (protection)', async () => {
+      const all = names(60);
+      const bad = all[39] ?? '';
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry({ exists: [bad], malicious: [bad] }));
+      expect(d?.deny).toMatch(/package\.json/);
+      expect(d?.deny).toContain(bad);
+      expect(d?.deny).toContain('MAL-2026-77');
+    });
+
+    it('T-03 a name one letter from a popular package that EXISTS, at position 30 of 40, keeps its typosquat warning beside the five lines', async () => {
+      const all = names(40);
+      all[29] = 'lodahs';
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry({ exists: ['lodahs'] }));
+      expect(d?.deny).toBeUndefined();
+      const typo = linesOf(d?.context).filter((l) => l.includes('lodahs'));
+      expect(typo).toHaveLength(1);
+      expect(typo[0]).toContain('lodash');
+      expect(typo[0]).not.toContain('not found on the public registry');
+      expect(notFoundLines(d?.context)).toHaveLength(CEILING);
+      expect(countLines(d?.context)[0]).toMatch(/34 more packages of package\.json/);
+    });
+
+    it('T-03 the "could not vet 3 packages of package.json" line of a registry that does not answer for 3 names is said as today (protection)', async () => {
+      const all = names(12);
+      writePackageJson(project, all);
+      const failing = new Set(all.slice(0, 3).map((n) => `https://registry.npmjs.org/${n}`));
+      const reg = registry();
+      const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+        failing.has(String(input)) ? new Response('', { status: 500 }) : reg.fetchImpl(input, init)) as typeof fetch;
+      const d = await decide('npm install', { fetchImpl });
+      expect(d?.deny).toBeUndefined();
+      const unvetted = linesOf(d?.context).filter((l) => l.includes('could not vet'));
+      expect(unvetted).toHaveLength(1);
+      expect(unvetted[0]).toMatch(/could not vet 3 packages of package\.json/);
+    });
+
+    it('T-03 `npm install <a package that exists and has a warning of its own>` in a project of 12 missing names says that warning beside the five lines', async () => {
+      writePackageJson(project, names(12));
+      const d = await decide('npm install lodahs', registry({ exists: ['lodahs'] }));
+      expect(d?.deny).toBeUndefined();
+      const own = linesOf(d?.context).filter((l) => l.includes('lodahs'));
+      expect(own).toHaveLength(1);
+      expect(own[0]).toContain('lodash');
+      expect(notFoundLines(d?.context)).toHaveLength(CEILING);
+      expect(countLines(d?.context)[0]).toMatch(/7 more packages of package\.json/);
+    });
+  });
+
+  describe('T-04 up to five missing names: the answer is as today', () => {
+    // The answer of the tree before this feature (b8fec499), written out: the header and one line a missing name.
+    const HEADER = '⚠️ dev-guardian package vetting — review before relying on these:';
+    const today = (file: string, pkg: string): string =>
+      `  • ${file}: '${pkg}': not found on the public registry — if it is private or local, ignore this. ` +
+      '(not denied: it is named by a manifest, where a missing name is usually a private or a workspace package)';
+
+    it('T-04 no missing name: nothing is said', async () => {
+      writePackageJson(project, []);
+      expect(await decide('npm install', registry())).toBeNull();
+    });
+
+    it.each([1, 2, 3, 4, 5])('T-04 %i missing names of package.json: the answer of today, line by line', async (n) => {
+      writePackageJson(project, names(n));
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(linesOf(d?.context)).toEqual([HEADER, ...names(n).map((pkg) => today('package.json', pkg))]);
+    });
+
+    it('T-04 5 missing names of package.json and a requirements file of none: the answer of today, line by line', async () => {
+      writePackageJson(project, names(5));
+      writeRequirements('reqs.txt', []);
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(linesOf(d?.context)).toEqual([HEADER, ...names(5).map((pkg) => today('package.json', pkg))]);
+    });
+
+    it('T-04 3 missing names of package.json and 2 of a requirements file: five lines of two files, no count line', async () => {
+      writePackageJson(project, names(3));
+      writeRequirements('reqs.txt', [name(101), name(102)]);
+      const d = await decide('npm install && pip install -r reqs.txt', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(linesOf(d?.context)).toEqual([
+        HEADER,
+        ...names(3).map((pkg) => today('package.json', pkg)),
+        today('reqs.txt', name(101)),
+        today('reqs.txt', name(102)),
+      ]);
+    });
+  });
+
+  describe('T-06 a name with a suggestion is never counted', () => {
+    it('T-06 `lodahs` (missing, one letter from `lodash`) at position 9 of 13: the first five lines, its own line with the suggestion, and `7 more`', async () => {
+      const all = [...names(8), 'lodahs', ...Array.from({ length: 4 }, (_, i) => name(i + 9))];
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual([...names(CEILING), 'lodahs']);
+      expect(notFoundLines(d?.context).find((l) => l.includes('lodahs'))).toContain("Did you mean 'lodash'?");
+      expect(countLines(d?.context)[0]).toMatch(/7 more packages of package\.json/);
+    });
+
+    it('T-06 `lodahs` at position 2 of 13: its line and five others, and `7 more`', async () => {
+      const all = [name(1), 'lodahs', ...Array.from({ length: 11 }, (_, i) => name(i + 2))];
+      writePackageJson(project, all);
+      const d = await decide('npm install', registry());
+      expect(d?.deny).toBeUndefined();
+      expect(namesSaid(d?.context)).toEqual([name(1), 'lodahs', ...Array.from({ length: 4 }, (_, i) => name(i + 2))]);
+      expect(notFoundLines(d?.context).find((l) => l.includes('lodahs'))).toContain("Did you mean 'lodash'?");
+      expect(countLines(d?.context)[0]).toMatch(/7 more packages of package\.json/);
+    });
+  });
+});
+
+// ───────────────── install-vet-npm-unread-verbs — the initializers and `npm install-test <package>` are vetted
+
+describe('install-vet-npm-unread-verbs', () => {
+  const X = 'dgprobe-zzq7731-init';
+  const S = '@dgprobe-zzq7731';
+  const DENIED = 'does not exist on the npm registry';
+  const NOT_FOUND = 'not found on the public registry';
+  const decide = async (command: string, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(command, opts(reg.fetchImpl));
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  /** The names the "not found" lines of an answer quote, sorted. */
+  const notFoundNames = (context: string | undefined): string[] =>
+    (context ?? '')
+      .split('\n')
+      .filter((l) => l.includes(NOT_FOUND))
+      .map((l) => /'([^']+)'/.exec(l)?.[1] ?? l)
+      .sort();
+  /** The packages a line gives, sorted, and whether every command of it is uncertain "two ways". */
+  const readOf = (command: string): { names: string[]; twoWays: boolean } => {
+    const parsed = parseInstallCommands(command);
+    return {
+      names: parsed.flatMap((c) => c.packages.map((p) => p.name)).sort(),
+      twoWays: parsed.length > 0 && parsed.every((c) => c.uncertain.some((u) => u.includes(' is read two ways'))),
+    };
+  };
+
+  describe('initializers', () => {
+    it.each([
+      [`npm create -y ${X}`, `create-${X}`],
+      [`npm init --yes --silent ${X}`, `create-${X}`],
+      [`npm innit -q ${X}`, `create-${X}`],
+      [`npm create --quiet ${X}`, `create-${X}`],
+      [`yarn create -q ${X}`, `create-${X}`],
+      [`yarn create --quiet ${X}`, `create-${X}`],
+      [`pnpm create ${X}@^1`, `create-${X}`],
+      [`npm init ${S}/${X}@latest`, `${S}/create-${X}`],
+    ])('T-03 `%s`: a missing name is DENIED, naming %s', async (command, name) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      expect(d?.deny ?? '', command).toContain(DENIED);
+      expect(d?.deny ?? '', command).toContain(`'${name}'`);
+      expect(reg.calls, command).toContain(urlOf(name));
+    });
+
+    it.each([
+      [`bun create ${X}`, [`create-${X}`]],
+      [`bun c ${X}`, [`create-${X}`]],
+      [`npm init -w folder ${X}`, [`create-${X}`]],
+      [`npm create --registry https://npm.dgprobe.invalid/ ${X}`, [`create-${X}`]],
+      [`npm init --scope ${S} ${X}`, [`create-${X}`]],
+      [`npm init -f ${X}`, [`create-${X}`]],
+      [`pnpm create --allow-build=a ${X}`, [`create-${X}`]],
+      [`bun create --dgunknown ${X}`, [`create-${X}`]],
+      [`yarn create -p ${X}-pkg ${X}`, [`${X}-pkg`, `create-${X}`]],
+      [`npm create --dgunknown ${X}`, [`create-${X}`]],
+      [`npm create ${X} && ls`, [`create-${X}`]],
+      [`sudo npm create ${X}`, [`create-${X}`]],
+      [`yarn create ${S}@1.2.3`, [`${S}/create`]],
+    ])('T-03 `%s`: a missing name only WARNS, naming %j', async (command, names) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      expect(d?.deny, command).toBeUndefined();
+      expect(notFoundNames(d?.context), command).toEqual([...names].sort());
+      // `--scope @s` is the value of a flag, not the initializer: `@s/create` is asked for only where the line names it.
+      expect(
+        reg.calls.some((c) => c.includes('%2F')),
+        command,
+      ).toBe(names.some((n) => n.includes('/')));
+    });
+
+    it('T-03 with `@s:registry=<url>` in the project .npmrc, `npm init @s` is not denied: `@s/create` is asked of the public registry and its 404 warns, with the registry of the scope as the reason', async () => {
+      writeFileSync(join(project, '.npmrc'), `${S}:registry=https://npm.dgprobe.invalid/\n`);
+      const reg = registry();
+      const d = await decide(`npm init ${S}`, reg);
+      expect(d?.deny).toBeUndefined();
+      expect(reg.calls).toContain(urlOf(`${S}/create`));
+      expect(notFoundNames(d?.context)).toEqual([`${S}/create`]);
+      expect(d?.context).toContain('a custom registry is configured');
+      expect(d?.context).toContain('npm.dgprobe.invalid');
+    });
+
+    it.each([
+      ['npm create create-foo', 'deny', ['create-create-foo'], 'create-create-foo'],
+      ['bun create create-foo', 'warn', ['create-create-foo'], 'create-create-foo'],
+      ['yarn create create-foo', 'warn', ['create-create-foo', 'create-foo'], 'create-create-foo'],
+      ['npm create create', 'warn', ['create', 'create-create'], 'create-create'],
+      ['pnpm create create', 'warn', ['create', 'create-create'], 'create-create'],
+      ['npm init @s/create-foo', 'warn', ['@s/create-create-foo', '@s/create-foo'], '@s/create-create-foo'],
+    ] as const)('T-06 `%s`: with the doubled-prefix name missing and the other published: %s', async (command, outcome, names, missing) => {
+      const reg = registry({ exists: names.filter((n) => n !== missing) });
+      const d = await decide(command, reg);
+      for (const name of names) expect(reg.calls, command).toContain(urlOf(name));
+      if (outcome === 'deny') {
+        expect(d?.deny ?? '', command).toContain(DENIED);
+        expect(d?.deny ?? '', command).toContain(`'${missing}'`);
+      } else {
+        expect(d?.deny, command).toBeUndefined();
+        expect(notFoundNames(d?.context), command).toEqual([missing]);
+      }
+    });
+
+    it('T-06 `pnpm create create-foo` asks for `create-foo` as written and, with it published, says nothing', async () => {
+      const reg = registry({ exists: ['create-foo'] });
+      const d = await decide('pnpm create create-foo', reg);
+      expect(reg.calls).toContain(urlOf('create-foo'));
+      expect(reg.calls).not.toContain(urlOf('create-create-foo'));
+      expect(d).toBeNull();
+    });
+
+    it.each([
+      ['npm create create-foo', ['create-create-foo'], false],
+      ['bun create create-foo', ['create-create-foo'], false],
+      ['pnpm create create-foo', ['create-foo'], false],
+      ['yarn create create-foo', ['create-create-foo', 'create-foo'], true],
+      ['npm create create', ['create', 'create-create'], true],
+      ['pnpm create create', ['create', 'create-create'], true],
+      ['npm init @s/create-foo', ['@s/create-create-foo', '@s/create-foo'], true],
+    ] as const)('T-06 `%s` is read as the packages %j; uncertain "is read two ways": %s', (command, names, twoWays) => {
+      expect(readOf(command)).toEqual({ names: [...names], twoWays });
+    });
+  });
+
+  describe('install-test', () => {
+    const P = 'dgprobe-zzq7731-pkg';
+
+    it.each(['npm install-test', 'npm it'])('T-08 `%s <a missing name>` is DENIED as `npm install <it>` is', async (verb) => {
+      const control = await decide(`npm install ${P}`, registry());
+      expect(control?.deny ?? '').toContain(DENIED);
+      const reg = registry();
+      const d = await decide(`${verb} ${P}`, reg);
+      expect(d?.deny ?? '', verb).toContain(DENIED);
+      expect(d?.deny ?? '', verb).toContain(`'${P}'`);
+      expect(reg.calls, verb).toContain(urlOf(P));
+    });
+
+    it.each(['npm install-test', 'npm it'])('T-08 `%s <a malicious package>` is DENIED, with the advisory', async (verb) => {
+      const d = await decide(`${verb} ${P}`, registry({ exists: [P], malicious: [P] }));
+      expect(d?.deny ?? '', verb).toContain('MAL-2026-77');
+      expect(d?.deny ?? '', verb).toContain(P);
+    });
+
+    it('T-08 `npm it -g <a missing name>` is DENIED and the manifest of the project is not read', async () => {
+      const dep = 'dgprobe-zzq7731-dep';
+      writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [dep]: '^1.0.0' } }));
+      const reg = registry();
+      const d = await decide(`npm it -g ${P}`, reg);
+      expect(d?.deny ?? '').toContain(DENIED);
+      expect(d?.deny ?? '').toContain(`'${P}'`);
+      expect(reg.calls).toContain(urlOf(P));
+      expect(reg.calls).not.toContain(urlOf(dep));
+    });
+  });
+});
+
+// ───────────────── install-vet-global-update-by-name — the names given to a global update, or to `yarn up`, are vetted
+
+describe('install-vet-global-update-by-name', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const DENIED = 'does not exist on the npm registry';
+  const NOT_FOUND = `'${P}': not found on the public registry`;
+  const NOT_DENIED = 'a package named to an update is fetched only when it is already installed';
+  const EVERY_GLOBAL = 'this command updates every globally installed package — none of them was vetted';
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  const pkgJson = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const decide = async (command: string, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(command, opts(reg.fetchImpl));
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === urlOf(name)).length;
+
+  /** The forms of the Yarn that update the manifest and name `P`. */
+  const YARN_UPDATES = [`yarn up ${P}`, `yarn up -R ${P}`, `yarn up -i ${P}`, `yarn workspace W up ${P}`, `yarn workspaces foreach -A up ${P}`];
+
+  it.each(YARN_UPDATES)('T-04 `%s`, P not in the manifest and published as malicious: P is asked of the registry and DENIED, with the advisory', async (command) => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP, P], malicious: [P] });
+    const d = await decide(command, reg);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+    expect(d?.deny ?? '', command).toContain('MAL-2026-77');
+    expect(d?.deny ?? '', command).toContain(P);
+  });
+
+  it.each(YARN_UPDATES)('T-04 `%s`, P not in the manifest and not on the registry: P is asked, the answer is a warning that says why, never a deny', async (command) => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP] });
+    const d = await decide(command, reg);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+    expect(asked(reg, DEP), 'the manifest is read as well').toBeGreaterThan(0);
+    expect(d?.deny, command).toBeUndefined();
+    expect(d?.context ?? '', command).toContain(NOT_FOUND);
+    expect(d?.context ?? '', command).toContain(NOT_DENIED);
+  });
+
+  it.each(YARN_UPDATES)('T-04 `%s` in a folder with no manifest: P is asked of the registry', async (command) => {
+    const reg = registry({ exists: [P] });
+    await decide(command, reg);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+  });
+
+  it.each(YARN_UPDATES)('T-04 `%s`, P in the manifest and no version: P is asked ONCE, by the manifest', async (command) => {
+    pkgJson({ [P]: '^1.0.0' });
+    const reg = registry({ exists: [P] });
+    await decide(command, reg);
+    expect(asked(reg, P), command).toBe(1);
+  });
+
+  it('T-04 `yarn up <P>@^3` with P in the manifest: P is asked again for the range, and the version the range picks goes to OSV', async () => {
+    pkgJson({ [P]: '^1.0.0' });
+    const queried: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        queried.push(...queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`));
+        return new Response(JSON.stringify({ results: queries.map(() => ({})) }), { status: 200 });
+      }
+      if (url === urlOf(P)) {
+        const versions = { '1.0.0': {}, '3.4.0': {}, '4.0.0': {} };
+        return new Response(JSON.stringify({ 'dist-tags': { latest: '4.0.0' }, modified: '2020-01-01T00:00:00.000Z', versions }), { status: 200 });
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    expect(await decideInstallCommand(`yarn up ${P}@^3`, opts(fetchImpl))).toBeNull();
+    expect(queried).toContain(`${P}@3.4.0`);
+  });
+
+  it('T-04 `pnpm update -g --latest <P>` in a project whose manifest does not have P: the manifest is read and P is asked, a missing P only warns', async () => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP] });
+    const d = await decide(`pnpm update -g --latest ${P}`, reg);
+    expect(asked(reg, DEP), 'the manifest is read').toBeGreaterThan(0);
+    expect(asked(reg, P)).toBeGreaterThan(0);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+  });
+
+  it('T-04 `pnpm update -g --latest <P>` with P malicious is DENIED', async () => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP, P], malicious: [P] });
+    const d = await decide(`pnpm update -g --latest ${P}`, reg);
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  // ── the update that names nobody (T-05)
+
+  it.each(['npm update -g', 'pnpm update -g', 'bun update -g', 'yarn global upgrade'])(
+    'T-05 `%s` says it updates every globally installed package and none was vetted: context, no deny, and the manifest of the project is not read',
+    async (command) => {
+      pkgJson({ [DEP]: '^1.0.0' });
+      const reg = registry({ exists: [DEP] });
+      const d = await decide(command, reg);
+      expect(d?.deny, command).toBeUndefined();
+      expect(d?.context ?? '', command).toContain(EVERY_GLOBAL);
+      expect(reg.calls, command).toEqual([]);
+    },
+  );
+
+  // ── protection (T-06): the names of a project update are not looked up, and the decision is today's
+
+  it.each([`npm update ${P}`, `pnpm update ${P}`, `bun update ${P}`, `yarn upgrade ${P}`])(
+    'T-06 `%s`, P not in the manifest: P is not asked, nothing is said, the manifest is vetted',
+    async (command) => {
+      pkgJson({ [DEP]: '^1.0.0' });
+      const reg = registry({ exists: [DEP] });
+      expect(await decide(command, reg), command).toBeNull();
+      expect(asked(reg, P), command).toBe(0);
+      expect(asked(reg, DEP), command).toBeGreaterThan(0);
+    },
+  );
+
+  it.each([`npm update ${P}`, `pnpm update ${P}`, `bun update ${P}`, `yarn upgrade ${P}`])(
+    'T-06 `%s`, P in the manifest: P is asked once, by the manifest, and nothing is said',
+    async (command) => {
+      pkgJson({ [P]: '^1.0.0' });
+      const reg = registry({ exists: [P] });
+      expect(await decide(command, reg), command).toBeNull();
+      expect(asked(reg, P), command).toBe(1);
+    },
+  );
+
+  it('T-06 `npm update` in a project: the manifest is vetted and nothing is said', async () => {
+    pkgJson({ [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [DEP] });
+    expect(await decide('npm update', reg)).toBeNull();
+    expect(asked(reg, DEP)).toBeGreaterThan(0);
+  });
+
+  it.each([`npm install -g ${P}`, `pnpm add -g ${P}`])('T-06 `%s` with a name the registry does not have is DENIED, as today', async (command) => {
+    const reg = registry();
+    const d = await decide(command, reg);
+    expect(d?.deny ?? '', command).toContain(DENIED);
+    expect(d?.deny ?? '', command).toContain(`'${P}'`);
+    expect(asked(reg, P), command).toBeGreaterThan(0);
+  });
+
+  it('T-06 `yarn global add <P>` with a name the registry does not have: asked, and only a warning (the command is not a plain install), as today', async () => {
+    const reg = registry();
+    const d = await decide(`yarn global add ${P}`, reg);
+    expect(asked(reg, P)).toBeGreaterThan(0);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+  });
+
+  // Review of the execution (2026-11-20): a name that an update AND an install of one line give is the install's. An update
+  // says less — no fresh version, no install scripts, its own reason for a missing name — and must not take the install's answer.
+  it.each(['npm update -g fresh-pkg; npm install fresh-pkg', 'npm install fresh-pkg; npm update -g fresh-pkg'])(
+    'T-04 `%s`: the install keeps its warnings (a version published an hour ago, install scripts)',
+    async (command) => {
+      const reg = lookupRegistry();
+      const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+      expect(d?.deny, command).toBeUndefined();
+      expect(d?.context ?? '', command).toMatch(/fresh-pkg.*published 1 h ago/s);
+      expect(d?.context ?? '', command).toMatch(/fresh-pkg.*runs install scripts on install: postinstall/s);
+    },
+  );
+
+  it.each([`npm update -g ${P} && npm install ${P}`, `yarn global upgrade ${P}; npm i ${P}`])(
+    "T-04 `%s` with a name the registry does not have: the warning is the install's, not the update's",
+    async (command) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      expect(d?.deny, command).toBeUndefined();
+      expect(d?.context ?? '', command).toContain(NOT_FOUND);
+      expect(d?.context ?? '', command).not.toContain(NOT_DENIED);
+    },
+  );
+});
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher runs, when it is a package manager, is vetted
+
+describe('install-vet-launcher-runs-manager', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const DENIED = 'does not exist on the npm registry';
+  const NOT_FOUND = `'${P}': not found on the public registry`;
+  const MANAGERS = ['npm', 'pnpm', 'yarn', 'yarnpkg', 'bun', 'corepack', 'npx'];
+  const NBSP = String.fromCharCode(0xa0);
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === urlOf(name)).length;
+  const pkgJson = (dir: string, deps: Record<string, string>): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  };
+  /** A line as the hook hands it to the decision: the command, the scripts the shell guard read in it and the tool's shell. */
+  type Line = { command: string; nested?: Array<{ text: string; shell: 'bash' | 'powershell' }>; shell?: 'bash' | 'powershell' };
+  const decide = async (line: Line, reg: { fetchImpl: typeof fetch }): Promise<{ context?: string; deny?: string } | null> =>
+    decideInstallCommand(line.command, opts(reg.fetchImpl, { nested: line.nested, shell: line.shell }));
+  const plain = (command: string): Line => ({ command });
+
+  // ── T-04: the manifest of the project, vetted as in an install without the launcher
+
+  it.each([`npx pnpm add ${P}`, `npx pnpm install`, `npx yarn`])(
+    'T-04 `%s`, with a malicious dependency in package.json: DENIED by the manifest, as the same command without the launcher is',
+    async (command) => {
+      pkgJson(project, { [DEP]: '^1.0.0' });
+      const without = command.replace(/^npx /, '');
+      const control = await decide(plain(without), registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] }));
+      expect(control?.deny ?? '', `the control ${without}`).toContain(DEP);
+      const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+      const d = await decide(plain(command), reg);
+      expect(d?.deny ?? '', command).toContain(DEP);
+      expect(d?.deny ?? '', command).toContain('package.json');
+      expect(asked(reg, DEP), command).toBeGreaterThan(0);
+    },
+  );
+
+  it('T-04 `npx pnpm add <P>` with `node_modules/pnpm` in the project: the launcher is not asked about, and the inner command is read all the same', async () => {
+    pkgJson(project, { [DEP]: '^1.0.0' });
+    mkdirSync(join(project, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', '.bin', 'pnpm'), '#!/bin/sh\n');
+    mkdirSync(join(project, 'node_modules', 'pnpm'), { recursive: true });
+    writeFileSync(join(project, 'node_modules', 'pnpm', 'package.json'), '{"name":"pnpm"}');
+    const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+    const d = await decide(plain(`npx pnpm add ${P}`), reg);
+    expect(asked(reg, 'pnpm'), 'the manager is installed: the outer command asks nothing').toBe(0);
+    expect(d?.deny ?? '').toContain(DEP);
+    expect(d?.deny ?? '').toContain('package.json');
+  });
+
+  it('T-04 `cd sub && npx pnpm add <P>` reads the manifest of `sub`', async () => {
+    pkgJson(join(project, 'sub'), { [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+    const d = await decide(plain(`cd sub && npx pnpm add ${P}`), reg);
+    expect(d?.deny ?? '').toContain(DEP);
+    expect(d?.deny ?? '').toContain('package.json');
+  });
+
+  it.each([
+    `npx --prefix d pnpm add ${P}`,
+    `pnpm --dir d dlx yarn add ${P}`,
+    `yarn --cwd d dlx pnpm add ${P}`,
+    `npm exec -w pkg -- pnpm add ${P}`,
+  ])('T-04 `%s`: one line says package.json was not read, and the manifest of the command folder is not asked', async (command) => {
+    pkgJson(project, { [DEP]: '^1.0.0' });
+    pkgJson(join(project, 'd'), { [DEP]: '^1.0.0' });
+    pkgJson(join(project, 'pkg'), { [DEP]: '^1.0.0' });
+    const reg = registry({ exists: [...MANAGERS, P, DEP], malicious: [DEP] });
+    const d = await decide(plain(command), reg);
+    expect(d?.deny, command).toBeUndefined();
+    expect(d?.context ?? '', command).toContain('package.json was not read (where the command runs could not be determined)');
+    expect(asked(reg, DEP), command).toBe(0);
+  });
+
+  // ── T-06: the refusal and the warning
+
+  /** The lines measured on 2026-11-20 (the nine of the decision 1) and the three inferences of the decision 2: a missing name is DENIED. */
+  const REFUSED = [
+    `npx pnpm add ${P}`,
+    `npx yarn add ${P}`,
+    `npx -y pnpm@11 add ${P}`,
+    `npm exec -- pnpm add ${P}`,
+    `pnpm dlx yarn add ${P}`,
+    `yarn dlx pnpm add ${P}`,
+    `bunx pnpm add ${P}`,
+    `npx corepack yarn add ${P}`,
+    `npm exec corepack -- yarn add ${P}`,
+    `npx pnpm add -D ${P}`,
+    `npx pnpm@12 add ${P}`,
+    `corepack pnpm@11 dlx yarn add ${P}`,
+  ].map(plain);
+
+  /** Everything else that reads: a missing name only WARNS. */
+  const WARNED: Line[] = [
+    `bunx yarn add ${P}`,
+    `npx npm install ${P}`,
+    `npx bun add ${P}`,
+    `npx yarnpkg add ${P}`,
+    `npm x pnpm add ${P}`,
+    `bun x pnpm add ${P}`,
+    `pnpx yarn add ${P}`,
+    `npx --yes pnpm add ${P}`,
+    `npm exec -y -- pnpm add ${P}`,
+    `npm exec pnpm -- add ${P}`,
+    `npm exec pnpm add ${P}`,
+    `npx -p pnpm pnpm add ${P}`,
+    `npx --no-install pnpm add ${P}`,
+    `npx pnpm install ${P}`,
+    `npx corepack pnpm add ${P}`,
+    `npx corepack yarn@4 add ${P}`,
+    `npx pnpm -- add ${P}`,
+    `npx pnpm add --dgunknown ${P}`,
+    `sudo npx pnpm add ${P}`,
+  ]
+    .map(plain)
+    .concat([
+      { command: `bash -c 'npx pnpm add ${P}'`, nested: [{ text: `npx pnpm add ${P}`, shell: 'bash' }] },
+      // The POSIX reading finds no command here (`npx<nbsp>pnpm` is one word); the PowerShell reading finds `npx pnpm add <P>`.
+      { command: `npx${NBSP}pnpm add ${P}`, shell: 'powershell' },
+    ]);
+
+  const label = (l: Line): string => `${l.command}${l.shell === undefined ? '' : ` (${l.shell} reading)`}`;
+
+  it.each(REFUSED.map((l) => [label(l), l] as const))('T-06 `%s` with a name the registry does not have is DENIED, naming it', async (_name, line) => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(line, reg);
+    expect(d?.deny ?? '', line.command).toContain(DENIED);
+    expect(d?.deny ?? '', line.command).toContain(`'${P}'`);
+    expect(asked(reg, P), line.command).toBeGreaterThan(0);
+  });
+
+  it.each(WARNED.map((l) => [label(l), l] as const))('T-06 `%s` with a name the registry does not have only WARNS, saying it was not found', async (_name, line) => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(line, reg);
+    expect(d?.deny, line.command).toBeUndefined();
+    expect(d?.context ?? '', line.command).toContain(NOT_FOUND);
+    expect(asked(reg, P), line.command).toBeGreaterThan(0);
+  });
+
+  it.each([...REFUSED, ...WARNED].map((l) => [label(l), l] as const))('T-06 `%s` with a package OSV lists as malicious is DENIED, with the advisory', async (_name, line) => {
+    const reg = registry({ exists: [...MANAGERS, P], malicious: [P] });
+    const d = await decide(line, reg);
+    expect(d?.deny ?? '', line.command).toContain('MAL-2026-77');
+    expect(d?.deny ?? '', line.command).toContain(P);
+  });
+
+  it('T-06 `npx pnpm dlx yarn add <P>`: `pnpm` and `yarn` are looked up and `<P>` never is (one level only)', async () => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(plain(`npx pnpm dlx yarn add ${P}`), reg);
+    expect({ pnpm: asked(reg, 'pnpm'), yarn: asked(reg, 'yarn'), named: asked(reg, P) }).toEqual({ pnpm: 1, yarn: 1, named: 0 });
+    expect(d?.deny).toBeUndefined();
+  });
+
+  it('T-06 `npx npx pnpm add <P>`: only `npx` is looked up (one level only)', async () => {
+    const reg = registry({ exists: MANAGERS });
+    await decide(plain(`npx npx pnpm add ${P}`), reg);
+    expect({ npx: asked(reg, 'npx'), pnpm: asked(reg, 'pnpm'), named: asked(reg, P) }).toEqual({ npx: 1, pnpm: 0, named: 0 });
+  });
+
+  // ── T-07: the registry the project configures, said on the line of the inner command
+
+  it('T-07 `npx pnpm add <a missing name>` with a registry in the project .npmrc: no deny, the name is said as not found, and the registry line is there once', async () => {
+    const OTHER = 'https://npm.other.example';
+    pkgJson(project, {});
+    writeFileSync(join(project, '.npmrc'), `registry=${OTHER}/\n`);
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(plain(`npx pnpm add ${P}`), reg);
+    const SAYS = "dev-guardian: the project's .npmrc sets the default registry";
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+    expect(d?.context ?? '').toContain('a custom registry is configured');
+    expect((d?.context ?? '').split(SAYS).length - 1, 'the line of the registry appears once').toBe(1);
+    expect(d?.context ?? '').toContain(`${SAYS} (${OTHER}) — packages are fetched from it, and what it serves was not vetted.`);
+  });
+
+  it('T-07 `npx pnpm add --registry=https://r.example <a missing name>` warns, and says the registry of the line', async () => {
+    const reg = registry({ exists: MANAGERS });
+    const d = await decide(plain(`npx pnpm add --registry=https://r.example ${P}`), reg);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '').toContain(NOT_FOUND);
+    expect(d?.context ?? '').toContain('the command line: https://r.example');
+  });
+});
+
+// ───────────────── install-vet-redirect-glued-word — `name@` under a launcher, and a redirection glued to a word, are vetted
+
+describe('install-vet-redirect-glued-word', () => {
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const NOT_FOUND = `'${P}': not found on the public registry`;
+  const urlOf = (name: string): string => `https://registry.npmjs.org/${name.replace('/', '%2F')}`;
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === urlOf(name)).length;
+
+  it.each([`npx ${P}@`, `pnpm dlx ${P}@`])('T-06 `%s` with a name the registry does not have only WARNS, saying it was not found', async (command) => {
+    const reg = registry({ exists: [] });
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    expect(asked(reg, P), `${command}: the name is looked up`).toBeGreaterThan(0);
+    expect(d?.deny, command).toBeUndefined();
+    expect(d?.context ?? '', command).toContain(NOT_FOUND);
+  });
+
+  it.each([`npx ${P}@`, `pnpm dlx ${P}@`])('T-06 `%s` with a package OSV lists as malicious is DENIED, with the advisory', async (command) => {
+    const reg = registry({ exists: [P], malicious: [P] });
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    expect(d?.deny ?? '', command).toContain('MAL-2026-77');
+    expect(d?.deny ?? '', command).toContain(P);
+  });
+
+  it('T-06 `npm ci>out.log` in a project whose package.json has a malicious dependency is DENIED by the manifest, as `npm ci` is', async () => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [DEP]: '^1.0.0' } }));
+    const control = await decideInstallCommand('npm ci', opts(registry({ exists: [DEP], malicious: [DEP] }).fetchImpl));
+    expect(control?.deny ?? '', 'the control, `npm ci`').toContain(DEP);
+    const reg = registry({ exists: [DEP], malicious: [DEP] });
+    const d = await decideInstallCommand('npm ci>out.log', opts(reg.fetchImpl));
+    expect(d?.deny ?? '', 'npm ci>out.log').toContain(DEP);
+    expect(d?.deny ?? '', 'npm ci>out.log').toContain('package.json');
+    expect(asked(reg, DEP)).toBeGreaterThan(0);
+  });
+});
+
+// ───────────────── install-vet-over-ceiling-asks — past a ceiling, the answer is a question to the user
+
+describe('install-vet-over-ceiling-asks', () => {
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  /** The question of the answer. `ask` is the field this feature adds: read through a type that has it, so the file type-checks before it exists. */
+  const askOf = (d: Decided): string | undefined => (d as (NonNullable<Decided> & { ask?: string }) | null)?.ask;
+  const typed = (n: number): string => `dgprobe-zzq7731-c${String(n)}`;
+  const dep = (n: number): string => `dgprobe-zzq7731-d${String(n)}`;
+  const range = (prefix: (n: number) => string, count: number, from = 1): string[] => Array.from({ length: count }, (_, i) => prefix(i + from));
+  const writeManifest = (deps: string[]): void =>
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: Object.fromEntries(deps.map((d) => [d, '^1.0.0'])) }),
+    );
+  const writeLock = (deps: string[], pins: string[] = deps): void =>
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: Object.fromEntries(deps.map((d) => [d, '^1.0.0'])) },
+          ...Object.fromEntries(
+            pins.map((p) => [`node_modules/${p}`, { version: '1.0.0', resolved: `https://registry.npmjs.org/${p}/-/${p}-1.0.0.tgz`, integrity: `sha512-${'A'.repeat(86)}==` }]),
+          ),
+        },
+      }),
+    );
+  const decide = (command: string, reg: { fetchImpl: typeof fetch }, extra: Partial<HookVetOptions> = {}): Promise<Decided> =>
+    decideInstallCommand(command, opts(reg.fetchImpl, { popular: {}, ...extra }));
+  const NAMES_REASON = (n: number): string => `${n === 1 ? '1 was' : `${String(n)} were`} not vetted (only the first 50 are)`;
+  const MANIFEST_REASON = (n: number): string => `${n === 1 ? '1 was' : `${String(n)} were`} not vetted (only the first 150 are)`;
+  const CUT_REASON = 'installs past the first 512 KB were not looked for';
+  const CUT_LINE = 'dev-guardian: installs past the first 512 KB of this command were not looked for — not verified.';
+  // The refusals as the tree with install-vet-manifest-warning-volume gives them (f07cbedf), pinned character for character.
+  const MALICIOUS_NAMED =
+    "dev-guardian blocked this install: 'dgprobe-zzq7731-c5@1.0.0': OSV malicious-package advisory for 1.0.0: MAL-2026-77. " +
+    'Check the package name against the project documentation or the registry before installing anything. ' +
+    'If this package is genuinely intended, ask the user to install it themselves.';
+  const MALICIOUS_IN_MANIFEST =
+    "dev-guardian blocked this install: package.json names 'dgprobe-zzq7731-d7@1.0.0': OSV malicious-package advisory for 1.0.0: MAL-2026-77. " +
+    "Installing it or removing the dependency is the user's decision: tell them which file names it, and install nothing from that manifest until they have decided.";
+  const MISSING = (name: string): string =>
+    `dev-guardian blocked this install: '${name}': does not exist on the npm registry — most likely a hallucinated or mistyped name. ` +
+    'Check the package name against the project documentation or the registry before installing anything. ' +
+    'If this package is private or local, re-run the install with an explicit `--registry <url>`, or prefix the command with `GUARDIAN_PKG_VET=0`.';
+
+  describe('T-01 more than 50 packages named by the commands of a call', () => {
+    it('T-01 `npm install` with 51 names the registry has: `ask` says 1 was not vetted, and the context is the one of today, with its count line', async () => {
+      const d = await decide(`npm install ${range(typed, 51).join(' ')}`, registry({ exists: range(typed, 51) }));
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain('this command names more packages than the hook vets');
+      expect(askOf(d) ?? '(no ask)').toContain(NAMES_REASON(1));
+      expect(askOf(d) ?? '(no ask)').not.toMatch(/^dev-guardian/);
+      expect(d?.context).toContain('1 more packages in this command were not vetted (only the first 50 are) — not verified.');
+    });
+
+    it('T-01 61 names: `ask` says 11 were not vetted', async () => {
+      const d = await decide(`npm install ${range(typed, 61).join(' ')}`, registry({ exists: range(typed, 61) }));
+      expect(askOf(d) ?? '(no ask)').toContain(NAMES_REASON(11));
+      expect(d?.context).toContain('11 more packages in this command were not vetted');
+    });
+
+    it('T-01 two commands of 30 names in one call share the ceiling: `ask` says 10 were not vetted', async () => {
+      const command = `npm install ${range(typed, 30).join(' ')}; npm install ${range(typed, 30, 31).join(' ')}`;
+      const d = await decide(command, registry({ exists: range(typed, 60) }));
+      expect(askOf(d) ?? '(no ask)').toContain(NAMES_REASON(10));
+    });
+
+    it('T-01 `npm install --a j0 … --a j59 --b <pkg>`: 61 candidate words, `ask` says 11 were not vetted', async () => {
+      const js = Array.from({ length: 60 }, (_, i) => `j${String(i)}`);
+      const command = `npm install ${js.map((j) => `--a ${j}`).join(' ')} --b ${typed(1)}`;
+      const d = await decide(command, registry({ exists: [...js, typed(1)] }));
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain(NAMES_REASON(11));
+    });
+
+    it('T-01 the 51 names with GUARDIAN_OFFLINE=1: `ask` all the same, with the context that says the packages could not be vetted', async () => {
+      const reg = registry({ exists: range(typed, 51) });
+      const d = await decide(`npm install ${range(typed, 51).join(' ')}`, reg, { env: { GUARDIAN_OFFLINE: '1' } });
+      expect(reg.calls).toEqual([]);
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain(NAMES_REASON(1));
+      expect(d?.context).toContain('could not vet');
+    });
+
+    it('T-01 the 51 names with the deadline already past: `ask` all the same, with the context that says the packages could not be vetted', async () => {
+      const d = await decide(`npm install ${range(typed, 51).join(' ')}`, registry({ exists: range(typed, 51) }), { deadlineAt: Date.now() - 1 });
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain(NAMES_REASON(1));
+      expect(d?.context).toContain('could not vet');
+    });
+  });
+
+  describe('T-02 more than 150 dependencies of the manifests a call reads', () => {
+    it('T-02 `npm install` in a project with no lockfile whose package.json has 151 dependencies the registry has: `ask` says 1 was not vetted', async () => {
+      writeManifest(range(dep, 151));
+      const d = await decide('npm install', registry({ exists: range(dep, 151) }));
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain('the manifests this command installs');
+      expect(askOf(d) ?? '(no ask)').toContain(MANIFEST_REASON(1));
+      expect(d?.context).toContain('1 more packages of the manifest were not vetted (only the first 150 are) — not verified.');
+    });
+
+    it('T-02 the same through `npm install <pkg>`, which installs the manifest too', async () => {
+      writeManifest(range(dep, 151));
+      const d = await decide(`npm install ${typed(1)}`, registry({ exists: [typed(1), ...range(dep, 151)] }));
+      expect(askOf(d) ?? '(no ask)').toContain('the manifests this command installs');
+      expect(askOf(d) ?? '(no ask)').toContain(MANIFEST_REASON(1));
+    });
+
+    it('T-02 `npm update` in a project of 151 dependencies WITH a lockfile that covers them: `ask` (the update verbs vet every dependency)', async () => {
+      writeManifest(range(dep, 151));
+      writeLock(range(dep, 151));
+      const d = await decide('npm update', registry({ exists: range(dep, 151) }), { projectDir: project });
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain(MANIFEST_REASON(1));
+    });
+
+    it.each(['pip install -r reqs.txt', 'uv pip install -r reqs.txt'])('T-02 `%s` with 151 packages in the file: `ask` with the same reason', async (command) => {
+      writeFileSync(join(project, 'reqs.txt'), `${range(dep, 151).join('\n')}\n`);
+      const d = await decide(command, registry({ exists: range(dep, 151) }));
+      expect(d?.deny, command).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)', command).toContain('the manifests this command installs');
+      expect(askOf(d) ?? '(no ask)', command).toContain(MANIFEST_REASON(1));
+    });
+
+    it('T-02 51 names on the line and 151 in the manifest: both reasons in one string, the names first, joined by `; `', async () => {
+      writeManifest(range(dep, 151));
+      const d = await decide(`npm install ${range(typed, 51).join(' ')}`, registry({ exists: [...range(typed, 51), ...range(dep, 151)] }));
+      const ask = askOf(d) ?? '(no ask)';
+      expect(ask).toContain(NAMES_REASON(1));
+      expect(ask).toContain(MANIFEST_REASON(1));
+      const names = ask.indexOf('this command names more packages than the hook vets');
+      expect(names).toBeGreaterThanOrEqual(0);
+      expect(names).toBeLessThan(ask.indexOf('the manifests this command installs'));
+      expect(ask).toContain('; the manifests this command installs');
+    });
+
+    it('T-02 the manifest of 151 with GUARDIAN_OFFLINE=1: `ask` all the same', async () => {
+      writeManifest(range(dep, 151));
+      const reg = registry({ exists: range(dep, 151) });
+      const d = await decide('npm install', reg, { env: { GUARDIAN_OFFLINE: '1' } });
+      expect(reg.calls).toEqual([]);
+      expect(askOf(d) ?? '(no ask)').toContain(MANIFEST_REASON(1));
+    });
+  });
+
+  describe('T-08 a command cut at 512 KB', () => {
+    it('T-08 a command over 512 KB whose read part installs a package the registry has: `ask` says installs past the cap were not looked for, and the context is the one of today with the cut line', async () => {
+      const command = `npm i ${typed(1)}; ${'echo x; '.repeat(70_000)}npm i ${typed(2)}`;
+      expect(command.length).toBeGreaterThan(512 * 1024);
+      const d = await decide(command, registry({ exists: [typed(1), typed(2)] }));
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain(CUT_REASON);
+      expect(d?.context).toContain(CUT_LINE);
+    });
+
+    it('T-08 a command over 512 KB whose read part installs nothing: `ask` too, and the cut line in the context', async () => {
+      const f = fakeFetch({});
+      const d = await decideInstallCommand(`${'echo x; '.repeat(70_000)}npm i ${typed(2)}`, opts(f.fetchImpl));
+      expect(f.calls).toEqual([]);
+      expect(askOf(d) ?? '(no ask)').toContain(CUT_REASON);
+      expect(d?.context).toContain(CUT_LINE);
+    });
+  });
+
+  describe('T-03 a refusal wins: it carries no question', () => {
+    it('T-03 a malicious package among the first 50 of 60 names: the deny of today, and no `ask`', async () => {
+      const names = range(typed, 60);
+      const d = await decide(`npm install ${names.join(' ')}`, registry({ exists: names, malicious: [typed(5)] }));
+      expect(d?.deny).toBe(MALICIOUS_NAMED);
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-03 a malicious dependency among the first 150 of 151 in the manifest: the deny of today, and no `ask`', async () => {
+      writeManifest(range(dep, 151));
+      const d = await decide('npm install', registry({ exists: range(dep, 151), malicious: [dep(7)] }));
+      expect(d?.deny).toBe(MALICIOUS_IN_MANIFEST);
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-03 a name the registry lacks among the first 50 of 60: the missing-name deny of today, and no `ask`', async () => {
+      const names = range(typed, 60);
+      const d = await decide(`npm install ${names.join(' ')}`, registry({ exists: names.filter((n) => n !== typed(7)) }));
+      expect(d?.deny).toBe(MISSING(typed(7)));
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    // Review of the execution (2026-11-20): the refusal wins over the question of the 512 KB cut too.
+    it('T-03 a malicious package in the read part of a command over 512 KB: a deny that names it, and no `ask`', async () => {
+      const command = `npm i ${typed(1)}; ${'echo x; '.repeat(70_000)}npm i ${typed(2)}`;
+      expect(command.length).toBeGreaterThan(512 * 1024);
+      const d = await decide(command, registry({ exists: [typed(1), typed(2)], malicious: [typed(1)] }));
+      expect(d?.deny ?? '').toContain(typed(1));
+      expect(d?.deny ?? '').toContain('MAL-2026-77');
+      expect(askOf(d)).toBeUndefined();
+    });
+  });
+
+  describe('T-04 inside the ceilings nothing changes, and there is no question', () => {
+    it.each([1, 2, 49, 50])('T-04 %i names on the line with a manifest of 0, 1, 149 and 150 dependencies the registry has: silence, no `ask`', async (n) => {
+      for (const m of [0, 1, 149, 150]) {
+        writeManifest(range(dep, m));
+        const d = await decide(`npm install ${range(typed, n).join(' ')}`, registry({ exists: [...range(typed, n), ...range(dep, m)] }));
+        expect({ n, m, d }).toEqual({ n, m, d: null });
+      }
+    });
+
+    it('T-04 50 names with the last missing, and a manifest of 150 with 7 names missing: the deny and the context of today, no `ask`', async () => {
+      const names = range(typed, 50);
+      const denied = await decide(`npm install ${names.join(' ')}`, registry({ exists: names.slice(0, 49) }));
+      expect(denied?.deny).toBe(MISSING(typed(50)));
+      expect(askOf(denied)).toBeUndefined();
+
+      writeManifest(range(dep, 150));
+      const warned = await decide('npm install', registry({ exists: range(dep, 143) }));
+      expect(warned?.deny).toBeUndefined();
+      // The header, five lines of missing names and the count: the whole context, line by line.
+      const lines = (warned?.context ?? '').split('\n');
+      expect(lines[0]).toMatch(/dev-guardian package vetting — review before relying on these:$/);
+      expect(lines.slice(1)).toEqual([
+        ...range(dep, 5, 144).map(
+          (n) =>
+            `  • package.json: '${n}': not found on the public registry — if it is private or local, ignore this. ` +
+            '(not denied: it is named by a manifest, where a missing name is usually a private or a workspace package)',
+        ),
+        'dev-guardian: 2 more packages of package.json are not on the public registry either (in a manifest that is usually a private or a workspace package) — not listed.',
+      ]);
+      expect(askOf(warned)).toBeUndefined();
+    });
+
+    it('T-04 `npm ci` and `npm install` in a project of 300 dependencies all covered by the lockfile: no `ask`', async () => {
+      writeManifest(range(dep, 300));
+      writeLock(range(dep, 300));
+      for (const command of ['npm ci', 'npm install']) {
+        const reg = registry({ exists: range(dep, 300) });
+        const d = await decide(command, reg, { projectDir: project });
+        expect({ command, d }).toEqual({ command, d: null });
+        expect(reg.calls.filter((u) => u !== OSV), command).toEqual([]);
+      }
+    });
+
+    it('T-04 a lockfile past the 8 000-pair ceiling: the line of today, no `ask`', async () => {
+      writeManifest([dep(1)]);
+      writeLock([dep(1)], range(dep, 8001));
+      const d = await decide('npm ci', registry({ exists: [dep(1)] }), { projectDir: project });
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context).toBe('dev-guardian: 1 more package of package-lock.json was not vetted (only the first 8000 are) — not verified.');
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-04 a command under 512 KB, with an install in it: no `ask`', async () => {
+      const command = `${'echo x; '.repeat(60_000)}npm i ${typed(1)}`;
+      expect(command.length).toBeLessThan(512 * 1024);
+      const d = await decide(command, registry({ exists: [typed(1)] }));
+      expect(askOf(d)).toBeUndefined();
+    });
   });
 });

@@ -322,6 +322,9 @@ export const RUN_NAMES = {
   'mcp-tool-audit': scanner('mcp-tool-audit'),
   // llm_scan: the hunt's findings (tool `llm-hunt`); written by the submit step of llm_scan.
   'llm-hunt': scanner('llm-hunt'),
+  // A hunt plan with hunt tasks still without a valid answer, or an entry point set aside or not visited
+  // (`llmscan/planRecord.ts`, in missing_tools beside an ok `llm-hunt`): the hunt's findings are not re-measured.
+  'llm-hunt:open-tasks': scanner('llm-hunt'),
 
   // import_sarif: the importer's own pass. It speaks for no key: an import's
   // findings carry the TOOL that wrote the log (an open set of names), and

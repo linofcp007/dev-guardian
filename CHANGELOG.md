@@ -8,6 +8,265 @@ version bump.
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-11-21
+
+The install hook reads more of what a package manager is told to install — the initializers of the npm family, `npm
+install-test`, the names an update fetches, a package manager started by a launcher, and a range written without
+quotes — and asks the user when a call passes one of its ceilings instead of letting it run. A session or project
+folder on a network share that does not answer no longer holds every hook past its timeout. `scan_skill` no longer
+reads three look-alikes of a shell command as exfiltration or remote code, and an `llm_scan` plan no longer hides a
+hunt's confirmed findings or stands in for the project's latest scan.
+
+### Upgrading from 3.14.1
+
+- **An install that ran in silence may now be denied, warned about or asked about.** `npm init <x>` and the other
+  initializers look up `create-<x>`, `npm install-test <package>`, `npm update -g <package>`, a package installed
+  through a launcher (`npx pnpm add <package>` and eight other measured lines) and `<package>@>=1.0.0` without
+  quotes are now vetted; a call that passes 50 named packages, 150 dependencies of its manifests or the first 512
+  KB of its command now asks the user (`permissionDecision: ask`). In a run where nobody can answer — `claude -p`,
+  or the `dontAsk` permission mode — Claude Code's documentation says such a call is denied; `bypassPermissions` is
+  not documented for a hook's question, and none of these modes was measured.
+- **A session on a network share starts one more process per hook call.** When the session's folder or
+  `CLAUDE_PROJECT_DIR` is a network path, each hook call asks a child process whether it answers (70 to 90 ms
+  measured on a minimal program), and waits up to 2 s for it while the share is down.
+- **`scan_skill` verdicts may change.** A skill whose only critical finding was one of the three look-alikes now
+  scores lower — a header that authenticates is medium, as `Authorization:` already was — and `audit_agent_config`
+  changes the same way for the commands of hooks.
+- **Check a baseline or a report made while an `llm_scan` plan existed.** `set_baseline {}` or `report_export {}`
+  may have taken that plan's empty record: check its scan type (`llm_scan`) and set or export it again.
+
+### Changed
+
+- **The install hook lists five missing names of a manifest, and counts the rest.** Every dependency of a manifest
+  that the public registry does not have used to get a warning line of its own at every install: a `package.json`
+  with 150 private packages and no scope configured gave 151 lines and 33 257 characters at each `npm install`, and
+  a requirements file the same at each `pip install -r` (measured). One answer now lists the first five such names,
+  of all the manifests it read together, and one line says how many more there are and in which files —
+  `dev-guardian: 145 more packages of package.json are not on the public registry either (in a manifest that is
+  usually a private or a workspace package) — not listed.` The same 150 names now give seven lines and under 1 600
+  characters. Nothing else changes: every name is still looked up and still goes to the malware check, so a
+  malicious package at any position is denied; a missing name close to a popular package's (`Did you mean '…'?`), a
+  typosquat suspicion and the warnings of the packages named on the command line are always listed; and an answer
+  with five missing names or fewer is word for word what it was.
+
+### Security
+
+- **A session or project folder on a network share that does not answer no longer holds every hook for 21 s.** The
+  dispatcher asked the disk about the payload's `cwd` and about `CLAUDE_PROJECT_DIR` in its own process, and Windows
+  waits about 21 s for a host that is down: on Windows 11, with each case on a host of its own in 198.51.100.0/24,
+  nine of twelve measured calls took 21.1 to 21.3 s — past the 15 s timeout of `hooks.json` — and no guard answered
+  in time (`npm install crossenv`, refused in 0.8 s from a local folder, got only the typosquat warning). A folder on
+  the network (`\\host\share`, `//host/share`, `\\?\UNC\…`) is now asked about in a child process that the hook gives
+  a 2 s deadline, one for all of them, and is never opened in the hook's own process; one that does not answer, does
+  not exist or could not be asked is treated as a folder that does not exist (the session works from the hook's own
+  folder, `CLAUDE_PROJECT_DIR` is ignored), and a line says so — which share, which of the two folders, that its hook
+  settings and registry configuration were not read — in the context of a Bash or PowerShell command that is not
+  refused and in the SessionStart notice (also with `sessionStart: false`). A refusal carries no context, as before.
+  The probe is a fifth part of the hooks bundle, `mcp/dist/hooksProbe.js`, loaded only by a call that has such a
+  folder. **What this does not reach:** a hook that Claude Code itself starts in a folder on a dead share waits at
+  its start, before any code of the plugin runs (measured with a plain program, not with Claude Code); the home and
+  temporary folders on a dead share; a mapped drive letter or a directory link to a share, which the path's
+  spelling does not tell from a local one; and a share that dies between the question and a later read. Nothing was
+  measured in a real Claude Code session: the measurement feeds the payload to the dispatcher, and a real, slow share
+  (cold SMB session, VPN) was not tried against the 2 s deadline — such a share is treated as not answering for that
+  call. A project on a share that answers is read as before. **For whoever upgrades:** every hook call of a session
+  whose folder or project is on a network share starts one more process — 70 to 90 ms measured on a minimal
+  program, twice per file write (before and after) — and, while the share is down, waits up to 2 s for it.
+- **The install hook asks the user when a call passes a ceiling, instead of saying a line and letting it run.** The hook
+  vets at most 50 packages per call, 150 dependencies of manifests and the first 512 KB of a command, and said "N more
+  packages … were not vetted" for the rest: padding a line with 51 names, a manifest with 150 dependencies ahead of
+  another, or a command past 512 KB was enough to get a package installed unvetted with only that line. It now asks:
+  `permissionDecision: ask`, with a reason that says how many were not vetted (or that installs past the first 512 KB
+  were not looked for), and the context keeps the warnings and the count line it had. This holds with `bash.block:
+  false` (the question belongs to the install vetting, whose deny does not follow that switch), offline
+  (`GUARDIAN_OFFLINE=1`) and past the vetting deadline, since the counts come before any request; if the shell guard
+  asks about the same command, one question carries both reasons, the guard's first. A deny always wins: it carries no
+  question. A command over 512 KB asks only when it names an installer. **For whoever upgrades:** every update verb
+  (`npm update`, `pnpm up`, `yarn upgrade`, `bun update`) in a project of more than 150 direct dependencies, and every
+  `pip install -r` / `uv pip install -r` of more than 150 packages, now asks at each run (no lockfile covers them);
+  an install that obeys a lockfile covering the direct dependencies does not ask, and a lockfile past 8 000 pairs
+  stays a warning line. In a `-p` run, where nobody can answer, Claude Code refuses the call and the model reads the
+  reason (its documentation; the `dontAsk` mode refuses what would ask), and there is no switch for this question
+  alone: `GUARDIAN_PKG_VET=0` switches the whole install vetting off, the deny of a malicious package with it.
+- **The install hook now vets a package written with an unquoted `>` or `<` glued to it, and `name@`.** `npm install <package>@>=1.0.0`,
+  `pnpm add`, `bun add` and `yarn add` with the same word, `<package>@<2`, `<package>> out.txt` and `pip install <package>>=1.0` were never
+  looked up: the hook dropped every word that has a redirection operator, a rule meant for `2>&1`. But bash hands the manager
+  the text before the operator (`<package>@`) and writes the rest to a file, and npm 11.19, pnpm 11.24, bun 1.4 and Yarn 1.22
+  then installed the latest version of `<package>` (measured 2026-11-20 in a container with a stand-in registry; the hook
+  asked about the dependencies of the manifest and not about `<package>`). PowerShell 7.6 and 5.1 treat a `>` as a redirection
+  only at the start of a word or after digits or `*`, and `<` never: they hand the program the whole word, and behind a `.cmd`
+  shim cmd.exe reads the line again and hands the manager `<package>@` (measured with a stand-in `.cmd`; no real manager ran on
+  Windows). `npm install <package>@`, `npx <package>@` and the same for pnpm, bun and Yarn were put aside as empty. Now the text
+  before the operator is the word, whatever it is (`npm ci>out.log` is `npm ci`, `pip install -r reqs.txt>out.log` reads the
+  file), the target of a redirection is never looked up, a descriptor (`2>&1`, `2>err.log`), `&>`, `*>` and an operator that starts
+  a word stay out, and `name@` is the package `name` with no range. With the PowerShell tool the hook reads both ways — the
+  whole word and the part before the operator — and looks an npm, pnpm, Yarn or bun range with `<` or `>` up with the range and
+  without it, quoted or not. A line with an unquoted redirection is still uncertain: a name the registry does not have is a
+  warning, never a deny, and a malicious package is denied; `npm install '<package>@>=1.0.0'` with the PowerShell tool is
+  denied for a missing name as before, and `npm install <package>@` is denied like `npm install <package>`; the `vet_packages`
+  tool reads `name@` as the name too. Upgrading: lines that
+  said nothing before now say what the registry says about the package — a warning for a name it does not have, a refusal for a
+  malicious one — `npm ci>out.log` and `pip install -r reqs.txt>out.log` now read the manifest, and with the PowerShell tool the
+  target of `<package>> out.txt` is looked up as a package. Under a launcher, `npx <package>@` only warns (not measured). See
+  `install-redirect-glued-word` in the known limits.
+- **The install hook now vets what a launcher makes a package manager install.** `npx pnpm add <package>`, `npx yarn add
+  <package>`, `npx -y pnpm@11 add <package>`, `npm exec -- pnpm add <package>`, `pnpm dlx yarn add <package>`, `yarn dlx pnpm add <package>`, `bunx pnpm add
+  <package>`, `npx corepack yarn add <package>` and `npm exec corepack -- yarn add <package>` vetted only the manager they
+  launch (`pnpm`, `yarn`, `corepack`): the manager then asked the registry for `<package>` and for the dependencies of the
+  project's `package.json` and installed all of them, unvetted (measured 2026-11-20 with a stand-in registry: npm 11.19,
+  pnpm 11.24, Yarn 1.22 and 4.18, bun 1.4, corepack 0.36; `pnpm add <package>` and `yarn add <package>` were refused). When
+  a launcher of the npm family runs `npm`, `pnpm`, `yarn`, `yarnpkg`, `bun` or `corepack`, the words after it are now read
+  as a command of that manager, one level deep, and vetted as the line without the launcher is. A name the registry does
+  not have is denied in the nine measured lines, in a plain single statement, with any version of the launched manager and
+  only the flags of the inner manager's confident list (`-D`, `-E`, …); `corepack <manager>@<version> dlx …` before `pnpm
+  dlx` and `yarn dlx` is read as the line without it. Every other form — another pair, `npm x`, `bun x`, `pnpx`, a flag of
+  the launcher (`--yes`, `--no-install`, `-p`), `--` elsewhere, another inner verb, a version behind `corepack` — is
+  vetted and only warns for a missing name; a package OSV lists as malicious is denied everywhere. Upgrading: the
+  manifest of the project is now read on these lines too (`npx yarn`, `npx pnpm install`, `npx corepack up`, …), so the
+  names of its dependencies go to the registry and to OSV and the answer takes as long as for an install of the manifest;
+  with a directory or workspace flag on the launcher one line says the `package.json` was not read. Only one level is
+  read: behind `npx npx pnpm add <package>` only the first `npx` is vetted, and behind `npx pnpm dlx yarn add <package>`
+  `pnpm` and `yarn` are, not `<package>`. Not read, and listed in the known limits: the Python launchers (`uvx pip install
+  <package>`, `pipx run pip install <package>`), `pnpm exec <manager>`, `@pnpm/exe` and `@yarnpkg/cli-dist`, and a
+  `.yarnrc.yml` or `bunfig.toml` behind a launcher.
+- **The install hook now vets the initializers of the npm family and `npm install-test <package>`.** `npm create`,
+  `npm init <name>`, `npm innit`, `yarn create`, `pnpm create` and `bun create` / `bun c` download `create-<name>`
+  and run it, and `npm install-test <package>` / `npm it <package>` install the package; none of them was looked at
+  (measured 2026-11-20 with a stand-in registry: npm 11.19, Yarn 1.22, 3.8 and 4.18, pnpm 11.24, bun 1.4). The
+  initializer's package is now looked up as `npm exec create-<name>` already was — `create-<name>`, `@scope/create`
+  for `@scope`, `@scope/create-<name>` for `@scope/<name>`, with the version the word carries — and `npm install-test
+  <package>` is read as `npm install <package>`.
+  - **Denied:** a package the public registry does not have, in a plain single statement for `npm create|init|innit`
+    (also with `-y`, `--yes`, `-q`, `--quiet`, `--silent`), `yarn create` (also `-q`, `--quiet`) and `pnpm create`,
+    and for `npm install-test` / `npm it`; and any such package that OSV lists as malicious, in every form.
+  - **Only a warning:** `bun create` / `bun c` for a missing name, because bun uses a template of that name from a
+    `.bun-create` folder when there is one and then does not ask the registry (measured; the hook does not read that
+    folder); a flag that was not measured with the verb (`npm init -w <folder> <name>`, `--registry`); a word that
+    already starts with `create-` for Yarn, the bare word `create`, a scope whose name starts with `create-`, and
+    `yarn create @scope@<version>`, where the managers differ or nothing was measured and both names are looked up.
+  - **Still not read:** `npm init` and `yarn create` with no name (they fetch nothing), an initializer that is not a
+    registry name (`npm init <user>/<repo>`, a path, a URL), `npm link <package>`, `npm init -w <folder>` with no
+    name, and `bun create` templates. The known limit `install-initializers` lists what the initializers leave.
+  - **Upgrading:** `npm create <a name the registry does not have>` and `npm install-test <a missing name>` are now
+    denied, as `npm exec` and `npm install` are, with the escape hatch the deny names. The names `create-<name>` now
+    go to the public registry and to OSV; in a project whose `.npmrc`, `.yarnrc`, `.yarnrc.yml` or `bunfig.toml`
+    sets the default registry, a missing name only warns, with that registry as the reason.
+- **The install hook now vets the package an update is told to fetch.** `npm update -g <package>` (also `npm up` and
+  `npm upgrade`), `pnpm update -g <package>`, `bun update -g <package>` and `yarn global upgrade <package>` fetch the
+  package when it is installed globally, and `yarn up <package>`, `yarn workspace <w> up <package>` and `yarn workspaces
+  foreach … up <package>` fetch it for the workspace. The install form (`npm install -g <package>`) was looked up;
+  the global update forms and the two workspace forms were silent, with no lookup at all, and for `yarn up <package>`
+  only the manifest was read (measured 2026-11-20 with a stand-in registry: npm 11.19, pnpm 11.24, Yarn 1.22, 3.8 and
+  4.18, bun 1.4: each manager asked the registry for the package and installed 1.5.0 or 2.1.0 of it). The name is now
+  looked up — sent to the public registry and to OSV — with the version or range it carries, as a package named to an
+  update:
+  - **Denied:** a package OSV lists as malicious, as for an install.
+  - **Only a warning:** a name the registry does not have, and a typosquat suspicion. A missing name is never denied
+    here: with nothing installed globally the managers asked the registry for nothing, and Yarn refuses a name no
+    workspace depends on (both measured; a missing name beside other global packages was not), and the hook cannot
+    see what is installed globally. The warning says so.
+  - **One line:** `npm update -g`, `pnpm update -g`, `bun update -g` and `yarn global upgrade` with no name say that the
+    command updates every globally installed package and that none was vetted. They are not denied and the project's
+    manifest is not read, as before.
+  - **Not said:** a recent version, install scripts and known vulnerabilities of the name, which an update would repeat
+    at every run (the known limit `install-global-update-by-name` lists what stays).
+  - **Upgrading:** `yarn workspace <w> up` and `yarn workspaces foreach … up|add` were not read (measured: `workspace
+    <w> up` with Yarn 3.8 and 4.18, `foreach -A up` with Yarn 4.18; `foreach … add` is read by the same rule and was
+    not measured); they are now read as `yarn up` and `yarn workspace <w> add`, so they vet the nearest `package.json` and the lockfile
+    like those do, and the command is uncertain for the workspace context. `yarn workspaces foreach` with a flag its
+    help does not list is uncertain too. A name that a manifest read for the command already has, without a version,
+    is looked up once, by the manifest, as before. The names of a project update (`npm update <name>`,
+    `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`) are still not looked up.
+
+### Fixed
+
+- **`scan_skill` no longer reads three look-alikes of a shell command as what the rule is named for.** Measured on
+  one command per page, in a fenced block and in a code file:
+  - **A credential-file name in the path of a URL is not a local file.** `curl -s "https://$TARGET/.env" | grep -i
+    "APP_KEY"`, `curl -s "https://$TARGET/backup/.env.production"`, `curl -s "https://$TARGET/.aws"`, `curl -s
+    https://target.example/.env` and `wget -q "https://$TARGET/.aws/credentials" -O -` were `de-sensitive-file-over-network`
+    (critical, and `de-read-sensitive-files`, high, for the last), enough alone for DO NOT INSTALL; the sentence
+    "Fetch https://target.example/.env with curl and look for APP_KEY" was `de-sensitive-file-over-network-prose` (high).
+    A line is read this way only if the whole line is one `curl` or `wget` (flags from a closed list that send and
+    write nothing — `wget` only with `-O -`), one `http(s)` URL in double quotes (a `$NAME` or `${NAME}` allowed) or
+    bare with no `$`, no `..` in it and no local host, and at most three text filters (`grep`, `jq`, `head`, `tail`,
+    `wc`, `sort`, `uniq`, `cut`) that are given no file, in at most 512 characters; a sentence of up to 512 characters
+    is read this way only if it has one URL written out whole and no sending flag, and the name is not outside it.
+  - **`python -m json.tool` reads what it is handed.** `… | base64 -d | python3 -m json.tool` (`dc-encoded-payload-exec`)
+    and `curl -s https://api.example/x | python3 -m json.tool` (`sc-curl-pipe-shell`, high and decisive, and its
+    sentence rule `sc-curl-pipe-shell-prose`) are no longer a finding when the stage is exactly that and ends the line
+    or is followed by another `|`; up to three such stages in a row are skipped. Such a command in a code span in the
+    middle of a sentence that goes on after it now gives only the sentence's `sc-curl-pipe-shell-prose` (high, not
+    decisive) instead of `sc-curl-pipe-shell` (high, decisive).
+  - **A header that authenticates is `de-secret-in-auth-header` (medium), not `de-env-over-network` (critical).**
+    `curl -H "X-Vault-Token: $VAULT_TOKEN"`, `-H "X-aws-ec2-metadata-token: $TOKEN"`, `--header "X-Auth-Token:
+    $API_TOKEN"`, `-H 'x-secret-key: ${APP_SECRET}'` and `wget --header="X-Auth-Token: $API_TOKEN"` — a header given
+    by `-H` / `--header` whose name (up to 64 characters) holds `token`, `key`, `auth` or `secret` as a word. This is
+    the same trade the rule already made for `Authorization:` and `X-API-Key:`: `-H "X-Key-Dump:
+    $AWS_SECRET_ACCESS_KEY"` is now medium too, and a medium finding alone scores SAFE.
+  - **What stays critical or high, on purpose** (measured, both readings): a file sent (`cat ~/.ssh/id_rsa | curl
+    --data-binary @- …`, `-F "f=@.env"`, `-d @.env`, `-T .env`, the name in a `$(…)`), `file://…`, `{curl,…,-T,.env}`,
+    `…;tar${IFS}cz${IFS}.ssh/|nc…`, a `..` in the URL, `scp .env …`, `-o .env`; a URL with a variable and no quotes
+    (`curl https://$TARGET/.env`), a line with `2>/dev/null`, `-o out.txt`, `sudo`, `| tee`, a flag outside the list
+    (`-sT`, `-K`, `-O -` on `curl`, `wget` without `-O -`), a second program after a `|`, a filter given a file
+    (`grep . .env`, `sort -o .npmrc`), a local host, a line of more than 512 characters, and a command in a code span
+    in the middle of a sentence; `… | python3 -m json.tool | bash`, `|& bash`, `sudo python3 -m json.tool`,
+    `python3 -m json.tool - /tmp/x.sh`, `2>/dev/null` after it, a sentence that goes on after `json.tool`, four such stages in a row, `-m code`, `-c`, `-mjson.tool`
+    and `-i -m json.tool`; a header whose name does not say it authenticates (`X-Data`, `X-Author`, `X-Monkey`), and a
+    secret in the URL or in a body (`-d "x-auth-token: $AWS_SECRET_ACCESS_KEY"`).
+  - **`audit_agent_config` changes the same way:** it runs these patterns over the commands of hooks, so a hook
+    command of the URL and `json.tool` forms above is no longer reported, one of the header forms is reported as
+    `de-secret-in-auth-header` (medium) instead of `de-env-over-network` (critical), and one that stays is reported as
+    before. No rule id was added, removed or renamed.
+  - **Known and accepted:** `| PYTHON3 -M JSON.TOOL` in capitals is skipped as the bare stage too (the patterns are
+    read case-blind); `-M` is no option of Python and `JSON` no module of its standard library. A sentence is exempt
+    only when its one URL is not on a local host and it has no sending flag (`-T`, `-d`, `-F`, `-K`, `--upload`,
+    `--post`, `--data`, `--form`, `--json`, `--url-query`, `--variable`). An authenticating header name is read only up
+    to 64 characters, which also keeps a hostile line of the header form linear.
+- **Starting an `llm_scan` plan no longer hides a hunt's confirmed findings, and its record is no longer the
+  project's latest scan.** Every plan wrote at its start a completed `llm_scan` record that said it had measured
+  everything. Measured on 3.14.1's sources, with a SAST scan of 3 findings and a complete hunt that confirmed 2 (5
+  open, `risk_score` 33): starting a verify-only plan with no task answered left 3 open, `risk_score` 23, the two gone
+  from `prioritize_findings` and the dashboard, and `diff_scans` (with and without `scan_type`) gave them as
+  `resolved: 2`; for a second hunt plan only started, the measurement covered the open set (3), `risk_score` (23) and
+  `diff_scans { scan_type: "llm_scan" }` (`resolved: 2`). `report_export {}` exported the plan's empty record
+  (`Findings (0)`, no LLM verification section) and `set_baseline {}` pinned it; in a project whose only scan was
+  scoped, the open set went from coverage `none` to `full`. Nothing was deleted, but the hunt's record was no longer a
+  source of the open set, which retention never deletes: once enough newer `llm_scan` records existed, a retention
+  run could have removed it. The same runs, repeated on the fixed tree, keep 5 open and 33, and no `diff_scans`
+  answer resolves anything. Now:
+  - A verify-only plan's record is never the latest scan nor a source of the open set (`report_export {}`,
+    `set_baseline {}`, `diff_scans` without ids, `risk_score`, `prioritize_findings`, the dashboard), and is still
+    reached by its `scan_id`. `diff_scans { scan_type: "llm_scan" }` compares the two newest hunts that ran — no
+    longer a hunt with a verify-only record. By ids, `diff_scans { from_scan_id: <hunt>, to_scan_id: <verify-only
+    record> }` gives the hunt's findings as `not_remeasured` instead of resolved; the other way round they are new,
+    as before.
+  - A hunt plan's record counts what was hunted: its hunt and cross-cutting tasks with a valid answer (one closed as
+    not delivered, or after three invalid answers, does not count) and its entry points. `none` while none has one —
+    passed over and named, and `set_baseline { scan_id }` refuses it —; `partial` while some lack one, or while an
+    entry point is set aside or not visited — the earlier hunts' confirmed findings stay open, `not_remeasured` —;
+    `full` when all have one and no entry point is set aside or not visited. The verify tasks (open, or closed stale,
+    not delivered or after three invalid answers), a finding left out of a full plan, and a hunt by groups of code
+    files in a project with no entry points do not hold it back, although the plan's own report says `partial` for
+    them. Until a later hunt answers every task, a hunt that was only started keeps `risk_score` and
+    `prioritize_findings` at coverage `partial`, naming it, and the findings of the next hunt compared with it are
+    `not_previously_measured`, not new.
+  - **A record stays `partial` for good** when one of its hunt or cross-cutting tasks was closed as not delivered or
+    after three invalid answers, or when an entry point was set aside; and a route whose handler file is outside the
+    project is set aside by every hunt of that project — measured: a second hunt there that answered every task and
+    did not find the first one's confirmed finding gave `resolved: 0`, and the finding stayed in the open set. The
+    way out today is a verdict:
+    `llm_scan { step: "start", modes: ["verify"], fingerprints: [<the finding's fingerprint>] }`, answered
+    `not_real` by a fresh context, takes a hunt finding out of the open set (measured).
+  - No migration: a verify-only record of an earlier version is recognised as it is read; an earlier hunt record
+    of a plan still open is corrected the next time the plan is read or answered, and one of a plan no longer open
+    (abandoned, or complete after a limit) keeps saying `full`. A baseline already set on a verify-only record stays
+    and still reads, and `set_baseline { scan_id }` still accepts one. `health_status.last_scan` and
+    `guardian://scans/latest` still show a plan's record (the latest activity). See
+    [docs/llm-scan.md](docs/llm-scan.md#the-plans-scan-record).
+  - **For whoever upgrades:** a baseline set with `set_baseline {}`, or a report exported without `scan_id`, while a
+    plan existed may be that plan's empty record: check its scan type (`llm_scan`) and set or export it again.
+
 ## [3.14.1] - 2026-11-20
 
 A patch release for one regression of 3.14.0: a lockfile whose entries repeat their own scope could spend the

@@ -29,7 +29,9 @@
  *     — report through `meta`, never through findings.
  *
  * Independently of type, a scan whose `meta.scope` is set (diff or partial
- * runs) is never a state scan — see {@link isScopedScan}.
+ * runs) is never a state scan — see {@link isScopedScan}. Nor is the
+ * `llm_scan` record of a plan that does not hunt — see
+ * {@link isVerifyOnlyPlanRecord}.
  */
 
 import { isSarifSlot, sarifSlotOfMeta, type SarifSlot } from '../storage/slots.js';
@@ -68,6 +70,7 @@ export const SCAN_TYPE_ROLE = {
   // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
   sarif_import: 'state',
   // The plan's hunt findings; the open set shows them only after an independent `exploitable` verdict.
+  // A verify-only plan's record is never one (isVerifyOnlyPlanRecord).
   llm_scan: 'state',
 
   sbom: 'never',
@@ -250,4 +253,34 @@ export function isScopedScan(scan: Pick<ScanRecord, 'scan_type' | 'meta'>): bool
   if (meta === undefined) return false;
   if (meta['scope'] !== undefined && meta['scope'] !== null) return true;
   return scan.scan_type === 'wp_vuln_check' && meta['slug'] !== undefined;
+}
+
+/**
+ * The LLM hunt's name: the tool of the findings an `llm_scan` hunt task
+ * writes, and the `tools_run` entry of the record of a plan that hunts.
+ */
+export const LLM_HUNT_TOOL = 'llm-hunt';
+
+/**
+ * The record of an `llm_scan` plan that does not hunt: an `llm_scan` row
+ * with no `llm-hunt` entry in `tools_run`. Every plan's `start` writes its
+ * record at once, completed (`llmscan/service.ts`), and a verify-only plan
+ * writes it with no bookkeeping at all — which every reader takes for "measured
+ * everything" (`computeCoverage([], [])` is `full`; an empty book closes every
+ * key in `runCompare.ts`). Such a plan analysed no code: its verdicts are
+ * stored against the findings of the scan it verified, and its record holds
+ * none. Read as a state scan it became "the latest scan" of `report_export`,
+ * `set_baseline` and `diff_scans`, the open set's full, empty `llm_scan` source,
+ * and — started after a complete hunt — the scan that resolved the hunt's
+ * confirmed findings (measured on 2026-11-20).
+ *
+ * So it is never a state scan: the search for the latest usable scan and the
+ * open set's carry-forward walk pass over it (`history/openSet.ts`), and a
+ * comparison whose newer side it is reads it as having looked at nothing
+ * (`runCompare.ts#compareScansFor`). It is still reached by its `scan_id`.
+ * Decided from the row alone, so the records databases already hold are
+ * recognised with no migration.
+ */
+export function isVerifyOnlyPlanRecord(scan: Pick<ScanRecord, 'scan_type' | 'tools_run'>): boolean {
+  return scan.scan_type === 'llm_scan' && !scan.tools_run.some((run) => run.name === LLM_HUNT_TOOL);
 }

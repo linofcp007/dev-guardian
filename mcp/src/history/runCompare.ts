@@ -62,7 +62,9 @@
  *   - for a tool the table does not know at all, measured only by a scan
  *     with no gap anywhere (coverage `full`), never by a partial one;
  *   - a scan with no bookkeeping at all (the oldest rows) measured
- *     everything.
+ *     everything — except a verify-only `llm_scan` plan's record, which
+ *     analysed no code: as the newer side it looked at nothing
+ *     (`compareScansFor`; `scanRoles.ts#isVerifyOnlyPlanRecord`).
  *
  * An audit_executive row is judged by its sub-scans' own bookkeeping (its
  * own entries only say which sub-tool answered).
@@ -77,7 +79,13 @@ import type { Storage } from '../storage/index.js';
 import { computeCoverage } from '../tools/scanCoverage.js';
 import type { Finding, PartialParse, ScanRecord, ToolRun } from '../types.js';
 import { KNOWN_FINDING_KEYS, findingKey, keysOfRun, runNameEntry } from './runNames.js';
-import { isOrchestratedFullScan, isScriptEraFullScan, sameImportSlot, scriptEraSlotOfFinding } from './scanRoles.js';
+import {
+  isOrchestratedFullScan,
+  isScriptEraFullScan,
+  isVerifyOnlyPlanRecord,
+  sameImportSlot,
+  scriptEraSlotOfFinding,
+} from './scanRoles.js';
 
 interface ScanComparison {
   /** Whether `f`, a finding of `from`, was not measured again by `to` — a gap, or not run. */
@@ -1134,10 +1142,17 @@ export function compareScansFor(storage: Storage, from: ScanRecord, to: ScanReco
   // them. Only an import of the same source tool measures them (and an import
   // measures nothing a native scan found).
   const crossSlot = !sameImportSlot(from, to);
+  // A verify-only plan's record analysed no code: as the newer side it
+  // resolves nothing. Its empty bookkeeping cannot say so — `bookkeepingVerdict`
+  // reads an empty book as "measured everything", which the oldest rows of
+  // other types rely on — so the record is recognised from its row, type
+  // first. As the reference it answers as before: what the newer scan found
+  // is new.
+  const toLookedAtNothing = isVerifyOnlyPlanRecord(to);
   const notLookedAt = (f: Finding): Answer => ({ verdict: 'not_run', notRun: f.tool, byTarget: false });
   /** `to`'s answer for a finding of `from`. */
   const inTo = (f: Finding): Answer => {
-    if (crossSlot) return notLookedAt(f);
+    if (crossSlot || toLookedAtNothing) return notLookedAt(f);
     const t = typeOfFrom(f);
     return answerFor(fromBooks(t), toBooks(t), f);
   };

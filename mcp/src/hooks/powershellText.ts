@@ -297,9 +297,18 @@ function singleQuotedEnd(text: string, at: number): number {
  * line (to a `|`) goes to the program word by word, unparsed, and a script
  * block's braces separate statements. Everything else is left as it is — a
  * reading for the guards, not a PowerShell parser.
+ *
+ * `literalGluedRedirects` (off by default; the guards never set it): a `>` or `<` that follows text in the same token — not nothing,
+ * digits or `*` — is data, not a redirection (measured 2026-11-20, PowerShell 7.6 and 5.1: `npm install P@>=1.0.0` hands the program
+ * `P@>=1.0.0`, and `P> out.txt` hands it `P>` and `out.txt`; `<` never redirects). Each `<` and `>` of such a token is written as a
+ * quoted character, so the POSIX reader keeps the word whole and the next word is an argument, not a target. The first operator of
+ * the token decides.
  */
-export function powershellAsPosix(text: string): string {
+export function powershellAsPosix(text: string, options: { literalGluedRedirects?: boolean } = {}): string {
   const seen = hereStrings();
+  /** The text of the current token so far (quotes removed), and whether its operators are literal: decided at the first one. */
+  let token = '';
+  let glued: boolean | null = null;
   /** Per open `{`: whether it is a `${…}` / `@{…}` literal rather than a script block. */
   const braces: boolean[] = [];
   let out = '';
@@ -307,6 +316,10 @@ export function powershellAsPosix(text: string): string {
   while (i < text.length) {
     const ch = text.charAt(i);
     const boundary = atBoundary(text, i);
+    if (boundary || UNICODE_SPACE.test(text.charAt(i - 1))) {
+      token = '';
+      glued = null;
+    }
     if (boundary && text.startsWith('<#', i)) {
       i = blockCommentEnd(text, i);
       out += ' ';
@@ -370,6 +383,7 @@ export function powershellAsPosix(text: string): string {
         j += 1;
       }
       out += posixSingle(lit);
+      token += lit === '' ? '""' : lit;
       i = j + 1;
       continue;
     }
@@ -420,7 +434,11 @@ export function powershellAsPosix(text: string): string {
     }
     if (ch === '\\') out += '\\\\';
     else if (ch === ',' || UNICODE_SPACE.test(ch)) out += ' ';
-    else out += ch;
+    else if (options.literalGluedRedirects === true && (ch === '<' || ch === '>')) {
+      glued ??= !/^(?:\d*|\*|&)$/.test(token);
+      out += glued ? posixSingle(ch) : ch;
+    } else out += ch;
+    token += ch;
     i += 1;
   }
   return out;

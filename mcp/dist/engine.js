@@ -2766,14 +2766,20 @@ function singleQuotedEnd(text3, at) {
   }
   return text3.length;
 }
-function powershellAsPosix(text3) {
+function powershellAsPosix(text3, options = {}) {
   const seen = hereStrings();
+  let token = "";
+  let glued = null;
   const braces = [];
   let out = "";
   let i = 0;
   while (i < text3.length) {
     const ch = text3.charAt(i);
     const boundary = atBoundary(text3, i);
+    if (boundary || UNICODE_SPACE.test(text3.charAt(i - 1))) {
+      token = "";
+      glued = null;
+    }
     if (boundary && text3.startsWith("<#", i)) {
       i = blockCommentEnd(text3, i);
       out += " ";
@@ -2829,6 +2835,7 @@ function powershellAsPosix(text3) {
         j += 1;
       }
       out += posixSingle(lit);
+      token += lit === "" ? '""' : lit;
       i = j + 1;
       continue;
     }
@@ -2867,7 +2874,11 @@ function powershellAsPosix(text3) {
     }
     if (ch === "\\") out += "\\\\";
     else if (ch === "," || UNICODE_SPACE.test(ch)) out += " ";
-    else out += ch;
+    else if (options.literalGluedRedirects === true && (ch === "<" || ch === ">")) {
+      glued ??= !/^(?:\d*|\*|&)$/.test(token);
+      out += glued ? posixSingle(ch) : ch;
+    } else out += ch;
+    token += ch;
     i += 1;
   }
   return out;
@@ -3500,7 +3511,7 @@ function withoutRedirections(words) {
       out.push(word.value);
       continue;
     }
-    if (!/^(?:\d*|&)$/.test(r.prefix)) out.push(r.prefix);
+    if (!NOT_A_WORD_PREFIX.test(r.prefix)) out.push(r.prefix);
     if (r.inline === "") i += 1;
   }
   return out;
@@ -3846,7 +3857,7 @@ function withoutRedirectWords(words) {
   }
   return out;
 }
-var NEW_ITEM_VALUED, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, GIT_VALUED, REMOVERS, CMD_SWITCHED;
+var NEW_ITEM_VALUED, NOT_A_WORD_PREFIX, COPY_VALUED, PS_PATH_PARAMS, PS_VALUE_PARAMS, PS_SWITCHES, RSYNC_VALUED, SED_IN_PLACE, EDITOR_VALUED_LETTERS, GIT_VALUED, REMOVERS, CMD_SWITCHED;
 var init_effects = __esm({
   "src/hooks/shell/effects.ts"() {
     "use strict";
@@ -3861,6 +3872,7 @@ var init_effects = __esm({
       ["target", ["value", "target"]],
       ["credential", ["credential"]]
     ];
+    NOT_A_WORD_PREFIX = /^(?:\d*|&)$/;
     COPY_VALUED = /* @__PURE__ */ new Set(["-S", "--suffix", "-m", "--mode", "-o", "--owner", "-g", "--group"]);
     PS_PATH_PARAMS = ["path", "literalpath", "destination"];
     PS_VALUE_PARAMS = ["filter", "include", "exclude", "credential", "fromsession", "tosession"];
@@ -13477,6 +13489,9 @@ var init_scansRepo = __esm({
           meta = COALESCE(?, meta)
       WHERE id = ?
     `);
+        this.rewriteBookkeepingStmt = db.prepare(`
+      UPDATE scans SET tools_run = ?, missing_tools = ? WHERE id = ?
+    `);
         this.markCancelledStmt = db.prepare(`
       UPDATE scans
       SET status = 'cancelled', finished_at = ?
@@ -13532,6 +13547,7 @@ var init_scansRepo = __esm({
       db;
       insertStmt;
       finalizeStmt;
+      rewriteBookkeepingStmt;
       markCancelledStmt;
       listRunningStmt;
       reapOneStmt;
@@ -13588,6 +13604,17 @@ var init_scansRepo = __esm({
           input2.scan_id
         );
         return finishedAt;
+      }
+      /**
+       * Rewrites what a scan says it ran — `tools_run` and `missing_tools`, from
+       * which its coverage is judged — and nothing else: its status and finish
+       * date stay as {@link finalize} wrote them, which writing it again would
+       * move. For a record that measures more after it was finalized: an
+       * `llm_scan` plan's, completed at the plan's start and kept up to date as
+       * its hunt tasks are answered (`llmscan/planRecord.ts`).
+       */
+      rewriteBookkeeping(scanId, bookkeeping) {
+        this.rewriteBookkeepingStmt.run(JSON.stringify(bookkeeping.tools_run), JSON.stringify(bookkeeping.missing_tools), scanId);
       }
       markCancelled(scanId) {
         this.markCancelledStmt.run(nowIso(), scanId);
@@ -23025,7 +23052,10 @@ function isScopedScan(scan2) {
   if (meta3["scope"] !== void 0 && meta3["scope"] !== null) return true;
   return scan2.scan_type === "wp_vuln_check" && meta3["slug"] !== void 0;
 }
-var SCAN_TYPE_ROLE, STATE_SCAN_TYPES, TARGET_SCAN_TYPES, SCRIPT_ERA_RUN_SLOTS;
+function isVerifyOnlyPlanRecord(scan2) {
+  return scan2.scan_type === "llm_scan" && !scan2.tools_run.some((run2) => run2.name === LLM_HUNT_TOOL);
+}
+var SCAN_TYPE_ROLE, STATE_SCAN_TYPES, TARGET_SCAN_TYPES, SCRIPT_ERA_RUN_SLOTS, LLM_HUNT_TOOL;
 var init_scanRoles = __esm({
   "src/history/scanRoles.ts"() {
     "use strict";
@@ -23056,6 +23086,7 @@ var init_scanRoles = __esm({
       // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
       sarif_import: "state",
       // The plan's hunt findings; the open set shows them only after an independent `exploitable` verdict.
+      // A verify-only plan's record is never one (isVerifyOnlyPlanRecord).
       llm_scan: "state",
       sbom: "never",
       detect_stack: "never",
@@ -23080,6 +23111,7 @@ var init_scanRoles = __esm({
       trivy: "deps",
       "trivy-dockerfile": "containers"
     };
+    LLM_HUNT_TOOL = "llm-hunt";
   }
 });
 
@@ -71168,6 +71200,9 @@ var init_runNames = __esm({
       "mcp-tool-audit": scanner("mcp-tool-audit"),
       // llm_scan: the hunt's findings (tool `llm-hunt`); written by the submit step of llm_scan.
       "llm-hunt": scanner("llm-hunt"),
+      // A hunt plan with hunt tasks still without a valid answer, or an entry point set aside or not visited
+      // (`llmscan/planRecord.ts`, in missing_tools beside an ok `llm-hunt`): the hunt's findings are not re-measured.
+      "llm-hunt:open-tasks": scanner("llm-hunt"),
       // import_sarif: the importer's own pass. It speaks for no key: an import's
       // findings carry the TOOL that wrote the log (an open set of names), and
       // only an import of the same source tool measures them
@@ -71592,9 +71627,10 @@ function compareScansFor(storage, from, to) {
   const fromBooks = booksOf(storage, from);
   const toBooks = booksOf(storage, to);
   const crossSlot = !sameImportSlot(from, to);
+  const toLookedAtNothing = isVerifyOnlyPlanRecord(to);
   const notLookedAt = (f) => ({ verdict: "not_run", notRun: f.tool, byTarget: false });
   const inTo = (f) => {
-    if (crossSlot) return notLookedAt(f);
+    if (crossSlot || toLookedAtNothing) return notLookedAt(f);
     const t = typeOfFrom(f);
     return answerFor(fromBooks(t), toBooks(t), f);
   };
@@ -71912,7 +71948,7 @@ function search(storage, projectPath, types, opts) {
       ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
     });
     for (const scan2 of page) {
-      if (isScopedScan(scan2)) continue;
+      if (isScopedScan(scan2) || isVerifyOnlyPlanRecord(scan2)) continue;
       if (opts.predicate !== void 0 && !opts.predicate(scan2)) continue;
       const judged = judge4(scan2, opts.slot);
       if (judged === null) continue;
@@ -72091,7 +72127,7 @@ function carryForward(storage, projectPath, slot, source, sourceRows, isSuppress
     if (last !== void 0) before = last.scan_id;
     for (const scan2 of page) {
       if (walked >= CARRY_WALK_LIMIT) break;
-      if (isScopedScan(scan2)) continue;
+      if (isScopedScan(scan2) || isVerifyOnlyPlanRecord(scan2)) continue;
       const coverage = judge4(scan2, slot);
       if (coverage === null || coverage === "none") continue;
       walked += 1;
@@ -72195,7 +72231,7 @@ function isConfirming(marker) {
   return marker !== void 0 && marker.independent && marker.verdict === "exploitable";
 }
 function isHuntFinding(f) {
-  return f.tool === HUNT_TOOL;
+  return f.tool === LLM_HUNT_TOOL;
 }
 function splitHuntCandidates(storage, projectPath, rows) {
   if (!rows.some(isHuntFinding)) return { counted: [...rows], unconfirmed: [] };
@@ -72371,7 +72407,7 @@ function describeOpenSet(set3) {
     ...set3.future_dated_note !== void 0 ? { future_dated_note: set3.future_dated_note } : {}
   };
 }
-var PAGE2, SKIPPED_SAMPLE, HUNT_TOOL, CARRY_WALK_LIMIT, KnownFindings;
+var PAGE2, SKIPPED_SAMPLE, CARRY_WALK_LIMIT, KnownFindings;
 var init_openSet = __esm({
   "src/history/openSet.ts"() {
     "use strict";
@@ -72386,7 +72422,6 @@ var init_openSet = __esm({
     init_slots();
     PAGE2 = 25;
     SKIPPED_SAMPLE = 5;
-    HUNT_TOOL = "llm-hunt";
     CARRY_WALK_LIMIT = 5e3;
     KnownFindings = class {
       identities = /* @__PURE__ */ new Set();
@@ -99968,6 +100003,23 @@ function writesInto(path3) {
 function hasFetchTarget(text3) {
   return REMOTE_DESTINATION_RE.test(text3) || keywordThenTail(text3, SHELL_NET_CLIENT, NET_TARGET).length > 0;
 }
+function isUrlOnlySentence(text3) {
+  const urls = text3.match(SENTENCE_URL);
+  if (urls === null || urls.length !== 1) return false;
+  if ((text3.match(/https?:\/\//gi) ?? []).length !== 1) return false;
+  if (!SENTENCE_URL_NOT_LOCAL.test(urls[0])) return false;
+  const at = text3.indexOf(urls[0]);
+  const after2 = text3.charAt(at + urls[0].length);
+  if (after2 === "$" || after2 === "{") return false;
+  if (SENDING_FLAG.test(text3)) return false;
+  return !SENSITIVE_FILE_RE.test(text3.slice(0, at) + " " + text3.slice(at + urls[0].length));
+}
+function isPlainFetchLine(text3) {
+  return PLAIN_FETCH_LINE.test(text3);
+}
+function isPlainFetchOrUrlSentence(text3) {
+  return PLAIN_FETCH_LINE.test(text3) || isUrlOnlySentence(text3);
+}
 function scanContent(content, isCode, opts = {}) {
   const lines = content.split(/\r?\n/);
   if (isCode) {
@@ -100320,6 +100372,7 @@ function matchUnits(rules2, units) {
       let best = null;
       for (const unit of units) {
         if (rule.requires !== void 0 && !rule.requires.test(unit.text)) continue;
+        if (rule.exemptLine !== void 0 && unit.source !== "inline" && unit.text.length <= PLAIN_FETCH_MAX && rule.exemptLine(unit.text)) continue;
         pattern.lastIndex = 0;
         let line = unit.line;
         let snippet = null;
@@ -100483,7 +100536,7 @@ function finalize2(matches3) {
 function severityOfRule(rule) {
   return rule.severity ?? THREAT_CATEGORY_META[rule.category].defaultSeverity;
 }
-var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_TARGET, INTERPRETER, PROSE_TARGET, AUTH_HEADER, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL, WGET, POWERSHELL_FETCH, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_NAMES_FILE, POWERSHELL_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
+var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_TARGET, INTERPRETER, PROSE_TARGET, AUTH_HEADER, AUTH_HEADER_FLAG, AUTHENTICATES, JSON_TOOL_STAGE, READING_STAGE, NOT_A_READING_STAGE, RUNS_A_PROGRAM, PIPE_TO_INTERPRETER, PLAIN_URL_CHARS, PLAIN_LOCAL_HOST, PLAIN_NOT_LOCAL, PLAIN_URL, PLAIN_CURL_FLAG, PLAIN_WGET_FLAG, PLAIN_WGET_STDOUT, PLAIN_OPERAND, PLAIN_FILTER, PLAIN_CURL, PLAIN_WGET, PLAIN_FETCH_LINE, PLAIN_FETCH_MAX, SENTENCE_URL, SENDING_FLAG, SENTENCE_URL_NOT_LOCAL, SENSITIVE_FILE_RE, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL, WGET, POWERSHELL_FETCH, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_NAMES_FILE, POWERSHELL_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
 var init_patterns = __esm({
   "src/skillaudit/patterns.ts"() {
     "use strict";
@@ -100512,6 +100565,32 @@ var init_patterns = __esm({
     INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
     PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
     AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
+    AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]{0,63}?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]{1,64}:\s*(?:(?:bearer|basic|token)\s+)?`;
+    AUTHENTICATES = `(?:${AUTH_HEADER}|${AUTH_HEADER_FLAG})`;
+    JSON_TOOL_STAGE = String.raw`python3?[ \t]+-m[ \t]+json\.tool[ \t]{0,16}`;
+    READING_STAGE = String.raw`\|[ \t]*${JSON_TOOL_STAGE}(?=\|(?!&))`;
+    NOT_A_READING_STAGE = String.raw`(?!${JSON_TOOL_STAGE}(?=\r?$))`;
+    RUNS_A_PROGRAM = String.raw`(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`;
+    PIPE_TO_INTERPRETER = String.raw`(?:(?:${READING_STAGE}){3}\|\s*${RUNS_A_PROGRAM}|(?=(?<skippedReads>(?:${READING_STAGE}){0,2}(?!${READING_STAGE})))\k<skippedReads>\|\s*${NOT_A_READING_STAGE}${RUNS_A_PROGRAM})`;
+    PLAIN_URL_CHARS = String.raw`[\w.~%/:?#=+-]`;
+    PLAIN_LOCAL_HOST = String.raw`(?:[Ll][Oo][Cc][Aa][Ll][Hh][Oo][Ss][Tt]|127(?:\.\d{1,3}){3}|0\.0\.0\.0|::1|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|[\w-]+(?:\.[\w-]+)*\.(?:[Ll][Oo][Cc][Aa][Ll](?:[Hh][Oo][Ss][Tt])?|[Ii][Nn][Tt][Ee][Rr][Nn][Aa][Ll]|[Ll][Aa][Nn]|[Hh][Oo][Mm][Ee]\.[Aa][Rr][Pp][Aa]))`;
+    PLAIN_NOT_LOCAL = String.raw`(?!${PLAIN_LOCAL_HOST}(?![\w.-]))`;
+    PLAIN_URL = String.raw`(?:"https?://${PLAIN_NOT_LOCAL}(?![^"]*\.\.)(?:${PLAIN_URL_CHARS}|\$\w+(?!\w)|\$\{\w+\})*"|https?://${PLAIN_NOT_LOCAL}(?![^\s|]*\.\.)${PLAIN_URL_CHARS}+)`;
+    PLAIN_CURL_FLAG = String.raw`(?:-[sSLkfiIvg46]+|-o[ \t]+/dev/null|--(?:silent|location|insecure|fail|head)|(?:-m|--max-time|--connect-timeout)[ \t]+\d+)`;
+    PLAIN_WGET_FLAG = String.raw`-[qSv46]+`;
+    PLAIN_WGET_STDOUT = String.raw`-O[ \t]+-`;
+    PLAIN_OPERAND = String.raw`(?:"(?!-)[\w ,.:=^*+?\[\]-]*"|[\w.,:=^+][\w.,:=^+-]*)`;
+    PLAIN_FILTER = String.raw`(?:e?grep(?:[ \t]+-[ivcnowEFq]+)?[ \t]+${PLAIN_OPERAND}|jq(?:[ \t]+-[rc]+)?[ \t]+${PLAIN_OPERAND}|(?:head|tail)(?:[ \t]+(?:-n[ \t]+\d+|-\d+))?|wc(?:[ \t]+-[lcw]+)?|sort(?:[ \t]+-[unr]+)?|uniq(?:[ \t]+-[cd]+)?|cut[ \t]+-d[\w:,=.-][ \t]+-f[\d,-]+)`;
+    PLAIN_CURL = String.raw`curl(?:[ \t]+${PLAIN_CURL_FLAG})*[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_CURL_FLAG})*`;
+    PLAIN_WGET = String.raw`wget(?:[ \t]+${PLAIN_WGET_FLAG})*(?:[ \t]+${PLAIN_WGET_STDOUT}(?:[ \t]+${PLAIN_WGET_FLAG})*[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_WGET_FLAG})*|[ \t]+${PLAIN_URL}(?:[ \t]+${PLAIN_WGET_FLAG})*[ \t]+${PLAIN_WGET_STDOUT}(?:[ \t]+${PLAIN_WGET_FLAG})*)`;
+    PLAIN_FETCH_LINE = new RegExp(
+      String.raw`^[ \t]*(?:${PLAIN_CURL}|${PLAIN_WGET})(?:[ \t]*\|(?!&)[ \t]*${PLAIN_FILTER}){0,3}[ \t]*$`
+    );
+    PLAIN_FETCH_MAX = 512;
+    SENTENCE_URL = /\bhttps?:\/\/[\w.~%/:?#=+-]+/gi;
+    SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form|json|url-query|variable|config)|@)/;
+    SENTENCE_URL_NOT_LOCAL = new RegExp(String.raw`^[Hh][Tt][Tt][Pp][Ss]?://${PLAIN_NOT_LOCAL}`);
+    SENSITIVE_FILE_RE = new RegExp(SENSITIVE_FILE, "i");
     SKILL_RULES = [
       // ───────────────────────────── prompt_injection ─────────────────────────
       {
@@ -100698,7 +100777,7 @@ var init_patterns = __esm({
           // rule. Measured: an official plugin's `curl -H "Authorization: Bearer
           // $API_TOKEN" https://api.example.com/mcp/health`, a health check in a
           // reference doc, read critical and took its skill to DO_NOT_INSTALL.
-          new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTH_HEADER}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, "i"),
+          new RegExp(`\\b(curl|wget)\\b[^\\n]{0,200}(?<!${AUTHENTICATES}["']?)(\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL))`, "i"),
           // The whole environment (wave 2 of the 3.0 review: `env | curl -X POST
           // --data-binary @- https://…` read SAFE): piped into a sender, or
           // substituted into its arguments — `curl -d "$(env)"`, `@<(printenv)`.
@@ -100732,7 +100811,7 @@ var init_patterns = __esm({
         target: "code",
         patterns: [
           new RegExp(
-            `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTH_HEADER}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
+            `\\b(curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)\\b[^\\n]{0,200}${AUTHENTICATES}["']?\\$\\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL)`,
             "i"
           )
         ]
@@ -100744,7 +100823,8 @@ var init_patterns = __esm({
         title: "Reads sensitive local credential files",
         message: "Code references SSH keys, cloud credentials, browser data or .env \u2014 sensitive material a skill rarely needs.",
         target: "code",
-        patterns: [new RegExp(SENSITIVE_FILE_STRONG, "i"), new RegExp(ENV_READ, "i")]
+        patterns: [new RegExp(SENSITIVE_FILE_STRONG, "i"), new RegExp(ENV_READ, "i")],
+        exemptLine: isPlainFetchLine
       },
       {
         id: "de-sensitive-file-over-network",
@@ -100755,7 +100835,8 @@ var init_patterns = __esm({
         title: "Credential file sent over the network",
         message: "One command both names a credential file (SSH key, cloud credentials, .netrc/.npmrc, browser data, .env) and a network client \u2014 the shape of `cat ~/.ssh/id_rsa | curl --data-binary @- https://\u2026`.",
         target: "code",
-        patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, "i")]
+        patterns: [new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*${NETWORK_SENDER})`, "i")],
+        exemptLine: isPlainFetchLine
       },
       {
         id: "de-sensitive-file-over-network-prose",
@@ -100767,7 +100848,8 @@ var init_patterns = __esm({
         target: "prose",
         patterns: [
           new RegExp(`^(?=.*${SENSITIVE_FILE})(?=.*(${NETWORK_SENDER}|${SEND_VERB}))(?=.*${REMOTE_DESTINATION})`, "i")
-        ]
+        ],
+        exemptLine: isPlainFetchOrUrlSentence
       },
       {
         id: "de-dns-or-raw-egress",
@@ -100824,7 +100906,7 @@ var init_patterns = __esm({
         message: "Downloads a remote script and executes it unverified (curl|bash and friends).",
         target: "code",
         patterns: [
-          new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
+          new RegExp(String.raw`\b(curl|wget)\b[^\n|]{0,200}${PIPE_TO_INTERPRETER}`, "i"),
           /\beval\s+"\$\(\s*(curl|wget)\b/i,
           /\b(iwr|irm|invoke-webrequest|invoke-restmethod)\b[^\n|]{0,200}\|\s*(iex|invoke-expression)/i,
           // `bash <(curl …)`, `sh -c "$(curl …)"`, and the same with any
@@ -100848,7 +100930,7 @@ var init_patterns = __esm({
           // get.docker.com shape), or a variable (`URL=https://…`, then
           // `curl -s $URL | bash`) as the target.
           new RegExp(
-            String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`,
+            String.raw`\b(curl|wget)\b[^|\n]{0,200}?${PROSE_TARGET}[^|\n]{0,300}${PIPE_TO_INTERPRETER}`,
             "i"
           ),
           new RegExp(String.raw`\b(${INTERPRETER}|source)\s+(-\w+\s+)*<\(\s*(curl|wget)\b[^)\n]{0,300}?${PROSE_TARGET}`, "i"),
@@ -101008,7 +101090,7 @@ var init_patterns = __esm({
           // skills of 2026-02, whose download hides inside the blob. The pipe is
           // looked for in the 300 characters after the flag, as every run here:
           // unbounded, the line was read again from every `base64 -d` on it.
-          new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}\|\s*(sudo\s+(-\S+\s+)*)?${INTERPRETER}\b`, "i"),
+          new RegExp(String.raw`\bbase64\s+(-\w+\s+)*(-d|-D|--decode)\b[^\n|]{0,300}${PIPE_TO_INTERPRETER}`, "i"),
           /FromBase64String[^\n]{0,200}\b(iex|Invoke-Expression)\b|\b(iex|Invoke-Expression)\b[^\n]{0,120}FromBase64String/i
         ]
       },
@@ -115700,6 +115782,7 @@ function parseNpm(raw, manager, alias = false) {
   const name = at > 0 ? raw.slice(0, at) : raw;
   let range = at > 0 ? raw.slice(at + 1) : void 0;
   if (!scoped && name.includes("/")) return skip(raw, "GitHub shorthand (user/repo) \u2014 not looked up");
+  if (range === "") range = void 0;
   if (range !== void 0) {
     if (/^npm:/i.test(range)) {
       const rest = range.slice(4);
@@ -115782,7 +115865,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -116510,6 +116593,33 @@ var init_parseCommand = __esm({
         noFetchFlags: set2("--no", "--offline"),
         boolWord: { except: LOGLEVEL_FLAGS }
       },
+      // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
+      // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
+      // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+      "npm-init": {
+        value: set2(...NPM_TABLE.value, "--init-author-name", "--init-author-url", "--init-license", "--init-module", "--init-type", "--init-version"),
+        bool: set2(...NPM_TABLE.bool, "--init-private", "--no-workspaces-update"),
+        registry: NPM_TABLE.registry,
+        dir: NPM_TABLE.dir,
+        workspace: NPM_TABLE.workspace,
+        boolWord: { except: LOGLEVEL_FLAGS }
+      },
+      // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
+      "yarn-create": {
+        value: set2("--package", "-p"),
+        bool: set2("--quiet", "-q"),
+        registry: set2(),
+        packageFlags: set2("--package", "-p")
+      },
+      // `pnpm create` (pnpm 11.24.0): the flags of `pnpm dlx` that are no package flags; no flag was measured with it.
+      "pnpm-create": {
+        value: set2("--allow-build", "--registry", "--dir", "-C", "--reporter"),
+        bool: set2("--silent", "-s", "--quiet", "--verbose"),
+        registry: set2("--registry"),
+        dir: set2("--dir", "-C")
+      },
+      // `bun create` / `bun c`: no flag was measured.
+      "bun-create": { value: set2(), bool: set2(), registry: set2() },
       "pnpm-dlx": {
         value: set2("--package", "--allow-build", "--registry", "--dir", "-C", "--reporter"),
         // `--quiet` and `--verbose` (measured 2026-11-19, pnpm 10.33.2: `--quiet false P` asks for `false`).
@@ -116585,15 +116695,13 @@ var init_parseCommand = __esm({
         packageFlags: set2("--spec")
       }
     };
-    NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall"]);
+    NPM_INSTALL = /* @__PURE__ */ new Set(["install", "i", "add", "in", "ins", "inst", "insta", "instal", "isnt", "isnta", "isntal", "isntall", "install-test", "it"]);
     NPM_MANIFEST_INSTALL = /* @__PURE__ */ new Set([
       "ci",
       "clean-install",
       "ic",
       "install-clean",
       "isntall-clean",
-      "install-test",
-      "it",
       "install-ci-test",
       "cit",
       "clean-install-test",
@@ -116606,11 +116714,14 @@ var init_parseCommand = __esm({
     COMPOSER_REQUIRE = /* @__PURE__ */ new Set(["require", "r", "req", "requ", "requi", "requir"]);
     BUN_ADD = /* @__PURE__ */ new Set(["add", "a", "install", "i"]);
     PNPM_INSTALL = /* @__PURE__ */ new Set(["install", "i"]);
+    NPM_INITIALIZER = /* @__PURE__ */ new Set(["create", "init", "innit"]);
+    CREATE_ONLY = /* @__PURE__ */ new Set(["create"]);
+    BUN_INITIALIZER = /* @__PURE__ */ new Set(["create", "c"]);
     SUBCOMMANDS = {
-      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x"]),
-      pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE]),
-      bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x"]),
-      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "dlx", "dedupe", "up", ...YARN_UPDATE]),
+      npm: /* @__PURE__ */ new Set([...NPM_INSTALL, ...NPM_MANIFEST_INSTALL, ...NPM_UPDATE, ...NPM_MAINTENANCE, "audit", "exec", "x", ...NPM_INITIALIZER]),
+      pnpm: /* @__PURE__ */ new Set(["add", "dlx", "dedupe", ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
+      bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x", ...BUN_INITIALIZER]),
+      yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "workspaces", "dlx", "dedupe", "up", ...YARN_UPDATE, ...CREATE_ONLY]),
       pip: /* @__PURE__ */ new Set(["install"]),
       uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
       poetry: /* @__PURE__ */ new Set(["add"]),
@@ -116753,6 +116864,10 @@ var init_parseCommand = __esm({
       // `npm exec` is npm's own command: `--ignore-scripts` is a boolean flag of npm that changes nothing about the lookup.
       "npm-exec": { bool: set2("-y", "--yes", "-q", "--quiet", "--silent", "--ignore-scripts"), value: set2() },
       "pnpm-dlx": { bool: set2("--silent", "-s"), value: set2() },
+      // The initializers (measured 2026-11-20): consent and verbosity only; pnpm none, bun has no entry (it never denies).
+      "npm-init": { bool: set2("-y", "--yes", "-q", "--quiet", "--silent"), value: set2() },
+      "yarn-create": { bool: set2("-q", "--quiet"), value: set2() },
+      "pnpm-create": { bool: set2(), value: set2() },
       "yarn-dlx": { bool: set2("-q", "--quiet"), value: set2() },
       bunx: { bool: set2("--bun", "--silent", "--verbose"), value: set2() },
       uvx: { bool: set2("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set2() },
@@ -119174,6 +119289,33 @@ var init_report2 = __esm({
   }
 });
 
+// src/llmscan/planRecord.ts
+function huntRun(run2) {
+  return { name: "llm-hunt", status: run2.status, ...run2.reason !== void 0 ? { reason: run2.reason } : {} };
+}
+function planRecordBookkeeping(plan, tasks) {
+  if (!plan.modes.includes("hunt")) return { tools_run: [], missing_tools: [] };
+  const hunts = tasks.filter((t) => t.kind === "hunt" || t.kind === "crosscut");
+  const report = computeReport(plan, tasks);
+  const unanswered2 = new Set(report.missing);
+  const answered2 = hunts.filter((t) => !unanswered2.has(t.task_id)).length;
+  if (answered2 === 0) {
+    const reason = hunts.length === 0 ? "the plan has no hunt task: nothing in the project was eligible for one" : `none of the plan's ${String(hunts.length)} hunt task(s) has a valid answer`;
+    return { tools_run: [huntRun({ status: "skipped", reason })], missing_tools: [LLM_HUNT_TOOL] };
+  }
+  const whole = answered2 === hunts.length && report.entry_points.every((e) => e.status === "visited");
+  return { tools_run: [huntRun({ status: "ok" })], missing_tools: whole ? [] : [OPEN_TASKS] };
+}
+var OPEN_TASKS;
+var init_planRecord = __esm({
+  "src/llmscan/planRecord.ts"() {
+    "use strict";
+    init_scanRoles();
+    init_report2();
+    OPEN_TASKS = `${LLM_HUNT_TOOL}:open-tasks`;
+  }
+});
+
 // src/llmscan/service.ts
 import { createHash as createHash21, randomUUID as randomUUID22 } from "node:crypto";
 import { posix as posix5, relative as relative40, isAbsolute as isAbsolute27 } from "node:path";
@@ -119201,9 +119343,22 @@ function loadPlan(storage, planId, opts = {}) {
   }
   return { ok: true, plan };
 }
+function recordUpdate(storage, plan, tasks) {
+  const next = planRecordBookkeeping(plan, tasks);
+  const now = storage.scans.getById(plan.scan_id);
+  const same = now !== null && JSON.stringify(now.tools_run) === JSON.stringify(next.tools_run) && JSON.stringify(now.missing_tools) === JSON.stringify(next.missing_tools);
+  return same ? null : next;
+}
+function rewritePlanRecord(storage, plan) {
+  const tasks = storage.llmScan.listTasks(plan.id);
+  const next = recordUpdate(storage, plan, tasks);
+  if (next !== null) storage.scans.rewriteBookkeeping(plan.scan_id, next);
+  return tasks;
+}
 function settlePlan(storage, plan) {
   if (plan.status !== "open") return plan;
-  const tasks = storage.llmScan.listTasks(plan.id);
+  const seen = storage.llmScan.listTasks(plan.id);
+  const tasks = recordUpdate(storage, plan, seen) === null ? seen : storage.rawHandle().transaction(() => rewritePlanRecord(storage, plan))();
   if (tasks.length > 0 && tasks.every((t) => t.status === "closed")) {
     storage.llmScan.updatePlan(plan.id, "complete", nowIso2());
     return storage.llmScan.getPlan(plan.id) ?? plan;
@@ -119254,9 +119409,9 @@ function findingsToVerify(storage, input2) {
   if (input2.scan_id !== void 0) {
     const scan2 = storage.scans.getById(input2.scan_id);
     if (scan2 === null || scan2.project_path !== input2.project) return fail5("unknown_scan_id", `No scan ${input2.scan_id} for this project.`);
-    return { ok: true, findings: storage.findings.listByScan(input2.scan_id).filter((f) => f.tool !== "llm-hunt"), unknown: [] };
+    return { ok: true, findings: storage.findings.listByScan(input2.scan_id).filter((f) => !isHuntFinding(f)), unknown: [] };
   }
-  return { ok: true, findings: openSetForProject(storage, input2.project).findings.filter((f) => f.tool !== "llm-hunt"), unknown: [] };
+  return { ok: true, findings: openSetForProject(storage, input2.project).findings.filter((f) => !isHuntFinding(f)), unknown: [] };
 }
 async function startPlan(storage, input2) {
   const { project, modes } = input2;
@@ -119353,12 +119508,7 @@ async function startPlan(storage, input2) {
   };
   storage.rawHandle().transaction(() => {
     storage.scans.insert({ scan_id: scanId, scan_type: "llm_scan", project_path: project, tree_hash: treeHash, meta: { plan_id: planId, modes } });
-    storage.scans.finalize({
-      scan_id: scanId,
-      status: "completed",
-      tools_run: hunting ? [{ name: "llm-hunt", status: "ok" }] : [],
-      missing_tools: []
-    });
+    storage.scans.finalize({ scan_id: scanId, status: "completed", ...planRecordBookkeeping(stored, tasks) });
     storage.llmScan.insertPlan(stored, tasks);
   })();
   const byKind = {};
@@ -119420,7 +119570,7 @@ function briefFor(storage, plan, task) {
   const files = new Set(task.target.files);
   const known = files.size === 0 ? [] : openSetForProject(storage, root).findings.filter((f) => {
     const rel2 = f.file_path === void 0 ? null : relPosix(root, f.file_path);
-    return f.tool !== "llm-hunt" && rel2 !== null && files.has(rel2);
+    return !isHuntFinding(f) && rel2 !== null && files.has(rel2);
   });
   return renderBrief(task, { ...base2, entry_points: routes, scanner_findings: known }).text;
 }
@@ -119521,6 +119671,7 @@ function lostRace(storage, input2) {
 }
 function huntFindingRow(f) {
   return makeFinding({
+    // LLM_HUNT_TOOL, written out: `test/unit/history/runNames.test.ts` reads every finding tool from the source.
     tool: "llm-hunt",
     rule_id: f.class,
     severity: huntSeverity(f.class),
@@ -119628,6 +119779,7 @@ function acceptHunt(storage, plan, task, input2, value, rejected, responseChars,
       closed_at: null
     }));
     if (verifyTasks.length > 0 && !repo.appendTasks(plan.id, verifyTasks)) throw new Error("the plan is no longer open");
+    rewritePlanRecord(storage, plan);
     return { stored: withIdentity.length, verify: verifyTasks.length };
   })();
   if (stored === null) return lostRace(storage, input2);
@@ -119653,6 +119805,7 @@ var init_service = __esm({
     init_briefs();
     init_classes();
     init_plan2();
+    init_planRecord();
     init_report2();
     init_submission();
     init_types8();

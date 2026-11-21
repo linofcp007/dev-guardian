@@ -167,7 +167,11 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'corepack-manager-download',
       'dotnet-other-install-forms',
       'install-candidates-over-ceiling',
+      'install-global-update-by-name',
+      'install-initializers',
+      'install-launcher-runs-manager',
       'install-other-runners',
+      'install-redirect-glued-word',
       'launcher-flag-words',
       'lockfile-origin-host-unsaid',
       'manifest-above-project-root',
@@ -368,5 +372,191 @@ describe('install-vet-manifest-parent-dir', () => {
     for (const [index, example] of examples.entries()) {
       expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
     }
+  });
+});
+
+// ───────────────── install-vet-npm-unread-verbs — the record of what the initializers leave unverified
+
+describe('install-vet-npm-unread-verbs', () => {
+  describe('known limits', () => {
+    it('T-07 the record `install-initializers` exists, is an install-vetting record with hook examples the dispatcher harness runs, and says what these verbs leave unverified or only warn about', () => {
+      const id = 'install-initializers';
+      const record = loadKnownLimits().find((l) => l.id === id);
+      expect(record, `the data file has no record ${id}`).toBeDefined();
+      expect(record?.area).toBe('install-vetting');
+      const examples = record?.examples ?? [];
+      expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+      const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+      for (const [index, example] of examples.entries()) {
+        expect({ detector: example.detector, harnessed: harnessed.has(`${id} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+      }
+      // The harness runs offline: what an example shows is "could not vet" or silence, never the refusal of a missing name.
+      expect(examples.filter((e) => e.detector === 'hook' && e.expect.decision === 'deny')).toEqual([]);
+      const doc = record?.doc ?? '';
+      expect(doc).toContain('bun create');
+      expect(doc).toContain('.bun-create');
+      expect(doc).toContain('yarn create @scope@');
+      expect(doc).toContain('yarn create -p');
+      expect(doc).toContain('create-');
+    });
+
+    it('T-07 the record `manifest-other-managers` says that a package given to `npm install-test` is vetted', () => {
+      const record = loadKnownLimits().find((l) => l.id === 'manifest-other-managers');
+      expect(record, 'the data file has no record manifest-other-managers').toBeDefined();
+      expect(record?.doc ?? '').toMatch(/a package given to `npm install-test` is (?:vetted|verified|looked up)/);
+    });
+  });
+});
+
+// ───────────────── install-vet-global-update-by-name — the record of what a global update by name leaves unverified
+
+describe('install-vet-global-update-by-name', () => {
+  it('T-07 the record `install-global-update-by-name` exists, says what a global update by name leaves unverified, and has the three offline hook examples the harness runs', () => {
+    const id = 'install-global-update-by-name';
+    const record = loadKnownLimits().find((l) => l.id === id);
+    expect(record, `the data file has no record ${id}`).toBeDefined();
+    expect(record?.area).toBe('install-vetting');
+    const examples = record?.examples ?? [];
+    expect(
+      examples.map((e) => ({ detector: e.detector, command: e.detector === 'hook' ? e.input.command : undefined, decision: e.detector === 'hook' ? e.expect.decision : undefined })).sort((a, b) => String(a.command).localeCompare(String(b.command))),
+    ).toEqual([
+      { detector: 'hook', command: 'npm update -g', decision: 'warn' },
+      { detector: 'hook', command: 'npm update -g left-pad', decision: 'warn' },
+      { detector: 'hook', command: 'yarn workspace docs upgrade left-pad', decision: 'none' },
+    ]);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const index of examples.keys()) expect(harnessed.has(`${id} #${String(index + 1)}`), `${id} #${String(index + 1)} is run by the dispatcher harness`).toBe(true);
+    const doc = record?.doc ?? '';
+    expect(doc).toContain('globally installed');
+    expect(doc).toContain('install scripts');
+    expect(doc).toContain('vulnerabilities');
+    expect(doc).toContain('`yarn workspace <w> upgrade <P>`');
+  });
+});
+
+// ───────────────── install-vet-launcher-runs-manager — what a launcher in front of a package manager leaves unverified
+
+describe('install-vet-launcher-runs-manager', () => {
+  const ID = 'install-launcher-runs-manager';
+  const record = (id: string): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === id);
+  const commandOf = (e: { detector: string; input?: Record<string, unknown> }): string => (e.detector === 'hook' ? String(e.input?.['command']) : '');
+
+  it('T-08 the record `install-other-runners` no longer says the package behind a launcher that runs a manager is not vetted, and its launcher examples are gone', () => {
+    const other = record('install-other-runners');
+    expect(other, 'the data file has no record install-other-runners').toBeDefined();
+    const doc = other?.doc ?? '';
+    expect(doc).not.toContain('the package the manager then installs is not vetted');
+    expect(doc).not.toMatch(/npx (?:corepack|pnpm|yarn) /);
+    const launchers = (other?.examples ?? []).map(commandOf).filter((c) => /^(?:npx|npm exec|pnpm dlx|yarn dlx|bunx|bun x|pnpx) /.test(c));
+    expect(launchers).toEqual([]);
+  });
+
+  it('T-08 the record `install-launcher-runs-manager` exists, says the forms that were not measured, the one level, `@pnpm/exe`, `@yarnpkg/cli-dist` and `pnpm exec <manager>`, and has hook examples the dispatcher harness runs', () => {
+    const limit = record(ID);
+    expect(limit, `the data file has no record ${ID}`).toBeDefined();
+    expect(limit?.area).toBe('install-vetting');
+    const examples = limit?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${ID} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+    }
+    // The harness runs offline: what an example shows is "could not vet" or silence, never the refusal of a missing name.
+    expect(examples.filter((e) => e.detector === 'hook' && e.expect.decision === 'deny')).toEqual([]);
+    const doc = limit?.doc ?? '';
+    expect(doc).toMatch(/not measured|unmeasured/i);
+    expect(doc).toContain('npx npx pnpm');
+    expect(doc).toContain('npx pnpm dlx yarn');
+    expect(doc).toContain('@pnpm/exe');
+    expect(doc).toContain('@yarnpkg/cli-dist');
+    expect(doc).toContain('pnpm exec');
+    // docs.test.ts keeps this phrase out of every known limit.
+    expect(doc).not.toContain('pnpm install <package>');
+  });
+
+  it('T-08 the record `install-launcher-runs-manager` has the example `npx pnpm add left-pad` with `node_modules/pnpm/package.json` in the project, which warns (without the fix it is silent)', () => {
+    const examples = record(ID)?.examples ?? [];
+    const found = examples.filter(
+      (e) => e.detector === 'hook' && commandOf(e) === 'npx pnpm add left-pad' && Object.keys(e.files ?? {}).includes('node_modules/pnpm/package.json'),
+    );
+    expect(found.map((e) => (e.detector === 'hook' ? e.expect.decision : undefined))).toEqual(['warn']);
+  });
+});
+
+// ───────────────── install-vet-redirect-glued-word — what a word glued to a redirection leaves unverified
+
+describe('install-vet-redirect-glued-word', () => {
+  const ID = 'install-redirect-glued-word';
+  const record = (id: string): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === id);
+
+  it('T-07 the record `yarn-bun-npm-protocol` no longer says that a range written without quotes is not read', () => {
+    const limit = record('yarn-bun-npm-protocol');
+    expect(limit, 'the data file has no record yarn-bun-npm-protocol').toBeDefined();
+    expect(limit?.doc ?? '').not.toContain('unquoted, the shell takes `>` for a redirection');
+  });
+
+  it('T-07 the install-vetting hook examples this file runs include the record `install-redirect-glued-word`', () => {
+    const ids = new Set([...HOOKS.run, ...HOOKS.skip].filter((r) => (r.limit.area as string) === 'install-vetting').map((r) => r.limit.id));
+    expect(ids.has(ID), `the hook examples of ${ID} are run by this harness`).toBe(true);
+  });
+
+  it('T-07 the record `install-redirect-glued-word` exists, says what stays, and has offline hook examples the dispatcher harness runs', () => {
+    const limit = record(ID);
+    expect(limit, `the data file has no record ${ID}`).toBeDefined();
+    expect(limit?.area).toBe('install-vetting');
+    const examples = limit?.examples ?? [];
+    expect(examples.filter((e) => e.detector === 'hook').length).toBeGreaterThan(0);
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const [index, example] of examples.entries()) {
+      expect({ detector: example.detector, harnessed: harnessed.has(`${ID} #${String(index + 1)}`) }).toEqual({ detector: 'hook', harnessed: true });
+    }
+    // The harness runs offline: what an example shows is "could not vet" or silence, never the refusal of a missing name.
+    expect(examples.filter((e) => e.detector === 'hook' && e.expect.decision === 'deny')).toEqual([]);
+    const doc = limit?.doc ?? '';
+    // With the PowerShell tool the target of `<name>> out.txt` is asked of the registry as a package.
+    expect(doc).toContain('PowerShell');
+    expect(doc).toContain('> out.txt');
+    // `name@` under a launcher, and `name@npm:` for npm and pnpm, were not measured.
+    expect(doc).toMatch(/not measured|unmeasured/i);
+    expect(doc).toContain('npx');
+    expect(doc).toContain('@npm:');
+  });
+
+  it('T-07 the record `install-redirect-glued-word` shows a PowerShell-tool example of a name glued to `>`, and an example of a name ending in `@` under a launcher, both answering "could not vet"', () => {
+    const hooks = (record(ID)?.examples ?? []).flatMap((e) => (e.detector === 'hook' ? [e] : []));
+    const command = (e: HookExample): string => String(e.input['command']);
+    const powershell = hooks.filter((e) => e.tool === 'PowerShell' && command(e).includes('> out.txt'));
+    const launcher = hooks.filter((e) => /^(?:npx|pnpm dlx) \S+@$/.test(command(e)));
+    expect({ powershell: powershell.map((e) => e.expect.decision), launcher: launcher.map((e) => e.expect.decision) }).toEqual({
+      powershell: ['warn'],
+      launcher: ['warn'],
+    });
+  });
+});
+
+// ───────────────── install-vet-over-ceiling-asks — the candidate ceiling is a question now, not a note
+
+describe('install-vet-over-ceiling-asks', () => {
+  const ID = 'install-candidates-over-ceiling';
+  const record = (): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === ID);
+
+  it('T-06 the record `install-candidates-over-ceiling` says the hook asks the user before the install runs, and no longer says it does not deny or ask', () => {
+    const doc = (record()?.doc ?? '').replace(/\s+/g, ' ');
+    expect(record(), `the data file has no record ${ID}`).toBeDefined();
+    expect(doc).not.toContain('it does not deny or ask');
+    expect(doc).toContain('the hook says how many packages of the command were not vetted and asks the user before the install runs');
+  });
+
+  it('T-06 the record expects `ask` of its example, and the dispatcher, run without the network, gives `ask`', () => {
+    const hooks = (record()?.examples ?? []).flatMap((e) => (e.detector === 'hook' ? [e] : []));
+    expect(hooks.map((e) => e.expect.decision)).toEqual(['ask']);
+    const limit = record();
+    expect(limit).toBeDefined();
+    const env = limit === undefined ? {} : exampleEnv(limit);
+    const given = hooks.map((e) => {
+      const got = answer(e, env);
+      return got.detector === 'hook' ? got.decision : got.detector;
+    });
+    expect(given).toEqual(['ask']);
   });
 });
