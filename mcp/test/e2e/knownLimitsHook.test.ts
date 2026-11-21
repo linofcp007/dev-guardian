@@ -171,6 +171,8 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'install-initializers',
       'install-launcher-runs-manager',
       'install-other-runners',
+      'install-python-option-parsing',
+      'install-python-tool-forms',
       'install-redirect-glued-word',
       'launcher-flag-words',
       'lockfile-origin-host-unsaid',

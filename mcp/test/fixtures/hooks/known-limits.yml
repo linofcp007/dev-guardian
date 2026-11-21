@@ -433,7 +433,7 @@
 - id: manifest-other-managers
   area: install-vetting
   doc: |-
-    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `yarn workspaces foreach … add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn workspace <w> up`, `yarn workspaces foreach … up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies of the manifest: in a project update they are not looked up (`npm update <name>`, `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`), while the names given to a global update and to the `up` forms of Yarn are vetted as a package named to an update (see `install-global-update-by-name`); the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`. The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it. `npm install-test` and `npm it` install the manifest as `npm install` does, and a package given to `npm install-test` is vetted like one given to `npm install` (a name the registry does not have is denied in the same forms).
+    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `yarn workspaces foreach … add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn workspace <w> up`, `yarn workspaces foreach … up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies of the manifest: in a project update they are not looked up (`npm update <name>`, `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`), while the names given to a global update and to the `up` forms of Yarn are vetted as a package named to an update (see `install-global-update-by-name`); the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`, and the requirements files of `pip download -r`, `pip wheel -r`, `pipx inject -r` and `pipx runpip <environment> install -r` (read as the file of `pip install -r` is; see `install-python-tool-forms`). The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it. `npm install-test` and `npm it` install the manifest as `npm install` does, and a package given to `npm install-test` is vetted like one given to `npm install` (a name the registry does not have is denied in the same forms).
   examples:
     - detector: hook
       event: PreToolUse
@@ -1208,3 +1208,72 @@
       input:
         command: yarn workspace docs upgrade left-pad
       expect: { decision: none }
+
+- id: install-python-tool-forms
+  area: install-vetting
+  doc: |-
+    The forms that fetch a Python package and may build it are vetted by name: `pip download` and `pip wheel` (also `pip3`, `python -m pip` and behind `pipx runpip <environment>`), `pip install --dry-run`, `pipx inject`, `pipx upgrade --install`, `pipx runpip <environment> install`, `pipx run --spec` and `--with`, `uvx --from` and `--with`, `uv tool run` and `uv tool install` with them, and the names given to `pipx upgrade`, `pipx reinstall` and `uv tool upgrade`. The requirements files of `pip download -r`, `pip wheel -r`, `pipx inject -r` and `pipx runpip … -r` are read as the file of `pip install -r`. A package the index does not have is denied only for the 32 forms measured in a Linux container (pip 23.0.1, pipx and uv against an index that logged every request), word by word with nothing after the last one; every other spelling or variation is read and only warns, with the reason that the form was not measured. What stays:
+
+    - A package that is a source distribution (an sdist) runs its build backend or `setup.py` when pip downloads or wheels it, and its build dependencies are asked of the index and installed in the build environment — in `pip install` too: the hook sees the name on the command line and never the dependencies the sdist names. A newer pip than 23.0.1, and an sdist under uv and under pipx, were not measured.
+    - The spellings and variations that only warn: `pip3 download`, `python3 -m pip download`, `py -m pip wheel`, more names or flags than a measured form (`pip download --dest out P`, `pip download P==1.*`, `P===1.0`, `P==1.0rc1`), `pipx inject --force`, `pipx upgrade --install --force`, `pipx runpip <environment> install -q`, two words after the program (`uvx --from P cmd a b`), and a flag the tables do not hold. `pipx runpip <environment> download` is read and only warns: with the `auto` engine pipx asks the index for nothing (it runs `uv pip download`, which uv does not have).
+    - A name given to `pipx upgrade`, `pipx reinstall` or `uv tool upgrade` is the name of an environment, which with `--suffix` is not the name of its package (the index is asked for the package, never for the suffixed name); the index the tool was installed from is the one saved in the environment, not the one the hook asks; `pipx reinstall` puts back the version that was saved while the hook looks the name up without a version; and a tool installed from a path, with `-e` or from a VCS URL is not what the name says. The names leave the machine like those of an install.
+    - `pipx upgrade-all` and `uv tool upgrade --all` update every tool that was installed: one line says so and that none was vetted, and nothing is asked. `pipx upgrade-all --skip a b` takes several words after `--skip`, the table reads one: none of them is a name.
+    - `pipx reinstall-all`, `pipx install-all`, `pipx upgrade-shared` and `pipx runpip <environment>` with another verb (`list`, `show`, `uninstall`, `freeze`) are not read, with no line. `pip index versions`, `pip list` and `pip show` neither. `--with-requirements` and `--with-editable` of `uv tool install` name files that are not read, and a `-r https://…` is not fetched: the file is not looked at, as with `pip install -r https://…`.
+    - The `-r` inside a requirements file of `pipx inject -r` is not followed by pipx (it fails to parse the line), and the hook follows it as the reader does for `pip install -r`. The readings of the `-r` files have no limit per line, as with `pip install -r`.
+    - The `pip` engine of pipx also asks the index for `pip` before `pipx inject`, `pipx upgrade` and `pipx reinstall` (the shared libraries): that name is not on the command line and is not vetted.
+    - A word that may name a pipx environment after a flag the hook does not know (`pipx inject --dgunknown x T P`) is looked up as a candidate, with the line uncertain.
+    - A value with extras and a comma in `uvx --with`, `--from` and the `--spec` and `--preinstall` of pipx is split only at the commas outside `[…]`; a range with a comma (`P>=1,<2`) stays split and is read wider than uv reads it (not measured).
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx upgrade-all
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: py -m pip download dgprobe-zzq7731-named
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx runpip dgprobe-zzq7731-tool list
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx upgrade-shared
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx reinstall-all
+      expect: { decision: none }
+
+- id: install-python-option-parsing
+  area: install-vetting
+  doc: |-
+    The tables of flags of `pip download`, `pip wheel`, `pipx inject`, `pipx runpip`, `pipx upgrade`, `pipx reinstall`, `pipx upgrade-all` and `uv tool upgrade` are the parsers of the managers, flag by flag (pip 23.0.1, pipx, uv): a flag a manager has and the tables do not hold is unknown, the word after it is a candidate and the line only warns. The managers read what the tables do not:
+
+    - pip and pipx (argparse) accept an unambiguous prefix of a long flag (`pip download --no-bin :all: P`, `pipx upgrade --inst P`): the hook reads the abbreviation as an unknown flag, so `pipx upgrade --inst P` is read as names given to an update, not as an install, and a package that `--install` would fetch is only warned about.
+    - `--skip` of `pipx upgrade-all` takes several words (`nargs` of one or more) and the table reads one.
+    - uv (clap) has hidden flags that the probe did not name and flags of other versions: they are unknown to the table, and so are the flags of the pip of other versions (`--all-releases`). The line warns, never denies.
+    - Which of two readings a manager gives a word that follows a flag with an optional value is not known where it was not measured.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx upgrade --inst dgprobe-zzq7731-named
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: 'pip download --no-bin :all: dgprobe-zzq7731-named'
+      expect: { decision: warn }

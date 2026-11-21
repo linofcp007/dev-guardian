@@ -10,6 +10,34 @@ version bump.
 
 ### Security
 
+- **The install hook reads the Python forms that fetch a package and build it, and no longer lets them pass silently.**
+  `pip download <package>`, `pip wheel <package>`, `pipx inject`, `pipx upgrade`, `pipx reinstall`, `pipx runpip`,
+  `pipx upgrade-all` and `uv tool upgrade` were not read: a Linux container without network, with an index that
+  logged each request (2026-11-20 and 2026-11-21), showed the same requests as `pip install <package>` — and, for a
+  source distribution, its build backend or `setup.py` running — while the hook said nothing. They are read now, each
+  with the flags of its own verb (the parsers of pip 23.0.1, pipx and uv, flag by flag): `-d` / `--dest` and `-w` /
+  `--wheel-dir` are folders and never packages, the index flags are registries, the environment word of `pipx inject`
+  and `pipx runpip` is never looked up, and `pipx run --with` is a package flag and no longer an unknown flag. A
+  package named in a package flag with extras and a comma (`uvx --with "P[x,y]"`) was split in the middle of its
+  extras and so never looked up; it is split now only at the commas outside `[…]`.
+- **What changes for someone who updates.**
+  - *Forms that now refuse a package missing from the registry:* only the 32 forms measured — `pip download P`,
+    `pip wheel P`, `pip download --no-deps P`, `pip install --dry-run P`, `pipx inject <env> P`, `pipx upgrade
+    --install P`, `pipx runpip <env> install P`, `pipx run --spec P cmd`, `pipx run --with D P`, `uvx --from P cmd`,
+    `uvx --with P tool`, `uv tool install --with P tool` and the others of the known limit `install-python-tool-forms`,
+    word by word with nothing after the last one. The deny names `--index-url <url>` (pip, pipx) or `--index <url>`
+    (uv) and `GUARDIAN_PKG_VET=0`.
+  - *New warnings:* every other spelling or variation of those verbs is read and only warns, with the reason `this form
+    of '<verb>' was not measured` (`pip3 download`, `python3 -m pip download`, `pipx inject --force`, …); `pipx
+    upgrade-all` and `uv tool upgrade --all` say that every tool is updated and none was vetted, offline too.
+  - *`-r` files now read:* `pip download -r`, `pip wheel -r`, `pipx inject -r` and `pipx runpip <env> … -r` are
+    read as the file of `pip install -r`; a missing name in them warns and never denies.
+  - *Names that now leave the machine:* the packages of those forms; the names given to `pipx upgrade <name>`, `pipx
+    reinstall <name>` and `uv tool upgrade <name>` (an environment name, which with `--suffix` is not the package's);
+    the value of `pipx inject --include-resources-from`; and a word that may name a pipx environment after a flag the
+    hook does not know.
+  - *Malicious packages:* one that OSV lists is denied in every one of these forms, measured or not, and a name given to
+    an update is denied for it too; a name an update is given that the index does not have only warns.
 - **A malicious package pinned in the `bun.lock` that bun 1.4.4 writes is denied.** bun 1.4.4 writes
   `"lockfileVersion": 2`, and the install hook read a `bun.lock` of label 0 or 1 only: for each of 24 lockfiles bun
   1.4.4 wrote (a plain dependency, a scope, dev, optional and peer dependencies, an alias, nested copies, workspaces,
