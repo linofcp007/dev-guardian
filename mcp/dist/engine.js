@@ -100562,7 +100562,7 @@ var init_patterns = __esm({
     INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
     PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
     AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
-    AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]*?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]{1,64}:\s*(?:(?:bearer|basic|token)\s+)?`;
+    AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]{0,63}?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]{1,64}:\s*(?:(?:bearer|basic|token)\s+)?`;
     AUTHENTICATES = `(?:${AUTH_HEADER}|${AUTH_HEADER_FLAG})`;
     JSON_TOOL_STAGE = String.raw`python3?[ \t]+-m[ \t]+json\.tool[ \t]{0,16}`;
     READING_STAGE = String.raw`\|[ \t]*${JSON_TOOL_STAGE}(?=\|(?!&))`;
@@ -100585,7 +100585,7 @@ var init_patterns = __esm({
     );
     PLAIN_FETCH_MAX = 512;
     SENTENCE_URL = /\bhttps?:\/\/[\w.~%/:?#=+-]+/gi;
-    SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form|json|url-query|variable))/;
+    SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form|json|url-query|variable|config)|@)/;
     SENTENCE_URL_NOT_LOCAL = new RegExp(String.raw`^[Hh][Tt][Tt][Pp][Ss]?://${PLAIN_NOT_LOCAL}`);
     SENSITIVE_FILE_RE = new RegExp(SENSITIVE_FILE, "i");
     SKILL_RULES = [
