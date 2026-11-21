@@ -23037,7 +23037,10 @@ function isScopedScan(scan2) {
   if (meta3["scope"] !== void 0 && meta3["scope"] !== null) return true;
   return scan2.scan_type === "wp_vuln_check" && meta3["slug"] !== void 0;
 }
-var SCAN_TYPE_ROLE, STATE_SCAN_TYPES, TARGET_SCAN_TYPES, SCRIPT_ERA_RUN_SLOTS;
+function isVerifyOnlyPlanRecord(scan2) {
+  return scan2.scan_type === "llm_scan" && !scan2.tools_run.some((run2) => run2.name === LLM_HUNT_TOOL);
+}
+var SCAN_TYPE_ROLE, STATE_SCAN_TYPES, TARGET_SCAN_TYPES, SCRIPT_ERA_RUN_SLOTS, LLM_HUNT_TOOL;
 var init_scanRoles = __esm({
   "src/history/scanRoles.ts"() {
     "use strict";
@@ -23068,6 +23071,7 @@ var init_scanRoles = __esm({
       // One open-set slot per `meta.source_tool`, not one for the type — see sarifSlotOf.
       sarif_import: "state",
       // The plan's hunt findings; the open set shows them only after an independent `exploitable` verdict.
+      // A verify-only plan's record is never one (isVerifyOnlyPlanRecord).
       llm_scan: "state",
       sbom: "never",
       detect_stack: "never",
@@ -23092,6 +23096,7 @@ var init_scanRoles = __esm({
       trivy: "deps",
       "trivy-dockerfile": "containers"
     };
+    LLM_HUNT_TOOL = "llm-hunt";
   }
 });
 
@@ -71604,9 +71609,10 @@ function compareScansFor(storage, from, to) {
   const fromBooks = booksOf(storage, from);
   const toBooks = booksOf(storage, to);
   const crossSlot = !sameImportSlot(from, to);
+  const toLookedAtNothing = isVerifyOnlyPlanRecord(to);
   const notLookedAt = (f) => ({ verdict: "not_run", notRun: f.tool, byTarget: false });
   const inTo = (f) => {
-    if (crossSlot) return notLookedAt(f);
+    if (crossSlot || toLookedAtNothing) return notLookedAt(f);
     const t = typeOfFrom(f);
     return answerFor(fromBooks(t), toBooks(t), f);
   };
@@ -71924,7 +71930,7 @@ function search(storage, projectPath, types, opts) {
       ...opts.excludeOrchestrated === true ? { excludeWithChildScans: true } : {}
     });
     for (const scan2 of page) {
-      if (isScopedScan(scan2)) continue;
+      if (isScopedScan(scan2) || isVerifyOnlyPlanRecord(scan2)) continue;
       if (opts.predicate !== void 0 && !opts.predicate(scan2)) continue;
       const judged = judge4(scan2, opts.slot);
       if (judged === null) continue;
@@ -72103,7 +72109,7 @@ function carryForward(storage, projectPath, slot, source, sourceRows, isSuppress
     if (last !== void 0) before = last.scan_id;
     for (const scan2 of page) {
       if (walked >= CARRY_WALK_LIMIT) break;
-      if (isScopedScan(scan2)) continue;
+      if (isScopedScan(scan2) || isVerifyOnlyPlanRecord(scan2)) continue;
       const coverage = judge4(scan2, slot);
       if (coverage === null || coverage === "none") continue;
       walked += 1;
@@ -72207,7 +72213,7 @@ function isConfirming(marker) {
   return marker !== void 0 && marker.independent && marker.verdict === "exploitable";
 }
 function isHuntFinding(f) {
-  return f.tool === HUNT_TOOL;
+  return f.tool === LLM_HUNT_TOOL;
 }
 function splitHuntCandidates(storage, projectPath, rows) {
   if (!rows.some(isHuntFinding)) return { counted: [...rows], unconfirmed: [] };
@@ -72383,7 +72389,7 @@ function describeOpenSet(set3) {
     ...set3.future_dated_note !== void 0 ? { future_dated_note: set3.future_dated_note } : {}
   };
 }
-var PAGE2, SKIPPED_SAMPLE, HUNT_TOOL, CARRY_WALK_LIMIT, KnownFindings;
+var PAGE2, SKIPPED_SAMPLE, CARRY_WALK_LIMIT, KnownFindings;
 var init_openSet = __esm({
   "src/history/openSet.ts"() {
     "use strict";
@@ -72398,7 +72404,6 @@ var init_openSet = __esm({
     init_slots();
     PAGE2 = 25;
     SKIPPED_SAMPLE = 5;
-    HUNT_TOOL = "llm-hunt";
     CARRY_WALK_LIMIT = 5e3;
     KnownFindings = class {
       identities = /* @__PURE__ */ new Set();
