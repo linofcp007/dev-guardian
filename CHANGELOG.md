@@ -80,6 +80,46 @@ version bump.
   those), which leaves only the key; and a source name escaped twice (`%2564…`), which the hook decodes to the end
   and looks up where Yarn decodes once.
 
+### Fixed
+
+- **npm's groups of short flags, and `-L`, `-m` and `-c`, are read as npm reads them.** The install hook took a group
+  that holds a `g` (`npm install -gD <name>`) as not global for certain, so it read the project's `package.json` and
+  asked the registry for its dependencies, although npm installs the line globally and reads no manifest; it did not
+  know npm's `-a -l -p -n -h -v -H`, nor `-L`, `-m` and `-c`, so it asked the registry for the value of `-L`, `-m` or
+  `-c` as a package; and it did not read at all a line with one of them before the verb, which npm installs (measured
+  with npm 11.19.0 in a Linux container without network, 2026-11-21: 30 groups of two letters with a `g`, `-gDE`,
+  `-DgE`, `-DEg`, `-L global`, `-gL global`, `-gm`, `-mg`, `-gc`, `-cg`, `npm install-test -gD`, `npm -L global
+  install` and `npm update -gD [<name>]` install globally without the manifest; on Windows only `-gD` was measured,
+  and npm reads its flags with the same code there). A single-dash word made of npm 11.19.0's letters is now read as
+  those letters written apart: `-gD` as `-g -D`, global for certain; a value letter before another letter takes that
+  letter as its value, as npm does (`-Cg <dir>` asks for `<dir>`, and `-Cd`, `-Lq` and `-gws` leave the word `info`,
+  `warn` or `silent`, which npm asks the registry for and so does the hook — the owner's answer A to question 6);
+  `-m`, `-c` and `-call` take no word that looks like a flag (`npm i -m -g <name>` is global, and a
+  `--registry=<url>` after them still counts — answer A to question 5); the six words npm reads whole (`-ws`, `-dd`,
+  `-ddd`, `-all`, `-ca`, `-call`) are read whole; and a word with a letter npm does not have (`-gx`, `-gT`) is one
+  flag the hook does not know, said whole (`unknown flag -gx`). `-L`, `-m` and `-c` are read with their values
+  before the verb too, and `npx`, `npm exec` / `npm x` and `npm init` / `npm create` read `-L <value>` and
+  `-m <value>` and look up the package that follows, or its `create-<x>` (answer B to question 4).
+  - **Now denied:** a malicious `<name>` in `npm -L|-m|-c <value> <verb> <name>` and in `npx`, `npm exec`,
+    `npm init` and `npm create` with `-L` or `-m`; a malicious `info`, `warn` or `silent` left by a value letter in a
+    group; a malicious dependency of the manifest in `npm -m|-c <value> <verb> <name>`, where npm reads the manifest,
+    and in `npm -gL project install <name>` and `npm -L project -g install <name>`, where npm does not and the hook
+    reads `--location` beside `-g` as a doubt (as it already did for `npm i -gL project <name>`).
+  - **No longer denied:** a malicious dependency of the manifest in an install npm makes global — a group with a `g`,
+    `-L global`, `npm update -gD` — which npm does not install; and a malicious word that is the value of `-L`, `-m`,
+    `-c`, `-ca` or `-call`, which npm does not fetch.
+  - **Now read, and a warning:** the lines with `-L`, `-m` or `-c` before the verb, with any verb the hook reads. No
+    form starts to deny a name the registry does not have: these lines and the launchers with `-L` or `-m` only warn.
+  - **Names that leave the machine:** the dependencies of the manifest no longer go for those global installs, nor
+    `project`, `user`, `global`, the value of `-m` or `-c`, the word after `-ca` or `-call` and `create-global`; the
+    package of the lines now read, and of the launchers with `-L` or `-m`, goes to the registry and to OSV, and so do
+    `info`, `warn` and `silent` in the groups above. The project's registry line is no longer said for an install npm
+    makes global through a group or `-L global`, and `npm update -gD` says it updates every globally installed package
+    instead of vetting the manifest.
+  - **Still not read as npm reads it** (the known limits `npm-short-flag-groups` and `project-default-registry`): the
+    whole words with a letter npm does not have (`-global`, `-local -g`, which npm installs globally), the groups of
+    letters given to a launcher, and the groups of pnpm and bun, which were not measured.
+
 ## [3.15.0] - 2026-11-21
 
 The install hook reads more of what a package manager is told to install — the initializers of the npm family, `npm

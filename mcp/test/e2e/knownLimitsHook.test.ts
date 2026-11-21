@@ -181,6 +181,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'manifest-private-scope',
       'manifest-value-not-a-range',
       'manifest-workspace-members',
+      'npm-short-flag-groups',
       'tilde-range-word',
       'yarn-bun-npm-protocol',
     ]);

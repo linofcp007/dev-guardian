@@ -1505,6 +1505,8 @@ describe('install-vet-project-registry-said', () => {
     'npm install -g --force x',
     'npm install --save-exact -g x',
     'pnpm add -g --ignore-scripts x',
+    // install-vet-global-in-short-cluster: npm reads `-gD` as `-g -D` (measured 2026-11-21, npm 11.19.0).
+    'npm install -gD x',
   ])('T-09 %s: a global install', (command) => {
     expect(globalOf(command)).toBe(true);
   });
@@ -1522,7 +1524,6 @@ describe('install-vet-project-registry-said', () => {
     'npm install -g --location=project x',
     'npm install --location project -g x',
     'npm install x -- -g',
-    'npm install -gD x',
     'npm install -g $FLAGS x',
     'npm install -g "$PKG"',
     'pnpm add --global=false x',
@@ -2885,6 +2886,8 @@ describe('install-vet-global-update-by-name', () => {
     `bun update -g ${P}`,
     `yarn global upgrade ${P}`,
     `yarn global upgrade ${P} --latest`,
+    // install-vet-global-in-short-cluster: npm reads `-gD` as `-g -D` (measured 2026-11-21, M-1b).
+    `npm update -gD ${P}`,
   ])('T-01 `%s` gives the name in `updateNames` and not in `packages`; global for certain, no manifest', (command) => {
     expect(read(command), command).toEqual([
       { packages: [], updateNames: [[P, undefined, P]], manifest: undefined, update: undefined, global: true, uncertain: expect.any(Array) },
@@ -2897,7 +2900,7 @@ describe('install-vet-global-update-by-name', () => {
     ]);
   });
 
-  it.each([`pnpm update -g --latest ${P}`, `npm update -gD ${P}`, `npm update -g false ${P}`, `npm update --global=false ${P}`])(
+  it.each([`pnpm update -g --latest ${P}`, `npm update -g false ${P}`, `npm update --global=false ${P}`])(
     'T-01 `%s` is global but not for certain: `updateNames` has the name AND the manifest is read',
     (command) => {
       const parsed = read(command);

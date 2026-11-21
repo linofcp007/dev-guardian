@@ -506,6 +506,24 @@ interface FlagTable {
   bothWays?: 'clusters' | 'flags';
   /** After a shell-mode flag a positional of ONE word is the package (`pnpm dlx -c pkg`, measured 2026-11-19); several words are shell text. */
   shellWord?: true;
+  /** Short flags noted under the long flag they are, for the rules that read the long name (npm's `-L` is `--location`). */
+  long?: ReadonlyMap<string, string>;
+  /**
+   * Value flags of type String: they do not take a next word that looks like a flag ({@link NOPT_FLAG_LIKE}), which is then
+   * read as one — npm's option parser (`npm i -m -g P` is global; the owner's answer A to question 5, 2026-11-21).
+   */
+  stringValue?: ReadonlySet<string>;
+  /**
+   * Value flags known only as a word of their own: in a group of letters each stays a letter the table does not know, as
+   * before it was added. The launchers' `-L` and `-m` (2026-11-21): a group inside a launcher keeps the reading of before
+   * (`npx -yL global P` looks up `global`), which was not measured.
+   */
+  notInGroups?: ReadonlySet<string>;
+  /**
+   * `npm`: a group of letters is opened as npm 11.19.0 opens it ({@link openNpmGroup}). Absent: the first letter that takes a
+   * value takes the rest of the group, or the next word (pip's `-rreq.txt`), as for every other manager and the launchers.
+   */
+  groups?: 'npm';
 }
 
 const set = (...xs: string[]): ReadonlySet<string> => new Set(xs);
@@ -525,24 +543,79 @@ const NPM_COMMON_BOOL = [
 /** The loglevel shorthands of npm and pnpm: boolean flags that take no `true` / `false` word (measured 2026-11-19). */
 const LOGLEVEL_FLAGS: ReadonlySet<string> = new Set(['--silent', '--quiet', '-q', '--verbose', '-d', '-s']);
 
-const NPM_TABLE: FlagTable = {
+/**
+ * npm's value flags as they were before its groups of letters were read as npm reads them (install-vet-global-in-short-cluster,
+ * 2026-11-21): the launchers `npm exec` and `npm init` are built from these, and keep the rule of a group they had.
+ */
+const NPM_VALUE_FLAGS = [
   // `-C` is npm's short form of `--prefix`.
-  value: set('--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include',
-    '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix',
-    '--otp', '--scope', '--cpu', '--os', '--libc', '--location',
-    // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
-    '--fetch-retries', '--fetch-retry-factor', '--fetch-retry-mintimeout', '--fetch-retry-maxtimeout',
-    '--fetch-timeout', '--cache-min', '--cache-max', '--maxsockets', '--depth', '--node-options', '--script-shell',
-    '--auth-type', '--cafile', '--https-proxy', '--proxy', '--noproxy', '--local-address', '--user-agent',
-    '--min-release-age'),
-  // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
-  // regression tests of this fix use them as the examples of a flag the table lacks.)
-  // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
-  bool: set(...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl', '-s'),
+  '--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include',
+  '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix',
+  '--otp', '--scope', '--cpu', '--os', '--libc', '--location',
+  // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+  '--fetch-retries', '--fetch-retry-factor', '--fetch-retry-mintimeout', '--fetch-retry-maxtimeout',
+  '--fetch-timeout', '--cache-min', '--cache-max', '--maxsockets', '--depth', '--node-options', '--script-shell',
+  '--auth-type', '--cafile', '--https-proxy', '--proxy', '--noproxy', '--local-address', '--user-agent',
+  '--min-release-age',
+];
+/**
+ * npm's boolean flags as they were before its groups were read as npm reads them, the set the launchers are built from.
+ * npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the regression
+ * tests of install-vet-unknown-flag-hides-package use them as the examples of a flag the table lacks.) `-s` is npm's loglevel
+ * shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
+ */
+const NPM_BOOL_FLAGS = [...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl', '-s'];
+/** npm's flags of a workspace context as they were before its groups were read as npm reads them (`-ws` is NPM_TABLE's own). */
+const NPM_WORKSPACE_FLAGS = ['--workspace', '-w', '--workspaces'];
+
+/** npm's `-L` is `--location`: noted under that name, so that the global rules read it (`-L global` is `--location global`). */
+const NPM_LONG: ReadonlyMap<string, string> = new Map([['-L', '--location']]);
+
+/**
+ * npm's single letters and the words npm expands each to — measured 2026-11-20 with npm 11.19.0 (the config definitions and
+ * shorthands, `.specs/_findings-2026-11-20/measurements/cmd-forms/explore-linux-container-2026-11-20.txt:305-366`), confirmed
+ * 2026-11-21 (`.specs/install-vet-global-in-short-cluster/measurements/single-dash-words-linux-container-2026-11-21.txt:11-15`).
+ * A constant of its own: `NPM_TABLE` holds Yarn's `-T` as well, which npm does not have. `?` is left out: a group is made of
+ * letters only ({@link SHORT_CLUSTER}).
+ */
+const NPM_LETTERS: ReadonlyMap<string, string> = new Map([
+  // No value. `d`, `q` and `s` are two words each.
+  ['a', '--all'], ['f', '--force'], ['g', '--global'], ['l', '--long'], ['p', '--parseable'], ['S', '--save'],
+  ['B', '--save-bundle'], ['D', '--save-dev'], ['E', '--save-exact'], ['O', '--save-optional'], ['P', '--save-prod'],
+  ['y', '--yes'], ['h', '--usage'], ['H', '--usage'], ['v', '--version'], ['n', '--no-yes'],
+  ['d', '--loglevel info'], ['q', '--loglevel warn'], ['s', '--loglevel silent'],
+  // A value: `c` and `m` are of type String; `L`, `C` and `w` take any word.
+  ['c', '--call'], ['m', '--message'], ['L', '--location'], ['C', '--prefix'], ['w', '--workspace'],
+]);
+/**
+ * The letters of {@link NPM_LETTERS} that take a value and, standing before another letter of the group, take that letter's
+ * first word as it (`-Cg` is `--prefix --global`, `-Lq` is `--location --loglevel` and leaves `warn` a positional: measured,
+ * `single-dash-words…:24-25, 27`).
+ */
+const NPM_TAKE_NEXT_LETTER: ReadonlySet<string> = new Set(['L', 'C', 'w']);
+/**
+ * The letters of {@link NPM_LETTERS} of type String: they take no letter of the group after them, and no word that looks like
+ * a flag ({@link NOPT_FLAG_LIKE}): `-mg` is `--message --global`, global (measured, M-1 474 and 476; `single-dash-words…:31-32`).
+ */
+const NPM_STRING_LETTERS: ReadonlySet<string> = new Set(['c', 'm']);
+/** What npm's option parser (`nopt`) takes for a flag, not for the value of a String flag: `-` or `--` and another character. */
+const NOPT_FLAG_LIKE = /^-{1,2}[^-]/;
+
+const NPM_TABLE: FlagTable = {
+  // The value letters of npm 11.19.0 (`-L` is noted as `--location`, NPM_LONG), and `-ca` and `-call`, two of the six words
+  // npm reads whole instead of opening them (`--ca` and `--call`; measured, `single-dash-words…:13-14`).
+  value: set(...NPM_VALUE_FLAGS, '-L', '-m', '-c', '-ca', '-call'),
+  // The letters npm has and the table had not (`-a` … `-H`), and the four other whole words: `-all` (`--all`), `-ws`
+  // (`--workspaces`), `-dd` and `-ddd` (`--loglevel verbose|silly`).
+  bool: set(...NPM_BOOL_FLAGS, '-a', '-l', '-p', '-n', '-h', '-v', '-H', '-all', '-ws', '-dd', '-ddd'),
   registry: set('--registry'),
   dir: set('--prefix', '-C'),
-  workspace: set('--workspace', '-w', '--workspaces'),
-  boolWord: { except: LOGLEVEL_FLAGS },
+  workspace: set(...NPM_WORKSPACE_FLAGS, '-ws'),
+  // The letters added, `-all` and the two loglevel words take no `true` / `false` either: the word after them is a package.
+  boolWord: { except: new Set([...LOGLEVEL_FLAGS, '-a', '-l', '-p', '-n', '-h', '-v', '-H', '-all', '-dd', '-ddd']) },
+  long: NPM_LONG,
+  stringValue: set('-m', '-c', '-call'),
+  groups: 'npm',
 };
 
 const FLAGS: Record<string, FlagTable> = {
@@ -705,12 +778,14 @@ const UV_REGISTRY = ['--index', '--index-url', '--default-index', '--extra-index
  */
 const LAUNCH_FLAGS: Record<string, FlagTable> = {
   npx: {
+    // `-L` (`--location`) and `-m` (`--message`, of type String): measured 2026-11-21 (npm 11.19.0), `npx -L global P` asks the
+    // registry for P, never for `global` (M-4; the owner's answer B to question 4). A group of letters keeps the rule of today.
     value: set('--package', '-p', '--call', '-c', '--registry', '--cache', '--userconfig', '--prefix', '-C', '--workspace', '-w',
-      '--loglevel', '--node-options'),
+      '--loglevel', '--node-options', '-L', '-m'),
     bool: set('--yes', '-y', '--no', '--no-install', '--ignore-existing', '--quiet', '-q', '--silent', '--prefer-offline',
       '--prefer-online', '--offline', '--workspaces', '--include-workspace-root', '--verbose', '--no-yes'),
     registry: set('--registry'),
-    workspace: set('--workspace', '-w', '--workspaces'),
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     packageFlags: set('--package', '-p'),
     shellFlags: set('--call', '-c'),
     noFetchFlags: set('--no', '--no-install', '--offline'),
@@ -719,29 +794,42 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
     optionalWord: set('--no', '--no-yes', '--no-install', '--offline'),
     bothWays: 'clusters',
+    long: NPM_LONG,
+    stringValue: set('-m'),
+    notInGroups: set('-L', '-m'),
   },
   // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
   // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+  // Built from npm's flags as they were before its groups were read as npm reads them, plus `-L` and `-m` (M-4; the owner's
+  // answer B to question 4): `npm exec -L global P` and `npm exec -m <v> P` ask for P. A group of letters keeps the rule of today.
   'npm-exec': {
-    value: set(...NPM_TABLE.value, '--package', '--call', '-c'),
-    bool: set(...NPM_TABLE.bool, '-p', '--no', '--no-install', '--no-yes', '--ignore-existing'),
+    value: set(...NPM_VALUE_FLAGS, '--package', '--call', '-c', '-L', '-m'),
+    bool: set(...NPM_BOOL_FLAGS, '-p', '--no', '--no-install', '--no-yes', '--ignore-existing'),
     registry: NPM_TABLE.registry,
-    workspace: NPM_TABLE.workspace,
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     packageFlags: set('--package'),
     shellFlags: set('--call', '-c'),
     noFetchFlags: set('--no', '--offline'),
     boolWord: { except: LOGLEVEL_FLAGS },
+    long: NPM_LONG,
+    stringValue: set('-m'),
+    notInGroups: set('-L', '-m'),
   },
   // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
   // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
   // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+  // Built, as `npm exec`, from npm's flags of before plus `-L` and `-m`: `npm init -L global x` asks for `create-x` (M-4).
   'npm-init': {
-    value: set(...NPM_TABLE.value, '--init-author-name', '--init-author-url', '--init-license', '--init-module', '--init-type', '--init-version'),
-    bool: set(...NPM_TABLE.bool, '--init-private', '--no-workspaces-update'),
+    value: set(...NPM_VALUE_FLAGS, '--init-author-name', '--init-author-url', '--init-license', '--init-module', '--init-type', '--init-version',
+      '-L', '-m'),
+    bool: set(...NPM_BOOL_FLAGS, '--init-private', '--no-workspaces-update'),
     registry: NPM_TABLE.registry,
     dir: NPM_TABLE.dir,
-    workspace: NPM_TABLE.workspace,
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     boolWord: { except: LOGLEVEL_FLAGS },
+    long: NPM_LONG,
+    stringValue: set('-m'),
+    notInGroups: set('-L', '-m'),
   },
   // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
   'yarn-create': {
@@ -874,6 +962,55 @@ const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 
 const isBoolWord = (word: string | undefined): boolean => word === 'true' || word === 'false';
 
+/** An npm group of letters as npm 11.19.0 opens it ({@link openNpmGroup}). */
+interface NpmGroup {
+  /** The flags, in order, as the table names them; a value letter that is not the last carries the first word of the letter after it. */
+  flags: Array<{ flag: string; value?: string }>;
+  /** The second word of a `d`, `q` or `s` whose first word a value letter took: npm asks the registry for it (`-Cd` leaves `info`). */
+  positionals: string[];
+  /** What the word after the group is to its last flag: the value (`value`), the value unless it looks like a flag (`string`), nothing (`none`). */
+  next: 'value' | 'string' | 'none';
+}
+
+/** Whether `v` is a word of letters that `table` opens as npm does: npm's table, and not one of its exact flags (the six words npm reads whole are). */
+const isNpmGroupWord = (v: string, table: FlagTable): boolean =>
+  table.groups === 'npm' && !v.startsWith('--') && SHORT_CLUSTER.test(v) && !table.value.has(v) && !table.bool.has(v);
+
+/**
+ * Opens an npm word of letters as npm 11.19.0 does (measured 2026-11-20 and 2026-11-21, {@link NPM_LETTERS}): each letter is the
+ * flag written alone, in order. A letter of {@link NPM_TAKE_NEXT_LETTER} that is not the last takes the first word of the letter
+ * after it as its value, and that letter no longer counts — when it is `d`, `q` or `s` its second word (`info`, `warn`, `silent`)
+ * is a positional, which npm installs (the owner's answer A to question 6). `c` and `m` take nothing inside the group.
+ * `undefined` when a letter is not one of npm's: npm reads the whole word as a flag it does not know (`-gx` is `--gx`, `-gT`
+ * too — `T` is Yarn's). The callers ask {@link isNpmGroupWord} first. One pass over the letters.
+ */
+function openNpmGroup(word: string): NpmGroup | undefined {
+  const letters = [...word.slice(1)];
+  if (!letters.every((c) => NPM_LETTERS.has(c))) return undefined;
+  const group: NpmGroup = { flags: [], positionals: [], next: 'none' };
+  for (let k = 0; k < letters.length; k += 1) {
+    const letter = letters[k] ?? '';
+    const after = letters[k + 1];
+    if (after === undefined) {
+      group.flags.push({ flag: `-${letter}` });
+      group.next = NPM_TAKE_NEXT_LETTER.has(letter) ? 'value' : NPM_STRING_LETTERS.has(letter) ? 'string' : 'none';
+    } else if (NPM_TAKE_NEXT_LETTER.has(letter)) {
+      const [first = '', second] = (NPM_LETTERS.get(after) ?? '').split(' ');
+      group.flags.push({ flag: `-${letter}`, value: first });
+      if (second !== undefined) group.positionals.push(second);
+      k += 1;
+    } else group.flags.push({ flag: `-${letter}` });
+  }
+  return group;
+}
+
+/** Whether a flag that reads the next word as `next` (a value flag: `value`; one of type String: `string`) takes `word`. */
+const takesNextWord = (next: NpmGroup['next'], word: string | undefined): boolean =>
+  word !== undefined && (next === 'value' || (next === 'string' && !NOPT_FLAG_LIKE.test(word)));
+
+/** How the exact value flag `v` of `table` reads the next word: of type String ({@link FlagTable.stringValue}) or any word. */
+const valueKind = (v: string, table: FlagTable): NpmGroup['next'] => (table.stringValue?.has(v) === true ? 'string' : 'value');
+
 /**
  * The one rule for the word after a flag the table does not know: `walk` and `nextPositional` both ask it, so the
  * flag is read the same way in a package position and in the subcommand position. The tables are hand-written lists
@@ -932,7 +1069,9 @@ const productionWordReason = (word: string): string =>
  *
  * Short-flag clusters are expanded letter by letter (`-qr req.txt` is `-q`
  * then `-r req.txt`; `-rreq.txt` is `-r req.txt`): the first letter that
- * takes a value takes the rest of the cluster, or the next word. A flag
+ * takes a value takes the rest of the cluster, or the next word — except in
+ * npm's table, whose groups are opened as npm opens them ({@link openNpmGroup}:
+ * `-gD` is `-g -D`, `-gL project` is `-g --location project`). A flag
  * this table does not know makes the parse uncertain; the word after an
  * unknown LONG flag is both a possible value and a candidate package
  * ({@link afterUnknownFlag}): vetting a flag's value as a name only warns, and
@@ -946,7 +1085,8 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   let customRegistry: string | undefined;
   const registries: string[] = [];
   const flags: Array<{ flag: string; value?: string; eq?: true }> = [];
-  const note = (flag: string, value: string | undefined, eq?: true): void => {
+  const note = (written: string, value: string | undefined, eq?: true): void => {
+    const flag = table.long?.get(written) ?? written;
     flags.push(value === undefined ? { flag } : eq === true ? { flag, value, eq } : { flag, value });
     if (table.registry.has(flag) && value !== undefined) {
       registries.push(value);
@@ -983,8 +1123,11 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
       continue;
     }
     if (table.value.has(v)) {
-      note(v, words[i + 1]?.value);
-      i += 1;
+      const word = words[i + 1]?.value;
+      if (takesNextWord(valueKind(v, table), word)) {
+        note(v, word);
+        i += 1;
+      } else note(v, undefined);
       continue;
     }
     if (table.bool.has(v)) {
@@ -1001,10 +1144,31 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
       }
       continue;
     }
+    if (isNpmGroupWord(v, table)) {
+      const group = openNpmGroup(v);
+      if (group === undefined) {
+        // A letter npm does not have: the whole word is one flag npm does not know (`-gx`), and a short flag takes no word.
+        uncertain.push(`unknown flag ${v}`);
+        unknownFlags += 1;
+        continue;
+      }
+      const word = words[i + 1]?.value;
+      const last = group.flags.length - 1;
+      for (const [k, f] of group.flags.entries()) {
+        if (k < last || f.value !== undefined) note(f.flag, f.value);
+        // The word after the group is the last letter's: its value, or the `true` / `false` of the rule of today (`-Dg false` is `-g false`).
+        else if (takesNextWord(group.next, word) || (takesWord(v, table) && isBoolWord(word))) {
+          note(f.flag, word);
+          i += 1;
+        } else note(f.flag, undefined);
+      }
+      for (const value of group.positionals) positionals.push({ value });
+      continue;
+    }
     if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
       for (let k = 1; k < v.length; k += 1) {
         const flag = `-${v.charAt(k)}`;
-        if (table.value.has(flag)) {
+        if (table.value.has(flag) && table.notInGroups?.has(flag) !== true) {
           const rest = v.slice(k + 1);
           if (rest !== '') note(flag, rest);
           else {
@@ -1115,15 +1279,19 @@ const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
 /**
  * Whether an npm, pnpm or bun command says it is a GLOBAL install, and no word can take that back — measured
  * 2026-11-19 (npm 11, pnpm 10, Yarn 1.22 and 4, bun 1.4): the project's registry file is not obeyed by a global install,
- * but is by `--global=false`, `-g false`, `-g --no-global`, `-g --location=project`. The words before the subcommand
- * and the words after it are two lists, each read up to a `--` word. In doubt the answer is no:
+ * but is by `--global=false`, `-g false` and `-g --no-global`. `-g --location=project` is global and does not obey it either
+ * (`.specs/install-vet-project-registry-said/measurements/global-spellings-windows-2026-11-19.txt:15`; so `-gL project` and
+ * `-L project -g`, measured 2026-11-21), and is read as a doubt on purpose: a line too many, never one too few. The words
+ * before the subcommand and the words after it are two lists, each read up to a `--` word. For npm each list is read as npm
+ * reads it ({@link npmFlagWords}): a group of letters is its flags written apart (`-gD` is `-g -D`, `-Dg false` is
+ * `-D -g false`, measured 2026-11-21 with npm 11.19.0) and `-L` is `--location`. In doubt the answer is no:
  *   - a word with a shell expansion (`$` or a backtick) may be `false` or `--no-global`: not global;
  *   - says global: the exact words `-g` and `--global` (not when the next word of the list is `false`), `--global=true`,
  *     and for npm `--location=global` and `--location global`;
  *   - takes it back: any other word that starts with `-` and has `global` or `location` in it, or starts `-g=`;
- *   - a short cluster that holds a `g` (`-gD`, `-Dg false`) takes it back: the word after it may be the value of its `g`
- *     (measured 2026-11-19, npm 11.20.0: `-g -Dg false` installs the manifest); a package name with "global" in it takes
- *     nothing back.
+ *   - for pnpm and bun, a short cluster that holds a `g` (`-gD`, `-Dg false`) takes it back: the word after it may be the
+ *     value of its `g` (measured 2026-11-19 with npm 11.20.0: `-g -Dg false` installs the manifest; pnpm's and bun's groups
+ *     were not measured); a package name with "global" in it takes nothing back.
  * It is only part of the answer: a global word that stands where another flag's value goes (`--otp --global`) is that
  * flag's value, not a flag — the caller also asks the walker's flags ({@link isGlobalFlag}), which know the flags that
  * take a value, and a flag the manager's table does not know (npm's abbreviations: `--loc=project`) leaves it not global.
@@ -1135,20 +1303,45 @@ function saysGlobal(manager: string, pre: readonly ShellWord[], args: readonly S
   if ([...pre, ...args].some((w) => /[$`]/.test(w.value))) return false;
   let says = false;
   for (const list of [beforeDoubleDash(pre), beforeDoubleDash(args)]) {
-    for (const [at, w] of list.entries()) {
-      const v = w.value;
-      const next = list[at + 1]?.value;
-      if (!v.startsWith('-')) continue;
+    const read = manager === 'npm' ? npmFlagWords(list) : rawFlagWords(list);
+    for (const { flag: v, next } of read) {
       if (v === '-g' || v === '--global') {
         if (next === 'false') return false;
         says = true;
       } else if (v === '--global=true') says = true;
       else if (manager === 'npm' && (v === '--location=global' || (v === '--location' && next === 'global'))) says = true;
       else if (v.startsWith('-g=') || /global|location/.test(v.toLowerCase())) return false;
-      else if (/^-[A-Za-z]{2,}$/.test(v) && v.includes('g')) return false; // a cluster with a `g`: its word may be the value of that `g`
+      // pnpm and bun: a cluster with a `g` takes it back, its word may be the value of that `g`. npm's groups are opened above.
+      else if (manager !== 'npm' && /^-[A-Za-z]{2,}$/.test(v) && v.includes('g')) return false;
     }
   }
   return says;
+}
+
+/** The flag words of `list` as written, each with the word after it. */
+const rawFlagWords = (list: readonly ShellWord[]): Array<{ flag: string; next: string | undefined }> =>
+  list.flatMap((w, at) => (w.value.startsWith('-') ? [{ flag: w.value, next: list[at + 1]?.value }] : []));
+
+/**
+ * The flag words of `list` as npm reads them, each with the word after it: a group of letters is opened ({@link openNpmGroup},
+ * the one function `walk` and `scanPositional` use too) — its flags in order, a value letter's word being the letter it took
+ * (`-Lg` is `--location` with `--global`) and the last flag's the word after the group — and `-L` is `--location`. A word
+ * npm does not open (one with a letter npm does not have) stays as written.
+ */
+function npmFlagWords(list: readonly ShellWord[]): Array<{ flag: string; next: string | undefined }> {
+  const out: Array<{ flag: string; next: string | undefined }> = [];
+  for (const { flag: v, next } of rawFlagWords(list)) {
+    const group = isNpmGroupWord(v, NPM_TABLE) ? openNpmGroup(v) : undefined;
+    if (group === undefined) {
+      out.push({ flag: NPM_LONG.get(v) ?? v, next });
+      continue;
+    }
+    for (const [k, f] of group.flags.entries()) {
+      const following = group.flags[k + 1];
+      out.push({ flag: NPM_LONG.get(f.flag) ?? f.flag, next: f.value ?? (following === undefined ? next : following.flag) });
+    }
+  }
+  return out;
 }
 
 interface Detected {
@@ -1222,12 +1415,19 @@ function scanPositional(
     const v = words[i]?.value ?? '';
     if (v.startsWith('-') && v.length > 1) {
       if (v.includes('=')) continue;
-      if (table.value.has(v)) i += 1;
+      const next = words[i + 1]?.value;
+      // An npm group, opened as `walk` opens it: `npm -gL project install P` — the last letter takes the word.
+      const group = isNpmGroupWord(v, table) ? openNpmGroup(v) : undefined;
+      // `npm -L global install P`, `npm -m <v> install P` (the String rule: not `npm -m -g install P`).
+      if (table.value.has(v)) {
+        if (takesNextWord(valueKind(v, table), next)) i += 1;
+      }
       // `npm -D false install`: the word after a boolean flag is its value, not the subcommand.
-      else if (takesWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
-      else if (readsBothWays(v, words[i + 1]?.value, table)) candidateAt = i + 1;
-      else {
-        const next = words[i + 1]?.value;
+      else if (takesWord(v, table) && isBoolWord(next)) i += 1;
+      else if (readsBothWays(v, next, table)) candidateAt = i + 1;
+      else if (group !== undefined) {
+        if (takesNextWord(group.next, next)) i += 1;
+      } else {
         const after = afterUnknownFlag(v, next, table);
         if (after === 'value' || (after === 'candidate' && subcommands !== undefined && !subcommands.has(next ?? ''))) i += 1;
         else if (after === 'candidate') candidateAt = i + 1;

@@ -2888,59 +2888,99 @@ var NPM_COMMON_BOOL = [
   "--no-frozen-lockfile"
 ];
 var LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d", "-s"]);
-var NPM_TABLE = {
+var NPM_VALUE_FLAGS = [
   // `-C` is npm's short form of `--prefix`.
-  value: set(
-    "--registry",
-    "--prefix",
-    "-C",
-    "--tag",
-    "--workspace",
-    "-w",
-    "--omit",
-    "--include",
-    "--install-strategy",
-    "--cache",
-    "--userconfig",
-    "--globalconfig",
-    "--before",
-    "--loglevel",
-    "--save-prefix",
-    "--otp",
-    "--scope",
-    "--cpu",
-    "--os",
-    "--libc",
-    "--location",
-    // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
-    "--fetch-retries",
-    "--fetch-retry-factor",
-    "--fetch-retry-mintimeout",
-    "--fetch-retry-maxtimeout",
-    "--fetch-timeout",
-    "--cache-min",
-    "--cache-max",
-    "--maxsockets",
-    "--depth",
-    "--node-options",
-    "--script-shell",
-    "--auth-type",
-    "--cafile",
-    "--https-proxy",
-    "--proxy",
-    "--noproxy",
-    "--local-address",
-    "--user-agent",
-    "--min-release-age"
-  ),
-  // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
-  // regression tests of this fix use them as the examples of a flag the table lacks.)
-  // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
-  bool: set(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl", "-s"),
+  "--registry",
+  "--prefix",
+  "-C",
+  "--tag",
+  "--workspace",
+  "-w",
+  "--omit",
+  "--include",
+  "--install-strategy",
+  "--cache",
+  "--userconfig",
+  "--globalconfig",
+  "--before",
+  "--loglevel",
+  "--save-prefix",
+  "--otp",
+  "--scope",
+  "--cpu",
+  "--os",
+  "--libc",
+  "--location",
+  // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+  "--fetch-retries",
+  "--fetch-retry-factor",
+  "--fetch-retry-mintimeout",
+  "--fetch-retry-maxtimeout",
+  "--fetch-timeout",
+  "--cache-min",
+  "--cache-max",
+  "--maxsockets",
+  "--depth",
+  "--node-options",
+  "--script-shell",
+  "--auth-type",
+  "--cafile",
+  "--https-proxy",
+  "--proxy",
+  "--noproxy",
+  "--local-address",
+  "--user-agent",
+  "--min-release-age"
+];
+var NPM_BOOL_FLAGS = [...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl", "-s"];
+var NPM_WORKSPACE_FLAGS = ["--workspace", "-w", "--workspaces"];
+var NPM_LONG = /* @__PURE__ */ new Map([["-L", "--location"]]);
+var NPM_LETTERS = /* @__PURE__ */ new Map([
+  // No value. `d`, `q` and `s` are two words each.
+  ["a", "--all"],
+  ["f", "--force"],
+  ["g", "--global"],
+  ["l", "--long"],
+  ["p", "--parseable"],
+  ["S", "--save"],
+  ["B", "--save-bundle"],
+  ["D", "--save-dev"],
+  ["E", "--save-exact"],
+  ["O", "--save-optional"],
+  ["P", "--save-prod"],
+  ["y", "--yes"],
+  ["h", "--usage"],
+  ["H", "--usage"],
+  ["v", "--version"],
+  ["n", "--no-yes"],
+  ["d", "--loglevel info"],
+  ["q", "--loglevel warn"],
+  ["s", "--loglevel silent"],
+  // A value: `c` and `m` are of type String; `L`, `C` and `w` take any word.
+  ["c", "--call"],
+  ["m", "--message"],
+  ["L", "--location"],
+  ["C", "--prefix"],
+  ["w", "--workspace"]
+]);
+var NPM_TAKE_NEXT_LETTER = /* @__PURE__ */ new Set(["L", "C", "w"]);
+var NPM_STRING_LETTERS = /* @__PURE__ */ new Set(["c", "m"]);
+var NOPT_FLAG_LIKE = /^-{1,2}[^-]/;
+var NPM_TABLE = {
+  // The value letters of npm 11.19.0 (`-L` is noted as `--location`, NPM_LONG), and `-ca` and `-call`, two of the six words
+  // npm reads whole instead of opening them (`--ca` and `--call`; measured, `single-dash-words…:13-14`).
+  value: set(...NPM_VALUE_FLAGS, "-L", "-m", "-c", "-ca", "-call"),
+  // The letters npm has and the table had not (`-a` … `-H`), and the four other whole words: `-all` (`--all`), `-ws`
+  // (`--workspaces`), `-dd` and `-ddd` (`--loglevel verbose|silly`).
+  bool: set(...NPM_BOOL_FLAGS, "-a", "-l", "-p", "-n", "-h", "-v", "-H", "-all", "-ws", "-dd", "-ddd"),
   registry: set("--registry"),
   dir: set("--prefix", "-C"),
-  workspace: set("--workspace", "-w", "--workspaces"),
-  boolWord: { except: LOGLEVEL_FLAGS }
+  workspace: set(...NPM_WORKSPACE_FLAGS, "-ws"),
+  // The letters added, `-all` and the two loglevel words take no `true` / `false` either: the word after them is a package.
+  boolWord: { except: /* @__PURE__ */ new Set([...LOGLEVEL_FLAGS, "-a", "-l", "-p", "-n", "-h", "-v", "-H", "-all", "-dd", "-ddd"]) },
+  long: NPM_LONG,
+  stringValue: set("-m", "-c", "-call"),
+  groups: "npm"
 };
 var FLAGS = {
   npm: NPM_TABLE,
@@ -3466,6 +3506,8 @@ var UV_BOOL = [
 var UV_REGISTRY = ["--index", "--index-url", "--default-index", "--extra-index-url", "--find-links", "-f"];
 var LAUNCH_FLAGS = {
   npx: {
+    // `-L` (`--location`) and `-m` (`--message`, of type String): measured 2026-11-21 (npm 11.19.0), `npx -L global P` asks the
+    // registry for P, never for `global` (M-4; the owner's answer B to question 4). A group of letters keeps the rule of today.
     value: set(
       "--package",
       "-p",
@@ -3479,7 +3521,9 @@ var LAUNCH_FLAGS = {
       "--workspace",
       "-w",
       "--loglevel",
-      "--node-options"
+      "--node-options",
+      "-L",
+      "-m"
     ),
     bool: set(
       "--yes",
@@ -3499,7 +3543,7 @@ var LAUNCH_FLAGS = {
       "--no-yes"
     ),
     registry: set("--registry"),
-    workspace: set("--workspace", "-w", "--workspaces"),
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     packageFlags: set("--package", "-p"),
     shellFlags: set("--call", "-c"),
     noFetchFlags: set("--no", "--no-install", "--offline"),
@@ -3507,30 +3551,52 @@ var LAUNCH_FLAGS = {
     // `--no-install false P` and `--offline false P` fetch nothing (measured); they are read like `--no` (the word is their
     // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
     optionalWord: set("--no", "--no-yes", "--no-install", "--offline"),
-    bothWays: "clusters"
+    bothWays: "clusters",
+    long: NPM_LONG,
+    stringValue: set("-m"),
+    notInGroups: set("-L", "-m")
   },
   // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
   // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+  // Built from npm's flags as they were before its groups were read as npm reads them, plus `-L` and `-m` (M-4; the owner's
+  // answer B to question 4): `npm exec -L global P` and `npm exec -m <v> P` ask for P. A group of letters keeps the rule of today.
   "npm-exec": {
-    value: set(...NPM_TABLE.value, "--package", "--call", "-c"),
-    bool: set(...NPM_TABLE.bool, "-p", "--no", "--no-install", "--no-yes", "--ignore-existing"),
+    value: set(...NPM_VALUE_FLAGS, "--package", "--call", "-c", "-L", "-m"),
+    bool: set(...NPM_BOOL_FLAGS, "-p", "--no", "--no-install", "--no-yes", "--ignore-existing"),
     registry: NPM_TABLE.registry,
-    workspace: NPM_TABLE.workspace,
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     packageFlags: set("--package"),
     shellFlags: set("--call", "-c"),
     noFetchFlags: set("--no", "--offline"),
-    boolWord: { except: LOGLEVEL_FLAGS }
+    boolWord: { except: LOGLEVEL_FLAGS },
+    long: NPM_LONG,
+    stringValue: set("-m"),
+    notInGroups: set("-L", "-m")
   },
   // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
   // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
   // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+  // Built, as `npm exec`, from npm's flags of before plus `-L` and `-m`: `npm init -L global x` asks for `create-x` (M-4).
   "npm-init": {
-    value: set(...NPM_TABLE.value, "--init-author-name", "--init-author-url", "--init-license", "--init-module", "--init-type", "--init-version"),
-    bool: set(...NPM_TABLE.bool, "--init-private", "--no-workspaces-update"),
+    value: set(
+      ...NPM_VALUE_FLAGS,
+      "--init-author-name",
+      "--init-author-url",
+      "--init-license",
+      "--init-module",
+      "--init-type",
+      "--init-version",
+      "-L",
+      "-m"
+    ),
+    bool: set(...NPM_BOOL_FLAGS, "--init-private", "--no-workspaces-update"),
     registry: NPM_TABLE.registry,
     dir: NPM_TABLE.dir,
-    workspace: NPM_TABLE.workspace,
-    boolWord: { except: LOGLEVEL_FLAGS }
+    workspace: set(...NPM_WORKSPACE_FLAGS),
+    boolWord: { except: LOGLEVEL_FLAGS },
+    long: NPM_LONG,
+    stringValue: set("-m"),
+    notInGroups: set("-L", "-m")
   },
   // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
   "yarn-create": {
@@ -3645,6 +3711,28 @@ function limitCandidates(positionals) {
 }
 var SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 var isBoolWord = (word) => word === "true" || word === "false";
+var isNpmGroupWord = (v, table) => table.groups === "npm" && !v.startsWith("--") && SHORT_CLUSTER.test(v) && !table.value.has(v) && !table.bool.has(v);
+function openNpmGroup(word) {
+  const letters = [...word.slice(1)];
+  if (!letters.every((c) => NPM_LETTERS.has(c))) return void 0;
+  const group = { flags: [], positionals: [], next: "none" };
+  for (let k = 0; k < letters.length; k += 1) {
+    const letter = letters[k] ?? "";
+    const after = letters[k + 1];
+    if (after === void 0) {
+      group.flags.push({ flag: `-${letter}` });
+      group.next = NPM_TAKE_NEXT_LETTER.has(letter) ? "value" : NPM_STRING_LETTERS.has(letter) ? "string" : "none";
+    } else if (NPM_TAKE_NEXT_LETTER.has(letter)) {
+      const [first = "", second] = (NPM_LETTERS.get(after) ?? "").split(" ");
+      group.flags.push({ flag: `-${letter}`, value: first });
+      if (second !== void 0) group.positionals.push(second);
+      k += 1;
+    } else group.flags.push({ flag: `-${letter}` });
+  }
+  return group;
+}
+var takesNextWord = (next, word) => word !== void 0 && (next === "value" || next === "string" && !NOPT_FLAG_LIKE.test(word));
+var valueKind = (v, table) => table.stringValue?.has(v) === true ? "string" : "value";
 function afterUnknownFlag(v, next, table) {
   if (table.value.has(v) || table.bool.has(v)) return "none";
   if (!v.startsWith("--") || v === "--" || v.startsWith("--no-") || v.includes("=")) return "none";
@@ -3678,7 +3766,8 @@ function walk(words, table) {
   let customRegistry;
   const registries = [];
   const flags = [];
-  const note = (flag, value, eq2) => {
+  const note = (written, value, eq2) => {
+    const flag = table.long?.get(written) ?? written;
     flags.push(value === void 0 ? { flag } : eq2 === true ? { flag, value, eq: eq2 } : { flag, value });
     if (table.registry.has(flag) && value !== void 0) {
       registries.push(value);
@@ -3715,8 +3804,11 @@ function walk(words, table) {
       continue;
     }
     if (table.value.has(v)) {
-      note(v, words[i + 1]?.value);
-      i += 1;
+      const word = words[i + 1]?.value;
+      if (takesNextWord(valueKind(v, table), word)) {
+        note(v, word);
+        i += 1;
+      } else note(v, void 0);
       continue;
     }
     if (table.bool.has(v)) {
@@ -3733,10 +3825,29 @@ function walk(words, table) {
       }
       continue;
     }
+    if (isNpmGroupWord(v, table)) {
+      const group = openNpmGroup(v);
+      if (group === void 0) {
+        uncertain.push(`unknown flag ${v}`);
+        unknownFlags += 1;
+        continue;
+      }
+      const word = words[i + 1]?.value;
+      const last = group.flags.length - 1;
+      for (const [k, f] of group.flags.entries()) {
+        if (k < last || f.value !== void 0) note(f.flag, f.value);
+        else if (takesNextWord(group.next, word) || takesWord(v, table) && isBoolWord(word)) {
+          note(f.flag, word);
+          i += 1;
+        } else note(f.flag, void 0);
+      }
+      for (const value of group.positionals) positionals.push({ value });
+      continue;
+    }
     if (!v.startsWith("--") && SHORT_CLUSTER.test(v)) {
       for (let k = 1; k < v.length; k += 1) {
         const flag = `-${v.charAt(k)}`;
-        if (table.value.has(flag)) {
+        if (table.value.has(flag) && table.notInGroups?.has(flag) !== true) {
           const rest = v.slice(k + 1);
           if (rest !== "") note(flag, rest);
           else {
@@ -3823,20 +3934,34 @@ function saysGlobal(manager, pre, args) {
   if ([...pre, ...args].some((w) => /[$`]/.test(w.value))) return false;
   let says = false;
   for (const list of [beforeDoubleDash(pre), beforeDoubleDash(args)]) {
-    for (const [at, w] of list.entries()) {
-      const v = w.value;
-      const next = list[at + 1]?.value;
-      if (!v.startsWith("-")) continue;
+    const read2 = manager === "npm" ? npmFlagWords(list) : rawFlagWords(list);
+    for (const { flag: v, next } of read2) {
       if (v === "-g" || v === "--global") {
         if (next === "false") return false;
         says = true;
       } else if (v === "--global=true") says = true;
       else if (manager === "npm" && (v === "--location=global" || v === "--location" && next === "global")) says = true;
       else if (v.startsWith("-g=") || /global|location/.test(v.toLowerCase())) return false;
-      else if (/^-[A-Za-z]{2,}$/.test(v) && v.includes("g")) return false;
+      else if (manager !== "npm" && /^-[A-Za-z]{2,}$/.test(v) && v.includes("g")) return false;
     }
   }
   return says;
+}
+var rawFlagWords = (list) => list.flatMap((w, at) => w.value.startsWith("-") ? [{ flag: w.value, next: list[at + 1]?.value }] : []);
+function npmFlagWords(list) {
+  const out = [];
+  for (const { flag: v, next } of rawFlagWords(list)) {
+    const group = isNpmGroupWord(v, NPM_TABLE) ? openNpmGroup(v) : void 0;
+    if (group === void 0) {
+      out.push({ flag: NPM_LONG.get(v) ?? v, next });
+      continue;
+    }
+    for (const [k, f] of group.flags.entries()) {
+      const following = group.flags[k + 1];
+      out.push({ flag: NPM_LONG.get(f.flag) ?? f.flag, next: f.value ?? (following === void 0 ? next : following.flag) });
+    }
+  }
+  return out;
 }
 function launcher(manager, ecosystem, args, pre, launch) {
   return { manager, ecosystem, args, pre, uncertain: [], launch };
@@ -3847,11 +3972,15 @@ function scanPositional(words, from, table, subcommands) {
     const v = words[i]?.value ?? "";
     if (v.startsWith("-") && v.length > 1) {
       if (v.includes("=")) continue;
-      if (table.value.has(v)) i += 1;
-      else if (takesWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
-      else if (readsBothWays(v, words[i + 1]?.value, table)) candidateAt = i + 1;
-      else {
-        const next = words[i + 1]?.value;
+      const next = words[i + 1]?.value;
+      const group = isNpmGroupWord(v, table) ? openNpmGroup(v) : void 0;
+      if (table.value.has(v)) {
+        if (takesNextWord(valueKind(v, table), next)) i += 1;
+      } else if (takesWord(v, table) && isBoolWord(next)) i += 1;
+      else if (readsBothWays(v, next, table)) candidateAt = i + 1;
+      else if (group !== void 0) {
+        if (takesNextWord(group.next, next)) i += 1;
+      } else {
         const after = afterUnknownFlag(v, next, table);
         if (after === "value" || after === "candidate" && subcommands !== void 0 && !subcommands.has(next ?? "")) i += 1;
         else if (after === "candidate") candidateAt = i + 1;

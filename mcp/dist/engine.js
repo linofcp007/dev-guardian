@@ -115865,7 +115865,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_VALUE_FLAGS, NPM_BOOL_FLAGS, NPM_WORKSPACE_FLAGS, NPM_LONG, NPM_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115960,59 +115960,68 @@ var init_parseCommand = __esm({
       "--no-frozen-lockfile"
     ];
     LOGLEVEL_FLAGS = /* @__PURE__ */ new Set(["--silent", "--quiet", "-q", "--verbose", "-d", "-s"]);
-    NPM_TABLE = {
+    NPM_VALUE_FLAGS = [
       // `-C` is npm's short form of `--prefix`.
-      value: set2(
-        "--registry",
-        "--prefix",
-        "-C",
-        "--tag",
-        "--workspace",
-        "-w",
-        "--omit",
-        "--include",
-        "--install-strategy",
-        "--cache",
-        "--userconfig",
-        "--globalconfig",
-        "--before",
-        "--loglevel",
-        "--save-prefix",
-        "--otp",
-        "--scope",
-        "--cpu",
-        "--os",
-        "--libc",
-        "--location",
-        // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
-        "--fetch-retries",
-        "--fetch-retry-factor",
-        "--fetch-retry-mintimeout",
-        "--fetch-retry-maxtimeout",
-        "--fetch-timeout",
-        "--cache-min",
-        "--cache-max",
-        "--maxsockets",
-        "--depth",
-        "--node-options",
-        "--script-shell",
-        "--auth-type",
-        "--cafile",
-        "--https-proxy",
-        "--proxy",
-        "--noproxy",
-        "--local-address",
-        "--user-agent",
-        "--min-release-age"
-      ),
-      // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
-      // regression tests of this fix use them as the examples of a flag the table lacks.)
-      // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
-      bool: set2(...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl", "-s"),
+      "--registry",
+      "--prefix",
+      "-C",
+      "--tag",
+      "--workspace",
+      "-w",
+      "--omit",
+      "--include",
+      "--install-strategy",
+      "--cache",
+      "--userconfig",
+      "--globalconfig",
+      "--before",
+      "--loglevel",
+      "--save-prefix",
+      "--otp",
+      "--scope",
+      "--cpu",
+      "--os",
+      "--libc",
+      "--location",
+      // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+      "--fetch-retries",
+      "--fetch-retry-factor",
+      "--fetch-retry-mintimeout",
+      "--fetch-retry-maxtimeout",
+      "--fetch-timeout",
+      "--cache-min",
+      "--cache-max",
+      "--maxsockets",
+      "--depth",
+      "--node-options",
+      "--script-shell",
+      "--auth-type",
+      "--cafile",
+      "--https-proxy",
+      "--proxy",
+      "--noproxy",
+      "--local-address",
+      "--user-agent",
+      "--min-release-age"
+    ];
+    NPM_BOOL_FLAGS = [...NPM_COMMON_BOOL, "--allow-same-version", "--strict-ssl", "-s"];
+    NPM_WORKSPACE_FLAGS = ["--workspace", "-w", "--workspaces"];
+    NPM_LONG = /* @__PURE__ */ new Map([["-L", "--location"]]);
+    NPM_TABLE = {
+      // The value letters of npm 11.19.0 (`-L` is noted as `--location`, NPM_LONG), and `-ca` and `-call`, two of the six words
+      // npm reads whole instead of opening them (`--ca` and `--call`; measured, `single-dash-words…:13-14`).
+      value: set2(...NPM_VALUE_FLAGS, "-L", "-m", "-c", "-ca", "-call"),
+      // The letters npm has and the table had not (`-a` … `-H`), and the four other whole words: `-all` (`--all`), `-ws`
+      // (`--workspaces`), `-dd` and `-ddd` (`--loglevel verbose|silly`).
+      bool: set2(...NPM_BOOL_FLAGS, "-a", "-l", "-p", "-n", "-h", "-v", "-H", "-all", "-ws", "-dd", "-ddd"),
       registry: set2("--registry"),
       dir: set2("--prefix", "-C"),
-      workspace: set2("--workspace", "-w", "--workspaces"),
-      boolWord: { except: LOGLEVEL_FLAGS }
+      workspace: set2(...NPM_WORKSPACE_FLAGS, "-ws"),
+      // The letters added, `-all` and the two loglevel words take no `true` / `false` either: the word after them is a package.
+      boolWord: { except: /* @__PURE__ */ new Set([...LOGLEVEL_FLAGS, "-a", "-l", "-p", "-n", "-h", "-v", "-H", "-all", "-dd", "-ddd"]) },
+      long: NPM_LONG,
+      stringValue: set2("-m", "-c", "-call"),
+      groups: "npm"
     };
     FLAGS = {
       npm: NPM_TABLE,
@@ -116538,6 +116547,8 @@ var init_parseCommand = __esm({
     UV_REGISTRY = ["--index", "--index-url", "--default-index", "--extra-index-url", "--find-links", "-f"];
     LAUNCH_FLAGS = {
       npx: {
+        // `-L` (`--location`) and `-m` (`--message`, of type String): measured 2026-11-21 (npm 11.19.0), `npx -L global P` asks the
+        // registry for P, never for `global` (M-4; the owner's answer B to question 4). A group of letters keeps the rule of today.
         value: set2(
           "--package",
           "-p",
@@ -116551,7 +116562,9 @@ var init_parseCommand = __esm({
           "--workspace",
           "-w",
           "--loglevel",
-          "--node-options"
+          "--node-options",
+          "-L",
+          "-m"
         ),
         bool: set2(
           "--yes",
@@ -116571,7 +116584,7 @@ var init_parseCommand = __esm({
           "--no-yes"
         ),
         registry: set2("--registry"),
-        workspace: set2("--workspace", "-w", "--workspaces"),
+        workspace: set2(...NPM_WORKSPACE_FLAGS),
         packageFlags: set2("--package", "-p"),
         shellFlags: set2("--call", "-c"),
         noFetchFlags: set2("--no", "--no-install", "--offline"),
@@ -116579,30 +116592,52 @@ var init_parseCommand = __esm({
         // `--no-install false P` and `--offline false P` fetch nothing (measured); they are read like `--no` (the word is their
         // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
         optionalWord: set2("--no", "--no-yes", "--no-install", "--offline"),
-        bothWays: "clusters"
+        bothWays: "clusters",
+        long: NPM_LONG,
+        stringValue: set2("-m"),
+        notInGroups: set2("-L", "-m")
       },
       // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
       // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+      // Built from npm's flags as they were before its groups were read as npm reads them, plus `-L` and `-m` (M-4; the owner's
+      // answer B to question 4): `npm exec -L global P` and `npm exec -m <v> P` ask for P. A group of letters keeps the rule of today.
       "npm-exec": {
-        value: set2(...NPM_TABLE.value, "--package", "--call", "-c"),
-        bool: set2(...NPM_TABLE.bool, "-p", "--no", "--no-install", "--no-yes", "--ignore-existing"),
+        value: set2(...NPM_VALUE_FLAGS, "--package", "--call", "-c", "-L", "-m"),
+        bool: set2(...NPM_BOOL_FLAGS, "-p", "--no", "--no-install", "--no-yes", "--ignore-existing"),
         registry: NPM_TABLE.registry,
-        workspace: NPM_TABLE.workspace,
+        workspace: set2(...NPM_WORKSPACE_FLAGS),
         packageFlags: set2("--package"),
         shellFlags: set2("--call", "-c"),
         noFetchFlags: set2("--no", "--offline"),
-        boolWord: { except: LOGLEVEL_FLAGS }
+        boolWord: { except: LOGLEVEL_FLAGS },
+        long: NPM_LONG,
+        stringValue: set2("-m"),
+        notInGroups: set2("-L", "-m")
       },
       // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
       // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
       // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+      // Built, as `npm exec`, from npm's flags of before plus `-L` and `-m`: `npm init -L global x` asks for `create-x` (M-4).
       "npm-init": {
-        value: set2(...NPM_TABLE.value, "--init-author-name", "--init-author-url", "--init-license", "--init-module", "--init-type", "--init-version"),
-        bool: set2(...NPM_TABLE.bool, "--init-private", "--no-workspaces-update"),
+        value: set2(
+          ...NPM_VALUE_FLAGS,
+          "--init-author-name",
+          "--init-author-url",
+          "--init-license",
+          "--init-module",
+          "--init-type",
+          "--init-version",
+          "-L",
+          "-m"
+        ),
+        bool: set2(...NPM_BOOL_FLAGS, "--init-private", "--no-workspaces-update"),
         registry: NPM_TABLE.registry,
         dir: NPM_TABLE.dir,
-        workspace: NPM_TABLE.workspace,
-        boolWord: { except: LOGLEVEL_FLAGS }
+        workspace: set2(...NPM_WORKSPACE_FLAGS),
+        boolWord: { except: LOGLEVEL_FLAGS },
+        long: NPM_LONG,
+        stringValue: set2("-m"),
+        notInGroups: set2("-L", "-m")
       },
       // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
       "yarn-create": {
