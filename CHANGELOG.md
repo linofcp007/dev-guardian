@@ -8,6 +8,33 @@ version bump.
 
 ## [Unreleased]
 
+## [3.15.0] - 2026-11-21
+
+The install hook reads more of what a package manager is told to install — the initializers of the npm family, `npm
+install-test`, the names an update fetches, a package manager started by a launcher, and a range written without
+quotes — and asks the user when a call passes one of its ceilings instead of letting it run. A session or project
+folder on a network share that does not answer no longer holds every hook past its timeout. `scan_skill` no longer
+reads three look-alikes of a shell command as exfiltration or remote code, and an `llm_scan` plan no longer hides a
+hunt's confirmed findings or stands in for the project's latest scan.
+
+### Upgrading from 3.14.1
+
+- **An install that ran in silence may now be denied, warned about or asked about.** `npm init <x>` and the other
+  initializers look up `create-<x>`, `npm install-test <package>`, `npm update -g <package>`, a package installed
+  through a launcher (`npx pnpm add <package>` and eight other measured lines) and `<package>@>=1.0.0` without
+  quotes are now vetted; a call that passes 50 named packages, 150 dependencies of its manifests or the first 512
+  KB of its command now asks the user (`permissionDecision: ask`). In a run where nobody can answer — `claude -p`,
+  or the `dontAsk` permission mode — Claude Code's documentation says such a call is denied; `bypassPermissions` is
+  not documented for a hook's question, and none of these modes was measured.
+- **A session on a network share starts one more process per hook call.** When the session's folder or
+  `CLAUDE_PROJECT_DIR` is a network path, each hook call asks a child process whether it answers (70 to 90 ms
+  measured on a minimal program), and waits up to 2 s for it while the share is down.
+- **`scan_skill` verdicts may change.** A skill whose only critical finding was one of the three look-alikes now
+  scores lower — a header that authenticates is medium, as `Authorization:` already was — and `audit_agent_config`
+  changes the same way for the commands of hooks.
+- **Check a baseline or a report made while an `llm_scan` plan existed.** `set_baseline {}` or `report_export {}`
+  may have taken that plan's empty record: check its scan type (`llm_scan`) and set or export it again.
+
 ### Changed
 
 - **The install hook lists five missing names of a manifest, and counts the rest.** Every dependency of a manifest
