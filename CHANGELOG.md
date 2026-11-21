@@ -8,6 +8,47 @@ version bump.
 
 ## [Unreleased]
 
+### Security
+
+- **A malicious package pinned in the `bun.lock` that bun 1.4.4 writes is denied.** bun 1.4.4 writes
+  `"lockfileVersion": 2`, and the install hook read a `bun.lock` of label 0 or 1 only: for each of 24 lockfiles bun
+  1.4.4 wrote (a plain dependency, a scope, dev, optional and peer dependencies, an alias, nested copies, workspaces,
+  local folders and tarballs, a URL tarball, `overrides`, a catalog, a patch, a link, git; a Linux container without
+  network, 2026-11-20), `bun install` got "bun.lock was not read (its lockfileVersion is not 0 or 1)", and no pinned
+  version, transitive ones included, went to OSV. Labels 0, 1, 2 and 3 are now read with one grammar — bun 1.4.4
+  uses a file labelled 3 as one labelled 2, and says it supports "lockfile versions up to 3" — and 4 or more, a
+  number in quotes, `2.0` and no number are still said as not read (bun throws such a file away; `2.0` it probably
+  reads as 2, which was not measured). A local tarball that bun writes without `file:` (`vendor/x-1.0.0.tgz`) is
+  counted as the project's own, no longer as an entry not recognised.
+- **A registry line of a `bun.lock` that is not written as bun writes one is said, and its pair asked about — under
+  labels 0 and 1 too.** The reader took such a line loosely: without the space after its first comma it lost the
+  entry's origin (the pair went to OSV as from the default registry, and nothing said the other host); with a path
+  in its second element (`"./x"`) it counted the entry as the project's own and asked nothing; with a git URL there
+  (`git+https://…`, or an http(s) URL ending in `.git` or of `codeload.github.com`) it did not ask about the pair. A
+  registry line must now be exactly `["name@version", "" or an http(s) URL that is not a git one, {…},
+  "<integrity>"],`, with `, ` between the elements. Any other is counted in "N entries of bun.lock were not
+  recognised — not vetted.", a line a lockfile of label 0 or 1 now gets where it got none, and its pair goes to OSV
+  from the origin its second element names: the host is still said for git, and a path or a string that cannot be
+  read is another source said without a host. No line the reader took before is refused, and none that
+  gave a pair, the pair its URL fetches or a host loses it. The pin of a scope that a `.npmrc` gives a registry of
+  its own, on a line that names the public registry's URL without spaces, now goes to OSV, as the same line with
+  spaces already did.
+- **A `bun.lock` that is not written as bun writes it no longer spares the direct dependencies their lookup.** A
+  lockfile covers a direct dependency when it pins the range the manifest records, and the hook then does not ask
+  the registry about it; but bun 1.4.4 throws away a file with a registry entry that has no integrity (and, under
+  labels 2 and 3, one whose integrity is malformed or md5, or empty for a tarball outside the configured registry)
+  and resolves everything again from the manifest (measured). A `bun.lock` now covers only when every line is as bun
+  writes it: no entry left unrecognised, every entry line closed by `],`, every other entry line one of
+  `["name@spec"]`, `["name@spec", {…}]` and `["name@spec", {…}, "<text>"]`, no registry version that ends in
+  `.tgz`, `.tar.gz` or `.tar`, and under label 2 a well-formed sha512 integrity on every registry line; a file of
+  label 3, which no bun was seen to write, never covers. Its pins still go to OSV. What this costs: each direct
+  dependency of such a file is looked up at the registry by name, as with no lockfile — a `MAL-` advisory on the
+  version its range resolves to today denies the command even when bun installs the pinned one (a file of label 2
+  with an empty integrity, which bun 1.4.4 keeps), a private package gets the warning "not found on the public
+  registry" at every install, and past 150 direct dependencies the user is asked. Not measured: label 0, a file of
+  label 1 written by an older bun, `2.0`, and a local tarball of one path segment (`x.tgz`, counted as the
+  project's own); what the rule does not see is in the known limit `manifest-lockfile-and-transitive`.
+
 ## [3.15.0] - 2026-11-21
 
 The install hook reads more of what a package manager is told to install — the initializers of the npm family, `npm

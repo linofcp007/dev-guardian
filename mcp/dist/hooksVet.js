@@ -1321,26 +1321,20 @@ function stringAt(line, start, end) {
     return null;
   }
 }
-function parseBunLine(line) {
-  if (!line.startsWith('    "')) return null;
-  const keyEnd = stringEnd(line, 4);
-  if (keyEnd < 0 || !line.startsWith(': ["', keyEnd + 1)) return null;
-  const firstStart = keyEnd + 4;
-  const firstEnd = stringEnd(line, firstStart);
-  if (firstEnd < 0) return null;
-  const first = stringAt(line, firstStart, firstEnd);
-  let i = firstEnd + 1;
-  let second;
-  if (line.startsWith(', "', i)) {
-    const end = stringEnd(line, i + 2);
-    if (end < 0) return null;
-    second = stringAt(line, i + 2, end) ?? void 0;
-    if (second === void 0) return null;
-    i = end + 1;
-  }
-  let depth = 1;
+function nameAndSpec(first) {
+  const at = first.indexOf("@", 1);
+  return at < 0 ? null : [first.slice(0, at), first.slice(at + 1)];
+}
+function stringAfter(line, from) {
+  let k = from;
+  while (line.charCodeAt(k) === 32 || line.charCodeAt(k) === 9) k += 1;
+  const end = line.charCodeAt(k) === 34 ? stringEnd(line, k) : -1;
+  return end < 0 ? void 0 : stringAt(line, k, end);
+}
+function objectEnd(line, start) {
+  let depth = 0;
   let inString = false;
-  for (; i < line.length && depth > 0; i += 1) {
+  for (let i = start; i < line.length; i += 1) {
     const c = line.charCodeAt(i);
     if (inString) {
       if (c === 92) i += 1;
@@ -1351,11 +1345,72 @@ function parseBunLine(line) {
       depth += 1;
     } else if (c === 93 || c === 125) {
       depth -= 1;
+      if (depth === 0) return c === 125 ? i : -1;
+    }
+  }
+  return -1;
+}
+function bunShape(line, from) {
+  let shape = "";
+  let last = "";
+  let i = from;
+  while (shape.length < 3 && line.startsWith(", ", i)) {
+    const start = i + 2;
+    const c = line.charCodeAt(start);
+    const end = c === 34 ? stringEnd(line, start) : c === 123 ? objectEnd(line, start) : -1;
+    if (end < 0) return null;
+    shape += c === 34 ? "s" : "o";
+    last = c === 34 ? line.slice(start + 1, end) : "";
+    i = end + 1;
+  }
+  return i === line.length - 2 && line.endsWith("],") ? { shape, last } : null;
+}
+function parseBunLine(line) {
+  if (!line.startsWith('    "')) return null;
+  const keyEnd = stringEnd(line, 4);
+  if (keyEnd < 0 || !line.startsWith(': ["', keyEnd + 1)) return null;
+  const firstStart = keyEnd + 4;
+  const firstEnd = stringEnd(line, firstStart);
+  if (firstEnd < 0) return null;
+  const first = stringAt(line, firstStart, firstEnd);
+  let depth = 1;
+  let inString = false;
+  let commas = 0;
+  let firstComma = -1;
+  let filled = true;
+  let empty = false;
+  let i = firstEnd + 1;
+  for (; i < line.length && depth > 0; i += 1) {
+    const c = line.charCodeAt(i);
+    if (inString) {
+      if (c === 92) i += 1;
+      else if (c === 34) inString = false;
+    } else if (c === 34) {
+      inString = true;
+      filled = true;
+    } else if (c === 91 || c === 123) {
+      depth += 1;
+      filled = true;
+    } else if (c === 93 || c === 125) {
+      depth -= 1;
+      if (depth === 0 && !filled) empty = true;
+    } else if (c === 44 && depth === 1) {
+      if (!filled) empty = true;
+      if (firstComma < 0) firstComma = i;
+      commas += 1;
+      filled = false;
+    } else if (c !== 32 && c !== 9) {
+      filled = true;
     }
   }
   if (first === null || depth !== 0) return null;
   const tail = line.slice(i).trim();
-  return tail === "" || tail === "," ? { key: line.slice(5, keyEnd), first, second } : null;
+  if (tail !== "" && tail !== ",") return null;
+  const second = firstComma < 0 ? void 0 : stringAfter(line, firstComma + 1);
+  const cut = nameAndSpec(first);
+  if (second === null && line.startsWith(', "', firstEnd + 1) && (cut === null || !VERSION.test(cut[1]))) return null;
+  const written = bunShape(line, firstEnd + 1);
+  return { key: line.slice(5, keyEnd), first, second, elements: empty ? 0 : commas + 1, shape: written?.shape ?? null, last: written?.last ?? "" };
 }
 function scanBun(inner, acc, onEntry) {
   const odd = SEPARATOR.test(inner);
@@ -1370,24 +1425,65 @@ function scanBun(inner, acc, onEntry) {
     else onEntry(entry);
   }
 }
-function bunEntry(acc, e) {
-  const at = e.first.indexOf("@", 1);
-  if (at <= 0) {
-    acc.unrecognised += 1;
-    return;
+var TARBALL_SEGMENT = /^[A-Za-z0-9._+-]+$/;
+function localTarball(spec2) {
+  const path = spec2.startsWith("./") ? spec2.slice(2) : spec2.startsWith("/") ? spec2.slice(1) : spec2;
+  return path.endsWith(".tgz") && path.split("/").every((segment) => segment !== "." && segment !== ".." && TARBALL_SEGMENT.test(segment));
+}
+var BUN_SEQUENCES = /* @__PURE__ */ new Set(["", "o", "os"]);
+var ARCHIVE_ENDINGS = [".tgz", ".tar.gz", ".tar"];
+var SHA512 = /^sha512-[A-Za-z0-9+/]{85}[AQgw]==$/;
+function bunRegistryLine(acc, pin, e) {
+  const { second } = e;
+  if (second === void 0 || second === "") {
+    const inForm2 = second === "" && e.shape === "sos";
+    if (!inForm2) acc.unrecognised += 1;
+    emit(acc, pin, void 0);
+    return inForm2;
   }
-  const name = e.first.slice(0, at);
-  const spec2 = e.first.slice(at + 1);
+  const unknown2 = () => {
+    acc.unrecognised += 1;
+    emit(acc, pin, UNKNOWN_ELSEWHERE);
+    return false;
+  };
+  if (second === null) return unknown2();
+  const where = locate(second, pin.name);
+  if (where === "local" || where === "bad") return unknown2();
+  if (where.source.kind === "git") {
+    acc.unrecognised += 1;
+    emit(acc, pin, { source: { kind: "elsewhere", host: where.source.host, url: "" }, named: void 0 });
+    return false;
+  }
+  const inForm = e.shape === "sos" && (second.startsWith("https://") || second.startsWith("http://"));
+  if (!inForm) acc.unrecognised += 1;
+  emit(acc, pin, where);
+  return inForm;
+}
+function bunEntry(acc, e, sha512Only) {
+  const cut = nameAndSpec(e.first);
+  if (cut === null) {
+    acc.unrecognised += 1;
+    return false;
+  }
+  const [name, spec2] = cut;
   if (spec2.startsWith("workspace:")) {
     acc.local += 1;
   } else if (VERSION.test(spec2)) {
     const pin = makePin(name, spec2);
-    if (pin === void 0) acc.unrecognised += 1;
-    else finish(acc, pin, e.second === void 0 || e.second === "" ? void 0 : e.second);
+    if (pin === void 0) {
+      acc.unrecognised += 1;
+      return false;
+    }
+    const inForm = bunRegistryLine(acc, pin, e);
+    return inForm && !ARCHIVE_ENDINGS.some((ending) => spec2.endsWith(ending)) && (!sha512Only || SHA512.test(e.last));
+  } else if ((e.elements === 2 || e.elements === 3) && localTarball(spec2)) {
+    acc.local += 1;
   } else {
     finish(acc, void 0, spec2);
   }
+  return e.shape !== null && BUN_SEQUENCES.has(e.shape);
 }
+var BUN_VERSIONS = /* @__PURE__ */ new Set(["0", "1", "2", "3"]);
 var JSON_PLAIN = Array.from({ length: 128 }, (_, c) => " 	\n\r,:+-.eE0123456789".includes(String.fromCharCode(c)));
 function bunFrame(text) {
   const n = text.length;
@@ -1459,7 +1555,7 @@ function bunFrame(text) {
   }
   if (depth !== 0) return { unread: "it is not complete JSON" };
   if (seen.version !== 1) return { unread: seen.version === 0 ? "it has no lockfileVersion" : "it has more than one lockfileVersion" };
-  if (version !== "0" && version !== "1") return { unread: "its lockfileVersion is not 0 or 1" };
+  if (!BUN_VERSIONS.has(version)) return { unread: "its lockfileVersion is not 0, 1, 2 or 3" };
   if (seen.packages !== 1) return { unread: seen.packages === 0 ? 'it has no "packages" object' : 'it has more than one "packages" object' };
   const [from, to] = ranges.packages;
   const [wFrom, wTo] = ranges.workspaces;
@@ -1469,7 +1565,11 @@ function readBun(text) {
   const frame = bunFrame(text);
   if ("unread" in frame) return frame;
   const acc = newAcc();
-  scanBun(frame.packages, acc, (e) => bunEntry(acc, e));
+  let asBunWrites = frame.version !== "3";
+  scanBun(frame.packages, acc, (e) => {
+    if (!bunEntry(acc, e, frame.version === "2")) asBunWrites = false;
+  });
+  const covers = asBunWrites && acc.unrecognised === 0;
   let hoistedIndex;
   const hoisted = () => {
     if (hoistedIndex !== void 0) return hoistedIndex;
@@ -1489,7 +1589,7 @@ function readBun(text) {
     local: acc.local,
     unrecognised: acc.unrecognised,
     resolutionOf: (rel, name, range) => {
-      if (!validName(name) || recorded().get(`${rel}\0${name}`)?.has(range) !== true) return null;
+      if (!covers || !validName(name) || recorded().get(`${rel}\0${name}`)?.has(range) !== true) return null;
       const pinned = hoisted().get(name);
       return pinned !== void 0 && satisfies(range, pinned) ? pinned : null;
     }
