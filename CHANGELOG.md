@@ -154,7 +154,7 @@ version bump.
 ### Fixed
 
 - **`scan_skill` no longer reads three look-alikes of a shell command as what the rule is named for.** Measured on
-  one command per page, in a fenced block and in a code file (`measurements/lookalikes-windows-2026-11-20.txt`):
+  one command per page, in a fenced block and in a code file:
   - **A credential-file name in the path of a URL is not a local file.** `curl -s "https://$TARGET/.env" | grep -i
     "APP_KEY"`, `curl -s "https://$TARGET/backup/.env.production"`, `curl -s "https://$TARGET/.aws"`, `curl -s
     https://target.example/.env` and `wget -q "https://$TARGET/.aws/credentials" -O -` were `de-sensitive-file-over-network`
@@ -188,8 +188,14 @@ version bump.
     and `-i -m json.tool`; a header whose name does not say it authenticates (`X-Data`, `X-Author`, `X-Monkey`), and a
     secret in the URL or in a body (`-d "x-auth-token: $AWS_SECRET_ACCESS_KEY"`).
   - **`audit_agent_config` changes the same way:** it runs these patterns over the commands of hooks, so a hook
-    command of the forms above is no longer reported by `scan_skill`'s rule, and one that stays is reported as before.
-    No rule id was added, removed or renamed.
+    command of the URL and `json.tool` forms above is no longer reported, one of the header forms is reported as
+    `de-secret-in-auth-header` (medium) instead of `de-env-over-network` (critical), and one that stays is reported as
+    before. No rule id was added, removed or renamed.
+  - **Known and accepted:** `| PYTHON3 -M JSON.TOOL` in capitals is skipped as the bare stage too (the patterns are
+    read case-blind); `-M` is no option of Python and `JSON` no module of its standard library. A sentence is exempt
+    only when its one URL is not on a local host and it has no sending flag (`-T`, `-d`, `-F`, `-K`, `--upload`,
+    `--post`, `--data`, `--form`, `--json`, `--url-query`, `--variable`). An authenticating header name is read only up
+    to 64 characters, which also keeps a hostile line of the header form linear.
 
 ## [3.14.1] - 2026-11-20
 

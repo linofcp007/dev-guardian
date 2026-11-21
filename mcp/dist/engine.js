@@ -99984,6 +99984,7 @@ function isUrlOnlySentence(text3) {
   const urls = text3.match(SENTENCE_URL);
   if (urls === null || urls.length !== 1) return false;
   if ((text3.match(/https?:\/\//gi) ?? []).length !== 1) return false;
+  if (!SENTENCE_URL_NOT_LOCAL.test(urls[0])) return false;
   const at = text3.indexOf(urls[0]);
   const after2 = text3.charAt(at + urls[0].length);
   if (after2 === "$" || after2 === "{") return false;
@@ -100512,7 +100513,7 @@ function finalize2(matches3) {
 function severityOfRule(rule) {
   return rule.severity ?? THREAT_CATEGORY_META[rule.category].defaultSeverity;
 }
-var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_TARGET, INTERPRETER, PROSE_TARGET, AUTH_HEADER, AUTH_HEADER_FLAG, AUTHENTICATES, JSON_TOOL_STAGE, READING_STAGE, NOT_A_READING_STAGE, RUNS_A_PROGRAM, PIPE_TO_INTERPRETER, PLAIN_URL_CHARS, PLAIN_LOCAL_HOST, PLAIN_NOT_LOCAL, PLAIN_URL, PLAIN_CURL_FLAG, PLAIN_WGET_FLAG, PLAIN_WGET_STDOUT, PLAIN_OPERAND, PLAIN_FILTER, PLAIN_CURL, PLAIN_WGET, PLAIN_FETCH_LINE, PLAIN_FETCH_MAX, SENTENCE_URL, SENDING_FLAG, SENSITIVE_FILE_RE, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL, WGET, POWERSHELL_FETCH, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_NAMES_FILE, POWERSHELL_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
+var AGENT_AND_CLOUD_CREDENTIALS, SENSITIVE_FILE_STRONG, ENV_FILE, SENSITIVE_DIR, SENSITIVE_FILE, ENV_DUMP, SHELL_SENDER, AGENT_CONFIG, AGENT_COMMANDS, LOCAL_HOST, ENV_READ, NETWORK_SENDER, SEND_VERB, REMOTE_DESTINATION, REMOTE_DESTINATION_RE, SHELL_VALUE, BARE_HOST, SHELL_NET_CLIENT, NET_TARGET, INTERPRETER, PROSE_TARGET, AUTH_HEADER, AUTH_HEADER_FLAG, AUTHENTICATES, JSON_TOOL_STAGE, READING_STAGE, NOT_A_READING_STAGE, RUNS_A_PROGRAM, PIPE_TO_INTERPRETER, PLAIN_URL_CHARS, PLAIN_LOCAL_HOST, PLAIN_NOT_LOCAL, PLAIN_URL, PLAIN_CURL_FLAG, PLAIN_WGET_FLAG, PLAIN_WGET_STDOUT, PLAIN_OPERAND, PLAIN_FILTER, PLAIN_CURL, PLAIN_WGET, PLAIN_FETCH_LINE, PLAIN_FETCH_MAX, SENTENCE_URL, SENDING_FLAG, SENTENCE_URL_NOT_LOCAL, SENSITIVE_FILE_RE, SKILL_RULES, NOT_CITING, QUOTE_SPAN_LINES, RESIST_LABEL, USE_VERB, DIRECTS_USE, NEGATED_DIRECTIVE, CITED_MATERIAL, BACK_REFERENCE, HTML_BLOCK_OPENER, CONTEXT_LINES, QUOTED, SEVERITY_RANK, PLACEHOLDER_TOKEN_RE, DOC_HOST_RE, ONE_LEVEL_LOWER, CURL, WGET, POWERSHELL_FETCH, CURL_OUTPUT, CURL_REDIRECT, CURL_REMOTE_NAME, WGET_OUTPUT, WGET_NAMES_FILE, POWERSHELL_OUTFILE, URL_IN, RUNNER, NAME_BREAK, RUN_CHECK_READS, DOWNLOAD_THEN_RUN;
 var init_patterns = __esm({
   "src/skillaudit/patterns.ts"() {
     "use strict";
@@ -100541,7 +100542,7 @@ var init_patterns = __esm({
     INTERPRETER = String.raw`(bash|sh|zsh|dash|ksh|python[23]?(?:\.\d+)?|node|perl|ruby|php|pwsh|powershell(?:\.exe)?)`;
     PROSE_TARGET = String.raw`(\b(https?|ftp):\/\/|${SHELL_VALUE}|${BARE_HOST})`;
     AUTH_HEADER = String.raw`(authorization:\s*(bearer|basic|token)?\s*|--oauth2-bearer\s+|private-token:\s*|x-api-key:\s*|(-u|--user)\s+["']?[^\s:"']*:)`;
-    AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]{1,64}:)(?=[\w-]*?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]+:\s*(?:(?:bearer|basic|token)\s+)?`;
+    AUTH_HEADER_FLAG = String.raw`(?:-H|--header)(?:\s+|=)["']?(?=[\w-]*?(?<![a-z0-9])(?:token|key|auth|secret)(?![a-z0-9]))[\w-]{1,64}:\s*(?:(?:bearer|basic|token)\s+)?`;
     AUTHENTICATES = `(?:${AUTH_HEADER}|${AUTH_HEADER_FLAG})`;
     JSON_TOOL_STAGE = String.raw`python3?[ \t]+-m[ \t]+json\.tool[ \t]{0,16}`;
     READING_STAGE = String.raw`\|[ \t]*${JSON_TOOL_STAGE}(?=\|(?!&))`;
@@ -100564,7 +100565,8 @@ var init_patterns = __esm({
     );
     PLAIN_FETCH_MAX = 512;
     SENTENCE_URL = /\bhttps?:\/\/[\w.~%/:?#=+-]+/gi;
-    SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form))/;
+    SENDING_FLAG = /(?:^|\s)(?:-\S*[TdFK]|--(?:upload|post|data|form|json|url-query|variable))/;
+    SENTENCE_URL_NOT_LOCAL = new RegExp(String.raw`^[Hh][Tt][Tt][Pp][Ss]?://${PLAIN_NOT_LOCAL}`);
     SENSITIVE_FILE_RE = new RegExp(SENSITIVE_FILE, "i");
     SKILL_RULES = [
       // ───────────────────────────── prompt_injection ─────────────────────────
