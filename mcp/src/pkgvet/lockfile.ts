@@ -1232,7 +1232,10 @@ function parseBunLine(line: string): BunLine | null {
   return { key: line.slice(5, keyEnd), first, second, elements: empty ? 0 : commas + 1, shape: written?.shape ?? null, last: written?.last ?? '' };
 }
 
-/** The lines of the `packages` object (the text between its braces); each must be one entry in the form bun writes. */
+/**
+ * The lines of the `packages` object (the text between its braces): each must be one entry line ({@link parseBunLine}),
+ * else it is counted as not recognised; how an entry line is written is judged by {@link bunEntry}.
+ */
 function scanBun(inner: string, acc: Acc, onEntry: (e: BunLine) => void): void {
   const odd = SEPARATOR.test(inner);
   for (const line of splitLines(inner)) {
@@ -1324,8 +1327,9 @@ function bunEntry(acc: Acc, e: BunLine, sha512Only: boolean): boolean {
     }
     const inForm = bunRegistryLine(acc, pin, e);
     return inForm && !ARCHIVE_ENDINGS.some((ending) => spec.endsWith(ending)) && (!sha512Only || SHA512.test(e.last));
-  } else if ((e.elements === 2 || e.elements === 3) && localTarball(spec)) {
-    // Only after the version test: `name@1.0.0-rc.tgz` is a registry line, never a path.
+  } else if ((e.elements === 2 || e.elements === 3) && localTarball(spec) && locate(spec) === 'bad') {
+    // Only after the version test (`name@1.0.0-rc.tgz` is a registry line), and only a path no other reading takes:
+    // `git+a/x.tgz` stays a git origin, said as another source; `./x.tgz` is the project's own by `locate` already.
     acc.local += 1;
   } else {
     // Not a registry version: where the entry comes from (a URL has no pair of its own).

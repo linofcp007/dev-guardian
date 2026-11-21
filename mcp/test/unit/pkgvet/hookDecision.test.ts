@@ -2588,6 +2588,15 @@ describe('install-vet-lockfile-pins', () => {
       });
     });
 
+    it.each(['git+a/x.tgz', 'GIT+x.tgz'])('T-03 guard (review round 1): an entry `nome@%s` is a git origin as today — said as another source, never the project’s own', async (spec) => {
+      expect(await install(depLock(1, [`    "dep": ["dep@1.2.3", "", {}, ${I}],`, `    "nome": ["nome@${spec}", {}],`]))).toEqual({
+        deny: undefined,
+        lines: [ANOTHER_SOURCE],
+        registry: [],
+        asked: ['dep@1.2.3'],
+      });
+    });
+
     it.each([1, 2])('T-07 `bun update` with a bun.lock of label %i that covers `dep`: as today — `dep` is asked of the registry by name, and its pin of OSV', async (label) => {
       pkgJson(DEP);
       put('bun.lock', depLock(label, [`    "dep": ["dep@1.2.3", "", {}, ${I}],`]));

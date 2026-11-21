@@ -2416,6 +2416,26 @@ describe('lockfile-bun-lock-v2', () => {
     }
   });
 
+  it('T-03 guard (review round 1): a path in the grammar that `locate` reads as git (`git+a/x.tgz`, `GIT+x.tgz`) stays a git origin, as today — never the project’s own', () => {
+    for (const spec of ['git+a/x.tgz', 'GIT+x.tgz']) {
+      for (const rest of ['{}', `{}, ${JSON.stringify(INTEGRITY)}`]) {
+        for (const label of [1, 2]) {
+          const line = `    "nome": [${JSON.stringify(`nome@${spec}`)}, ${rest}],`;
+          const r = readOrSay(`${line} label ${label}`, labelled(bun([line]), label));
+          if (r === undefined) continue;
+          // A git origin is what the hook says as "comes from another source": the decision's own test is in hookDecision.test.ts.
+          expect.soft({ line, label, entries: r.entries, local: r.local, unrecognised: r.unrecognised }).toEqual({
+            line,
+            label,
+            entries: [{ source: { kind: 'git', host: '' } }],
+            local: 0,
+            unrecognised: 0,
+          });
+        }
+      }
+    }
+  });
+
   it('T-03 a line that is no registry line and whose second string does not decode: not recognised as today, never the project’s own — and the file covers nothing', () => {
     for (const line of ['    "x": ["x@workspace:a", "\\q"],', '    "x": ["x@./x.tgz", "\\q", {}],']) {
       const r = readOrSay(line, depLock([line]));
@@ -2555,6 +2575,8 @@ describe('lockfile-bun-lock-v2', () => {
       ['another entry over two lines', depLock(['    "other": ["other@1.2.3", "",', `      {}, ${I}],`])],
       ['an entry line ending in `]` without its comma', depLock([], depLine(), [`    "other": ["other@1.2.3", "", {}, ${I}]`])],
       ['a registry entry whose version ends in .tgz', depLock([`    "other": ["other@1.0.0-rc.tgz", "", {}, ${I}],`])],
+      ['a registry entry whose version ends in .tar.gz', depLock([`    "other": ["other@1.0.0-rc.tar.gz", "", {}, ${I}],`])],
+      ['a registry entry whose version ends in .tar', depLock([`    "other": ["other@1.0.0-rc.tar", "", {}, ${I}],`])],
       ['an entry that is no registry line, two strings', depLock(['    "z": ["z@./x.tgz", "junk"],'])],
       ['an entry that is no registry line, two objects', depLock(['    "z": ["z@./x.tgz", {}, {}],'])],
       ['an entry that is no registry line, four elements', depLock([`    "z": ["z@npm:real@1.0.0", "", {}, ${I}],`])],

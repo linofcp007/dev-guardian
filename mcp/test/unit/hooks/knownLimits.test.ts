@@ -494,7 +494,7 @@ describe('install-vet-lockfile-pins', () => {
       if (name === 'yarn.lock') return !/^# yarn lockfile v1\s*$/m.test(text) && !/^__metadata:/m.test(text);
       const version = /["']?lockfileVersion["']?\s*:\s*["']?(\d+)/.exec(text)?.[1];
       if (version === undefined) return false;
-      const known = name === 'pnpm-lock.yaml' ? ['5', '6', '9'] : name === 'bun.lock' ? ['0', '1'] : ['1', '2', '3'];
+      const known = name === 'pnpm-lock.yaml' ? ['5', '6', '9'] : name === 'bun.lock' ? ['0', '1', '2', '3'] : ['1', '2', '3'];
       return !known.includes(version);
     };
 

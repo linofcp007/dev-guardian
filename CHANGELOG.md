@@ -44,10 +44,11 @@ version bump.
   label 3, which no bun was seen to write, never covers. Its pins still go to OSV. What this costs: each direct
   dependency of such a file is looked up at the registry by name, as with no lockfile — a `MAL-` advisory on the
   version its range resolves to today denies the command even when bun installs the pinned one (a file of label 2
-  with an empty integrity, which bun 1.4.4 keeps), a private package gets the warning "not found on the public
-  registry" at every install, and past 150 direct dependencies the user is asked. Not measured: label 0, a file of
-  label 1 written by an older bun, `2.0`, and a local tarball of one path segment (`x.tgz`, counted as the
-  project's own); what the rule does not see is in the known limit `manifest-lockfile-and-transitive`.
+  with an empty integrity for a package of the default registry, which bun 1.4.4 keeps), a private package gets the
+  warning "not found on the public registry" at every install, and past 150 direct dependencies the user is asked.
+  Not measured: label 0, a file of label 1 written by an older bun, a well-formed sha1, sha256 or sha384 integrity,
+  `2.0`, and a local tarball of one path segment (`x.tgz`, counted as the project's own); what the rule does not see
+  is in the known limit `manifest-lockfile-and-transitive`.
 
 ## [3.15.0] - 2026-11-21
 

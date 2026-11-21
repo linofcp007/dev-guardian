@@ -1476,7 +1476,7 @@ function bunEntry(acc, e, sha512Only) {
     }
     const inForm = bunRegistryLine(acc, pin, e);
     return inForm && !ARCHIVE_ENDINGS.some((ending) => spec2.endsWith(ending)) && (!sha512Only || SHA512.test(e.last));
-  } else if ((e.elements === 2 || e.elements === 3) && localTarball(spec2)) {
+  } else if ((e.elements === 2 || e.elements === 3) && localTarball(spec2) && locate(spec2) === "bad") {
     acc.local += 1;
   } else {
     finish(acc, void 0, spec2);
