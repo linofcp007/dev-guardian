@@ -38,7 +38,17 @@
 import { dirname, resolve } from 'node:path';
 
 import { isNetworkPath, readSmallText, type TextRead } from '../hooks/configFile.js';
-import { isSemverRange, MAX_RANGE_LENGTH, notARegistryRange, npmKeyRange, npmProtocolReading, parsePackageSpec, readsFileValue } from './parseCommand.js';
+import {
+  isSemverRange,
+  isTildeWord,
+  MAX_RANGE_LENGTH,
+  notAPackage,
+  notARegistryRange,
+  npmKeyRange,
+  npmProtocolReading,
+  parsePackageSpec,
+  readsFileValue,
+} from './parseCommand.js';
 import type { PackageSpec, PkgEcosystem } from './types.js';
 
 type ManifestStatus = 'ok' | 'absent' | 'unreadable';
@@ -152,18 +162,21 @@ const DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
 /**
  * The protocols the hook knows, a value that names no registry package, and where each comes from: `file:` and `link:` (npm, pnpm,
- * Yarn, bun), `workspace:` (pnpm, Yarn, bun), `catalog:` (pnpm, Yarn 4, bun), `portal:`, `patch:` and `exec:` (Yarn 2 and later) and
- * `jsr:` (pnpm, Yarn 4). Most are also in the command line's list of URL and VCS specs ({@link notARegistryRange}); here they are
- * all in one place. Measured on 2026-11-20 (npm 11.20, pnpm 10.33): none of them is asked of the registry; Yarn 1.22 asks for all but
- * `file:` and `link:` (a known limit: the word `yarn` does not say which Yarn runs). Any OTHER `word:rest` (`foo:^1`) is a spec of
- * the registry, vetted by its name; a drive letter (`C:x`) is a path. `user/repo` with an optional `#branch` is the GitHub shorthand.
+ * Yarn, bun), `workspace:` (pnpm, Yarn, bun), `portal:`, `patch:` and `exec:` (Yarn 2 and later) and `jsr:` (pnpm, Yarn 4). Most
+ * are also in the command line's list of URL and VCS specs ({@link notARegistryRange}); here they are all in one place. Measured on
+ * 2026-11-20 (npm 11.20, pnpm 10.33): none of them is asked of the registry; Yarn 1.22 asks for all but `file:` and `link:` (a known
+ * limit: the word `yarn` does not say which Yarn runs). A dependency's own value `patch:…` is read before this list
+ * ({@link patchDependency}): the list keeps it for the range of an alias and the rest of a patch's source. `catalog:` is not in it:
+ * pnpm 11.24, Yarn 4.18 and bun 1.4 fetch the key from the registry, at the version the catalog gives (measured 2026-11-20), so it
+ * is the key with no range, like any OTHER `word:rest` (`foo:^1`), a spec of the registry vetted by its name. A drive letter (`C:x`)
+ * is a path. `user/repo` with an optional `#branch` is the GitHub shorthand.
  */
-const NOT_OF_THE_REGISTRY = /^(?:(?:file|link|workspace|catalog|portal|patch|exec|jsr):|[A-Za-z]:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/i;
+const NOT_OF_THE_REGISTRY = /^(?:(?:file|link|workspace|portal|patch|exec|jsr):|[A-Za-z]:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/i;
 
 /**
  * What a dependency's value asks the registry for: `undefined` for "the default" (an empty value, `latest`) and for a value the
  * hook does not read as a range (it is still a spec of the registry: the package is vetted, with no range); the range or tag; or
- * `null` when the value is positively something else — a path, a protocol (`file:`, `link:`, `workspace:`, `catalog:` …), a URL, a
+ * `null` when the value is positively something else — a path, a protocol (`file:`, `link:`, `workspace:`, `patch:` …), a URL, a
  * git repository, `user/repo`, or an archive the manager reads as a file. The reading fails closed: only those are dropped.
  */
 function npmRange(value: string, manager: string): string | undefined | null {
@@ -175,36 +188,188 @@ function npmRange(value: string, manager: string): string | undefined | null {
   return isSemverRange(v) ? v : undefined;
 }
 
+/** The alias prefix of a value, read in any letter case, as npm reads it. */
+const NPM_PROTOCOL = /^npm:/i;
+/** A patch of Yarn 2 and later, `patch:<source>#<path and parameters>`, in any letter case. */
+const PATCH_PROTOCOL = /^patch:/i;
+const PATCH_WORD = 'patch:';
+
 /**
- * A dependency entry as the packages a registry would serve: `"x": "npm:real@^1"` is `real` (an alias); for Yarn and bun
- * `"x": "npm:^1"` is `x` and `"x": "npm:1.0.0"` is both `x` and `1.0.0` ({@link npmProtocolReading}, the command line's own
- * rule). Empty when the value is no registry spec.
+ * The shape of a range in the `<rest>` of `npm:<rest>` when `<rest>` is a valid package name (the grammar G of
+ * install-vet-manifest-protocol-values, bug.md → Correção): `v` any number of times, a part, at most two more `.` and a part, and
+ * after the third part an optional prerelease (an optional `-`, then identifiers separated by `.`); a part is digits, `x` or `X`.
+ * It is node-semver 7.8.5's `validRange` cut down to what a valid name can hold, and widened to its `loose` forms and to a semver
+ * older than `invalidXRangeOrder`, so that no pnpm installs the key of such a rest unseen: like pnpm 11.24 it reads `1.0.0`, `1.x`,
+ * `1.2`, `v1.2.3`, `vx`, `x.x.x-beta` and `1.0.0-beta` as a range, and `x-foo`, `x.js`, `v`, `1.2.3.4` and `latest` as none; it
+ * also reads `x.1`, `1.x.1`, `1.0.0beta`, `01.0.0` and `vv1.2.3`, which pnpm 11.24 reads as an alias (a lookup of the key too many).
+ * Tested only on a valid name — at most 214 characters, no space —, which bounds its backtracking.
  */
-function npmDependency(key: string, value: string, manager: string): PackageSpec[] {
-  let name = key;
-  let wanted = value.trim();
-  let second: string | undefined;
-  if (/^npm:/i.test(wanted)) {
-    const real = wanted.slice(4);
-    const reading = npmProtocolReading(manager, real);
-    if (reading === 'alias') {
-      const at = real.indexOf('@', real.startsWith('@') ? 1 : 0);
-      name = at > 0 ? real.slice(0, at) : real;
-      wanted = at > 0 ? real.slice(at + 1) : '';
-    } else if (reading === 'both') {
-      second = real;
-      // The key is asked at that version or range; a word (a tag, a name) or an archive bun reads as a file leaves it with none.
-      wanted = npmKeyRange(manager, real) ?? '';
-    } else {
-      // The key is the package and the rest its range; a rest that is no range still leaves the key vetted.
-      wanted = npmKeyRange(manager, real) ?? '';
+const NPM_REST_RANGE = /^v*(?:[0-9]+|[xX])(?:\.(?:[0-9]+|[xX])(?:\.(?:[0-9]+|[xX])(?:-?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*)?)?)?$/;
+
+/**
+ * How a `package.json` value `npm:<rest>` is read: {@link npmProtocolReading}, the command line's rule, with what the managers do
+ * with a VALUE (install-vet-manifest-protocol-values, measured 2026-11-20 and 21 with npm 11.19, pnpm 11.24, Yarn 4.18, bun 1.4):
+ *
+ *   - for pnpm, Yarn and bun a `~` word with no slash or backslash after it (`~x`, `~abc`, a lone `~`) is the key, never a path:
+ *     the three install the key for `npm:~x`;
+ *   - pnpm 11 reads the key when `<rest>` is a range for node-semver and an alias otherwise, and pnpm 10.33 an alias always; the
+ *     hook does not know which pnpm runs, so a `<rest>` that is no valid name is the key — with no range expression run on it, as
+ *     it may be as long as the file — and a valid name is the alias, and the key too when it has the shape of a range
+ *     ({@link NPM_REST_RANGE});
+ *   - npm reads an alias always; so does every manager for a `<rest>` with a `@range` of its own or a shell expansion, and a
+ *     path or a URL is no package.
+ */
+function npmValueReading(manager: string, rest: string): 'alias' | 'key' | 'both' {
+  const tildeIsKey = manager === 'pnpm' || manager === 'yarn' || manager === 'bun';
+  if (!tildeIsKey || /[$`]/.test(rest) || rest.indexOf('@', rest.startsWith('@') ? 1 : 0) > 0) return npmProtocolReading(manager, rest);
+  if (isTildeWord(rest)) return 'key';
+  if (manager !== 'pnpm') return npmProtocolReading(manager, rest);
+  if (validName('npm', rest)) return NPM_REST_RANGE.test(rest) ? 'both' : 'alias';
+  return rest !== '' && notAPackage(rest, null) !== null ? 'alias' : 'key';
+}
+
+/**
+ * `"key": "npm:<rest>"` as the packages a registry would serve ({@link npmValueReading}): an alias is the package after `npm:`
+ * (`"x": "npm:real@^1"` is `real`); read as the key, it is `key`, at `<rest>` without the spaces at its ends when that is a
+ * version or a range ({@link npmKeyRange}: a word, or an archive bun reads as a file, leaves it with none), and read both ways
+ * `<rest>` is a name too. A key that is no valid name leaves the other package alone.
+ */
+function npmProtocolDependency(key: string, rest: string, manager: string): PackageSpec[] {
+  const reading = npmValueReading(manager, rest);
+  if (reading === 'alias') {
+    const at = rest.indexOf('@', rest.startsWith('@') ? 1 : 0);
+    const name = at > 0 ? rest.slice(0, at) : rest;
+    const range = npmRange(at > 0 ? rest.slice(at + 1) : '', manager);
+    return range !== null && validName('npm', name) ? [spec('npm', name, range)] : [];
+  }
+  const own = validName('npm', key) ? [spec('npm', key, npmKeyRange(manager, rest.trim()))] : [];
+  return reading === 'both' && validName('npm', rest) ? [...own, spec('npm', rest, undefined)] : own;
+}
+
+const HEX_DIGITS = '0123456789abcdefABCDEF';
+/** The first digit of the `%XX` of an ASCII character, `00` to `7F`. */
+const ASCII_HIGH_DIGITS = '01234567';
+
+/**
+ * `text` with every `%XX` of an ASCII character (`00` to `7F`, the hex digits in either case) decoded until none is left: the
+ * fixed point, the same in any order, as two such sequences never overlap. Any other `%` (`%zz`, `%C3`, one at the end) stays,
+ * and a name or a range with it is not valid. One pass, left to right, into a buffer: each character goes to its end, and while
+ * the buffer ends in such a `%XX` the three give way to the character they stand for. Each swap shortens the buffer by two, so
+ * the work is linear — `decodeURIComponent` again and again is not (`%2525…2531` would take one pass per `25`).
+ */
+function decodeAsciiEscapes(text: string): string {
+  const out: string[] = [];
+  for (const c of text) {
+    out.push(c);
+    for (let n = out.length; n >= 3; n -= 2) {
+      const high = out[n - 2];
+      const low = out[n - 1];
+      if (out[n - 3] !== '%' || high === undefined || low === undefined || !ASCII_HIGH_DIGITS.includes(high) || !HEX_DIGITS.includes(low)) break;
+      out.length = n - 3;
+      out.push(String.fromCharCode(Number.parseInt(`${high}${low}`, 16)));
     }
   }
-  if (!validName('npm', name)) return [];
+  return out.join('');
+}
+
+/** How far from its start a name's `@` is looked for: one past the longest valid name, as a longer name names nothing. */
+const NAME_SPAN = MAX_NAME_LENGTH + 1;
+
+/** The first `@` of `text` after `from` and before `end`, looked for in the first {@link NAME_SPAN} characters from `from` only; -1 when there is none there. */
+function nameEnd(text: string, from: number, end: number): number {
+  const stop = Math.min(end, from + NAME_SPAN);
+  for (let i = from + 1; i < stop; i += 1) if (text.charCodeAt(i) === 0x40) return i;
+  return -1;
+}
+
+/** Whether `text` holds `prefix` (lower case) at `at`, in any letter case, before `end`. */
+function prefixAt(text: string, at: number, end: number, prefix: string): boolean {
+  return at + prefix.length <= end && text.slice(at, at + prefix.length).toLowerCase() === prefix;
+}
+
+/**
+ * The package the source of a `patch:` value names — what Yarn 3 and 4 install, with the patch (measured 2026-11-20) — or
+ * `undefined` when it names none the hook looks up. The grammar of install-vet-manifest-protocol-values (bug.md → Correção):
+ *
+ *   1. The source runs from after `patch:` to the first `#` as written; what follows (the patch's path) is not read.
+ *   2. It is decoded once, to the fixed point ({@link decodeAsciiEscapes}): no level decodes again.
+ *   3. A level is an interval of that text, the top one the whole of it. Its name runs to the first `@` after its first
+ *      character, or to its end, and its rest follows that `@`.
+ *   4. A name that is no valid name names nothing.
+ *   5. A rest that starts with `patch:` opens a new level, from after it to the first `#` of the text (looked for once: none is
+ *      left inside that cut for the levels below it), and the name is not read.
+ *   6. On the last level ({@link sourcePackage}), a rest `npm:<P>@<Q>` is an alias: `P`, at `Q` when that is a version or a
+ *      range — nothing when `P` is no valid name or `Q` no registry spec.
+ *   7. Any other rest, its `npm:` taken off, that is no registry spec (a path, git, a URL, `file:`, `workspace:` …) names
+ *      nothing: what Yarn installs then does not come from the registry.
+ *   8. Otherwise the name, at the rest when that is a version or a range of at most 100 characters: the rest is never a second
+ *      name.
+ *
+ * Linear in the value: an `@` is looked for in a name's first 215 characters only, a level is a pair of indexes, the `#` that
+ * ends the levels is found once, and steps 6 to 8 run once.
+ */
+function patchSource(value: string, manager: string): PackageSpec | undefined {
+  const hash = value.indexOf('#');
+  const text = decodeAsciiEscapes(value.slice(PATCH_WORD.length, hash < 0 ? value.length : hash));
+  let start = 0;
+  let end = text.length;
+  let cut = -1;
+  for (;;) {
+    const at = nameEnd(text, start, end);
+    if (at < 0 && end - start > MAX_NAME_LENGTH) return undefined;
+    const name = text.slice(start, at < 0 ? end : at);
+    if (!validName('npm', name)) return undefined;
+    const rest = at < 0 ? end : at + 1;
+    if (!prefixAt(text, rest, end, PATCH_WORD)) return sourcePackage(name, text.slice(rest, end), manager);
+    start = rest + PATCH_WORD.length;
+    if (cut < 0) {
+      const next = text.indexOf('#', start);
+      cut = next < 0 ? text.length : next;
+    }
+    end = cut;
+  }
+}
+
+/** Steps 6 to 8 of {@link patchSource}, on the last level of the source: its name `name` and its rest `rest`. */
+function sourcePackage(name: string, rest: string, manager: string): PackageSpec | undefined {
+  const isAlias = NPM_PROTOCOL.test(rest);
+  const wanted = isAlias ? rest.slice(4) : rest;
+  const at = isAlias ? nameEnd(wanted, 0, wanted.length) : -1;
+  if (at > 0) {
+    const real = wanted.slice(0, at);
+    const range = wanted.slice(at + 1);
+    return validName('npm', real) && npmRange(range, manager) !== null ? spec('npm', real, npmKeyRange(manager, range)) : undefined;
+  }
+  return npmRange(wanted, manager) === null ? undefined : spec('npm', name, npmKeyRange(manager, wanted));
+}
+
+/**
+ * `"key": "patch:<source>#…"` as the packages a registry would serve: the key, once and with no range (bun 1.4 installs the key
+ * and reads nothing after `patch:`), and the package of the source ({@link patchSource}), which Yarn 3 and 4 install. When the
+ * source names the key itself the two are one entry: at the source's range for Yarn, the version it installs, and with none for
+ * the others. A key that is no valid name leaves the source's package alone.
+ */
+function patchDependency(key: string, value: string, manager: string): PackageSpec[] {
+  const source = patchSource(value, manager);
+  if (!validName('npm', key)) return source === undefined ? [] : [source];
+  const own = spec('npm', key, undefined);
+  if (source === undefined) return [own];
+  if (source.name === key) return [manager === 'yarn' ? source : own];
+  return [own, source];
+}
+
+/**
+ * A dependency entry as the packages a registry would serve: the key at the range of its value ({@link npmRange}); for
+ * `npm:<rest>` the alias or the key the manager reads ({@link npmProtocolDependency}), and for `patch:` the key and the package of
+ * its source ({@link patchDependency}). Empty when the value is no registry spec, or when the key is no valid name and the value
+ * names no other package.
+ */
+function npmDependency(key: string, value: string, manager: string): PackageSpec[] {
+  const wanted = value.trim();
+  if (PATCH_PROTOCOL.test(wanted)) return patchDependency(key, wanted, manager);
+  if (NPM_PROTOCOL.test(wanted)) return npmProtocolDependency(key, wanted.slice(4), manager);
   const range = npmRange(wanted, manager);
-  if (range === null) return [];
-  const own = spec('npm', name, range);
-  return second !== undefined && validName('npm', second) ? [own, spec('npm', second, undefined)] : [own];
+  return range !== null && validName('npm', key) ? [spec('npm', key, range)] : [];
 }
 
 /**

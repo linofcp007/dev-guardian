@@ -223,7 +223,7 @@ function isPathLike(word: string): boolean {
 const SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
 
 /** A reason this word is not a package name, or `null` when it may be one. */
-function notAPackage(word: string, archive: RegExp | null): string | null {
+export function notAPackage(word: string, archive: RegExp | null): string | null {
   if (word.length === 0) return 'empty';
   if (SCP_GIT.test(word)) return 'SSH git spec (user@host:path) — not looked up';
   if (isPathLike(word)) return 'local path — not looked up';
@@ -262,7 +262,8 @@ export function isSemverRange(text: string): boolean {
  * package is `key` and `rest` a version, a range or a tag — or an alias when `rest` has a `@range` of its own. Yarn 1 reads an
  * alias, and bun either by the shape of `rest`; the hook does not know which runs, so a `rest` that is a valid name without a
  * range is read both ways. `rest` that is a path, a URL or a shell
- * expansion is `alias`: it is skipped, as for every manager. The one rule of the command line and of a `package.json` value.
+ * expansion is `alias`: it is skipped, as for every manager. The rule of the command line; a `package.json` value starts from
+ * it and reads pnpm 11 and a `~` word as the managers do there (`manifest.ts`, `npmValueReading`).
  *
  * - `alias`: only `rest` is the package (or the word is skipped);
  * - `key`: only `key` is the package, `rest` is its range;
@@ -320,7 +321,7 @@ function npmReadings(spec: PackageSpec, manager: string | undefined): { packages
 }
 
 /** A `~` word with no slash or backslash after it: a spec of the registry, never a path (`~x`, `~abc`, a lone `~`); `~/x` and `~user/x` are paths. */
-function isTildeWord(word: string): boolean {
+export function isTildeWord(word: string): boolean {
   return word.startsWith('~') && !/[\\/]/.test(word);
 }
 

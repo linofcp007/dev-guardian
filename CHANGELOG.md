@@ -49,6 +49,36 @@ version bump.
   Not measured: label 0, a file of label 1 written by an older bun, a well-formed sha1, sha256 or sha384 integrity,
   `2.0`, and a local tarball of one path segment (`x.tgz`, counted as the project's own); what the rule does not see
   is in the known limit `manifest-lockfile-and-transitive`.
+- **A malicious dependency written as `catalog:`, `patch:` or `npm:<rest>` in a `package.json` is denied.** The
+  install hook dropped a `catalog:` or `patch:` value unvetted, read `npm:<rest>` under pnpm as an alias, and dropped
+  `npm:~x`, while the managers fetch a package from the registry for each (measured in a Linux container without
+  network, 2026-11-20 and 21: pnpm 11.24, Yarn 4.18 and bun 1.4 fetch the key of `"x": "catalog:"`; Yarn 3.8 and 4.18
+  fetch the package the source of a `patch:` names, and bun the key; pnpm 11.24 fetches the key for `npm:^1.0.0`,
+  `npm:1.0.0`, `npm:*`, `npm:~1.2.3`, `npm:>=1.0.0 <2` and `npm:x || 1.0.0`; pnpm, Yarn and bun fetch the key for
+  `npm:~x`). A `package.json` value is now read as the managers read it: `catalog:` and `catalog:<name>` are the key,
+  with no range; `patch:<source>#…` is the key, with no range, and the package the source names (decoded, a nested
+  `patch:` followed to the innermost one, an alias's real package, the part after the name its range and never a
+  second name), one entry when the source names the key; under pnpm, `npm:<rest>` with no `@range` of its own is the
+  key when `<rest>` is no package name, the key and `<rest>` when `<rest>` is a name shaped like a version (`1.0.0`,
+  `1.x`, `v1.2.3`), and still the alias for any other name (`latest`, `real`); under pnpm, Yarn and bun, `npm:~x`,
+  `npm:~abc` and `npm:~` are the key, and the key's range of `npm:<rest>` is read without the spaces around it
+  (`"npm: ^1.0.0"` is the key at `^1.0.0`); and a key that is no valid name drops only the key — `"_k": "npm:real"`
+  now looks up `real` under Yarn and bun too. For npm, `npm:<rest>` is still the alias; the command line does not
+  change. These names now go to the public registry and to OSV at every install of the manifest, with any manager —
+  `npm install` too, which takes neither `catalog:` nor `patch:` —; a scope that the npm configuration gives a
+  registry of its own still stays, and so does the name in a `patch:` source that is not of the registry. What this
+  costs: a name the registry does not have is a warning at every install and a malicious one denies; more names
+  count towards the 150 of a manifest, past which the user is asked; under pnpm the key is also looked up for five
+  names pnpm 11.24 reads as an alias (`x.1`, `1.x.1`, `1.0.0beta`, `01.0.0`, `vv1.2.3`) and for a `<rest>` such as
+  `=foo`; and `"x": "npm:1.0.0"` leaves the "could not vet" line for `1.0.0` at every `pnpm install`, as under Yarn
+  and bun. What stays (the known limits `manifest-value-not-a-range`, `manifest-not-from-a-registry` and
+  `yarn-bun-npm-protocol`): the catalog is not read — an entry that is an alias, a URL or a repository is not followed (with `x: npm:other@1.0.0`
+  the managers install `other` and the hook looks up `x`), and the newest version of the key is checked, not the
+  catalog's; `workspace:`, `portal:`, `exec:` and `jsr:` under Yarn 1 when the registry has a dist-tag of that exact
+  text; the command-line twins `pnpm add x@npm:^1.0.0` and `<manager> add x@npm:~x`; a `patch:` source that names no
+  registry package (git, a URL, `file:`, `workspace:`, a path, an invalid name, an alias whose range is one of
+  those), which leaves only the key; and a source name escaped twice (`%2564…`), which the hook decodes to the end
+  and looks up where Yarn decodes once.
 
 ## [3.15.0] - 2026-11-21
 

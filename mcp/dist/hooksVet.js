@@ -5014,7 +5014,7 @@ function pushOnce(into, seen, pkg) {
 }
 var NPM_SECTIONS = ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"];
 var DIST_TAG = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
-var NOT_OF_THE_REGISTRY = /^(?:(?:file|link|workspace|catalog|portal|patch|exec|jsr):|[A-Za-z]:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/i;
+var NOT_OF_THE_REGISTRY = /^(?:(?:file|link|workspace|portal|patch|exec|jsr):|[A-Za-z]:|[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:#.*)?$)/i;
 function npmRange(value, manager) {
   const v = value.trim();
   if (v === "" || v === "latest") return void 0;
@@ -5023,29 +5023,100 @@ function npmRange(value, manager) {
   if (DIST_TAG.test(v)) return v;
   return isSemverRange(v) ? v : void 0;
 }
-function npmDependency(key, value, manager) {
-  let name = key;
-  let wanted = value.trim();
-  let second;
-  if (/^npm:/i.test(wanted)) {
-    const real = wanted.slice(4);
-    const reading = npmProtocolReading(manager, real);
-    if (reading === "alias") {
-      const at = real.indexOf("@", real.startsWith("@") ? 1 : 0);
-      name = at > 0 ? real.slice(0, at) : real;
-      wanted = at > 0 ? real.slice(at + 1) : "";
-    } else if (reading === "both") {
-      second = real;
-      wanted = npmKeyRange(manager, real) ?? "";
-    } else {
-      wanted = npmKeyRange(manager, real) ?? "";
+var NPM_PROTOCOL = /^npm:/i;
+var PATCH_PROTOCOL = /^patch:/i;
+var PATCH_WORD = "patch:";
+var NPM_REST_RANGE = /^v*(?:[0-9]+|[xX])(?:\.(?:[0-9]+|[xX])(?:\.(?:[0-9]+|[xX])(?:-?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*)?)?)?$/;
+function npmValueReading(manager, rest) {
+  const tildeIsKey = manager === "pnpm" || manager === "yarn" || manager === "bun";
+  if (!tildeIsKey || /[$`]/.test(rest) || rest.indexOf("@", rest.startsWith("@") ? 1 : 0) > 0) return npmProtocolReading(manager, rest);
+  if (isTildeWord(rest)) return "key";
+  if (manager !== "pnpm") return npmProtocolReading(manager, rest);
+  if (validName2("npm", rest)) return NPM_REST_RANGE.test(rest) ? "both" : "alias";
+  return rest !== "" && notAPackage(rest, null) !== null ? "alias" : "key";
+}
+function npmProtocolDependency(key, rest, manager) {
+  const reading = npmValueReading(manager, rest);
+  if (reading === "alias") {
+    const at = rest.indexOf("@", rest.startsWith("@") ? 1 : 0);
+    const name = at > 0 ? rest.slice(0, at) : rest;
+    const range = npmRange(at > 0 ? rest.slice(at + 1) : "", manager);
+    return range !== null && validName2("npm", name) ? [spec("npm", name, range)] : [];
+  }
+  const own = validName2("npm", key) ? [spec("npm", key, npmKeyRange(manager, rest.trim()))] : [];
+  return reading === "both" && validName2("npm", rest) ? [...own, spec("npm", rest, void 0)] : own;
+}
+var HEX_DIGITS = "0123456789abcdefABCDEF";
+var ASCII_HIGH_DIGITS = "01234567";
+function decodeAsciiEscapes(text) {
+  const out = [];
+  for (const c of text) {
+    out.push(c);
+    for (let n = out.length; n >= 3; n -= 2) {
+      const high = out[n - 2];
+      const low = out[n - 1];
+      if (out[n - 3] !== "%" || high === void 0 || low === void 0 || !ASCII_HIGH_DIGITS.includes(high) || !HEX_DIGITS.includes(low)) break;
+      out.length = n - 3;
+      out.push(String.fromCharCode(Number.parseInt(`${high}${low}`, 16)));
     }
   }
-  if (!validName2("npm", name)) return [];
+  return out.join("");
+}
+var NAME_SPAN = MAX_NAME_LENGTH + 1;
+function nameEnd(text, from, end) {
+  const stop = Math.min(end, from + NAME_SPAN);
+  for (let i = from + 1; i < stop; i += 1) if (text.charCodeAt(i) === 64) return i;
+  return -1;
+}
+function prefixAt(text, at, end, prefix) {
+  return at + prefix.length <= end && text.slice(at, at + prefix.length).toLowerCase() === prefix;
+}
+function patchSource(value, manager) {
+  const hash = value.indexOf("#");
+  const text = decodeAsciiEscapes(value.slice(PATCH_WORD.length, hash < 0 ? value.length : hash));
+  let start = 0;
+  let end = text.length;
+  let cut = -1;
+  for (; ; ) {
+    const at = nameEnd(text, start, end);
+    if (at < 0 && end - start > MAX_NAME_LENGTH) return void 0;
+    const name = text.slice(start, at < 0 ? end : at);
+    if (!validName2("npm", name)) return void 0;
+    const rest = at < 0 ? end : at + 1;
+    if (!prefixAt(text, rest, end, PATCH_WORD)) return sourcePackage(name, text.slice(rest, end), manager);
+    start = rest + PATCH_WORD.length;
+    if (cut < 0) {
+      const next = text.indexOf("#", start);
+      cut = next < 0 ? text.length : next;
+    }
+    end = cut;
+  }
+}
+function sourcePackage(name, rest, manager) {
+  const isAlias = NPM_PROTOCOL.test(rest);
+  const wanted = isAlias ? rest.slice(4) : rest;
+  const at = isAlias ? nameEnd(wanted, 0, wanted.length) : -1;
+  if (at > 0) {
+    const real = wanted.slice(0, at);
+    const range = wanted.slice(at + 1);
+    return validName2("npm", real) && npmRange(range, manager) !== null ? spec("npm", real, npmKeyRange(manager, range)) : void 0;
+  }
+  return npmRange(wanted, manager) === null ? void 0 : spec("npm", name, npmKeyRange(manager, wanted));
+}
+function patchDependency(key, value, manager) {
+  const source = patchSource(value, manager);
+  if (!validName2("npm", key)) return source === void 0 ? [] : [source];
+  const own = spec("npm", key, void 0);
+  if (source === void 0) return [own];
+  if (source.name === key) return [manager === "yarn" ? source : own];
+  return [own, source];
+}
+function npmDependency(key, value, manager) {
+  const wanted = value.trim();
+  if (PATCH_PROTOCOL.test(wanted)) return patchDependency(key, wanted, manager);
+  if (NPM_PROTOCOL.test(wanted)) return npmProtocolDependency(key, wanted.slice(4), manager);
   const range = npmRange(wanted, manager);
-  if (range === null) return [];
-  const own = spec("npm", name, range);
-  return second !== void 0 && validName2("npm", second) ? [own, spec("npm", second, void 0)] : [own];
+  return range !== null && validName2("npm", key) ? [spec("npm", key, range)] : [];
 }
 function readNpmManifest(dir, manager = "npm") {
   const file = "package.json";

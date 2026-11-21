@@ -122438,7 +122438,7 @@ var init_lockfile = __esm({
 });
 
 // src/pkgvet/manifest.ts
-var MAX_MANIFEST_BYTES3, REASON, MANIFEST_UNREADABLE_REASONS, UNKNOWN_DIRECTORY;
+var MAX_MANIFEST_BYTES3, REASON, MANIFEST_UNREADABLE_REASONS, UNKNOWN_DIRECTORY, MAX_NAME_LENGTH2, NAME_SPAN;
 var init_manifest2 = __esm({
   "src/pkgvet/manifest.ts"() {
     "use strict";
@@ -122458,6 +122458,8 @@ var init_manifest2 = __esm({
     };
     MANIFEST_UNREADABLE_REASONS = Object.values(REASON);
     UNKNOWN_DIRECTORY = REASON.unknownDir;
+    MAX_NAME_LENGTH2 = 214;
+    NAME_SPAN = MAX_NAME_LENGTH2 + 1;
   }
 });
 
