@@ -2798,3 +2798,60 @@ describe('install-vet-inline-script-deps', () => {
     });
   });
 });
+
+// ───────────────── install-vet-dotnet-run-forms — the .NET forms that fetch a package by name, through the dispatcher
+
+describe('install-vet-dotnet-run-forms', () => {
+  const N = 'Dgprobe.Zzq7731.Nope';
+  const EVIL = 'Dgprobe.Zzq7731.Evil';
+  const nugetUrl = (name: string): string => `https://api.nuget.org/v3-flatcontainer/${name.toLowerCase()}/index.json`;
+  /**
+   * The NuGet of the plan: N is unknown (404); EVIL is published with the one version 1.0.0, nuget.org's search gives its
+   * canonical id and the OSV lists `EVIL` 1.0.0 as malicious. The other versions of EVIL do not exist.
+   */
+  const ROUTES: Record<string, Route> = {
+    [nugetUrl(N)]: { status: 404 },
+    [nugetUrl(EVIL)]: { body: { versions: ['1.0.0'] } },
+    [`https://azuresearch-usnc.nuget.org/query?q=${encodeURIComponent(`packageid:${EVIL.toLowerCase()}`)}&prerelease=true&semVerLevel=2.0.0&take=1`]: { body: { data: [{ id: EVIL }] } },
+    [`https://api.nuget.org/v3/registration5-gz-semver2/${EVIL.toLowerCase()}/1.0.0.json`]: { body: { published: '2020-01-01T00:00:00Z' } },
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-7731'] } },
+  };
+
+  it.each([
+    `dnx ${N}`,
+    `dnx ${N} hello`,
+    `dotnet tool exec ${N}`,
+    `dotnet tool update -g ${N}`,
+    `dotnet tool update ${N}`,
+    `dotnet new install ${N} --force`,
+    `dotnet package download ${N}`,
+  ])('T-02 `%s`: a name NuGet does not know is DENIED, and NuGet was asked for it', (command) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(r.requests).toContain(nugetUrl(N));
+  });
+
+  it.each([`dotnet dnx ${N} --yes`, `dotnet new install ${N}`, `dotnet package update ${N}`])(
+    'T-02 `%s`: a name NuGet does not know is a WARNING, never a deny, and NuGet was asked for it',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny').not.toBe('deny');
+      expect(r.output?.hookSpecificOutput?.additionalContext ?? '(no context)').toContain('not found on the public registry');
+      expect(r.requests).toContain(nugetUrl(N));
+    },
+  );
+
+  it.each([`dnx ${EVIL}`, `dnx -- ${EVIL}`, `dnx ${EVIL}@latest`, `dotnet new install ${EVIL}`, `dotnet package update ${EVIL}`])(
+    'T-02 `%s`: a package the OSV lists as malicious is DENIED, by its advisory and not as a missing name',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({ advisory: reason.includes('MAL-2026-7731'), escapeHatch: reason.includes('GUARDIAN_PKG_VET=0') }).toEqual({ advisory: true, escapeHatch: false });
+    },
+  );
+});

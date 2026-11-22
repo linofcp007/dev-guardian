@@ -12,7 +12,7 @@ import {
 } from '../../../src/pkgvet/hookDecision.js';
 import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
-import { hangBound } from '../../helpers/timing.js';
+import { hangBound, MIN_CHUNK_MS } from '../../helpers/timing.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
 const OSV = 'https://api.osv.dev/v1/querybatch';
@@ -6329,4 +6329,278 @@ describe('install-vet-inline-script-deps', () => {
       expect(askOf(d) ?? '(no ask)').toContain('this command names more packages than the hook vets');
     });
   });
+});
+
+// ───────────────── install-vet-dotnet-run-forms — the decision for the .NET forms that fetch a package by name
+
+describe('install-vet-dotnet-run-forms', () => {
+  // The identifiers are made up; the registry of `fakeRegistry` answers 404 for each, and no test runs `dotnet`.
+  const N = 'Dgprobe.Zzq7731.Nope';
+  const N2 = 'Dgprobe.Zzq7731.Nope2';
+  const NOT_FOUND = 'not found on the public registry';
+  /** The start of the reason of a form that was not measured; what is missing follows in the parentheses. */
+  const FORM = 'a dotnet command form that was not measured (';
+  /** The reason of a version the SDK 10.0.404 refuses before any request (the owner's answer to question 9). */
+  const REFUSED = 'a version SDK 10.0.404 refuses before any request — looked up in case another SDK accepts it';
+  /** The start of the reason of the folder of the command: why the hook did not look at the disk for a word of `dotnet new install`. */
+  const DISK = "whether a file or folder of that name is in the command's folder was not looked for (";
+  const NO_FORCE = 'dotnet new install without --force was measured to contact an https source, not to ask it for the package — not measured';
+  const NAMED_TO_UPDATE = 'a package named to an update is fetched only when it is already installed';
+  const nugetUrl = (name: string): string => `https://api.nuget.org/v3-flatcontainer/${name.toLowerCase()}/index.json`;
+  const hatch = (flag: string): string => `re-run the install with an explicit \`${flag}\`, or prefix the command with \`GUARDIAN_PKG_VET=0\`.`;
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  /** The decision of a command against the public registry of the file, with the URLs it asked. */
+  const run = async (command: string, extra: Partial<HookVetOptions> = {}): Promise<{ d: Decided; calls: string[] }> => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: {}, ...extra }));
+    return { d, calls: f.calls };
+  };
+
+  // ── T-04: the refusals — the 47 measured forms of the table, one line each
+
+  /** The run forms the four spellings share: the id alone, with a version in either place, with an argument for the tool, and `--yes` before it. */
+  const runForms = (spelling: string): string[] => [
+    `${spelling} ${N}`,
+    `${spelling} ${N}@1.0.0`,
+    `${spelling} ${N} --version 1.0.0`,
+    `${spelling} ${N} hello`,
+    `${spelling} --yes ${N}`,
+  ];
+  const SOURCE_FORMS: string[] = [
+    // dotnet tool execute (5)
+    ...runForms('dotnet tool execute'),
+    // dotnet tool exec (6)
+    ...runForms('dotnet tool exec'),
+    `dotnet tool exec ${N} --yes`,
+    // dotnet dnx (5)
+    ...runForms('dotnet dnx'),
+    // dnx (10)
+    ...runForms('dnx'),
+    `dnx ${N} --yes`,
+    `dnx --version 1.0.0 ${N}`,
+    `dnx "${N}@1.*"`,
+    `dnx -- ${N}`,
+    `dnx ${N} -- --help`,
+    // dotnet tool update (11): global or by path, then the local ones
+    `dotnet tool update -g ${N}`,
+    `dotnet tool update -g ${N} --version 1.0.0`,
+    `dotnet tool update --tool-path ./t ${N}`,
+    `dotnet tool update --global ${N}`,
+    `dotnet tool update ${N} -g`,
+    `dotnet tool update -g ${N}@1.0.0`,
+    `dotnet tool update --tool-path ./t ${N} --version 1.0.0`,
+    `dotnet tool update ${N}`,
+    `dotnet tool update ${N} --version 1.0.0`,
+    `dotnet tool update ${N}@1.0.0`,
+    `dotnet tool update --local ${N}`,
+    // dotnet package download (5)
+    `dotnet package download ${N}`,
+    `dotnet package download ${N} --allow-insecure-connections`,
+    `dotnet package download ${N}@1.0.0 --allow-insecure-connections`,
+    `dotnet package download ${N}@1.0.0`,
+    `dotnet package download ${N} ${N2}`,
+  ];
+  const NEW_INSTALL_FORMS: string[] = [
+    `dotnet new install ${N} --force`,
+    `dotnet new install ${N}::1.0.0 --force`,
+    `dotnet new install ${N}@1.0.0 --force`,
+    `dotnet new install --force ${N}`,
+    `dotnet new install ${N} ${N2} --force`,
+  ];
+
+  it('T-04 (guard) the table is the 47 measured forms: 42 that name `--source`, 5 of `dotnet new install` that name `--add-source`', () => {
+    expect(SOURCE_FORMS).toHaveLength(42);
+    expect(NEW_INSTALL_FORMS).toHaveLength(5);
+    expect(new Set([...SOURCE_FORMS, ...NEW_INSTALL_FORMS]).size).toBe(47);
+  });
+
+  it.each(SOURCE_FORMS)('T-04 `%s` is DENIED for a name nuget.org does not have, and the way out is `--source <url>`', async (command) => {
+    const { d, calls } = await run(command);
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(d?.deny ?? '(no deny)').toContain(hatch('--source <url>'));
+    expect(calls).toContain(nugetUrl(N));
+  });
+
+  it.each(NEW_INSTALL_FORMS)('T-04 `%s` is DENIED for a name nuget.org does not have, and the way out is `--add-source <url>`, not `--source`', async (command) => {
+    const { d, calls } = await run(command);
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(d?.deny ?? '(no deny)').toContain(hatch('--add-source <url>'));
+    expect(d?.deny ?? '').not.toContain('--source');
+    expect(calls).toContain(nugetUrl(N));
+  });
+
+  // ── T-04: the warnings — what the table does not measure is looked up, and never refused for a missing name
+
+  it.each<[string, string]>([
+    // (a) a flag the form does not list
+    [`dnx ${N} --foo`, FORM],
+    // (c) a flag in a place the table does not measure
+    [`dotnet dnx --version 1.0.0 ${N}`, FORM],
+    [`dotnet dnx ${N} --yes`, FORM],
+    [`dotnet tool update ${N} --tool-path ./t`, FORM],
+    // (e) flags that were measured apart and not together
+    [`dnx --yes ${N}@1.0.0`, FORM],
+    [`dotnet tool update --global ${N} --version 1.0.0`, FORM],
+    // (f) more than one package
+    [`dotnet tool update -g ${N} ${N2}`, FORM],
+    // (g) a version text that is not an exact version
+    [`dotnet tool exec "${N}@1.*"`, FORM],
+    [`dnx ${N}@^1.0`, FORM],
+    [`dnx --yes ${N}@latest`, FORM],
+    // (h) the `--` in a spelling that was not measured
+    [`dotnet dnx -- ${N}`, FORM],
+    [`dotnet tool exec ${N} -- x`, FORM],
+    // a version the SDK 10.0.404 refuses before any request: the three measured lines
+    [`dnx ${N}@latest`, REFUSED],
+    [`dotnet package download ${N}@1.* --allow-insecure-connections`, REFUSED],
+    [`dotnet new install ${N}::latest --force`, REFUSED],
+    // (j) the reasons of today
+    [`dotnet new install ${N}`, NO_FORCE],
+    [`dotnet package update ${N}`, NAMED_TO_UPDATE],
+    [`dnx ${N} --prerelease`, FORM],
+    [`dnx --source ./feed ${N}`, 'a custom registry is configured'],
+    [`dnx ${N} --add-source https://f.example/v3/index.json`, 'a custom registry is configured'],
+    [`dnx ${N} --configfile ./n.config`, 'a custom registry is configured'],
+    [`dotnet new install ${N} --nuget-source https://f.example/v3/index.json --force`, 'a custom registry is configured'],
+    [`dotnet package download ${N} -o ./out`, FORM],
+    [`cd sub && dnx ${N}`, 'directory change earlier in the command'],
+    [`dnx ${N}.nupkg`, 'a name that ends like an archive file'],
+  ])('T-04 `%s` WARNS, with the reason `%s`, and does not deny', async (command, reason) => {
+    mkdirSync(join(project, 'sub'), { recursive: true });
+    const { d, calls } = await run(command);
+    const context = d?.context ?? '(no context)';
+    expect({ deny: d?.deny, notFound: context.includes(NOT_FOUND), reason: context.includes(reason) }).toEqual({ deny: undefined, notFound: true, reason: true });
+    expect(calls.some((u) => u.startsWith('https://api.nuget.org/v3-flatcontainer/dgprobe.zzq7731.nope')), 'the name is asked of NuGet').toBe(true);
+  });
+
+  // ── T-05: the word of `dotnet new install` and the disk — an `lstat` of the command's folder, which a test replaces
+
+  /** The signature `HookVetOptions.lstatImpl` is to have: the part of `Stats` the decision reads. A local name, so this file type-checks before the field exists. */
+  type LstatLike = (path: string) => { isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean };
+  const failing =
+    (code: string): LstatLike =>
+    (path) => {
+      throw Object.assign(new Error(`${code}: ${path}`), { code });
+    };
+  /** An `lstatImpl` that counts what it is asked, and answers like `impl`. */
+  const counting = (impl: LstatLike): { paths: string[]; lstatImpl: LstatLike } => {
+    const paths: string[] = [];
+    return {
+      paths,
+      lstatImpl: (path) => {
+        paths.push(path);
+        return impl(path);
+      },
+    };
+  };
+  const runWith = async (command: string, lstatImpl: LstatLike, extra: Partial<HookVetOptions> = {}): Promise<{ d: Decided; calls: string[] }> => {
+    const f = fakeRegistry();
+    const o: HookVetOptions & { lstatImpl: LstatLike } = { ...opts(f.fetchImpl, { popular: {}, ...extra }), lstatImpl };
+    return { d: await decideInstallCommand(command, o), calls: f.calls };
+  };
+
+  it('T-05 (a) `dotnet new install <id> --force` in an empty folder asks NuGet for the name and DENIES it', async () => {
+    const { d, calls } = await run(`dotnet new install ${N} --force`);
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(calls).toContain(nugetUrl(N));
+  });
+
+  it('T-05 (b) a command folder on the network is never asked of the file system: NuGet is asked, the reason is said, no deny', async () => {
+    const disk = counting(failing('ENOENT'));
+    const { d, calls } = await runWith(`dotnet new install ${N} --force`, disk.lstatImpl, { cwd: '\\\\dgprobe-nowhere.invalid\\share\\proj' });
+    expect(disk.paths).toEqual([]);
+    expect(calls).toContain(nugetUrl(N));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${DISK}the folder is on the network)`);
+  });
+
+  it('T-05 (c) an `lstat` that fails for another reason than "not there" says why, asks NuGet, and does not deny', async () => {
+    const disk = counting(failing('EACCES'));
+    const { d, calls } = await runWith(`dotnet new install ${N} --force`, disk.lstatImpl);
+    expect(calls).toContain(nugetUrl(N));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${DISK}lstat failed: EACCES)`);
+  });
+
+  it('T-05 (d) past the deadline there is no `lstat`, no deny, and the answer says the name was not verified', async () => {
+    const disk = counting(failing('ENOENT'));
+    const { d } = await runWith(`dotnet new install ${N} --force`, disk.lstatImpl, { deadlineAt: Date.now() - 1 });
+    expect(disk.paths).toEqual([]);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(/time budget/);
+    expect(d?.context ?? '(no context)').toContain(N);
+  });
+
+  it('T-05 (e) a word with `::` is never an `lstat` and always an identifier: NuGet is asked, and the name is DENIED', async () => {
+    const disk = counting(failing('ENOENT'));
+    const { d, calls } = await runWith(`dotnet new install ${N}::1.0.0 --force`, disk.lstatImpl);
+    expect(disk.paths).toEqual([]);
+    expect(calls).toContain(nugetUrl(N));
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+  });
+
+  // ── T-06: guard — an entry of that name in the command's folder, and a path written as one, are not looked up
+
+  it.each<[string, () => string, () => void]>([
+    ['an empty folder of that name, with --force', () => `dotnet new install ${N} --force`, (): void => void mkdirSync(join(project, N))],
+    ['an empty file of that name with the `.nupkg` ending', () => `dotnet new install ${N}.nupkg`, (): void => writeFileSync(join(project, `${N}.nupkg`), '')],
+    ['`./` before the word, nothing on disk', () => `dotnet new install ./${N} --force`, (): void => undefined],
+    ['`.\\` before the word, nothing on disk', () => `dotnet new install .\\${N} --force`, (): void => undefined],
+    ['an absolute path, nothing on disk', () => `dotnet new install ${join(project, N).replace(/\\/g, '/')} --force`, (): void => undefined],
+  ])('T-06 %s: no request, no decision', async (_what, command, prepare) => {
+    prepare();
+    const { d, calls } = await run(command());
+    expect({ decision: d, calls }).toEqual({ decision: null, calls: [] });
+  });
+
+  // ── T-09: the ceiling of 50 words — the `lstat` stops there, the hook's own ceiling of vetted packages stays
+
+  const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `Dgprobe.Zzq7731.W${String(i).padStart(4, '0')}`);
+
+  it('T-09 (a) 60 words with --force, the first 10 of them a folder of the same name: those 10 are not asked, the other 50 are, nothing is denied', async () => {
+    const all = ids(60);
+    for (const id of all.slice(0, 10)) mkdirSync(join(project, id));
+    const { d, calls } = await run(`dotnet new install ${all.join(' ')} --force`);
+    const asked = calls.filter((u) => u.startsWith('https://api.nuget.org/v3-flatcontainer/'));
+    expect(new Set(asked)).toEqual(new Set(all.slice(10).map(nugetUrl)));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${DISK}past the first 50 words)`);
+  });
+
+  it('T-09 (b) 3 200 words with --force: ASK, nothing denied, and the context says 3150 were not vetted', async () => {
+    const { d } = await run(`dotnet new install ${ids(3200).join(' ')} --force`);
+    expect(d?.deny).toBeUndefined();
+    expect(typeof d?.ask, 'the decision asks the user').toBe('string');
+    expect(d?.context ?? '(no context)').toContain('3150 more packages in this command were not vetted');
+  });
+
+  /** The cost of the cheapest of `runs` samples of `reps` calls each, in ms. */
+  async function cheapest(runs: number, reps: number, call: () => Promise<unknown>): Promise<number> {
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < runs; i += 1) {
+      const t0 = performance.now();
+      for (let r = 0; r < reps; r += 1) await call();
+      best = Math.min(best, performance.now() - t0);
+    }
+    return best;
+  }
+
+  it(
+    'T-09 (guard) the cost of `dotnet new install` with --force offline is linear in the words: eight times the words, well under 22.6 times the time',
+    async () => {
+      const decideWords = (n: number) => async (): Promise<unknown> =>
+        decideInstallCommand(`dotnet new install ${ids(n).join(' ')} --force`, opts(fakeRegistry().fetchImpl, { popular: {}, env: { GUARDIAN_OFFLINE: '1' } }));
+      const small = decideWords(400);
+      const large = decideWords(3200);
+      // Before the form is read a call costs about a millisecond, where the clock's noise weighs: a sample is `reps` calls, enough for MIN_CHUNK_MS.
+      const once = await cheapest(3, 1, small);
+      const reps = Math.max(1, Math.ceil(MIN_CHUNK_MS / Math.max(once, 0.001)));
+      const base = await cheapest(5, reps, small);
+      const big = await cheapest(5, reps, large);
+      // Linear reads about 8, quadratic about 64: the geometric middle is 22.6.
+      expect(big / base, `3200 words cost ${big.toFixed(1)} ms against ${base.toFixed(1)} ms for 400 (${String(reps)} calls a sample)`).toBeLessThan(22.6);
+    },
+    300_000,
+  );
 });

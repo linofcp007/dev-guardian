@@ -4182,3 +4182,192 @@ describe('install-vet-inline-script-deps', () => {
     });
   });
 });
+
+// ───────────────── install-vet-dotnet-run-forms — the .NET forms that fetch a package by name: the run forms, `tool update`, `new install`, `package download` and `package update`
+
+describe('install-vet-dotnet-run-forms', () => {
+  // The identifiers are made up; no test runs `dotnet`.
+  const T = 'Dgprobe.Zzq7731.Tool';
+  const LIB = 'Dgprobe.Zzq7731.Lib';
+  const TPL = 'Dgprobe.Zzq7731.Templates';
+  /** The reason of a version the SDK 10.0.404 refuses before any request (the owner's answer to question 9). */
+  const REFUSED = 'a version SDK 10.0.404 refuses before any request — looked up in case another SDK accepts it';
+  /** The start of the reason of a form that was not measured; what is missing follows in the parentheses. */
+  const FORM = 'a dotnet command form that was not measured (';
+
+  type Pair = [string] | [string, string];
+  /** The packages of a command as `[name]` / `[name, version]`. */
+  const pairs = (c: { packages: ReadonlyArray<{ name: string; range?: string }> }): Pair[] =>
+    c.packages.map((p): Pair => (p.range === undefined ? [p.name] : [p.name, p.range]));
+  /** What a line gives, per command: the ecosystem and its packages. An empty parse gives `[]`, so a missing reader fails by its assertion. */
+  const read = (command: string): Array<{ ecosystem: string; packages: Pair[] }> =>
+    parseInstallCommands(command).map((c) => ({ ecosystem: c.ecosystem, packages: pairs(c) }));
+  const nuget = (...packages: Pair[]): Array<{ ecosystem: string; packages: Pair[] }> => [{ ecosystem: 'nuget', packages }];
+  const uncertainOf = (command: string): string => parseInstallCommands(command).flatMap((c) => c.uncertain).join(' | ');
+
+  // ── T-01: the run forms — `dnx`, `dotnet dnx`, `dotnet tool exec`, `dotnet tool execute`
+
+  const SPELLINGS = ['dnx', 'dotnet dnx', 'dotnet tool exec', 'dotnet tool execute'] as const;
+  const RUN_FORMS: ReadonlyArray<[string, Pair[]]> = [
+    [T, [[T]]],
+    [`${T}@1.2.3`, [[T, '1.2.3']]],
+    [`${T} --version 1.2.3`, [[T, '1.2.3']]],
+    [`"${T}@1.*"`, [[T, '1.*']]],
+    [`--yes ${T}`, [[T]]],
+    [`${T} --yes`, [[T]]],
+    [`${T} hello world`, [[T]]],
+    [`-- ${T}`, [[T]]],
+    [`${T} -- --version 9`, [[T]]],
+    [`${T} -v q`, [[T]]],
+    [`${T} --source ./feed`, [[T]]],
+  ];
+  const RUN_LINES = SPELLINGS.flatMap((spelling) => RUN_FORMS.map(([rest, expected]): [string, Pair[]] => [`${spelling} ${rest}`, expected]));
+
+  it.each(RUN_LINES)('T-01 `%s` is one NuGet command that vets the first positional only: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it.each(SPELLINGS)("T-01 `%s <id> hello world` says nothing was skipped: the words after the id are the tool's arguments", (spelling) => {
+    const cmds = parseInstallCommands(`${spelling} ${T} hello world`);
+    expect(cmds.map((c) => c.skipped)).toEqual([[]]);
+  });
+
+  it.each(SPELLINGS)("T-01 `%s <id> --source ./feed` records ./feed as the command's registry", (spelling) => {
+    const cmds = parseInstallCommands(`${spelling} ${T} --source ./feed`);
+    expect(cmds.map((c) => c.customRegistry)).toEqual(['./feed']);
+    expect(cmds.map((c) => pairs(c))).toEqual([[[T]]]);
+  });
+
+  it('T-01 `dnx <id>@latest` vets the name without a version and says the SDK refuses that version', () => {
+    expect(read(`dnx ${T}@latest`)).toEqual(nuget([T]));
+    expect(uncertainOf(`dnx ${T}@latest`)).toContain(REFUSED);
+  });
+
+  it('T-01 `dnx --yes <id>@latest` is not one of the measured refusals: the name with the version as written, and the reason of the form', () => {
+    expect(read(`dnx --yes ${T}@latest`)).toEqual(nuget([T, 'latest']));
+    expect(uncertainOf(`dnx --yes ${T}@latest`)).toContain(FORM);
+  });
+
+  // ── T-01: `dotnet tool update`
+
+  it.each([
+    [`dotnet tool update ${T}`, [[T]]],
+    [`dotnet tool update -g ${T}`, [[T]]],
+    [`dotnet tool update --global ${T}`, [[T]]],
+    [`dotnet tool update --local ${T}`, [[T]]],
+    [`dotnet tool update --tool-path ./d ${T}`, [[T]]],
+    [`dotnet tool update ${T}@1.2.3`, [[T, '1.2.3']]],
+    [`dotnet tool update ${T} --version 1.2.3`, [[T, '1.2.3']]],
+    [`dotnet tool update -g ${T}@1.2.3`, [[T, '1.2.3']]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` is a NuGet command for the tool, read as `dotnet tool install` is: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it('T-01 `dotnet tool update -g a b` vets `a` and says `b` is an extra argument', () => {
+    const cmds = parseInstallCommands('dotnet tool update -g a b');
+    expect(cmds.map((c) => pairs(c))).toEqual([[['a']]]);
+    expect(cmds.map((c) => c.skipped)).toEqual([[{ raw: 'b', reason: expect.stringMatching(/unexpected extra argument/) }]]);
+  });
+
+  // ── T-01: `dotnet new install`
+
+  it.each([
+    [`dotnet new install ${TPL}`, [[TPL]]],
+    [`dotnet new install ${TPL}::1.2.3`, [[TPL, '1.2.3']]],
+    [`dotnet new install ${TPL}@1.2.3`, [[TPL, '1.2.3']]],
+    ['dotnet new install A B --force', [['A'], ['B']]],
+    [`dotnet new install ${TPL} -v q`, [[TPL]]],
+    [`dotnet new install ${TPL}::latest --force`, [[TPL]]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` vets every word as an identifier, the version of `::` or `@` apart: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it('T-01 `dotnet new install <id>::latest --force` says the SDK refuses that version', () => {
+    expect(uncertainOf(`dotnet new install ${TPL}::latest --force`)).toContain(REFUSED);
+  });
+
+  it("T-01 `dotnet new install <id> --add-source ./feed` records ./feed as the command's registry", () => {
+    const cmds = parseInstallCommands(`dotnet new install ${TPL} --add-source ./feed`);
+    expect(cmds.map((c) => pairs(c))).toEqual([[[TPL]]]);
+    expect(cmds.map((c) => c.customRegistry)).toEqual(['./feed']);
+  });
+
+  // ── T-01: `dotnet package download`
+
+  it.each([
+    [`dotnet package download ${LIB}`, [[LIB]]],
+    [`dotnet package download ${LIB}@1.2.3`, [[LIB, '1.2.3']]],
+    ['dotnet package download A B', [['A'], ['B']]],
+    [`dotnet package download ${LIB}@1.* --allow-insecure-connections`, [[LIB]]],
+    [`dotnet package download ${LIB} -o ./out -v q`, [[LIB]]],
+    [`dotnet package download ${LIB} --output ./out --verbosity q`, [[LIB]]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` vets every identifier; `-v` is the verbosity and `-o` a folder, never a version or a package: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it('T-01 `dotnet package download <id>@1.* --allow-insecure-connections` says the SDK refuses that version', () => {
+    expect(uncertainOf(`dotnet package download ${LIB}@1.* --allow-insecure-connections`)).toContain(REFUSED);
+  });
+
+  it("T-01 `dotnet package download <id> -s <url>` records the URL as the command's registry", () => {
+    const url = 'https://f.example/v3/index.json';
+    const cmds = parseInstallCommands(`dotnet package download ${LIB} -s ${url}`);
+    expect(cmds.map((c) => pairs(c))).toEqual([[[LIB]]]);
+    expect(cmds.map((c) => c.customRegistry)).toEqual([url]);
+  });
+
+  // ── T-01: `dotnet package update` names go to `updateNames`, not to `packages`
+
+  /** `updateNames` is read through a type that has it, so a parser without it fails by its assertion, not by the compiler. */
+  type WithUpdateNames = ReturnType<typeof parseInstallCommands>[number] & { updateNames?: readonly PackageSpec[] };
+  const updateRead = (command: string): Array<{ packages: Pair[]; updateNames: Pair[] | undefined }> =>
+    parseInstallCommands(command).map((c) => {
+      const names = (c as WithUpdateNames).updateNames;
+      return { packages: pairs(c), updateNames: names === undefined ? undefined : pairs({ packages: names }) };
+    });
+
+  it.each([
+    [`dotnet package update ${LIB}`, [[LIB]]],
+    [`dotnet package update ${LIB}@1.2.3`, [[LIB, '1.2.3']]],
+    ['dotnet package update A B', [['A'], ['B']]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` gives no package to install and the names given to an update: %j', (command, names) => {
+    expect(updateRead(command)).toEqual([{ packages: [], updateNames: names }]);
+  });
+
+  // ── T-03: guard — what is read today stays as it is, and the forms that name no package stay unread
+
+  it.each([
+    ['dotnet add package Some.Pkg', [['Some.Pkg']]],
+    ['dotnet package add Some.Pkg', [['Some.Pkg']]],
+    ['dotnet tool install some.tool', [['some.tool']]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-03 `%s` is a NuGet command for %j with nothing uncertain', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+    expect(parseInstallCommands(command).map((c) => c.uncertain)).toEqual([[]]);
+  });
+
+  it('T-03 `dotnet tool install some.tool.nupkg` keeps the reason that this package manager was not measured', () => {
+    expect(uncertainOf('dotnet tool install some.tool.nupkg')).toContain('this package manager was not measured');
+  });
+
+  it.each([
+    'dotnet package search L',
+    'dotnet package search L --exact-match',
+    'dotnet new details T',
+    'dotnet new update',
+    'dotnet new list',
+    'dotnet new console',
+    'dotnet tool run T',
+    'dotnet tool list',
+    'dotnet tool uninstall T',
+    'dotnet tool restore',
+    'dotnet package remove L',
+    'dotnet package list --outdated',
+    'dotnet restore',
+    'dotnet build',
+    'dotnet run probe.cs',
+    'dotnet store --manifest packages.xml',
+    'dotnet workload install maui',
+  ])('T-03 `%s` is no command to vet', (command) => {
+    expect(parseInstallCommands(command)).toEqual([]);
+  });
+});
