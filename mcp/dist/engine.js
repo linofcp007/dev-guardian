@@ -115842,13 +115842,14 @@ function parseComposer(raw) {
   if (!name.includes("/")) return skip(raw, "platform package or not a vendor/name \u2014 not looked up");
   return withRange(checkName("packagist", name, raw), range);
 }
-function parseNuget(raw) {
+function parseNuget(raw, colons = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw, raw.indexOf("@") > 0 ? ARCHIVE2 : null);
+  const colon = colons ? raw.indexOf("::") : -1;
+  const at = colon > 0 ? colon : raw.indexOf("@");
+  const bad = notAPackage(colon > 0 ? raw.slice(0, colon) : raw, at > 0 ? ARCHIVE2 : null);
   if (bad !== null) return skip(raw, bad);
-  const at = raw.indexOf("@");
   const name = at > 0 ? raw.slice(0, at) : raw;
-  const range = at > 0 ? raw.slice(at + 1) : void 0;
+  const range = at > 0 ? raw.slice(at + (colon > 0 ? 2 : 1)) : void 0;
   return withRange(checkName("nuget", name, raw), range);
 }
 function parsePackageSpec(ecosystem, raw, manager) {
@@ -115865,7 +115866,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_VALUE_FLAGS, NPM_BOOL_FLAGS, NPM_WORKSPACE_FLAGS, NPM_LONG, NPM_TABLE, PIP_REQUIREMENTS_REASON, PIP_CONSTRAINTS_REASON, PIP_EDITABLE_REASON, PIP_FETCH_VALUE, PIP_FETCH_BOOL, PIP_FETCH_REGISTRY, PIP_FETCH_REPORTED, PIP_DOWNLOAD_TABLE, PIP_WHEEL_TABLE, PIPX_UPGRADE_TABLE, UV_TOOL_UPGRADE_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_VALUE_FLAGS, NPM_BOOL_FLAGS, NPM_WORKSPACE_FLAGS, NPM_LONG, NPM_TABLE, PIP_REQUIREMENTS_REASON, PIP_CONSTRAINTS_REASON, PIP_EDITABLE_REASON, PIP_FETCH_VALUE, PIP_FETCH_BOOL, PIP_FETCH_REGISTRY, PIP_FETCH_REPORTED, PIP_DOWNLOAD_TABLE, PIP_WHEEL_TABLE, PIPX_UPGRADE_TABLE, UV_TOOL_UPGRADE_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, MEASURED_DOTNET_FORMS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -116712,6 +116713,34 @@ var init_parseCommand = __esm({
           "--allow-roll-forward"
         ),
         registry: set2("--add-source", "--source", "--configfile")
+      },
+      // The forms that fetch a package by name, each with the flags of its own verb (the help of the SDK 10.0.404,
+      // .specs/_findings-2026-11-20/measurements/dotnet-forms/help-windows-2026-11-20.txt): `-v` is the MSBuild verbosity in every one of
+      // them, a version only in `add package`. `--yes` is accepted by the run command and is not in its help (measured, table-windows-2026-11-20.txt lines 25-26).
+      "dotnet-run": {
+        value: set2("--version", "--configfile", "--source", "--add-source", "-v", "--verbosity"),
+        bool: set2("--allow-roll-forward", "--prerelease", "--disable-parallel", "--ignore-failed-sources", "--no-http-cache", "--interactive", "--yes"),
+        registry: set2("--source", "--add-source", "--configfile")
+      },
+      "dotnet-tool-update": {
+        value: set2("--tool-path", "--version", "--configfile", "--tool-manifest", "--add-source", "--source", "--framework", "-v", "--verbosity"),
+        bool: set2("-g", "--global", "--local", "--prerelease", "--disable-parallel", "--ignore-failed-sources", "--no-http-cache", "--interactive", "--allow-downgrade", "--all"),
+        registry: set2("--add-source", "--source", "--configfile")
+      },
+      "dotnet-new-install": {
+        value: set2("--add-source", "--nuget-source", "-v", "--verbosity"),
+        bool: set2("--interactive", "--force", "-d", "--diagnostics"),
+        registry: set2("--add-source", "--nuget-source")
+      },
+      "dotnet-download": {
+        value: set2("--configfile", "-o", "--output", "-s", "--source", "-v", "--verbosity"),
+        bool: set2("--allow-insecure-connections", "--interactive", "--prerelease"),
+        registry: set2("-s", "--source", "--configfile")
+      },
+      "dotnet-package-update": {
+        value: set2("--file", "--project", "-v", "--verbosity"),
+        bool: set2("--vulnerable", "--interactive"),
+        registry: set2()
       }
     };
     UV_VALUED = [
@@ -117121,8 +117150,51 @@ var init_parseCommand = __esm({
       uv: /* @__PURE__ */ new Set(["add", "pip", "tool", "run"]),
       poetry: /* @__PURE__ */ new Set(["add"]),
       composer: COMPOSER_REQUIRE,
-      dotnet: /* @__PURE__ */ new Set(["add", "package", "tool"])
+      dotnet: /* @__PURE__ */ new Set(["add", "package", "tool", "new", "dnx"])
     };
+    MEASURED_DOTNET_FORMS = (() => {
+      const f = (spelling, ...rest) => [...spelling.split(" "), ...rest];
+      const run2 = (spelling) => [
+        f(spelling, "<id>"),
+        f(spelling, "<id>@<v>"),
+        f(spelling, "<id>", "--version", "<v>"),
+        f(spelling, "<id>", "<args>"),
+        f(spelling, "--yes", "<id>")
+      ];
+      return [
+        ...run2("dotnet tool execute"),
+        ...run2("dotnet tool exec"),
+        f("dotnet tool exec", "<id>", "--yes"),
+        ...run2("dotnet dnx"),
+        ...run2("dnx"),
+        f("dnx", "<id>", "--yes"),
+        f("dnx", "--version", "<v>", "<id>"),
+        f("dnx", "<id>@<n>.*"),
+        f("dnx", "--", "<id>"),
+        f("dnx", "<id>", "--", "<rest>"),
+        f("dotnet tool update", "-g", "<id>"),
+        f("dotnet tool update", "-g", "<id>", "--version", "<v>"),
+        f("dotnet tool update", "--tool-path", "<dir>", "<id>"),
+        f("dotnet tool update", "--global", "<id>"),
+        f("dotnet tool update", "<id>", "-g"),
+        f("dotnet tool update", "-g", "<id>@<v>"),
+        f("dotnet tool update", "--tool-path", "<dir>", "<id>", "--version", "<v>"),
+        f("dotnet tool update", "<id>"),
+        f("dotnet tool update", "<id>", "--version", "<v>"),
+        f("dotnet tool update", "<id>@<v>"),
+        f("dotnet tool update", "--local", "<id>"),
+        f("dotnet new install", "<id>", "--force"),
+        f("dotnet new install", "<id>::<v>", "--force"),
+        f("dotnet new install", "<id>@<v>", "--force"),
+        f("dotnet new install", "--force", "<id>"),
+        f("dotnet new install", "<ids>", "--force"),
+        f("dotnet package download", "<id>"),
+        f("dotnet package download", "<id>", "--allow-insecure-connections"),
+        f("dotnet package download", "<id>@<v>", "--allow-insecure-connections"),
+        f("dotnet package download", "<id>@<v>"),
+        f("dotnet package download", "<ids>")
+      ];
+    })();
     NPM_ALLOW_BOOL = ["-D", "--save-dev", "-E", "--save-exact", "-O", "--save-optional", "-P", "--save-prod", "-S", "--save"];
     ALLOW = {
       npm: {

@@ -2796,13 +2796,14 @@ function parseComposer(raw) {
   if (!name.includes("/")) return skip(raw, "platform package or not a vendor/name \u2014 not looked up");
   return withRange(checkName("packagist", name, raw), range);
 }
-function parseNuget(raw) {
+function parseNuget(raw, colons = false) {
   if (/[$`]/.test(raw)) return skip(raw, "not a literal package name (shell expansion)");
-  const bad = notAPackage(raw, raw.indexOf("@") > 0 ? ARCHIVE : null);
+  const colon = colons ? raw.indexOf("::") : -1;
+  const at = colon > 0 ? colon : raw.indexOf("@");
+  const bad = notAPackage(colon > 0 ? raw.slice(0, colon) : raw, at > 0 ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
-  const at = raw.indexOf("@");
   const name = at > 0 ? raw.slice(0, at) : raw;
-  const range = at > 0 ? raw.slice(at + 1) : void 0;
+  const range = at > 0 ? raw.slice(at + (colon > 0 ? 2 : 1)) : void 0;
   return withRange(checkName("nuget", name, raw), range);
 }
 function parsePackageSpec(ecosystem, raw, manager) {
@@ -3671,6 +3672,34 @@ var FLAGS = {
       "--allow-roll-forward"
     ),
     registry: set("--add-source", "--source", "--configfile")
+  },
+  // The forms that fetch a package by name, each with the flags of its own verb (the help of the SDK 10.0.404,
+  // .specs/_findings-2026-11-20/measurements/dotnet-forms/help-windows-2026-11-20.txt): `-v` is the MSBuild verbosity in every one of
+  // them, a version only in `add package`. `--yes` is accepted by the run command and is not in its help (measured, table-windows-2026-11-20.txt lines 25-26).
+  "dotnet-run": {
+    value: set("--version", "--configfile", "--source", "--add-source", "-v", "--verbosity"),
+    bool: set("--allow-roll-forward", "--prerelease", "--disable-parallel", "--ignore-failed-sources", "--no-http-cache", "--interactive", "--yes"),
+    registry: set("--source", "--add-source", "--configfile")
+  },
+  "dotnet-tool-update": {
+    value: set("--tool-path", "--version", "--configfile", "--tool-manifest", "--add-source", "--source", "--framework", "-v", "--verbosity"),
+    bool: set("-g", "--global", "--local", "--prerelease", "--disable-parallel", "--ignore-failed-sources", "--no-http-cache", "--interactive", "--allow-downgrade", "--all"),
+    registry: set("--add-source", "--source", "--configfile")
+  },
+  "dotnet-new-install": {
+    value: set("--add-source", "--nuget-source", "-v", "--verbosity"),
+    bool: set("--interactive", "--force", "-d", "--diagnostics"),
+    registry: set("--add-source", "--nuget-source")
+  },
+  "dotnet-download": {
+    value: set("--configfile", "-o", "--output", "-s", "--source", "-v", "--verbosity"),
+    bool: set("--allow-insecure-connections", "--interactive", "--prerelease"),
+    registry: set("-s", "--source", "--configfile")
+  },
+  "dotnet-package-update": {
+    value: set("--file", "--project", "-v", "--verbosity"),
+    bool: set("--vulnerable", "--interactive"),
+    registry: set()
   }
 };
 var UV_VALUED = [
@@ -4325,6 +4354,13 @@ function npmFlagWords(list) {
   }
   return out;
 }
+var DOTNET_FORM_TABLES = {
+  run: "dotnet-run",
+  "tool-update": "dotnet-tool-update",
+  "new-install": "dotnet-new-install",
+  download: "dotnet-download",
+  "package-update": "dotnet-package-update"
+};
 function launcher(manager, ecosystem, args, pre, launch) {
   return { manager, ecosystem, args, pre, uncertain: [], launch };
 }
@@ -4367,12 +4403,11 @@ var SUBCOMMANDS = {
   uv: /* @__PURE__ */ new Set(["add", "pip", "tool", "run"]),
   poetry: /* @__PURE__ */ new Set(["add"]),
   composer: COMPOSER_REQUIRE,
-  dotnet: /* @__PURE__ */ new Set(["add", "package", "tool"])
+  dotnet: /* @__PURE__ */ new Set(["add", "package", "tool", "new", "dnx"])
 };
 var PIPX_SUBCOMMANDS = /* @__PURE__ */ new Set(["install", "run", "inject", "upgrade", "reinstall", "runpip", "upgrade-all"]);
 var UV_TOOL_SUBCOMMANDS = /* @__PURE__ */ new Set(["run", "install", "upgrade"]);
 var PIP_FETCH_TABLES = /* @__PURE__ */ new Map([["install", void 0], ["download", "pip-download"], ["wheel", "pip-wheel"]]);
-var ADD_ONLY = /* @__PURE__ */ new Set(["add"]);
 var ADD_OR_UP = /* @__PURE__ */ new Set(["add", "up"]);
 var ADD_OR_UPGRADE = /* @__PURE__ */ new Set(["add", "upgrade"]);
 var FOREACH_ONLY = /* @__PURE__ */ new Set(["foreach"]);
@@ -4433,6 +4468,11 @@ function upgradeDetected(after, before) {
   return { manager: "pipx", ecosystem: "pypi", args: after, pre: before, uncertain: [], flagTable: "pipx-upgrade", names: "always" };
 }
 var INSTALL_ONLY = /* @__PURE__ */ new Set(["install"]);
+var DOTNET_TOOL_VERBS = /* @__PURE__ */ new Set(["install", "exec", "execute", "update"]);
+var DOTNET_PACKAGE_VERBS = /* @__PURE__ */ new Set(["add", "download", "update"]);
+function dotnetDetected(form, spelling, args, pre) {
+  return { manager: "dotnet", ecosystem: "nuget", args, pre, uncertain: [], flagTable: DOTNET_FORM_TABLES[form], dotnet: { form, spelling } };
+}
 var PACKAGE_ONLY = /* @__PURE__ */ new Set(["package"]);
 function detect(input) {
   let words = input;
@@ -4501,6 +4541,7 @@ function detect(input) {
         return null;
     }
   }
+  if (head === "dnx") return dotnetDetected("run", "dnx", rest, []);
   const table = FLAGS[head];
   if (table === void 0) return null;
   const initVerbs = INITIALIZER_VERBS[head];
@@ -4633,18 +4674,30 @@ function detect(input) {
     case "composer":
       return COMPOSER_REQUIRE.has(subWord) ? { manager: head, ecosystem: "packagist", args: words.slice(sub + 1), pre, uncertain: [] } : null;
     case "dotnet": {
+      if (subWord === "dnx") return dotnetDetected("run", "dotnet dnx", words.slice(sub + 1), pre);
+      if (subWord === "new") {
+        const verb = nextPositional(words, sub + 1, FLAGS["dotnet-new-install"] ?? table, INSTALL_ONLY);
+        return verb >= 0 && words[verb]?.value === "install" ? dotnetDetected("new-install", "dotnet new install", words.slice(verb + 1), pre) : null;
+      }
       if (subWord === "package") {
-        const verb = nextPositional(words, sub + 1, table, ADD_ONLY);
-        if (verb < 0 || words[verb]?.value !== "add") return null;
+        const verb = nextPositional(words, sub + 1, table, DOTNET_PACKAGE_VERBS);
+        const verbName = verb < 0 ? "" : words[verb]?.value ?? "";
+        if (verbName === "download") return dotnetDetected("download", "dotnet package download", words.slice(verb + 1), pre);
+        if (verbName === "update") return dotnetDetected("package-update", "dotnet package update", words.slice(verb + 1), pre);
+        if (verbName !== "add") return null;
         const args = words.slice(verb + 1);
         const uncertain2 = args.some((w) => /^--(?:project|file)(?:=|$)/.test(w.value)) ? ["dotnet project argument (the NuGet configuration next to that project was not read)"] : [];
         return { manager: head, ecosystem: "nuget", args, pre, uncertain: uncertain2 };
       }
       if (subWord === "tool") {
         const toolTable = FLAGS["dotnet-tool"] ?? table;
-        const verb = nextPositional(words, sub + 1, toolTable, INSTALL_ONLY);
-        if (verb < 0 || words[verb]?.value !== "install") return null;
-        return { manager: head, ecosystem: "nuget", args: words.slice(verb + 1), pre, uncertain: [], flagTable: "dotnet-tool" };
+        const verb = nextPositional(words, sub + 1, toolTable, DOTNET_TOOL_VERBS);
+        const verbName = verb < 0 ? "" : words[verb]?.value ?? "";
+        const after2 = verb < 0 ? [] : words.slice(verb + 1);
+        if (verbName === "exec" || verbName === "execute") return dotnetDetected("run", `dotnet tool ${verbName}`, after2, pre);
+        if (verbName === "update") return dotnetDetected("tool-update", "dotnet tool update", after2, pre);
+        if (verbName !== "install") return null;
+        return { manager: head, ecosystem: "nuget", args: after2, pre, uncertain: [], flagTable: "dotnet-tool" };
       }
       if (subWord !== "add") return null;
       let at = nextPositional(words, sub + 1, table);
@@ -4877,6 +4930,7 @@ function splitOutsideBrackets(value) {
 }
 function collect(d, context) {
   if (d.launch !== void 0) return collectLaunch(d, d.launch, context);
+  if (d.dotnet !== void 0) return collectDotnet(d, d.dotnet, context);
   const table = FLAGS[d.flagTable ?? (d.manager === "uv-pip" ? "pip" : d.manager)] ?? FLAGS["npm"];
   const flagTable = table ?? { value: set(), bool: set(), registry: set() };
   const preWalk = walk(d.pre, flagTable);
@@ -4972,6 +5026,242 @@ function collect(d, context) {
     if (d.update === true) out.update = true;
   }
   return out;
+}
+var NUGET_EXACT_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
+var SDK_REFUSED_VERSION = "a version SDK 10.0.404 refuses before any request \u2014 looked up in case another SDK accepts it";
+function isPlainNugetName(word) {
+  if (word.startsWith("-")) return false;
+  const spec2 = parseNuget(word);
+  return "name" in spec2 && spec2.name === word && spec2.range === void 0;
+}
+function refusedVersionLine(spelling, args) {
+  const [word = "", flag] = args;
+  const sep2 = spelling === "dotnet new install" ? "::" : "@";
+  const at = word.indexOf(sep2);
+  if (at <= 0 || !isPlainNugetName(word.slice(0, at))) return false;
+  const text = word.slice(at + sep2.length);
+  switch (spelling) {
+    case "dnx":
+      return args.length === 1 && text === "latest";
+    case "dotnet package download":
+      return args.length === 2 && text === "1.*" && flag === "--allow-insecure-connections";
+    case "dotnet new install":
+      return args.length === 2 && text === "latest" && flag === "--force";
+    default:
+      return false;
+  }
+}
+function collectDotnet(d, dotnet, context) {
+  const table = FLAGS[d.flagTable ?? ""] ?? { value: set(), bool: set(), registry: set() };
+  const preWalk = walk(d.pre, table);
+  let body = d.args;
+  if (dotnet.form === "run") {
+    const dash = d.args.findIndex((w) => w.value === "--");
+    if (dash >= 0) {
+      const before = d.args.slice(0, dash);
+      const named = walk(before, table).positionals.length > 0;
+      const idWord = d.args[dash + 1];
+      body = named || idWord === void 0 ? before : [...before, idWord];
+    }
+  }
+  const walked = walk(body, table);
+  const limited = limitCandidates(walked.positionals);
+  const colons = dotnet.form === "new-install";
+  const several = dotnet.form === "new-install" || dotnet.form === "download" || dotnet.form === "package-update";
+  const candidate = limited.kept.some((p) => p.candidate === true);
+  const skipped = walked.skipped;
+  const packages = [];
+  const candidates = [];
+  const names = [];
+  const out = {
+    ecosystem: "nuget",
+    manager: "dotnet",
+    packages,
+    skipped,
+    uncertain: [.../* @__PURE__ */ new Set([...context, ...d.uncertain, ...preWalk.uncertain, ...walked.uncertain])],
+    registries: [...preWalk.registries, ...walked.registries]
+  };
+  const registry = preWalk.customRegistry ?? walked.customRegistry;
+  if (registry !== void 0) out.customRegistry = registry;
+  if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
+  const spelled = limited.kept.slice(0, several || candidate ? void 0 : 1);
+  for (const p of spelled) {
+    const spec2 = parseNuget(p.value, colons);
+    if (!("name" in spec2)) {
+      skipped.push(spec2);
+      continue;
+    }
+    if (dotnet.form === "package-update") names.push(spec2);
+    else {
+      packages.push(spec2);
+      if (p.candidate === true) candidates.push(spec2);
+    }
+    const why = unmeasuredReason("dotnet", spec2);
+    if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
+  }
+  if (dotnet.form === "tool-update" && !candidate) {
+    for (const p of limited.kept.slice(1)) skipped.push(skip(p.value, "unexpected extra argument to dotnet tool update"));
+  }
+  if (candidates.length > 0) out.candidates = candidates;
+  const first = packages[0];
+  const version = dotnet.form === "run" || dotnet.form === "tool-update" ? flagValue(body, ["--version"]) : void 0;
+  if (first !== void 0 && version !== void 0) first.range = version;
+  if (first !== void 0 && refusedVersionLine(dotnet.spelling, d.pre.length === 0 ? d.args.map((w) => w.value) : [])) {
+    delete first.range;
+    if (!out.uncertain.includes(SDK_REFUSED_VERSION)) out.uncertain.push(SDK_REFUSED_VERSION);
+  }
+  if (dotnet.form === "package-update") {
+    if (names.length > 0) out.updateNames = names;
+    if (body.some((w) => /^--(?:project|file)(?:=|$)/.test(w.value))) {
+      out.uncertain.push("dotnet project argument (the NuGet configuration next to that project was not read)");
+    }
+  }
+  if (dotnet.form === "new-install") {
+    out.localPathFirst = true;
+    out.sourceFlag = "`--add-source <url>`";
+  }
+  return out;
+}
+var MEASURED_DOTNET_FORMS = (() => {
+  const f = (spelling, ...rest) => [...spelling.split(" "), ...rest];
+  const run = (spelling) => [
+    f(spelling, "<id>"),
+    f(spelling, "<id>@<v>"),
+    f(spelling, "<id>", "--version", "<v>"),
+    f(spelling, "<id>", "<args>"),
+    f(spelling, "--yes", "<id>")
+  ];
+  return [
+    ...run("dotnet tool execute"),
+    ...run("dotnet tool exec"),
+    f("dotnet tool exec", "<id>", "--yes"),
+    ...run("dotnet dnx"),
+    ...run("dnx"),
+    f("dnx", "<id>", "--yes"),
+    f("dnx", "--version", "<v>", "<id>"),
+    f("dnx", "<id>@<n>.*"),
+    f("dnx", "--", "<id>"),
+    f("dnx", "<id>", "--", "<rest>"),
+    f("dotnet tool update", "-g", "<id>"),
+    f("dotnet tool update", "-g", "<id>", "--version", "<v>"),
+    f("dotnet tool update", "--tool-path", "<dir>", "<id>"),
+    f("dotnet tool update", "--global", "<id>"),
+    f("dotnet tool update", "<id>", "-g"),
+    f("dotnet tool update", "-g", "<id>@<v>"),
+    f("dotnet tool update", "--tool-path", "<dir>", "<id>", "--version", "<v>"),
+    f("dotnet tool update", "<id>"),
+    f("dotnet tool update", "<id>", "--version", "<v>"),
+    f("dotnet tool update", "<id>@<v>"),
+    f("dotnet tool update", "--local", "<id>"),
+    f("dotnet new install", "<id>", "--force"),
+    f("dotnet new install", "<id>::<v>", "--force"),
+    f("dotnet new install", "<id>@<v>", "--force"),
+    f("dotnet new install", "--force", "<id>"),
+    f("dotnet new install", "<ids>", "--force"),
+    f("dotnet package download", "<id>"),
+    f("dotnet package download", "<id>", "--allow-insecure-connections"),
+    f("dotnet package download", "<id>@<v>", "--allow-insecure-connections"),
+    f("dotnet package download", "<id>@<v>"),
+    f("dotnet package download", "<ids>")
+  ];
+})();
+function fitsDotnetPlace(token, word) {
+  const pair = (sep2) => {
+    const at = word.indexOf(sep2);
+    return at > 0 ? { id: word.slice(0, at), text: word.slice(at + sep2.length) } : void 0;
+  };
+  switch (token) {
+    case "<id>":
+      return isPlainNugetName(word);
+    case "<v>":
+      return NUGET_EXACT_VERSION.test(word);
+    case "<dir>":
+      return word !== "";
+    case "<id>@<v>": {
+      const p = pair("@");
+      return p !== void 0 && isPlainNugetName(p.id) && NUGET_EXACT_VERSION.test(p.text);
+    }
+    case "<id>::<v>": {
+      const p = pair("::");
+      return p !== void 0 && isPlainNugetName(p.id) && NUGET_EXACT_VERSION.test(p.text);
+    }
+    case "<id>@<n>.*": {
+      const p = pair("@");
+      return p !== void 0 && isPlainNugetName(p.id) && /^\d+\.\*$/.test(p.text);
+    }
+    default:
+      return token === word;
+  }
+}
+function isMeasuredDotnetForm(words) {
+  return MEASURED_DOTNET_FORMS.some((form) => {
+    let at = 0;
+    for (const token of form) {
+      if (token === "<ids>" || token === "<args>" || token === "<rest>") {
+        let n = 0;
+        while (at + n < words.length && (token === "<rest>" || (token === "<ids>" ? isPlainNugetName(words[at + n] ?? "") : !(words[at + n] ?? "").startsWith("-")))) n += 1;
+        if (n < (token === "<ids>" ? 2 : 1)) return false;
+        at += n;
+      } else {
+        if (at >= words.length || !fitsDotnetPlace(token, words[at] ?? "")) return false;
+        at += 1;
+      }
+    }
+    return at === words.length;
+  });
+}
+function dotnetFormOf(words) {
+  const [a = "", b = "", c = ""] = words;
+  if (a === "dnx") return { spelling: "dnx", form: "run", rest: words.slice(1) };
+  if (a !== "dotnet") return void 0;
+  if (b === "dnx") return { spelling: "dotnet dnx", form: "run", rest: words.slice(2) };
+  if (b === "tool" && (c === "exec" || c === "execute")) return { spelling: `dotnet tool ${c}`, form: "run", rest: words.slice(3) };
+  if (b === "tool" && c === "update") return { spelling: "dotnet tool update", form: "tool-update", rest: words.slice(3) };
+  if (b === "new" && c === "install") return { spelling: "dotnet new install", form: "new-install", rest: words.slice(3) };
+  if (b === "package" && c === "download") return { spelling: "dotnet package download", form: "download", rest: words.slice(3) };
+  if (b === "package" && c === "update") return { spelling: "dotnet package update", form: "package-update", rest: words.slice(3) };
+  return void 0;
+}
+function versionTextOf(word) {
+  const colon = word.indexOf("::");
+  const at = colon > 0 ? colon : word.indexOf("@");
+  return at > 0 ? word.slice(at + (colon > 0 ? 2 : 1)) : void 0;
+}
+function dotnetGap(spelling, form, rest) {
+  const own = MEASURED_DOTNET_FORMS.filter((m) => m.join(" ").startsWith(`${spelling} `));
+  const measuredFlags = new Set(own.flatMap((m) => m.filter((t) => t.startsWith("-") && t !== "--")));
+  if (rest.includes("--")) return "the `--`";
+  const valueFlags = FLAGS[DOTNET_FORM_TABLES[form]]?.value ?? /* @__PURE__ */ new Set();
+  const flags = [];
+  const positionals = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const w = rest[i] ?? "";
+    if (!w.startsWith("-")) {
+      positionals.push(w);
+      continue;
+    }
+    flags.push(w);
+    if (valueFlags.has(w)) i += 1;
+  }
+  for (const w of positionals) {
+    const text = versionTextOf(w);
+    if (text !== void 0 && !NUGET_EXACT_VERSION.test(text)) return `the version text ${text}`;
+  }
+  const unknown2 = flags.find((w) => !measuredFlags.has(w.includes("=") ? w.slice(0, w.indexOf("=")) : w));
+  if (unknown2 !== void 0) return `the flag ${unknown2}`;
+  if (positionals.length > 1) return form === "run" ? "a tool argument after the package" : "more than one package";
+  const [only, ...more] = flags;
+  return only !== void 0 && more.length === 0 ? `the place of the flag ${only}` : "the flags together";
+}
+var NEW_INSTALL_WITHOUT_FORCE = "dotnet new install without --force was measured to contact an https source, not to ask it for the package \u2014 not measured";
+function judgeDotnetForm(words) {
+  const line = dotnetFormOf(words);
+  if (line === void 0) return void 0;
+  if (line.form === "package-update") return notPlain("dotnet package update names a package given to an update");
+  if (line.form === "new-install" && !line.rest.includes("--force")) return NEW_INSTALL_WITHOUT_FORCE;
+  if (refusedVersionLine(line.spelling, line.rest)) return SDK_REFUSED_VERSION;
+  if (isMeasuredDotnetForm(words)) return null;
+  return `a dotnet command form that was not measured (${dotnetGap(line.spelling, line.form, line.rest)})`;
 }
 function flagValue(words, names) {
   for (let i = 0; i < words.length; i += 1) {
@@ -5543,6 +5833,8 @@ function confidentWords(words) {
   const tool = named === "yarnpkg" ? "yarn" : named;
   if (tool === void 0) return notSingle("empty");
   if (isMeasuredPythonForm([tool, ...rest])) return null;
+  const dotnetForm = judgeDotnetForm([tool, ...rest]);
+  if (dotnetForm !== void 0) return dotnetForm;
   const unmeasured = unmeasuredVerb([tool, ...rest]);
   if (unmeasured !== void 0) return unmeasured;
   const at = (k) => rest[k] ?? "";
@@ -8032,11 +8324,12 @@ var MAX_VETTED_PACKAGES = MAX_CANDIDATES_PER_COMMAND;
 var MAX_MANIFEST_PACKAGES = 150;
 var MANIFEST_UNREPORTED = /* @__PURE__ */ new Set(["publish_age", "install_scripts"]);
 var MAX_PARSED_LENGTH = 512 * 1024;
-function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed], pastDeadline = () => false) {
+function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed], pastDeadline = () => false, onDisk = (c) => c) {
   const cut = command.length > MAX_PARSED_LENGTH;
   let unassessed = 0;
   const parsed = withManifests(
     parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) => {
+      if (c.localPathFirst === true) return onDisk(c);
       if (c.localFirst !== true) return c;
       if (pastDeadline()) {
         unassessed += 1;
@@ -8553,6 +8846,49 @@ function installedLocally(name, cwd, byPackageFlag = false, manager = "") {
   }
   return false;
 }
+var MAX_DISK_WORDS = 50;
+var diskReason = (why) => `whether a file or folder of that name is in the command's folder was not looked for (${why})`;
+function withoutDiskEntries(c, opts, pastDeadline, said2) {
+  const why = /* @__PURE__ */ new Set();
+  const lstat = opts.lstatImpl ?? ((path) => lstatSync3(path));
+  const dir = isNetworkPath(opts.cwd) ? void 0 : commandDir(c, opts);
+  const asked = /* @__PURE__ */ new Map();
+  const packages = [];
+  for (const pkg of c.packages) {
+    const word = pkg.raw;
+    if (word.includes("::")) {
+      packages.push(pkg);
+      continue;
+    }
+    const known = asked.get(word);
+    if (known !== void 0) {
+      if (!known) packages.push(pkg);
+      continue;
+    }
+    if (pastDeadline()) why.add("vetting time budget exhausted");
+    else if (dir === void 0) why.add("the folder is on the network");
+    else if (dir === null) why.add("the folder is not known");
+    else if (asked.size >= MAX_DISK_WORDS) why.add(`past the first ${String(MAX_DISK_WORDS)} words`);
+    else {
+      const path = resolve4(dir, word);
+      if (isNetworkPath(path)) why.add("the folder is on the network");
+      else {
+        try {
+          lstat(path);
+          asked.set(word, true);
+          continue;
+        } catch (error) {
+          const code = error?.code;
+          asked.set(word, false);
+          if (code !== "ENOENT" && code !== "ENOTDIR") why.add(`lstat failed: ${typeof code === "string" ? code : "unknown"}`);
+        }
+      }
+    }
+    packages.push(pkg);
+  }
+  for (const each of why) said2.add(`dev-guardian: ${diskReason(each)} \u2014 its words were vetted as package names.`);
+  return { ...c, packages, uncertain: [...c.uncertain, ...[...why].map(diskReason)] };
+}
 function runsInstalledCopy(pkg, c, opts, memo) {
   if (pkg.range !== void 0 || pkg.raw !== pkg.name || c.prefixed === true) return false;
   const dir = commandDir(c, opts);
@@ -8919,6 +9255,7 @@ async function decideInstallCommand(command, opts) {
   const isPopular = popularTest(opts);
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
   const localCopies = /* @__PURE__ */ new Map();
+  const diskNotes = /* @__PURE__ */ new Set();
   const { commands, notVetted, manifestNotVetted, cut, unassessed } = boundedInstalls(
     command,
     shell,
@@ -8927,7 +9264,8 @@ async function decideInstallCommand(command, opts) {
     opts.nested,
     cdpath,
     (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt),
-    () => Date.now() > deadlineAt
+    () => Date.now() > deadlineAt,
+    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes)
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];
@@ -9045,7 +9383,7 @@ async function decideInstallCommand(command, opts) {
       const d = cmd.fromUpdate === true ? decideUpdateOne(r) : decideOne(r, cmd.uncertain);
       if (d.deny !== void 0) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
-      else if (d.deny !== void 0) missingIn = missingIn ?? cmd.manager;
+      else if (d.deny !== void 0) missingIn = missingIn ?? cmd;
       if (d.warn !== void 0) warnings.push(d.warn);
       if (d.unverified !== void 0) unverified.push(d.unverified);
     }
@@ -9058,7 +9396,7 @@ async function decideInstallCommand(command, opts) {
         // escape hatch — a registry flag, or an inline prefix, takes the
         // command out of the confident shape, so the agent can always
         // proceed. A MALICIOUS package gets no such hint.
-        (malicious ? "If this package is genuinely intended, ask the user to install it themselves." : escapeHatch(missingIn ?? "", shell))
+        (malicious ? "If this package is genuinely intended, ask the user to install it themselves." : escapeHatch(missingIn?.manager ?? "", shell, missingIn?.sourceFlag))
       );
     }
     if (manifestDenies.length > 0) {
@@ -9081,7 +9419,7 @@ ${counts.join(`
   for (const [file, { count, why }] of unverifiedIn) {
     lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
   }
-  lines.push(.../* @__PURE__ */ new Set([...lockLines, ...manifestNotes]));
+  lines.push(.../* @__PURE__ */ new Set([...lockLines, ...manifestNotes, ...diskNotes]));
   if (unassessed > 0) {
     lines.push(
       `dev-guardian: ${unassessed} launcher commands of this line were not checked for a copy in the project (vetting time budget exhausted) \u2014 their packages were vetted as if fetched.`
@@ -9119,9 +9457,9 @@ var NO_REGISTRY_FLAG = {
   yarn: "Yarn Berry has no registry flag",
   composer: "composer has no registry flag"
 };
-function escapeHatch(manager, shell = "bash") {
+function escapeHatch(manager, shell = "bash", sourceFlag) {
   const prefix = shell === "powershell" ? "run `$env:GUARDIAN_PKG_VET = '0'` before it, in the same command" : "prefix the command with `GUARDIAN_PKG_VET=0`";
-  const flag = REGISTRY_FLAG[manager];
+  const flag = sourceFlag ?? REGISTRY_FLAG[manager];
   if (flag !== void 0) return `If this package is private or local, re-run the install with an explicit ${flag}, or ${prefix}.`;
   const none = NO_REGISTRY_FLAG[manager];
   return `If this package is private or local, ${prefix}${none !== void 0 ? ` (${none})` : ""}.`;

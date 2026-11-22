@@ -37,8 +37,33 @@ version bump.
 - **Warnings that no longer come out:** for `pipx run <x>` with a file `<x>` in the directory, the missing name, the
   typosquat, a version under 72 h, the install scripts, an exact version nobody published, the known vulnerabilities and
   "could not vet"; and everything said of the word after the script of `pipx run --path <x> <arg>`.
+- **The .NET forms that fetch a package by name (decisions 1 to 5 of the requirements, answered 2026-11-21).**
+  *What is now refused* (a package the sources do not have, one plain statement, nothing else on the line): only the 47
+  forms measured with SDK 10.0.404 — the run command (`dnx`, `dotnet dnx`, `dotnet tool exec` / `execute`: the id, with a
+  version after `@` or `--version`, after `--yes`, with arguments for the tool, `dnx -- <id>`, `dnx <id> -- <args>`), `dotnet
+  tool update` (global, by path and local), `dotnet new install <id>… --force` (`::` or `@` for a version) and `dotnet package
+  download <id>…`, word by word; the places the measurement filled with one value are widened as the owner approved. A
+  package OSV lists as malicious is refused in every form. *What now only warns, with the reason:* every other line of those
+  forms (a flag, a place or a mix of flags not measured, more than one package, a version text that is not exact), `dotnet new
+  install` without `--force` (measured to contact an https source, not to ask it for the package), `dotnet package update <name>`
+  (an update fetches a package only when it is installed), and the three versions the SDK refuses before any request
+  (`dnx <id>@latest`, `dotnet package download <id>@1.* --allow-insecure-connections`, `dotnet new install <id>::latest
+  --force`), which are looked up in case another SDK accepts them. *The new disk question:* for each word of `dotnet new install`
+  (50 at most a command) the hook asks `lstat` whether an entry of that name is in the command's folder — the installer reads a
+  path then, and the word is not looked up; never on a network folder, never past the deadline, and a failure of `lstat` is said.
+  *Names that now leave the machine* (to nuget.org and to OSV): the identifiers of these forms.
 
 ### Security
+
+- **The install hook reads the .NET forms that fetch a package by name — `dnx`, `dotnet tool exec` / `execute` / `update`,
+  `dotnet new install`, `dotnet package download` and `dotnet package update` — and no longer lets them pass silently.** Against
+  a substitute NuGet source that logged each request (SDK 10.0.404, Windows 11, 2026-11-20 and 2026-11-21), `dnx <id>`,
+  `dotnet dnx`, `dotnet tool exec` / `execute`, `dotnet tool update`, `dotnet new install <id> --force` and `dotnet package
+  download <id>` asked the source for the package exactly as `dotnet tool install <id>` does, while the hook said nothing: the
+  word `dnx` did not even pass its gate, and every other verb was no command it read. They are read now, each with the flags of
+  its own verb (`-v` is the verbosity in all of them), and a missing name is refused for the 47 forms measured; the deny names
+  the flag of its own form (`--add-source <url>` for `dotnet new install`, which has no `--source`, else `--source <url>`) beside the
+  `GUARDIAN_PKG_VET=0` prefix. What stays unread is in the known limit `dotnet-other-install-forms`.
 
 - **The install hook reads the inline dependencies of the script `uv run` and `pipx run` run, and `uv run --with`.** A
   Python file can carry a `# /// script` block (PEP 723) whose `dependencies` the uv, and the pipx, install when they run it:

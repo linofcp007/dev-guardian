@@ -91,6 +91,9 @@ import type { PackageChecks, PackageSpec, PackageVetResult, PkgEcosystem } from 
 import { HOOK_BUDGET_MS, registryHost, vetPackages, vetTyposquatOnly } from './vet.js';
 import { isExactVersion } from './versions.js';
 
+/** The part of `fs.Stats` the decision reads: `lstat` of a word of `dotnet new install`, which a test replaces. */
+export type LstatLike = (path: string) => { isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean };
+
 export interface HookVetOptions {
   /** The project directory (the hook payload's `cwd`). */
   cwd: string;
@@ -104,6 +107,8 @@ export interface HookVetOptions {
   homeDir?: string;
   env?: Readonly<Record<string, string | undefined>>;
   fetchImpl?: typeof fetch;
+  /** How an entry of the command's folder is looked up (`dotnet new install`): by default `lstatSync`, which follows no link. */
+  lstatImpl?: LstatLike;
   budgetMs?: number;
   now?: number;
   /** `configs/popular-packages`, located by the hook from the plugin root. */
@@ -227,6 +232,7 @@ function boundedInstalls(
   cdpath = false,
   withManifests: (parsed: readonly InstallCommand[]) => VetCommand[] = (parsed) => [...parsed],
   pastDeadline: () => boolean = () => false,
+  onDisk: (c: InstallCommand) => InstallCommand = (c) => c,
 ): { commands: VetCommand[]; notVetted: number; manifestNotVetted: number; cut: boolean; unassessed: number } {
   const cut = command.length > MAX_PARSED_LENGTH;
   // The safety net of the budget (review round 2): past the deadline a launcher is no longer asked whether the project
@@ -235,6 +241,8 @@ function boundedInstalls(
   let unassessed = 0;
   const parsed = withManifests(
     parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) => {
+      // `dotnet new install` reads a word as a path when an entry of that name is in the command's folder: it fetches nothing then.
+      if (c.localPathFirst === true) return onDisk(c);
       // `npx`, `npm exec` and `bunx` run a bin the project has installed, and
       // fetch nothing: there is nothing to vet (review P1).
       if (c.localFirst !== true) return c;
@@ -1040,6 +1048,64 @@ function installedLocally(name: string, cwd: string, byPackageFlag = false, mana
   return false;
 }
 
+/** The words of one `dotnet new install` the hook asks the disk about: no more, whatever the length of the line. */
+const MAX_DISK_WORDS = 50;
+
+/** The reason a word of `dotnet new install` was not asked of the disk, said as the command's own: the word is vetted as an identifier all the same. */
+const diskReason = (why: string): string => `whether a file or folder of that name is in the command's folder was not looked for (${why})`;
+
+/**
+ * `dotnet new install <word>`: with an entry of that name in the command's folder (a folder, a file, empty or not, a link itself: `lstat`
+ * follows none) the installer takes the word as a path and fetches nothing (measured 2026-11-20, table-id-or-path-windows-2026-11-20.txt), so
+ * the word is no identifier and is left out, without a line. A word that is not there (`ENOENT`, `ENOTDIR`) is an identifier. A word with
+ * `::` is always one (the separator of the SDK's version; on NTFS it would be a stream) and never asked. Where the disk cannot say — a
+ * folder on the network (never asked: `cwd` as it arrives, before it is resolved, or the path of the word), one a `cd` moved to that is not
+ * known, an `lstat` that fails for another reason, the deadline, a word past the first {@link MAX_DISK_WORDS} — the word is vetted and the command
+ * says why it may not deny. At most {@link MAX_DISK_WORDS} distinct words are asked.
+ */
+function withoutDiskEntries(c: InstallCommand, opts: HookVetOptions, pastDeadline: () => boolean, said: Set<string>): InstallCommand {
+  const why = new Set<string>();
+  const lstat: LstatLike = opts.lstatImpl ?? ((path) => lstatSync(path));
+  const dir = isNetworkPath(opts.cwd) ? undefined : commandDir(c, opts);
+  const asked = new Map<string, boolean>();
+  const packages: PackageSpec[] = [];
+  for (const pkg of c.packages) {
+    const word = pkg.raw;
+    if (word.includes('::')) {
+      packages.push(pkg);
+      continue;
+    }
+    const known = asked.get(word);
+    if (known !== undefined) {
+      if (!known) packages.push(pkg);
+      continue;
+    }
+    if (pastDeadline()) why.add('vetting time budget exhausted');
+    else if (dir === undefined) why.add('the folder is on the network');
+    else if (dir === null) why.add('the folder is not known');
+    else if (asked.size >= MAX_DISK_WORDS) why.add(`past the first ${String(MAX_DISK_WORDS)} words`);
+    else {
+      const path = resolve(dir, word);
+      if (isNetworkPath(path)) why.add('the folder is on the network');
+      else {
+        try {
+          lstat(path);
+          asked.set(word, true);
+          continue;
+        } catch (error) {
+          const code = (error as { code?: unknown } | null)?.code;
+          asked.set(word, false);
+          if (code !== 'ENOENT' && code !== 'ENOTDIR') why.add(`lstat failed: ${typeof code === 'string' ? code : 'unknown'}`);
+        }
+      }
+    }
+    packages.push(pkg);
+  }
+  // The reason is also a line of the answer of its own: a name that the registry configuration explains is told that reason instead of this one.
+  for (const each of why) said.add(`dev-guardian: ${diskReason(each)} — its words were vetted as package names.`);
+  return { ...c, packages, uncertain: [...c.uncertain, ...[...why].map(diskReason)] };
+}
+
 /**
  * Whether a launcher would run `pkg` from the project (review 8, extra item):
  * an unversioned name — `npx vitest`, never `npx -y vitest@5.0.4` or
@@ -1571,6 +1637,8 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
   // One lookup per directory and name, however many statements of the line name them (review round 2: 8 000 x `npx lodash;`).
   const localCopies = new Map<string, boolean>();
+  /** What the disk could not say about the words of `dotnet new install`: one line each, said whatever else happens. */
+  const diskNotes = new Set<string>();
   const { commands, notVetted, manifestNotVetted, cut, unassessed } = boundedInstalls(
     command,
     shell,
@@ -1580,6 +1648,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     cdpath,
     (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt),
     () => Date.now() > deadlineAt,
+    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes),
   );
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {
@@ -1640,7 +1709,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const lockCounts: string[] = [];
   const lockDenies = new Set<string>();
   let malicious = false;
-  let missingIn: string | undefined;
+  let missingIn: InstallCommand | undefined;
   // What the lockfiles say. An exception here is one more lockfile not read — the hook stays fail-open.
   const verdictOf = new Map(verdicts.map((v) => [pairKey(v.pin), v] as const));
   const counted = new Set<string>();
@@ -1706,7 +1775,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
       const d = cmd.fromUpdate === true ? decideUpdateOne(r) : decideOne(r, cmd.uncertain);
       if (d.deny !== undefined) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
-      else if (d.deny !== undefined) missingIn = missingIn ?? cmd.manager;
+      else if (d.deny !== undefined) missingIn = missingIn ?? cmd;
       if (d.warn !== undefined) warnings.push(d.warn);
       if (d.unverified !== undefined) unverified.push(d.unverified);
     }
@@ -1722,7 +1791,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           // escape hatch — a registry flag, or an inline prefix, takes the
           // command out of the confident shape, so the agent can always
           // proceed. A MALICIOUS package gets no such hint.
-          (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : escapeHatch(missingIn ?? '', shell)),
+          (malicious ? 'If this package is genuinely intended, ask the user to install it themselves.' : escapeHatch(missingIn?.manager ?? '', shell, missingIn?.sourceFlag)),
       );
     }
     if (manifestDenies.length > 0) {
@@ -1749,7 +1818,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     lines.push(`${COULD_NOT_VET}${plural(count)} of ${file} (${why})${NOT_VERIFIED}`);
   }
   // Two installs of one line may read one lockfile twice: a line is said once.
-  lines.push(...new Set([...lockLines, ...manifestNotes]));
+  lines.push(...new Set([...lockLines, ...manifestNotes, ...diskNotes]));
   if (unassessed > 0) {
     lines.push(
       `dev-guardian: ${unassessed} launcher commands of this line were not checked for a copy in the project (vetting time budget exhausted) — their packages were vetted as if fetched.`,
@@ -1801,12 +1870,13 @@ const NO_REGISTRY_FLAG: Readonly<Record<string, string>> = {
  * for the shell: a `VAR=x` prefix for bash, `$env:` for PowerShell. Neither
  * touches the hook's own switch; a malicious version is still denied.
  */
-export function escapeHatch(manager: string, shell: CommandShell = 'bash'): string {
+export function escapeHatch(manager: string, shell: CommandShell = 'bash', sourceFlag?: string): string {
   const prefix =
     shell === 'powershell'
       ? "run `$env:GUARDIAN_PKG_VET = '0'` before it, in the same command"
       : 'prefix the command with `GUARDIAN_PKG_VET=0`';
-  const flag = REGISTRY_FLAG[manager];
+  // The flag the refused command's own form has comes first: `dotnet new install` has `--add-source`, not `--source`.
+  const flag = sourceFlag ?? REGISTRY_FLAG[manager];
   if (flag !== undefined) return `If this package is private or local, re-run the install with an explicit ${flag}, or ${prefix}.`;
   const none = NO_REGISTRY_FLAG[manager];
   return `If this package is private or local, ${prefix}${none !== undefined ? ` (${none})` : ''}.`;

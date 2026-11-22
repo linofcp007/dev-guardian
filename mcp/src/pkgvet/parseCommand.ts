@@ -157,6 +157,16 @@ export interface InstallCommand {
   scriptDirUnknown?: true;
   /** A file the line `source`s (or `.`s) before this command: it may have moved the directory or changed the environment. */
   sourced?: string;
+  /**
+   * The flag that names a source for this form, as the refusal of a missing name says it (`--add-source <url>` in code spans), when it is
+   * not the one of the manager ({@link REGISTRY_FLAG} of the decision): `dotnet new install` has no `--source`. Absent for every other form.
+   */
+  sourceFlag?: string;
+  /**
+   * `dotnet new install` reads a word as a path when an entry of that name is in the command's folder, and as an identifier otherwise:
+   * the hook asks the disk (`lstat`, no link followed) before it vets the words. The parse does no I/O and marks the command.
+   */
+  localPathFirst?: true;
 }
 
 /** A word of {@link InstallCommand.inlineScripts}. */
@@ -445,13 +455,18 @@ function parseComposer(raw: string): PackageSpec | SkippedSpec {
   return withRange(checkName('packagist', name, raw), range);
 }
 
-function parseNuget(raw: string): PackageSpec | SkippedSpec {
+/**
+ * A NuGet word as `dotnet add package` reads it: `name`, or `name@version`. With `colons` (`dotnet new install`: the template installer
+ * writes a version after `::` as well, measured 2026-11-21) `name::version` is read too, and is checked as the name before it.
+ */
+function parseNuget(raw: string, colons = false): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw, raw.indexOf('@') > 0 ? ARCHIVE : null);
+  const colon = colons ? raw.indexOf('::') : -1;
+  const at = colon > 0 ? colon : raw.indexOf('@');
+  const bad = notAPackage(colon > 0 ? raw.slice(0, colon) : raw, at > 0 ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
-  const at = raw.indexOf('@');
   const name = at > 0 ? raw.slice(0, at) : raw;
-  const range = at > 0 ? raw.slice(at + 1) : undefined;
+  const range = at > 0 ? raw.slice(at + (colon > 0 ? 2 : 1)) : undefined;
   return withRange(checkName('nuget', name, raw), range);
 }
 
@@ -866,6 +881,34 @@ const FLAGS: Record<string, FlagTable> = {
     bool: set('-g', '--global', '--local', '--prerelease', '--disable-parallel', '--ignore-failed-sources', '--no-http-cache',
       '--interactive', '--allow-downgrade', '--create-manifest-if-needed', '--allow-roll-forward'),
     registry: set('--add-source', '--source', '--configfile'),
+  },
+  // The forms that fetch a package by name, each with the flags of its own verb (the help of the SDK 10.0.404,
+  // .specs/_findings-2026-11-20/measurements/dotnet-forms/help-windows-2026-11-20.txt): `-v` is the MSBuild verbosity in every one of
+  // them, a version only in `add package`. `--yes` is accepted by the run command and is not in its help (measured, table-windows-2026-11-20.txt lines 25-26).
+  'dotnet-run': {
+    value: set('--version', '--configfile', '--source', '--add-source', '-v', '--verbosity'),
+    bool: set('--allow-roll-forward', '--prerelease', '--disable-parallel', '--ignore-failed-sources', '--no-http-cache', '--interactive', '--yes'),
+    registry: set('--source', '--add-source', '--configfile'),
+  },
+  'dotnet-tool-update': {
+    value: set('--tool-path', '--version', '--configfile', '--tool-manifest', '--add-source', '--source', '--framework', '-v', '--verbosity'),
+    bool: set('-g', '--global', '--local', '--prerelease', '--disable-parallel', '--ignore-failed-sources', '--no-http-cache', '--interactive', '--allow-downgrade', '--all'),
+    registry: set('--add-source', '--source', '--configfile'),
+  },
+  'dotnet-new-install': {
+    value: set('--add-source', '--nuget-source', '-v', '--verbosity'),
+    bool: set('--interactive', '--force', '-d', '--diagnostics'),
+    registry: set('--add-source', '--nuget-source'),
+  },
+  'dotnet-download': {
+    value: set('--configfile', '-o', '--output', '-s', '--source', '-v', '--verbosity'),
+    bool: set('--allow-insecure-connections', '--interactive', '--prerelease'),
+    registry: set('-s', '--source', '--configfile'),
+  },
+  'dotnet-package-update': {
+    value: set('--file', '--project', '-v', '--verbosity'),
+    bool: set('--vulnerable', '--interactive'),
+    registry: set(),
   },
 };
 
@@ -1557,7 +1600,19 @@ interface Detected {
    * environment of `pipx inject`, which `pre` holds) may have been that flag's value ({@link afterUnknownFlag}).
    */
   firstIsCandidate?: true;
+  /** One of the {@link DotnetForm}s that fetch a package by name, and how it is spelled (`dnx`, `dotnet tool exec`, …): {@link collectDotnet} reads it. */
+  dotnet?: { form: DotnetForm; spelling: string };
 }
+/** The .NET forms read since install-vet-dotnet-run-forms: the run command (`dnx`, `dotnet dnx`, `dotnet tool exec` / `execute`) and four verbs. */
+type DotnetForm = 'run' | 'tool-update' | 'new-install' | 'download' | 'package-update';
+/** The {@link FLAGS} table of the flags of each {@link DotnetForm}. */
+const DOTNET_FORM_TABLES: Readonly<Record<DotnetForm, string>> = {
+  run: 'dotnet-run',
+  'tool-update': 'dotnet-tool-update',
+  'new-install': 'dotnet-new-install',
+  download: 'dotnet-download',
+  'package-update': 'dotnet-package-update',
+};
 
 /** A launcher as `detect` returns it. */
 function launcher(
@@ -1632,7 +1687,7 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   uv: new Set(['add', 'pip', 'tool', 'run']),
   poetry: new Set(['add']),
   composer: COMPOSER_REQUIRE,
-  dotnet: new Set(['add', 'package', 'tool']),
+  dotnet: new Set(['add', 'package', 'tool', 'new', 'dnx']),
 };
 /** The verbs of pipx the hook reads: the ones that fetch a package, or an update of one that is installed. */
 const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run', 'inject', 'upgrade', 'reinstall', 'runpip', 'upgrade-all']);
@@ -1640,7 +1695,6 @@ const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run', 'inject
 const UV_TOOL_SUBCOMMANDS: ReadonlySet<string> = new Set(['run', 'install', 'upgrade']);
 /** The verbs of pip that fetch a package, and the {@link FLAGS} table of the flags of each (`install`: pip's own). */
 const PIP_FETCH_TABLES: ReadonlyMap<string, string | undefined> = new Map([['install', undefined], ['download', 'pip-download'], ['wheel', 'pip-wheel']]);
-const ADD_ONLY: ReadonlySet<string> = new Set(['add']);
 const ADD_OR_UP: ReadonlySet<string> = new Set(['add', 'up']);
 const ADD_OR_UPGRADE: ReadonlySet<string> = new Set(['add', 'upgrade']);
 const FOREACH_ONLY: ReadonlySet<string> = new Set(['foreach']);
@@ -1733,6 +1787,13 @@ function upgradeDetected(after: ShellWord[], before: ShellWord[]): Detected {
   return { manager: 'pipx', ecosystem: 'pypi', args: after, pre: before, uncertain: [], flagTable: 'pipx-upgrade', names: 'always' };
 }
 const INSTALL_ONLY: ReadonlySet<string> = new Set(['install']);
+const DOTNET_TOOL_VERBS: ReadonlySet<string> = new Set(['install', 'exec', 'execute', 'update']);
+const DOTNET_PACKAGE_VERBS: ReadonlySet<string> = new Set(['add', 'download', 'update']);
+
+/** A .NET form that fetches a package by name, as `detect` returns it: the manager is `dotnet` whatever the spelling (`dnx` too). */
+function dotnetDetected(form: DotnetForm, spelling: string, args: ShellWord[], pre: ShellWord[]): Detected {
+  return { manager: 'dotnet', ecosystem: 'nuget', args, pre, uncertain: [], flagTable: DOTNET_FORM_TABLES[form], dotnet: { form, spelling } };
+}
 const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
 
 /**
@@ -1814,6 +1875,7 @@ function detect(input: readonly ShellWord[]): Detected | null {
     }
   }
 
+  if (head === 'dnx') return dotnetDetected('run', 'dnx', rest, []);
   const table = FLAGS[head];
   if (table === undefined) return null;
   // An initializer verb after a flag the table does not know may be that flag's value (`npm --dgunknown create install p`,
@@ -1971,9 +2033,17 @@ function detect(input: readonly ShellWord[]): Detected | null {
         : null;
     case 'dotnet': {
       // dotnet package add <NAME> (.NET 10: the same command as `add package`, the project a flag)
+      if (subWord === 'dnx') return dotnetDetected('run', 'dotnet dnx', words.slice(sub + 1), pre);
+      if (subWord === 'new') {
+        const verb = nextPositional(words, sub + 1, FLAGS['dotnet-new-install'] ?? table, INSTALL_ONLY);
+        return verb >= 0 && words[verb]?.value === 'install' ? dotnetDetected('new-install', 'dotnet new install', words.slice(verb + 1), pre) : null;
+      }
       if (subWord === 'package') {
-        const verb = nextPositional(words, sub + 1, table, ADD_ONLY);
-        if (verb < 0 || words[verb]?.value !== 'add') return null;
+        const verb = nextPositional(words, sub + 1, table, DOTNET_PACKAGE_VERBS);
+        const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
+        if (verbName === 'download') return dotnetDetected('download', 'dotnet package download', words.slice(verb + 1), pre);
+        if (verbName === 'update') return dotnetDetected('package-update', 'dotnet package update', words.slice(verb + 1), pre);
+        if (verbName !== 'add') return null;
         const args = words.slice(verb + 1);
         const uncertain = args.some((w) => /^--(?:project|file)(?:=|$)/.test(w.value))
           ? ['dotnet project argument (the NuGet configuration next to that project was not read)']
@@ -1983,9 +2053,13 @@ function detect(input: readonly ShellWord[]): Detected | null {
       // dotnet tool install <NAME>: the tool is a NuGet package, asked of the sources as `add package` asks.
       if (subWord === 'tool') {
         const toolTable = FLAGS['dotnet-tool'] ?? table;
-        const verb = nextPositional(words, sub + 1, toolTable, INSTALL_ONLY);
-        if (verb < 0 || words[verb]?.value !== 'install') return null;
-        return { manager: head, ecosystem: 'nuget', args: words.slice(verb + 1), pre, uncertain: [], flagTable: 'dotnet-tool' };
+        const verb = nextPositional(words, sub + 1, toolTable, DOTNET_TOOL_VERBS);
+        const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
+        const after = verb < 0 ? [] : words.slice(verb + 1);
+        if (verbName === 'exec' || verbName === 'execute') return dotnetDetected('run', `dotnet tool ${verbName}`, after, pre);
+        if (verbName === 'update') return dotnetDetected('tool-update', 'dotnet tool update', after, pre);
+        if (verbName !== 'install') return null;
+        return { manager: head, ecosystem: 'nuget', args: after, pre, uncertain: [], flagTable: 'dotnet-tool' };
       }
       if (subWord !== 'add') return null;
       // dotnet add [<PROJECT>] package <NAME>
@@ -2310,6 +2384,7 @@ function splitOutsideBrackets(value: string): string[] {
 
 function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.launch !== undefined) return collectLaunch(d, d.launch, context);
+  if (d.dotnet !== undefined) return collectDotnet(d, d.dotnet, context);
   const table = FLAGS[d.flagTable ?? (d.manager === 'uv-pip' ? 'pip' : d.manager)] ?? FLAGS['npm'];
   const flagTable = table ?? { value: set(), bool: set(), registry: set() };
   const preWalk = walk(d.pre, flagTable);
@@ -2428,6 +2503,303 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     if (d.update === true) out.update = true;
   }
   return out;
+}
+
+/** A version of NuGet as one writes it exact: `1`, `1.2.3.4`, `1.0.0-beta.1`, `1.0.0+build.5` (the form of `NUGET_VERSION` of `privateRegistry.ts`, which this module does not import). */
+const NUGET_EXACT_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
+
+/** The reason of a command that names a version the SDK 10.0.404 refuses before any request (the owner's answer to question 9). */
+const SDK_REFUSED_VERSION = 'a version SDK 10.0.404 refuses before any request — looked up in case another SDK accepts it';
+
+/** Whether `word` is a NuGet name written whole, with no version: `parseNuget` reads it as a name and nothing else. */
+function isPlainNugetName(word: string): boolean {
+  if (word.startsWith('-')) return false;
+  const spec = parseNuget(word);
+  return 'name' in spec && spec.name === word && spec.range === undefined;
+}
+
+/**
+ * The three lines whose version the SDK 10.0.404 refuses before any request (measured 2026-11-21, m 18, 20 and 21: nothing reaches the
+ * source): `dnx <id>@latest`, `dotnet package download <id>@1.* --allow-insecure-connections` and `dotnet new install <id>::latest --force`,
+ * with the same spelling, the same flags and the same place. `args` are the words after the spelling.
+ */
+function refusedVersionLine(spelling: string, args: readonly string[]): boolean {
+  const [word = '', flag] = args;
+  const sep = spelling === 'dotnet new install' ? '::' : '@';
+  const at = word.indexOf(sep);
+  if (at <= 0 || !isPlainNugetName(word.slice(0, at))) return false;
+  const text = word.slice(at + sep.length);
+  switch (spelling) {
+    case 'dnx':
+      return args.length === 1 && text === 'latest';
+    case 'dotnet package download':
+      return args.length === 2 && text === '1.*' && flag === '--allow-insecure-connections';
+    case 'dotnet new install':
+      return args.length === 2 && text === 'latest' && flag === '--force';
+    default:
+      return false;
+  }
+}
+
+/**
+ * What a `dnx`, `dotnet tool exec` / `execute` / `update`, `dotnet new install`, `dotnet package download` or `dotnet package update` line
+ * gives (the forms that ask the sources for a package by name, measured 2026-11-20 and 21):
+ *
+ *   - the run command: the FIRST positional word is the package, the rest are the tool's own arguments (never packages, never skipped);
+ *     its flags are read after the id as well, and a `--` before the id makes the word after it the id, one after it ends what is read;
+ *   - `tool update`: one package, as `tool install` reads it, and a second word is an extra argument;
+ *   - `new install` and `package download`: every positional word is a package;
+ *   - `package update`: the words are names given to an update ({@link InstallCommand.updateNames}), never packages.
+ *
+ * The version is the one after `@` (after `::` too in `new install`) or the value of `--version`; it is dropped, and the command said
+ * uncertain, for the three lines of {@link refusedVersionLine}.
+ */
+function collectDotnet(d: Detected, dotnet: NonNullable<Detected['dotnet']>, context: readonly string[]): InstallCommand {
+  const table = FLAGS[d.flagTable ?? ''] ?? { value: set(), bool: set(), registry: set() };
+  const preWalk = walk(d.pre, table);
+  let body = d.args;
+  if (dotnet.form === 'run') {
+    const dash = d.args.findIndex((w) => w.value === '--');
+    if (dash >= 0) {
+      const before = d.args.slice(0, dash);
+      // A word before the `--` is the id and what follows is the tool's; with none, the word after the `--` is the id.
+      const named = walk(before, table).positionals.length > 0;
+      const idWord = d.args[dash + 1];
+      body = named || idWord === undefined ? before : [...before, idWord];
+    }
+  }
+  const walked = walk(body, table);
+  const limited = limitCandidates(walked.positionals);
+  const colons = dotnet.form === 'new-install';
+  const several = dotnet.form === 'new-install' || dotnet.form === 'download' || dotnet.form === 'package-update';
+  const candidate = limited.kept.some((p) => p.candidate === true);
+  const skipped = walked.skipped;
+  const packages: PackageSpec[] = [];
+  const candidates: PackageSpec[] = [];
+  const names: PackageSpec[] = [];
+  const out: InstallCommand = {
+    ecosystem: 'nuget',
+    manager: 'dotnet',
+    packages,
+    skipped,
+    uncertain: [...new Set([...context, ...d.uncertain, ...preWalk.uncertain, ...walked.uncertain])],
+    registries: [...preWalk.registries, ...walked.registries],
+  };
+  const registry = preWalk.customRegistry ?? walked.customRegistry;
+  if (registry !== undefined) out.customRegistry = registry;
+  if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
+  const spelled = limited.kept.slice(0, several || candidate ? undefined : 1);
+  for (const p of spelled) {
+    const spec = parseNuget(p.value, colons);
+    if (!('name' in spec)) {
+      skipped.push(spec);
+      continue;
+    }
+    if (dotnet.form === 'package-update') names.push(spec);
+    else {
+      packages.push(spec);
+      if (p.candidate === true) candidates.push(spec);
+    }
+    const why = unmeasuredReason('dotnet', spec);
+    if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
+  }
+  // A second word of `tool update` is an extra argument, as it is for `tool install` (a run command's are the tool's, and no one's business).
+  if (dotnet.form === 'tool-update' && !candidate) {
+    for (const p of limited.kept.slice(1)) skipped.push(skip(p.value, 'unexpected extra argument to dotnet tool update'));
+  }
+  if (candidates.length > 0) out.candidates = candidates;
+  const first = packages[0];
+  const version = dotnet.form === 'run' || dotnet.form === 'tool-update' ? flagValue(body, ['--version']) : undefined;
+  if (first !== undefined && version !== undefined) first.range = version;
+  if (first !== undefined && refusedVersionLine(dotnet.spelling, d.pre.length === 0 ? d.args.map((w) => w.value) : [])) {
+    delete first.range;
+    if (!out.uncertain.includes(SDK_REFUSED_VERSION)) out.uncertain.push(SDK_REFUSED_VERSION);
+  }
+  if (dotnet.form === 'package-update') {
+    if (names.length > 0) out.updateNames = names;
+    if (body.some((w) => /^--(?:project|file)(?:=|$)/.test(w.value))) {
+      out.uncertain.push('dotnet project argument (the NuGet configuration next to that project was not read)');
+    }
+  }
+  if (dotnet.form === 'new-install') {
+    out.localPathFirst = true;
+    out.sourceFlag = '`--add-source <url>`';
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────── the measured .NET forms
+
+/**
+ * The lines of the .NET forms that fetch a package by name whose inner command may DENY a name the sources do not have: the 47 forms
+ * measured with SDK 10.0.404 on Windows 11 (`.specs/_findings-2026-11-20/measurements/dotnet-forms/table-windows-2026-11-20.txt` of
+ * 2026-11-20, lines 1-3, 6-8, 11-13, 16-18, 25-26, 34-36, 40-42, 54-59 and 77-79, and `m2-windows-2026-11-21.txt` of 2026-11-21, m 1-17 and
+ * 19, 22-23, 26): the spelling, then the words in the measured order with nothing after the last one. A place stands for a kind of word:
+ * `<id>` a NuGet name (no version, no leading `-`); `<id>@<v>` and `<id>::<v>` that name and an exact version of NuGet; `<id>@<n>.*` that
+ * name, `@`, a number and `.*` (only `dnx`, the word quoted — a `*` outside quotes already takes the confident shape away); `<v>` an
+ * exact version; `<dir>` any word; `<ids>` two or more names; `<args>` one or more words with no `-` in front (the tool's own arguments);
+ * `<rest>` every word after a `--`. The owner widened the places the measurement filled with one value (the answers to questions 5 and 8).
+ * A line that is none of them keeps the reason of what is missing ({@link dotnetGap}).
+ */
+const MEASURED_DOTNET_FORMS: ReadonlyArray<readonly string[]> = (() => {
+  const f = (spelling: string, ...rest: string[]): string[] => [...spelling.split(' '), ...rest];
+  const run = (spelling: string): string[][] => [
+    f(spelling, '<id>'),
+    f(spelling, '<id>@<v>'),
+    f(spelling, '<id>', '--version', '<v>'),
+    f(spelling, '<id>', '<args>'),
+    f(spelling, '--yes', '<id>'),
+  ];
+  return [
+    ...run('dotnet tool execute'),
+    ...run('dotnet tool exec'),
+    f('dotnet tool exec', '<id>', '--yes'),
+    ...run('dotnet dnx'),
+    ...run('dnx'),
+    f('dnx', '<id>', '--yes'),
+    f('dnx', '--version', '<v>', '<id>'),
+    f('dnx', '<id>@<n>.*'),
+    f('dnx', '--', '<id>'),
+    f('dnx', '<id>', '--', '<rest>'),
+    f('dotnet tool update', '-g', '<id>'),
+    f('dotnet tool update', '-g', '<id>', '--version', '<v>'),
+    f('dotnet tool update', '--tool-path', '<dir>', '<id>'),
+    f('dotnet tool update', '--global', '<id>'),
+    f('dotnet tool update', '<id>', '-g'),
+    f('dotnet tool update', '-g', '<id>@<v>'),
+    f('dotnet tool update', '--tool-path', '<dir>', '<id>', '--version', '<v>'),
+    f('dotnet tool update', '<id>'),
+    f('dotnet tool update', '<id>', '--version', '<v>'),
+    f('dotnet tool update', '<id>@<v>'),
+    f('dotnet tool update', '--local', '<id>'),
+    f('dotnet new install', '<id>', '--force'),
+    f('dotnet new install', '<id>::<v>', '--force'),
+    f('dotnet new install', '<id>@<v>', '--force'),
+    f('dotnet new install', '--force', '<id>'),
+    f('dotnet new install', '<ids>', '--force'),
+    f('dotnet package download', '<id>'),
+    f('dotnet package download', '<id>', '--allow-insecure-connections'),
+    f('dotnet package download', '<id>@<v>', '--allow-insecure-connections'),
+    f('dotnet package download', '<id>@<v>'),
+    f('dotnet package download', '<ids>'),
+  ];
+})();
+
+/** Whether `word` is what the single-word place `token` of a measured .NET form stands for (a token without `<` is the word itself). */
+function fitsDotnetPlace(token: string, word: string): boolean {
+  const pair = (sep: string): { id: string; text: string } | undefined => {
+    const at = word.indexOf(sep);
+    return at > 0 ? { id: word.slice(0, at), text: word.slice(at + sep.length) } : undefined;
+  };
+  switch (token) {
+    case '<id>':
+      return isPlainNugetName(word);
+    case '<v>':
+      return NUGET_EXACT_VERSION.test(word);
+    case '<dir>':
+      return word !== '';
+    case '<id>@<v>': {
+      const p = pair('@');
+      return p !== undefined && isPlainNugetName(p.id) && NUGET_EXACT_VERSION.test(p.text);
+    }
+    case '<id>::<v>': {
+      const p = pair('::');
+      return p !== undefined && isPlainNugetName(p.id) && NUGET_EXACT_VERSION.test(p.text);
+    }
+    case '<id>@<n>.*': {
+      const p = pair('@');
+      return p !== undefined && isPlainNugetName(p.id) && /^\d+\.\*$/.test(p.text);
+    }
+    default:
+      return token === word;
+  }
+}
+
+/** Whether the words are, word by word and with nothing after the last, one of the {@link MEASURED_DOTNET_FORMS}. */
+function isMeasuredDotnetForm(words: readonly string[]): boolean {
+  return MEASURED_DOTNET_FORMS.some((form) => {
+    let at = 0;
+    for (const token of form) {
+      if (token === '<ids>' || token === '<args>' || token === '<rest>') {
+        let n = 0;
+        while (at + n < words.length && (token === '<rest>' || (token === '<ids>' ? isPlainNugetName(words[at + n] ?? '') : !(words[at + n] ?? '').startsWith('-')))) n += 1;
+        if (n < (token === '<ids>' ? 2 : 1)) return false;
+        at += n;
+      } else {
+        if (at >= words.length || !fitsDotnetPlace(token, words[at] ?? '')) return false;
+        at += 1;
+      }
+    }
+    return at === words.length;
+  });
+}
+
+/** A line of the forms {@link collectDotnet} reads: the spelling (the words that name it), its form, and the words after them. */
+function dotnetFormOf(words: readonly string[]): { spelling: string; form: DotnetForm; rest: readonly string[] } | undefined {
+  const [a = '', b = '', c = ''] = words;
+  if (a === 'dnx') return { spelling: 'dnx', form: 'run', rest: words.slice(1) };
+  if (a !== 'dotnet') return undefined;
+  if (b === 'dnx') return { spelling: 'dotnet dnx', form: 'run', rest: words.slice(2) };
+  if (b === 'tool' && (c === 'exec' || c === 'execute')) return { spelling: `dotnet tool ${c}`, form: 'run', rest: words.slice(3) };
+  if (b === 'tool' && c === 'update') return { spelling: 'dotnet tool update', form: 'tool-update', rest: words.slice(3) };
+  if (b === 'new' && c === 'install') return { spelling: 'dotnet new install', form: 'new-install', rest: words.slice(3) };
+  if (b === 'package' && c === 'download') return { spelling: 'dotnet package download', form: 'download', rest: words.slice(3) };
+  if (b === 'package' && c === 'update') return { spelling: 'dotnet package update', form: 'package-update', rest: words.slice(3) };
+  return undefined;
+}
+
+/** The text of the version a word of an identifier names: after `@`, or after `::` (`dotnet new install`). */
+function versionTextOf(word: string): string | undefined {
+  const colon = word.indexOf('::');
+  const at = colon > 0 ? colon : word.indexOf('@');
+  return at > 0 ? word.slice(at + (colon > 0 ? 2 : 1)) : undefined;
+}
+
+/** What a line of a read .NET form has that no measured form of its spelling has: the first thing that fits, in the words of the reason. */
+function dotnetGap(spelling: string, form: DotnetForm, rest: readonly string[]): string {
+  const own = MEASURED_DOTNET_FORMS.filter((m) => m.join(' ').startsWith(`${spelling} `));
+  const measuredFlags = new Set(own.flatMap((m) => m.filter((t) => t.startsWith('-') && t !== '--')));
+  if (rest.includes('--')) return 'the `--`';
+  const valueFlags = FLAGS[DOTNET_FORM_TABLES[form]]?.value ?? new Set<string>();
+  const flags: string[] = [];
+  const positionals: string[] = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const w = rest[i] ?? '';
+    if (!w.startsWith('-')) {
+      positionals.push(w);
+      continue;
+    }
+    flags.push(w);
+    if (valueFlags.has(w)) i += 1;
+  }
+  for (const w of positionals) {
+    const text = versionTextOf(w);
+    if (text !== undefined && !NUGET_EXACT_VERSION.test(text)) return `the version text ${text}`;
+  }
+  const unknown = flags.find((w) => !measuredFlags.has(w.includes('=') ? w.slice(0, w.indexOf('=')) : w));
+  if (unknown !== undefined) return `the flag ${unknown}`;
+  if (positionals.length > 1) return form === 'run' ? 'a tool argument after the package' : 'more than one package';
+  const [only, ...more] = flags;
+  return only !== undefined && more.length === 0 ? `the place of the flag ${only}` : 'the flags together';
+}
+
+/** The reason `dotnet new install` without `--force` may not deny (the owner's answer B to question 3). */
+const NEW_INSTALL_WITHOUT_FORCE =
+  'dotnet new install without --force was measured to contact an https source, not to ask it for the package — not measured';
+
+/**
+ * The judgement of the confident shape for the forms {@link collectDotnet} reads: `null` for one of the {@link MEASURED_DOTNET_FORMS}, the
+ * reason otherwise; `undefined` when the words are no such form. The three lines of {@link refusedVersionLine} say that; `dotnet new
+ * install` with no `--force` says it was not measured; `dotnet package update` names no package, so what it says is only ever a warning.
+ */
+function judgeDotnetForm(words: readonly string[]): string | null | undefined {
+  const line = dotnetFormOf(words);
+  if (line === undefined) return undefined;
+  if (line.form === 'package-update') return notPlain('dotnet package update names a package given to an update');
+  if (line.form === 'new-install' && !line.rest.includes('--force')) return NEW_INSTALL_WITHOUT_FORCE;
+  if (refusedVersionLine(line.spelling, line.rest)) return SDK_REFUSED_VERSION;
+  if (isMeasuredDotnetForm(words)) return null;
+  return `a dotnet command form that was not measured (${dotnetGap(line.spelling, line.form, line.rest)})`;
 }
 
 function flagValue(words: readonly ShellWord[], names: readonly string[]): string | undefined {
@@ -3128,6 +3500,9 @@ function confidentWords(words: readonly string[]): string | null {
   if (tool === undefined) return notSingle('empty');
   // One of the 32 measured Python forms has the confident shape, and no other line of the forms read since does.
   if (isMeasuredPythonForm([tool, ...rest])) return null;
+  // The .NET forms read since install-vet-dotnet-run-forms are judged by their measured forms, not by an allowlist of flags.
+  const dotnetForm = judgeDotnetForm([tool, ...rest]);
+  if (dotnetForm !== undefined) return dotnetForm;
   const unmeasured = unmeasuredVerb([tool, ...rest]);
   if (unmeasured !== undefined) return unmeasured;
   const at = (k: number): string => rest[k] ?? '';

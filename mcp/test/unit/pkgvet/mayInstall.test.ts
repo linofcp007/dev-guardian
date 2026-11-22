@@ -131,7 +131,7 @@ describe('install-vet-through-corepack', () => {
 });
 
 describe('install-vet-dotnet-run-forms', () => {
-  it.each(['dnx T', 'dnx.exe T', '"dnx" T', 'echo hi; dnx T', 'C:\tools\dnx.exe T'])('T-08 `%s`: the gate lets it through to the parser', (command) => {
+  it.each(['dnx T', 'dnx.exe T', '"dnx" T', 'echo hi; dnx T', 'C:\\tools\\dnx.exe T'])('T-08 `%s`: the gate lets it through to the parser', (command) => {
     expect(mayInstall(command)).toBe(true);
   });
 
