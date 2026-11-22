@@ -5516,7 +5516,10 @@ var REASON = {
   unreadable: "could not be read",
   tooMany: "past the limit of 8 requirement files",
   tooDeep: "included more than 3 levels deep",
-  unknownDir: "where the command runs could not be determined"
+  unknownDir: "where the command runs could not be determined",
+  notInForm: "its `# /// script` block is not in the form the hook reads",
+  deadline: "vetting time budget exhausted",
+  notLiteral: "not a literal file name"
 };
 var MANIFEST_UNREADABLE_REASONS = Object.values(REASON);
 var UNKNOWN_DIRECTORY = REASON.unknownDir;
@@ -5715,6 +5718,14 @@ function optionValue(line, names) {
   }
   return void 0;
 }
+var OTHER_SOURCE_REASONS = ["direct URL reference", "local path", "URL / VCS / protocol spec", "SSH git spec", "archive file"];
+function readRequirement(requirement, manager) {
+  const parsed = parsePackageSpec("pypi", requirement, manager);
+  if (!("name" in parsed)) return OTHER_SOURCE_REASONS.some((r) => parsed.reason.startsWith(r)) ? { kind: "other-source" } : { kind: "none" };
+  if (parsed.name.length > MAX_NAME_LENGTH) return { kind: "none" };
+  const rangeUnread = parsed.range !== void 0 && !pypiRange(parsed.range);
+  return { kind: "package", name: parsed.name, range: rangeUnread ? void 0 : parsed.range, rangeUnread };
+}
 function requirementLines(text) {
   const out = [];
   let pending = "";
@@ -5758,10 +5769,9 @@ function readRequirementFile(path, under, depth, walk2, found) {
       continue;
     }
     const requirement = line.replace(/\s+--[A-Za-z].*$/, "").trim();
-    const parsed = parsePackageSpec("pypi", requirement, walk2.manager);
-    if (!("name" in parsed) || parsed.name.length > MAX_NAME_LENGTH) continue;
-    if (parsed.range !== void 0 && !pypiRange(parsed.range)) continue;
-    pushOnce(found.packages, found.seen, spec("pypi", parsed.name, parsed.range));
+    const reading = readRequirement(requirement, walk2.manager);
+    if (reading.kind !== "package" || reading.rangeUnread) continue;
+    pushOnce(found.packages, found.seen, spec("pypi", reading.name, reading.range));
   }
   return { status: "ok" };
 }

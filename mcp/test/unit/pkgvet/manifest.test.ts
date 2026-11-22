@@ -13,9 +13,11 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  inlineScriptBlock,
   MANIFEST_UNREADABLE_REASONS,
   MAX_MANIFEST_BYTES,
   MAX_REQUIREMENT_FILES,
+  readInlineScript,
   readNpmManifest,
   readRequirements,
 } from '../../../src/pkgvet/manifest.js';
@@ -1025,6 +1027,199 @@ describe('install-vet-manifest-protocol-values', () => {
       expect(line('pnpm add evil-pkg-zq@npm:vx')).toEqual([{ packages: [['vx', undefined]], skipped: [] }]);
       expect(line('pnpm add evil-pkg-zq@npm:~x')).toEqual([{ packages: [], skipped: ['evil-pkg-zq@npm:~x'] }]);
       expect(line('pnpm add alias-zq@npm:real-zq')).toEqual([{ packages: [['real-zq', undefined]], skipped: [] }]);
+    });
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — the reader of the `# /// script` block (PEP 723)
+
+describe('install-vet-inline-script-deps', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const NOT_IN_FORM = 'its `# /// script` block is not in the form the hook reads';
+  /** A `script` block: the lines of `body` (an empty one is a bare `#`), opened and closed. */
+  const block = (...body: string[]): string => ['# /// script', ...body.map((l) => (l === '' ? '#' : `# ${l}`)), '# ///'].join('\n') + '\n';
+  const deps = (list: string): string => block(`dependencies = [${list}]`);
+  /** The packages of a text as `[name, range]`, or the reason it was not read. */
+  const read = (text: string): { packages: Array<[string, string | undefined]> | string; toolUv: boolean; otherSource: boolean; incomplete?: string } => {
+    const r = inlineScriptBlock(text);
+    if (r.status === 'unreadable') return { packages: r.reason, toolUv: false, otherSource: false };
+    const out: { packages: Array<[string, string | undefined]> | string; toolUv: boolean; otherSource: boolean; incomplete?: string } = {
+      packages: named(r),
+      toolUv: r.toolUv === true,
+      otherSource: r.otherSource === true,
+    };
+    if (r.incomplete !== undefined) out.incomplete = r.incomplete;
+    return out;
+  };
+  const pairs = (text: string): Array<[string, string | undefined]> | string => read(text).packages;
+
+  describe('T-01 (a) what the reader accepts', () => {
+    it.each<[label: string, text: string, expected: Array<[string, string | undefined]>]>([
+      ['one line, with ranges', deps('"requests>=2,<3", "rich"'), [['requests', '>=2,<3'], ['rich', undefined]]],
+      ['several lines, a trailing comma, a quote of the other kind, a comment', block('dependencies = [', '  "requests",  # http', "  'rich',", ']'), [['requests', undefined], ['rich', undefined]]],
+      ['no blanks around the equal sign', block('dependencies=["a"]'), [['a', undefined]]],
+      ['blanks inside the brackets', deps(' "a" , "b" '), [['a', undefined], ['b', undefined]]],
+      ['a quoted key', block('"dependencies" = ["a"]', "'requires-python' = '>=3.11'"), [['a', undefined]]],
+      ['a \\u escape', deps('"dgprobe-zzq7731-\\u0065vil"'), [[EVIL, undefined]]],
+      ['a \\U escape', deps('"dgprobe-zzq7731-\\U00000065vil"'), [[EVIL, undefined]]],
+      ['an escape that makes an operator (the string is decoded before it is read)', deps('"requests\\u003e=2"'), [['requests', '>=2']]],
+      ['scalar keys it does not use', block('name = "x"', 'version = 1', 'flag = true', 'when = 2026-11-21', 'dependencies = ["a"]'), [['a', undefined]]],
+      ['requires-python, bare lines and a TOML comment', block('requires-python = ">=3.11"', '', '# a comment', 'dependencies = ["a"]', ''), [['a', undefined]]],
+      ['CRLF line ends', block('dependencies = ["a"]').split('\n').join('\r\n'), [['a', undefined]]],
+      ['a file with CR alone at every line end (EC-18)', block('dependencies = ["a"]').split('\n').join('\r'), [['a', undefined]]],
+      ['a BOM before the first line', `﻿${deps('"a"')}`, [['a', undefined]]],
+      ['after a shebang and a docstring', `#!/usr/bin/env python3\n"""doc"""\n${deps('"a"')}`, [['a', undefined]]],
+      ['after 2 000 lines of code', `${'x = 1\n'.repeat(2_000)}${deps('"a"')}`, [['a', undefined]]],
+      ['a closing line with blanks at the end', `# /// script\n# dependencies = ["a"]\n# ///  \t\nprint(1)\n`, [['a', undefined]]],
+      ['two closed blocks: both are read', `${deps('"a"')}x = 1\n${deps('"b"')}`, [['a', undefined], ['b', undefined]]],
+      ['a closed block and a second opening that never closes: the first one', `${deps('"a"')}x = 1\n# /// script\n# dependencies = ["b"]\n`, [['a', undefined]]],
+      ['[tool.ruff] and [project] after dependencies', block('dependencies = ["a"]', '[tool.ruff]', 'x = 1', '[project]', 'y = 2'), [['a', undefined]]],
+    ])('T-01 %s', (_label, text, expected) => {
+      expect(pairs(text)).toEqual(expected);
+    });
+
+    it('T-01 [tool.ruff] and [project] after dependencies leave `toolUv` out', () => {
+      expect(read(block('dependencies = ["a"]', '[tool.ruff]', '[project]')).toolUv).toBe(false);
+      expect(inlineScriptBlock(block('dependencies = ["a"]', '[tool.ruff]'))).not.toHaveProperty('toolUv');
+    });
+
+    it.each([
+      ['[tool.uv] with index-url', ['dependencies = ["a"]', '[tool.uv]', 'index-url = "x"']],
+      ['[[tool.uv.index]]', ['dependencies = ["a"]', '[[tool.uv.index]]', 'url = "x"']],
+      ['[ tool.uv ]', ['dependencies = ["a"]', '[ tool.uv ]']],
+      ['a dotted key tool.uv.index-url', ['dependencies = ["a"]', 'tool.uv.index-url = "x"']],
+      ['[tool] followed by uv.index-url', ['dependencies = ["a"]', '[tool]', 'uv.index-url = "x"']],
+      ['the decoded header ["tool".uv]', ['dependencies = ["a"]', '["tool".uv]']],
+      ['the decoded header [tool."uv"]', ['dependencies = ["a"]', '[tool."uv"]']],
+      ['the decoded key "tool".\'uv\'.index-url', ['dependencies = ["a"]', `"tool".'uv'.index-url = "x"`]],
+    ])('T-01 %s: the packages are read and `toolUv` is set', (_label, body) => {
+      expect(read(block(...body))).toMatchObject({ packages: [['a', undefined]], toolUv: true });
+    });
+
+    it('T-01 no block, a `# /// pyproject` block and a block that never closes: ok, no package', () => {
+      expect(inlineScriptBlock('print(1)\n')).toMatchObject({ status: 'ok', packages: [] });
+      expect(inlineScriptBlock('# /// pyproject\n# dependencies = ["a"]\n# ///\n')).toMatchObject({ status: 'ok', packages: [] });
+      expect(inlineScriptBlock('# /// script\n# dependencies = ["a"]\nprint(1)\n')).toMatchObject({ status: 'ok', packages: [] });
+    });
+
+    it('T-01 a closed block followed by `#\\r# ///`: the reading of the uv names the package, the other one is not in the form (the union keeps both)', () => {
+      const text = `# /// script\n# dependencies = ["${EVIL}"]\n# ///\n#\r# ///\n`;
+      expect(read(text)).toMatchObject({ packages: [[EVIL, undefined]], incomplete: NOT_IN_FORM });
+    });
+
+    it('T-01 a lone CR inside the TOML: the reading that splits at CR reads the block, the other is not in the form (the union asks)', () => {
+      const text = `# /// script\n# name = "x"\r# y = 1\n# dependencies = ["a"]\n# ///\n`;
+      expect(read(text)).toMatchObject({ packages: [['a', undefined]], incomplete: NOT_IN_FORM });
+    });
+  });
+
+  describe('T-01 (b) the requirements of a block', () => {
+    const FIVE = ['"rich[jupyter]>=13"', `"httpx; python_version>'3.8'"`, '"pkg @ https://h.example/x.whl"', '"git+https://h.example/r.git"', '"./local"'];
+
+    it('T-01 the five forms give what `readRequirements` gives the same five lines of a file, and the URL, the VCS and the path set `otherSource`', () => {
+      write('r.txt', ['rich[jupyter]>=13', "httpx; python_version>'3.8'", 'pkg @ https://h.example/x.whl', 'git+https://h.example/r.git', './local'].join('\n'));
+      const fromFile = named(readRequirements(dir, ['r.txt'], 'uv')[0]);
+      expect(fromFile).toEqual([['rich', '>=13'], ['httpx', undefined]]);
+      expect(read(deps(FIVE.join(', ')))).toEqual({ packages: fromFile, toolUv: false, otherSource: true });
+    });
+
+    it('T-01 a block of `rich` alone has no `otherSource`', () => {
+      expect(inlineScriptBlock(deps('"rich"'))).not.toHaveProperty('otherSource');
+    });
+
+    it.each([
+      ['the PEP 508 form in parentheses', `${EVIL} (>=1.0)`],
+      ['a list of versions over 100 characters', `${EVIL}>=0.1,${Array.from({ length: 30 }, (_, i) => `!=0.${String(i + 2)}`).join(',')}`],
+      ['an old post-release `1.0-1`', `${EVIL}>1.0-1`],
+    ])('T-01 %s: only the name is vetted (P8 = B), where a requirements file skips the line', (_label, requirement) => {
+      write('r.txt', `${requirement}\n`);
+      expect(named(readRequirements(dir, ['r.txt'], 'uv')[0])).toEqual([]);
+      expect(pairs(deps(`"${requirement}"`))).toEqual([[EVIL, undefined]]);
+    });
+  });
+
+  describe('T-01 (c) what the reader refuses', () => {
+    it.each<[label: string, text: string]>([
+      ['dependencies as a string', block('dependencies = "requests"')],
+      ['an escape the TOML does not have', deps('"a\\x41"')],
+      ['dependencies as a multi-line string', block('dependencies = """a"""')],
+      ['an inline table in the list', deps('{name = "a"}')],
+      ['a list in the list', deps('["a"]')],
+      ['a multi-line string for another key', block('description = """x"""', 'dependencies = ["a"]')],
+      ['a list for another key', block('extra = ["x"]', 'dependencies = ["a"]')],
+      ['a second dependencies', block('dependencies = ["a"]', 'dependencies = ["b"]')],
+      ['a [dependencies] header', block('dependencies = ["a"]', '[dependencies]')],
+      ['a line `a b c`', block('a b c', 'dependencies = ["a"]')],
+      ['a requirement that names nothing', deps('"requests", "bad name"')],
+      ['a name over 214 characters', deps(`"${'a'.repeat(215)}"`)],
+      ['a control character in a string', deps('"a\\u0001b"')],
+      ['a string that never closes', block('dependencies = ["a]')],
+    ])('T-01 %s is unreadable, with the reason of the fixed list', (_label, text) => {
+      expect(inlineScriptBlock(text)).toEqual({ status: 'unreadable', reason: NOT_IN_FORM });
+      expect(MANIFEST_UNREADABLE_REASONS).toContain(NOT_IN_FORM);
+    });
+
+    it('T-01 the three new reasons are in the list of the reasons a manifest was not read', () => {
+      expect(MANIFEST_UNREADABLE_REASONS).toEqual(expect.arrayContaining([NOT_IN_FORM, 'vetting time budget exhausted', 'not a literal file name']));
+    });
+  });
+
+  describe('T-01 (d) the file', () => {
+    const readFile = (file: string) => readInlineScript(dir, file, 'uv', dir);
+
+    it('T-01 a file that is not there is absent', () => {
+      expect(readFile('nope.py')).toMatchObject({ status: 'absent', packages: [] });
+    });
+
+    it('T-01 a block of the file is read, under the name the command gave it', () => {
+      write('sub/x.py', deps(`"${EVIL}"`));
+      expect(readFile('sub/x.py')).toMatchObject({ file: 'sub/x.py', status: 'ok', packages: [{ name: EVIL }], names: [EVIL] });
+    });
+
+    it('T-01 a directory in its place is "not a regular file"', () => {
+      mkdirSync(join(dir, 'd.py'));
+      expect(readFile('d.py')).toMatchObject({ status: 'unreadable', reason: 'not a regular file' });
+    });
+
+    it('T-01 a valid block at the top of a file over `MAX_MANIFEST_BYTES` is "over 1 MiB"', () => {
+      write('big.py', `${deps(`"${EVIL}"`)}${'# pad\n'.repeat(Math.ceil(MAX_MANIFEST_BYTES / 6) + 10)}`);
+      expect(readFile('big.py')).toMatchObject({ status: 'unreadable', reason: 'over 1 MiB' });
+    });
+
+    it('T-01 a block outside the form is unreadable with the fixed reason, and nothing of the file in it', () => {
+      write('odd.py', block('dependencies = ["a"]', 'extra = ["secret-looking-text"]'));
+      const r = readFile('odd.py');
+      expect(r).toMatchObject({ status: 'unreadable', reason: NOT_IN_FORM });
+      expect(JSON.stringify(r)).not.toContain('secret-looking-text');
+    });
+
+    it('T-01 a network path is "on a network path", and answers at once', () => {
+      const t0 = Date.now();
+      const r = readFile('\\\\198.51.100.7\\share\\x.py');
+      expect(Date.now() - t0).toBeLessThan(hangBound(1000));
+      expect(r).toMatchObject({ status: 'unreadable', reason: 'on a network path' });
+    });
+
+    it.skipIf(process.platform === 'win32')('T-01 a FIFO in the place of the script does not hold the read (POSIX: Windows has no mkfifo)', () => {
+      execFileSync('mkfifo', [join(dir, 'fifo.py')]);
+      const t0 = Date.now();
+      const r = readFile('fifo.py');
+      expect(Date.now() - t0).toBeLessThan(hangBound(1000));
+      expect(r.status).toBe('unreadable');
+    });
+  });
+
+  describe('T-10 (a) the reader costs linear time', () => {
+    it.each<[label: string, base: number, make: (n: number) => string]>([
+      ['n lines of content in one block', 500, (n) => block(...Array.from({ length: n }, () => 'k = 1'))],
+      ['n `# /// script` lines that never close', 500, (n) => '# /// script\n'.repeat(n)],
+      ['one opening and n `# ///` lines', 500, (n) => `# /// script\n${'# ///\n'.repeat(n)}`],
+      ['a dependencies list of n strings on one line', 500, (n) => deps(Array.from({ length: n }, () => '"a"').join(', '))],
+      ['a string of n `\\u0065` escapes', 4_000, (n) => deps(`"${'\\u0065'.repeat(n)}"`)],
+      ['a string that never closes, of n `\\"`', 4_000, (n) => block(`dependencies = ["${'\\"'.repeat(n)}`)],
+      ['a string that never closes, of n `\\\\`', 4_000, (n) => block(`dependencies = ["${'\\\\'.repeat(n)}`)],
+    ])('T-10 %s: eight times the input, well under 22.6 times the time', (label, base, make) => {
+      expectLinear(`install-vet-inline-script-deps ${label}`, (n) => void inlineScriptBlock(make(n)), base);
     });
   });
 });

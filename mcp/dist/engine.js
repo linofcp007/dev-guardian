@@ -122739,7 +122739,10 @@ var init_manifest2 = __esm({
       unreadable: "could not be read",
       tooMany: "past the limit of 8 requirement files",
       tooDeep: "included more than 3 levels deep",
-      unknownDir: "where the command runs could not be determined"
+      unknownDir: "where the command runs could not be determined",
+      notInForm: "its `# /// script` block is not in the form the hook reads",
+      deadline: "vetting time budget exhausted",
+      notLiteral: "not a literal file name"
     };
     MANIFEST_UNREADABLE_REASONS = Object.values(REASON);
     UNKNOWN_DIRECTORY = REASON.unknownDir;

@@ -70,6 +70,10 @@ export interface ManifestRead {
   reason?: string;
   /** With `ok`: a file this one includes was not read, and why — its packages are not in `packages`. */
   incomplete?: string;
+  /** An inline script block names its own index or sources (`[tool.uv]`, or a `[tool]` header): what they serve is not vetted. */
+  toolUv?: true;
+  /** An inline script block names a package from a URL, a path or a VCS: it is not vetted. */
+  otherSource?: true;
 }
 
 /** The most of a manifest that is read: the hooks' cap for a `package.json`. */
@@ -89,6 +93,9 @@ const REASON = {
   tooMany: 'past the limit of 8 requirement files',
   tooDeep: 'included more than 3 levels deep',
   unknownDir: 'where the command runs could not be determined',
+  notInForm: 'its `# /// script` block is not in the form the hook reads',
+  deadline: 'vetting time budget exhausted',
+  notLiteral: 'not a literal file name',
 } as const;
 
 /** Why a manifest was not read: the only texts about one that reach a message. */
@@ -438,6 +445,28 @@ function optionValue(line: string, names: readonly string[]): string | undefined
   return undefined;
 }
 
+/** The reasons `parsePackageSpec` gives for a requirement the registry does not serve: a URL, a path, a VCS or an archive. */
+const OTHER_SOURCE_REASONS = ['direct URL reference', 'local path', 'URL / VCS / protocol spec', 'SSH git spec', 'archive file'] as const;
+
+/** What a requirement says (a line of a requirements file, or a string of an inline script block): the one reading of it. */
+type RequirementReading =
+  | { kind: 'package'; name: string; range: string | undefined; rangeUnread: boolean }
+  | { kind: 'other-source' }
+  | { kind: 'none' };
+
+/**
+ * A requirement as the registry would read it: its name, and its range when the hook reads that (`rangeUnread` otherwise, with no
+ * `range`: the PEP 508 form in parentheses, a list over 100 characters, a `1.0-1`). A URL, a path or a VCS is another source; any
+ * other string that gives no name (or one over 214 characters) is nothing. Each reader decides what to do with the three.
+ */
+function readRequirement(requirement: string, manager: string): RequirementReading {
+  const parsed = parsePackageSpec('pypi', requirement, manager);
+  if (!('name' in parsed)) return OTHER_SOURCE_REASONS.some((r) => parsed.reason.startsWith(r)) ? { kind: 'other-source' } : { kind: 'none' };
+  if (parsed.name.length > MAX_NAME_LENGTH) return { kind: 'none' };
+  const rangeUnread = parsed.range !== undefined && !pypiRange(parsed.range);
+  return { kind: 'package', name: parsed.name, range: rangeUnread ? undefined : parsed.range, rangeUnread };
+}
+
 /** The lines of a requirements file as pip reads them: a `\` at the end of a line continues it, a `#` starts a comment. */
 function requirementLines(text: string): string[] {
   const out: string[] = [];
@@ -510,10 +539,10 @@ function readRequirementFile(
     }
     // Per-requirement options (`--hash=…`, `--config-settings …`) follow the requirement.
     const requirement = line.replace(/\s+--[A-Za-z].*$/, '').trim();
-    const parsed = parsePackageSpec('pypi', requirement, walk.manager);
-    if (!('name' in parsed) || parsed.name.length > MAX_NAME_LENGTH) continue;
-    if (parsed.range !== undefined && !pypiRange(parsed.range)) continue;
-    pushOnce(found.packages, found.seen, spec('pypi', parsed.name, parsed.range));
+    const reading = readRequirement(requirement, walk.manager);
+    // What is no package, or has a range the hook does not read, is skipped: a file's line is vetted whole or not at all.
+    if (reading.kind !== 'package' || reading.rangeUnread) continue;
+    pushOnce(found.packages, found.seen, spec('pypi', reading.name, reading.range));
   }
   return { status: 'ok' };
 }
@@ -537,4 +566,343 @@ export function readRequirements(dir: string, files: readonly string[], manager 
     if (found.incomplete !== undefined) out.incomplete = found.incomplete;
     return out;
   });
+}
+
+// ───────────────────────────────────────────────────── inline script metadata (PEP 723)
+
+/** The answer of {@link inlineScriptBlock}: the packages the `script` blocks of a text name, or why a block was not read. */
+type InlineBlockRead =
+  | { status: 'ok'; packages: PackageSpec[]; toolUv?: true; otherSource?: true; incomplete?: string }
+  | { status: 'unreadable'; reason: string };
+
+/** A cursor over the text of a block: one character at a time, never backwards past a decision. */
+interface Lex {
+  s: string;
+  p: number;
+}
+
+const isBlank = (c: string | undefined): boolean => c === ' ' || c === '\t';
+const isBareKeyChar = (c: string): boolean => {
+  const n = c.charCodeAt(0);
+  return (n >= 48 && n <= 57) || (n >= 65 && n <= 90) || (n >= 97 && n <= 122) || c === '_' || c === '-';
+};
+/** The characters of a bare scalar (a number, `true`, a date) of a key the reader ignores. */
+const isBareValueChar = (c: string): boolean => isBareKeyChar(c) || c === '.' || c === ':' || c === '+';
+const HEX = '0123456789abcdefABCDEF';
+const SIMPLE_ESCAPES: Readonly<Record<string, string>> = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', '"': '"', '\\': '\\' };
+
+function skipToLineEnd(x: Lex): void {
+  while (x.p < x.s.length && x.s[x.p] !== '\n') x.p += 1;
+}
+
+function skipBlanks(x: Lex): void {
+  while (isBlank(x.s[x.p])) x.p += 1;
+}
+
+/** Whitespace, comments and line breaks: what may stand between the elements of an array. */
+function skipBlankLines(x: Lex): void {
+  for (;;) {
+    const c = x.s[x.p];
+    if (isBlank(c) || c === '\n') x.p += 1;
+    else if (c === '#') skipToLineEnd(x);
+    else return;
+  }
+}
+
+/** Whether the rest of the line is empty or a comment (and moves to its end). */
+function endsLine(x: Lex): boolean {
+  skipBlanks(x);
+  const c = x.s[x.p];
+  if (c === undefined || c === '\n') return true;
+  if (c !== '#') return false;
+  skipToLineEnd(x);
+  return true;
+}
+
+/** `digits` hexadecimal characters at the cursor, as the character they encode; `undefined` when they are not that or not a scalar value. */
+function readCodePoint(x: Lex, digits: number): string | undefined {
+  let code = 0;
+  for (let i = 0; i < digits; i += 1) {
+    const c = x.s[x.p];
+    if (c === undefined || !HEX.includes(c)) return undefined;
+    code = code * 16 + Number.parseInt(c, 16);
+    x.p += 1;
+  }
+  return code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff) ? undefined : String.fromCodePoint(code);
+}
+
+/**
+ * A one-line TOML string at the cursor, decoded: basic (`"…"`, with the escapes TOML has) or literal (`'…'`). A string of several
+ * lines (`"""`), another escape, a control character other than a tab, or an end of line before the closing quote is `undefined`.
+ * One pass, one step per character: a string that never closes costs what it is long, and nothing backtracks.
+ */
+function readString(x: Lex): string | undefined {
+  const quote = x.s[x.p];
+  if (x.s[x.p + 1] === quote && x.s[x.p + 2] === quote) return undefined;
+  x.p += 1;
+  let out = '';
+  for (;;) {
+    const c = x.s[x.p];
+    if (c === undefined || c === '\n') return undefined;
+    x.p += 1;
+    if (c === quote) return out;
+    const code = c.charCodeAt(0);
+    if ((code < 0x20 && c !== '\t') || code === 0x7f) return undefined;
+    if (quote === "'" || c !== '\\') {
+      out += c;
+      continue;
+    }
+    const e = x.s[x.p];
+    if (e === undefined) return undefined;
+    x.p += 1;
+    const decoded = e === 'u' ? readCodePoint(x, 4) : e === 'U' ? readCodePoint(x, 8) : SIMPLE_ESCAPES[e];
+    if (decoded === undefined) return undefined;
+    out += decoded;
+  }
+}
+
+/** A key — bare, quoted or dotted, with blanks around the dots — as its decoded parts; `undefined` when it is none. */
+function readKey(x: Lex): string[] | undefined {
+  const parts: string[] = [];
+  for (;;) {
+    skipBlanks(x);
+    const c = x.s[x.p];
+    if (c === undefined) return undefined;
+    let part: string | undefined;
+    if (c === '"' || c === "'") part = readString(x);
+    else {
+      const start = x.p;
+      while (x.p < x.s.length && isBareKeyChar(x.s[x.p] ?? ' ')) x.p += 1;
+      part = x.p > start ? x.s.slice(start, x.p) : undefined;
+    }
+    if (part === undefined) return undefined;
+    parts.push(part);
+    skipBlanks(x);
+    if (x.s[x.p] !== '.') return parts;
+    x.p += 1;
+  }
+}
+
+/** The one-line scalar value of a key the reader ignores: a string, or a bare word. */
+function skipScalar(x: Lex): boolean {
+  const c = x.s[x.p];
+  if (c === '"' || c === "'") return readString(x) !== undefined;
+  const start = x.p;
+  while (x.p < x.s.length && isBareValueChar(x.s[x.p] ?? ' ')) x.p += 1;
+  return x.p > start;
+}
+
+/** `[ "a", 'b', ]` over one line or several, comments and blank lines between: the strings; `undefined` for anything else in it. */
+function readStringList(x: Lex): string[] | undefined {
+  if (x.s[x.p] !== '[') return undefined;
+  x.p += 1;
+  const out: string[] = [];
+  for (;;) {
+    skipBlankLines(x);
+    const c = x.s[x.p];
+    if (c === ']') {
+      x.p += 1;
+      return out;
+    }
+    if (c !== '"' && c !== "'") return undefined;
+    const item = readString(x);
+    if (item === undefined) return undefined;
+    out.push(item);
+    skipBlankLines(x);
+    const next = x.s[x.p];
+    if (next === ',') x.p += 1;
+    else if (next !== ']') return undefined;
+  }
+}
+
+/** A `[header]` or `[[header]]` at the cursor: its decoded key; `undefined` when it is not well formed. */
+function readHeader(x: Lex): string[] | undefined {
+  x.p += 1;
+  const double = x.s[x.p] === '[';
+  if (double) x.p += 1;
+  const key = readKey(x);
+  if (key === undefined) return undefined;
+  skipBlanks(x);
+  if (x.s[x.p] !== ']') return undefined;
+  x.p += 1;
+  if (double) {
+    if (x.s[x.p] !== ']') return undefined;
+    x.p += 1;
+  }
+  return endsLine(x) ? key : undefined;
+}
+
+interface TomlBlock {
+  dependencies: string[];
+  toolUv: boolean;
+}
+
+/**
+ * The TOML of a block, as far as the reader goes (bug.md → "O leitor do bloco"): above the first header one statement a line —
+ * `dependencies = [ … ]` once, `requires-python = <string>`, any other key with a one-line scalar — and from the first header on
+ * only the headers. `undefined` is "not in the form the hook reads".
+ */
+function readToml(content: string): TomlBlock | undefined {
+  const x: Lex = { s: content, p: 0 };
+  let dependencies: string[] | undefined;
+  let toolUv = false;
+  let inTables = false;
+  while (x.p < x.s.length) {
+    skipBlanks(x);
+    const c = x.s[x.p];
+    if (c === undefined) break;
+    if (c === '\n') {
+      x.p += 1;
+      continue;
+    }
+    if (c === '#') {
+      skipToLineEnd(x);
+      continue;
+    }
+    if (c === '[') {
+      const header = readHeader(x);
+      if (header === undefined || header[0] === 'dependencies' || header[0] === 'requires-python') return undefined;
+      if (header[0] === 'tool' && (header.length === 1 || header[1] === 'uv')) toolUv = true;
+      inTables = true;
+      continue;
+    }
+    if (inTables) {
+      skipToLineEnd(x);
+      continue;
+    }
+    const key = readKey(x);
+    if (key === undefined) return undefined;
+    skipBlanks(x);
+    if (x.s[x.p] !== '=') return undefined;
+    x.p += 1;
+    skipBlanks(x);
+    if (key.length === 1 && key[0] === 'dependencies') {
+      if (dependencies !== undefined) return undefined;
+      dependencies = readStringList(x);
+      if (dependencies === undefined || !endsLine(x)) return undefined;
+      continue;
+    }
+    if (key[0] === 'tool' && key[1] === 'uv') toolUv = true;
+    if (!skipScalar(x) || !endsLine(x)) return undefined;
+  }
+  return { dependencies: dependencies ?? [], toolUv };
+}
+
+const isOpening = (line: string): boolean => line.startsWith('# /// script') && line.slice('# /// script'.length).trim() === '' && !line.slice('# /// script'.length).includes('\r');
+const isContent = (line: string): boolean => line === '#' || line.startsWith('# ');
+/** The closing line: `# ///`, blanks and tabs at the end allowed. */
+const isClosing = (line: string): boolean => line.startsWith('# ///') && line.slice('# ///'.length).trim() === '' && !line.slice('# ///'.length).includes('\r');
+
+/** The lines of a text split at `\n` alone, a `\r` before it taken off (CRLF): how the uv reads a file. */
+function linesAtLineFeed(text: string): string[] {
+  return text.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
+}
+
+/** The lines of a text split at `\r\n`, `\r` and `\n`: how the pipx with the `pip` engine reads a file. */
+function linesAtAnyBreak(text: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c !== '\r' && c !== '\n') continue;
+    out.push(text.slice(start, i));
+    if (c === '\r' && text[i + 1] === '\n') i += 1;
+    start = i + 1;
+  }
+  out.push(text.slice(start));
+  return out;
+}
+
+/** Whether a `\r` stands in the text that no `\n` follows: the two ways of splitting lines then differ. */
+function hasLoneCarriageReturn(text: string): boolean {
+  for (let i = text.indexOf('\r'); i >= 0; i = text.indexOf('\r', i + 1)) if (text[i + 1] !== '\n') return true;
+  return false;
+}
+
+/** The `script` blocks of one split of the lines, read; each line is visited a bounded number of times. */
+function readBlocksOf(lines: readonly string[], manager: string): InlineBlockRead {
+  const packages: PackageSpec[] = [];
+  const seen = new Set<string>();
+  let toolUv = false;
+  let otherSource = false;
+  let i = 0;
+  while (i < lines.length) {
+    if (!isOpening(lines[i] ?? '')) {
+      i += 1;
+      continue;
+    }
+    // The content is the run of `#` lines after the opening; the block closes at the LAST `# ///` of that run (PEP 723).
+    let end = i + 1;
+    let closing = -1;
+    while (end < lines.length && isContent(lines[end] ?? '')) {
+      if (isClosing(lines[end] ?? '')) closing = end;
+      end += 1;
+    }
+    if (closing < 0) {
+      // A block that never closes is no block, and a run with no closing has none inside it either: go past the run.
+      i = end;
+      continue;
+    }
+    const content = lines
+      .slice(i + 1, closing)
+      .map((line) => line.slice(2))
+      .join('\n');
+    const toml = readToml(content);
+    if (toml === undefined) return { status: 'unreadable', reason: REASON.notInForm };
+    if (toml.toolUv) toolUv = true;
+    for (const requirement of toml.dependencies) {
+      const reading = readRequirement(requirement, manager);
+      if (reading.kind === 'none') return { status: 'unreadable', reason: REASON.notInForm };
+      if (reading.kind === 'other-source') otherSource = true;
+      // A name whose range the hook does not read is vetted by the name alone: the uv installs it all the same.
+      else pushOnce(packages, seen, spec('pypi', reading.name, reading.range));
+    }
+    i = closing + 1;
+  }
+  const out: InlineBlockRead = { status: 'ok', packages };
+  if (toolUv) out.toolUv = true;
+  if (otherSource) out.otherSource = true;
+  return out;
+}
+
+/**
+ * The packages the `# /// script` blocks of a Python file name (PEP 723). With a `\r` that no `\n` follows the text is read twice —
+ * split at `\n` alone (the uv) and at any line break (the pipx with the `pip` engine) — and the answer is the union: a reading that
+ * fails beside one that works leaves `incomplete`, which asks like a block that is not read, and a refusal still wins.
+ */
+export function inlineScriptBlock(text: string, manager = 'uv'): InlineBlockRead {
+  const clean = text.startsWith('﻿') ? text.slice(1) : text;
+  const first = readBlocksOf(linesAtLineFeed(clean), manager);
+  if (!hasLoneCarriageReturn(clean)) return first;
+  const second = readBlocksOf(linesAtAnyBreak(clean), manager);
+  if (first.status === 'unreadable') return second.status === 'unreadable' ? first : { ...second, incomplete: first.reason };
+  if (second.status === 'unreadable') return { ...first, incomplete: second.reason };
+  const packages: PackageSpec[] = [];
+  const seen = new Set<string>();
+  for (const pkg of [...first.packages, ...second.packages]) pushOnce(packages, seen, pkg);
+  const out: InlineBlockRead = { status: 'ok', packages };
+  if (first.toolUv === true || second.toolUv === true) out.toolUv = true;
+  if (first.otherSource === true || second.otherSource === true) out.otherSource = true;
+  return out;
+}
+
+/**
+ * The packages the inline script metadata of `file` — relative to `dir`, the directory the uv or the pipx looks for it in — names,
+ * read through the same reader as a manifest (`under` bounds the links walked). Absent when there is no file; a block that is not
+ * there or never closes is `ok` with no package.
+ */
+export function readInlineScript(dir: string, file: string, manager: string, under: string): ManifestRead {
+  const shown = label(file);
+  const none = { file: shown, packages: [], names: [], registries: [] };
+  if (isNetworkPath(file)) return { ...none, status: 'unreadable', reason: REASON.network };
+  const read = readManifestText(resolve(dir, file), under);
+  if (read.status === 'absent') return { ...none, status: 'absent' };
+  if (read.status === 'unreadable') return { ...none, status: 'unreadable', reason: read.reason };
+  const block = inlineScriptBlock(read.text, manager);
+  if (block.status === 'unreadable') return { ...none, status: 'unreadable', reason: block.reason };
+  const out: ManifestRead = { file: shown, status: 'ok', packages: block.packages, names: block.packages.map((p) => p.name), registries: [] };
+  if (block.incomplete !== undefined) out.incomplete = block.incomplete;
+  if (block.toolUv === true) out.toolUv = true;
+  if (block.otherSource === true) out.otherSource = true;
+  return out;
 }
