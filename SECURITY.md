@@ -113,7 +113,7 @@ their respective projects.
   private registry, so a missing name warns. From a bun `.env` the hook reads only the variables
   `BUN_CONFIG_REGISTRY`, `NPM_CONFIG_REGISTRY` and `npm_config_registry` and nothing else of
   the file, and the scheme and host of such a value (never its credentials, path or query) reach
-  the model in the context of the hook's answer, as those of an `.npmrc` do. The `env` of a
+  the model in the hook's answer (its context, or the reason of a refusal), as those of an `.npmrc` do. The `env` of a
   project's `.claude/settings.json` can reach the hook's environment, which counts as the
   user's own: a known limit. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
   `MultiEdit` (or MCP write) of `.claude/settings.json` or `settings.local.json`,

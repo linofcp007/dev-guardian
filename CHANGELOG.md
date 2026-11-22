@@ -75,13 +75,13 @@ version bump.
 ### Security
 
 - **The install hook reads the registry files the bun obeys, and only those, and no project file can turn the refusal of a
-  malicious name into a warning.** Measured with bun 1.4.4, uv 0.13.8, poetry 2.5.1, pipx 1.18.16 and pip 23.0.1 in a Linux
+  malicious name into a warning for npm and PyPI.** Measured with bun 1.4.4, uv 0.13.8, poetry 2.5.1, pipx 1.18.16 and pip 23.0.1 in a Linux
   container without network (2026-11-20 and 2026-11-21): a `bunfig.toml` with `[install.registry]`, `install.registry = …` or
   `[install.scopes."@s"]`, and a `.env` with `BUN_CONFIG_REGISTRY` or `NPM_CONFIG_REGISTRY`, change the registry bun asks and the
   hook did not read them (it refused a name the project's registry serves, or said nothing); and in 21 pairs the manager does
   not obey a file the hook counted, so a file the manager ignores took the refusal of a missing name away. The hook now reads
-  the first, stops counting the second, and refuses a withdrawn malicious name that only a project file explains. *Known
-  limits, not closed:* the `NODE_ENV` of the shell the command runs in is not the hook's; the `env` of a project's
+  the first, stops counting the second, and refuses a withdrawn malicious name that only a project file explains, for npm and PyPI. *Known
+  limits, not closed:* a `repositories` entry of a project `composer.json` and a project `nuget.config` still turn that refusal into a warning for Composer and NuGet; the `NODE_ENV` of the shell the command runs in is not the hook's; the `env` of a project's
   `.claude/settings.json` reaches the hook's environment and is counted as the user's own, so a registry variable set there is
   taken as the user's word; the line of a `bunfig.toml` or `.npmrc` that loses to the `.env` is still said. Project-set
   environment variables are not recognised as the project's.

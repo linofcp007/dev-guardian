@@ -1829,13 +1829,12 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     // The counts of what was not vetted come after the sentences — the advisory received stands even when a batch failed.
     // The other lines (another source, not recognised, …) stay out of a deny: they do not change it, and the deny stays short.
     const counts = [...new Set([...lockCounts, ...scriptDenyLines])];
-    // The one note that stays beside the refusal of a missing name: a file of the project sets the default registry and was said, though it
-    // did not explain the name (a value the reader cannot judge, a workspace root it cannot tell). A malicious name's deny stays short.
+    // The one note that rides in the refusal of a missing name: a file of the project sets the default registry and was said, though it
+    // did not explain the name (a value the reader cannot judge, a workspace root it cannot tell). It is in the text because the dispatcher
+    // answers a deny with its reason alone. The deny of a malicious name stays short.
     const registryLines = malicious ? [] : [...new Set(manifestNotes.filter(isDefaultRegistryLine))];
-    return {
-      deny: `dev-guardian blocked this install: ${parts.join(' ')}${counts.length > 0 ? `\n${counts.join(`\n`)}` : ''}`,
-      ...(registryLines.length > 0 ? { context: registryLines.join('\n') } : {}),
-    };
+    const tail = [...counts, ...registryLines];
+    return { deny: `dev-guardian blocked this install: ${parts.join(' ')}${tail.length > 0 ? `\n${tail.join('\n')}` : ''}` };
   }
   const lines: string[] = [];
   if (warnings.length > 0) {

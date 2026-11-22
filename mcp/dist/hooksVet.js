@@ -9742,12 +9742,9 @@ async function decideInstallCommand(command, opts) {
     }
     const counts = [.../* @__PURE__ */ new Set([...lockCounts, ...scriptDenyLines])];
     const registryLines = malicious ? [] : [...new Set(manifestNotes.filter(isDefaultRegistryLine))];
-    return {
-      deny: `dev-guardian blocked this install: ${parts.join(" ")}${counts.length > 0 ? `
-${counts.join(`
-`)}` : ""}`,
-      ...registryLines.length > 0 ? { context: registryLines.join("\n") } : {}
-    };
+    const tail = [...counts, ...registryLines];
+    return { deny: `dev-guardian blocked this install: ${parts.join(" ")}${tail.length > 0 ? `
+${tail.join("\n")}` : ""}` };
   }
   const lines = [];
   if (warnings.length > 0) {

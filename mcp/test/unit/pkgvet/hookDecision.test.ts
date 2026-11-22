@@ -7126,7 +7126,7 @@ describe('install-vet-registry-files-unread', () => {
     const cwd = setUp({ manifest: ROOT_WORKSPACES(['{app,lib}']), files: { 'app/package.json': MEMBER_JSON, '.env': dotenv(BUN_VAR) }, at: 'app' });
     const { d } = await decide(`bun add ${MISSING}`, {}, { cwd });
     expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
-    expect(textOf(d)).toContain(lineFor('.env'));
+    expect(d?.deny ?? '(no deny)', 'the line rides in the refusal text').toContain(lineFor('.env'));
   });
 
   it.each([
@@ -7185,7 +7185,7 @@ describe('install-vet-registry-files-unread', () => {
     projectWith({ '.env': text });
     const { d } = await decide(`bun add ${MISSING}`);
     expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
-    expect(textOf(d)).toContain(lineFor('.env', null));
+    expect(d?.deny ?? '(no deny)', 'the line rides in the refusal text').toContain(lineFor('.env', null));
   });
 
   it('T-03 a value with credentials: the line has the scheme and host, nothing of the marker or the user name', async () => {

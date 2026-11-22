@@ -2899,4 +2899,17 @@ describe('install-vet-registry-files-unread', () => {
     expect(r.status).toBe(0);
     expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
   });
+
+  it('T-03 (e2e) a .env value the reader cannot judge: the refusal of a missing name carries the line of the .env in its reason', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put('.env', 'BUN_CONFIG_REGISTRY=$REGISTRY\n');
+    const r = runHook(`bun add ${MISSING}`, { [`https://registry.npmjs.org/${MISSING}`]: { status: 404 }, [OSV]: { osv: {} } }, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+    expect(reason).toContain('does not exist on the npm registry');
+    expect(reason).toContain("dev-guardian: the project's .env sets the default registry — packages are fetched from it, and what it serves was not vetted.");
+  });
+
 });
