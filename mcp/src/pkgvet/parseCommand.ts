@@ -158,6 +158,17 @@ export interface InstallCommand {
   /** A file the line `source`s (or `.`s) before this command: it may have moved the directory or changed the environment. */
   sourced?: string;
   /**
+   * The form of the command as the registry files are judged for it, as written: `bun add`, `bun install`, `pip install`, `uv add`,
+   * `uv pip install`, `pipx install`, `pipx run` and `poetry add` (measured 2026-11-20 and 2026-11-21: which project file each one obeys).
+   * Absent for any other form (`bun a`, `bun i`, `uvx`, `uv tool install|run`, a script given to `pipx run`, the npm, pnpm and Yarn
+   * commands): the files are then read as they were before the forms were told apart.
+   */
+  registryForm?: string;
+  /** A bun command with `--env-file`, `--env-file=…` or `--no-env-file`, before or after the verb: the bun does not read the `.env` files it would. */
+  envFileFlag?: true;
+  /** A bun command that runs a package (`bunx`, `bun x`, `bun create`, `bun c`): the bun reads no `.env` file for it (`bun x` measured, the others by its documentation). */
+  bunLauncher?: true;
+  /**
    * The flag that names a source for this form, as the refusal of a missing name says it (`--add-source <url>` in code spans), when it is
    * not the one of the manager ({@link REGISTRY_FLAG} of the decision): `dotnet new install` has no `--source`. Absent for every other form.
    */
@@ -1602,6 +1613,8 @@ interface Detected {
   firstIsCandidate?: true;
   /** One of the {@link DotnetForm}s that fetch a package by name, and how it is spelled (`dnx`, `dotnet tool exec`, …): {@link collectDotnet} reads it. */
   dotnet?: { form: DotnetForm; spelling: string };
+  /** The {@link InstallCommand.registryForm} of the command, when it is one of the eight. */
+  registryForm?: string;
 }
 /** The .NET forms read since install-vet-dotnet-run-forms: the run command (`dnx`, `dotnet dnx`, `dotnet tool exec` / `execute`) and four verbs. */
 type DotnetForm = 'run' | 'tool-update' | 'new-install' | 'download' | 'package-update';
@@ -1855,9 +1868,9 @@ function detect(input: readonly ShellWord[]): Detected | null {
     const before = words.slice(i, sub);
     switch (subWord) {
       case 'install':
-        return launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-install' });
+        return { ...launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-install' }), registryForm: 'pipx install' };
       case 'run':
-        return launcher('pipx', 'pypi', after, before, { style: 'run', flags: 'pipx-run' });
+        return { ...launcher('pipx', 'pypi', after, before, { style: 'run', flags: 'pipx-run' }), registryForm: 'pipx run' };
       case 'inject':
         return injectDetected(after, before);
       case 'runpip':
@@ -1964,7 +1977,9 @@ function detect(input: readonly ShellWord[]): Detected | null {
       // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too, and install the manifest.
       if (subWord === 'update') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       if (!BUN_ADD.has(subWord)) return null;
-      return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
+      const d: Detected = { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
+      // Only the two spellings measured (`bun add`, `bun install`) are told apart; `bun a` and `bun i` read the files as before.
+      return subWord === 'add' || subWord === 'install' ? { ...d, registryForm: `bun ${subWord}` } : d;
     }
     case 'yarn': {
       if (subWord === 'install' || subWord === 'dedupe') return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' });
@@ -2008,7 +2023,8 @@ function detect(input: readonly ShellWord[]): Detected | null {
       if (!PIP_FETCH_TABLES.has(subWord)) return null;
       const flagTable = PIP_FETCH_TABLES.get(subWord);
       const d: Detected = { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
-      return flagTable === undefined ? d : { ...d, flagTable };
+      if (flagTable !== undefined) return { ...d, flagTable };
+      return subWord === 'install' ? { ...d, registryForm: 'pip install' } : d;
     }
     case 'uv': {
       if (subWord === 'run') {
@@ -2016,17 +2032,17 @@ function detect(input: readonly ShellWord[]): Detected | null {
         const envDir = leadingWorkingDir(words.slice(0, start));
         return envDir === undefined ? d : { ...d, envDir };
       }
-      if (subWord === 'add') return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
+      if (subWord === 'add') return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [], registryForm: 'uv add' };
       if (subWord === 'pip') {
         const inst = nextPositional(words, sub + 1, table, INSTALL_ONLY);
         if (inst >= 0 && words[inst]?.value === 'install') {
-          return { manager: 'uv-pip', ecosystem: 'pypi', args: words.slice(inst + 1), pre, uncertain: [] };
+          return { manager: 'uv-pip', ecosystem: 'pypi', args: words.slice(inst + 1), pre, uncertain: [], registryForm: 'uv pip install' };
         }
       }
       return null;
     }
     case 'poetry':
-      return subWord === 'add' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
+      return subWord === 'add' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [], registryForm: 'poetry add' } : null;
     case 'composer':
       return COMPOSER_REQUIRE.has(subWord)
         ? { manager: head, ecosystem: 'packagist', args: words.slice(sub + 1), pre, uncertain: [] }
@@ -2283,6 +2299,12 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
   if (launch.flags === 'uv-run') attachUvRun(out, d, pre, w, flags);
   else if (launch.flags === 'pipx-run' && launch.style === 'run' && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp);
+  // A script given to `pipx run` (a `.py` file, or `--path`) is read by `install-vet-inline-script-deps`: it keeps the answer it had.
+  // Any other word may be a file too, but it is the package of that name unless the folder holds one: the form is measured for it.
+  const script = pathApp || (out.inlineScripts ?? []).some((w) => PYTHON_FILE.test(w.file));
+  if (d.registryForm !== undefined && !script) out.registryForm = d.registryForm;
+  if (d.manager === 'bun') out.bunLauncher = true;
+  if (d.manager === 'bun' && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
   // The requirements files `pipx inject -r` hands to pip, as `pip install -r` hands them, in the order written.
   if (launch.flags === 'pipx-inject') {
     const files = requirementFiles(flags, PIPX_REQUIREMENT_FLAGS);
@@ -2382,6 +2404,11 @@ function splitOutsideBrackets(value: string): string[] {
   return parts;
 }
 
+/** A word of the bun's `.env` flags: `--env-file`, `--env-file=<file>` and `--no-env-file`. */
+function isEnvFileWord(w: ShellWord): boolean {
+  return w.value === '--env-file' || w.value === '--no-env-file' || w.value.startsWith('--env-file=');
+}
+
 function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.launch !== undefined) return collectLaunch(d, d.launch, context);
   if (d.dotnet !== undefined) return collectDotnet(d, d.dotnet, context);
@@ -2407,6 +2434,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
+  if (d.registryForm !== undefined) out.registryForm = d.registryForm;
+  if (d.manager === 'bun' && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
   if (limited.dropped > 0 && !readsNoPackage) out.candidatesDropped = limited.dropped;
 
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a

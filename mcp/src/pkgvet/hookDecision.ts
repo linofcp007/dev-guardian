@@ -84,6 +84,7 @@ import {
   npmScopeRegistryOf,
   npmUserRegistries,
   registryCache,
+  type RegistryCommand,
   type RegistryContext,
 } from './privateRegistry.js';
 import { buildPopularIndex, normalizePackageName, type PopularIndex } from './typosquat.js';
@@ -428,7 +429,7 @@ function withManifestPackages(
     // `pipx upgrade-all` and `uv tool upgrade --all` (also with names beside `--all`): said before any request is made.
     if (c.updatesEveryTool === true) notes.push(UPDATES_EVERY_TOOL);
     // A line of thousands of commands asks once per manager and directory: the answer is the same.
-    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)}`;
+    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)} ${String(c.envFileFlag === true)} ${String(c.bunLauncher === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
     notes.push(...(lineAsked.get(key) ?? []));
     const manifest = c.manifest;
@@ -476,7 +477,7 @@ function withManifestPackages(
       if (read.incomplete !== undefined) {
         notes.push(`dev-guardian: a file ${read.file} includes was not read (${read.incomplete}) — its packages were not vetted.`);
       }
-      const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: base }, notes) : read.packages;
+      const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: base, command: registryCommand(c) }, notes) : read.packages;
       // A direct dependency the lockfile records for this project leaves the registry path: its typosquat check stays.
       // Not for an update verb: it moves them past the pins, so every direct dependency is vetted by name (the pins still go to OSV).
       const packages = lock === undefined || c.update === true ? inScope : withoutCovered(inScope, lock);
@@ -496,6 +497,29 @@ function withManifestPackages(
   }
   overflowScripts(world);
   return out;
+}
+
+/**
+ * What the lookups of the registry files need to know of a command: its manager, the form it was written in when it is one of the
+ * measured eight, whether it is global for certain, and the two things that stop the bun reading its `.env` files. Without it a lookup
+ * reads every file as it did before the commands were told apart.
+ */
+function registryCommand(c: InstallCommand): RegistryCommand {
+  return {
+    manager: c.manager,
+    registryForm: c.registryForm,
+    global: c.global === true,
+    envFileFlag: c.envFileFlag === true,
+    bunLauncher: c.bunLauncher === true,
+  };
+}
+
+/** Whether a note is one of the lines of {@link projectDefaultRegistryLines}: a file of the project sets the default registry. */
+function isDefaultRegistryLine(note: string): boolean {
+  return (
+    /^dev-guardian: the project's \S+ sets the default registry(?: \([^)]*\))? — /.test(note) ||
+    /^dev-guardian: \d+ more files? of the project sets? the default registry\.$/.test(note)
+  );
 }
 
 /** The most lines said for the project files that set the default registry: the rest is counted. */
@@ -521,7 +545,7 @@ function projectDefaultRegistryLines(
     if (c.ecosystem !== 'npm' || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
     const dir = commandDir(c, opts);
     if (dir === null) return [];
-    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
+    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir, command: registryCommand(c) }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
     const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
       const host = registryHost('npm', f.url);
       return `dev-guardian: the project's ${basename(f.source)} sets the default registry${host === undefined ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
@@ -829,7 +853,7 @@ function lockedProject(
       notes.push(notReadLine(found.file, read.unread));
       return undefined;
     }
-    const ctx: RegistryContext = { ...registry, projectDir: dir };
+    const ctx: RegistryContext = { ...registry, projectDir: dir, command: registryCommand(c) };
     let userRegistries: string[] | undefined;
     const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(ctx));
     const plan = pairsToAsk(read, ctx);
@@ -1684,7 +1708,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
           offline,
           deadlineAt,
           now,
-          registry,
+          registry: { ...registry, command: registryCommand(c) },
           commandRegistries: c.registries,
           // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
           // what only those two checks need is not asked of the registry.
@@ -1805,7 +1829,13 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     // The counts of what was not vetted come after the sentences — the advisory received stands even when a batch failed.
     // The other lines (another source, not recognised, …) stay out of a deny: they do not change it, and the deny stays short.
     const counts = [...new Set([...lockCounts, ...scriptDenyLines])];
-    return { deny: `dev-guardian blocked this install: ${parts.join(' ')}${counts.length > 0 ? `\n${counts.join(`\n`)}` : ''}` };
+    // The one note that stays beside the refusal of a missing name: a file of the project sets the default registry and was said, though it
+    // did not explain the name (a value the reader cannot judge, a workspace root it cannot tell). A malicious name's deny stays short.
+    const registryLines = malicious ? [] : [...new Set(manifestNotes.filter(isDefaultRegistryLine))];
+    return {
+      deny: `dev-guardian blocked this install: ${parts.join(' ')}${counts.length > 0 ? `\n${counts.join(`\n`)}` : ''}`,
+      ...(registryLines.length > 0 ? { context: registryLines.join('\n') } : {}),
+    };
   }
   const lines: string[] = [];
   if (warnings.length > 0) {

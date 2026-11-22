@@ -52,9 +52,39 @@ version bump.
   (50 at most a command) the hook asks `lstat` whether an entry of that name is in the command's folder — the installer reads a
   path then, and the word is not looked up; never on a network folder, never past the deadline, and a failure of `lstat` is said.
   *Names that now leave the machine* (to nuget.org and to OSV): the identifiers of these forms.
+- **Registry files the install hook now reads or no longer counts (install-vet-registry-files-unread).** *Files now read, for a bun
+  command that is not global:* the `bunfig.toml` forms `install.registry = …` before any header, `[install.registry]` with `url`,
+  and `[install.scopes."@s"]` (also `'@s'`, `"s"` and `s`) with `url`; and the `.env` files of the root of bun, in one folder only
+  (`.env.<mode>.local`, `.env.local` except in `test`, `.env.<mode>`, `.env`; the mode is `NODE_ENV` of the hook's own environment
+  when it is `development` or `test`, `production` otherwise), for `BUN_CONFIG_REGISTRY`, `NPM_CONFIG_REGISTRY` and
+  `npm_config_registry` only, by a closed grammar, up to 1 MiB each, never a network path, never above the repository root. Not
+  for a global install, `--env-file` or `--no-env-file`, `bunx`, `bun x`, `bun create` and `bun c`. *Files no longer counted (a name
+  the index does not have is refused, as without the file):* the 21 measured pairs in which the manager does not obey the file —
+  `uv add` with the `[pip]` table of `uv.toml`; `pipx install` / `pipx run` with the `uv.toml` or `[tool.uv] index-url`;
+  `pipx install` with `[[tool.uv.index]]` or a primary poetry source; `poetry add` with an `explicit` source, the `uv.toml`,
+  `[tool.uv] index-url` or `[[tool.uv.index]]` with `default = true`; `pip install` with the files of the uv or a primary poetry
+  source; `uv add` / `uv pip install` with a primary poetry source; a global `bun add` with the project's `registry=` or
+  `[install] registry`. `[tool.uv.pip] index-url` now explains a missing name for `uv pip install` only. *What is now said:* the
+  line of the project's default registry for the new `bunfig.toml` forms and the `.env` files (the host only, never credentials;
+  a value the reader cannot judge gives the line without a host and explains nothing). *What leaves the machine:* nothing new —
+  the `.env` files are read for those three variables and nothing else of them is kept, said or sent; a `[install.scopes."@s"]`
+  subtable takes no name out of the checks. *What can now be refused:* a malicious name the public registry took down is refused
+  when only a file of the project explains the missing name (the old files and the new ones, npm and PyPI); a registry of the
+  user, of the machine, of the hook's environment or of the command line keeps the warning, and so does a workspace package.
 
 ### Security
 
+- **The install hook reads the registry files the bun obeys, and only those, and no project file can turn the refusal of a
+  malicious name into a warning.** Measured with bun 1.4.4, uv 0.13.8, poetry 2.5.1, pipx 1.18.16 and pip 23.0.1 in a Linux
+  container without network (2026-11-20 and 2026-11-21): a `bunfig.toml` with `[install.registry]`, `install.registry = …` or
+  `[install.scopes."@s"]`, and a `.env` with `BUN_CONFIG_REGISTRY` or `NPM_CONFIG_REGISTRY`, change the registry bun asks and the
+  hook did not read them (it refused a name the project's registry serves, or said nothing); and in 21 pairs the manager does
+  not obey a file the hook counted, so a file the manager ignores took the refusal of a missing name away. The hook now reads
+  the first, stops counting the second, and refuses a withdrawn malicious name that only a project file explains. *Known
+  limits, not closed:* the `NODE_ENV` of the shell the command runs in is not the hook's; the `env` of a project's
+  `.claude/settings.json` reaches the hook's environment and is counted as the user's own, so a registry variable set there is
+  taken as the user's word; the line of a `bunfig.toml` or `.npmrc` that loses to the `.env` is still said. Project-set
+  environment variables are not recognised as the project's.
 - **The install hook reads the .NET forms that fetch a package by name — `dnx`, `dotnet tool exec` / `execute` / `update`,
   `dotnet new install`, `dotnet package download` and `dotnet package update` — and no longer lets them pass silently.** Against
   a substitute NuGet source that logged each request (SDK 10.0.404, Windows 11, 2026-11-20 and 2026-11-21), `dnx <id>`,

@@ -20,7 +20,7 @@ __export(hookDecision_exports, {
 });
 import { lstatSync as lstatSync3, realpathSync, statSync as statSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
-import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, parse as parse4, relative as relative3, resolve as resolve4, sep } from "node:path";
+import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, parse as parse4, relative as relative3, resolve as resolve4, sep } from "node:path";
 
 // src/hooks/configFile.ts
 import { closeSync, constants, fstatSync, lstatSync, openSync, readlinkSync, readSync, statSync } from "node:fs";
@@ -4522,9 +4522,9 @@ function detect(input) {
     const before2 = words.slice(i, sub2);
     switch (subWord2) {
       case "install":
-        return launcher("pipx", "pypi", after2, before2, { style: "install", flags: "pipx-install" });
+        return { ...launcher("pipx", "pypi", after2, before2, { style: "install", flags: "pipx-install" }), registryForm: "pipx install" };
       case "run":
-        return launcher("pipx", "pypi", after2, before2, { style: "run", flags: "pipx-run" });
+        return { ...launcher("pipx", "pypi", after2, before2, { style: "run", flags: "pipx-run" }), registryForm: "pipx run" };
       case "inject":
         return injectDetected(after2, before2);
       case "runpip":
@@ -4612,7 +4612,8 @@ function detect(input) {
     case "bun": {
       if (subWord === "update") return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always", update: true, names: "global-word" };
       if (!BUN_ADD.has(subWord)) return null;
-      return { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
+      const d = { manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "bare" };
+      return subWord === "add" || subWord === "install" ? { ...d, registryForm: `bun ${subWord}` } : d;
     }
     case "yarn": {
       if (subWord === "install" || subWord === "dedupe") return tag({ manager: head, ecosystem: "npm", args: words.slice(sub + 1), pre, uncertain: [], manifest: "always" });
@@ -4652,7 +4653,8 @@ function detect(input) {
       if (!PIP_FETCH_TABLES.has(subWord)) return null;
       const flagTable = PIP_FETCH_TABLES.get(subWord);
       const d = { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] };
-      return flagTable === void 0 ? d : { ...d, flagTable };
+      if (flagTable !== void 0) return { ...d, flagTable };
+      return subWord === "install" ? { ...d, registryForm: "pip install" } : d;
     }
     case "uv": {
       if (subWord === "run") {
@@ -4660,17 +4662,17 @@ function detect(input) {
         const envDir = leadingWorkingDir(words.slice(0, start));
         return envDir === void 0 ? d : { ...d, envDir };
       }
-      if (subWord === "add") return { manager: "uv", ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] };
+      if (subWord === "add") return { manager: "uv", ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [], registryForm: "uv add" };
       if (subWord === "pip") {
         const inst = nextPositional(words, sub + 1, table, INSTALL_ONLY);
         if (inst >= 0 && words[inst]?.value === "install") {
-          return { manager: "uv-pip", ecosystem: "pypi", args: words.slice(inst + 1), pre, uncertain: [] };
+          return { manager: "uv-pip", ecosystem: "pypi", args: words.slice(inst + 1), pre, uncertain: [], registryForm: "uv pip install" };
         }
       }
       return null;
     }
     case "poetry":
-      return subWord === "add" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] } : null;
+      return subWord === "add" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [], registryForm: "poetry add" } : null;
     case "composer":
       return COMPOSER_REQUIRE.has(subWord) ? { manager: head, ecosystem: "packagist", args: words.slice(sub + 1), pre, uncertain: [] } : null;
     case "dotnet": {
@@ -4863,6 +4865,10 @@ function collectLaunch(d, launch, context) {
   if (flags.some((f) => f.flag === "--prefix" || f.flag === "-C")) out.prefixed = true;
   if (launch.flags === "uv-run") attachUvRun(out, d, pre, w, flags);
   else if (launch.flags === "pipx-run" && launch.style === "run" && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp);
+  const script = pathApp || (out.inlineScripts ?? []).some((w2) => PYTHON_FILE.test(w2.file));
+  if (d.registryForm !== void 0 && !script) out.registryForm = d.registryForm;
+  if (d.manager === "bun") out.bunLauncher = true;
+  if (d.manager === "bun" && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
   if (launch.flags === "pipx-inject") {
     const files = requirementFiles(flags, PIPX_REQUIREMENT_FLAGS);
     if (files.length > 0) out.manifest = { kind: "requirements", files };
@@ -4928,6 +4934,9 @@ function splitOutsideBrackets(value) {
   parts.push(value.slice(start));
   return parts;
 }
+function isEnvFileWord(w) {
+  return w.value === "--env-file" || w.value === "--no-env-file" || w.value.startsWith("--env-file=");
+}
 function collect(d, context) {
   if (d.launch !== void 0) return collectLaunch(d, d.launch, context);
   if (d.dotnet !== void 0) return collectDotnet(d, d.dotnet, context);
@@ -4951,6 +4960,8 @@ function collect(d, context) {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== void 0) out.customRegistry = registry;
+  if (d.registryForm !== void 0) out.registryForm = d.registryForm;
+  if (d.manager === "bun" && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
   if (limited.dropped > 0 && !readsNoPackage) out.candidatesDropped = limited.dropped;
   const candidatePackages = [];
   const bothPairs = [];
@@ -6861,7 +6872,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync2, readdirSync as readdirSync2 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname as dirname3, isAbsolute as isAbsolute2, join as join4, parse as parse3, relative as relative2, resolve as resolve3 } from "node:path";
+import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join4, parse as parse3, relative as relative2, resolve as resolve3 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -6922,6 +6933,11 @@ function takeUnchecked() {
   return unchecked;
 }
 function read(path, ctx, under, what = "configuration") {
+  const r = readRaw(path, ctx, under);
+  if (r.status === "refused") noteUnread(path, what);
+  return r.status === "ok" ? r.text : void 0;
+}
+function readRaw(path, ctx, under) {
   const root = walkRoot(path, ctx, under);
   const key = `${path}\0${root ?? ""}`;
   let r = ctx.cache?.reads.get(key);
@@ -6929,8 +6945,16 @@ function read(path, ctx, under, what = "configuration") {
     r = readSmallText(path, MAX_REGISTRY_CONFIG_BYTES, root);
     ctx.cache?.reads.set(key, r);
   }
-  if (r.status === "refused") noteUnread(path, what);
-  return r.status === "ok" ? r.text : void 0;
+  return r;
+}
+function readEnvFile(path, ctx) {
+  try {
+    const r = readRaw(path, ctx);
+    if (r.status === "refused" && r.reason !== "not-a-regular-file") noteUnread(path, "configuration");
+    return r.status === "ok" ? r.text : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function present(path) {
   try {
@@ -7112,6 +7136,164 @@ function fromBunfig(text, scope, all) {
   }
   return found;
 }
+function urlOrConfigured(value) {
+  return /^https?:\/\/\S+$/i.test(value) ? value : UNREADABLE_VALUE;
+}
+function bunScopeKey(text) {
+  return /^@?[A-Za-z0-9._-]+$/.test(text) ? text.replace(/^@/, "").toLowerCase() : void 0;
+}
+function scopeOfSubtable(header) {
+  const quoted = /^install\.scopes\.(["'])([^"']+)\1$/.exec(header);
+  if (quoted !== null) return bunScopeKey(quoted[2] ?? "");
+  const bare = /^install\.scopes\.([A-Za-z0-9_-]+)$/.exec(header);
+  return bare === null ? void 0 : bunScopeKey(bare[1] ?? "");
+}
+function bunfigValue(line) {
+  const match = /https?:\/\/[^"'\s}]+/.exec(line);
+  const unquoted = match !== null && !/["']/.test(line.charAt(match.index - 1));
+  return match === null ? UNREADABLE_VALUE : withCommentAt(match[0], unquoted ? line.slice(match.index + match[0].length) : "");
+}
+function bunfigFound(text, scope) {
+  try {
+    const wanted = scope?.toLowerCase();
+    let section = "";
+    let exact = "";
+    let header = false;
+    let found;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      const head = /^\[([^\]]+)\]$/.exec(line);
+      if (head !== null) {
+        header = true;
+        exact = head[1] ?? "";
+        section = exact.trim();
+        continue;
+      }
+      if (line === "" || line.startsWith("#")) continue;
+      if (section === "install" && /^registry\s*=/.test(line)) found = found ?? { url: bunfigValue(line), explains: true };
+      else if (!header && /^install\.registry\s*=/.test(line)) found = found ?? newForm(bunfigValue(line));
+      else if (exact === "install.registry" && /^url\s*=/.test(line)) found = found ?? newForm(bunfigValue(line));
+      else if (wanted !== void 0) {
+        if (section === "install.scopes") {
+          const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
+          if (key !== void 0 && key.toLowerCase() === wanted) return { url: bunfigValue(line), explains: true };
+        } else if (/^url\s*=/.test(line) && scopeOfSubtable(exact) === wanted) return newForm(bunfigValue(line));
+      }
+    }
+    return found;
+  } catch {
+    return void 0;
+  }
+  function newForm(url) {
+    return { url, explains: url !== UNREADABLE_VALUE };
+  }
+}
+var BUN_ENV_NAMES = /* @__PURE__ */ new Set(["BUN_CONFIG_REGISTRY", "NPM_CONFIG_REGISTRY", "npm_config_registry"]);
+function bunEnvValue(text) {
+  let open;
+  let bun;
+  let other;
+  for (const raw of text.split(/\r?\n/)) {
+    if (open !== void 0) {
+      if (raw.includes(open)) open = void 0;
+      continue;
+    }
+    const assignment = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(raw);
+    if (assignment === null) continue;
+    const name = assignment[1] ?? "";
+    const rest = assignment[2] ?? "";
+    const first = rest.charAt(0);
+    let value;
+    if (first === '"' || first === "'" || first === "`") {
+      const close = rest.indexOf(first, 1);
+      if (close < 0) {
+        open = first;
+        value = UNREADABLE_VALUE;
+      } else {
+        const content = rest.slice(1, close);
+        const bad = first !== "'" && (content.includes("\\") || content.includes("$"));
+        value = bad || !endsCleanly(rest.slice(close + 1)) ? UNREADABLE_VALUE : content === "" ? void 0 : urlOrConfigured(content);
+      }
+    } else {
+      let end = 0;
+      while (end < rest.length && rest.charAt(end) !== " " && rest.charAt(end) !== "	") end += 1;
+      const token = rest.slice(0, end);
+      if (token === "" || token.startsWith("#")) value = void 0;
+      else if (/["'`\\$#]/.test(token) || !endsCleanly(rest.slice(end))) value = UNREADABLE_VALUE;
+      else value = urlOrConfigured(token);
+    }
+    if (!BUN_ENV_NAMES.has(name) || value === void 0) continue;
+    if (value !== UNREADABLE_VALUE && isPublic("npm", value)) continue;
+    if (name === "BUN_CONFIG_REGISTRY") bun = value;
+    else other = value;
+  }
+  return bun ?? other;
+  function endsCleanly(tail) {
+    const t = tail.trimStart();
+    return t === "" || t !== tail && t.startsWith("#");
+  }
+}
+function bunMode(ctx) {
+  const v = envOf(ctx)["NODE_ENV"];
+  return v === "development" || v === "test" ? v : "production";
+}
+function bunEnvNames(mode) {
+  return [`.env.${mode}.local`, ...mode === "test" ? [] : [".env.local"], `.env.${mode}`, ".env"];
+}
+function judgeWorkspaceEntry(entry, rel) {
+  if (typeof entry !== "string" || entry === "" || entry.startsWith("!") || entry.startsWith("./")) return "unknown";
+  if (entry.endsWith("/") && !entry.endsWith("/*") && !entry.endsWith("/**")) return "unknown";
+  let body = entry;
+  let kind = "exact";
+  if (entry.endsWith("/**")) {
+    body = entry.slice(0, -3);
+    kind = "globstar";
+  } else if (entry.endsWith("/*")) {
+    body = entry.slice(0, -2);
+    kind = "star";
+  }
+  if (body === "" || /[*?[\]{}()!+@\\]/.test(body) || body.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) return "unknown";
+  if (kind === "exact") return body === rel ? "yes" : "no";
+  if (!rel.startsWith(`${body}/`)) return "no";
+  return kind === "globstar" || !rel.slice(body.length + 1).includes("/") ? "yes" : "no";
+}
+function workspacesList(packageJson, rel) {
+  if (packageJson === void 0) return "no";
+  try {
+    const w = JSON.parse(packageJson).workspaces;
+    const entries = Array.isArray(w) ? w : w !== null && typeof w === "object" ? w.packages : void 0;
+    if (!Array.isArray(entries)) return "no";
+    const verdicts = entries.map((e) => judgeWorkspaceEntry(e, rel));
+    return verdicts.includes("yes") ? "yes" : verdicts.includes("unknown") ? "unknown" : "no";
+  } catch {
+    return "no";
+  }
+}
+function bunEnvPlan(ctx) {
+  const cmd = ctx.command;
+  if (cmd === void 0 || cmd.manager !== "bun" || cmd.global || cmd.envFileFlag || cmd.bunLauncher) return void 0;
+  try {
+    const near = ancestors(ctx);
+    const first = near.findIndex((dir) => present(join4(dir, "package.json")));
+    const base2 = near[first < 0 ? 0 : first];
+    if (base2 === void 0) return void 0;
+    if (first < 0) return { dirs: [base2], explains: true };
+    let unsure;
+    for (const dir of near.slice(first + 1)) {
+      const listed = workspacesList(read(join4(dir, "package.json"), ctx, void 0, "workspace manifest"), relative2(dir, base2).split(/[\\/]/).join("/"));
+      if (listed === "yes") return { dirs: [dir], explains: true };
+      if (listed === "unknown" && unsure === void 0) unsure = dir;
+    }
+    return unsure === void 0 ? { dirs: [base2], explains: true } : { dirs: [unsure, base2], explains: false };
+  } catch {
+    return void 0;
+  }
+}
+function envFound(text, explainsAllowed) {
+  const value = bunEnvValue(text);
+  if (value === void 0) return void 0;
+  return { url: value, explains: explainsAllowed && value !== UNREADABLE_VALUE };
+}
 var NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
 function npmConfigFiles(ctx) {
   const env = envOf(ctx);
@@ -7162,30 +7344,79 @@ function envRegistry(ecosystem, ctx) {
     if (raw === void 0 || raw.trim() === "" || !ENV_REGISTRY[ecosystem].test(key)) continue;
     const value = raw.trim();
     if (/NO_INDEX/i.test(key)) {
-      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: "registry", source: key };
+      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: "registry", source: key, from: "user" };
       continue;
     }
     if (value.split(/\s+/).some((u) => !isPublic(ecosystem, u.replace(/^[^=]+=(?=https?:)/, "")))) {
-      return { kind: "registry", source: key, url: value };
+      return { kind: "registry", source: key, url: value, from: "user" };
     }
   }
   return null;
+}
+function scopeOnly(parse5) {
+  return (text, scope) => {
+    if (scope === void 0) return void 0;
+    const url = parse5(text, scope);
+    return url !== void 0 && url !== parse5(text, void 0) ? url : void 0;
+  };
+}
+function isBunProject(ctx) {
+  return ctx.command?.manager === "bun" && !ctx.command.global;
+}
+function registryFiles(ctx) {
+  const base2 = npmConfigFiles(ctx);
+  const cmd = ctx.command;
+  const bun = isBunProject(ctx);
+  const noDefault = cmd?.global === true && cmd.registryForm === "bun add";
+  if (!bun && !noDefault) return base2;
+  const plan = bun ? bunEnvPlan(ctx) : void 0;
+  const out = [];
+  for (const f of base2) {
+    const name = basename2(f.path);
+    if (f.user) {
+      out.push(f);
+    } else if (noDefault && (name === ".npmrc" || name === "bunfig.toml")) {
+      out.push({ ...f, parse: scopeOnly(f.parse) });
+    } else if (bun && name === "bunfig.toml") {
+      out.push({ ...f, found: bunfigFound });
+    } else {
+      if (plan !== void 0 && name === ".npmrc" && plan.dirs.some((d) => samePath(d, dirname3(f.path)))) {
+        for (const envName of bunEnvNames(bunMode(ctx))) {
+          out.push({ path: join4(dirname3(f.path), envName), parse: () => void 0, user: false, env: true, found: (text) => envFound(text, plan.explains) });
+        }
+      }
+      out.push(f);
+    }
+  }
+  return out;
 }
 function npmRegistry(name, ctx) {
   const scope = npmScope(name);
   const fromEnv = envRegistry("npm", ctx);
   if (fromEnv !== null) return fromEnv;
   let authSource;
-  for (const { path, parse: parse5 } of npmConfigFiles(ctx)) {
-    const text = read(path, ctx);
+  let userAuth;
+  let first = null;
+  for (const file of registryFiles(ctx)) {
+    const text = file.env === true ? readEnvFile(file.path, ctx) : read(file.path, ctx);
     if (text === void 0) continue;
-    const url = parse5(text, scope);
-    if (url !== void 0 && !isPublic("npm", url)) return { kind: "registry", source: path, url };
-    if (authSource === void 0 && NPM_AUTH.test(text)) authSource = path;
+    const url = file.found === void 0 ? file.parse(text, scope) : void 0;
+    const hit = file.found === void 0 ? url === void 0 ? void 0 : { url, explains: true } : file.found(text, scope);
+    if (hit !== void 0 && hit.explains && !isPublic("npm", hit.url)) {
+      first = first ?? { kind: "registry", source: file.path, url: hit.url, from: file.user ? "user" : "project" };
+      if (file.user) return first.from === "user" ? first : { ...first, from: "user" };
+      continue;
+    }
+    if (file.env !== true && NPM_AUTH.test(text)) {
+      authSource = authSource ?? file.path;
+      if (file.user) userAuth = userAuth ?? file.path;
+    }
   }
-  if (scope !== void 0 && authSource !== void 0) return { kind: "auth", source: authSource };
+  const credential = scope !== void 0 && userAuth !== void 0;
+  if (first !== null) return credential && first.from === "project" ? { ...first, from: "user" } : first;
+  if (scope !== void 0 && authSource !== void 0) return { kind: "auth", source: authSource, from: userAuth !== void 0 ? "user" : "project" };
   const local = npmWorkspacePackage(name, ctx);
-  return local === void 0 ? null : { kind: "workspace", source: local };
+  return local === void 0 ? null : { kind: "workspace", source: local, from: "project" };
 }
 function npmScopeRegistryOf(ctx = {}) {
   let prepared;
@@ -7253,14 +7484,23 @@ function npmProjectDefaultRegistry(manager, ctx = {}) {
     const near = ancestors(ctx);
     const first = near.findIndex((dir) => present(join4(dir, "package.json")));
     const from = first < 0 ? 0 : first;
+    const envDirs = manager === "bun" ? bunEnvPlan(ctx)?.dirs : void 0;
     for (const dir of near.slice(from)) {
       const isBase = dir === near[from];
       const obeyed = isBase || manager === "yarn" || hasWorkspaces(read(join4(dir, "package.json"), ctx, void 0, "workspace manifest")) || manager === "pnpm" && present(join4(dir, "pnpm-workspace.yaml"));
+      if (envDirs?.some((d) => samePath(d, dir)) === true) {
+        for (const name of bunEnvNames(bunMode(ctx))) {
+          const source = join4(dir, name);
+          const text = readEnvFile(source, ctx);
+          const url = text === void 0 ? void 0 : bunEnvValue(text);
+          if (url !== void 0) found.push({ source, url });
+        }
+      }
       if (!obeyed) continue;
       for (const { name, parse: parse5 } of files) {
         const source = join4(dir, name);
         const text = read(source, ctx);
-        const url = text === void 0 ? void 0 : parse5(text, void 0);
+        const url = text === void 0 ? void 0 : manager === "bun" && name === "bunfig.toml" ? bunfigFound(text, void 0)?.url : parse5(text, void 0);
         if (url !== void 0 && !isPublic("npm", url)) found.push({ source, url });
       }
     }
@@ -7415,27 +7655,101 @@ function fromPipConf(text) {
   }
   return void 0;
 }
-function fromPyproject(text) {
-  if (/^\s*\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)\s*\]\]/m.test(text)) {
-    return /https?:\/\/[^"'\s]+/.exec(text.slice(text.search(/\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)/)))?.[0] ?? "(configured)";
-  }
-  const uv = /^\s*\[tool\.uv\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text);
-  if (uv !== null) {
-    const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(uv[1] ?? "");
-    if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
-  }
-  return void 0;
+function arrayUrl(body) {
+  return /https?:\/\/[^"'\s]+/.exec(body.join("\n"))?.[0] ?? UNREADABLE_VALUE;
 }
-function fromUvToml(text) {
-  if (/^\s*\[\[\s*index\s*\]\]/m.test(text)) return /https?:\/\/[^"'\s]+/.exec(text)?.[0] ?? "(configured)";
-  const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(text);
-  if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
-  return void 0;
+function indexKeyValue(line, onlyIndexUrl = false) {
+  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/.exec(line);
+  if (m === null || onlyIndexUrl && m[1] !== "index-url") return void 0;
+  return isPublic("pypi", m[2] ?? "") ? void 0 : m[2];
+}
+function indexEntries(text, arrays, keys, top) {
+  const out = [];
+  let table;
+  let keyed = top === void 0 ? void 0 : { kind: top };
+  const flush = () => {
+    const kind = table === void 0 ? void 0 : arrays[table.name]?.(table.body);
+    if (table !== void 0 && kind !== void 0) out.push({ kind, url: arrayUrl(table.body) });
+    table = void 0;
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const array = /^\s*\[\[\s*([^\][]+?)\s*\]\]/.exec(line);
+    const plain = array === null ? /^\s*\[\s*([^\][]+?)\s*\]/.exec(line) : null;
+    if (array !== null || plain !== null) {
+      flush();
+      const name = (array ?? plain)?.[1] ?? "";
+      if (array !== null) {
+        table = { name, body: [] };
+        keyed = void 0;
+      } else {
+        keyed = Object.hasOwn(keys, name) ? keys[name] : top === void 0 ? void 0 : { kind: top };
+      }
+      continue;
+    }
+    if (table !== void 0) {
+      table.body.push(line);
+      continue;
+    }
+    if (keyed === void 0) continue;
+    const value = indexKeyValue(line, keyed.onlyIndexUrl === true);
+    if (value !== void 0) out.push({ kind: keyed.kind, url: value });
+  }
+  flush();
+  return out;
+}
+var hasDefault = (body) => body.some((l) => /^\s*default\s*=\s*true\b/.test(l));
+function poetryKind(body) {
+  const p = body.map((l) => /^\s*priority\s*=\s*["']([^"']*)["']/.exec(l)?.[1]).find((v) => v !== void 0);
+  if (p === void 0) return "poetry-none";
+  return p === "primary" || p === "supplemental" || p === "explicit" ? `poetry-${p}` : "poetry-other";
+}
+function uvTomlEntries(text) {
+  return indexEntries(
+    text,
+    { index: (body) => hasDefault(body) ? "uv-index-default" : "uv-index" },
+    { pip: { kind: "uv-pip" } },
+    "uv-top"
+  );
+}
+function pyprojectEntries(text) {
+  return indexEntries(
+    text,
+    {
+      "tool.uv.index": (body) => hasDefault(body) ? "tool-uv-index-default" : "tool-uv-index",
+      "tool.poetry.source": poetryKind,
+      "tool.pdm.source": () => "pdm"
+    },
+    { "tool.uv": { kind: "tool-uv" }, "tool.uv.pip": { kind: "tool-uv-pip", onlyIndexUrl: true } }
+  );
+}
+var NOT_OBEYED = {
+  "uv add": /* @__PURE__ */ new Set(["uv-pip", "poetry-primary"]),
+  "uv pip install": /* @__PURE__ */ new Set(["poetry-primary"]),
+  "pipx install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"]),
+  "pipx run": /* @__PURE__ */ new Set(["uv-top", "tool-uv"]),
+  "poetry add": /* @__PURE__ */ new Set(["poetry-explicit", "uv-top", "tool-uv", "tool-uv-index-default"]),
+  "pip install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"])
+};
+function explainingIndex(entries, ctx) {
+  const form = ctx.command?.registryForm;
+  const skipped = form === void 0 ? void 0 : Object.hasOwn(NOT_OBEYED, form) ? NOT_OBEYED[form] : void 0;
+  return entries.find((e) => e.kind === "tool-uv-pip" ? form === "uv pip install" : skipped?.has(e.kind) !== true)?.url;
+}
+function anyIndex(entries) {
+  return entries.find((e) => e.kind !== "tool-uv-pip")?.url;
+}
+function insideProject(path, ctx) {
+  return ancestors(ctx).some((dir) => isInside(dir, resolve3(path)));
 }
 function pypiRegistry(name, ctx) {
   const env = envOf(ctx);
   const fromEnv = envRegistry("pypi", ctx);
   if (fromEnv !== null) return fromEnv;
+  const state = { first: null };
+  const take = (found) => {
+    state.first = state.first ?? found;
+    return found.from === "user" ? { ...state.first, from: "user" } : null;
+  };
   const home = homeOf(ctx);
   const etc = ctx.etcDir ?? "/etc";
   const confs = [];
@@ -7460,7 +7774,10 @@ function pypiRegistry(name, ctx) {
   for (const path of confs) {
     const text = read(path, ctx);
     const url = text === void 0 ? void 0 : fromPipConf(text);
-    if (url !== void 0) return { kind: "registry", source: path, url };
+    if (url !== void 0) {
+      const done = take({ kind: "registry", source: path, url, from: insideProject(path, ctx) ? "project" : "user" });
+      if (done !== null) return done;
+    }
   }
   const uvConfs = [];
   const uvExplicit = envValue(env, "UV_CONFIG_FILE");
@@ -7468,23 +7785,27 @@ function pypiRegistry(name, ctx) {
   uvConfs.push(join4(xdg, "uv", "uv.toml"), join4(appdata, "uv", "uv.toml"), join4(etc, "uv", "uv.toml"));
   for (const path of uvConfs) {
     const text = read(path, ctx);
-    const url = text === void 0 ? void 0 : fromUvToml(text);
-    if (url !== void 0) return { kind: "registry", source: path, url };
+    const url = text === void 0 ? void 0 : anyIndex(uvTomlEntries(text));
+    if (url !== void 0) {
+      const done = take({ kind: "registry", source: path, url, from: "user" });
+      if (done !== null) return done;
+    }
   }
   for (const dir of ancestors(ctx)) {
     const uvToml = join4(dir, "uv.toml");
     const uvText = read(uvToml, ctx);
-    const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
-    if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
+    const uvUrl = uvText === void 0 ? void 0 : explainingIndex(uvTomlEntries(uvText), ctx);
+    if (uvUrl !== void 0) take({ kind: "registry", source: uvToml, url: uvUrl, from: "project" });
     const pyproject = join4(dir, "pyproject.toml");
     const text = read(pyproject, ctx);
     if (text === void 0) continue;
-    const url = fromPyproject(text);
-    if (url !== void 0) return { kind: "registry", source: pyproject, url };
+    const url = explainingIndex(pyprojectEntries(text), ctx);
+    if (url !== void 0) take({ kind: "registry", source: pyproject, url, from: "project" });
     break;
   }
+  if (state.first !== null) return state.first;
   const local = uvWorkspacePackage(name, ctx);
-  return local === void 0 ? null : { kind: "workspace", source: local };
+  return local === void 0 ? null : { kind: "workspace", source: local, from: "project" };
 }
 function hasRepositories(text) {
   if (text === void 0) return false;
@@ -7502,14 +7823,14 @@ function composerRegistry(ctx) {
     const path = join4(dir, "composer.json");
     const text = read(path, ctx);
     if (text === void 0) continue;
-    if (hasRepositories(text)) return { kind: "registry", source: path };
+    if (hasRepositories(text)) return { kind: "registry", source: path, from: "project" };
     break;
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const composerHome = envValue(env, "COMPOSER_HOME");
   const globals = composerHome !== void 0 ? [join4(composerHome, "config.json")] : [join4(home, ".composer", "config.json"), join4(home, ".config", "composer", "config.json"), join4(envValue(env, "APPDATA") ?? join4(home, "AppData", "Roaming"), "Composer", "config.json")];
-  for (const path of globals) if (hasRepositories(read(path, ctx))) return { kind: "registry", source: path };
+  for (const path of globals) if (hasRepositories(read(path, ctx))) return { kind: "registry", source: path, from: "user" };
   return null;
 }
 function nugetConfigIn(dir, ctx) {
@@ -7590,7 +7911,7 @@ function nugetRegistry(name, ctx) {
     if (text === void 0) continue;
     for (const url of customNugetSources(text)) {
       if (machineWide.has(path) && isLocalFolderSource(url) && !localFeedHas(url, path, name, ctx)) continue;
-      return { kind: "registry", source: path, url };
+      return { kind: "registry", source: path, url, from: insideProject(path, ctx) ? "project" : "user" };
     }
   }
   return null;
@@ -7859,9 +8180,12 @@ function parsedHttpUrl(text) {
     return void 0;
   }
 }
+function onlyTheProjectExplains(eco, custom) {
+  return (eco === "npm" || eco === "pypi") && (custom.kind === "registry" || custom.kind === "auth") && custom.from === "project";
+}
 function customFor(spec2, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec2.ecosystem, u));
-  if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine };
+  if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine, from: "user" };
   return customRegistryFor(spec2.ecosystem, spec2.name, opts.registry ?? {});
 }
 function resolveFor(w, info) {
@@ -7998,7 +8322,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     } else {
       exists = fail(`does not exist on ${registry} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
-    malicious = malIds.length > 0 ? custom !== null && custom.kind !== "unreadable" && custom.kind !== "unchecked" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry}`) : fail(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry}`) : osvDown !== void 0 ? unknown(osvDown) : na();
+    malicious = malIds.length > 0 ? custom !== null && custom.kind !== "unreadable" && custom.kind !== "unchecked" && !onlyTheProjectExplains(eco, custom) ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry}`) : fail(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry}`) : osvDown !== void 0 ? unknown(osvDown) : na();
     vulnerabilities = na();
     publishAge = na();
     if (eco === "npm") installScripts = na();
@@ -8118,7 +8442,7 @@ function explain404(w, opts) {
   const deadlineAt = opts.registry?.deadlineAt;
   if (deadlineAt !== void 0 && Date.now() > deadlineAt) {
     const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(w.spec.ecosystem, u));
-    w.custom = onCommandLine !== void 0 ? { kind: "registry", source: "the command line", url: onCommandLine } : { kind: "unchecked", source: "the vetting deadline", cut: "time" };
+    w.custom = onCommandLine !== void 0 ? { kind: "registry", source: "the command line", url: onCommandLine, from: "user" } : { kind: "unchecked", source: "the vetting deadline", cut: "time" };
     return;
   }
   w.custom = customFor(w.spec, opts);
@@ -8431,7 +8755,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
     };
     if (c.global === true && c.updateNames?.length === 0 && c.skipped.length === 0) notes.push(UPDATES_EVERY_GLOBAL);
     if (c.updatesEveryTool === true) notes.push(UPDATES_EVERY_TOOL);
-    const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}\0${String(c.global === true)}`;
+    const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}\0${String(c.global === true)}\0${String(c.envFileFlag === true)}\0${String(c.bunLauncher === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
     notes.push(...lineAsked.get(key) ?? []);
     const manifest = c.manifest;
@@ -8474,7 +8798,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
       if (read2.incomplete !== void 0) {
         notes.push(`dev-guardian: a file ${read2.file} includes was not read (${read2.incomplete}) \u2014 its packages were not vetted.`);
       }
-      const inScope = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: base2 }, notes) : read2.packages;
+      const inScope = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: base2, command: registryCommand(c) }, notes) : read2.packages;
       const packages = lock === void 0 || c.update === true ? inScope : withoutCovered(inScope, lock);
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read2.registries];
@@ -8493,16 +8817,28 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
   overflowScripts(world);
   return out;
 }
+function registryCommand(c) {
+  return {
+    manager: c.manager,
+    registryForm: c.registryForm,
+    global: c.global === true,
+    envFileFlag: c.envFileFlag === true,
+    bunLauncher: c.bunLauncher === true
+  };
+}
+function isDefaultRegistryLine(note) {
+  return /^dev-guardian: the project's \S+ sets the default registry(?: \([^)]*\))? — /.test(note) || /^dev-guardian: \d+ more files? of the project sets? the default registry\.$/.test(note);
+}
 var MAX_REGISTRY_LINES = 3;
 function projectDefaultRegistryLines(c, opts, registry, userRegistries) {
   try {
     if (c.ecosystem !== "npm" || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
     const dir = commandDir(c, opts);
     if (dir === null) return [];
-    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
+    const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir, command: registryCommand(c) }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
     const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
       const host = registryHost("npm", f.url);
-      return `dev-guardian: the project's ${basename2(f.source)} sets the default registry${host === void 0 ? "" : ` (${host})`} \u2014 packages are fetched from it, and what it serves was not vetted.`;
+      return `dev-guardian: the project's ${basename3(f.source)} sets the default registry${host === void 0 ? "" : ` (${host})`} \u2014 packages are fetched from it, and what it serves was not vetted.`;
     });
     const rest = found.length - lines.length;
     if (rest > 0) lines.push(rest === 1 ? "dev-guardian: 1 more file of the project sets the default registry." : `dev-guardian: ${rest} more files of the project set the default registry.`);
@@ -8526,7 +8862,7 @@ function withoutOwnRegistryScopes(read2, registry, notes) {
     if (own.from !== "project") continue;
     held += 1;
     byProject.add(`@${own.scope}`);
-    if (source === "") source = basename2(own.source);
+    if (source === "") source = basename3(own.source);
   }
   if (held > 0) notes.push(ownScopeLine(held, read2.file, byProject, source));
   return kept;
@@ -8665,7 +9001,7 @@ function pairsToAsk(read2, registry) {
         if (own.from === "project") {
           heldKeys.add(key);
           scopes.add(`@${own.scope}`);
-          if (source === "") source = basename2(own.source);
+          if (source === "") source = basename3(own.source);
         }
         continue;
       }
@@ -8690,7 +9026,7 @@ function lockedProject(c, dir, manifest, opts, top, registry, notes) {
       notes.push(notReadLine(found.file, read2.unread));
       return void 0;
     }
-    const ctx = { ...registry, projectDir: dir };
+    const ctx = { ...registry, projectDir: dir, command: registryCommand(c) };
     let userRegistries;
     const user = () => userRegistries ??= npmUserRegistries(ctx);
     const plan = pairsToAsk(read2, ctx);
@@ -9089,7 +9425,7 @@ function readScript(w, cand, written) {
   const under = scriptUnder(w, cand.path, cand.dir);
   let read2;
   try {
-    read2 = cand.physical ? { ...readInlineScript(dirname4(cand.path), basename2(cand.path), "uv", under), file: said(written) } : readInlineScript(cand.dir, written, "uv", under);
+    read2 = cand.physical ? { ...readInlineScript(dirname4(cand.path), basename3(cand.path), "uv", under), file: said(written) } : readInlineScript(cand.dir, written, "uv", under);
   } catch {
     read2 = { file: said(written), status: "unreadable", packages: [], names: [], registries: [], reason: UNREADABLE_REASON };
   }
@@ -9298,7 +9634,7 @@ async function decideInstallCommand(command, opts) {
           offline,
           deadlineAt,
           now,
-          registry,
+          registry: { ...registry, command: registryCommand(c) },
           commandRegistries: c.registries,
           // A manifest's packages are told neither of a fresh version nor of install scripts (`decideManifestOne`):
           // what only those two checks need is not asked of the registry.
@@ -9405,9 +9741,13 @@ async function decideInstallCommand(command, opts) {
       );
     }
     const counts = [.../* @__PURE__ */ new Set([...lockCounts, ...scriptDenyLines])];
-    return { deny: `dev-guardian blocked this install: ${parts.join(" ")}${counts.length > 0 ? `
+    const registryLines = malicious ? [] : [...new Set(manifestNotes.filter(isDefaultRegistryLine))];
+    return {
+      deny: `dev-guardian blocked this install: ${parts.join(" ")}${counts.length > 0 ? `
 ${counts.join(`
-`)}` : ""}` };
+`)}` : ""}`,
+      ...registryLines.length > 0 ? { context: registryLines.join("\n") } : {}
+    };
   }
   const lines = [];
   if (warnings.length > 0) {

@@ -5500,16 +5500,16 @@ function isGitleaksSecret(f) {
 function locate3(filePath, projectPath) {
   let path3 = filePath ?? "";
   if (path3 === "") return { key: "", readable: null };
-  let insideProject = !isAbsolute6(path3);
+  let insideProject2 = !isAbsolute6(path3);
   if (projectPath !== void 0 && isAbsolute6(path3)) {
     const rel2 = relative5(projectPath, path3);
     if (rel2 !== "" && !isAbsolute6(rel2) && rel2 !== ".." && !rel2.startsWith(`..${sep3}`)) {
       path3 = rel2;
-      insideProject = true;
+      insideProject2 = true;
     }
   }
   const key = normalizePathPosix(path3).replace(/^(\.\/)+/, "");
-  return { key, readable: insideProject ? path3.replace(/\\/g, "/") : null };
+  return { key, readable: insideProject2 ? path3.replace(/\\/g, "/") : null };
 }
 function contentSource(f, readable2, linesOf2) {
   const dependency = dependencyCoordinates(f);
@@ -89321,7 +89321,7 @@ var require_properties = __commonJS({
           return;
         const valid = gen.name("valid");
         for (const prop6 of properties) {
-          if (hasDefault(prop6)) {
+          if (hasDefault2(prop6)) {
             applyPropertySchema(prop6);
           } else {
             gen.if((0, code_1.propertyInData)(gen, data, prop6, it.opts.ownProperties));
@@ -89333,7 +89333,7 @@ var require_properties = __commonJS({
           cxt.it.definedProperties.add(prop6);
           cxt.ok(valid);
         }
-        function hasDefault(prop6) {
+        function hasDefault2(prop6) {
           return it.opts.useDefaults && !it.compositeRule && schema[prop6].default !== void 0;
         }
         function applyPropertySchema(prop6) {
@@ -117517,7 +117517,7 @@ var init_popular = __esm({
 // src/pkgvet/privateRegistry.ts
 import { lstatSync as lstatSync19, readdirSync as readdirSync20 } from "node:fs";
 import { homedir as homedir12 } from "node:os";
-import { dirname as dirname35, isAbsolute as isAbsolute25, join as join115, parse as parse11, relative as relative38, resolve as resolve37 } from "node:path";
+import { basename as basename15, dirname as dirname35, isAbsolute as isAbsolute25, join as join115, parse as parse11, relative as relative38, resolve as resolve37 } from "node:path";
 function registryCache() {
   return { reads: /* @__PURE__ */ new Map(), workspaces: /* @__PURE__ */ new Map() };
 }
@@ -117566,6 +117566,11 @@ function takeUnchecked() {
   return unchecked;
 }
 function read2(path3, ctx, under, what = "configuration") {
+  const r = readRaw(path3, ctx, under);
+  if (r.status === "refused") noteUnread3(path3, what);
+  return r.status === "ok" ? r.text : void 0;
+}
+function readRaw(path3, ctx, under) {
   const root = walkRoot2(path3, ctx, under);
   const key = `${path3}\0${root ?? ""}`;
   let r = ctx.cache?.reads.get(key);
@@ -117573,8 +117578,16 @@ function read2(path3, ctx, under, what = "configuration") {
     r = readSmallText(path3, MAX_REGISTRY_CONFIG_BYTES, root);
     ctx.cache?.reads.set(key, r);
   }
-  if (r.status === "refused") noteUnread3(path3, what);
-  return r.status === "ok" ? r.text : void 0;
+  return r;
+}
+function readEnvFile(path3, ctx) {
+  try {
+    const r = readRaw(path3, ctx);
+    if (r.status === "refused" && r.reason !== "not-a-regular-file") noteUnread3(path3, "configuration");
+    return r.status === "ok" ? r.text : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function present4(path3) {
   try {
@@ -117751,6 +117764,163 @@ function fromBunfig(text3, scope, all) {
   }
   return found2;
 }
+function urlOrConfigured(value) {
+  return /^https?:\/\/\S+$/i.test(value) ? value : UNREADABLE_VALUE;
+}
+function bunScopeKey(text3) {
+  return /^@?[A-Za-z0-9._-]+$/.test(text3) ? text3.replace(/^@/, "").toLowerCase() : void 0;
+}
+function scopeOfSubtable(header) {
+  const quoted = /^install\.scopes\.(["'])([^"']+)\1$/.exec(header);
+  if (quoted !== null) return bunScopeKey(quoted[2] ?? "");
+  const bare = /^install\.scopes\.([A-Za-z0-9_-]+)$/.exec(header);
+  return bare === null ? void 0 : bunScopeKey(bare[1] ?? "");
+}
+function bunfigValue(line) {
+  const match = /https?:\/\/[^"'\s}]+/.exec(line);
+  const unquoted = match !== null && !/["']/.test(line.charAt(match.index - 1));
+  return match === null ? UNREADABLE_VALUE : withCommentAt(match[0], unquoted ? line.slice(match.index + match[0].length) : "");
+}
+function bunfigFound(text3, scope) {
+  try {
+    const wanted = scope?.toLowerCase();
+    let section = "";
+    let exact = "";
+    let header = false;
+    let found2;
+    for (const raw of text3.split(/\r?\n/)) {
+      const line = raw.trim();
+      const head = /^\[([^\]]+)\]$/.exec(line);
+      if (head !== null) {
+        header = true;
+        exact = head[1] ?? "";
+        section = exact.trim();
+        continue;
+      }
+      if (line === "" || line.startsWith("#")) continue;
+      if (section === "install" && /^registry\s*=/.test(line)) found2 = found2 ?? { url: bunfigValue(line), explains: true };
+      else if (!header && /^install\.registry\s*=/.test(line)) found2 = found2 ?? newForm(bunfigValue(line));
+      else if (exact === "install.registry" && /^url\s*=/.test(line)) found2 = found2 ?? newForm(bunfigValue(line));
+      else if (wanted !== void 0) {
+        if (section === "install.scopes") {
+          const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
+          if (key !== void 0 && key.toLowerCase() === wanted) return { url: bunfigValue(line), explains: true };
+        } else if (/^url\s*=/.test(line) && scopeOfSubtable(exact) === wanted) return newForm(bunfigValue(line));
+      }
+    }
+    return found2;
+  } catch {
+    return void 0;
+  }
+  function newForm(url2) {
+    return { url: url2, explains: url2 !== UNREADABLE_VALUE };
+  }
+}
+function bunEnvValue(text3) {
+  let open2;
+  let bun;
+  let other;
+  for (const raw of text3.split(/\r?\n/)) {
+    if (open2 !== void 0) {
+      if (raw.includes(open2)) open2 = void 0;
+      continue;
+    }
+    const assignment = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(raw);
+    if (assignment === null) continue;
+    const name = assignment[1] ?? "";
+    const rest = assignment[2] ?? "";
+    const first = rest.charAt(0);
+    let value;
+    if (first === '"' || first === "'" || first === "`") {
+      const close = rest.indexOf(first, 1);
+      if (close < 0) {
+        open2 = first;
+        value = UNREADABLE_VALUE;
+      } else {
+        const content = rest.slice(1, close);
+        const bad = first !== "'" && (content.includes("\\") || content.includes("$"));
+        value = bad || !endsCleanly(rest.slice(close + 1)) ? UNREADABLE_VALUE : content === "" ? void 0 : urlOrConfigured(content);
+      }
+    } else {
+      let end = 0;
+      while (end < rest.length && rest.charAt(end) !== " " && rest.charAt(end) !== "	") end += 1;
+      const token = rest.slice(0, end);
+      if (token === "" || token.startsWith("#")) value = void 0;
+      else if (/["'`\\$#]/.test(token) || !endsCleanly(rest.slice(end))) value = UNREADABLE_VALUE;
+      else value = urlOrConfigured(token);
+    }
+    if (!BUN_ENV_NAMES.has(name) || value === void 0) continue;
+    if (value !== UNREADABLE_VALUE && isPublic("npm", value)) continue;
+    if (name === "BUN_CONFIG_REGISTRY") bun = value;
+    else other = value;
+  }
+  return bun ?? other;
+  function endsCleanly(tail2) {
+    const t = tail2.trimStart();
+    return t === "" || t !== tail2 && t.startsWith("#");
+  }
+}
+function bunMode(ctx) {
+  const v = envOf(ctx)["NODE_ENV"];
+  return v === "development" || v === "test" ? v : "production";
+}
+function bunEnvNames(mode) {
+  return [`.env.${mode}.local`, ...mode === "test" ? [] : [".env.local"], `.env.${mode}`, ".env"];
+}
+function judgeWorkspaceEntry(entry, rel2) {
+  if (typeof entry !== "string" || entry === "" || entry.startsWith("!") || entry.startsWith("./")) return "unknown";
+  if (entry.endsWith("/") && !entry.endsWith("/*") && !entry.endsWith("/**")) return "unknown";
+  let body = entry;
+  let kind = "exact";
+  if (entry.endsWith("/**")) {
+    body = entry.slice(0, -3);
+    kind = "globstar";
+  } else if (entry.endsWith("/*")) {
+    body = entry.slice(0, -2);
+    kind = "star";
+  }
+  if (body === "" || /[*?[\]{}()!+@\\]/.test(body) || body.split("/").some((seg) => seg === "" || seg === "." || seg === "..")) return "unknown";
+  if (kind === "exact") return body === rel2 ? "yes" : "no";
+  if (!rel2.startsWith(`${body}/`)) return "no";
+  return kind === "globstar" || !rel2.slice(body.length + 1).includes("/") ? "yes" : "no";
+}
+function workspacesList(packageJson, rel2) {
+  if (packageJson === void 0) return "no";
+  try {
+    const w = JSON.parse(packageJson).workspaces;
+    const entries3 = Array.isArray(w) ? w : w !== null && typeof w === "object" ? w.packages : void 0;
+    if (!Array.isArray(entries3)) return "no";
+    const verdicts = entries3.map((e) => judgeWorkspaceEntry(e, rel2));
+    return verdicts.includes("yes") ? "yes" : verdicts.includes("unknown") ? "unknown" : "no";
+  } catch {
+    return "no";
+  }
+}
+function bunEnvPlan(ctx) {
+  const cmd = ctx.command;
+  if (cmd === void 0 || cmd.manager !== "bun" || cmd.global || cmd.envFileFlag || cmd.bunLauncher) return void 0;
+  try {
+    const near = ancestors2(ctx);
+    const first = near.findIndex((dir) => present4(join115(dir, "package.json")));
+    const base2 = near[first < 0 ? 0 : first];
+    if (base2 === void 0) return void 0;
+    if (first < 0) return { dirs: [base2], explains: true };
+    let unsure;
+    for (const dir of near.slice(first + 1)) {
+      const listed2 = workspacesList(read2(join115(dir, "package.json"), ctx, void 0, "workspace manifest"), relative38(dir, base2).split(/[\\/]/).join("/"));
+      if (listed2 === "yes") return { dirs: [dir], explains: true };
+      if (listed2 === "unknown" && unsure === void 0) unsure = dir;
+    }
+    return unsure === void 0 ? { dirs: [base2], explains: true } : { dirs: [unsure, base2], explains: false };
+  } catch {
+    return void 0;
+  }
+}
+function envFound(text3, explainsAllowed) {
+  const value = bunEnvValue(text3);
+  if (value === void 0) return void 0;
+  return { url: value, explains: explainsAllowed && value !== UNREADABLE_VALUE };
+}
 function npmConfigFiles(ctx) {
   const env = envOf(ctx);
   const home = homeOf(ctx);
@@ -117794,30 +117964,79 @@ function envRegistry(ecosystem, ctx) {
     if (raw === void 0 || raw.trim() === "" || !ENV_REGISTRY[ecosystem].test(key)) continue;
     const value = raw.trim();
     if (/NO_INDEX/i.test(key)) {
-      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: "registry", source: key };
+      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: "registry", source: key, from: "user" };
       continue;
     }
     if (value.split(/\s+/).some((u) => !isPublic(ecosystem, u.replace(/^[^=]+=(?=https?:)/, "")))) {
-      return { kind: "registry", source: key, url: value };
+      return { kind: "registry", source: key, url: value, from: "user" };
     }
   }
   return null;
+}
+function scopeOnly(parse12) {
+  return (text3, scope) => {
+    if (scope === void 0) return void 0;
+    const url2 = parse12(text3, scope);
+    return url2 !== void 0 && url2 !== parse12(text3, void 0) ? url2 : void 0;
+  };
+}
+function isBunProject(ctx) {
+  return ctx.command?.manager === "bun" && !ctx.command.global;
+}
+function registryFiles(ctx) {
+  const base2 = npmConfigFiles(ctx);
+  const cmd = ctx.command;
+  const bun = isBunProject(ctx);
+  const noDefault = cmd?.global === true && cmd.registryForm === "bun add";
+  if (!bun && !noDefault) return base2;
+  const plan = bun ? bunEnvPlan(ctx) : void 0;
+  const out = [];
+  for (const f of base2) {
+    const name = basename15(f.path);
+    if (f.user) {
+      out.push(f);
+    } else if (noDefault && (name === ".npmrc" || name === "bunfig.toml")) {
+      out.push({ ...f, parse: scopeOnly(f.parse) });
+    } else if (bun && name === "bunfig.toml") {
+      out.push({ ...f, found: bunfigFound });
+    } else {
+      if (plan !== void 0 && name === ".npmrc" && plan.dirs.some((d) => samePath3(d, dirname35(f.path)))) {
+        for (const envName of bunEnvNames(bunMode(ctx))) {
+          out.push({ path: join115(dirname35(f.path), envName), parse: () => void 0, user: false, env: true, found: (text3) => envFound(text3, plan.explains) });
+        }
+      }
+      out.push(f);
+    }
+  }
+  return out;
 }
 function npmRegistry(name, ctx) {
   const scope = npmScope(name);
   const fromEnv = envRegistry("npm", ctx);
   if (fromEnv !== null) return fromEnv;
   let authSource;
-  for (const { path: path3, parse: parse12 } of npmConfigFiles(ctx)) {
-    const text3 = read2(path3, ctx);
+  let userAuth;
+  let first = null;
+  for (const file2 of registryFiles(ctx)) {
+    const text3 = file2.env === true ? readEnvFile(file2.path, ctx) : read2(file2.path, ctx);
     if (text3 === void 0) continue;
-    const url2 = parse12(text3, scope);
-    if (url2 !== void 0 && !isPublic("npm", url2)) return { kind: "registry", source: path3, url: url2 };
-    if (authSource === void 0 && NPM_AUTH.test(text3)) authSource = path3;
+    const url2 = file2.found === void 0 ? file2.parse(text3, scope) : void 0;
+    const hit = file2.found === void 0 ? url2 === void 0 ? void 0 : { url: url2, explains: true } : file2.found(text3, scope);
+    if (hit !== void 0 && hit.explains && !isPublic("npm", hit.url)) {
+      first = first ?? { kind: "registry", source: file2.path, url: hit.url, from: file2.user ? "user" : "project" };
+      if (file2.user) return first.from === "user" ? first : { ...first, from: "user" };
+      continue;
+    }
+    if (file2.env !== true && NPM_AUTH.test(text3)) {
+      authSource = authSource ?? file2.path;
+      if (file2.user) userAuth = userAuth ?? file2.path;
+    }
   }
-  if (scope !== void 0 && authSource !== void 0) return { kind: "auth", source: authSource };
+  const credential = scope !== void 0 && userAuth !== void 0;
+  if (first !== null) return credential && first.from === "project" ? { ...first, from: "user" } : first;
+  if (scope !== void 0 && authSource !== void 0) return { kind: "auth", source: authSource, from: userAuth !== void 0 ? "user" : "project" };
   const local = npmWorkspacePackage(name, ctx);
-  return local === void 0 ? null : { kind: "workspace", source: local };
+  return local === void 0 ? null : { kind: "workspace", source: local, from: "project" };
 }
 function workspaceIndex(root, file2, nameOf2, ctx) {
   const key = `${file2}\0${root}`;
@@ -117919,27 +118138,92 @@ function fromPipConf(text3) {
   }
   return void 0;
 }
-function fromPyproject(text3) {
-  if (/^\s*\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)\s*\]\]/m.test(text3)) {
-    return /https?:\/\/[^"'\s]+/.exec(text3.slice(text3.search(/\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)/)))?.[0] ?? "(configured)";
-  }
-  const uv = /^\s*\[tool\.uv\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text3);
-  if (uv !== null) {
-    const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(uv[1] ?? "");
-    if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
-  }
-  return void 0;
+function arrayUrl(body) {
+  return /https?:\/\/[^"'\s]+/.exec(body.join("\n"))?.[0] ?? UNREADABLE_VALUE;
 }
-function fromUvToml(text3) {
-  if (/^\s*\[\[\s*index\s*\]\]/m.test(text3)) return /https?:\/\/[^"'\s]+/.exec(text3)?.[0] ?? "(configured)";
-  const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(text3);
-  if (m !== null && !isPublic("pypi", m[1] ?? "")) return m[1];
-  return void 0;
+function indexKeyValue(line, onlyIndexUrl = false) {
+  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/.exec(line);
+  if (m === null || onlyIndexUrl && m[1] !== "index-url") return void 0;
+  return isPublic("pypi", m[2] ?? "") ? void 0 : m[2];
+}
+function indexEntries(text3, arrays, keys, top) {
+  const out = [];
+  let table;
+  let keyed = top === void 0 ? void 0 : { kind: top };
+  const flush = () => {
+    const kind = table === void 0 ? void 0 : arrays[table.name]?.(table.body);
+    if (table !== void 0 && kind !== void 0) out.push({ kind, url: arrayUrl(table.body) });
+    table = void 0;
+  };
+  for (const line of text3.split(/\r?\n/)) {
+    const array2 = /^\s*\[\[\s*([^\][]+?)\s*\]\]/.exec(line);
+    const plain = array2 === null ? /^\s*\[\s*([^\][]+?)\s*\]/.exec(line) : null;
+    if (array2 !== null || plain !== null) {
+      flush();
+      const name = (array2 ?? plain)?.[1] ?? "";
+      if (array2 !== null) {
+        table = { name, body: [] };
+        keyed = void 0;
+      } else {
+        keyed = Object.hasOwn(keys, name) ? keys[name] : top === void 0 ? void 0 : { kind: top };
+      }
+      continue;
+    }
+    if (table !== void 0) {
+      table.body.push(line);
+      continue;
+    }
+    if (keyed === void 0) continue;
+    const value = indexKeyValue(line, keyed.onlyIndexUrl === true);
+    if (value !== void 0) out.push({ kind: keyed.kind, url: value });
+  }
+  flush();
+  return out;
+}
+function poetryKind(body) {
+  const p = body.map((l) => /^\s*priority\s*=\s*["']([^"']*)["']/.exec(l)?.[1]).find((v) => v !== void 0);
+  if (p === void 0) return "poetry-none";
+  return p === "primary" || p === "supplemental" || p === "explicit" ? `poetry-${p}` : "poetry-other";
+}
+function uvTomlEntries(text3) {
+  return indexEntries(
+    text3,
+    { index: (body) => hasDefault(body) ? "uv-index-default" : "uv-index" },
+    { pip: { kind: "uv-pip" } },
+    "uv-top"
+  );
+}
+function pyprojectEntries(text3) {
+  return indexEntries(
+    text3,
+    {
+      "tool.uv.index": (body) => hasDefault(body) ? "tool-uv-index-default" : "tool-uv-index",
+      "tool.poetry.source": poetryKind,
+      "tool.pdm.source": () => "pdm"
+    },
+    { "tool.uv": { kind: "tool-uv" }, "tool.uv.pip": { kind: "tool-uv-pip", onlyIndexUrl: true } }
+  );
+}
+function explainingIndex(entries3, ctx) {
+  const form = ctx.command?.registryForm;
+  const skipped2 = form === void 0 ? void 0 : Object.hasOwn(NOT_OBEYED, form) ? NOT_OBEYED[form] : void 0;
+  return entries3.find((e) => e.kind === "tool-uv-pip" ? form === "uv pip install" : skipped2?.has(e.kind) !== true)?.url;
+}
+function anyIndex(entries3) {
+  return entries3.find((e) => e.kind !== "tool-uv-pip")?.url;
+}
+function insideProject(path3, ctx) {
+  return ancestors2(ctx).some((dir) => isInside4(dir, resolve37(path3)));
 }
 function pypiRegistry(name, ctx) {
   const env = envOf(ctx);
   const fromEnv = envRegistry("pypi", ctx);
   if (fromEnv !== null) return fromEnv;
+  const state = { first: null };
+  const take = (found2) => {
+    state.first = state.first ?? found2;
+    return found2.from === "user" ? { ...state.first, from: "user" } : null;
+  };
   const home = homeOf(ctx);
   const etc = ctx.etcDir ?? "/etc";
   const confs = [];
@@ -117964,7 +118248,10 @@ function pypiRegistry(name, ctx) {
   for (const path3 of confs) {
     const text3 = read2(path3, ctx);
     const url2 = text3 === void 0 ? void 0 : fromPipConf(text3);
-    if (url2 !== void 0) return { kind: "registry", source: path3, url: url2 };
+    if (url2 !== void 0) {
+      const done = take({ kind: "registry", source: path3, url: url2, from: insideProject(path3, ctx) ? "project" : "user" });
+      if (done !== null) return done;
+    }
   }
   const uvConfs = [];
   const uvExplicit = envValue6(env, "UV_CONFIG_FILE");
@@ -117972,23 +118259,27 @@ function pypiRegistry(name, ctx) {
   uvConfs.push(join115(xdg, "uv", "uv.toml"), join115(appdata, "uv", "uv.toml"), join115(etc, "uv", "uv.toml"));
   for (const path3 of uvConfs) {
     const text3 = read2(path3, ctx);
-    const url2 = text3 === void 0 ? void 0 : fromUvToml(text3);
-    if (url2 !== void 0) return { kind: "registry", source: path3, url: url2 };
+    const url2 = text3 === void 0 ? void 0 : anyIndex(uvTomlEntries(text3));
+    if (url2 !== void 0) {
+      const done = take({ kind: "registry", source: path3, url: url2, from: "user" });
+      if (done !== null) return done;
+    }
   }
   for (const dir of ancestors2(ctx)) {
     const uvToml = join115(dir, "uv.toml");
     const uvText = read2(uvToml, ctx);
-    const uvUrl = uvText === void 0 ? void 0 : fromUvToml(uvText);
-    if (uvUrl !== void 0) return { kind: "registry", source: uvToml, url: uvUrl };
+    const uvUrl = uvText === void 0 ? void 0 : explainingIndex(uvTomlEntries(uvText), ctx);
+    if (uvUrl !== void 0) take({ kind: "registry", source: uvToml, url: uvUrl, from: "project" });
     const pyproject = join115(dir, "pyproject.toml");
     const text3 = read2(pyproject, ctx);
     if (text3 === void 0) continue;
-    const url2 = fromPyproject(text3);
-    if (url2 !== void 0) return { kind: "registry", source: pyproject, url: url2 };
+    const url2 = explainingIndex(pyprojectEntries(text3), ctx);
+    if (url2 !== void 0) take({ kind: "registry", source: pyproject, url: url2, from: "project" });
     break;
   }
+  if (state.first !== null) return state.first;
   const local = uvWorkspacePackage(name, ctx);
-  return local === void 0 ? null : { kind: "workspace", source: local };
+  return local === void 0 ? null : { kind: "workspace", source: local, from: "project" };
 }
 function hasRepositories(text3) {
   if (text3 === void 0) return false;
@@ -118006,14 +118297,14 @@ function composerRegistry(ctx) {
     const path3 = join115(dir, "composer.json");
     const text3 = read2(path3, ctx);
     if (text3 === void 0) continue;
-    if (hasRepositories(text3)) return { kind: "registry", source: path3 };
+    if (hasRepositories(text3)) return { kind: "registry", source: path3, from: "project" };
     break;
   }
   const env = envOf(ctx);
   const home = homeOf(ctx);
   const composerHome = envValue6(env, "COMPOSER_HOME");
   const globals = composerHome !== void 0 ? [join115(composerHome, "config.json")] : [join115(home, ".composer", "config.json"), join115(home, ".config", "composer", "config.json"), join115(envValue6(env, "APPDATA") ?? join115(home, "AppData", "Roaming"), "Composer", "config.json")];
-  for (const path3 of globals) if (hasRepositories(read2(path3, ctx))) return { kind: "registry", source: path3 };
+  for (const path3 of globals) if (hasRepositories(read2(path3, ctx))) return { kind: "registry", source: path3, from: "user" };
   return null;
 }
 function nugetConfigIn(dir, ctx) {
@@ -118093,7 +118384,7 @@ function nugetRegistry(name, ctx) {
     if (text3 === void 0) continue;
     for (const url2 of customNugetSources(text3)) {
       if (machineWide.has(path3) && isLocalFolderSource(url2) && !localFeedHas(url2, path3, name, ctx)) continue;
-      return { kind: "registry", source: path3, url: url2 };
+      return { kind: "registry", source: path3, url: url2, from: insideProject(path3, ctx) ? "project" : "user" };
     }
   }
   return null;
@@ -118128,7 +118419,7 @@ function customRegistryFor(ecosystem, name, ctx = {}) {
   if (unchecked !== void 0) return { kind: "unchecked", source: unchecked.root, cut: unchecked.cut };
   return unread !== void 0 ? { kind: "unreadable", source: unread.path, what: unread.what } : null;
 }
-var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, UNSAFE_TEXT, URL_SHAPE, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, UNREADABLE_VALUE, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, NUGET_VERSION;
+var MAX_WORKSPACE_DIRS2, PUBLIC_HOSTS, UNSAFE_TEXT, URL_SHAPE, MAX_REGISTRY_CONFIG_BYTES, firstUnread, firstUnchecked, UNREADABLE_VALUE, BUN_ENV_NAMES, NPM_AUTH, ENV_REGISTRY, SKIP_DIRS5, MAX_SCAN_DIRS, MAX_SCAN_DEPTH, pep503, hasDefault, NOT_OBEYED, NUGET_VERSION;
 var init_privateRegistry = __esm({
   "src/pkgvet/privateRegistry.ts"() {
     "use strict";
@@ -118145,6 +118436,7 @@ var init_privateRegistry = __esm({
     URL_SHAPE = /^(?:(https?):)?\/\/([^/?#@:]+)(?::(\d*))?(?:[/?#]|$)/i;
     MAX_REGISTRY_CONFIG_BYTES = 1024 * 1024;
     UNREADABLE_VALUE = "(configured)";
+    BUN_ENV_NAMES = /* @__PURE__ */ new Set(["BUN_CONFIG_REGISTRY", "NPM_CONFIG_REGISTRY", "npm_config_registry"]);
     NPM_AUTH = /^\s*(?:\/\/registry\.(?:npmjs\.org|yarnpkg\.com)\/:)?_(?:authToken|auth|password)\s*=|^\s*npmAuth(?:Token|Ident)\s*:/m;
     ENV_REGISTRY = {
       npm: /^(?:YARN_NPM_REGISTRY_SERVER|YARN_REGISTRY|BUN_CONFIG_REGISTRY|npm_config_.*registry.*)$/i,
@@ -118156,6 +118448,15 @@ var init_privateRegistry = __esm({
     MAX_SCAN_DIRS = MAX_WORKSPACE_DIRS2;
     MAX_SCAN_DEPTH = 5;
     pep503 = (n) => n.trim().toLowerCase().replace(/[-_.]+/g, "-");
+    hasDefault = (body) => body.some((l) => /^\s*default\s*=\s*true\b/.test(l));
+    NOT_OBEYED = {
+      "uv add": /* @__PURE__ */ new Set(["uv-pip", "poetry-primary"]),
+      "uv pip install": /* @__PURE__ */ new Set(["poetry-primary"]),
+      "pipx install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"]),
+      "pipx run": /* @__PURE__ */ new Set(["uv-top", "tool-uv"]),
+      "poetry add": /* @__PURE__ */ new Set(["poetry-explicit", "uv-top", "tool-uv", "tool-uv-index-default"]),
+      "pip install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"])
+    };
     NUGET_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
   }
 });
@@ -118384,9 +118685,12 @@ function parsedHttpUrl(text3) {
     return void 0;
   }
 }
+function onlyTheProjectExplains(eco, custom2) {
+  return (eco === "npm" || eco === "pypi") && (custom2.kind === "registry" || custom2.kind === "auth") && custom2.from === "project";
+}
 function customFor(spec, opts) {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
-  if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine };
+  if (onCommandLine !== void 0) return { kind: "registry", source: "the command line", url: onCommandLine, from: "user" };
   return customRegistryFor(spec.ecosystem, spec.name, opts.registry ?? {});
 }
 function resolveFor(w, info) {
@@ -118494,7 +118798,7 @@ function buildResult(w, osv, osvError, now, offlineReason) {
     } else {
       exists = fail4(`does not exist on ${registry2} \u2014 most likely a hallucinated or mistyped name.${didYouMean}`);
     }
-    malicious = malIds.length > 0 ? custom2 !== null && custom2.kind !== "unreadable" && custom2.kind !== "unchecked" ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail4(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown3(osvDown) : na();
+    malicious = malIds.length > 0 ? custom2 !== null && custom2.kind !== "unreadable" && custom2.kind !== "unchecked" && !onlyTheProjectExplains(eco, custom2) ? warn(`OSV lists this name as a malicious package (${malIds.join(", ")}) removed from ${registry2}`) : fail4(`OSV lists this name as a malicious package (${malIds.join(", ")}), removed from ${registry2}`) : osvDown !== void 0 ? unknown3(osvDown) : na();
     vulnerabilities = na();
     publishAge = na();
     if (eco === "npm") installScripts = na();
@@ -118614,7 +118918,7 @@ function explain404(w, opts) {
   const deadlineAt = opts.registry?.deadlineAt;
   if (deadlineAt !== void 0 && Date.now() > deadlineAt) {
     const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(w.spec.ecosystem, u));
-    w.custom = onCommandLine !== void 0 ? { kind: "registry", source: "the command line", url: onCommandLine } : { kind: "unchecked", source: "the vetting deadline", cut: "time" };
+    w.custom = onCommandLine !== void 0 ? { kind: "registry", source: "the command line", url: onCommandLine, from: "user" } : { kind: "unchecked", source: "the vetting deadline", cut: "time" };
     return;
   }
   w.custom = customFor(w.spec, opts);
@@ -118986,7 +119290,7 @@ var init_render = __esm({
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
 import { existsSync as existsSync24, readFileSync as readFileSync16, writeFileSync as writeFileSync31 } from "node:fs";
-import { basename as basename15, join as join116, posix as posix4, win32 as win325 } from "node:path";
+import { basename as basename16, join as join116, posix as posix4, win32 as win325 } from "node:path";
 async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
   const projectPath = toolProjectPath(inp.project_path);
@@ -119166,7 +119470,7 @@ function readSurface(ctx, projectPath, depsScan, unknowns) {
   };
 }
 function productOf(projectPath, sbom) {
-  const directory = basename15(projectPath);
+  const directory = basename16(projectPath);
   const sbomName = sbom?.product_name ?? null;
   const name = sbomName === null ? directory : isAbsolutePath2(sbomName) ? win325.basename(sbomName) || directory : sbomName;
   const productPurl = sbom?.product_purl ?? null;
@@ -122796,7 +123100,7 @@ var init_renderHtml = __esm({
 // src/selftest/canaries.ts
 import { cpSync, existsSync as existsSync25, lstatSync as lstatSync20, mkdirSync as mkdirSync17, mkdtempSync as mkdtempSync16, readdirSync as readdirSync21, readFileSync as readFileSync17, realpathSync as realpathSync10, rmSync as rmSync24, writeFileSync as writeFileSync32 } from "node:fs";
 import { tmpdir as tmpdir17 } from "node:os";
-import { basename as basename16, dirname as dirname36, join as join119, relative as relative41, sep as sep22 } from "node:path";
+import { basename as basename17, dirname as dirname36, join as join119, relative as relative41, sep as sep22 } from "node:path";
 function canaryToken() {
   return CANARY_HALVES.join("");
 }
@@ -122870,7 +123174,7 @@ function leftoverWorkspaces(tmpRoot, own2, now = Date.now()) {
   }
   const out = [];
   for (const name of names) {
-    if (!name.startsWith(WORKSPACE_PREFIX) || name === basename16(own2)) continue;
+    if (!name.startsWith(WORKSPACE_PREFIX) || name === basename17(own2)) continue;
     const path3 = join119(tmpRoot, name);
     try {
       const st = lstatSync20(path3);
@@ -123255,7 +123559,7 @@ __export(run_exports, {
 });
 import { realpathSync as realpathSync11 } from "node:fs";
 import { homedir as homedir13, tmpdir as tmpdir18 } from "node:os";
-import { basename as basename17, join as join121 } from "node:path";
+import { basename as basename18, join as join121 } from "node:path";
 async function within(run2, timeoutMs, graceMs, onTimeout) {
   let timer;
   const late2 = new Promise((resolve39) => {
@@ -123376,7 +123680,7 @@ async function runSelftest(opts) {
         }
       };
       const paths = [];
-      if (ws !== void 0) paths.push(["<selftest directory>", ws.dir], ["<selftest directory>", basename17(ws.dir)]);
+      if (ws !== void 0) paths.push(["<selftest directory>", ws.dir], ["<selftest directory>", basename18(ws.dir)]);
       for (const [label, path3] of [["<temporary directory>", tmpRoot], ["<data directory>", opts.dataDir]]) {
         paths.push([label, path3], [label, real(path3)]);
       }
@@ -123732,7 +124036,7 @@ __export(defaultRunners_exports, {
 });
 import { rmSync as rmSync25 } from "node:fs";
 import { tmpdir as tmpdir19 } from "node:os";
-import { basename as basename18, join as join122 } from "node:path";
+import { basename as basename19, join as join122 } from "node:path";
 function scannerEnv(env) {
   const win = process.platform === "win32";
   const isPath = (key) => win ? key.toUpperCase() === "PATH" : key === "PATH";
@@ -123788,7 +124092,7 @@ function semgrepSaid(stderr) {
   return lines.at(-1) ?? said;
 }
 async function semgrep(args) {
-  const name = basename18(args.rulesPath);
+  const name = basename19(args.rulesPath);
   if (offlineIn(args.env) && await scannerAvailable("semgrep") === null) {
     return ended("not_run", "GUARDIAN_OFFLINE=1: Semgrep is not installed here and would run from its Docker image, which Docker may have to download");
   }

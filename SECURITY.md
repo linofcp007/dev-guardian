@@ -110,7 +110,12 @@ their respective projects.
   guard denies creating one there. The install hook reads its registry
   configuration (`.npmrc`, `pip.conf`, `nuget.config`, …) through the same
   link walk; one that is there but could not be read counts as possibly a
-  private registry, so a missing name warns. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
+  private registry, so a missing name warns. From a bun `.env` the hook reads only the variables
+  `BUN_CONFIG_REGISTRY`, `NPM_CONFIG_REGISTRY` and `npm_config_registry` and nothing else of
+  the file, and the scheme and host of such a value (never its credentials, path or query) reach
+  the model in the context of the hook's answer, as those of an `.npmrc` do. The `env` of a
+  project's `.claude/settings.json` can reach the hook's environment, which counts as the
+  user's own: a known limit. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
   `MultiEdit` (or MCP write) of `.claude/settings.json` or `settings.local.json`,
   or of the machine's `managed-settings.json`, is denied
   when it would newly set `disableAllHooks` (any value that may read as true),

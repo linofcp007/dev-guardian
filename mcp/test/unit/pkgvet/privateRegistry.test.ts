@@ -5,10 +5,11 @@ import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { customRegistryFor, isPublicRegistryUrl, npmScopeRegistry, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
+import { decideInstallCommand } from '../../../src/pkgvet/hookDecision.js';
+import { customRegistryFor, isPublicRegistryUrl, npmScopeRegistry, type RegistryCommand, type RegistryContext } from '../../../src/pkgvet/privateRegistry.js';
 import * as privateRegistry from '../../../src/pkgvet/privateRegistry.js';
 import { MCP_ROOT, TSX_NODE_ARGS } from '../../helpers/tsxNode.js';
-import { hangBound } from '../../helpers/timing.js';
+import { expectLinear, hangBound } from '../../helpers/timing.js';
 
 let project: string;
 let home: string;
@@ -1664,10 +1665,10 @@ describe('install-vet-registry-files-unread', () => {
 
   type ProjectDefault = (manager: string, ctx: RegistryContext) => Array<{ source: string; url: string }>;
   const projectDefault = privateRegistry.npmProjectDefaultRegistry as ProjectDefault;
-  /** The command of a plain `bun add`: not global, no env-file flag, not a launcher. The field is new: the context is cast. */
+  /** The command of a plain `bun add`: not global, no env-file flag, not a launcher. */
   const BUN_ADD = { manager: 'bun', registryForm: 'bun add', global: false, envFileFlag: false, bunLauncher: false };
   const withCommand = (extra: { projectDir?: string; env?: Record<string, string> } = {}): RegistryContext =>
-    ({ ...ctx(extra.env), ...(extra.projectDir === undefined ? {} : { projectDir: extra.projectDir }), command: BUN_ADD }) as RegistryContext;
+    ({ ...ctx(extra.env), ...(extra.projectDir === undefined ? {} : { projectDir: extra.projectDir }), command: BUN_ADD });
   const hostOf = (name: string): string => `https://npm.${name}.example/`;
   const BUN_VAR = 'BUN_CONFIG_REGISTRY';
   const dotenvOf = (name: string, url = PROJECT_NPM): string => `${name}=${url}\n`;
@@ -1743,5 +1744,239 @@ describe('install-vet-registry-files-unread', () => {
     projectWith({ 'package.json': workspaceRoot(['{app,lib}']), 'app/package.json': MANIFEST, '.env': dotenvOf(BUN_VAR), 'app/.env': dotenvOf(BUN_VAR, hostOf('member')) });
     const bySource = (a: { source: string }, b: { source: string }): number => a.source.localeCompare(b.source);
     expect([...answerOf(withCommand({ projectDir: join(project, 'app') }))].sort(bySource)).toEqual([entry('.env'), entry('app/.env', hostOf('member'))].sort(bySource));
+  });
+
+  // ── T-13: the context of the command (the lookups of a 404 for a command)
+
+  const bunCmd = (extra: Partial<RegistryCommand> = {}): RegistryCommand => ({
+    manager: 'bun',
+    registryForm: 'bun add',
+    global: false,
+    envFileFlag: false,
+    bunLauncher: false,
+    ...extra,
+  });
+  const forCommand = (command: RegistryCommand, extra: { projectDir?: string; env?: Record<string, string> } = {}): RegistryContext => ({
+    ...ctx(extra.env),
+    ...(extra.projectDir === undefined ? {} : { projectDir: extra.projectDir }),
+    command,
+  });
+  const project404 = (file: string, url = PROJECT_NPM): { kind: string; source: string; url: string; from: string } => ({
+    kind: 'registry',
+    source: join(project, file),
+    url,
+    from: 'project',
+  });
+  const found = (name: string, c: RegistryContext, ecosystem: 'npm' | 'pypi' = 'npm'): unknown => {
+    const r = customRegistryFor(ecosystem, name, c);
+    return r === null ? null : { kind: r.kind, source: r.source, url: r.url, from: r.from };
+  };
+
+  it.each(BUNFIG_SPELLINGS)('T-13 a bun add reads the bunfig.toml spelling %s: the registry, from the project', (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    expect(found(NAME, forCommand(bunCmd()))).toEqual(project404('bunfig.toml'));
+  });
+
+  it.each(SCOPE_SPELLINGS)('T-13 a bun add reads [install.scopes.%s] url for a name of that scope, and for no other', (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    expect(found(`@acme/${NAME}`, forCommand(bunCmd()))).toEqual(project404('bunfig.toml'));
+    expect(found(`@other/${NAME}`, forCommand(bunCmd()))).toBeNull();
+    expect(found(NAME, forCommand(bunCmd()))).toBeNull();
+  });
+
+  it('T-13 a bunfig.toml with [install] registry = SECOND and then [install.registry] url = PROJECT: the first is the registry', () => {
+    projectWith({ 'bunfig.toml': `[install]\nregistry = "${SECOND_NPM}"\n\n[install.registry]\nurl = "${PROJECT_NPM}"\n` });
+    expect(found(NAME, forCommand(bunCmd()))).toEqual(project404('bunfig.toml', SECOND_NPM));
+  });
+
+  it.each([
+    ['.env', { '.env': dotenv('BUN_CONFIG_REGISTRY') }, '.env', undefined],
+    ['.env.local', { '.env.local': dotenv('NPM_CONFIG_REGISTRY') }, '.env.local', undefined],
+    ['.env.production', { '.env.production': dotenv('npm_config_registry') }, '.env.production', undefined],
+    ['.env.production.local', { '.env.production.local': dotenv('BUN_CONFIG_REGISTRY') }, '.env.production.local', undefined],
+    ['.env.development with NODE_ENV=development', { '.env.development': dotenv('BUN_CONFIG_REGISTRY') }, '.env.development', 'development'],
+    ['.env.test with NODE_ENV=test', { '.env.test': dotenv('BUN_CONFIG_REGISTRY') }, '.env.test', 'test'],
+  ])('T-13 a bun add reads the %s: the registry, from the project', (_label, files, file, mode) => {
+    projectWith(files);
+    expect(found(NAME, forCommand(bunCmd(), mode === undefined ? {} : { env: { NODE_ENV: mode } }))).toEqual(project404(file));
+  });
+
+  it('T-13 bunLauncher: no .env is read, and the new spellings of the bunfig.toml are (P3 = A)', () => {
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY') });
+    expect(found(NAME, forCommand(bunCmd({ registryForm: undefined, bunLauncher: true })))).toBeNull();
+    put('bunfig.toml', `[install.registry]\nurl = "${PROJECT_NPM}"\n`);
+    expect(found(NAME, forCommand(bunCmd({ registryForm: undefined, bunLauncher: true })))).toEqual(project404('bunfig.toml'));
+  });
+
+  it('T-13 envFileFlag: no .env is read', () => {
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY') });
+    expect(found(NAME, forCommand(bunCmd({ envFileFlag: true })))).toBeNull();
+  });
+
+  it('T-13 a root with workspaces ["{app,lib}"] and a .env at the root and in the member: nothing explains the name (D-8)', () => {
+    projectWith({
+      'package.json': workspaceRoot(['{app,lib}']),
+      'app/package.json': MANIFEST,
+      '.env': dotenvOf(BUN_VAR),
+      'app/.env': dotenvOf(BUN_VAR, hostOf('member')),
+    });
+    expect(found(NAME, forCommand(bunCmd(), { projectDir: join(project, 'app') }))).toBeNull();
+  });
+
+  it.each([
+    ['BUN_CONFIG_REGISTRY=$REG', '.env', 'BUN_CONFIG_REGISTRY=$REG\n'],
+    ['an unclosed quote', '.env', `BUN_CONFIG_REGISTRY="${PROJECT_NPM}`],
+    ['a url that is no URL in the bunfig.toml', 'bunfig.toml', '[install.registry]\nurl = "$REG"\n'],
+    ['a dotted key that is no URL in the bunfig.toml', 'bunfig.toml', 'install.registry = "$REG"\n'],
+  ])('T-13 a value the reader cannot judge (%s) explains nothing (P7 = A)', (_label, file, text) => {
+    projectWith({ [file]: text });
+    expect(found(NAME, forCommand(bunCmd()))).toBeNull();
+  });
+
+  it('T-13 a global bun add: no new spelling and no .env is read, and the project registry= is not obeyed (N8) while a scope of it is', () => {
+    const global = bunCmd({ global: true });
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY'), 'bunfig.toml': `[install.registry]\nurl = "${PROJECT_NPM}"\n` });
+    expect(found(NAME, forCommand(global))).toBeNull();
+    projectWith({ '.npmrc': `registry=${PROJECT_NPM}\n` });
+    expect(found(NAME, forCommand(global))).toBeNull();
+    expect(found(NAME, forCommand(bunCmd({ global: true, registryForm: 'bun install' })))).toEqual(project404('.npmrc'));
+    put('.npmrc', `@acme:registry=${PROJECT_NPM}\n`);
+    expect(found(`@acme/${NAME}`, forCommand(global))).toEqual(project404('.npmrc'));
+  });
+
+  it('T-13 whose word: the project .npmrc is the project\'s, and the user\'s own registry (a file, the environment) makes it the user\'s', () => {
+    projectWith({ '.npmrc': `registry=${PROJECT_NPM}\n` });
+    expect(found(NAME, forCommand(bunCmd()))).toEqual(project404('.npmrc'));
+    writeFileSync(join(home, '.npmrc'), `registry=${SECOND_NPM}\n`);
+    expect(found(NAME, forCommand(bunCmd()))).toMatchObject({ kind: 'registry', source: join(project, '.npmrc'), from: 'user' });
+    rmSync(join(home, '.npmrc'));
+    expect(found(NAME, forCommand(bunCmd(), { env: { NPM_CONFIG_REGISTRY: SECOND_NPM } }))).toMatchObject({ kind: 'registry', source: 'NPM_CONFIG_REGISTRY', from: 'user' });
+  });
+
+  it.each([
+    ['uv pip install', true],
+    ['uv add', false],
+    ['pip install', false],
+    [undefined, false],
+  ])('T-13 [tool.uv.pip] index-url for the form %s explains the name: %s', (form, explains) => {
+    projectWith({ 'pyproject.toml': `${PYPROJECT}\n[tool.uv.pip]\nindex-url = "${PROJECT_PYPI}"\n` });
+    const command: RegistryCommand = { manager: 'uv', registryForm: form, global: false, envFileFlag: false, bunLauncher: false };
+    expect(found(NAME, forCommand(command), 'pypi')).toEqual(explains ? project404('pyproject.toml', PROJECT_PYPI) : null);
+  });
+
+  /** The form of each of the 21 pairs and one that does obey the file (the same order as PAIRS). */
+  const OBEYED_BY = [
+    'uv pip install',
+    'uv add',
+    'uv add',
+    'uv add',
+    'uv add',
+    'pipx run',
+    'pipx run',
+    'pipx run',
+    'pip install',
+    'uv add',
+    'uv add',
+    'uv add',
+    'uv add',
+    'uv add',
+    'pipx run',
+    'pipx run',
+    'pipx run',
+    'pipx run',
+    'pipx run',
+    'bun add',
+    'bun add',
+  ];
+
+  it.each(PAIRS.map((p, i): [string, string, number] => [p[0], p[1], i]))('T-13 pair %s, `%s` (%#): the file explains nothing, and another form is explained by it', (_pair, command, index) => {
+    const row = PAIRS[index];
+    const other = OBEYED_BY[index];
+    if (row === undefined || other === undefined) throw new Error('the table of pairs and the one of forms differ');
+    const [, , ecosystem, files, source, url] = row;
+    projectWith(files);
+    const global = command === 'bun add -g';
+    const form = global ? 'bun add' : command;
+    const manager = ecosystem === 'npm' ? 'bun' : form.split(' ')[0] ?? 'pip';
+    const as = (registryForm: string, isGlobal: boolean): RegistryCommand => ({ manager, registryForm, global: isGlobal, envFileFlag: false, bunLauncher: false });
+    expect(found(NAME, forCommand(as(form, global)), ecosystem)).toBeNull();
+    expect(found(NAME, forCommand(as(other, false)), ecosystem)).toEqual(project404(source, url));
+  });
+
+  it('T-13 npmScopeRegistryOf with the bun command and the subtable: null (P9 = A)', () => {
+    projectWith({ 'bunfig.toml': `[install.scopes."${SCOPE}"]\nurl = "${PROJECT_NPM}"\n` });
+    expect(privateRegistry.npmScopeRegistryOf(forCommand(bunCmd()))(`${SCOPE}/regfile`)).toBeNull();
+  });
+
+  // ── T-12: the cost of what is read now (a property: linear in the input, never worse), and a FIFO in place of a .env
+
+  const MiB = 1024 * 1024;
+  /** A call that reads the files again: a fresh cache each time, so the cost is the reading's and not the cache's. */
+  const fresh = (c: RegistryContext): RegistryContext => ({ ...c, cache: privateRegistry.registryCache() });
+
+  it('T-12 a .env of n lines `X_<i>=v` and then the registry: linear, and the entry is read at both sizes', () => {
+    projectWith({});
+    expectLinear(
+      'a .env of many lines',
+      (n) => {
+        const text = `${Array.from({ length: n }, (_v, i) => `X_${String(i)}=v`).join('\n')}\nBUN_CONFIG_REGISTRY=${PROJECT_NPM}\n`;
+        expect(Buffer.byteLength(text), 'under the cap of 1 MiB').toBeLessThan(MiB);
+        put('.env', text);
+        expect(answerOf(fresh(withCommand()))).toEqual([entry('.env')]);
+      },
+      6000,
+    );
+  });
+
+  it('T-12 a .env of one line BUN_CONFIG_REGISTRY=" and n letters, never closed: linear, and read as (configured) at both sizes', () => {
+    projectWith({});
+    expectLinear(
+      'a long unclosed value',
+      (n) => {
+        const text = `BUN_CONFIG_REGISTRY="${'a'.repeat(n)}`;
+        expect(Buffer.byteLength(text), 'under the cap of 1 MiB').toBeLessThan(MiB);
+        put('.env', text);
+        expect(answerOf(fresh(withCommand()))).toEqual([entry('.env', '(configured)')]);
+      },
+      60_000,
+    );
+  });
+
+  it('T-12 a bunfig.toml of n subtables [install.scopes."@s<i>"] with a url: linear, and the registry of @s0 is read at both sizes', () => {
+    projectWith({});
+    expectLinear(
+      'a bunfig.toml of many scope subtables',
+      (n) => {
+        const text = Array.from({ length: n }, (_v, i) => `[install.scopes."@s${String(i)}"]\nurl = "${PROJECT_NPM}"\n`).join('\n');
+        expect(Buffer.byteLength(text), 'under the cap of 1 MiB').toBeLessThan(MiB);
+        put('bunfig.toml', text);
+        expect(found('@s0/x', fresh(forCommand(bunCmd())))).toEqual(project404('bunfig.toml'));
+      },
+      1000,
+    );
+  });
+
+  it.skipIf(process.platform === 'win32')('T-12 a FIFO where the .env is (POSIX only: Windows has no FIFOs): bun add of a missing name answers within the bound, refused, with no line', async () => {
+    projectWith({});
+    expect(spawnSync('mkfifo', [join(project, '.env')]).status).toBe(0);
+    const fetchImpl = (async (input: string | URL | Request): Promise<Response> => {
+      const url = String(input);
+      return url.includes('osv') ? new Response(JSON.stringify({ results: [{}] })) : new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    const t0 = Date.now();
+    const d = await decideInstallCommand(`bun add ${NAME}`, {
+      cwd: project,
+      homeDir: home,
+      env: { GUARDIAN_OFFLINE: '0' },
+      etcDir: join(home, 'no-etc'),
+      nodeExecPath: join(home, 'no-node', 'bin', 'node'),
+      systemLibraryDir: join(home, 'no-library'),
+      fetchImpl,
+      popular: {},
+    });
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect(d?.deny ?? '(no deny)').toContain('does not exist on the npm registry');
+    expect(`${d?.deny ?? ''}${d?.context ?? ''}`).not.toContain('sets the default registry');
+    expect(`${d?.deny ?? ''}${d?.context ?? ''}`).not.toContain('could not be read');
   });
 });

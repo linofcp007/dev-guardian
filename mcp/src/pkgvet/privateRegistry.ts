@@ -67,7 +67,7 @@
 
 import { lstatSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path';
 import { climbsOut, isRemoteOrDeviceTarget, readSmallText, walkLinksUnder, type TextRead } from '../hooks/configFile.js';
 import { withCommentAt } from './strayAt.js';
 import type { PkgEcosystem } from './types.js';
@@ -120,6 +120,25 @@ export interface RegistryContext {
    * unknown, never absent: a name not found in it reads `unchecked`.
    */
   deadlineAt?: number | undefined;
+  /**
+   * The command the lookups are made for. Present, it decides which project files are obeyed: the bun's `bunfig.toml` and `.env`
+   * files for a bun command, and the pairs (command by file) in which the manager does not obey a file it would otherwise be
+   * said to. Absent (`vet_packages`, the lockfile and manifest lookups of tools), every file is read as before it existed.
+   */
+  command?: RegistryCommand | undefined;
+}
+
+/**
+ * What a lookup needs of the install command (`InstallCommand` of `parseCommand.ts`, which this module does not import):
+ * the manager as the parse names it, the form it was written in when it is one of the eight that were measured, whether the
+ * install is global for certain, and the two things that stop the bun reading its `.env` files.
+ */
+export interface RegistryCommand {
+  manager: string;
+  registryForm?: string | undefined;
+  global: boolean;
+  envFileFlag: boolean;
+  bunLauncher: boolean;
 }
 
 /**
@@ -136,13 +155,9 @@ export interface RegistryContext {
  *                  it is unknown, never absent (Part Y fix round 1, controller
  *                  ruling).
  */
-export interface CustomRegistry {
-  /**
-   * `unchecked` — nothing above was found, but a workspace was not read to its
-   * end: it has more than {@link MAX_SCAN_DIRS} directories, or the vetting
-   * deadline came first (review I4). `source` then says which.
-   */
-  kind: 'registry' | 'auth' | 'workspace' | 'unreadable' | 'unchecked';
+export type CustomRegistry = Explained | NotRead;
+
+interface RegistryFields {
   /** Where it was found: a file path or an environment variable name. */
   source: string;
   url?: string;
@@ -150,6 +165,29 @@ export interface CustomRegistry {
   what?: UnreadKind;
   /** For `unchecked`: why the workspace at `source` was not read to its end — too many directories, or the deadline. */
   cut?: 'size' | 'time';
+}
+
+/**
+ * A registry, credential or workspace that explains the 404 (the other two kinds below). `from` says whose word it is: `project` for a
+ * file of the project (a folder up to the repository root, a file inside the project folder such as the `pip.conf` of its virtual
+ * environment, a `.yarnrc.yml` above the root, a `.env`), `user` for the hook's environment, the command line and the files of the
+ * user and of the machine. When a file of the project explains the 404 first the search goes on, and this is `user` if any of the
+ * user's explains too. Required, so that no path leaves it unset and is read as `user`.
+ */
+interface Explained extends RegistryFields {
+  /**
+   * `unchecked` — nothing above was found, but a workspace was not read to its
+   * end: it has more than {@link MAX_SCAN_DIRS} directories, or the vetting
+   * deadline came first (review I4). `source` then says which.
+   */
+  kind: 'registry' | 'auth' | 'workspace';
+  from: 'project' | 'user';
+}
+
+/** What could not be read or checked says nothing of whose word it is: it keeps every refusal, whoever's the file. */
+interface NotRead extends RegistryFields {
+  kind: 'unreadable' | 'unchecked';
+  from?: undefined;
 }
 
 /** The most directories a workspace walk reads (exported for the warning's wording). */
@@ -286,6 +324,13 @@ function takeUnchecked(): { root: string; cut: 'size' | 'time' } | undefined {
  * so is one read from the call's cache, the same way as the first time.
  */
 function read(path: string, ctx: RegistryContext, under?: string, what: UnreadKind = 'configuration'): string | undefined {
+  const r = readRaw(path, ctx, under);
+  if (r.status === 'refused') noteUnread(path, what);
+  return r.status === 'ok' ? r.text : undefined;
+}
+
+/** {@link read} without the note: the whole read, from the call's cache when it is there. */
+function readRaw(path: string, ctx: RegistryContext, under?: string): TextRead {
   const root = walkRoot(path, ctx, under);
   const key = `${path}\u0000${root ?? ''}`;
   let r = ctx.cache?.reads.get(key);
@@ -293,8 +338,23 @@ function read(path: string, ctx: RegistryContext, under?: string, what: UnreadKi
     r = readSmallText(path, MAX_REGISTRY_CONFIG_BYTES, root);
     ctx.cache?.reads.set(key, r);
   }
-  if (r.status === 'refused') noteUnread(path, what);
-  return r.status === 'ok' ? r.text : undefined;
+  return r;
+}
+
+/**
+ * The text of a `.env` file of the bun, by the same cache and the same bounded reader as {@link read}. A path that is not a regular
+ * file (the folder of a Python virtual environment named `.env`, a FIFO) is no file: absent, and not noted. Anything else that is
+ * there and is not read — too large, no permission, behind a link to the network — is configuration that was not read, as for the
+ * other registry files. Never throws: an exception is "no `.env`".
+ */
+function readEnvFile(path: string, ctx: RegistryContext): string | undefined {
+  try {
+    const r = readRaw(path, ctx);
+    if (r.status === 'refused' && r.reason !== 'not-a-regular-file') noteUnread(path, 'configuration');
+    return r.status === 'ok' ? r.text : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -536,6 +596,231 @@ function fromBunfig(text: string, scope: string | undefined, all?: string[]): st
 }
 
 /**
+ * What a reader of the bun's files found: the value as the line gives it (an `http(s)` URL cut as {@link fromBunfig} cuts it, or
+ * {@link UNREADABLE_VALUE}), and whether it explains a name missing from the public registry. A value of the new readers that is
+ * not a URL (`$VARIABLE`, an unclosed quote) is only said, in the line: the bun may resolve it to the public registry.
+ */
+interface Found {
+  url: string;
+  explains: boolean;
+}
+
+/** `https://…` as the new readers take a value: a URL of the http(s) scheme as a whole word, anything else is not read. */
+function urlOrConfigured(value: string): string {
+  return /^https?:\/\/\S+$/i.test(value) ? value : UNREADABLE_VALUE;
+}
+
+/** The scope a header or key of `bunfig.toml` names, without its `@` and in lower case, or undefined when the text is no scope. */
+function bunScopeKey(text: string): string | undefined {
+  return /^@?[A-Za-z0-9._-]+$/.test(text) ? text.replace(/^@/, '').toLowerCase() : undefined;
+}
+
+/** The scope of a header `install.scopes."<s>"`, `install.scopes.'<s>'` or `install.scopes.<s>` (no `@`, no `.`): a subtable. */
+function scopeOfSubtable(header: string): string | undefined {
+  const quoted = /^install\.scopes\.(["'])([^"']+)\1$/.exec(header);
+  if (quoted !== null) return bunScopeKey(quoted[2] ?? '');
+  const bare = /^install\.scopes\.([A-Za-z0-9_-]+)$/.exec(header);
+  return bare === null ? undefined : bunScopeKey(bare[1] ?? '');
+}
+
+/** The value of a `bunfig.toml` line, as {@link fromBunfig} reads it. */
+function bunfigValue(line: string): string {
+  const match = /https?:\/\/[^"'\s}]+/.exec(line);
+  // An unquoted value ends at a space: what follows may be the rest of a credential written after a `#`.
+  const unquoted = match !== null && !/["']/.test(line.charAt(match.index - 1));
+  return match === null ? UNREADABLE_VALUE : withCommentAt(match[0], unquoted ? line.slice(match.index + match[0].length) : '');
+}
+
+/**
+ * `bunfig.toml` for a bun command that is not global: a closed grammar of the two forms of {@link fromBunfig} and three more,
+ * measured with the bun 1.4.4 — `install.registry = <v>` before any header, `url = <v>` under the exact header `[install.registry]`,
+ * and `url = <v>` under `[install.scopes."<s>"]`, `[install.scopes.'<s>']` or `[install.scopes.<s>]` (the registry of scope `<s>`).
+ * Other keys of those tables (`token`, `username`, `password`) are never read. The default registry is the FIRST of the forms in
+ * the file; for a `scope` the first line that names it, else the default. A value of the new forms that is no URL is only said.
+ * The two old forms keep their reading, `(configured)` included. Never throws: an exception is what the old reader answers.
+ */
+function bunfigFound(text: string, scope: string | undefined): Found | undefined {
+  try {
+    const wanted = scope?.toLowerCase();
+    let section = '';
+    let exact = '';
+    let header = false;
+    let found: Found | undefined;
+    for (const raw of text.split(/\r?\n/)) {
+      const line = raw.trim();
+      const head = /^\[([^\]]+)\]$/.exec(line);
+      if (head !== null) {
+        header = true;
+        exact = head[1] ?? '';
+        section = exact.trim();
+        continue;
+      }
+      if (line === '' || line.startsWith('#')) continue;
+      if (section === 'install' && /^registry\s*=/.test(line)) found = found ?? { url: bunfigValue(line), explains: true };
+      else if (!header && /^install\.registry\s*=/.test(line)) found = found ?? newForm(bunfigValue(line));
+      else if (exact === 'install.registry' && /^url\s*=/.test(line)) found = found ?? newForm(bunfigValue(line));
+      else if (wanted !== undefined) {
+        if (section === 'install.scopes') {
+          const key = /^["']?@?([^"'=\s]+)["']?\s*=/.exec(line)?.[1];
+          if (key !== undefined && key.toLowerCase() === wanted) return { url: bunfigValue(line), explains: true };
+        } else if (/^url\s*=/.test(line) && scopeOfSubtable(exact) === wanted) return newForm(bunfigValue(line));
+      }
+    }
+    return found;
+  } catch {
+    return undefined;
+  }
+
+  function newForm(url: string): Found {
+    return { url, explains: url !== UNREADABLE_VALUE };
+  }
+}
+
+/** The names of the registry variables of a `.env` the bun reads: the three, exactly. */
+const BUN_ENV_NAMES: ReadonlySet<string> = new Set(['BUN_CONFIG_REGISTRY', 'NPM_CONFIG_REGISTRY', 'npm_config_registry']);
+
+/**
+ * The registry a `.env` of the bun gives, by a closed grammar read line by line (the text comes without its byte order mark, and
+ * `\r\n` ends a line like `\n`): spaces, an optional `export `, the exact name of one of {@link BUN_ENV_NAMES}, spaces, `=`, spaces and
+ * the value — unquoted (up to the first space, with no quote, backtick, backslash, `$` or `#`), in `"…"` (no `"`, `\` or `$` inside),
+ * in `'…'` (no `'` inside) or in backticks (no backtick, `\` or `$` inside) — and then only spaces, or a space and a `#` comment.
+ * An empty value does not count. A value of those names in any other form is {@link UNREADABLE_VALUE}. Any other line is ignored,
+ * and so is every line inside a value that another variable opens with `"`, `'` or a backtick and does not close on its line, up to
+ * the first line that holds that character (measured: the bun does not obey a registry line inside such a value). Of the values
+ * that are not the public registry, `BUN_CONFIG_REGISTRY`'s last wins, else the last of the other two (measured). Nothing of the file
+ * but that value is returned, and it is the value as written: a URL is judged and cut by the caller. Linear in the text.
+ */
+function bunEnvValue(text: string): string | undefined {
+  let open: string | undefined;
+  let bun: string | undefined;
+  let other: string | undefined;
+  for (const raw of text.split(/\r?\n/)) {
+    if (open !== undefined) {
+      if (raw.includes(open)) open = undefined;
+      continue;
+    }
+    const assignment = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(raw);
+    if (assignment === null) continue;
+    const name = assignment[1] ?? '';
+    const rest = assignment[2] ?? '';
+    const first = rest.charAt(0);
+    let value: string | undefined;
+    if (first === '"' || first === "'" || first === '`') {
+      const close = rest.indexOf(first, 1);
+      if (close < 0) {
+        open = first;
+        value = UNREADABLE_VALUE;
+      } else {
+        const content = rest.slice(1, close);
+        const bad = first !== "'" && (content.includes('\\') || content.includes('$'));
+        value = bad || !endsCleanly(rest.slice(close + 1)) ? UNREADABLE_VALUE : content === '' ? undefined : urlOrConfigured(content);
+      }
+    } else {
+      let end = 0;
+      while (end < rest.length && rest.charAt(end) !== ' ' && rest.charAt(end) !== '\t') end += 1;
+      const token = rest.slice(0, end);
+      if (token === '' || token.startsWith('#')) value = undefined;
+      else if (/["'`\\$#]/.test(token) || !endsCleanly(rest.slice(end))) value = UNREADABLE_VALUE;
+      else value = urlOrConfigured(token);
+    }
+    if (!BUN_ENV_NAMES.has(name) || value === undefined) continue;
+    if (value !== UNREADABLE_VALUE && isPublic('npm', value)) continue;
+    if (name === 'BUN_CONFIG_REGISTRY') bun = value;
+    else other = value;
+  }
+  return bun ?? other;
+
+  /** What follows a value: only spaces, or a space and a `#` comment. */
+  function endsCleanly(tail: string): boolean {
+    const t = tail.trimStart();
+    return t === '' || (t !== tail && t.startsWith('#'));
+  }
+}
+
+/** The modes of the bun's `.env` files: `NODE_ENV` when it is `development` or `test`, `production` for any other value, set or not. */
+function bunMode(ctx: RegistryContext): 'development' | 'test' | 'production' {
+  const v = envOf(ctx)['NODE_ENV'];
+  return v === 'development' || v === 'test' ? v : 'production';
+}
+
+/** The `.env` files of one folder the bun reads, highest precedence first: `.env.<mode>.local`, `.env.local` (not in `test`), `.env.<mode>`, `.env`. */
+function bunEnvNames(mode: string): string[] {
+  return [`.env.${mode}.local`, ...(mode === 'test' ? [] : ['.env.local']), `.env.${mode}`, '.env'];
+}
+
+/** Whether one entry of `workspaces` lists the folder `rel` (below the root, written with `/`), or the reader cannot tell. */
+function judgeWorkspaceEntry(entry: unknown, rel: string): 'yes' | 'no' | 'unknown' {
+  if (typeof entry !== 'string' || entry === '' || entry.startsWith('!') || entry.startsWith('./')) return 'unknown';
+  // A trailing `/` is not the exact path of the folder (not measured): not judged.
+  if (entry.endsWith('/') && !entry.endsWith('/*') && !entry.endsWith('/**')) return 'unknown';
+  let body = entry;
+  let kind: 'exact' | 'star' | 'globstar' = 'exact';
+  if (entry.endsWith('/**')) {
+    body = entry.slice(0, -3);
+    kind = 'globstar';
+  } else if (entry.endsWith('/*')) {
+    body = entry.slice(0, -2);
+    kind = 'star';
+  }
+  if (body === '' || /[*?[\]{}()!+@\\]/.test(body) || body.split('/').some((seg) => seg === '' || seg === '.' || seg === '..')) return 'unknown';
+  if (kind === 'exact') return body === rel ? 'yes' : 'no';
+  if (!rel.startsWith(`${body}/`)) return 'no';
+  return kind === 'globstar' || !rel.slice(body.length + 1).includes('/') ? 'yes' : 'no';
+}
+
+/** Whether the `workspaces` of a `package.json` list the folder `rel`: yes, no, or the reader cannot tell (an entry it does not judge and none that lists). */
+function workspacesList(packageJson: string | undefined, rel: string): 'yes' | 'no' | 'unknown' {
+  if (packageJson === undefined) return 'no';
+  try {
+    const w = (JSON.parse(packageJson) as { workspaces?: unknown }).workspaces;
+    const entries: unknown = Array.isArray(w) ? w : w !== null && typeof w === 'object' ? (w as { packages?: unknown }).packages : undefined;
+    if (!Array.isArray(entries)) return 'no';
+    const verdicts = (entries as unknown[]).map((e) => judgeWorkspaceEntry(e, rel));
+    return verdicts.includes('yes') ? 'yes' : verdicts.includes('unknown') ? 'unknown' : 'no';
+  } catch {
+    return 'no';
+  }
+}
+
+/**
+ * The folders whose `.env` files the bun reads for this command, and whether what they say can explain a missing name. Only for a
+ * bun command that is not global, has no `--env-file` / `--no-env-file`, and is not a launcher (`bunx`, `bun x`, `bun create`, `bun c`:
+ * `bun x` measured not to read any, the others by the bun's documentation); `undefined` for any other.
+ *
+ * One folder, never above the repository root nor the home directory: the root of the bun — the nearest folder, from that of the nearest
+ * `package.json`, whose `workspaces` list that folder (an exact path, `<prefix>/*` one level below, `<prefix>/**` at any depth below);
+ * else that folder; with no `package.json`, the command's. A root with an entry the reader does not judge and no entry that lists
+ * the folder gives both its `.env` files and the folder's, only to be said: none explains a name (the refusal stays).
+ */
+function bunEnvPlan(ctx: RegistryContext): { dirs: string[]; explains: boolean } | undefined {
+  const cmd = ctx.command;
+  if (cmd === undefined || cmd.manager !== 'bun' || cmd.global || cmd.envFileFlag || cmd.bunLauncher) return undefined;
+  try {
+    const near = ancestors(ctx);
+    const first = near.findIndex((dir) => present(join(dir, 'package.json')));
+    const base = near[first < 0 ? 0 : first];
+    if (base === undefined) return undefined;
+    if (first < 0) return { dirs: [base], explains: true };
+    let unsure: string | undefined;
+    for (const dir of near.slice(first + 1)) {
+      const listed = workspacesList(read(join(dir, 'package.json'), ctx, undefined, 'workspace manifest'), relative(dir, base).split(/[\\/]/).join('/'));
+      if (listed === 'yes') return { dirs: [dir], explains: true };
+      if (listed === 'unknown' && unsure === undefined) unsure = dir;
+    }
+    return unsure === undefined ? { dirs: [base], explains: true } : { dirs: [unsure, base], explains: false };
+  } catch {
+    return undefined;
+  }
+}
+
+/** What a `.env` file gives as {@link Found}: its value, which explains when it is a URL and the folders' plan lets it. */
+function envFound(text: string, explainsAllowed: boolean): Found | undefined {
+  const value = bunEnvValue(text);
+  if (value === undefined) return undefined;
+  return { url: value, explains: explainsAllowed && value !== UNREADABLE_VALUE };
+}
+
+/**
  * Reads one registry URL for `scope` — or, with `all` given, ALSO pushes every
  * registry URL the file names (default and per scope), for {@link npmUserRegistries}.
  */
@@ -630,14 +915,70 @@ function envRegistry(ecosystem: PkgEcosystem, ctx: RegistryContext): CustomRegis
     if (raw === undefined || raw.trim() === '' || !ENV_REGISTRY[ecosystem].test(key)) continue;
     const value = raw.trim();
     if (/NO_INDEX/i.test(key)) {
-      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: 'registry', source: key };
+      if (/^(?:1|true|yes|on)$/i.test(value)) return { kind: 'registry', source: key, from: 'user' };
       continue;
     }
     if (value.split(/\s+/).some((u) => !isPublic(ecosystem, u.replace(/^[^=]+=(?=https?:)/, '')))) {
-      return { kind: 'registry', source: key, url: value };
+      return { kind: 'registry', source: key, url: value, from: 'user' };
     }
   }
   return null;
+}
+
+/** A configuration file as the lookup of a 404 and the line of the project read it: the parser, or the bun's own reader. */
+interface RegistryFile extends NpmConfigFile {
+  /** Replaces `parse`: the closed reader of the bun's `bunfig.toml`, or of a `.env`. */
+  found?: (text: string, scope: string | undefined) => Found | undefined;
+  /** A `.env` of the bun: read by {@link readEnvFile}. */
+  env?: true;
+}
+
+/** `parse` kept only for the registry of a SCOPE: a global `bun add` obeys no project default registry (N8), and still obeys a scope's. */
+function scopeOnly(parse: NpmParser): NpmParser {
+  return (text, scope) => {
+    if (scope === undefined) return undefined;
+    const url = parse(text, scope);
+    return url !== undefined && url !== parse(text, undefined) ? url : undefined;
+  };
+}
+
+/** The files of a bun command that is not global, which reads the new forms of `bunfig.toml` and the `.env` files. */
+function isBunProject(ctx: RegistryContext): boolean {
+  return ctx.command?.manager === 'bun' && !ctx.command.global;
+}
+
+/**
+ * {@link npmConfigFiles}, as the command reads them. For a bun command that is not global: the closed grammar of `bunfig.toml` in the
+ * project, and the `.env` files of the one folder of {@link bunEnvPlan} before that folder's `.npmrc` (measured: the `.env` wins).
+ * For a global `bun add`: the project's `.npmrc` and `bunfig.toml` give a scope's registry only (pair N8). Any other command, and
+ * no command, the files as they were.
+ */
+function registryFiles(ctx: RegistryContext): RegistryFile[] {
+  const base = npmConfigFiles(ctx);
+  const cmd = ctx.command;
+  const bun = isBunProject(ctx);
+  const noDefault = cmd?.global === true && cmd.registryForm === 'bun add';
+  if (!bun && !noDefault) return base;
+  const plan = bun ? bunEnvPlan(ctx) : undefined;
+  const out: RegistryFile[] = [];
+  for (const f of base) {
+    const name = basename(f.path);
+    if (f.user) {
+      out.push(f);
+    } else if (noDefault && (name === '.npmrc' || name === 'bunfig.toml')) {
+      out.push({ ...f, parse: scopeOnly(f.parse) });
+    } else if (bun && name === 'bunfig.toml') {
+      out.push({ ...f, found: bunfigFound });
+    } else {
+      if (plan !== undefined && name === '.npmrc' && plan.dirs.some((d) => samePath(d, dirname(f.path)))) {
+        for (const envName of bunEnvNames(bunMode(ctx))) {
+          out.push({ path: join(dirname(f.path), envName), parse: () => undefined, user: false, env: true, found: (text) => envFound(text, plan.explains) });
+        }
+      }
+      out.push(f);
+    }
+  }
+  return out;
 }
 
 function npmRegistry(name: string, ctx: RegistryContext): CustomRegistry | null {
@@ -645,19 +986,33 @@ function npmRegistry(name: string, ctx: RegistryContext): CustomRegistry | null 
   const fromEnv = envRegistry('npm', ctx);
   if (fromEnv !== null) return fromEnv;
   let authSource: string | undefined;
-  for (const { path, parse } of npmConfigFiles(ctx)) {
-    const text = read(path, ctx);
+  let userAuth: string | undefined;
+  // The first explanation found. One of the project's does not end the search: the user's own may explain the 404 as well, and
+  // then it is the user's word (`from`), which keeps the warning for a malicious name the public registry took down.
+  let first: Explained | null = null;
+  for (const file of registryFiles(ctx)) {
+    const text = file.env === true ? readEnvFile(file.path, ctx) : read(file.path, ctx);
     if (text === undefined) continue;
-    const url = parse(text, scope);
-    if (url !== undefined && !isPublic('npm', url)) return { kind: 'registry', source: path, url };
-    if (authSource === undefined && NPM_AUTH.test(text)) authSource = path;
+    const url = file.found === undefined ? file.parse(text, scope) : undefined;
+    const hit: Found | undefined = file.found === undefined ? (url === undefined ? undefined : { url, explains: true }) : file.found(text, scope);
+    if (hit !== undefined && hit.explains && !isPublic('npm', hit.url)) {
+      first = first ?? { kind: 'registry', source: file.path, url: hit.url, from: file.user ? 'user' : 'project' };
+      if (file.user) return first.from === 'user' ? first : { ...first, from: 'user' };
+      continue;
+    }
+    if (file.env !== true && NPM_AUTH.test(text)) {
+      authSource = authSource ?? file.path;
+      if (file.user) userAuth = userAuth ?? file.path;
+    }
   }
   // Ruling (e): a private SCOPED package on npmjs answers 404 to an
   // anonymous request, so with credentials configured a scoped 404 proves
   // nothing. npmjs has no private unscoped packages.
-  if (scope !== undefined && authSource !== undefined) return { kind: 'auth', source: authSource };
+  const credential = scope !== undefined && userAuth !== undefined;
+  if (first !== null) return credential && first.from === 'project' ? { ...first, from: 'user' } : first;
+  if (scope !== undefined && authSource !== undefined) return { kind: 'auth', source: authSource, from: userAuth !== undefined ? 'user' : 'project' };
   const local = npmWorkspacePackage(name, ctx);
-  return local === undefined ? null : { kind: 'workspace', source: local };
+  return local === undefined ? null : { kind: 'workspace', source: local, from: 'project' };
 }
 
 /**
@@ -790,6 +1145,7 @@ export function npmProjectDefaultRegistry(manager: string, ctx: RegistryContext 
     const near = ancestors(ctx);
     const first = near.findIndex((dir) => present(join(dir, 'package.json')));
     const from = first < 0 ? 0 : first;
+    const envDirs = manager === 'bun' ? bunEnvPlan(ctx)?.dirs : undefined;
     for (const dir of near.slice(from)) {
       const isBase = dir === near[from];
       const obeyed =
@@ -797,11 +1153,21 @@ export function npmProjectDefaultRegistry(manager: string, ctx: RegistryContext 
         manager === 'yarn' ||
         hasWorkspaces(read(join(dir, 'package.json'), ctx, undefined, 'workspace manifest')) ||
         (manager === 'pnpm' && present(join(dir, 'pnpm-workspace.yaml')));
+      // The `.env` files of the bun come first in their folder (measured: they win), and only for a command that reads them.
+      if (envDirs?.some((d) => samePath(d, dir)) === true) {
+        for (const name of bunEnvNames(bunMode(ctx))) {
+          const source = join(dir, name);
+          const text = readEnvFile(source, ctx);
+          const url = text === undefined ? undefined : bunEnvValue(text);
+          if (url !== undefined) found.push({ source, url });
+        }
+      }
       if (!obeyed) continue;
       for (const { name, parse } of files) {
         const source = join(dir, name);
         const text = read(source, ctx);
-        const url = text === undefined ? undefined : parse(text, undefined);
+        // The bun reads the new forms of its `bunfig.toml` for the line, with or without a command.
+        const url = text === undefined ? undefined : manager === 'bun' && name === 'bunfig.toml' ? bunfigFound(text, undefined)?.url : parse(text, undefined);
         if (url !== undefined && !isPublic('npm', url)) found.push({ source, url });
       }
     }
@@ -1036,29 +1402,169 @@ function fromPipConf(text: string): string | undefined {
   return undefined;
 }
 
-function fromPyproject(text: string): string | undefined {
-  if (/^\s*\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)\s*\]\]/m.test(text)) {
-    return /https?:\/\/[^"'\s]+/.exec(text.slice(text.search(/\[\[\s*tool\.(?:uv\.index|poetry\.source|pdm\.source)/)))?.[0] ?? '(configured)';
-  }
-  const uv = /^\s*\[tool\.uv\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/m.exec(text);
-  if (uv !== null) {
-    const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(uv[1] ?? '');
-    if (m !== null && !isPublic('pypi', m[1] ?? '')) return m[1];
-  }
-  return undefined;
+/**
+ * The kind of an index a `uv.toml` or a `pyproject.toml` names. The tables of an array (`[[index]]`, `[[tool.uv.index]]`,
+ * `[[tool.poetry.source]]` by priority, `[[tool.pdm.source]]`) count whatever their URL; the keys (`index-url`, `extra-index-url`,
+ * `find-links`) count when their value is not the public index.
+ */
+type IndexKind =
+  | 'uv-top'
+  | 'uv-pip'
+  | 'uv-index'
+  | 'uv-index-default'
+  | 'tool-uv'
+  | 'tool-uv-pip'
+  | 'tool-uv-index'
+  | 'tool-uv-index-default'
+  | 'poetry-none'
+  | 'poetry-primary'
+  | 'poetry-supplemental'
+  | 'poetry-explicit'
+  | 'poetry-other'
+  | 'pdm';
+
+interface IndexEntry {
+  kind: IndexKind;
+  url: string;
 }
 
-function fromUvToml(text: string): string | undefined {
-  if (/^\s*\[\[\s*index\s*\]\]/m.test(text)) return /https?:\/\/[^"'\s]+/.exec(text)?.[0] ?? '(configured)';
-  const m = /^\s*(?:index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/m.exec(text);
-  if (m !== null && !isPublic('pypi', m[1] ?? '')) return m[1];
-  return undefined;
+/** A table of an array, its header's name and its lines, as read so far. */
+interface ArrayTable {
+  name: string;
+  body: string[];
+}
+
+/** The first `http(s)` URL of the lines of a table of an array, else {@link UNREADABLE_VALUE}. */
+function arrayUrl(body: string[]): string {
+  return /https?:\/\/[^"'\s]+/.exec(body.join('\n'))?.[0] ?? UNREADABLE_VALUE;
+}
+
+/** The value of `index-url`, `extra-index-url` or `find-links` on a line (a `"`, `'`, space or `]` ends it), unless it is the public index. */
+function indexKeyValue(line: string, onlyIndexUrl = false): string | undefined {
+  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/.exec(line);
+  if (m === null || (onlyIndexUrl && m[1] !== 'index-url')) return undefined;
+  return isPublic('pypi', m[2] ?? '') ? undefined : m[2];
+}
+
+/**
+ * Every index a table-aware reading of a TOML file names, in the order of the file. `arrays` maps the name of an array of tables to the
+ * kind of an entry (given its lines); `keys` maps a table's name to the kind of the index keys under it (`onlyIndexUrl`: just `index-url`),
+ * and `top` is the kind of the keys before any header (`uv.toml`). A header that is not one of them ends the table before it.
+ */
+function indexEntries(
+  text: string,
+  arrays: Readonly<Record<string, (body: string[]) => IndexKind>>,
+  keys: Readonly<Record<string, { kind: IndexKind; onlyIndexUrl?: true }>>,
+  top?: IndexKind,
+): IndexEntry[] {
+  const out: IndexEntry[] = [];
+  let table: ArrayTable | undefined;
+  let keyed: { kind: IndexKind; onlyIndexUrl?: true } | undefined = top === undefined ? undefined : { kind: top };
+  const flush = (): void => {
+    const kind = table === undefined ? undefined : arrays[table.name]?.(table.body);
+    if (table !== undefined && kind !== undefined) out.push({ kind, url: arrayUrl(table.body) });
+    table = undefined;
+  };
+  for (const line of text.split(/\r?\n/)) {
+    const array = /^\s*\[\[\s*([^\][]+?)\s*\]\]/.exec(line);
+    const plain = array === null ? /^\s*\[\s*([^\][]+?)\s*\]/.exec(line) : null;
+    if (array !== null || plain !== null) {
+      flush();
+      const name = (array ?? plain)?.[1] ?? '';
+      if (array !== null) {
+        table = { name, body: [] };
+        keyed = undefined;
+      } else {
+        keyed = Object.hasOwn(keys, name) ? keys[name] : top === undefined ? undefined : { kind: top };
+      }
+      continue;
+    }
+    if (table !== undefined) {
+      table.body.push(line);
+      continue;
+    }
+    if (keyed === undefined) continue;
+    const value = indexKeyValue(line, keyed.onlyIndexUrl === true);
+    if (value !== undefined) out.push({ kind: keyed.kind, url: value });
+  }
+  flush();
+  return out;
+}
+
+const hasDefault = (body: string[]): boolean => body.some((l) => /^\s*default\s*=\s*true\b/.test(l));
+/** The priority of a `[[tool.poetry.source]]`: none, one of the three measured, or another word. */
+function poetryKind(body: string[]): IndexKind {
+  const p = body.map((l) => /^\s*priority\s*=\s*["']([^"']*)["']/.exec(l)?.[1]).find((v) => v !== undefined);
+  if (p === undefined) return 'poetry-none';
+  return p === 'primary' || p === 'supplemental' || p === 'explicit' ? (`poetry-${p}` as IndexKind) : 'poetry-other';
+}
+
+/** The indexes of a `uv.toml`: the keys on top and in any other table, `[pip]` apart, and `[[index]]`. */
+function uvTomlEntries(text: string): IndexEntry[] {
+  return indexEntries(
+    text,
+    { index: (body) => (hasDefault(body) ? 'uv-index-default' : 'uv-index') },
+    { pip: { kind: 'uv-pip' } },
+    'uv-top',
+  );
+}
+
+/** The indexes of a `pyproject.toml`: `[tool.uv]`, `[tool.uv.pip]` (`index-url`), `[[tool.uv.index]]`, `[[tool.poetry.source]]` and `[[tool.pdm.source]]`. */
+function pyprojectEntries(text: string): IndexEntry[] {
+  return indexEntries(
+    text,
+    {
+      'tool.uv.index': (body) => (hasDefault(body) ? 'tool-uv-index-default' : 'tool-uv-index'),
+      'tool.poetry.source': poetryKind,
+      'tool.pdm.source': () => 'pdm',
+    },
+    { 'tool.uv': { kind: 'tool-uv' }, 'tool.uv.pip': { kind: 'tool-uv-pip', onlyIndexUrl: true } },
+  );
+}
+
+/**
+ * The pairs (command by project file) in which the manager does not obey the file, measured 2026-11-20 (uv 0.13.8, poetry 2.5.1, pipx
+ * 1.18.16, pip 23.0.1), by the form the command was written in: the kinds of index that then explain nothing. Outside this table a
+ * project file counts, as it did (a pair nobody measured, a form the parse does not tell).
+ */
+const NOT_OBEYED: Readonly<Record<string, ReadonlySet<IndexKind>>> = {
+  'uv add': new Set<IndexKind>(['uv-pip', 'poetry-primary']),
+  'uv pip install': new Set<IndexKind>(['poetry-primary']),
+  'pipx install': new Set<IndexKind>(['uv-top', 'tool-uv', 'tool-uv-index', 'tool-uv-index-default', 'poetry-primary']),
+  'pipx run': new Set<IndexKind>(['uv-top', 'tool-uv']),
+  'poetry add': new Set<IndexKind>(['poetry-explicit', 'uv-top', 'tool-uv', 'tool-uv-index-default']),
+  'pip install': new Set<IndexKind>(['uv-top', 'tool-uv', 'tool-uv-index', 'tool-uv-index-default', 'poetry-primary']),
+};
+
+/** The URL of the first entry of a PROJECT file that explains a 404 for the command: `[tool.uv.pip]` only for `uv pip install`, and not the pairs of {@link NOT_OBEYED}. */
+function explainingIndex(entries: readonly IndexEntry[], ctx: RegistryContext): string | undefined {
+  const form = ctx.command?.registryForm;
+  const skipped = form === undefined ? undefined : (Object.hasOwn(NOT_OBEYED, form) ? NOT_OBEYED[form] : undefined);
+  return entries.find((e) => (e.kind === 'tool-uv-pip' ? form === 'uv pip install' : skipped?.has(e.kind) !== true))?.url;
+}
+
+/** The URL of the first entry of a file of the user or of the machine: every kind but `[tool.uv.pip]`, which only a project's `pyproject.toml` has. */
+function anyIndex(entries: readonly IndexEntry[]): string | undefined {
+  return entries.find((e) => e.kind !== 'tool-uv-pip')?.url;
+}
+
+/** `path` is inside one of the project's directories (up to the repository root): the `pip.conf` of the virtual environment of the project, say. */
+function insideProject(path: string, ctx: RegistryContext): boolean {
+  return ancestors(ctx).some((dir) => isInside(dir, resolve(path)));
 }
 
 function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null {
   const env = envOf(ctx);
   const fromEnv = envRegistry('pypi', ctx);
   if (fromEnv !== null) return fromEnv;
+
+  // The first explanation found. A file of the project does not end the search: the user's own may explain the 404 too, and then
+  // it is the user's word (`from`).
+  const state: { first: Explained | null } = { first: null };
+  const take = (found: Explained): Explained | null => {
+    state.first = state.first ?? found;
+    return found.from === 'user' ? { ...state.first, from: 'user' } : null;
+  };
 
   // pip: explicit file, user (XDG, ~/.pip, %APPDATA%), venv, and global
   // (/etc/pip.conf, /etc/xdg/pip/pip.conf and XDG_CONFIG_DIRS, %ProgramData%).
@@ -1088,7 +1594,11 @@ function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null
   for (const path of confs) {
     const text = read(path, ctx);
     const url = text === undefined ? undefined : fromPipConf(text);
-    if (url !== undefined) return { kind: 'registry', source: path, url };
+    // The `pip.conf` of a virtual environment inside the project is the project's (EC-9); the others are the user's or the machine's.
+    if (url !== undefined) {
+      const done = take({ kind: 'registry', source: path, url, from: insideProject(path, ctx) ? 'project' : 'user' });
+      if (done !== null) return done;
+    }
   }
 
   // uv: UV_CONFIG_FILE, user (XDG / %APPDATA%) and system uv.toml.
@@ -1098,24 +1608,28 @@ function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null
   uvConfs.push(join(xdg, 'uv', 'uv.toml'), join(appdata, 'uv', 'uv.toml'), join(etc, 'uv', 'uv.toml'));
   for (const path of uvConfs) {
     const text = read(path, ctx);
-    const url = text === undefined ? undefined : fromUvToml(text);
-    if (url !== undefined) return { kind: 'registry', source: path, url };
+    const url = text === undefined ? undefined : anyIndex(uvTomlEntries(text));
+    if (url !== undefined) {
+      const done = take({ kind: 'registry', source: path, url, from: 'user' });
+      if (done !== null) return done;
+    }
   }
 
   for (const dir of ancestors(ctx)) {
     const uvToml = join(dir, 'uv.toml');
     const uvText = read(uvToml, ctx);
-    const uvUrl = uvText === undefined ? undefined : fromUvToml(uvText);
-    if (uvUrl !== undefined) return { kind: 'registry', source: uvToml, url: uvUrl };
+    const uvUrl = uvText === undefined ? undefined : explainingIndex(uvTomlEntries(uvText), ctx);
+    if (uvUrl !== undefined) take({ kind: 'registry', source: uvToml, url: uvUrl, from: 'project' });
     const pyproject = join(dir, 'pyproject.toml');
     const text = read(pyproject, ctx);
     if (text === undefined) continue;
-    const url = fromPyproject(text);
-    if (url !== undefined) return { kind: 'registry', source: pyproject, url };
+    const url = explainingIndex(pyprojectEntries(text), ctx);
+    if (url !== undefined) take({ kind: 'registry', source: pyproject, url, from: 'project' });
     break; // the nearest pyproject.toml is the project; its parents are not
   }
+  if (state.first !== null) return state.first;
   const local = uvWorkspacePackage(name, ctx);
-  return local === undefined ? null : { kind: 'workspace', source: local };
+  return local === undefined ? null : { kind: 'workspace', source: local, from: 'project' };
 }
 
 // ────────────────────────────────────────────────────────── Composer
@@ -1137,7 +1651,7 @@ function composerRegistry(ctx: RegistryContext): CustomRegistry | null {
     const path = join(dir, 'composer.json');
     const text = read(path, ctx);
     if (text === undefined) continue;
-    if (hasRepositories(text)) return { kind: 'registry', source: path };
+    if (hasRepositories(text)) return { kind: 'registry', source: path, from: 'project' };
     break;
   }
   const env = envOf(ctx);
@@ -1146,7 +1660,7 @@ function composerRegistry(ctx: RegistryContext): CustomRegistry | null {
   const globals = composerHome !== undefined
     ? [join(composerHome, 'config.json')]
     : [join(home, '.composer', 'config.json'), join(home, '.config', 'composer', 'config.json'), join(envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming'), 'Composer', 'config.json')];
-  for (const path of globals) if (hasRepositories(read(path, ctx))) return { kind: 'registry', source: path };
+  for (const path of globals) if (hasRepositories(read(path, ctx))) return { kind: 'registry', source: path, from: 'user' };
   return null;
 }
 
@@ -1260,7 +1774,7 @@ function nugetRegistry(name: string, ctx: RegistryContext): CustomRegistry | nul
       // Microsoft.VisualStudio.Offline.config is one on every VS machine —
       // explains a 404 only for a package it holds (fix round 1, M2).
       if (machineWide.has(path) && isLocalFolderSource(url) && !localFeedHas(url, path, name, ctx)) continue;
-      return { kind: 'registry', source: path, url };
+      return { kind: 'registry', source: path, url, from: insideProject(path, ctx) ? 'project' : 'user' };
     }
   }
   return null;

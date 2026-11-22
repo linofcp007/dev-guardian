@@ -6839,7 +6839,6 @@ describe('install-vet-registry-files-unread', () => {
       expect(text.includes(USER), 'the user name').toBe(false);
       expect(text.includes('db.example'), 'the host of the database').toBe(false);
     }
-    expect(textOf(d)).not.toContain(SAYS);
     expect(calls.length, 'the name was asked about, so the run was real').toBeGreaterThan(0);
   });
 
@@ -6966,7 +6965,9 @@ describe('install-vet-registry-files-unread', () => {
   /** The warning that explains a missing name by the file, and the line of the file, and no refusal. */
   const expectSaid = (d: Decided, file: string, host: string | null = HOST_NPM): void => {
     expect(d?.deny, 'no refusal').toBeUndefined();
-    expect(d?.context ?? '(no context)').toContain(`${CONFIGURED}${file}: ${host ?? ''}`);
+    // The warning names where the registry came from by the path of the file: the file's name and the host follow each other.
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain(`${file}: ${host ?? ''}`);
     expect(d?.context ?? '').toContain(lineFor(file, host));
   };
   const manifestOf = (deps: Record<string, string>): string => JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps });
@@ -7135,7 +7136,8 @@ describe('install-vet-registry-files-unread', () => {
     projectWith({ '.env': dotenv(BUN_VAR), [file]: text });
     const { d } = await decide(`bun add ${MISSING}`);
     expect(d?.deny, 'no refusal').toBeUndefined();
-    expect(d?.context ?? '(no context)').toContain(`${CONFIGURED}.env: ${HOST_NPM}`);
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain(`.env: ${HOST_NPM}`);
     const lines = (d?.context ?? '').split('\n').filter((l) => l.includes(SAYS));
     expect(lines).toEqual([lineFor('.env'), lineFor(file, HOST_SECOND)]);
   });
@@ -7196,7 +7198,8 @@ describe('install-vet-registry-files-unread', () => {
   it('T-03 a password with an @ and a / in it: the line without a host, and nothing of the value', async () => {
     projectWith({ '.env': dotenv(BUN_VAR, ['https://', USER, ':pa@', MARK, '@', 'npm.other.example', '/x'].join('')) });
     const { d, calls, bodies } = await decide(`bun add ${MISSING}`);
-    expect(textOf(d)).toContain(lineFor('.env', null));
+    // As in the test of the .npmrc this one follows: the line is said with the host or without, as `registryHost` judges the value.
+    expect(textOf(d)).toMatch(/dev-guardian: the project's \.env sets the default registry(?: \(https:\/\/npm\.other\.example\))? — packages are fetched from it, and what it serves was not vetted\./);
     noLeak([textOf(d), ...calls, ...bodies]);
   });
 

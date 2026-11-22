@@ -4371,3 +4371,58 @@ describe('install-vet-dotnet-run-forms', () => {
     expect(parseInstallCommands(command)).toEqual([]);
   });
 });
+
+// ───────────────── install-vet-registry-files-unread — what the parse tells the registry readers of a command
+
+describe('install-vet-registry-files-unread', () => {
+  const first = (command: string) => parseInstallCommands(command)[0];
+
+  it.each([
+    ['bun add P', 'bun add'],
+    ['bun install P', 'bun install'],
+    ['pip install P', 'pip install'],
+    ['uv add P', 'uv add'],
+    ['uv pip install P', 'uv pip install'],
+    ['pipx install P', 'pipx install'],
+    ['pipx run P', 'pipx run'],
+    ['poetry add P', 'poetry add'],
+  ])('T-14 `%s` has the registryForm `%s`', (command, form) => {
+    expect(first(command)?.registryForm).toBe(form);
+  });
+
+  it.each(['bun a P', 'bun i P', 'bunx P', 'bun x P', 'uvx P', 'uv tool install P', 'npm install P', 'pnpm add P', 'yarn add P'])(
+    'T-14 `%s` has no registryForm',
+    (command) => {
+      expect(first(command), 'the command is read').toBeDefined();
+      expect(first(command)?.registryForm).toBeUndefined();
+    },
+  );
+
+  it.each(['pipx run script.py', 'pipx run --path script.py', 'uv run script.py'])(
+    'T-14 `%s` runs a script, which install-vet-inline-script-deps reads: no registryForm',
+    (command) => {
+      expect(first(command)?.registryForm).toBeUndefined();
+    },
+  );
+
+  it.each(['bun add --no-env-file P', 'bun add --env-file=x P', 'bun add --env-file x P', 'bun --env-file=x add P'])(
+    'T-14 `%s` has the envFileFlag',
+    (command) => {
+      expect(first(command)?.envFileFlag).toBe(true);
+    },
+  );
+
+  it.each(['bun add P', 'npm install P'])('T-14 `%s` has no envFileFlag', (command) => {
+    expect(first(command), 'the command is read').toBeDefined();
+    expect(first(command)?.envFileFlag).toBeUndefined();
+  });
+
+  it.each(['bunx P', 'bun x P', 'bun create P', 'bun c P'])('T-14 `%s` is a bunLauncher', (command) => {
+    expect(first(command)?.bunLauncher).toBe(true);
+  });
+
+  it.each(['bun add P', 'bun a P', 'bun update P', 'npx P'])('T-14 `%s` is no bunLauncher', (command) => {
+    expect(first(command), 'the command is read').toBeDefined();
+    expect(first(command)?.bunLauncher).toBeUndefined();
+  });
+});
