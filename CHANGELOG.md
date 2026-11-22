@@ -8,7 +8,54 @@ version bump.
 
 ## [Unreleased]
 
+### Upgrading from 3.15.0
+
+- **Files the install hook now reads.** The script of `uv run <x>.py` / `.pyw` (any letter case), `uv run --script <x>`,
+  `-s <x>` (also in a group, `-qs`), `--gui-script <x>`, also `python -m uv run`, with `--directory` (before or after `run`)
+  or `UV_WORKING_DIR=` in front (also behind `env`), also after a `cd` through a local link; the file of `pipx run --path
+  <x>`; the word `pipx run <x>` (and the one after a flag the hook does not know, `pipx run --backend pip <x>`) when a
+  regular file `<x>` is in the directory; the file of `uv run --with-requirements` and the files it includes; a `.py` /
+  `.pyw` file of `uv pip install -r`. Up to 1 MiB each, eight scripts a call, each once, never a network path, never past
+  the deadline. Each word of `pipx run` that may be the app costs one question to the disk (50 at most a call), and each
+  `cd` through a link before a script costs a walk of the links.
+- **Names that now leave the machine** (to the public registry and to OSV): the inline dependencies and `uv run --with`
+  names above, and the names of a `--with-requirements` file; a requirement with a range the hook does not read, by its name
+  alone. **Names that no longer leave:** the word after the script of `pipx run --path <x> <arg>`; `pipx run <x>` with a file
+  `<x>` goes to the malware check only.
+- **What can now be refused:** only a package OSV lists as malicious, in a block the hook reads, in `uv run --with` or in a
+  `--with-requirements` file. No form refuses a name the registry does not have (`--with` is not on the confident-shape
+  allowlist).
+- **What is now asked:** a script that runs and was not read, a block with `[tool.uv]`, a requirement that is a URL, a path
+  or a VCS, more than eight scripts, and more than 150 packages of manifests (the blocks count) or 50 named.
+- **What is no longer refused:** `pipx run <x>` with a file `<x>` in the directory when the registry does not have `<x>` (a
+  malicious `<x>` is still refused); `pipx run <x>` when the directory the hook cannot tell (it warns); a malicious word
+  after the script of `pipx run --path <x>` (the pipx never asks the index for it); and, when the link walk refuses the
+  entry `<x>` (a link to the network, more than 32 links), the refusal by a missing name becomes the question.
+- **Warnings that now come out:** for the inline blocks and the `--with-requirements` files, a name the registry does not
+  have, a typosquat, the lines "was not read (…)", `[tool.uv]`, a requirement that is a URL, a path or a VCS, a `source`
+  before a script, the scripts past the eighth, and the count of the missing names after the first five.
+- **Warnings that no longer come out:** for `pipx run <x>` with a file `<x>` in the directory, the missing name, the
+  typosquat, a version under 72 h, the install scripts, an exact version nobody published, the known vulnerabilities and
+  "could not vet"; and everything said of the word after the script of `pipx run --path <x> <arg>`.
+
 ### Security
+
+- **The install hook reads the inline dependencies of the script `uv run` and `pipx run` run, and `uv run --with`.** A
+  Python file can carry a `# /// script` block (PEP 723) whose `dependencies` the uv, and the pipx, install when they run it:
+  in a Linux container without network, with an index that logged each request (2026-11-20 and 2026-11-21), `uv run
+  script.py`, `uv run --script`, `-s`, `--gui-script`, `python -m uv run`, `uv run --directory`, `pipx run script.py` and `pipx
+  run --path script.py` asked the index for the packages of the block, `uv run --with P` for `P`, and `uv run
+  --with-requirements` and `uv pip install -r x.py` for what the file names, while the hook said nothing — `uv run` was
+  no command it read, and `pipx run script.py` looked the word `script.py` up as a package. They are read now: each
+  requirement of a block is vetted as the dependencies of a manifest are (a malicious package denies, naming the file; a
+  name the registry does not have or a typosquat warns; the packages count toward the 150 of manifests), `--with` and `-w`
+  as packages named on the line, a `.py` / `.pyw` file of `--with-requirements` or `uv pip install -r` as a script, any other
+  file of `--with-requirements` as a requirements file. A script the hook cannot read — a block outside the grammar it
+  reads, a file over 1 MiB or that is not a regular file, more than eight scripts, a link to the network or a chain of
+  more than 32 links — is said in one line and **the user is asked** before the install; so is a block with `[tool.uv]`
+  (it may choose its own index) or a requirement that is a URL, a path or a VCS. `pipx run <file>` with a file of that
+  name in the directory is no longer refused for a name the index does not have: the pipx runs the file. What stays is in
+  the known limit `install-inline-script-deps`.
 
 - **The install hook reads the Python forms that fetch a package and build it, and no longer lets them pass silently.**
   `pip download <package>`, `pip wheel <package>`, `pipx inject`, `pipx upgrade`, `pipx reinstall`, `pipx runpip`,

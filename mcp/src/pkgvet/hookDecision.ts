@@ -73,7 +73,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
 import { LOCKFILES, lockFormat, readLock, type LockRead, type Pin, type Source } from './lockfile.js';
-import { readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
+import { readInlineScript, readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
 import { MAX_CANDIDATES_PER_COMMAND, parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
@@ -299,9 +299,10 @@ function boundedInstalls(
 
 /**
  * An install command as it is vetted: the packages a manifest names carry the file that names them, and the names an update
- * verb is given ({@link InstallCommand.updateNames}) are marked `fromUpdate`.
+ * verb is given ({@link InstallCommand.updateNames}) are marked `fromUpdate`; the words `pipx run` takes as the name of a local file
+ * are looked up for malware only (`fromLocalScript`).
  */
-type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true };
+type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true; fromLocalScript?: true };
 
 /** Why the name given to an update is never denied as missing (measured 2026-11-20: an update fetches only what is installed already). */
 const NAMED_TO_UPDATE = 'not denied: a package named to an update is fetched only when it is already installed';
@@ -383,15 +384,33 @@ function withManifestPackages(
   registry: RegistryContext,
   notes: string[],
   locked: LockedProject[],
+  scriptOut: { asks: string[]; withDeny: string[] },
+  pastDeadline: () => boolean,
 ): VetCommand[] {
   const out: VetCommand[] = [];
   // The root a manifest or a lockfile is looked for up to: the project directory, or the root of the git repository it is in.
   const top = opts.projectDir === undefined ? undefined : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
   const lineAsked = new Map<string, string[]>();
+  const world: ScriptWorld = {
+    opts,
+    // The root the links of a script are walked from: the repository root, else the project directory the hook was given.
+    top: top ?? opts.projectDir,
+    pastDeadline,
+    notes,
+    asks: scriptOut.asks,
+    withDeny: scriptOut.withDeny,
+    folders: new Map<string, Folder>(),
+    probes: new Map<string, Probe>(),
+    reads: new Map<string, ManifestRead>(),
+    overflow: new Set<string>(),
+    asked: new Set<string>(),
+  };
   let userRegistries: string[] | undefined;
   const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
   for (const c of parsed) {
-    out.push(c);
+    // The scripts the command runs come first: a `pipx run` word that is a local file leaves its packages, and says so.
+    const scripted = scriptCommands(c, world);
+    out.push(scripted.command, ...scripted.extra);
     // The names of an update are vetted whatever happens to the manifest below: every early `continue` comes after this.
     const pushUpdate = (inManifest: ReadonlySet<string>): void => {
       const more = updateCommand(c, inManifest);
@@ -409,7 +428,9 @@ function withManifestPackages(
       pushUpdate(new Set());
       continue;
     }
-    const dir = c.prefixed === true ? null : commandDir(c, opts);
+    // `uv run --directory D --with-requirements F`: the file is looked for where the uv moved to.
+    const moved = c.scriptDir !== undefined || c.scriptDirUnknown === true ? folderOf(c, world) : undefined;
+    const dir = c.prefixed === true ? null : moved === undefined ? commandDir(c, opts) : (moved.kind === 'dirs' ? (moved.dirs[0] ?? null) : null);
     if (dir === null) {
       const what = manifest.kind === 'package-json' ? 'package.json' : 'the requirements file';
       notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) — its packages were not vetted.`);
@@ -465,6 +486,7 @@ function withManifestPackages(
       });
     }
   }
+  overflowScripts(world);
   return out;
 }
 
@@ -943,6 +965,11 @@ function presentBelow(under: string, path: string): boolean {
  */
 function fileBelow(under: string, path: string): boolean {
   if (!walkLinksUnder(under, path).ok) return false;
+  return isRegularFile(path);
+}
+
+/** Whether `path` is a regular file, a local link followed to what it names (`stat`: it opens nothing). */
+function isRegularFile(path: string): boolean {
   try {
     return statSync(path).isFile();
   } catch {
@@ -1055,16 +1082,20 @@ function commandDir(c: InstallCommand, opts: HookVetOptions): string | null {
   if (isNetworkPath(dir)) return null;
   let real = realDir(dir);
   for (const step of c.workdir) {
-    let target = step;
-    if (target === '~' || /^~[\\/]/.test(target)) target = join(home, target.slice(1));
-    else if (target.startsWith('~')) return null; // `~user`
-    else if (windows) target = target.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`);
-    if (real === null) return null;
+    const target = cdTarget(step, home, windows);
+    if (target === null || real === null) return null;
     const moved = plainMove(dir, real, target, windows);
     if (moved === null) return null;
     [dir, real] = moved;
   }
   return dir;
+}
+
+/** The target of a `cd` as the hook walks it: a `~` read as the home directory and, on Windows, an MSYS `/c/…` as `C:/…`; `null` for `~user`. */
+function cdTarget(step: string, home: string, windows: boolean): string | null {
+  if (step === '~' || /^~[\\/]/.test(step)) return join(home, step.slice(1));
+  if (step.startsWith('~')) return null;
+  return windows ? step.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive: string) => `${drive.toUpperCase()}:/`) : step;
 }
 
 /** The real path of a directory (`realpathSync.native`), or `null` when it cannot be had. Never asked of a network path. */
@@ -1115,6 +1146,360 @@ function plainMove(dir: string, real: string, target: string, windows: boolean):
   return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
 }
 
+// ───────────────────────────────────────────────────── inline scripts (PEP 723)
+
+/** The most script files one call reads, each once; the others are counted and the user is asked. */
+const MAX_SCRIPT_FILES = 8;
+/** The reasons a script was not read that come from the line or the session, never from a file of the repository: only the line is said. */
+const DEADLINE_REASON = 'vetting time budget exhausted';
+const NOT_LITERAL_REASON = 'not a literal file name';
+/** The two reasons the link walk and the read give ({@link ManifestRead.reason}). */
+const NETWORK_REASON = 'on a network path';
+const UNREADABLE_REASON = 'could not be read';
+/** How many directories one line may hold in doubt (`cd tools && cd ..` after a link: the logical one and the physical one). */
+const MAX_DIR_STATES = 8;
+
+/** Where the scripts of a command are looked for: the directories (more than one when a `..` follows a link), or why none is known. */
+type Folder = { kind: 'dirs'; dirs: string[] } | { kind: 'unknown' } | { kind: 'deadline' } | { kind: 'refused'; reason: string };
+
+/** What the disk says of a word `pipx run` may take as its app. */
+type Probe = { kind: 'file' } | { kind: 'none' } | { kind: 'refused'; reason: string };
+
+/** What one call knows of the scripts of its line: asked once, whatever the number of commands that name them. */
+interface ScriptWorld {
+  opts: HookVetOptions;
+  /** The root the links of a script are walked from when it is below it. */
+  top: string | undefined;
+  pastDeadline: () => boolean;
+  notes: string[];
+  asks: string[];
+  /** The lines said with a deny as well as without one. */
+  withDeny: string[];
+  folders: Map<string, Folder>;
+  probes: Map<string, Probe>;
+  reads: Map<string, ManifestRead>;
+  /** The files past {@link MAX_SCRIPT_FILES}, each once. */
+  overflow: Set<string>;
+  /** The words of `pipx run` asked of the disk: at most {@link MAX_VETTED_PACKAGES} a call. */
+  asked: Set<string>;
+}
+
+const hasDotDot = (path: string): boolean => path.split(/[\\/]+/).includes('..');
+const samePath = (a: string, b: string): boolean => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+
+/** Whether a link stands on the way from `under` to `path` (`lstat` of each component below `under`). */
+function linkOnPath(under: string, path: string): boolean {
+  const rel = relative(resolve(under), resolve(path));
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+  let at = resolve(under);
+  for (const part of rel.split(/[\\/]+/)) {
+    if (part === '' || part === '.') continue;
+    at = join(at, part);
+    try {
+      if (lstatSync(at).isSymbolicLink()) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
+ * Where `target` leads from the real directory `real` when the kernel resolves it (POSIX): each link on the way is followed to its real
+ * path and a `..` goes up from there — `tools/..` with `tools` a link to `sub/inner` is `sub`, where the shell, resolving the `..` in the
+ * text, says the directory above `tools`. The last component of a word that names a file (`lastIsFile`) is not resolved: the open follows
+ * it. `null` when a link on the way cannot be resolved, or leads off the local disk (that one is refused by the reading itself).
+ */
+function physicalPath(real: string, target: string, lastIsFile: boolean): string | null {
+  let at = real;
+  const parts = target.split(/[\\/]+/);
+  for (const [k, part] of parts.entries()) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') {
+      at = dirname(at);
+      continue;
+    }
+    const next = join(at, part);
+    let link = false;
+    try {
+      link = lstatSync(next).isSymbolicLink();
+    } catch {
+      link = false;
+    }
+    if (link && !(lastIsFile && k === parts.length - 1)) {
+      // `realpath` of a link to the network waits for it: the walk looks at the link's own target first.
+      if (!walkLinksUnder(at, next).ok) return null;
+      const resolved = realDir(next);
+      if (resolved === null) return null;
+      at = resolved;
+    } else at = next;
+  }
+  return at;
+}
+
+type Moved = { ok: true; states: Array<[logical: string, real: string]> } | { ok: false; folder: Folder };
+
+/**
+ * One `cd` (or `--directory`, or `UV_WORKING_DIR`) of a script's line, from the directory `logical` (whose real path is `real`): the
+ * links on the way are walked first, from the project root when the target is below it ({@link walkLinksUnder}: a link to the network
+ * is refused, and so is a chain of more than 32); then the real path of where it lands. A link that was followed and leads nowhere is
+ * "could not be read" — the repository put the link there — and a plain directory that is not there is a directory not known. With a
+ * `..` after a link the logical and the physical directory can differ: both are kept.
+ */
+function moveScriptDir(logical: string, real: string, target: string, windows: boolean, top: string | undefined): Moved {
+  const unknown: Moved = { ok: false, folder: { kind: 'unknown' } };
+  // A drive with no slash after it (`C:`, `C:x`) depends on the shell, as it does for `commandDir`.
+  if (windows && /^[A-Za-z]:(?![\\/])/.test(target)) return unknown;
+  const next = resolve(logical, target);
+  if (isNetworkPath(next)) return { ok: false, folder: { kind: 'refused', reason: NETWORK_REASON } };
+  const under = top !== undefined && isWithin(top, next) ? top : logical;
+  const walked = walkLinksUnder(under, next);
+  if (!walked.ok) return { ok: false, folder: { kind: 'refused', reason: walked.reason === 'remote-link' ? NETWORK_REASON : UNREADABLE_REASON } };
+  const landed = realDir(next);
+  if (landed === null) return linkOnPath(under, next) ? { ok: false, folder: { kind: 'refused', reason: UNREADABLE_REASON } } : unknown;
+  const states: Array<[string, string]> = [[next, landed]];
+  if (!isAbsolute(target) && hasDotDot(target)) {
+    const physical = physicalPath(real, target, false);
+    const physicalReal = physical === null ? null : realDir(physical);
+    if (physical !== null && physicalReal !== null && !samePath(physical, next)) states.push([physical, physicalReal]);
+  }
+  return { ok: true, states };
+}
+
+/**
+ * The directories the uv or the pipx look for the scripts of `c` in: where the line runs ({@link InstallCommand.workdir}, the `cd`s
+ * before it), moved by `--directory` / `UV_WORKING_DIR` ({@link InstallCommand.scriptDir}). Unlike {@link commandDir} a `cd` through a
+ * link is followed — the process opens the script from the link's target — one step after another, the shell's own path (the logical
+ * one) kept for the next `cd` (P9 and P10 of install-vet-inline-script-deps). Nothing is asked of the disk past the deadline.
+ */
+function scriptFolder(c: InstallCommand, w: ScriptWorld): Folder {
+  if (c.workdir === null || c.scriptDirUnknown === true) return { kind: 'unknown' };
+  const start = resolve(w.opts.cwd);
+  if (isNetworkPath(start)) return { kind: 'unknown' };
+  const steps = [...(c.workdir ?? []), ...(c.scriptDir === undefined ? [] : [c.scriptDir])];
+  if (steps.length === 0) return { kind: 'dirs', dirs: [start] };
+  const home = w.opts.homeDir ?? homedir();
+  const windows = (w.opts.platform ?? process.platform) === 'win32';
+  const startReal = realDir(start);
+  if (startReal === null) return { kind: 'unknown' };
+  let states: Array<[string, string]> = [[start, startReal]];
+  for (const step of steps) {
+    if (w.pastDeadline()) return { kind: 'deadline' };
+    const target = cdTarget(step, home, windows);
+    if (target === null) return { kind: 'unknown' };
+    const next: Array<[string, string]> = [];
+    for (const [logical, real] of states) {
+      const moved = moveScriptDir(logical, real, target, windows, w.top);
+      if (!moved.ok) return moved.folder;
+      for (const state of moved.states) if (!next.some(([seen]) => samePath(seen, state[0]))) next.push(state);
+    }
+    states = next.slice(0, MAX_DIR_STATES);
+  }
+  return { kind: 'dirs', dirs: states.map(([logical]) => logical) };
+}
+
+function folderOf(c: InstallCommand, w: ScriptWorld): Folder {
+  const key = JSON.stringify([c.workdir === undefined ? 'none' : c.workdir, c.scriptDir ?? null, c.scriptDirUnknown ?? null]);
+  let folder = w.folders.get(key);
+  if (folder === undefined) {
+    try {
+      folder = scriptFolder(c, w);
+    } catch {
+      // Fail-open: a directory that cannot be worked out is a directory not known.
+      folder = { kind: 'unknown' };
+    }
+    w.folders.set(key, folder);
+  }
+  return folder;
+}
+
+/** A path a script may be at, and the directory of the command it was reached from. */
+interface ScriptPath {
+  path: string;
+  dir: string;
+  physical: boolean;
+}
+
+/** The paths the word `written` names from each of `dirs`: the logical one and, with a `..` after a link, the physical one. */
+function scriptPaths(dirs: readonly string[], written: string): ScriptPath[] {
+  const out: ScriptPath[] = [];
+  const add = (path: string, dir: string, physical: boolean): void => {
+    if (!out.some((p) => samePath(p.path, path))) out.push({ path, dir, physical });
+  };
+  for (const dir of dirs) {
+    add(resolve(dir, written), dir, false);
+    if (isAbsolute(written) || !hasDotDot(written)) continue;
+    const real = realDir(dir);
+    const physical = real === null ? null : physicalPath(real, written, true);
+    if (physical !== null) add(physical, dir, true);
+  }
+  return out;
+}
+
+/** The root a script's links are walked from: the project root when it is below it, the command's directory otherwise. */
+const scriptUnder = (w: ScriptWorld, path: string, dir: string): string => (w.top !== undefined && isWithin(w.top, path) ? w.top : dir);
+
+/** Whether `word` is a regular file below `under`: `walkLinksUnder` first, and the reason when it refuses. */
+function probeFile(under: string, path: string): Probe {
+  const walked = walkLinksUnder(under, path);
+  if (!walked.ok) return { kind: 'refused', reason: walked.reason === 'remote-link' ? NETWORK_REASON : UNREADABLE_REASON };
+  return isRegularFile(path) ? { kind: 'file' } : { kind: 'none' };
+}
+
+/** The read of a script, once per call: `undefined` when it is past the eighth file. Never throws. */
+function readScript(w: ScriptWorld, cand: ScriptPath, written: string): ManifestRead | undefined {
+  const key = process.platform === 'win32' ? cand.path.toLowerCase() : cand.path;
+  const known = w.reads.get(key);
+  if (known !== undefined) return known;
+  if (w.reads.size >= MAX_SCRIPT_FILES) {
+    w.overflow.add(key);
+    return undefined;
+  }
+  const under = scriptUnder(w, cand.path, cand.dir);
+  let read: ManifestRead;
+  try {
+    read = cand.physical
+      ? { ...readInlineScript(dirname(cand.path), basename(cand.path), 'uv', under), file: said(written) }
+      : readInlineScript(cand.dir, written, 'uv', under);
+  } catch {
+    read = { file: said(written), status: 'unreadable', packages: [], names: [], registries: [], reason: UNREADABLE_REASON };
+  }
+  w.reads.set(key, read);
+  return read;
+}
+
+/** The question for a script the hook did not read, whose packages the uv or the pipx install unvetted. */
+const unreadAsk = (file: string, why: string): string =>
+  `the inline dependencies of ${file} could not be read (${why}) — uv or pipx installs them unvetted; allow it only if you trust this script`;
+
+/** A command stripped of what only its own packages need, as the base of the commands made of its scripts. */
+function withoutCandidates(c: InstallCommand): VetCommand {
+  const { candidates: _candidates, candidatesDropped: _dropped, inlineScripts: _scripts, ...rest } = c;
+  return rest;
+}
+
+/**
+ * The scripts a command runs, vetted: each is read (once per call, at most eight files) and what its `# /// script` block names becomes
+ * one more command to vet, as a manifest's packages do (`fromManifest`); what could not be read is a line, and — when the repository can
+ * choose it — a question to the user. A word `pipx run` may take as its app (`ifFile`) is asked of the disk: when it is a file the
+ * pipx runs it, so the word is looked up for malware only (`fromLocalScript`) and its block is read; when it is not there nothing
+ * changes. A word that could not be asked keeps its place as a package and says it may be a local script.
+ */
+function scriptCommands(c: InstallCommand, w: ScriptWorld): { command: VetCommand; extra: VetCommand[] } {
+  const scripts = c.inlineScripts;
+  if (scripts === undefined) return { command: c, extra: [] };
+  const extra: VetCommand[] = [];
+  const base = withoutCandidates(c);
+  /** The words of `pipx run` that are files (or entries the walk refused): looked up for malware only. */
+  const local = new Set<string>();
+  const maybeLocal: string[] = [];
+  let ran = false;
+  const unread = (file: string, why: string, ask: boolean): void => {
+    w.notes.push(notReadLine(file, why));
+    if (ask) w.asks.push(unreadAsk(file, why));
+  };
+  const askable = (why: string): boolean => why !== DEADLINE_REASON && why !== UNKNOWN_DIRECTORY && why !== NOT_LITERAL_REASON;
+  for (const s of scripts) {
+    const file = said(s.file);
+    const asked = s.ifFile === true;
+    if (!asked) ran = true;
+    if (s.literal === false) {
+      w.notes.push(notReadLine(file, NOT_LITERAL_REASON));
+      continue;
+    }
+    if (isNetworkPath(s.file)) {
+      unread(file, NETWORK_REASON, true);
+      if (asked) local.add(s.file);
+      continue;
+    }
+    const folder = w.pastDeadline() ? ({ kind: 'deadline' } as const) : folderOf(c, w);
+    if (folder.kind === 'refused') {
+      unread(file, folder.reason, true);
+      if (asked) local.add(s.file);
+      continue;
+    }
+    if (folder.kind !== 'dirs') {
+      if (asked) maybeLocal.push(s.file);
+      else w.notes.push(notReadLine(file, folder.kind === 'deadline' ? DEADLINE_REASON : UNKNOWN_DIRECTORY));
+      continue;
+    }
+    if (asked) {
+      const key = `${folder.dirs.join('|')}|${s.file}`;
+      if (!w.asked.has(key)) {
+        if (w.asked.size >= MAX_VETTED_PACKAGES) {
+          maybeLocal.push(s.file);
+          continue;
+        }
+        w.asked.add(key);
+      }
+    }
+    for (const cand of scriptPaths(folder.dirs, s.file)) {
+      if (asked) {
+        const under = scriptUnder(w, cand.path, cand.dir);
+        const probeKey = `${under}|${cand.path}`;
+        let probe = w.probes.get(probeKey);
+        if (probe === undefined) {
+          probe = probeFile(under, cand.path);
+          w.probes.set(probeKey, probe);
+        }
+        if (probe.kind === 'none') continue;
+        local.add(s.file);
+        ran = true;
+        if (probe.kind === 'refused') {
+          unread(file, probe.reason, true);
+          continue;
+        }
+      }
+      const read = readScript(w, cand, s.file);
+      if (read === undefined || read.status === 'absent') continue;
+      if (read.status === 'unreadable') {
+        const why = read.reason ?? UNREADABLE_REASON;
+        unread(read.file, why, askable(why));
+        continue;
+      }
+      if (read.incomplete !== undefined) unread(read.file, read.incomplete, true);
+      if (read.toolUv === true) {
+        w.notes.push(`dev-guardian: ${read.file} may name its own index or sources ([tool.uv]) — what they serve was not verified.`);
+        w.asks.push(`the inline dependencies of ${read.file} may come from its own index or sources ([tool.uv]) — what they serve was not vetted; allow it only if you trust this script`);
+      }
+      if (read.otherSource === true) {
+        w.notes.push(`dev-guardian: ${read.file} names packages from a URL, a path or a VCS — they were not vetted.`);
+        w.asks.push(`${read.file} names packages from a URL, a path or a VCS — they were not vetted; allow it only if you trust this script`);
+      }
+      if (read.packages.length === 0) continue;
+      const custom = c.customRegistry ?? undefined;
+      extra.push({
+        ...base,
+        packages: read.packages,
+        skipped: [],
+        uncertain: [NAMED_BY_MANIFEST],
+        registries: c.registries,
+        ...(custom !== undefined ? { customRegistry: custom } : {}),
+        fromManifest: read.file,
+      });
+    }
+  }
+  if (c.sourced !== undefined && ran) {
+    const line = `dev-guardian: ${said(c.sourced)} was run with source before the script and may have changed the directory or the environment — not checked.`;
+    w.notes.push(line);
+    w.withDeny.push(line);
+  }
+  if (local.size === 0 && maybeLocal.length === 0) return { command: c, extra };
+  const here = c.packages.filter((p) => local.has(p.raw));
+  const reasons = maybeLocal.map((word) => `\`${said(word)}\` may be a local script that pipx runs instead — not checked`);
+  const command: VetCommand = { ...c, packages: c.packages.filter((p) => !local.has(p.raw)), uncertain: [...c.uncertain, ...reasons] };
+  if (here.length > 0) extra.unshift({ ...base, packages: here, skipped: [], uncertain: [], fromLocalScript: true });
+  return { command, extra };
+}
+
+/** The lines and the question for the files past the eighth a call reads. */
+function overflowScripts(w: ScriptWorld): void {
+  const n = w.overflow.size;
+  if (n === 0) return;
+  w.notes.push(`dev-guardian: ${String(n)} more script file${n === 1 ? '' : 's'} of this command ${n === 1 ? 'was' : 'were'} not read (only the first ${String(MAX_SCRIPT_FILES)} are) — their packages were not vetted.`);
+  w.asks.push(`this command runs more scripts than the hook reads — ${String(n)} ${n === 1 ? 'was' : 'were'} not read (only the first ${String(MAX_SCRIPT_FILES)} are); allow it only if you expected that`);
+}
+
 /**
  * The words of the hook's "could not vet … — not verified." line, which the
  * selftest (`selftest/hookChecks.ts`) recognises by these very constants: were
@@ -1128,7 +1513,7 @@ export const NOT_VERIFIED = ' — not verified.';
  * ceiling, the dependencies of the manifests past theirs, the cut at 512 KB — in that order, joined by `; `.
  * `undefined` when none holds. Fixed sentences with two integers and the ceilings: nothing of the project is in them.
  */
-function askReason(signals: { notVetted: number; manifestNotVetted: number; cut: boolean }): string | undefined {
+function askReason(signals: { notVetted: number; manifestNotVetted: number; cut: boolean }, scripts: readonly string[] = []): string | undefined {
   const verb = (n: number): string => (n === 1 ? '1 was' : `${String(n)} were`);
   const reasons: string[] = [];
   if (signals.notVetted > 0) {
@@ -1144,6 +1529,8 @@ function askReason(signals: { notVetted: number; manifestNotVetted: number; cut:
   if (signals.cut) {
     reasons.push('this command is longer than the hook reads — installs past the first 512 KB were not looked for; allow it only if you expected a command this long');
   }
+  // The questions about the scripts, once each, in the order the line met them.
+  reasons.push(...new Set(scripts));
   return reasons.length > 0 ? reasons.join('; ') : undefined;
 }
 
@@ -1173,6 +1560,10 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   };
   // What a manifest could not tell: one line each, said whatever else happens.
   const manifestNotes: string[] = [];
+  /** What the scripts of the line ask the user: a script that was not read, an index of its own, a source that is not the registry. */
+  const scriptAsks: string[] = [];
+  /** The lines of the scripts a deny carries too. */
+  const scriptDenyLines: string[] = [];
   /** The lockfiles of the manifest installs of the line, read. */
   const locked: LockedProject[] = [];
   const isPopular = popularTest(opts);
@@ -1187,14 +1578,14 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies),
     opts.nested,
     cdpath,
-    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked),
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt),
     () => Date.now() > deadlineAt,
   );
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {
     const said = [...manifestNotes, ...(cut ? [CUT_NOTE] : [])];
     if (said.length === 0) return null;
-    const question = askReason({ notVetted, manifestNotVetted, cut });
+    const question = askReason({ notVetted, manifestNotVetted, cut }, scriptAsks);
     return question === undefined ? { context: said.join('\n') } : { context: said.join('\n'), ask: question };
   }
 
@@ -1304,6 +1695,14 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         }
         continue;
       }
+      // The word of `pipx run` that is a file the pipx runs: only a package of that name that is malicious is said.
+      if (cmd.fromLocalScript === true) {
+        if (r.checks.malicious.status === 'fail') {
+          denies.push(localScriptDeny(r));
+          malicious = true;
+        }
+        continue;
+      }
       const d = cmd.fromUpdate === true ? decideUpdateOne(r) : decideOne(r, cmd.uncertain);
       if (d.deny !== undefined) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
@@ -1336,7 +1735,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     }
     // The counts of what was not vetted come after the sentences — the advisory received stands even when a batch failed.
     // The other lines (another source, not recognised, …) stay out of a deny: they do not change it, and the deny stays short.
-    const counts = [...new Set(lockCounts)];
+    const counts = [...new Set([...lockCounts, ...scriptDenyLines])];
     return { deny: `dev-guardian blocked this install: ${parts.join(' ')}${counts.length > 0 ? `\n${counts.join(`\n`)}` : ''}` };
   }
   const lines: string[] = [];
@@ -1368,7 +1767,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   }
   if (cut) lines.push(CUT_NOTE);
   if (lines.length === 0) return null;
-  const question = askReason({ notVetted, manifestNotVetted, cut });
+  const question = askReason({ notVetted, manifestNotVetted, cut }, scriptAsks);
   return question === undefined ? { context: lines.join('\n') } : { context: lines.join('\n'), ask: question };
 }
 
@@ -1477,6 +1876,15 @@ function decideManifestOne(
   const unknown = [r.checks.exists, r.checks.malicious].find((c) => c.status === 'unknown' && c.detail !== undefined);
   if (unknown !== undefined) out.unverified = unknown.detail ?? '';
   return out;
+}
+
+/** The sentence for a malicious package whose name is a local file `pipx run` runs: nothing else of the word is said. */
+function localScriptDeny(r: PackageVetResult): string {
+  const why = Object.values(r.checks)
+    .filter((c) => c.status === 'fail' && c.detail !== undefined)
+    .map((c) => c.detail ?? '')
+    .join('; ');
+  return `pipx runs the local file '${r.name}' here, and a package of that name is malicious: '${label(r)}': ${sentence(why)}`;
 }
 
 /**

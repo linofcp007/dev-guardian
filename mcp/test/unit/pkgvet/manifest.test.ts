@@ -1096,6 +1096,11 @@ describe('install-vet-inline-script-deps', () => {
       expect(read(block(...body))).toMatchObject({ packages: [['a', undefined]], toolUv: true });
     });
 
+    it('T-01 the escapes `\\\\` and `\\"` are decoded before the requirement is read: `a\\b` is a path (another source), `a"b` is no name', () => {
+      expect(read(deps('"a\\\\b"'))).toEqual({ packages: [], toolUv: false, otherSource: true });
+      expect(inlineScriptBlock(deps('"a\\"b"'))).toEqual({ status: 'unreadable', reason: NOT_IN_FORM });
+    });
+
     it('T-01 no block, a `# /// pyproject` block and a block that never closes: ok, no package', () => {
       expect(inlineScriptBlock('print(1)\n')).toMatchObject({ status: 'ok', packages: [] });
       expect(inlineScriptBlock('# /// pyproject\n# dependencies = ["a"]\n# ///\n')).toMatchObject({ status: 'ok', packages: [] });

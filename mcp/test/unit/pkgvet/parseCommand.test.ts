@@ -4173,4 +4173,12 @@ describe('install-vet-inline-script-deps', () => {
       expect(cmds.map((c) => ({ packages: c.packages.map((p) => p.name), uncertain: c.uncertain }))).toEqual([{ packages: [U], uncertain: [] }]);
     });
   });
+
+  // ── T-10 (b): the analysis of a line of scripts costs linear time
+
+  describe('T-10 (b) the analysis costs linear time', () => {
+    it('T-10 `uv run --with a s.py;` repeated n times: eight times the lines, well under 22.6 times the time', () => {
+      expectLinear('install-vet-inline-script-deps uv run --with a s.py;', (n) => void parseInstallCommands('uv run --with a s.py;'.repeat(n)), 100);
+    });
+  });
 });

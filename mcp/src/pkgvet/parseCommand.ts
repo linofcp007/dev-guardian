@@ -142,6 +142,28 @@ export interface InstallCommand {
    * Linux container: each installed tool is asked of the index). `updateNames` is then `[]`, or the names given beside `--all`.
    */
   updatesEveryTool?: true;
+  /**
+   * The Python files the command runs or reads as inline script metadata (PEP 723), in the order of the line: the script of `uv run`
+   * (a word ending `.py` / `.pyw`, or any word after `--script`, `-s` or `--gui-script`), a `.py` / `.pyw` file given to `uv run
+   * --with-requirements` or `uv pip install -r` (the uv reads it as a script), and the words `pipx run` may take as its app.
+   * `literal: false`: the word has an expansion or a glob, so which file it is cannot be told. `ifFile`: the word is a file only
+   * when one of that name is in the directory — `pipx run script.py` runs the file, and fetches the package of that name otherwise —
+   * and the hook asks the disk. Reading the files is the hook's: this module does no I/O.
+   */
+  inlineScripts?: InlineScriptWord[];
+  /** Where the uv looks for the script of `uv run`: the value of `--directory` (before or after `run`) or of a leading `UV_WORKING_DIR=`. */
+  scriptDir?: string;
+  /** The directory the uv looks for the script in cannot be told: an expansion in `--directory` or `UV_WORKING_DIR`, or the variable set elsewhere on the line. */
+  scriptDirUnknown?: true;
+  /** A file the line `source`s (or `.`s) before this command: it may have moved the directory or changed the environment. */
+  sourced?: string;
+}
+
+/** A word of {@link InstallCommand.inlineScripts}. */
+interface InlineScriptWord {
+  file: string;
+  literal?: false;
+  ifFile?: true;
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -974,6 +996,28 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     packageFlags: set('--from'),
     extraPackageFlags: set('--with', '-w'),
   },
+  // `uv run` (the help of uv 0.13.8 stored by the measurement M-2 of install-vet-inline-script-deps, `.specs/install-vet-inline-script-deps/
+  // measurements/m2-linux-container-2026-11-21.txt:15-242`): the options written with `<…>` take a value, the others do not. The short
+  // spellings are noted under the long one. The words after the program are the program's own: they are never read with this table.
+  'uv-run': {
+    value: set('--extra', '--no-extra', '--group', '--no-group', '--only-group', '--no-editable-package', '--env-file', '--with', '-w',
+      '--with-editable', '--with-requirements', '--package', '--python-platform', '--index', '--default-index', '--index-url', '-i',
+      '--extra-index-url', '--find-links', '-f', '--index-strategy', '--keyring-provider', '--upgrade-package', '-P', '--upgrade-group',
+      '--resolution', '--prerelease', '--prerelease-package', '--fork-strategy', '--exclude-newer', '--exclude-newer-package',
+      '--no-sources-package', '--reinstall-package', '--link-mode', '--config-setting', '-C', '--config-settings-package',
+      '--no-build-isolation-package', '--no-build-package', '--no-binary-package', '--cache-dir', '--refresh-package', '--python', '-p',
+      '--color', '--allow-insecure-host', '--directory', '--project', '--config-file'),
+    bool: set('--all-extras', '--no-dev', '--only-dev', '--no-default-groups', '--all-groups', '--module', '-m', '--no-editable', '--exact',
+      '--no-env-file', '--isolated', '--active', '--no-sync', '--locked', '--frozen', '--script', '-s', '--gui-script', '--all-packages',
+      '--no-project', '--no-index', '--no-sources', '--upgrade', '-U', '--reinstall', '--compile-bytecode', '--no-build-isolation',
+      '--no-build', '--no-binary', '--require-build-hashes', '--no-require-build-hashes', '--no-cache', '-n', '--refresh',
+      '--managed-python', '--no-managed-python', '--no-python-downloads', '--quiet', '-q', '--verbose', '-v', '--system-certs',
+      '--offline', '--no-progress', '--no-config', '--help', '-h'),
+    registry: set('--index', '--default-index', '--index-url', '--extra-index-url', '--find-links'),
+    registryBool: set('--no-index'),
+    long: new Map([['-m', '--module'], ['-s', '--script'], ['-w', '--with'], ['-i', '--index-url'], ['-f', '--find-links']]),
+    extraPackageFlags: set('--with'),
+  },
   'uv-tool-install': {
     value: set(...UV_VALUED, '--with', '-w', '--editable', '-e'),
     bool: set(...UV_BOOL),
@@ -994,8 +1038,9 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     extraPackageFlags: set('--preinstall', '--spec'),
   },
   'pipx-run': {
-    value: set('--spec', '--index-url', '-i', '--python', '--path', '--with'),
-    bool: set('--no-cache', '--quiet', '-q', '--verbose', '-v', '--system-site-packages', '--fetch-missing-python'),
+    // `--path` takes no value (the help of pipx 1.18.16, M-2 of install-vet-inline-script-deps): the app is a path to a script.
+    value: set('--spec', '--index-url', '-i', '--python', '--with'),
+    bool: set('--no-cache', '--quiet', '-q', '--verbose', '-v', '--system-site-packages', '--fetch-missing-python', '--path'),
     registry: set('--index-url', '-i'),
     packageFlags: set('--spec'),
     extraPackageFlags: set('--with'),
@@ -1042,7 +1087,7 @@ interface WalkResult {
   /** Reasons a missing name in this command must not be denied (ruling (a), (c), (f)). */
   uncertain: string[];
   /** Every flag seen, with its value when it took one — what a launcher's packages are read from. */
-  flags: Array<{ flag: string; value?: string; eq?: true }>;
+  flags: Array<{ flag: string; value?: string; eq?: true; at?: number }>;
   /** How many flags the table of the manager does not know: npm reads abbreviations (`--loc=project`) that it does not hold. */
   unknownFlags: number;
 }
@@ -1194,10 +1239,12 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   let unknownFlags = 0;
   let customRegistry: string | undefined;
   const registries: string[] = [];
-  const flags: Array<{ flag: string; value?: string; eq?: true }> = [];
+  const flags: Array<{ flag: string; value?: string; eq?: true; at?: number }> = [];
+  // The index of the word being read: a flag is noted with it, so that a launcher can tell the flags before a word from those after.
+  let here = 0;
   const note = (written: string, value: string | undefined, eq?: true): void => {
     const flag = table.long?.get(written) ?? written;
-    flags.push(value === undefined ? { flag } : eq === true ? { flag, value, eq } : { flag, value });
+    flags.push(value === undefined ? { flag, at: here } : eq === true ? { flag, value, eq, at: here } : { flag, value, at: here });
     if (table.registry.has(flag) && value !== undefined) {
       registries.push(value);
       customRegistry = customRegistry ?? value;
@@ -1216,6 +1263,7 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   for (let i = 0; i < words.length; i += 1) {
     const w = words[i];
     if (w === undefined) break;
+    here = i;
     const v = w.value;
     if (v === '--') continue;
     if (!v.startsWith('-') || v.length === 1) {
@@ -1482,7 +1530,11 @@ interface Detected {
     spelling?: string;
     /** The line began `corepack <manager>[@version]` before the launcher. */
     viaCorepack?: true;
+    /** The first positional word is the program the launcher runs (`uv run`), never a package: only the flags name packages. */
+    program?: true;
   };
+  /** The value of a `UV_WORKING_DIR=` assignment that stands before `uv run` (alone, or after `env`). */
+  envDir?: string;
   /**
    * An install of the project's `package.json`: `always` for a subcommand
    * that takes no package (`npm ci`, `pnpm install`, `yarn install`, a bare
@@ -1577,7 +1629,7 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   bun: new Set([...BUN_ADD, 'update', 'x', ...BUN_INITIALIZER]),
   yarn: new Set(['install', 'add', 'global', 'workspace', 'workspaces', 'dlx', 'dedupe', 'up', ...YARN_UPDATE, ...CREATE_ONLY]),
   pip: new Set(['install', 'download', 'wheel']),
-  uv: new Set(['add', 'pip', 'tool']),
+  uv: new Set(['add', 'pip', 'tool', 'run']),
   poetry: new Set(['add']),
   composer: COMPOSER_REQUIRE,
   dotnet: new Set(['add', 'package', 'tool']),
@@ -1897,6 +1949,11 @@ function detect(input: readonly ShellWord[]): Detected | null {
       return flagTable === undefined ? d : { ...d, flagTable };
     }
     case 'uv': {
+      if (subWord === 'run') {
+        const d = launcher('uv', 'pypi', words.slice(sub + 1), pre, { style: 'run', flags: 'uv-run', program: true });
+        const envDir = leadingWorkingDir(words.slice(0, start));
+        return envDir === undefined ? d : { ...d, envDir };
+      }
       if (subWord === 'add') return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
       if (subWord === 'pip') {
         const inst = nextPositional(words, sub + 1, table, INSTALL_ONLY);
@@ -1944,6 +2001,13 @@ function detect(input: readonly ShellWord[]): Detected | null {
     default:
       return null;
   }
+}
+
+/** The value of the last `UV_WORKING_DIR=<value>` among the words in front of a command (a leading assignment, or one given to `env`). */
+function leadingWorkingDir(front: readonly ShellWord[]): string | undefined {
+  let found: string | undefined;
+  for (const w of front) if (w.value.startsWith('UV_WORKING_DIR=')) found = w.value.slice('UV_WORKING_DIR='.length);
+  return found;
 }
 
 /** Composer lets a constraint follow its package as a separate word: `vendor/pkg "^2.0"`. */
@@ -2071,6 +2135,8 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
           .map((v) => v.trim())
           .filter((v) => v !== '');
   const raws: string[] = [];
+  // `pipx run --path <script>`: the word is a script, never a package (the help of pipx 1.18.16: `--path` takes no value).
+  const pathApp = launch.flags === 'pipx-run' && launch.style === 'run' && flags.some((f) => f.flag === '--path');
   // An initializer's words are rewritten to the package the manager asks for; a candidate that is no registry name is a flag's value.
   const initializer = launch.initializer === true;
   const limited = limitCandidates(initializer ? w.positionals.filter((p) => isInitializerName(p.value, d.manager)) : w.positionals);
@@ -2093,7 +2159,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
     if (named.length > 0) {
       raws.push(...named);
       byPackageFlag = true;
-    } else if (!has(table.shellFlags)) raws.push(...limited.kept.map((p) => p.value));
+    } else if (!has(table.shellFlags) && launch.program !== true && !pathApp) raws.push(...limited.kept.map((p) => p.value));
     // In shell mode the positional is shell text — but a line of ONE word is a package for pnpm (`pnpm dlx -c pkg`, measured
     // 2026-11-19); with more words after it (`-c a b`) or spaces inside it (`-c 'a --version'`) it is a command, not looked up.
     else if (table.shellWord === true && d.args.length === body.length) raws.push(...limited.kept.map((p) => p.value).filter((v) => !/\s/.test(v)));
@@ -2141,12 +2207,75 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
+  if (launch.flags === 'uv-run') attachUvRun(out, d, pre, w, flags);
+  else if (launch.flags === 'pipx-run' && launch.style === 'run' && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp);
   // The requirements files `pipx inject -r` hands to pip, as `pip install -r` hands them, in the order written.
   if (launch.flags === 'pipx-inject') {
     const files = requirementFiles(flags, PIPX_REQUIREMENT_FLAGS);
     if (files.length > 0) out.manifest = { kind: 'requirements', files };
   }
   return out;
+}
+
+/** A file name the uv reads as a script: `.py` or `.pyw`, in any letter case (measured: `.py`, `.PY`, `.pyw`). */
+const PYTHON_FILE = /\.pyw?$/i;
+
+/** Whether a word may be the name of a file: not the standard input (`-`), not a URL or a VCS spec. */
+const isFileWord = (word: string): boolean => word !== '-' && !word.includes('://') && !URL_OR_VCS.test(word);
+
+/** A script the command surely runs, named by `file`: one with an expansion or a glob cannot be told which file it is. */
+const scriptWord = (file: string): InlineScriptWord => (SHELL_EXPANSION.test(file) ? { file, literal: false } : { file });
+
+/**
+ * What `uv run` reads besides the packages of `--with`: its script — a word that ends `.py` / `.pyw` or follows `--script`, `-s`
+ * or `--gui-script` among the flags of `uv run` BEFORE it, and no `--module` / `-m` there (`uv run evil.py -m msg` and
+ * `python -m uv run s.py` keep it, `uv run -m evil.py` does not) — each word that may be the program (the first positional, and the
+ * next ones while a flag the table does not know may have taken the first) —, the `.py` / `.pyw` files of `--with-requirements` (the
+ * uv reads them as a script), the other files of it as a requirements manifest, and the directory the uv looks in (`--directory`,
+ * before or after `run`, else a leading `UV_WORKING_DIR=`). `--project` does not move it.
+ */
+function attachUvRun(out: InstallCommand, d: Detected, pre: WalkResult, w: WalkResult, flags: ReadonlyArray<{ flag: string; value?: string }>): void {
+  const scripts: InlineScriptWord[] = [];
+  const seen = new Set<string>();
+  const add = (word: InlineScriptWord): void => {
+    const key = `${word.file}|${String(word.literal)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    scripts.push(word);
+  };
+  for (const p of w.positionals) {
+    if (!isFileWord(p.value)) continue;
+    const before = [...pre.flags, ...w.flags.filter((f) => f.at !== undefined && f.at < p.at)];
+    if (before.some((f) => f.flag === '--module')) continue;
+    if (before.some((f) => f.flag === '--script' || f.flag === '--gui-script') || PYTHON_FILE.test(p.value)) add(scriptWord(p.value));
+  }
+  const required = requirementFiles(flags, new Set(['--with-requirements']));
+  for (const file of required) if (PYTHON_FILE.test(file)) add(scriptWord(file));
+  const others = required.filter((file) => !PYTHON_FILE.test(file));
+  if (others.length > 0) out.manifest = { kind: 'requirements', files: others };
+  if (scripts.length > 0) out.inlineScripts = scripts;
+  const given = flags.filter((f) => f.flag === '--directory' && f.value !== undefined && f.value !== '').map((f) => f.value ?? '');
+  const dir = given.length > 0 ? given[given.length - 1] : d.envDir;
+  if (dir === undefined || dir === '') return;
+  if (SHELL_EXPANSION.test(dir)) out.scriptDirUnknown = true;
+  else out.scriptDir = dir;
+}
+
+/**
+ * The words `pipx run` may take as its app (the first positional, and the next ones while a flag the table does not know may have
+ * taken it) as files: with `--path` the only word is a script for certain and several are each a file only if it is there; without it
+ * each is a file only when one of that name is in the directory, and the hook asks the disk. A word with an expansion is none, but for a
+ * script `--path` names for certain.
+ */
+function attachPipxApp(out: InstallCommand, w: WalkResult, pathApp: boolean): void {
+  const words = w.positionals.filter((p) => isFileWord(p.value));
+  const scripts: InlineScriptWord[] = [];
+  for (const p of words) {
+    const expands = SHELL_EXPANSION.test(p.value);
+    if (pathApp && words.length === 1) scripts.push(scriptWord(p.value));
+    else if (!expands) scripts.push({ file: p.value, ifFile: true });
+  }
+  if (scripts.length > 0) out.inlineScripts = scripts;
 }
 
 /** The flags of `pipx inject` that name a requirements file. */
@@ -2285,7 +2414,11 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
     const files = requirementFiles(walked.flags, REQUIREMENT_FLAGS);
-    if (files.length > 0) out.manifest = { kind: 'requirements', files };
+    // The uv reads a `.py` / `.pyw` file given to `uv pip install -r` as a script (measured, M-2e); pip reads it as requirements.
+    const scripts = d.manager === 'uv-pip' ? files.filter((f) => PYTHON_FILE.test(f)) : [];
+    const rest = files.filter((f) => !scripts.includes(f));
+    if (scripts.length > 0) out.inlineScripts = scripts.map(scriptWord);
+    if (rest.length > 0) out.manifest = { kind: 'requirements', files: rest };
   } else if (d.manifest !== undefined && out.global !== true) {
     // The manifest is left unread only for an install that is global FOR CERTAIN (`out.global`); in doubt — `-g $X`,
     // `-g --location=project`, `npm ci --global=false` — it is read: vetting more, never less (measured 2026-11-19).
@@ -2353,10 +2486,10 @@ export function parseInstallCommands(
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined) continue;
+      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined && c.inlineScripts === undefined) continue;
       for (const p of packages) seen.add(packageKey(p));
-      // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest read.
-      const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined);
+      // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest or script read.
+      const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined || c.inlineScripts !== undefined);
       out.push({ ...c, packages, ...(unknownDir ? { workdir: null } : {}) });
     }
   }
@@ -2368,6 +2501,11 @@ function manifestKey(c: InstallCommand): string {
   const m = c.manifest;
   if (m === undefined) return '';
   return JSON.stringify([m.kind, m.kind === 'requirements' ? m.files : [], c.workdir ?? null, c.prefixed === true, c.update === true]);
+}
+
+/** What tells two commands that run scripts apart: the files, and where each looks for them. */
+function scriptKey(c: InstallCommand): string {
+  return c.inlineScripts === undefined ? '' : JSON.stringify([c.inlineScripts, c.scriptDir ?? null, c.scriptDirUnknown ?? null, c.workdir ?? null]);
 }
 
 /** Why a package found in a script the command hands a shell is never denied as missing. */
@@ -2383,15 +2521,25 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
   if (asPowerShell === text) return withoutRanges(out);
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const seenManifests = new Set(out.map(manifestKey));
+  const seenScripts = new Set(out.map(scriptKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     // A manifest install only this reading finds is kept; one both readings find is the same install.
     const newManifest = c.manifest !== undefined && !seenManifests.has(manifestKey(c));
-    if (packages.length === 0 && !newManifest && c.updateNames === undefined) continue;
+    // The scripts a command names, likewise: one both readings find is the same script.
+    const newScripts = c.inlineScripts !== undefined && !seenScripts.has(scriptKey(c));
+    if (packages.length === 0 && !newManifest && !newScripts && c.updateNames === undefined) continue;
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
-    const { manifest: _same, ...withoutManifest } = c;
-    out.push({ ...(newManifest ? c : withoutManifest), packages, skipped: [] });
+    seenScripts.add(scriptKey(c));
+    const { manifest: _same, inlineScripts: _scripts, ...stripped } = c;
+    out.push({
+      ...stripped,
+      ...(newManifest && c.manifest !== undefined ? { manifest: c.manifest } : {}),
+      ...(newScripts && c.inlineScripts !== undefined ? { inlineScripts: c.inlineScripts } : {}),
+      packages,
+      skipped: [],
+    });
   }
   return withoutRanges(out);
 }
@@ -2689,16 +2837,35 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
   // (review of 3.4.0, finding 5): only a move that surely ran counts.
   const dirs = workdirs(split.statements, { cdpath });
   let dirChanged = false;
+  // The first file the line `source`s (or `.`s) so far: it may have moved the directory or changed the environment before a script runs.
+  let sourced: string | undefined;
+  // `UV_WORKING_DIR` anywhere in the line (any letter case): `uv run` only trusts the assignment right before it.
+  const workingDirWords = (text.match(/UV_WORKING_DIR/gi) ?? []).length;
   split.statements.forEach((statement, s) => {
     statement.commands.forEach((words, w) => {
       // A redirection is no package: `pip install x 2>&1` named a package `2`
       // (PEP 508 reads `2>&1` as `2` at a version `>&1`), `2> err.log` two.
+      const sourcedBefore = sourced;
+      const at = commandStart(words);
+      const headWord = words[at]?.value;
+      if (headWord === 'source' || headWord === '.') sourced = sourced ?? words[at + 1]?.value;
       const d = detect(wordsWithoutRedirections(words));
       if (d !== null) {
         const context: string[] = [];
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
         const c = collect(d, context);
+        // `uv run pytest`: nothing to read, no command (the sync of the project stays unread).
+        if (d.launch?.program === true && c.packages.length === 0 && c.skipped.length === 0 && c.inlineScripts === undefined && c.manifest === undefined) {
+          if (changesDirectory(words)) dirChanged = true;
+          return;
+        }
+        // Any other `UV_WORKING_DIR` than the assignment in front of the command leaves the directory unknown.
+        if (d.launch?.flags === 'uv-run' && workingDirWords > (d.envDir === undefined ? 0 : 1)) {
+          delete c.scriptDir;
+          c.scriptDirUnknown = true;
+        }
+        if (sourcedBefore !== undefined && c.inlineScripts !== undefined) c.sourced = sourcedBefore;
         // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does,
         // and so does a `key@npm:rest` that Yarn and bun read as either of two packages.
         const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
@@ -2873,6 +3040,8 @@ const ALLOW: Record<string, Allow> = {
   'yarn-dlx': { bool: set('-q', '--quiet'), value: set() },
   bunx: { bool: set('--bun', '--silent', '--verbose'), value: set() },
   uvx: { bool: set('-q', '--quiet', '-v', '--verbose', '--isolated'), value: set() },
+  // `uv run`: the flags of `uvx`; `--with` and `-w` are left out, so a name of them the registry does not have only warns (the owner's answer 2-A).
+  'uv-run': { bool: set('-q', '--quiet', '-v', '--verbose', '--isolated'), value: set() },
   'uv-tool-install': { bool: set('-q', '--quiet', '-v', '--verbose', '--force', '--upgrade', '-U'), value: set() },
   'pipx-install': { bool: set('--force', '-f', '-q', '--quiet', '-v', '--verbose', '--include-deps'), value: set() },
   'pipx-run': { bool: set('-q', '--quiet', '-v', '--verbose', '--no-cache'), value: set() },
@@ -3034,6 +3203,7 @@ function confidentWords(words: readonly string[]): string | null {
       if (at(0) === 'add') [key, args] = ['uv', rest.slice(1)];
       else if (at(0) === 'pip' && at(1) === 'install') [key, args] = ['uv-pip', rest.slice(2)];
       else if (at(0) === 'tool' && at(1) === 'run') [key, args, launch] = ['uvx', rest.slice(2), true];
+      else if (at(0) === 'run') [key, args, launch] = ['uv-run', rest.slice(1), true];
       else if (at(0) === 'tool' && at(1) === 'install') [key, args] = ['uv-tool-install', rest.slice(2)];
       else return notPlain(`'uv ${at(0)}'`);
       break;

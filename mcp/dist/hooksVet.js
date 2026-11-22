@@ -3869,6 +3869,115 @@ var LAUNCH_FLAGS = {
     packageFlags: set("--from"),
     extraPackageFlags: set("--with", "-w")
   },
+  // `uv run` (the help of uv 0.13.8 stored by the measurement M-2 of install-vet-inline-script-deps, `.specs/install-vet-inline-script-deps/
+  // measurements/m2-linux-container-2026-11-21.txt:15-242`): the options written with `<…>` take a value, the others do not. The short
+  // spellings are noted under the long one. The words after the program are the program's own: they are never read with this table.
+  "uv-run": {
+    value: set(
+      "--extra",
+      "--no-extra",
+      "--group",
+      "--no-group",
+      "--only-group",
+      "--no-editable-package",
+      "--env-file",
+      "--with",
+      "-w",
+      "--with-editable",
+      "--with-requirements",
+      "--package",
+      "--python-platform",
+      "--index",
+      "--default-index",
+      "--index-url",
+      "-i",
+      "--extra-index-url",
+      "--find-links",
+      "-f",
+      "--index-strategy",
+      "--keyring-provider",
+      "--upgrade-package",
+      "-P",
+      "--upgrade-group",
+      "--resolution",
+      "--prerelease",
+      "--prerelease-package",
+      "--fork-strategy",
+      "--exclude-newer",
+      "--exclude-newer-package",
+      "--no-sources-package",
+      "--reinstall-package",
+      "--link-mode",
+      "--config-setting",
+      "-C",
+      "--config-settings-package",
+      "--no-build-isolation-package",
+      "--no-build-package",
+      "--no-binary-package",
+      "--cache-dir",
+      "--refresh-package",
+      "--python",
+      "-p",
+      "--color",
+      "--allow-insecure-host",
+      "--directory",
+      "--project",
+      "--config-file"
+    ),
+    bool: set(
+      "--all-extras",
+      "--no-dev",
+      "--only-dev",
+      "--no-default-groups",
+      "--all-groups",
+      "--module",
+      "-m",
+      "--no-editable",
+      "--exact",
+      "--no-env-file",
+      "--isolated",
+      "--active",
+      "--no-sync",
+      "--locked",
+      "--frozen",
+      "--script",
+      "-s",
+      "--gui-script",
+      "--all-packages",
+      "--no-project",
+      "--no-index",
+      "--no-sources",
+      "--upgrade",
+      "-U",
+      "--reinstall",
+      "--compile-bytecode",
+      "--no-build-isolation",
+      "--no-build",
+      "--no-binary",
+      "--require-build-hashes",
+      "--no-require-build-hashes",
+      "--no-cache",
+      "-n",
+      "--refresh",
+      "--managed-python",
+      "--no-managed-python",
+      "--no-python-downloads",
+      "--quiet",
+      "-q",
+      "--verbose",
+      "-v",
+      "--system-certs",
+      "--offline",
+      "--no-progress",
+      "--no-config",
+      "--help",
+      "-h"
+    ),
+    registry: set("--index", "--default-index", "--index-url", "--extra-index-url", "--find-links"),
+    registryBool: set("--no-index"),
+    long: /* @__PURE__ */ new Map([["-m", "--module"], ["-s", "--script"], ["-w", "--with"], ["-i", "--index-url"], ["-f", "--find-links"]]),
+    extraPackageFlags: set("--with")
+  },
   "uv-tool-install": {
     value: set(...UV_VALUED, "--with", "-w", "--editable", "-e"),
     bool: set(...UV_BOOL),
@@ -3901,8 +4010,9 @@ var LAUNCH_FLAGS = {
     extraPackageFlags: set("--preinstall", "--spec")
   },
   "pipx-run": {
-    value: set("--spec", "--index-url", "-i", "--python", "--path", "--with"),
-    bool: set("--no-cache", "--quiet", "-q", "--verbose", "-v", "--system-site-packages", "--fetch-missing-python"),
+    // `--path` takes no value (the help of pipx 1.18.16, M-2 of install-vet-inline-script-deps): the app is a path to a script.
+    value: set("--spec", "--index-url", "-i", "--python", "--with"),
+    bool: set("--no-cache", "--quiet", "-q", "--verbose", "-v", "--system-site-packages", "--fetch-missing-python", "--path"),
     registry: set("--index-url", "-i"),
     packageFlags: set("--spec"),
     extraPackageFlags: set("--with")
@@ -4016,9 +4126,10 @@ function walk(words, table) {
   let customRegistry;
   const registries = [];
   const flags = [];
+  let here = 0;
   const note = (written, value, eq2) => {
     const flag = table.long?.get(written) ?? written;
-    flags.push(value === void 0 ? { flag } : eq2 === true ? { flag, value, eq: eq2 } : { flag, value });
+    flags.push(value === void 0 ? { flag, at: here } : eq2 === true ? { flag, value, eq: eq2, at: here } : { flag, value, at: here });
     if (table.registry.has(flag) && value !== void 0) {
       registries.push(value);
       customRegistry = customRegistry ?? value;
@@ -4037,6 +4148,7 @@ function walk(words, table) {
   for (let i = 0; i < words.length; i += 1) {
     const w = words[i];
     if (w === void 0) break;
+    here = i;
     const v = w.value;
     if (v === "--") continue;
     if (!v.startsWith("-") || v.length === 1) {
@@ -4252,7 +4364,7 @@ var SUBCOMMANDS = {
   bun: /* @__PURE__ */ new Set([...BUN_ADD, "update", "x", ...BUN_INITIALIZER]),
   yarn: /* @__PURE__ */ new Set(["install", "add", "global", "workspace", "workspaces", "dlx", "dedupe", "up", ...YARN_UPDATE, ...CREATE_ONLY]),
   pip: /* @__PURE__ */ new Set(["install", "download", "wheel"]),
-  uv: /* @__PURE__ */ new Set(["add", "pip", "tool"]),
+  uv: /* @__PURE__ */ new Set(["add", "pip", "tool", "run"]),
   poetry: /* @__PURE__ */ new Set(["add"]),
   composer: COMPOSER_REQUIRE,
   dotnet: /* @__PURE__ */ new Set(["add", "package", "tool"])
@@ -4502,6 +4614,11 @@ function detect(input) {
       return flagTable === void 0 ? d : { ...d, flagTable };
     }
     case "uv": {
+      if (subWord === "run") {
+        const d = launcher("uv", "pypi", words.slice(sub + 1), pre, { style: "run", flags: "uv-run", program: true });
+        const envDir = leadingWorkingDir(words.slice(0, start));
+        return envDir === void 0 ? d : { ...d, envDir };
+      }
       if (subWord === "add") return { manager: "uv", ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [] };
       if (subWord === "pip") {
         const inst = nextPositional(words, sub + 1, table, INSTALL_ONLY);
@@ -4542,6 +4659,11 @@ function detect(input) {
     default:
       return null;
   }
+}
+function leadingWorkingDir(front) {
+  let found;
+  for (const w of front) if (w.value.startsWith("UV_WORKING_DIR=")) found = w.value.slice("UV_WORKING_DIR=".length);
+  return found;
 }
 var COMPOSER_CONSTRAINT = /^(?:[\^~<>=!*]|v?\d|dev-|@)/;
 function launchEnd(args, table) {
@@ -4620,6 +4742,7 @@ function collectLaunch(d, launch, context) {
   const wordFlags = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag) && isBoolWord(f.value) && f.eq !== true);
   const values = (names) => names === void 0 ? [] : flags.filter((f) => names.has(f.flag)).flatMap((f) => d.ecosystem === "pypi" ? splitOutsideBrackets(f.value ?? "") : (f.value ?? "").split(",")).map((v) => v.trim()).filter((v) => v !== "");
   const raws = [];
+  const pathApp = launch.flags === "pipx-run" && launch.style === "run" && flags.some((f) => f.flag === "--path");
   const initializer = launch.initializer === true;
   const limited = limitCandidates(initializer ? w.positionals.filter((p) => isInitializerName(p.value, d.manager)) : w.positionals);
   const written = /* @__PURE__ */ new Map();
@@ -4640,7 +4763,7 @@ function collectLaunch(d, launch, context) {
     if (named.length > 0) {
       raws.push(...named);
       byPackageFlag = true;
-    } else if (!has2(table.shellFlags)) raws.push(...limited.kept.map((p) => p.value));
+    } else if (!has2(table.shellFlags) && launch.program !== true && !pathApp) raws.push(...limited.kept.map((p) => p.value));
     else if (table.shellWord === true && d.args.length === body.length) raws.push(...limited.kept.map((p) => p.value).filter((v) => !/\s/.test(v)));
     raws.push(...values(table.extraPackageFlags));
   }
@@ -4685,11 +4808,52 @@ function collectLaunch(d, launch, context) {
   if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === "--prefix" || f.flag === "-C")) out.prefixed = true;
+  if (launch.flags === "uv-run") attachUvRun(out, d, pre, w, flags);
+  else if (launch.flags === "pipx-run" && launch.style === "run" && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp);
   if (launch.flags === "pipx-inject") {
     const files = requirementFiles(flags, PIPX_REQUIREMENT_FLAGS);
     if (files.length > 0) out.manifest = { kind: "requirements", files };
   }
   return out;
+}
+var PYTHON_FILE = /\.pyw?$/i;
+var isFileWord = (word) => word !== "-" && !word.includes("://") && !URL_OR_VCS.test(word);
+var scriptWord = (file) => SHELL_EXPANSION.test(file) ? { file, literal: false } : { file };
+function attachUvRun(out, d, pre, w, flags) {
+  const scripts = [];
+  const seen = /* @__PURE__ */ new Set();
+  const add = (word) => {
+    const key = `${word.file}|${String(word.literal)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    scripts.push(word);
+  };
+  for (const p of w.positionals) {
+    if (!isFileWord(p.value)) continue;
+    const before = [...pre.flags, ...w.flags.filter((f) => f.at !== void 0 && f.at < p.at)];
+    if (before.some((f) => f.flag === "--module")) continue;
+    if (before.some((f) => f.flag === "--script" || f.flag === "--gui-script") || PYTHON_FILE.test(p.value)) add(scriptWord(p.value));
+  }
+  const required = requirementFiles(flags, /* @__PURE__ */ new Set(["--with-requirements"]));
+  for (const file of required) if (PYTHON_FILE.test(file)) add(scriptWord(file));
+  const others = required.filter((file) => !PYTHON_FILE.test(file));
+  if (others.length > 0) out.manifest = { kind: "requirements", files: others };
+  if (scripts.length > 0) out.inlineScripts = scripts;
+  const given = flags.filter((f) => f.flag === "--directory" && f.value !== void 0 && f.value !== "").map((f) => f.value ?? "");
+  const dir = given.length > 0 ? given[given.length - 1] : d.envDir;
+  if (dir === void 0 || dir === "") return;
+  if (SHELL_EXPANSION.test(dir)) out.scriptDirUnknown = true;
+  else out.scriptDir = dir;
+}
+function attachPipxApp(out, w, pathApp) {
+  const words = w.positionals.filter((p) => isFileWord(p.value));
+  const scripts = [];
+  for (const p of words) {
+    const expands = SHELL_EXPANSION.test(p.value);
+    if (pathApp && words.length === 1) scripts.push(scriptWord(p.value));
+    else if (!expands) scripts.push({ file: p.value, ifFile: true });
+  }
+  if (scripts.length > 0) out.inlineScripts = scripts;
 }
 var PIPX_REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement"]);
 function requirementFiles(flags, names) {
@@ -4799,7 +4963,10 @@ function collect(d, context) {
   if (d.global === true || knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args)) out.global = true;
   if (d.manager === "pip" || d.manager === "uv-pip") {
     const files = requirementFiles(walked.flags, REQUIREMENT_FLAGS);
-    if (files.length > 0) out.manifest = { kind: "requirements", files };
+    const scripts = d.manager === "uv-pip" ? files.filter((f) => PYTHON_FILE.test(f)) : [];
+    const rest = files.filter((f) => !scripts.includes(f));
+    if (scripts.length > 0) out.inlineScripts = scripts.map(scriptWord);
+    if (rest.length > 0) out.manifest = { kind: "requirements", files: rest };
   } else if (d.manifest !== void 0 && out.global !== true) {
     out.manifest = { kind: "package-json" };
     if (d.update === true) out.update = true;
@@ -4829,9 +4996,9 @@ function parseInstallCommands(command, opts = {}) {
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === void 0 && c.updateNames === void 0) continue;
+      if (packages.length === 0 && c.manifest === void 0 && c.updateNames === void 0 && c.inlineScripts === void 0) continue;
       for (const p of packages) seen.add(packageKey(p));
-      const unknownDir = moved2 && (c.localFirst === true || c.manifest !== void 0);
+      const unknownDir = moved2 && (c.localFirst === true || c.manifest !== void 0 || c.inlineScripts !== void 0);
       out.push({ ...c, packages, ...unknownDir ? { workdir: null } : {} });
     }
   }
@@ -4842,6 +5009,9 @@ function manifestKey(c) {
   if (m === void 0) return "";
   return JSON.stringify([m.kind, m.kind === "requirements" ? m.files : [], c.workdir ?? null, c.prefixed === true, c.update === true]);
 }
+function scriptKey(c) {
+  return c.inlineScripts === void 0 ? "" : JSON.stringify([c.inlineScripts, c.scriptDir ?? null, c.scriptDirUnknown ?? null, c.workdir ?? null]);
+}
 var NESTED_SCRIPT = "found in a script the command hands a shell (bash -c, cmd /c, pwsh -c, a script piped to a shell) \u2014 vetted, never denied as missing";
 function readingsOf(command, shell, forced, cdpath) {
   const text = stripComments(command);
@@ -4851,14 +5021,23 @@ function readingsOf(command, shell, forced, cdpath) {
   if (asPowerShell === text) return withoutRanges(out);
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const seenManifests = new Set(out.map(manifestKey));
+  const seenScripts = new Set(out.map(scriptKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     const newManifest = c.manifest !== void 0 && !seenManifests.has(manifestKey(c));
-    if (packages.length === 0 && !newManifest && c.updateNames === void 0) continue;
+    const newScripts = c.inlineScripts !== void 0 && !seenScripts.has(scriptKey(c));
+    if (packages.length === 0 && !newManifest && !newScripts && c.updateNames === void 0) continue;
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
-    const { manifest: _same, ...withoutManifest } = c;
-    out.push({ ...newManifest ? c : withoutManifest, packages, skipped: [] });
+    seenScripts.add(scriptKey(c));
+    const { manifest: _same, inlineScripts: _scripts, ...stripped } = c;
+    out.push({
+      ...stripped,
+      ...newManifest && c.manifest !== void 0 ? { manifest: c.manifest } : {},
+      ...newScripts && c.inlineScripts !== void 0 ? { inlineScripts: c.inlineScripts } : {},
+      packages,
+      skipped: []
+    });
   }
   return withoutRanges(out);
 }
@@ -5056,14 +5235,29 @@ function parseReading(text, forced, cdpath) {
   const envChange = changesEnvironment(text, split.statements);
   const dirs = workdirs(split.statements, { cdpath });
   let dirChanged = false;
+  let sourced;
+  const workingDirWords = (text.match(/UV_WORKING_DIR/gi) ?? []).length;
   split.statements.forEach((statement, s) => {
     statement.commands.forEach((words, w) => {
+      const sourcedBefore = sourced;
+      const at = commandStart(words);
+      const headWord = words[at]?.value;
+      if (headWord === "source" || headWord === ".") sourced = sourced ?? words[at + 1]?.value;
       const d = detect(wordsWithoutRedirections(words));
       if (d !== null) {
         const context = [];
         if (envChange) context.push("inline environment assignment in the command (it can redirect the registry)");
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
+        if (d.launch?.program === true && c.packages.length === 0 && c.skipped.length === 0 && c.inlineScripts === void 0 && c.manifest === void 0) {
+          if (changesDirectory(words)) dirChanged = true;
+          return;
+        }
+        if (d.launch?.flags === "uv-run" && workingDirWords > (d.envDir === void 0 ? 0 : 1)) {
+          delete c.scriptDir;
+          c.scriptDirUnknown = true;
+        }
+        if (sourcedBefore !== void 0 && c.inlineScripts !== void 0) c.sourced = sourcedBefore;
         const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
         const unmeasuredVerbReason = notConfident === null ? void 0 : unmeasuredVerb(words.map((word) => word.value));
         c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...unmeasuredVerbReason === void 0 ? [] : [unmeasuredVerbReason], ...c.uncertain])];
@@ -5290,6 +5484,8 @@ var ALLOW = {
   "yarn-dlx": { bool: set("-q", "--quiet"), value: set() },
   bunx: { bool: set("--bun", "--silent", "--verbose"), value: set() },
   uvx: { bool: set("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set() },
+  // `uv run`: the flags of `uvx`; `--with` and `-w` are left out, so a name of them the registry does not have only warns (the owner's answer 2-A).
+  "uv-run": { bool: set("-q", "--quiet", "-v", "--verbose", "--isolated"), value: set() },
   "uv-tool-install": { bool: set("-q", "--quiet", "-v", "--verbose", "--force", "--upgrade", "-U"), value: set() },
   "pipx-install": { bool: set("--force", "-f", "-q", "--quiet", "-v", "--verbose", "--include-deps"), value: set() },
   "pipx-run": { bool: set("-q", "--quiet", "-v", "--verbose", "--no-cache"), value: set() }
@@ -5416,6 +5612,7 @@ function confidentWords(words) {
       if (at(0) === "add") [key, args] = ["uv", rest.slice(1)];
       else if (at(0) === "pip" && at(1) === "install") [key, args] = ["uv-pip", rest.slice(2)];
       else if (at(0) === "tool" && at(1) === "run") [key, args, launch] = ["uvx", rest.slice(2), true];
+      else if (at(0) === "run") [key, args, launch] = ["uv-run", rest.slice(1), true];
       else if (at(0) === "tool" && at(1) === "install") [key, args] = ["uv-tool-install", rest.slice(2)];
       else return notPlain(`'uv ${at(0)}'`);
       break;
@@ -5788,6 +5985,269 @@ function readRequirements(dir, files, manager = "pip") {
     if (found.incomplete !== void 0) out.incomplete = found.incomplete;
     return out;
   });
+}
+var isBlank = (c) => c === " " || c === "	";
+var isBareKeyChar = (c) => {
+  const n = c.charCodeAt(0);
+  return n >= 48 && n <= 57 || n >= 65 && n <= 90 || n >= 97 && n <= 122 || c === "_" || c === "-";
+};
+var isBareValueChar = (c) => isBareKeyChar(c) || c === "." || c === ":" || c === "+";
+var HEX = "0123456789abcdefABCDEF";
+var SIMPLE_ESCAPES = { b: "\b", t: "	", n: "\n", f: "\f", r: "\r", '"': '"', "\\": "\\" };
+function skipToLineEnd(x) {
+  while (x.p < x.s.length && x.s[x.p] !== "\n") x.p += 1;
+}
+function skipBlanks(x) {
+  while (isBlank(x.s[x.p])) x.p += 1;
+}
+function skipBlankLines(x) {
+  for (; ; ) {
+    const c = x.s[x.p];
+    if (isBlank(c) || c === "\n") x.p += 1;
+    else if (c === "#") skipToLineEnd(x);
+    else return;
+  }
+}
+function endsLine(x) {
+  skipBlanks(x);
+  const c = x.s[x.p];
+  if (c === void 0 || c === "\n") return true;
+  if (c !== "#") return false;
+  skipToLineEnd(x);
+  return true;
+}
+function readCodePoint(x, digits) {
+  let code = 0;
+  for (let i = 0; i < digits; i += 1) {
+    const c = x.s[x.p];
+    if (c === void 0 || !HEX.includes(c)) return void 0;
+    code = code * 16 + Number.parseInt(c, 16);
+    x.p += 1;
+  }
+  return code > 1114111 || code >= 55296 && code <= 57343 ? void 0 : String.fromCodePoint(code);
+}
+function readString(x) {
+  const quote = x.s[x.p];
+  if (x.s[x.p + 1] === quote && x.s[x.p + 2] === quote) return void 0;
+  x.p += 1;
+  let out = "";
+  for (; ; ) {
+    const c = x.s[x.p];
+    if (c === void 0 || c === "\n") return void 0;
+    x.p += 1;
+    if (c === quote) return out;
+    const code = c.charCodeAt(0);
+    if (code < 32 && c !== "	" || code === 127) return void 0;
+    if (quote === "'" || c !== "\\") {
+      out += c;
+      continue;
+    }
+    const e = x.s[x.p];
+    if (e === void 0) return void 0;
+    x.p += 1;
+    const decoded = e === "u" ? readCodePoint(x, 4) : e === "U" ? readCodePoint(x, 8) : SIMPLE_ESCAPES[e];
+    if (decoded === void 0) return void 0;
+    out += decoded;
+  }
+}
+function readKey(x) {
+  const parts = [];
+  for (; ; ) {
+    skipBlanks(x);
+    const c = x.s[x.p];
+    if (c === void 0) return void 0;
+    let part;
+    if (c === '"' || c === "'") part = readString(x);
+    else {
+      const start = x.p;
+      while (x.p < x.s.length && isBareKeyChar(x.s[x.p] ?? " ")) x.p += 1;
+      part = x.p > start ? x.s.slice(start, x.p) : void 0;
+    }
+    if (part === void 0) return void 0;
+    parts.push(part);
+    skipBlanks(x);
+    if (x.s[x.p] !== ".") return parts;
+    x.p += 1;
+  }
+}
+function skipScalar(x) {
+  const c = x.s[x.p];
+  if (c === '"' || c === "'") return readString(x) !== void 0;
+  const start = x.p;
+  while (x.p < x.s.length && isBareValueChar(x.s[x.p] ?? " ")) x.p += 1;
+  return x.p > start;
+}
+function readStringList(x) {
+  if (x.s[x.p] !== "[") return void 0;
+  x.p += 1;
+  const out = [];
+  for (; ; ) {
+    skipBlankLines(x);
+    const c = x.s[x.p];
+    if (c === "]") {
+      x.p += 1;
+      return out;
+    }
+    if (c !== '"' && c !== "'") return void 0;
+    const item = readString(x);
+    if (item === void 0) return void 0;
+    out.push(item);
+    skipBlankLines(x);
+    const next = x.s[x.p];
+    if (next === ",") x.p += 1;
+    else if (next !== "]") return void 0;
+  }
+}
+function readHeader(x) {
+  x.p += 1;
+  const double = x.s[x.p] === "[";
+  if (double) x.p += 1;
+  const key = readKey(x);
+  if (key === void 0) return void 0;
+  skipBlanks(x);
+  if (x.s[x.p] !== "]") return void 0;
+  x.p += 1;
+  if (double) {
+    if (x.s[x.p] !== "]") return void 0;
+    x.p += 1;
+  }
+  return endsLine(x) ? key : void 0;
+}
+function readToml(content) {
+  const x = { s: content, p: 0 };
+  let dependencies;
+  let toolUv = false;
+  let inTables = false;
+  while (x.p < x.s.length) {
+    skipBlanks(x);
+    const c = x.s[x.p];
+    if (c === void 0) break;
+    if (c === "\n") {
+      x.p += 1;
+      continue;
+    }
+    if (c === "#") {
+      skipToLineEnd(x);
+      continue;
+    }
+    if (c === "[") {
+      const header = readHeader(x);
+      if (header === void 0 || header[0] === "dependencies" || header[0] === "requires-python") return void 0;
+      if (header[0] === "tool" && (header.length === 1 || header[1] === "uv")) toolUv = true;
+      inTables = true;
+      continue;
+    }
+    if (inTables) {
+      skipToLineEnd(x);
+      continue;
+    }
+    const key = readKey(x);
+    if (key === void 0) return void 0;
+    skipBlanks(x);
+    if (x.s[x.p] !== "=") return void 0;
+    x.p += 1;
+    skipBlanks(x);
+    if (key.length === 1 && key[0] === "dependencies") {
+      if (dependencies !== void 0) return void 0;
+      dependencies = readStringList(x);
+      if (dependencies === void 0 || !endsLine(x)) return void 0;
+      continue;
+    }
+    if (key[0] === "tool" && key[1] === "uv") toolUv = true;
+    if (!skipScalar(x) || !endsLine(x)) return void 0;
+  }
+  return { dependencies: dependencies ?? [], toolUv };
+}
+var isOpening = (line) => line.startsWith("# /// script") && line.slice("# /// script".length).trim() === "" && !line.slice("# /// script".length).includes("\r");
+var isContent = (line) => line === "#" || line.startsWith("# ");
+var isClosing = (line) => line.startsWith("# ///") && line.slice("# ///".length).trim() === "" && !line.slice("# ///".length).includes("\r");
+function linesAtLineFeed(text) {
+  return text.split("\n").map((line) => line.endsWith("\r") ? line.slice(0, -1) : line);
+}
+function linesAtAnyBreak(text) {
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c !== "\r" && c !== "\n") continue;
+    out.push(text.slice(start, i));
+    if (c === "\r" && text[i + 1] === "\n") i += 1;
+    start = i + 1;
+  }
+  out.push(text.slice(start));
+  return out;
+}
+function hasLoneCarriageReturn(text) {
+  for (let i = text.indexOf("\r"); i >= 0; i = text.indexOf("\r", i + 1)) if (text[i + 1] !== "\n") return true;
+  return false;
+}
+function readBlocksOf(lines, manager) {
+  const packages = [];
+  const seen = /* @__PURE__ */ new Set();
+  let toolUv = false;
+  let otherSource = false;
+  let i = 0;
+  while (i < lines.length) {
+    if (!isOpening(lines[i] ?? "")) {
+      i += 1;
+      continue;
+    }
+    let end = i + 1;
+    let closing = -1;
+    while (end < lines.length && isContent(lines[end] ?? "")) {
+      if (isClosing(lines[end] ?? "")) closing = end;
+      end += 1;
+    }
+    if (closing < 0) {
+      i = end;
+      continue;
+    }
+    const content = lines.slice(i + 1, closing).map((line) => line.slice(2)).join("\n");
+    const toml = readToml(content);
+    if (toml === void 0) return { status: "unreadable", reason: REASON.notInForm };
+    if (toml.toolUv) toolUv = true;
+    for (const requirement of toml.dependencies) {
+      const reading = readRequirement(requirement, manager);
+      if (reading.kind === "none") return { status: "unreadable", reason: REASON.notInForm };
+      if (reading.kind === "other-source") otherSource = true;
+      else pushOnce(packages, seen, spec("pypi", reading.name, reading.range));
+    }
+    i = closing + 1;
+  }
+  const out = { status: "ok", packages };
+  if (toolUv) out.toolUv = true;
+  if (otherSource) out.otherSource = true;
+  return out;
+}
+function inlineScriptBlock(text, manager = "uv") {
+  const clean = text.startsWith("\uFEFF") ? text.slice(1) : text;
+  const first = readBlocksOf(linesAtLineFeed(clean), manager);
+  if (!hasLoneCarriageReturn(clean)) return first;
+  const second = readBlocksOf(linesAtAnyBreak(clean), manager);
+  if (first.status === "unreadable") return second.status === "unreadable" ? first : { ...second, incomplete: first.reason };
+  if (second.status === "unreadable") return { ...first, incomplete: second.reason };
+  const packages = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const pkg of [...first.packages, ...second.packages]) pushOnce(packages, seen, pkg);
+  const out = { status: "ok", packages };
+  if (first.toolUv === true || second.toolUv === true) out.toolUv = true;
+  if (first.otherSource === true || second.otherSource === true) out.otherSource = true;
+  return out;
+}
+function readInlineScript(dir, file, manager, under) {
+  const shown = label(file);
+  const none = { file: shown, packages: [], names: [], registries: [] };
+  if (isNetworkPath(file)) return { ...none, status: "unreadable", reason: REASON.network };
+  const read2 = readManifestText(resolve2(dir, file), under);
+  if (read2.status === "absent") return { ...none, status: "absent" };
+  if (read2.status === "unreadable") return { ...none, status: "unreadable", reason: read2.reason };
+  const block = inlineScriptBlock(read2.text, manager);
+  if (block.status === "unreadable") return { ...none, status: "unreadable", reason: block.reason };
+  const out = { file: shown, status: "ok", packages: block.packages, names: block.packages.map((p) => p.name), registries: [] };
+  if (block.incomplete !== void 0) out.incomplete = block.incomplete;
+  if (block.toolUv === true) out.toolUv = true;
+  if (block.otherSource === true) out.otherSource = true;
+  return out;
 }
 
 // src/platform/httpBody.ts
@@ -7649,14 +8109,29 @@ function missingCountLine(counted) {
   const named = rest > 0 ? `${shown.join(", ")} and ${String(rest)} more file${rest === 1 ? "" : "s"}` : shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1] ?? ""}` : shown[0] ?? "";
   return `dev-guardian: ${String(total)} more package${total === 1 ? "" : "s"} of ${named} ${total === 1 ? "is" : "are"} not on the public registry either (in a manifest that is usually a private or a workspace package) \u2014 not listed.`;
 }
-function withManifestPackages(parsed, opts, registry, notes, locked) {
+function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, pastDeadline) {
   const out = [];
   const top = opts.projectDir === void 0 ? void 0 : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
   const lineAsked = /* @__PURE__ */ new Map();
+  const world = {
+    opts,
+    // The root the links of a script are walked from: the repository root, else the project directory the hook was given.
+    top: top ?? opts.projectDir,
+    pastDeadline,
+    notes,
+    asks: scriptOut.asks,
+    withDeny: scriptOut.withDeny,
+    folders: /* @__PURE__ */ new Map(),
+    probes: /* @__PURE__ */ new Map(),
+    reads: /* @__PURE__ */ new Map(),
+    overflow: /* @__PURE__ */ new Set(),
+    asked: /* @__PURE__ */ new Set()
+  };
   let userRegistries;
   const user = () => userRegistries ??= npmUserRegistries(registry);
   for (const c of parsed) {
-    out.push(c);
+    const scripted = scriptCommands(c, world);
+    out.push(scripted.command, ...scripted.extra);
     const pushUpdate = (inManifest) => {
       const more = updateCommand(c, inManifest);
       if (more !== void 0) out.push(more);
@@ -7671,7 +8146,8 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
       pushUpdate(/* @__PURE__ */ new Set());
       continue;
     }
-    const dir = c.prefixed === true ? null : commandDir(c, opts);
+    const moved2 = c.scriptDir !== void 0 || c.scriptDirUnknown === true ? folderOf(c, world) : void 0;
+    const dir = c.prefixed === true ? null : moved2 === void 0 ? commandDir(c, opts) : moved2.kind === "dirs" ? moved2.dirs[0] ?? null : null;
     if (dir === null) {
       const what = manifest.kind === "package-json" ? "package.json" : "the requirements file";
       notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) \u2014 its packages were not vetted.`);
@@ -7721,6 +8197,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked) {
       });
     }
   }
+  overflowScripts(world);
   return out;
 }
 var MAX_REGISTRY_LINES = 3;
@@ -8029,6 +8506,9 @@ function presentBelow(under, path) {
 }
 function fileBelow(under, path) {
   if (!walkLinksUnder(under, path).ok) return false;
+  return isRegularFile(path);
+}
+function isRegularFile(path) {
   try {
     return statSync2(path).isFile();
   } catch {
@@ -8093,16 +8573,18 @@ function commandDir(c, opts) {
   if (isNetworkPath(dir)) return null;
   let real = realDir(dir);
   for (const step of c.workdir) {
-    let target = step;
-    if (target === "~" || /^~[\\/]/.test(target)) target = join5(home, target.slice(1));
-    else if (target.startsWith("~")) return null;
-    else if (windows) target = target.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`);
-    if (real === null) return null;
+    const target = cdTarget(step, home, windows);
+    if (target === null || real === null) return null;
     const moved2 = plainMove(dir, real, target, windows);
     if (moved2 === null) return null;
     [dir, real] = moved2;
   }
   return dir;
+}
+function cdTarget(step, home, windows) {
+  if (step === "~" || /^~[\\/]/.test(step)) return join5(home, step.slice(1));
+  if (step.startsWith("~")) return null;
+  return windows ? step.replace(/^\/(?:cygdrive\/)?([A-Za-z])(?=\/|$)/, (_, drive) => `${drive.toUpperCase()}:/`) : step;
 }
 function realDir(path) {
   try {
@@ -8136,9 +8618,267 @@ function plainMove(dir, real, target, windows) {
   const expected = resolve4(real, target);
   return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
 }
+var MAX_SCRIPT_FILES = 8;
+var DEADLINE_REASON = "vetting time budget exhausted";
+var NOT_LITERAL_REASON = "not a literal file name";
+var NETWORK_REASON = "on a network path";
+var UNREADABLE_REASON = "could not be read";
+var MAX_DIR_STATES = 8;
+var hasDotDot = (path) => path.split(/[\\/]+/).includes("..");
+var samePath2 = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+function linkOnPath(under, path) {
+  const rel = relative3(resolve4(under), resolve4(path));
+  if (rel === "" || rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute3(rel)) return false;
+  let at = resolve4(under);
+  for (const part of rel.split(/[\\/]+/)) {
+    if (part === "" || part === ".") continue;
+    at = join5(at, part);
+    try {
+      if (lstatSync3(at).isSymbolicLink()) return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+function physicalPath(real, target, lastIsFile) {
+  let at = real;
+  const parts = target.split(/[\\/]+/);
+  for (const [k, part] of parts.entries()) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      at = dirname4(at);
+      continue;
+    }
+    const next = join5(at, part);
+    let link = false;
+    try {
+      link = lstatSync3(next).isSymbolicLink();
+    } catch {
+      link = false;
+    }
+    if (link && !(lastIsFile && k === parts.length - 1)) {
+      if (!walkLinksUnder(at, next).ok) return null;
+      const resolved = realDir(next);
+      if (resolved === null) return null;
+      at = resolved;
+    } else at = next;
+  }
+  return at;
+}
+function moveScriptDir(logical, real, target, windows, top) {
+  const unknown2 = { ok: false, folder: { kind: "unknown" } };
+  if (windows && /^[A-Za-z]:(?![\\/])/.test(target)) return unknown2;
+  const next = resolve4(logical, target);
+  if (isNetworkPath(next)) return { ok: false, folder: { kind: "refused", reason: NETWORK_REASON } };
+  const under = top !== void 0 && isWithin(top, next) ? top : logical;
+  const walked = walkLinksUnder(under, next);
+  if (!walked.ok) return { ok: false, folder: { kind: "refused", reason: walked.reason === "remote-link" ? NETWORK_REASON : UNREADABLE_REASON } };
+  const landed = realDir(next);
+  if (landed === null) return linkOnPath(under, next) ? { ok: false, folder: { kind: "refused", reason: UNREADABLE_REASON } } : unknown2;
+  const states = [[next, landed]];
+  if (!isAbsolute3(target) && hasDotDot(target)) {
+    const physical = physicalPath(real, target, false);
+    const physicalReal = physical === null ? null : realDir(physical);
+    if (physical !== null && physicalReal !== null && !samePath2(physical, next)) states.push([physical, physicalReal]);
+  }
+  return { ok: true, states };
+}
+function scriptFolder(c, w) {
+  if (c.workdir === null || c.scriptDirUnknown === true) return { kind: "unknown" };
+  const start = resolve4(w.opts.cwd);
+  if (isNetworkPath(start)) return { kind: "unknown" };
+  const steps = [...c.workdir ?? [], ...c.scriptDir === void 0 ? [] : [c.scriptDir]];
+  if (steps.length === 0) return { kind: "dirs", dirs: [start] };
+  const home = w.opts.homeDir ?? homedir2();
+  const windows = (w.opts.platform ?? process.platform) === "win32";
+  const startReal = realDir(start);
+  if (startReal === null) return { kind: "unknown" };
+  let states = [[start, startReal]];
+  for (const step of steps) {
+    if (w.pastDeadline()) return { kind: "deadline" };
+    const target = cdTarget(step, home, windows);
+    if (target === null) return { kind: "unknown" };
+    const next = [];
+    for (const [logical, real] of states) {
+      const moved2 = moveScriptDir(logical, real, target, windows, w.top);
+      if (!moved2.ok) return moved2.folder;
+      for (const state of moved2.states) if (!next.some(([seen]) => samePath2(seen, state[0]))) next.push(state);
+    }
+    states = next.slice(0, MAX_DIR_STATES);
+  }
+  return { kind: "dirs", dirs: states.map(([logical]) => logical) };
+}
+function folderOf(c, w) {
+  const key = JSON.stringify([c.workdir === void 0 ? "none" : c.workdir, c.scriptDir ?? null, c.scriptDirUnknown ?? null]);
+  let folder = w.folders.get(key);
+  if (folder === void 0) {
+    try {
+      folder = scriptFolder(c, w);
+    } catch {
+      folder = { kind: "unknown" };
+    }
+    w.folders.set(key, folder);
+  }
+  return folder;
+}
+function scriptPaths(dirs, written) {
+  const out = [];
+  const add = (path, dir, physical) => {
+    if (!out.some((p) => samePath2(p.path, path))) out.push({ path, dir, physical });
+  };
+  for (const dir of dirs) {
+    add(resolve4(dir, written), dir, false);
+    if (isAbsolute3(written) || !hasDotDot(written)) continue;
+    const real = realDir(dir);
+    const physical = real === null ? null : physicalPath(real, written, true);
+    if (physical !== null) add(physical, dir, true);
+  }
+  return out;
+}
+var scriptUnder = (w, path, dir) => w.top !== void 0 && isWithin(w.top, path) ? w.top : dir;
+function probeFile(under, path) {
+  const walked = walkLinksUnder(under, path);
+  if (!walked.ok) return { kind: "refused", reason: walked.reason === "remote-link" ? NETWORK_REASON : UNREADABLE_REASON };
+  return isRegularFile(path) ? { kind: "file" } : { kind: "none" };
+}
+function readScript(w, cand, written) {
+  const key = process.platform === "win32" ? cand.path.toLowerCase() : cand.path;
+  const known = w.reads.get(key);
+  if (known !== void 0) return known;
+  if (w.reads.size >= MAX_SCRIPT_FILES) {
+    w.overflow.add(key);
+    return void 0;
+  }
+  const under = scriptUnder(w, cand.path, cand.dir);
+  let read2;
+  try {
+    read2 = cand.physical ? { ...readInlineScript(dirname4(cand.path), basename2(cand.path), "uv", under), file: said(written) } : readInlineScript(cand.dir, written, "uv", under);
+  } catch {
+    read2 = { file: said(written), status: "unreadable", packages: [], names: [], registries: [], reason: UNREADABLE_REASON };
+  }
+  w.reads.set(key, read2);
+  return read2;
+}
+var unreadAsk = (file, why) => `the inline dependencies of ${file} could not be read (${why}) \u2014 uv or pipx installs them unvetted; allow it only if you trust this script`;
+function withoutCandidates(c) {
+  const { candidates: _candidates, candidatesDropped: _dropped, inlineScripts: _scripts, ...rest } = c;
+  return rest;
+}
+function scriptCommands(c, w) {
+  const scripts = c.inlineScripts;
+  if (scripts === void 0) return { command: c, extra: [] };
+  const extra = [];
+  const base2 = withoutCandidates(c);
+  const local = /* @__PURE__ */ new Set();
+  const maybeLocal = [];
+  let ran = false;
+  const unread = (file, why, ask) => {
+    w.notes.push(notReadLine(file, why));
+    if (ask) w.asks.push(unreadAsk(file, why));
+  };
+  const askable = (why) => why !== DEADLINE_REASON && why !== UNKNOWN_DIRECTORY && why !== NOT_LITERAL_REASON;
+  for (const s of scripts) {
+    const file = said(s.file);
+    const asked = s.ifFile === true;
+    if (!asked) ran = true;
+    if (s.literal === false) {
+      w.notes.push(notReadLine(file, NOT_LITERAL_REASON));
+      continue;
+    }
+    if (isNetworkPath(s.file)) {
+      unread(file, NETWORK_REASON, true);
+      if (asked) local.add(s.file);
+      continue;
+    }
+    const folder = w.pastDeadline() ? { kind: "deadline" } : folderOf(c, w);
+    if (folder.kind === "refused") {
+      unread(file, folder.reason, true);
+      if (asked) local.add(s.file);
+      continue;
+    }
+    if (folder.kind !== "dirs") {
+      if (asked) maybeLocal.push(s.file);
+      else w.notes.push(notReadLine(file, folder.kind === "deadline" ? DEADLINE_REASON : UNKNOWN_DIRECTORY));
+      continue;
+    }
+    if (asked) {
+      const key = `${folder.dirs.join("|")}|${s.file}`;
+      if (!w.asked.has(key)) {
+        if (w.asked.size >= MAX_VETTED_PACKAGES) {
+          maybeLocal.push(s.file);
+          continue;
+        }
+        w.asked.add(key);
+      }
+    }
+    for (const cand of scriptPaths(folder.dirs, s.file)) {
+      if (asked) {
+        const under = scriptUnder(w, cand.path, cand.dir);
+        const probeKey = `${under}|${cand.path}`;
+        let probe = w.probes.get(probeKey);
+        if (probe === void 0) {
+          probe = probeFile(under, cand.path);
+          w.probes.set(probeKey, probe);
+        }
+        if (probe.kind === "none") continue;
+        local.add(s.file);
+        ran = true;
+        if (probe.kind === "refused") {
+          unread(file, probe.reason, true);
+          continue;
+        }
+      }
+      const read2 = readScript(w, cand, s.file);
+      if (read2 === void 0 || read2.status === "absent") continue;
+      if (read2.status === "unreadable") {
+        const why = read2.reason ?? UNREADABLE_REASON;
+        unread(read2.file, why, askable(why));
+        continue;
+      }
+      if (read2.incomplete !== void 0) unread(read2.file, read2.incomplete, true);
+      if (read2.toolUv === true) {
+        w.notes.push(`dev-guardian: ${read2.file} may name its own index or sources ([tool.uv]) \u2014 what they serve was not verified.`);
+        w.asks.push(`the inline dependencies of ${read2.file} may come from its own index or sources ([tool.uv]) \u2014 what they serve was not vetted; allow it only if you trust this script`);
+      }
+      if (read2.otherSource === true) {
+        w.notes.push(`dev-guardian: ${read2.file} names packages from a URL, a path or a VCS \u2014 they were not vetted.`);
+        w.asks.push(`${read2.file} names packages from a URL, a path or a VCS \u2014 they were not vetted; allow it only if you trust this script`);
+      }
+      if (read2.packages.length === 0) continue;
+      const custom = c.customRegistry ?? void 0;
+      extra.push({
+        ...base2,
+        packages: read2.packages,
+        skipped: [],
+        uncertain: [NAMED_BY_MANIFEST],
+        registries: c.registries,
+        ...custom !== void 0 ? { customRegistry: custom } : {},
+        fromManifest: read2.file
+      });
+    }
+  }
+  if (c.sourced !== void 0 && ran) {
+    const line = `dev-guardian: ${said(c.sourced)} was run with source before the script and may have changed the directory or the environment \u2014 not checked.`;
+    w.notes.push(line);
+    w.withDeny.push(line);
+  }
+  if (local.size === 0 && maybeLocal.length === 0) return { command: c, extra };
+  const here = c.packages.filter((p) => local.has(p.raw));
+  const reasons = maybeLocal.map((word) => `\`${said(word)}\` may be a local script that pipx runs instead \u2014 not checked`);
+  const command = { ...c, packages: c.packages.filter((p) => !local.has(p.raw)), uncertain: [...c.uncertain, ...reasons] };
+  if (here.length > 0) extra.unshift({ ...base2, packages: here, skipped: [], uncertain: [], fromLocalScript: true });
+  return { command, extra };
+}
+function overflowScripts(w) {
+  const n = w.overflow.size;
+  if (n === 0) return;
+  w.notes.push(`dev-guardian: ${String(n)} more script file${n === 1 ? "" : "s"} of this command ${n === 1 ? "was" : "were"} not read (only the first ${String(MAX_SCRIPT_FILES)} are) \u2014 their packages were not vetted.`);
+  w.asks.push(`this command runs more scripts than the hook reads \u2014 ${String(n)} ${n === 1 ? "was" : "were"} not read (only the first ${String(MAX_SCRIPT_FILES)} are); allow it only if you expected that`);
+}
 var COULD_NOT_VET = "dev-guardian could not vet ";
 var NOT_VERIFIED = " \u2014 not verified.";
-function askReason(signals) {
+function askReason(signals, scripts = []) {
   const verb = (n) => n === 1 ? "1 was" : `${String(n)} were`;
   const reasons = [];
   if (signals.notVetted > 0) {
@@ -8154,6 +8894,7 @@ function askReason(signals) {
   if (signals.cut) {
     reasons.push("this command is longer than the hook reads \u2014 installs past the first 512 KB were not looked for; allow it only if you expected a command this long");
   }
+  reasons.push(...new Set(scripts));
   return reasons.length > 0 ? reasons.join("; ") : void 0;
 }
 var CUT_NOTE = "dev-guardian: installs past the first 512 KB of this command were not looked for \u2014 not verified.";
@@ -8172,6 +8913,8 @@ async function decideInstallCommand(command, opts) {
     cache: registryCache()
   };
   const manifestNotes = [];
+  const scriptAsks = [];
+  const scriptDenyLines = [];
   const locked = [];
   const isPopular = popularTest(opts);
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
@@ -8183,13 +8926,13 @@ async function decideInstallCommand(command, opts) {
     (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies),
     opts.nested,
     cdpath,
-    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked),
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt),
     () => Date.now() > deadlineAt
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];
     if (said2.length === 0) return null;
-    const question2 = askReason({ notVetted, manifestNotVetted, cut });
+    const question2 = askReason({ notVetted, manifestNotVetted, cut }, scriptAsks);
     return question2 === void 0 ? { context: said2.join("\n") } : { context: said2.join("\n"), ask: question2 };
   }
   const offline = env["GUARDIAN_OFFLINE"] === "1";
@@ -8292,6 +9035,13 @@ async function decideInstallCommand(command, opts) {
         }
         continue;
       }
+      if (cmd.fromLocalScript === true) {
+        if (r.checks.malicious.status === "fail") {
+          denies.push(localScriptDeny(r));
+          malicious = true;
+        }
+        continue;
+      }
       const d = cmd.fromUpdate === true ? decideUpdateOne(r) : decideOne(r, cmd.uncertain);
       if (d.deny !== void 0) denies.push(d.deny);
       if (d.malicious === true) malicious = true;
@@ -8316,7 +9066,7 @@ async function decideInstallCommand(command, opts) {
         `${manifestDenies.join(" ")} Installing it or removing the dependency is the user's decision: tell them which file names it, and install nothing from that manifest until they have decided.`
       );
     }
-    const counts = [...new Set(lockCounts)];
+    const counts = [.../* @__PURE__ */ new Set([...lockCounts, ...scriptDenyLines])];
     return { deny: `dev-guardian blocked this install: ${parts.join(" ")}${counts.length > 0 ? `
 ${counts.join(`
 `)}` : ""}` };
@@ -8349,7 +9099,7 @@ ${counts.join(`
   }
   if (cut) lines.push(CUT_NOTE);
   if (lines.length === 0) return null;
-  const question = askReason({ notVetted, manifestNotVetted, cut });
+  const question = askReason({ notVetted, manifestNotVetted, cut }, scriptAsks);
   return question === void 0 ? { context: lines.join("\n") } : { context: lines.join("\n"), ask: question };
 }
 var NOT_FOUND = "not found on the public registry \u2014 if it is private or local, ignore this.";
@@ -8407,6 +9157,10 @@ function decideManifestOne(r, file) {
   const unknown2 = [r.checks.exists, r.checks.malicious].find((c) => c.status === "unknown" && c.detail !== void 0);
   if (unknown2 !== void 0) out.unverified = unknown2.detail ?? "";
   return out;
+}
+function localScriptDeny(r) {
+  const why = Object.values(r.checks).filter((c) => c.status === "fail" && c.detail !== void 0).map((c) => c.detail ?? "").join("; ");
+  return `pipx runs the local file '${r.name}' here, and a package of that name is malicious: '${label2(r)}': ${sentence(why)}`;
 }
 function decideUpdateOne(r) {
   if (r.checks.malicious.status === "fail") {

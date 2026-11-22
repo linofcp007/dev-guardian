@@ -6024,7 +6024,7 @@ describe('install-vet-inline-script-deps', () => {
   describe('T-06 the lines and the question', () => {
     it.each<[file: string, make: () => void, reason: string]>([
       ['big.py', () => put('big.py', `${BLOCK(EVIL)}${'# pad\n'.repeat(180_000)}`), 'over 1 MiB'],
-      ['odd.py', () => put('odd.py', `# /// script\n# dependencies = ["${EVIL}"]\n# extra = ["x"]\n# ///\nprint(1)\n`), 'not in the form the hook reads'],
+      ['odd.py', () => put('odd.py', `# /// script\n# dependencies = ["${EVIL}"]\n# extra = ["x"]\n# ///\nprint(1)\n`), 'its `# /// script` block is not in the form the hook reads'],
       ['dir.py', () => mkdirSync(join(project, 'dir.py')), 'not a regular file'],
     ])('T-06 `uv run %s` that could not be read: a line, and a question, never a refusal', async (file, make, reason) => {
       make();
@@ -6163,7 +6163,8 @@ describe('install-vet-inline-script-deps', () => {
       expect(Date.now() - t0).toBeLessThan(hangBound(3000));
     });
 
-    it.each([`uv run ${UNC}\\x.py`, `pipx run ${UNC}\\x.py`])('T-07 (d) `%s`: a network path is never asked of the disk — a line and a question, in time', async (command) => {
+    // Single-quoted: an unquoted backslash is an escape to the shell, which would hand the program `\198.51.100.7sharex.py`.
+    it.each([`uv run '${UNC}\\x.py'`, `pipx run '${UNC}\\x.py'`])('T-07 (d) `%s`: a network path is never asked of the disk — a line and a question, in time', async (command) => {
       const t0 = Date.now();
       const d = await decide(command, reg());
       expect(Date.now() - t0).toBeLessThan(hangBound(2000));

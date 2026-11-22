@@ -169,6 +169,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'install-candidates-over-ceiling',
       'install-global-update-by-name',
       'install-initializers',
+      'install-inline-script-deps',
       'install-launcher-runs-manager',
       'install-other-runners',
       'install-python-option-parsing',
