@@ -6604,3 +6604,347 @@ describe('install-vet-dotnet-run-forms', () => {
     300_000,
   );
 });
+
+// ───────────────── install-vet-registry-files-unread — guards: what the hook must keep answering as the 3.15.0 does
+
+describe('install-vet-registry-files-unread', () => {
+  const PROJECT_NPM = 'https://npm.other.example/';
+  const PROJECT_PYPI = 'https://pypi.other.example/simple/';
+  const SECOND_NPM = 'https://second.other.example/';
+  const MISSING = 'dgprobe-missing';
+  const EVIL = 'dgprobe-evil';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+  const PYPROJECT = '[project]\nname = "probe"\nversion = "1.0.0"\nrequires-python = ">=3.9"\ndependencies = []\n';
+  const POETRY = '[tool.poetry]\nname = "probe"\nversion = "1.0.0"\ndescription = ""\nauthors = []\npackage-mode = false\n\n[tool.poetry.dependencies]\npython = ">=3.9"\n';
+  const SAYS = 'sets the default registry';
+  const CONFIGURED = 'a custom registry is configured (';
+  const NOT_NPM = 'does not exist on the npm registry';
+  const NOT_PYPI = 'does not exist on PyPI';
+  const NOT_FOUND = 'not found on the public registry';
+  // Built from pieces: no literal `scheme://user:password@host` or token stands in the test source.
+  const MARK = ['dgsecret', 'zzq7731'].join('-');
+  const USER = ['dg', 'user'].join('');
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+
+  /** A file of the test's project, by path below it. */
+  const put = (rel: string, text: string): void => {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), text);
+  };
+  /** The project is a repository, so that no reader climbs out of it into the temp folder. */
+  const repository = (): void => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+  };
+  /** A project with the manifest and the given files. */
+  const projectWith = (files: Record<string, string>, manifest = MANIFEST): void => {
+    repository();
+    put('package.json', manifest);
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+  };
+  /** The decision for `command` against the public registries of `registry()`; `cwd` is a folder below the project. */
+  const decide = async (
+    command: string,
+    spec: { exists?: string[]; malicious?: string[] } = {},
+    extra: Partial<HookVetOptions> = {},
+  ): Promise<{ d: Decided; calls: string[]; bodies: string[] }> => {
+    const reg = registry(spec);
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl, { env: { GUARDIAN_OFFLINE: '0' }, ...extra }));
+    return { d, calls: reg.calls, bodies: reg.bodies };
+  };
+  const textOf = (d: Decided): string => `${d?.deny ?? ''}\n${d?.context ?? ''}\n${d?.ask ?? ''}`;
+  /** The answer is a refusal that names the name and says it is not on the public registry, with no line of a project file. */
+  const expectRefusal = (d: Decided, reason: string): void => {
+    expect(d?.deny ?? '(no deny)').toContain(reason);
+    expect(d?.deny ?? '').toContain(MISSING);
+    expect(textOf(d), 'no line of a project file').not.toContain(SAYS);
+    expect(textOf(d), 'no registry of a project file').not.toContain(CONFIGURED);
+  };
+
+  const dotenv = (name: string, value = PROJECT_NPM): string => `${name}=${value}\n`;
+
+  // ── T-08: what the bun does not obey, and what the plan does not read
+
+  /** A `.env` the bun does not obey (or the plan does not read): the layout, and the folder the command runs in. */
+  interface Unobeyed {
+    label: string;
+    files: Record<string, string>;
+    manifest?: string;
+    /** The folder the command runs in, below the project. */
+    at?: string;
+    command?: string;
+  }
+  const ROOT_LISTS_APP = JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: ['app'] });
+  const ROOT_LISTS_OTHER = JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: ['other'] });
+  const MEMBER = JSON.stringify({ name: 'app', version: '1.0.0' });
+  const UNOBEYED: Unobeyed[] = [
+    { label: '.env.development without NODE_ENV', files: { '.env.development': dotenv('BUN_CONFIG_REGISTRY') } },
+    { label: '.env.test without NODE_ENV', files: { '.env.test': dotenv('BUN_CONFIG_REGISTRY') } },
+    {
+      label: 'a .env only in the member of a workspace whose root lists it',
+      manifest: ROOT_LISTS_APP,
+      files: { 'app/package.json': MEMBER, 'app/.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'app',
+    },
+    {
+      label: 'a .env in a folder above, with no package.json there',
+      manifest: '{}',
+      files: { 'app/package.json': MEMBER, '.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'app',
+    },
+    {
+      label: 'a .env only in a subfolder with no package.json, where the command runs (m2-j)',
+      files: { 'sub/.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'sub',
+    },
+    {
+      label: 'a .env only at a root whose workspaces is ["other"], the command in app (m2-k)',
+      manifest: ROOT_LISTS_OTHER,
+      files: { 'app/package.json': MEMBER, '.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'app',
+    },
+    {
+      label: 'bun add -g with the .env',
+      files: { '.env': dotenv('BUN_CONFIG_REGISTRY') },
+      command: `bun add -g ${MISSING}`,
+    },
+  ];
+
+  it.each(UNOBEYED)('T-08 $label: refused, no line', async ({ files, manifest, at, command }) => {
+    projectWith(files, manifest);
+    const cwd = at === undefined ? project : join(project, at);
+    mkdirSync(cwd, { recursive: true });
+    const { d } = await decide(command ?? `bun add ${MISSING}`, {}, { cwd });
+    expectRefusal(d, NOT_NPM);
+  });
+
+  it.each([`bunx ${MISSING}`, `bun x ${MISSING}`, `bun create ${MISSING}`, `bun c ${MISSING}`])(
+    'T-08 `%s` with a .env: the same answer as without it, and no line of the .env (bun x measured, m2-l; the others by the bun documentation)',
+    async (command) => {
+      projectWith({});
+      const without = await decide(command);
+      put('.env', dotenv('BUN_CONFIG_REGISTRY'));
+      const withFile = await decide(command);
+      expect(withFile.d).toEqual(without.d);
+      expect(textOf(withFile.d)).not.toContain(SAYS);
+      expect(textOf(withFile.d)).not.toContain(CONFIGURED);
+      expect(withFile.calls).toEqual(without.calls);
+    },
+  );
+
+  it.each([
+    [`bun add --no-env-file ${MISSING}`, ['.env']],
+    [`bun add --env-file=custom.env ${MISSING}`, ['.env', 'custom.env']],
+    [`bun add --env-file custom.env ${MISSING}`, ['.env', 'custom.env']],
+    [`bun --env-file=custom.env add ${MISSING}`, ['.env', 'custom.env']],
+  ])('T-08 `%s` with the .env: the warning the measurement gave, no refusal, no line of a .env', async (command, envFiles) => {
+    projectWith(Object.fromEntries(envFiles.map((f) => [f, dotenv('BUN_CONFIG_REGISTRY')])));
+    const { d } = await decide(command);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`'${MISSING}': ${NOT_FOUND}`);
+    expect(d?.context ?? '').toContain('unknown flag --');
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(textOf(d), 'the registry the .env names').not.toContain('npm.other.example');
+  });
+
+  it.each([`npm install ${MISSING}`, `pnpm add ${MISSING}`, `yarn add ${MISSING}`])(
+    'T-08 `%s` with a .env: refused, no line (only the bun reads a .env)',
+    async (command) => {
+      projectWith({ '.env': [dotenv('BUN_CONFIG_REGISTRY'), dotenv('NPM_CONFIG_REGISTRY'), dotenv('npm_config_registry')].join('') });
+      const { d } = await decide(command);
+      expectRefusal(d, NOT_NPM);
+    },
+  );
+
+  it.each([
+    ['pip install', `pip install ${MISSING}`],
+    ['uv add', `uv add ${MISSING}`],
+    ['pipx install', `pipx install ${MISSING}`],
+    ['poetry add', `poetry add ${MISSING}`],
+  ])('T-08 %s with a .env of PIP_INDEX_URL, UV_INDEX_URL and UV_DEFAULT_INDEX: refused', async (_label, command) => {
+    projectWith({
+      '.env': [dotenv('PIP_INDEX_URL', PROJECT_PYPI), dotenv('UV_INDEX_URL', PROJECT_PYPI), dotenv('UV_DEFAULT_INDEX', PROJECT_PYPI)].join(''),
+      'pyproject.toml': command.startsWith('poetry') ? POETRY : PYPROJECT,
+    });
+    const { d } = await decide(command);
+    expectRefusal(d, NOT_PYPI);
+  });
+
+  it.each([
+    ['bun add', `bun add ${MISSING}`, NOT_NPM],
+    ['pip install', `pip install ${MISSING}`, NOT_PYPI],
+  ])('T-08 a folder named .env with a pyvenv.cfg inside (%s): refused, and nothing "could not be read"', async (_label, command, reason) => {
+    projectWith({ '.env/pyvenv.cfg': 'home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.11.2\n' });
+    const { d } = await decide(command);
+    expectRefusal(d, reason);
+    expect(textOf(d)).not.toContain('could not be read');
+  });
+
+  it('T-08 BUN_CONFIG_REGISTRY in the hook environment and a .env (EC-14, known limit): the warning of today, and no line of the .env', async () => {
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY') });
+    const { d } = await decide(`bun add ${MISSING}`, {}, { env: { GUARDIAN_OFFLINE: '0', BUN_CONFIG_REGISTRY: SECOND_NPM } });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('second.other.example');
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(textOf(d), 'the registry the .env names').not.toContain('npm.other.example');
+  });
+
+  it('T-08 bun add of a malicious name already taken from the public registry, with a .env: refused with the MAL- advisory', async () => {
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY') });
+    const { d } = await decide(`bun add ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('OSV lists this name as a malicious package (');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+    expect(d?.deny ?? '').toContain('), removed from');
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  // ── T-09: what the grammar of a .env does not accept, and what never leaves
+
+  const BAD_LINES: Array<[label: string, text: string]> = [
+    ['a comment', `# BUN_CONFIG_REGISTRY=${PROJECT_NPM}\n`],
+    ['a longer name (BUN_CONFIG_REGISTRY_X)', `BUN_CONFIG_REGISTRY_X=${PROJECT_NPM}\n`],
+    ['a name with a prefix (XBUN_CONFIG_REGISTRY)', `XBUN_CONFIG_REGISTRY=${PROJECT_NPM}\n`],
+    ['the name in lower case (bun_config_registry; m2-m)', `bun_config_registry=${PROJECT_NPM}\n`],
+    ['a colon for the equals sign (BUN_CONFIG_REGISTRY: ...)', `BUN_CONFIG_REGISTRY: ${PROJECT_NPM}\n`],
+    ['an empty value', 'BUN_CONFIG_REGISTRY=\n'],
+    ['the public registry', 'BUN_CONFIG_REGISTRY=https://registry.npmjs.org/\n'],
+    ['a line inside the double-quoted value of another variable', `OTHER="first\nBUN_CONFIG_REGISTRY=${PROJECT_NPM}\nlast"\n`],
+    ["a line inside the single-quoted value of another variable", `OTHER='first\nBUN_CONFIG_REGISTRY=${PROJECT_NPM}\nlast'\n`],
+    ['a line inside the backtick value of another variable', `OTHER=\`first\nBUN_CONFIG_REGISTRY=${PROJECT_NPM}\nlast\`\n`],
+  ];
+
+  it.each(BAD_LINES)('T-09 %s alone in a .env: refused, no line', async (_label, text) => {
+    projectWith({ '.env': text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expectRefusal(d, NOT_NPM);
+  });
+
+  it('T-09 a subtable [install.scopes.acme.extra] with a url in the bunfig.toml, bun add of a scoped name: refused, no line', async () => {
+    projectWith({ 'bunfig.toml': `[install.scopes.acme.extra]\nurl = "${PROJECT_NPM}"\n` });
+    const { d } = await decide(`bun add @acme/${MISSING}`);
+    expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+  });
+
+  it.each([`bun add ${MISSING}`, 'bun install'])('T-09 a .env with a token, a database URL with a password, and the registry (%s): nothing of it is said or sent', async (command) => {
+    const url = ['postgres://', USER, ':', MARK, '@', 'db.example', '/x'].join('');
+    const manifest = JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [MISSING]: '^1.0.0' } });
+    projectWith({ '.env': [`NPM_TOKEN=${MARK}\n`, `DATABASE_URL=${url}\n`, dotenv('BUN_CONFIG_REGISTRY')].join('') }, command === 'bun install' ? manifest : MANIFEST);
+    const { d, calls, bodies } = await decide(command);
+    for (const text of [textOf(d), ...calls, ...bodies]) {
+      expect(text.includes(MARK), 'the marker').toBe(false);
+      expect(text.includes(USER), 'the user name').toBe(false);
+      expect(text.includes('db.example'), 'the host of the database').toBe(false);
+    }
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(calls.length, 'the name was asked about, so the run was real').toBeGreaterThan(0);
+  });
+
+  // ── T-10: what stays as it is
+
+  const IDX = PROJECT_PYPI;
+  const poetrySource = (priority: string): string =>
+    `\n[[tool.poetry.source]]\nname = "dgproject"\nurl = "${IDX}"\n${priority === '' ? '' : `priority = "${priority}"\n`}`;
+
+  /** The commands and files that still give a warning for a name that is missing: the pair, the files, and the file the warning names. */
+  const WARNS: Array<[label: string, command: string, files: Record<string, string>, named: string]> = [
+    ...(['uv add', 'uv pip install'] as const).flatMap(
+      (verb): Array<[string, string, Record<string, string>, string]> => [
+        [`${verb} with uv.toml index-url`, `${verb} ${MISSING}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `index-url = "${IDX}"\n` }, 'uv.toml: '],
+        [`${verb} with uv.toml [[index]]`, `${verb} ${MISSING}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${IDX}"\n` }, 'uv.toml: '],
+        [
+          `${verb} with uv.toml [[index]] default = true`,
+          `${verb} ${MISSING}`,
+          { 'pyproject.toml': PYPROJECT, 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${IDX}"\ndefault = true\n` },
+          'uv.toml: ',
+        ],
+        [`${verb} with [tool.uv] index-url`, `${verb} ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n[tool.uv]\nindex-url = "${IDX}"\n` }, 'pyproject.toml: '],
+        [
+          `${verb} with [[tool.uv.index]]`,
+          `${verb} ${MISSING}`,
+          { 'pyproject.toml': `${PYPROJECT}\n[[tool.uv.index]]\nname = "dgproject"\nurl = "${IDX}"\n` },
+          'pyproject.toml: ',
+        ],
+      ],
+    ),
+    ['uv pip install with uv.toml [pip] index-url', `uv pip install ${MISSING}`, { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }, 'uv.toml: '],
+    ['poetry add with a source without priority', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('') }, 'pyproject.toml: '],
+    ['poetry add with a primary source', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('primary') }, 'pyproject.toml: '],
+    ['poetry add with a supplemental source', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('supplemental') }, 'pyproject.toml: '],
+    ['poetry add --source corp, corp being explicit', `poetry add --source dgproject ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('explicit') }, 'the command line'],
+    // The pairs nobody measured: the 3.15.0 answer stays.
+    ['uvx with uv.toml [pip] index-url (not measured)', `uvx ${MISSING}`, { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }, 'uv.toml: '],
+    ['uv tool install with [tool.uv] index-url (not measured)', `uv tool install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n[tool.uv]\nindex-url = "${IDX}"\n` }, 'pyproject.toml: '],
+    [
+      'pipx run with [[tool.uv.index]] (not measured)',
+      `pipx run ${MISSING}`,
+      { 'pyproject.toml': `${PYPROJECT}\n[[tool.uv.index]]\nname = "dgproject"\nurl = "${IDX}"\n` },
+      'pyproject.toml: ',
+    ],
+    ['pip install with uv.toml [[index]] (not measured)', `pip install ${MISSING}`, { 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${IDX}"\n` }, 'uv.toml: '],
+    ['bun install -g with the .npmrc registry= (not measured)', `bun install -g ${MISSING}`, { '.npmrc': `registry=${PROJECT_NPM}\n` }, '.npmrc: '],
+  ];
+
+  it.each(WARNS)('T-10 %s: a warning that names the file, no refusal', async (_label, command, files, named) => {
+    projectWith(files);
+    const { d } = await decide(command);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain(named);
+    expect(d?.context ?? '').toContain(MISSING);
+  });
+
+  it('T-10 uv add with [tool.uv.pip] index-url: refused, as today', async () => {
+    projectWith({ 'pyproject.toml': `${PYPROJECT}\n[tool.uv.pip]\nindex-url = "${IDX}"\n` });
+    const { d } = await decide(`uv add ${MISSING}`);
+    expectRefusal(d, NOT_PYPI);
+  });
+
+  it('T-10 a bunfig.toml with [install] registry = SECOND and then [install.registry] url = PROJECT: bun add warns and names SECOND, the first', async () => {
+    projectWith({ 'bunfig.toml': `[install]\nregistry = "${SECOND_NPM}"\n\n[install.registry]\nurl = "${PROJECT_NPM}"\n` });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('bunfig.toml: https://second.other.example');
+    expect(textOf(d), 'the second form is not read').not.toContain('npm.other.example');
+  });
+
+  // The hook says the first reason of the name (the registry that explains the 404), not the `) removed from` text of the
+  // malicious check, which `vet.ts` keeps in the check: what matters here is a warning and no refusal.
+  it('T-10 a malicious name taken from the public registry, with the registry only in the user .npmrc: a warning, no refusal, as today', async () => {
+    projectWith({});
+    writeFileSync(join(home, '.npmrc'), `registry=${PROJECT_NPM}\n`);
+    const { d } = await decide(`npm install ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('.npmrc: https://npm.other.example)');
+    expect(d?.context ?? '').toContain(EVIL);
+  });
+
+  it('T-10 the same with NPM_CONFIG_REGISTRY in the hook environment (EC-14, known limit): a warning, no refusal, as today', async () => {
+    projectWith({});
+    const { d } = await decide(`npm install ${EVIL}`, { malicious: [EVIL] }, { env: { GUARDIAN_OFFLINE: '0', NPM_CONFIG_REGISTRY: PROJECT_NPM } });
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('NPM_CONFIG_REGISTRY: https://npm.other.example)');
+  });
+
+  // The boundary of the scope forms of today, which this feature does not close: a manifest that names a name of a scope
+  // the project's own file gives a registry is not asked about, not refused, and counted in a line.
+  const SCOPE_BOUNDARY: Array<[label: string, command: string, file: string, text: string]> = [
+    ['npm install, @acme:registry= in the project .npmrc', 'npm install', '.npmrc', `@acme:registry=${PROJECT_NPM}\n`],
+    ['bun install, [install.scopes] "@acme" = PROJECT in the bunfig.toml', 'bun install', 'bunfig.toml', `[install.scopes]\n"@acme" = "${PROJECT_NPM}"\n`],
+  ];
+
+  it.each(SCOPE_BOUNDARY)('T-10 %s and a manifest that names @acme/dgprobe-evil: not asked about, not refused, counted in a line', async (_label, command, file, text) => {
+    const manifest = JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [`@acme/${EVIL}`]: '^1.0.0' } });
+    projectWith({ [file]: text }, manifest);
+    const { d, calls, bodies } = await decide(command, { malicious: [EVIL] });
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain('gives a registry of its own — not vetted.');
+    expect([...calls, ...bodies].filter((t) => t.includes(EVIL)), 'no request carries the name').toEqual([]);
+  });
+});

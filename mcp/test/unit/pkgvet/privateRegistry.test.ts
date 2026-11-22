@@ -1500,3 +1500,163 @@ describe('install-vet-project-registry-said', () => {
     expect(answer('yarn', '')).toEqual(nothing('yarn'));
   });
 });
+
+// ───────────────── install-vet-registry-files-unread — guards: the readers, asked without a command, answer as the 3.15.0 does
+
+describe('install-vet-registry-files-unread', () => {
+  const PROJECT_NPM = 'https://npm.other.example/';
+  const PROJECT_PYPI = 'https://pypi.other.example/simple/';
+  const SECOND_NPM = 'https://second.other.example/';
+  const MANIFEST = '{ "name": "fixture-app", "version": "1.0.0" }\n';
+  const PYPROJECT = '[project]\nname = "probe"\nversion = "1.0.0"\nrequires-python = ">=3.9"\ndependencies = []\n';
+  const POETRY = '[tool.poetry]\nname = "probe"\nversion = "1.0.0"\ndescription = ""\nauthors = []\npackage-mode = false\n\n[tool.poetry.dependencies]\npython = ">=3.9"\n';
+  const NAME = 'dgprobe-missing';
+  const SCOPE = '@dgprobe-zzq7731';
+
+  /** A file of the test's project, by path below it. */
+  const put = (rel: string, text: string): void => {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), text);
+  };
+  /** A project: a repository (so no walk leaves it), a manifest and the given files. */
+  const projectWith = (files: Record<string, string>): void => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('package.json', MANIFEST);
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+  };
+  /** What the answer holds of the 3.15.0: the kind, the file and the URL (the field `from` is new, and is not compared). */
+  const shape = (found: ReturnType<typeof customRegistryFor>): { kind: string; source: string; url: string | undefined } | null =>
+    found === null ? null : { kind: found.kind, source: found.source, url: found.url };
+  const registryOf = (file: string, url: string): { kind: string; source: string; url: string } => ({ kind: 'registry', source: join(project, file), url });
+  const dotenv = (name: string, value = PROJECT_NPM): string => `${name}=${value}\n`;
+
+  // The projects of the new spellings (T-01) and of the .env files (T-02): today nothing of them is read.
+  const BUNFIG_SPELLINGS: Array<[label: string, text: string]> = [
+    ['[install.registry] url', `[install.registry]\nurl = "${PROJECT_NPM}"\n`],
+    ['[install.registry] url with a token beside it', `[install.registry]\nurl = "${PROJECT_NPM}"\ntoken = "${['dgsecret', 'zzq7731'].join('-')}"\n`],
+    ['install.registry = before any header', `install.registry = "${PROJECT_NPM}"\n`],
+  ];
+  const SCOPE_SPELLINGS: Array<[label: string, text: string]> = [
+    ['"@acme"', `[install.scopes."@acme"]\nurl = "${PROJECT_NPM}"\n`],
+    ["'@acme'", `[install.scopes.'@acme']\nurl = "${PROJECT_NPM}"\n`],
+    ['"acme"', `[install.scopes."acme"]\nurl = "${PROJECT_NPM}"\n`],
+    ['acme', `[install.scopes.acme]\nurl = "${PROJECT_NPM}"\n`],
+  ];
+  const ENV_FILES: Array<[label: string, files: Record<string, string>]> = [
+    ['.env BUN_CONFIG_REGISTRY', { '.env': dotenv('BUN_CONFIG_REGISTRY') }],
+    ['.env NPM_CONFIG_REGISTRY', { '.env': dotenv('NPM_CONFIG_REGISTRY') }],
+    ['.env npm_config_registry', { '.env': dotenv('npm_config_registry') }],
+    ['.env.local', { '.env.local': dotenv('BUN_CONFIG_REGISTRY') }],
+    ['.env.production', { '.env.production': dotenv('NPM_CONFIG_REGISTRY') }],
+    ['.env.production.local', { '.env.production.local': dotenv('BUN_CONFIG_REGISTRY') }],
+    ['.env.development', { '.env.development': dotenv('BUN_CONFIG_REGISTRY') }],
+    ['.env.test', { '.env.test': dotenv('BUN_CONFIG_REGISTRY') }],
+  ];
+
+  it.each(BUNFIG_SPELLINGS)('T-11 customRegistryFor without a command: null for the bunfig.toml spelling %s', (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    expect(shape(customRegistryFor('npm', NAME, ctx()))).toBeNull();
+  });
+
+  it.each(ENV_FILES)('T-11 customRegistryFor without a command: null for %s', (_label, files) => {
+    projectWith(files);
+    expect(shape(customRegistryFor('npm', NAME, ctx()))).toBeNull();
+  });
+
+  it.each(SCOPE_SPELLINGS)('T-11 customRegistryFor without a command: null for a scoped name and [install.scopes.%s] with a url', (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    expect(shape(customRegistryFor('npm', `@acme/${NAME}`, ctx()))).toBeNull();
+    expect(shape(customRegistryFor('npm', NAME, ctx()))).toBeNull();
+  });
+
+  it('T-11 customRegistryFor without a command: a workspace root with the .env, the command in the member: null', () => {
+    projectWith({ 'package.json': '{ "name": "fixture-root", "version": "1.0.0", "workspaces": ["app"] }\n', 'app/package.json': MANIFEST, '.env': dotenv('BUN_CONFIG_REGISTRY') });
+    expect(shape(customRegistryFor('npm', NAME, { ...ctx(), projectDir: join(project, 'app') }))).toBeNull();
+  });
+
+  it.each([
+    ['bunfig.toml [install] registry', 'bunfig.toml', `[install]\nregistry = "${SECOND_NPM}"\n`],
+    ['.npmrc registry=', '.npmrc', `registry=${SECOND_NPM}\n`],
+  ])('T-11 customRegistryFor without a command: a .env with PROJECT and a %s with SECOND is the entry of today, the SECOND of the file', (_label, file, text) => {
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY'), [file]: text });
+    expect(shape(customRegistryFor('npm', NAME, ctx()))).toEqual(registryOf(file, SECOND_NPM));
+  });
+
+  // The 21 pairs (command × file) in which the manager does not obey the file: today the union counts the file, without a command.
+  const IDX = PROJECT_PYPI;
+  const UV_INDEX = `[[tool.uv.index]]\nname = "dgproject"\nurl = "${IDX}"\n`;
+  const UV_INDEX_DEFAULT = `${UV_INDEX}default = true\n`;
+  const POETRY_SOURCE = (priority: string): string => `\n[[tool.poetry.source]]\nname = "dgproject"\nurl = "${IDX}"\n${priority === '' ? '' : `priority = "${priority}"\n`}`;
+  const TOOL_UV_INDEX_URL = `[tool.uv]\nindex-url = "${IDX}"\n`;
+  const UV_TOML_URL = `index-url = "${IDX}"\n`;
+
+  type Pair = [pair: string, command: string, ecosystem: 'pypi' | 'npm', files: Record<string, string>, source: string, url: string];
+  const PAIRS: Pair[] = [
+    ['N1', 'uv add', 'pypi', { 'pyproject.toml': PYPROJECT, 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }, 'uv.toml', IDX],
+    ['N2', 'pipx install', 'pypi', { 'uv.toml': UV_TOML_URL }, 'uv.toml', IDX],
+    ['N2', 'pipx run', 'pypi', { 'uv.toml': UV_TOML_URL }, 'uv.toml', IDX],
+    ['N2', 'pipx install', 'pypi', { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV_INDEX_URL}` }, 'pyproject.toml', IDX],
+    ['N2', 'pipx run', 'pypi', { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV_INDEX_URL}` }, 'pyproject.toml', IDX],
+    ['N3', 'pipx install', 'pypi', { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}` }, 'pyproject.toml', IDX],
+    ['N3', 'pipx install', 'pypi', { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX_DEFAULT}` }, 'pyproject.toml', IDX],
+    ['N3', 'pipx install', 'pypi', { 'pyproject.toml': POETRY + POETRY_SOURCE('primary') }, 'pyproject.toml', IDX],
+    ['N4', 'poetry add', 'pypi', { 'pyproject.toml': POETRY + POETRY_SOURCE('explicit') }, 'pyproject.toml', IDX],
+    ['N5', 'poetry add', 'pypi', { 'pyproject.toml': POETRY, 'uv.toml': UV_TOML_URL }, 'uv.toml', IDX],
+    ['N5', 'poetry add', 'pypi', { 'pyproject.toml': `${POETRY}\n${TOOL_UV_INDEX_URL}` }, 'pyproject.toml', IDX],
+    ['N5', 'poetry add', 'pypi', { 'pyproject.toml': `${POETRY}\n${UV_INDEX_DEFAULT}` }, 'pyproject.toml', IDX],
+    ['N6', 'pip install', 'pypi', { 'uv.toml': UV_TOML_URL }, 'uv.toml', IDX],
+    ['N6', 'pip install', 'pypi', { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV_INDEX_URL}` }, 'pyproject.toml', IDX],
+    ['N6', 'pip install', 'pypi', { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}` }, 'pyproject.toml', IDX],
+    ['N6', 'pip install', 'pypi', { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX_DEFAULT}` }, 'pyproject.toml', IDX],
+    ['N6', 'pip install', 'pypi', { 'pyproject.toml': POETRY + POETRY_SOURCE('primary') }, 'pyproject.toml', IDX],
+    ['N7', 'uv pip install', 'pypi', { 'pyproject.toml': PYPROJECT + POETRY_SOURCE('primary') }, 'pyproject.toml', IDX],
+    ['N7', 'uv add', 'pypi', { 'pyproject.toml': PYPROJECT + POETRY_SOURCE('primary') }, 'pyproject.toml', IDX],
+    ['N8', 'bun add -g', 'npm', { 'bunfig.toml': `[install]\nregistry = "${PROJECT_NPM}"\n` }, 'bunfig.toml', PROJECT_NPM],
+    ['N8', 'bun add -g', 'npm', { '.npmrc': `registry=${PROJECT_NPM}\n` }, '.npmrc', PROJECT_NPM],
+  ];
+
+  it('T-11 the table of the 21 pairs has 21 rows', () => {
+    expect(PAIRS).toHaveLength(21);
+  });
+
+  it.each(PAIRS)('T-11 customRegistryFor without a command: the registry for %s, %s (%#)', (_pair, _command, ecosystem, files, source, url) => {
+    projectWith(files);
+    expect(shape(customRegistryFor(ecosystem, NAME, ctx()))).toEqual(registryOf(source, url));
+  });
+
+  it('T-11 npmScopeRegistryOf without a command: null for the subtable [install.scopes."@s"] with a url', () => {
+    projectWith({ 'bunfig.toml': `[install.scopes."${SCOPE}"]\nurl = "${PROJECT_NPM}"\n` });
+    expect(privateRegistry.npmScopeRegistryOf(ctx())(`${SCOPE}/regfile`)).toBeNull();
+  });
+
+  it.each(['npm', 'npx', 'pnpm', 'yarn'])('T-11 npmProjectDefaultRegistry(%s) with the .env files and the new spellings: nothing', (manager) => {
+    for (const [, files] of ENV_FILES) {
+      for (const [rel, text] of Object.entries(files)) put(rel, text);
+    }
+    projectWith({ 'bunfig.toml': `[install.registry]\nurl = "${PROJECT_NPM}"\n` });
+    expect(privateRegistry.npmProjectDefaultRegistry(manager, ctx())).toEqual([]);
+    put('bunfig.toml', `install.registry = "${PROJECT_NPM}"\n`);
+    expect(privateRegistry.npmProjectDefaultRegistry(manager, ctx())).toEqual([]);
+  });
+
+  it('T-11 npmProjectDefaultRegistry(bun) without a command: no entry of a .env, and the entry of the file beside it as today', () => {
+    projectWith(Object.assign({}, ...ENV_FILES.map(([, files]) => files)));
+    expect(privateRegistry.npmProjectDefaultRegistry('bun', ctx())).toEqual([]);
+    put('bunfig.toml', `[install]\nregistry = "${SECOND_NPM}"\n`);
+    expect(privateRegistry.npmProjectDefaultRegistry('bun', ctx())).toEqual([{ source: join(project, 'bunfig.toml'), url: SECOND_NPM }]);
+  });
+
+  it.each([
+    ['install.registry = before any header', `install.registry = "${PROJECT_NPM}"\n`],
+    ['[install.registry] url', `[install.registry]\nurl = "${PROJECT_NPM}"\n`],
+    ['[install.scopes."@corp"] url', `[install.scopes."@corp"]\nurl = "${PROJECT_NPM}"\n`],
+  ])('T-11 npmUserRegistries with a ~/.bunfig.toml of the new spelling %s: none of it', (_label, text) => {
+    writeFileSync(join(home, '.bunfig.toml'), text);
+    expect(privateRegistry.npmUserRegistries(ctx())).toEqual([]);
+  });
+
+  it('T-11 npmUserRegistries with a ~/.bunfig.toml [install] registry: the one of today', () => {
+    writeFileSync(join(home, '.bunfig.toml'), `[install]\nregistry = "${SECOND_NPM}"\n`);
+    expect(privateRegistry.npmUserRegistries(ctx())).toEqual([SECOND_NPM]);
+  });
+});
