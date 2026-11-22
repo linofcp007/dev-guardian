@@ -1659,4 +1659,89 @@ describe('install-vet-registry-files-unread', () => {
     writeFileSync(join(home, '.bunfig.toml'), `[install]\nregistry = "${SECOND_NPM}"\n`);
     expect(privateRegistry.npmUserRegistries(ctx())).toEqual([SECOND_NPM]);
   });
+
+  // ── T-05: npmProjectDefaultRegistry('bun', …) reads the new spellings and the .env files (red until the fix)
+
+  type ProjectDefault = (manager: string, ctx: RegistryContext) => Array<{ source: string; url: string }>;
+  const projectDefault = privateRegistry.npmProjectDefaultRegistry as ProjectDefault;
+  /** The command of a plain `bun add`: not global, no env-file flag, not a launcher. The field is new: the context is cast. */
+  const BUN_ADD = { manager: 'bun', registryForm: 'bun add', global: false, envFileFlag: false, bunLauncher: false };
+  const withCommand = (extra: { projectDir?: string; env?: Record<string, string> } = {}): RegistryContext =>
+    ({ ...ctx(extra.env), ...(extra.projectDir === undefined ? {} : { projectDir: extra.projectDir }), command: BUN_ADD }) as RegistryContext;
+  const hostOf = (name: string): string => `https://npm.${name}.example/`;
+  const BUN_VAR = 'BUN_CONFIG_REGISTRY';
+  const dotenvOf = (name: string, url = PROJECT_NPM): string => `${name}=${url}\n`;
+  const entry = (rel: string, url = PROJECT_NPM): { source: string; url: string } => ({ source: resolve(project, rel), url });
+  const answerOf = (c: RegistryContext): Array<{ source: string; url: string }> => projectDefault('bun', c).map((e) => ({ source: resolve(e.source), url: e.url }));
+  const workspaceRoot = (patterns: string[]): string => JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: patterns });
+
+  it.each(BUNFIG_SPELLINGS)('T-05 without a command, the bunfig.toml spelling %s is the project default registry', (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    expect(answerOf(ctx())).toEqual([entry('bunfig.toml')]);
+  });
+
+  it.each([
+    ['.env BUN_CONFIG_REGISTRY', { '.env': dotenvOf(BUN_VAR) }, '.env'],
+    ['.env NPM_CONFIG_REGISTRY', { '.env': dotenvOf('NPM_CONFIG_REGISTRY') }, '.env'],
+    ['.env npm_config_registry', { '.env': dotenvOf('npm_config_registry') }, '.env'],
+    ['.env.local', { '.env.local': dotenvOf(BUN_VAR) }, '.env.local'],
+    ['.env.production', { '.env.production': dotenvOf('NPM_CONFIG_REGISTRY') }, '.env.production'],
+    ['.env.production.local', { '.env.production.local': dotenvOf(BUN_VAR) }, '.env.production.local'],
+  ])('T-05 with the command of a bun add, %s is the project default registry', (_label, files, rel) => {
+    projectWith(files);
+    expect(answerOf(withCommand())).toEqual([entry(rel)]);
+  });
+
+  it('T-05 with the command of a bun add, the six files of one folder come in this order: .env.production.local, .env.local, .env.production, .env, .npmrc, bunfig.toml', () => {
+    projectWith({
+      '.env.production.local': dotenvOf(BUN_VAR, hostOf('one')),
+      '.env.local': dotenvOf(BUN_VAR, hostOf('two')),
+      '.env.production': dotenvOf(BUN_VAR, hostOf('three')),
+      '.env': dotenvOf(BUN_VAR, hostOf('four')),
+      '.npmrc': `registry=${hostOf('five')}\n`,
+      'bunfig.toml': `[install]\nregistry = "${hostOf('six')}"\n`,
+    });
+    expect(answerOf(withCommand())).toEqual([
+      entry('.env.production.local', hostOf('one')),
+      entry('.env.local', hostOf('two')),
+      entry('.env.production', hostOf('three')),
+      entry('.env', hostOf('four')),
+      entry('.npmrc', hostOf('five')),
+      entry('bunfig.toml', hostOf('six')),
+    ]);
+  });
+
+  it('T-05 NODE_ENV=test with a .env.local and a .env.test: only the .env.test (the bun skips .env.local in test mode)', () => {
+    projectWith({ '.env.local': dotenvOf(BUN_VAR, hostOf('local')), '.env.test': dotenvOf(BUN_VAR) });
+    expect(answerOf(withCommand({ env: { NODE_ENV: 'test' } }))).toEqual([entry('.env.test')]);
+  });
+
+  it('T-05 NODE_ENV=staging with a .env.staging and a .env.production: only the .env.production (m2-d: any other value is production)', () => {
+    projectWith({ '.env.staging': dotenvOf(BUN_VAR, hostOf('staging')), '.env.production': dotenvOf(BUN_VAR) });
+    expect(answerOf(withCommand({ env: { NODE_ENV: 'staging' } }))).toEqual([entry('.env.production')]);
+  });
+
+  it('T-05 a workspace whose root lists app, the command in app: the .env of the root, not the one of the member', () => {
+    projectWith({ 'package.json': workspaceRoot(['app']), 'app/package.json': MANIFEST, '.env': dotenvOf(BUN_VAR), 'app/.env': dotenvOf(BUN_VAR, hostOf('member')) });
+    expect(answerOf(withCommand({ projectDir: join(project, 'app') }))).toEqual([entry('.env')]);
+  });
+
+  it('T-05 a root that lists another folder (workspaces ["other"]): the .env of the member, not the one of the root (m2-k)', () => {
+    projectWith({ 'package.json': workspaceRoot(['other']), 'app/package.json': MANIFEST, '.env': dotenvOf(BUN_VAR, hostOf('root')), 'app/.env': dotenvOf(BUN_VAR) });
+    expect(answerOf(withCommand({ projectDir: join(project, 'app') }))).toEqual([entry('app/.env')]);
+  });
+
+  it.each([
+    ['packages/*', 'packages/app'],
+    ['packages/**', 'packages/x/app'],
+  ])('T-05 a root with workspaces ["%s"] and the member in %s: the .env of the root', (pattern, member) => {
+    projectWith({ 'package.json': workspaceRoot([pattern]), [`${member}/package.json`]: MANIFEST, '.env': dotenvOf(BUN_VAR), [`${member}/.env`]: dotenvOf(BUN_VAR, hostOf('member')) });
+    expect(answerOf(withCommand({ projectDir: join(project, member) }))).toEqual([entry('.env')]);
+  });
+
+  it('T-05 a root with workspaces ["{app,lib}"], a glob the reader does not judge: the .env of the root and the one of the member, only to say the line (D-8, P11 = A)', () => {
+    projectWith({ 'package.json': workspaceRoot(['{app,lib}']), 'app/package.json': MANIFEST, '.env': dotenvOf(BUN_VAR), 'app/.env': dotenvOf(BUN_VAR, hostOf('member')) });
+    const bySource = (a: { source: string }, b: { source: string }): number => a.source.localeCompare(b.source);
+    expect([...answerOf(withCommand({ projectDir: join(project, 'app') }))].sort(bySource)).toEqual([entry('.env'), entry('app/.env', hostOf('member'))].sort(bySource));
+  });
 });

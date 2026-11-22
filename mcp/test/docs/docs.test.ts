@@ -1049,3 +1049,52 @@ describe('install-vet-inline-script-deps', () => {
     expect(para).toContain('inline dependencies');
   });
 });
+
+// ───────────────── install-vet-registry-files-unread — the docs say what the code reads (red until the fix)
+
+describe('install-vet-registry-files-unread', () => {
+  /** The sentences of a text, its line breaks folded: a sentence ends at a full stop, `!` or `?` and a space. */
+  const sentences = (text: string): string[] => text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/);
+  const said = (text: string, parts: Array<string | RegExp>): boolean =>
+    sentences(text).some((s) => parts.every((p) => (typeof p === 'string' ? s.includes(p) : p.test(s))));
+
+  const hooksSection = (): string => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the section "Install-time package vetting"').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    return hooks.slice(at, end === -1 ? undefined : end);
+  };
+  const limitRecord = (): string => {
+    const page = read('docs/hooks-known-limits.md');
+    const start = page.indexOf('When a file of the project sets the default registry');
+    expect(start, 'the record project-default-registry').toBeGreaterThan(-1);
+    const stop = page.indexOf('The line is added to an install that is vetted', start);
+    return page.slice(start, stop === -1 ? undefined : stop);
+  };
+
+  const HOOKS_SENTENCES: Array<[what: string, parts: Array<string | RegExp>]> = [
+    ['the bun reads a .env, by NODE_ENV, for BUN_CONFIG_REGISTRY', ['bun', '.env', 'NODE_ENV', 'BUN_CONFIG_REGISTRY']],
+    ['[install.registry] of the bunfig.toml is read', ['[install.registry]']],
+    ['pipx does not count the uv.toml of the project', ['pipx', 'uv.toml', /not count|does not|never/]],
+    ['a withdrawn malicious name stays refused with a registry only a project file configures', ['malicious', /refus/, /only a file of the project|project file/]],
+  ];
+
+  it.each(HOOKS_SENTENCES)('T-07 docs/hooks.md, install-time vetting: %s', (_what, parts) => {
+    expect(said(hooksSection(), parts)).toBe(true);
+  });
+
+  it('T-07 SECURITY.md says the hook reads only the registry variables of a .env, and that the host reaches the model', () => {
+    expect(said(read('SECURITY.md'), ['.env', /only/, 'host', 'model'])).toBe(true);
+  });
+
+  const LIMIT_SENTENCES: Array<[what: string, parts: Array<string | RegExp>]> = [
+    ['the NODE_ENV of the shell, which the hook does not see', ['NODE_ENV', 'shell']],
+    ['the env of .claude/settings.json (EC-14)', ['.claude/settings.json', 'env']],
+    ['the line of the bunfig.toml or .npmrc that loses to the .env is still said', ['bunfig.toml', '.npmrc', '.env', /still/]],
+  ];
+
+  it.each(LIMIT_SENTENCES)('T-07 the record project-default-registry of docs/hooks-known-limits.md says %s', (_what, parts) => {
+    expect(said(limitRecord(), parts)).toBe(true);
+  });
+});

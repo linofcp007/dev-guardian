@@ -2855,3 +2855,48 @@ describe('install-vet-dotnet-run-forms', () => {
     },
   );
 });
+
+// ───────────────── install-vet-registry-files-unread — the new files, through the dispatcher
+
+describe('install-vet-registry-files-unread', () => {
+  const CLEAN = 'dgprobe-clean';
+  const MISSING = 'dgprobe-missing';
+  const HOST = 'https://npm.other.example';
+  const NPM_ROUTES: Record<string, Route> = { [`https://registry.npmjs.org/${CLEAN}`]: npmDoc('1.0.0'), [OSV]: { osv: {} } };
+  const line = (file: string): string =>
+    `dev-guardian: the project's ${file} sets the default registry (${HOST}) — packages are fetched from it, and what it serves was not vetted.`;
+  const put = (file: string, text: string): void => {
+    mkdirSync(dirname(join(project, file)), { recursive: true });
+    writeFileSync(join(project, file), text);
+  };
+  /** NODE_ENV is empty in the hook's environment: vitest sets `test`, which the bun would read as its own mode. */
+  const ENV = { NODE_ENV: '' };
+
+  it('T-06 `bun add <clean>` with a .env of BUN_CONFIG_REGISTRY: the additionalContext is exactly the line of the .env', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put('.env', `BUN_CONFIG_REGISTRY=${HOST}/\n`);
+    const r = runHook(`bun add ${CLEAN}`, NPM_ROUTES, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('.env'));
+  });
+
+  it('T-06 `bun add <clean>` with [install.registry] url in the bunfig.toml: the additionalContext is exactly the line of the bunfig.toml', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put('bunfig.toml', `[install.registry]\nurl = "${HOST}/"\n`);
+    const r = runHook(`bun add ${CLEAN}`, NPM_ROUTES, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('bunfig.toml'));
+  });
+
+  it('T-06 `pipx install <missing>` with a uv.toml index-url, a 404 from PyPI and a clean OSV: DENIED (pipx does not obey the uv.toml)', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('uv.toml', 'index-url = "https://pypi.other.example/simple/"\n');
+    const r = runHook(`pipx install ${MISSING}`, { [`https://pypi.org/pypi/${MISSING}/json`]: { status: 404 }, [OSV]: { osv: {} } }, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+  });
+});

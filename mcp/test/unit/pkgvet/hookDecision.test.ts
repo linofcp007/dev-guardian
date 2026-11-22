@@ -6947,4 +6947,362 @@ describe('install-vet-registry-files-unread', () => {
     expect(d?.context ?? '(no context)').toContain('gives a registry of its own — not vetted.');
     expect([...calls, ...bodies].filter((t) => t.includes(EVIL)), 'no request carries the name').toEqual([]);
   });
+
+  // ── T-01 to T-04, T-15: the regressions (red until the fix)
+
+  const HOST_NPM = 'https://npm.other.example';
+  const HOST_SECOND = 'https://second.other.example';
+  const HOST_PYPI = 'https://pypi.other.example';
+  /** The line, exactly: the file by its name, the registry by scheme and host. */
+  const lineFor = (file: string, host: string | null = HOST_NPM): string =>
+    `dev-guardian: the project's ${file} sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+  /** Nothing of the marker, of the user name or of the folder is in a text of the answer or in a request. */
+  const noLeak = (parts: string[]): void => {
+    for (const text of parts) {
+      expect(text.includes(MARK), 'the marker').toBe(false);
+      expect(text.includes(USER), 'the user name').toBe(false);
+    }
+  };
+  /** The warning that explains a missing name by the file, and the line of the file, and no refusal. */
+  const expectSaid = (d: Decided, file: string, host: string | null = HOST_NPM): void => {
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${CONFIGURED}${file}: ${host ?? ''}`);
+    expect(d?.context ?? '').toContain(lineFor(file, host));
+  };
+  const manifestOf = (deps: Record<string, string>): string => JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps });
+
+  const ROOT_WORKSPACES = (patterns: string[]): string => JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: patterns });
+  const MEMBER_JSON = JSON.stringify({ name: 'app', version: '1.0.0' });
+
+  // T-01: the bunfig.toml spellings
+  const BUNFIG_FORMS: Array<[label: string, text: string]> = [
+    ['(a) [install.registry] url', `[install.registry]\nurl = "${PROJECT_NPM}"\n`],
+    ['(b) [install.registry] url with a token beside it', `[install.registry]\nurl = "${PROJECT_NPM}"\ntoken = "${MARK}"\n`],
+    ['(c) install.registry = before any header', `install.registry = "${PROJECT_NPM}"\n`],
+  ];
+
+  it.each(BUNFIG_FORMS)('T-01 %s: bun add of a missing name is not refused, the warning names bunfig.toml and the line is said', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    const { d, calls, bodies } = await decide(`bun add ${MISSING}`);
+    expectSaid(d, 'bunfig.toml');
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  it.each(BUNFIG_FORMS)('T-01 %s: bun install of a manifest with a clean name says the line and nothing else', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text }, manifestOf({ 'dgprobe-clean': '^1.0.0' }));
+    const { d, calls, bodies } = await decide('bun install', { exists: ['dgprobe-clean'] });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toBe(lineFor('bunfig.toml'));
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  const SCOPE_FORMS: Array<[label: string, text: string]> = [
+    ['"@acme"', `[install.scopes."@acme"]\nurl = "${PROJECT_NPM}"\n`],
+    ["'@acme'", `[install.scopes.'@acme']\nurl = "${PROJECT_NPM}"\n`],
+    ['"acme"', `[install.scopes."acme"]\nurl = "${PROJECT_NPM}"\n`],
+    ['acme', `[install.scopes.acme]\nurl = "${PROJECT_NPM}"\n`],
+  ];
+
+  it.each(SCOPE_FORMS)('T-01 (d) [install.scopes.%s] url: bun add of a missing name of that scope is not refused, the warning names bunfig.toml', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    const { d } = await decide(`bun add @acme/${MISSING}`);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('bunfig.toml');
+  });
+
+  it.each(SCOPE_FORMS)('T-01 (d) [install.scopes.%s] url: bun install asks the registry and OSV for the manifest name, and the warning says the registry, with no scope line', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text }, manifestOf({ [`@acme/${MISSING}`]: '^1.0.0' }));
+    const { d, calls, bodies } = await decide('bun install');
+    expect(calls.some((c) => c.includes(MISSING)), 'the registry was asked for the name (P9 = A)').toBe(true);
+    expect(bodies.some((b) => b.includes(MISSING)), 'OSV was asked for the name').toBe(true);
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('bunfig.toml');
+    expect(d?.context ?? '').not.toContain('it is named by a manifest');
+    expect(d?.context ?? '').not.toContain('gives a registry of its own');
+  });
+
+  // T-02: the .env files
+  const BUN_VAR = 'BUN_CONFIG_REGISTRY';
+  const NPM_VAR = 'NPM_CONFIG_REGISTRY';
+  interface DotenvCase {
+    label: string;
+    files: Record<string, string>;
+    /** The file the line and the warning name. */
+    file: string;
+    env?: Record<string, string>;
+    manifest?: string;
+    at?: string;
+    /** The registry that must not be named (another file the bun does not obey here). */
+    not?: string;
+  }
+  const NODE_ENV_CASES: DotenvCase[] = [
+    { label: '.env with BUN_CONFIG_REGISTRY', files: { '.env': dotenv(BUN_VAR) }, file: '.env' },
+    { label: '.env with NPM_CONFIG_REGISTRY', files: { '.env': dotenv(NPM_VAR) }, file: '.env' },
+    { label: '.env with npm_config_registry', files: { '.env': dotenv('npm_config_registry') }, file: '.env' },
+    { label: '.env.local with BUN_CONFIG_REGISTRY', files: { '.env.local': dotenv(BUN_VAR) }, file: '.env.local' },
+    { label: '.env.local with NPM_CONFIG_REGISTRY', files: { '.env.local': dotenv(NPM_VAR) }, file: '.env.local' },
+    { label: '.env.production with BUN_CONFIG_REGISTRY', files: { '.env.production': dotenv(BUN_VAR) }, file: '.env.production' },
+    { label: '.env.production with NPM_CONFIG_REGISTRY', files: { '.env.production': dotenv(NPM_VAR) }, file: '.env.production' },
+    { label: '.env.production.local', files: { '.env.production.local': dotenv(BUN_VAR) }, file: '.env.production.local' },
+    {
+      label: 'NODE_ENV=development: .env.development PROJECT beside a .env.production SECOND',
+      env: { NODE_ENV: 'development' },
+      files: { '.env.development': dotenv(BUN_VAR), '.env.production': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.development',
+      not: 'second.other.example',
+    },
+    {
+      label: 'NODE_ENV=test: .env.test PROJECT beside a .env.production SECOND',
+      env: { NODE_ENV: 'test' },
+      files: { '.env.test': dotenv(BUN_VAR), '.env.production': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.test',
+      not: 'second.other.example',
+    },
+    {
+      label: 'NODE_ENV=production: .env.production PROJECT beside a .env.development SECOND',
+      env: { NODE_ENV: 'production' },
+      files: { '.env.production': dotenv(BUN_VAR), '.env.development': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.production',
+      not: 'second.other.example',
+    },
+    {
+      label: 'NODE_ENV=staging is production (m2-d): .env.production PROJECT, .env.staging SECOND',
+      env: { NODE_ENV: 'staging' },
+      files: { '.env.production': dotenv(BUN_VAR), '.env.staging': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.production',
+      not: 'second.other.example',
+    },
+    {
+      label: 'a workspace whose root lists app, the .env at the root, the command in app',
+      manifest: ROOT_WORKSPACES(['app']),
+      files: { 'app/package.json': MEMBER_JSON, '.env': dotenv(BUN_VAR) },
+      file: '.env',
+      at: 'app',
+    },
+    {
+      label: 'the same with an app/.env SECOND: only the root one',
+      manifest: ROOT_WORKSPACES(['app']),
+      files: { 'app/package.json': MEMBER_JSON, '.env': dotenv(BUN_VAR), 'app/.env': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env',
+      at: 'app',
+      not: 'second.other.example',
+    },
+    {
+      label: 'a root whose workspaces is ["other"] and a .env only in app (m2-k)',
+      manifest: ROOT_WORKSPACES(['other']),
+      files: { 'app/package.json': MEMBER_JSON, 'app/.env': dotenv(BUN_VAR) },
+      file: '.env',
+      at: 'app',
+    },
+  ];
+
+  /** The project of a case, and the folder the command runs in. */
+  const setUp = (c: { files: Record<string, string>; manifest?: string; at?: string }, manifest?: string): string => {
+    projectWith(c.files, c.manifest ?? manifest);
+    const cwd = c.at === undefined ? project : join(project, c.at);
+    mkdirSync(cwd, { recursive: true });
+    return cwd;
+  };
+
+  it.each(NODE_ENV_CASES)('T-02 $label: bun add of a missing name is not refused, the warning names the file and the host, and the line is said', async (c) => {
+    const cwd = setUp(c);
+    const { d } = await decide(`bun add ${MISSING}`, {}, { cwd, env: { GUARDIAN_OFFLINE: '0', ...c.env } });
+    expectSaid(d, c.file);
+    if (c.not !== undefined) expect(textOf(d), 'the file the bun does not obey here').not.toContain(c.not);
+  });
+
+  it.each(NODE_ENV_CASES)('T-02 $label: bun install of a clean manifest says exactly the line', async (c) => {
+    const memberManifest = manifestOf({ 'dgprobe-clean': '^1.0.0' });
+    const cwd = setUp(c, memberManifest);
+    if (c.at !== undefined) put(`${c.at}/package.json`, memberManifest);
+    const { d } = await decide('bun install', { exists: ['dgprobe-clean'] }, { cwd, env: { GUARDIAN_OFFLINE: '0', ...c.env } });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toBe(lineFor(c.file));
+  });
+
+  it('T-02 a root whose workspaces is ["{app,lib}"], a glob the reader does not judge, and a .env at the root: the refusal stays and the line is said (D-8, P11 = A)', async () => {
+    const cwd = setUp({ manifest: ROOT_WORKSPACES(['{app,lib}']), files: { 'app/package.json': MEMBER_JSON, '.env': dotenv(BUN_VAR) }, at: 'app' });
+    const { d } = await decide(`bun add ${MISSING}`, {}, { cwd });
+    expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
+    expect(textOf(d)).toContain(lineFor('.env'));
+  });
+
+  it.each([
+    ['bunfig.toml [install] registry', 'bunfig.toml', `[install]\nregistry = "${SECOND_NPM}"\n`],
+    ['.npmrc registry=', '.npmrc', `registry=${SECOND_NPM}\n`],
+  ])('T-02 a .env with PROJECT and a %s with SECOND: the warning names the .env and PROJECT, and the lines are the .env first, then the other file', async (_label, file, text) => {
+    projectWith({ '.env': dotenv(BUN_VAR), [file]: text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${CONFIGURED}.env: ${HOST_NPM}`);
+    const lines = (d?.context ?? '').split('\n').filter((l) => l.includes(SAYS));
+    expect(lines).toEqual([lineFor('.env'), lineFor(file, HOST_SECOND)]);
+  });
+
+  it.each([
+    ['bunfig.toml [install] registry', 'bunfig.toml', `[install]\nregistry = "${SECOND_NPM}"\n`],
+    ['.npmrc registry=', '.npmrc', `registry=${SECOND_NPM}\n`],
+  ])('T-02 bun install with a .env PROJECT and a %s SECOND: the context is the two lines, the .env first', async (_label, file, text) => {
+    projectWith({ '.env': dotenv(BUN_VAR), [file]: text }, manifestOf({ 'dgprobe-clean': '^1.0.0' }));
+    const { d } = await decide('bun install', { exists: ['dgprobe-clean'] });
+    expect(d?.context?.split('\n') ?? ['(no context)']).toEqual([lineFor('.env'), lineFor(file, HOST_SECOND)]);
+  });
+
+  // T-03: the grammar of the .env, a line at a time
+  const BOM = '﻿';
+  const GRAMMAR: Array<[label: string, text: string, host?: string]> = [
+    ['export', `export ${BUN_VAR}=${PROJECT_NPM}\n`],
+    ['double quotes', `${BUN_VAR}="${PROJECT_NPM}"\n`],
+    ['single quotes', `${BUN_VAR}='${PROJECT_NPM}'\n`],
+    ['a comment after a space', `${BUN_VAR}=${PROJECT_NPM} # the company registry\n`],
+    ['spaces around the equals sign', ` ${BUN_VAR} = ${PROJECT_NPM}\n`],
+    ['backticks (m2-s)', `${BUN_VAR}=\`${PROJECT_NPM}\`\n`],
+    ['a byte order mark at the start (m2-q)', `${BOM}${BUN_VAR}=${PROJECT_NPM}\n`],
+    ['CRLF line ends (m2-t)', `OTHER=1\r\n${BUN_VAR}=${PROJECT_NPM}\r\n`],
+    ['blank and comment lines before', `\n# a comment\n\nOTHER=1\n${BUN_VAR}=${PROJECT_NPM}\n`],
+    ['BUN_CONFIG_REGISTRY PROJECT, then NPM_CONFIG_REGISTRY SECOND (m2-i)', `${BUN_VAR}=${PROJECT_NPM}\n${NPM_VAR}=${SECOND_NPM}\n`],
+    ['BUN_CONFIG_REGISTRY twice, SECOND then PROJECT (m2-h)', `${BUN_VAR}=${SECOND_NPM}\n${BUN_VAR}=${PROJECT_NPM}\n`],
+  ];
+
+  it.each(GRAMMAR)('T-03 .env grammar, %s: the line with the host, no refusal', async (_label, text) => {
+    projectWith({ '.env': text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expectSaid(d, '.env');
+    expect(textOf(d), 'the other registry').not.toContain('second.other.example');
+  });
+
+  const CONFIGURED_VALUES: Array<[label: string, text: string]> = [
+    ['$REG', `${BUN_VAR}=$REG\n`],
+    ['"${REG}"', `${BUN_VAR}="\${REG}"\n`],
+    ['a backslash inside quotes', `${BUN_VAR}="${PROJECT_NPM}\\x"\n`],
+    ['a double quote with no end', `${BUN_VAR}="${PROJECT_NPM}`],
+  ];
+
+  it.each(CONFIGURED_VALUES)('T-03 (configured) %s: the line without a host, and the refusal stays', async (_label, text) => {
+    projectWith({ '.env': text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
+    expect(textOf(d)).toContain(lineFor('.env', null));
+  });
+
+  it('T-03 a value with credentials: the line has the scheme and host, nothing of the marker or the user name', async () => {
+    projectWith({ '.env': dotenv(BUN_VAR, ['https://', USER, ':', MARK, '@', 'npm.other.example', '/'].join('')) });
+    const { d, calls, bodies } = await decide(`bun add ${MISSING}`);
+    expect(d?.context ?? '(no context)').toContain(lineFor('.env'));
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  it('T-03 a password with an @ and a / in it: the line without a host, and nothing of the value', async () => {
+    projectWith({ '.env': dotenv(BUN_VAR, ['https://', USER, ':pa@', MARK, '@', 'npm.other.example', '/x'].join('')) });
+    const { d, calls, bodies } = await decide(`bun add ${MISSING}`);
+    expect(textOf(d)).toContain(lineFor('.env', null));
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  // T-04: the Python forms and bun add -g
+  it('T-04 (a) uv pip install with [tool.uv.pip] index-url in the pyproject.toml: not refused, the warning names pyproject.toml', async () => {
+    projectWith({ 'pyproject.toml': `${PYPROJECT}\n[tool.uv.pip]\nindex-url = "${PROJECT_PYPI}"\n` });
+    const { d } = await decide(`uv pip install ${MISSING}`);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`pyproject.toml: ${HOST_PYPI}`);
+  });
+
+  const UV_INDEX = `[[tool.uv.index]]\nname = "dgproject"\nurl = "${PROJECT_PYPI}"\n`;
+  const POETRY_SOURCE = `\n[[tool.poetry.source]]\nname = "dgproject"\nurl = "${PROJECT_PYPI}"\npriority = "primary"\n`;
+  const TOOL_UV = `[tool.uv]\nindex-url = "${PROJECT_PYPI}"\n`;
+  const UV_TOML = `index-url = "${PROJECT_PYPI}"\n`;
+  /** The 21 pairs (command × file) of the table N of bug.md, the file as the measured case wrote it. */
+  const PAIRS: Array<[pair: string, command: string, files: Record<string, string>]> = [
+    ['N1', `uv add ${MISSING}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `[pip]\nindex-url = "${PROJECT_PYPI}"\n` }],
+    ['N2', `pipx install ${MISSING}`, { 'uv.toml': UV_TOML }],
+    ['N2', `pipx run ${MISSING}`, { 'uv.toml': UV_TOML }],
+    ['N2', `pipx install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` }],
+    ['N2', `pipx run ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` }],
+    ['N3', `pipx install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}` }],
+    ['N3', `pipx install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}default = true\n` }],
+    ['N3', `pipx install ${MISSING}`, { 'pyproject.toml': POETRY + POETRY_SOURCE }],
+    ['N4', `poetry add ${MISSING}`, { 'pyproject.toml': `${POETRY}${POETRY_SOURCE.replace('primary', 'explicit')}` }],
+    ['N5', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY, 'uv.toml': UV_TOML }],
+    ['N5', `poetry add ${MISSING}`, { 'pyproject.toml': `${POETRY}\n${TOOL_UV}` }],
+    ['N5', `poetry add ${MISSING}`, { 'pyproject.toml': `${POETRY}\n${UV_INDEX}default = true\n` }],
+    ['N6', `pip install ${MISSING}`, { 'uv.toml': UV_TOML }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}` }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}default = true\n` }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': POETRY + POETRY_SOURCE }],
+    ['N7', `uv pip install ${MISSING}`, { 'pyproject.toml': PYPROJECT + POETRY_SOURCE }],
+    ['N7', `uv add ${MISSING}`, { 'pyproject.toml': PYPROJECT + POETRY_SOURCE }],
+    ['N8', `bun add -g ${MISSING}`, { 'bunfig.toml': `[install]\nregistry = "${PROJECT_NPM}"\n` }],
+    ['N8', `bun add -g ${MISSING}`, { '.npmrc': `registry=${PROJECT_NPM}\n` }],
+  ];
+
+  it('T-04 the table has 21 pairs', () => {
+    expect(PAIRS).toHaveLength(21);
+  });
+
+  it.each(PAIRS)('T-04 (b) %s `%s` (%#): refused, and no custom registry is configured', async (pair, command, files) => {
+    projectWith(files);
+    const { d } = await decide(command);
+    expect(d?.deny ?? '(no deny)').toContain(pair === 'N8' ? NOT_NPM : NOT_PYPI);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+  });
+
+  it.each([
+    ['N1 uv add', `uv add ${EVIL}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `[pip]\nindex-url = "${PROJECT_PYPI}"\n` }],
+    ['N2 pipx run', `pipx run ${EVIL}`, { 'uv.toml': UV_TOML }],
+    ['N8 bun add -g', `bun add -g ${EVIL}`, { '.npmrc': `registry=${PROJECT_NPM}\n` }],
+  ])('T-04 (c) %s of a malicious name taken from the public registry: refused with the advisory', async (_label, command, files) => {
+    projectWith(files);
+    const { d } = await decide(command, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+    expect(d?.deny ?? '').toContain('), removed from');
+  });
+
+  it('T-04 (c) pip install -r requirements.txt naming a malicious name, with a uv.toml index-url (N6): refused, naming requirements.txt', async () => {
+    projectWith({ 'uv.toml': UV_TOML, 'requirements.txt': `${EVIL}\n` });
+    const { d } = await decide('pip install -r requirements.txt', { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('requirements.txt');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  // T-15: a malicious name the public registry took down, explained only by a file of the project
+  it('T-15 (a) npm install of it with registry= in the project .npmrc: refused, with the advisory', async () => {
+    projectWith({ '.npmrc': `registry=${PROJECT_NPM}\n` });
+    const { d } = await decide(`npm install ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+    expect(d?.deny ?? '').toContain('), removed from');
+  });
+
+  it('T-15 (b) uv add of it with [tool.uv] index-url: refused', async () => {
+    projectWith({ 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` });
+    const { d } = await decide(`uv add ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (c) npm install of a manifest that names it, with the same .npmrc: refused, naming package.json', async () => {
+    projectWith({ '.npmrc': `registry=${PROJECT_NPM}\n` }, manifestOf({ [EVIL]: '^1.0.0' }));
+    const { d } = await decide('npm install', { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('package.json');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (d) pip install -r requirements.txt naming it, with a uv.toml [[index]] (a pair outside the table N): refused, naming requirements.txt', async () => {
+    projectWith({ 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${PROJECT_PYPI}"\n`, 'requirements.txt': `${EVIL}\n` });
+    const { d } = await decide('pip install -r requirements.txt', { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('requirements.txt');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (e) pip install of it with VIRTUAL_ENV at the project .venv whose pip.conf sets an index: refused', async () => {
+    projectWith({ '.venv/pip.conf': `[global]\nindex-url = ${PROJECT_PYPI}\n` });
+    const { d } = await decide(`pip install ${EVIL}`, { malicious: [EVIL] }, { env: { GUARDIAN_OFFLINE: '0', VIRTUAL_ENV: join(project, '.venv') } });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (f) bun add @acme/dgprobe-evil on the command line, with @acme:registry= in the project .npmrc: refused (a name of the command is refused, one of the manifest only counted)', async () => {
+    projectWith({ '.npmrc': `@acme:registry=${PROJECT_NPM}\n` });
+    const { d } = await decide(`bun add @acme/${EVIL}`, { malicious: [`@acme/${EVIL}`] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+  });
 });
