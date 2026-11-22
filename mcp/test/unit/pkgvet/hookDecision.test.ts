@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -5822,5 +5822,510 @@ describe('install-vet-python-tool-forms', () => {
       },
       300_000,
     );
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — `uv run` and `pipx run` read a script's PEP 723 block
+
+describe('install-vet-inline-script-deps', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const NAMED = 'dgprobe-zzq7731-named';
+  const NOT_FOUND = 'not found on the public registry';
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The public registry of the plan: `requests` is clean, EVIL is published and has a `MAL-` advisory; everything else is a 404. */
+  const reg = (exists: string[] = []): ReturnType<typeof registry> => registry({ exists: ['requests', EVIL, ...exists], malicious: [EVIL] });
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  /** The question of the answer, read through a type that has it, so the file type-checks whatever the answer type is. */
+  const askOf = (d: Decided): string | undefined => (d as (NonNullable<Decided> & { ask?: string }) | null)?.ask;
+  const decide = (command: string, r: { fetchImpl: typeof fetch }, extra: Partial<HookVetOptions> = {}): Promise<Decided> =>
+    decideInstallCommand(command, opts(r.fetchImpl, { popular: {}, ...extra }));
+  const put = (rel: string, text: string, at: string = project): void => {
+    mkdirSync(dirname(join(at, rel)), { recursive: true });
+    writeFileSync(join(at, rel), text);
+  };
+  const notRead = (file: string, reason: string): string => `dev-guardian: ${file} was not read (${reason}) — its packages were not vetted.`;
+  /** The refusal of a block that names EVIL: the file, the name and the version, and whose decision it is. */
+  const refused = (d: Decided, file: string): void => {
+    expect(d?.deny ?? '(no deny)').toContain(`${file} names '${EVIL}@1.0.0'`);
+    expect(d?.deny ?? '(no deny)').toContain("is the user's decision");
+  };
+  const CAN_SYMLINK = ((): boolean => {
+    const probe = mkdtempSync(join(tmpdir(), 'pkgvet-ivsd-symlink-probe-'));
+    try {
+      writeFileSync(join(probe, 't'), 'x');
+      symlinkSync(join(probe, 't'), join(probe, 'l'));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const DIR_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+  const UNC = '\\\\198.51.100.7\\share';
+
+  // ── T-03: `uv run` reads the block
+
+  describe('T-03 `uv run` reads the block', () => {
+    it.each<{ command: string; nested?: boolean; shell?: 'powershell' }>([
+      { command: 'uv run script.py' },
+      { command: 'uv run --script script.py' },
+      { command: 'uv run -s script.py' },
+      { command: 'uv run --no-project script.py' },
+      { command: 'uv run ./script.py' },
+      { command: 'uv run --with requests script.py' },
+      { command: 'python -m uv run script.py' },
+      { command: 'uv run script.py -m msg' },
+      { command: 'uv run --project . script.py' },
+      { command: "bash -c 'uv run script.py'", nested: true },
+    ])('T-03 `$command` with a malicious name in the block of script.py is DENIED, naming the file and the package', async ({ command, nested }) => {
+      put('script.py', BLOCK(EVIL, 'requests'));
+      const extra: Partial<HookVetOptions> = nested === true ? { nested: [{ text: 'uv run script.py', shell: 'bash' }] } : {};
+      refused(await decide(command, reg(), extra), 'script.py');
+    });
+
+    it.each([
+      'uv run --directory sub script.py',
+      'uv --directory sub run script.py',
+      'python -m uv --directory sub run script.py',
+      'UV_WORKING_DIR=sub uv run script.py',
+    ])('T-03 `%s` reads the script of the directory `sub`, and refuses it', async (command) => {
+      put('sub/script.py', BLOCK(EVIL, 'requests'));
+      refused(await decide(command, reg()), 'script.py');
+    });
+
+    it('T-03 a name the registry does not have only warns, and says the manifest names it', async () => {
+      put('script.py', BLOCK(DEP));
+      const d = await decide('uv run script.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`script.py: '${DEP}': ${NOT_FOUND}`);
+      expect(d?.context ?? '(no context)').toContain('not denied: it is named by a manifest');
+    });
+
+    it('T-03 a clean block is silent, and its name was looked up', async () => {
+      put('script.py', BLOCK('requests'));
+      const r = reg();
+      expect(await decide('uv run script.py', r)).toBeNull();
+      expect(r.calls).toContain(pypiUrl('requests'));
+    });
+
+    it('T-03 a requirement with a range the hook does not read is checked by its name (P8 = B)', async () => {
+      put('evilrange.py', `# /// script\n# dependencies = ["${EVIL} (>=1.0)"]\n# ///\nprint(1)\n`);
+      refused(await decide('uv run evilrange.py', reg()), 'evilrange.py');
+    });
+
+    it('T-03 a closing line `#\\r# ///` after a closed block: the reading of uv wins, and the question of the other reading carries no refusal', async () => {
+      put('crsplit.py', `${BLOCK(EVIL)}#\r# ///\n`);
+      refused(await decide('uv run crsplit.py', reg()), 'crsplit.py');
+    });
+  });
+
+  // ── T-04: `--with` and `--with-requirements`
+
+  describe('T-04 `--with` and `--with-requirements`', () => {
+    it('T-04 `uv run --with P python -c "print(1)"` with a malicious P is DENIED, as a package named on the line', async () => {
+      const d = await decide(`uv run --with ${EVIL} python -c "print(1)"`, reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/'dgprobe-zzq7731-evil@1\.0\.0'/);
+      expect(d?.deny ?? '(no deny)').toContain('ask the user to install it themselves');
+    });
+
+    it.each([
+      [`uv run --with ${NAMED} python -c "print(1)"`, 'flag --with is not on the confident-shape allowlist'],
+      [`uv run -w ${NAMED} pytest`, 'flag -w is not on the confident-shape allowlist'],
+      [`uv run --with ${NAMED},requests python -c "print(1)"`, "not a single plain install statement (',' outside quotes)"],
+    ])('T-04 `%s` warns that the name is not found, and does not deny (P2 = A)', async (command, why) => {
+      const r = reg();
+      const d = await decide(command, r);
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`'${NAMED}': ${NOT_FOUND}`);
+      expect(d?.context ?? '(no context)').toContain(`(not denied: ${why}`);
+      if (command.includes(',requests')) expect(r.calls).toEqual(expect.arrayContaining([pypiUrl(NAMED), pypiUrl('requests')]));
+    });
+
+    it('T-04 `uv run --with-requirements reqs-in.txt …` reads the requirements file, and refuses a malicious name in it', async () => {
+      put('reqs-in.txt', `${EVIL}\n`);
+      const d = await decide('uv run --with-requirements reqs-in.txt python -c "print(1)"', reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/reqs-in\.txt names 'dgprobe-zzq7731-evil/);
+    });
+
+    it.each([
+      'uv run --with-requirements deps.py python -c "print(1)"',
+      'uv run --with-requirements deps.pyw python -c "print(1)"',
+      'uv run --with-requirements DEPS.PY python -c "print(1)"',
+      'uv pip install -r deps.py',
+    ])('T-04 `%s` reads the file as a script, with the reader of the block (the uv does, M-2e)', async (command) => {
+      const file = /deps\.pyw?|DEPS\.PY/.exec(command)?.[0] ?? 'deps.py';
+      put(file, BLOCK(EVIL));
+      expect((await decide(command, reg()))?.deny ?? '(no deny)').toContain(`${file} names '${EVIL}`);
+    });
+  });
+
+  // ── T-05: `pipx run` of a file
+
+  describe('T-05 `pipx run` of a file (P5 = A)', () => {
+    it('T-05 (a) `pipx run script.py`: the block refuses, the word is looked up only for malware and never called a missing name', async () => {
+      put('script.py', BLOCK(EVIL));
+      const r = reg();
+      const d = await decide('pipx run script.py', r);
+      expect(d?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+      expect(d?.deny ?? '').not.toMatch(/'script\.py': .*does not exist/);
+      expect(r.calls).toContain(pypiUrl('script.py'));
+    });
+
+    it('T-05 (b) `pipx run --path script.py` refuses the block and never looks the file name up', async () => {
+      put('script.py', BLOCK(EVIL));
+      const r = reg();
+      const d = await decide('pipx run --path script.py', r);
+      expect(d?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+      expect(r.calls).not.toContain(pypiUrl('script.py'));
+    });
+
+    it('T-05 (c) `pipx run --path script.py P` runs the script with P as an argument: P is not looked up', async () => {
+      put('script.py', BLOCK('requests'));
+      const r = reg();
+      const d = await decide(`pipx run --path script.py ${EVIL}`, r);
+      expect(d).toBeNull();
+      expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+    });
+
+    it('T-05 (d) a file `dgprobe-zzq7731` with no extension: the block refuses, and nothing is said of a missing `dgprobe-zzq7731`', async () => {
+      put('dgprobe-zzq7731', BLOCK(EVIL));
+      const d = await decide('pipx run dgprobe-zzq7731', reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/dgprobe-zzq7731 names 'dgprobe-zzq7731-evil/);
+      expect(d?.deny ?? '').not.toMatch(/'dgprobe-zzq7731': .*does not exist/);
+    });
+
+    it('T-05 (e) `pipx run ./script.py` refuses the block', async () => {
+      put('script.py', BLOCK(EVIL));
+      expect((await decide('pipx run ./script.py', reg()))?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+    });
+
+    it('T-05 (f) a clean script.py: `pipx run script.py` is silent, `script.py` is not called a missing name', async () => {
+      put('script.py', BLOCK('requests'));
+      expect(await decide('pipx run script.py', reg())).toBeNull();
+    });
+
+    it('T-05 (g) an empty file `dgprobe-zzq7731-arc.zip`: `pipx run dgprobe-zzq7731-arc.zip` is silent', async () => {
+      put('dgprobe-zzq7731-arc.zip', '');
+      expect(await decide('pipx run dgprobe-zzq7731-arc.zip', reg())).toBeNull();
+    });
+
+    it('T-05 (h) `pipx run --backend pip script.py` refuses the block of script.py (EC-19)', async () => {
+      put('script.py', BLOCK(EVIL));
+      expect((await decide('pipx run --backend pip script.py', reg()))?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+    });
+  });
+
+  // ── T-06: the lines and the question (P3 = B)
+
+  describe('T-06 the lines and the question', () => {
+    it.each<[file: string, make: () => void, reason: string]>([
+      ['big.py', () => put('big.py', `${BLOCK(EVIL)}${'# pad\n'.repeat(180_000)}`), 'over 1 MiB'],
+      ['odd.py', () => put('odd.py', `# /// script\n# dependencies = ["${EVIL}"]\n# extra = ["x"]\n# ///\nprint(1)\n`), 'not in the form the hook reads'],
+      ['dir.py', () => mkdirSync(join(project, 'dir.py')), 'not a regular file'],
+    ])('T-06 `uv run %s` that could not be read: a line, and a question, never a refusal', async (file, make, reason) => {
+      make();
+      const d = await decide(`uv run ${file}`, reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(notRead(file, reason));
+      expect(askOf(d) ?? '(no ask)').toContain(`the inline dependencies of ${file} could not be read`);
+    });
+
+    it('T-06 `false && cd sub; uv run script.py`: where the command runs is not known — only the line', async () => {
+      put('script.py', BLOCK(EVIL));
+      const d = await decide('false && cd sub; uv run script.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(notRead('script.py', 'where the command runs could not be determined'));
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-06 `uv run "$D/x.py"`: not a literal file name — only the line', async () => {
+      const d = await decide('uv run "$D/x.py"', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(notRead('$D/x.py', 'not a literal file name'));
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-06 `uv run open.py`, a block that never closes: silent, nothing asked of the registry', async () => {
+      put('open.py', `# /// script\n# dependencies = ["${EVIL}"]\nprint(1)\n`);
+      const r = reg();
+      expect(await decide('uv run open.py', r)).toBeNull();
+      expect(r.calls).toEqual([]);
+    });
+
+    it('T-06 `uv run two.py`, two closed blocks with the malicious name in the second: DENIED', async () => {
+      put('two.py', `${BLOCK('requests')}${BLOCK(EVIL)}`);
+      refused(await decide('uv run two.py', reg()), 'two.py');
+    });
+
+    it.each([
+      ['toolidx.py', '# [tool.uv]\n# index-url = "https://pypi.corp/simple"\n'],
+      ['toolhdr.py', '# [tool]\n# uv.index-url = "https://pypi.corp/simple"\n'],
+    ])('T-06 `uv run %s` may name its own index: a line, and a question (P7 = B)', async (file, table) => {
+      put(file, `# /// script\n# dependencies = ["requests"]\n${table}# ///\nprint(1)\n`);
+      const d = await decide(`uv run ${file}`, reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`${file} may name its own index or sources ([tool.uv])`);
+      expect(askOf(d) ?? '(no ask)').toContain(`the inline dependencies of ${file} may come from its own index or sources`);
+    });
+
+    it('T-06 `uv run urlreq.py` with a requirement that is a URL: a line, and a question (P7 = B)', async () => {
+      put('urlreq.py', '# /// script\n# dependencies = ["requests", "x @ https://h.example/x.whl"]\n# ///\nprint(1)\n');
+      const d = await decide('uv run urlreq.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('urlreq.py names packages from a URL, a path or a VCS');
+      expect(askOf(d) ?? '(no ask)').toMatch(/urlreq\.py names packages from a URL, a path or a VCS/);
+    });
+
+    it.each<{ command: string; shell?: 'powershell' }>([
+      { command: 'export UV_WORKING_DIR=sub; uv run script.py' },
+      { command: "$env:UV_WORKING_DIR = 'sub'; uv run script.py", shell: 'powershell' },
+      { command: "${env:UV_WORKING_DIR} = 'sub'; uv run script.py", shell: 'powershell' },
+      { command: 'si env:UV_WORKING_DIR sub; uv run script.py', shell: 'powershell' },
+      { command: 'Set-Content env:UV_WORKING_DIR sub; uv run script.py', shell: 'powershell' },
+    ])('T-06 `$command`: the directory is not known — only the line, no refusal, no question', async ({ command, shell }) => {
+      put('sub/script.py', BLOCK(EVIL));
+      const d = await decide(command, reg(), shell === undefined ? {} : { shell });
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('where the command runs could not be determined');
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it.each(['source ./env.sh && uv run script.py', '. ./env.sh && uv run script.py'])(
+      'T-06 `%s` reads the script in the written directory, refuses it, and says env.sh may have changed the directory (P11 = A)',
+      async (command) => {
+        put('env.sh', 'echo hello\n');
+        put('script.py', BLOCK(EVIL));
+        const d = await decide(command, reg());
+        refused(d, 'script.py');
+        expect(`${d?.deny ?? ''}\n${d?.context ?? ''}`).toMatch(/env\.sh.*may have changed/s);
+      },
+    );
+
+    it('T-06 `source ./env.sh && uv run script.py` with a clean script: a line about env.sh, and no question', async () => {
+      put('env.sh', 'echo hello\n');
+      put('script.py', BLOCK('requests'));
+      const d = await decide('source ./env.sh && uv run script.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toMatch(/env\.sh.*may have changed/s);
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-06 `false && cd sub; pipx run P`: the missing-name warning also says the word may be a local script pipx runs instead', async () => {
+      const d = await decide(`false && cd sub; pipx run ${NAMED}`, reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`'${NAMED}': ${NOT_FOUND}`);
+      expect(d?.context ?? '(no context)').toContain('may be a local script that pipx runs instead — not checked');
+    });
+  });
+
+  // ── T-07: the limits
+
+  describe('T-07 the limits', () => {
+    const chain = (at: string, links: number): void => {
+      writeFileSync(join(at, 'real.py'), BLOCK(EVIL));
+      for (let i = links - 1; i >= 0; i -= 1) {
+        const name = i === 0 ? 'chain.py' : `c${String(i)}`;
+        const target = i === links - 1 ? 'real.py' : `c${String(i + 1)}`;
+        symlinkSync(target, join(at, name));
+      }
+    };
+
+    it('T-07 (a) a block of 160 names the registry has: `ask` says 10 were not vetted, and 150 were looked up', async () => {
+      const many = Array.from({ length: 160 }, (_, i) => `dgprobe-zzq7731-n${String(i)}`);
+      put('big-list.py', BLOCK(...many));
+      const r = reg(many);
+      const d = await decide('uv run big-list.py', r);
+      expect(askOf(d) ?? '(no ask)').toContain('the manifests this command installs name more dependencies than the hook vets — 10 were not vetted (only the first 150 are)');
+      expect(r.calls.filter((u) => /\/dgprobe-zzq7731-n\d+\/json$/.test(u))).toHaveLength(150);
+    });
+
+    it('T-07 (b) ten scripts: the first 8 are read, the others are counted in a line and a question, and no refusal comes out of the unread ones', async () => {
+      for (let i = 0; i < 8; i += 1) put(`s${String(i)}.py`, BLOCK('requests'));
+      put('s8.py', BLOCK(EVIL));
+      put('s9.py', BLOCK(EVIL));
+      const d = await decide(Array.from({ length: 10 }, (_, i) => `uv run s${String(i)}.py`).join('; '), reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('dev-guardian: 2 more script files of this command were not read (only the first 8 are) — their packages were not vetted.');
+      expect(askOf(d) ?? '(no ask)').toContain('this command runs more scripts than the hook reads — 2 were not read (only the first 8 are)');
+    });
+
+    it('T-07 (c) the same script 2 000 times: one refusal, one request for the package, in time', async () => {
+      put('s.py', BLOCK(EVIL));
+      const r = reg();
+      const t0 = Date.now();
+      const d = await decide('uv run s.py; '.repeat(2_000), r);
+      expect(d?.deny ?? '(no deny)').toContain(`s.py names '${EVIL}@1.0.0'`);
+      expect(r.calls.filter((u) => u === pypiUrl(EVIL))).toHaveLength(1);
+      expect(Date.now() - t0).toBeLessThan(hangBound(3000));
+    });
+
+    it.each([`uv run ${UNC}\\x.py`, `pipx run ${UNC}\\x.py`])('T-07 (d) `%s`: a network path is never asked of the disk — a line and a question, in time', async (command) => {
+      const t0 = Date.now();
+      const d = await decide(command, reg());
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it('T-07 (e) with the deadline already past, `uv run script.py` says the vetting time budget is exhausted, and asks nothing', async () => {
+      put('script.py', BLOCK(EVIL));
+      const d = await decide('uv run script.py', reg(), { deadlineAt: Date.now() - 1 });
+      expect(d?.context ?? '(no context)').toContain('vetting time budget exhausted');
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (f) a link `link.py` to a network path, reached by `cd sub && uv run ../link.py`: a line and a question, in time', async () => {
+      const root = realpathSync.native(project);
+      mkdirSync(join(root, 'sub'));
+      // The type is given: without it Node stats the target to choose one, and a network target cannot be stat'ed.
+      symlinkSync(`${UNC}\\x.py`, join(root, 'link.py'), 'file');
+      const t0 = Date.now();
+      const d = await decide('cd sub && uv run ../link.py', reg(), { cwd: root, projectDir: root });
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toMatch(/link\.py could not be read \(on a network path\)/);
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (h) a chain of 33 links to a script with a malicious block: not refused, a line and a question — the hook gives up after 32', async () => {
+      const root = realpathSync.native(project);
+      chain(root, 33);
+      const d = await decide('uv run chain.py', reg(), { cwd: root, projectDir: root });
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('could not be read');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (h) the same chain with 32 links is read, and refused', async () => {
+      const root = realpathSync.native(project);
+      chain(root, 32);
+      refused(await decide('uv run chain.py', reg(), { cwd: root, projectDir: root }), 'chain.py');
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (i) a link named as the pipx app to a network path: no missing-name refusal, a line and a question, in time', async () => {
+      const root = realpathSync.native(project);
+      symlinkSync(`${UNC}\\x`, join(root, NAMED), 'file');
+      const t0 = Date.now();
+      const d = await decide(`pipx run ${NAMED}`, reg(), { cwd: root, projectDir: root });
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it.skipIf(!CAN_SYMLINK).each([
+      'cd tools && uv run setup.py',
+      'uv run --directory tools setup.py',
+      'UV_WORKING_DIR=tools uv run setup.py',
+      'cd tools && pipx run setup.py',
+    ])('T-07 (j) `%s` follows the local link `tools` to the directory that holds the script, and refuses it (P9 = A)', async (command) => {
+      const root = realpathSync.native(project);
+      put('real-tools/setup.py', BLOCK(EVIL), root);
+      symlinkSync(join(root, 'real-tools'), join(root, 'tools'), DIR_LINK);
+      refused(await decide(command, reg(), { cwd: root, projectDir: root }), 'setup.py');
+    });
+
+    const BOTH = ['cd tools && cd .. && uv run setup.py', 'uv run tools/../setup.py', 'uv run --directory tools/.. setup.py', 'UV_WORKING_DIR=tools/.. uv run setup.py'];
+    it.skipIf(!CAN_SYMLINK).each(
+      BOTH.flatMap((command) => [
+        { command, logical: EVIL, physical: 'requests', refuse: true },
+        { command, logical: 'requests', physical: EVIL, refuse: true },
+        { command, logical: 'requests', physical: 'requests', refuse: false },
+      ]),
+    )('T-07 (l) `$command` with ./setup.py naming $logical and sub/setup.py naming $physical reads both candidates (P10 = A): refused $refuse', async ({ command, logical, physical, refuse }) => {
+      const root = realpathSync.native(project);
+      put('sub/inner/keep', '', root);
+      put('setup.py', BLOCK(logical), root);
+      put('sub/setup.py', BLOCK(physical), root);
+      symlinkSync(join(root, 'sub', 'inner'), join(root, 'tools'), DIR_LINK);
+      const r = reg();
+      const d = await decide(command, r, { cwd: root, projectDir: root });
+      if (refuse) expect(d?.deny ?? '(no deny)').toContain(`setup.py names '${EVIL}@1.0.0'`);
+      else {
+        expect(r.calls).toContain(pypiUrl('requests'));
+        expect(d).toBeNull();
+      }
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (m) `cd broken; uv run setup.py` with `broken` a link to nothing: a line and a question', async () => {
+      const root = realpathSync.native(project);
+      symlinkSync(join(root, 'nowhere'), join(root, 'broken'), DIR_LINK);
+      const d = await decide('cd broken; uv run setup.py', reg(), { cwd: root, projectDir: root });
+      expect(d?.context ?? '(no context)').toContain('could not be read');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (k) `cd netdir && uv run x.py` with `netdir` a link to a network path: a line and a question, in time', async () => {
+      const root = realpathSync.native(project);
+      symlinkSync(UNC, join(root, 'netdir'), 'dir');
+      const t0 = Date.now();
+      const d = await decide('cd netdir && uv run x.py', reg(), { cwd: root, projectDir: root });
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+  });
+
+  // ── T-09: protection — green before and after the fix
+
+  describe('T-09 what is not read, through the decision', () => {
+    it.each(['uv run python script.py', 'uv run pytest', 'uv run missing.py', 'uv run - < script.py', 'cat script.py | uv run -'])(
+      'T-09 (a) `%s` with a malicious script.py in the directory: nothing is read, nothing is asked of the registry',
+      async (command) => {
+        put('script.py', BLOCK(EVIL));
+        const r = reg();
+        expect(await decide(command, r)).toBeNull();
+        expect(r.calls).toEqual([]);
+      },
+    );
+
+    it('T-09 (b) `uv run tool`, a file with no extension and no --script: the uv does not read its block (measured)', async () => {
+      put('tool', BLOCK(EVIL));
+      expect(await decide('uv run tool', reg())).toBeNull();
+    });
+
+    it('T-09 (c) `pipx run zz-no-such-pkg`, no such file: refused as a name the registry does not have', async () => {
+      const d = await decide('pipx run zz-no-such-pkg', reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/zz-no-such-pkg/);
+      expect(d?.deny ?? '(no deny)').toMatch(/does not exist/);
+    });
+
+    it('T-09 (d) `uvx --with-requirements reqs-in.txt requests` leaves the file unread', async () => {
+      put('reqs-in.txt', `${EVIL}\n`);
+      const r = reg();
+      expect(await decide('uvx --with-requirements reqs-in.txt requests', r)).toBeNull();
+      expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+    });
+
+    it('T-09 (e) `uv run plain.py`, a script with no block: silent, nothing asked of the registry', async () => {
+      put('plain.py', 'print(1)\n');
+      const r = reg();
+      expect(await decide('uv run plain.py', r)).toBeNull();
+      expect(r.calls).toEqual([]);
+    });
+
+    it('T-09 (f) `uv run pytest` in a project whose pyproject.toml names a malicious package: the sync stays unread', async () => {
+      put('pyproject.toml', `[project]\nname = "app"\nversion = "1.0.0"\ndependencies = ["${EVIL}"]\n`);
+      expect(await decide('uv run pytest', reg())).toBeNull();
+    });
+
+    it('T-09 (g) `echo x > new.py; uv run new.py` with no new.py in the directory: the hook reads the disk before the line', async () => {
+      expect(await decide('echo x > new.py; uv run new.py', reg())).toBeNull();
+    });
+
+    it('T-09 (h) an empty file named as a malicious package and `pipx run` of it: the name is still looked up and refused', async () => {
+      put(EVIL, '');
+      expect((await decide(`pipx run ${EVIL}`, reg()))?.deny ?? '(no deny)').toContain(`'${EVIL}@1.0.0'`);
+    });
+
+    it('T-09 (i) 6 800 different words after `pipx run`, no file: the answer comes in time, with the question above 50 packages', async () => {
+      const t0 = Date.now();
+      const d = await decide(Array.from({ length: 6_800 }, (_, i) => `pipx run dgprobe-zzq7731-w${String(i)}; `).join(''), registry());
+      expect(Date.now() - t0).toBeLessThan(hangBound(3000));
+      expect(askOf(d) ?? '(no ask)').toContain('this command names more packages than the hook vets');
+    });
   });
 });

@@ -4021,3 +4021,156 @@ describe('install-vet-python-tool-forms', () => {
     });
   });
 });
+
+// ───────────────── install-vet-inline-script-deps — `uv run` and `pipx run` read a script's PEP 723 block
+
+describe('install-vet-inline-script-deps', () => {
+  const U = 'dgprobe-zzq7731-named';
+
+  // ── T-02: the analysis alone, no disk. `toMatchObject` takes any shape, so the file type-checks before the fields exist.
+
+  describe('T-02 the analysis of `uv run`', () => {
+    it('T-02 `uv run script.py` is one `uv` command with no package, the script named, and nothing uncertain', () => {
+      expect(parseInstallCommands('uv run script.py')).toMatchObject([{ manager: 'uv', packages: [], inlineScripts: [{ file: 'script.py' }], uncertain: [] }]);
+    });
+
+    it.each([
+      ['uv run --script tool', 'tool'],
+      ['uv run -s tool', 'tool'],
+      ['uv run -qs tool', 'tool'],
+      ['uv run --gui-script tool', 'tool'],
+      ['uv run script.PY', 'script.PY'],
+      ['uv run app.pyw', 'app.pyw'],
+      ['uv run --no-project --python 3.12 sub/x.py arg --flag', 'sub/x.py'],
+      ['uv run ./script.py', './script.py'],
+      ['python -m uv run script.py', 'script.py'],
+      ['uv run evil.py -m msg', 'evil.py'],
+    ])('T-02 `%s` reads %s as the script', (command, file) => {
+      expect(parseInstallCommands(command)).toMatchObject([{ manager: 'uv', inlineScripts: [{ file }] }]);
+    });
+
+    it.each(['uv run -m evil.py', 'uv run -qm evil.py'])('T-02 `%s` runs a module: no command (green before the fix too)', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each([
+      'uv run --directory sub x.py',
+      'uv --directory sub run x.py',
+      'python -m uv --directory sub run x.py',
+      'UV_WORKING_DIR=sub uv run x.py',
+      'env UV_WORKING_DIR=sub uv run x.py',
+    ])('T-02 `%s` carries the directory `sub` the script is looked for in', (command) => {
+      expect(parseInstallCommands(command)).toMatchObject([{ scriptDir: 'sub', inlineScripts: [{ file: 'x.py' }] }]);
+    });
+
+    it('T-02 `uv run --project sub x.py` names the script and no directory: --project does not move it', () => {
+      const cmds = parseInstallCommands('uv run --project sub x.py');
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'x.py' }] }]);
+      expect(cmds[0]).not.toHaveProperty('scriptDir');
+    });
+
+    it('T-02 `uv run --with a,b --with c -w d pytest` names a b c d, no script, and says the comma is not one plain statement', () => {
+      const cmds = parseInstallCommands('uv run --with a,b --with c -w d pytest');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([['a', 'b', 'c', 'd']]);
+      expect(cmds[0]?.uncertain[0]).toContain("not a single plain install statement (',' outside quotes)");
+      expect(cmds[0]).not.toHaveProperty('inlineScripts');
+    });
+
+    it('T-02 `uv run --with-requirements r.txt python -c "print(1)"` gives the requirements manifest of r.txt', () => {
+      expect(parseInstallCommands('uv run --with-requirements r.txt python -c "print(1)"')).toMatchObject([
+        { manager: 'uv', manifest: { kind: 'requirements', files: ['r.txt'] } },
+      ]);
+    });
+
+    it.each(['deps.py', 'deps.pyw', 'DEPS.PY'])('T-02 `uv run --with-requirements %s …` is read as a script, not as a requirements file', (file) => {
+      const cmds = parseInstallCommands(`uv run --with-requirements ${file} python -c "print(1)"`);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file }] }]);
+      expect(cmds[0]).not.toHaveProperty('manifest');
+    });
+
+    it('T-02 `uv pip install -r deps.py` reads the file as a script (P12 = A)', () => {
+      const cmds = parseInstallCommands('uv pip install -r deps.py');
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'deps.py' }] }]);
+      expect(cmds[0]).not.toHaveProperty('manifest');
+    });
+
+    it('T-02 `pip install -r deps.py` keeps the requirements manifest of today (green before the fix too)', () => {
+      expect(parseInstallCommands('pip install -r deps.py')).toMatchObject([{ manifest: { kind: 'requirements', files: ['deps.py'] } }]);
+    });
+
+    it('T-02 `uv run --index https://pypi.corp/simple --with a cmd` names the index it was given', () => {
+      expect(parseInstallCommands('uv run --index https://pypi.corp/simple --with a cmd')).toMatchObject([{ packages: [{ name: 'a' }], registries: ['https://pypi.corp/simple'] }]);
+    });
+
+    it('T-02 `uv run --with a script.py` names the package and the script', () => {
+      expect(parseInstallCommands('uv run --with a script.py')).toMatchObject([{ packages: [{ name: 'a' }], inlineScripts: [{ file: 'script.py' }] }]);
+    });
+
+    it('T-02 `uv run --dgunknown x.py y.py` takes both words as scripts that may run', () => {
+      expect(parseInstallCommands('uv run --dgunknown x.py y.py')).toMatchObject([{ inlineScripts: [{ file: 'x.py' }, { file: 'y.py' }] }]);
+    });
+
+    it('T-02 `uv run "$D/x.py"` names a script that is not a literal file name', () => {
+      expect(parseInstallCommands('uv run "$D/x.py"')).toMatchObject([{ inlineScripts: [{ file: '$D/x.py', literal: false }] }]);
+    });
+
+    it("T-02 `bash -c 'uv run s.py'` keeps the nested command, with its script", () => {
+      expect(parseInstallCommands("bash -c 'uv run s.py'", { nested: [{ text: 'uv run s.py', shell: 'bash' }] })).toMatchObject([
+        { manager: 'uv', inlineScripts: [{ file: 's.py' }] },
+      ]);
+    });
+  });
+
+  describe('T-02 the analysis of `pipx run`', () => {
+    it('T-02 `pipx run --path script.py arg` has no package: --path takes no value, and the word is the script', () => {
+      expect(parseInstallCommands('pipx run --path script.py arg')).toMatchObject([{ packages: [], inlineScripts: [{ file: 'script.py' }] }]);
+    });
+
+    it('T-02 `pipx run script.py` is the package `script.py` and a script that may be a file', () => {
+      const cmds = parseInstallCommands('pipx run script.py');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([['script.py']]);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'script.py', ifFile: true }] }]);
+    });
+
+    it('T-02 `pipx run --backend pip evil.py` has the words `pip` and `evil.py` as packages and as files that may be there', () => {
+      const cmds = parseInstallCommands('pipx run --backend pip evil.py');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([['pip', 'evil.py']]);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'pip', ifFile: true }, { file: 'evil.py', ifFile: true }] }]);
+    });
+
+    it('T-02 `pipx run --backend pip --path evil.py` has no package and the same two words as files', () => {
+      const cmds = parseInstallCommands('pipx run --backend pip --path evil.py');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([[]]);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'pip', ifFile: true }, { file: 'evil.py', ifFile: true }] }]);
+    });
+
+    it('T-02 `pipx run ./tool.py` is set aside as a package, as today, and names the path as a file that may be there', () => {
+      const cmds = parseInstallCommands('pipx run ./tool.py');
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: './tool.py', ifFile: true }] }]);
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([[]]);
+    });
+  });
+
+  // ── T-09: protection — what stays as it is (green before and after the fix)
+
+  describe('T-09 the analysis of what is not read', () => {
+    it.each([
+      'uv run pytest',
+      'uv run python script.py',
+      'uv run python -m mypy src',
+      'uv run -m http.server',
+      'uv run -',
+      'uv run tool',
+      'uv run https://h.example/x.py',
+      'uv run',
+      'cat script.py | uv run -',
+    ])('T-09 `%s` is no command: no script, no package', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it('T-09 `pipx run --spec P cmd` is the package P with nothing uncertain, as the measured Python forms give it today', () => {
+      const cmds = parseInstallCommands(`pipx run --spec ${U} cmd`);
+      expect(cmds.map((c) => ({ packages: c.packages.map((p) => p.name), uncertain: c.uncertain }))).toEqual([{ packages: [U], uncertain: [] }]);
+    });
+  });
+});

@@ -550,3 +550,40 @@ describe('install-vet-redirect-glued-word', () => {
     expect(shown).toBe(true);
   });
 });
+
+// ───────────────── install-vet-inline-script-deps — the record of what `uv run` and `pipx run` leave unread
+
+describe('install-vet-inline-script-deps', () => {
+  it('T-11 a record install-inline-script-deps (install-vetting) names what stays unread, with hook examples', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'install-inline-script-deps');
+    expect(limit, 'a record with the id install-inline-script-deps in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    expect(limit.examples.some((e) => e.detector === 'hook')).toBe(true);
+    const named = [
+      'pip-run',
+      'hatch run',
+      'pdm run',
+      'uv run python',
+      'uv run -',
+      'remote',
+      '[tool.uv.sources]',
+      '--with-requirements',
+      'mapped drive',
+      '/net/',
+      'uv.toml',
+      'UV_WORKING_DIR',
+      'curl -o',
+    ];
+    expect(named.filter((w) => !limit.doc.includes(w))).toEqual([]);
+  });
+
+  it('T-11 the record manifest-other-managers has an example `uv run pytest` beside a pyproject.toml, with decision none', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'manifest-other-managers');
+    expect(limit, 'the record manifest-other-managers').toBeDefined();
+    const shown = (limit?.examples ?? []).flatMap((e) =>
+      e.detector === 'hook' ? [{ command: e.input['command'], pyproject: Object.keys(e.files ?? {}).includes('pyproject.toml'), decision: e.expect.decision }] : [],
+    );
+    expect(shown).toEqual(expect.arrayContaining([{ command: 'uv run pytest', pyproject: true, decision: 'none' }]));
+  });
+});

@@ -2750,3 +2750,51 @@ describe('install-vet-python-tool-forms', () => {
     });
   });
 });
+
+// ───────────────── install-vet-inline-script-deps — `uv run` and `pipx run` read a script's PEP 723 block, through the dispatcher
+
+describe('install-vet-inline-script-deps', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const NAMED = 'dgprobe-zzq7731-named';
+  const pypi = (version: string): Route => ({
+    body: { info: { version }, releases: { [version]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+  });
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The PyPI has EVIL and the script.py of the plan (0.0.5), and OSV lists EVIL 1.0.0 as malicious. */
+  const ROUTES: Record<string, Route> = {
+    [`https://pypi.org/pypi/${EVIL}/json`]: pypi('1.0.0'),
+    'https://pypi.org/pypi/script.py/json': pypi('0.0.5'),
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-0042'] } },
+  };
+
+  describe('T-08 through the dispatcher', () => {
+    it.each(['uv run script.py', 'pipx run script.py'])('T-08 `%s` with a malicious name in the block of script.py is DENIED, naming the file and the package', (command) => {
+      writeFileSync(join(project, 'script.py'), BLOCK(EVIL));
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({
+        decision: r.output?.hookSpecificOutput?.permissionDecision,
+        file: reason.includes('script.py'),
+        named: reason.includes(EVIL),
+      }).toEqual({ decision: 'deny', file: true, named: true });
+    });
+
+    it('T-08 `uv run --with P python -c "print(1)"`, with P unknown to the PyPI, warns that it is not found and says why it does not deny', () => {
+      const r = runHook(`uv run --with ${NAMED} python -c "print(1)"`, { [`https://pypi.org/pypi/${NAMED}/json`]: { status: 404 }, [OSV]: { osv: {} } });
+      expect(r.status).toBe(0);
+      const context = r.output?.hookSpecificOutput?.additionalContext ?? '(no context)';
+      expect(context).toContain(`'${NAMED}': not found`);
+      expect(context).toContain('flag --with is not on the confident-shape allowlist');
+      expect(r.output?.hookSpecificOutput?.permissionDecision).not.toBe('deny');
+    });
+
+    it('T-08 `uv run odd.py`, a block outside the grammar the hook reads, ASKS, and the reason says it could not be read (P3 = B)', () => {
+      writeFileSync(join(project, 'odd.py'), `# /// script\n# dependencies = ["${EVIL}"]\n# extra = ["x"]\n# ///\nprint(1)\n`);
+      const r = runHook('uv run odd.py', ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)').toContain('could not be read');
+    });
+  });
+});

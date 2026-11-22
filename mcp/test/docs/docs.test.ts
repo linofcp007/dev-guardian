@@ -1010,3 +1010,42 @@ describe('install-vet-global-in-short-cluster', () => {
     expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
   });
 });
+
+// ───────────────── install-vet-inline-script-deps — the docs say that `uv run` and `pipx run` read a script's inline dependencies
+
+describe('install-vet-inline-script-deps', () => {
+  /** A paragraph of docs/hooks.md, from its bold lead to the next blank line. */
+  const paragraph = (lead: string): string => {
+    const para = read('docs/hooks.md')
+      .split(/\n\s*\n/)
+      .find((p) => p.startsWith(lead));
+    return (para ?? '').replace(/\s+/g, ' ');
+  };
+
+  it('T-11 the "When" cell of the SECURITY.md row of the public registries names PEP 723, `uv run`, `pipx run` and `--with`', () => {
+    const row = read('SECURITY.md')
+      .split('\n')
+      .find((line) => line.startsWith('| `registry.npmjs.org`, `pypi.org`'));
+    expect(row, 'the egress row of the public registries').toBeDefined();
+    // | Destination | Who contacts it | When |: the third cell. The symbols carry their code ticks, so today's text does not match by chance.
+    const when = (row ?? '').split(' | ')[2] ?? '';
+    expect({
+      pep723: when.includes('PEP 723'),
+      uvRun: when.includes('`uv run`'),
+      pipxRun: when.includes('`pipx run`'),
+      withFlag: when.includes('`--with`'),
+    }).toEqual({ pep723: true, uvRun: true, pipxRun: true, withFlag: true });
+  });
+
+  it('T-11 the paragraph "What leaves the machine." of docs/hooks.md names PEP 723 and `uv run --with`', () => {
+    const para = paragraph('**What leaves the machine.**');
+    expect(para, 'the paragraph "What leaves the machine."').not.toBe('');
+    expect({ pep723: para.includes('PEP 723'), uvRunWith: para.includes('`uv run --with`') }).toEqual({ pep723: true, uvRunWith: true });
+  });
+
+  it('T-11 the paragraph "Past a ceiling the user is asked." of docs/hooks.md says that the inline dependencies of a script are asked about too', () => {
+    const para = paragraph('**Past a ceiling the user is asked.**');
+    expect(para, 'the paragraph "Past a ceiling the user is asked."').not.toBe('');
+    expect(para).toContain('inline dependencies');
+  });
+});
