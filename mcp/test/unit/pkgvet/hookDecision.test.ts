@@ -8269,6 +8269,22 @@ describe('install-vet-uv-run-project-index', () => {
     expect(textOf(d)).not.toContain('pypi-d');
   });
 
+  it('T-01 (l) a name of `--with` beside a script: the search starts from the folder of the script as well (f1, f4, f10), and the line is said', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide(`uv run --with ${REQUESTS} sub/s.py`);
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (l) a name of `--with` beside a script that names no package of its own: the line is said from the folder of the script (red on the first version of the fix: only the folder of the command was searched)', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', 'print(1)\n');
+    const { d } = await decide(`uv run --with ${REQUESTS} sub/s.py`);
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
   // ── T-02: the other kinds of index `uv run` obeys, and the ones it does not
 
   const OBEYED: Array<[label: string, file: string, files: Record<string, string>]> = [

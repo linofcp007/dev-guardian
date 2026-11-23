@@ -9606,11 +9606,25 @@ var MAX_DIR_STATES = 8;
 function uvSearchStart(c, dir, w) {
   const run = c.uvRun;
   if (run === void 0 || run.projectUnknown === true) return void 0;
-  const start = run.project === void 0 ? dir : resolve4(dir, run.project);
+  const start = run.project === void 0 ? dir : projectStart(dir, run.project, w);
+  if (start === void 0) return void 0;
   if (run.assigned === true) return start;
   const key = [start, run.noConfig, run.defaultIndexFlag].join("\0");
   if (!w.uvAsks.has(key)) w.uvAsks.set(key, { dir: start, noConfig: run.noConfig, defaultIndexFlag: run.defaultIndexFlag });
   return start;
+}
+function projectStart(dir, project, w) {
+  try {
+    if (isNetworkPath(dir)) return void 0;
+    const windows = (w.opts.platform ?? process.platform) === "win32";
+    const target = cdTarget(project, w.opts.homeDir ?? homedir2(), windows);
+    const real = realDir(dir);
+    if (target === null || real === null) return void 0;
+    const moved2 = moveScriptDir(dir, real, target, windows, w.top);
+    return moved2.ok ? moved2.states[0]?.[0] : void 0;
+  } catch {
+    return void 0;
+  }
 }
 var MAX_INDEX_LINES = MAX_REGISTRY_LINES;
 function uvRunLines(w, registry) {
@@ -9867,6 +9881,7 @@ function scriptCommands(c, w) {
         w.notes.push(`dev-guardian: ${read2.file} names packages from a URL, a path or a VCS \u2014 they were not vetted.`);
         w.asks.push(`${read2.file} names packages from a URL, a path or a VCS \u2014 they were not vetted; allow it only if you trust this script`);
       }
+      if (c.uvRun !== void 0 && c.packages.length > 0) uvSearchStart(c, dirname4(cand.path), w);
       if (read2.packages.length === 0) continue;
       const custom = c.customRegistry ?? void 0;
       const uvStart = c.uvRun === void 0 ? void 0 : uvSearchStart(c, dirname4(cand.path), w);

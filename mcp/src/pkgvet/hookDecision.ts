@@ -1418,11 +1418,31 @@ interface UvAsk {
 function uvSearchStart(c: InstallCommand, dir: string, w: ScriptWorld): string | undefined {
   const run = c.uvRun;
   if (run === undefined || run.projectUnknown === true) return undefined;
-  const start = run.project === undefined ? dir : resolve(dir, run.project);
+  const start = run.project === undefined ? dir : projectStart(dir, run.project, w);
+  if (start === undefined) return undefined;
   if (run.assigned === true) return start;
   const key = [start, run.noConfig, run.defaultIndexFlag].join('\u0000');
   if (!w.uvAsks.has(key)) w.uvAsks.set(key, { dir: start, noConfig: run.noConfig, defaultIndexFlag: run.defaultIndexFlag });
   return start;
+}
+
+/**
+ * The folder `--project <project>` moves a `uv run`'s search to, from `dir`: accepted only after the check every move of the scripts' folder goes
+ * through ({@link moveScriptDir}: a network path, a link that leads to one, a folder that is not there — each asks nothing of the disk beyond the
+ * link walk), else `undefined`: no line, and no folder for the reason of a missing name. Never throws.
+ */
+function projectStart(dir: string, project: string, w: ScriptWorld): string | undefined {
+  try {
+    if (isNetworkPath(dir)) return undefined;
+    const windows = (w.opts.platform ?? process.platform) === 'win32';
+    const target = cdTarget(project, w.opts.homeDir ?? homedir(), windows);
+    const real = realDir(dir);
+    if (target === null || real === null) return undefined;
+    const moved = moveScriptDir(dir, real, target, windows, w.top);
+    return moved.ok ? moved.states[0]?.[0] : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The most lines said for the project files that set the package index of a `uv run`: the rest is counted. */
@@ -1763,6 +1783,8 @@ function scriptCommands(c: InstallCommand, w: ScriptWorld): { command: VetComman
         w.notes.push(`dev-guardian: ${read.file} names packages from a URL, a path or a VCS — they were not vetted.`);
         w.asks.push(`${read.file} names packages from a URL, a path or a VCS — they were not vetted; allow it only if you trust this script`);
       }
+      // The names of `--with` beside a script are fetched with the script's: the uv reads its project file from the folder of the script too.
+      if (c.uvRun !== undefined && c.packages.length > 0) uvSearchStart(c, dirname(cand.path), w);
       if (read.packages.length === 0) continue;
       const custom = c.customRegistry ?? undefined;
       // `uv run <script>`: the uv reads the project file from the folder of the script, not from where the command runs (measured f1, f4, f10).

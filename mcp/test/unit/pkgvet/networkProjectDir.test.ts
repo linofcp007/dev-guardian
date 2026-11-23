@@ -433,3 +433,66 @@ describe("install-vet-network-project-dir-probe", () => {
     90_000,
   );
 });
+
+import { symlinkSync } from "node:fs";
+
+describe("install-vet-uv-run-project-index", () => {
+  const MISSING = "dgprobe-zzq7731-missing";
+  const win = it.skipIf(process.platform !== "win32");
+  const WIN = " (Windows; skipped otherwise)";
+  /** Whether this account may make a folder link to a network path: without the privilege the link test is skipped, with its label saying so. */
+  const CAN_LINK = ((): boolean => {
+    if (process.platform !== "win32") return false;
+    const probe = mkdtempSync(join(tmpdir(), "dg-uvproj-probe-"));
+    try {
+      symlinkSync(NET, join(probe, "l"), "dir");
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const ifLink = it.skipIf(process.platform !== "win32" || !CAN_LINK);
+
+  /** The text of the answer, and what a name missing from the PyPI says about why it is not refused. */
+  const expectNoProjectFile = (d: Awaited<ReturnType<typeof decideInstallCommand>>): void => {
+    const text = `${d?.deny ?? ""}\n${d?.context ?? ""}`;
+    expect(text).not.toContain("sets the package index");
+    expect(text).not.toContain("a custom registry is configured (");
+    expect(d?.context ?? "(no context)").toContain(`'${MISSING}': not found on the public registry`);
+  };
+
+  win(
+    `T-08 (a) \`uv run --project '<a network path>' --with <a missing name>\`, the folder of the command local: the share is asked of the disk for nothing, no line, no project file as the reason${WIN}`,
+    async () => {
+      const f = registries();
+      const d = await decideInstallCommand(
+        `uv run --project '${NET}' --with ${MISSING} python -c "print(1)"`,
+        opts(f.fetchImpl, tempDir("dg-uvproj-cwd-")),
+      );
+      expect(networkPaths()).toEqual([]);
+      expectNoProjectFile(d);
+    },
+    90_000,
+  );
+
+  ifLink(
+    `T-08 (b) \`uv run --project netproj --with <a missing name>\`, netproj a local link to a network path: nothing below the link is asked of the disk, no line, no project file as the reason${WIN}`,
+    async () => {
+      const dir = tempDir("dg-uvproj-link-");
+      const link = join(dir, "netproj");
+      symlinkSync(NET, link, "dir");
+      const f = registries();
+      const d = await decideInstallCommand(
+        `uv run --project netproj --with ${MISSING} python -c "print(1)"`,
+        opts(f.fetchImpl, dir),
+      );
+      const below = seen.paths.filter((p) => norm(p).startsWith(`${norm(link)}/`));
+      expect(below).toEqual([]);
+      expect(networkPaths()).toEqual([]);
+      expectNoProjectFile(d);
+    },
+    90_000,
+  );
+});
