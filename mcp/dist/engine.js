@@ -120780,7 +120780,7 @@ var init_service = __esm({
     CODE_EXTENSIONS = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".java", ".cs", ".php", ".rb", ".rs"];
     isOverLimit = (reason) => reason.startsWith(OVER_LIMIT_REASON_PREFIX);
     hashesOf = (project, files) => Object.fromEntries(files.map((f) => [f, fileHash(project, f)]));
-    tokenLimitNote = (n) => `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). To cover the whole plan, start again with a larger max_estimated_tokens.`;
+    tokenLimitNote = (n) => `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). A plan's limits are fixed when it is made: to cover the whole plan, start a new plan (without plan_id) with a larger max_estimated_tokens.`;
     needsConfirm = (plan) => !plan.confirmed && plan.estimate.total_tokens > plan.limits.max_estimated_tokens;
     RECIPE = {
       loop: [
@@ -120810,6 +120810,17 @@ async function handler48(input2, ctx) {
     return fail5("invalid_input", `Invalid input: ${parsed2.error.issues.map((i) => `${i.path.join(".") || "$"}: ${i.message}`).join("; ")}`);
   }
   const inp = parsed2.data;
+  if (inp.plan_id !== void 0) {
+    const given = new Map(Object.entries(inp));
+    const refused2 = Object.keys(inputSchema50).filter((key) => !PLAN_ID_KEYS.includes(key) && given.get(key) !== void 0);
+    if (refused2.length > 0) {
+      return fail5(
+        "invalid_input",
+        `llm_scan {step: "start", plan_id} takes project_path and confirm only; it does not take ${refused2.join(", ")}. To read or confirm this plan, call llm_scan { step: "start", plan_id } with only project_path; to confirm it, add confirm: true, which the user must agree to. A plan's limits, modes and findings are fixed when it is made: for others, start a new plan with llm_scan { step: "start" } without plan_id.`,
+        { plan_id: inp.plan_id }
+      );
+    }
+  }
   let project;
   try {
     project = resolveProjectPath(inp.project_path).path;
@@ -120833,7 +120844,7 @@ async function handler48(input2, ctx) {
     confirm: inp.confirm === true
   });
 }
-var inputSchema50, parser, tool51;
+var inputSchema50, parser, PLAN_ID_KEYS, tool51;
 var init_llmScanStart = __esm({
   "src/tools/llmScanStart.ts"() {
     "use strict";
@@ -120855,6 +120866,7 @@ var init_llmScanStart = __esm({
       plan_id: external_exports.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning (with confirm: true, confirm it).")
     };
     parser = external_exports.object(inputSchema50).strict();
+    PLAN_ID_KEYS = ["plan_id", "project_path", "confirm"];
     tool51 = defineTool({
       name: "llm_scan_start",
       title: "Plan an LLM-assisted scan",

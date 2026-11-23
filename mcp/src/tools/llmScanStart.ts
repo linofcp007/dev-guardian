@@ -37,6 +37,9 @@ const inputSchema = {
 
 const parser = z.object(inputSchema).strict();
 
+/** The keys `start` takes next to `plan_id`; the rule is this list, never the list of the refused. */
+const PLAN_ID_KEYS: readonly string[] = ['plan_id', 'project_path', 'confirm'];
+
 const tool = defineTool({
   name: 'llm_scan_start',
   title: 'Plan an LLM-assisted scan',
@@ -61,6 +64,24 @@ async function handler(input: ToolInput<typeof inputSchema>, ctx: PluginContext)
     return fail('invalid_input', `Invalid input: ${parsed.error.issues.map((i) => `${i.path.join('.') || '$'}: ${i.message}`).join('; ')}`);
   }
   const inp = parsed.data;
+
+  // With plan_id the step reads or confirms an existing plan and takes exactly plan_id, project_path and
+  // confirm. A plan's limits, modes and findings are fixed when it is made, so any other parameter is
+  // refused, never ignored, before the plan is read (named in the schema's order).
+  if (inp.plan_id !== undefined) {
+    const given = new Map(Object.entries(inp));
+    const refused = Object.keys(inputSchema).filter((key) => !PLAN_ID_KEYS.includes(key) && given.get(key) !== undefined);
+    if (refused.length > 0) {
+      return fail(
+        'invalid_input',
+        `llm_scan {step: "start", plan_id} takes project_path and confirm only; it does not take ${refused.join(', ')}. ` +
+          'To read or confirm this plan, call llm_scan { step: "start", plan_id } with only project_path; to confirm it, add confirm: true, ' +
+          "which the user must agree to. A plan's limits, modes and findings are fixed when it is made: for others, " +
+          'start a new plan with llm_scan { step: "start" } without plan_id.',
+        { plan_id: inp.plan_id },
+      );
+    }
+  }
 
   let project: string;
   try {

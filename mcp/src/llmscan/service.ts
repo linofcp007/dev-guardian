@@ -165,7 +165,7 @@ export function reportOf(storage: Storage, plan: LlmScanPlan): LlmScanReport {
 
 /** D-4: `confirm` authorises the start only; delivery still stops at max_estimated_tokens. */
 const tokenLimitNote = (n: number): string =>
-  `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). To cover the whole plan, start again with a larger max_estimated_tokens.`;
+  `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). A plan's limits are fixed when it is made: to cover the whole plan, start a new plan (without plan_id) with a larger max_estimated_tokens.`;
 
 /**
  * A projection, not a promise: how many of the tasks not yet delivered, in delivery order, fit in what is
