@@ -7656,4 +7656,130 @@ describe('install-vet-path-forms', () => {
     expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
     expect(net.registry).toEqual([]);
   });
+
+  // ── T-01 to T-03: the regression — the spelling of a folder must not change what the hook reads (red until the fix)
+
+  const MANIFEST_DENY = /\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s;
+  /** The same folder with forward slashes, as a `cd` of Git Bash writes it. */
+  const forward = (p: string): string => p.split(String.fromCharCode(92)).join('/');
+  /** The MSYS spelling of a drive path: `C:\x` is `/c/x`. */
+  const msys = (p: string): string => `/${p.slice(0, 1).toLowerCase()}${forward(p.slice(2))}`;
+
+  ifShort(`T-01 (a) (Windows, a volume with 8.3 names; skipped otherwise) the session in the short spelling of the subfolder, the project in the long one: the manifest above is read and refused`, async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, shortOf(sub), root).o);
+    expect(d?.deny ?? '(no deny)').toMatch(MANIFEST_DENY);
+  });
+
+  ifShort(`T-01 (b) (Windows, a volume with 8.3 names; skipped otherwise) the session in the long subfolder, the project in the short spelling: the same refusal`, async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, sub, shortOf(root)).o);
+    expect(d?.deny ?? '(no deny)').toMatch(MANIFEST_DENY);
+  });
+
+  ifShort(`T-01 (c) (Windows, a volume with 8.3 names; skipped otherwise) \`npm ci\` from the short subfolder: a lockfile of the root that pins a malicious version is refused, naming the lockfile`, async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } }));
+    writeFileSync(join(root, 'package-lock.json'), lockOf('bad-transitive', '1.0.0'));
+    const net = lockNet();
+    const d = await decideInstallCommand('npm ci', at(net.fetchImpl, shortOf(sub), root).o);
+    expect(d?.deny ?? '(no deny)').toMatch(/package-lock\.json pins 'bad-transitive@1\.0\.0'/);
+  });
+
+  ifShort(`T-01 (d) (Windows, a volume with 8.3 names; skipped otherwise) \`npm ci\` from the short subfolder, a lockfile that covers the manifest: what it pins goes to OSV, and the registry is not asked`, async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } }));
+    writeFileSync(join(root, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, shortOf(sub), root).o)).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
+  });
+
+  const refusal = async (command: string, extra: Partial<HookVetOptions> = {}): Promise<string> => {
+    const { root } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand(command, at(reg.fetchImpl, root, root, extra).o);
+    return d?.deny ?? '(no deny)';
+  };
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder with />" && npm install` refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd "${forward(shortOf(sub))}" && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder as /c/…>" && npm install` (MSYS) refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd "${msys(shortOf(sub))}" && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `pushd "<short subfolder>" && npm install` refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`pushd "${shortOf(sub)}" && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd <8.3 name of the subfolder> && npm install` (relative) refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd ${basename(shortOf(sub))} && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd <short subfolder>; npm install` in PowerShell refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd ${shortOf(sub)}; npm install`, { shell: 'powershell' })).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && pip install -r requirements.txt` reads the requirements file of the subfolder and refuses', async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(sub, 'requirements.txt'), 'evil-py\n');
+    const reg = registry({ exists: ['evil-py'], malicious: ['evil-py'] });
+    const d = await decideInstallCommand(`cd "${forward(shortOf(sub))}" && pip install -r requirements.txt`, at(reg.fetchImpl, root, root).o);
+    expect(d?.deny ?? '(no deny)').toMatch(/requirements\.txt/);
+  });
+
+  const ID = 'Dgprobe.Zzq7731.Nope';
+  const FOLDER_NOT_KNOWN = 'the folder is not known';
+  const nugetCalls = (calls: string[]): string[] => calls.filter((u) => u.includes('nuget.org'));
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && dotnet new install <id> --force`, nothing of that name there: the NuGet is asked, the context warns, without the reason "the folder is not known"', async () => {
+    const { root, sub } = dirs();
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && dotnet new install ${ID} --force`, at(f.fetchImpl, root, root).o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(ID);
+    expect(nugetCalls(f.calls).length).toBeGreaterThan(0);
+    expect(d?.context ?? '(no context)').not.toContain(FOLDER_NOT_KNOWN);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && dotnet new install <id> --force`, a folder of that name there: no NuGet request, nothing said', async () => {
+    const { root, sub } = dirs();
+    mkdirSync(join(sub, ID));
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && dotnet new install ${ID} --force`, at(f.fetchImpl, root, root).o);
+    expect(nugetCalls(f.calls)).toEqual([]);
+    expect(d).toBeNull();
+  });
+
+  ifShort('T-03 (a) (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && npx <tool>` with the tool installed in the subfolder: null, and the registry is not asked', async () => {
+    const { root, sub } = dirs();
+    mkdirSync(join(sub, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(sub, 'node_modules', '.bin', 'zz-no-such-pkg'), '#!/bin/sh\n');
+    const reg = registry({});
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && npx zz-no-such-pkg`, at(reg.fetchImpl, root, root, { popular: {} }).o);
+    expect(d).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-03 (b) (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && npm install` with a .npmrc beside the manifest of the project: its default registry is said', async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    writeFileSync(join(root, '.npmrc'), 'registry=https://registry.example.invalid/\n');
+    const reg = registry({});
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && npm install`, at(reg.fetchImpl, root, root).o);
+    expect(d?.context ?? '(no context)').toContain("the project's .npmrc sets the default registry (https://registry.example.invalid)");
+  });
 });
