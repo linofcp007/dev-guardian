@@ -544,3 +544,135 @@ describe('openPr — order of operations and refusal (additional coverage)', () 
     expect(calls.some((c) => c.args[0] === 'status')).toBe(false);
   });
 });
+
+// --- deps-tools-host-other-texts, T-07 (red until the fix) -----------------------------------------------------------
+//
+// What the push refusal and the push failure of `openPr` say of a URL, a git configuration key or an error line that
+// holds a credential: the remote before and after the repository's own `url.<base>.insteadOf`, that key, the keys git
+// configuration names that dev-guardian did not apply, and the first error line of `git push`. A URL with a user part
+// is said as the parser writes it without it; one with an `@` outside its user part is said `(host not shown)`. Every
+// credential-looking value is MADE UP and built from parts.
+
+const T07 = {
+  tok: ['tok', 'ZzQ', '7731'].join(''),
+  ken: ['ken', 'Qq', '88'].join(''),
+  user: ['dg', 'user', 'zq'].join(''),
+};
+const T07_HOST = 'host.example';
+const t07PartsIn = (text: string): string[] => Object.values(T07).filter((p) => text.toLowerCase().includes(p.toLowerCase()));
+
+type T07Scripted = { outcome: string; exitCode: number | null; stdout?: string; stderr?: string; gitNotApplied?: string[] };
+/** `fakeRunWithCwd` of this file, with the field `runProcess` adds when it did not apply a key of the repository's git configuration. */
+function fakeRunNotApplied(script: Record<string, T07Scripted>) {
+  const calls: string[][] = [];
+  const run = async (opts: { command: string; args?: string[]; cwd: string }) => {
+    const args = opts.args ?? [];
+    calls.push([opts.command, ...args]);
+    const line = [opts.command, ...args].join(' ');
+    const key = Object.keys(script)
+      .sort((a, b) => b.length - a.length)
+      .find((k) => line.startsWith(k));
+    const hit = (key === undefined ? undefined : script[key]) ?? { outcome: 'completed', exitCode: 0 };
+    return {
+      outcome: hit.outcome,
+      exitCode: hit.exitCode,
+      stdout: hit.stdout ?? '',
+      stderr: hit.stderr ?? '',
+      truncated: false,
+      ...(hit.gitNotApplied !== undefined ? { gitNotApplied: hit.gitNotApplied } : {}),
+    };
+  };
+  return { run: run as never, calls };
+}
+
+describe('deps-tools-host-other-texts T-07 openPr says a remote, a key and an error line without credentials', () => {
+  const base = { projectPath: '/p', worktreePath: '/w', branch: 'dev-guardian/fix-npm-abc', title: 'T', body: 'B', scope: { allows: (path: string) => path === 'file.txt' } };
+  const noPush = (calls: string[][]): boolean => !calls.some((c) => c[0] === 'git' && c[1] === 'push');
+
+  /** `raw` is origin; the repository's own `url.<keyBase>.insteadOf = <prefix>` turns it into `effective`. */
+  const rewrite = (raw: string, prefix: string, keyBase: string, effective: string) =>
+    fakeRunNotApplied({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'git remote': { outcome: 'completed', exitCode: 0, stdout: `${effective}\n` },
+      'git config': {
+        outcome: 'completed',
+        exitCode: 0,
+        stdout: `local\0remote.origin.url\n${raw}\0local\0url.${keyBase}.insteadof\n${prefix}\0`,
+      },
+    });
+
+  it.each([
+    {
+      id: 'origin https://T/K@H/org/repo.git',
+      raw: `https://${T07.tok}/${T07.ken}@${T07_HOST}/org/repo.git`,
+      prefix: 'https://',
+      keyBase: 'https://other.example/',
+      effective: `https://other.example/${T07.tok}/${T07.ken}@${T07_HOST}/org/repo.git`,
+      key: 'url.https://other.example/.insteadof',
+    },
+    {
+      id: 'origin https://U:T@H/org/repo.git',
+      raw: `https://${T07.user}:${T07.tok}@${T07_HOST}/org/repo.git`,
+      prefix: 'https://',
+      keyBase: 'https://other.example/',
+      effective: `https://other.example/${T07.user}:${T07.tok}@${T07_HOST}/org/repo.git`,
+      key: 'url.https://other.example/.insteadof',
+    },
+    {
+      id: 'a key whose base has credentials',
+      raw: 'https://github.com/o/r.git',
+      prefix: 'https://github.com/',
+      keyBase: `https://${T07.user}:${T07.tok}@other.example/`,
+      effective: `https://${T07.user}:${T07.tok}@other.example/o/r.git`,
+      key: 'url.https://other.example/.insteadof',
+    },
+    {
+      id: 'origin TOKEN@host:org/repo.git (the scp form with another name)',
+      raw: `${T07.tok}@${T07_HOST}:org/repo.git`,
+      prefix: `${T07.tok}@${T07_HOST}:`,
+      keyBase: 'git@other.example:',
+      effective: 'git@other.example:org/repo.git',
+      key: 'url.git@other.example:.insteadof',
+    },
+  ])('T-07 the push refusal, $id: no part of the credentials, the key named, push_failed, no git push', async ({ raw, prefix, keyBase, effective, key }) => {
+    const { run, calls } = rewrite(raw, prefix, keyBase, effective);
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('push_failed');
+    expect(t07PartsIn(r.detail ?? ''), r.detail ?? '').toEqual([]);
+    expect(r.detail).toContain(key);
+    expect(noPush(calls)).toBe(true);
+  });
+
+  it('T-07 the keys git configuration names and dev-guardian did not apply: git_config_not_applied and the push_failed detail say them without credentials', async () => {
+    const keys = [`http.https://${T07.user}:${T07.tok}@${T07_HOST}/.extraheader`, `credential.https://${T07.tok}/${T07.ken}@${T07_HOST}/.helper`];
+    const { run } = fakeRunNotApplied({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'git commit': { outcome: 'completed', exitCode: 0, gitNotApplied: keys },
+      'git push': { outcome: 'failed', exitCode: 1, stderr: 'fatal: the remote hung up\n' },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('push_failed');
+    const said = JSON.stringify(r);
+    expect(t07PartsIn(said), said).toEqual([]);
+    expect(r.detail).toContain(`http.https://${T07_HOST}/.extraheader`);
+    expect(JSON.stringify(r.git_config_not_applied)).toContain('credential.https://(host not shown).helper');
+  });
+
+  it('T-07 the first error line of git push: a URL in it is said without credentials', async () => {
+    const { run } = fakeRunNotApplied({
+      'gh pr list': { outcome: 'completed', exitCode: 0, stdout: '[]' },
+      'git status': REAL_CHANGES,
+      'git push': {
+        outcome: 'failed',
+        exitCode: 128,
+        stderr: `fatal: unable to access 'https://${T07.user}:${T07.tok}@${T07_HOST}/org/repo.git/': Could not resolve host\n`,
+      },
+    });
+    const r = await openPr({ ...base, run });
+    expect(r.status).toBe('push_failed');
+    expect(t07PartsIn(r.detail ?? ''), r.detail ?? '').toEqual([]);
+    expect(r.detail).toContain(`https://${T07_HOST}/org/repo.git/`);
+  });
+});

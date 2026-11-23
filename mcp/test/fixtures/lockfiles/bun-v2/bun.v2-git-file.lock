@@ -1,0 +1,15 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-gitdep": "git+file:///tmp/dgprobe-gitdep",
+      },
+    },
+  },
+  "packages": {
+    "dgprobe-zzq7731-gitdep": ["dgprobe-zzq7731-gitdep@git+file:///tmp/dgprobe-gitdep#30a8813de76f53d7f7db81e6aa91af5dcf4b005b", {}, "30a8813de76f53d7f7db81e6aa91af5dcf4b005b"],
+  }
+}

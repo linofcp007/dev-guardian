@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-localdir": "file:../dgprobe-outside/localdir",
+        "dgprobe-zzq7731-localtgz": "file:/tmp/dgprobe-outside/dgprobe-zzq7731-localtgz-1.0.0.tgz",
+      },
+    },
+  },
+  "packages": {
+    "dgprobe-zzq7731-localdir": ["dgprobe-zzq7731-localdir@file:../dgprobe-outside/localdir", {}],
+
+    "dgprobe-zzq7731-localtgz": ["dgprobe-zzq7731-localtgz@/tmp/dgprobe-outside/dgprobe-zzq7731-localtgz-1.0.0.tgz", {}, "sha512-kYqghamq+YeDU/Ao3nH7VrY8z+kMIGSm//sBk3xncXlnSupqeNLt7nrzxETDOmj52OHLgpmEMvYLiNUDzw66yg=="],
+  }
+}

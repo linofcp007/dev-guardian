@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -12,7 +13,7 @@ import {
 } from '../../../src/pkgvet/hookDecision.js';
 import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
-import { hangBound } from '../../helpers/timing.js';
+import { hangBound, MIN_CHUNK_MS } from '../../helpers/timing.js';
 
 const NOW = Date.parse('2026-09-25T12:00:00Z');
 const OSV = 'https://api.osv.dev/v1/querybatch';
@@ -1580,11 +1581,12 @@ describe('install-vet-lockfile-pins', () => {
 
   /**
    * The network of these tests. The public registry answers for every name: `placeholder` names with npm's security
-   * placeholder, the others with {@link LATEST}. OSV answers `MAL-2025-6022` for {@link BAD} alone, another advisory
-   * for the `vulnerable` pairs, and HTTP 500 for a request `fails` picks. Any other URL is an error — and is in `calls`.
+   * placeholder, the others with {@link LATEST}. OSV answers `MAL-2025-6022` for {@link BAD} alone, `MAL-2026-0100`
+   * for the `malicious` pairs, another advisory for the `vulnerable` pairs, and HTTP 500 for a request `fails` picks.
+   * Any other URL is an error — and is in `calls`.
    */
   function lockNet(
-    spec: { placeholder?: readonly string[]; vulnerable?: readonly string[]; fails?: (pairs: readonly string[]) => boolean } = {},
+    spec: { placeholder?: readonly string[]; malicious?: readonly string[]; vulnerable?: readonly string[]; fails?: (pairs: readonly string[]) => boolean } = {},
   ): LockNet {
     const net: Omit<LockNet, 'fetchImpl'> = { calls: [], bodies: [], registry: [], asked: [], batches: [] };
     const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
@@ -1602,6 +1604,7 @@ describe('install-vet-lockfile-pins', () => {
           results: queries.map((q, i) => {
             const pair = pairs[i] ?? '';
             if (q.package?.ecosystem === 'npm' && pair === BAD) return { vulns: [{ id: 'MAL-2025-6022' }] };
+            if (q.package?.ecosystem === 'npm' && spec.malicious?.includes(pair) === true) return { vulns: [{ id: 'MAL-2026-0100' }] };
             return spec.vulnerable?.includes(pair) === true ? { vulns: [{ id: 'GHSA-aaaa-bbbb-cccc' }] } : {};
           }),
         });
@@ -2038,10 +2041,10 @@ describe('install-vet-lockfile-pins', () => {
       /\S/,
     ],
     [
-      'a bun.lock of lockfileVersion 2',
+      'a bun.lock of lockfileVersion 4',
       'bun install',
       'bun.lock',
-      (path) => writeFileSync(path, bunLock(BAD_LOCK).replace('"lockfileVersion": 1,', '"lockfileVersion": 2,')),
+      (path) => writeFileSync(path, bunLock(BAD_LOCK).replace('"lockfileVersion": 1,', '"lockfileVersion": 4,')),
       /\S/,
     ],
     [
@@ -2522,6 +2525,87 @@ describe('install-vet-lockfile-pins', () => {
     expect(lines(d?.context).filter((l) => /lodahs/.test(l))).toHaveLength(1);
   });
 
+  // ── lockfile-bun-lock-v2, T-07: a bun.lock outside the form bun writes, through the decision (the helpers above)
+  describe('lockfile-bun-lock-v2', () => {
+    const DEP = { dep: '^1.0.0' };
+    const DOC = `${PUBLIC}/dep`;
+    const I = JSON.stringify(INTEGRITY);
+    const NOT_RECOGNISED = 'dev-guardian: 1 entry of bun.lock was not recognised — not vetted.';
+    const ANOTHER_SOURCE = 'dev-guardian: 1 package of bun.lock comes from another source — what it serves was not vetted.';
+    /** A bun.lock of lockfileVersion `label` whose workspace records `dep: ^1.0.0`; its entries are `entries`, the first one `dep`'s. */
+    const depLock = (label: number, entries: readonly string[]): string => {
+      const text = bunLock({ root: DEP, pins: [] }, entries).replace('"lockfileVersion": 1,', `"lockfileVersion": ${label},`);
+      expect(text).toContain(`"lockfileVersion": ${label},`);
+      return text;
+    };
+    /** What `bun install` decided and asked: the deny, the lines of the context, the registry documents and the OSV pairs. */
+    async function install(lockfile: string, net: LockNet = lockNet()): Promise<{ deny: string | undefined; lines: string[]; registry: string[]; asked: string[] }> {
+      pkgJson(DEP);
+      put('bun.lock', lockfile);
+      const d = await decideInstallCommand('bun install', at(net.fetchImpl));
+      return { deny: d?.deny, lines: d?.context === undefined ? [] : lines(d.context), registry: net.registry, asked: sorted(net.asked) };
+    }
+
+    it('T-07 (1) label 1, the entry of `dep` without its integrity: the one lockfile line says it was not recognised, `dep` is asked of the registry by name and its pin of OSV — and a malicious pin is denied', async () => {
+      const lockfile = depLock(1, ['    "dep": ["dep@1.2.3", "", {}],']);
+      expect(await install(lockfile)).toEqual({ deny: undefined, lines: [NOT_RECOGNISED], registry: [DOC], asked: ['dep@1.0.0', 'dep@1.2.3'] });
+      const denied = await install(lockfile, lockNet({ malicious: ['dep@1.2.3'] }));
+      expect(denied.deny ?? '(no deny)').toContain("bun.lock pins 'dep@1.2.3'");
+    });
+
+    it('T-07 (2) label 1, a path in the second element of `dep`: another source said without a host, then not recognised — `dep` is asked of the registry, its pin of OSV', async () => {
+      expect(await install(depLock(1, [`    "dep": ["dep@1.2.3", "./x", {}, ${I}],`]))).toEqual({
+        deny: undefined,
+        lines: [ANOTHER_SOURCE, NOT_RECOGNISED],
+        registry: [DOC],
+        asked: ['dep@1.0.0', 'dep@1.2.3'],
+      });
+    });
+
+    it('T-07 (3) label 1, the entry of `dep` fetching evil@6.6.6, without a space before its object: denied for what it fetches, and `dep` is asked of the registry', async () => {
+      const lockfile = depLock(1, [`    "dep": ["dep@1.2.3", "https://evil.example/evil/-/evil-6.6.6.tgz",{}, ${I}],`]);
+      const read = await install(lockfile, lockNet({ malicious: ['evil@6.6.6'] }));
+      expect(read.deny ?? '(no deny)').toContain("bun.lock names 'dep@1.2.3' and fetches 'evil@6.6.6'");
+      expect(read.registry).toEqual([DOC]);
+    });
+
+    it('T-07 (4) label 2, an md5 integrity: no lockfile line — `dep` is asked of the registry by name, its pin of OSV', async () => {
+      expect(await install(depLock(2, [`    "dep": ["dep@1.2.3", "", {}, "md5-${'A'.repeat(22)}=="],`]))).toEqual({
+        deny: undefined,
+        lines: [],
+        registry: [DOC],
+        asked: ['dep@1.0.0', 'dep@1.2.3'],
+      });
+    });
+
+    it('T-07 (5) label 1, a pin of a scope the project’s .npmrc gives a registry of its own, the public registry’s URL written without spaces: it IS sent to OSV, and the one lockfile line is not recognised — no "own scope"', async () => {
+      put('.npmrc', ACME_REGISTRY);
+      const acme = `    "@acme/billing": ["@acme/billing@3.0.1","https://registry.npmjs.org/@acme/billing/-/billing-3.0.1.tgz",{},${I}],`;
+      expect(await install(depLock(1, [`    "dep": ["dep@1.2.3", "", {}, ${I}],`, acme]))).toEqual({
+        deny: undefined,
+        lines: [NOT_RECOGNISED],
+        registry: [DOC],
+        asked: ['@acme/billing@3.0.1', 'dep@1.0.0', 'dep@1.2.3'],
+      });
+    });
+
+    it.each(['git+a/x.tgz', 'GIT+x.tgz'])('T-03 guard (review round 1): an entry `nome@%s` is a git origin as today — said as another source, never the project’s own', async (spec) => {
+      expect(await install(depLock(1, [`    "dep": ["dep@1.2.3", "", {}, ${I}],`, `    "nome": ["nome@${spec}", {}],`]))).toEqual({
+        deny: undefined,
+        lines: [ANOTHER_SOURCE],
+        registry: [],
+        asked: ['dep@1.2.3'],
+      });
+    });
+
+    it.each([1, 2])('T-07 `bun update` with a bun.lock of label %i that covers `dep`: as today — `dep` is asked of the registry by name, and its pin of OSV', async (label) => {
+      pkgJson(DEP);
+      put('bun.lock', depLock(label, [`    "dep": ["dep@1.2.3", "", {}, ${I}],`]));
+      const net = lockNet();
+      expect(await decideInstallCommand('bun update', at(net.fetchImpl))).toBeNull();
+      expect({ registry: net.registry, pinned: net.asked.includes('dep@1.2.3') }).toEqual({ registry: [DOC], pinned: true });
+    });
+  });
 });
 
 // ───────────────── install-vet-slow-first-round — a document that does not arrive costs its package, not the manifest
@@ -2716,9 +2800,10 @@ describe('selftest-install-vet-canary', () => {
 describe('pkgvet-archive-like-name', () => {
   it('T-11 `composer require vendor/<missing>.zip`, the registry answering 404: a warning, never a deny', async () => {
     const f = fakeRegistry();
-    const d = await decideInstallCommand('composer require dgprobe/missing.zip', opts(f.fetchImpl));
+    // With a flag: the bare form is the one the composer was measured with (pkgvet-archive-names-pipx-composer), where the name is refused.
+    const d = await decideInstallCommand('composer require --dev dgprobe/missing.zip', opts(f.fetchImpl));
     expect(f.calls, 'the name is asked of Packagist').toContain('https://repo.packagist.org/p2/dgprobe/missing.zip.json');
-    expect(d?.deny, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(d?.deny, 'never a deny for a form that was not measured').toBeUndefined();
     expect(d?.context ?? '', 'a warning that names the package').toContain('dgprobe/missing.zip');
   });
 
@@ -5254,5 +5339,3368 @@ describe('install-vet-over-ceiling-asks', () => {
       const d = await decide(command, registry({ exists: [typed(1)] }));
       expect(askOf(d)).toBeUndefined();
     });
+  });
+});
+
+// ───────────────── install-vet-manifest-protocol-values — the names a `catalog:` or a `patch:` value adds go through the rules of every dependency
+
+describe('install-vet-manifest-protocol-values', () => {
+  const dep = (n: number): string => `dgprobe-zzq7731-p${String(n)}`;
+  const writeDeps = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  /** The registry URLs asked, OSV's batch left out. */
+  const ofRegistry = (calls: readonly string[]): string[] => calls.filter((url) => url !== OSV);
+
+  it('T-05 (a) 151 dependencies `catalog:`: 150 are asked of the registry, the count line of the ceiling is said, and the answer asks the user (install-vet-over-ceiling-asks)', async () => {
+    const names = Array.from({ length: 151 }, (_, i) => dep(i + 1));
+    writeDeps(Object.fromEntries(names.map((name) => [name, 'catalog:'])));
+    const reg = registry({ exists: names });
+    const d = await decideInstallCommand('pnpm install', opts(reg.fetchImpl, { popular: {} }));
+    expect(new Set(ofRegistry(reg.calls)).size).toBe(150);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context).toContain('1 more packages of the manifest were not vetted (only the first 150 are) — not verified.');
+    expect(d?.ask ?? '(no ask)').toContain('the manifests this command installs');
+    expect(d?.ask ?? '(no ask)').toContain('1 was not vetted (only the first 150 are)');
+  });
+
+  it('T-05 (b) a `catalog:` dependency the lockfile pins: its name is asked of the registry as for `latest`, and the pinned version still goes to OSV', async () => {
+    // Side by side: `latest` is what the tree does today for a value with no range; the `catalog:` key must do the same.
+    const deps = { 'cat-pkg-zq': 'catalog:', 'latest-pkg-zq': 'latest' };
+    writeDeps(deps);
+    const pin = (name: string): Record<string, unknown> => ({
+      version: '1.0.0',
+      resolved: `https://registry.npmjs.org/${name}/-/${name}-1.0.0.tgz`,
+      integrity: `sha512-${'A'.repeat(86)}==`,
+    });
+    writeFileSync(
+      join(project, 'package-lock.json'),
+      JSON.stringify({
+        name: 'fixture-app',
+        version: '1.0.0',
+        lockfileVersion: 3,
+        requires: true,
+        packages: {
+          '': { name: 'fixture-app', version: '1.0.0', dependencies: deps },
+          'node_modules/cat-pkg-zq': pin('cat-pkg-zq'),
+          'node_modules/latest-pkg-zq': pin('latest-pkg-zq'),
+        },
+      }),
+    );
+    const asked: string[] = [];
+    const f = fakeFetch({
+      'https://registry.npmjs.org/cat-pkg-zq': npmDoc('1.0.0'),
+      'https://registry.npmjs.org/latest-pkg-zq': npmDoc('1.0.0'),
+      [OSV]: (body) => {
+        const queries = (body as { queries: Array<{ package?: { name?: string }; version?: string }> }).queries;
+        asked.push(...queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`));
+        return osvClean(body);
+      },
+    });
+    const d = await decideInstallCommand('npm ci', { ...opts(f.fetchImpl), projectDir: project });
+    expect(d?.deny).toBeUndefined();
+    // What the lockfile pins is vetted (today too).
+    expect(asked).toContain('cat-pkg-zq@1.0.0');
+    expect(asked).toContain('latest-pkg-zq@1.0.0');
+    // The key is asked of the registry as `latest` is: the same requests, by comparison and not by a pasted value.
+    const registryFor = (name: string): string[] => f.calls.filter((url) => url.endsWith(`/${name}`));
+    expect(registryFor('latest-pkg-zq').length).toBeGreaterThan(0);
+    expect(registryFor('cat-pkg-zq').map((url) => url.replace('cat-pkg-zq', 'X'))).toEqual(registryFor('latest-pkg-zq').map((url) => url.replace('latest-pkg-zq', 'X')));
+  });
+
+  it('T-05 (c) a scope the project’s .npmrc gives a registry of its own: neither the key `@acme-zq/x: catalog:` nor the source `@acme-zq/y` of a patch leaves, one line counts them, and `left-pad-zq` is asked', async () => {
+    writeFileSync(join(project, '.npmrc'), '@acme-zq:registry=https://npm.acme-zq.example/\n');
+    writeDeps({ '@acme-zq/x': 'catalog:', 'left-pad-zq': 'patch:@acme-zq/y@npm%3A1.0.0#f' });
+    const reg = registry({ exists: ['left-pad-zq'] });
+    const d = await decideInstallCommand('yarn install', opts(reg.fetchImpl, { popular: {} }));
+    expect([...reg.calls, ...reg.bodies].filter((sent) => /acme-zq/i.test(sent))).toEqual([]);
+    expect(reg.calls).toContain('https://registry.npmjs.org/left-pad-zq');
+    expect(d?.deny).toBeUndefined();
+    expect((d?.context ?? '').split('\n')).toContain(
+      "dev-guardian: 2 packages of package.json are in a scope (@acme-zq) the project's .npmrc gives a registry of its own — not vetted.",
+    );
+  });
+
+  it('T-05 (d) `real-zq: patch:real-zq@npm:1.0.0#f` under `yarn install`, with `real-zq` not on the registry: ONE warning line', async () => {
+    writeDeps({ 'real-zq': 'patch:real-zq@npm:1.0.0#f' });
+    const reg = registry({});
+    const d = await decideInstallCommand('yarn install', opts(reg.fetchImpl, { popular: {} }));
+    expect(d?.deny).toBeUndefined();
+    const warned = (d?.context ?? '').split('\n').filter((l) => l.includes('not found on the public registry'));
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain("'real-zq");
+  });
+});
+
+// ───────────────── install-vet-global-in-short-cluster — npm's groups of short flags decide as the same flags written apart
+
+describe('install-vet-global-in-short-cluster', () => {
+  // The names of the measurement (.specs/install-vet-global-in-short-cluster/measurements/, npm 11.19.0).
+  const P = 'dgprobe-zzq7731-named';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const INIT = 'dgprobe-zzq7731-init';
+  const DENIED = 'does not exist on the npm registry';
+  const notFound = (name: string): string => `'${name}': not found on the public registry`;
+  const NAMED_TO_UPDATE = 'a package named to an update is fetched only when it is already installed';
+  const EVERY_GLOBAL = 'this command updates every globally installed package — none of them was vetted.';
+  const allowlist = (flag: string): string => `flag ${flag} is not on the confident-shape allowlist`;
+  const asked = (reg: { calls: string[] }, name: string): number => reg.calls.filter((u) => u === `https://registry.npmjs.org/${name}`).length;
+
+  /** The decision for `command` in the project of the measurement — its package.json names D at ^1.0.0 — with a registry that has neither P nor D. */
+  const decide = async (command: string): Promise<{ d: Awaited<ReturnType<typeof decideInstallCommand>>; reg: ReturnType<typeof registry> }> => {
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [DEP]: '^1.0.0' } }));
+    const reg = registry();
+    return { d: await decideInstallCommand(command, opts(reg.fetchImpl)), reg };
+  };
+
+  // ── T-06: the decision of a group is the decision of its letters written apart
+
+  it.each([`npm i -gD ${P}`, `npm i -Dg ${P}`, `npm i -gE ${P}`, `npm i -gS ${P}`, `npm i -gDE ${P}`])(
+    'T-06 `%s` DENIES the missing P and does not ask the registry for D: npm installs globally and reads no manifest',
+    async (command) => {
+      const { d, reg } = await decide(command);
+      const deny = d?.deny ?? '';
+      expect({ deniesP: deny.includes(`'${P}'`) && deny.includes(DENIED), askedDep: asked(reg, DEP) }).toEqual({ deniesP: true, askedDep: 0 });
+    },
+  );
+
+  it.each<[command: string, flag: string]>([
+    [`npm i -gf ${P}`, '-f'],
+    [`npm i -gy ${P}`, '-y'],
+    [`npm i -ga ${P}`, '-a'],
+    [`npm i -gn ${P}`, '-n'],
+  ])('T-06 `%s` warns, for `flag %s is not on the confident-shape allowlist`, and does not ask the registry for D', async (command, flag) => {
+    const { d, reg } = await decide(command);
+    expect({ deny: d?.deny, reason: (d?.context ?? '').includes(allowlist(flag)), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      reason: true,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm i -L global <P>` warns about P, and asks the registry neither for `global` nor for D', async () => {
+    const { d, reg } = await decide(`npm i -L global ${P}`);
+    expect({ deny: d?.deny, warnsP: (d?.context ?? '').includes(notFound(P)), askedGlobal: asked(reg, 'global'), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      warnsP: true,
+      askedGlobal: 0,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm -L global install <P>` is read: P is asked, and the answer is a warning, never a deny', async () => {
+    const { d, reg } = await decide(`npm -L global install ${P}`);
+    expect({ deny: d?.deny, warnsP: (d?.context ?? '').includes(notFound(P)), askedP: asked(reg, P) > 0 }).toEqual({
+      deny: undefined,
+      warnsP: true,
+      askedP: true,
+    });
+  });
+
+  it('T-06 `npm update -gD` says it updates every globally installed package, and does not ask the registry for D', async () => {
+    const { d, reg } = await decide('npm update -gD');
+    expect({ deny: d?.deny, everyGlobal: (d?.context ?? '').includes(EVERY_GLOBAL), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      everyGlobal: true,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm update -gD <P>` warns about P as a name given to an update, and does not ask the registry for D', async () => {
+    const { d, reg } = await decide(`npm update -gD ${P}`);
+    const context = d?.context ?? '';
+    expect({ deny: d?.deny, warnsP: context.includes(notFound(P)), named: context.includes(NAMED_TO_UPDATE), askedDep: asked(reg, DEP) }).toEqual({
+      deny: undefined,
+      warnsP: true,
+      named: true,
+      askedDep: 0,
+    });
+  });
+
+  it('T-06 `npm i -gC dgprobe-dir <P>` warns with `directory changed by -C`, and without the note that the package.json was not read', async () => {
+    const { d } = await decide(`npm i -gC dgprobe-dir ${P}`);
+    const context = d?.context ?? '';
+    expect({ deny: d?.deny, directory: context.includes('directory changed by -C'), notRead: context.includes('package.json was not read') }).toEqual({
+      deny: undefined,
+      directory: true,
+      notRead: false,
+    });
+  });
+
+  // ── T-13: a launcher with `-L` or `-m` vets the package it fetches (question 4, the owner's answer B)
+
+  it.each<[command: string, fetched: string, flag: string]>([
+    [`npm exec -L global ${P}`, P, '-L'],
+    [`npx -L global ${P}`, P, '-L'],
+    [`npm exec -m dgprobe-msg ${P}`, P, '-m'],
+    [`npm init -L global ${INIT}`, `create-${INIT}`, '-L'],
+    [`npm create -L global ${INIT}`, `create-${INIT}`, '-L'],
+  ])('T-13 `%s` with %s missing from the registry warns about it, for `flag %s is not on the confident-shape allowlist`, and never denies', async (command, fetched, flag) => {
+    const reg = registry();
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl));
+    const context = d?.context ?? '';
+    expect({ deny: d?.deny, warns: context.includes(notFound(fetched)), reason: context.includes(allowlist(flag)) }).toEqual({
+      deny: undefined,
+      warns: true,
+      reason: true,
+    });
+  });
+});
+
+// ───────────────── install-vet-python-tool-forms — the decision for the Python forms that fetch a package and build it
+
+describe('install-vet-python-tool-forms', () => {
+  // The names of the plan: absent from the registry, unless a test says they exist.
+  const X = 'zz-no-such-pkg';
+  const Y = 'dgprobe-zzq7731-y';
+  const Z = 'dgprobe-zzq7731-z';
+  const T = 'dgprobe-zzq7731-tool';
+  const P = 'dgprobe-zzq7731-named';
+  const CMD = 'dgprobe-zzq7731-cmd';
+  const EVIL = 'zz-evil-pkg';
+  const UPDATES_EVERY_TOOL = 'dev-guardian: this command updates every tool pipx or uv installed — none of them was vetted.';
+  const NAMED_TO_UPDATE = 'a package named to an update is fetched only when it is already installed';
+  const NOT_FOUND = 'not found on the public registry';
+  const notFound = (name: string): string => `'${name}': ${NOT_FOUND}`;
+  const notMeasured = (verb: string): string => `this form of '${verb}' was not measured`;
+  const allowlist = (flag: string): string => `flag ${flag} is not on the confident-shape allowlist`;
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  /** The question of the answer: read through a type that has it, so the file type-checks whatever the answer type is. */
+  const askOf = (d: Decided): string | undefined => (d as (NonNullable<Decided> & { ask?: string }) | null)?.ask;
+  const decide = (command: string, reg: { fetchImpl: typeof fetch }, extra: Partial<HookVetOptions> = {}): Promise<Decided> =>
+    decideInstallCommand(command, opts(reg.fetchImpl, { popular: {}, ...extra }));
+
+  /** The flag the refusal names for the manager of a line: `--index <url>` for uv, `--index-url <url>` for pip and pipx. */
+  const indexFlag = (command: string): string => (/^uvx? /.test(command) ? '`--index <url>`' : '`--index-url <url>`');
+
+  describe('decision', () => {
+    // ── T-03: the confident shape — what is refused, what only warns, what is asked
+
+    const REFUSED = [
+      // The 14 forms of 2026-11-20, one by one.
+      `pip download ${X}`,
+      `pip wheel ${X}`,
+      `pip download --no-deps ${X}`,
+      `pip download --no-binary :all: ${X}`,
+      `pip install --dry-run ${X}`,
+      `pipx inject ${T} ${X}`,
+      `pipx upgrade --install ${X}`,
+      `pipx runpip ${T} install ${X}`,
+      `pipx run --spec ${X} ${CMD}`,
+      `pipx run --with ${Y} ${X}`,
+      `uvx --from ${X} ${CMD}`,
+      `uv tool run --from ${X} ${CMD}`,
+      `uvx --with ${Y} ${X}`,
+      `uv tool install --with ${Y} ${X}`,
+      // The 18 of the M-02 of 2026-11-21.
+      `python -m pip download ${X}`,
+      `pip3 wheel ${X}`,
+      `python -m pip install --dry-run ${X}`,
+      `pip download ${X} ${Y}`,
+      `pip download ${X}==1.0`,
+      `pip download -d out ${X}`,
+      `pip wheel --no-deps ${X}`,
+      `pip download ${X} --no-deps`,
+      `pipx inject ${T} ${X} ${Y}`,
+      `uvx --from=${X} ${CMD}`,
+      `uv tool run --with ${Y} ${X}`,
+      `uvx -w ${Y} ${X}`,
+      `uv tool install ${X} --with ${Y}`,
+      `pipx run --spec=${X} ${CMD}`,
+      `uvx --from ${X} ${CMD} --help`,
+      `pipx run --spec ${X} ${CMD} a`,
+      `uvx --with ${Y} ${X} --version`,
+      `pipx run --with ${Y} ${X} --help`,
+      // The places widened by the owner's answer 2-A.
+      `pip download -d build ${X}`,
+      `uvx --from ${X} ${CMD} --verbose`,
+    ];
+    it.each([...new Set(REFUSED)])('T-03 `%s` DENIES the missing name, and names the index flag of its manager and `GUARDIAN_PKG_VET=0`', async (command) => {
+      const d = await decide(command, registry());
+      const deny = d?.deny ?? '(no deny)';
+      expect({
+        named: deny.includes(`'${X}'`),
+        reason: deny.includes('does not exist on PyPI'),
+        indexFlag: deny.includes(indexFlag(command)),
+        prefix: deny.includes('GUARDIAN_PKG_VET=0'),
+      }).toEqual({ named: true, reason: true, indexFlag: true, prefix: true });
+    });
+
+    it.each<[command: string, reason: string]>([
+      [`pip3 download ${X}`, notMeasured('pip download')],
+      [`python3 -m pip download ${X}`, notMeasured('pip download')],
+      [`py -m pip wheel ${X}`, notMeasured('pip wheel')],
+      [`pip download ${X} ${Y} ${Z}`, notMeasured('pip download')],
+      [`pip download --dest out ${X}`, notMeasured('pip download')],
+      [`pip download ${X}==1.*`, notMeasured('pip download')],
+      [`pip download ${X}===1.0`, notMeasured('pip download')],
+      [`pip download ${X}==1.0rc1`, notMeasured('pip download')],
+      [`pipx inject --force ${T} ${X}`, notMeasured('pipx inject')],
+      [`pipx runpip ${T} download ${X}`, notMeasured('pipx runpip')],
+      [`pipx runpip ${T} install -q ${X}`, notMeasured('pipx runpip')],
+      [`pipx upgrade --install --force ${X}`, notMeasured('pipx upgrade --install')],
+      [`uvx --from ${X} ${CMD} a b`, allowlist('--from')],
+      [`pipx run --spec ${X} ${CMD} a b`, allowlist('--spec')],
+      [`sudo pip download ${X}`, "not a plain install command ('sudo' is not a bare package-manager name)"],
+      [`pip download ${X} && ls`, "not a single plain install statement ('&' outside quotes)"],
+    ])('T-03 `%s` WARNS that the name was not found, with its reason, and does not deny', async (command, reason) => {
+      const reg = registry();
+      const d = await decide(command, reg);
+      const context = d?.context ?? '(no context)';
+      expect({ deny: d?.deny, notFound: context.includes(notFound(X)), reason: context.includes(reason), askedX: reg.calls.includes(pypiUrl(X)) }).toEqual({
+        deny: undefined,
+        notFound: true,
+        reason: true,
+        askedX: true,
+      });
+    });
+
+    it('T-03 `pipx inject --include-resources-from Y T X` warns about X and Y, both asked of the registry, and never T', async () => {
+      const reg = registry();
+      const d = await decide(`pipx inject --include-resources-from ${Y} ${T} ${X}`, reg);
+      const context = d?.context ?? '(no context)';
+      expect({
+        deny: d?.deny,
+        x: context.includes(notFound(X)),
+        y: context.includes(notFound(Y)),
+        reason: context.includes(notMeasured('pipx inject')),
+        askedT: reg.calls.includes(pypiUrl(T)),
+      }).toEqual({ deny: undefined, x: true, y: true, reason: true, askedT: false });
+    });
+
+    it('T-03 `pipx inject --dgunknown x T X` warns, for `unknown flag --dgunknown`: T and X are asked of the registry, and x never', async () => {
+      const reg = registry();
+      const d = await decide(`pipx inject --dgunknown x ${T} ${X}`, reg);
+      const context = d?.context ?? '(no context)';
+      expect({
+        deny: d?.deny,
+        reason: context.includes('unknown flag --dgunknown'),
+        x: context.includes(notFound(X)),
+        askedT: reg.calls.includes(pypiUrl(T)),
+        askedLowerX: reg.calls.includes(pypiUrl('x')),
+      }).toEqual({ deny: undefined, reason: true, x: true, askedT: true, askedLowerX: false });
+    });
+
+    it('T-03 `pipx inject T X` never asks the registry for T, the environment', async () => {
+      const reg = registry();
+      await decide(`pipx inject ${T} ${X}`, reg);
+      expect({ askedX: reg.calls.includes(pypiUrl(X)), askedT: reg.calls.filter((u) => u.includes(T)) }).toEqual({ askedX: true, askedT: [] });
+    });
+
+    it('T-03 `pip download` with 51 distinct names the registry has asks the user: 1 was not vetted (only the first 50 are)', async () => {
+      const names = Array.from({ length: 51 }, (_, i) => `dgprobe-zzq7731-c${String(i + 1)}`);
+      const d = await decide(`pip download ${names.join(' ')}`, registry({ exists: names }));
+      expect(d?.deny).toBeUndefined();
+      expect(askOf(d) ?? '(no ask)').toContain('this command names more packages than the hook vets');
+      expect(askOf(d) ?? '(no ask)').toContain('1 was not vetted (only the first 50 are)');
+    });
+
+    // ── T-04: the names given to an update, and the updates of every tool
+
+    it.each([`pipx upgrade ${X}`, `pipx reinstall ${X}`, `uv tool upgrade ${X}`])(
+      'T-04 `%s` warns that the name was not found, says a package named to an update is fetched only when it is already installed, and never denies',
+      async (command) => {
+        const d = await decide(command, registry());
+        const context = d?.context ?? '(no context)';
+        expect({ deny: d?.deny, notFound: context.includes(notFound(X)), named: context.includes(NAMED_TO_UPDATE) }).toEqual({
+          deny: undefined,
+          notFound: true,
+          named: true,
+        });
+      },
+    );
+
+    it.each([`pipx upgrade ${EVIL}`, `pipx reinstall ${EVIL}`, `uv tool upgrade ${EVIL}`])('T-04 `%s` DENIES a package OSV lists as malicious', async (command) => {
+      const d = await decide(command, registry({ exists: [EVIL], malicious: [EVIL] }));
+      const deny = d?.deny ?? '(no deny)';
+      expect({ evil: deny.includes(EVIL), mal: deny.includes('MAL-2026-77') }).toEqual({ evil: true, mal: true });
+    });
+
+    it.each(['pipx upgrade-all', 'uv tool upgrade --all', `pipx upgrade-all --skip ${X}`])(
+      'T-04 `%s` says in one line that it updates every tool and none was vetted: no deny, and no request to the network',
+      async (command) => {
+        const reg = registry();
+        const d = await decide(command, reg);
+        expect({ deny: d?.deny, line: d?.context?.includes(UPDATES_EVERY_TOOL), calls: reg.calls }).toEqual({ deny: undefined, line: true, calls: [] });
+      },
+    );
+
+    it.each(['pipx upgrade-all', 'uv tool upgrade --all', `pipx upgrade-all --skip ${X}`])('T-04 `%s` says the same with GUARDIAN_OFFLINE=1', async (command) => {
+      const reg = registry();
+      const d = await decide(command, reg, { env: { GUARDIAN_OFFLINE: '1' } });
+      expect({ deny: d?.deny, line: d?.context?.includes(UPDATES_EVERY_TOOL), calls: reg.calls }).toEqual({ deny: undefined, line: true, calls: [] });
+    });
+
+    it('T-04 `uv tool upgrade --all X` says the line of every tool and the warning for X', async () => {
+      const d = await decide(`uv tool upgrade --all ${X}`, registry());
+      const context = d?.context ?? '(no context)';
+      expect({ deny: d?.deny, line: context.includes(UPDATES_EVERY_TOOL), x: context.includes(notFound(X)) }).toEqual({ deny: undefined, line: true, x: true });
+    });
+
+    // ── T-07: the files of `-r` are read as the one of `pip install -r`
+
+    const REQ_COMMANDS = [
+      'pip download -r a.txt',
+      'pip wheel -r a.txt',
+      `pipx runpip ${T} install -r a.txt`,
+      `pipx inject ${T} -r a.txt`,
+      `pipx inject -fr a.txt ${T} ${P}`,
+    ];
+    it.each(REQ_COMMANDS)('T-07 `%s` DENIES the malicious package a.txt names, naming the file; the missing one is never refused', async (command) => {
+      writeFileSync(join(project, 'a.txt'), `${EVIL}==1.0.0\n${X}\n`);
+      const d = await decide(command, registry({ exists: [EVIL, P], malicious: [EVIL] }));
+      const deny = d?.deny ?? '(no deny)';
+      expect({ file: deny.includes('a.txt'), evil: deny.includes(EVIL), mal: deny.includes('MAL-2026-77'), refusesMissing: deny.includes(`'${X}'`) }).toEqual({
+        file: true,
+        evil: true,
+        mal: true,
+        refusesMissing: false,
+      });
+    });
+
+    it.each(REQ_COMMANDS)('T-07 `%s` with a.txt naming only a missing package warns about it and never denies', async (command) => {
+      writeFileSync(join(project, 'a.txt'), `${X}\n`);
+      const d = await decide(command, registry({ exists: [P] }));
+      expect({ deny: d?.deny, warns: (d?.context ?? '(no context)').includes(notFound(X)) }).toEqual({ deny: undefined, warns: true });
+    });
+
+    it('T-07 `pipx inject T -r n.txt`, with n.txt including `-r a.txt`, DENIES for the malicious package of a.txt: the reader follows the inner -r, which pipx does not', async () => {
+      writeFileSync(join(project, 'a.txt'), `${EVIL}==1.0.0\n`);
+      writeFileSync(join(project, 'n.txt'), '-r a.txt\n');
+      const d = await decide(`pipx inject ${T} -r n.txt`, registry({ exists: [EVIL], malicious: [EVIL] }));
+      const deny = d?.deny ?? '(no deny)';
+      expect({ evil: deny.includes(EVIL), mal: deny.includes('MAL-2026-77') }).toEqual({ evil: true, mal: true });
+    });
+
+    // ── T-05: protection — the reasons of today, written here, without a refusal
+
+    it.each<[command: string, reason: string]>([
+      [`uvx --from=${X} cmd --help`, allowlist('--from')],
+      [`uvx -w ${Y} ${X} --version`, allowlist('-w')],
+      [`uv tool run --with ${Y} ${X} --help`, allowlist('--with')],
+      [`uv tool install -q ${X} --with ${Y}`, allowlist('--with')],
+      [`uvx --with ${Y},${Z} ${X} --help`, "not a single plain install statement (',' outside quotes)"],
+      [`pipx run --spec=${X} cmd a`, allowlist('--spec')],
+      [`python3 -m pip install --dry-run -q ${X}`, allowlist('--dry-run')],
+      [`pip install --dry-run -q ${X}`, allowlist('--dry-run')],
+    ])('T-05 `%s` warns that the name was not found, for `%s`, and does not deny', async (command, reason) => {
+      const d = await decide(command, registry());
+      const context = d?.context ?? '(no context)';
+      expect({ deny: d?.deny, notFound: context.includes(notFound(X)), reason: context.includes(reason) }).toEqual({ deny: undefined, notFound: true, reason: true });
+    });
+
+    it('T-05 `pip install -r https://x.test/r.txt` says nothing about the file, as today', async () => {
+      const reg = registry();
+      expect(await decide('pip install -r https://x.test/r.txt', reg)).toBeNull();
+      expect(reg.calls).toEqual([]);
+    });
+
+    // ── T-08: protection — the decision's own cost, with `-r` files read once per command, is linear in the line
+
+    /** The cost of the cheapest of `runs` calls, in ms. */
+    async function cheapest(runs: number, run: () => Promise<unknown>): Promise<number> {
+      let best = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < runs; i += 1) {
+        const t0 = performance.now();
+        await run();
+        best = Math.min(best, performance.now() - t0);
+      }
+      return best;
+    }
+
+    it.each([
+      ['pip install -r a.txt;', 'pip install -r a.txt;'],
+      ['pip download -r a.txt;', 'pip download -r a.txt;'],
+    ])(
+      'T-08 the decision of `%s` repeated costs linear time: eight times the lines, well under 22.6 times the time',
+      async (_label, line) => {
+        writeFileSync(join(project, 'a.txt'), `${P}\n`);
+        const run = (n: number) => async (): Promise<unknown> => decide(line.repeat(n), registry({ exists: [P] }));
+        const base = await cheapest(2, run(100));
+        const large = await cheapest(1, run(800));
+        // Linear reads about 8, quadratic about 64: the geometric middle is 22.6.
+        expect(large / base, `800 lines cost ${large.toFixed(0)} ms against ${base.toFixed(0)} ms for 100`).toBeLessThan(22.6);
+      },
+      300_000,
+    );
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — `uv run` and `pipx run` read a script's PEP 723 block
+
+describe('install-vet-inline-script-deps', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const DEP = 'dgprobe-zzq7731-dep';
+  const NAMED = 'dgprobe-zzq7731-named';
+  const NOT_FOUND = 'not found on the public registry';
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The public registry of the plan: `requests` is clean, EVIL is published and has a `MAL-` advisory; everything else is a 404. */
+  const reg = (exists: string[] = []): ReturnType<typeof registry> => registry({ exists: ['requests', EVIL, ...exists], malicious: [EVIL] });
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  /** The question of the answer, read through a type that has it, so the file type-checks whatever the answer type is. */
+  const askOf = (d: Decided): string | undefined => (d as (NonNullable<Decided> & { ask?: string }) | null)?.ask;
+  const decide = (command: string, r: { fetchImpl: typeof fetch }, extra: Partial<HookVetOptions> = {}): Promise<Decided> =>
+    decideInstallCommand(command, opts(r.fetchImpl, { popular: {}, ...extra }));
+  const put = (rel: string, text: string, at: string = project): void => {
+    mkdirSync(dirname(join(at, rel)), { recursive: true });
+    writeFileSync(join(at, rel), text);
+  };
+  const notRead = (file: string, reason: string): string => `dev-guardian: ${file} was not read (${reason}) — its packages were not vetted.`;
+  /** The refusal of a block that names EVIL: the file, the name and the version, and whose decision it is. */
+  const refused = (d: Decided, file: string): void => {
+    expect(d?.deny ?? '(no deny)').toContain(`${file} names '${EVIL}@1.0.0'`);
+    expect(d?.deny ?? '(no deny)').toContain("is the user's decision");
+  };
+  const CAN_SYMLINK = ((): boolean => {
+    const probe = mkdtempSync(join(tmpdir(), 'pkgvet-ivsd-symlink-probe-'));
+    try {
+      writeFileSync(join(probe, 't'), 'x');
+      symlinkSync(join(probe, 't'), join(probe, 'l'));
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const DIR_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+  const UNC = '\\\\198.51.100.7\\share';
+
+  // ── T-03: `uv run` reads the block
+
+  describe('T-03 `uv run` reads the block', () => {
+    it.each<{ command: string; nested?: boolean; shell?: 'powershell' }>([
+      { command: 'uv run script.py' },
+      { command: 'uv run --script script.py' },
+      { command: 'uv run -s script.py' },
+      { command: 'uv run --no-project script.py' },
+      { command: 'uv run ./script.py' },
+      { command: 'uv run --with requests script.py' },
+      { command: 'python -m uv run script.py' },
+      { command: 'uv run script.py -m msg' },
+      { command: 'uv run --project . script.py' },
+      { command: "bash -c 'uv run script.py'", nested: true },
+    ])('T-03 `$command` with a malicious name in the block of script.py is DENIED, naming the file and the package', async ({ command, nested }) => {
+      put('script.py', BLOCK(EVIL, 'requests'));
+      const extra: Partial<HookVetOptions> = nested === true ? { nested: [{ text: 'uv run script.py', shell: 'bash' }] } : {};
+      refused(await decide(command, reg(), extra), 'script.py');
+    });
+
+    it.each([
+      'uv run --directory sub script.py',
+      'uv --directory sub run script.py',
+      'python -m uv --directory sub run script.py',
+      'UV_WORKING_DIR=sub uv run script.py',
+    ])('T-03 `%s` reads the script of the directory `sub`, and refuses it', async (command) => {
+      put('sub/script.py', BLOCK(EVIL, 'requests'));
+      refused(await decide(command, reg()), 'script.py');
+    });
+
+    it('T-03 a name the registry does not have only warns, and says the manifest names it', async () => {
+      put('script.py', BLOCK(DEP));
+      const d = await decide('uv run script.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`script.py: '${DEP}': ${NOT_FOUND}`);
+      expect(d?.context ?? '(no context)').toContain('not denied: it is named by a manifest');
+    });
+
+    it('T-03 a clean block is silent, and its name was looked up', async () => {
+      put('script.py', BLOCK('requests'));
+      const r = reg();
+      expect(await decide('uv run script.py', r)).toBeNull();
+      expect(r.calls).toContain(pypiUrl('requests'));
+    });
+
+    it('T-03 a requirement with a range the hook does not read is checked by its name (P8 = B)', async () => {
+      put('evilrange.py', `# /// script\n# dependencies = ["${EVIL} (>=1.0)"]\n# ///\nprint(1)\n`);
+      refused(await decide('uv run evilrange.py', reg()), 'evilrange.py');
+    });
+
+    it('T-03 a closing line `#\\r# ///` after a closed block: the reading of uv wins, and the question of the other reading carries no refusal', async () => {
+      put('crsplit.py', `${BLOCK(EVIL)}#\r# ///\n`);
+      refused(await decide('uv run crsplit.py', reg()), 'crsplit.py');
+    });
+  });
+
+  // ── T-04: `--with` and `--with-requirements`
+
+  describe('T-04 `--with` and `--with-requirements`', () => {
+    it('T-04 `uv run --with P python -c "print(1)"` with a malicious P is DENIED, as a package named on the line', async () => {
+      const d = await decide(`uv run --with ${EVIL} python -c "print(1)"`, reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/'dgprobe-zzq7731-evil@1\.0\.0'/);
+      expect(d?.deny ?? '(no deny)').toContain('ask the user to install it themselves');
+    });
+
+    it.each([
+      [`uv run --with ${NAMED} python -c "print(1)"`, 'flag --with is not on the confident-shape allowlist'],
+      [`uv run -w ${NAMED} pytest`, 'flag -w is not on the confident-shape allowlist'],
+      [`uv run --with ${NAMED},requests python -c "print(1)"`, "not a single plain install statement (',' outside quotes)"],
+    ])('T-04 `%s` warns that the name is not found, and does not deny (P2 = A)', async (command, why) => {
+      const r = reg();
+      const d = await decide(command, r);
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`'${NAMED}': ${NOT_FOUND}`);
+      expect(d?.context ?? '(no context)').toContain(`(not denied: ${why}`);
+      if (command.includes(',requests')) expect(r.calls).toEqual(expect.arrayContaining([pypiUrl(NAMED), pypiUrl('requests')]));
+    });
+
+    it('T-04 `uv run --with-requirements reqs-in.txt …` reads the requirements file, and refuses a malicious name in it', async () => {
+      put('reqs-in.txt', `${EVIL}\n`);
+      const d = await decide('uv run --with-requirements reqs-in.txt python -c "print(1)"', reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/reqs-in\.txt names 'dgprobe-zzq7731-evil/);
+    });
+
+    it.each([
+      'uv run --with-requirements deps.py python -c "print(1)"',
+      'uv run --with-requirements deps.pyw python -c "print(1)"',
+      'uv run --with-requirements DEPS.PY python -c "print(1)"',
+      'uv pip install -r deps.py',
+    ])('T-04 `%s` reads the file as a script, with the reader of the block (the uv does, M-2e)', async (command) => {
+      const file = /deps\.pyw?|DEPS\.PY/.exec(command)?.[0] ?? 'deps.py';
+      put(file, BLOCK(EVIL));
+      expect((await decide(command, reg()))?.deny ?? '(no deny)').toContain(`${file} names '${EVIL}`);
+    });
+  });
+
+  // ── T-05: `pipx run` of a file
+
+  describe('T-05 `pipx run` of a file (P5 = A)', () => {
+    it('T-05 (a) `pipx run script.py`: the block refuses, the word is looked up only for malware and never called a missing name', async () => {
+      put('script.py', BLOCK(EVIL));
+      const r = reg();
+      const d = await decide('pipx run script.py', r);
+      expect(d?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+      expect(d?.deny ?? '').not.toMatch(/'script\.py': .*does not exist/);
+      expect(r.calls).toContain(pypiUrl('script.py'));
+    });
+
+    it('T-05 (b) `pipx run --path script.py` refuses the block and never looks the file name up', async () => {
+      put('script.py', BLOCK(EVIL));
+      const r = reg();
+      const d = await decide('pipx run --path script.py', r);
+      expect(d?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+      expect(r.calls).not.toContain(pypiUrl('script.py'));
+    });
+
+    it('T-05 (c) `pipx run --path script.py P` runs the script with P as an argument: P is not looked up', async () => {
+      put('script.py', BLOCK('requests'));
+      const r = reg();
+      const d = await decide(`pipx run --path script.py ${EVIL}`, r);
+      expect(d).toBeNull();
+      expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+    });
+
+    it('T-05 (d) a file `dgprobe-zzq7731` with no extension: the block refuses, and nothing is said of a missing `dgprobe-zzq7731`', async () => {
+      put('dgprobe-zzq7731', BLOCK(EVIL));
+      const d = await decide('pipx run dgprobe-zzq7731', reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/dgprobe-zzq7731 names 'dgprobe-zzq7731-evil/);
+      expect(d?.deny ?? '').not.toMatch(/'dgprobe-zzq7731': .*does not exist/);
+    });
+
+    it('T-05 (e) `pipx run ./script.py` refuses the block', async () => {
+      put('script.py', BLOCK(EVIL));
+      expect((await decide('pipx run ./script.py', reg()))?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+    });
+
+    it('T-05 (f) a clean script.py: `pipx run script.py` is silent, `script.py` is not called a missing name', async () => {
+      put('script.py', BLOCK('requests'));
+      expect(await decide('pipx run script.py', reg())).toBeNull();
+    });
+
+    it('T-05 (g) an empty file `dgprobe-zzq7731-arc.zip`: `pipx run dgprobe-zzq7731-arc.zip` is silent', async () => {
+      put('dgprobe-zzq7731-arc.zip', '');
+      expect(await decide('pipx run dgprobe-zzq7731-arc.zip', reg())).toBeNull();
+    });
+
+    it('T-05 (h) `pipx run --backend pip script.py` refuses the block of script.py (EC-19)', async () => {
+      put('script.py', BLOCK(EVIL));
+      expect((await decide('pipx run --backend pip script.py', reg()))?.deny ?? '(no deny)').toMatch(/script\.py names 'dgprobe-zzq7731-evil/);
+    });
+  });
+
+  // ── T-06: the lines and the question (P3 = B)
+
+  describe('T-06 the lines and the question', () => {
+    it.each<[file: string, make: () => void, reason: string]>([
+      ['big.py', () => put('big.py', `${BLOCK(EVIL)}${'# pad\n'.repeat(180_000)}`), 'over 1 MiB'],
+      ['odd.py', () => put('odd.py', `# /// script\n# dependencies = ["${EVIL}"]\n# extra = ["x"]\n# ///\nprint(1)\n`), 'its `# /// script` block is not in the form the hook reads'],
+      ['dir.py', () => mkdirSync(join(project, 'dir.py')), 'not a regular file'],
+    ])('T-06 `uv run %s` that could not be read: a line, and a question, never a refusal', async (file, make, reason) => {
+      make();
+      const d = await decide(`uv run ${file}`, reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(notRead(file, reason));
+      expect(askOf(d) ?? '(no ask)').toContain(`the inline dependencies of ${file} could not be read`);
+    });
+
+    it('T-06 `false && cd sub; uv run script.py`: where the command runs is not known — only the line', async () => {
+      put('script.py', BLOCK(EVIL));
+      const d = await decide('false && cd sub; uv run script.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(notRead('script.py', 'where the command runs could not be determined'));
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-06 `uv run "$D/x.py"`: not a literal file name — only the line', async () => {
+      const d = await decide('uv run "$D/x.py"', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(notRead('$D/x.py', 'not a literal file name'));
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-06 `uv run open.py`, a block that never closes: silent, nothing asked of the registry', async () => {
+      put('open.py', `# /// script\n# dependencies = ["${EVIL}"]\nprint(1)\n`);
+      const r = reg();
+      expect(await decide('uv run open.py', r)).toBeNull();
+      expect(r.calls).toEqual([]);
+    });
+
+    it('T-06 `uv run two.py`, two closed blocks with the malicious name in the second: DENIED', async () => {
+      put('two.py', `${BLOCK('requests')}${BLOCK(EVIL)}`);
+      refused(await decide('uv run two.py', reg()), 'two.py');
+    });
+
+    it.each([
+      ['toolidx.py', '# [tool.uv]\n# index-url = "https://pypi.corp/simple"\n'],
+      ['toolhdr.py', '# [tool]\n# uv.index-url = "https://pypi.corp/simple"\n'],
+    ])('T-06 `uv run %s` may name its own index: a line, and a question (P7 = B)', async (file, table) => {
+      put(file, `# /// script\n# dependencies = ["requests"]\n${table}# ///\nprint(1)\n`);
+      const d = await decide(`uv run ${file}`, reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`${file} may name its own index or sources ([tool.uv])`);
+      expect(askOf(d) ?? '(no ask)').toContain(`the inline dependencies of ${file} may come from its own index or sources`);
+    });
+
+    it('T-06 `uv run urlreq.py` with a requirement that is a URL: a line, and a question (P7 = B)', async () => {
+      put('urlreq.py', '# /// script\n# dependencies = ["requests", "x @ https://h.example/x.whl"]\n# ///\nprint(1)\n');
+      const d = await decide('uv run urlreq.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('urlreq.py names packages from a URL, a path or a VCS');
+      expect(askOf(d) ?? '(no ask)').toMatch(/urlreq\.py names packages from a URL, a path or a VCS/);
+    });
+
+    it.each<{ command: string; shell?: 'powershell' }>([
+      { command: 'export UV_WORKING_DIR=sub; uv run script.py' },
+      { command: "$env:UV_WORKING_DIR = 'sub'; uv run script.py", shell: 'powershell' },
+      { command: "${env:UV_WORKING_DIR} = 'sub'; uv run script.py", shell: 'powershell' },
+      { command: 'si env:UV_WORKING_DIR sub; uv run script.py', shell: 'powershell' },
+      { command: 'Set-Content env:UV_WORKING_DIR sub; uv run script.py', shell: 'powershell' },
+    ])('T-06 `$command`: the directory is not known — only the line, no refusal, no question', async ({ command, shell }) => {
+      put('sub/script.py', BLOCK(EVIL));
+      const d = await decide(command, reg(), shell === undefined ? {} : { shell });
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('where the command runs could not be determined');
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it.each(['source ./env.sh && uv run script.py', '. ./env.sh && uv run script.py'])(
+      'T-06 `%s` reads the script in the written directory, refuses it, and says env.sh may have changed the directory (P11 = A)',
+      async (command) => {
+        put('env.sh', 'echo hello\n');
+        put('script.py', BLOCK(EVIL));
+        const d = await decide(command, reg());
+        refused(d, 'script.py');
+        expect(`${d?.deny ?? ''}\n${d?.context ?? ''}`).toMatch(/env\.sh.*may have changed/s);
+      },
+    );
+
+    it('T-06 `source ./env.sh && uv run script.py` with a clean script: a line about env.sh, and no question', async () => {
+      put('env.sh', 'echo hello\n');
+      put('script.py', BLOCK('requests'));
+      const d = await decide('source ./env.sh && uv run script.py', reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toMatch(/env\.sh.*may have changed/s);
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it('T-06 `false && cd sub; pipx run P`: the missing-name warning also says the word may be a local script pipx runs instead', async () => {
+      const d = await decide(`false && cd sub; pipx run ${NAMED}`, reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(`'${NAMED}': ${NOT_FOUND}`);
+      expect(d?.context ?? '(no context)').toContain('may be a local script that pipx runs instead — not checked');
+    });
+  });
+
+  // ── T-07: the limits
+
+  describe('T-07 the limits', () => {
+    const chain = (at: string, links: number): void => {
+      writeFileSync(join(at, 'real.py'), BLOCK(EVIL));
+      for (let i = links - 1; i >= 0; i -= 1) {
+        const name = i === 0 ? 'chain.py' : `c${String(i)}`;
+        const target = i === links - 1 ? 'real.py' : `c${String(i + 1)}`;
+        symlinkSync(target, join(at, name));
+      }
+    };
+
+    it('T-07 (a) a block of 160 names the registry has: `ask` says 10 were not vetted, and 150 were looked up', async () => {
+      const many = Array.from({ length: 160 }, (_, i) => `dgprobe-zzq7731-n${String(i)}`);
+      put('big-list.py', BLOCK(...many));
+      const r = reg(many);
+      const d = await decide('uv run big-list.py', r);
+      expect(askOf(d) ?? '(no ask)').toContain('the manifests this command installs name more dependencies than the hook vets — 10 were not vetted (only the first 150 are)');
+      expect(r.calls.filter((u) => /\/dgprobe-zzq7731-n\d+\/json$/.test(u))).toHaveLength(150);
+    });
+
+    it('T-07 (b) ten scripts: the first 8 are read, the others are counted in a line and a question, and no refusal comes out of the unread ones', async () => {
+      for (let i = 0; i < 8; i += 1) put(`s${String(i)}.py`, BLOCK('requests'));
+      put('s8.py', BLOCK(EVIL));
+      put('s9.py', BLOCK(EVIL));
+      const d = await decide(Array.from({ length: 10 }, (_, i) => `uv run s${String(i)}.py`).join('; '), reg());
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('dev-guardian: 2 more script files of this command were not read (only the first 8 are) — their packages were not vetted.');
+      expect(askOf(d) ?? '(no ask)').toContain('this command runs more scripts than the hook reads — 2 were not read (only the first 8 are)');
+    });
+
+    it('T-07 (c) the same script 2 000 times: one refusal, one request for the package, in time', async () => {
+      put('s.py', BLOCK(EVIL));
+      const r = reg();
+      const t0 = Date.now();
+      const d = await decide('uv run s.py; '.repeat(2_000), r);
+      expect(d?.deny ?? '(no deny)').toContain(`s.py names '${EVIL}@1.0.0'`);
+      expect(r.calls.filter((u) => u === pypiUrl(EVIL))).toHaveLength(1);
+      expect(Date.now() - t0).toBeLessThan(hangBound(3000));
+    });
+
+    // Single-quoted: an unquoted backslash is an escape to the shell, which would hand the program `\198.51.100.7sharex.py`.
+    it.each([`uv run '${UNC}\\x.py'`, `pipx run '${UNC}\\x.py'`])('T-07 (d) `%s`: a network path is never asked of the disk — a line and a question, in time', async (command) => {
+      const t0 = Date.now();
+      const d = await decide(command, reg());
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it('T-07 (e) with the deadline already past, `uv run script.py` says the vetting time budget is exhausted, and asks nothing', async () => {
+      put('script.py', BLOCK(EVIL));
+      const d = await decide('uv run script.py', reg(), { deadlineAt: Date.now() - 1 });
+      expect(d?.context ?? '(no context)').toContain('vetting time budget exhausted');
+      expect(askOf(d)).toBeUndefined();
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (f) a link `link.py` to a network path, reached by `cd sub && uv run ../link.py`: a line and a question, in time', async () => {
+      const root = realpathSync.native(project);
+      mkdirSync(join(root, 'sub'));
+      // The type is given: without it Node stats the target to choose one, and a network target cannot be stat'ed.
+      symlinkSync(`${UNC}\\x.py`, join(root, 'link.py'), 'file');
+      const t0 = Date.now();
+      const d = await decide('cd sub && uv run ../link.py', reg(), { cwd: root, projectDir: root });
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toMatch(/link\.py could not be read \(on a network path\)/);
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (h) a chain of 33 links to a script with a malicious block: not refused, a line and a question — the hook gives up after 32', async () => {
+      const root = realpathSync.native(project);
+      chain(root, 33);
+      const d = await decide('uv run chain.py', reg(), { cwd: root, projectDir: root });
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('could not be read');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (h) the same chain with 32 links is read, and refused', async () => {
+      const root = realpathSync.native(project);
+      chain(root, 32);
+      refused(await decide('uv run chain.py', reg(), { cwd: root, projectDir: root }), 'chain.py');
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (i) a link named as the pipx app to a network path: no missing-name refusal, a line and a question, in time', async () => {
+      const root = realpathSync.native(project);
+      symlinkSync(`${UNC}\\x`, join(root, NAMED), 'file');
+      const t0 = Date.now();
+      const d = await decide(`pipx run ${NAMED}`, reg(), { cwd: root, projectDir: root });
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it.skipIf(!CAN_SYMLINK).each([
+      'cd tools && uv run setup.py',
+      'uv run --directory tools setup.py',
+      'UV_WORKING_DIR=tools uv run setup.py',
+      'cd tools && pipx run setup.py',
+    ])('T-07 (j) `%s` follows the local link `tools` to the directory that holds the script, and refuses it (P9 = A)', async (command) => {
+      const root = realpathSync.native(project);
+      put('real-tools/setup.py', BLOCK(EVIL), root);
+      symlinkSync(join(root, 'real-tools'), join(root, 'tools'), DIR_LINK);
+      refused(await decide(command, reg(), { cwd: root, projectDir: root }), 'setup.py');
+    });
+
+    const BOTH = ['cd tools && cd .. && uv run setup.py', 'uv run tools/../setup.py', 'uv run --directory tools/.. setup.py', 'UV_WORKING_DIR=tools/.. uv run setup.py'];
+    it.skipIf(!CAN_SYMLINK).each(
+      BOTH.flatMap((command) => [
+        { command, logical: EVIL, physical: 'requests', refuse: true },
+        { command, logical: 'requests', physical: EVIL, refuse: true },
+        { command, logical: 'requests', physical: 'requests', refuse: false },
+      ]),
+    )('T-07 (l) `$command` with ./setup.py naming $logical and sub/setup.py naming $physical reads both candidates (P10 = A): refused $refuse', async ({ command, logical, physical, refuse }) => {
+      const root = realpathSync.native(project);
+      put('sub/inner/keep', '', root);
+      put('setup.py', BLOCK(logical), root);
+      put('sub/setup.py', BLOCK(physical), root);
+      symlinkSync(join(root, 'sub', 'inner'), join(root, 'tools'), DIR_LINK);
+      const r = reg();
+      const d = await decide(command, r, { cwd: root, projectDir: root });
+      if (refuse) expect(d?.deny ?? '(no deny)').toContain(`setup.py names '${EVIL}@1.0.0'`);
+      else {
+        expect(r.calls).toContain(pypiUrl('requests'));
+        expect(d).toBeNull();
+      }
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (m) `cd broken; uv run setup.py` with `broken` a link to nothing: a line and a question', async () => {
+      const root = realpathSync.native(project);
+      symlinkSync(join(root, 'nowhere'), join(root, 'broken'), DIR_LINK);
+      const d = await decide('cd broken; uv run setup.py', reg(), { cwd: root, projectDir: root });
+      expect(d?.context ?? '(no context)').toContain('could not be read');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+
+    it.skipIf(!CAN_SYMLINK)('T-07 (k) `cd netdir && uv run x.py` with `netdir` a link to a network path: a line and a question, in time', async () => {
+      const root = realpathSync.native(project);
+      symlinkSync(UNC, join(root, 'netdir'), 'dir');
+      const t0 = Date.now();
+      const d = await decide('cd netdir && uv run x.py', reg(), { cwd: root, projectDir: root });
+      expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+      expect(d?.context ?? '(no context)').toContain('on a network path');
+      expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+    });
+  });
+
+  // ── T-09: protection — green before and after the fix
+
+  describe('T-09 what is not read, through the decision', () => {
+    it.each(['uv run python script.py', 'uv run pytest', 'uv run missing.py', 'uv run - < script.py', 'cat script.py | uv run -'])(
+      'T-09 (a) `%s` with a malicious script.py in the directory: nothing is read, nothing is asked of the registry',
+      async (command) => {
+        put('script.py', BLOCK(EVIL));
+        const r = reg();
+        expect(await decide(command, r)).toBeNull();
+        expect(r.calls).toEqual([]);
+      },
+    );
+
+    it('T-09 (b) `uv run tool`, a file with no extension and no --script: the uv does not read its block (measured)', async () => {
+      put('tool', BLOCK(EVIL));
+      expect(await decide('uv run tool', reg())).toBeNull();
+    });
+
+    it('T-09 (c) `pipx run zz-no-such-pkg`, no such file: refused as a name the registry does not have', async () => {
+      const d = await decide('pipx run zz-no-such-pkg', reg());
+      expect(d?.deny ?? '(no deny)').toMatch(/zz-no-such-pkg/);
+      expect(d?.deny ?? '(no deny)').toMatch(/does not exist/);
+    });
+
+    it('T-09 (d) `uvx --with-requirements reqs-in.txt requests` leaves the file unread', async () => {
+      put('reqs-in.txt', `${EVIL}\n`);
+      const r = reg();
+      expect(await decide('uvx --with-requirements reqs-in.txt requests', r)).toBeNull();
+      expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+    });
+
+    it('T-09 (e) `uv run plain.py`, a script with no block: silent, nothing asked of the registry', async () => {
+      put('plain.py', 'print(1)\n');
+      const r = reg();
+      expect(await decide('uv run plain.py', r)).toBeNull();
+      expect(r.calls).toEqual([]);
+    });
+
+    it('T-09 (f) `uv run pytest` in a project whose pyproject.toml names a malicious package: the sync stays unread', async () => {
+      put('pyproject.toml', `[project]\nname = "app"\nversion = "1.0.0"\ndependencies = ["${EVIL}"]\n`);
+      expect(await decide('uv run pytest', reg())).toBeNull();
+    });
+
+    it('T-09 (g) `echo x > new.py; uv run new.py` with no new.py in the directory: the hook reads the disk before the line', async () => {
+      expect(await decide('echo x > new.py; uv run new.py', reg())).toBeNull();
+    });
+
+    it('T-09 (h) an empty file named as a malicious package and `pipx run` of it: the name is still looked up and refused', async () => {
+      put(EVIL, '');
+      expect((await decide(`pipx run ${EVIL}`, reg()))?.deny ?? '(no deny)').toContain(`'${EVIL}@1.0.0'`);
+    });
+
+    it('T-09 (i) 6 800 different words after `pipx run`, no file: the answer comes in time, with the question above 50 packages', async () => {
+      const t0 = Date.now();
+      const d = await decide(Array.from({ length: 6_800 }, (_, i) => `pipx run dgprobe-zzq7731-w${String(i)}; `).join(''), registry());
+      expect(Date.now() - t0).toBeLessThan(hangBound(3000));
+      expect(askOf(d) ?? '(no ask)').toContain('this command names more packages than the hook vets');
+    });
+  });
+});
+
+// ───────────────── install-vet-dotnet-run-forms — the decision for the .NET forms that fetch a package by name
+
+describe('install-vet-dotnet-run-forms', () => {
+  // The identifiers are made up; the registry of `fakeRegistry` answers 404 for each, and no test runs `dotnet`.
+  const N = 'Dgprobe.Zzq7731.Nope';
+  const N2 = 'Dgprobe.Zzq7731.Nope2';
+  const NOT_FOUND = 'not found on the public registry';
+  /** The start of the reason of a form that was not measured; what is missing follows in the parentheses. */
+  const FORM = 'a dotnet command form that was not measured (';
+  /** The reason of a version the SDK 10.0.404 refuses before any request (the owner's answer to question 9). */
+  const REFUSED = 'a version SDK 10.0.404 refuses before any request — looked up in case another SDK accepts it';
+  /** The start of the reason of the folder of the command: why the hook did not look at the disk for a word of `dotnet new install`. */
+  const DISK = "whether a file or folder of that name is in the command's folder was not looked for (";
+  const NO_FORCE = 'dotnet new install without --force was measured to contact an https source, not to ask it for the package — not measured';
+  const NAMED_TO_UPDATE = 'a package named to an update is fetched only when it is already installed';
+  const nugetUrl = (name: string): string => `https://api.nuget.org/v3-flatcontainer/${name.toLowerCase()}/index.json`;
+  const hatch = (flag: string): string => `re-run the install with an explicit \`${flag}\`, or prefix the command with \`GUARDIAN_PKG_VET=0\`.`;
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  /** The decision of a command against the public registry of the file, with the URLs it asked. */
+  const run = async (command: string, extra: Partial<HookVetOptions> = {}): Promise<{ d: Decided; calls: string[] }> => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(command, opts(f.fetchImpl, { popular: {}, ...extra }));
+    return { d, calls: f.calls };
+  };
+
+  // ── T-04: the refusals — the 47 measured forms of the table, one line each
+
+  /** The run forms the four spellings share: the id alone, with a version in either place, with an argument for the tool, and `--yes` before it. */
+  const runForms = (spelling: string): string[] => [
+    `${spelling} ${N}`,
+    `${spelling} ${N}@1.0.0`,
+    `${spelling} ${N} --version 1.0.0`,
+    `${spelling} ${N} hello`,
+    `${spelling} --yes ${N}`,
+  ];
+  const SOURCE_FORMS: string[] = [
+    // dotnet tool execute (5)
+    ...runForms('dotnet tool execute'),
+    // dotnet tool exec (6)
+    ...runForms('dotnet tool exec'),
+    `dotnet tool exec ${N} --yes`,
+    // dotnet dnx (5)
+    ...runForms('dotnet dnx'),
+    // dnx (10)
+    ...runForms('dnx'),
+    `dnx ${N} --yes`,
+    `dnx --version 1.0.0 ${N}`,
+    `dnx "${N}@1.*"`,
+    `dnx -- ${N}`,
+    `dnx ${N} -- --help`,
+    // dotnet tool update (11): global or by path, then the local ones
+    `dotnet tool update -g ${N}`,
+    `dotnet tool update -g ${N} --version 1.0.0`,
+    `dotnet tool update --tool-path ./t ${N}`,
+    `dotnet tool update --global ${N}`,
+    `dotnet tool update ${N} -g`,
+    `dotnet tool update -g ${N}@1.0.0`,
+    `dotnet tool update --tool-path ./t ${N} --version 1.0.0`,
+    `dotnet tool update ${N}`,
+    `dotnet tool update ${N} --version 1.0.0`,
+    `dotnet tool update ${N}@1.0.0`,
+    `dotnet tool update --local ${N}`,
+    // dotnet package download (5)
+    `dotnet package download ${N}`,
+    `dotnet package download ${N} --allow-insecure-connections`,
+    `dotnet package download ${N}@1.0.0 --allow-insecure-connections`,
+    `dotnet package download ${N}@1.0.0`,
+    `dotnet package download ${N} ${N2}`,
+  ];
+  const NEW_INSTALL_FORMS: string[] = [
+    `dotnet new install ${N} --force`,
+    `dotnet new install ${N}::1.0.0 --force`,
+    `dotnet new install ${N}@1.0.0 --force`,
+    `dotnet new install --force ${N}`,
+    `dotnet new install ${N} ${N2} --force`,
+  ];
+
+  it('T-04 (guard) the table is the 47 measured forms: 42 that name `--source`, 5 of `dotnet new install` that name `--add-source`', () => {
+    expect(SOURCE_FORMS).toHaveLength(42);
+    expect(NEW_INSTALL_FORMS).toHaveLength(5);
+    expect(new Set([...SOURCE_FORMS, ...NEW_INSTALL_FORMS]).size).toBe(47);
+  });
+
+  it.each(SOURCE_FORMS)('T-04 `%s` is DENIED for a name nuget.org does not have, and the way out is `--source <url>`', async (command) => {
+    const { d, calls } = await run(command);
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(d?.deny ?? '(no deny)').toContain(hatch('--source <url>'));
+    expect(calls).toContain(nugetUrl(N));
+  });
+
+  it.each(NEW_INSTALL_FORMS)('T-04 `%s` is DENIED for a name nuget.org does not have, and the way out is `--add-source <url>`, not `--source`', async (command) => {
+    const { d, calls } = await run(command);
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(d?.deny ?? '(no deny)').toContain(hatch('--add-source <url>'));
+    expect(d?.deny ?? '').not.toContain('--source');
+    expect(calls).toContain(nugetUrl(N));
+  });
+
+  // ── T-04: the warnings — what the table does not measure is looked up, and never refused for a missing name
+
+  it.each<[string, string]>([
+    // (a) a flag the form does not list
+    [`dnx ${N} --foo`, FORM],
+    // (c) a flag in a place the table does not measure
+    [`dotnet dnx --version 1.0.0 ${N}`, FORM],
+    [`dotnet dnx ${N} --yes`, FORM],
+    [`dotnet tool update ${N} --tool-path ./t`, FORM],
+    // (e) flags that were measured apart and not together
+    [`dnx --yes ${N}@1.0.0`, FORM],
+    [`dotnet tool update --global ${N} --version 1.0.0`, FORM],
+    // (f) more than one package
+    [`dotnet tool update -g ${N} ${N2}`, FORM],
+    // (g) a version text that is not an exact version
+    [`dotnet tool exec "${N}@1.*"`, FORM],
+    [`dnx ${N}@^1.0`, FORM],
+    [`dnx --yes ${N}@latest`, FORM],
+    // (h) the `--` in a spelling that was not measured
+    [`dotnet dnx -- ${N}`, FORM],
+    [`dotnet tool exec ${N} -- x`, FORM],
+    // a version the SDK 10.0.404 refuses before any request: the three measured lines
+    [`dnx ${N}@latest`, REFUSED],
+    [`dotnet package download ${N}@1.* --allow-insecure-connections`, REFUSED],
+    [`dotnet new install ${N}::latest --force`, REFUSED],
+    // (j) the reasons of today
+    [`dotnet new install ${N}`, NO_FORCE],
+    [`dotnet package update ${N}`, NAMED_TO_UPDATE],
+    [`dnx ${N} --prerelease`, FORM],
+    [`dnx --source ./feed ${N}`, 'a custom registry is configured'],
+    [`dnx ${N} --add-source https://f.example/v3/index.json`, 'a custom registry is configured'],
+    [`dnx ${N} --configfile ./n.config`, 'a custom registry is configured'],
+    [`dotnet new install ${N} --nuget-source https://f.example/v3/index.json --force`, 'a custom registry is configured'],
+    [`dotnet package download ${N} -o ./out`, FORM],
+    [`cd sub && dnx ${N}`, 'directory change earlier in the command'],
+    [`dnx ${N}.nupkg`, 'a name that ends like an archive file'],
+  ])('T-04 `%s` WARNS, with the reason `%s`, and does not deny', async (command, reason) => {
+    mkdirSync(join(project, 'sub'), { recursive: true });
+    const { d, calls } = await run(command);
+    const context = d?.context ?? '(no context)';
+    expect({ deny: d?.deny, notFound: context.includes(NOT_FOUND), reason: context.includes(reason) }).toEqual({ deny: undefined, notFound: true, reason: true });
+    expect(calls.some((u) => u.startsWith('https://api.nuget.org/v3-flatcontainer/dgprobe.zzq7731.nope')), 'the name is asked of NuGet').toBe(true);
+  });
+
+  // ── T-05: the word of `dotnet new install` and the disk — an `lstat` of the command's folder, which a test replaces
+
+  /** The signature `HookVetOptions.lstatImpl` is to have: the part of `Stats` the decision reads. A local name, so this file type-checks before the field exists. */
+  type LstatLike = (path: string) => { isDirectory(): boolean; isFile(): boolean; isSymbolicLink(): boolean };
+  const failing =
+    (code: string): LstatLike =>
+    (path) => {
+      throw Object.assign(new Error(`${code}: ${path}`), { code });
+    };
+  /** An `lstatImpl` that counts what it is asked, and answers like `impl`. */
+  const counting = (impl: LstatLike): { paths: string[]; lstatImpl: LstatLike } => {
+    const paths: string[] = [];
+    return {
+      paths,
+      lstatImpl: (path) => {
+        paths.push(path);
+        return impl(path);
+      },
+    };
+  };
+  const runWith = async (command: string, lstatImpl: LstatLike, extra: Partial<HookVetOptions> = {}): Promise<{ d: Decided; calls: string[] }> => {
+    const f = fakeRegistry();
+    const o: HookVetOptions & { lstatImpl: LstatLike } = { ...opts(f.fetchImpl, { popular: {}, ...extra }), lstatImpl };
+    return { d: await decideInstallCommand(command, o), calls: f.calls };
+  };
+
+  it('T-05 (a) `dotnet new install <id> --force` in an empty folder asks NuGet for the name and DENIES it', async () => {
+    const { d, calls } = await run(`dotnet new install ${N} --force`);
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(calls).toContain(nugetUrl(N));
+  });
+
+  it('T-05 (b) a command folder on the network is never asked of the file system: NuGet is asked, the reason is said, no deny', async () => {
+    const disk = counting(failing('ENOENT'));
+    const { d, calls } = await runWith(`dotnet new install ${N} --force`, disk.lstatImpl, { cwd: '\\\\dgprobe-nowhere.invalid\\share\\proj' });
+    expect(disk.paths).toEqual([]);
+    expect(calls).toContain(nugetUrl(N));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${DISK}the folder is on the network)`);
+  });
+
+  it('T-05 (c) an `lstat` that fails for another reason than "not there" says why, asks NuGet, and does not deny', async () => {
+    const disk = counting(failing('EACCES'));
+    const { d, calls } = await runWith(`dotnet new install ${N} --force`, disk.lstatImpl);
+    expect(calls).toContain(nugetUrl(N));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${DISK}lstat failed: EACCES)`);
+  });
+
+  it('T-05 (d) past the deadline there is no `lstat`, no deny, and the answer says the name was not verified', async () => {
+    const disk = counting(failing('ENOENT'));
+    const { d } = await runWith(`dotnet new install ${N} --force`, disk.lstatImpl, { deadlineAt: Date.now() - 1 });
+    expect(disk.paths).toEqual([]);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(/time budget/);
+    expect(d?.context ?? '(no context)').toContain(N);
+  });
+
+  it('T-05 (e) a word with `::` is never an `lstat` and always an identifier: NuGet is asked, and the name is DENIED', async () => {
+    const disk = counting(failing('ENOENT'));
+    const { d, calls } = await runWith(`dotnet new install ${N}::1.0.0 --force`, disk.lstatImpl);
+    expect(disk.paths).toEqual([]);
+    expect(calls).toContain(nugetUrl(N));
+    expect(d?.deny ?? '(no deny)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+  });
+
+  // ── T-06: guard — an entry of that name in the command's folder, and a path written as one, are not looked up
+
+  it.each<[string, () => string, () => void]>([
+    ['an empty folder of that name, with --force', () => `dotnet new install ${N} --force`, (): void => void mkdirSync(join(project, N))],
+    ['an empty file of that name with the `.nupkg` ending', () => `dotnet new install ${N}.nupkg`, (): void => writeFileSync(join(project, `${N}.nupkg`), '')],
+    ['`./` before the word, nothing on disk', () => `dotnet new install ./${N} --force`, (): void => undefined],
+    ['`.\\` before the word, nothing on disk', () => `dotnet new install .\\${N} --force`, (): void => undefined],
+    ['an absolute path, nothing on disk', () => `dotnet new install ${join(project, N).replace(/\\/g, '/')} --force`, (): void => undefined],
+  ])('T-06 %s: no request, no decision', async (_what, command, prepare) => {
+    prepare();
+    const { d, calls } = await run(command());
+    expect({ decision: d, calls }).toEqual({ decision: null, calls: [] });
+  });
+
+  // ── T-09: the ceiling of 50 words — the `lstat` stops there, the hook's own ceiling of vetted packages stays
+
+  const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `Dgprobe.Zzq7731.W${String(i).padStart(4, '0')}`);
+
+  it('T-09 (a) 60 words with --force, the first 10 of them a folder of the same name: those 10 are not asked, the other 50 are, nothing is denied', async () => {
+    const all = ids(60);
+    for (const id of all.slice(0, 10)) mkdirSync(join(project, id));
+    const { d, calls } = await run(`dotnet new install ${all.join(' ')} --force`);
+    const asked = calls.filter((u) => u.startsWith('https://api.nuget.org/v3-flatcontainer/'));
+    expect(new Set(asked)).toEqual(new Set(all.slice(10).map(nugetUrl)));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`${DISK}past the first 50 words)`);
+  });
+
+  it('T-09 (b) 3 200 words with --force: ASK, nothing denied, and the context says 3150 were not vetted', async () => {
+    const { d } = await run(`dotnet new install ${ids(3200).join(' ')} --force`);
+    expect(d?.deny).toBeUndefined();
+    expect(typeof d?.ask, 'the decision asks the user').toBe('string');
+    expect(d?.context ?? '(no context)').toContain('3150 more packages in this command were not vetted');
+  });
+
+  /** The cost of the cheapest of `runs` samples of `reps` calls each, in ms. */
+  async function cheapest(runs: number, reps: number, call: () => Promise<unknown>): Promise<number> {
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < runs; i += 1) {
+      const t0 = performance.now();
+      for (let r = 0; r < reps; r += 1) await call();
+      best = Math.min(best, performance.now() - t0);
+    }
+    return best;
+  }
+
+  it(
+    'T-09 (guard) the cost of `dotnet new install` with --force offline is linear in the words: eight times the words, well under 22.6 times the time',
+    async () => {
+      const decideWords = (n: number) => async (): Promise<unknown> =>
+        decideInstallCommand(`dotnet new install ${ids(n).join(' ')} --force`, opts(fakeRegistry().fetchImpl, { popular: {}, env: { GUARDIAN_OFFLINE: '1' } }));
+      const small = decideWords(400);
+      const large = decideWords(3200);
+      // Before the form is read a call costs about a millisecond, where the clock's noise weighs: a sample is `reps` calls, enough for MIN_CHUNK_MS.
+      const once = await cheapest(3, 1, small);
+      const reps = Math.max(1, Math.ceil(MIN_CHUNK_MS / Math.max(once, 0.001)));
+      const base = await cheapest(5, reps, small);
+      const big = await cheapest(5, reps, large);
+      // Linear reads about 8, quadratic about 64: the geometric middle is 22.6.
+      expect(big / base, `3200 words cost ${big.toFixed(1)} ms against ${base.toFixed(1)} ms for 400 (${String(reps)} calls a sample)`).toBeLessThan(22.6);
+    },
+    300_000,
+  );
+});
+
+// ───────────────── install-vet-registry-files-unread — guards: what the hook must keep answering as the 3.15.0 does
+
+describe('install-vet-registry-files-unread', () => {
+  const PROJECT_NPM = 'https://npm.other.example/';
+  const PROJECT_PYPI = 'https://pypi.other.example/simple/';
+  const SECOND_NPM = 'https://second.other.example/';
+  const MISSING = 'dgprobe-missing';
+  const EVIL = 'dgprobe-evil';
+  const MANIFEST = JSON.stringify({ name: 'fixture-app', version: '1.0.0' });
+  const PYPROJECT = '[project]\nname = "probe"\nversion = "1.0.0"\nrequires-python = ">=3.9"\ndependencies = []\n';
+  const POETRY = '[tool.poetry]\nname = "probe"\nversion = "1.0.0"\ndescription = ""\nauthors = []\npackage-mode = false\n\n[tool.poetry.dependencies]\npython = ">=3.9"\n';
+  const SAYS = 'sets the default registry';
+  const CONFIGURED = 'a custom registry is configured (';
+  const NOT_NPM = 'does not exist on the npm registry';
+  const NOT_PYPI = 'does not exist on PyPI';
+  const NOT_FOUND = 'not found on the public registry';
+  // Built from pieces: no literal `scheme://user:password@host` or token stands in the test source.
+  const MARK = ['dgsecret', 'zzq7731'].join('-');
+  const USER = ['dg', 'user'].join('');
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+
+  /** A file of the test's project, by path below it. */
+  const put = (rel: string, text: string): void => {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), text);
+  };
+  /** The project is a repository, so that no reader climbs out of it into the temp folder. */
+  const repository = (): void => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+  };
+  /** A project with the manifest and the given files. */
+  const projectWith = (files: Record<string, string>, manifest = MANIFEST): void => {
+    repository();
+    put('package.json', manifest);
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+  };
+  /** The decision for `command` against the public registries of `registry()`; `cwd` is a folder below the project. */
+  const decide = async (
+    command: string,
+    spec: { exists?: string[]; malicious?: string[] } = {},
+    extra: Partial<HookVetOptions> = {},
+  ): Promise<{ d: Decided; calls: string[]; bodies: string[] }> => {
+    const reg = registry(spec);
+    const d = await decideInstallCommand(command, opts(reg.fetchImpl, { env: { GUARDIAN_OFFLINE: '0' }, ...extra }));
+    return { d, calls: reg.calls, bodies: reg.bodies };
+  };
+  const textOf = (d: Decided): string => `${d?.deny ?? ''}\n${d?.context ?? ''}\n${d?.ask ?? ''}`;
+  /** The answer is a refusal that names the name and says it is not on the public registry, with no line of a project file. */
+  const expectRefusal = (d: Decided, reason: string): void => {
+    expect(d?.deny ?? '(no deny)').toContain(reason);
+    expect(d?.deny ?? '').toContain(MISSING);
+    expect(textOf(d), 'no line of a project file').not.toContain(SAYS);
+    expect(textOf(d), 'no registry of a project file').not.toContain(CONFIGURED);
+  };
+
+  const dotenv = (name: string, value = PROJECT_NPM): string => `${name}=${value}\n`;
+
+  // ── T-08: what the bun does not obey, and what the plan does not read
+
+  /** A `.env` the bun does not obey (or the plan does not read): the layout, and the folder the command runs in. */
+  interface Unobeyed {
+    label: string;
+    files: Record<string, string>;
+    manifest?: string;
+    /** The folder the command runs in, below the project. */
+    at?: string;
+    command?: string;
+  }
+  const ROOT_LISTS_APP = JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: ['app'] });
+  const ROOT_LISTS_OTHER = JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: ['other'] });
+  const MEMBER = JSON.stringify({ name: 'app', version: '1.0.0' });
+  const UNOBEYED: Unobeyed[] = [
+    { label: '.env.development without NODE_ENV', files: { '.env.development': dotenv('BUN_CONFIG_REGISTRY') } },
+    { label: '.env.test without NODE_ENV', files: { '.env.test': dotenv('BUN_CONFIG_REGISTRY') } },
+    {
+      label: 'a .env only in the member of a workspace whose root lists it',
+      manifest: ROOT_LISTS_APP,
+      files: { 'app/package.json': MEMBER, 'app/.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'app',
+    },
+    {
+      label: 'a .env in a folder above, with no package.json there',
+      manifest: '{}',
+      files: { 'app/package.json': MEMBER, '.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'app',
+    },
+    {
+      label: 'a .env only in a subfolder with no package.json, where the command runs (m2-j)',
+      files: { 'sub/.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'sub',
+    },
+    {
+      label: 'a .env only at a root whose workspaces is ["other"], the command in app (m2-k)',
+      manifest: ROOT_LISTS_OTHER,
+      files: { 'app/package.json': MEMBER, '.env': dotenv('BUN_CONFIG_REGISTRY') },
+      at: 'app',
+    },
+    {
+      label: 'bun add -g with the .env',
+      files: { '.env': dotenv('BUN_CONFIG_REGISTRY') },
+      command: `bun add -g ${MISSING}`,
+    },
+  ];
+
+  it.each(UNOBEYED)('T-08 $label: refused, no line', async ({ files, manifest, at, command }) => {
+    projectWith(files, manifest);
+    const cwd = at === undefined ? project : join(project, at);
+    mkdirSync(cwd, { recursive: true });
+    const { d } = await decide(command ?? `bun add ${MISSING}`, {}, { cwd });
+    expectRefusal(d, NOT_NPM);
+  });
+
+  it.each([`bunx ${MISSING}`, `bun x ${MISSING}`, `bun create ${MISSING}`, `bun c ${MISSING}`])(
+    'T-08 `%s` with a .env: the same answer as without it, and no line of the .env (bun x measured, m2-l; the others by the bun documentation)',
+    async (command) => {
+      projectWith({});
+      const without = await decide(command);
+      put('.env', dotenv('BUN_CONFIG_REGISTRY'));
+      const withFile = await decide(command);
+      expect(withFile.d).toEqual(without.d);
+      expect(textOf(withFile.d)).not.toContain(SAYS);
+      expect(textOf(withFile.d)).not.toContain(CONFIGURED);
+      expect(withFile.calls).toEqual(without.calls);
+    },
+  );
+
+  it.each([
+    [`bun add --no-env-file ${MISSING}`, ['.env']],
+    [`bun add --env-file=custom.env ${MISSING}`, ['.env', 'custom.env']],
+    [`bun add --env-file custom.env ${MISSING}`, ['.env', 'custom.env']],
+    [`bun --env-file=custom.env add ${MISSING}`, ['.env', 'custom.env']],
+  ])('T-08 `%s` with the .env: the warning the measurement gave, no refusal, no line of a .env', async (command, envFiles) => {
+    projectWith(Object.fromEntries(envFiles.map((f) => [f, dotenv('BUN_CONFIG_REGISTRY')])));
+    const { d } = await decide(command);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`'${MISSING}': ${NOT_FOUND}`);
+    expect(d?.context ?? '').toContain('unknown flag --');
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(textOf(d), 'the registry the .env names').not.toContain('npm.other.example');
+  });
+
+  it.each([`npm install ${MISSING}`, `pnpm add ${MISSING}`, `yarn add ${MISSING}`])(
+    'T-08 `%s` with a .env: refused, no line (only the bun reads a .env)',
+    async (command) => {
+      projectWith({ '.env': [dotenv('BUN_CONFIG_REGISTRY'), dotenv('NPM_CONFIG_REGISTRY'), dotenv('npm_config_registry')].join('') });
+      const { d } = await decide(command);
+      expectRefusal(d, NOT_NPM);
+    },
+  );
+
+  it.each([
+    ['pip install', `pip install ${MISSING}`],
+    ['uv add', `uv add ${MISSING}`],
+    ['pipx install', `pipx install ${MISSING}`],
+    ['poetry add', `poetry add ${MISSING}`],
+  ])('T-08 %s with a .env of PIP_INDEX_URL, UV_INDEX_URL and UV_DEFAULT_INDEX: refused', async (_label, command) => {
+    projectWith({
+      '.env': [dotenv('PIP_INDEX_URL', PROJECT_PYPI), dotenv('UV_INDEX_URL', PROJECT_PYPI), dotenv('UV_DEFAULT_INDEX', PROJECT_PYPI)].join(''),
+      'pyproject.toml': command.startsWith('poetry') ? POETRY : PYPROJECT,
+    });
+    const { d } = await decide(command);
+    expectRefusal(d, NOT_PYPI);
+  });
+
+  it.each([
+    ['bun add', `bun add ${MISSING}`, NOT_NPM],
+    ['pip install', `pip install ${MISSING}`, NOT_PYPI],
+  ])('T-08 a folder named .env with a pyvenv.cfg inside (%s): refused, and nothing "could not be read"', async (_label, command, reason) => {
+    projectWith({ '.env/pyvenv.cfg': 'home = /usr/bin\ninclude-system-site-packages = false\nversion = 3.11.2\n' });
+    const { d } = await decide(command);
+    expectRefusal(d, reason);
+    expect(textOf(d)).not.toContain('could not be read');
+  });
+
+  it('T-08 BUN_CONFIG_REGISTRY in the hook environment and a .env (EC-14, known limit): the warning of today, and no line of the .env', async () => {
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY') });
+    const { d } = await decide(`bun add ${MISSING}`, {}, { env: { GUARDIAN_OFFLINE: '0', BUN_CONFIG_REGISTRY: SECOND_NPM } });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('second.other.example');
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(textOf(d), 'the registry the .env names').not.toContain('npm.other.example');
+  });
+
+  it('T-08 bun add of a malicious name already taken from the public registry, with a .env: refused with the MAL- advisory', async () => {
+    projectWith({ '.env': dotenv('BUN_CONFIG_REGISTRY') });
+    const { d } = await decide(`bun add ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('OSV lists this name as a malicious package (');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+    expect(d?.deny ?? '').toContain('), removed from');
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  // ── T-09: what the grammar of a .env does not accept, and what never leaves
+
+  const BAD_LINES: Array<[label: string, text: string]> = [
+    ['a comment', `# BUN_CONFIG_REGISTRY=${PROJECT_NPM}\n`],
+    ['a longer name (BUN_CONFIG_REGISTRY_X)', `BUN_CONFIG_REGISTRY_X=${PROJECT_NPM}\n`],
+    ['a name with a prefix (XBUN_CONFIG_REGISTRY)', `XBUN_CONFIG_REGISTRY=${PROJECT_NPM}\n`],
+    ['the name in lower case (bun_config_registry; m2-m)', `bun_config_registry=${PROJECT_NPM}\n`],
+    ['a colon for the equals sign (BUN_CONFIG_REGISTRY: ...)', `BUN_CONFIG_REGISTRY: ${PROJECT_NPM}\n`],
+    ['an empty value', 'BUN_CONFIG_REGISTRY=\n'],
+    ['the public registry', 'BUN_CONFIG_REGISTRY=https://registry.npmjs.org/\n'],
+    ['a line inside the double-quoted value of another variable', `OTHER="first\nBUN_CONFIG_REGISTRY=${PROJECT_NPM}\nlast"\n`],
+    ["a line inside the single-quoted value of another variable", `OTHER='first\nBUN_CONFIG_REGISTRY=${PROJECT_NPM}\nlast'\n`],
+    ['a line inside the backtick value of another variable', `OTHER=\`first\nBUN_CONFIG_REGISTRY=${PROJECT_NPM}\nlast\`\n`],
+  ];
+
+  it.each(BAD_LINES)('T-09 %s alone in a .env: refused, no line', async (_label, text) => {
+    projectWith({ '.env': text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expectRefusal(d, NOT_NPM);
+  });
+
+  it('T-09 a subtable [install.scopes.acme.extra] with a url in the bunfig.toml, bun add of a scoped name: refused, no line', async () => {
+    projectWith({ 'bunfig.toml': `[install.scopes.acme.extra]\nurl = "${PROJECT_NPM}"\n` });
+    const { d } = await decide(`bun add @acme/${MISSING}`);
+    expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+  });
+
+  it.each([`bun add ${MISSING}`, 'bun install'])('T-09 a .env with a token, a database URL with a password, and the registry (%s): nothing of it is said or sent', async (command) => {
+    const url = ['postgres://', USER, ':', MARK, '@', 'db.example', '/x'].join('');
+    const manifest = JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [MISSING]: '^1.0.0' } });
+    projectWith({ '.env': [`NPM_TOKEN=${MARK}\n`, `DATABASE_URL=${url}\n`, dotenv('BUN_CONFIG_REGISTRY')].join('') }, command === 'bun install' ? manifest : MANIFEST);
+    const { d, calls, bodies } = await decide(command);
+    for (const text of [textOf(d), ...calls, ...bodies]) {
+      expect(text.includes(MARK), 'the marker').toBe(false);
+      expect(text.includes(USER), 'the user name').toBe(false);
+      expect(text.includes('db.example'), 'the host of the database').toBe(false);
+    }
+    expect(calls.length, 'the name was asked about, so the run was real').toBeGreaterThan(0);
+  });
+
+  // ── T-10: what stays as it is
+
+  const IDX = PROJECT_PYPI;
+  const poetrySource = (priority: string): string =>
+    `\n[[tool.poetry.source]]\nname = "dgproject"\nurl = "${IDX}"\n${priority === '' ? '' : `priority = "${priority}"\n`}`;
+
+  /** The commands and files that still give a warning for a name that is missing: the pair, the files, and the file the warning names. */
+  const WARNS: Array<[label: string, command: string, files: Record<string, string>, named: string]> = [
+    ...(['uv add', 'uv pip install'] as const).flatMap(
+      (verb): Array<[string, string, Record<string, string>, string]> => [
+        [`${verb} with uv.toml index-url`, `${verb} ${MISSING}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `index-url = "${IDX}"\n` }, 'uv.toml: '],
+        [`${verb} with uv.toml [[index]]`, `${verb} ${MISSING}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${IDX}"\n` }, 'uv.toml: '],
+        [
+          `${verb} with uv.toml [[index]] default = true`,
+          `${verb} ${MISSING}`,
+          { 'pyproject.toml': PYPROJECT, 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${IDX}"\ndefault = true\n` },
+          'uv.toml: ',
+        ],
+        [`${verb} with [tool.uv] index-url`, `${verb} ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n[tool.uv]\nindex-url = "${IDX}"\n` }, 'pyproject.toml: '],
+        [
+          `${verb} with [[tool.uv.index]]`,
+          `${verb} ${MISSING}`,
+          { 'pyproject.toml': `${PYPROJECT}\n[[tool.uv.index]]\nname = "dgproject"\nurl = "${IDX}"\n` },
+          'pyproject.toml: ',
+        ],
+      ],
+    ),
+    ['uv pip install with uv.toml [pip] index-url', `uv pip install ${MISSING}`, { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }, 'uv.toml: '],
+    ['poetry add with a source without priority', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('') }, 'pyproject.toml: '],
+    ['poetry add with a primary source', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('primary') }, 'pyproject.toml: '],
+    ['poetry add with a supplemental source', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('supplemental') }, 'pyproject.toml: '],
+    ['poetry add --source corp, corp being explicit', `poetry add --source dgproject ${MISSING}`, { 'pyproject.toml': POETRY + poetrySource('explicit') }, 'the command line'],
+    // The pairs nobody measured: the 3.15.0 answer stays.
+    ['uvx with uv.toml [pip] index-url (not measured)', `uvx ${MISSING}`, { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }, 'uv.toml: '],
+    ['uv tool install with [tool.uv] index-url (not measured)', `uv tool install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n[tool.uv]\nindex-url = "${IDX}"\n` }, 'pyproject.toml: '],
+    [
+      'pipx run with [[tool.uv.index]] (not measured)',
+      `pipx run ${MISSING}`,
+      { 'pyproject.toml': `${PYPROJECT}\n[[tool.uv.index]]\nname = "dgproject"\nurl = "${IDX}"\n` },
+      'pyproject.toml: ',
+    ],
+    ['pip install with uv.toml [[index]] (not measured)', `pip install ${MISSING}`, { 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${IDX}"\n` }, 'uv.toml: '],
+    ['bun install -g with the .npmrc registry= (not measured)', `bun install -g ${MISSING}`, { '.npmrc': `registry=${PROJECT_NPM}\n` }, '.npmrc: '],
+  ];
+
+  it.each(WARNS)('T-10 %s: a warning that names the file, no refusal', async (_label, command, files, named) => {
+    projectWith(files);
+    const { d } = await decide(command);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain(named);
+    expect(d?.context ?? '').toContain(MISSING);
+  });
+
+  it('T-10 uv add with [tool.uv.pip] index-url: refused, as today', async () => {
+    projectWith({ 'pyproject.toml': `${PYPROJECT}\n[tool.uv.pip]\nindex-url = "${IDX}"\n` });
+    const { d } = await decide(`uv add ${MISSING}`);
+    expectRefusal(d, NOT_PYPI);
+  });
+
+  it('T-10 a bunfig.toml with [install] registry = SECOND and then [install.registry] url = PROJECT: bun add warns and names SECOND, the first', async () => {
+    projectWith({ 'bunfig.toml': `[install]\nregistry = "${SECOND_NPM}"\n\n[install.registry]\nurl = "${PROJECT_NPM}"\n` });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('bunfig.toml: https://second.other.example');
+    expect(textOf(d), 'the second form is not read').not.toContain('npm.other.example');
+  });
+
+  // The hook says the first reason of the name (the registry that explains the 404), not the `) removed from` text of the
+  // malicious check, which `vet.ts` keeps in the check: what matters here is a warning and no refusal.
+  it('T-10 a malicious name taken from the public registry, with the registry only in the user .npmrc: a warning, no refusal, as today', async () => {
+    projectWith({});
+    writeFileSync(join(home, '.npmrc'), `registry=${PROJECT_NPM}\n`);
+    const { d } = await decide(`npm install ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('.npmrc: https://npm.other.example)');
+    expect(d?.context ?? '').toContain(EVIL);
+  });
+
+  it('T-10 the same with NPM_CONFIG_REGISTRY in the hook environment (EC-14, known limit): a warning, no refusal, as today', async () => {
+    projectWith({});
+    const { d } = await decide(`npm install ${EVIL}`, { malicious: [EVIL] }, { env: { GUARDIAN_OFFLINE: '0', NPM_CONFIG_REGISTRY: PROJECT_NPM } });
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('NPM_CONFIG_REGISTRY: https://npm.other.example)');
+  });
+
+  // The boundary of the scope forms of today, which this feature does not close: a manifest that names a name of a scope
+  // the project's own file gives a registry is not asked about, not refused, and counted in a line.
+  const SCOPE_BOUNDARY: Array<[label: string, command: string, file: string, text: string]> = [
+    ['npm install, @acme:registry= in the project .npmrc', 'npm install', '.npmrc', `@acme:registry=${PROJECT_NPM}\n`],
+    ['bun install, [install.scopes] "@acme" = PROJECT in the bunfig.toml', 'bun install', 'bunfig.toml', `[install.scopes]\n"@acme" = "${PROJECT_NPM}"\n`],
+  ];
+
+  it.each(SCOPE_BOUNDARY)('T-10 %s and a manifest that names @acme/dgprobe-evil: not asked about, not refused, counted in a line', async (_label, command, file, text) => {
+    const manifest = JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { [`@acme/${EVIL}`]: '^1.0.0' } });
+    projectWith({ [file]: text }, manifest);
+    const { d, calls, bodies } = await decide(command, { malicious: [EVIL] });
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain('gives a registry of its own — not vetted.');
+    expect([...calls, ...bodies].filter((t) => t.includes(EVIL)), 'no request carries the name').toEqual([]);
+  });
+
+  // ── T-01 to T-04, T-15: the regressions (red until the fix)
+
+  const HOST_NPM = 'https://npm.other.example';
+  const HOST_SECOND = 'https://second.other.example';
+  const HOST_PYPI = 'https://pypi.other.example';
+  /** The line, exactly: the file by its name, the registry by scheme and host. */
+  const lineFor = (file: string, host: string | null = HOST_NPM): string =>
+    `dev-guardian: the project's ${file} sets the default registry${host === null ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`;
+  /** Nothing of the marker, of the user name or of the folder is in a text of the answer or in a request. */
+  const noLeak = (parts: string[]): void => {
+    for (const text of parts) {
+      expect(text.includes(MARK), 'the marker').toBe(false);
+      expect(text.includes(USER), 'the user name').toBe(false);
+    }
+  };
+  /** The warning that explains a missing name by the file, and the line of the file, and no refusal. */
+  const expectSaid = (d: Decided, file: string, host: string | null = HOST_NPM): void => {
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    // The warning names where the registry came from by the path of the file: the file's name and the host follow each other.
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain(`${file}: ${host ?? ''}`);
+    expect(d?.context ?? '').toContain(lineFor(file, host));
+  };
+  const manifestOf = (deps: Record<string, string>): string => JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps });
+
+  const ROOT_WORKSPACES = (patterns: string[]): string => JSON.stringify({ name: 'fixture-root', version: '1.0.0', workspaces: patterns });
+  const MEMBER_JSON = JSON.stringify({ name: 'app', version: '1.0.0' });
+
+  // T-01: the bunfig.toml spellings
+  const BUNFIG_FORMS: Array<[label: string, text: string]> = [
+    ['(a) [install.registry] url', `[install.registry]\nurl = "${PROJECT_NPM}"\n`],
+    ['(b) [install.registry] url with a token beside it', `[install.registry]\nurl = "${PROJECT_NPM}"\ntoken = "${MARK}"\n`],
+    ['(c) install.registry = before any header', `install.registry = "${PROJECT_NPM}"\n`],
+  ];
+
+  it.each(BUNFIG_FORMS)('T-01 %s: bun add of a missing name is not refused, the warning names bunfig.toml and the line is said', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    const { d, calls, bodies } = await decide(`bun add ${MISSING}`);
+    expectSaid(d, 'bunfig.toml');
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  it.each(BUNFIG_FORMS)('T-01 %s: bun install of a manifest with a clean name says the line and nothing else', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text }, manifestOf({ 'dgprobe-clean': '^1.0.0' }));
+    const { d, calls, bodies } = await decide('bun install', { exists: ['dgprobe-clean'] });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toBe(lineFor('bunfig.toml'));
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  const SCOPE_FORMS: Array<[label: string, text: string]> = [
+    ['"@acme"', `[install.scopes."@acme"]\nurl = "${PROJECT_NPM}"\n`],
+    ["'@acme'", `[install.scopes.'@acme']\nurl = "${PROJECT_NPM}"\n`],
+    ['"acme"', `[install.scopes."acme"]\nurl = "${PROJECT_NPM}"\n`],
+    ['acme', `[install.scopes.acme]\nurl = "${PROJECT_NPM}"\n`],
+  ];
+
+  it.each(SCOPE_FORMS)('T-01 (d) [install.scopes.%s] url: bun add of a missing name of that scope is not refused, the warning names bunfig.toml', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text });
+    const { d } = await decide(`bun add @acme/${MISSING}`);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('bunfig.toml');
+  });
+
+  it.each(SCOPE_FORMS)('T-01 (d) [install.scopes.%s] url: bun install asks the registry and OSV for the manifest name, and the warning says the registry, with no scope line', async (_label, text) => {
+    projectWith({ 'bunfig.toml': text }, manifestOf({ [`@acme/${MISSING}`]: '^1.0.0' }));
+    const { d, calls, bodies } = await decide('bun install');
+    expect(calls.some((c) => c.includes(MISSING)), 'the registry was asked for the name (P9 = A)').toBe(true);
+    expect(bodies.some((b) => b.includes(MISSING)), 'OSV was asked for the name').toBe(true);
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('bunfig.toml');
+    expect(d?.context ?? '').not.toContain('it is named by a manifest');
+    expect(d?.context ?? '').not.toContain('gives a registry of its own');
+  });
+
+  // T-02: the .env files
+  const BUN_VAR = 'BUN_CONFIG_REGISTRY';
+  const NPM_VAR = 'NPM_CONFIG_REGISTRY';
+  interface DotenvCase {
+    label: string;
+    files: Record<string, string>;
+    /** The file the line and the warning name. */
+    file: string;
+    env?: Record<string, string>;
+    manifest?: string;
+    at?: string;
+    /** The registry that must not be named (another file the bun does not obey here). */
+    not?: string;
+  }
+  const NODE_ENV_CASES: DotenvCase[] = [
+    { label: '.env with BUN_CONFIG_REGISTRY', files: { '.env': dotenv(BUN_VAR) }, file: '.env' },
+    { label: '.env with NPM_CONFIG_REGISTRY', files: { '.env': dotenv(NPM_VAR) }, file: '.env' },
+    { label: '.env with npm_config_registry', files: { '.env': dotenv('npm_config_registry') }, file: '.env' },
+    { label: '.env.local with BUN_CONFIG_REGISTRY', files: { '.env.local': dotenv(BUN_VAR) }, file: '.env.local' },
+    { label: '.env.local with NPM_CONFIG_REGISTRY', files: { '.env.local': dotenv(NPM_VAR) }, file: '.env.local' },
+    { label: '.env.production with BUN_CONFIG_REGISTRY', files: { '.env.production': dotenv(BUN_VAR) }, file: '.env.production' },
+    { label: '.env.production with NPM_CONFIG_REGISTRY', files: { '.env.production': dotenv(NPM_VAR) }, file: '.env.production' },
+    { label: '.env.production.local', files: { '.env.production.local': dotenv(BUN_VAR) }, file: '.env.production.local' },
+    {
+      label: 'NODE_ENV=development: .env.development PROJECT beside a .env.production SECOND',
+      env: { NODE_ENV: 'development' },
+      files: { '.env.development': dotenv(BUN_VAR), '.env.production': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.development',
+      not: 'second.other.example',
+    },
+    {
+      label: 'NODE_ENV=test: .env.test PROJECT beside a .env.production SECOND',
+      env: { NODE_ENV: 'test' },
+      files: { '.env.test': dotenv(BUN_VAR), '.env.production': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.test',
+      not: 'second.other.example',
+    },
+    {
+      label: 'NODE_ENV=production: .env.production PROJECT beside a .env.development SECOND',
+      env: { NODE_ENV: 'production' },
+      files: { '.env.production': dotenv(BUN_VAR), '.env.development': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.production',
+      not: 'second.other.example',
+    },
+    {
+      label: 'NODE_ENV=staging is production (m2-d): .env.production PROJECT, .env.staging SECOND',
+      env: { NODE_ENV: 'staging' },
+      files: { '.env.production': dotenv(BUN_VAR), '.env.staging': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env.production',
+      not: 'second.other.example',
+    },
+    {
+      label: 'a workspace whose root lists app, the .env at the root, the command in app',
+      manifest: ROOT_WORKSPACES(['app']),
+      files: { 'app/package.json': MEMBER_JSON, '.env': dotenv(BUN_VAR) },
+      file: '.env',
+      at: 'app',
+    },
+    {
+      label: 'the same with an app/.env SECOND: only the root one',
+      manifest: ROOT_WORKSPACES(['app']),
+      files: { 'app/package.json': MEMBER_JSON, '.env': dotenv(BUN_VAR), 'app/.env': dotenv(BUN_VAR, SECOND_NPM) },
+      file: '.env',
+      at: 'app',
+      not: 'second.other.example',
+    },
+    {
+      label: 'a root whose workspaces is ["other"] and a .env only in app (m2-k)',
+      manifest: ROOT_WORKSPACES(['other']),
+      files: { 'app/package.json': MEMBER_JSON, 'app/.env': dotenv(BUN_VAR) },
+      file: '.env',
+      at: 'app',
+    },
+  ];
+
+  /** The project of a case, and the folder the command runs in. */
+  const setUp = (c: { files: Record<string, string>; manifest?: string; at?: string }, manifest?: string): string => {
+    projectWith(c.files, c.manifest ?? manifest);
+    const cwd = c.at === undefined ? project : join(project, c.at);
+    mkdirSync(cwd, { recursive: true });
+    return cwd;
+  };
+
+  it.each(NODE_ENV_CASES)('T-02 $label: bun add of a missing name is not refused, the warning names the file and the host, and the line is said', async (c) => {
+    const cwd = setUp(c);
+    const { d } = await decide(`bun add ${MISSING}`, {}, { cwd, env: { GUARDIAN_OFFLINE: '0', ...c.env } });
+    expectSaid(d, c.file);
+    if (c.not !== undefined) expect(textOf(d), 'the file the bun does not obey here').not.toContain(c.not);
+  });
+
+  it.each(NODE_ENV_CASES)('T-02 $label: bun install of a clean manifest says exactly the line', async (c) => {
+    const memberManifest = manifestOf({ 'dgprobe-clean': '^1.0.0' });
+    const cwd = setUp(c, memberManifest);
+    if (c.at !== undefined) put(`${c.at}/package.json`, memberManifest);
+    const { d } = await decide('bun install', { exists: ['dgprobe-clean'] }, { cwd, env: { GUARDIAN_OFFLINE: '0', ...c.env } });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toBe(lineFor(c.file));
+  });
+
+  it('T-02 a root whose workspaces is ["{app,lib}"], a glob the reader does not judge, and a .env at the root: the refusal stays and the line is said (D-8, P11 = A)', async () => {
+    const cwd = setUp({ manifest: ROOT_WORKSPACES(['{app,lib}']), files: { 'app/package.json': MEMBER_JSON, '.env': dotenv(BUN_VAR) }, at: 'app' });
+    const { d } = await decide(`bun add ${MISSING}`, {}, { cwd });
+    expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
+    expect(d?.deny ?? '(no deny)', 'the line rides in the refusal text').toContain(lineFor('.env'));
+  });
+
+  it.each([
+    ['bunfig.toml [install] registry', 'bunfig.toml', `[install]\nregistry = "${SECOND_NPM}"\n`],
+    ['.npmrc registry=', '.npmrc', `registry=${SECOND_NPM}\n`],
+  ])('T-02 a .env with PROJECT and a %s with SECOND: the warning names the .env and PROJECT, and the lines are the .env first, then the other file', async (_label, file, text) => {
+    projectWith({ '.env': dotenv(BUN_VAR), [file]: text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain(`.env: ${HOST_NPM}`);
+    const lines = (d?.context ?? '').split('\n').filter((l) => l.includes(SAYS));
+    expect(lines).toEqual([lineFor('.env'), lineFor(file, HOST_SECOND)]);
+  });
+
+  it.each([
+    ['bunfig.toml [install] registry', 'bunfig.toml', `[install]\nregistry = "${SECOND_NPM}"\n`],
+    ['.npmrc registry=', '.npmrc', `registry=${SECOND_NPM}\n`],
+  ])('T-02 bun install with a .env PROJECT and a %s SECOND: the context is the two lines, the .env first', async (_label, file, text) => {
+    projectWith({ '.env': dotenv(BUN_VAR), [file]: text }, manifestOf({ 'dgprobe-clean': '^1.0.0' }));
+    const { d } = await decide('bun install', { exists: ['dgprobe-clean'] });
+    expect(d?.context?.split('\n') ?? ['(no context)']).toEqual([lineFor('.env'), lineFor(file, HOST_SECOND)]);
+  });
+
+  // T-03: the grammar of the .env, a line at a time
+  const BOM = '﻿';
+  const GRAMMAR: Array<[label: string, text: string, host?: string]> = [
+    ['export', `export ${BUN_VAR}=${PROJECT_NPM}\n`],
+    ['double quotes', `${BUN_VAR}="${PROJECT_NPM}"\n`],
+    ['single quotes', `${BUN_VAR}='${PROJECT_NPM}'\n`],
+    ['a comment after a space', `${BUN_VAR}=${PROJECT_NPM} # the company registry\n`],
+    ['spaces around the equals sign', ` ${BUN_VAR} = ${PROJECT_NPM}\n`],
+    ['backticks (m2-s)', `${BUN_VAR}=\`${PROJECT_NPM}\`\n`],
+    ['a byte order mark at the start (m2-q)', `${BOM}${BUN_VAR}=${PROJECT_NPM}\n`],
+    ['CRLF line ends (m2-t)', `OTHER=1\r\n${BUN_VAR}=${PROJECT_NPM}\r\n`],
+    ['blank and comment lines before', `\n# a comment\n\nOTHER=1\n${BUN_VAR}=${PROJECT_NPM}\n`],
+    ['BUN_CONFIG_REGISTRY PROJECT, then NPM_CONFIG_REGISTRY SECOND (m2-i)', `${BUN_VAR}=${PROJECT_NPM}\n${NPM_VAR}=${SECOND_NPM}\n`],
+    ['BUN_CONFIG_REGISTRY twice, SECOND then PROJECT (m2-h)', `${BUN_VAR}=${SECOND_NPM}\n${BUN_VAR}=${PROJECT_NPM}\n`],
+  ];
+
+  it.each(GRAMMAR)('T-03 .env grammar, %s: the line with the host, no refusal', async (_label, text) => {
+    projectWith({ '.env': text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expectSaid(d, '.env');
+    expect(textOf(d), 'the other registry').not.toContain('second.other.example');
+  });
+
+  const CONFIGURED_VALUES: Array<[label: string, text: string]> = [
+    ['$REG', `${BUN_VAR}=$REG\n`],
+    ['"${REG}"', `${BUN_VAR}="\${REG}"\n`],
+    ['a backslash inside quotes', `${BUN_VAR}="${PROJECT_NPM}\\x"\n`],
+    ['a double quote with no end', `${BUN_VAR}="${PROJECT_NPM}`],
+  ];
+
+  it.each(CONFIGURED_VALUES)('T-03 (configured) %s: the line without a host, and the refusal stays', async (_label, text) => {
+    projectWith({ '.env': text });
+    const { d } = await decide(`bun add ${MISSING}`);
+    expect(d?.deny ?? '(no deny)').toContain(NOT_NPM);
+    expect(d?.deny ?? '(no deny)', 'the line rides in the refusal text').toContain(lineFor('.env', null));
+  });
+
+  it('T-03 a value with credentials: the line has the scheme and host, nothing of the marker or the user name', async () => {
+    projectWith({ '.env': dotenv(BUN_VAR, ['https://', USER, ':', MARK, '@', 'npm.other.example', '/'].join('')) });
+    const { d, calls, bodies } = await decide(`bun add ${MISSING}`);
+    expect(d?.context ?? '(no context)').toContain(lineFor('.env'));
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  it('T-03 a password with an @ and a / in it: the line without a host, and nothing of the value', async () => {
+    projectWith({ '.env': dotenv(BUN_VAR, ['https://', USER, ':pa@', MARK, '@', 'npm.other.example', '/x'].join('')) });
+    const { d, calls, bodies } = await decide(`bun add ${MISSING}`);
+    // As in the test of the .npmrc this one follows: the line is said with the host or without, as `registryHost` judges the value.
+    expect(textOf(d)).toMatch(/dev-guardian: the project's \.env sets the default registry(?: \(https:\/\/npm\.other\.example\))? — packages are fetched from it, and what it serves was not vetted\./);
+    noLeak([textOf(d), ...calls, ...bodies]);
+  });
+
+  // T-04: the Python forms and bun add -g
+  it('T-04 (a) uv pip install with [tool.uv.pip] index-url in the pyproject.toml: not refused, the warning names pyproject.toml', async () => {
+    projectWith({ 'pyproject.toml': `${PYPROJECT}\n[tool.uv.pip]\nindex-url = "${PROJECT_PYPI}"\n` });
+    const { d } = await decide(`uv pip install ${MISSING}`);
+    expect(d?.deny, 'no refusal').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`pyproject.toml: ${HOST_PYPI}`);
+  });
+
+  const UV_INDEX = `[[tool.uv.index]]\nname = "dgproject"\nurl = "${PROJECT_PYPI}"\n`;
+  const POETRY_SOURCE = `\n[[tool.poetry.source]]\nname = "dgproject"\nurl = "${PROJECT_PYPI}"\npriority = "primary"\n`;
+  const TOOL_UV = `[tool.uv]\nindex-url = "${PROJECT_PYPI}"\n`;
+  const UV_TOML = `index-url = "${PROJECT_PYPI}"\n`;
+  /** The 21 pairs (command × file) of the table N of bug.md, the file as the measured case wrote it. */
+  const PAIRS: Array<[pair: string, command: string, files: Record<string, string>]> = [
+    ['N1', `uv add ${MISSING}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `[pip]\nindex-url = "${PROJECT_PYPI}"\n` }],
+    ['N2', `pipx install ${MISSING}`, { 'uv.toml': UV_TOML }],
+    ['N2', `pipx run ${MISSING}`, { 'uv.toml': UV_TOML }],
+    ['N2', `pipx install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` }],
+    ['N2', `pipx run ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` }],
+    ['N3', `pipx install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}` }],
+    ['N3', `pipx install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}default = true\n` }],
+    ['N3', `pipx install ${MISSING}`, { 'pyproject.toml': POETRY + POETRY_SOURCE }],
+    ['N4', `poetry add ${MISSING}`, { 'pyproject.toml': `${POETRY}${POETRY_SOURCE.replace('primary', 'explicit')}` }],
+    ['N5', `poetry add ${MISSING}`, { 'pyproject.toml': POETRY, 'uv.toml': UV_TOML }],
+    ['N5', `poetry add ${MISSING}`, { 'pyproject.toml': `${POETRY}\n${TOOL_UV}` }],
+    ['N5', `poetry add ${MISSING}`, { 'pyproject.toml': `${POETRY}\n${UV_INDEX}default = true\n` }],
+    ['N6', `pip install ${MISSING}`, { 'uv.toml': UV_TOML }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}` }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': `${PYPROJECT}\n${UV_INDEX}default = true\n` }],
+    ['N6', `pip install ${MISSING}`, { 'pyproject.toml': POETRY + POETRY_SOURCE }],
+    ['N7', `uv pip install ${MISSING}`, { 'pyproject.toml': PYPROJECT + POETRY_SOURCE }],
+    ['N7', `uv add ${MISSING}`, { 'pyproject.toml': PYPROJECT + POETRY_SOURCE }],
+    ['N8', `bun add -g ${MISSING}`, { 'bunfig.toml': `[install]\nregistry = "${PROJECT_NPM}"\n` }],
+    ['N8', `bun add -g ${MISSING}`, { '.npmrc': `registry=${PROJECT_NPM}\n` }],
+  ];
+
+  it('T-04 the table has 21 pairs', () => {
+    expect(PAIRS).toHaveLength(21);
+  });
+
+  it.each(PAIRS)('T-04 (b) %s `%s` (%#): refused, and no custom registry is configured', async (pair, command, files) => {
+    projectWith(files);
+    const { d } = await decide(command);
+    expect(d?.deny ?? '(no deny)').toContain(pair === 'N8' ? NOT_NPM : NOT_PYPI);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+  });
+
+  it.each([
+    ['N1 uv add', `uv add ${EVIL}`, { 'pyproject.toml': PYPROJECT, 'uv.toml': `[pip]\nindex-url = "${PROJECT_PYPI}"\n` }],
+    ['N2 pipx run', `pipx run ${EVIL}`, { 'uv.toml': UV_TOML }],
+    ['N8 bun add -g', `bun add -g ${EVIL}`, { '.npmrc': `registry=${PROJECT_NPM}\n` }],
+  ])('T-04 (c) %s of a malicious name taken from the public registry: refused with the advisory', async (_label, command, files) => {
+    projectWith(files);
+    const { d } = await decide(command, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+    expect(d?.deny ?? '').toContain('), removed from');
+  });
+
+  it('T-04 (c) pip install -r requirements.txt naming a malicious name, with a uv.toml index-url (N6): refused, naming requirements.txt', async () => {
+    projectWith({ 'uv.toml': UV_TOML, 'requirements.txt': `${EVIL}\n` });
+    const { d } = await decide('pip install -r requirements.txt', { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('requirements.txt');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  // T-15: a malicious name the public registry took down, explained only by a file of the project
+  it('T-15 (a) npm install of it with registry= in the project .npmrc: refused, with the advisory', async () => {
+    projectWith({ '.npmrc': `registry=${PROJECT_NPM}\n` });
+    const { d } = await decide(`npm install ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+    expect(d?.deny ?? '').toContain('), removed from');
+  });
+
+  it('T-15 (b) uv add of it with [tool.uv] index-url: refused', async () => {
+    projectWith({ 'pyproject.toml': `${PYPROJECT}\n${TOOL_UV}` });
+    const { d } = await decide(`uv add ${EVIL}`, { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (c) npm install of a manifest that names it, with the same .npmrc: refused, naming package.json', async () => {
+    projectWith({ '.npmrc': `registry=${PROJECT_NPM}\n` }, manifestOf({ [EVIL]: '^1.0.0' }));
+    const { d } = await decide('npm install', { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('package.json');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (d) pip install -r requirements.txt naming it, with a uv.toml [[index]] (a pair outside the table N): refused, naming requirements.txt', async () => {
+    projectWith({ 'uv.toml': `[[index]]\nname = "dgproject"\nurl = "${PROJECT_PYPI}"\n`, 'requirements.txt': `${EVIL}\n` });
+    const { d } = await decide('pip install -r requirements.txt', { malicious: [EVIL] });
+    expect(d?.deny ?? '(no deny)').toContain('requirements.txt');
+    expect(d?.deny ?? '').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (e) pip install of it with VIRTUAL_ENV at the project .venv whose pip.conf sets an index: refused', async () => {
+    projectWith({ '.venv/pip.conf': `[global]\nindex-url = ${PROJECT_PYPI}\n` });
+    const { d } = await decide(`pip install ${EVIL}`, { malicious: [EVIL] }, { env: { GUARDIAN_OFFLINE: '0', VIRTUAL_ENV: join(project, '.venv') } });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+  });
+
+  it('T-15 (f) bun add @acme/dgprobe-evil on the command line, with @acme:registry= in the project .npmrc: refused (a name of the command is refused, one of the manifest only counted)', async () => {
+    projectWith({ '.npmrc': `@acme:registry=${PROJECT_NPM}\n` });
+    const { d } = await decide(`bun add @acme/${EVIL}`, { malicious: [`@acme/${EVIL}`] });
+    expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
+  });
+});
+
+// ───────────────── pkgvet-archive-names-pipx-composer — the decision for the words the pipx and the composer measured
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  // The names are made up; no test runs pipx or composer.
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const MISSING = 'dgprobe-missing';
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The line of criterion 2: what `pipx run <p>` does with a word it reads as a file, said when the folder is not known. */
+  const runLine = (word: string): string =>
+    `dev-guardian: pipx run reads ${word} as a file, not a package — if the file is there, pipx runs it as a script and installs the packages its \`# /// script\` block names; they were not vetted.`;
+  const R2 =
+    'a name that ends like an archive file — composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known';
+  const occurrences = (text: string, part: string): number => text.split(part).length - 1;
+  const put = (rel: string, text: string): void => {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), text);
+  };
+  /** The registry of the plan for a refusal of the block: EVIL is published and has a `MAL-` advisory, everything else is a 404. */
+  const evilRegistry = (): ReturnType<typeof registry> => registry({ exists: ['requests', EVIL], malicious: [EVIL] });
+
+  it.each([
+    ['composer require dgprobe/missing.zip', 'does not exist on Packagist'],
+    ['pipx install dgprobe-missing.egg', 'does not exist on PyPI'],
+    ['pipx run dgprobe-missing.egg', 'does not exist on PyPI'],
+  ])('T-05 `%s`, a 404 and no file: DENIED as a name the registry does not have', async (command, why) => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(command, opts(f.fetchImpl));
+    expect(d?.deny ?? '(no deny)').toContain(why);
+  });
+
+  it.each(['pipx install dgprobe-missing.whl', 'pipx run dgprobe-missing.zip'])(
+    'T-05 `%s`, a 404 and no file: nothing said, and the word was asked for malware only',
+    async (command) => {
+      const f = fakeRegistry();
+      const d = await decideInstallCommand(command, opts(f.fetchImpl));
+      expect(d, 'nothing is said').toBeNull();
+      expect(f.calls).toEqual([pypiUrl(command.split(' ').at(-1) ?? ''), OSV]);
+    },
+  );
+
+  it.each(['cd "$X" && pipx run dgprobe-missing.zip', 'cd "$X"; pipx run dgprobe-missing.zip'])(
+    'T-05 `%s`: the folder is not known, so the line of `pipx run` is said once, and the word is not called a missing name',
+    async (command) => {
+      const f = fakeRegistry();
+      const d = await decideInstallCommand(command, opts(f.fetchImpl));
+      expect(d?.deny, 'never a deny').toBeUndefined();
+      const context = d?.context ?? '(no context)';
+      expect(occurrences(context, runLine('dgprobe-missing.zip'))).toBe(1);
+      expect(context).not.toContain('not found');
+    },
+  );
+
+  it('T-05 `composer require dgprobe/missing.whl`: the ending was not measured with the composer, so no refusal, and a warning with R2', async () => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('composer require dgprobe/missing.whl', opts(f.fetchImpl));
+    expect(d?.deny, 'never a deny for an ending that was not measured').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(R2);
+  });
+
+  it.each(['dgprobe-missing.zip', 'dgprobe-missing.egg'])('T-05 (guard) `pipx run %s` with an empty file of that name in the project: nothing said', async (file) => {
+    put(file, '');
+    const f = fakeRegistry();
+    expect(await decideInstallCommand(`pipx run ${file}`, opts(f.fetchImpl))).toBeNull();
+  });
+
+  it.each(['dgprobe-missing.zip', 'dgprobe-missing.egg'])(
+    'T-05 (guard) `pipx run %s` with a file whose block names a malicious package: DENIED, naming the file',
+    async (file) => {
+      put(file, BLOCK(EVIL));
+      const r = evilRegistry();
+      const d = await decideInstallCommand(`pipx run ${file}`, opts(r.fetchImpl));
+      expect(d?.deny ?? '(no deny)').toContain(`${file} names '${EVIL}@1.0.0'`);
+    },
+  );
+
+  it('T-05 (guard) `pipx run ./dgprobe-missing.zip`, a path: nothing said and nothing asked', async () => {
+    const f = fakeRegistry();
+    expect(await decideInstallCommand(`pipx run ./${MISSING}.zip`, opts(f.fetchImpl))).toBeNull();
+    expect(f.calls).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-path-forms — the guards: what the spelling of a folder must not change (green before the fix)
+
+describe('install-vet-path-forms', () => {
+  type DiskImpl = NonNullable<HookVetOptions['diskImpl']>;
+
+  const WINDOWS = process.platform === 'win32';
+  const ROOT_NAME = 'project with a long name';
+  const SUB_NAME = 'sub folder inside';
+  const EVIL_MANIFEST = { name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', 'evil-pkg': '^1.0.0' } };
+  const COULD_NOT_BE_DETERMINED = /package\.json was not read \(where the command runs could not be determined\)/;
+
+  /** The short (8.3) spelling of an existing folder, as the system says it: `cmd.exe` by its whole path, run in the folder. */
+  const shortOf = (dir: string): string =>
+    (
+      spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe'), ['/d', '/c', '"for %I in (.) do @echo %~sI"'], {
+        cwd: dir,
+        encoding: 'utf8',
+        windowsVerbatimArguments: true,
+      }).stdout ?? ''
+    ).trim();
+
+  /** Decided once per file: this is Windows, on a volume that gives short names, and the two spellings are one folder. */
+  const SHORT_NAMES = ((): boolean => {
+    if (!WINDOWS) return false;
+    const probe = mkdtempSync(join(tmpdir(), 'dg path forms probe '));
+    try {
+      const short = shortOf(probe);
+      return short !== '' && short.toLowerCase() !== probe.toLowerCase() && realpathSync.native(short) === realpathSync.native(probe);
+    } catch {
+      // No `cmd.exe`, or a volume without short names: the tests that need them are skipped, with their label saying so.
+      return false;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const ifShort = it.skipIf(!SHORT_NAMES);
+  const ifWindows = it.skipIf(!WINDOWS);
+
+  const links: string[] = [];
+  afterEach(() => {
+    // A junction or link made in a test is removed itself, before the folder that holds it is.
+    for (const link of links.splice(0)) rmSync(link, { force: true });
+  });
+  /** A folder link (a junction on Windows, which needs no privilege) from `link` to `target`. */
+  const linkDir = (target: string, link: string): void => {
+    symlinkSync(target, link, WINDOWS ? 'junction' : 'dir');
+    links.push(link);
+  };
+
+  const dirs = (base: string = project): { root: string; sub: string } => {
+    const root = join(base, ROOT_NAME);
+    const sub = join(root, SUB_NAME);
+    mkdirSync(sub, { recursive: true });
+    return { root, sub };
+  };
+  const writeEvil = (dir: string): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(EVIL_MANIFEST));
+  };
+  const evilRegistry = (): ReturnType<typeof registry> => registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+  /** The options of a hook call from `cwd`, with the project at `projectDir` and a counting `diskImpl`. */
+  function at(fetchImpl: typeof fetch, cwd: string, projectDir: string, extra: Partial<HookVetOptions> = {}): { o: HookVetOptions; n: { lstat: number; realpath: number } } {
+    const n = { lstat: 0, realpath: 0 };
+    const diskImpl: DiskImpl = {
+      lstat: (p) => {
+        n.lstat += 1;
+        return lstatSync(p);
+      },
+      realpath: (p) => {
+        n.realpath += 1;
+        return realpathSync.native(p);
+      },
+    };
+    return { o: opts(fetchImpl, { cwd, projectDir, diskImpl, ...extra }), n };
+  }
+
+  /** A package-lock.json of lockfileVersion 3 for a project whose one direct dependency is express (as in `install-vet-manifest-parent-dir`). */
+  const lockOf = (transitive: string, version: string): string =>
+    JSON.stringify({
+      name: 'fixture-app',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } },
+        'node_modules/express': { version: '4.21.2', resolved: 'https://registry.npmjs.org/express/-/express-4.21.2.tgz' },
+        [`node_modules/${transitive}`]: { version, resolved: `https://registry.npmjs.org/${transitive}/-/${transitive}-${version}.tgz` },
+      },
+    });
+  /** The registry and OSV of the lockfile test: every document answers, and the requests are kept. */
+  function lockNet(): { fetchImpl: typeof fetch; registry: string[]; asked: string[] } {
+    const registryCalls: string[] = [];
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => (p === 'bad-transitive@1.0.0' ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      if (/^https:\/\/registry\.npmjs\.org\/[^/]+$/.test(url)) {
+        registryCalls.push(url);
+        return json(npmDoc('1.0.0').body);
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, registry: registryCalls, asked };
+  }
+
+  // ── T-04: only the case differs — what was already right stays right
+
+  ifWindows(
+    'T-04 (Windows; skipped otherwise) a session folder written in upper case, the project in lower case: the manifest above is read, named ../package.json',
+    async () => {
+      const { root, sub } = dirs();
+      writeEvil(root);
+      const reg = evilRegistry();
+      const { o } = at(reg.fetchImpl, sub.toUpperCase(), root.toLowerCase());
+      expect((await decideInstallCommand('npm install', o))?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+    },
+  );
+
+  ifWindows('T-04 (Windows; skipped otherwise) `cd` to the subfolder written in upper case, from the root: the same refusal', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, root, root);
+    const d = await decideInstallCommand(`cd "${sub.toUpperCase()}" && npm install`, o);
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  // ── T-05: the limits — what the new comparison must not make readable, and what keeps saying "was not read"
+
+  it('T-05 (a) a session folder that is a link from outside the project to the subfolder: null, and nothing is asked', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const link = join(project, 'link outside');
+    linkDir(sub, link);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, link, root);
+    expect(await decideInstallCommand('npm install', o)).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-05 (b) `cd` to that link, from the project: the line "could not be determined", and nothing is asked', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const link = join(project, 'link outside');
+    linkDir(sub, link);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, root, root);
+    const d = await decideInstallCommand(`cd "${link}" && npm install`, o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifWindows.each([
+    ['a trailing dot', '.'],
+    ['a trailing space', ' '],
+  ])('T-05 (c) (Windows; skipped otherwise) `cd` to the subfolder with %s: the line "could not be determined", and nothing is asked', async (_what, tail) => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, root, root);
+    const d = await decideInstallCommand(`cd "${sub}${tail}" && npm install`, o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (d) (Windows, a volume with 8.3 names; skipped otherwise) a session in the short spelling of a folder outside the project: that folder alone is read', async () => {
+    const { root } = dirs();
+    const { root: outside, sub: below } = dirs(join(project, 'outside with a long name'));
+    writeEvil(outside);
+    const own = evilRegistry();
+    const denied = await decideInstallCommand('npm install', at(own.fetchImpl, shortOf(outside), root).o);
+    expect(denied?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg/s);
+    const lower = evilRegistry();
+    expect(await decideInstallCommand('npm install', at(lower.fetchImpl, shortOf(below), root).o)).toBeNull();
+    expect(lower.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (e) (Windows, a volume with 8.3 names; skipped otherwise) a package.json only above the project root: not read, from the short subfolder', async () => {
+    const above = join(project, 'above with a long name');
+    const { root, sub } = dirs(above);
+    writeEvil(above);
+    const reg = evilRegistry();
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, shortOf(sub), root).o)).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (f) (Windows, a volume with 8.3 names; skipped otherwise) the home directory: its package.json is not read, for a project in the short spelling below it', async () => {
+    const homeDir = join(project, 'home with a long name');
+    mkdirSync(join(homeDir, '.git'), { recursive: true });
+    writeEvil(homeDir);
+    const docs = join(homeDir, 'docs');
+    const sub = join(docs, 'sub');
+    mkdirSync(sub, { recursive: true });
+    const reg = evilRegistry();
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, sub, shortOf(docs), { homeDir }).o)).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (g) (Windows, a volume with 8.3 names; skipped otherwise) `npm install --prefix` the short subfolder: the line "could not be determined", and nothing is asked', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand(`npm install --prefix "${shortOf(sub)}"`, at(reg.fetchImpl, root, root).o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (h) (Windows, a volume with 8.3 names; skipped otherwise) the same package installed 6 800 times, from the short subfolder: looked up once, in time, and the disk is asked no more than for 100', async () => {
+    const { root, sub } = dirs();
+    const run = async (times: number): Promise<{ realpath: number; express: number; ms: number }> => {
+      const reg = registry({ exists: ['express'] });
+      const { o, n } = at(reg.fetchImpl, shortOf(sub), root);
+      const t0 = performance.now();
+      expect(await decideInstallCommand('npm i express; '.repeat(times), o)).toBeNull();
+      return { realpath: n.realpath, express: reg.calls.filter((u) => u.endsWith('/express')).length, ms: performance.now() - t0 };
+    };
+    const few = await run(100);
+    const many = await run(6_800);
+    expect(many.express).toBe(1);
+    expect(many.ms).toBeLessThan(hangBound(3000));
+    // The cost of the spelling is one question per folder, whatever the length of the line; and the hook does ask: a
+    // `diskImpl` that is never wired to it would give 0 = 0.
+    expect(many.realpath).toBe(few.realpath);
+    expect(many.realpath).toBeGreaterThan(0);
+  });
+
+  ifShort('T-05 (i) (Windows, a volume with 8.3 names; skipped otherwise) a relative `cd` from a session folder that is a junction to a folder outside the project: the line "could not be determined"', async () => {
+    const { root } = dirs();
+    const outside = join(project, 'outside');
+    const target = join(outside, SUB_NAME);
+    mkdirSync(target, { recursive: true });
+    writeEvil(target);
+    const jweb = join(root, 'jweb');
+    linkDir(outside, jweb);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand(`cd ${basename(shortOf(target))} && npm install`, at(reg.fetchImpl, jweb, root).o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (j) (Windows, a volume with 8.3 names; skipped otherwise) a session in the short spelling of the root itself: its lockfile covers the manifest, so the registry is not asked', async () => {
+    const { root } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } }));
+    writeFileSync(join(root, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, shortOf(root), root).o)).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
+  });
+
+  // ── T-01 to T-03: the regression — the spelling of a folder must not change what the hook reads (red until the fix)
+
+  const MANIFEST_DENY = /\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s;
+  /** The same folder with forward slashes, as a `cd` of Git Bash writes it. */
+  const forward = (p: string): string => p.split(String.fromCharCode(92)).join('/');
+  /** The MSYS spelling of a drive path: `C:\x` is `/c/x`. */
+  const msys = (p: string): string => `/${p.slice(0, 1).toLowerCase()}${forward(p.slice(2))}`;
+
+  ifShort(`T-01 (a) (Windows, a volume with 8.3 names; skipped otherwise) the session in the short spelling of the subfolder, the project in the long one: the manifest above is read and refused`, async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, shortOf(sub), root).o);
+    expect(d?.deny ?? '(no deny)').toMatch(MANIFEST_DENY);
+  });
+
+  ifShort(`T-01 (b) (Windows, a volume with 8.3 names; skipped otherwise) the session in the long subfolder, the project in the short spelling: the same refusal`, async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand('npm install', at(reg.fetchImpl, sub, shortOf(root)).o);
+    expect(d?.deny ?? '(no deny)').toMatch(MANIFEST_DENY);
+  });
+
+  ifShort(`T-01 (c) (Windows, a volume with 8.3 names; skipped otherwise) \`npm ci\` from the short subfolder: a lockfile of the root that pins a malicious version is refused, naming the lockfile`, async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } }));
+    writeFileSync(join(root, 'package-lock.json'), lockOf('bad-transitive', '1.0.0'));
+    const net = lockNet();
+    const d = await decideInstallCommand('npm ci', at(net.fetchImpl, shortOf(sub), root).o);
+    expect(d?.deny ?? '(no deny)').toMatch(/package-lock\.json pins 'bad-transitive@1\.0\.0'/);
+  });
+
+  ifShort(`T-01 (d) (Windows, a volume with 8.3 names; skipped otherwise) \`npm ci\` from the short subfolder, a lockfile that covers the manifest: what it pins goes to OSV, and the registry is not asked`, async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } }));
+    writeFileSync(join(root, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, shortOf(sub), root).o)).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
+  });
+
+  const refusal = async (command: string, extra: Partial<HookVetOptions> = {}): Promise<string> => {
+    const { root } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand(command, at(reg.fetchImpl, root, root, extra).o);
+    return d?.deny ?? '(no deny)';
+  };
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder with />" && npm install` refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd "${forward(shortOf(sub))}" && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder as /c/…>" && npm install` (MSYS) refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd "${msys(shortOf(sub))}" && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `pushd "<short subfolder>" && npm install` refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`pushd "${shortOf(sub)}" && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd <8.3 name of the subfolder> && npm install` (relative) refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd ${basename(shortOf(sub))} && npm install`)).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd <short subfolder>; npm install` in PowerShell refuses with ../package.json', async () => {
+    const { sub } = dirs();
+    expect(await refusal(`cd ${shortOf(sub)}; npm install`, { shell: 'powershell' })).toMatch(MANIFEST_DENY);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && pip install -r requirements.txt` reads the requirements file of the subfolder and refuses', async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(sub, 'requirements.txt'), 'evil-py\n');
+    const reg = registry({ exists: ['evil-py'], malicious: ['evil-py'] });
+    const d = await decideInstallCommand(`cd "${forward(shortOf(sub))}" && pip install -r requirements.txt`, at(reg.fetchImpl, root, root).o);
+    expect(d?.deny ?? '(no deny)').toMatch(/requirements\.txt/);
+  });
+
+  const ID = 'Dgprobe.Zzq7731.Nope';
+  const FOLDER_NOT_KNOWN = 'the folder is not known';
+  const nugetCalls = (calls: string[]): string[] => calls.filter((u) => u.includes('nuget.org'));
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && dotnet new install <id> --force`, nothing of that name there: the NuGet is asked, the context warns, without the reason "the folder is not known"', async () => {
+    const { root, sub } = dirs();
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && dotnet new install ${ID} --force`, at(f.fetchImpl, root, root).o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(ID);
+    expect(nugetCalls(f.calls).length).toBeGreaterThan(0);
+    expect(d?.context ?? '(no context)').not.toContain(FOLDER_NOT_KNOWN);
+  });
+
+  ifShort('T-02 (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && dotnet new install <id> --force`, a folder of that name there: no NuGet request, nothing said', async () => {
+    const { root, sub } = dirs();
+    mkdirSync(join(sub, ID));
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && dotnet new install ${ID} --force`, at(f.fetchImpl, root, root).o);
+    expect(nugetCalls(f.calls)).toEqual([]);
+    expect(d).toBeNull();
+  });
+
+  ifShort('T-03 (a) (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && npx <tool>` with the tool installed in the subfolder: null, and the registry is not asked', async () => {
+    const { root, sub } = dirs();
+    mkdirSync(join(sub, 'node_modules', '.bin'), { recursive: true });
+    writeFileSync(join(sub, 'node_modules', '.bin', 'zz-no-such-pkg'), '#!/bin/sh\n');
+    const reg = registry({});
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && npx zz-no-such-pkg`, at(reg.fetchImpl, root, root, { popular: {} }).o);
+    expect(d).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-03 (b) (Windows, a volume with 8.3 names; skipped otherwise) `cd "<short subfolder>" && npm install` with a .npmrc beside the manifest of the project: its default registry is said', async () => {
+    const { root, sub } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    writeFileSync(join(root, '.npmrc'), 'registry=https://registry.example.invalid/\n');
+    const reg = registry({});
+    const d = await decideInstallCommand(`cd "${shortOf(sub)}" && npm install`, at(reg.fetchImpl, root, root).o);
+    expect(d?.context ?? '(no context)').toContain("the project's .npmrc sets the default registry (https://registry.example.invalid)");
+  });
+});
+
+describe('install-vet-uv-run-project-index', () => {
+  const IDX = 'https://pypi.corp.example/simple/';
+  const CLI = 'https://pypi.cli.example/simple/';
+  const REQUESTS = 'requests';
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const GONE = 'dgprobe-zzq7731-gone';
+  const MISSING = 'dgprobe-zzq7731-missing';
+  const PROJECT = '[project]\nname = "dgprobe-zzq7731-proj"\nversion = "0.1.0"\ndependencies = []\n\n';
+  const PY = 'python -c "print(1)"';
+  const SAYS = 'sets the package index';
+  const CONFIGURED = 'a custom registry is configured (';
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The public registry of the plan: `requests` and EVIL are published, EVIL and GONE have a `MAL-` advisory, the rest is a 404. */
+  const reg = (): ReturnType<typeof registry> => registry({ exists: [REQUESTS, EVIL], malicious: [EVIL, GONE] });
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  const kindOf = (d: Decided): 'null' | 'deny' | 'ask' | 'context' =>
+    d === null ? 'null' : d.deny !== undefined ? 'deny' : d.ask !== undefined ? 'ask' : 'context';
+  const textOf = (d: Decided): string => `${d?.deny ?? ''}\n${d?.context ?? ''}\n${d?.ask ?? ''}`;
+  const put = (rel: string, text: string, at: string = project): void => {
+    mkdirSync(dirname(join(at, rel)), { recursive: true });
+    writeFileSync(join(at, rel), text);
+  };
+  /** A folder that is a repository root: no reader climbs out of it into the temp folder. */
+  const repository = (at: string = project): void => {
+    mkdirSync(join(at, '.git'), { recursive: true });
+  };
+  /** The decision for `command` run in `at` (the folder of the command and the project), against the public registry above. */
+  const decide = async (command: string, o: { at?: string; env?: Record<string, string> } = {}): Promise<{ d: Decided; calls: string[] }> => {
+    const at = o.at ?? project;
+    const r = reg();
+    const d = await decideInstallCommand(command, opts(r.fetchImpl, { popular: {}, cwd: at, projectDir: at, env: { GUARDIAN_OFFLINE: '0', ...(o.env ?? {}) } }));
+    return { d, calls: r.calls };
+  };
+  const pypiAsked = (calls: string[]): string[] => calls.filter((u) => u.startsWith('https://pypi.org/pypi/'));
+
+  // The 7 project files of the table of bug.md, written here and never read from `.specs/`.
+  const FILES: Array<[label: string, files: Record<string, string>]> = [
+    ['no project file', {}],
+    ['uv.toml index-url', { 'uv.toml': `index-url = "${IDX}"\n` }],
+    ['uv.toml [[index]] default = true', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['uv.toml [[index]]', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['uv.toml [pip] index-url', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['pyproject.toml [tool.uv] index-url', { 'pyproject.toml': `${PROJECT}[tool.uv]\nindex-url = "${IDX}"\n` }],
+    ['pyproject.toml [[tool.uv.index]] default = true', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+  ];
+  // The 5 forms, and what each needs on disk for a name.
+  const FORMS: Array<[command: string, files: (name: string) => Record<string, string>]> = [
+    ['uv run s.py', (n) => ({ 's.py': BLOCK(n) })],
+    ['pipx run s.py', (n) => ({ 's.py': BLOCK(n) })],
+    ['pipx run --path s.py', (n) => ({ 's.py': BLOCK(n) })],
+    [`uv run --with-requirements r.txt ${PY}`, (n) => ({ 'r.txt': `${n}\n` })],
+    [`uv run --with {N} ${PY}`, () => ({})],
+  ];
+  // The decision of the table of bug.md, with or without a project file.
+  const NAMES: Array<[name: string, kind: 'null' | 'deny' | 'context']> = [
+    [REQUESTS, 'null'],
+    [MISSING, 'context'],
+    [EVIL, 'deny'],
+    [GONE, 'deny'],
+  ];
+
+  // ── T-04 (a): no verdict changes — the 140 rows (7 files x 5 forms x 4 names)
+
+  /** The files of the table whose index `uv run` obeys: its forms say the line for a clean name. */
+  const OBEYED_FILES = new Set(['uv.toml index-url', 'uv.toml [[index]] default = true', 'uv.toml [[index]]', 'pyproject.toml [tool.uv] index-url', 'pyproject.toml [[tool.uv.index]] default = true']);
+
+  it.each(FILES)('T-04 (a) %s: the decision of each of the 5 forms and 4 names is the one of the table, and no answer names the index', async (_label, files) => {
+    let n = 0;
+    for (const [template, filesOf] of FORMS) {
+      for (const [name, kind] of NAMES) {
+        const command = template.replace('{N}', name);
+        const at = join(project, `cell-${String(n)}`);
+        n += 1;
+        repository(at);
+        for (const [rel, text] of [...Object.entries(files), ...Object.entries(filesOf(name))]) put(rel, text, at);
+        const { d, calls } = await decide(command, { at });
+        const row = `${command} (${name})`;
+        // Revision of 2026-11-23 (the owner's answer after task 3): with a file the uv obeys, a `uv run` form with a clean name says the line, so it is
+        // context only; no refusal and no question appears or disappears, and the index is named by no refusal.
+        const lineSaid = OBEYED_FILES.has(_label) && command.startsWith('uv run');
+        const want = name === REQUESTS && lineSaid ? 'context' : kind;
+        expect(kindOf(d), row).toBe(want);
+        expect(d?.ask, row).toBeUndefined();
+        expect(pypiAsked(calls).some((u) => u.includes(`/pypi/${name}/json`)), `${row}: the name is asked of the PyPI`).toBe(true);
+        if (!lineSaid || name === EVIL || name === GONE) expect(textOf(d), `${row}: no line of a project file`).not.toContain(SAYS);
+        // A refusal does not name the index.
+        if (want === 'deny') expect(textOf(d), `${row}: the index is not named`).not.toContain('pypi.corp.example');
+        if (name === MISSING) expect(d?.context ?? '(no context)', row).toContain(`'${MISSING}': not found on the public registry`);
+        if (name === EVIL) {
+          // A published malicious name: the refusal is the same text with and without the file.
+          const bare = join(project, `bare-${String(n)}`);
+          repository(bare);
+          for (const [rel, text] of Object.entries(filesOf(name))) put(rel, text, bare);
+          const without = await decide(command, { at: bare });
+          expect(d?.deny, row).toBe(without.d?.deny);
+          expect(d?.deny ?? '(no deny)', row).toContain('MAL-2026-77');
+        }
+        if (name === GONE) {
+          expect(d?.deny ?? '(no deny)', row).toContain('OSV lists this name as a malicious package (MAL-2026-77), removed from PyPI');
+        }
+      }
+    }
+  }, 60_000);
+
+  // ── T-04 (b): where the line is not said, with `uv.toml` = IDX and `s.py` = BLOCK('requests')
+
+  const uvProject = (): void => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+  };
+
+  it('T-04 (b) `uv run --no-config s.py` and `uv run --config-file cfg.toml s.py`: nothing said (s1, s3)', async () => {
+    uvProject();
+    put('cfg.toml', `index-url = "${CLI}"\n`);
+    expect((await decide('uv run --no-config s.py')).d).toBeNull();
+    expect((await decide('uv run --config-file cfg.toml s.py')).d).toBeNull();
+  });
+
+  it('T-04 (b) UV_NO_CONFIG=1 and a UV_CONFIG_FILE with no index, outside the folder, in the hook environment: nothing said (s2, s5)', async () => {
+    uvProject();
+    const cfg = join(home, 'no-index.toml');
+    writeFileSync(cfg, 'native-tls = false\n');
+    expect((await decide('uv run s.py', { env: { UV_NO_CONFIG: '1' } })).d).toBeNull();
+    expect((await decide('uv run s.py', { env: { UV_CONFIG_FILE: cfg } })).d).toBeNull();
+  });
+
+  it.each(['--default-index', '--index-url', '-i'])('T-04 (b) `uv run %s CLI s.py`: nothing said (c3-c6)', async (flag) => {
+    uvProject();
+    expect((await decide(`uv run ${flag} ${CLI} s.py`)).d).toBeNull();
+  });
+
+  it.each(['UV_DEFAULT_INDEX', 'UV_INDEX_URL'])('T-04 (b) %s in the hook environment: nothing said (n1, n2)', async (variable) => {
+    uvProject();
+    expect((await decide('uv run s.py', { env: { [variable]: CLI } })).d).toBeNull();
+  });
+
+  it('T-04 (b) UV_DEFAULT_INDEX with a pyproject.toml [tool.uv] index: nothing said (n12)', async () => {
+    repository();
+    put('pyproject.toml', `${PROJECT}[tool.uv]\nindex-url = "${IDX}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py', { env: { UV_DEFAULT_INDEX: CLI } })).d).toBeNull();
+  });
+
+  it('T-04 (b) `UV_DEFAULT_INDEX=x uv run s.py`, an assignment before the command: nothing said', async () => {
+    uvProject();
+    expect((await decide('UV_DEFAULT_INDEX=x uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (b) a project index that is the PyPI itself (EC-3): nothing said', async () => {
+    repository();
+    put('uv.toml', 'index-url = "https://pypi.org/simple"\n');
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (b) the same IDX in the uv.toml of the user (APPDATA / XDG_CONFIG_HOME): nothing said', async () => {
+    uvProject();
+    const cfg = join(home, 'cfg');
+    mkdirSync(join(cfg, 'uv'), { recursive: true });
+    writeFileSync(join(cfg, 'uv', 'uv.toml'), `index-url = "${IDX}"\n`);
+    expect((await decide('uv run s.py', { env: { APPDATA: cfg, XDG_CONFIG_HOME: cfg } })).d).toBeNull();
+  });
+
+  it('T-04 (b) `uv run pytest`, nothing to vet (P2 = A): nothing said', async () => {
+    uvProject();
+    expect((await decide('uv run pytest')).d).toBeNull();
+  });
+
+  it('T-04 (b) `false && cd sub; uv run s.py`, the folder is not known: only the line that the script was not read', async () => {
+    uvProject();
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('false && cd sub; uv run s.py');
+    expect(d?.context).toBe('dev-guardian: s.py was not read (where the command runs could not be determined) — its packages were not vetted.');
+    expect(d?.deny).toBeUndefined();
+    expect(d?.ask).toBeUndefined();
+  });
+
+  const POETRY = (priority: string): string => `[[tool.poetry.source]]\nname = "corp"\nurl = "${IDX}"\n${priority}`;
+  /** The kinds of index `uv run` does not obey (M-1 k6, k9, k12-k16, k18). */
+  const NOT_OBEYED: Array<[label: string, files: Record<string, string>]> = [
+    ['uv.toml [pip] index-url', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['[tool.uv.pip] index-url', { 'pyproject.toml': `${PROJECT}[tool.uv.pip]\nindex-url = "${IDX}"\n` }],
+    ['[[tool.poetry.source]]', { 'pyproject.toml': `${PROJECT}${POETRY('')}` }],
+    ['[[tool.poetry.source]] primary', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "primary"\n')}` }],
+    ['[[tool.poetry.source]] supplemental', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "supplemental"\n')}` }],
+    ['[[tool.poetry.source]] explicit', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "explicit"\n')}` }],
+    ['[[tool.poetry.source]] default', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "default"\n')}` }],
+    ['[[tool.pdm.source]]', { 'pyproject.toml': `${PROJECT}[[tool.pdm.source]]\nname = "corp"\nurl = "${IDX}"\n` }],
+  ];
+
+  it.each(NOT_OBEYED)('T-04 (b) `uv run s.py` with %s and a clean script: nothing said', async (_label, files) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  /** The files of the T-03 plan: every kind of index a project file gives, none of which a script of `pipx run` obeys (M-1 p1-p8, p12-p20). */
+  const PIPX_FILES: Array<[label: string, files: Record<string, string>]> = [
+    ['uv.toml index-url', { 'uv.toml': `index-url = "${IDX}"\n` }],
+    ['uv.toml extra-index-url', { 'uv.toml': `extra-index-url = ["${IDX}"]\n` }],
+    ['uv.toml find-links', { 'uv.toml': 'find-links = ["https://pypi.corp.example/links/"]\n' }],
+    ['uv.toml [[index]]', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['uv.toml [[index]] default = true', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['uv.toml [pip] index-url', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['[tool.uv] index-url', { 'pyproject.toml': `${PROJECT}[tool.uv]\nindex-url = "${IDX}"\n` }],
+    ['[[tool.uv.index]]', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['[[tool.uv.index]] default = true', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['[[tool.poetry.source]]', { 'pyproject.toml': `${PROJECT}${POETRY('')}` }],
+    ['[[tool.poetry.source]] primary', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "primary"\n')}` }],
+    ['[[tool.poetry.source]] default', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "default"\n')}` }],
+    ['[[tool.pdm.source]]', { 'pyproject.toml': `${PROJECT}[[tool.pdm.source]]\nname = "corp"\nurl = "${IDX}"\n` }],
+  ];
+
+  it.each(PIPX_FILES.flatMap(([label, files]) => ['pipx run s.py', 'pipx run --path s.py'].map((command) => ({ label, files, command }))))(
+    'T-04 (b) `$command` with a clean script and $label: nothing said (P3 = A)',
+    async ({ files, command }) => {
+      repository();
+      for (const [rel, text] of Object.entries(files)) put(rel, text);
+      put('s.py', BLOCK(REQUESTS));
+      expect((await decide(command)).d).toBeNull();
+    },
+  );
+
+  // ── T-04 (c): the other commands (P2 = A)
+
+  it.each(['uv add requests', 'uv pip install requests', 'pip install requests', 'uvx requests', 'uv tool install requests', 'pipx install requests', 'pipx run requests'])(
+    'T-04 (c) `%s` with a uv.toml index: nothing said, as today',
+    async (command) => {
+      repository();
+      put('uv.toml', `index-url = "${IDX}"\n`);
+      expect((await decide(command)).d).toBeNull();
+    },
+  );
+
+  // ── T-04 (d): the reader's limits
+
+  it('T-04 (d) EC-4: a uv.toml that is a folder: nothing said', async () => {
+    repository();
+    mkdirSync(join(project, 'uv.toml'));
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (d) EC-4: a uv.toml above 1 MiB with the index-url at the top: nothing said', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n${'#'.repeat(1024 * 1024 + 10)}\n`);
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (d) EC-10: a uv.toml in the folder above the repository (uv obeys it, f8): nothing said, the hook does not read above the root', async () => {
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    const repo = join(project, 'repo');
+    repository(repo);
+    put('s.py', BLOCK(REQUESTS), repo);
+    expect((await decide('uv run s.py', { at: repo })).d).toBeNull();
+  });
+
+  it('T-04 (d) EC-11: `uv run --with-requirements sub/r.txt` with the uv.toml in sub and nothing at the root: nothing said (w11)', async () => {
+    repository();
+    put('sub/r.txt', `${REQUESTS}\n`);
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    expect((await decide(`uv run --with-requirements sub/r.txt ${PY}`)).d).toBeNull();
+  });
+
+  // ── T-04 (e): the refusals carry no line
+
+  it('T-04 (e) a malicious name in the script, with a uv.toml index: refused with the text of today, no line of the file', async () => {
+    repository();
+    put('s.py', BLOCK(EVIL));
+    const without = (await decide('uv run s.py')).d;
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    const { d } = await decide('uv run s.py');
+    expect(d?.deny ?? '(no deny)').toContain(`names '${EVIL}@1.0.0'`);
+    expect(d?.deny).toBe(without?.deny);
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  it('T-04 (e) `uv run s.py; pip install <a malicious name>`: the pip install is refused with the OSV text of today, with no line of the project file (on a `;` line a missing name only warns)', async () => {
+    uvProject();
+    const { d } = await decide(`uv run s.py; pip install ${EVIL}`);
+    expect(d?.deny ?? '(no deny)').toContain('OSV malicious-package advisory for 1.0.0: MAL-2026-77');
+    expect(d?.deny ?? '').toContain(EVIL);
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  // ── T-04 (f): what stays
+
+  it.each(['uv run s.py', 'pipx run s.py'])('T-04 (f) `%s` with [tool.uv.pip] and a missing name: the reason of a project without the file (k9, p15)', async (command) => {
+    repository();
+    put('pyproject.toml', `${PROJECT}[tool.uv.pip]\nindex-url = "${IDX}"\n`);
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide(command);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`'${MISSING}': not found on the public registry`);
+    expect(d?.context ?? '(no context)').toContain('not denied: it is named by a manifest');
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  it('T-04 (f) PIP_INDEX_URL in the hook environment and a missing name in `uv run s.py`: the reason "a custom registry is configured", as today (US-1.AC-6)', async () => {
+    repository();
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide('uv run s.py', { env: { PIP_INDEX_URL: IDX } });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('PIP_INDEX_URL');
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  // ── The regression tests (red until the fix): the line, what `uv run` obeys, what a script of `pipx run` does not
+
+  const IDX2 = 'https://pypi.second.example/simple/';
+  /** The line of the plan, for a file of the project and the host of its index. */
+  const LINE = (file: string, host = 'https://pypi.corp.example'): string =>
+    `dev-guardian: the project's ${file} sets the package index (${host}) — packages are fetched from it, and what it serves was not vetted.`;
+  const LINE2 = (file: string): string => LINE(file, 'https://pypi.second.example');
+  const COUNT1 = 'dev-guardian: 1 more file of the project sets the package index.';
+  const NOT_NAMED_BY_FILE = 'not denied: it is named by a manifest';
+  const contextOf = (d: Decided): string => d?.context ?? '(no context)';
+  const countOf = (text: string, part: string): number => text.split(part).length - 1;
+  const tool = (extra: string): string => `${PROJECT}[tool.uv]\n${extra}`;
+
+  /** The two files `uv run` reads for an index-url, and what each of them says. */
+  const URL_FILES: Array<[file: string, files: Record<string, string>]> = [
+    ['uv.toml', { 'uv.toml': `index-url = "${IDX}"\n` }],
+    ['pyproject.toml', { 'pyproject.toml': tool(`index-url = "${IDX}"\n`) }],
+  ];
+  const T01_COMMANDS: Array<[command: string, files: (name: string) => Record<string, string>]> = [
+    ['uv run s.py', (n) => ({ 's.py': BLOCK(n) })],
+    [`uv run --with {N} ${PY}`, () => ({})],
+    [`uv run --with-requirements r.txt ${PY}`, (n) => ({ 'r.txt': `${n}\n` })],
+  ];
+  const T01_CELLS = URL_FILES.flatMap(([file, files]) => T01_COMMANDS.map(([command, filesOf]) => ({ file, files, command, filesOf })));
+
+  it.each(T01_CELLS)('T-01 (a) `$command` with the index-url of the $file: the line, no refusal, no question (M-1 k1, k7, w1-w4)', async ({ file, files, command, filesOf }) => {
+    repository();
+    for (const [rel, text] of [...Object.entries(files), ...Object.entries(filesOf(REQUESTS))]) put(rel, text);
+    const { d } = await decide(command.replace('{N}', REQUESTS));
+    expect(contextOf(d)).toContain(LINE(file));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.ask).toBeUndefined();
+  });
+
+  it.each(T01_CELLS)('T-01 (b) `$command` with the index-url of the $file and a missing name: the warning of today, and the line', async ({ file, files, command, filesOf }) => {
+    repository();
+    for (const [rel, text] of [...Object.entries(files), ...Object.entries(filesOf(MISSING))]) put(rel, text);
+    const { d } = await decide(command.replace('{N}', MISSING));
+    expect(contextOf(d)).toContain(LINE(file));
+    expect(contextOf(d)).toContain(`'${MISSING}': not found on the public registry`);
+    expect(d?.deny).toBeUndefined();
+  });
+
+  it('T-01 (c) EC-1: a uv.toml and a [tool.uv] in the same folder: the line of the uv.toml, nothing of the other (x1)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('pyproject.toml', tool(`index-url = "${IDX2}"\n`));
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.second.example');
+  });
+
+  it('T-01 (d) EC-2: an index with credentials: the line names the host only, and nothing of the credentials is said', async () => {
+    const user = ['dg', 'user'].join('');
+    const token = ['dgsecret', 'zzq7731'].join('-');
+    repository();
+    put('uv.toml', `index-url = "https://${user}:${token}@pypi.corp.example/simple/"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(textOf(d).includes(user), 'the user').toBe(false);
+    expect(textOf(d).includes(token), 'the token').toBe(false);
+  });
+
+  it('T-01 (e) EC-6: 500 times `uv run s.py` in one line: the line is said once', async () => {
+    uvProject();
+    const { d } = await decide('uv run s.py; '.repeat(500));
+    expect(countOf(contextOf(d), LINE('uv.toml'))).toBe(1);
+  });
+
+  it('T-01 (f) EC-5: a script that may name its own index: the line, and the question of the block', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('s.py', '# /// script\n# dependencies = ["requests"]\n# [tool.uv]\n# index-url = "https://pypi.other.example/simple/"\n# ///\nprint(1)\n');
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(contextOf(d)).toContain('s.py may name its own index or sources ([tool.uv])');
+    expect(d?.ask ?? '(no ask)').toContain('the inline dependencies of s.py may come from its own index or sources');
+  });
+
+  it('T-01 (g) EC-7: `uv run --directory sub s.py` with the uv.toml in sub: the line (f3)', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run --directory sub s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (h) EC-8: `uv run sub/s.py` reads the uv.toml of the folder of the script (f1)', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run sub/s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (h) EC-8: `uv run sub/s.py` with a uv.toml in the root and another in sub: the one of sub (f4)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `index-url = "${IDX2}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run sub/s.py');
+    expect(contextOf(d)).toContain(LINE2('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.corp.example');
+  });
+
+  it('T-01 (h) EC-8: `cd sub && uv run ../s.py` reads the uv.toml of the folder of the script, the root (f10)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `index-url = "${IDX2}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd sub && uv run ../s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.second.example');
+  });
+
+  it('T-01 (i) EC-9: `cd sub && uv run s.py` with the uv.toml in the root: the search climbs (f2)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd sub && uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (i) EC-9: the search passes a pyproject.toml with no [tool.uv] (f6)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('proj/pyproject.toml', PROJECT);
+    put('proj/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd proj && uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (i) EC-9: the search stops at the first file it finds and does not add the one above (f7)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `[[index]]\nname = "second"\nurl = "${IDX2}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd sub && uv run s.py');
+    expect(contextOf(d)).toContain(LINE2('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.corp.example');
+  });
+
+  it('T-01 (j) the key of the line: a `uv add` before a `uv run` does not use it up', async () => {
+    uvProject();
+    const { d } = await decide('uv add requests; uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (j) the key of the line: two folders, two lines', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `index-url = "${IDX2}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py; uv run --directory sub s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(contextOf(d)).toContain(LINE2('uv.toml'));
+  });
+
+  it('T-01 (k) the ceiling: four folders, three lines and the count of the rest', async () => {
+    repository();
+    for (const f of ['a', 'b', 'c', 'd']) {
+      put(`${f}/uv.toml`, `index-url = "https://pypi-${f}.corp.example/simple/"\n`);
+      put(`${f}/s.py`, BLOCK(REQUESTS));
+    }
+    const { d } = await decide('uv run a/s.py; uv run b/s.py; uv run c/s.py; uv run d/s.py');
+    const context = contextOf(d);
+    for (const f of ['a', 'b', 'c']) expect(context).toContain(LINE('uv.toml', `https://pypi-${f}.corp.example`));
+    expect(context).toContain(COUNT1);
+    expect(textOf(d)).not.toContain('pypi-d');
+  });
+
+  it('T-01 (l) a name of `--with` beside a script: the search starts from the folder of the script as well (f1, f4, f10), and the line is said', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide(`uv run --with ${REQUESTS} sub/s.py`);
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (l) a name of `--with` beside a script that names no package of its own: the line is said from the folder of the script (red on the first version of the fix: only the folder of the command was searched)', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', 'print(1)\n');
+    const { d } = await decide(`uv run --with ${REQUESTS} sub/s.py`);
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  // ── T-02: the other kinds of index `uv run` obeys, and the ones it does not
+
+  const OBEYED: Array<[label: string, file: string, files: Record<string, string>]> = [
+    ['uv.toml extra-index-url (k2)', 'uv.toml', { 'uv.toml': `extra-index-url = ["${IDX}"]\n` }],
+    ['uv.toml find-links (k3)', 'uv.toml', { 'uv.toml': 'find-links = ["https://pypi.corp.example/links/"]\n' }],
+    ['uv.toml [[index]] (k4)', 'uv.toml', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['uv.toml [[index]] default = true (k5)', 'uv.toml', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['[tool.uv] extra-index-url (k8)', 'pyproject.toml', { 'pyproject.toml': tool(`extra-index-url = ["${IDX}"]\n`) }],
+    ['[[tool.uv.index]] (k10)', 'pyproject.toml', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['[[tool.uv.index]] default = true (k11)', 'pyproject.toml', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['[tool.uv] index-url with no [project] (k17)', 'pyproject.toml', { 'pyproject.toml': `[tool.uv]\nindex-url = "${IDX}"\n` }],
+  ];
+
+  it.each(OBEYED)('T-02 (a) `uv run s.py` with %s: the line', async (_label, file, files) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE(file));
+  });
+
+  const UNOBEYED_MISSING: Array<[label: string, files: Record<string, string>]> = [
+    ['uv.toml [pip] index-url (k6)', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['[[tool.poetry.source]] (k12)', { 'pyproject.toml': `${PROJECT}${POETRY('')}` }],
+    ['[[tool.poetry.source]] primary (k13)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "primary"\n')}` }],
+    ['[[tool.poetry.source]] supplemental (k14)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "supplemental"\n')}` }],
+    ['[[tool.poetry.source]] explicit (k15)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "explicit"\n')}` }],
+    ['[[tool.poetry.source]] default (k18)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "default"\n')}` }],
+    ['[[tool.pdm.source]] (k16)', { 'pyproject.toml': `${PROJECT}[[tool.pdm.source]]\nname = "corp"\nurl = "${IDX}"\n` }],
+  ];
+
+  /** The warning of a missing name when no file of the project explains it: the reason of a project with no file, and no line. */
+  const expectNoFileReason = (d: Decided): void => {
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(contextOf(d)).toContain(`'${MISSING}': not found on the public registry`);
+    expect(contextOf(d)).toContain(NOT_NAMED_BY_FILE);
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(d?.deny).toBeUndefined();
+  };
+
+  it.each(UNOBEYED_MISSING)('T-02 (b) `uv run s.py` with %s and a missing name: the reason of a project with no file, no line', async (_label, files) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide('uv run s.py');
+    expectNoFileReason(d);
+  });
+
+  it.each([
+    ['a uv.toml with only [pip] beside it (x2)', `[pip]\nindex-url = "${IDX}"\n`],
+    ['a uv.toml with no index beside it (x3)', 'native-tls = false\n'],
+  ])('T-02 (c) EC-1: the [tool.uv] of a pyproject.toml with %s is not read: the reason of a project with no file, no line', async (_label, uvToml) => {
+    repository();
+    put('uv.toml', uvToml);
+    put('pyproject.toml', tool(`index-url = "${IDX2}"\n`));
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide('uv run s.py');
+    expectNoFileReason(d);
+  });
+
+  it('T-02 (d) `uv run --with <missing name>` with a [pip] index-url: the reason of the flag, no registry', async () => {
+    repository();
+    put('uv.toml', `[pip]\nindex-url = "${IDX}"\n`);
+    const { d } = await decide(`uv run --with ${MISSING} ${PY}`);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(contextOf(d)).toContain('(not denied: flag --with is not on the confident-shape allowlist)');
+  });
+
+  it('T-02 (e) a withdrawn malicious name with a [pip] index-url: refused, with the text that it does not exist on PyPI', async () => {
+    repository();
+    put('uv.toml', `[pip]\nindex-url = "${IDX}"\n`);
+    put('s.py', BLOCK(GONE));
+    const { d } = await decide('uv run s.py');
+    expect(d?.deny ?? '(no deny)').toContain('does not exist on PyPI — most likely a hallucinated or mistyped name.');
+    expect(d?.deny ?? '').toContain('OSV lists this name as a malicious package (MAL-2026-77), removed from PyPI');
+  });
+
+  // ── T-03: a script of `pipx run` obeys no file of the project (P3 = A)
+
+  const PIPX_COMMANDS = ['pipx run s.py', 'pipx run --path s.py'];
+  const T03_CELLS = PIPX_FILES.flatMap(([label, files]) => PIPX_COMMANDS.map((command) => ({ label, files, command })));
+
+  it.each(T03_CELLS)('T-03 `$command` with $label and a missing name: the reason of a project with no file, no line', async ({ files, command }) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide(command);
+    expectNoFileReason(d);
+  });
+
+  it.each(PIPX_COMMANDS)('T-03 `%s` with the index-url of the uv.toml and a withdrawn malicious name: refused, with the text that it does not exist on PyPI', async (command) => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('s.py', BLOCK(GONE));
+    const { d } = await decide(command);
+    expect(d?.deny ?? '(no deny)').toContain('does not exist on PyPI — most likely a hallucinated or mistyped name.');
+  });
+
+  // ── T-07: what does not take the line away (US-1.AC-8)
+
+  const HELD: Array<[label: string, command: string, env: Record<string, string>]> = [
+    ['`--index CLI` (c1, c2)', `uv run --index ${CLI} s.py`, {}],
+    ['`--extra-index-url CLI` (c7)', `uv run --extra-index-url ${CLI} s.py`, {}],
+    ['`--find-links` (c8b)', 'uv run --find-links https://pypi.cli.example/links/ s.py', {}],
+    ['`--no-project` (s7)', 'uv run --no-project s.py', {}],
+    ['UV_INDEX (n7)', 'uv run s.py', { UV_INDEX: CLI }],
+    ['UV_EXTRA_INDEX_URL (n5, n6)', 'uv run s.py', { UV_EXTRA_INDEX_URL: CLI }],
+    ['UV_FIND_LINKS (n8b)', 'uv run s.py', { UV_FIND_LINKS: 'https://pypi.cli.example/links/' }],
+    ['UV_NO_INDEX=1 (n9)', 'uv run s.py', { UV_NO_INDEX: '1' }],
+    ['PIP_INDEX_URL (n3)', 'uv run s.py', { PIP_INDEX_URL: CLI }],
+    ['PIP_EXTRA_INDEX_URL (n4)', 'uv run s.py', { PIP_EXTRA_INDEX_URL: CLI }],
+  ];
+
+  it.each(HELD)('T-07 with the index-url of the uv.toml and %s: the line is still said', async (_label, command, env) => {
+    uvProject();
+    const { d } = await decide(command, { env });
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it.each([
+    ['UV_DEFAULT_INDEX (n10)', 'uv run s.py', { UV_DEFAULT_INDEX: CLI }],
+    ['`--default-index CLI` (c9)', `uv run --default-index ${CLI} s.py`, {}],
+  ])('T-07 with a [[index]] with no default in the uv.toml and %s: the line is still said', async (_label, command, env) => {
+    repository();
+    put('uv.toml', `[[index]]\nname = "corp"\nurl = "${IDX}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide(command, { env });
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+});
+
+// ───────────────── install-vet-with-requirements-directory-link — the guards: what the fix must not change (green before the fix)
+
+describe('install-vet-with-requirements-directory-link', () => {
+  // The names are the made-up ones of the plan: EVIL is published and has a `MAL-` advisory, `requests` is clean, the rest are 404.
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const PY = 'python -c "print(1)"';
+  const UNC = '\\\\198.51.100.7\\share';
+  const DIR_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  const reg = (): ReturnType<typeof registry> => registry({ exists: ['requests', EVIL], malicious: [EVIL] });
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  const askOf = (d: Decided): string | undefined => (d as (NonNullable<Decided> & { ask?: string }) | null)?.ask;
+  const decide = (command: string, r: { fetchImpl: typeof fetch }, extra: Partial<HookVetOptions> = {}): Promise<Decided> =>
+    decideInstallCommand(command, opts(r.fetchImpl, { popular: {}, ...extra }));
+  const put = (rel: string, text: string, at: string): void => {
+    mkdirSync(dirname(join(at, rel)), { recursive: true });
+    writeFileSync(join(at, rel), text);
+  };
+  /** The refusal of `file`, written at the start of the reason or after a space (so `r.txt` is not `sub/r.txt`), with the name and whose decision it is. */
+  const denies = (d: Decided, file: string): void => {
+    const deny = d?.deny ?? '(no deny)';
+    const needle = `${file} names '${EVIL}@1.0.0'`;
+    expect(deny.startsWith(needle) || deny.includes(` ${needle}`), deny).toBe(true);
+    expect(deny).toContain("is the user's decision");
+  };
+  const notRead = (file: string, reason: string): string => `dev-guardian: ${file} was not read (${reason}) — its packages were not vetted.`;
+  const UNKNOWN_DIR = 'the requirements file was not read (where the command runs could not be determined)';
+
+  /** The project of the test, by its real path, with the folder link `tools` -> `sub/inner` (the one of the plan). */
+  const withTools = (): string => {
+    const root = realpathSync.native(project);
+    mkdirSync(join(root, 'sub', 'inner'), { recursive: true });
+    symlinkSync(join(root, 'sub', 'inner'), join(root, 'tools'), DIR_LINK);
+    return root;
+  };
+  const here = (root: string): Partial<HookVetOptions> => ({ cwd: root, projectDir: root });
+
+  /** Decided once per file: this account can make the folder link the tests use. */
+  const CAN_LINK = ((): boolean => {
+    const probe = mkdtempSync(join(tmpdir(), 'pkgvet-ivwrdl-probe-'));
+    try {
+      mkdirSync(join(probe, 't'));
+      symlinkSync(join(probe, 't'), join(probe, 'l'), DIR_LINK);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(join(probe, 'l'), { force: true });
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const ifLink = it.skipIf(!CAN_LINK);
+  // A junction or link is removed itself, before the folder that holds it is (as in `install-vet-path-forms`).
+  afterEach(() => {
+    for (const name of ['tools', 'broken', 'netdir']) rmSync(join(project, name), { force: true });
+  });
+
+  ifLink('T-04 (a) r.txt names the package and sub/r.txt is clean, `--directory tools/..`: the logical folder, already read, is refused', async () => {
+    const root = withTools();
+    put('r.txt', `${EVIL}\n`, root);
+    put('sub/r.txt', 'requests\n', root);
+    denies(await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  ifLink('T-04 (b) sub/inner/r.txt names the package, `--directory tools`: one folder, refused as r.txt', async () => {
+    const root = withTools();
+    put('sub/inner/r.txt', `${EVIL}\n`, root);
+    denies(await decide(`uv run --directory tools --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  it('T-04 (c) no link, sub/r.txt names the package, `--directory sub`: refused as r.txt', async () => {
+    const root = realpathSync.native(project);
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(`uv run --directory sub --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  ifLink('T-04 (d) a .py after --with-requirements is read as a script: sub/deps.py with the block, `--directory tools/..`', async () => {
+    const root = withTools();
+    put('sub/deps.py', BLOCK(EVIL), root);
+    denies(await decide(`uv run --directory tools/.. --with-requirements deps.py ${PY}`, reg(), here(root)), 'deps.py');
+  });
+
+  ifLink('T-04 (e) `cd tools && pip install -r r.txt`: pip keeps commandDir, the line says where the command runs could not be determined', async () => {
+    const root = withTools();
+    put('sub/inner/r.txt', `${EVIL}\n`, root);
+    const d = await decide('cd tools && pip install -r r.txt', reg(), here(root));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(UNKNOWN_DIR);
+  });
+
+  ifLink.each([`uv run --with-requirements tools/../r.txt ${PY}`, 'pip install -r tools/../r.txt'])(
+    'T-04 (f) `%s`, only sub/r.txt names the package: the word is resolved in the text, null and nothing asked',
+    async (command) => {
+      const root = withTools();
+      put('sub/r.txt', `${EVIL}\n`, root);
+      const r = reg();
+      expect(await decide(command, r, here(root))).toBeNull();
+      expect(r.calls).toEqual([]);
+    },
+  );
+
+  ifLink('T-04 (g) `--directory broken setup.py`, `broken` a link to nothing: the script is not read, a question says so', async () => {
+    const root = realpathSync.native(project);
+    symlinkSync(join(root, 'nowhere'), join(root, 'broken'), DIR_LINK);
+    const d = await decide('uv run --directory broken setup.py', reg(), here(root));
+    expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+  });
+
+  it('T-04 (h) `uvx --with-requirements r.txt requests` leaves the file unread: null, and the package is not asked', async () => {
+    const root = realpathSync.native(project);
+    put('r.txt', `${EVIL}\n`, root);
+    const r = reg();
+    expect(await decide('uvx --with-requirements r.txt requests', r, here(root))).toBeNull();
+    expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+  });
+
+  ifLink('T-04 (i) both r.txt and sub/r.txt are `requests`, `--directory tools/..`: null, and requests is looked up', async () => {
+    const root = withTools();
+    put('r.txt', 'requests\n', root);
+    put('sub/r.txt', 'requests\n', root);
+    const r = reg();
+    expect(await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, r, here(root))).toBeNull();
+    expect(r.calls).toContain(pypiUrl('requests'));
+  });
+
+  // Windows only: on POSIX `\\h\s` resolves to a local path, so the network line is not said there (the 3.16.0 release run on Linux).
+  it.skipIf(process.platform !== 'win32')('T-04 (j) a session folder on a network path, no `cd` and no flag: the line of today, no refusal and no question, in time (Windows; skipped otherwise)', async () => {
+    const proj = `${UNC}\\proj`;
+    const t0 = Date.now();
+    const d = await decide(`uv run --with-requirements r.txt ${PY}`, reg(), { cwd: proj, projectDir: proj });
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect(d?.deny).toBeUndefined();
+    expect(askOf(d)).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(notRead('r.txt', 'on a network path'));
+  });
+
+  ifLink.each(['cd tools && uv pip install -r r.txt', 'cd tools && pipx inject dgprobe-zzq7731-tool -r r.txt'])(
+    'T-04 (k) `%s`, sub/inner/r.txt names the package: no refusal, the line of the folder not known',
+    async (command) => {
+      const root = withTools();
+      put('sub/inner/r.txt', `${EVIL}\n`, root);
+      const d = await decide(command, reg(), here(root));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(UNKNOWN_DIR);
+    },
+  );
+
+  // ── The regression tests: red until the fix (T-01, T-02, T-03, T-05)
+
+  const REASON_LINE = (reason: string): string => `dev-guardian: the requirements file was not read (${reason}) — its packages were not vetted.`;
+  /** Folders outside the project that a test made; removed after each test. */
+  const outside: string[] = [];
+  afterEach(() => {
+    for (const dir of outside.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  /** Decided once per file: this account can make the folder link to a network path the tests use. */
+  const CAN_NET_LINK = ((): boolean => {
+    const probe = mkdtempSync(join(tmpdir(), 'pkgvet-ivwrdl-net-'));
+    try {
+      symlinkSync(UNC, join(probe, 'n'), 'dir');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(join(probe, 'n'), { force: true });
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const ifNetLink = it.skipIf(!CAN_NET_LINK);
+  const netLink = (): string => {
+    const root = realpathSync.native(project);
+    symlinkSync(UNC, join(root, 'netdir'), 'dir');
+    return root;
+  };
+
+  /** The four commands of the plan that move the folder by a `..` after the link, and the file `r.txt` they read. */
+  const DOTDOT = [
+    `uv run --directory tools/.. --with-requirements r.txt ${PY}`,
+    `UV_WORKING_DIR=tools/.. uv run --with-requirements r.txt ${PY}`,
+    `cd tools && uv run --directory .. --with-requirements r.txt ${PY}`,
+    `uv --directory tools/.. run --with-requirements r.txt ${PY}`,
+  ];
+
+  ifLink.each(DOTDOT)('T-01 (a) `%s`, r.txt is requests and sub/r.txt names the package: sub/r.txt is refused', async (command) => {
+    const root = withTools();
+    put('r.txt', 'requests\n', root);
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(command, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifLink.each(DOTDOT)('T-01 (b) `%s`, only sub/r.txt names the package: sub/r.txt is refused', async (command) => {
+    const root = withTools();
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(command, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifLink.each(DOTDOT)('T-01 (d) `%s`, r.txt a folder and sub/r.txt names the package: sub/r.txt is refused, r.txt is said not regular', async (command) => {
+    const root = withTools();
+    mkdirSync(join(root, 'r.txt'));
+    put('sub/r.txt', `${EVIL}\n`, root);
+    const d = await decide(command, reg(), here(root));
+    denies(d, 'sub/r.txt');
+    // The dispatcher sends a refusal's text alone: the line is inside it, and the decision has no context.
+    expect(d?.deny ?? '(no deny)').toContain(notRead('r.txt', 'not a regular file'));
+    expect(d?.context).toBeUndefined();
+  });
+
+  it('T-02 (a) `--directory broken`, a link to a folder that does not exist: the line says it could not be read, no refusal, no question', async () => {
+    const root = realpathSync.native(project);
+    symlinkSync(join(root, 'nowhere'), join(root, 'broken'), DIR_LINK);
+    const d = await decide(`uv run --directory broken --with-requirements r.txt ${PY}`, reg(), here(root));
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('could not be read') });
+  });
+
+  it('T-02 (b) the deadline is past, `--directory sub`, sub/r.txt names the package: the line says the time budget is exhausted, no refusal, no question', async () => {
+    const root = realpathSync.native(project);
+    put('sub/r.txt', `${EVIL}\n`, root);
+    const d = await decide(`uv run --directory sub --with-requirements r.txt ${PY}`, reg(), { ...here(root), deadlineAt: Date.now() - 1 });
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('vetting time budget exhausted') });
+  });
+
+  ifNetLink('T-02 (c) `--directory netdir`, a link to a network path: the line says on a network path, no refusal, no question, in time', async () => {
+    const root = netLink();
+    const t0 = Date.now();
+    const d = await decide(`uv run --directory netdir --with-requirements r.txt ${PY}`, reg(), here(root));
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('on a network path') });
+  });
+
+  ifLink('T-03 (a) `cd tools && uv run --with-requirements r.txt`, tools a link to real-tools that holds r.txt: r.txt is refused', async () => {
+    const root = realpathSync.native(project);
+    put('real-tools/r.txt', `${EVIL}\n`, root);
+    symlinkSync(join(root, 'real-tools'), join(root, 'tools'), DIR_LINK);
+    denies(await decide(`cd tools && uv run --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  ifLink('T-03 (b) `cd tools && cd .. && uv run --with-requirements r.txt`, only sub/r.txt names the package: sub/r.txt is refused', async () => {
+    const root = withTools();
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(`cd tools && cd .. && uv run --with-requirements r.txt ${PY}`, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifNetLink('T-03 (c) `cd netdir && uv run --with-requirements r.txt`, netdir a link to a network path: the line says on a network path, in time', async () => {
+    const root = netLink();
+    const t0 = Date.now();
+    const d = await decide(`cd netdir && uv run --with-requirements r.txt ${PY}`, reg(), here(root));
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('on a network path') });
+  });
+
+  ifLink('T-03 (d) `cd tools && uv run --with-requirements r.txt`, tools a link to a folder outside the project: r.txt there is refused, and the registry was asked', async () => {
+    const root = realpathSync.native(project);
+    const elsewhere = realpathSync.native(mkdtempSync(join(tmpdir(), 'pkgvet-ivwrdl-out-')));
+    outside.push(elsewhere);
+    put('r.txt', `${EVIL}\n`, elsewhere);
+    symlinkSync(elsewhere, join(root, 'tools'), DIR_LINK);
+    const r = reg();
+    denies(await decide(`cd tools && uv run --with-requirements r.txt ${PY}`, r, here(root)), 'r.txt');
+    expect(r.calls).toContain(pypiUrl(EVIL));
+  });
+
+  /** `r.txt` and `sub/r.txt` each include `a.txt` to `e.txt` (in their own folder), all `requests` but the one `evil` names. */
+  const withIncludes = (evil: string): string => {
+    const root = withTools();
+    const includes = `${['a', 'b', 'c', 'd', 'e'].map((n) => `-r ${n}.txt`).join('\n')}\nrequests\n`;
+    for (const dir of ['', 'sub/']) {
+      put(`${dir}r.txt`, includes, root);
+      for (const n of ['a', 'b', 'c', 'd', 'e']) put(`${dir}${n}.txt`, `${dir}${n}.txt` === evil ? `${EVIL}\n` : 'requests\n', root);
+    }
+    return root;
+  };
+
+  ifLink('T-05 (a) the eighth file, sub/a.txt, names the package: sub/r.txt is refused (a file it includes)', async () => {
+    const root = withIncludes('sub/a.txt');
+    denies(await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifLink('T-05 (b) the ninth file, sub/b.txt, names the package: it is not read, and the line says the limit of 8 files', async () => {
+    const root = withIncludes('sub/b.txt');
+    const r = reg();
+    const d = await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, r, here(root));
+    expect(d?.deny).toBeUndefined();
+    expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+    expect(d?.context ?? '(no context)').toContain('dev-guardian: a file sub/r.txt includes was not read (past the limit of 8 requirement files) — its packages were not vetted.');
   });
 });

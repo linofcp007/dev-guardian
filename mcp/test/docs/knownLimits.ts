@@ -122,7 +122,7 @@ const limitRecord = z.strictObject({
   /** Kebab-case, stable, unique. */
   id: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'expected a kebab-case id'),
   area: z.enum(LIMIT_AREAS),
-  /** The published item: English, inline Markdown. */
+  /** The published item: English Markdown — inline, or several lines (paragraphs and `- ` lists), which the page indents inside the item. */
   doc: z.string().trim().min(1),
   examples: z.array(z.discriminatedUnion('detector', [shellExample, secretExample, hookExample])).default([]),
   /** Why it has no example; required when `examples` is empty. */

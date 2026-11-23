@@ -48,6 +48,7 @@ import {
   renderToolsDoc,
   type PackInput,
 } from './renderDocs.js';
+import { listProblems } from './markdownLists.js';
 import { DOCS_DIR, loadPacks, loadRegistry, REPO_ROOT } from './sources.js';
 
 /** The listed tools — what a host sees, and what the docs count and name. */
@@ -65,6 +66,11 @@ beforeAll(async () => {
 
 function read(rel: string): string {
   return readFileSync(resolve(REPO_ROOT, rel), 'utf8');
+}
+
+/** `text` with every run of white space as one space: a record is found wherever the page wraps or indents it. */
+function flat(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 const REGENERATE = 'run `npm run build` in mcp/ to regenerate it — never edit a generated page by hand';
@@ -167,7 +173,7 @@ describe("the hooks' known-limits page", () => {
     expect([...at].sort((x, y) => x - y)).toEqual(at);
 
     for (const l of limits) {
-      expect(page, l.id).toContain(l.doc.trim());
+      expect(flat(page), l.id).toContain(flat(l.doc));
       if (l.examples.length === 0) expect(page, l.id).toContain((l.not_executable ?? '').trim());
     }
     for (const { limit, index, example } of exampleRefs(limits)) {
@@ -847,7 +853,7 @@ describe('install-vet-project-registry-said', () => {
       workspace: true,
     });
     expect(limit.doc, 'the indexes a project file sets are said only when a name is missing').toMatch(/\bonly\b[^.]*\bmissing\b|\bmissing\b[^.]*\bonly\b/i);
-    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
+    expect(flat(read('docs/hooks-known-limits.md')), REGENERATE).toContain(flat(limit.doc));
   });
 });
 
@@ -952,5 +958,548 @@ describe('install-vet-over-ceiling-asks', () => {
     const page = hooksPage();
     expect(page).toContain('no switch for this question alone');
     expect(page).toContain('when no one can answer, the call is refused and the model reads the reason');
+  });
+});
+
+// ───────────────── install-vet-global-in-short-cluster — the docs say an npm group reads as its letters apart, and what stays
+
+describe('install-vet-global-in-short-cluster', () => {
+  // A one-dash word, not the tail of a two-dash one: `-global`, never the `-global` inside `--global`.
+  const ONE_DASH_GLOBAL = /(?<![\w-])-global(?![\w-])/;
+  const ONE_DASH_LOCAL = /(?<![\w-])-local(?![\w-])/;
+  const GROUP_GD = /(?<![\w-])-gD(?![\w-])/;
+  const APART_G_D = /(?<![\w-])-g -D(?![\w-])/;
+
+  it('T-08 the "Install-time package vetting" section of docs/hooks.md no longer says a cluster with a `g` is never global, and has a sentence that reads `-gD` as `-g -D`', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const section = hooks.slice(at, end === -1 ? undefined : end).replace(/\s+/g, ' ');
+    const sameReading = section.split(/(?<=[.!?])\s+/).some((s) => GROUP_GD.test(s) && APART_G_D.test(s));
+    expect({ neverGlobal: section.includes('a cluster that holds a `g` is never read as global'), sameReading }).toEqual({
+      neverGlobal: false,
+      sameReading: true,
+    });
+  });
+
+  it('T-08 the record project-default-registry no longer names "a short cluster such as `-gD`", and names `-gL project` and `-global`; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'project-default-registry');
+    expect(limit, 'the record project-default-registry').toBeDefined();
+    const doc = limit?.doc ?? '';
+    expect({ cluster: doc.includes('a short cluster such as `-gD`'), gLProject: doc.includes('-gL project'), oneDashGlobal: ONE_DASH_GLOBAL.test(doc) }).toEqual({
+      cluster: false,
+      gLProject: true,
+      oneDashGlobal: true,
+    });
+    expect(flat(read('docs/hooks-known-limits.md')), REGENERATE).toContain(flat(doc));
+  });
+
+  it('T-08 a record npm-short-flag-groups (install-vetting) names `-global`, `-local` and the groups inside the launchers, with its two examples; the generated page has it', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'npm-short-flag-groups');
+    expect(limit, 'a record with the id npm-short-flag-groups in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    expect({ oneDashGlobal: ONE_DASH_GLOBAL.test(limit.doc), oneDashLocal: ONE_DASH_LOCAL.test(limit.doc), launchers: /\blaunchers?\b/i.test(limit.doc) }).toEqual({
+      oneDashGlobal: true,
+      oneDashLocal: true,
+      launchers: true,
+    });
+    // The harness runs offline: the hook says what it could not verify, a warning.
+    const examples = limit.examples.flatMap((e) => (e.detector === 'hook' ? [{ command: e.input['command'], decision: e.expect.decision }] : []));
+    expect(examples).toEqual(
+      expect.arrayContaining([
+        { command: 'npm install -global dgprobe-zzq7731', decision: 'warn' },
+        { command: 'npx -yL global dgprobe-zzq7731', decision: 'warn' },
+      ]),
+    );
+    expect(flat(read('docs/hooks-known-limits.md')), REGENERATE).toContain(flat(limit.doc));
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — the docs say that `uv run` and `pipx run` read a script's inline dependencies
+
+describe('install-vet-inline-script-deps', () => {
+  /** A paragraph of docs/hooks.md, from its bold lead to the next blank line. */
+  const paragraph = (lead: string): string => {
+    const para = read('docs/hooks.md')
+      .split(/\n\s*\n/)
+      .find((p) => p.startsWith(lead));
+    return (para ?? '').replace(/\s+/g, ' ');
+  };
+
+  it('T-11 the "When" cell of the SECURITY.md row of the public registries names PEP 723, `uv run`, `pipx run` and `--with`', () => {
+    const row = read('SECURITY.md')
+      .split('\n')
+      .find((line) => line.startsWith('| `registry.npmjs.org`, `pypi.org`'));
+    expect(row, 'the egress row of the public registries').toBeDefined();
+    // | Destination | Who contacts it | When |: the third cell. The symbols carry their code ticks, so today's text does not match by chance.
+    const when = (row ?? '').split(' | ')[2] ?? '';
+    expect({
+      pep723: when.includes('PEP 723'),
+      uvRun: when.includes('`uv run`'),
+      pipxRun: when.includes('`pipx run`'),
+      withFlag: when.includes('`--with`'),
+    }).toEqual({ pep723: true, uvRun: true, pipxRun: true, withFlag: true });
+  });
+
+  it('T-11 the paragraph "What leaves the machine." of docs/hooks.md names PEP 723 and `uv run --with`', () => {
+    const para = paragraph('**What leaves the machine.**');
+    expect(para, 'the paragraph "What leaves the machine."').not.toBe('');
+    expect({ pep723: para.includes('PEP 723'), uvRunWith: para.includes('`uv run --with`') }).toEqual({ pep723: true, uvRunWith: true });
+  });
+
+  it('T-11 the paragraph "Past a ceiling the user is asked." of docs/hooks.md says that the inline dependencies of a script are asked about too', () => {
+    const para = paragraph('**Past a ceiling the user is asked.**');
+    expect(para, 'the paragraph "Past a ceiling the user is asked."').not.toBe('');
+    expect(para).toContain('inline dependencies');
+  });
+});
+
+// ───────────────── install-vet-registry-files-unread — the docs say what the code reads (red until the fix)
+
+describe('install-vet-registry-files-unread', () => {
+  /** The sentences of a text, its line breaks folded: a sentence ends at a full stop, `!` or `?` and a space. */
+  const sentences = (text: string): string[] => text.replace(/\s+/g, ' ').split(/(?<=[.!?])\s+/);
+  const said = (text: string, parts: Array<string | RegExp>): boolean =>
+    sentences(text).some((s) => parts.every((p) => (typeof p === 'string' ? s.includes(p) : p.test(s))));
+
+  const hooksSection = (): string => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the section "Install-time package vetting"').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    return hooks.slice(at, end === -1 ? undefined : end);
+  };
+  const limitRecord = (): string => {
+    const page = read('docs/hooks-known-limits.md');
+    const start = page.indexOf('When a file of the project sets the default registry');
+    expect(start, 'the record project-default-registry').toBeGreaterThan(-1);
+    const stop = page.indexOf('The line is added to an install that is vetted', start);
+    return page.slice(start, stop === -1 ? undefined : stop);
+  };
+
+  const HOOKS_SENTENCES: Array<[what: string, parts: Array<string | RegExp>]> = [
+    ['the bun reads a .env, by NODE_ENV, for BUN_CONFIG_REGISTRY', ['bun', '.env', 'NODE_ENV', 'BUN_CONFIG_REGISTRY']],
+    ['[install.registry] of the bunfig.toml is read', ['[install.registry]']],
+    ['pipx does not count the uv.toml of the project', ['pipx', 'uv.toml', /not count|does not|never/]],
+    ['a withdrawn malicious name stays refused with a registry only a project file configures', ['malicious', /refus/, /only a file of the project|project file/]],
+  ];
+
+  it.each(HOOKS_SENTENCES)('T-07 docs/hooks.md, install-time vetting: %s', (_what, parts) => {
+    expect(said(hooksSection(), parts)).toBe(true);
+  });
+
+  it('T-07 SECURITY.md says the hook reads only the registry variables of a .env, and that the host reaches the model', () => {
+    expect(said(read('SECURITY.md'), ['.env', /only/, 'host', 'model'])).toBe(true);
+  });
+
+  const LIMIT_SENTENCES: Array<[what: string, parts: Array<string | RegExp>]> = [
+    ['the NODE_ENV of the shell, which the hook does not see', ['NODE_ENV', 'shell']],
+    ['the env of .claude/settings.json (EC-14)', ['.claude/settings.json', 'env']],
+    ['the line of the bunfig.toml or .npmrc that loses to the .env is still said', ['bunfig.toml', '.npmrc', '.env', /still/]],
+  ];
+
+  it.each(LIMIT_SENTENCES)('T-07 the record project-default-registry of docs/hooks-known-limits.md says %s', (_what, parts) => {
+    expect(said(limitRecord(), parts)).toBe(true);
+  });
+});
+
+// ───────────────── pkgvet-archive-names-pipx-composer — the docs say what the pipx and the composer were measured to read
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item, a table row and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  const TWELVE = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma'];
+  const OLD_SENTENCE = 'pipx, composer and dotnet were not measured';
+
+  it('T-08 docs/hooks.md says what the pipx and the composer read as a file, and that only the dotnet was not measured', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const lines = sentences(hooks.slice(at, end === -1 ? undefined : end));
+    const code = (s: string, endings: readonly string[]): boolean => endings.every((e) => s.includes(`\`${e}\``));
+
+    const found = {
+      'pipx: the twelve endings between backticks, and the word "file"': lines.some((s) => /\bpipx\b/.test(s) && code(s, TWELVE) && /\bfile\b/.test(s)),
+      'composer: .zip and .tar.gz between backticks': lines.some((s) => /\bcomposer\b/.test(s) && code(s, ['.zip', '.tar.gz'])),
+      'dotnet: not measured': lines.some((s) => /\bdotnet\b/.test(s) && /not measured/.test(s)),
+      'no sentence says "pipx, composer and dotnet were not measured"': !lines.some((s) => s.includes(OLD_SENTENCE)),
+    };
+    expect(found).toEqual({
+      'pipx: the twelve endings between backticks, and the word "file"': true,
+      'composer: .zip and .tar.gz between backticks': true,
+      'dotnet: not measured': true,
+      'no sentence says "pipx, composer and dotnet were not measured"': true,
+    });
+  });
+
+  it('T-08 the record archive-like-names says what was measured and where, and runs the examples of the new readings; the generated page has its text', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'archive-like-names');
+    expect(limit, 'a record with the id archive-like-names in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    const runs = (command: string, decision: string): boolean =>
+      limit.examples.some((e) => e.detector === 'hook' && e.input.command === command && e.expect.decision === decision);
+    const found = {
+      'the text says pipx': /\bpipx\b/.test(limit.doc),
+      'the text says measured': /\bmeasured\b/.test(limit.doc),
+      'the text names Linux': /\bLinux\b/.test(limit.doc),
+      'the text names Windows': /\bWindows\b/.test(limit.doc),
+      'pipx install thing.zip: none': runs('pipx install thing.zip', 'none'),
+      'pipx run thing.zip: none': runs('pipx run thing.zip', 'none'),
+      'cd "$D" && pipx run thing.zip: warn': runs('cd "$D" && pipx run thing.zip', 'warn'),
+      'pipx install --force thing.zip: warn': runs('pipx install --force thing.zip', 'warn'),
+      'composer require vendor/thing.whl: warn': runs('composer require vendor/thing.whl', 'warn'),
+      'the generated page has the text': read('docs/hooks-known-limits.md').includes(limit.doc.trim()),
+    };
+    expect(found).toEqual({
+      'the text says pipx': true,
+      'the text says measured': true,
+      'the text names Linux': true,
+      'the text names Windows': true,
+      'pipx install thing.zip: none': true,
+      'pipx run thing.zip: none': true,
+      'cd "$D" && pipx run thing.zip: warn': true,
+      'pipx install --force thing.zip: warn': true,
+      'composer require vendor/thing.whl: warn': true,
+      'the generated page has the text': true,
+    });
+  });
+});
+
+// ───────────────── llm-scan-codex-smoke-findings — the versioned documents say what the server does
+
+describe('llm-scan-codex-smoke-findings', () => {
+  /** The blocks of a page (split on blank lines), white space collapsed to single spaces. */
+  const blocks = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n/)
+      .map((block) => block.replace(/\s+/g, ' ').trim());
+
+  /** The sentences of a page, each on one line. */
+  const sentencesOf = (text: string): string[] => blocks(text).flatMap((block) => block.split(/(?<=[.!?])\s+/)).filter((s) => s !== '');
+
+  it('T-06 docs/llm-scan.md says that confirm never raises the limit, what the plan record says, why nothing_to_plan and where the Codex run stands', () => {
+    const page = read('docs/llm-scan.md').replace(/\r\n/g, '\n');
+    const confirmParagraph = blocks(page).find((b) => b.startsWith('**`confirm` opens the gate')) ?? '';
+    const recordStart = page.indexOf("## The plan's scan record");
+    const recordEnd = page.indexOf('\n## ', recordStart + 1);
+    const recordSection = recordStart === -1 ? '' : page.slice(recordStart, recordEnd === -1 ? undefined : recordEnd);
+    const nothingToPlanRow = page.split('\n').find((line) => line.startsWith('| `nothing_to_plan`')) ?? '';
+    const runParagraph = blocks(page).find((b) => b.startsWith('Run end to end on a real host so far')) ?? '';
+
+    const found = {
+      'the confirm paragraph exists': confirmParagraph !== '',
+      'the confirm paragraph says new plan': confirmParagraph.includes('new plan'),
+      'the confirm paragraph says without `plan_id`': confirmParagraph.includes('without `plan_id`'),
+      'the confirm paragraph no longer says start again': !confirmParagraph.includes('start again'),
+      'the plan record section names verify_source': recordSection.includes('verify_source'),
+      'the nothing_to_plan row says open set': nothingToPlanRow.includes('open set'),
+      'the nothing_to_plan row says scoped': nothingToPlanRow.includes('scoped'),
+      'the run paragraph names Codex': runParagraph.includes('Codex'),
+      'the run paragraph names 2026-11-19': runParagraph.includes('2026-11-19'),
+      'the run paragraph names reservations': runParagraph.includes('reservations'),
+    };
+    expect(found).toEqual({
+      'the confirm paragraph exists': true,
+      'the confirm paragraph says new plan': true,
+      'the confirm paragraph says without `plan_id`': true,
+      'the confirm paragraph no longer says start again': true,
+      'the plan record section names verify_source': true,
+      'the nothing_to_plan row says open set': true,
+      'the nothing_to_plan row says scoped': true,
+      'the run paragraph names Codex': true,
+      'the run paragraph names 2026-11-19': true,
+      'the run paragraph names reservations': true,
+    });
+  });
+
+  it('T-06 docs/hosts.md says that the project .codex/config.toml was not loaded by Codex CLI 0.165.0 and that -c mcp_servers worked', () => {
+    const sentence = sentencesOf(read('docs/hosts.md')).find((s) => s.includes('Codex CLI 0.165.0')) ?? '';
+    expect({
+      'a sentence names Codex CLI 0.165.0': sentence !== '',
+      'it names .codex/config.toml': sentence.includes('.codex/config.toml'),
+      'it names -c mcp_servers': sentence.includes('-c mcp_servers'),
+    }).toEqual({
+      'a sentence names Codex CLI 0.165.0': true,
+      'it names .codex/config.toml': true,
+      'it names -c mcp_servers': true,
+    });
+  });
+});
+
+// ───────────────── known-limits-doc-markdownlint — the page keeps the list layout markdownlint accepts
+
+describe('known-limits-doc-markdownlint', () => {
+  const pageOf = (): string => renderKnownLimitsDoc(loadKnownLimits());
+  /** The generator writes a record as a single block when its text has no line break. */
+  const multiBlock = (limit: { doc: string }): boolean => limit.doc.trim().includes('\n');
+  /** A problem without its explanation: `"<line>: <rule>"`. */
+  const brief = (problems: string[]): string[] =>
+    problems.map((p) => p.split(' ').slice(0, p.includes(': not modelled') ? 3 : 2).join(' '));
+
+  it('T-03 (a) a sample in the layout of the page before the fix is refused with MD005 and MD032', () => {
+    const rules = brief(listProblems('## A\n\n- one\n\n- inner\n\nclosing\n  - ex\n- two\n'));
+    expect(rules).toEqual(['7: MD005', '8: MD032']);
+  });
+
+  // [name, text, line, rule]: the rule and the line the check names.
+  const refused: [string, string, number, string][] = [
+    ['a space at the end of a line (markdownlint: MD009)', '## A\n\n- one \n', 3, 'MD009'],
+    ['two blank lines in a row (markdownlint: MD012)', '## A\n\n\n- one\n', 3, 'MD012'],
+    ['two newlines at the end (markdownlint: MD012)', '## A\n\n- one\n\n', 4, 'MD012'],
+    ['no newline at the end (markdownlint: MD047)', '## A\n\n- one', 3, 'MD047'],
+    ['an item at 4 spaces (markdownlint: MD007)', '## A\n\n- one\n    - deep\n', 4, 'MD007'],
+    ['an item at 2 spaces outside an item (markdownlint: MD007)', '## A\n\n  - stray\n', 3, 'MD007'],
+    ['an item glued to a paragraph at column 0 (markdownlint: MD032)', '## A\n\npara\n- one\n', 4, 'MD032'],
+    ['an item at 2 spaces glued to a paragraph of the item (only this check refuses it)', '## A\n\n- one\n\n  para\n  - ex\n', 6, 'MD032'],
+    ['a paragraph of the item glued to an item at 2 spaces (only this check refuses it)', '## A\n\n- one\n  - ex\n  para\n', 5, 'MD032'],
+    ['a line at column 0 glued to two items of a section (only this check refuses it)', '## A\n\n- one\nloose\n- two\n', 4, 'MD005'],
+    ['a line at column 0 between two lists separated by blank lines (not measured with markdownlint)', '## A\n\n- one\n\nloose\n\n- two\n', 5, 'MD005'],
+  ];
+  for (const [name, text, line, rule] of refused) {
+    it(`T-03 (b) refuses ${name}`, () => {
+      expect(brief(listProblems(text))).toEqual([`${String(line)}: ${rule}`]);
+    });
+  }
+
+  // The shapes the check does not model: refused, with their line and the words "not modelled".
+  const notModelled: [string, string, number][] = [
+    ['a ``` line', '## A\n\n```\n', 3],
+    ['a ~~~ line', '## A\n\n~~~\n', 3],
+    ['an ordered item', '## A\n\n1. one\n', 3],
+    ['an item that starts with "*"', '## A\n\n* one\n', 3],
+    ['an item that starts with "+"', '## A\n\n+ one\n', 3],
+    ['a "-" followed by two spaces', '## A\n\n-  one\n', 3],
+    ['a heading inside an item', '## A\n\n- one\n\n  ### inner\n', 5],
+  ];
+  for (const [name, text, line] of notModelled) {
+    it(`T-03 (b) says it does not model ${name}`, () => {
+      expect(brief(listProblems(text))).toEqual([`${String(line)}: not modelled`]);
+    });
+  }
+
+  it('T-03 (c) passes a record of one block with two examples, and a record of several blocks with examples and without them', () => {
+    const passing = {
+      'one block': '## A\n\n- doc\n  - ex1\n  - ex2\n- doc2\n',
+      'several blocks with examples': '## A\n\n- first\n\n  - stays 1\n  - stays 2\n\n  Examples:\n\n  - ex1\n- next\n',
+      'several blocks without examples': '## A\n\n- first\n\n  - stays 1\n\n  No test runs it: why.\n- next\n',
+    };
+    expect(Object.fromEntries(Object.entries(passing).map(([name, text]) => [name, listProblems(text)]))).toEqual({
+      'one block': [],
+      'several blocks with examples': [],
+      'several blocks without examples': [],
+    });
+  });
+
+  it('T-04 (a) a record of one block with examples keeps its item, its example lines at two spaces and its reason, with no blank line between', () => {
+    const lines = pageOf().split('\n');
+    const failing: string[] = [];
+    for (const limit of loadKnownLimits().filter((l) => !multiBlock(l) && l.examples.length > 0)) {
+      const at = lines.indexOf(`- ${limit.doc.trim()}`);
+      const count = limit.examples.length + (limit.not_executable !== undefined ? 1 : 0);
+      const after = lines.slice(at + 1, at + 1 + count);
+      const next = lines[at + 1 + count];
+      const ok = at >= 0 && after.length === count && after.every((l) => l.startsWith('  - ')) && (next === '' || next?.startsWith('- ') === true);
+      if (!ok) failing.push(limit.id);
+    }
+    expect(failing).toEqual([]);
+  });
+
+  it('T-04 (b) the page and the committed page hold the text of every record, with white space joined', () => {
+    const page = flat(pageOf());
+    const committed = flat(read('docs/hooks-known-limits.md'));
+    const missing = loadKnownLimits().flatMap((l) => [
+      ...(page.includes(flat(l.doc)) ? [] : [`${l.id} (generated)`]),
+      ...(committed.includes(flat(l.doc)) ? [] : [`${l.id} (committed)`]),
+    ]);
+    expect(missing).toEqual([]);
+  });
+
+  it('T-04 (c) the page keeps the titles of its sections in the order of the areas and the introduction with the counts', () => {
+    const limits = loadKnownLimits();
+    const lines = pageOf().split('\n');
+    const used = LIMIT_AREAS.filter((area) => limits.some((l) => l.area === area));
+    expect(lines.filter((line) => line.startsWith('## '))).toEqual(used.map((area) => `## ${AREA_TITLES[area]}`));
+    const counts = executableCounts(limits);
+    const intro = lines.find((line) => line.startsWith('This page is rendered from')) ?? '';
+    expect(intro.startsWith(`This page is rendered from [\`${KNOWN_LIMITS_SOURCE}\`](../${KNOWN_LIMITS_SOURCE}): **${String(counts.total)} limits**, `)).toBe(true);
+    expect(intro).toContain(`${String(counts.withExample)} with at least one example and ${String(counts.without)} with none, which says why.`);
+  });
+
+  /** The text of the reason line of a record: the reason with a single full stop at the end. */
+  const reasonLine = (limit: { examples: readonly unknown[]; not_executable?: string | undefined }): string => {
+    const reason = (limit.not_executable ?? '').trim();
+    return `${limit.examples.length === 0 ? 'No test runs it' : 'What no test runs'}: ${reason}${reason.endsWith('.') ? '' : '.'}`;
+  };
+
+  it('T-01 the generated page and the committed page pass the list check', () => {
+    const problems = { generated: listProblems(pageOf()), committed: listProblems(read('docs/hooks-known-limits.md')) };
+    expect(problems.generated, `generated page:\n${problems.generated.join('\n')}`).toEqual([]);
+    expect(problems.committed, `committed page:\n${problems.committed.join('\n')}`).toEqual([]);
+  });
+
+  it('T-02 (a) every section has one top-level item per record of its area', () => {
+    const limits = loadKnownLimits();
+    const lines = pageOf().split('\n');
+    const wrong: string[] = [];
+    for (const area of LIMIT_AREAS) {
+      const records = limits.filter((l) => l.area === area).length;
+      if (records === 0) continue;
+      const start = lines.indexOf(`## ${AREA_TITLES[area]}`);
+      const rest = lines.slice(start + 1);
+      const end = rest.findIndex((line) => line.startsWith('## '));
+      const items = (end === -1 ? rest : rest.slice(0, end)).filter((line) => line.startsWith('- ')).length;
+      if (items !== records) wrong.push(`${AREA_TITLES[area]}: ${String(items)} items for ${String(records)} records`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('T-02 (b) a record of several blocks keeps its lines at two spaces, then "Examples:", its examples and its reason', () => {
+    const lines = pageOf().split('\n');
+    const wrong: string[] = [];
+    for (const limit of loadKnownLimits().filter(multiBlock)) {
+      const docLines = limit.doc.trim().split('\n');
+      const at = lines.indexOf(`- ${docLines[0] ?? ''}`);
+      const expected = docLines.slice(1).map((line) => (line === '' ? '' : `  ${line}`));
+      const hasReason = limit.not_executable !== undefined;
+      const exampleCount = limit.examples.length;
+      if (exampleCount > 0) expected.push('', '  Examples:', '');
+      else if (hasReason) expected.push('');
+      const start = at + 1;
+      const doc = lines.slice(start, start + expected.length);
+      const exampleLines = lines.slice(start + expected.length, start + expected.length + exampleCount);
+      const reasonAt = start + expected.length + exampleCount;
+      const reason = hasReason ? (exampleCount > 0 ? `  - ${reasonLine(limit)}` : `  ${reasonLine(limit)}`) : undefined;
+      const next = lines[reasonAt + (reason === undefined ? 0 : 1)];
+      const ok =
+        at >= 0 &&
+        JSON.stringify(doc) === JSON.stringify(expected) &&
+        exampleLines.length === exampleCount &&
+        exampleLines.every((line) => line.startsWith('  - ')) &&
+        (reason === undefined || lines[reasonAt] === reason) &&
+        (next === '' || next?.startsWith('- ') === true);
+      if (!ok) wrong.push(limit.id);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('T-02 (c) the reason of every record ends with a single full stop', () => {
+    const lines = pageOf().split('\n');
+    const wrong: string[] = [];
+    for (const limit of loadKnownLimits().filter((l) => l.not_executable !== undefined)) {
+      const indent = !multiBlock(limit) || limit.examples.length > 0 ? '  - ' : '  ';
+      if (!lines.includes(`${indent}${reasonLine(limit)}`)) wrong.push(limit.id);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('T-02 (d) a record of two lines with no blank line between them keeps the second line in the item, then "Examples:"', () => {
+    const example = loadKnownLimits().flatMap((l) => l.examples)[0];
+    expect(example, 'an example of a real record').toBeDefined();
+    if (example === undefined) return;
+    const page = renderKnownLimitsDoc([{ id: 'synthetic', area: 'install-vetting', doc: 'one\ntwo', examples: [example] }]);
+    const lines = page.split('\n');
+    const at = lines.indexOf('- one');
+    expect({ shape: lines.slice(at, at + 5), example: lines[at + 5]?.startsWith('  - ') === true, problems: listProblems(page) }).toEqual({
+      shape: ['- one', '  two', '', '  Examples:', ''],
+      example: true,
+      problems: [],
+    });
+  });
+});
+
+// ───────────────── install-vet-with-requirements-directory-link — what the documentation says of where the requirements file is read
+
+describe('install-vet-with-requirements-directory-link', () => {
+  it('T-06 docs/hooks.md: the sentence on where the script is looked for says the file of `uv run --with-requirements` is, and that a `..` after a link reads both paths', () => {
+    const paragraph = read('docs/hooks.md')
+      .split('\n')
+      .find((line) => line.startsWith('**The inline script block.**'));
+    expect(paragraph, 'the "The inline script block." paragraph of docs/hooks.md').toBeDefined();
+    const text = flat(paragraph ?? '');
+    const at = text.indexOf('The script is looked for');
+    expect(at, 'the sentence "The script is looked for …" in that paragraph').toBeGreaterThan(-1);
+    const sentence = text.slice(at, text.indexOf('. ', at) + 1);
+    expect({ requirements: sentence.includes('`--with-requirements`'), dotdot: sentence.includes('`..`') }).toEqual({ requirements: true, dotdot: true });
+  });
+
+  it('T-06 docs/hooks-known-limits.md carries the text of the install-inline-script-deps record, with `tools/../r.txt` and `pip install -r` (whitespace joined)', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'install-inline-script-deps');
+    expect(limit, 'the record install-inline-script-deps').toBeDefined();
+    const page = flat(read('docs/hooks-known-limits.md'));
+    const doc = flat(limit?.doc ?? '');
+    expect({
+      pageHasRecord: doc !== '' && page.includes(doc),
+      recordNamesDotdotWord: doc.includes('tools/../r.txt'),
+      recordNamesPip: doc.includes('pip install -r'),
+      pageNamesDotdotWord: page.includes('tools/../r.txt'),
+    }).toEqual({ pageHasRecord: true, recordNamesDotdotWord: true, recordNamesPip: true, pageNamesDotdotWord: true });
+  });
+});
+
+// ───────────────── install-vet-uv-run-project-index — the docs say the line `uv run` gets and what the managers do not obey
+
+describe('install-vet-uv-run-project-index', () => {
+  const paragraph = (start: string): string => {
+    const found = read('docs/hooks.md')
+      .split('\n')
+      .find((line) => line.startsWith(start));
+    expect(found, `the "${start}" paragraph of docs/hooks.md`).toBeDefined();
+    return flat(found ?? '');
+  };
+  const recordDoc = (id: string): string => {
+    const limit = loadKnownLimits().find((l) => l.id === id);
+    expect(limit, `the record ${id}`).toBeDefined();
+    return flat(limit?.doc ?? '');
+  };
+
+  it('T-05 docs/hooks.md "The inline script block." says the line ("sets the package index") and where the search starts ("beside the script")', () => {
+    const text = paragraph('**The inline script block.**');
+    expect({ line: text.includes('sets the package index'), beside: text.includes('beside the script') }).toEqual({ line: true, beside: true });
+  });
+
+  it('T-05 docs/hooks.md "The files a manager does not obey." names `uv run`, and a script given to `pipx run` is no longer one of "Every other pair"', () => {
+    const text = paragraph('**The files a manager does not obey.**');
+    const at = text.indexOf('Every other pair');
+    expect(at, 'the sentence "Every other pair …"').toBeGreaterThan(-1);
+    const sentence = text.slice(at, text.indexOf('. ', at) + 1);
+    expect({ namesUvRun: text.includes('`uv run`'), scriptListed: sentence.includes('a script given to `pipx run`') }).toEqual({
+      namesUvRun: true,
+      scriptListed: false,
+    });
+  });
+
+  it('T-05 docs/hooks-known-limits.md carries the project-default-registry record, with `uv run` and with no script given to `pipx run` (whitespace joined)', () => {
+    const page = flat(read('docs/hooks-known-limits.md'));
+    const doc = recordDoc('project-default-registry');
+    const lines = (loadKnownLimits().find((l) => l.id === 'project-default-registry')?.doc ?? '').split('\n');
+    expect({
+      pageHasRecord: doc !== '' && page.includes(doc),
+      namesUvRun: lines.some((line) => line.includes('gives PyPI') && line.includes('`uv run`')),
+      scriptListed: page.includes('a script given to `pipx run`'),
+    }).toEqual({
+      pageHasRecord: true,
+      namesUvRun: true,
+      scriptListed: false,
+    });
+  });
+
+  it('T-05 docs/hooks-known-limits.md carries the install-inline-script-deps record, with "above the repository root" and no "is not read (`install-vet-registry-files-unread`)" (whitespace joined)', () => {
+    const page = flat(read('docs/hooks-known-limits.md'));
+    const doc = recordDoc('install-inline-script-deps');
+    expect({
+      pageHasRecord: doc !== '' && page.includes(doc),
+      namesRoot: page.includes('above the repository root') && doc.includes('above the repository root'),
+      saysNotRead: page.includes('is not read (`install-vet-registry-files-unread`)'),
+    }).toEqual({ pageHasRecord: true, namesRoot: true, saysNotRead: false });
   });
 });

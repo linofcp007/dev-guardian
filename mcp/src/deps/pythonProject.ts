@@ -262,6 +262,8 @@ export function checkSetupCfg(projectDir: string, checkoutRoot: string): PipRefu
   for (const raw of textLines(read.text)) {
     n += 1;
     const line = raw.replace(/(^|\s)[#;].*$/, '');
+    // What the comment took off the end: an `@` in it may be the rest of a credential written before it.
+    const cutOff = raw.slice(line.length);
     if (line.trim() === '') continue;
     const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
     if (header?.[1] !== undefined) {
@@ -280,13 +282,13 @@ export function checkSetupCfg(projectDir: string, checkoutRoot: string): PipRefu
       inRequires = ['install_requires', 'setup_requires', 'tests_require'].includes(key) || section === 'options.extras_require';
       const first = (kv[2] ?? '').trim();
       if (inRequires && first !== '') {
-        const bad = judgeRequirement(first);
+        const bad = judgeRequirement(first, cutOff);
         if (bad !== null) refusals.push({ file, line: n, ...bad, detail: key });
       }
       continue;
     }
     if (inRequires) {
-      const bad = judgeRequirement(line.trim());
+      const bad = judgeRequirement(line.trim(), cutOff);
       if (bad !== null) refusals.push({ file, line: n, ...bad });
     }
   }

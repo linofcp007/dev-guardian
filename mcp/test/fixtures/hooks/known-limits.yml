@@ -433,7 +433,7 @@
 - id: manifest-other-managers
   area: install-vetting
   doc: |-
-    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `yarn workspaces foreach … add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn workspace <w> up`, `yarn workspaces foreach … up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies of the manifest: in a project update they are not looked up (`npm update <name>`, `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`), while the names given to a global update and to the `up` forms of Yarn are vetted as a package named to an update (see `install-global-update-by-name`); the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`. The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it. `npm install-test` and `npm it` install the manifest as `npm install` does, and a package given to `npm install-test` is vetted like one given to `npm install` (a name the registry does not have is denied in the same forms).
+    A manifest install is vetted for the npm family (`npm install` with or without a package, `npm add`, `pnpm add`, `yarn add`, `yarn workspace <w> add`, `yarn workspaces foreach … add`, `bun add` — an install that names a package installs the manifest too, unless it is global for certain or a launcher — `npm ci`, `npm install-ci-test`, `pnpm install`, `yarn`, `yarn install`, `bun install`), for the update and maintenance verbs of that family that install the manifest (`npm update`, `upgrade`, `up`, `npm dedupe`, `npm prune`, `npm audit fix`, `pnpm update`, `up`, `upgrade`, `pnpm dedupe`, `yarn upgrade`, `yarn up`, `yarn workspace <w> up`, `yarn workspaces foreach … up`, `yarn dedupe`, `bun update` — an update verb is vetted by name past the lockfile's pins, and the names it is given select dependencies of the manifest: in a project update they are not looked up (`npm update <name>`, `pnpm update <name>`, `bun update <name>`, `yarn upgrade <name>`), while the names given to a global update and to the `up` forms of Yarn are vetted as a package named to an update (see `install-global-update-by-name`); the check follows the manifest's range, so a version outside it, picked by `--latest`, `yarn up <name>` or `bun update --latest`, is not vetted) and for `pip install -r` / `uv pip install -r`, and the requirements files of `pip download -r`, `pip wheel -r`, `pipx inject -r` and `pipx runpip <environment> install -r` (read as the file of `pip install -r` is; see `install-python-tool-forms`). The manifest installs and updates of the other tools are not read: `poetry install`, `poetry update`, `uv sync`, `uv lock --upgrade`, `uv run <program>` (the sync of the project that `uv run pytest` does; a script or a package it names is read, see `install-inline-script-deps`), `pipenv install`, `composer install`, `composer update`, `dotnet restore`, `bundle install`, `cargo fetch`, `go mod download` — nor `pnpm install-test` and `yarn workspaces focus`. Their manifest is installed without a lookup; `deps_audit` reads it. `npm install-test` and `npm it` install the manifest as `npm install` does, and a package given to `npm install-test` is vetted like one given to `npm install` (a name the registry does not have is denied in the same forms).
   examples:
     - detector: hook
       event: PreToolUse
@@ -450,6 +450,18 @@
       tool: Bash
       input:
         command: uv sync
+      files:
+        pyproject.toml: |
+          [project]
+          name = "app"
+          version = "1.0.0"
+          dependencies = ["crossenv"]
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: uv run pytest
       files:
         pyproject.toml: |
           [project]
@@ -482,13 +494,20 @@
 - id: manifest-lockfile-and-transitive
   area: install-vetting
   doc: |-
-    The lockfile of the command's own package manager (`npm-shrinkwrap.json` or `package-lock.json` for npm, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`) is read, and every name and exact version it pins — transitive dependencies too, up to 8 000 pairs per call — is looked up in OSV for a malicious-package advisory; nothing else of it is looked up or sent. What stays out of that vetting, each one said in a line of the answer unless noted:
+    The lockfile of the command's own package manager (`npm-shrinkwrap.json` or `package-lock.json` for npm, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock`) is read, and every name and exact version it pins — transitive dependencies too, up to 8 000 pairs per call — is looked up in OSV for a malicious-package advisory; nothing else of it is looked up or sent.
+
+    A `bun.lock` is read under `lockfileVersion` 0, 1, 2 and 3, all with one grammar (bun 1.4.4 writes 2); 4 or more, a number in quotes, `2.0` and no number are said as not read. A registry line must be exactly as bun writes one — `"key": ["name@version", "" or an http(s) URL that is not a git one, {…}, "<integrity>"],`, with a comma and one space between the elements: a line written otherwise is counted as not recognised, in every label, and its pair still goes to OSV, from the origin its second element names. A local tarball that bun writes without `file:` (`vendor/x-1.0.0.tgz`, in an entry of two or three elements) is the project's own. A `bun.lock` covers a direct dependency (spares it the lookup at the registry) only when every line is written as bun writes it — no entry left unrecognised; every other entry line `["name@spec"]`, `["name@spec", {…}]` or `["name@spec", {…}, "<text>"]`, closed by `],`; no registry version that ends in `.tgz`, `.tar.gz` or `.tar`; under label 2, a well-formed sha512 integrity on every registry line — and never under label 3, which no bun was seen to write. A file that does not cover still has its pins looked up, and each direct dependency is looked up at the registry by name, as with no lockfile.
+
+    What stays out of that vetting, each one said in a line of the answer unless noted:
 
     - What another source serves. A package the lockfile fetches from a host other than the public npm registry — a mirror, a company proxy, a URL, a git repository — has its pair looked up when it comes by `http` or `https`, and the origin is counted and said: what that origin serves is not verified. Only a registry the user's own npm configuration names is not said.
     - A default registry that a configuration file of the project sets (`.npmrc`, `.yarnrc`, `.yarnrc.yml`, `bunfig.toml`) is said in a line of its own, whatever the lockfile holds: npm swaps it in for the public host of every `resolved` URL, and the lockfiles of pnpm, Yarn 2+ and bun name no host at all. What that line does not cover is in the record `project-default-registry`, and the line is described in `docs/hooks.md`.
     - The content of a package. It is not compared with the lockfile's `integrity`, and an archive that does not match its URL is the registry's and the package manager's to notice.
     - A lockfile of another package manager than the command's: `npm ci` does not read a `yarn.lock`, a `pnpm-lock.yaml` or a `bun.lock`, and with none of its own the manifest is vetted as it always was.
     - `bun.lockb`, bun's binary lockfile, and a lockfile of a format version the reader does not know: said as not read, and the manifest is vetted as it always was.
+    - A `bun.lock` that bun throws away while the hook trusts it. The rule above does not look inside an object `{…}` (only its brackets are balanced), at the third element of an entry that is no registry line (a commit that is not 40 hexadecimal digits) or at whether a `workspace:` member exists, and cannot know that an older bun does not read the label: in a hostile repository one of these is enough for the hook to spare a direct dependency its lookup while bun resolves it again from the manifest. Not said.
+    - A `bun.lock` of label 2 whose integrity is empty, for a package of the default registry: bun 1.4.4 keeps it (measured), and the hook does not trust it. Its pins are looked up, and so is each direct dependency at the registry by name: a `MAL-` advisory on the version its range resolves to today denies the command even when bun installs the pinned one, a private package gets the warning "not found on the public registry" at every install, and past 150 direct dependencies the user is asked.
+    - Not measured for `bun.lock`: label 0, a file of label 1 written by an older bun, a well-formed sha1, sha256 or sha384 integrity (under label 2 the hook does not trust it), `"lockfileVersion": 2.0` (said as not read; bun probably reads it as 2), a local tarball of one path segment (`name@x.tgz`), which is counted as the project's own, and a registry line whose fourth element is a string that does not decode (`"\q"`), with which a file of label 0 or 1 still covers.
     - Above 8 000 pairs the rest is said and not vetted — a lockfile can be padded past the cap, and the pairs of the manifest's own dependencies and of names off the popular list go first.
     - An `npm install` whose lockfile is out of sync with `package.json`: what npm resolves again is not looked up, and a direct dependency the lockfile does not record at the manifest's range goes through the registry as before. `npm ci` fails on such a lockfile.
 
@@ -667,7 +686,7 @@
 - id: manifest-not-from-a-registry
   area: install-vetting
   doc: |-
-    A dependency that does not come from a registry is not looked up, because there is nothing to look up: a git repository, a URL, a tarball, a path, `file:`, `link:`, `workspace:`, `catalog:` in a `package.json`; `-e`, a path, a URL or `name @ url` in a requirements file. What such a dependency holds is whatever its source serves.
+    A dependency that does not come from a registry is not looked up, because there is nothing to look up: a git repository, a URL, a tarball, a path, `file:`, `link:`, `workspace:`, `portal:`, `exec:`, `jsr:` in a `package.json`; `-e`, a path, a URL or `name @ url` in a requirements file. What such a dependency holds is whatever its source serves. The same holds for the source of a `patch:` value (Yarn 2 and later) that names no registry package: a source whose part after the name is git, a URL, `file:`, `workspace:`, `github:`, `user/repo` or a path (`patch:x@git+https://…#…`, `patch:x@file:../x#…`), an alias whose range is one of those (`patch:x@npm:y@workspace:*#…`), or a name that is no valid package name. Only the key of the dependency is looked up then (bun installs the key; what Yarn installs does not come from the registry), and the name in the source is not sent. A `patch:` source that is not of the registry was not measured.
   examples:
     - detector: hook
       event: PreToolUse
@@ -701,7 +720,7 @@
 - id: manifest-private-scope
   area: install-vetting
   doc: |-
-    A package of a scope that the npm configuration gives a registry of its own (`@scope:registry=` in an `.npmrc`, `npmScopes` in `.yarnrc.yml`, `[install.scopes]` in `bunfig.toml`) is not looked up: the package manager fetches it from that registry, and its name is not sent to the public one. When the user's configuration names the registry, nothing is said. When a file of the project does, one line says how many packages were not vetted — the file is the repository's, and what that registry serves cannot be checked from here.
+    A package of a scope that the npm configuration gives a registry of its own (`@scope:registry=` in an `.npmrc`, `npmScopes` in `.yarnrc.yml`, `[install.scopes]` in `bunfig.toml`) is not looked up: the package manager fetches it from that registry, and its name is not sent to the public one. When the user's configuration names the registry, nothing is said. When a file of the project does, one line says how many packages were not vetted — the file is the repository's, and what that registry serves cannot be checked from here. A `[install.scopes."@scope"]` subtable of `bunfig.toml` with a `url` is not one of these: it explains a missing name of its scope for a bun command that is not global (the warning names the `bunfig.toml`), and takes nothing out of the checks — the names and pins of that scope are still asked of the public registry and of OSV, as the lockfile and the manifest of a scope given by `@scope:registry=` are not. Making the subtable a registry of its own for those names is not done.
   examples:
     - detector: hook
       event: PreToolUse
@@ -726,19 +745,37 @@
 - id: archive-like-names
   area: install-vetting
   doc: |-
-    A word that ends like an archive (`.zip`, `.tgz`, `.whl`) is vetted as a package name when the package manager of the command reads it as one, and skipped when that manager reads it as a file; the endings each manager reads as a file are listed in `docs/hooks.md`, under "Install-time package vetting". Two things stay. `pipx`, `composer` and `dotnet` were not measured: their word is vetted as a name and the command counts as uncertain, so a name the registry does not have is a warning and never a deny — if one of them does read the word as a file, the warning is a false one. And the word `yarn` does not say whether Yarn 1 or Yarn 4 runs: a manifest value ending in `.tgz` or `.tar.gz` is a file for Yarn 1 and a tag for Yarn 4, and is vetted as a name, so the dependency's name is looked up although Yarn 1 installs the file; the same holds for a version part on a command line (`yarn add name@x.tgz`). And under Yarn 4 and bun `name@npm:<tag>` is the package `name` itself, which the hook looks up together with the word after `npm:` (see `yarn-bun-npm-protocol`).
+    A word that ends like an archive (`.zip`, `.tgz`, `.whl`) is vetted as a package name when the package manager of the command reads it as one, and skipped when that manager reads it as a file; the endings each manager reads as a file are listed in `docs/hooks.md`, under "Install-time package vetting". What was measured, and what stays. `pipx install <word>` and `pipx run <word>`, with no flag and the ending in lower case, were measured (pipx 1.18.16, the pip and the uv engines, on Linux and on Windows): with one of the twelve endings pip reads as a file the pipx never asks the index for the word, so the hook looks it up for malware only and says nothing else of it (`pipx run` runs the file as a script when there is one, and the hook reads its `# /// script` block as `uv run` is read, with the limits of that reading; when the folder is not known it says the line instead), and `.egg` and `.nupkg` are names there. `composer require <vendor>/<name>` with `.zip` or `.tar.gz` was measured as a name on Windows only (composer 2.10.3): Linux and macOS were not. Everything else was not measured, and only warns: the word is vetted as a name and the command counts as uncertain, so a name the registry does not have is a warning and never a deny — if the manager reads the word as a file, the warning is a false one. That is every other line of the pipx and the composer with such a word (a flag, a second word, another spelling of the program or the verb, an ending in capitals, the value of `--spec`), the composer's other twelve endings, a word with a version of its own or an ending outside the fourteen (read as a name, as before), what the pipx installs from inside a real archive (no more read than for pip), and `dotnet` in every form. And the word `yarn` does not say whether Yarn 1 or Yarn 4 runs: a manifest value ending in `.tgz` or `.tar.gz` is a file for Yarn 1 and a tag for Yarn 4, and is vetted as a name, so the dependency's name is looked up although Yarn 1 installs the file; the same holds for a version part on a command line (`yarn add name@x.tgz`). And under Yarn 4 and bun `name@npm:<tag>` is the package `name` itself, which the hook looks up together with the word after `npm:` (see `yarn-bun-npm-protocol`).
   examples:
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
         command: pipx install thing.zip
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx run thing.zip
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: cd "$D" && pipx run thing.zip
       expect: { decision: warn }
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
-        command: composer require vendor/thing.zip
+        command: pipx install --force thing.zip
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: composer require vendor/thing.whl
       expect: { decision: warn }
     - detector: hook
       event: PreToolUse
@@ -766,11 +803,32 @@
     - A registry variable assigned inline in the command itself (`NPM_CONFIG_REGISTRY=https://… npm install thing`) is not seen: the line is still said, although the manager obeys the variable. Only the environment of the hook's own process is read.
     - npm picks the directory of the project by a `node_modules` folder as well as by a `package.json`, and the hook looks beside the nearest `package.json` only; and the walk above the command's directory stops after 16 directories. A project file beyond either is not read for this line.
     - A `.yarnrc.yml` above the repository root is not read for this line, although Yarn reads it.
-    - The line may be said for an install that IS global, when the command says global in a way the hook does not take as certain: a variable in the command (`npm install -g $FLAGS thing`), `-g` with `--location=project`, a short cluster such as `-gD`, a global word that follows a flag taking a value (`--tag --global`), a flag the hook's table does not know beside `-g` (`--unsafe-perm`). The hook reads a global install only when a word says so and no word can take it back; a line too many is the price, never one too few.
-    - The indexes a project file gives PyPI, Composer and NuGet (`pyproject.toml`, `uv.toml`, `composer.json`, `nuget.config`) are said only when a name is missing from the public registry, as the warning's reason; an install that finds every name there carries no line about them.
+    - The line may be said for an install that IS global, when the command says global in a way the hook does not take as certain: a variable in the command (`npm install -g $FLAGS thing`), `-g` with `--location=project` or `-L project` (`npm install -gL project thing`, `npm install -L project -g thing`: npm installs globally and does not obey the project's file, measured), the whole words `-global` and `-local -g`, which npm reads as global and the hook as flags it does not know, a group of letters of pnpm or bun that holds a `g` (`pnpm add -gD thing`, `bun add -gD thing`: not measured), a global word that follows a flag taking a value (`--tag --global`), a flag the hook's table does not know beside `-g` (`--unsafe-perm`). An npm group of letters is read as the same letters written apart: `-gD` is as global as `-g -D`. The hook reads a global install only when a word says so and no word can take it back; a line too many is the price, never one too few.
+    - The indexes a project file gives PyPI, Composer and NuGet (`pyproject.toml`, `uv.toml`, `composer.json`, `nuget.config`) are said only when a name is missing from the public registry, as the warning's reason; an install that finds every name there carries no line about them. `uv run` is the exception: the index the one file the uv reads for it gives is said in a line of its own (`docs/hooks.md`, "The inline script block."), also when every name is there. The `.env` files of bun are read by the mode that `NODE_ENV` of the hook's own environment gives (`development` or `test`, and `production` for any other value or none). The `NODE_ENV` of the shell the command runs in, which a startup file of that shell may export, is not known to the hook: the mode, and so which `.env` file the line and the warning name, may differ from the one bun reads. The `env` of a project's `.claude/settings.json` reaches the environment of the hook and is read as the user's own (EC-14): a registry variable it sets is the user's word, so it silences the line and keeps the warning for a malicious name the public registry took down. The hook cannot tell it from a variable the user set. When a `.env` wins over a `bunfig.toml` or an `.npmrc` of the same folder (bun obeys the `.env`), the line of that `bunfig.toml` or `.npmrc` is still said, with "packages are fetched from it", although bun does not fetch from it: a line too many, never one too few. `--env-file <file>` and `--no-env-file` stop the hook reading any `.env` and it says no registry from them: the command is warned about and never denied, because the flag is not in its table. A registry given by `NAME: value` in a `.env` (bun obeys it), and the spellings of `bunfig.toml` that bun obeys and the hook does not read (`install.scopes."@s"` before any header, `registry.url` under `[install]`, `[ install.registry ]` with spaces) are not read, so a missing name is refused. The pairs nobody measured (`uvx`, `uv tool install`, other versions of the managers, Windows and macOS) keep the answer they had.
   examples: []
   not_executable: |-
     The line is added to an install that is vetted against a registry's answers, and the harness of the known limits runs offline: a hook that is offline says what it could not verify, never the line. `hookDecision.test.ts` and `hooksPkgVet.test.ts` (T-03 to T-09, `install-vet-project-registry-said`) hold it, with a registry stand-in and through the dispatcher.
+
+- id: npm-short-flag-groups
+  area: install-vetting
+  doc: |-
+    npm reads a single-dash word of its letters as the flags of those letters written apart, and the hook reads it the same way, by the letters of npm 11.19.0 (measured 2026-11-21 in a Linux container): `npm install -gD <name>` is `npm install -g -D <name>`, `-gL project` is `-g --location project`, and a letter that takes a value before another letter takes that letter as its value (`-Cd` leaves the word `info`, which npm asks the registry for, and so does the hook). `-L`, `-m` and `-c` are read with their values, also before the verb (`npm -L global install <name>`). What stays:
+
+    - npm also reads some single-dash words whole, from its table of shorthands. The hook reads the six made only of npm's letters (`-ws`, `-dd`, `-ddd`, `-all`, `-ca`, `-call`); every other one holds a letter npm does not open — `-global`, `-local`, `-iwr`, `-reg`, `-desc`, `-porcelain`, `-silent`, `-verbose` — and the hook reads it as a flag it does not know: the command is uncertain, never global for certain, and the project's manifest is read. npm installs `npm install -global <name>` and `npm install -local -g <name>` globally, without the manifest: the hook vets more than npm installs, never less.
+    - A group of letters given to a launcher (`npx -yL global <name>`, `npm exec -yL global <name>`, `npm init -yL global <name>`) is read as before, not as npm opens it: in a group `-L` and `-m` are letters the hook does not know, so the word after the group (`global`) is looked up as the package and the command is uncertain, while npm reads that word as the value of `-L` and fetches `<name>`, which is not looked up. None of these was measured. `-L` and `-m` written alone are read as npm reads them (`npx -L global <name>` looks up `<name>`, measured).
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npm install -global dgprobe-zzq7731
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: npx -yL global dgprobe-zzq7731
+      expect: { decision: warn }
 
 - id: corepack-manager-download
   area: install-vetting
@@ -942,20 +1000,8 @@
 - id: dotnet-other-install-forms
   area: install-vetting
   doc: |-
-    Of the .NET commands, only `dotnet add package <name>`, `dotnet package add <name>` and `dotnet tool install <name>` are read as installs of a NuGet package, and the name is looked up. Not read, and not measured, so what each one asks of the package sources is not known: `dotnet new install <id>` (the template installer: it refused the stand-in source in the one measurement made), `dotnet tool update`, `dotnet tool restore` (the tool manifest), `dotnet tool execute` / `dotnet tool exec`, `dotnet dnx` and `dnx` (the SDK help says they execute a tool from source without permanently installing it) and `dotnet workload install`. No name of theirs is looked up.
+    Of the .NET commands, these are read as installs of a NuGet package, and the name is looked up (a package the OSV lists as malicious is always refused): `dotnet add package <name>`, `dotnet package add <name>` and `dotnet tool install <name>`, and, measured with SDK 10.0.404 on Windows, `dnx`, `dotnet dnx` and `dotnet tool exec` / `execute` (the first word is the package, the rest are the tool's arguments), `dotnet tool update <name>`, `dotnet new install <id>...` (every word is an identifier with its version after `::` or `@`, unless an entry of that name is in the command's folder: the installer then reads a path, and the hook looks with `lstat`, never on the network, at most 50 words), `dotnet package download <id>...` and `dotnet package update <name>...` (an update fetches a package only when it is already installed, so a missing name only warns). A missing name is refused only for the 47 forms measured, word by word and in the measured order; every other line of those forms only warns, with the reason: a flag, a place of a flag or a mix of flags not measured, a `--` outside `dnx`, a tool argument after the package, more than one package, a version text that is not an exact version (and the three versions the SDK refuses before any request: `dnx <id>@latest`, `dotnet package download <id>@1.* --allow-insecure-connections`, `dotnet new install <id>::latest --force`, which are looked up in case another SDK accepts them), `dotnet new install` without `--force` (measured to contact an https source, not to ask it for the package), a name that ends like an archive, a source or configuration file named on the command line, a folder on the network or one the hook could not look at. What stays unread, and no name of it is looked up: the forms that read their identifiers from a file, `dotnet tool restore` and `dotnet tool update --all` (the tool manifest), `dotnet package update` with no name, `dotnet restore` and `dotnet build` (the `PackageReference` items), `dotnet run <file>` (a `#:package` line), `dotnet store --manifest` and `dotnet new update`; `dotnet workload install` / `update` / `restore`, which were not measured (they would install components of the SDK); `dotnet fsi` (`#r "nuget: ..."`); and Linux and macOS, which were not measured.
   examples:
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: dotnet new install Acme.Totally.Missing.Templates
-      expect: { decision: none }
-    - detector: hook
-      event: PreToolUse
-      tool: Bash
-      input:
-        command: dotnet tool update Acme.Totally.Missing.Tool
-      expect: { decision: none }
     - detector: hook
       event: PreToolUse
       tool: Bash
@@ -972,37 +1018,51 @@
       event: PreToolUse
       tool: Bash
       input:
-        command: dotnet tool execute Acme.Totally.Missing.Tool
+        command: dotnet tool update --all
       expect: { decision: none }
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
-        command: dotnet tool exec Acme.Totally.Missing.Tool
+        command: dotnet package update
       expect: { decision: none }
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
-        command: dotnet dnx Acme.Totally.Missing.Tool
-      expect: { decision: none }
+        command: dotnet new install Acme.Totally.Missing.Templates
+      expect: { decision: warn }
     - detector: hook
       event: PreToolUse
       tool: Bash
       input:
-        command: dnx Acme.Totally.Missing.Tool
-      expect: { decision: none }
+        command: dotnet dnx Acme.Totally.Missing.Tool --yes
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dotnet tool exec -- Acme.Totally.Missing.Tool
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: dotnet package update Acme.Totally.Missing.Lib
+      expect: { decision: warn }
 
 - id: yarn-bun-npm-protocol
   area: install-vetting
   doc: |-
-    For Yarn 4 (measured), `name@npm:<rest>` is the registry protocol: it asks for `name` itself when `<rest>` is a version, a range or a tag, and for `<rest>` when it has a `@range` of its own (`name@npm:real@1.0.0`, an alias). Bun (1.4.4, measured) asks for `name` only when `<rest>` is a full version or a range that starts with an operator, and for `<rest>`, an alias, for `latest`, `next`, `1`, `1.2`, `1.x` or another word; Yarn 1 reads an alias. For npm and pnpm it is always an alias. The word `yarn` does not say which Yarn runs, and the hook does not read `packageManager` or `yarnPath` to choose; it reads a `<rest>` that is no package name (`^1.2.3`, `*`, `>=1.0.0`) as `name`, and a `<rest>` that is a valid name with no range (`latest`, `1.0.0`, `1.x`, `real`) as both: it looks up `name` (at `<rest>` when that is a version or a range) and `<rest>`, and counts the command as uncertain, so a name the registry does not have is a warning and never a deny (a malicious one is denied). The same reading holds for a `package.json` value `npm:<rest>` of a Yarn or bun install. What stays:
+    For Yarn 4 (measured), `name@npm:<rest>` is the registry protocol: it asks for `name` itself when `<rest>` is a version, a range or a tag, and for `<rest>` when it has a `@range` of its own (`name@npm:real@1.0.0`, an alias). Bun (1.4.4, measured) asks for `name` only when `<rest>` is a full version or a range that starts with an operator, and for `<rest>`, an alias, for `latest`, `next`, `1`, `1.2`, `1.x` or another word; Yarn 1 reads an alias. On the command line, for npm and pnpm it is always an alias. The word `yarn` does not say which Yarn runs, and the hook does not read `packageManager` or `yarnPath` to choose; it reads a `<rest>` that is no package name (`^1.2.3`, `*`, `>=1.0.0`) as `name`, and a `<rest>` that is a valid name with no range (`latest`, `1.0.0`, `1.x`, `real`) as both: it looks up `name` (at `<rest>` when that is a version or a range) and `<rest>`, and counts the command as uncertain, so a name the registry does not have is a warning and never a deny (a malicious one is denied). The same reading holds for a `package.json` value `npm:<rest>` of a Yarn or bun install, with three more rules for a value, which hold for pnpm too: the range of `name` is `<rest>` without the spaces at its ends (`"x": "npm: ^1.0.0"` is `x` at `^1.0.0`); a `~` word with no slash or backslash after it (`npm:~x`, `npm:~abc`, a lone `npm:~`) is `name` with no range, never a path (measured 2026-11-20: pnpm 11.24, Yarn 3.8 and 4.18 and bun 1.4 install the key for `npm:~x`, and bun for `npm:~abc` and `npm:~`; pnpm asks for the name `~abc`, which no registry serves); and a key that is no valid name drops only the key, so `"_k": "npm:real"` looks up `real`. For a pnpm install a value `npm:<rest>` with no `@range` of its own is read as pnpm 11.24 reads it — the key when node-semver reads `<rest>` as a range, the alias otherwise (measured 2026-11-20 and 21; pnpm 10.33 was measured reading an alias always) — and as the hook does not know which pnpm runs: a `<rest>` that is no valid name (`^1.0.0`, `*`, `>=1.0.0 <2`, `x || 1.0.0`, an empty one) is `name`, at `<rest>` when that is a range the hook reads, and a valid name is the alias, and `name` too when it has the shape of a version or an x-range (`1.0.0`, `1.x`, `1.2`, `v1.2.3`, `vx`, `x.x.x-beta`); `latest`, `next`, `real`, `x-foo`, `x.js` and `1.2.3.4` stay the alias only. For npm the value is always the alias. A path, a URL or a shell expansion after `npm:` is nothing, for every manager. What stays:
 
     - Yarn 2 and 3 were not measured, only Yarn 1 and Yarn 4 (and bun 1.4.4): the reading follows Yarn 4.
     - A command with a word read both ways counts as uncertain as a whole, so ANOTHER name on the same line that the registry does not have is a warning and not a deny (a malicious one is still denied).
     - The bun rule is not copied: the two-name reading covers it, at the price of one lookup too many.
     - A range written without quotes (`name@npm:>=1.0.0`) is read for Yarn and bun — for npm and pnpm `name@npm:` is put aside —: bash hands the manager `name@npm:` and the hook reads that, and the PowerShell tool is read both ways (see `install-redirect-glued-word`). A range with a space still needs quotes.
-    - A `package.json` value `"x": "npm:1.0.0"` leaves a "could not vet" line for the name `1.0.0` at every `yarn install`: the public registry answers that name with a document that is no package.
+    - The command-line twins of the value rules are unchanged: `pnpm add x@npm:^1.0.0` is put aside (an alias whose name `^1.0.0` is no name), and so is `<manager> add x@npm:~x` (a path); the command line of pnpm 11 was not measured.
+    - Under pnpm the key is looked up for more forms than pnpm 11.24 installs it for, so that no pnpm installs it unseen: five valid names it reads as an alias (`x.1`, `1.x.1`, `1.0.0beta`, `01.0.0`, `vv1.2.3`, which an older semver or its loose mode reads as a range), a `<rest>` that is no valid name and no range for node-semver (`=foo`, `^abc`), and every such form under pnpm 10, which reads an alias. A key the registry does not have is a warning at each install, and a malicious one denies.
+    - A `package.json` value `"x": "npm:1.0.0"` leaves a "could not vet" line for the name `1.0.0` at every `yarn install`, `bun install` and `pnpm install`: the public registry answers that name with a document that is no package.
     - `name@NPM:<rest>` in capitals reads as the package `name` under Yarn 1, and bun reads it as a git URL (`https://NPM/<rest>/`): the hook reads it as the lower-case form.
     - `resolutions` and `overrides` of a `package.json` are not read, and neither is a lockfile written by Yarn for these forms.
   examples:
@@ -1090,13 +1150,15 @@
 - id: manifest-value-not-a-range
   area: install-vetting
   doc: |-
-    A dependency of a `package.json` is vetted by its name unless its value is positively something else: a path (`./x`, `../x`, `/x`, `~/x`, a drive letter such as `C:x`), one of the protocols the hook knows (`file:`, `link:`, `workspace:`, `catalog:`, `portal:`, `patch:`, `exec:` and `jsr:`), a URL, a git repository (`git+…`, `git:`, `github:`, `gitlab:`, `bitbucket:`, `gist:`, the scp form), `user/repo` (with an optional `#branch`), or an archive that the manager of the command reads as a file. The value is its range when the hook reads one (a semver range, a dist-tag), and no range when it does not (`~x`, `^x`, `> 1`, `~abc`, a lone `~`, `1 . 0`, a value longer than 100 characters, `foo:^1`, `foo:bar`, where `foo` is no protocol the hook knows): the package is vetted all the same. Measured on 2026-11-20: npm 11.20 and pnpm 10.33 on Windows, and npm 11.19 and Yarn 1.22 in a Linux container, ask the registry for the package for the values that are no protocol and no path, and for nothing for `./x`, `~/x` and `file:x`. What stays:
+    A dependency of a `package.json` is vetted by its name unless its value is positively something else: a path (`./x`, `../x`, `/x`, `~/x`, a drive letter such as `C:x`), one of the protocols the hook knows that names no registry package (`file:`, `link:`, `workspace:`, `portal:`, `exec:` and `jsr:`), a URL, a git repository (`git+…`, `git:`, `github:`, `gitlab:`, `bitbucket:`, `gist:`, the scp form), `user/repo` (with an optional `#branch`), or an archive that the manager of the command reads as a file. The value is its range when the hook reads one (a semver range, a dist-tag), and no range when it does not (`~x`, `^x`, `> 1`, `~abc`, a lone `~`, `1 . 0`, a value longer than 100 characters, `foo:^1`, `foo:bar`, where `foo` is no protocol the hook knows): the package is vetted all the same. Measured on 2026-11-20: npm 11.20 and pnpm 10.33 on Windows, and npm 11.19 and Yarn 1.22 in a Linux container, ask the registry for the package for the values that are no protocol and no path, and for nothing for `./x`, `~/x` and `file:x`. Two protocols name a registry package, and the hook reads them so for every manager, `npm install` too (measured 2026-11-20 in a Linux container with pnpm 11.24, Yarn 3.8 and 4.18 and bun 1.4): `catalog:` and `catalog:<name>` are the key, with no range (pnpm, Yarn 4 and bun fetch it at the version of the catalog); `patch:<source>#<patch>` is the key, with no range (bun fetches it), and the package the source names, which Yarn 3 and 4 fetch: the source is decoded (every `%XX` of an ASCII character, to the end), a nested `patch:` is followed to the innermost one, an alias in it (`patch:x@npm:real@1.0.0#…`) is the real package, and the part after the name is its range — `patch:real@npm:1.0.0#./fix.patch` is `real` at `1.0.0`, never a package named `1.0.0`. When the source names the key itself it is one entry, at the source's range under `yarn install`. A source that names no registry package leaves the key alone (see `manifest-not-from-a-registry`). A key that is no valid name drops only the key: the package its value names (the source of a `patch:`, the alias of `npm:<rest>`) is still vetted. What stays:
 
-    - Under Yarn 1.22 a value with the protocol of another manager (`workspace:`, `portal:`, `patch:`, `exec:`, `catalog:`, `jsr:`), a drive letter (`C:x`) and `..` are asked of the registry, and the hook does not vet them; under pnpm 10.33 `.` and `..` are. A value with several slashes (`a/b/c`), which Yarn 1 also asks the registry for, is vetted by its name, although npm reads it as a folder. The word `yarn` does not say which Yarn runs, and in a Yarn 4 project each workspace package would give a warning and its name would go to the public registry. For such a value to install anything, the registry would need a dist-tag with that exact name (not measured whether it accepts one).
+    - Under Yarn 1.22 a value with the protocol of another manager (`workspace:`, `portal:`, `exec:`, `jsr:`), a drive letter (`C:x`) and `..` are asked of the registry, and the hook does not vet them; under pnpm 10.33 `.` and `..` are. A value with several slashes (`a/b/c`), which Yarn 1 also asks the registry for, is vetted by its name, although npm reads it as a folder. The word `yarn` does not say which Yarn runs, and in a Yarn 4 project each workspace package would give a warning and its name would go to the public registry. For such a value to install anything, the registry would need a dist-tag with that exact name (not measured whether it accepts one).
+    - The catalog is not read (`pnpm-workspace.yaml`, `.yarnrc.yml`, `workspaces.catalog`): the key of a `catalog:` value is vetted with no range, so the version checked is the newest, and an entry that is an alias, a URL or a repository is not followed. Measured: with the entry `x: npm:other@1.0.0`, pnpm 11.24, Yarn 4.18 and bun 1.4 install `other`, and the hook looks up `x`. Not measured: `patch:x@catalog:#…` under Yarn 4 with such an entry, where the hook looks up `x`.
+    - A `patch:` source whose name is escaped twice (`%2564…`) is decoded by the hook to the end and the decoded name is looked up; Yarn decodes once and asks for `%64…`. A lookup too many: a name the registry does not have is a warning at each install. A source nested more than two levels deep, and these values in capitals (`CATALOG:`, `PATCH:`) or with spaces around them, which the hook reads as the lower-case form, were not measured.
     - A value that is not text (a number, an object, `null`, a list) is ignored, as before; it was not measured.
     - A value the hook does not read as a range is vetted with no range, so the version checked is the newest, and may not be the one the manager picks.
     - A dependency of that kind that the lockfile records is not "covered" by it: the lockfile covers a dependency only through its range, so the registry is asked for the newest version too, as it is for an empty value or `latest`; the version the lockfile pins is vetted as a pin all the same.
-    - Yarn 4 and bun were not measured for these values: the hook reads them as it reads the others. macOS was not measured.
+    - Yarn 3.8.7, Yarn 4.18.1 and bun 1.4.4 were measured for the protocol values in a Linux container only (2026-11-20); macOS was not measured.
   examples:
     - detector: hook
       event: PreToolUse
@@ -1175,4 +1237,136 @@
       tool: Bash
       input:
         command: yarn workspace docs upgrade left-pad
+      expect: { decision: none }
+
+- id: install-python-tool-forms
+  area: install-vetting
+  doc: |-
+    The forms that fetch a Python package and may build it are vetted by name: `pip download` and `pip wheel` (also `pip3`, `python -m pip` and behind `pipx runpip <environment>`), `pip install --dry-run`, `pipx inject`, `pipx upgrade --install`, `pipx runpip <environment> install`, `pipx run --spec` and `--with`, `uvx --from` and `--with`, `uv tool run` and `uv tool install` with them, and the names given to `pipx upgrade`, `pipx reinstall` and `uv tool upgrade`. The requirements files of `pip download -r`, `pip wheel -r`, `pipx inject -r` and `pipx runpip … -r` are read as the file of `pip install -r`. A package the index does not have is denied only for the 32 forms measured in a Linux container (pip 23.0.1, pipx and uv against an index that logged every request), word by word with nothing after the last one; every other spelling or variation is read and only warns, with the reason that the form was not measured. What stays:
+
+    - A package that is a source distribution (an sdist) runs its build backend or `setup.py` when pip downloads or wheels it, and its build dependencies are asked of the index and installed in the build environment — in `pip install` too: the hook sees the name on the command line and never the dependencies the sdist names. A newer pip than 23.0.1, and an sdist under uv and under pipx, were not measured.
+    - The spellings and variations that only warn: `pip3 download`, `python3 -m pip download`, `py -m pip wheel`, more names or flags than a measured form (`pip download --dest out P`, `pip download P==1.*`, `P===1.0`, `P==1.0rc1`), `pipx inject --force`, `pipx upgrade --install --force`, `pipx runpip <environment> install -q`, two words after the program (`uvx --from P cmd a b`), and a flag the tables do not hold. `pipx runpip <environment> download` is read and only warns: with the `auto` engine pipx asks the index for nothing (it runs `uv pip download`, which uv does not have).
+    - A name given to `pipx upgrade`, `pipx reinstall` or `uv tool upgrade` is the name of an environment, which with `--suffix` is not the name of its package (the index is asked for the package, never for the suffixed name); the index the tool was installed from is the one saved in the environment, not the one the hook asks; `pipx reinstall` puts back the version that was saved while the hook looks the name up without a version; and a tool installed from a path, with `-e` or from a VCS URL is not what the name says. The names leave the machine like those of an install.
+    - `pipx upgrade-all` and `uv tool upgrade --all` update every tool that was installed: one line says so and that none was vetted, and nothing is asked. `pipx upgrade-all --skip a b` takes several words after `--skip`, the table reads one: none of them is a name.
+    - `pipx reinstall-all`, `pipx install-all`, `pipx upgrade-shared` and `pipx runpip <environment>` with another verb (`list`, `show`, `uninstall`, `freeze`) are not read, with no line. `pip index versions`, `pip list` and `pip show` neither. `--with-requirements` and `--with-editable` of `uv tool install` name files that are not read, and a `-r https://…` is not fetched: the file is not looked at, as with `pip install -r https://…`.
+    - The `-r` inside a requirements file of `pipx inject -r` is not followed by pipx (it fails to parse the line), and the hook follows it as the reader does for `pip install -r`. The readings of the `-r` files have no limit per line, as with `pip install -r`.
+    - The `pip` engine of pipx also asks the index for `pip` before `pipx inject`, `pipx upgrade` and `pipx reinstall` (the shared libraries): that name is not on the command line and is not vetted.
+    - A word that may name a pipx environment after a flag the hook does not know (`pipx inject --dgunknown x T P`) is looked up as a candidate, with the line uncertain.
+    - A value with extras and a comma in `uvx --with`, `--from` and the `--spec` and `--preinstall` of pipx is split only at the commas outside `[…]`; a range with a comma (`P>=1,<2`) stays split and is read wider than uv reads it (not measured).
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx upgrade-all
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: py -m pip download dgprobe-zzq7731-named
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx runpip dgprobe-zzq7731-tool list
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx upgrade-shared
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx reinstall-all
+      expect: { decision: none }
+
+- id: install-python-option-parsing
+  area: install-vetting
+  doc: |-
+    The tables of flags of `pip download`, `pip wheel`, `pipx inject`, `pipx runpip`, `pipx upgrade`, `pipx reinstall`, `pipx upgrade-all` and `uv tool upgrade` are the parsers of the managers, flag by flag (pip 23.0.1, pipx, uv): a flag a manager has and the tables do not hold is unknown, the word after it is a candidate and the line only warns. The managers read what the tables do not:
+
+    - pip and pipx (argparse) accept an unambiguous prefix of a long flag (`pip download --no-bin :all: P`, `pipx upgrade --inst P`): the hook reads the abbreviation as an unknown flag, so `pipx upgrade --inst P` is read as names given to an update, not as an install, and a package that `--install` would fetch is only warned about.
+    - `--skip` of `pipx upgrade-all` takes several words (`nargs` of one or more) and the table reads one.
+    - uv (clap) has hidden flags that the probe did not name and flags of other versions: they are unknown to the table, and so are the flags of the pip of other versions (`--all-releases`). The line warns, never denies.
+    - Which of two readings a manager gives a word that follows a flag with an optional value is not known where it was not measured.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pipx upgrade --inst dgprobe-zzq7731-named
+      expect: { decision: warn }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: 'pip download --no-bin :all: dgprobe-zzq7731-named'
+      expect: { decision: warn }
+
+- id: install-inline-script-deps
+  area: install-vetting
+  doc: |-
+    `uv run` and `pipx run` read the inline script metadata (PEP 723) of the script they run: the `# /// script` block of `uv run <x>.py`, `uv run --script <x>`, `pipx run --path <x>` and, when a file of that name is in the directory, `pipx run <x>`; its `dependencies` are vetted like those of a manifest (a malicious package denies, a missing name or a typosquat warns), and so are the names of `uv run --with`, the file of `uv run --with-requirements` and a `.py` / `.pyw` file given to `uv pip install -r` (the uv reads it as a script). A script the hook could not read — a block outside the grammar it reads, a file over 1 MiB, one that is not a regular file, past the eighth script of a call, a link to the network or a chain of more than 32 links — is said in one line and the user is asked; a block with `[tool.uv]` or a URL, a path or a VCS requirement is said and asked about too. What stays unread:
+
+    - `uv run python script.py`, `uv run pytest`, a file with no extension and no `--script` (`uv run tool`): the uv does not read their block, and the hook does not either. `uv run -` and `cat x.py | uv run -` give the uv the script on the standard input, which the hook does not read; `curl … | uv run -` is refused by the shell guard.
+    - A script that is remote (`uv run https://example.com/x.py`), and one the line itself writes or replaces before it runs (`curl -o s.py … && uv run s.py`, `echo … > s.py; uv run s.py`): the hook reads the disk before any instruction of the line runs, and `rm x; pipx run x` has the pipx fetch the package `x` after the hook saw the file.
+    - The packages `[tool.uv.sources]` names are vetted by their name on the public registry all the same, but where they are fetched from is not; the index of a `uv.toml` or of a `[tool.uv]` table of the project's `pyproject.toml` applies to `uv run script.py` too: the hook says it in one line, for the one file the uv reads from the folder of the script (`install-vet-uv-run-project-index`), and reads nothing above the repository root, so a `uv.toml` there, which the uv obeys, is not seen. A `PIP_*` variable still explains a missing name of `uv run`, although the uv does not read it, and Windows and macOS were not measured.
+    - The `UV_WORKING_DIR` of the session's environment, and `export UV_WORKING_DIR=…` and the other ways to set it on the line (`set`, `$env:UV_WORKING_DIR`, `si env:…`): the directory is not known, so the script is not read and one line says so. A `source` or `.` of a file that moves the directory or changes the environment before the script is not followed: the script is read in the directory as written, and one line says the file may have changed it.
+    - The lines of a file given to `uv run --with-requirements` that are a URL, a VCS or a path, a `-r x.py` included in a requirements file, and `uv pip sync x.py` (not measured); `uvx --with-requirements` and `uv tool install --with-requirements` stay unread.
+    - A `..` in the word of a requirements file (`uv run --with-requirements tools/../r.txt`, `pip install -r tools/../r.txt`) is resolved in the text, as the reader does for every manager, so only the folder the word names written is read for it, never the folder behind a link (`tools` a link to `sub/inner`: `tools/../r.txt` is read as `r.txt`, `sub/r.txt` is not tried); not measured. The `..` of a folder (`--directory tools/..`, `UV_WORKING_DIR=tools/..`, a `cd`) is another matter: it reads both paths.
+    - A link in the repository that leads to a local path that is itself a network mount (`/net/<host>/…` of the macOS automount, `/mnt/<share>/…`, `Z:\…`), a mapped drive, a `subst`, a DFS or an NFS mount, and a link to the network above the command's directory outside the project: the hook cannot tell them from a local path, so the read may wait for the network until Claude Code ends the hook at 15 s and the command runs unvetted.
+    - `pip-run`, `hatch run`, `pdm run` and `poetry run`, which also run a script with dependencies, are not read.
+  examples:
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: uv run python script.py
+      files:
+        script.py: |
+          # /// script
+          # dependencies = ["crossenv"]
+          # ///
+          print(1)
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: uv run tool
+      files:
+        tool: |
+          # /// script
+          # dependencies = ["crossenv"]
+          # ///
+          print(1)
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: uv run - < script.py
+      files:
+        script.py: |
+          # /// script
+          # dependencies = ["crossenv"]
+          # ///
+          print(1)
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: uv run https://example.com/x.py
+      expect: { decision: none }
+    - detector: hook
+      event: PreToolUse
+      tool: Bash
+      input:
+        command: pip-run crossenv -- -c pass
       expect: { decision: none }

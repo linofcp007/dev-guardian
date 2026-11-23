@@ -1086,8 +1086,20 @@ interface BunLine {
   key: string;
   /** The first element, decoded: `name@version`, `name@workspace:…`, `name@https://…`. */
   first: string;
-  /** The second element when it is a string: the registry, `''` for the default. */
-  second: string | undefined;
+  /**
+   * The JSON value after the first comma of the array, white space around it or not, when it is a string — the registry,
+   * `''` for the default: decoded, `null` when it does not decode, `undefined` when it is no string (an object, or nothing).
+   */
+  second: string | null | undefined;
+  /** How many elements the array holds, the first one included; `0` when one of them is empty (`["a", , {}]`, `["a",]`). */
+  elements: number;
+  /**
+   * The elements after the first, one letter each — `s` a string, `o` an object — when the line is written the way bun
+   * writes one: `, ` before each of them and `],` at the end of the line, three at most; `null` for any other writing.
+   */
+  shape: string | null;
+  /** The last of those elements as written between its quotes when it is a string (a registry line's integrity), else `''`. */
+  last: string;
 }
 
 /** The index of the quote that closes the string opened at `start`, or -1. */
@@ -1111,27 +1123,25 @@ function stringAt(line: string, start: number, end: number): string | null {
   }
 }
 
-/** An entry line of the form bun writes — `    "key": ["name@spec", "registry", {…}, "integrity"],` — and nothing else: the array must close at the end of the line, so two entries on one line, or one over several lines, are not read. */
-function parseBunLine(line: string): BunLine | null {
-  if (!line.startsWith('    "')) return null;
-  const keyEnd = stringEnd(line, 4);
-  if (keyEnd < 0 || !line.startsWith(': ["', keyEnd + 1)) return null;
-  const firstStart = keyEnd + 4;
-  const firstEnd = stringEnd(line, firstStart);
-  if (firstEnd < 0) return null;
-  const first = stringAt(line, firstStart, firstEnd);
-  let i = firstEnd + 1;
-  let second: string | undefined;
-  if (line.startsWith(', "', i)) {
-    const end = stringEnd(line, i + 2);
-    if (end < 0) return null;
-    second = stringAt(line, i + 2, end) ?? undefined;
-    if (second === undefined) return null;
-    i = end + 1;
-  }
-  let depth = 1;
+/** `name@spec` cut at the `@` after the first character (a scope's own `@` is the first), or `null` when it has none. */
+function nameAndSpec(first: string): [name: string, spec: string] | null {
+  const at = first.indexOf('@', 1);
+  return at < 0 ? null : [first.slice(0, at), first.slice(at + 1)];
+}
+
+/** The string that starts at `from` once white space is skipped: decoded, `null` when it does not decode, `undefined` when none starts there. */
+function stringAfter(line: string, from: number): string | null | undefined {
+  let k = from;
+  while (line.charCodeAt(k) === 32 || line.charCodeAt(k) === 9) k += 1;
+  const end = line.charCodeAt(k) === 34 ? stringEnd(line, k) : -1;
+  return end < 0 ? undefined : stringAt(line, k, end);
+}
+
+/** The index of the `}` that closes the object opened at `start` (brackets of both kinds counted, strings skipped), or -1. */
+function objectEnd(line: string, start: number): number {
+  let depth = 0;
   let inString = false;
-  for (; i < line.length && depth > 0; i += 1) {
+  for (let i = start; i < line.length; i += 1) {
     const c = line.charCodeAt(i);
     if (inString) {
       if (c === 92) i += 1;
@@ -1142,14 +1152,90 @@ function parseBunLine(line: string): BunLine | null {
       depth += 1;
     } else if (c === 93 || c === 125) {
       depth -= 1;
+      if (depth === 0) return c === 125 ? i : -1;
+    }
+  }
+  return -1;
+}
+
+/** {@link BunLine.shape} and {@link BunLine.last} of the elements after the first, which starts at `from`. */
+function bunShape(line: string, from: number): { shape: string; last: string } | null {
+  let shape = '';
+  let last = '';
+  let i = from;
+  while (shape.length < 3 && line.startsWith(', ', i)) {
+    const start = i + 2;
+    const c = line.charCodeAt(start);
+    const end = c === 34 ? stringEnd(line, start) : c === 123 ? objectEnd(line, start) : -1;
+    if (end < 0) return null;
+    shape += c === 34 ? 's' : 'o';
+    last = c === 34 ? line.slice(start + 1, end) : '';
+    i = end + 1;
+  }
+  return i === line.length - 2 && line.endsWith('],') ? { shape, last } : null;
+}
+
+/**
+ * An entry line of `packages` — `    "key": ["name@spec", …]` — and nothing else: the array must close at the end of the
+ * line, so two entries on one line, or one over several lines, are not read. Whether it is written the way bun writes
+ * one (`    "key": ["name@spec", "registry", {…}, "integrity"],`) is said in `shape`, and judged by {@link bunEntry}: a
+ * line read here is read whatever its shape.
+ */
+function parseBunLine(line: string): BunLine | null {
+  if (!line.startsWith('    "')) return null;
+  const keyEnd = stringEnd(line, 4);
+  if (keyEnd < 0 || !line.startsWith(': ["', keyEnd + 1)) return null;
+  const firstStart = keyEnd + 4;
+  const firstEnd = stringEnd(line, firstStart);
+  if (firstEnd < 0) return null;
+  const first = stringAt(line, firstStart, firstEnd);
+  let depth = 1;
+  let inString = false;
+  // The commas of the array itself, the first of them, and whether each element between two of them holds anything.
+  let commas = 0;
+  let firstComma = -1;
+  let filled = true;
+  let empty = false;
+  let i = firstEnd + 1;
+  for (; i < line.length && depth > 0; i += 1) {
+    const c = line.charCodeAt(i);
+    if (inString) {
+      if (c === 92) i += 1;
+      else if (c === 34) inString = false;
+    } else if (c === 34) {
+      inString = true;
+      filled = true;
+    } else if (c === 91 || c === 123) {
+      depth += 1;
+      filled = true;
+    } else if (c === 93 || c === 125) {
+      depth -= 1;
+      if (depth === 0 && !filled) empty = true;
+    } else if (c === 44 && depth === 1) {
+      if (!filled) empty = true;
+      if (firstComma < 0) firstComma = i;
+      commas += 1;
+      filled = false;
+    } else if (c !== 32 && c !== 9) {
+      filled = true;
     }
   }
   if (first === null || depth !== 0) return null;
   const tail = line.slice(i).trim();
-  return tail === '' || tail === ',' ? { key: line.slice(5, keyEnd), first, second } : null;
+  if (tail !== '' && tail !== ',') return null;
+  const second = firstComma < 0 ? undefined : stringAfter(line, firstComma + 1);
+  // A string right after `, "` that does not decode refuses the line, as it always did — but a registry line's is a
+  // source no parser can read: the line is read, and its pair asked about (lockfile-bun-lock-v2).
+  const cut = nameAndSpec(first);
+  if (second === null && line.startsWith(', "', firstEnd + 1) && (cut === null || !VERSION.test(cut[1]))) return null;
+  const written = bunShape(line, firstEnd + 1);
+  return { key: line.slice(5, keyEnd), first, second, elements: empty ? 0 : commas + 1, shape: written?.shape ?? null, last: written?.last ?? '' };
 }
 
-/** The lines of the `packages` object (the text between its braces); each must be one entry in the form bun writes. */
+/**
+ * The lines of the `packages` object (the text between its braces): each must be one entry line ({@link parseBunLine}),
+ * else it is counted as not recognised; how an entry line is written is judged by {@link bunEntry}.
+ */
 function scanBun(inner: string, acc: Acc, onEntry: (e: BunLine) => void): void {
   const odd = SEPARATOR.test(inner);
   for (const line of splitLines(inner)) {
@@ -1164,27 +1250,102 @@ function scanBun(inner: string, acc: Acc, onEntry: (e: BunLine) => void): void {
   }
 }
 
-function bunEntry(acc: Acc, e: BunLine): void {
-  const at = e.first.indexOf('@', 1);
-  if (at <= 0) {
-    acc.unrecognised += 1;
-    return;
+/** A segment of the path of a local tarball, as bun writes one without `file:`. */
+const TARBALL_SEGMENT = /^[A-Za-z0-9._+-]+$/;
+
+/**
+ * A local tarball as bun 1.4.4 writes one without `file:` (`vendor/x-1.0.0.tgz`): a `./`, a `/` or neither, then
+ * segments of letters, digits, `.`, `_`, `+` and `-` joined by one `/`, none of them `.` or `..`, the last ending in `.tgz`.
+ */
+function localTarball(spec: string): boolean {
+  const path = spec.startsWith('./') ? spec.slice(2) : spec.startsWith('/') ? spec.slice(1) : spec;
+  return path.endsWith('.tgz') && path.split('/').every((segment) => segment !== '.' && segment !== '..' && TARBALL_SEGMENT.test(segment));
+}
+
+/** The sequences of elements after the first that bun writes in an entry that is no registry line: none, `{…}`, `{…}, "<text>"`. */
+const BUN_SEQUENCES: ReadonlySet<string> = new Set(['', 'o', 'os']);
+/** The endings of a version that names an archive: not a version bun pins. */
+const ARCHIVE_ENDINGS = ['.tgz', '.tar.gz', '.tar'] as const;
+/** The integrity bun 1.4.4 keeps a lockfile of label 2 with: a well-formed sha512 (64 bytes in base64). */
+const SHA512 = /^sha512-[A-Za-z0-9+/]{85}[AQgw]==$/;
+
+/**
+ * A registry line — its first element `name@<exact version>` — emitted with the origin its second element gives; true
+ * when it is in the form bun writes: `["name@version", "<'' or an http(s) URL not read as git>", {…}, "<text>"],`, with
+ * `, ` between the elements. Outside that form it is not recognised, and its pair is asked about all the same.
+ */
+function bunRegistryLine(acc: Acc, pin: Pin, e: BunLine): boolean {
+  const { second } = e;
+  if (second === undefined || second === '') {
+    // `""` is the default registry, decided before `locate` (which calls an empty string bad); no string there states no origin either.
+    const inForm = second === '' && e.shape === 'sos';
+    if (!inForm) acc.unrecognised += 1;
+    emit(acc, pin, undefined);
+    return inForm;
   }
-  const name = e.first.slice(0, at);
-  const spec = e.first.slice(at + 1);
+  // A string that does not decode, a path, a URL no parser should read: another source, said without a host.
+  const unknown = (): false => {
+    acc.unrecognised += 1;
+    emit(acc, pin, UNKNOWN_ELSEWHERE);
+    return false;
+  };
+  if (second === null) return unknown();
+  const where = locate(second, pin.name);
+  if (where === 'local' || where === 'bad') return unknown();
+  if (where.source.kind === 'git') {
+    // Never the form of a registry line, which names a version: the pair is asked about, and the host is still said.
+    acc.unrecognised += 1;
+    emit(acc, pin, { source: { kind: 'elsewhere', host: where.source.host, url: '' }, named: undefined });
+    return false;
+  }
+  // The prefix decides the form only; the origin is what `locate` read, whatever the spelling of the scheme.
+  const inForm = e.shape === 'sos' && (second.startsWith('https://') || second.startsWith('http://'));
+  if (!inForm) acc.unrecognised += 1;
+  emit(acc, pin, where);
+  return inForm;
+}
+
+/**
+ * One entry of `packages`, counted or emitted. True when the line is written as bun writes it — what a file needs, line
+ * by line, to cover a dependency: a registry line in its form, with no version that names an archive and, under
+ * `sha512Only` (label 2), a well-formed sha512; any other line in one of {@link BUN_SEQUENCES}.
+ */
+function bunEntry(acc: Acc, e: BunLine, sha512Only: boolean): boolean {
+  const cut = nameAndSpec(e.first);
+  if (cut === null) {
+    acc.unrecognised += 1;
+    return false;
+  }
+  const [name, spec] = cut;
   if (spec.startsWith('workspace:')) {
     acc.local += 1;
   } else if (VERSION.test(spec)) {
     const pin = makePin(name, spec);
-    if (pin === undefined) acc.unrecognised += 1;
-    else finish(acc, pin, e.second === undefined || e.second === '' ? undefined : e.second);
+    if (pin === undefined) {
+      acc.unrecognised += 1;
+      return false;
+    }
+    const inForm = bunRegistryLine(acc, pin, e);
+    return inForm && !ARCHIVE_ENDINGS.some((ending) => spec.endsWith(ending)) && (!sha512Only || SHA512.test(e.last));
+  } else if ((e.elements === 2 || e.elements === 3) && localTarball(spec) && locate(spec) === 'bad') {
+    // Only after the version test (`name@1.0.0-rc.tgz` is a registry line), and only a path no other reading takes:
+    // `git+a/x.tgz` stays a git origin, said as another source; `./x.tgz` is the project's own by `locate` already.
+    acc.local += 1;
   } else {
     // Not a registry version: where the entry comes from (a URL has no pair of its own).
     finish(acc, undefined, spec);
   }
+  return e.shape !== null && BUN_SEQUENCES.has(e.shape);
 }
 
+/**
+ * The values of `lockfileVersion` read, all with the grammar of 1: bun 1.4.4 writes 2, and uses a file labelled 0, 1, 2
+ * or 3 (measured, 2026-11-20); it throws away one labelled 4 or more and resolves everything again.
+ */
+const BUN_VERSIONS: ReadonlySet<string> = new Set(['0', '1', '2', '3']);
+
 interface BunFrame {
+  /** One of {@link BUN_VERSIONS}. */
   version: string;
   /** The text between the braces of the one top-level `packages` object. */
   packages: string;
@@ -1273,7 +1434,7 @@ function bunFrame(text: string): BunFrame | { unread: string } {
   }
   if (depth !== 0) return { unread: 'it is not complete JSON' };
   if (seen.version !== 1) return { unread: seen.version === 0 ? 'it has no lockfileVersion' : 'it has more than one lockfileVersion' };
-  if (version !== '0' && version !== '1') return { unread: 'its lockfileVersion is not 0 or 1' };
+  if (!BUN_VERSIONS.has(version)) return { unread: 'its lockfileVersion is not 0, 1, 2 or 3' };
   if (seen.packages !== 1) return { unread: seen.packages === 0 ? 'it has no "packages" object' : 'it has more than one "packages" object' };
   const [from, to] = ranges.packages;
   const [wFrom, wTo] = ranges.workspaces;
@@ -1284,7 +1445,13 @@ function readBun(text: string): LockRead | { unread: string } {
   const frame = bunFrame(text);
   if ('unread' in frame) return frame;
   const acc = newAcc();
-  scanBun(frame.packages, acc, (e) => bunEntry(acc, e));
+  // A file bun throws away (and resolves everything again) must not spare a dependency its lookup: it covers one only
+  // when every line is written as bun writes it — and never under label 3, which no bun was seen to write.
+  let asBunWrites = frame.version !== '3';
+  scanBun(frame.packages, acc, (e) => {
+    if (!bunEntry(acc, e, frame.version === '2')) asBunWrites = false;
+  });
+  const covers = asBunWrites && acc.unrecognised === 0;
   let hoistedIndex: Map<string, string> | undefined;
   /** package key → pinned version, for the keys that are plain names (the hoisted copies). */
   const hoisted = (): Map<string, string> => {
@@ -1305,7 +1472,7 @@ function readBun(text: string): LockRead | { unread: string } {
     local: acc.local,
     unrecognised: acc.unrecognised,
     resolutionOf: (rel, name, range) => {
-      if (!validName(name) || recorded().get(`${rel}\u0000${name}`)?.has(range) !== true) return null;
+      if (!covers || !validName(name) || recorded().get(`${rel}\u0000${name}`)?.has(range) !== true) return null;
       const pinned = hoisted().get(name);
       return pinned !== undefined && satisfies(range, pinned) ? pinned : null;
     },

@@ -1182,6 +1182,60 @@ describe('install-vet-lockfile-pins', () => {
     // The request log is one file for the whole test: what the second run added comes after the first run's lines.
     expect(asked(own.requests.slice(above.requests.length))).toEqual(ONLY_OSV);
   });
+
+  // ── lockfile-bun-lock-v2, T-02: the bun.lock bun 1.4.4 writes, through the real hook process (the helpers above)
+  describe('lockfile-bun-lock-v2', () => {
+    /** A well-formed sha512 of another last character: 85 of its alphabet, then `Q`. */
+    const INTEGRITY_Q = `sha512-${'B'.repeat(85)}Q==`;
+    /** The bun.lock above as bun 1.4.4 writes it: lockfileVersion 2 (or `label`), configVersion 1, four elements, an empty registry, well-formed sha512. */
+    const bunLockV2 = (transitive: string, label = 2): string =>
+      [
+        '{',
+        `  "lockfileVersion": ${label},`,
+        '  "configVersion": 1,',
+        '  "workspaces": {',
+        '    "": {',
+        '      "name": "fixture-app",',
+        '      "dependencies": {',
+        '        "express": "^4.21.0",',
+        '      },',
+        '    },',
+        '  },',
+        '  "packages": {',
+        `    "eslint-config-prettier": ["eslint-config-prettier@${transitive}", "", { "bin": { "eslint-config-prettier": "bin/cli.js" } }, "${INTEGRITY_A}"],`,
+        '',
+        `    "express": ["express@4.21.2", "", { "dependencies": { "eslint-config-prettier": "^10.1.0" } }, "${INTEGRITY_Q}"],`,
+        '  }',
+        '}',
+        '',
+      ].join('\n');
+
+    it('T-02 `bun install` with a bun.lock of lockfileVersion 2 that pins a malicious version of a TRANSITIVE dependency: DENIED, naming the pair — and nothing but OSV is asked', () => {
+      manifest();
+      writeFileSync(join(project, 'bun.lock'), bunLockV2(MALICIOUS));
+      const r = runHook('bun install', ROUTES);
+      expect(context(r)).not.toContain('bun.lock was not read');
+      expect({ status: r.status, decision: decision(r) }).toEqual({ status: 0, decision: 'deny' });
+      expectPinned(reason(r), 'bun.lock', MALICIOUS);
+      expect(asked(r.requests)).toEqual(ONLY_OSV);
+    });
+
+    it('T-02 the same bun.lock with the version that has no advisory: no answer, and no request to the registry for the direct dependency it covers', () => {
+      manifest();
+      writeFileSync(join(project, 'bun.lock'), bunLockV2(CLEAN));
+      const r = runHook('bun install', ROUTES);
+      expect({ status: r.status, output: r.output, requests: asked(r.requests) }).toEqual({ status: 0, output: undefined, requests: ONLY_OSV });
+    });
+
+    it('T-02 lockfileVersion 3 with the malicious version: DENIED all the same', () => {
+      manifest();
+      writeFileSync(join(project, 'bun.lock'), bunLockV2(MALICIOUS, 3));
+      const r = runHook('bun install', ROUTES);
+      expect(context(r)).not.toContain('bun.lock was not read');
+      expect({ status: r.status, decision: decision(r) }).toEqual({ status: 0, decision: 'deny' });
+      expectPinned(reason(r), 'bun.lock', MALICIOUS);
+    });
+  });
 });
 
 // ───────────────── install-vet-slow-first-round — a registry document that never arrives, through the real hook process
@@ -1438,12 +1492,13 @@ describe('pkgvet-archive-like-name', () => {
     expect(r.requests).toEqual([]);
   });
 
-  it('T-07 a manager that was not measured, with a name the registry does not have: a warning, never a deny', () => {
+  it('T-07 a form that was not measured, with a name the registry does not have: a warning, never a deny', () => {
     const name = 'dgprobe-missing.zip';
-    const r = runHook(`pipx install ${name}`, { [`https://pypi.org/pypi/${name}/json`]: { status: 404 }, [OSV]: { osv: {} } });
+    // With a flag: the bare form is the one the pipx was measured with (pkgvet-archive-names-pipx-composer).
+    const r = runHook(`pipx install --force ${name}`, { [`https://pypi.org/pypi/${name}/json`]: { status: 404 }, [OSV]: { osv: {} } });
     expect(r.status).toBe(0);
     expect(r.requests, 'the name is asked of the registry').toContain(`https://pypi.org/pypi/${name}/json`);
-    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny for a form that was not measured').toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain(name);
   });
 
@@ -2480,5 +2535,561 @@ describe('install-vet-over-ceiling-asks', () => {
       expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
       expect(r.requests).toEqual([]);
     });
+  });
+});
+
+// ───────────────── install-vet-manifest-protocol-values — `catalog:`, `patch:` and `npm:<rest>` in a manifest, through the dispatcher
+
+describe('install-vet-manifest-protocol-values', () => {
+  // `proto-evil-zq` is malicious only here, at both its versions; `proto-missing-zq` is on no registry; the others are clean.
+  const EVIL = 'proto-evil-zq';
+  const MISSING = 'proto-missing-zq';
+  const ADVISORY = 'MAL-2026-0089';
+  const ROUTES: Record<string, Route> = {
+    [`https://registry.npmjs.org/${EVIL}`]: {
+      accept: 'install-v1',
+      body: { 'dist-tags': { latest: '1.5.0' }, modified: '2020-01-01T00:00:00.000Z', versions: { '1.0.0': {}, '1.5.0': {} } },
+    },
+    [`https://registry.npmjs.org/${MISSING}`]: { status: 404 },
+    'https://registry.npmjs.org/x': npmDoc('1.0.0'),
+    'https://registry.npmjs.org/left-pad-zq': npmDoc('1.0.0'),
+    'https://registry.npmjs.org/real-zq': npmDoc('1.0.0'),
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: [ADVISORY], [`${EVIL}@1.5.0`]: [ADVISORY] } },
+  };
+  const manifest = (deps: Record<string, string>): void =>
+    writeFileSync(join(project, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: deps }));
+  const isDenied = (command: string): void => {
+    const r = runHook(command, ROUTES);
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '';
+    expect(reason, command).toContain('package.json');
+    expect(reason, command).toContain(EVIL);
+  };
+  const isWarned = (command: string): void => {
+    const r = runHook(command, ROUTES);
+    expect(r.status, command).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, command).not.toBe('deny');
+    const warned = (r.output?.hookSpecificOutput?.additionalContext ?? '')
+      .split('\n')
+      .filter((l) => l.includes(`'${MISSING}`) && l.includes('not found on the public registry'));
+    expect(warned, command).toHaveLength(1);
+    expect(warned[0], command).toContain('package.json');
+  };
+
+  const CASES = (['pnpm install', 'yarn install', 'bun install'] as const).flatMap((command) =>
+    (['catalog:', 'patch:x', 'npm:~x'] as const).map((value) => [command, value] as const),
+  );
+
+  it.each(CASES)('T-04 `%s` with `"<malicious>": "%s"` is DENIED, naming the package and the file', (command, value) => {
+    manifest({ [EVIL]: value });
+    isDenied(command);
+  });
+
+  it.each(CASES)('T-04 `%s` with `"<a name the registry does not have>": "%s"`: the warning of the manifest, never a deny', (command, value) => {
+    manifest({ [MISSING]: value });
+    isWarned(command);
+  });
+
+  it('T-04 `yarn install` with `"left-pad-zq": "patch:<malicious>@npm%3A1.0.0#./fix.patch"` is DENIED for the package of the source', () => {
+    manifest({ 'left-pad-zq': `patch:${EVIL}@npm%3A1.0.0#./fix.patch` });
+    isDenied('yarn install');
+  });
+
+  it('T-04 `yarn install` with `"left-pad-zq": "patch:<a name the registry does not have>@npm%3A1.0.0#./fix.patch"`: the warning, never a deny', () => {
+    manifest({ 'left-pad-zq': `patch:${MISSING}@npm%3A1.0.0#./fix.patch` });
+    isWarned('yarn install');
+  });
+
+  it('T-04 `pnpm install` with `"<malicious>": "npm:^1.0.0"` is DENIED, naming the package and the file', () => {
+    manifest({ [EVIL]: 'npm:^1.0.0' });
+    isDenied('pnpm install');
+  });
+
+  it('T-04 `pnpm install` with `"<a name the registry does not have>": "npm:^1.0.0"`: the warning, never a deny', () => {
+    manifest({ [MISSING]: 'npm:^1.0.0' });
+    isWarned('pnpm install');
+  });
+
+  it('T-04 `pnpm install` with `"my-alias-zq": "npm:real-zq"` gives what it gives today: `real-zq` is asked, `my-alias-zq` is not, nothing is denied', () => {
+    manifest({ 'my-alias-zq': 'npm:real-zq' });
+    const r = runHook('pnpm install', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+    expect(r.requests.filter((url) => url.startsWith('https://registry.npmjs.org/'))).toEqual(['https://registry.npmjs.org/real-zq']);
+  });
+});
+
+// ───────────────── install-vet-global-in-short-cluster — npm's groups of short flags through the dispatcher
+
+describe('install-vet-global-in-short-cluster', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://registry.npmjs.org/express': npmDoc('4.21.2'),
+    'https://registry.npmjs.org/lodash': npmDoc('4.17.21'),
+    'https://registry.npmjs.org/crossenv': npmDoc('0.0.1-security'),
+    [OSV]: { osv: {} },
+  };
+  /** The project: its package.json names `lodash` and `crossenv`, npm's security placeholder. */
+  const manifest = (): void =>
+    writeFileSync(
+      join(project, 'package.json'),
+      JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { lodash: '^4.17.21', crossenv: '*' } }),
+    );
+  const askedFor = (r: HookOut, name: string): string[] => r.requests.filter((u) => u.includes(name));
+
+  // ── T-07: a global install written with a group, or with `-L` / `-m`, is read as npm reads it
+
+  it.each([
+    'npm install -gD express',
+    'npm install -Dg express',
+    'npm i -gE express',
+    'npm i -gDE express',
+    'npm install -L global express',
+    'npm install -gm dgprobe-msg express',
+    'npm update -gD',
+  ])('T-07 `%s` in a project whose package.json names a malicious package is not denied, and crossenv is not asked: npm installs globally', (command) => {
+    manifest();
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect({ denied: r.output?.hookSpecificOutput?.permissionDecision === 'deny', crossenv: askedFor(r, 'crossenv') }).toEqual({ denied: false, crossenv: [] });
+  });
+
+  it('T-07 `npm -L global install express` is read: not denied, express is asked and crossenv is not', () => {
+    manifest();
+    const r = runHook('npm -L global install express', ROUTES);
+    expect(r.status).toBe(0);
+    expect({
+      denied: r.output?.hookSpecificOutput?.permissionDecision === 'deny',
+      express: r.requests.includes('https://registry.npmjs.org/express'),
+      crossenv: askedFor(r, 'crossenv'),
+    }).toEqual({ denied: false, express: true, crossenv: [] });
+  });
+
+  // `npm -m <v> install` installs the manifest (M-3, 94); `npm -gL project install` does not (M-3, 96), and the hook reads it
+  // anyway: `--location` beside `-g` stays a doubt (EC-9).
+  it.each(['npm -m dgprobe-msg install express', 'npm -gL project install express'])(
+    'T-07 `%s` in a project whose package.json names a malicious package is DENIED, naming the file and the package',
+    (command) => {
+      manifest();
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+
+  // ── T-10: protection — what npm installs the manifest for stays denied, and `-g` stays global
+
+  it.each(['npm install express', 'npm install -Dg false', 'npm install -gx express'])(
+    'T-10 `%s` in a project whose package.json names a malicious package stays DENIED, naming the file and the package',
+    (command) => {
+      manifest();
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason).toMatch(/package\.json.*crossenv/s);
+    },
+  );
+
+  it('T-10 `npm install -g express` in the same project stays not denied, and crossenv is not asked', () => {
+    manifest();
+    const r = runHook('npm install -g express', ROUTES);
+    expect(r.status).toBe(0);
+    expect({ denied: r.output?.hookSpecificOutput?.permissionDecision === 'deny', crossenv: askedFor(r, 'crossenv') }).toEqual({ denied: false, crossenv: [] });
+  });
+});
+
+// ───────────────── install-vet-python-tool-forms — the Python forms that fetch a package and build it, through the dispatcher
+
+describe('install-vet-python-tool-forms', () => {
+  const X = 'zz-no-such-pkg';
+  const EVIL = 'zz-evil-pkg';
+  const T = 'dgprobe-zzq7731-tool';
+  const pypiDoc = (version: string): Route => ({
+    body: { info: { version }, releases: { [version]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+  });
+  /** The PyPI answers 404 for X and has nothing to say about it at OSV. */
+  const MISSING: Record<string, Route> = { [`https://pypi.org/pypi/${X}/json`]: { status: 404 }, [OSV]: { osv: {} } };
+  /** The PyPI has EVIL, and OSV lists its 1.0.0 as malicious. */
+  const MALICIOUS: Record<string, Route> = {
+    [`https://pypi.org/pypi/${EVIL}/json`]: pypiDoc('1.0.0'),
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-7'] } },
+  };
+
+  describe('dispatcher', () => {
+    it.each([
+      `pip download ${X}`,
+      `pip wheel ${X}`,
+      `python -m pip download ${X}`,
+      `pip install --dry-run ${X}`,
+      `pipx inject ${T} ${X}`,
+      `pipx runpip ${T} install ${X}`,
+      `uvx --from ${X} zz-cmd`,
+      `uvx --from ${X} zz-cmd --help`,
+      `pipx run --spec ${X} zz-cmd`,
+    ])('T-02 `%s` is DENIED, naming the package and saying it does not exist on PyPI; the environment is never asked of the registry', (command) => {
+      const r = runHook(command, MISSING);
+      expect(r.status).toBe(0);
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({
+        decision: r.output?.hookSpecificOutput?.permissionDecision,
+        named: reason.includes(X),
+        doesNotExist: reason.includes('does not exist on PyPI'),
+        askedEnvironment: r.requests.filter((u) => u.includes(T)),
+      }).toEqual({ decision: 'deny', named: true, doesNotExist: true, askedEnvironment: [] });
+    });
+
+    it.each([`pipx upgrade ${EVIL}`, `uv tool upgrade ${EVIL}`, `python -m pip download ${EVIL}`])('T-02 `%s` is DENIED with the OSV identifier of the malicious package', (command) => {
+      const r = runHook(command, MALICIOUS);
+      expect(r.status).toBe(0);
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({ decision: r.output?.hookSpecificOutput?.permissionDecision, named: reason.includes(EVIL), id: reason.includes('MAL-2026-7') }).toEqual({
+        decision: 'deny',
+        named: true,
+        id: true,
+      });
+    });
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — `uv run` and `pipx run` read a script's PEP 723 block, through the dispatcher
+
+describe('install-vet-inline-script-deps', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const NAMED = 'dgprobe-zzq7731-named';
+  const pypi = (version: string): Route => ({
+    body: { info: { version }, releases: { [version]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+  });
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The PyPI has EVIL and the script.py of the plan (0.0.5), and OSV lists EVIL 1.0.0 as malicious. */
+  const ROUTES: Record<string, Route> = {
+    [`https://pypi.org/pypi/${EVIL}/json`]: pypi('1.0.0'),
+    'https://pypi.org/pypi/script.py/json': pypi('0.0.5'),
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-0042'] } },
+  };
+
+  describe('T-08 through the dispatcher', () => {
+    it.each(['uv run script.py', 'pipx run script.py'])('T-08 `%s` with a malicious name in the block of script.py is DENIED, naming the file and the package', (command) => {
+      writeFileSync(join(project, 'script.py'), BLOCK(EVIL));
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({
+        decision: r.output?.hookSpecificOutput?.permissionDecision,
+        file: reason.includes('script.py'),
+        named: reason.includes(EVIL),
+      }).toEqual({ decision: 'deny', file: true, named: true });
+    });
+
+    it('T-08 `uv run --with P python -c "print(1)"`, with P unknown to the PyPI, warns that it is not found and says why it does not deny', () => {
+      const r = runHook(`uv run --with ${NAMED} python -c "print(1)"`, { [`https://pypi.org/pypi/${NAMED}/json`]: { status: 404 }, [OSV]: { osv: {} } });
+      expect(r.status).toBe(0);
+      const context = r.output?.hookSpecificOutput?.additionalContext ?? '(no context)';
+      expect(context).toContain(`'${NAMED}': not found`);
+      expect(context).toContain('flag --with is not on the confident-shape allowlist');
+      expect(r.output?.hookSpecificOutput?.permissionDecision).not.toBe('deny');
+    });
+
+    it('T-08 `uv run odd.py`, a block outside the grammar the hook reads, ASKS, and the reason says it could not be read (P3 = B)', () => {
+      writeFileSync(join(project, 'odd.py'), `# /// script\n# dependencies = ["${EVIL}"]\n# extra = ["x"]\n# ///\nprint(1)\n`);
+      const r = runHook('uv run odd.py', ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('ask');
+      expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)').toContain('could not be read');
+    });
+  });
+});
+
+// ───────────────── install-vet-dotnet-run-forms — the .NET forms that fetch a package by name, through the dispatcher
+
+describe('install-vet-dotnet-run-forms', () => {
+  const N = 'Dgprobe.Zzq7731.Nope';
+  const EVIL = 'Dgprobe.Zzq7731.Evil';
+  const nugetUrl = (name: string): string => `https://api.nuget.org/v3-flatcontainer/${name.toLowerCase()}/index.json`;
+  /**
+   * The NuGet of the plan: N is unknown (404); EVIL is published with the one version 1.0.0, nuget.org's search gives its
+   * canonical id and the OSV lists `EVIL` 1.0.0 as malicious. The other versions of EVIL do not exist.
+   */
+  const ROUTES: Record<string, Route> = {
+    [nugetUrl(N)]: { status: 404 },
+    [nugetUrl(EVIL)]: { body: { versions: ['1.0.0'] } },
+    [`https://azuresearch-usnc.nuget.org/query?q=${encodeURIComponent(`packageid:${EVIL.toLowerCase()}`)}&prerelease=true&semVerLevel=2.0.0&take=1`]: { body: { data: [{ id: EVIL }] } },
+    [`https://api.nuget.org/v3/registration5-gz-semver2/${EVIL.toLowerCase()}/1.0.0.json`]: { body: { published: '2020-01-01T00:00:00Z' } },
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-7731'] } },
+  };
+
+  it.each([
+    `dnx ${N}`,
+    `dnx ${N} hello`,
+    `dotnet tool exec ${N}`,
+    `dotnet tool update -g ${N}`,
+    `dotnet tool update ${N}`,
+    `dotnet new install ${N} --force`,
+    `dotnet package download ${N}`,
+  ])('T-02 `%s`: a name NuGet does not know is DENIED, and NuGet was asked for it', (command) => {
+    const r = runHook(command, ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    expect(r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)').toMatch(/Dgprobe\.Zzq7731\.Nope.*does not exist/s);
+    expect(r.requests).toContain(nugetUrl(N));
+  });
+
+  it.each([`dotnet dnx ${N} --yes`, `dotnet new install ${N}`, `dotnet package update ${N}`])(
+    'T-02 `%s`: a name NuGet does not know is a WARNING, never a deny, and NuGet was asked for it',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny').not.toBe('deny');
+      expect(r.output?.hookSpecificOutput?.additionalContext ?? '(no context)').toContain('not found on the public registry');
+      expect(r.requests).toContain(nugetUrl(N));
+    },
+  );
+
+  it.each([`dnx ${EVIL}`, `dnx -- ${EVIL}`, `dnx ${EVIL}@latest`, `dotnet new install ${EVIL}`, `dotnet package update ${EVIL}`])(
+    'T-02 `%s`: a package the OSV lists as malicious is DENIED, by its advisory and not as a missing name',
+    (command) => {
+      const r = runHook(command, ROUTES);
+      expect(r.status).toBe(0);
+      expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+      const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+      expect({ advisory: reason.includes('MAL-2026-7731'), escapeHatch: reason.includes('GUARDIAN_PKG_VET=0') }).toEqual({ advisory: true, escapeHatch: false });
+    },
+  );
+});
+
+// ───────────────── install-vet-registry-files-unread — the new files, through the dispatcher
+
+describe('install-vet-registry-files-unread', () => {
+  const CLEAN = 'dgprobe-clean';
+  const MISSING = 'dgprobe-missing';
+  const HOST = 'https://npm.other.example';
+  const NPM_ROUTES: Record<string, Route> = { [`https://registry.npmjs.org/${CLEAN}`]: npmDoc('1.0.0'), [OSV]: { osv: {} } };
+  const line = (file: string): string =>
+    `dev-guardian: the project's ${file} sets the default registry (${HOST}) — packages are fetched from it, and what it serves was not vetted.`;
+  const put = (file: string, text: string): void => {
+    mkdirSync(dirname(join(project, file)), { recursive: true });
+    writeFileSync(join(project, file), text);
+  };
+  /** NODE_ENV is empty in the hook's environment: vitest sets `test`, which the bun would read as its own mode. */
+  const ENV = { NODE_ENV: '' };
+
+  it('T-06 `bun add <clean>` with a .env of BUN_CONFIG_REGISTRY: the additionalContext is exactly the line of the .env', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put('.env', `BUN_CONFIG_REGISTRY=${HOST}/\n`);
+    const r = runHook(`bun add ${CLEAN}`, NPM_ROUTES, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('.env'));
+  });
+
+  it('T-06 `bun add <clean>` with [install.registry] url in the bunfig.toml: the additionalContext is exactly the line of the bunfig.toml', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put('bunfig.toml', `[install.registry]\nurl = "${HOST}/"\n`);
+    const r = runHook(`bun add ${CLEAN}`, NPM_ROUTES, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'a line, never a verdict').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.additionalContext).toBe(line('bunfig.toml'));
+  });
+
+  it('T-06 `pipx install <missing>` with a uv.toml index-url, a 404 from PyPI and a clean OSV: DENIED (pipx does not obey the uv.toml)', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('uv.toml', 'index-url = "https://pypi.other.example/simple/"\n');
+    const r = runHook(`pipx install ${MISSING}`, { [`https://pypi.org/pypi/${MISSING}/json`]: { status: 404 }, [OSV]: { osv: {} } }, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+  });
+
+  it('T-03 (e2e) a .env value the reader cannot judge: the refusal of a missing name carries the line of the .env in its reason', () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    put('package.json', JSON.stringify({ name: 'fixture-app', version: '1.0.0' }));
+    put('.env', 'BUN_CONFIG_REGISTRY=$REGISTRY\n');
+    const r = runHook(`bun add ${MISSING}`, { [`https://registry.npmjs.org/${MISSING}`]: { status: 404 }, [OSV]: { osv: {} } }, { env: ENV });
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBe('deny');
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+    expect(reason).toContain('does not exist on the npm registry');
+    expect(reason).toContain("dev-guardian: the project's .env sets the default registry — packages are fetched from it, and what it serves was not vetted.");
+  });
+
+});
+
+// ───────────────── pkgvet-archive-names-pipx-composer — the words the pipx and the composer measured, through the dispatcher
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  // The names are made up; the PyPI, the Packagist and OSV are answered by the preload, never by the real network.
+  const FOURTEEN = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma', '.egg', '.nupkg'] as const;
+  const REFUSED_ENDINGS: readonly string[] = ['.egg', '.nupkg'];
+  const pypiUrl = (word: string): string => `https://pypi.org/pypi/${word}/json`;
+  const packagistUrl = (name: string): string => `https://repo.packagist.org/p2/${name}.json`;
+  const MAL = 'MAL-2026-0042';
+  /** A package of the PyPI at 1.0.0. */
+  const pypiPackage = (version: string): Route => ({
+    body: { info: { version }, releases: { [version]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+  });
+  /** A package of the Packagist at 1.0.0. */
+  const packagistPackage = (name: string, version: string): Route => ({
+    body: { packages: { [name]: [{ version, time: '2020-01-01T00:00:00+00:00' }] } },
+  });
+  /** The line of criterion 2: what `pipx run <p>` does with a word it reads as a file, said when the folder is not known. */
+  const runLine = (word: string): string =>
+    `dev-guardian: pipx run reads ${word} as a file, not a package — if the file is there, pipx runs it as a script and installs the packages its \`# /// script\` block names; they were not vetted.`;
+  const decisionOf = (r: HookOut): string | undefined => r.output?.hookSpecificOutput?.permissionDecision;
+  const reasonOf = (r: HookOut): string => r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+
+  // ── the 56 lines of SC-001: `pipx install` and `pipx run`, each of the fourteen endings, without and with an empty file
+
+  type Row = { verb: 'install' | 'run'; ending: string; withFile: boolean; word: string; refused: boolean; guard: boolean };
+  const ROWS: Row[] = (['install', 'run'] as const).flatMap((verb) =>
+    FOURTEEN.flatMap((ending) =>
+      [false, true].map((withFile): Row => {
+        const word = `dgprobe-zzq7731-arc${ending}`;
+        // The pipx refuses the missing name where it asks the index for it: `install` always, `run` only with no file.
+        const refused = REFUSED_ENDINGS.includes(ending) && !(verb === 'run' && withFile);
+        // Silent at `ed53f52c` already: `pipx run` with a file, which the disk decides.
+        return { verb, ending, withFile, word, refused, guard: verb === 'run' && withFile };
+      }),
+    ),
+  );
+
+  it('T-06 (guard) the table of SC-001 has 56 lines: 50 silent, 6 refused, 14 of them the guards', () => {
+    expect(ROWS).toHaveLength(56);
+    expect(ROWS.filter((r) => r.refused)).toHaveLength(6);
+    expect(ROWS.filter((r) => !r.refused)).toHaveLength(50);
+    expect(ROWS.filter((r) => r.guard)).toHaveLength(14);
+  });
+
+  it.each(ROWS.map((r) => [`${r.guard ? '(guard) ' : ''}\`pipx ${r.verb} ${r.word}\`${r.withFile ? ' with an empty file' : ''}`, r] as const))(
+    'T-06 %s',
+    (_label, row) => {
+      if (row.withFile) writeFileSync(join(project, row.word), '');
+      const r = runHook(`pipx ${row.verb} ${row.word}`, { [pypiUrl(row.word)]: { status: 404 }, [OSV]: { osv: {} } });
+      expect(r.status).toBe(0);
+      expect(r.requests, 'the word is asked of the PyPI').toContain(pypiUrl(row.word));
+      expect(decisionOf(r)).toBe(row.refused ? 'deny' : undefined);
+      if (row.refused) expect(reasonOf(r)).toContain('does not exist on PyPI');
+      else expect(r.output, 'nothing is said').toBeUndefined();
+    },
+  );
+
+  // ── the composer
+
+  it.each(['.tar.gz', '.zip'])('T-06 `composer require dgprobe/missing%s` is DENIED as a name the Packagist does not have, and the name was asked', (ending) => {
+    const name = `dgprobe/missing${ending}`;
+    const r = runHook(`composer require ${name}`, { [packagistUrl(name)]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(packagistUrl(name));
+    expect(decisionOf(r)).toBe('deny');
+    expect(reasonOf(r)).toContain('does not exist on Packagist');
+  });
+
+  // ── a folder that is not known (SC-002)
+
+  it('T-06 `cd "$X" && pipx run dgprobe-missing.zip`, X without a value: no refusal, the line of `pipx run` once, no missing name, and the word asked for malware', () => {
+    const word = 'dgprobe-missing.zip';
+    // `X` is set to nothing in the hook's environment, so that a value of the machine's own cannot change the line.
+    const r = runHook(`cd "$X" && pipx run ${word}`, { [pypiUrl(word)]: { status: 404 }, [OSV]: { osv: {} } }, { env: { X: '' } });
+    expect(r.status).toBe(0);
+    expect(decisionOf(r), 'never a deny').toBeUndefined();
+    const said = r.output?.hookSpecificOutput?.additionalContext ?? '(no context)';
+    expect(said.split(runLine(word)).length - 1).toBe(1);
+    expect(said).not.toContain('not found');
+    expect(r.requests).toContain(pypiUrl(word));
+  });
+
+  // ── a malicious package of the name of an archive: refused, with the sentence of the form
+
+  const EVIL_ROUTES = (word: string): Record<string, Route> => ({ [pypiUrl(word)]: pypiPackage('1.0.0'), [OSV]: { osv: { [`${word}@1.0.0`]: [MAL] } } });
+
+  it.each(['pipx install dgprobe-evil.zip', 'pipx run dgprobe-evil.zip'])(
+    "T-06 `%s`, with no file: the refusal says pipx reads 'dgprobe-evil.zip' as a file here, not as a package",
+    (command) => {
+      const r = runHook(command, EVIL_ROUTES('dgprobe-evil.zip'));
+      expect(decisionOf(r)).toBe('deny');
+      expect(reasonOf(r)).toContain("pipx reads 'dgprobe-evil.zip' as a file here, not as a package, and a package of that name is malicious:");
+    },
+  );
+
+  it.each([
+    ['pipx install dgprobe-evil.egg', 'dgprobe-evil.egg'],
+    ['composer require dgprobe/evil.zip', 'dgprobe/evil.zip'],
+    ['pipx install dgprobe-evil.zip', 'dgprobe-evil.zip'],
+    ['pipx run dgprobe-evil.zip', 'dgprobe-evil.zip'],
+    ['pipx install --force dgprobe-evil.zip', 'dgprobe-evil.zip'],
+    ['composer require dgprobe/evil.whl', 'dgprobe/evil.whl'],
+  ])('T-06 (guard) `%s`, a malicious package the registry has: DENIED, naming the package and its MAL- id', (command, name) => {
+    const routes: Record<string, Route> = name.includes('/')
+      ? { [packagistUrl(name)]: packagistPackage(name, '1.0.0'), [OSV]: { osv: { [`${name}@1.0.0`]: [MAL] } } }
+      : EVIL_ROUTES(name);
+    const r = runHook(command, routes);
+    expect(decisionOf(r)).toBe('deny');
+    expect(reasonOf(r)).toContain(name);
+    expect(reasonOf(r)).toContain(MAL);
+  });
+});
+
+// ───────────────── install-vet-with-requirements-directory-link — the file of `uv run --with-requirements`, through the dispatcher
+
+describe('install-vet-with-requirements-directory-link', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const ROUTES: Record<string, Route> = {
+    [`https://pypi.org/pypi/${EVIL}/json`]: {
+      body: { info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+    },
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-0042'] } },
+  };
+
+  it('T-07 `uv run --directory tools/.. --with-requirements r.txt`, tools a link to sub/inner and only sub/r.txt naming the package, is DENIED, naming sub/r.txt and the package', () => {
+    mkdirSync(join(project, 'sub', 'inner'), { recursive: true });
+    writeFileSync(join(project, 'sub', 'r.txt'), `${EVIL}\n`);
+    symlinkSync(join(project, 'sub', 'inner'), join(project, 'tools'), process.platform === 'win32' ? 'junction' : 'dir');
+    const r = runHook('uv run --directory tools/.. --with-requirements r.txt python -c "print(1)"', ROUTES);
+    expect(r.status).toBe(0);
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+    expect({
+      decision: r.output?.hookSpecificOutput?.permissionDecision,
+      file: reason.includes('sub/r.txt'),
+      named: reason.includes(EVIL),
+    }).toEqual({ decision: 'deny', file: true, named: true });
+  });
+
+  it('T-07 (b) r.txt a folder and sub/r.txt naming the package: DENIED, and the reason says r.txt was not read (not a regular file) and names sub/r.txt', () => {
+    mkdirSync(join(project, 'sub', 'inner'), { recursive: true });
+    mkdirSync(join(project, 'r.txt'));
+    writeFileSync(join(project, 'sub', 'r.txt'), `${EVIL}
+`);
+    symlinkSync(join(project, 'sub', 'inner'), join(project, 'tools'), process.platform === 'win32' ? 'junction' : 'dir');
+    const r = runHook('uv run --directory tools/.. --with-requirements r.txt python -c "print(1)"', ROUTES);
+    expect(r.status).toBe(0);
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+    expect({
+      decision: r.output?.hookSpecificOutput?.permissionDecision,
+      unread: reason.includes('r.txt was not read (not a regular file)'),
+      file: reason.includes('sub/r.txt'),
+    }).toEqual({ decision: 'deny', unread: true, file: true });
+  });
+});
+
+// ───────────────── install-vet-uv-run-project-index — `uv run` says the index a file of the project gives, through the dispatcher
+
+describe('install-vet-uv-run-project-index', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://pypi.org/pypi/requests/json': {
+      body: { info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+    },
+    [OSV]: { osv: {} },
+  };
+  const LINE =
+    "dev-guardian: the project's uv.toml sets the package index (https://pypi.corp.example) — packages are fetched from it, and what it serves was not vetted.";
+
+  it('T-06 `uv run s.py` with the index-url of a uv.toml and a clean script: the line in additionalContext, no refusal, no question', () => {
+    mkdirSync(join(project, '.git'));
+    writeFileSync(join(project, 'uv.toml'), 'index-url = "https://pypi.corp.example/simple/"\n');
+    writeFileSync(join(project, 's.py'), '# /// script\n# dependencies = ["requests"]\n# ///\nprint(1)\n');
+    const r = runHook('uv run s.py', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '(no context)').toContain(LINE);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
   });
 });

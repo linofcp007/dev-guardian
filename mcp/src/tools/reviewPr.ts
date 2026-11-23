@@ -95,6 +95,7 @@ import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
 import { runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
 import { defineTool, registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
+import { gitKeysSaid } from '../redaction/urlSaid.js';
 import {
   makeScanTool,
   type InvokeContext,
@@ -274,7 +275,7 @@ const reviewPr = makeScanTool({
     if (preexisting !== null) warnings.push(preexisting);
     // A head checkout made without the repository's own filter drivers (or
     // anything else its git configuration names) says so.
-    const notApplied = tree === null ? null : describeNotApplied(tree.notApplied);
+    const notApplied = tree === null ? null : describeNotApplied(gitKeysSaid(tree.notApplied));
     if (notApplied !== null) warnings.push(`Head checkout: ${notApplied}.`);
 
     return {

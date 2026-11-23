@@ -1,7 +1,8 @@
 # Lockfile fixtures: where each one comes from
 
 Real lockfiles of public repositories, one per format version the readers of
-`mcp/src/pkgvet/lockfile.ts` take (install-vet-lockfile-pins). They were read through the GitHub API on
+`mcp/src/pkgvet/lockfile.ts` take (install-vet-lockfile-pins), and the lockfiles bun 1.4.4 wrote in a measurement
+(`bun-v2/`, below). The files of public repositories were read through the GitHub API on
 2026-11-17 (`gh api repos/<repository>/contents/<path>?ref=<ref>` with `Accept: application/vnd.github.raw`) and
 are the files of the readers' prototype (`.specs/install-vet-lockfile-pins/measurements/README.md`).
 
@@ -20,6 +21,25 @@ They are **data**: `mcp/test/unit/pkgvet/lockfile.test.ts` reads them as text an
 | `yarn.v1.lock` | ChatGPTNextWeb/NextChat | defdcdb5 | `yarn.lock` | yarn v1 | 30 of 1 145 blocks |
 | `yarn.berry.lock` | jestjs/jest | v29.7.0 (4e569916) | `yarn.lock` | Yarn 2+ (`__metadata` version 6) | 36 of 2 089 blocks |
 | `bun.v1.lock` | danny-avila/LibreChat | c8c5478c | `bun.lock` | bun.lock 1 | 45 of 3 971 entries; 4 of the 7 workspaces |
+
+## `bun-v2/`: the bun.lock bun 1.4.4 writes
+
+The 24 files of `bun-v2/` are not cut from a repository: each is the whole `bun.lock` that bun 1.4.4 wrote for one
+made-up project of a measurement (lockfile-bun-lock-v2), in a Linux container with no network (`--network none`) and a
+stand-in registry of made-up packages, on 2026-11-20. Each is named `bun.v2-<case>.lock` after its case: `alias`,
+`catalog`, `default-registry-tarball`, `dev-optional-peer`, `file-folder`, `file-outside`, `file-tarball-noslash`,
+`file-tarball`, `git-file`, `link`, `linker-isolated`, `lockfile-only-plain`, `migrated-from-package-lock`,
+`min-release-age`, `nested`, `overrides`, `patched`, `path-tarball`, `plain`, `scoped`, `trusted`, `url-tarball`,
+`workspace`, `workspace-nested`. They all say `"lockfileVersion": 2`.
+
+- **One edit:** the stand-in registry's address, `http://127.0.0.1:4873`, is written `https://packages.example.invalid`
+  wherever bun wrote it. Not the public registry's address: on its hosts the reader counts a tarball URL without the
+  shape of a registry path as not recognised, and the `url-tarball` case has one. No other character was changed: the
+  integrities are the ones bun wrote, and every name is the measurement's own made-up one (`dgprobe-zzq7731-…`).
+- The line ends are LF, as bun writes them; the copies the measurement kept on the Windows host had CRLF.
+- The measurement, its scripts and the files as they were saved are in the spec's working folder
+  (`.specs/_findings-2026-11-20/measurements/registry-files/`, `bunlock-<case>.txt`), which the repository does not
+  carry.
 
 ## How they were cut
 

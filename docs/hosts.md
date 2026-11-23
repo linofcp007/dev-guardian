@@ -7,10 +7,10 @@ The engine is the MCP server, so any host that speaks MCP over stdio can use dev
 The server and the CLI are committed pre-built and bundled (`mcp/dist/server.js` starts the server from `mcp/dist/engine.js`, which the CLI runs too, and neither needs a runtime `node_modules`), so there is nothing to install or build — only Node.js ≥ 22.13 and git.
 
 ```text
-git clone --depth 1 --branch v3.15.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
+git clone --depth 1 --branch v3.16.0 https://github.com/linofcp007/dev-guardian.git ~/tools/dev-guardian
 ```
 
-The clone above pins 3.15.0; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
+The clone above pins 3.16.0; to follow a later release, use its `vX.Y.Z` tag. Do not pin `v2.0.0`: it has no `--update-mcp`, `--global` or `ci-init`, and its `mcp-config all --write` also writes the global Windsurf and Claude Desktop configs. Keep the clone somewhere stable, because every host config below points at it by absolute path.
 
 ## 2. Wire a host into a project
 
@@ -34,6 +34,8 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | Gemini CLI | `.gemini/settings.json` / `~/.gemini/settings.json` | `GEMINI.md` |
 | Cline | manual — the CLI prints the snippet to paste into Cline's MCP settings | `.clinerules` |
 | Claude Desktop | `claude_desktop_config.json` (global only; `%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/Claude/`) | none, and `mcp-config` writes none for it — paste `host-rules/AGENTS.md` into a Project's instructions after replacing every `{{DEV_GUARDIAN_CLI}}` in it (see below) |
+
+Measured on Codex CLI 0.165.0 (2026-11-19, Windows): the project's `.codex/config.toml` that `mcp-config codex --write` wrote was not loaded, so with it alone Codex saw no dev-guardian tool, and it was not loaded either with the two ways the test tried to mark the project as trusted; the cause was not measured, and registering the server per invocation with `-c mcp_servers.…` worked (`--global` was not measured).
 
 | Flag | Meaning |
 | --- | --- |

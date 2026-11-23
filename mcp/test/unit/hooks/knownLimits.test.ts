@@ -393,8 +393,11 @@ describe('the limits of the manifest vetting, as data', () => {
     'install-candidates-over-ceiling',
     'install-global-update-by-name',
     'install-initializers',
+    'install-inline-script-deps',
     'install-launcher-runs-manager',
     'install-other-runners',
+    'install-python-option-parsing',
+    'install-python-tool-forms',
     'install-redirect-glued-word',
     'launcher-flag-words',
     'lockfile-origin-host-unsaid',
@@ -406,6 +409,7 @@ describe('the limits of the manifest vetting, as data', () => {
     'manifest-quiet-checks',
     'manifest-value-not-a-range',
     'manifest-workspace-members',
+    'npm-short-flag-groups',
     'project-default-registry',
     'tilde-range-word',
     'yarn-bun-npm-protocol',
@@ -494,7 +498,7 @@ describe('install-vet-lockfile-pins', () => {
       if (name === 'yarn.lock') return !/^# yarn lockfile v1\s*$/m.test(text) && !/^__metadata:/m.test(text);
       const version = /["']?lockfileVersion["']?\s*:\s*["']?(\d+)/.exec(text)?.[1];
       if (version === undefined) return false;
-      const known = name === 'pnpm-lock.yaml' ? ['5', '6', '9'] : name === 'bun.lock' ? ['0', '1'] : ['1', '2', '3'];
+      const known = name === 'pnpm-lock.yaml' ? ['5', '6', '9'] : name === 'bun.lock' ? ['0', '1', '2', '3'] : ['1', '2', '3'];
       return !known.includes(version);
     };
 
@@ -545,5 +549,82 @@ describe('install-vet-redirect-glued-word', () => {
     expect(limit?.area).toBe('install-vetting');
     const shown = (limit?.examples ?? []).some((e) => e.detector === 'hook') || (limit?.not_executable ?? '').trim() !== '';
     expect(shown).toBe(true);
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — the record of what `uv run` and `pipx run` leave unread
+
+describe('install-vet-inline-script-deps', () => {
+  it('T-11 a record install-inline-script-deps (install-vetting) names what stays unread, with hook examples', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'install-inline-script-deps');
+    expect(limit, 'a record with the id install-inline-script-deps in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    expect(limit.area).toBe('install-vetting');
+    expect(limit.examples.some((e) => e.detector === 'hook')).toBe(true);
+    const named = [
+      'pip-run',
+      'hatch run',
+      'pdm run',
+      'uv run python',
+      'uv run -',
+      'remote',
+      '[tool.uv.sources]',
+      '--with-requirements',
+      'mapped drive',
+      '/net/',
+      'uv.toml',
+      'UV_WORKING_DIR',
+      'curl -o',
+    ];
+    expect(named.filter((w) => !limit.doc.includes(w))).toEqual([]);
+  });
+
+  it('T-11 the record manifest-other-managers has an example `uv run pytest` beside a pyproject.toml, with decision none', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'manifest-other-managers');
+    expect(limit, 'the record manifest-other-managers').toBeDefined();
+    const shown = (limit?.examples ?? []).flatMap((e) =>
+      e.detector === 'hook' ? [{ command: e.input['command'], pyproject: Object.keys(e.files ?? {}).includes('pyproject.toml'), decision: e.expect.decision }] : [],
+    );
+    expect(shown).toEqual(expect.arrayContaining([{ command: 'uv run pytest', pyproject: true, decision: 'none' }]));
+  });
+});
+
+// ───────────────── install-vet-with-requirements-directory-link — the record says the `..` in the word of a requirements file stays unread
+
+describe('install-vet-with-requirements-directory-link', () => {
+  it('T-06 the record install-inline-script-deps has `tools/../r.txt` and `pip install -r` in its doc', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'install-inline-script-deps');
+    expect(limit, 'the record install-inline-script-deps').toBeDefined();
+    const doc = (limit?.doc ?? '').replace(/\s+/g, ' ');
+    expect(['tools/../r.txt', 'pip install -r'].filter((w) => !doc.includes(w))).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-uv-run-project-index — the records say what `uv run` does with the index of a project file
+
+describe('install-vet-uv-run-project-index', () => {
+  const docOf = (id: string): string => {
+    const limit = loadKnownLimits().find((l) => l.id === id);
+    expect(limit, `the record ${id}`).toBeDefined();
+    return limit?.doc ?? '';
+  };
+
+  it('T-05 the record project-default-registry says `uv run` in the sentence on the indexes of the PyPI, and no longer lists a script given to `pipx run` among the pairs nobody measured', () => {
+    const doc = docOf('project-default-registry');
+    const bullet = doc.split('\n').find((line) => line.includes('gives PyPI')) ?? '';
+    const flat = doc.replace(/\s+/g, ' ');
+    expect({ bulletFound: bullet !== '', namesUvRun: bullet.includes('`uv run`'), scriptListed: flat.includes('a script given to `pipx run`') }).toEqual({
+      bulletFound: true,
+      namesUvRun: true,
+      scriptListed: false,
+    });
+  });
+
+  it('T-05 the record install-inline-script-deps no longer says the index of a project file "is not read (`install-vet-registry-files-unread`)", and names the repository root above which nothing is read', () => {
+    const doc = docOf('install-inline-script-deps').replace(/\s+/g, ' ');
+    expect({ saysNotRead: doc.includes('is not read (`install-vet-registry-files-unread`)'), namesRoot: doc.includes('above the repository root') }).toEqual({
+      saysNotRead: false,
+      namesRoot: true,
+    });
   });
 });

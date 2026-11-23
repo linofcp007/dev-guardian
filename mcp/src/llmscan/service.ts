@@ -165,7 +165,7 @@ export function reportOf(storage: Storage, plan: LlmScanPlan): LlmScanReport {
 
 /** D-4: `confirm` authorises the start only; delivery still stops at max_estimated_tokens. */
 const tokenLimitNote = (n: number): string =>
-  `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). To cover the whole plan, start again with a larger max_estimated_tokens.`;
+  `About ${String(n)} task(s) still to deliver fit under max_estimated_tokens by the plan's estimate; delivery stops there with limit_reached (the real brief sizes decide, so it can differ a little). A plan's limits are fixed when it is made: to cover the whole plan, start a new plan (without plan_id) with a larger max_estimated_tokens.`;
 
 /**
  * A projection, not a promise: how many of the tasks not yet delivered, in delivery order, fit in what is
@@ -233,24 +233,64 @@ const RECIPE = {
 } as const;
 
 /** The scanner findings a verify plan checks: named fingerprints, one scan, or the project's open set (hunt findings are checked by their own tasks). */
-function findingsToVerify(storage: Storage, input: StartInput): { ok: true; findings: Finding[]; unknown: string[] } | Fail {
+function findingsToVerify(storage: Storage, input: StartInput): { ok: true; findings: Finding[]; unknown: string[]; from: VerifySource['from']; scanOf: Map<string, string> } | Fail {
+  /** The scan each finding was read from, by fingerprint: what `verify_source` reports. */
+  const scanOf = new Map<string, string>();
   if (input.fingerprints !== undefined) {
     const found: Finding[] = [];
     const unknown: string[] = [];
     for (const fp of input.fingerprints) {
       const hit = storage.findings.findLatestInProject(input.project, fp);
-      if (hit === null) unknown.push(fp);
-      else found.push(hit.finding);
+      if (hit === null) {
+        unknown.push(fp);
+      } else {
+        found.push(hit.finding);
+        scanOf.set(hit.finding.fingerprint, hit.scan_id);
+      }
     }
-    return { ok: true, findings: found, unknown };
+    return { ok: true, findings: found, unknown, from: 'fingerprints', scanOf };
   }
   if (input.scan_id !== undefined) {
     const scan = storage.scans.getById(input.scan_id);
     if (scan === null || scan.project_path !== input.project) return fail('unknown_scan_id', `No scan ${input.scan_id} for this project.`);
-    return { ok: true, findings: storage.findings.listByScan(input.scan_id).filter((f) => !isHuntFinding(f)), unknown: [] };
+    const findings = storage.findings.listByScan(input.scan_id).filter((f) => !isHuntFinding(f));
+    for (const f of findings) scanOf.set(f.fingerprint, input.scan_id);
+    return { ok: true, findings, unknown: [], from: 'scan', scanOf };
   }
-  return { ok: true, findings: openSetForProject(storage, input.project).findings.filter((f) => !isHuntFinding(f)), unknown: [] };
+  const findings = openSetForProject(storage, input.project).findings.filter((f) => !isHuntFinding(f));
+  for (const f of findings) scanOf.set(f.fingerprint, f.scan_id);
+  return { ok: true, findings, unknown: [], from: 'open_set', scanOf };
 }
+
+/** US-1.AC-3: which input chose the findings of a verify plan, and the scans they were read from. */
+interface VerifySource {
+  from: 'scan' | 'fingerprints' | 'open_set';
+  scan_ids: string[];
+  scan_ids_total: number;
+}
+
+function isVerifySource(value: unknown): value is VerifySource {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (v['from'] === 'scan' || v['from'] === 'fingerprints' || v['from'] === 'open_set') && Array.isArray(v['scan_ids']) && typeof v['scan_ids_total'] === 'number';
+}
+
+/** The scans of the findings that got a verify task, each once, in task order (at most MAX_LISTED named; the total is exact). */
+function verifySourceOf(from: VerifySource['from'], scanOf: ReadonlyMap<string, string>, tasks: ReadonlyArray<{ kind: TaskKind; target: { fingerprint?: string } }>): VerifySource {
+  const scans = new Set<string>();
+  for (const t of tasks) {
+    const scan = t.kind === 'verify' && t.target.fingerprint !== undefined ? scanOf.get(t.target.fingerprint) : undefined;
+    if (scan !== undefined) scans.add(scan);
+  }
+  const all = listed([...scans]);
+  return { from, scan_ids: all.items, scan_ids_total: all.total };
+}
+
+/** The planner's sentence for "no finding was eligible" (`plan.ts`), as opposed to "no task fits". */
+const NO_ELIGIBLE_FINDING_PREFIX = 'No finding is eligible for verification';
+
+const OPEN_SET_NOTHING_TO_PLAN =
+  "No finding in the project's open set is eligible for verification (each needs a file and a line). A scoped scan (one run with scope, or a review_pr) is never part of the open set: to verify one, pass its scan_id.";
 
 /** US-1.AC-1, US-2.AC-1: the plan and its tasks, estimated and stored before anything is handed out. */
 export async function startPlan(storage: Storage, input: StartInput): Promise<Out> {
@@ -279,11 +319,15 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
 
   let findings: Finding[] = [];
   const unknown: string[] = [];
+  let verifyFrom: VerifySource['from'] | null = null;
+  let scanOf: ReadonlyMap<string, string> = new Map();
   if (modes.includes('verify')) {
     const chosen = findingsToVerify(storage, input);
     if (!chosen.ok) return chosen;
     findings = chosen.findings;
     unknown.push(...chosen.unknown);
+    verifyFrom = chosen.from;
+    scanOf = chosen.scanOf;
   }
   const codeFiles = hunting
     ? listProjectFiles(project).filter((f) => CODE_EXTENSIONS.some((e) => f.toLowerCase().endsWith(e))).slice(0, MAX_FALLBACK_CODE_FILES)
@@ -303,7 +347,9 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
   ];
   const setAside = plan.set_aside.map((s) => (isOverLimit(s.reason) ? { ...s, overflow: true as const } : s));
   if (plan.nothing_to_plan !== null) {
-    return fail('nothing_to_plan', plan.nothing_to_plan, { not_eligible: listed(notEligible).items });
+    // A verify-only plan that took the project's open set says so: a scoped scan is never in it (US-1.AC-4).
+    const fromOpenSet = !hunting && verifyFrom === 'open_set' && plan.nothing_to_plan.startsWith(NO_ELIGIBLE_FINDING_PREFIX);
+    return fail('nothing_to_plan', fromOpenSet ? OPEN_SET_NOTHING_TO_PLAN : plan.nothing_to_plan, { not_eligible: listed(notEligible).items });
   }
 
   const planId = randomUUID();
@@ -364,8 +410,15 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
   // The plan's scan holds the hunt's findings (tool `llm-hunt`); it is
   // completed at once, and the findings are added as hunt tasks close. Its
   // bookkeeping says what was hunted (planRecord.ts): nothing yet.
+  const verifySource = verifyFrom === null ? null : verifySourceOf(verifyFrom, scanOf, tasks);
   storage.rawHandle().transaction(() => {
-    storage.scans.insert({ scan_id: scanId, scan_type: 'llm_scan', project_path: project, tree_hash: treeHash, meta: { plan_id: planId, modes } });
+    storage.scans.insert({
+      scan_id: scanId,
+      scan_type: 'llm_scan',
+      project_path: project,
+      tree_hash: treeHash,
+      meta: { plan_id: planId, modes, ...(verifySource !== null ? { verify_source: verifySource } : {}) },
+    });
     storage.scans.finalize({ scan_id: scanId, status: 'completed', ...planRecordBookkeeping(stored, tasks) });
     storage.llmScan.insertPlan(stored, tasks);
   })();
@@ -388,6 +441,7 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
     deliverable_tasks: deliverable.length,
     beyond_max_tasks: tasks.length - deliverable.length,
     needs_confirm: needsConfirm(stored),
+    ...(verifySource !== null ? { verify_source: verifySource } : {}),
     ...tokenLimitFields(stored, tasks),
     ...(needsConfirm(stored) ? { confirm_with: 'llm_scan { step: "start", plan_id, confirm: true }' } : {}),
     notes: plan.notes,
@@ -403,6 +457,8 @@ export function planStatus(storage: Storage, planId: string, project: string | n
   if (project !== null && loaded.plan.project_path !== project) return fail('not_found', `No LLM scan plan with id ${planId} for this project.`);
   if (confirm && loaded.plan.status === 'open') storage.llmScan.confirmPlan(planId, nowIso());
   const plan = settlePlan(storage, storage.llmScan.getPlan(planId) ?? loaded.plan);
+  // Written into the plan record's meta when the plan was made; a plan from before that, or one whose record is gone, has none.
+  const recorded = plan.modes.includes('verify') ? storage.scans.getById(plan.scan_id)?.meta?.['verify_source'] : undefined;
   return {
     ok: true,
     plan_id: plan.id,
@@ -412,6 +468,7 @@ export function planStatus(storage: Storage, planId: string, project: string | n
     limits: plan.limits,
     estimate: plan.estimate,
     needs_confirm: needsConfirm(plan),
+    ...(isVerifySource(recorded) ? { verify_source: recorded } : {}),
     ...tokenLimitFields(plan, storage.llmScan.listTasks(plan.id)),
     prompt_version: plan.prompt_version,
     report: reportOf(storage, plan),

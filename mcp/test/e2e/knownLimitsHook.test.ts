@@ -169,8 +169,11 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'install-candidates-over-ceiling',
       'install-global-update-by-name',
       'install-initializers',
+      'install-inline-script-deps',
       'install-launcher-runs-manager',
       'install-other-runners',
+      'install-python-option-parsing',
+      'install-python-tool-forms',
       'install-redirect-glued-word',
       'launcher-flag-words',
       'lockfile-origin-host-unsaid',
@@ -181,6 +184,7 @@ describe('the limits of the manifest vetting run through the dispatcher', () => 
       'manifest-private-scope',
       'manifest-value-not-a-range',
       'manifest-workspace-members',
+      'npm-short-flag-groups',
       'tilde-range-word',
       'yarn-bun-npm-protocol',
     ]);
@@ -558,5 +562,157 @@ describe('install-vet-over-ceiling-asks', () => {
       return got.detector === 'hook' ? got.decision : got.detector;
     });
     expect(given).toEqual(['ask']);
+  });
+});
+
+// ───────────────── install-vet-python-tool-forms — what the Python forms that fetch a package and build it leave unverified
+
+describe('install-vet-python-tool-forms', () => {
+  const record = (id: string): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === id);
+  const commandOf = (e: { detector: string; input?: Record<string, unknown> }): string => (e.detector === 'hook' ? String(e.input?.['command']) : '');
+  const decisionOf = (e: { detector: string; expect: unknown }): unknown => (e.detector === 'hook' ? (e.expect as { decision?: unknown }).decision : undefined);
+  /** The records' examples as the commands and the decisions they state, in the order of the data file. */
+  const stated = (id: string): Array<{ command: string; decision: unknown }> =>
+    (record(id)?.examples ?? []).map((e) => ({ command: commandOf(e), decision: decisionOf(e) }));
+  const harnessed = (): Set<string> => new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+
+  describe('known limits', () => {
+    it('T-06 the record `install-python-tool-forms` exists in the area install-vetting and says what stays: the symbols and the measurements it names', () => {
+      const id = 'install-python-tool-forms';
+      const limit = record(id);
+      expect(limit, `the data file has no record ${id}`).toBeDefined();
+      expect(limit?.area).toBe('install-vetting');
+      const doc = (limit?.doc ?? '').replace(/\s+/g, ' ');
+      expect(doc).toMatch(/not measured|unmeasured/i);
+      for (const symbol of [
+        'sdist',
+        '--suffix',
+        'pipx reinstall',
+        'pipx runpip',
+        '--with-requirements',
+        '-r https://',
+        'upgrade-shared',
+        'reinstall-all',
+        'install-all',
+        'uv tool upgrade --all',
+        'pipx upgrade-all',
+      ]) {
+        expect({ symbol, named: doc.includes(symbol) }).toEqual({ symbol, named: true });
+      }
+    });
+
+    it('T-06 the record `install-python-tool-forms` has the five hook examples the dispatcher harness runs, each with the decision it states', () => {
+      const id = 'install-python-tool-forms';
+      expect(stated(id)).toEqual(
+        expect.arrayContaining([
+          { command: 'pipx upgrade-all', decision: 'warn' },
+          { command: 'py -m pip download dgprobe-zzq7731-named', decision: 'warn' },
+          { command: 'pipx runpip dgprobe-zzq7731-tool list', decision: 'none' },
+          { command: 'pipx upgrade-shared', decision: 'none' },
+          { command: 'pipx reinstall-all', decision: 'none' },
+        ]),
+      );
+      const run = harnessed();
+      for (const index of (record(id)?.examples ?? []).keys()) {
+        expect({ example: index + 1, harnessed: run.has(`${id} #${String(index + 1)}`) }).toEqual({ example: index + 1, harnessed: true });
+      }
+    });
+
+    it('T-06 the record `install-python-option-parsing` exists in the same area, with the two examples of the disagreements, which warn', () => {
+      const id = 'install-python-option-parsing';
+      const limit = record(id);
+      expect(limit, `the data file has no record ${id}`).toBeDefined();
+      expect(limit?.area).toBe('install-vetting');
+      expect(stated(id)).toEqual(
+        expect.arrayContaining([
+          { command: 'pipx upgrade --inst dgprobe-zzq7731-named', decision: 'warn' },
+          { command: 'pip download --no-bin :all: dgprobe-zzq7731-named', decision: 'warn' },
+        ]),
+      );
+      const run = harnessed();
+      for (const index of (limit?.examples ?? []).keys()) {
+        expect({ example: index + 1, harnessed: run.has(`${id} #${String(index + 1)}`) }).toEqual({ example: index + 1, harnessed: true });
+      }
+    });
+
+    it('T-06 the record `manifest-other-managers` names `pip download -r`', () => {
+      const limit = record('manifest-other-managers');
+      expect(limit, 'the data file has no record manifest-other-managers').toBeDefined();
+      expect(limit?.doc ?? '').toContain('pip download -r');
+    });
+  });
+});
+
+// ───────────────── install-vet-dotnet-run-forms — what the .NET forms that fetch a package by name leave unverified
+
+describe('install-vet-dotnet-run-forms', () => {
+  const ID = 'dotnet-other-install-forms';
+  const record = (): KnownLimit | undefined => loadKnownLimits().find((l) => l.id === ID);
+  const commandOf = (e: { detector: string; input?: Record<string, unknown> }): string => (e.detector === 'hook' ? String(e.input?.['command']) : '');
+  const decisionOf = (e: { detector: string; expect: unknown }): unknown => (e.detector === 'hook' ? (e.expect as { decision?: unknown }).decision : undefined);
+  /** What the record's examples say, in the order of the data file. */
+  const stated = (): Array<{ command: string; decision: unknown }> => (record()?.examples ?? []).map((e) => ({ command: commandOf(e), decision: decisionOf(e) }));
+  /** The examples of the plan: no name to look up (`none`), and a name or a form the hook can only warn about, offline (`warn`). */
+  const EXAMPLES: ReadonlyArray<{ command: string; decision: HookDecision }> = [
+    { command: 'dotnet tool restore', decision: 'none' },
+    { command: 'dotnet workload install maui', decision: 'none' },
+    { command: 'dotnet tool update --all', decision: 'none' },
+    { command: 'dotnet package update', decision: 'none' },
+    { command: 'dotnet new install Acme.Totally.Missing.Templates', decision: 'warn' },
+    { command: 'dotnet dnx Acme.Totally.Missing.Tool --yes', decision: 'warn' },
+    { command: 'dotnet tool exec -- Acme.Totally.Missing.Tool', decision: 'warn' },
+    { command: 'dotnet package update Acme.Totally.Missing.Lib', decision: 'warn' },
+  ];
+  const page = (): string => readFileSync(join(PLUGIN_ROOT, 'docs', 'hooks-known-limits.md'), 'utf8').replace(/\s+/g, ' ');
+
+  /** The `doc` of the record and of the generated page, whitespace folded. */
+  const docs = (): Array<{ where: string; text: string }> => [
+    { where: 'the record', text: (record()?.doc ?? '').replace(/\s+/g, ' ') },
+    { where: 'docs/hooks-known-limits.md', text: page() },
+  ];
+
+  it('T-07 the `doc` of `dotnet-other-install-forms` no longer says that the forms now read are not read', () => {
+    expect(record(), `the data file has no record ${ID}`).toBeDefined();
+    const doc = (record()?.doc ?? '').replace(/\s+/g, ' ');
+    // The words of the old sentence that listed the forms as unread.
+    for (const old of ['(the template installer: it refused the stand-in source in the one measurement made)', '`dotnet tool execute` / `dotnet tool exec`', '`dotnet dnx` and `dnx`']) {
+      expect({ old, said: doc.includes(old) }).toEqual({ old, said: false });
+    }
+  });
+
+  it('T-07 the `doc` names what stays: the forms that read a file, `dotnet workload`, and the lines that only warn', () => {
+    const doc = (record()?.doc ?? '').replace(/\s+/g, ' ');
+    for (const symbol of ['dotnet tool restore', 'dotnet tool update --all', 'dotnet package update', 'dotnet new update', 'dotnet workload', 'dotnet run', 'dotnet store']) {
+      expect({ symbol, named: doc.includes(symbol) }).toEqual({ symbol, named: true });
+    }
+    expect(doc).toMatch(/not measured|unmeasured/i);
+    expect(doc).toMatch(/warn/i);
+  });
+
+  it('T-07 docs/hooks-known-limits.md carries the new `doc`, and neither says the old sentence', () => {
+    const doc = (record()?.doc ?? '').trim().replace(/\s+/g, ' ');
+    expect(page()).toContain(doc);
+    for (const { where, text } of docs()) {
+      expect({ where, said: text.includes('`dotnet dnx` and `dnx`') }).toEqual({ where, said: false });
+    }
+  });
+
+  it('T-07 the record states the eight examples of the plan with their decisions, and the dispatcher harness runs each', () => {
+    expect(stated()).toEqual(expect.arrayContaining(EXAMPLES.map((e) => ({ command: e.command, decision: e.decision }))));
+    const harnessed = new Set([...HOOKS.run, ...HOOKS.skip].map((ref) => label(ref)));
+    for (const index of (record()?.examples ?? []).keys()) {
+      expect({ example: index + 1, harnessed: harnessed.has(`${ID} #${String(index + 1)}`) }).toEqual({ example: index + 1, harnessed: true });
+    }
+  });
+
+  it('T-07 the dispatcher, offline, answers each of the eight commands as the plan says: `none` for the forms that read a file or no name, `warn` for the rest — never a deny', () => {
+    const limit = record();
+    const env = limit === undefined ? {} : exampleEnv(limit);
+    const given = EXAMPLES.map((e) => {
+      const example: HookExample = { detector: 'hook', event: 'PreToolUse', tool: 'Bash', input: { command: e.command }, expect: { decision: e.decision } };
+      const got = answer(example, env);
+      return { command: e.command, decision: got.detector === 'hook' ? got.decision : got.detector };
+    });
+    expect(given).toEqual(EXAMPLES.map((e) => ({ command: e.command, decision: e.decision })));
   });
 });

@@ -55,6 +55,9 @@ export type ProcessOutcome =
   | 'output_too_large'
   | 'timed_out';
 
+/** A rest of a stderr line longer than this goes to `onLog` as a line of its own, without waiting for a line end. */
+const MAX_PENDING_LOG = 4096;
+
 export interface ProcessRunOptions {
   command: string;
   args?: string[];
@@ -182,6 +185,8 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
   // tools with `--verbose` flags can spew MBs of stderr; without a cap the
   // server would grow unbounded.
   const stderrCap = Math.max(64 * 1024, Math.floor(cap / 10));
+  /** The part of the last stderr piece with no line end yet, for `onLog`. */
+  let pendingLog = '';
   readText(child.process?.stderr, (text, totalBytes) => {
     if (totalBytes <= stderrCap) {
       stderrBuf += text;
@@ -189,8 +194,16 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
       stderrBuf += '…(truncated)\n';
     }
     if (options.onLog) {
-      for (const line of text.split(/\r?\n/)) {
+      // WHOLE lines: the pipe cuts a line where it likes, and a rule that reads a URL cannot see one in two halves. What
+      // has no line end yet waits for the next piece; a rest of more than MAX_PENDING_LOG characters goes out as a line.
+      const parts = `${pendingLog}${text}`.split(/\r\n|\r|\n/);
+      pendingLog = parts.pop() ?? '';
+      for (const line of parts) {
         if (line.length > 0) options.onLog(line);
+      }
+      if (pendingLog.length > MAX_PENDING_LOG) {
+        options.onLog(pendingLog);
+        pendingLog = '';
       }
     }
   });
@@ -222,6 +235,9 @@ export async function runProcess(options: ProcessRunOptions): Promise<ProcessRun
   }
 
   const exit = await child.done;
+  // What is left of the stream with no line end is a line too.
+  if (options.onLog && pendingLog.length > 0) options.onLog(pendingLog);
+  pendingLog = '';
   if (timer) clearTimeout(timer);
   if (abortListener && options.signal) {
     options.signal.removeEventListener('abort', abortListener);

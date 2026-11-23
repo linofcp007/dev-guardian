@@ -1,0 +1,20 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-parent": "^1.0.0",
+      },
+    },
+  },
+  "overrides": {
+    "dgprobe-zzq7731-dep": "1.0.0",
+  },
+  "packages": {
+    "dgprobe-zzq7731-dep": ["dgprobe-zzq7731-dep@1.0.0", "https://packages.example.invalid/dgprobe-zzq7731-dep/-/dgprobe-zzq7731-dep-1.0.0.tgz", {}, "sha512-sOKpl0BKI27AKoNou2QDDP3Lx8uDWxv/Dqcelzjvkwm5JD4QfOpshIyeRtuX8kzcfOtHvoqFwAqWu6iWgtIFTQ=="],
+
+    "dgprobe-zzq7731-parent": ["dgprobe-zzq7731-parent@1.0.0", "https://packages.example.invalid/dgprobe-zzq7731-parent/-/dgprobe-zzq7731-parent-1.0.0.tgz", { "dependencies": { "dgprobe-zzq7731-dep": "^1.0.0" } }, "sha512-YRAf2qWtpmhioB22gGI7NsayvqNvTJGU+Hp+TKzm5BCOQVmLgoNfkxv2+/BgtK6rDzgM7IaNgE1dvm1WT3XFWA=="],
+  }
+}

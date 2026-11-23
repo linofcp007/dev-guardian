@@ -115,6 +115,7 @@ import { describeNotApplied } from '../platform/gitSafety.js';
 import { runProcess, type ProcessRunResult } from './processRunner.js';
 import { SCANNED_WALK_EXCLUDE } from './projectFiles.js';
 import { gitleaksParser } from './scannerParsers/gitleaks.js';
+import { gitKeysSaid } from '../redaction/urlSaid.js';
 import { parseInputAsJson, type ScannerParser } from './scannerParsers/index.js';
 
 export type SecretLocation = 'history' | 'working_tree' | 'directory';
@@ -490,7 +491,7 @@ async function commitsPass(
   }
   // `git log -p` ran without the repository's own textconv driver (or gpg
   // program, …): gitleaks read the history as stored, which is named.
-  const notApplied = describeNotApplied(run.gitNotApplied ?? []);
+  const notApplied = describeNotApplied(gitKeysSaid(run.gitNotApplied ?? []));
   if (notApplied !== null) reasons.push(notApplied);
   if (problems.length === 0 && !result.cancelled && view.merges !== null) {
     const merges = await mergesPass(opts, result, view.merges, view.source, own, projectPrefix);

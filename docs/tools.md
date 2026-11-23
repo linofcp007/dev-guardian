@@ -295,10 +295,10 @@ Your model verifies the scanners' findings and hunts what they miss; the server 
 | `scan_id` | string | no | — | Verify the findings of this scan. Default: the project open set. |
 | `fingerprints` | array of string | no | — | Verify only these findings. |
 | `max_tasks` | number | no | — | Stop handing out tasks after this many. Default 200. |
-| `max_estimated_tokens` | number | no | — | Above this estimate the plan needs confirm: true. Default 500000. |
+| `max_estimated_tokens` | number | no | — | Above this estimate the plan needs confirm: true, which never raises it; a larger limit needs a new plan. Default 500000. |
 | `per_task_overhead` | number | no | — | Host tokens assumed per task. Default 60000. |
-| `confirm` | boolean | no | — | Accept an estimate above the limit. |
-| `plan_id` | string | no | — | task, submit: the plan step start returned. start: report on this plan instead of planning (confirm: true confirms it). |
+| `confirm` | boolean | no | — | Start a plan above max\_estimated\_tokens once the user agrees; delivery still stops at that limit. |
+| `plan_id` | string | no | — | task, submit: the plan step start returned. start: report on this plan instead of planning; takes project\_path and confirm only (confirm: true confirms it). |
 | `execute` | one of "host", "sampling" | no | — | host (default): hand the task out. sampling: run it through the client's MCP sampling. |
 | `task_id` | string | no | — | submit: the task, as step task returned it. |
 | `lease_token` | string | no | — | submit: the lease\_token step task returned with the task. |

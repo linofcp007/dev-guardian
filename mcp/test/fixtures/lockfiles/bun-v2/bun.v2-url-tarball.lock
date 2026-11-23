@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-named": "https://packages.example.invalid/dgprobe-zzq7731-named/-/dgprobe-zzq7731-named-1.0.0.tgz",
+        "dgprobe-zzq7731-urltgz": "https://packages.example.invalid/files/dgprobe-zzq7731-urltgz-1.0.0.tgz",
+      },
+    },
+  },
+  "packages": {
+    "dgprobe-zzq7731-named": ["dgprobe-zzq7731-named@https://packages.example.invalid/dgprobe-zzq7731-named/-/dgprobe-zzq7731-named-1.0.0.tgz", {}, "sha512-ldwMgJfYmWvMKyd+tG+WUi1YVs5PGdEJVzqSpbBKrI46fV/aTPj27+VVcv0whZWgKSJgR6G/ZgUVjI/k7/NwoQ=="],
+
+    "dgprobe-zzq7731-urltgz": ["dgprobe-zzq7731-urltgz@https://packages.example.invalid/files/dgprobe-zzq7731-urltgz-1.0.0.tgz", {}, "sha512-Xsw14NNNaEGdDYCtlmX0m5uA3jcDv4cJyHGF0eRD8u5+eOloD9g/pHQmot+bDrnXo6IHvZ9YZe8SbPW4Q/+bqg=="],
+  }
+}

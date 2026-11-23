@@ -346,3 +346,262 @@ describe('D-3: limits, delivery order, severity, concurrency', () => {
     }
   });
 });
+
+// ───────────────── llm-scan-codex-smoke-findings — what each answer says the server did
+//
+// This block is last, and its imports are here, so the lines the guards above cite do not move.
+
+import { randomUUID } from 'node:crypto';
+import { seedScan as seedHistoryScan } from '../helpers/historySeed.js';
+import { SHELL, SQLI, locOfTask, seedScan, type Harness, type Raw } from '../helpers/llmScanHarness.js';
+
+describe('llm-scan-codex-smoke-findings', () => {
+  const PLAN_KEYS = ['estimate', 'limits', 'modes', 'needs_confirm', 'ok', 'plan_id', 'prompt_version', 'report', 'scan_id', 'status'];
+  const EC4_SENTENCE = 'No finding is eligible for verification (each needs a file and a line).';
+
+  /** The error of a refused call; an answer that is `ok` fails the assertion here. */
+  function errorOf(r: Raw): Extract<Raw, { ok: false }>['error'] {
+    expect(r.ok, JSON.stringify(r)).toBe(false);
+    if (r.ok) throw new Error('unreachable: the assertion above failed');
+    return r.error;
+  }
+
+  const verifySourceOf = (r: object): unknown => (r as { verify_source?: unknown }).verify_source;
+
+  /** The standard project and a plan above the token limit, not confirmed. */
+  async function unconfirmedPlan(h: Harness): Promise<{ s: ReturnType<typeof seedStandard>; planId: string }> {
+    const s = seedStandard(h);
+    const over = await start(h, { modes: ['verify'], per_task_overhead: 300_000 });
+    expect(over.needs_confirm).toBe(true);
+    return { s, planId: over.plan_id };
+  }
+
+  const callStart = (h: Harness, input: Record<string, unknown>): Promise<Raw> => callTool(h, 'llm_scan_start', { project_path: h.project, ...input });
+
+  it('T-01 start { plan_id, max_estimated_tokens, confirm: true } is refused and the plan stays as it was', async () => {
+    const h = harness();
+    const { planId } = await unconfirmedPlan(h);
+    const before = h.repo.getPlan(planId);
+    expect(before?.confirmed).toBe(false);
+
+    const e = errorOf(await callStart(h, { plan_id: planId, max_estimated_tokens: 2_000_000, confirm: true }));
+    expect(e.code).toBe('invalid_input');
+    for (const phrase of ['max_estimated_tokens', 'To read or confirm this plan', 'with only project_path', 'the user must agree', 'new plan', 'llm_scan { step: "start" }']) {
+      expect(e.message).toContain(phrase);
+    }
+    expect(e.message).not.toContain('llm_scan_start');
+    expect(e.retry_with).toEqual({ plan_id: planId });
+
+    const after = h.repo.getPlan(planId);
+    expect(after?.confirmed).toBe(false);
+    expect(after?.limits).toEqual(before?.limits);
+    expectDomainError(await callTool(h, 'llm_scan_task', { plan_id: planId }), 'needs_confirm');
+  });
+
+  it.each(['modes', 'scan_id', 'fingerprints', 'max_tasks', 'per_task_overhead'])(
+    'T-01 %s next to plan_id is refused, named, and the plan is unchanged',
+    async (key) => {
+      const h = harness();
+      const { s, planId } = await unconfirmedPlan(h);
+      const values: Record<string, unknown> = {
+        modes: ['hunt'],
+        scan_id: s.sastScanId,
+        fingerprints: [s.sqli.fingerprint],
+        max_tasks: 1,
+        per_task_overhead: 1,
+      };
+      const before = h.repo.getPlan(planId);
+
+      const e = errorOf(await callStart(h, { plan_id: planId, [key]: values[key] }));
+      expect(e.code).toBe('invalid_input');
+      expect(e.message).toContain(key);
+      expect(e.message).not.toContain('llm_scan_start');
+      expect(e.retry_with).toEqual({ plan_id: planId });
+      expect(h.repo.getPlan(planId)).toEqual(before);
+    },
+  );
+
+  it('T-01 two parameters at once (modes and max_tasks) are both named', async () => {
+    const h = harness();
+    const { planId } = await unconfirmedPlan(h);
+    const e = errorOf(await callStart(h, { plan_id: planId, modes: ['hunt'], max_tasks: 1 }));
+    expect(e.code).toBe('invalid_input');
+    expect(e.message).toContain('modes');
+    expect(e.message).toContain('max_tasks');
+  });
+
+  it('T-01 an unknown plan_id with modes is invalid_input, not not_found', async () => {
+    const h = harness();
+    seedStandard(h);
+    expectDomainError(await callStart(h, { plan_id: 'nope', modes: ['hunt'] }), 'invalid_input');
+  });
+
+  it('T-02 the token_limit_note says the limits are fixed when the plan is made, in start, start { plan_id } and the needs_confirm refusal', async () => {
+    const h = harness();
+    seedStandard(h);
+    const over = await start(h, { modes: ['verify'], per_task_overhead: 300_000 });
+    const created = (over as typeof over & { token_limit_note: string }).token_limit_note;
+    const again = okResult<{ token_limit_note: string }>(await callStart(h, { plan_id: over.plan_id })).token_limit_note;
+    const refused = errorOf(await callTool(h, 'llm_scan_task', { plan_id: over.plan_id }));
+    expect(refused.code).toBe('needs_confirm');
+
+    expect(created).toMatch(/About 1 task.*limit_reached.*larger max_estimated_tokens/);
+    for (const text of [created, again, refused.message]) {
+      expect(text).toContain('fixed when it is made');
+      expect(text).toContain('start a new plan (without plan_id)');
+      expect(text).not.toContain('start again');
+    }
+  });
+
+  it('T-03 a plan checking one scan says so in verify_source, in the answer, in start { plan_id } and in the scan record', async () => {
+    const h = harness();
+    const s = seedStandard(h);
+    const out = await start(h, { modes: ['verify'], scan_id: s.sastScanId });
+    const expected = { from: 'scan', scan_ids: [s.sastScanId], scan_ids_total: 1 };
+
+    expect(out.scan_id).not.toBe(s.sastScanId);
+    expect(verifySourceOf(out)).toEqual(expected);
+    expect(verifySourceOf(okResult<object>(await callStart(h, { plan_id: out.plan_id })))).toEqual(expected);
+    expect(h.storage.scans.getById(out.scan_id)?.meta?.['verify_source']).toEqual(expected);
+  });
+
+  it('T-03 with no scan_id the findings come from the open set, and the deps scan is not among the scans', async () => {
+    const h = harness();
+    const s = seedStandard(h);
+    const out = await start(h, { modes: ['verify'] });
+    expect(verifySourceOf(out)).toMatchObject({ from: 'open_set', scan_ids: [s.sastScanId], scan_ids_total: 1 });
+  });
+
+  it('T-03 with fingerprints the source says fingerprints', async () => {
+    const h = harness();
+    const s = seedStandard(h);
+    const out = await start(h, { modes: ['verify'], fingerprints: [s.sqli.fingerprint] });
+    expect(verifySourceOf(out)).toMatchObject({ from: 'fingerprints', scan_ids: [s.sastScanId], scan_ids_total: 1 });
+  });
+
+  it('T-03 fingerprints of two scans list each scan once', async () => {
+    const h = harness();
+    const s = seedStandard(h);
+    const second = seedScan(h.storage, h.db, h.project, 'sast', [
+      { tool: 'semgrep', rule_id: 'fixture.second-scan', loc: SHELL, message: 'A finding of the second scan.' },
+    ]);
+    const other = second.findings[0];
+    if (other === undefined) throw new Error('seeding failed');
+    const out = await start(h, { modes: ['verify'], fingerprints: [s.sqli.fingerprint, other.fingerprint] });
+    const source = verifySourceOf(out) as { from?: string; scan_ids?: string[]; scan_ids_total?: number } | undefined;
+    expect([...(source?.scan_ids ?? [])].sort()).toEqual([s.sastScanId, second.scanId].sort());
+    expect(source?.scan_ids_total).toBe(2);
+  });
+
+  it('T-04 a project whose only scan is a scoped one: nothing_to_plan names the open set, the scoped scan and scan_id', async () => {
+    const h = harness();
+    seedHistoryScan(h, {
+      id: randomUUID(),
+      type: 'sast',
+      project: h.project,
+      meta: { scope: { kind: 'paths', paths: ['src'], files: 7 } },
+      findings: [
+        { tool: 'semgrep', rule_id: 'fixture.sql', file: SQLI.file, line: SQLI.line, message: 'User input flows into a SQL string.' },
+        { tool: 'semgrep', rule_id: 'fixture.sql-insert', file: 'src/routes/users.ts', line: 18, message: 'User input flows into a SQL string.' },
+        { tool: 'semgrep', rule_id: 'fixture.exec', file: SHELL.file, line: SHELL.line, message: 'A child process is started with input.' },
+      ],
+    });
+    const e = errorOf(await callStart(h, { modes: ['verify'] }));
+    expect(e.code).toBe('nothing_to_plan');
+    for (const phrase of ['open set', 'scoped', 'scan_id']) expect(e.message).toContain(phrase);
+    expect(e.retry_with).toHaveProperty('not_eligible');
+    expect(h.repo.listPlans(h.project)).toEqual([]);
+  });
+
+  it('T-07 the four plan_id calls answer with the same keys and values as getPlan, plus verify_source at most', async () => {
+    const h = harness();
+    seedStandard(h);
+    const out = await start(h, { modes: ['verify'] });
+    const inputs: Array<Record<string, unknown>> = [
+      { plan_id: out.plan_id },
+      { plan_id: out.plan_id, confirm: true },
+      { plan_id: out.plan_id, project_path: h.project },
+      { plan_id: out.plan_id, confirm: false },
+    ];
+    for (const input of inputs) {
+      const r = okResult<Record<string, unknown>>(await callTool(h, 'llm_scan_start', input));
+      const plan = h.repo.getPlan(out.plan_id);
+      if (plan === null) throw new Error('the plan is stored');
+      expect(Object.keys(r).filter((k) => k !== 'verify_source').sort(), JSON.stringify(input)).toEqual(PLAN_KEYS);
+      expect(r).toMatchObject({
+        ok: true,
+        plan_id: plan.id,
+        scan_id: plan.scan_id,
+        status: plan.status,
+        modes: plan.modes,
+        limits: plan.limits,
+        estimate: plan.estimate,
+        needs_confirm: false,
+        prompt_version: plan.prompt_version,
+      });
+      expect(r['report']).toEqual(computeReport(plan, h.repo.listTasks(plan.id)));
+    }
+  });
+
+  it('T-07 a hunt-only plan has no verify_source', async () => {
+    const h = harness();
+    await seedSurface(h);
+    const out = await start(h, { modes: ['hunt'] });
+    expect('verify_source' in out).toBe(false);
+    expect('verify_source' in okResult<object>(await callStart(h, { plan_id: out.plan_id }))).toBe(false);
+  });
+
+  it('T-07 a plan whose record has no verify_source in its meta answers start { plan_id } without the field', async () => {
+    const h = harness();
+    seedStandard(h);
+    const out = await start(h, { modes: ['verify'] });
+    h.db.prepare('UPDATE scans SET meta = ? WHERE id = ?').run(JSON.stringify({ plan_id: out.plan_id, modes: ['verify'] }), out.scan_id);
+    expect(h.storage.scans.getById(out.scan_id)?.meta).toEqual({ plan_id: out.plan_id, modes: ['verify'] });
+    expect('verify_source' in okResult<object>(await callStart(h, { plan_id: out.plan_id }))).toBe(false);
+  });
+
+  it('T-07 start { scan_id: the deps scan } finds nothing eligible and says what it said before', async () => {
+    const h = harness();
+    seedStandard(h);
+    const deps = h.db.prepare<[], { id: string }>("SELECT id FROM scans WHERE scan_type = 'deps'").get();
+    if (deps === undefined) throw new Error('the standard project holds a deps scan');
+    const e = errorOf(await callStart(h, { modes: ['verify'], scan_id: deps.id }));
+    expect(e.code).toBe('nothing_to_plan');
+    expect(e.message).toContain(EC4_SENTENCE);
+  });
+
+  it('T-08 start { plan_id } of an open plan whose scan record is gone still answers ok, without verify_source', async () => {
+    const h = harness();
+    seedStandard(h);
+    const out = await start(h, { modes: ['verify'] });
+    const before = okResult<Record<string, unknown>>(await callStart(h, { plan_id: out.plan_id }));
+    h.db.pragma('foreign_keys = OFF');
+    h.db.prepare('DELETE FROM scans WHERE id = ?').run(out.scan_id);
+    expect(h.storage.scans.getById(out.scan_id)).toBeNull();
+
+    const r = okResult<Record<string, unknown>>(await callStart(h, { plan_id: out.plan_id }));
+    expect('verify_source' in r).toBe(false);
+    expect(r).toMatchObject({ plan_id: out.plan_id, status: 'open' });
+    expect(r['report']).toEqual(before['report']);
+  });
+
+  it('T-08 the same once the plan is complete', async () => {
+    const h = harness();
+    const s = seedStandard(h);
+    const out = await start(h, { modes: ['verify'] });
+    for (let i = 0; i < 3; i += 1) {
+      const t = await lease(h, out.plan_id);
+      expect(okResult<SubmitOut>(await submit(h, out.plan_id, t, verdictAt(locOfTask(h, out.plan_id, t.task_id, s.locs), 'real'))).accepted).toBe(true);
+    }
+    const before = okResult<Record<string, unknown>>(await callStart(h, { plan_id: out.plan_id }));
+    expect(before['status']).toBe('complete');
+    h.db.pragma('foreign_keys = OFF');
+    h.db.prepare('DELETE FROM scans WHERE id = ?').run(out.scan_id);
+    expect(h.storage.scans.getById(out.scan_id)).toBeNull();
+
+    const r = okResult<Record<string, unknown>>(await callStart(h, { plan_id: out.plan_id }));
+    expect('verify_source' in r).toBe(false);
+    expect(r).toMatchObject({ plan_id: out.plan_id, status: 'complete' });
+    expect(r['report']).toEqual(before['report']);
+  });
+});

@@ -1,0 +1,18 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-dep": "1.2.3",
+      },
+    },
+  },
+  "patchedDependencies": {
+    "dgprobe-zzq7731-dep@1.2.3": "patches/dgprobe-zzq7731-dep@1.2.3.patch",
+  },
+  "packages": {
+    "dgprobe-zzq7731-dep": ["dgprobe-zzq7731-dep@1.2.3", "https://packages.example.invalid/dgprobe-zzq7731-dep/-/dgprobe-zzq7731-dep-1.2.3.tgz", {}, "sha512-lokrIVJ48pak+WeDGDW8KooWj9Gkg5ii3hCBczhHlKAEv3dD6kmzjFQ8rgaK/rqMku6ra6LA5YDr/PDThHeNww=="],
+  }
+}

@@ -29,13 +29,23 @@ const inputSchema = {
     .int()
     .min(1)
     .optional()
-    .describe(`Above this estimate the plan needs confirm: true. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`),
+    .describe(
+      `Above this estimate the plan needs confirm: true, which never raises it; a larger limit needs a new plan. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`,
+    ),
   per_task_overhead: z.number().int().min(0).optional().describe(`Host tokens assumed per task. Default ${String(LLM_SCAN_DEFAULTS.per_task_overhead)}.`),
-  confirm: z.boolean().optional().describe('Accept an estimate above the limit.'),
-  plan_id: z.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning (with confirm: true, confirm it)."),
+  confirm: z.boolean().optional().describe('Start a plan above max_estimated_tokens once the user agrees; delivery still stops at that limit.'),
+  plan_id: z
+    .string()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Return this plan's status and report instead of planning; takes project_path and confirm only (confirm: true confirms it)."),
 };
 
 const parser = z.object(inputSchema).strict();
+
+/** The keys `start` takes next to `plan_id`; the rule is this list, never the list of the refused. */
+const PLAN_ID_KEYS: readonly string[] = ['plan_id', 'project_path', 'confirm'];
 
 const tool = defineTool({
   name: 'llm_scan_start',
@@ -61,6 +71,24 @@ async function handler(input: ToolInput<typeof inputSchema>, ctx: PluginContext)
     return fail('invalid_input', `Invalid input: ${parsed.error.issues.map((i) => `${i.path.join('.') || '$'}: ${i.message}`).join('; ')}`);
   }
   const inp = parsed.data;
+
+  // With plan_id the step reads or confirms an existing plan and takes exactly plan_id, project_path and
+  // confirm. A plan's limits, modes and findings are fixed when it is made, so any other parameter is
+  // refused, never ignored, before the plan is read (named in the schema's order).
+  if (inp.plan_id !== undefined) {
+    const given = new Map(Object.entries(inp));
+    const refused = Object.keys(inputSchema).filter((key) => !PLAN_ID_KEYS.includes(key) && given.get(key) !== undefined);
+    if (refused.length > 0) {
+      return fail(
+        'invalid_input',
+        `llm_scan {step: "start", plan_id} takes project_path and confirm only; it does not take ${refused.join(', ')}. ` +
+          'To read or confirm this plan, call llm_scan { step: "start", plan_id } with only project_path; to confirm it, add confirm: true, ' +
+          "which the user must agree to. A plan's limits, modes and findings are fixed when it is made: for others, " +
+          'start a new plan with llm_scan { step: "start" } without plan_id.',
+        { plan_id: inp.plan_id },
+      );
+    }
+  }
 
   let project: string;
   try {

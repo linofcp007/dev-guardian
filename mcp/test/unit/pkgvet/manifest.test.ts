@@ -13,15 +13,17 @@ import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  inlineScriptBlock,
   MANIFEST_UNREADABLE_REASONS,
   MAX_MANIFEST_BYTES,
   MAX_REQUIREMENT_FILES,
+  readInlineScript,
   readNpmManifest,
   readRequirements,
 } from '../../../src/pkgvet/manifest.js';
 import { decideInstallCommand, type HookVetOptions } from '../../../src/pkgvet/hookDecision.js';
-import { parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
-import { hangBound } from '../../helpers/timing.js';
+import { parseInstallCommands, parsePackageSpec } from '../../../src/pkgvet/parseCommand.js';
+import { expectLinear, hangBound } from '../../helpers/timing.js';
 
 let dir: string;
 beforeEach(() => {
@@ -80,7 +82,6 @@ describe('readNpmManifest — the dependencies a package.json declares', () => {
           local: 'file:../local',
           linked: 'link:../x',
           ws: 'workspace:*',
-          cat: 'catalog:',
           git1: 'git+https://github.com/o/r.git#v1',
           git2: 'github:o/r',
           short: 'o/r',
@@ -454,8 +455,11 @@ describe('pkgvet-yarn-berry-npm-protocol', () => {
   });
 
   it.each(['npm', 'pnpm'])('T-03 guard: `%s` reads the value as an alias, as before', (manager) => {
-    expect(read(manager, 'npm:^1.2.3')).toEqual([]);
-    expect(read(manager, 'npm:1.0.0')).toEqual([['1.0.0', undefined]]);
+    // For pnpm a rest that is a range or a version is read by install-vet-manifest-protocol-values (its T-02).
+    if (manager === 'npm') {
+      expect(read(manager, 'npm:^1.2.3')).toEqual([]);
+      expect(read(manager, 'npm:1.0.0')).toEqual([['1.0.0', undefined]]);
+    }
     expect(read(manager, 'npm:latest')).toEqual([['latest', undefined]]);
     expect(read(manager, 'npm:real-zq@1.0.0', 'alias-zq')).toEqual([['real-zq', '1.0.0']]);
   });
@@ -524,9 +528,7 @@ describe('install-vet-manifest-value-dropped', () => {
     'file:x',
     'link:x',
     'workspace:*',
-    'catalog:',
     'portal:x',
-    'patch:x',
     'https://host.example/x.tgz',
     'git+https://host.example/r.git',
     'github:u/r',
@@ -622,10 +624,7 @@ describe('install-vet-manifest-value-dropped — round 1', () => {
     'link:x',
     'workspace:*',
     'workspace:^',
-    'catalog:',
-    'catalog:default',
     'portal:x',
-    'patch:x',
     'exec:x',
     'jsr:^1',
     'jsr:@scope-zq/x@1',
@@ -642,5 +641,637 @@ describe('install-vet-manifest-value-dropped — round 1', () => {
 
   it.each(['u/r#branch', 'u/r', '.', '..'])('T-06 the value `%s` stays out of the list (a known limit for `..`), for every manager', (value) => {
     for (const manager of MANAGERS) expect(read(manager, value), `${manager} ${value}`).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-manifest-protocol-values — `catalog:`, `patch:` and `npm:<rest>` name the package the manager fetches
+
+describe('install-vet-manifest-protocol-values', () => {
+  type Pair = [string, string | undefined];
+  const MANAGERS = ['npm', 'pnpm', 'yarn', 'bun'] as const;
+
+  /** What `readNpmManifest(dir, manager)` reads out of one dependency `key: value`. */
+  function read(manager: string, value: string, key: string): Pair[] {
+    write('package.json', JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [key]: value } }));
+    const r = readNpmManifest(dir, manager);
+    expect(r.status).toBe('ok');
+    return named(r);
+  }
+
+  /** `[name, range]` pairs as a multiset: the order does not count, and a pair read twice counts twice (how "once" is held). */
+  const bag = (pairs: readonly Pair[]): string[] => pairs.map(([name, range]) => JSON.stringify([name, range ?? null])).sort();
+  /** What each of `managers` reads out of `key: value`, as multisets: one comparison names every manager that reads otherwise. */
+  const readBy = (managers: readonly string[], value: string, key: string): Record<string, string[]> =>
+    Object.fromEntries(managers.map((manager) => [manager, bag(read(manager, value, key))]));
+  /** The same `pairs` for each of `managers`, the other side of {@link readBy}. */
+  const sameFor = (managers: readonly string[], pairs: readonly Pair[]): Record<string, string[]> =>
+    Object.fromEntries(managers.map((manager) => [manager, bag(pairs)]));
+
+  // ── T-01: the lines of test-plan.md → "As linhas do T-01", one per step of the grammar of bug.md → Correção
+
+  describe('T-01 `catalog:` gives the key, and `patch:` the key and the package the grammar of its source reads', () => {
+    const KEY = 'left-pad-zq';
+    const key: Pair = [KEY, undefined];
+    const real = (range?: string): Pair => ['real-zq', range];
+    const FOUR_LEVELS =
+      'patch:a-zq@patch%3Ab-zq@patch%253Ac-zq@patch%25253Areal-zq@npm%2525253A1.0.0%252523./d.patch%2523./c.patch%23./b.patch#./a.patch';
+
+    const ROWS: ReadonlyArray<{ step: string; value: string; want: Pair[] }> = [
+      { step: 'AC-1', value: 'catalog:', want: [key] },
+      { step: 'AC-1', value: 'catalog:tools', want: [key] },
+      { step: 'AC-1, EC-8', value: '  CATALOG:  ', want: [key] },
+
+      { step: 'step 1', value: 'patch:x', want: [key, ['x', undefined]] },
+      { step: 'step 1, EC-8', value: 'PATCH:x', want: [key, ['x', undefined]] },
+      { step: 'step 1', value: 'patch:real-zq#f', want: [key, real()] },
+      { step: 'step 1: no #', value: 'patch:real-zq', want: [key, real()] },
+      { step: 'step 1: an @ after the # does not count', value: 'patch:real-zq@npm:1.0.0#./dir@2/fix.patch', want: [key, real('1.0.0')] },
+
+      { step: 'step 2', value: 'patch:r%65al-zq@npm%3A1.0.0#f', want: [key, real('1.0.0')] },
+      { step: 'step 2: the fixed point, decision 5(f)', value: 'patch:%2572eal-zq@1.0.0#f', want: [key, real('1.0.0')] },
+      { step: 'step 2: %zz stays, and the name is not valid', value: 'patch:%zzreal@1.0.0#f', want: [key] },
+
+      { step: 'steps 3 and 5: the top level is S whole, N is real-zq#x', value: 'patch:real-zq%23x@1.0.0#f', want: [key] },
+      { step: 'steps 3 and 5: a new level ends at the #, and no a-zq', value: 'patch:a-zq@patch%3Areal-zq%23x@1#f', want: [key, real()] },
+
+      { step: 'steps 3 and 4', value: 'patch:@scope-zq/real@npm%3A1.0.0#f', want: [key, ['@scope-zq/real', '1.0.0']] },
+      { step: 'steps 3 and 4', value: 'patch:@1.0.0#f', want: [key] },
+      { step: 'steps 3 and 4', value: 'patch:$X@1.0.0#f', want: [key] },
+
+      { step: 'step 5: two levels, the form Yarn writes', value: 'patch:real-zq@patch%3Areal-zq@npm%253A1.0.0%23./a.patch#./b.patch', want: [key, real('1.0.0')] },
+      { step: 'step 5: four levels, another name in each, and none of a-zq, b-zq, c-zq', value: FOUR_LEVELS, want: [key, real('1.0.0')] },
+
+      { step: 'step 6, no a-zq', value: 'patch:a-zq@npm:real-zq@1.0.0#f', want: [key, real('1.0.0')] },
+      { step: 'step 6, no a-zq', value: 'patch:a-zq@npm:real-zq@latest#f', want: [key, real()] },
+      { step: 'step 6, no a-zq', value: 'patch:a-zq@npm:@scope-zq/real@^2#f', want: [key, ['@scope-zq/real', '^2']] },
+      { step: 'step 6, no a-zq', value: 'patch:a-zq@npm:_bad@1.0.0#f', want: [key] },
+      { step: 'step 6: the test of Q (question 6: B), no interno-zq', value: 'patch:a-zq@npm:interno-zq@workspace:*#f', want: [key] },
+      { step: 'step 6: the test of Q (question 6: B), no interno-zq', value: 'patch:a-zq@npm:interno-zq@file:../x#f', want: [key] },
+      { step: 'step 6: the test of Q (question 6: B), no interno-zq', value: 'patch:a-zq@npm:interno-zq@git+https://h.example/r.git#f', want: [key] },
+
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@git+https://h.example/r.git#f', want: [key] },
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@https://h.example/x.tgz#f', want: [key] },
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@file:../x#f', want: [key] },
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@workspace:*#f', want: [key] },
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@github:u-zq/r#f', want: [key] },
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@u-zq/r#f', want: [key] },
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@jsr:^1#f', want: [key] },
+      { step: 'step 7 (question 3: A)', value: 'patch:real-zq@./x#f', want: [key] },
+
+      { step: 'step 8: no package called 1.0.0', value: 'patch:real-zq@npm:1.0.0#./fix.patch', want: [key, real('1.0.0')] },
+      { step: 'step 8: no package called 1.0.0', value: 'patch:real-zq@npm%3A1.0.0#./fix.patch', want: [key, real('1.0.0')] },
+      { step: 'step 8: no package called 1.0.0', value: 'patch:real-zq@1.0.0#./fix.patch', want: [key, real('1.0.0')] },
+      { step: 'step 8', value: 'patch:real-zq@npm:^1.0.0#f', want: [key, real('^1.0.0')] },
+      { step: 'step 8: no latest', value: 'patch:real-zq@npm:latest#f', want: [key, real()] },
+      { step: 'step 8: no latest', value: 'patch:real-zq@latest#f', want: [key, real()] },
+      { step: 'step 8: no other-zq', value: 'patch:real-zq@npm:other-zq#f', want: [key, real()] },
+      { step: 'step 8', value: 'patch:real-zq@npm:#f', want: [key, real()] },
+      { step: 'step 8, EC-8', value: 'Patch:real-zq@NPM:1.0.0#f', want: [key, real('1.0.0')] },
+      { step: 'step 8: not measured, decision 5(a)', value: 'patch:x-zq@catalog:#f', want: [key, ['x-zq', undefined]] },
+    ];
+
+    it.each(ROWS)('T-01 ($step) `$value`, read with npm, pnpm, yarn and bun', ({ value, want }) => {
+      expect(readBy(MANAGERS, value, KEY)).toEqual(sameFor(MANAGERS, want));
+    });
+
+    it('T-01 (step 2) a source of 1 102 characters with the name escaped: nothing is cut before decoding, and a range over 100 characters is none', () => {
+      const value = `patch:r%65al-zq@npm%3A^1.0.0${' || 1.0.0'.repeat(120)}#f`;
+      expect(value.slice('patch:'.length, value.indexOf('#'))).toHaveLength(1102);
+      expect(readBy(MANAGERS, value, KEY)).toEqual(sameFor(MANAGERS, [key, real()]));
+    });
+
+    it('T-01 (steps 3 and 4) a name of 110 characters written all in %XX (330 characters), then `@1.0.0#f`: the key and that name at 1.0.0', () => {
+      const name = `real-zq-${'n'.repeat(102)}`;
+      const escaped = [...name].map((c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0')}`).join('');
+      expect([name.length, escaped.length]).toEqual([110, 330]);
+      expect(readBy(MANAGERS, `patch:${escaped}@1.0.0#f`, KEY)).toEqual(sameFor(MANAGERS, [key, [name, '1.0.0']]));
+    });
+
+    it('T-01 (steps 3 and 4) a name of 215 characters, then `@1.0.0#f`: no name, only the key', () => {
+      const name = `real-zq-${'n'.repeat(207)}`;
+      expect(name).toHaveLength(215);
+      expect(readBy(MANAGERS, `patch:${name}@1.0.0#f`, KEY)).toEqual(sameFor(MANAGERS, [key]));
+    });
+
+    it('T-01 (step 6) an alias whose P has 215 characters, then `@1.0.0` or `@workspace:*`: P is not valid, so only the key and no a-zq; a P of 214 is read', () => {
+      const long = `real-zq-${'n'.repeat(207)}`;
+      const longest = long.slice(0, 214);
+      expect([long.length, longest.length]).toEqual([215, 214]);
+      expect({
+        range: readBy(MANAGERS, `patch:a-zq@npm:${long}@1.0.0#f`, KEY),
+        workspace: readBy(MANAGERS, `patch:a-zq@npm:${long}@workspace:*#f`, KEY),
+        longest: readBy(MANAGERS, `patch:a-zq@npm:${longest}@1.0.0#f`, KEY),
+      }).toEqual({ range: sameFor(MANAGERS, [key]), workspace: sameFor(MANAGERS, [key]), longest: sameFor(MANAGERS, [key, [longest, '1.0.0']]) });
+    });
+
+    it('T-01 ("O que sai do valor") under the key `real-zq`, `patch:real-zq@npm:1.0.0#f` is one entry: at 1.0.0 for yarn, with no range for bun, npm and pnpm', () => {
+      expect(readBy(MANAGERS, 'patch:real-zq@npm:1.0.0#f', 'real-zq')).toEqual({
+        npm: bag([real()]),
+        pnpm: bag([real()]),
+        yarn: bag([real('1.0.0')]),
+        bun: bag([real()]),
+      });
+    });
+
+    it('T-01 (AC-5) under a key that is no package name (`_k`), `catalog:` gives nothing', () => {
+      expect(readBy(MANAGERS, 'catalog:', '_k')).toEqual(sameFor(MANAGERS, []));
+    });
+
+    it('T-01 (AC-5) under a key that is no package name (`_k`), `patch:real-zq@npm:1.0.0#f` gives only `real-zq` at 1.0.0', () => {
+      expect(readBy(MANAGERS, 'patch:real-zq@npm:1.0.0#f', '_k')).toEqual(sameFor(MANAGERS, [real('1.0.0')]));
+    });
+
+    describe('T-01 the cost of a value (bug.md → Correção, "Custo"): a shape, not milliseconds', () => {
+      /** The two shapes a reading that decodes again, or searches again at each level, is quadratic on. */
+      const SHAPES: ReadonlyArray<{ shape: string; value: (k: number) => string; k: number }> = [
+        { shape: '(a) `patch:real-zq@npm:%`, k times `25`, `31.0.0#f`', value: (k) => `patch:real-zq@npm:%${'25'.repeat(k)}31.0.0#f`, k: 50_000 },
+        { shape: '(b) `patch:`, k times `a-zq@patch:`, `real-zq@npm:1.0.0#f`', value: (k) => `patch:${'a-zq@patch:'.repeat(k)}real-zq@npm:1.0.0#f`, k: 10_000 },
+      ];
+      /** Writes the `package.json` of one size, under 1 MiB, in a directory of its own; returns the directory. */
+      const writeSize = (value: (k: number) => string, size: number): string => {
+        const text = JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [KEY]: value(size) } });
+        expect(text.length).toBeLessThan(MAX_MANIFEST_BYTES);
+        write(`k${String(size)}/package.json`, text);
+        return join(dir, `k${String(size)}`);
+      };
+
+      it.each(SHAPES)('T-01 cost $shape: 8k costs well under 22.6 times k (linear ~8, quadratic ~64)', ({ shape, value, k }) => {
+        const at = new Map([k, 8 * k].map((size) => [size, writeSize(value, size)]));
+        expectLinear(`T-01 ${shape}`, (size) => void readNpmManifest(at.get(size) ?? dir, 'yarn'), k);
+      });
+
+      it.each(SHAPES)(
+        'T-01 cost $shape: at 8k the key and `real-zq` at 1.0.0, for the four managers',
+        ({ value, k }) => {
+          const at = writeSize(value, 8 * k);
+          const got = Object.fromEntries(
+            MANAGERS.map((manager) => {
+              const r = readNpmManifest(at, manager);
+              return [manager, { status: r.status, packages: bag(named(r)) }];
+            }),
+          );
+          expect(got).toEqual(Object.fromEntries(MANAGERS.map((manager) => [manager, { status: 'ok', packages: bag([key, real('1.0.0')]) }])));
+        },
+        hangBound(2000),
+      );
+    });
+  });
+
+  // ── T-02: `npm:<rest>` under pnpm, by the rule of AC-3 with the permissive grammar G (question 1: B-permissive)
+
+  describe('T-02 `npm:<rest>` read with pnpm by the rule of AC-3, and with npm as today', () => {
+    const KEY = 'evil-pkg-zq';
+    const k = (range?: string): Pair => [KEY, range];
+    const rest = (name: string, range?: string): Pair => [name, range];
+
+    /** `pnpm`: what AC-3 reads; `npm`: what the tree reads today (an alias, always). */
+    const ROWS: ReadonlyArray<{ value: string; pnpm: Pair[]; npm: Pair[] }> = [
+      { value: 'npm:^1.2.3', pnpm: [k('^1.2.3')], npm: [] },
+      { value: 'npm:*', pnpm: [k('*')], npm: [] },
+      { value: 'npm:~1.2.3', pnpm: [k('~1.2.3')], npm: [] },
+      { value: 'npm:>=1.0.0 <2', pnpm: [k('>=1.0.0 <2')], npm: [] },
+      { value: 'npm:v1.2.3', pnpm: [k('v1.2.3'), rest('v1.2.3')], npm: [rest('v1.2.3')] },
+      { value: 'npm:1.0.0', pnpm: [k('1.0.0'), rest('1.0.0')], npm: [rest('1.0.0')] },
+      { value: 'npm:1.x', pnpm: [k('1.x'), rest('1.x')], npm: [rest('1.x')] },
+      { value: 'npm:latest', pnpm: [rest('latest')], npm: [rest('latest')] },
+      { value: 'npm:next', pnpm: [rest('next')], npm: [rest('next')] },
+      { value: 'npm:real-zq', pnpm: [rest('real-zq')], npm: [rest('real-zq')] },
+      { value: 'npm:real-zq@1.0.0', pnpm: [rest('real-zq', '1.0.0')], npm: [rest('real-zq', '1.0.0')] },
+      { value: 'npm:$X', pnpm: [], npm: [] },
+      { value: 'npm:./x.tgz', pnpm: [], npm: [] },
+      { value: 'npm:https://example.test/x.tgz', pnpm: [], npm: [] },
+      { value: 'NPM:^1.2.3', pnpm: [k('^1.2.3')], npm: [] },
+      // the fifth run (measured: pnpm 11.24.0 installs the key in the six and never asks for the rest)
+      { value: 'npm:', pnpm: [k()], npm: [] },
+      { value: 'npm: ^1.0.0', pnpm: [k('^1.0.0')], npm: [] },
+      { value: 'npm:x || 1.0.0', pnpm: [k('x || 1.0.0')], npm: [] },
+      { value: 'npm:X - 2', pnpm: [k('X - 2')], npm: [] },
+      { value: 'npm:X.X.X+b', pnpm: [k()], npm: [] },
+      { value: 'npm:x.x.x-beta', pnpm: [k(), rest('x.x.x-beta')], npm: [rest('x.x.x-beta')] },
+      // not measured: the reading fails closed
+      { value: 'npm:=foo', pnpm: [k()], npm: [] },
+      // the sixth and seventh runs: G reads a range (measured: pnpm asks for the key in the four)
+      { value: 'npm:vx', pnpm: [k(), rest('vx')], npm: [rest('vx')] },
+      { value: 'npm:vvx', pnpm: [k(), rest('vvx')], npm: [rest('vvx')] },
+      { value: 'npm:1.0.0-beta', pnpm: [k('1.0.0-beta'), rest('1.0.0-beta')], npm: [rest('1.0.0-beta')] },
+      { value: 'npm:1.2', pnpm: [k('1.2'), rest('1.2')], npm: [rest('1.2')] },
+      // G reads no range: only the name, as today (measured: pnpm reads an alias in the six)
+      { value: 'npm:1.2.3.4', pnpm: [rest('1.2.3.4')], npm: [rest('1.2.3.4')] },
+      { value: 'npm:x-foo', pnpm: [rest('x-foo')], npm: [rest('x-foo')] },
+      { value: 'npm:x.js', pnpm: [rest('x.js')], npm: [rest('x.js')] },
+      { value: 'npm:X-files', pnpm: [rest('X-files')], npm: [rest('X-files')] },
+      { value: 'npm:v', pnpm: [rest('v')], npm: [rest('v')] },
+      { value: 'npm:x-real-zq', pnpm: [rest('x-real-zq')], npm: [rest('x-real-zq')] },
+      // what the permissive G reads more than pnpm 11.24.0 (measured: an alias), so that no pnpm installs the key unseen
+      { value: 'npm:x.1', pnpm: [k(), rest('x.1')], npm: [rest('x.1')] },
+      { value: 'npm:vv1.2.3', pnpm: [k(), rest('vv1.2.3')], npm: [rest('vv1.2.3')] },
+      { value: 'npm:1.x.1', pnpm: [k('1.x.1'), rest('1.x.1')], npm: [rest('1.x.1')] },
+      { value: 'npm:1.0.0beta', pnpm: [k('1.0.0beta'), rest('1.0.0beta')], npm: [rest('1.0.0beta')] },
+      { value: 'npm:01.0.0', pnpm: [k('01.0.0'), rest('01.0.0')], npm: [rest('01.0.0')] },
+    ];
+
+    it.each(ROWS)('T-02 `pnpm` reads `$value` by AC-3', ({ value, pnpm }) => {
+      expect(bag(read('pnpm', value, KEY))).toEqual(bag(pnpm));
+    });
+
+    it.each(ROWS)('T-02 `npm` reads `$value` as today', ({ value, npm }) => {
+      expect(bag(read('npm', value, KEY))).toEqual(bag(npm));
+    });
+
+    it.each(['pnpm', 'npm'])('T-02 `%s` (AC-5): under a key that is no package name (`_k`), only the rest, as today', (manager) => {
+      expect(bag(read(manager, 'npm:1.0.0', '_k'))).toEqual(bag([rest('1.0.0')]));
+      expect(bag(read(manager, 'npm:real-zq', '_k'))).toEqual(bag([rest('real-zq')]));
+    });
+
+    it.each(['yarn', 'bun'])('T-02 `%s` (AC-5, question 2: A): under a key that is no package name (`_k`), the rest is still read', (manager) => {
+      expect(bag(read(manager, 'npm:real-zq', '_k'))).toEqual(bag([rest('real-zq')]));
+      expect(bag(read(manager, 'npm:1.0.0', '_k'))).toEqual(bag([rest('1.0.0')]));
+    });
+
+    it.each(['yarn', 'bun'])('T-02 `%s`: `npm: ^1.0.0` is the key at `^1.0.0` (the range is the rest without the spaces at its ends)', (manager) => {
+      expect(bag(read(manager, 'npm: ^1.0.0', KEY))).toEqual(bag([k('^1.0.0')]));
+    });
+
+    it.each(['pnpm', 'yarn', 'bun'])('T-02 `%s`: `npm:1`, k spaces and `1` is the key with no range, in a time linear in k (k = 50 000 and 8k)', (manager) => {
+      const SIZE = 50_000;
+      const at = new Map(
+        [SIZE, 8 * SIZE].map((size) => {
+          write(`k${String(size)}/package.json`, JSON.stringify({ name: 'app', version: '1.0.0', dependencies: { [KEY]: `npm:1${' '.repeat(size)}1` } }));
+          return [size, join(dir, `k${String(size)}`)];
+        }),
+      );
+      for (const [size, where] of at) expect({ size, packages: bag(named(readNpmManifest(where, manager))) }).toEqual({ size, packages: bag([k()]) });
+      expectLinear(`T-02 ${manager}: npm:1, k spaces, 1`, (size) => void readNpmManifest(at.get(size) ?? dir, manager), SIZE);
+    });
+  });
+
+  // ── T-03: `npm:` and a word that starts with a tilde (AC-4)
+
+  describe('T-03 `npm:~word`', () => {
+    const KEY = 'evil-pkg-zq';
+    const OTHERS = ['pnpm', 'yarn', 'bun'] as const;
+
+    it.each(['npm:~x', 'npm:~abc', 'npm:~'])('T-03 `%s` is the key with no range for pnpm, yarn and bun', (value) => {
+      expect(readBy(OTHERS, value, KEY)).toEqual(sameFor(OTHERS, [[KEY, undefined]]));
+    });
+
+    it.each(['npm:~x', 'npm:~abc', 'npm:~'])('T-03 `%s` is nothing for npm, as today', (value) => {
+      expect(bag(read('npm', value, KEY))).toEqual([]);
+    });
+
+    it.each(['npm:~/x', 'npm:~user-zq/x'])('T-03 `%s` stays a path: nothing, for the four managers', (value) => {
+      expect(readBy(MANAGERS, value, KEY)).toEqual(sameFor(MANAGERS, []));
+    });
+
+    it.each(['yarn', 'bun'])('T-03 `%s`: `npm:~1.2.3` is still the key at `~1.2.3`', (manager) => {
+      expect(bag(read(manager, 'npm:~1.2.3', KEY))).toEqual(bag([[KEY, '~1.2.3']]));
+    });
+  });
+
+  // ── T-06 (protection, green before and after): what this spec does not change
+
+  describe('T-06 what does not change', () => {
+    const KEY = 'evil-pkg-zq';
+    const k = (range?: string): Pair => [KEY, range];
+    const rest = (name: string): Pair => [name, undefined];
+    const YARN_BUN = ['yarn', 'bun'] as const;
+
+    it.each([
+      'file:x',
+      'link:x',
+      'workspace:*',
+      'workspace:^',
+      'portal:x',
+      'exec:x',
+      'jsr:^1',
+      './x',
+      '../x',
+      '/x',
+      '~/x',
+      'C:x',
+      'C:\\x',
+      '.',
+      '..',
+      'https://host.example/x.tgz',
+      'git+https://host.example/r.git',
+      'github:u/r',
+      'u/r',
+    ])('T-06 the value `%s` stays out of the list, for the four managers', (value) => {
+      expect(readBy(MANAGERS, value, KEY)).toEqual(sameFor(MANAGERS, []));
+    });
+
+    it.each([
+      ['^1.0.0', '^1.0.0'],
+      ['~1.0.0', '~1.0.0'],
+      ['1.0.0', '1.0.0'],
+      ['*', '*'],
+      ['next', 'next'],
+      ['latest', undefined],
+      ['foo:^1', undefined],
+    ] as const)('T-06 the value `%s` is still the key, for the four managers', (value, range) => {
+      expect(readBy(MANAGERS, value, KEY)).toEqual(sameFor(MANAGERS, [k(range)]));
+    });
+
+    it.each([
+      { value: 'npm:', want: [k()] },
+      { value: 'npm:x || 1.0.0', want: [k('x || 1.0.0')] },
+      { value: 'npm:X - 2', want: [k('X - 2')] },
+      { value: 'npm:X.X.X+b', want: [k()] },
+      { value: 'npm:x.x.x-beta', want: [k(), rest('x.x.x-beta')] },
+    ])('T-06 the fifth run, read with yarn and bun as today: `$value`', ({ value, want }) => {
+      expect(readBy(YARN_BUN, value, KEY)).toEqual(sameFor(YARN_BUN, want));
+    });
+
+    it.each([
+      { value: 'npm:', want: [] },
+      { value: 'npm: ^1.0.0', want: [] },
+      { value: 'npm:x || 1.0.0', want: [] },
+      { value: 'npm:X - 2', want: [] },
+      { value: 'npm:X.X.X+b', want: [] },
+      { value: 'npm:x.x.x-beta', want: [rest('x.x.x-beta')] },
+    ])('T-06 the fifth run, read with npm as today: `$value`', ({ value, want }) => {
+      expect(bag(read('npm', value, KEY))).toEqual(bag(want));
+    });
+
+    it.each([
+      { value: 'npm:x-foo', want: [k(), rest('x-foo')] },
+      { value: 'npm:x.js', want: [k(), rest('x.js')] },
+      { value: 'npm:X-files', want: [k(), rest('X-files')] },
+      { value: 'npm:v', want: [k(), rest('v')] },
+      { value: 'npm:vx', want: [k(), rest('vx')] },
+      { value: 'npm:x-real-zq', want: [k(), rest('x-real-zq')] },
+      { value: 'npm:1.2.3.4', want: [k('1.2.3.4'), rest('1.2.3.4')] },
+    ])('T-06 the sixth run, read with yarn and bun as today: `$value`', ({ value, want }) => {
+      expect(readBy(YARN_BUN, value, KEY)).toEqual(sameFor(YARN_BUN, want));
+    });
+
+    it.each(['x.x.x-beta', 'x-foo', 'x.js', 'X-files', 'v', 'vx', '1.2.3.4', 'x-real-zq'])(
+      'T-06 the sixth run, read with npm as today: `npm:%s` is only that name',
+      (name) => {
+        expect(bag(read('npm', `npm:${name}`, KEY))).toEqual(bag([rest(name)]));
+      },
+    );
+
+    it('T-06 the command line does not change: `parsePackageSpec` and `pnpm add key@npm:rest` read as today', () => {
+      expect(parsePackageSpec('npm', 'evil-pkg-zq@npm:^1.0.0', 'pnpm')).toEqual({ raw: 'evil-pkg-zq@npm:^1.0.0', reason: 'not a valid npm package name' });
+      expect(parsePackageSpec('npm', 'evil-pkg-zq@npm:1.0.0', 'pnpm')).toEqual({ ecosystem: 'npm', name: '1.0.0', raw: 'evil-pkg-zq@npm:1.0.0' });
+      expect(parsePackageSpec('npm', 'evil-pkg-zq@npm:vx', 'pnpm')).toEqual({ ecosystem: 'npm', name: 'vx', raw: 'evil-pkg-zq@npm:vx' });
+      expect(parsePackageSpec('npm', 'alias-zq@npm:real-zq', 'pnpm')).toEqual({ ecosystem: 'npm', name: 'real-zq', raw: 'alias-zq@npm:real-zq' });
+      for (const manager of MANAGERS) {
+        expect(parsePackageSpec('npm', 'evil-pkg-zq@npm:~x', manager), manager).toEqual({ raw: 'evil-pkg-zq@npm:~x', reason: 'local path — not looked up' });
+      }
+      const line = (command: string): Array<{ packages: Pair[]; skipped: string[] }> =>
+        parseInstallCommands(command).map((c) => ({ packages: c.packages.map((p): Pair => [p.name, p.range]), skipped: c.skipped.map((s) => s.raw) }));
+      expect(line('pnpm add evil-pkg-zq@npm:^1.0.0')).toEqual([{ packages: [], skipped: ['evil-pkg-zq@npm:^1.0.0'] }]);
+      expect(line('pnpm add evil-pkg-zq@npm:1.0.0')).toEqual([{ packages: [['1.0.0', undefined]], skipped: [] }]);
+      expect(line('pnpm add evil-pkg-zq@npm:vx')).toEqual([{ packages: [['vx', undefined]], skipped: [] }]);
+      expect(line('pnpm add evil-pkg-zq@npm:~x')).toEqual([{ packages: [], skipped: ['evil-pkg-zq@npm:~x'] }]);
+      expect(line('pnpm add alias-zq@npm:real-zq')).toEqual([{ packages: [['real-zq', undefined]], skipped: [] }]);
+    });
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — the reader of the `# /// script` block (PEP 723)
+
+describe('install-vet-inline-script-deps', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const NOT_IN_FORM = 'its `# /// script` block is not in the form the hook reads';
+  /** A `script` block: the lines of `body` (an empty one is a bare `#`), opened and closed. */
+  const block = (...body: string[]): string => ['# /// script', ...body.map((l) => (l === '' ? '#' : `# ${l}`)), '# ///'].join('\n') + '\n';
+  const deps = (list: string): string => block(`dependencies = [${list}]`);
+  /** The packages of a text as `[name, range]`, or the reason it was not read. */
+  const read = (text: string): { packages: Array<[string, string | undefined]> | string; toolUv: boolean; otherSource: boolean; incomplete?: string } => {
+    const r = inlineScriptBlock(text);
+    if (r.status === 'unreadable') return { packages: r.reason, toolUv: false, otherSource: false };
+    const out: { packages: Array<[string, string | undefined]> | string; toolUv: boolean; otherSource: boolean; incomplete?: string } = {
+      packages: named(r),
+      toolUv: r.toolUv === true,
+      otherSource: r.otherSource === true,
+    };
+    if (r.incomplete !== undefined) out.incomplete = r.incomplete;
+    return out;
+  };
+  const pairs = (text: string): Array<[string, string | undefined]> | string => read(text).packages;
+
+  describe('T-01 (a) what the reader accepts', () => {
+    it.each<[label: string, text: string, expected: Array<[string, string | undefined]>]>([
+      ['one line, with ranges', deps('"requests>=2,<3", "rich"'), [['requests', '>=2,<3'], ['rich', undefined]]],
+      ['several lines, a trailing comma, a quote of the other kind, a comment', block('dependencies = [', '  "requests",  # http', "  'rich',", ']'), [['requests', undefined], ['rich', undefined]]],
+      ['no blanks around the equal sign', block('dependencies=["a"]'), [['a', undefined]]],
+      ['blanks inside the brackets', deps(' "a" , "b" '), [['a', undefined], ['b', undefined]]],
+      ['a quoted key', block('"dependencies" = ["a"]', "'requires-python' = '>=3.11'"), [['a', undefined]]],
+      ['a \\u escape', deps('"dgprobe-zzq7731-\\u0065vil"'), [[EVIL, undefined]]],
+      ['a \\U escape', deps('"dgprobe-zzq7731-\\U00000065vil"'), [[EVIL, undefined]]],
+      ['an escape that makes an operator (the string is decoded before it is read)', deps('"requests\\u003e=2"'), [['requests', '>=2']]],
+      ['scalar keys it does not use', block('name = "x"', 'version = 1', 'flag = true', 'when = 2026-11-21', 'dependencies = ["a"]'), [['a', undefined]]],
+      ['requires-python, bare lines and a TOML comment', block('requires-python = ">=3.11"', '', '# a comment', 'dependencies = ["a"]', ''), [['a', undefined]]],
+      ['CRLF line ends', block('dependencies = ["a"]').split('\n').join('\r\n'), [['a', undefined]]],
+      ['a file with CR alone at every line end (EC-18)', block('dependencies = ["a"]').split('\n').join('\r'), [['a', undefined]]],
+      ['a BOM before the first line', `﻿${deps('"a"')}`, [['a', undefined]]],
+      ['after a shebang and a docstring', `#!/usr/bin/env python3\n"""doc"""\n${deps('"a"')}`, [['a', undefined]]],
+      ['after 2 000 lines of code', `${'x = 1\n'.repeat(2_000)}${deps('"a"')}`, [['a', undefined]]],
+      ['a closing line with blanks at the end', `# /// script\n# dependencies = ["a"]\n# ///  \t\nprint(1)\n`, [['a', undefined]]],
+      ['two closed blocks: both are read', `${deps('"a"')}x = 1\n${deps('"b"')}`, [['a', undefined], ['b', undefined]]],
+      ['a closed block and a second opening that never closes: the first one', `${deps('"a"')}x = 1\n# /// script\n# dependencies = ["b"]\n`, [['a', undefined]]],
+      ['[tool.ruff] and [project] after dependencies', block('dependencies = ["a"]', '[tool.ruff]', 'x = 1', '[project]', 'y = 2'), [['a', undefined]]],
+    ])('T-01 %s', (_label, text, expected) => {
+      expect(pairs(text)).toEqual(expected);
+    });
+
+    it('T-01 [tool.ruff] and [project] after dependencies leave `toolUv` out', () => {
+      expect(read(block('dependencies = ["a"]', '[tool.ruff]', '[project]')).toolUv).toBe(false);
+      expect(inlineScriptBlock(block('dependencies = ["a"]', '[tool.ruff]'))).not.toHaveProperty('toolUv');
+    });
+
+    it.each([
+      ['[tool.uv] with index-url', ['dependencies = ["a"]', '[tool.uv]', 'index-url = "x"']],
+      ['[[tool.uv.index]]', ['dependencies = ["a"]', '[[tool.uv.index]]', 'url = "x"']],
+      ['[ tool.uv ]', ['dependencies = ["a"]', '[ tool.uv ]']],
+      ['a dotted key tool.uv.index-url', ['dependencies = ["a"]', 'tool.uv.index-url = "x"']],
+      ['[tool] followed by uv.index-url', ['dependencies = ["a"]', '[tool]', 'uv.index-url = "x"']],
+      ['the decoded header ["tool".uv]', ['dependencies = ["a"]', '["tool".uv]']],
+      ['the decoded header [tool."uv"]', ['dependencies = ["a"]', '[tool."uv"]']],
+      ['the decoded key "tool".\'uv\'.index-url', ['dependencies = ["a"]', `"tool".'uv'.index-url = "x"`]],
+    ])('T-01 %s: the packages are read and `toolUv` is set', (_label, body) => {
+      expect(read(block(...body))).toMatchObject({ packages: [['a', undefined]], toolUv: true });
+    });
+
+    it('T-01 the escapes `\\\\` and `\\"` are decoded before the requirement is read: `a\\b` is a path (another source), `a"b` is no name', () => {
+      expect(read(deps('"a\\\\b"'))).toEqual({ packages: [], toolUv: false, otherSource: true });
+      expect(inlineScriptBlock(deps('"a\\"b"'))).toEqual({ status: 'unreadable', reason: NOT_IN_FORM });
+    });
+
+    it('T-01 no block, a `# /// pyproject` block and a block that never closes: ok, no package', () => {
+      expect(inlineScriptBlock('print(1)\n')).toMatchObject({ status: 'ok', packages: [] });
+      expect(inlineScriptBlock('# /// pyproject\n# dependencies = ["a"]\n# ///\n')).toMatchObject({ status: 'ok', packages: [] });
+      expect(inlineScriptBlock('# /// script\n# dependencies = ["a"]\nprint(1)\n')).toMatchObject({ status: 'ok', packages: [] });
+    });
+
+    it('T-01 a closed block followed by `#\\r# ///`: the reading of the uv names the package, the other one is not in the form (the union keeps both)', () => {
+      const text = `# /// script\n# dependencies = ["${EVIL}"]\n# ///\n#\r# ///\n`;
+      expect(read(text)).toMatchObject({ packages: [[EVIL, undefined]], incomplete: NOT_IN_FORM });
+    });
+
+    it('T-01 a lone CR inside the TOML: the reading that splits at CR reads the block, the other is not in the form (the union asks)', () => {
+      const text = `# /// script\n# name = "x"\r# y = 1\n# dependencies = ["a"]\n# ///\n`;
+      expect(read(text)).toMatchObject({ packages: [['a', undefined]], incomplete: NOT_IN_FORM });
+    });
+  });
+
+  describe('T-01 (b) the requirements of a block', () => {
+    const FIVE = ['"rich[jupyter]>=13"', `"httpx; python_version>'3.8'"`, '"pkg @ https://h.example/x.whl"', '"git+https://h.example/r.git"', '"./local"'];
+
+    it('T-01 the five forms give what `readRequirements` gives the same five lines of a file, and the URL, the VCS and the path set `otherSource`', () => {
+      write('r.txt', ['rich[jupyter]>=13', "httpx; python_version>'3.8'", 'pkg @ https://h.example/x.whl', 'git+https://h.example/r.git', './local'].join('\n'));
+      const fromFile = named(readRequirements(dir, ['r.txt'], 'uv')[0]);
+      expect(fromFile).toEqual([['rich', '>=13'], ['httpx', undefined]]);
+      expect(read(deps(FIVE.join(', ')))).toEqual({ packages: fromFile, toolUv: false, otherSource: true });
+    });
+
+    it('T-01 a block of `rich` alone has no `otherSource`', () => {
+      expect(inlineScriptBlock(deps('"rich"'))).not.toHaveProperty('otherSource');
+    });
+
+    it.each([
+      ['the PEP 508 form in parentheses', `${EVIL} (>=1.0)`],
+      ['a list of versions over 100 characters', `${EVIL}>=0.1,${Array.from({ length: 30 }, (_, i) => `!=0.${String(i + 2)}`).join(',')}`],
+      ['an old post-release `1.0-1`', `${EVIL}>1.0-1`],
+    ])('T-01 %s: only the name is vetted (P8 = B), where a requirements file skips the line', (_label, requirement) => {
+      write('r.txt', `${requirement}\n`);
+      expect(named(readRequirements(dir, ['r.txt'], 'uv')[0])).toEqual([]);
+      expect(pairs(deps(`"${requirement}"`))).toEqual([[EVIL, undefined]]);
+    });
+  });
+
+  describe('T-01 (c) what the reader refuses', () => {
+    it.each<[label: string, text: string]>([
+      ['dependencies as a string', block('dependencies = "requests"')],
+      ['an escape the TOML does not have', deps('"a\\x41"')],
+      ['dependencies as a multi-line string', block('dependencies = """a"""')],
+      ['an inline table in the list', deps('{name = "a"}')],
+      ['a list in the list', deps('["a"]')],
+      ['a multi-line string for another key', block('description = """x"""', 'dependencies = ["a"]')],
+      ['a list for another key', block('extra = ["x"]', 'dependencies = ["a"]')],
+      ['a second dependencies', block('dependencies = ["a"]', 'dependencies = ["b"]')],
+      ['a [dependencies] header', block('dependencies = ["a"]', '[dependencies]')],
+      ['a line `a b c`', block('a b c', 'dependencies = ["a"]')],
+      ['a requirement that names nothing', deps('"requests", "bad name"')],
+      ['a name over 214 characters', deps(`"${'a'.repeat(215)}"`)],
+      ['a control character in a string', deps('"a\\u0001b"')],
+      ['a string that never closes', block('dependencies = ["a]')],
+    ])('T-01 %s is unreadable, with the reason of the fixed list', (_label, text) => {
+      expect(inlineScriptBlock(text)).toEqual({ status: 'unreadable', reason: NOT_IN_FORM });
+      expect(MANIFEST_UNREADABLE_REASONS).toContain(NOT_IN_FORM);
+    });
+
+    it('T-01 the three new reasons are in the list of the reasons a manifest was not read', () => {
+      expect(MANIFEST_UNREADABLE_REASONS).toEqual(expect.arrayContaining([NOT_IN_FORM, 'vetting time budget exhausted', 'not a literal file name']));
+    });
+  });
+
+  describe('T-01 (d) the file', () => {
+    const readFile = (file: string) => readInlineScript(dir, file, 'uv', dir);
+
+    it('T-01 a file that is not there is absent', () => {
+      expect(readFile('nope.py')).toMatchObject({ status: 'absent', packages: [] });
+    });
+
+    it('T-01 a block of the file is read, under the name the command gave it', () => {
+      write('sub/x.py', deps(`"${EVIL}"`));
+      expect(readFile('sub/x.py')).toMatchObject({ file: 'sub/x.py', status: 'ok', packages: [{ name: EVIL }], names: [EVIL] });
+    });
+
+    it('T-01 a directory in its place is "not a regular file"', () => {
+      mkdirSync(join(dir, 'd.py'));
+      expect(readFile('d.py')).toMatchObject({ status: 'unreadable', reason: 'not a regular file' });
+    });
+
+    it('T-01 a valid block at the top of a file over `MAX_MANIFEST_BYTES` is "over 1 MiB"', () => {
+      write('big.py', `${deps(`"${EVIL}"`)}${'# pad\n'.repeat(Math.ceil(MAX_MANIFEST_BYTES / 6) + 10)}`);
+      expect(readFile('big.py')).toMatchObject({ status: 'unreadable', reason: 'over 1 MiB' });
+    });
+
+    it('T-01 a block outside the form is unreadable with the fixed reason, and nothing of the file in it', () => {
+      write('odd.py', block('dependencies = ["a"]', 'extra = ["secret-looking-text"]'));
+      const r = readFile('odd.py');
+      expect(r).toMatchObject({ status: 'unreadable', reason: NOT_IN_FORM });
+      expect(JSON.stringify(r)).not.toContain('secret-looking-text');
+    });
+
+    it('T-01 a network path is "on a network path", and answers at once', () => {
+      const t0 = Date.now();
+      const r = readFile('\\\\198.51.100.7\\share\\x.py');
+      expect(Date.now() - t0).toBeLessThan(hangBound(1000));
+      expect(r).toMatchObject({ status: 'unreadable', reason: 'on a network path' });
+    });
+
+    it.skipIf(process.platform === 'win32')('T-01 a FIFO in the place of the script does not hold the read (POSIX: Windows has no mkfifo)', () => {
+      execFileSync('mkfifo', [join(dir, 'fifo.py')]);
+      const t0 = Date.now();
+      const r = readFile('fifo.py');
+      expect(Date.now() - t0).toBeLessThan(hangBound(1000));
+      expect(r.status).toBe('unreadable');
+    });
+  });
+
+  describe('T-10 (a) the reader costs linear time', () => {
+    it.each<[label: string, base: number, make: (n: number) => string]>([
+      ['n lines of content in one block', 500, (n) => block(...Array.from({ length: n }, () => 'k = 1'))],
+      ['n `# /// script` lines that never close', 500, (n) => '# /// script\n'.repeat(n)],
+      ['one opening and n `# ///` lines', 500, (n) => `# /// script\n${'# ///\n'.repeat(n)}`],
+      ['a dependencies list of n strings on one line', 500, (n) => deps(Array.from({ length: n }, () => '"a"').join(', '))],
+      ['a string of n `\\u0065` escapes', 4_000, (n) => deps(`"${'\\u0065'.repeat(n)}"`)],
+      ['a string that never closes, of n `\\"`', 4_000, (n) => block(`dependencies = ["${'\\"'.repeat(n)}`)],
+      ['a string that never closes, of n `\\\\`', 4_000, (n) => block(`dependencies = ["${'\\\\'.repeat(n)}`)],
+    ])('T-10 %s: eight times the input, well under 22.6 times the time', (label, base, make) => {
+      expectLinear(`install-vet-inline-script-deps ${label}`, (n) => void inlineScriptBlock(make(n)), base);
+    });
+  });
+});
+
+// ───────────────── install-vet-with-requirements-directory-link — the requirements file read in a list of folders
+
+describe('install-vet-with-requirements-directory-link', () => {
+  const folders = (): [string, string] => {
+    const a = join(dir, 'a');
+    const b = join(dir, 'b');
+    for (const f of [a, b]) {
+      mkdirSync(f);
+      writeFileSync(join(f, 'r.txt'), 'requests\n');
+    }
+    return [a, b];
+  };
+
+  it('T-08 (a) a deadline that is past when the second folder is reached: the folder of a is read, the one of b is not, for the time budget; the deadline is asked once', () => {
+    const [a, b] = folders();
+    let asked = 0;
+    const reads = readRequirements([a, b], ['r.txt'], 'uv', () => {
+      asked += 1;
+      return true;
+    });
+    expect(reads.map((r) => ({ dir: r.dir, status: r.status, names: r.names, reason: r.reason }))).toEqual([
+      { dir: a, status: 'ok', names: ['requests'], reason: undefined },
+      { dir: b, status: 'unreadable', names: [], reason: 'vetting time budget exhausted' },
+    ]);
+    expect(asked).toBe(1);
+  });
+
+  it('T-08 (b) a deadline that never passes: both folders read ok, in the order of the list', () => {
+    const [a, b] = folders();
+    const reads = readRequirements([a, b], ['r.txt'], 'uv', () => false);
+    expect(reads.map((r) => ({ dir: r.dir, status: r.status, names: r.names }))).toEqual([
+      { dir: a, status: 'ok', names: ['requests'] },
+      { dir: b, status: 'ok', names: ['requests'] },
+    ]);
+  });
+
+  it('T-08 (c) the deadline is not asked before the first folder', () => {
+    const [a] = folders();
+    let asked = 0;
+    const reads = readRequirements([a], ['r.txt'], 'uv', () => {
+      asked += 1;
+      return true;
+    });
+    expect({ asked, status: reads[0]?.status }).toEqual({ asked: 0, status: 'ok' });
   });
 });

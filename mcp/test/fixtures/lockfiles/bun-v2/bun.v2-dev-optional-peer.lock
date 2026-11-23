@@ -1,0 +1,30 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-withpeer": "^1.0.0",
+      },
+      "devDependencies": {
+        "dgprobe-zzq7731-named": "^1.0.0",
+      },
+      "optionalDependencies": {
+        "dgprobe-zzq7731-native": "^1.0.0",
+      },
+      "peerDependencies": {
+        "dgprobe-zzq7731-dep": "^1.0.0",
+      },
+    },
+  },
+  "packages": {
+    "dgprobe-zzq7731-dep": ["dgprobe-zzq7731-dep@1.2.3", "https://packages.example.invalid/dgprobe-zzq7731-dep/-/dgprobe-zzq7731-dep-1.2.3.tgz", {}, "sha512-lokrIVJ48pak+WeDGDW8KooWj9Gkg5ii3hCBczhHlKAEv3dD6kmzjFQ8rgaK/rqMku6ra6LA5YDr/PDThHeNww=="],
+
+    "dgprobe-zzq7731-named": ["dgprobe-zzq7731-named@1.0.0", "https://packages.example.invalid/dgprobe-zzq7731-named/-/dgprobe-zzq7731-named-1.0.0.tgz", {}, "sha512-ldwMgJfYmWvMKyd+tG+WUi1YVs5PGdEJVzqSpbBKrI46fV/aTPj27+VVcv0whZWgKSJgR6G/ZgUVjI/k7/NwoQ=="],
+
+    "dgprobe-zzq7731-native": ["dgprobe-zzq7731-native@1.0.0", "https://packages.example.invalid/dgprobe-zzq7731-native/-/dgprobe-zzq7731-native-1.0.0.tgz", { "os": [ "linux", "darwin", ], "cpu": [ "x64", "arm64", ] }, "sha512-9zX8Hwwt+EKYv6UmqV7/WdlOaUcdGi3VnXMRa4rbwomFKHwpPJ1Iz4x7iHwJ2lpubKfUhsugj4en8QQBtp2QxA=="],
+
+    "dgprobe-zzq7731-withpeer": ["dgprobe-zzq7731-withpeer@1.0.0", "https://packages.example.invalid/dgprobe-zzq7731-withpeer/-/dgprobe-zzq7731-withpeer-1.0.0.tgz", { "peerDependencies": { "dgprobe-zzq7731-dep": "^1.0.0", "dgprobe-zzq7731-named": "^1.0.0" }, "optionalPeers": ["dgprobe-zzq7731-named"] }, "sha512-QKp0UMxPwTifbhqCU1OimcuzAj9N+QCg0KUsKvlobHjOe3D60dL+24ylVhOWwK8rxrnZYqbshli607pxytvQSw=="],
+  }
+}

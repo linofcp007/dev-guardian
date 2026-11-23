@@ -11,7 +11,7 @@
  * No imports: the hook loads it on every Bash and PowerShell call.
  */
 
-const INSTALLER_WORD = /(?:^|[^\w.-])(?:npm|pnpm|pnpx|npx|yarn|yarnpkg|corepack|bunx?|pipx?|pip\d[\d.]*|uvx?|poetry|composer|dotnet)(?:$|[^\w-])/i;
+const INSTALLER_WORD = /(?:^|[^\w.-])(?:npm|pnpm|pnpx|npx|yarn|yarnpkg|corepack|bunx?|pipx?|pip\d[\d.]*|uvx?|poetry|composer|dotnet|dnx)(?:$|[^\w-])/i;
 
 export function mayInstall(command: string): boolean {
   const unquoted = command.replace(/['"`]/g, '');

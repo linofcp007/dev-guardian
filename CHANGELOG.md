@@ -8,6 +8,387 @@ version bump.
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-11-23
+
+The install hook reads much more of what the Python and .NET tools are told to fetch: the inline dependencies of the
+script `uv run` and `pipx run` run, `uv run --with`, the file of `uv run --with-requirements` (in every folder where the
+uv can open it), the Python forms that fetch a package and build it, and the .NET forms that fetch a package by name.
+`uv run` now says the package index the project gives it. The hook reads the registry files the bun obeys, the
+`bun.lock` that bun 1.4.4 writes, `catalog:`, `patch:` and `npm:` dependencies, npm's groups of short flags, and a
+folder written with Windows 8.3 short names. A project folder on a share that stops answering no longer lets a
+malicious name through as "not verified". The dev-guardian tools no longer write the credentials of a URL they read
+from a file, and `llm_scan` says what the server did.
+
+### Upgrading from 3.15.0
+
+- **`npx`, `bunx` and `npm exec` in a folder on a network path.** The installed copy is no longer looked for there, so a plain
+  name (no version, no alias, no `--prefix`) the registry does not have, which nothing explains, is no longer refused on a share that
+  answers and has no copy: it warns,
+  with the reason "(not denied: it runs in a folder on a network path, where an installed copy was not looked for)". A
+  malicious name is still refused, and so is a name with a version, an alias or `--prefix`, as before.
+- **The default-registry line in a folder on a network path.** The project's `.npmrc` and the other registry files are not
+  read there: the line "the project's .npmrc sets the default registry (…)" is replaced by "dev-guardian: the project's registry
+  settings were not read (on a network path) — if they set the default registry, what it serves was not vetted."
+- **Files the install hook now reads.** The script of `uv run <x>.py` / `.pyw` (any letter case), `uv run --script <x>`,
+  `-s <x>` (also in a group, `-qs`), `--gui-script <x>`, also `python -m uv run`, with `--directory` (before or after `run`)
+  or `UV_WORKING_DIR=` in front (also behind `env`), also after a `cd` through a local link; the file of `pipx run --path
+  <x>`; the word `pipx run <x>` (and the one after a flag the hook does not know, `pipx run --backend pip <x>`) when a
+  regular file `<x>` is in the directory; the file of `uv run --with-requirements` and the files it includes; a `.py` /
+  `.pyw` file of `uv pip install -r`. Up to 1 MiB each, eight scripts a call, each once, never a network path, never past
+  the deadline. Each word of `pipx run` that may be the app costs one question to the disk (50 at most a call), and each
+  `cd` through a link before a script costs a walk of the links.
+- **Names that now leave the machine** (to the public registry and to OSV): the inline dependencies and `uv run --with`
+  names above, and the names of a `--with-requirements` file; a requirement with a range the hook does not read, by its name
+  alone. **Names that no longer leave:** the word after the script of `pipx run --path <x> <arg>`; `pipx run <x>` with a file
+  `<x>` goes to the malware check only.
+- **What can now be refused:** only a package OSV lists as malicious, in a block the hook reads, in `uv run --with` or in a
+  `--with-requirements` file. No form refuses a name the registry does not have (`--with` is not on the confident-shape
+  allowlist).
+- **What is now asked:** a script that runs and was not read, a block with `[tool.uv]`, a requirement that is a URL, a path
+  or a VCS, more than eight scripts, and more than 150 packages of manifests (the blocks count) or 50 named.
+- **What is no longer refused:** `pipx run <x>` with a file `<x>` in the directory when the registry does not have `<x>` (a
+  malicious `<x>` is still refused); `pipx run <x>` when the directory the hook cannot tell (it warns); a malicious word
+  after the script of `pipx run --path <x>` (the pipx never asks the index for it); and, when the link walk refuses the
+  entry `<x>` (a link to the network, more than 32 links), the refusal by a missing name becomes the question.
+- **Warnings that now come out:** for the inline blocks and the `--with-requirements` files, a name the registry does not
+  have, a typosquat, the lines "was not read (…)", `[tool.uv]`, a requirement that is a URL, a path or a VCS, a `source`
+  before a script, the scripts past the eighth, and the count of the missing names after the first five.
+- **Warnings that no longer come out:** for `pipx run <x>` with a file `<x>` in the directory, the missing name, the
+  typosquat, a version under 72 h, the install scripts, an exact version nobody published, the known vulnerabilities and
+  "could not vet"; and everything said of the word after the script of `pipx run --path <x> <arg>`.
+- **The .NET forms that fetch a package by name (decisions 1 to 5 of the requirements, answered 2026-11-21).**
+  *What is now refused* (a package the sources do not have, one plain statement, nothing else on the line): only the 47
+  forms measured with SDK 10.0.404 — the run command (`dnx`, `dotnet dnx`, `dotnet tool exec` / `execute`: the id, with a
+  version after `@` or `--version`, after `--yes`, with arguments for the tool, `dnx -- <id>`, `dnx <id> -- <args>`), `dotnet
+  tool update` (global, by path and local), `dotnet new install <id>… --force` (`::` or `@` for a version) and `dotnet package
+  download <id>…`, word by word; the places the measurement filled with one value are widened as the owner approved. A
+  package OSV lists as malicious is refused in every form. *What now only warns, with the reason:* every other line of those
+  forms (a flag, a place or a mix of flags not measured, more than one package, a version text that is not exact), `dotnet new
+  install` without `--force` (measured to contact an https source, not to ask it for the package), `dotnet package update <name>`
+  (an update fetches a package only when it is installed), and the three versions the SDK refuses before any request
+  (`dnx <id>@latest`, `dotnet package download <id>@1.* --allow-insecure-connections`, `dotnet new install <id>::latest
+  --force`), which are looked up in case another SDK accepts them. *The new disk question:* for each word of `dotnet new install`
+  (50 at most a command) the hook asks `lstat` whether an entry of that name is in the command's folder — the installer reads a
+  path then, and the word is not looked up; never on a network folder, never past the deadline, and a failure of `lstat` is said.
+  *Names that now leave the machine* (to nuget.org and to OSV): the identifiers of these forms.
+- **Registry files the install hook now reads or no longer counts (install-vet-registry-files-unread).** *Files now read, for a bun
+  command that is not global:* the `bunfig.toml` forms `install.registry = …` before any header, `[install.registry]` with `url`,
+  and `[install.scopes."@s"]` (also `'@s'`, `"s"` and `s`) with `url`; and the `.env` files of the root of bun, in one folder only
+  (`.env.<mode>.local`, `.env.local` except in `test`, `.env.<mode>`, `.env`; the mode is `NODE_ENV` of the hook's own environment
+  when it is `development` or `test`, `production` otherwise), for `BUN_CONFIG_REGISTRY`, `NPM_CONFIG_REGISTRY` and
+  `npm_config_registry` only, by a closed grammar, up to 1 MiB each, never a network path, never above the repository root. Not
+  for a global install, `--env-file` or `--no-env-file`, `bunx`, `bun x`, `bun create` and `bun c`. *Files no longer counted (a name
+  the index does not have is refused, as without the file):* the 21 measured pairs in which the manager does not obey the file —
+  `uv add` with the `[pip]` table of `uv.toml`; `pipx install` / `pipx run` with the `uv.toml` or `[tool.uv] index-url`;
+  `pipx install` with `[[tool.uv.index]]` or a primary poetry source; `poetry add` with an `explicit` source, the `uv.toml`,
+  `[tool.uv] index-url` or `[[tool.uv.index]]` with `default = true`; `pip install` with the files of the uv or a primary poetry
+  source; `uv add` / `uv pip install` with a primary poetry source; a global `bun add` with the project's `registry=` or
+  `[install] registry`. `[tool.uv.pip] index-url` now explains a missing name for `uv pip install` only. *What is now said:* the
+  line of the project's default registry for the new `bunfig.toml` forms and the `.env` files (the host only, never credentials;
+  a value the reader cannot judge gives the line without a host and explains nothing). *What leaves the machine:* nothing new —
+  the `.env` files are read for those three variables and nothing else of them is kept, said or sent; a `[install.scopes."@s"]`
+  subtable takes no name out of the checks. *What can now be refused:* a malicious name the public registry took down is refused
+  when only a file of the project explains the missing name (the old files and the new ones, npm and PyPI); a registry of the
+  user, of the machine, of the hook's environment or of the command line keeps the warning, and so does a workspace package.
+- **A finding `agent-audit-http-remote` that appears once as new (deps-tools-host-other-texts).** An `.mcp.json` server over plain
+  HTTP whose URL has a user part, or an `@` that is not one, is now said without them, and its snippet ends with `(server '<name>')`:
+  the finding's identity (its snippet is part of its fingerprint) changes once, so it shows as a new finding and the old one as
+  fixed. Suppress the new one with `suppress_finding`, and never run `baseline update` just for these: it accepts every finding.
+  What the database, `baseline.json` and its git history already hold stays as it was written.
+- **A folder written with short (8.3) names (install-vet-path-forms; Windows only, nothing changes elsewhere).** The install hook
+  now reads the `package.json`, the lockfile, the requirements files and the project's registry files of a folder written with
+  8.3 names or in other letter case, as it reads the long spelling: for a session folder or a project folder written
+  `PROJEC~1`, and for a `cd`, `pushd` or `Set-Location` to such a folder (absolute, relative or MSYS). A folder counts as the same
+  one only by a closed grammar: from a local drive root, at most 64 components, each a directory reached through no link
+  (symbolic link or junction), written as the name the disk has in other case or as its 8.3 name. A trailing dot or space, a
+  stream suffix, a device path, a `subst` drive for another folder, a link, or a network path keeps today's answer. *What can
+  now be refused:* only a package OSV lists as malicious, in a manifest or lockfile that used to go unread. *What can now be
+  warned or asked:* the lines of those files (a name the registry does not have, a typosquat, the project's default registry),
+  and the packages a manifest names now leave the machine (to the public registry and OSV) as they do with the long spelling.
+  *Files now read:* `package.json`, the lockfile, the requirements files and the registry files of the folder, never above the
+  project or repository root, and never a home directory or a folder above one. *Launchers:* after a `cd` to the short spelling
+  a launcher installed in that folder (`npx <tool>`, `bunx`) is no longer looked up, as after the long one. *`dotnet new
+  install`:* after a `cd` to the short spelling the word is now looked for in the folder, as in the long spelling: a folder or a
+  file of that name no longer sends the word to NuGet, and an id that is not there is vetted without the reason "the folder is
+  not known" (it warns, as with the long spelling: a line with a `cd` is never confident). *New disk questions:* `lstat` and the
+  real path of each component, once per folder in a call, never for a network path. On a mapped drive letter, a `subst` to a share
+  or a DFS point the text cannot tell from a local folder, so those questions go to the network, as today's `exists` and `lstat`
+  of the session folder and of a `cd` already do. *What is unchanged:* `--prefix`, `-C`, `--dir` and `--cwd`, and a `cd` that may
+  not have run, still say "package.json was not read (where the command runs could not be determined)". *Measured and inferred:*
+  the forms of npm and pnpm (the session in a short subfolder, a `cd` to the short spelling in Git Bash and in PowerShell) and
+  `npx` installed in the project were measured with npm 11.20.0 and pnpm 10.33.2: the manager installs the manifest of the
+  project, with its lockfile, from the short spelling, and obeys the project's `.npmrc`. The forms of Yarn and bun, `bunx`
+  included, are inferred (the same folder on the disk): neither was installed on the machine of the measurement.
+
+### Security
+
+- **`uv run` says the package index the project gives it, and a missing name is no longer explained by a file the uv does not obey.** The install hook says, in one line (three at most, and one that counts the rest), that a file of the project sets the package index for a `uv run` of a script, `--with` or `--with-requirements`: the one file the uv reads, found from the folder of the script up to the repository root (the first `uv.toml`, else the first `pyproject.toml` with `[tool.uv]`), by the `index-url`, `extra-index-url`, `find-links`, `[[index]]` and `[[tool.uv.index]]` it obeys, silenced by what the uv was measured to ignore it for (`--no-config`, `--config-file`, `UV_NO_CONFIG`, `UV_CONFIG_FILE`, a replaced default index). No verdict changes and the line is never in a refusal. The reason a missing name of `uv run` and of a script of `pipx run` gives no longer names a file the manager does not obey (`[pip]`, `[tool.uv.pip]`, poetry, pdm; for a `pipx run` script, any project file), and a withdrawn malicious name is again refused with "does not exist on PyPI". Measured with uv 0.13.8 and pipx 1.18.16 in a Linux container without network. A `uv.toml` above the repository root is not read.
+- **The file of `uv run --with-requirements` is read in every folder where the uv can open it.** After a `..` that follows a link (`--directory tools/..`, `UV_WORKING_DIR=tools/..`, `cd tools && uv run --directory ..`) the hook read only the folder as written and said nothing of the other one, so a malicious package in the file of the other folder was never looked up; it now reads both, refuses a malicious one and names the file by its path from the session's folder (`sub/r.txt`). A `cd` through a local link before `uv run --with-requirements` is followed as it is for a script (it left the file unread with "where the command runs could not be determined"), and a folder that cannot be searched says why in the line ("on a network path", "could not be read", "vetting time budget exhausted"), without a question. A file that is not read in one folder (not a regular file, over 1 MiB) is said in the same line, and when the file of the other folder is refused the line is inside the text of the refusal, which is all the hook sends. The eight files and the three levels of includes count for the command, not for each folder. A `..` inside the file's own word (`tools/../r.txt`, `pip install -r tools/../r.txt`) is still resolved as text.
+
+- **On Windows, an install in a folder written with 8.3 short names is no longer skipped by the install hook.** The hook compared
+  the session folder, the project folder and the target of a `cd` as text, so `PROJEC~1` and `project with a long name` were two
+  folders: a `cd` to the short spelling made the hook say "package.json was not read", and a session opened in a short
+  subfolder read no manifest above it (a file the project, or a hostile one, can make the model `cd` into). It now reads the
+  manifest, the lockfile and the requirements files of the folder as it does for the long spelling, and refuses a package OSV
+  lists as malicious. Not closed: the same folder reached through a link or a junction (`install-vet-junction-path-forms`).
+- **The install hook reads the registry files the bun obeys, and only those, and no project file can turn the refusal of a
+  malicious name into a warning for npm and PyPI.** Measured with bun 1.4.4, uv 0.13.8, poetry 2.5.1, pipx 1.18.16 and pip 23.0.1 in a Linux
+  container without network (2026-11-20 and 2026-11-21): a `bunfig.toml` with `[install.registry]`, `install.registry = …` or
+  `[install.scopes."@s"]`, and a `.env` with `BUN_CONFIG_REGISTRY` or `NPM_CONFIG_REGISTRY`, change the registry bun asks and the
+  hook did not read them (it refused a name the project's registry serves, or said nothing); and in 21 pairs the manager does
+  not obey a file the hook counted, so a file the manager ignores took the refusal of a missing name away. The hook now reads
+  the first, stops counting the second, and refuses a withdrawn malicious name that only a project file explains, for npm and PyPI. *Known
+  limits, not closed:* a `repositories` entry of a project `composer.json` and a project `nuget.config` still turn that refusal into a warning for Composer and NuGet; the `NODE_ENV` of the shell the command runs in is not the hook's; the `env` of a project's
+  `.claude/settings.json` reaches the hook's environment and is counted as the user's own, so a registry variable set there is
+  taken as the user's word; the line of a `bunfig.toml` or `.npmrc` that loses to the `.env` is still said. Project-set
+  environment variables are not recognised as the project's.
+- **The install hook reads the .NET forms that fetch a package by name — `dnx`, `dotnet tool exec` / `execute` / `update`,
+  `dotnet new install`, `dotnet package download` and `dotnet package update` — and no longer lets them pass silently.** Against
+  a substitute NuGet source that logged each request (SDK 10.0.404, Windows 11, 2026-11-20 and 2026-11-21), `dnx <id>`,
+  `dotnet dnx`, `dotnet tool exec` / `execute`, `dotnet tool update`, `dotnet new install <id> --force` and `dotnet package
+  download <id>` asked the source for the package exactly as `dotnet tool install <id>` does, while the hook said nothing: the
+  word `dnx` did not even pass its gate, and every other verb was no command it read. They are read now, each with the flags of
+  its own verb (`-v` is the verbosity in all of them), and a missing name is refused for the 47 forms measured; the deny names
+  the flag of its own form (`--add-source <url>` for `dotnet new install`, which has no `--source`, else `--source <url>`) beside the
+  `GUARDIAN_PKG_VET=0` prefix. What stays unread is in the known limit `dotnet-other-install-forms`.
+
+- **The install hook reads the inline dependencies of the script `uv run` and `pipx run` run, and `uv run --with`.** A
+  Python file can carry a `# /// script` block (PEP 723) whose `dependencies` the uv, and the pipx, install when they run it:
+  in a Linux container without network, with an index that logged each request (2026-11-20 and 2026-11-21), `uv run
+  script.py`, `uv run --script`, `-s`, `--gui-script`, `python -m uv run`, `uv run --directory`, `pipx run script.py` and `pipx
+  run --path script.py` asked the index for the packages of the block, `uv run --with P` for `P`, and `uv run
+  --with-requirements` and `uv pip install -r x.py` for what the file names, while the hook said nothing — `uv run` was
+  no command it read, and `pipx run script.py` looked the word `script.py` up as a package. They are read now: each
+  requirement of a block is vetted as the dependencies of a manifest are (a malicious package denies, naming the file; a
+  name the registry does not have or a typosquat warns; the packages count toward the 150 of manifests), `--with` and `-w`
+  as packages named on the line, a `.py` / `.pyw` file of `--with-requirements` or `uv pip install -r` as a script, any other
+  file of `--with-requirements` as a requirements file. A script the hook cannot read — a block outside the grammar it
+  reads, a file over 1 MiB or that is not a regular file, more than eight scripts, a link to the network or a chain of
+  more than 32 links — is said in one line and **the user is asked** before the install; so is a block with `[tool.uv]`
+  (it may choose its own index) or a requirement that is a URL, a path or a VCS. `pipx run <file>` with a file of that
+  name in the directory is no longer refused for a name the index does not have: the pipx runs the file. What stays is in
+  the known limit `install-inline-script-deps`.
+
+- **The install hook reads the Python forms that fetch a package and build it, and no longer lets them pass silently.**
+  `pip download <package>`, `pip wheel <package>`, `pipx inject`, `pipx upgrade`, `pipx reinstall`, `pipx runpip`,
+  `pipx upgrade-all` and `uv tool upgrade` were not read: a Linux container without network, with an index that
+  logged each request (2026-11-20 and 2026-11-21), showed the same requests as `pip install <package>` — and, for a
+  source distribution, its build backend or `setup.py` running — while the hook said nothing. They are read now, each
+  with the flags of its own verb (the parsers of pip 23.0.1, pipx and uv, flag by flag): `-d` / `--dest` and `-w` /
+  `--wheel-dir` are folders and never packages, the index flags are registries, the environment word of `pipx inject`
+  and `pipx runpip` is never looked up, and `pipx run --with` is a package flag and no longer an unknown flag. A
+  package named in a package flag with extras and a comma (`uvx --with "P[x,y]"`) was split in the middle of its
+  extras and so never looked up; it is split now only at the commas outside `[…]`.
+- **What changes for someone who updates.**
+  - *Forms that now refuse a package missing from the registry:* only the 32 forms measured — `pip download P`,
+    `pip wheel P`, `pip download --no-deps P`, `pip install --dry-run P`, `pipx inject <env> P`, `pipx upgrade
+    --install P`, `pipx runpip <env> install P`, `pipx run --spec P cmd`, `pipx run --with D P`, `uvx --from P cmd`,
+    `uvx --with P tool`, `uv tool install --with P tool` and the others of the known limit `install-python-tool-forms`,
+    word by word with nothing after the last one. The deny names `--index-url <url>` (pip, pipx) or `--index <url>`
+    (uv) and `GUARDIAN_PKG_VET=0`.
+  - *New warnings:* every other spelling or variation of those verbs is read and only warns, with the reason `this form
+    of '<verb>' was not measured` (`pip3 download`, `python3 -m pip download`, `pipx inject --force`, …); `pipx
+    upgrade-all` and `uv tool upgrade --all` say that every tool is updated and none was vetted, offline too.
+  - *`-r` files now read:* `pip download -r`, `pip wheel -r`, `pipx inject -r` and `pipx runpip <env> … -r` are
+    read as the file of `pip install -r`; a missing name in them warns and never denies.
+  - *Names that now leave the machine:* the packages of those forms; the names given to `pipx upgrade <name>`, `pipx
+    reinstall <name>` and `uv tool upgrade <name>` (an environment name, which with `--suffix` is not the package's);
+    the value of `pipx inject --include-resources-from`; and a word that may name a pipx environment after a flag the
+    hook does not know.
+  - *Malicious packages:* one that OSV lists is denied in every one of these forms, measured or not, and a name given to
+    an update is denied for it too; a name an update is given that the index does not have only warns.
+- **A malicious package pinned in the `bun.lock` that bun 1.4.4 writes is denied.** bun 1.4.4 writes
+  `"lockfileVersion": 2`, and the install hook read a `bun.lock` of label 0 or 1 only: for each of 24 lockfiles bun
+  1.4.4 wrote (a plain dependency, a scope, dev, optional and peer dependencies, an alias, nested copies, workspaces,
+  local folders and tarballs, a URL tarball, `overrides`, a catalog, a patch, a link, git; a Linux container without
+  network, 2026-11-20), `bun install` got "bun.lock was not read (its lockfileVersion is not 0 or 1)", and no pinned
+  version, transitive ones included, went to OSV. Labels 0, 1, 2 and 3 are now read with one grammar — bun 1.4.4
+  uses a file labelled 3 as one labelled 2, and says it supports "lockfile versions up to 3" — and 4 or more, a
+  number in quotes, `2.0` and no number are still said as not read (bun throws such a file away; `2.0` it probably
+  reads as 2, which was not measured). A local tarball that bun writes without `file:` (`vendor/x-1.0.0.tgz`) is
+  counted as the project's own, no longer as an entry not recognised.
+- **A registry line of a `bun.lock` that is not written as bun writes one is said, and its pair asked about — under
+  labels 0 and 1 too.** The reader took such a line loosely: without the space after its first comma it lost the
+  entry's origin (the pair went to OSV as from the default registry, and nothing said the other host); with a path
+  in its second element (`"./x"`) it counted the entry as the project's own and asked nothing; with a git URL there
+  (`git+https://…`, or an http(s) URL ending in `.git` or of `codeload.github.com`) it did not ask about the pair. A
+  registry line must now be exactly `["name@version", "" or an http(s) URL that is not a git one, {…},
+  "<integrity>"],`, with `, ` between the elements. Any other is counted in "N entries of bun.lock were not
+  recognised — not vetted.", a line a lockfile of label 0 or 1 now gets where it got none, and its pair goes to OSV
+  from the origin its second element names: the host is still said for git, and a path or a string that cannot be
+  read is another source said without a host. No line the reader took before is refused, and none that
+  gave a pair, the pair its URL fetches or a host loses it. The pin of a scope that a `.npmrc` gives a registry of
+  its own, on a line that names the public registry's URL without spaces, now goes to OSV, as the same line with
+  spaces already did.
+- **A `bun.lock` that is not written as bun writes it no longer spares the direct dependencies their lookup.** A
+  lockfile covers a direct dependency when it pins the range the manifest records, and the hook then does not ask
+  the registry about it; but bun 1.4.4 throws away a file with a registry entry that has no integrity (and, under
+  labels 2 and 3, one whose integrity is malformed or md5, or empty for a tarball outside the configured registry)
+  and resolves everything again from the manifest (measured). A `bun.lock` now covers only when every line is as bun
+  writes it: no entry left unrecognised, every entry line closed by `],`, every other entry line one of
+  `["name@spec"]`, `["name@spec", {…}]` and `["name@spec", {…}, "<text>"]`, no registry version that ends in
+  `.tgz`, `.tar.gz` or `.tar`, and under label 2 a well-formed sha512 integrity on every registry line; a file of
+  label 3, which no bun was seen to write, never covers. Its pins still go to OSV. What this costs: each direct
+  dependency of such a file is looked up at the registry by name, as with no lockfile — a `MAL-` advisory on the
+  version its range resolves to today denies the command even when bun installs the pinned one (a file of label 2
+  with an empty integrity for a package of the default registry, which bun 1.4.4 keeps), a private package gets the
+  warning "not found on the public registry" at every install, and past 150 direct dependencies the user is asked.
+  Not measured: label 0, a file of label 1 written by an older bun, a well-formed sha1, sha256 or sha384 integrity,
+  `2.0`, and a local tarball of one path segment (`x.tgz`, counted as the project's own); what the rule does not see
+  is in the known limit `manifest-lockfile-and-transitive`.
+- **A malicious dependency written as `catalog:`, `patch:` or `npm:<rest>` in a `package.json` is denied.** The
+  install hook dropped a `catalog:` or `patch:` value unvetted, read `npm:<rest>` under pnpm as an alias, and dropped
+  `npm:~x`, while the managers fetch a package from the registry for each (measured in a Linux container without
+  network, 2026-11-20 and 21: pnpm 11.24, Yarn 4.18 and bun 1.4 fetch the key of `"x": "catalog:"`; Yarn 3.8 and 4.18
+  fetch the package the source of a `patch:` names, and bun the key; pnpm 11.24 fetches the key for `npm:^1.0.0`,
+  `npm:1.0.0`, `npm:*`, `npm:~1.2.3`, `npm:>=1.0.0 <2` and `npm:x || 1.0.0`; pnpm, Yarn and bun fetch the key for
+  `npm:~x`). A `package.json` value is now read as the managers read it: `catalog:` and `catalog:<name>` are the key,
+  with no range; `patch:<source>#…` is the key, with no range, and the package the source names (decoded, a nested
+  `patch:` followed to the innermost one, an alias's real package, the part after the name its range and never a
+  second name), one entry when the source names the key; under pnpm, `npm:<rest>` with no `@range` of its own is the
+  key when `<rest>` is no package name, the key and `<rest>` when `<rest>` is a name shaped like a version (`1.0.0`,
+  `1.x`, `v1.2.3`), and still the alias for any other name (`latest`, `real`); under pnpm, Yarn and bun, `npm:~x`,
+  `npm:~abc` and `npm:~` are the key, and the key's range of `npm:<rest>` is read without the spaces around it
+  (`"npm: ^1.0.0"` is the key at `^1.0.0`); and a key that is no valid name drops only the key — `"_k": "npm:real"`
+  now looks up `real` under Yarn and bun too. For npm, `npm:<rest>` is still the alias; the command line does not
+  change. These names now go to the public registry and to OSV at every install of the manifest, with any manager —
+  `npm install` too, which takes neither `catalog:` nor `patch:` —; a scope that the npm configuration gives a
+  registry of its own still stays, and so does the name in a `patch:` source that is not of the registry. What this
+  costs: a name the registry does not have is a warning at every install and a malicious one denies; more names
+  count towards the 150 of a manifest, past which the user is asked; under pnpm the key is also looked up for five
+  names pnpm 11.24 reads as an alias (`x.1`, `1.x.1`, `1.0.0beta`, `01.0.0`, `vv1.2.3`) and for a `<rest>` such as
+  `=foo`; and `"x": "npm:1.0.0"` leaves the "could not vet" line for `1.0.0` at every `pnpm install`, as under Yarn
+  and bun. What stays (the known limits `manifest-value-not-a-range`, `manifest-not-from-a-registry` and
+  `yarn-bun-npm-protocol`): the catalog is not read — an entry that is an alias, a URL or a repository is not followed (with `x: npm:other@1.0.0`
+  the managers install `other` and the hook looks up `x`), and the newest version of the key is checked, not the
+  catalog's; `workspace:`, `portal:`, `exec:` and `jsr:` under Yarn 1 when the registry has a dist-tag of that exact
+  text; the command-line twins `pnpm add x@npm:^1.0.0` and `<manager> add x@npm:~x`; a `patch:` source that names no
+  registry package (git, a URL, `file:`, `workspace:`, a path, an invalid name, an alias whose range is one of
+  those), which leaves only the key; and a source name escaped twice (`%2564…`), which the hook decodes to the end
+  and looks up where Yarn decodes once.
+
+- **Credentials of a URL the dev-guardian tools read from a file are no longer written (deps-tools-host-other-texts).** A URL or a
+  network path read from a project file, an `.mcp.json`, the repository's git configuration, or the error line of a program is now
+  said as a URL parser reads it: without its user part (`https://U:T@host/x` is `https://host/x`); with no host at all when an
+  `@` stands outside the user part, or in what a reader cut off at a comment, a `;`, an `=`, a space, a quote, a comma or a
+  size limit (`scheme://(host not shown)`, `\(host not shown)` for a network path); `(unparseable URL)` for an `@` that is no
+  URL. A text with no `@`, a loose version, an `npm:` alias, the scp form `git@host:path` and a URL whose only `@` is the scope
+  of its own package or an empty user part are said as before. It reaches: the `.npmrc` registry, the key of an `overrides` /
+  `resolutions` entry and the `yarn.lock` line of the npm network-path refusal, the pip requirement, option, include and
+  comment cuts, `setup.cfg` and `pyproject.toml`, the .NET network-path reference and the restore error line (also in
+  `scan_sast`), the URL version a lock gives a package in `deps_update_plan` (`unplanned`, a plan step and the label of a
+  `create_fix_pr` candidate), the push refusal of `create_fix_pr` (the remote before and after the `insteadOf`, its key), the
+  git keys with a URL as their subsection (`http.<url>.extraheader`, `credential.<url>.helper`) in `create_fix_pr`,
+  `scan_secrets` and `review_pr`, the first error line of a program in the `create_fix_pr` answers (`stderr_head`, the
+  worktree reason, the push failure), the progress messages of a scan (a program's stderr line, its URLs said before the cut at
+  200 characters), `audit_mcp_tools` (an unreadable URL is no longer quoted; the host and port are not said when it is not the
+  host) and `audit_agent_config`. The `onLog` of a child process now receives whole lines (a line the pipe cut in two reaches
+  it as one; a rest of more than 4 096 characters goes out as a line). An OpenAPI `servers[0].url` with an `@` outside its user
+  part gives its routes an unknown base path (`path_partial: true`) and no piece of the URL. **The host is no longer said** for a
+  URL whose credential held an unencoded separator (`https://T/K@H/` was said `https://T`, a piece of the credential), or whose
+  cut-off part held an `@` (EC-7: `https://T;K@H/x`, `# name@corp` after a requirement). **What was written before holds the
+  credentials of that time** — the database, `.guardian/reports/`, stored maps, a `baseline.json` and its git history, session
+  logs: rotate every credential written in a URL of a project file, an `.mcp.json`, the repository's git configuration, or of
+  your own configuration whose sources an error or progress line may have repeated (`NuGet.Config`, `~/.npmrc`, `pip.conf`).
+
+### Fixed
+
+- **A malicious name could pass as "not verified" when the project folder was on a share that stopped answering.** The install
+  hook asked the disk for a `.git`, for the installed copy of an `npx` / `bunx` / `npm exec` name and for the project's
+  registry files in a folder on the network before its first request, and each question of a silent share costs about 21 s:
+  the 8 s deadline ended before the registry or OSV was asked. A network folder now costs the hook no disk question before the
+  vetting (`pip install` of a malicious name with the project folder on a silent share: refused at once).
+
+- **`llm_scan` says what the server did (llm-scan-codex-smoke-findings).** Four defects measured in the Codex smoke of
+  2026-11-19, and the texts around them. (1) `llm_scan { step: "start", plan_id, … }` with any parameter other than
+  `project_path` and `confirm` (`modes`, `scan_id`, `fingerprints`, `max_tasks`, `max_estimated_tokens`,
+  `per_task_overhead`) answered `ok` and ignored it: the plan kept its limits, and a model believed it had raised one.
+  It is now refused with `invalid_input`, naming the parameters, with `retry_with: { plan_id }`; the plan is neither read
+  nor confirmed. **A call that used to be accepted and ignored now fails:** to read or confirm a plan send `plan_id`
+  with `project_path` and, with the user's agreement, `confirm: true`; for other limits, modes or findings, start a new
+  plan without `plan_id`. (2) The `token_limit_note` (in `start`, `start { plan_id }` and the `needs_confirm` refusal of
+  `task`) says that a plan's limits are fixed when it is made and that covering the whole plan needs a new plan with a
+  larger `max_estimated_tokens`, where it said "start again". (3) A plan with `verify` in `modes` now says in
+  `verify_source` (`{ from, scan_ids, scan_ids_total }`) which input chose the findings and which scans they came from,
+  also in `start { plan_id }` (kept in the plan record's metadata, no migration; an older plan has none). The `scan_id`
+  of the answer stays the plan record's. (4) A verify-only plan with no `scan_id` that finds nothing in the project's
+  open set, for example after a scan with scope, answers `nothing_to_plan` with a reason that names the open set and
+  says to pass the `scan_id` of a scoped scan. The descriptions of `max_estimated_tokens`, `confirm` and `plan_id` of
+  `llm_scan` say the same (within the same budgets), and `docs/llm-scan.md` and `docs/hosts.md` record the Codex run
+  and what was measured of its project configuration.
+- **A word that ends like an archive is read as the pipx and the composer read it.** Both were treated as managers nobody
+  measured: the hook asked the registry about words the pipx never asks for and only warned about names the composer asks
+  for. Measured now (pipx 1.18.16 on Linux and on Windows, with the pip and the uv engines; composer 2.10.3 on Windows;
+  the files are named in the source next to the lists of the other managers). What changes:
+  - **Refused when the registry does not have the name,** on a line of the confident shape and only in the measured form
+    (`pipx install <word>`, `pipx run <word>` or `composer require <vendor>/<name>`, one word, no flag, the ending in lower
+    case): `pipx install` and `pipx run` with a word that ends in `.egg` or `.nupkg` (the pipx asks the index for it), and
+    `composer require` with a name that ends in `.zip` or `.tar.gz` (the composer asks Packagist for it). For `pipx run`
+    the disk decides first, as for any word: with a file of that name in the folder, the block is read and nothing is
+    refused for a missing name.
+  - **Silent:** `pipx install <word>` and `pipx run <word>` with a word that ends in `.zip`, `.whl`, `.tar`, `.tar.gz`,
+    `.tgz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.tlz`, `.tar.lz` or `.tar.lzma`, a path too in `pipx run`: the pipx reads
+    the word as a file and never asks the index for it, so it is not called a missing name any more (it was a warning in
+    every one of the 56 measured lines). A malicious package of that name is still refused, with a reason that says the
+    pipx reads the word as a file here.
+  - **A line, once:** when `pipx run` is given such a word and the hook cannot tell whether the file is there (the folder
+    is not known after a `cd "$X"`, the time is spent or 50 words were asked), it says that pipx run reads the word as a
+    file, not a package, and installs what the block of the file names, which was not vetted — instead of "may be a local
+    script that pipx runs instead — not checked".
+  - **Still warns, with a reason of its own:** every other line of the pipx or the composer with such a word (a flag,
+    another word, another spelling of the program or the verb, an ending in capitals, the value of `--spec`,
+    `pipx inject`) says it is a name that ends like an archive in a form that was not measured; the composer's other
+    twelve endings (`.whl`, `.tar`, `.tgz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.tlz`, `.tar.lz`, `.tar.lzma`, `.egg`,
+    `.nupkg`) say the composer was not measured with that ending. Nothing there is refused for a missing name; the
+    `dotnet` is unchanged (not measured in any form).
+  - **Names that leave the machine:** no word is dropped from the lookups and none is added: the twelve of the pipx go to
+    the registry and to OSV for the malware check only, as before. The known limit `archive-like-names` and
+    `docs/hooks.md` say what was measured and what stays.
+
+- **npm's groups of short flags, and `-L`, `-m` and `-c`, are read as npm reads them.** The install hook took a group
+  that holds a `g` (`npm install -gD <name>`) as not global for certain, so it read the project's `package.json` and
+  asked the registry for its dependencies, although npm installs the line globally and reads no manifest; it did not
+  know npm's `-a -l -p -n -h -v -H`, nor `-L`, `-m` and `-c`, so it asked the registry for the value of `-L`, `-m` or
+  `-c` as a package; and it did not read at all a line with one of them before the verb, which npm installs (measured
+  with npm 11.19.0 in a Linux container without network, 2026-11-21: 30 groups of two letters with a `g`, `-gDE`,
+  `-DgE`, `-DEg`, `-L global`, `-gL global`, `-gm`, `-mg`, `-gc`, `-cg`, `npm install-test -gD`, `npm -L global
+  install` and `npm update -gD [<name>]` install globally without the manifest; on Windows only `-gD` was measured,
+  and npm reads its flags with the same code there). A single-dash word made of npm 11.19.0's letters is now read as
+  those letters written apart: `-gD` as `-g -D`, global for certain; a value letter before another letter takes that
+  letter as its value, as npm does (`-Cg <dir>` asks for `<dir>`, and `-Cd`, `-Lq` and `-gws` leave the word `info`,
+  `warn` or `silent`, which npm asks the registry for and so does the hook — the owner's answer A to question 6);
+  `-m`, `-c` and `-call` take no word that looks like a flag (`npm i -m -g <name>` is global, and a
+  `--registry=<url>` after them still counts — answer A to question 5); the six words npm reads whole (`-ws`, `-dd`,
+  `-ddd`, `-all`, `-ca`, `-call`) are read whole; and a word with a letter npm does not have (`-gx`, `-gT`) is one
+  flag the hook does not know, said whole (`unknown flag -gx`). `-L`, `-m` and `-c` are read with their values
+  before the verb too, and `npx`, `npm exec` / `npm x` and `npm init` / `npm create` read `-L <value>` and
+  `-m <value>` and look up the package that follows, or its `create-<x>` (answer B to question 4).
+  - **Now denied:** a malicious `<name>` in `npm -L|-m|-c <value> <verb> <name>` and in `npx`, `npm exec`,
+    `npm init` and `npm create` with `-L` or `-m`; a malicious `info`, `warn` or `silent` left by a value letter in a
+    group; a malicious dependency of the manifest in `npm -m|-c <value> <verb> <name>`, where npm reads the manifest,
+    and in `npm -gL project install <name>` and `npm -L project -g install <name>`, where npm does not and the hook
+    reads `--location` beside `-g` as a doubt (as it already did for `npm i -gL project <name>`).
+  - **No longer denied:** a malicious dependency of the manifest in an install npm makes global — a group with a `g`,
+    `-L global`, `npm update -gD` — which npm does not install; and a malicious word that is the value of `-L`, `-m`,
+    `-c`, `-ca` or `-call`, which npm does not fetch.
+  - **Now read, and a warning:** the lines with `-L`, `-m` or `-c` before the verb, with any verb the hook reads. No
+    form starts to deny a name the registry does not have: these lines and the launchers with `-L` or `-m` only warn.
+  - **Names that leave the machine:** the dependencies of the manifest no longer go for those global installs, nor
+    `project`, `user`, `global`, the value of `-m` or `-c`, the word after `-ca` or `-call` and `create-global`; the
+    package of the lines now read, and of the launchers with `-L` or `-m`, goes to the registry and to OSV, and so do
+    `info`, `warn` and `silent` in the groups above. The project's registry line is no longer said for an install npm
+    makes global through a group or `-L global`, and `npm update -gD` says it updates every globally installed package
+    instead of vetting the manifest.
+  - **Still not read as npm reads it** (the known limits `npm-short-flag-groups` and `project-default-registry`): the
+    whole words with a letter npm does not have (`-global`, `-local -g`, which npm installs globally), the groups of
+    letters given to a launcher, and the groups of pnpm and bun, which were not measured.
+- **The known-limits page passes markdownlint again (known-limits-doc-markdownlint).** `docs/hooks-known-limits.md`
+  had 112 markdownlint errors (MD005, MD007, MD032) and showed 116 items for 26 records in "Install-time package
+  vetting": the generator wrote the lines after the first of a record's text at column 0 and the examples straight after
+  them. It now indents them by two spaces and, for a record of more than one line, writes "Examples:" (or the reason as a
+  paragraph) before the examples, so each record is one item; and it adds no second full stop to a reason that already
+  ends in one (two reasons ended in ".."). A test now checks the list layout the generator writes.
+
 ## [3.15.0] - 2026-11-21
 
 The install hook reads more of what a package manager is told to install — the initializers of the npm family, `npm

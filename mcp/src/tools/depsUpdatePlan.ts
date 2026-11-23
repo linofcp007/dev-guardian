@@ -128,6 +128,7 @@ import { gitRootAbove, npmConfigNotRead, npmPlanningCopy } from '../deps/npmPlan
 import { runProcess } from '../runners/processRunner.js';
 import { exactPin, findRequirementFiles, parseRequirementSpec, requirementMentions, type RequirementSpec } from '../deps/pipRequirements.js';
 import { matchesAny } from '../platform/glob.js';
+import { urlSaid } from '../redaction/urlSaid.js';
 import {
   listProjectDir,
   presentInProject,
@@ -959,7 +960,7 @@ async function runNpmOutdated(
           package_name: info.name,
           ecosystem: 'npm',
           cve_ids: cve.cveIds,
-          reason: `active CVE on a transitive dependency, but no fix version above the installed version ${installed}`,
+          reason: `active CVE on a transitive dependency, but no fix version above the installed version ${urlSaid(installed, { form: 'whole', ownName: info.name })}`,
         });
       }
       continue;
@@ -1037,7 +1038,7 @@ function planDirectNotListed(opts: {
       package_name: name,
       ecosystem: 'npm',
       cve_ids: cve.cveIds,
-      reason: `active CVE on a direct dependency, but no fix version above the installed ${installed} is known`,
+      reason: `active CVE on a direct dependency, but no fix version above the installed ${urlSaid(installed, { form: 'whole', ownName: name })} is known`,
     });
     return;
   }
@@ -1550,7 +1551,8 @@ function buildOverrideStep(input: {
 }): UpgradeStep {
   return {
     package_name: input.package_name,
-    installed_version: input.installed_version,
+    // A lock's version can be a URL (with credentials): said by the rule; the decisions above read the value as it was.
+    installed_version: urlSaid(input.installed_version, { form: 'whole', ownName: input.package_name }),
     latest_version: input.latest_version,
     ecosystem: 'npm',
     classification: 'security',
@@ -2329,7 +2331,7 @@ function buildStep(input: BuildStepInput): UpgradeStep {
   const classification: Classification = cve ? 'security' : (semverKind ?? 'major');
   const step: UpgradeStep = {
     package_name: input.package_name,
-    installed_version: input.installed_version,
+    installed_version: urlSaid(input.installed_version, { form: 'whole', ownName: input.package_name }),
     latest_version: input.latest_version,
     ecosystem: input.ecosystem,
     classification,

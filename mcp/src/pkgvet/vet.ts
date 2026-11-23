@@ -234,9 +234,17 @@ function parsedHttpUrl(text: string): URL | undefined {
   }
 }
 
+/**
+ * A registry or an npmjs credential that no one but a file of the project names, for npm or PyPI. A workspace package is left
+ * out (D-9): the name is then the repository's own, and a project registry that served it is found before it.
+ */
+function onlyTheProjectExplains(eco: PkgEcosystem, custom: CustomRegistry): boolean {
+  return (eco === 'npm' || eco === 'pypi') && (custom.kind === 'registry' || custom.kind === 'auth') && custom.from === 'project';
+}
+
 function customFor(spec: PackageSpec, opts: VetOptions): CustomRegistry | null {
   const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(spec.ecosystem, u));
-  if (onCommandLine !== undefined) return { kind: 'registry', source: 'the command line', url: onCommandLine };
+  if (onCommandLine !== undefined) return { kind: 'registry', source: 'the command line', url: onCommandLine, from: 'user' };
   return customRegistryFor(spec.ecosystem, spec.name, opts.registry ?? {});
 }
 
@@ -428,10 +436,14 @@ function buildResult(w: Work, osv: OsvResult | undefined, osvError: string | und
     // A private registry that is KNOWN to be configured may be serving the
     // real package under this name, so a removed malicious one only warns; a
     // configuration that merely could not be read is no such evidence, and the
-    // malicious name is still denied (Part Y fix round 1).
+    // malicious name is still denied (Part Y fix round 1). Nor is a registry
+    // that only a file of the PROJECT names: the project is what is being vetted,
+    // and a hostile one could name a registry to turn the refusal into a warning
+    // (install-vet-registry-files-unread). The user's own, the hook's environment
+    // and the command line keep the warning: they are the user's word.
     malicious =
       malIds.length > 0
-        ? custom !== null && custom.kind !== 'unreadable' && custom.kind !== 'unchecked'
+        ? custom !== null && custom.kind !== 'unreadable' && custom.kind !== 'unchecked' && !onlyTheProjectExplains(eco, custom)
           ? warn(`OSV lists this name as a malicious package (${malIds.join(', ')}) removed from ${registry}`)
           : fail(`OSV lists this name as a malicious package (${malIds.join(', ')}), removed from ${registry}`)
         : osvDown !== undefined
@@ -605,7 +617,7 @@ function explain404(w: Work, opts: VetOptions): void {
     const onCommandLine = (opts.commandRegistries ?? []).find((u) => !isPublicRegistryUrl(w.spec.ecosystem, u));
     w.custom =
       onCommandLine !== undefined
-        ? { kind: 'registry', source: 'the command line', url: onCommandLine }
+        ? { kind: 'registry', source: 'the command line', url: onCommandLine, from: 'user' }
         : { kind: 'unchecked', source: 'the vetting deadline', cut: 'time' };
     return;
   }

@@ -9,8 +9,8 @@ upgrade to the newest release.
 
 | Version | Supported |
 | ------- | --------- |
-| 3.15.x  | ✅        |
-| < 3.15  | ❌        |
+| 3.16.x  | ✅        |
+| < 3.16  | ❌        |
 
 ## Reporting a vulnerability
 
@@ -110,7 +110,12 @@ their respective projects.
   guard denies creating one there. The install hook reads its registry
   configuration (`.npmrc`, `pip.conf`, `nuget.config`, …) through the same
   link walk; one that is there but could not be read counts as possibly a
-  private registry, so a missing name warns. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
+  private registry, so a missing name warns. From a bun `.env` the hook reads only the variables
+  `BUN_CONFIG_REGISTRY`, `NPM_CONFIG_REGISTRY` and `npm_config_registry` and nothing else of
+  the file, and the scheme and host of such a value (never its credentials, path or query) reach
+  the model in the hook's answer (its context, or the reason of a refusal), as those of an `.npmrc` do. The `env` of a
+  project's `.claude/settings.json` can reach the hook's environment, which counts as the
+  user's own: a known limit. **Claude Code's own settings**: an assistant's `Write` / `Edit` /
   `MultiEdit` (or MCP write) of `.claude/settings.json` or `settings.local.json`,
   or of the machine's `managed-settings.json`, is denied
   when it would newly set `disableAllHooks` (any value that may read as true),
@@ -792,7 +797,7 @@ project's own build and test commands.
 | Destination | Who contacts it | When |
 | --- | --- | --- |
 | `api.osv.dev` | `vet_packages` ★, the install hook ★, `scan_skill` with `check_deps` ★ (offline, `osv.dev` reads `skipped`) | per call |
-| `registry.npmjs.org`, `pypi.org`, `repo.packagist.org`, `api.nuget.org`, `azuresearch-usnc.nuget.org` | `vet_packages` ★, the install hook ★ (3 s budget) | per call; the hook for a command that installs a package by name, and for a manifest install (`npm ci`, `npm install`, `pnpm install`, `yarn`, `bun install`, `pip install -r`) — also for an install by name inside a project (`npm install <package>`, `pnpm add`, `yarn add`, `bun add`), which installs the manifest too, and for a launcher that runs a package manager (`npx pnpm add <package>`, `npx yarn`, `bunx pnpm install`), which sends the manifest names too — then the names and ranges of the manifest's direct dependencies, never those of a scope the npm configuration gives a registry of its own; and the names given to a global update (`npm update -g <package>`) or to `yarn up` |
+| `registry.npmjs.org`, `pypi.org`, `repo.packagist.org`, `api.nuget.org`, `azuresearch-usnc.nuget.org` | `vet_packages` ★, the install hook ★ (3 s budget) | per call; the hook for a command that installs a package by name, and for a manifest install (`npm ci`, `npm install`, `pnpm install`, `yarn`, `bun install`, `pip install -r`, `pip download -r`, `pip wheel -r`, `pipx inject -r`, `pipx runpip … -r`) — also for an install by name inside a project (`npm install <package>`, `pnpm add`, `yarn add`, `bun add`), which installs the manifest too, and for a launcher that runs a package manager (`npx pnpm add <package>`, `npx yarn`, `bunx pnpm install`), which sends the manifest names too — then the names and ranges of the manifest's direct dependencies, never those of a scope the npm configuration gives a registry of its own; and the names given to a global update (`npm update -g <package>`) or to `yarn up`, to `pipx upgrade <package>`, `pipx reinstall <package>` and `uv tool upgrade <package>` (the name of a pipx environment, which with `--suffix` is not the name of its package), the value of `pipx inject --include-resources-from`, the word that may name a pipx environment after a flag the hook does not know, and a package name with extras and a comma in a package flag (`uvx --with "<package>[x,y]"`); and the names and ranges of the inline dependencies (PEP 723) of the script that `uv run` or `pipx run` runs, those of the `--with` flag of `uv run` and those of the file of its `--with-requirements` |
 | `www.cisa.gov` (KEV catalog), `api.first.org` (EPSS) | `prioritize_findings` ★, `risk_score` ★, `create_fix_pr` ★ | at most once per 24 h per CVE and for the catalog; `guardian://cves/active` only reads the cache |
 | The secret's own provider: `api.github.com`, `gitlab.com`, `slack.com`, `api.stripe.com`, `api.openai.com`, `api.anthropic.com`, `registry.npmjs.org`, `api.sendgrid.com` | `scan_secrets` with `verify_live: true` ★ | **off by default**. Each secret goes only to its own provider's read-only identity endpoint (a fixed URL per rule, never a host from the repository), 5 s timeout, at most 4 in flight and 50 per scan; `security_scan_full` never verifies |
 | `www.wordfence.com`, `api.wordpress.org` | `wp_vuln_check` (`mode: "source"`) ★ | Wordfence only with `WORDFENCE_API_KEY`; the feed is cached for 24 h |

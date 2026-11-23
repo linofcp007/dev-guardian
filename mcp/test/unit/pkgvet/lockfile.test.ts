@@ -223,6 +223,15 @@ function referenceYarn1(text: string): Reference & { blocks: number; versions: n
   return { ...reference(pairs, 0), blocks, versions };
 }
 
+/**
+ * A local tarball as bun 1.4.4 writes one without `file:` (lockfile-bun-lock-v2, US-1.AC-2): `./` or `/` optional, then
+ * segments of `A-Z a-z 0-9 . _ + -` joined by one `/`, none of them `.` or `..`, the last ending in `.tgz`.
+ */
+function localTarball(spec: string): boolean {
+  const body = spec.startsWith('./') ? spec.slice(2) : spec.startsWith('/') ? spec.slice(1) : spec;
+  return body.endsWith('.tgz') && body.split('/').every((segment) => /^[A-Za-z0-9._+-]+$/.test(segment) && segment !== '.' && segment !== '..');
+}
+
 /** bun.lock: JSON once the trailing commas are gone; the first element of every entry of `packages`. */
 function referenceBun(text: string): Reference {
   const doc: unknown = JSON.parse(text.replace(/,(\s*[}\]])/g, '$1'));
@@ -232,7 +241,7 @@ function referenceBun(text: string): Reference {
     const first = Array.isArray(e) ? String(e[0]) : '';
     const spec = first.slice(first.indexOf('@', 1) + 1);
     if (/^\d/.test(spec)) pairs.add(first);
-    else if (spec.startsWith('workspace:')) local += 1;
+    else if (spec.startsWith('workspace:') || spec.startsWith('file:') || spec.startsWith('link:') || localTarball(spec)) local += 1;
     // what is left names a URL: no pair of its own
   }
   return reference(pairs, local);
@@ -1040,7 +1049,7 @@ describe('install-vet-lockfile-pins', () => {
         ['yarn.lock: a v1 file without its header', 'yarn-lock', fixture('yarn.v1.lock').replace('# yarn lockfile v1\n', '')],
         ['yarn.lock: a Yarn 2+ file without __metadata', 'yarn-lock', fixture('yarn.berry.lock').replace(/^__metadata:\n {2}version: 6\n {2}cacheKey: 8\n/m, '')],
         ['yarn.lock: prose', 'yarn-lock', prose],
-        ['bun.lock: lockfileVersion 2', 'bun-lock', bunLock.replace('  "lockfileVersion": 1,', '  "lockfileVersion": 2,')],
+        ['bun.lock: lockfileVersion 4', 'bun-lock', bunLock.replace('  "lockfileVersion": 1,', '  "lockfileVersion": 4,')],
         ['bun.lock: no lockfileVersion', 'bun-lock', bunLock.replace('  "lockfileVersion": 1,\n', '')],
         ['bun.lock: two packages sections', 'bun-lock', bunLock.replace(/\n {2}\}\n\}\n$/, `\n  },\n  "packages": {\n${bunEntry('evil', 'evil@1.0.0')}\n  }\n}\n`)],
         ['bun.lock: prose', 'bun-lock', prose],
@@ -1058,7 +1067,7 @@ describe('install-vet-lockfile-pins', () => {
       // Each kind of refusal says its own reason.
       expect(reasons.get('package-lock: JSON cut short')).not.toBe(reasons.get('package-lock: lockfileVersion 4'));
       expect(reasons.get('pnpm-lock: lockfileVersion 7')).not.toBe(reasons.get('pnpm-lock: a second packages section'));
-      expect(reasons.get('bun.lock: lockfileVersion 2')).not.toBe(reasons.get('bun.lock: two packages sections'));
+      expect(reasons.get('bun.lock: lockfileVersion 4')).not.toBe(reasons.get('bun.lock: two packages sections'));
 
       // The binary lockfile of bun is no format of these readers, nor is another manager's file.
       expect(['bun.lockb', 'Pipfile.lock', 'composer.lock', 'package.json', 'yarn.lock.bak'].map(lockFormat)).toEqual([null, null, null, null, null]);
@@ -2045,7 +2054,8 @@ describe('lockfile-origin-host-from-userinfo', () => {
         if (needsBackslash && !backslash) continue;
         const r = lock(format, make(url));
         const entry = entryOf(r, 'probe@1.0.0');
-        const kind = url.startsWith('git+') ? 'git' : 'elsewhere';
+        // A git URL in the second element of a bun.lock registry line is outside its form (lockfile-bun-lock-v2): another source, asked about.
+        const kind = url.startsWith('git+') && format !== 'bun-lock' ? 'git' : 'elsewhere';
         // Soft: every malformed form is reported, not only the first one that fails.
         expect.soft({ label, kind: entry.source.kind, host: hostOf(entry.source), leaks: leaks(r) }).toEqual({ label, kind, host: '', leaks: '' });
       }
@@ -2191,4 +2201,482 @@ describe('lockfile-own-scope-scan-quadratic', () => {
       expect(hostOfEntry('nome', 'https://host.example/@x/nome/-/nome-1.0.0.tgz')).toBe('');
     });
   });
+});
+
+// ───────────────────────────────────────────────────────── lockfile-bun-lock-v2: T-01, T-03 to T-06, T-08
+describe('lockfile-bun-lock-v2', () => {
+  /**
+   * The 24 lockfiles bun 1.4.4 wrote in the measurement (lockfileVersion 2), its stand-in registry swapped for
+   * `https://packages.example.invalid` (`SOURCES.md`) — with the distinct pairs and the local entries the reference
+   * reads in each, counted once (2026-11-21): a reference that read nothing would prove nothing.
+   */
+  const V2: ReadonlyArray<{ name: string; pairs: number; local: number }> = [
+    { name: 'alias', pairs: 2, local: 0 },
+    { name: 'catalog', pairs: 1, local: 1 },
+    { name: 'default-registry-tarball', pairs: 1, local: 0 },
+    { name: 'dev-optional-peer', pairs: 4, local: 0 },
+    { name: 'file-folder', pairs: 1, local: 1 },
+    { name: 'file-outside', pairs: 0, local: 2 },
+    { name: 'file-tarball-noslash', pairs: 0, local: 1 },
+    { name: 'file-tarball', pairs: 0, local: 1 },
+    { name: 'git-file', pairs: 0, local: 0 },
+    { name: 'link', pairs: 0, local: 1 },
+    { name: 'linker-isolated', pairs: 3, local: 0 },
+    { name: 'lockfile-only-plain', pairs: 1, local: 0 },
+    { name: 'migrated-from-package-lock', pairs: 2, local: 0 },
+    { name: 'min-release-age', pairs: 1, local: 0 },
+    { name: 'nested', pairs: 3, local: 0 },
+    { name: 'overrides', pairs: 2, local: 0 },
+    { name: 'patched', pairs: 1, local: 0 },
+    { name: 'path-tarball', pairs: 0, local: 1 },
+    { name: 'plain', pairs: 1, local: 0 },
+    { name: 'scoped', pairs: 1, local: 0 },
+    { name: 'trusted', pairs: 1, local: 0 },
+    { name: 'url-tarball', pairs: 0, local: 0 },
+    { name: 'workspace', pairs: 1, local: 1 },
+    { name: 'workspace-nested', pairs: 2, local: 1 },
+  ];
+  const v2 = (name: string): string => fixture(`bun-v2/bun.v2-${name}.lock`);
+
+  /** `text` with its `"lockfileVersion"` set to `label`. */
+  function labelled(text: string, label: number): string {
+    const out = text.replace(/"lockfileVersion": \d+,/, `"lockfileVersion": ${label},`);
+    // A relabelling that found no number would compare a file with itself.
+    expect(out.includes(`"lockfileVersion": ${label},`), `lockfileVersion ${label}`).toBe(true);
+    return out;
+  }
+  /** The distinct pairs of the entries, sorted. */
+  const pinsOf = (r: LockRead): string[] => [...new Set(r.entries.flatMap((e: LockEntry) => (e.pin === undefined ? [] : [at(e.pin)])))].sort();
+  /** What the reader made of a bun.lock, as one value an assertion compares: why it was not read, or its pairs and counts. */
+  function readingOf(text: string): { unread: string } | { pins: string[]; local: number; unrecognised: number } {
+    const r = readLock('bun-lock', text);
+    return 'unread' in r ? { unread: r.unread } : { pins: pinsOf(r), local: r.local, unrecognised: r.unrecognised };
+  }
+  /** The same with the entries in full: what the property of T-01 compares across labels. */
+  function entriesRead(text: string): { unread: string } | { entries: LockEntry[]; local: number; unrecognised: number } {
+    const r = readLock('bun-lock', text);
+    return 'unread' in r ? { unread: r.unread } : { entries: r.entries, local: r.local, unrecognised: r.unrecognised };
+  }
+  /** The read of a bun.lock that must be read — or `undefined`, after an assertion that says why the reader gave up on it. */
+  function readOrSay(label: string, text: string): LockRead | undefined {
+    const r = readLock('bun-lock', text);
+    expect.soft({ label, unread: 'unread' in r ? r.unread : undefined }).toEqual({ label, unread: undefined });
+    return 'unread' in r ? undefined : r;
+  }
+
+  /** A workspace that records `dep` at `^1.0.0`, and the entry that pins it at 1.2.3 as bun writes one. */
+  const DEP_WORKSPACE = ['    "": {', '      "name": "app",', '      "dependencies": {', '        "dep": "^1.0.0",', '      },', '    },'].join('\n');
+  const depLine = (integrity: string = INTEGRITY, registry = ''): string => `    "dep": ["dep@1.2.3", ${JSON.stringify(registry)}, {}, ${JSON.stringify(integrity)}],`;
+  /** A bun.lock of that workspace: the lines of `before`, the entry of `dep`, the lines of `after`. */
+  const depLock = (after: readonly string[] = [], dep: string = depLine(), before: readonly string[] = []): string => bun([...before, dep, ...after], DEP_WORKSPACE);
+
+  // ─────────────────────────────────────────────────────── T-01: the lockfiles bun 1.4.4 writes
+  it.each(V2)(
+    'T-01 bun.v2-$name: read as bun 1.4.4 wrote it (label 2) and relabelled 1 and 3 — every entry recognised, the pairs and the local entries of the reference, the same entries in all three',
+    ({ name, pairs, local }) => {
+      const text = v2(name);
+      expect(text.startsWith('{\n  "lockfileVersion": 2,\n')).toBe(true);
+      const wanted = referenceBun(text);
+      expect({ pairs: wanted.pairs.length, local: wanted.local }).toEqual({ pairs, local });
+      for (const label of [2, 1, 3]) {
+        expect.soft({ label, reading: readingOf(labelled(text, label)) }).toEqual({ label, reading: { pins: wanted.pairs, local: wanted.local, unrecognised: 0 } });
+      }
+      // The property: the number changes nothing of what is read.
+      const one = entriesRead(labelled(text, 1));
+      for (const label of [2, 3]) expect.soft({ label, read: entriesRead(labelled(text, label)) }).toEqual({ label, read: one });
+    },
+  );
+
+  it('T-01 by hand: a URL tarball names its pair, an empty registry element is the default registry, git is another source never asked about, a workspace member is the project’s own', () => {
+    const host = 'packages.example.invalid';
+    const url = readOrSay('bun.v2-url-tarball', v2('url-tarball'));
+    if (url !== undefined) {
+      // One URL has the shape of a registry path and names its pair; the other, under /files/, names none. Both are another source.
+      expect(url.entries).toEqual([
+        { source: { kind: 'elsewhere', host, url: `https://${host}/dgprobe-zzq7731-named/-/dgprobe-zzq7731-named-1.0.0.tgz` }, fetched: { name: 'dgprobe-zzq7731-named', version: '1.0.0' } },
+        { source: { kind: 'elsewhere', host, url: `https://${host}/files/dgprobe-zzq7731-urltgz-1.0.0.tgz` } },
+      ]);
+      expect(asked(url)).toEqual(['dgprobe-zzq7731-named@1.0.0']);
+    }
+    const unstated = readOrSay('bun.v2-default-registry-tarball', v2('default-registry-tarball'));
+    if (unstated !== undefined) expect(unstated.entries).toEqual([{ pin: { name: 'dgprobe-zzq7731-pubtar', version: '1.0.0' }, source: { kind: 'unstated' } }]);
+    const git = readOrSay('bun.v2-git-file', v2('git-file'));
+    if (git !== undefined) expect({ git: gitEntries(git).length, entries: git.entries.length, asked: asked(git), local: git.local }).toEqual({ git: 1, entries: 1, asked: [], local: 0 });
+    const member = readOrSay('bun.v2-workspace', v2('workspace'));
+    if (member !== undefined) expect({ local: member.local, asked: asked(member) }).toEqual({ local: 1, asked: ['dgprobe-zzq7731-dep@1.2.3'] });
+  });
+
+  it('T-01 covered: a lockfile as bun 1.4.4 writes it covers with label 2 the direct dependencies it covers with label 1 — and none with label 3', () => {
+    const cases: Array<[file: string, rel: string, name: string, range: string, version: string]> = [
+      ['plain', '', 'dgprobe-zzq7731-dep', '^1.0.0', '1.2.3'],
+      // Objects with spaces and trailing commas in the entries; one dependency in each group bun records.
+      ['dev-optional-peer', '', 'dgprobe-zzq7731-withpeer', '^1.0.0', '1.0.0'],
+      ['dev-optional-peer', '', 'dgprobe-zzq7731-named', '^1.0.0', '1.0.0'],
+      ['dev-optional-peer', '', 'dgprobe-zzq7731-native', '^1.0.0', '1.0.0'],
+      ['nested', '', 'dgprobe-zzq7731-dep', '^2.0.0', '2.0.0'],
+      ['nested', '', 'dgprobe-zzq7731-parent', '^1.0.0', '1.0.0'],
+      ['workspace', 'packages/member', 'dgprobe-zzq7731-dep', '^1.0.0', '1.2.3'],
+      ['migrated-from-package-lock', '', 'dgprobe-zzq7731-dep', '^1.0.0', '1.2.3'],
+      ['migrated-from-package-lock', '', 'dgprobe-zzq7731-named', '^1.0.0', '1.0.0'],
+    ];
+    for (const [file, rel, name, range, version] of cases) {
+      for (const [label, wanted] of [[1, version], [2, version], [3, null]] as const) {
+        const r = readLock('bun-lock', labelled(v2(file), label));
+        const covered = 'unread' in r ? `not read: ${r.unread}` : r.resolutionOf(rel, name, range);
+        expect.soft({ file, label, rel, name, covered }).toEqual({ file, label, rel, name, covered: wanted });
+      }
+    }
+  });
+
+  it(
+    'T-01 the generated bun.lock of 4 000 entries and of a million entries: label 2 gives the pairs label 1 gives',
+    () => {
+      const generated = SIZED.find((s) => s.format === 'bun-lock');
+      expect(generated).toBeDefined();
+      if (generated === undefined) return;
+      for (const [what, text] of [
+        ['4 000 entries', generated.entries(4_000)],
+        ['a million entries', generated.million()],
+      ] as const) {
+        const one = readingOf(text);
+        expect({ what, pairs: 'pins' in one && one.pins.length >= 1_000 }).toEqual({ what, pairs: true });
+        // Thousands of pairs: compared whole, and the failure says why rather than listing them.
+        const two = readingOf(labelled(text, 2));
+        expect.soft({ what, label: 2, unread: 'unread' in two ? two.unread : undefined, same: JSON.stringify(two) === JSON.stringify(one) }).toEqual({
+          what,
+          label: 2,
+          unread: undefined,
+          same: true,
+        });
+      }
+    },
+    180_000,
+  );
+
+  // ─────────────────────────────────────────────────────── T-03: a local tarball written without `file:`
+  it('T-03 a local tarball bun writes without `file:`, with two and with three elements, in labels 1 and 2: the project’s own, nothing unrecognised', () => {
+    for (const spec of ['./vendor/x-1.0.0.tgz', '/tmp/x.tgz', 'vendor/x.tgz', 'a.b/c_d+e-f/x.tgz', 'x.tgz']) {
+      for (const [elements, rest] of [
+        [2, '{}'],
+        [3, `{}, ${JSON.stringify(INTEGRITY)}`],
+      ] as const) {
+        for (const label of [1, 2]) {
+          const text = labelled(bun([`    "nome": [${JSON.stringify(`nome@${spec}`)}, ${rest}],`]), label);
+          expect.soft({ spec, elements, label, reading: readingOf(text) }).toEqual({ spec, elements, label, reading: { pins: [], local: 1, unrecognised: 0 } });
+        }
+      }
+    }
+  });
+
+  it('T-03 guards: what is not that form reads as it does today (label 1 — each result copied from a run before the fix)', () => {
+    type Today = Pick<LockRead, 'entries' | 'local' | 'unrecognised'>;
+    const notRecognised: Today = { entries: [], local: 0, unrecognised: 1 };
+    const own: Today = { entries: [], local: 1, unrecognised: 0 };
+    const git = (host: string): Today => ({ entries: [{ source: { kind: 'git', host } }], local: 0, unrecognised: 0 });
+    const elsewhere = (host: string, url: string): Today => ({ entries: [{ source: { kind: 'elsewhere', host, url } }], local: 0, unrecognised: 0 });
+    const entry = (elements: string): string => `    "nome": [${elements}],`;
+    const today = (line: string): Today | undefined => {
+      const r = readOrSay(line, bun([line]));
+      return r === undefined ? undefined : { entries: r.entries, local: r.local, unrecognised: r.unrecognised };
+    };
+    const whole: Array<[string, Today]> = [
+      // One element and four: a path without a prefix stays not recognised.
+      [entry('"nome@vendor/x.tgz"'), notRecognised],
+      [entry(`"nome@vendor/x.tgz", "", {}, ${JSON.stringify(INTEGRITY)}`), notRecognised],
+      // A version that ends in `.tgz` is a version: the pair.
+      [entry(`"nome@1.0.0-rc.tgz", "", {}, ${JSON.stringify(INTEGRITY)}`), { entries: [{ pin: { name: 'nome', version: '1.0.0-rc.tgz' }, source: { kind: 'unstated' } }], local: 0, unrecognised: 0 }],
+    ];
+    for (const [line, read] of whole) expect.soft({ line, read: today(line) }).toEqual({ line, read });
+    // Each with two elements and with three: never the project's own by the new rule.
+    const bySpec: Array<[string, Today]> = [
+      ['//host.example/x.tgz', elsewhere('', '//host.example/x.tgz')],
+      ['\\\\host\\share\\x.tgz', notRecognised], // the UNC form, two backslashes
+      ['vendor\\x.tgz', notRecognised],
+      ['../x.tgz', own], // a `../` or `./` prefix is the project's own already
+      ['./a/../x.tgz', own],
+      ['~/x.tgz', notRecognised],
+      ['C:/x.tgz', git('')],
+      ['git@host/x.tgz', git('')],
+      ['x y.tgz', notRecognised],
+      ['^1.0.0.tgz', notRecognised],
+      ['vendor/x.tar.gz', notRecognised],
+      ['vendor/x.tar', notRecognised],
+      ['vendor/x.zip', notRecognised],
+      ['user/repo', notRecognised],
+      ['github:u/r#abc', git('github.com')],
+      ['https://h.example/x.tgz', elsewhere('h.example', 'https://h.example/x.tgz')],
+      ['file:vendor/dir', own],
+      ['link:nome', own],
+    ];
+    for (const [spec, read] of bySpec) {
+      for (const rest of ['{}', `{}, ${JSON.stringify(INTEGRITY)}`]) {
+        const line = entry(`${JSON.stringify(`nome@${spec}`)}, ${rest}`);
+        expect.soft({ line, read: today(line) }).toEqual({ line, read });
+      }
+    }
+  });
+
+  it('T-03 guard (review round 1): a path in the grammar that `locate` reads as git (`git+a/x.tgz`, `GIT+x.tgz`) stays a git origin, as today — never the project’s own', () => {
+    for (const spec of ['git+a/x.tgz', 'GIT+x.tgz']) {
+      for (const rest of ['{}', `{}, ${JSON.stringify(INTEGRITY)}`]) {
+        for (const label of [1, 2]) {
+          const line = `    "nome": [${JSON.stringify(`nome@${spec}`)}, ${rest}],`;
+          const r = readOrSay(`${line} label ${label}`, labelled(bun([line]), label));
+          if (r === undefined) continue;
+          // A git origin is what the hook says as "comes from another source": the decision's own test is in hookDecision.test.ts.
+          expect.soft({ line, label, entries: r.entries, local: r.local, unrecognised: r.unrecognised }).toEqual({
+            line,
+            label,
+            entries: [{ source: { kind: 'git', host: '' } }],
+            local: 0,
+            unrecognised: 0,
+          });
+        }
+      }
+    }
+  });
+
+  it('T-03 a line that is no registry line and whose second string does not decode: not recognised as today, never the project’s own — and the file covers nothing', () => {
+    for (const line of ['    "x": ["x@workspace:a", "\\q"],', '    "x": ["x@./x.tgz", "\\q", {}],']) {
+      const r = readOrSay(line, depLock([line]));
+      if (r === undefined) continue;
+      expect.soft({ line, local: r.local, unrecognised: r.unrecognised, asked: asked(r), covered: r.resolutionOf('', 'dep', '^1.0.0') }).toEqual({
+        line,
+        local: 0,
+        unrecognised: 1,
+        asked: ['dep@1.2.3'],
+        covered: null,
+      });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────── T-04: the numbers that are not read
+  it('T-04 a lockfileVersion of 4 or more, in quotes, not a whole number, or none: not read, and said in the reader’s words', () => {
+    const text = v2('plain');
+    const cases: Array<[string, string, string]> = [
+      ['4', text.replace('"lockfileVersion": 2,', '"lockfileVersion": 4,'), 'its lockfileVersion is not 0, 1, 2 or 3'],
+      ['9', text.replace('"lockfileVersion": 2,', '"lockfileVersion": 9,'), 'its lockfileVersion is not 0, 1, 2 or 3'],
+      ['"2"', text.replace('"lockfileVersion": 2,', '"lockfileVersion": "2",'), 'its lockfileVersion is not a number'],
+      ['2.0', text.replace('"lockfileVersion": 2,', '"lockfileVersion": 2.0,'), 'its lockfileVersion is not a number'],
+      ['none', text.replace('  "lockfileVersion": 2,\n', ''), 'it has no lockfileVersion'],
+    ];
+    for (const [label, edited, why] of cases) {
+      expect(edited).not.toBe(text);
+      const r = readLock('bun-lock', edited);
+      expect.soft({ label, unread: 'unread' in r ? r.unread : '(read)' }).toEqual({ label, unread: why });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────── T-05: the form of a registry line
+  const EVIL: Pin = { name: 'evil', version: '6.6.6' };
+  const UNKNOWN_ELSEWHERE = { kind: 'elsewhere', host: '', url: '' };
+  const UNSTATED = { kind: 'unstated' };
+  const FROM_EVIL: unknown = expect.objectContaining({ kind: 'elsewhere', host: 'evil.example' });
+  const I = JSON.stringify(INTEGRITY);
+  /** A registry line of the entry `<n>` pinning `<n>@1.2.3`, the origin its second element gives, and the pair its URL names. */
+  interface RegistryLine {
+    id: string;
+    line: (n: string) => string;
+    source: unknown;
+    fetched?: Pin;
+  }
+  /** Outside the form bun writes: `["name@version", "" or an http(s) URL not read as git, {…}, "<text>"],`, with `, ` between the elements. */
+  const OUT_OF_FORM: readonly RegistryLine[] = [
+    { id: '(a) no spaces', line: (n) => `    "${n}": ["${n}@1.2.3","https://evil.example/${n}/-/${n}-1.2.3.tgz",{},${I}],`, source: FROM_EVIL },
+    { id: '(b) no space before the object', line: (n) => `    "${n}": ["${n}@1.2.3", "https://evil.example/evil/-/evil-6.6.6.tgz",{}, ${I}],`, source: FROM_EVIL, fetched: EVIL },
+    { id: '(c) the last entry, without its comma', line: (n) => `    "${n}": ["${n}@1.2.3", "https://evil.example/evil/-/evil-6.6.6.tgz", {}, ${I}]`, source: FROM_EVIL, fetched: EVIL },
+    { id: '(d) no object', line: (n) => `    "${n}": ["${n}@1.2.3", "", ${I}],`, source: UNSTATED },
+    { id: '(e) two elements', line: (n) => `    "${n}": ["${n}@1.2.3", ""],`, source: UNSTATED },
+    { id: '(f) five elements', line: (n) => `    "${n}": ["${n}@1.2.3", "", {}, ${I}, ""],`, source: UNSTATED },
+    { id: '(g) no integrity', line: (n) => `    "${n}": ["${n}@1.2.3", "", {}],`, source: UNSTATED },
+    { id: '(h) a path in the second element', line: (n) => `    "${n}": ["${n}@1.2.3", "./x", {}, ${I}],`, source: UNKNOWN_ELSEWHERE },
+    { id: '(i) no registry element', line: (n) => `    "${n}": ["${n}@1.2.3", {}, ${I}],`, source: UNSTATED },
+    { id: '(j) the first element alone', line: (n) => `    "${n}": ["${n}@1.2.3"],`, source: UNSTATED },
+    { id: '(k) a git URL', line: (n) => `    "${n}": ["${n}@1.2.3", "git+https://h.example/r.git", {}, ${I}],`, source: { kind: 'elsewhere', host: 'h.example', url: '' } },
+    { id: '(l) the scheme in capitals', line: (n) => `    "${n}": ["${n}@1.2.3", "HTTPS://evil.example/evil/-/evil-6.6.6.tgz", {}, ${I}],`, source: FROM_EVIL, fetched: EVIL },
+    { id: '(m) https: without its slashes', line: (n) => `    "${n}": ["${n}@1.2.3", "https:evil.example/evil/-/evil-6.6.6.tgz", {}, ${I}],`, source: FROM_EVIL, fetched: EVIL },
+    { id: '(n) a string that does not decode, no spaces', line: (n) => `    "${n}": ["${n}@1.2.3","\\q",{},${I}],`, source: UNKNOWN_ELSEWHERE },
+    { id: '(n) a string that does not decode, the spaces', line: (n) => `    "${n}": ["${n}@1.2.3", "\\q", {}, ${I}],`, source: UNKNOWN_ELSEWHERE },
+    { id: '(o) an https URL read as git (.git)', line: (n) => `    "${n}": ["${n}@1.2.3", "https://h.example/r.git", {}, ${I}],`, source: { kind: 'elsewhere', host: 'h.example', url: '' } },
+    {
+      id: '(p) an https URL read as git (codeload.github.com)',
+      line: (n) => `    "${n}": ["${n}@1.2.3", "https://codeload.github.com/u/r/tar.gz/abc", {}, ${I}],`,
+      source: { kind: 'elsewhere', host: 'codeload.github.com', url: '' },
+    },
+  ];
+  /** In the form: read as today. */
+  const IN_FORM: readonly RegistryLine[] = [
+    { id: 'the default registry', line: (n) => `    "${n}": ["${n}@1.2.3", "", {}, ${I}],`, source: UNSTATED },
+    { id: 'the public registry', line: (n) => `    "${n}": ["${n}@1.2.3", "https://registry.npmjs.org/${n}/-/${n}-1.2.3.tgz", {}, ${I}],`, source: { kind: 'public' } },
+    { id: '(b) in the form', line: (n) => `    "${n}": ["${n}@1.2.3", "https://evil.example/evil/-/evil-6.6.6.tgz", {}, ${I}],`, source: FROM_EVIL, fetched: EVIL },
+  ];
+  /** What a read says of the pair `dep@1.2.3`: its entries, the pairs asked, the entries not recognised. */
+  function ofDep(text: string): { unread: string } | { entries: Array<Pick<LockEntry, 'source' | 'fetched'>>; asked: string[]; unrecognised: number } {
+    const r = readLock('bun-lock', text);
+    if ('unread' in r) return { unread: r.unread };
+    return { entries: entriesOf(r, 'dep@1.2.3').map((e: LockEntry) => ({ source: e.source, fetched: e.fetched })), asked: asked(r), unrecognised: r.unrecognised };
+  }
+
+  it.each([1, 2])('T-05 label %i: a registry line outside the form bun writes is not recognised and its pair is asked, from the origin its second element gives; the form itself reads as today', (label) => {
+    for (const [lines, unrecognised] of [
+      [OUT_OF_FORM, 1],
+      [IN_FORM, 0],
+    ] as const) {
+      for (const { id, line, source, fetched } of lines) {
+        const asking = fetched === undefined ? ['dep@1.2.3'] : ['dep@1.2.3', at(fetched)].sort();
+        expect.soft({ id, read: ofDep(labelled(bun([line('dep')]), label)) }).toEqual({ id, read: { entries: [{ source, fetched }], asked: asking, unrecognised } });
+      }
+    }
+    // Outside criterion 4, as today: text after `],` — the line is not read as an entry at all.
+    const after = 'a string after the closing `],`';
+    expect.soft({ id: after, read: ofDep(labelled(bun([`    "dep": ["dep@1.2.3", "", {}, ${I}], "x"`]), label)) }).toEqual({
+      id: after,
+      read: { entries: [], asked: [], unrecognised: 1 },
+    });
+  });
+
+  // ─────────────────────────────────────────────────────── T-06: when a bun.lock covers
+  const sha512 = (last: string): string => `sha512-${'A'.repeat(85)}${last}==`;
+  const MD5 = `md5-${'A'.repeat(22)}==`;
+  const FROM_URL = 'https://packages.example.invalid/dep/-/dep-1.2.3.tgz';
+  /** Entry lines no rule of the form takes: the file covers beside them. */
+  const BESIDE: ReadonlyArray<[string, string]> = [
+    ['a local tarball without its integrity', '    "nome": ["nome@./x.tgz", {}],'],
+    ['a URL tarball of three elements', `    "nome": ["nome@https://packages.example.invalid/files/nome-1.0.0.tgz", {}, ${I}],`],
+    ['a git entry whose third element is the commit', `    "nome": ["nome@git+https://h.example/r.git#${COMMIT}", {}, "${COMMIT}"],`],
+    ['a workspace member', '    "nome": ["nome@workspace:packages/nome"],'],
+  ];
+
+  it('T-06 covered: labels 0 and 1 whatever the integrity, label 2 with a well-formed sha512 from the default registry or a URL — and beside the entries no rule takes', () => {
+    const integrities: ReadonlyArray<[string, string]> = [
+      ['an empty integrity', ''],
+      ['the integrity x', 'x'],
+      ['an md5 integrity', MD5],
+      ['a sha512 integrity', INTEGRITY],
+    ];
+    const cases: Array<[label: number, what: string, text: string]> = [
+      ...[0, 1].flatMap((label) => integrities.map(([what, integrity]): [number, string, string] => [label, what, depLock([], depLine(integrity))])),
+      ...['A', 'Q', 'g', 'w'].flatMap((last): Array<[number, string, string]> => [
+        [2, `a sha512 ending in ${last}==, the default registry`, depLock([], depLine(sha512(last)))],
+        [2, `a sha512 ending in ${last}==, a URL`, depLock([], depLine(sha512(last), FROM_URL))],
+      ]),
+      ...[0, 1, 2].flatMap((label) => BESIDE.map(([what, line]): [number, string, string] => [label, `beside ${what}`, depLock([line])])),
+    ];
+    for (const [label, what, text] of cases) {
+      const r = readOrSay(`${what}, label ${label}`, labelled(text, label));
+      if (r === undefined) continue;
+      expect.soft({ label, what, covered: r.resolutionOf('', 'dep', '^1.0.0') }).toEqual({ label, what, covered: '1.2.3' });
+    }
+  });
+
+  it('T-06 not covered — in every label a line outside the form, in label 2 an integrity that is no well-formed sha512, label 3 always — and the pairs are read all the same', () => {
+    const others: Array<[string, string]> = [
+      ...OUT_OF_FORM.map(({ id, line }): [string, string] => [`the line ${id} of T-05 in another entry`, depLock([line('other')])]),
+      ['another entry over two lines', depLock(['    "other": ["other@1.2.3", "",', `      {}, ${I}],`])],
+      ['an entry line ending in `]` without its comma', depLock([], depLine(), [`    "other": ["other@1.2.3", "", {}, ${I}]`])],
+      ['a registry entry whose version ends in .tgz', depLock([`    "other": ["other@1.0.0-rc.tgz", "", {}, ${I}],`])],
+      ['a registry entry whose version ends in .tar.gz', depLock([`    "other": ["other@1.0.0-rc.tar.gz", "", {}, ${I}],`])],
+      ['a registry entry whose version ends in .tar', depLock([`    "other": ["other@1.0.0-rc.tar", "", {}, ${I}],`])],
+      ['an entry that is no registry line, two strings', depLock(['    "z": ["z@./x.tgz", "junk"],'])],
+      ['an entry that is no registry line, two objects', depLock(['    "z": ["z@./x.tgz", {}, {}],'])],
+      ['an entry that is no registry line, four elements', depLock([`    "z": ["z@npm:real@1.0.0", "", {}, ${I}],`])],
+    ];
+    const malformed: ReadonlyArray<[string, string]> = [
+      ['an empty integrity', ''],
+      ['sha512-not-a-hash', 'sha512-not-a-hash'],
+      ['an md5 integrity', MD5],
+      ['a well-formed sha1', `sha1-${'A'.repeat(27)}=`],
+      ['a well-formed sha256', `sha256-${'A'.repeat(43)}=`],
+      ['a sha512 of 85 characters', `sha512-${'A'.repeat(85)}==`],
+      ['a sha512 with a character outside its alphabet', `sha512-${'A'.repeat(84)}_A==`],
+      ['a sha512 ending in B==', sha512('B')],
+    ];
+    const cases: Array<[label: number, what: string, text: string]> = [
+      ...[0, 1, 2, 3].flatMap((label) => others.map(([what, text]): [number, string, string] => [label, what, text])),
+      ...malformed.map(([what, integrity]): [number, string, string] => [2, what, depLock([], depLine(integrity))]),
+      [3, 'a lockfile as bun writes it', depLock()],
+    ];
+    for (const [label, what, text] of cases) {
+      const r = readOrSay(`${what}, label ${label}`, labelled(text, label));
+      if (r === undefined) continue;
+      expect.soft({ label, what, covered: r.resolutionOf('', 'dep', '^1.0.0'), pinned: asked(r).includes('dep@1.2.3') }).toEqual({ label, what, covered: null, pinned: true });
+    }
+    const plain = readOrSay('bun.v2-plain, label 3', labelled(v2('plain'), 3));
+    if (plain !== undefined) {
+      expect({ covered: plain.resolutionOf('', 'dgprobe-zzq7731-dep', '^1.0.0'), asked: asked(plain) }).toEqual({ covered: null, asked: ['dgprobe-zzq7731-dep@1.2.3'] });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────── T-08: what install-vet-lockfile-pins reads of a bun.lock
+  it('T-08 protection: bun.v1.lock gives the same pairs and covers the same dependencies as before', () => {
+    const text = fixture('bun.v1.lock');
+    const r = lock('bun-lock', text);
+    expect({ pairs: asked(r), local: r.local, unrecognised: r.unrecognised }).toEqual({ pairs: referenceBun(text).pairs, local: 6, unrecognised: 0 });
+    expect(asked(r)).toHaveLength(35);
+    // Every dependency its workspaces record, asked of resolutionOf: the covered ones as a run before the fix gave them (2026-11-21).
+    const doc: unknown = JSON.parse(text.replace(/,(\s*[}\]])/g, '$1'));
+    const covered: string[] = [];
+    let recorded = 0;
+    for (const [rel, project] of Object.entries(objectAt(doc, 'workspaces'))) {
+      for (const group of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+        for (const [name, range] of Object.entries(objectAt(project, group))) {
+          recorded += 1;
+          const version = r.resolutionOf(rel, name, String(range));
+          if (version !== null) covered.push(`${rel}|${name}@${String(range)} -> ${version}`);
+        }
+      }
+    }
+    expect({ recorded, covered }).toEqual({
+      recorded: 176,
+      covered: [
+        '|@antithesishq/bombadil@0.6.1 -> 0.6.1',
+        '|eslint-config-prettier@^10.0.1 -> 10.0.1',
+        '|prettier@^3.5.0 -> 3.6.2',
+        'api|@anthropic-ai/vertex-sdk@^0.16.0 -> 0.16.1',
+        'api|@azure/identity@^4.13.1 -> 4.13.1',
+        'api|@keyv/redis@^4.3.3 -> 4.6.0',
+        'api|axios@^1.16.0 -> 1.19.0',
+        'api|js-yaml@^4.2.0 -> 4.3.1',
+        'api|zod@^3.22.4 -> 3.25.67',
+        'packages/data-provider|axios@^1.16.0 -> 1.19.0',
+        'packages/data-provider|dayjs@^1.11.13 -> 1.11.21',
+        'packages/data-provider|js-yaml@^4.3.1 -> 4.3.1',
+        'packages/data-provider|zod@^3.22.4 -> 3.25.67',
+        'packages/data-schemas|mdast-util-directive@^3.0.0 -> 3.0.0',
+      ],
+    });
+  });
+
+  it(
+    'T-08 protection: the generated bun.lock of 4 000 entries and of a million give, with label 1, the pairs they are written with',
+    () => {
+      const generated = SIZED.find((s) => s.format === 'bun-lock');
+      expect(generated).toBeDefined();
+      if (generated === undefined) return;
+      const many = lock('bun-lock', generated.entries(4_000));
+      expect({ pairs: asked(many), unrecognised: many.unrecognised }).toEqual({ pairs: upTo(4_000, (i) => `p${i}@1.0.${i % 7}`).sort(), unrecognised: 0 });
+      const million = lock('bun-lock', generated.million());
+      expect({ pairs: asked(million), unrecognised: million.unrecognised }).toEqual({ pairs: upTo(1_000, (q) => `q${q}@1.0.0`).sort(), unrecognised: 0 });
+    },
+    180_000,
+  );
+
+  it(
+    'T-08 protection: an entry line whose four elements are long is read in time linear in its length, in labels 1 and 2',
+    () => {
+      const longest = (text: string): number => text.split('\n').reduce((max, line) => Math.max(max, line.length), 0);
+      const lines = (n: number): string[] => [
+        `    "a": ["a@1.0.0", "https://h.example/${times('a/', n)}a-1.0.0.tgz", { ${times('"k": "v", ', n / 4)}}, "sha512-${times('A', n)}=="],`,
+        `    "b": ["b@1.0.0", "${times('\\\\', n / 2)}", ${times('{', n / 4)}${times('}', n / 4)}, "${times('\\"', n / 2)}"],`,
+        `    "c": ["c@1.0.0", "", {}, "${times('x', n)}", ${times('"y", ', n / 4)}],`,
+      ];
+      for (const label of [1, 2]) {
+        const texts = new Map([2_000, 16_000].map((n) => [n, labelled(bun(lines(n)), label)]));
+        // Lines the reader looks into: all under its limit.
+        expect(longest(texts.get(16_000) ?? '')).toBeLessThan(MAX_LINE);
+        expectLinear(`bun.lock, label ${label}: entry lines of n characters`, (n) => void readLock('bun-lock', texts.get(n) ?? ''), 2_000);
+      }
+    },
+    120_000,
+  );
 });

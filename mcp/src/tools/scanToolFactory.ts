@@ -134,6 +134,7 @@ import { assessCoverage, computeCoverage, repoSuppressionWarnings } from './scan
 import { honouredRootFiles, withProjectConfig } from '../runners/repoConfig.js';
 import type { ToolCallMeta, ToolInput, ToolModule, ToolShape } from './index.js';
 import { countBySeverity, topFindings } from '../severity/counts.js';
+import { urlsSaidIn } from '../redaction/urlSaid.js';
 
 /**
  * What `config.invoke` returns to the factory: how the scanner run(s) ended,
@@ -771,7 +772,8 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
     // message of the next heartbeat, never a notification of its own: a
     // chatty scanner would otherwise send hundreds per second.
     onLog: (line: string) => {
-      const trimmed = line.trim();
+      // The URLs in the line are said by the rule BEFORE the cut at MAX_LOG_LINE: a cut inside a credential leaves its start.
+      const trimmed = urlsSaidIn(line).trim();
       if (trimmed.length === 0) return;
       const clipped =
         trimmed.length > MAX_LOG_LINE ? `${trimmed.slice(0, MAX_LOG_LINE - 1)}…` : trimmed;

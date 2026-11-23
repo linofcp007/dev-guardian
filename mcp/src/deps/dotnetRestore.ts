@@ -53,6 +53,7 @@ import { unlinkSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve } from 'node:path';
 import { readSmallTextFile } from '../hooks/configFile.js';
 import { entryKindAnywhere, listProjectDir } from '../platform/projectFs.js';
+import { urlsSaidIn, urlSaid } from '../redaction/urlSaid.js';
 import { gitRootAbove } from './npmPlanningCopy.js';
 import { nugetRestoreRefusal, type NugetEnvironment, type NugetRestoreRefusal } from './nugetCredentials.js';
 
@@ -335,7 +336,8 @@ export function planDotnetRestore(root: string, target: string, nuget: NugetEnvi
   if (remote.length > 0) {
     plan.blocked = {
       code: 'network_path_reference',
-      reason: `not restored: ${remote.map((p) => relative(root, p) || p).join(', ')} is on a network path, which dotnet restore would open`,
+      // The rule decides on the absolute path: with an `@` in it the host is not said; without, as before.
+      reason: `not restored: ${remote.map((p) => (p.includes('@') ? urlSaid(p, { form: 'whole' }) : relative(root, p) || p)).join(', ')} is on a network path, which dotnet restore would open`,
     };
     return plan;
   }
@@ -426,7 +428,9 @@ export function classifyRestoreFailure(stdout: string, stderr: string): DotnetRe
   // message are what a reader needs. Only the LAST bracket group is dropped —
   // NuGet's own version ranges (`[12.0.1, )`) sit inside the message.
   const stripped = firstLine.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, '').replace(/\s*\[[^[\]]*\]\s*$/, '');
-  const message = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
+  // The URLs in the line are said by the rule BEFORE the cut: an `@` after the cut must not leave the start of a credential.
+  const said = urlsSaidIn(stripped);
+  const message = said.length > 240 ? `${said.slice(0, 237)}...` : said;
   return { code, kind, reason: `${lead} (${code}: ${message})` };
 }
 

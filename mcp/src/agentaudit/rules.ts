@@ -9,6 +9,7 @@
 
 import { redact, scanForSecrets } from '../hooks/secretScan.js';
 import { maskSecrets } from '../redaction/maskSecrets.js';
+import { urlSaid } from '../redaction/urlSaid.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import { scanContent } from '../skillaudit/patterns.js';
 import { matchSignatures } from '../skillaudit/yaraSignatures.js';
@@ -183,7 +184,12 @@ export function checkPlainHttpRemotes(entries: McpServerEntry[]): Finding[] {
     if (parsed.protocol !== 'http:' || isLoopbackHost(parsed.hostname)) continue;
     // The address, not its credentials: a query (`?api_key=…`) or a userinfo
     // password was copied whole into the message and the snippet.
-    const shown = maskSecrets(entry.url);
+    // The URL as the rule says it (no user part, no host that is the start of a credential), then its query masked as
+    // before. A URL the rule had to change carries the server's name in the snippet: two servers whose URLs differ only
+    // in what was not said are two findings, not one (the snippet is the identity of the stored finding).
+    const said = urlSaid(entry.url, { form: 'whole' });
+    const shown = maskSecrets(said);
+    const identity = said === entry.url ? shown : `${shown} (server '${entry.name}')`;
     out.push(
       finding({
         rule_id: 'agent-audit-http-remote',
@@ -195,7 +201,7 @@ export function checkPlainHttpRemotes(entries: McpServerEntry[]): Finding[] {
           `and any bearer token/header this server is configured with travel in the clear and can be ` +
           `read or altered in transit. Use https:// instead.`,
         file_path: entry.sourceLabel,
-        snippet: shown,
+        snippet: identity,
       }),
     );
   }

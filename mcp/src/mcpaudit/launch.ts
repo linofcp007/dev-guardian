@@ -100,23 +100,7 @@ import { stat } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, resolve } from 'node:path';
 import type { McpServerEntry } from '../agentaudit/mcpServers.js';
 import { isRemoteOrDeviceTarget } from '../hooks/configFile.js';
-
-/**
- * A special scheme (WHATWG: one whose URLs always have a host) followed by
- * `:`, anywhere: `https:evil.example` reaches evil.example as surely as
- * `https://evil.example` (fix round 5, I-4). `file` is left to
- * {@link ANY_SCHEME_WITH_SLASHES}: `file:x` has no host.
- */
-const SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
-/** Any `scheme://`; what follows is a host only when WHATWG parses one. */
-const ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
-/** Where a URL written into a command line or an env value ends. */
-const URL_END = /[\s"'<>|`]/;
-/**
- * A UNC or device path anywhere: `\\host\…`, `\\?\…`, `\\.\…`, or
- * `//host/…` not preceded by `:` or `/` (a URL's `://`, `file:///`).
- */
-const UNC_ANYWHERE = /\\\\[^\\\s"'<>|]+\\|(?<![:/])\/\/[^/\s"'<>|]+\//;
+import { ANY_SCHEME_WITH_SLASHES, asUrlParsersRead, SPECIAL_SCHEME, UNC_ANYWHERE, URL_END, urlSaid } from '../redaction/urlSaid.js';
 
 /** Schemes whose query string no client takes a host from. */
 const QUERY_SAFE_SCHEMES = new Set(['http:', 'https:', 'ws:', 'wss:']);
@@ -168,18 +152,23 @@ function unambiguous(url: URL, written: string): boolean {
   return QUERY_SAFE_SCHEMES.has(url.protocol) || !written.includes('?');
 }
 
-/** How a reason names a URL: scheme and host. `origin` is "null" for a non-special scheme (fix round 5, minor 2). */
-function hostLabel(url: URL): string {
-  return `${url.protocol}//${url.host}`;
+/**
+ * How a reason names a URL: scheme and host (and port), as `urlSaid` says it in its `hostPort` form — no host when an `@`
+ * stands outside the user part or in what follows the URL in its text (`cutOff`). `origin` is "null" for a non-special
+ * scheme (fix round 5, minor 2).
+ */
+function hostLabel(written: string, cutOff = ''): string {
+  return urlSaid(written, { form: 'hostPort', cutOff });
 }
 
 /** A `url` entry as a reason names it. */
 function urlLabel(url: string): string {
   try {
-    return hostLabel(new URL(url));
+    new URL(url);
   } catch {
     return 'a URL that does not parse';
   }
+  return hostLabel(url);
 }
 
 /**
@@ -199,32 +188,22 @@ function remoteInText(raw: string): string | null {
     try {
       url = new URL(written);
     } catch {
-      return `names a URL that does not parse (${JSON.stringify(written.slice(0, 80))})`;
+      // Nothing of it is quoted: what does not parse may hold the start or the rest of a credential.
+      return 'names a URL that does not parse';
     }
     if (url.hostname === '') continue;
     if (isLoopbackName(url.hostname)) {
       const cutInAuthority = start + written.length < text.length && authorityOpen(written);
       if (!cutInAuthority && unambiguous(url, written)) continue;
       return (
-        `names ${hostLabel(url)} written so that another client may read another host ` +
+        `names ${hostLabel(written, text.slice(start + written.length))} written so that another client may read another host ` +
         '(a backslash, several @, a host after the @ that is not loopback as written, a query on a ' +
         'non-HTTP scheme, or a space, quote or control character inside its host)'
       );
     }
-    return `names ${hostLabel(url)} (a proxy, a client or a source on another machine)`;
+    return `names ${hostLabel(written, text.slice(start + written.length))} (a proxy, a client or a source on another machine)`;
   }
   return null;
-}
-
-/**
- * A value as a URL parser reads it (final review): WHATWG deletes ASCII TAB
- * and newline ANYWHERE in its input, and strips leading and trailing C0
- * controls and spaces — so does Python's `urlsplit` for the first. The gate
- * cut `http://127.0.0.1:80<TAB>@other.example/` at the TAB and exempted the
- * loopback it saw; the server read other.example.
- */
-function asUrlParsersRead(value: string): string {
-  return value.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
 }
 
 /**
@@ -435,8 +414,8 @@ export async function resolveCommand(
     return {
       ok: false,
       reason:
-        `could not start the server: '${command}' was not found on PATH` +
-        (skipped.length > 0 ? ` (network PATH entries were not searched: ${skipped.join(', ')})` : ''),
+        `could not start the server: '${urlSaid(command, { form: 'whole' })}' was not found on PATH` +
+        (skipped.length > 0 ? ` (network PATH entries were not searched: ${skipped.map((d) => urlSaid(d, { form: 'whole' })).join(', ')})` : ''),
     };
   }
   return { ok: true, command: found };

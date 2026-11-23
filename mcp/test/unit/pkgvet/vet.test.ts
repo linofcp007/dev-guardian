@@ -1271,3 +1271,28 @@ describe('install-vet-tilde-range-skipped', () => {
     expect(results.map((r) => [r.name, r.verdict])).toEqual([['tilde-pkg-zq', 'block']]);
   });
 });
+
+// ───────────────── install-vet-registry-files-unread — a withdrawn malicious name, by vetPackages without a command
+
+describe('install-vet-registry-files-unread', () => {
+  const EVIL = 'dgprobe-evil';
+  const PROJECT_NPM = 'https://npm.other.example/';
+  const withdrawn = (): Fake =>
+    fakeFetch({ [`https://registry.npmjs.org/${EVIL}`]: { status: 404 }, [OSV]: osvRoute({ [`${EVIL}@`]: ['MAL-2026-77'] }) });
+
+  it('T-16 registry= in the project .npmrc and a withdrawn malicious name: checks.malicious is fail (only a project file explains the 404)', async () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{ "name": "fixture-app", "version": "1.0.0" }\n');
+    writeFileSync(join(project, '.npmrc'), `registry=${PROJECT_NPM}\n`);
+    const [r] = await vetPackages([spec('npm', EVIL)], opts(withdrawn()));
+    expect(r?.checks.malicious.status).toBe('fail');
+  });
+
+  it('T-16 the registry only in the .npmrc of the home directory and a withdrawn malicious name: checks.malicious is warn, as today', async () => {
+    mkdirSync(join(project, '.git'), { recursive: true });
+    writeFileSync(join(project, 'package.json'), '{ "name": "fixture-app", "version": "1.0.0" }\n');
+    writeFileSync(join(home, '.npmrc'), `registry=${PROJECT_NPM}\n`);
+    const [r] = await vetPackages([spec('npm', EVIL)], opts(withdrawn()));
+    expect(r?.checks.malicious.status).toBe('warn');
+  });
+});

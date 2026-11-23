@@ -24,7 +24,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { RULES_BODY } from '../../../src/hostsetup/rulesTemplate.js';
 import { RESOURCES } from '../../../src/resources/index.js';
-import { attachAllTools, listedTools, TOOLS } from '../../../src/tools/index.js';
+import { attachAllTools, listedTools, toolListing, TOOLS } from '../../../src/tools/index.js';
 import { SERVER_INSTRUCTIONS } from '../../../src/tools/instructions.js';
 import { freshPlugin } from '../../helpers/historySeed.js';
 import { MCP_ROOT } from '../../helpers/tsxNode.js';
@@ -382,5 +382,25 @@ describe('the host rules name the real tool and resource counts', () => {
     const m = /(\d+) tools and (\d+) resources/.exec(RULES_BODY);
     expect(m).not.toBeNull();
     expect([Number(m?.[1]), Number(m?.[2])]).toEqual([listedTools().length, RESOURCES.length]);
+  });
+});
+
+// llm-scan-codex-smoke-findings: what the parameter descriptions of llm_scan say about confirm and the limit.
+describe('llm-scan-codex-smoke-findings', () => {
+  it('T-05 max_estimated_tokens, confirm and plan_id say what the server does, each in at most 200 characters', () => {
+    const entry = toolListing().find((t) => t.name === 'llm_scan');
+    expect(entry, 'llm_scan is listed').toBeDefined();
+    const properties = (entry?.inputSchema['properties'] ?? {}) as Record<string, { description?: string }>;
+    const text = (name: string): string => properties[name]?.description ?? '';
+
+    expect(text('max_estimated_tokens')).toContain('never raises it');
+    expect(text('max_estimated_tokens')).toContain('new plan');
+    expect(text('confirm')).toContain('delivery still stops');
+    expect(text('confirm')).not.toContain('Accept an estimate above the limit');
+    expect(text('plan_id')).toContain('takes project_path and confirm only');
+    for (const name of ['max_estimated_tokens', 'confirm', 'plan_id']) {
+      expect(text(name).length, name).toBeGreaterThan(0);
+      expect(text(name).length, name).toBeLessThanOrEqual(200);
+    }
   });
 });

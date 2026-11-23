@@ -660,7 +660,6 @@ describe('parseInstallCommands — launchers that download and run a package (re
 
   it.each([
     ['npx -p typescript tsc', /-p/],
-    ['uvx --from httpie-zz http', /--from/],
     ['pipx install --pip-args="--index-url https://corp" tool-zz', /pip-args/],
     ['npx --registry https://npm.corp tool-zz', /registry|--registry/],
   ])('%s is not confident', (command, why) => {
@@ -791,7 +790,6 @@ describe('manifest installs — a command that installs what a manifest says', (
     'npm test',
     'pip install requests',
     'pip install -c constraints.txt requests',
-    'pip download -r a.txt',
     'echo npm ci',
     'git commit -m "npm ci"',
   ])('T-03 %s is no manifest install', (command) => {
@@ -1008,9 +1006,10 @@ describe('pkgvet-archive-like-name', () => {
 
   it('T-04 a manager that was not measured: the archive-like word is a package AND the command says why it is uncertain', () => {
     const cases: Array<[string, string]> = [
-      ['pipx install x.zip', 'x.zip'],
-      ['pipx run x.whl', 'x.whl'],
-      ['composer require v/p.zip', 'v/p.zip'],
+      // Outside the form measured for the pipx and the composer (pkgvet-archive-names-pipx-composer): a flag; the reason is R1, which says archive too.
+      ['pipx install -q x.zip', 'x.zip'],
+      ['pipx run -q x.whl', 'x.whl'],
+      ['composer require --dev v/p.zip', 'v/p.zip'],
       ['dotnet add package X.Y.zip', 'X.Y.zip'],
     ];
     for (const [command, name] of cases) {
@@ -1328,7 +1327,7 @@ describe('pkgvet-archive-like-name', () => {
     ["pipx install foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
     ["pipx install lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
     ["pipx install thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
-    ["pipx install --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known"],
+    ["pipx install --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)"],
     ["pipx install --registry https://r.example/x.zip somepkg", "pipx/pypi | P somepkg | S https://r.example/x.zip => URL / VCS / protocol spec — not looked up | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
     ["pipx install -e ./pkg.tgz somepkg", "pipx/pypi | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist"],
     ["pipx run left-pad", "pipx/pypi | P left-pad"],
@@ -1346,7 +1345,7 @@ describe('pkgvet-archive-like-name', () => {
     ["pipx run foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
     ["pipx run lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
     ["pipx run thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
-    ["pipx run --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known"],
+    ["pipx run --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)"],
     ["pipx run --registry https://r.example/x.zip somepkg", "pipx/pypi | P somepkg | S https://r.example/x.zip => URL / VCS / protocol spec — not looked up | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
     ["pipx run -e ./pkg.tgz somepkg", "pipx/pypi | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["composer require left-pad", "composer/packagist | S left-pad => platform package or not a vendor/name — not looked up"],
@@ -1464,7 +1463,8 @@ describe('pkgvet-archive-like-name', () => {
 
   it('T-11 pipx hands the word to pip: an ending pip reads as a file but the old list lacked is a package AND an unmeasured reason', () => {
     for (const ending of ['.tbz', '.txz', '.tlz', '.tar.lz', '.tar.lzma']) {
-      const command = `pipx install x${ending}`;
+      // With a flag: the bare form is the measured one, where the word is a file for the pipx (pkgvet-archive-names-pipx-composer).
+      const command = `pipx install -q x${ending}`;
       const cmds = parseInstallCommands(command);
       expect(cmds.map((c) => c.packages.map((p) => p.name)), command).toEqual([[`x${ending}`]]);
       expect(cmds.map((c) => c.skipped), command).toEqual([[]]);
@@ -1505,6 +1505,8 @@ describe('install-vet-project-registry-said', () => {
     'npm install -g --force x',
     'npm install --save-exact -g x',
     'pnpm add -g --ignore-scripts x',
+    // install-vet-global-in-short-cluster: npm reads `-gD` as `-g -D` (measured 2026-11-21, npm 11.19.0).
+    'npm install -gD x',
   ])('T-09 %s: a global install', (command) => {
     expect(globalOf(command)).toBe(true);
   });
@@ -1522,7 +1524,6 @@ describe('install-vet-project-registry-said', () => {
     'npm install -g --location=project x',
     'npm install --location project -g x',
     'npm install x -- -g',
-    'npm install -gD x',
     'npm install -g $FLAGS x',
     'npm install -g "$PKG"',
     'pnpm add --global=false x',
@@ -2885,6 +2886,8 @@ describe('install-vet-global-update-by-name', () => {
     `bun update -g ${P}`,
     `yarn global upgrade ${P}`,
     `yarn global upgrade ${P} --latest`,
+    // install-vet-global-in-short-cluster: npm reads `-gD` as `-g -D` (measured 2026-11-21, M-1b).
+    `npm update -gD ${P}`,
   ])('T-01 `%s` gives the name in `updateNames` and not in `packages`; global for certain, no manifest', (command) => {
     expect(read(command), command).toEqual([
       { packages: [], updateNames: [[P, undefined, P]], manifest: undefined, update: undefined, global: true, uncertain: expect.any(Array) },
@@ -2897,7 +2900,7 @@ describe('install-vet-global-update-by-name', () => {
     ]);
   });
 
-  it.each([`pnpm update -g --latest ${P}`, `npm update -gD ${P}`, `npm update -g false ${P}`, `npm update --global=false ${P}`])(
+  it.each([`pnpm update -g --latest ${P}`, `npm update -g false ${P}`, `npm update --global=false ${P}`])(
     'T-01 `%s` is global but not for certain: `updateNames` has the name AND the manifest is read',
     (command) => {
       const parsed = read(command);
@@ -3390,5 +3393,1209 @@ describe('install-vet-redirect-glued-word', () => {
     expect(readings(`yarn add ${P}@npm:`).map((r) => r.packages)).toEqual([[[P, undefined]]]);
     const npm = parseInstallCommands(`npm install ${P}@npm:`);
     expect({ packages: npm.map((c) => c.packages), skipped: npm.map((c) => c.skipped.map((s) => s.raw)) }).toEqual({ packages: [[]], skipped: [[`${P}@npm:`]] });
+  });
+});
+
+// ───────────────── install-vet-global-in-short-cluster — npm's groups of short flags read as npm reads them
+
+describe('install-vet-global-in-short-cluster', () => {
+  // The names of the measurement (.specs/install-vet-global-in-short-cluster/measurements/, npm 11.19.0).
+  const P = 'dgprobe-zzq7731-named';
+  const W = 'dgprobe-zzq7731-ws';
+  const INIT = 'dgprobe-zzq7731-init';
+  const MANIFEST = { kind: 'package-json' };
+  /**
+   * The letters of npm 11.19.0 that take no value (`explore-linux-container-2026-11-20.txt:305-366`, confirmed in
+   * `single-dash-words-linux-container-2026-11-21.txt:11`), written here and not taken from the parser.
+   */
+  const NO_VALUE = ['a', 'f', 'g', 'l', 'p', 'S', 'B', 'D', 'E', 'O', 'P', 'y', 'h', 'H', 'v', 'd', 's', 'q', 'n'];
+
+  type Reading = {
+    manager: string;
+    packages: string[];
+    updateNames: string[] | undefined;
+    manifest: unknown;
+    global: boolean | undefined;
+    uncertain: string[];
+    prefixed: boolean | undefined;
+    customRegistry: string | undefined;
+    skipped: string[];
+    localFirst: boolean | undefined;
+  };
+  /** What each install command of a line gives. */
+  const readAll = (command: string): Reading[] =>
+    parseInstallCommands(command).map((c) => ({
+      manager: c.manager,
+      packages: c.packages.map((p) => p.name),
+      updateNames: c.updateNames?.map((p) => p.name),
+      manifest: c.manifest,
+      global: c.global,
+      uncertain: c.uncertain,
+      prefixed: c.prefixed,
+      customRegistry: c.customRegistry,
+      skipped: c.skipped.map((s) => s.raw),
+      localFirst: c.localFirst,
+    }));
+  const NONE: Reading = {
+    manager: '',
+    packages: [],
+    updateNames: undefined,
+    manifest: undefined,
+    global: undefined,
+    uncertain: [],
+    prefixed: undefined,
+    customRegistry: undefined,
+    skipped: [],
+    localFirst: undefined,
+  };
+  /** What the single install command of `command` gives. */
+  const one = (command: string): Reading => {
+    const all = readAll(command);
+    expect(all.length, command).toBe(1);
+    return all[0] ?? NONE;
+  };
+  /** The five fields the reading of a group and of its letters written apart must share. */
+  const essence = (command: string): unknown =>
+    readAll(command).map((r) => ({ packages: r.packages, updateNames: r.updateNames, manifest: r.manifest, global: r.global, uncertain: r.uncertain }));
+  /** The same letters, written one by one in the same order: `-gD` → `-g -D`. */
+  const apart = (group: string): string => [...group].map((c) => `-${c}`).join(' ');
+
+  // ── T-01: a group of no-value letters reads as the same letters written apart
+
+  const TWOS = NO_VALUE.flatMap((a) => NO_VALUE.filter((b) => b !== a).map((b) => `${a}${b}`));
+  const THREES = NO_VALUE.flatMap((a) =>
+    NO_VALUE.flatMap((b) => NO_VALUE.filter((c) => a !== b && a !== c && b !== c && (a === 'g' || b === 'g' || c === 'g')).map((c) => `${a}${b}${c}`)),
+  );
+
+  it.each<[label: string, groups: readonly string[], count: number]>([
+    ['every group of two different letters', TWOS, 342],
+    ['every group of three different letters with a `g`', THREES, 918],
+  ])(
+    'T-01 %s of the npm 11.19.0 no-value list, in every order, gives in `npm i` and `npm update` what the same letters written apart give',
+    (_label, groups, count) => {
+      expect(groups.length).toBe(count);
+      const differing: string[] = [];
+      let first: unknown;
+      for (const group of groups) {
+        for (const verb of ['i', 'update']) {
+          const line = `npm ${verb} -${group} ${P}`;
+          const control = `npm ${verb} ${apart(group)} ${P}`;
+          const got = essence(line);
+          const want = essence(control);
+          if (JSON.stringify(got) !== JSON.stringify(want)) {
+            differing.push(line);
+            first = first ?? { line, got, control, want };
+          }
+        }
+      }
+      expect({ differing: differing.length, examples: differing.slice(0, 8) }, JSON.stringify(first)).toEqual({ differing: 0, examples: [] });
+    },
+  );
+
+  it.each<[command: string, updateNames: string[] | undefined]>([
+    [`npm install-test -gD ${P}`, undefined],
+    // An update that names nobody: `updateNames` is empty.
+    ['npm update -gD', []],
+  ])('T-01 `%s` is global for certain and reads no manifest (`updateNames`: %j)', (command, updateNames) => {
+    const r = one(command);
+    expect({ updateNames: r.updateNames, global: r.global, manifest: r.manifest }).toEqual({ updateNames, global: true, manifest: undefined });
+  });
+
+  it('T-01 the second command of `npx npm i -gD <P>` is global for certain and reads no manifest', () => {
+    const all = readAll(`npx npm i -gD ${P}`);
+    expect(all.map((r) => r.manager)).toEqual(['npx', 'npm']);
+    const second = all[1] ?? NONE;
+    expect({ global: second.global, manifest: second.manifest }).toEqual({ global: true, manifest: undefined });
+  });
+
+  // ── T-02: the letters npm has and the table had not
+
+  it.each([
+    `npm i -g -a ${P}`,
+    `npm i -g -l ${P}`,
+    `npm i -g -p ${P}`,
+    `npm i -g -n ${P}`,
+    `npm i -g -h ${P}`,
+    `npm i -g -v ${P}`,
+    `npm i -g -H ${P}`,
+    `npm i -ga ${P}`,
+    `npm i -ag ${P}`,
+    `npm i -gl ${P}`,
+    `npm i -gp ${P}`,
+    `npm i -gn ${P}`,
+    `npm i -gh ${P}`,
+    `npm i -gv ${P}`,
+    `npm i -gH ${P}`,
+  ])('T-02 `%s` gives [P], global for certain, no manifest, and no reason "unknown flag"', (command) => {
+    const r = one(command);
+    expect({
+      packages: r.packages,
+      global: r.global,
+      manifest: r.manifest,
+      unknown: r.uncertain.filter((u) => u.startsWith('unknown flag')),
+    }).toEqual({ packages: [P], global: true, manifest: undefined, unknown: [] });
+  });
+
+  // ── T-03: the letters that take a value — `-L`, `-m`, `-c` — alone, last of a group, and inside one
+
+  /** The reasons `-L`, `-m` and `-c` gave as flags the table did not know. */
+  const unknownValueLetters = (r: Reading): string[] => r.uncertain.filter((u) => ['unknown flag -L', 'unknown flag -m', 'unknown flag -c'].includes(u));
+
+  it.each([`npm i -L global ${P}`, `npm i -gL global ${P}`])('T-03 `%s` gives [P], global for certain, no manifest', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, global: r.global, manifest: r.manifest, unknown: unknownValueLetters(r) }).toEqual({
+      packages: [P],
+      global: true,
+      manifest: undefined,
+      unknown: [],
+    });
+  });
+
+  it.each<[command: string, packages: string[]]>([
+    [`npm i -gm dgprobe-msg ${P}`, [P]],
+    [`npm i -gc dgprobe-call ${P}`, [P]],
+    [`npm i -mg dgprobe-msg ${P}`, ['dgprobe-msg', P]],
+    [`npm i -cg dgprobe-call ${P}`, ['dgprobe-call', P]],
+    // The String rule (question 5, the owner's answer A): `-m` and `-c` take no word that starts with `-` and another character.
+    [`npm i -m -g ${P}`, [P]],
+    [`npm i -c -g ${P}`, [P]],
+  ])('T-03 `%s` gives %j, global for certain', (command, packages) => {
+    const r = one(command);
+    expect({ packages: r.packages, global: r.global, unknown: unknownValueLetters(r) }).toEqual({ packages, global: true, unknown: [] });
+  });
+
+  it.each([`npm i -gL project ${P}`, `npm i -gL user ${P}`, `npm i -L project -g ${P}`])(
+    'T-03 `%s` gives [P], is not global for certain (`--location` beside `-g` stays a doubt), and the manifest is read',
+    (command) => {
+      const r = one(command);
+      expect({ packages: r.packages, global: r.global === true, manifest: r.manifest, unknown: unknownValueLetters(r) }).toEqual({
+        packages: [P],
+        global: false,
+        manifest: MANIFEST,
+        unknown: [],
+      });
+    },
+  );
+
+  it.each([`npm i -L project ${P}`, `npm i -m dgprobe-msg ${P}`, `npm i -c dgprobe-call ${P}`])('T-03 `%s` gives [P], and the manifest is read', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest, unknown: unknownValueLetters(r) }).toEqual({ packages: [P], manifest: MANIFEST, unknown: [] });
+  });
+
+  it.each([`npm i -mc dgprobe-call ${P}`, `npm i -CgL project ${P}`])('T-03 `%s` gives [P]: the word is the value of the last letter', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, unknown: unknownValueLetters(r) }).toEqual({ packages: [P], unknown: [] });
+  });
+
+  // ── T-04: a word with a letter npm does not have is one flag npm does not know, the whole word
+
+  it.each<[command: string, word: string, letter: string]>([
+    [`npm i -gx ${P}`, '-gx', 'x'],
+    [`npm i -xg ${P}`, '-xg', 'x'],
+    [`npm i -gT ${P}`, '-gT', 'T'],
+    [`npm i -gZ ${P}`, '-gZ', 'Z'],
+    [`npm i -gDx ${P}`, '-gDx', 'x'],
+  ])('T-04 `%s` gives [P], not global for certain, the manifest read, and the reason `unknown flag %s` (the whole word)', (command, word, letter) => {
+    const r = one(command);
+    expect({
+      packages: r.packages,
+      global: r.global === true,
+      manifest: r.manifest,
+      whole: r.uncertain.includes(`unknown flag ${word}`),
+      letter: r.uncertain.includes(`unknown flag -${letter}`),
+    }).toEqual({ packages: [P], global: false, manifest: MANIFEST, whole: true, letter: false });
+  });
+
+  // ── T-05: the flags before the verb (M-3)
+
+  it.each([
+    `npm -L global install ${P}`,
+    `npm -L project -g install ${P}`,
+    `npm -m dgprobe-msg install ${P}`,
+    `npm -c dgprobe-call i ${P}`,
+    `npm -gL project install ${P}`,
+    `npm -gm dgprobe-msg i ${P}`,
+  ])('T-05 `%s` gives an npm command with [P]', (command) => {
+    expect(readAll(command).map((r) => ({ manager: r.manager, packages: r.packages }))).toEqual([{ manager: 'npm', packages: [P] }]);
+  });
+
+  it.each([`npm -L global install ${P}`, `npm -gm dgprobe-msg i ${P}`])('T-05 `%s` is global for certain and reads no manifest', (command) => {
+    const r = one(command);
+    expect({ global: r.global, manifest: r.manifest }).toEqual({ global: true, manifest: undefined });
+  });
+
+  it.each([`npm -m dgprobe-msg install ${P}`, `npm -c dgprobe-call i ${P}`])('T-05 `%s` reads the manifest', (command) => {
+    expect(one(command).manifest).toEqual(MANIFEST);
+  });
+
+  it('T-05 `npm -L global exec <P>` gives the launcher `npm exec` with [P]', () => {
+    expect(readAll(`npm -L global exec ${P}`).map((r) => ({ manager: r.manager, packages: r.packages, manifest: r.manifest, localFirst: r.localFirst }))).toEqual([
+      { manager: 'npm', packages: [P], manifest: undefined, localFirst: true },
+    ]);
+  });
+
+  // ── T-12: the words npm reads whole, and the letters that expand to two words (M-2)
+
+  it.each([`npm i -call dgprobe-call ${P}`, `npm i -ca dgprobe-call ${P}`])('T-12 `%s` gives [P], and the manifest is read: the word is the value of the whole word', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [P], manifest: MANIFEST });
+  });
+
+  it('T-12 `npm i -ca --registry=https://r.example/ <P>` gives [P] and no custom registry: `-ca` takes the next word, whatever it is', () => {
+    const r = one(`npm i -ca --registry=https://r.example/ ${P}`);
+    expect({ packages: r.packages, customRegistry: r.customRegistry }).toEqual({ packages: [P], customRegistry: undefined });
+  });
+
+  it('T-12 `npm i -Cd dgprobe-dir <P>` gives [info, dgprobe-dir, P] and is prefixed (question 6, the owner\'s answer A)', () => {
+    const r = one(`npm i -Cd dgprobe-dir ${P}`);
+    expect({ packages: r.packages, prefixed: r.prefixed }).toEqual({ packages: ['info', 'dgprobe-dir', P], prefixed: true });
+  });
+
+  it('T-12 `npm i -Lq <P>` gives [warn, P], is not global for certain, and the manifest is read', () => {
+    const r = one(`npm i -Lq ${P}`);
+    expect({ packages: r.packages, global: r.global === true, manifest: r.manifest }).toEqual({ packages: ['warn', P], global: false, manifest: MANIFEST });
+  });
+
+  // ── T-13: the launchers with `-L` and `-m` (M-4; question 4, the owner's answer B)
+
+  it.each<[command: string, packages: string[]]>([
+    [`npm exec -L global ${P}`, [P]],
+    [`npx -L global ${P}`, [P]],
+    [`npm exec -m dgprobe-msg ${P}`, [P]],
+    [`npm init -L global ${INIT}`, [`create-${INIT}`]],
+    [`npm create -L global ${INIT}`, [`create-${INIT}`]],
+  ])('T-13 `%s` gives %j, and never `global`, `dgprobe-msg` or `create-global`', (command, packages) => {
+    const names = readAll(command).flatMap((r) => r.packages);
+    expect({ names, values: names.filter((n) => ['global', 'dgprobe-msg', 'create-global'].includes(n)) }).toEqual({ names: packages, values: [] });
+  });
+
+  // ── T-09: protection — what stays as it is, with the values written here
+
+  it.each([`pnpm add -gD ${P}`, `pnpm add -Dg ${P}`, `bun add -gD ${P}`])('T-09 `%s` is not global for certain: pnpm and bun keep the rule of today', (command) => {
+    expect(one(command).global === true).toBe(false);
+  });
+
+  it.each<[command: string, packages: string[], prefixed: boolean | undefined]>([
+    [`npm i -Cg dgprobe-dir ${P}`, ['dgprobe-dir', P], true],
+    [`npm i -gC dgprobe-dir ${P}`, [P], true],
+    [`npm i -Cm dgprobe-call ${P}`, ['dgprobe-call', P], true],
+    [`npm i -wg ${W} ${P}`, [W, P], undefined],
+    [`npm i -gw ${W} ${P}`, [P], undefined],
+  ])('T-09 `%s` gives %j (prefixed: %s)', (command, packages, prefixed) => {
+    const r = one(command);
+    expect({ packages: r.packages, prefixed: r.prefixed }).toEqual({ packages, prefixed });
+  });
+
+  it('T-09 `npm i -Lg project <P>` gives [project, P], is not global, and the manifest is read (M-1, 438)', () => {
+    const r = one(`npm i -Lg project ${P}`);
+    expect({ packages: r.packages, global: r.global === true, manifest: r.manifest }).toEqual({ packages: ['project', P], global: false, manifest: MANIFEST });
+  });
+
+  it.each(['npm install -Dg false', 'npm install -g -Dg false'])('T-09 `%s` names no package and reads the manifest', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: MANIFEST });
+  });
+
+  it.each([`npm i -Da false ${P}`, `npm i -a false ${P}`, `npm i -all false ${P}`])('T-09 `%s` has `false` among its packages', (command) => {
+    expect(one(command).packages).toContain('false');
+  });
+
+  it.each([
+    `npm install ${P} -- -gD`,
+    `npm install -g $FLAGS ${P}`,
+    `npm i -local -g ${P}`,
+    `npm i -global ${P}`,
+  ])('T-09 `%s` is not global for certain', (command) => {
+    expect(one(command).global === true).toBe(false);
+  });
+
+  it('T-09 `npm i -ws <P>` gives [P], reads the manifest, and is uncertain for the workspace context (M-2, 170)', () => {
+    const r = one(`npm i -ws ${P}`);
+    expect({ packages: r.packages, manifest: r.manifest, workspace: r.uncertain.some((u) => u.startsWith('workspace context')) }).toEqual({
+      packages: [P],
+      manifest: MANIFEST,
+      workspace: true,
+    });
+  });
+
+  it.each([`npm i -dd ${P}`, `npm i -ddd ${P}`, `npm i -all ${P}`])('T-09 `%s` gives [P] and reads the manifest', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [P], manifest: MANIFEST });
+  });
+
+  it.each([`npm i -g -dd ${P}`, `npm i -g -ws ${P}`])('T-09 `%s` gives [P], global for certain', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, global: r.global }).toEqual({ packages: [P], global: true });
+  });
+
+  it.each([`npm i -m --registry=https://r.example/ ${P}`, `npm i -call --registry=https://r.example/ ${P}`])(
+    'T-09 `%s` gives [P] and the registry of the line (question 5, the owner\'s answer A)',
+    (command) => {
+      const r = one(command);
+      expect({ packages: r.packages, customRegistry: r.customRegistry }).toEqual({ packages: [P], customRegistry: 'https://r.example/' });
+    },
+  );
+
+  it('T-09 `npm i -gL=project <P>` is uncertain for a flag the table does not know', () => {
+    expect(one(`npm i -gL=project ${P}`).uncertain.some((u) => u.startsWith('unknown flag'))).toBe(true);
+  });
+
+  it.each(['pip install -qr req.txt', 'pip install -rreq.txt'])('T-09 `%s` names no package and puts `req.txt` aside: the rule of pip stays', (command) => {
+    const r = one(command);
+    expect({ packages: r.packages, skipped: r.skipped }).toEqual({ packages: [], skipped: ['req.txt'] });
+  });
+
+  it.each<[command: string, packages: string[]]>([
+    [`npm exec -sy true ${P}`, [P]],
+    [`npx -y ${P}`, [P]],
+    [`npm exec --yes ${P}`, [P]],
+    [`npm init -y ${P}`, [`create-${P}`]],
+  ])('T-09 `%s` gives %j, as today', (command, packages) => {
+    expect(readAll(command).flatMap((r) => r.packages)).toEqual(packages);
+  });
+
+  // ── T-11: protection — the cost of a line of groups stays linear
+
+  // `n` groups and one package: eight times as many cost well under 22.6 times as much (linear reads ~8, quadratic ~64;
+  // see test/helpers/timing.ts). Guards the function that opens an npm group, which `saysGlobal` calls too.
+  it.each<[label: string, make: (n: number) => string]>([
+    ['`-gDEOPSB` groups', (n) => `npm i ${'-gDEOPSB '.repeat(n)}${P}`],
+    ['`-gL project` pairs', (n) => `npm i ${'-gL project '.repeat(n)}${P}`],
+  ])('T-11 eight times as many %s in one `npm i` line cost well under 22.6 times as much', (label, make) => {
+    expectLinear(`install-vet-global-in-short-cluster ${label}`, (n) => void parseInstallCommands(make(n)), 400);
+  }, 120_000);
+});
+
+// ───────────────── install-vet-python-tool-forms — the Python forms that fetch a package and build it, read as their managers read them
+
+describe('install-vet-python-tool-forms', () => {
+  // The names of the measurement (.specs/install-vet-python-tool-forms/measurements/, pip 23.0.1).
+  const P = 'dgprobe-zzq7731-named';
+  const D = 'dgprobe-zzq7731-dep';
+  const T = 'dgprobe-zzq7731-tool';
+  const CMD = 'dgprobe-zzq7731-cmd';
+  const URL = 'https://x.test/simple';
+  /** Part of R1, the reason of a word of the pipx that ends like an archive in a form that was not measured (pkgvet-archive-names-pipx-composer). */
+  const FORM_NOT_MEASURED = 'in a form that was not measured';
+
+  /** What the feature adds to a command; read through a type that has it, so the file type-checks before the field exists. */
+  type WithEveryTool = { updatesEveryTool?: boolean };
+
+  interface Reading {
+    manager: string;
+    packages: string[];
+    candidates: string[];
+    updateNames: string[] | undefined;
+    updatesEveryTool: boolean | undefined;
+    manifest: unknown;
+    registries: string[];
+    uncertain: string[];
+    skipped: string[];
+  }
+  const NONE: Reading = {
+    manager: '(no command)',
+    packages: [],
+    candidates: [],
+    updateNames: undefined,
+    updatesEveryTool: undefined,
+    manifest: undefined,
+    registries: [],
+    uncertain: [],
+    skipped: [],
+  };
+  /** The packages are sorted: which of two names comes first is no part of what a form promises. */
+  const readAll = (command: string): Reading[] =>
+    parseInstallCommands(command).map((c) => ({
+      manager: c.manager,
+      packages: c.packages.map((p) => p.name).sort(),
+      candidates: (c.candidates ?? []).map((p) => p.name).sort(),
+      updateNames: c.updateNames?.map((p) => p.name),
+      updatesEveryTool: (c as typeof c & WithEveryTool).updatesEveryTool,
+      manifest: c.manifest,
+      registries: c.registries,
+      uncertain: c.uncertain,
+      skipped: c.skipped.map((s) => s.raw),
+    }));
+  /** The single install command of `command`: exactly one, or the test fails on the count. */
+  const one = (command: string): Reading => {
+    const all = readAll(command);
+    expect(all.length, `${command}: the number of commands read`).toBe(1);
+    return all[0] ?? NONE;
+  };
+  const sorted = (...names: string[]): string[] => [...names].sort();
+
+  describe('parse', () => {
+    // ── T-01: the commands that fetch a package, each read with its own flags
+
+    it.each<[command: string, manager: string, packages: string[]]>([
+      [`pip download ${P}`, 'pip', [P]],
+      [`pip wheel ${P}`, 'pip', [P]],
+      [`python -m pip download ${P}`, 'pip', [P]],
+      [`py -m pip wheel ${P}`, 'pip', [P]],
+      [`pip3 download ${P}==2.0.0`, 'pip', [P]],
+      [`pip download --no-deps -d out ${P}`, 'pip', [P]],
+      [`pip download -dout ${P}`, 'pip', [P]],
+      [`pip download --dest=out ${P}`, 'pip', [P]],
+      [`pip download --destination-directory out ${P}`, 'pip', [P]],
+      [`pip wheel -w out ${P}`, 'pip', [P]],
+      [`pipx inject ${T} ${P} ${D}`, 'pipx', sorted(P, D)],
+      [`pipx inject --force ${T} ${P}`, 'pipx', [P]],
+      [`pipx inject --include-resources-from ${D} ${T} ${P}`, 'pipx', sorted(D, P)],
+      [`pipx upgrade --install ${P}`, 'pipx', [P]],
+      [`pipx runpip ${T} install ${P} ${D}`, 'pip', sorted(P, D)],
+      [`pipx runpip ${T} -q install ${P}`, 'pip', [P]],
+      [`pipx run --with ${D} ${P} arg`, 'pipx', sorted(D, P)],
+      [`pipx run --with "${D}[x,y]" ${P}`, 'pipx', sorted(D, P)],
+      [`uvx --with "${P}[x,y]" ${T}`, 'uv', sorted(P, T)],
+      [`uvx --from "${P}[x,y]" ${CMD}`, 'uv', [P]],
+      [`pipx run --spec "${P}[x,y]" ${CMD}`, 'pipx', [P]],
+      [`pipx install --preinstall "${D}[x,y]" ${T}`, 'pipx', sorted(D, T)],
+    ])('T-01 `%s`: one command of %s with the packages %j and no other', (command, manager, packages) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages }).toEqual({ manager, packages });
+    });
+
+    it('T-01 `pip3 download P==2.0.0` keeps the range `==2.0.0` of P', () => {
+      const c = parseInstallCommands(`pip3 download ${P}==2.0.0`);
+      expect(c.length, 'the number of commands read').toBe(1);
+      expect(c[0]?.packages.map((p) => [p.name, p.range])).toEqual([[P, '==2.0.0']]);
+    });
+
+    it.each([`pip download --pypi-url ${URL} ${P}`, `pip download -i ${URL} ${P}`])('T-01 `%s` names the index as a registry', (command) => {
+      const r = one(command);
+      expect({ packages: r.packages, registries: r.registries }).toEqual({ packages: [P], registries: [URL] });
+    });
+
+    it('T-01 `pipx inject -qi URL T P` names the index as a registry and never takes T for a package', () => {
+      const r = one(`pipx inject -qi ${URL} ${T} ${P}`);
+      expect({ manager: r.manager, packages: r.packages, registries: r.registries }).toEqual({ manager: 'pipx', packages: [P], registries: [URL] });
+    });
+
+    it('T-01 `pipx inject -fr reqs.txt T P` reads P and the requirements file, and takes neither T nor reqs.txt for a package', () => {
+      const r = one(`pipx inject -fr reqs.txt ${T} ${P}`);
+      expect({ manager: r.manager, packages: r.packages, manifest: r.manifest }).toEqual({
+        manager: 'pipx',
+        packages: [P],
+        manifest: { kind: 'requirements', files: ['reqs.txt'] },
+      });
+    });
+
+    it('T-01 `pipx inject --dgunknown x T P`: T is a candidate, P is a package, x is neither, and the line says `unknown flag --dgunknown`', () => {
+      const r = one(`pipx inject --dgunknown x ${T} ${P}`);
+      expect({ manager: r.manager, packages: r.packages, candidates: r.candidates, unknown: r.uncertain.includes('unknown flag --dgunknown') }).toEqual({
+        manager: 'pipx',
+        packages: sorted(T, P),
+        candidates: [T],
+        unknown: true,
+      });
+    });
+
+    it('T-01 `pipx runpip --dgunknown x T install P` reads P only, and is uncertain: neither x nor T is looked up', () => {
+      const r = one(`pipx runpip --dgunknown x ${T} install ${P}`);
+      expect({ manager: r.manager, packages: r.packages, uncertain: r.uncertain.length > 0 }).toEqual({ manager: 'pip', packages: [P], uncertain: true });
+    });
+
+    it('T-01 `pipx inject T x.zip` looks up x.zip and says why it is uncertain: the form was not measured (R1)', () => {
+      const r = one(`pipx inject ${T} x.zip`);
+      expect({ manager: r.manager, packages: r.packages, reason: r.uncertain.join(' | ').includes(FORM_NOT_MEASURED) }).toEqual({
+        manager: 'pipx',
+        packages: ['x.zip'],
+        reason: true,
+      });
+    });
+
+    it('T-01 `pip download x.zip` is a command of pip with no package: x.zip is a file for pip', () => {
+      const r = one('pip download x.zip');
+      expect({ manager: r.manager, packages: r.packages }).toEqual({ manager: 'pip', packages: [] });
+    });
+
+    it.each([`pipx run --with ${D} ${P} arg`, `pipx run --with "${D}[x,y]" ${P}`])(
+      'T-01 `%s` does not say `unknown flag --with`, and D is not a candidate',
+      (command) => {
+        const r = one(command);
+        expect({ unknownWith: r.uncertain.includes('unknown flag --with'), candidates: r.candidates, skipped: r.skipped }).toEqual({
+          unknownWith: false,
+          candidates: [],
+          skipped: [],
+        });
+      },
+    );
+
+    it.each([`uvx --with "${P}[x,y]" ${T}`, `pipx install --preinstall "${D}[x,y]" ${T}`, `uvx --from "${P}[x,y]" ${CMD}`, `pipx run --spec "${P}[x,y]" ${CMD}`])(
+      'T-01 `%s` skips no half of the name: the commas inside [...] do not split it',
+      (command) => {
+        expect(one(command).skipped).toEqual([]);
+      },
+    );
+
+    // ── T-01: the names given to an update, and the updates of every tool
+
+    it.each<[command: string, manager: string, names: string[]]>([
+      [`pipx upgrade ${P}`, 'pipx', [P]],
+      [`pipx reinstall ${P}`, 'pipx', [P]],
+      [`uv tool upgrade ${P} ${D}`, 'uv', [P, D]],
+      [`uv tool upgrade --python 3.12 ${P}`, 'uv', [P]],
+      [`uv tool upgrade -i ${URL} ${P}`, 'uv', [P]],
+    ])('T-01 `%s`: one command of %s, no package, and the names given to the update %j', (command, manager, names) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages, updateNames: r.updateNames }).toEqual({ manager, packages: [], updateNames: names });
+    });
+
+    it('T-01 `uv tool upgrade -i URL P` names the index as a registry, and the URL is no name', () => {
+      expect(one(`uv tool upgrade -i ${URL} ${P}`).registries).toEqual([URL]);
+    });
+
+    it.each([
+      ['pipx upgrade-all', 'pipx'],
+      ['pipx upgrade-all --skip a b', 'pipx'],
+      ['uv tool upgrade --all', 'uv'],
+    ])('T-01 `%s` is one command of %s that updates every tool: no name given, none of a or b', (command, manager) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages, updateNames: r.updateNames, updatesEveryTool: r.updatesEveryTool }).toEqual({
+        manager,
+        packages: [],
+        updateNames: [],
+        updatesEveryTool: true,
+      });
+    });
+
+    // ── T-07: the files of `-r` of the four commands are read as the one of `pip install -r`
+
+    it.each<[command: string, files: string[]]>([
+      ['pip download -r a.txt', ['a.txt']],
+      ['pip wheel -r a.txt -r b.txt', ['a.txt', 'b.txt']],
+      [`pipx runpip ${T} install -r a.txt`, ['a.txt']],
+      [`pipx inject ${T} -r a.txt`, ['a.txt']],
+      [`pipx inject -fr a.txt ${T} ${P}`, ['a.txt']],
+    ])('T-07 `%s` gives the manifest of requirements files %j, in order', (command, files) => {
+      expect(one(command).manifest).toEqual({ kind: 'requirements', files });
+    });
+
+    // ── T-05: protection — what the readers give today, written here
+
+    it.each<[command: string, manager: string, packages: string[], uncertain: string[]]>([
+      [`pip install ${P}`, 'pip', [P], []],
+      [`pipx install ${P}`, 'pipx', [P], []],
+      [`pipx run ${P}`, 'pipx', [P], []],
+      [`uvx ${P}`, 'uv', [P], []],
+      [`uv tool install ${P}`, 'uv', [P], []],
+      [`uv tool run ${P}`, 'uv', [P], []],
+      // The commas outside [...] split today, and the line says it is not one plain statement.
+      [`uvx --with ${P},${D} ${T}`, 'uv', sorted(P, D, T), ["not a single plain install statement (',' outside quotes)"]],
+    ])('T-05 `%s` is one command of %s with the packages %j and the reasons %j, as today', (command, manager, packages, uncertain) => {
+      const r = one(command);
+      expect({ manager: r.manager, packages: r.packages, uncertain: r.uncertain }).toEqual({ manager, packages, uncertain });
+    });
+
+    it('T-05 `pip install -r a.txt` gives the manifest of requirements files and no package, as today', () => {
+      const r = one('pip install -r a.txt');
+      expect({ packages: r.packages, manifest: r.manifest }).toEqual({ packages: [], manifest: { kind: 'requirements', files: ['a.txt'] } });
+    });
+
+    it.each([
+      'pip index versions P',
+      'pip list',
+      'pip show P',
+      'pipx list',
+      'uv tool list',
+      `pipx runpip ${T} list`,
+      `pipx runpip ${T} uninstall ${P}`,
+      'pipx upgrade-shared',
+      'pipx reinstall-all',
+      'pipx install-all spec.json',
+    ])('T-05 `%s` is no install command: none is read, as today', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it('T-05 `pipx install -q x.zip` looks up x.zip and says the form was not measured (R1)', () => {
+      const r = one('pipx install -q x.zip');
+      expect({ packages: r.packages, reason: r.uncertain.join(' | ').includes(FORM_NOT_MEASURED) }).toEqual({ packages: ['x.zip'], reason: true });
+    });
+
+    // ── T-08: protection — the cost of the new readers is linear in the line
+
+    it.each<[label: string, make: (n: number) => string]>([
+      ['pipx inject T P;', (n) => `pipx inject ${T} ${P};`.repeat(n)],
+      ['pip download --no-deps P;', (n) => `pip download --no-deps ${P};`.repeat(n)],
+      ['pipx runpip T install P;', (n) => `pipx runpip ${T} install ${P};`.repeat(n)],
+      ['pipx inject T and n times P', (n) => `pipx inject ${T} ${'P '.repeat(n)}`],
+    ])('T-08 parseInstallCommands of %s costs linear time: eight times the input, well under 22.6 times the time', (label, make) => {
+      expectLinear(`install-vet-python-tool-forms ${label}`, (n) => void parseInstallCommands(make(n)), 500);
+    });
+  });
+});
+
+// ───────────────── install-vet-inline-script-deps — `uv run` and `pipx run` read a script's PEP 723 block
+
+describe('install-vet-inline-script-deps', () => {
+  const U = 'dgprobe-zzq7731-named';
+
+  // ── T-02: the analysis alone, no disk. `toMatchObject` takes any shape, so the file type-checks before the fields exist.
+
+  describe('T-02 the analysis of `uv run`', () => {
+    it('T-02 `uv run script.py` is one `uv` command with no package, the script named, and nothing uncertain', () => {
+      expect(parseInstallCommands('uv run script.py')).toMatchObject([{ manager: 'uv', packages: [], inlineScripts: [{ file: 'script.py' }], uncertain: [] }]);
+    });
+
+    it.each([
+      ['uv run --script tool', 'tool'],
+      ['uv run -s tool', 'tool'],
+      ['uv run -qs tool', 'tool'],
+      ['uv run --gui-script tool', 'tool'],
+      ['uv run script.PY', 'script.PY'],
+      ['uv run app.pyw', 'app.pyw'],
+      ['uv run --no-project --python 3.12 sub/x.py arg --flag', 'sub/x.py'],
+      ['uv run ./script.py', './script.py'],
+      ['python -m uv run script.py', 'script.py'],
+      ['uv run evil.py -m msg', 'evil.py'],
+    ])('T-02 `%s` reads %s as the script', (command, file) => {
+      expect(parseInstallCommands(command)).toMatchObject([{ manager: 'uv', inlineScripts: [{ file }] }]);
+    });
+
+    it.each(['uv run -m evil.py', 'uv run -qm evil.py'])('T-02 `%s` runs a module: no command (green before the fix too)', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it.each([
+      'uv run --directory sub x.py',
+      'uv --directory sub run x.py',
+      'python -m uv --directory sub run x.py',
+      'UV_WORKING_DIR=sub uv run x.py',
+      'env UV_WORKING_DIR=sub uv run x.py',
+    ])('T-02 `%s` carries the directory `sub` the script is looked for in', (command) => {
+      expect(parseInstallCommands(command)).toMatchObject([{ scriptDir: 'sub', inlineScripts: [{ file: 'x.py' }] }]);
+    });
+
+    it('T-02 `uv run --project sub x.py` names the script and no directory: --project does not move it', () => {
+      const cmds = parseInstallCommands('uv run --project sub x.py');
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'x.py' }] }]);
+      expect(cmds[0]).not.toHaveProperty('scriptDir');
+    });
+
+    it('T-02 `uv run --with a,b --with c -w d pytest` names a b c d, no script, and says the comma is not one plain statement', () => {
+      const cmds = parseInstallCommands('uv run --with a,b --with c -w d pytest');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([['a', 'b', 'c', 'd']]);
+      expect(cmds[0]?.uncertain[0]).toContain("not a single plain install statement (',' outside quotes)");
+      expect(cmds[0]).not.toHaveProperty('inlineScripts');
+    });
+
+    it('T-02 `uv run --with-requirements r.txt python -c "print(1)"` gives the requirements manifest of r.txt', () => {
+      expect(parseInstallCommands('uv run --with-requirements r.txt python -c "print(1)"')).toMatchObject([
+        { manager: 'uv', manifest: { kind: 'requirements', files: ['r.txt'] } },
+      ]);
+    });
+
+    it.each(['deps.py', 'deps.pyw', 'DEPS.PY'])('T-02 `uv run --with-requirements %s …` is read as a script, not as a requirements file', (file) => {
+      const cmds = parseInstallCommands(`uv run --with-requirements ${file} python -c "print(1)"`);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file }] }]);
+      expect(cmds[0]).not.toHaveProperty('manifest');
+    });
+
+    it('T-02 `uv pip install -r deps.py` reads the file as a script (P12 = A)', () => {
+      const cmds = parseInstallCommands('uv pip install -r deps.py');
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'deps.py' }] }]);
+      expect(cmds[0]).not.toHaveProperty('manifest');
+    });
+
+    it('T-02 `pip install -r deps.py` keeps the requirements manifest of today (green before the fix too)', () => {
+      expect(parseInstallCommands('pip install -r deps.py')).toMatchObject([{ manifest: { kind: 'requirements', files: ['deps.py'] } }]);
+    });
+
+    it('T-02 `uv run --index https://pypi.corp/simple --with a cmd` names the index it was given', () => {
+      expect(parseInstallCommands('uv run --index https://pypi.corp/simple --with a cmd')).toMatchObject([{ packages: [{ name: 'a' }], registries: ['https://pypi.corp/simple'] }]);
+    });
+
+    it('T-02 `uv run --with a script.py` names the package and the script', () => {
+      expect(parseInstallCommands('uv run --with a script.py')).toMatchObject([{ packages: [{ name: 'a' }], inlineScripts: [{ file: 'script.py' }] }]);
+    });
+
+    it('T-02 `uv run --dgunknown x.py y.py` takes both words as scripts that may run', () => {
+      expect(parseInstallCommands('uv run --dgunknown x.py y.py')).toMatchObject([{ inlineScripts: [{ file: 'x.py' }, { file: 'y.py' }] }]);
+    });
+
+    it('T-02 `uv run "$D/x.py"` names a script that is not a literal file name', () => {
+      expect(parseInstallCommands('uv run "$D/x.py"')).toMatchObject([{ inlineScripts: [{ file: '$D/x.py', literal: false }] }]);
+    });
+
+    it("T-02 `bash -c 'uv run s.py'` keeps the nested command, with its script", () => {
+      expect(parseInstallCommands("bash -c 'uv run s.py'", { nested: [{ text: 'uv run s.py', shell: 'bash' }] })).toMatchObject([
+        { manager: 'uv', inlineScripts: [{ file: 's.py' }] },
+      ]);
+    });
+  });
+
+  describe('T-02 the analysis of `pipx run`', () => {
+    it('T-02 `pipx run --path script.py arg` has no package: --path takes no value, and the word is the script', () => {
+      expect(parseInstallCommands('pipx run --path script.py arg')).toMatchObject([{ packages: [], inlineScripts: [{ file: 'script.py' }] }]);
+    });
+
+    it('T-02 `pipx run script.py` is the package `script.py` and a script that may be a file', () => {
+      const cmds = parseInstallCommands('pipx run script.py');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([['script.py']]);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'script.py', ifFile: true }] }]);
+    });
+
+    it('T-02 `pipx run --backend pip evil.py` has the words `pip` and `evil.py` as packages and as files that may be there', () => {
+      const cmds = parseInstallCommands('pipx run --backend pip evil.py');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([['pip', 'evil.py']]);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'pip', ifFile: true }, { file: 'evil.py', ifFile: true }] }]);
+    });
+
+    it('T-02 `pipx run --backend pip --path evil.py` has no package and the same two words as files', () => {
+      const cmds = parseInstallCommands('pipx run --backend pip --path evil.py');
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([[]]);
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: 'pip', ifFile: true }, { file: 'evil.py', ifFile: true }] }]);
+    });
+
+    it('T-02 `pipx run ./tool.py` is set aside as a package, as today, and names the path as a file that may be there', () => {
+      const cmds = parseInstallCommands('pipx run ./tool.py');
+      expect(cmds).toMatchObject([{ inlineScripts: [{ file: './tool.py', ifFile: true }] }]);
+      expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([[]]);
+    });
+  });
+
+  // ── T-09: protection — what stays as it is (green before and after the fix)
+
+  describe('T-09 the analysis of what is not read', () => {
+    it.each([
+      'uv run pytest',
+      'uv run python script.py',
+      'uv run python -m mypy src',
+      'uv run -m http.server',
+      'uv run -',
+      'uv run tool',
+      'uv run https://h.example/x.py',
+      'uv run',
+      'cat script.py | uv run -',
+    ])('T-09 `%s` is no command: no script, no package', (command) => {
+      expect(parseInstallCommands(command)).toEqual([]);
+    });
+
+    it('T-09 `pipx run --spec P cmd` is the package P with nothing uncertain, as the measured Python forms give it today', () => {
+      const cmds = parseInstallCommands(`pipx run --spec ${U} cmd`);
+      expect(cmds.map((c) => ({ packages: c.packages.map((p) => p.name), uncertain: c.uncertain }))).toEqual([{ packages: [U], uncertain: [] }]);
+    });
+  });
+
+  // ── T-10 (b): the analysis of a line of scripts costs linear time
+
+  describe('T-10 (b) the analysis costs linear time', () => {
+    it('T-10 `uv run --with a s.py;` repeated n times: eight times the lines, well under 22.6 times the time', () => {
+      expectLinear('install-vet-inline-script-deps uv run --with a s.py;', (n) => void parseInstallCommands('uv run --with a s.py;'.repeat(n)), 100);
+    });
+  });
+});
+
+// ───────────────── install-vet-dotnet-run-forms — the .NET forms that fetch a package by name: the run forms, `tool update`, `new install`, `package download` and `package update`
+
+describe('install-vet-dotnet-run-forms', () => {
+  // The identifiers are made up; no test runs `dotnet`.
+  const T = 'Dgprobe.Zzq7731.Tool';
+  const LIB = 'Dgprobe.Zzq7731.Lib';
+  const TPL = 'Dgprobe.Zzq7731.Templates';
+  /** The reason of a version the SDK 10.0.404 refuses before any request (the owner's answer to question 9). */
+  const REFUSED = 'a version SDK 10.0.404 refuses before any request — looked up in case another SDK accepts it';
+  /** The start of the reason of a form that was not measured; what is missing follows in the parentheses. */
+  const FORM = 'a dotnet command form that was not measured (';
+
+  type Pair = [string] | [string, string];
+  /** The packages of a command as `[name]` / `[name, version]`. */
+  const pairs = (c: { packages: ReadonlyArray<{ name: string; range?: string }> }): Pair[] =>
+    c.packages.map((p): Pair => (p.range === undefined ? [p.name] : [p.name, p.range]));
+  /** What a line gives, per command: the ecosystem and its packages. An empty parse gives `[]`, so a missing reader fails by its assertion. */
+  const read = (command: string): Array<{ ecosystem: string; packages: Pair[] }> =>
+    parseInstallCommands(command).map((c) => ({ ecosystem: c.ecosystem, packages: pairs(c) }));
+  const nuget = (...packages: Pair[]): Array<{ ecosystem: string; packages: Pair[] }> => [{ ecosystem: 'nuget', packages }];
+  const uncertainOf = (command: string): string => parseInstallCommands(command).flatMap((c) => c.uncertain).join(' | ');
+
+  // ── T-01: the run forms — `dnx`, `dotnet dnx`, `dotnet tool exec`, `dotnet tool execute`
+
+  const SPELLINGS = ['dnx', 'dotnet dnx', 'dotnet tool exec', 'dotnet tool execute'] as const;
+  const RUN_FORMS: ReadonlyArray<[string, Pair[]]> = [
+    [T, [[T]]],
+    [`${T}@1.2.3`, [[T, '1.2.3']]],
+    [`${T} --version 1.2.3`, [[T, '1.2.3']]],
+    [`"${T}@1.*"`, [[T, '1.*']]],
+    [`--yes ${T}`, [[T]]],
+    [`${T} --yes`, [[T]]],
+    [`${T} hello world`, [[T]]],
+    [`-- ${T}`, [[T]]],
+    [`${T} -- --version 9`, [[T]]],
+    [`${T} -v q`, [[T]]],
+    [`${T} --source ./feed`, [[T]]],
+  ];
+  const RUN_LINES = SPELLINGS.flatMap((spelling) => RUN_FORMS.map(([rest, expected]): [string, Pair[]] => [`${spelling} ${rest}`, expected]));
+
+  it.each(RUN_LINES)('T-01 `%s` is one NuGet command that vets the first positional only: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it.each(SPELLINGS)("T-01 `%s <id> hello world` says nothing was skipped: the words after the id are the tool's arguments", (spelling) => {
+    const cmds = parseInstallCommands(`${spelling} ${T} hello world`);
+    expect(cmds.map((c) => c.skipped)).toEqual([[]]);
+  });
+
+  it.each(SPELLINGS)("T-01 `%s <id> --source ./feed` records ./feed as the command's registry", (spelling) => {
+    const cmds = parseInstallCommands(`${spelling} ${T} --source ./feed`);
+    expect(cmds.map((c) => c.customRegistry)).toEqual(['./feed']);
+    expect(cmds.map((c) => pairs(c))).toEqual([[[T]]]);
+  });
+
+  it('T-01 `dnx <id>@latest` vets the name without a version and says the SDK refuses that version', () => {
+    expect(read(`dnx ${T}@latest`)).toEqual(nuget([T]));
+    expect(uncertainOf(`dnx ${T}@latest`)).toContain(REFUSED);
+  });
+
+  it('T-01 `dnx --yes <id>@latest` is not one of the measured refusals: the name with the version as written, and the reason of the form', () => {
+    expect(read(`dnx --yes ${T}@latest`)).toEqual(nuget([T, 'latest']));
+    expect(uncertainOf(`dnx --yes ${T}@latest`)).toContain(FORM);
+  });
+
+  // ── T-01: `dotnet tool update`
+
+  it.each([
+    [`dotnet tool update ${T}`, [[T]]],
+    [`dotnet tool update -g ${T}`, [[T]]],
+    [`dotnet tool update --global ${T}`, [[T]]],
+    [`dotnet tool update --local ${T}`, [[T]]],
+    [`dotnet tool update --tool-path ./d ${T}`, [[T]]],
+    [`dotnet tool update ${T}@1.2.3`, [[T, '1.2.3']]],
+    [`dotnet tool update ${T} --version 1.2.3`, [[T, '1.2.3']]],
+    [`dotnet tool update -g ${T}@1.2.3`, [[T, '1.2.3']]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` is a NuGet command for the tool, read as `dotnet tool install` is: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it('T-01 `dotnet tool update -g a b` vets `a` and says `b` is an extra argument', () => {
+    const cmds = parseInstallCommands('dotnet tool update -g a b');
+    expect(cmds.map((c) => pairs(c))).toEqual([[['a']]]);
+    expect(cmds.map((c) => c.skipped)).toEqual([[{ raw: 'b', reason: expect.stringMatching(/unexpected extra argument/) }]]);
+  });
+
+  // ── T-01: `dotnet new install`
+
+  it.each([
+    [`dotnet new install ${TPL}`, [[TPL]]],
+    [`dotnet new install ${TPL}::1.2.3`, [[TPL, '1.2.3']]],
+    [`dotnet new install ${TPL}@1.2.3`, [[TPL, '1.2.3']]],
+    ['dotnet new install A B --force', [['A'], ['B']]],
+    [`dotnet new install ${TPL} -v q`, [[TPL]]],
+    [`dotnet new install ${TPL}::latest --force`, [[TPL]]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` vets every word as an identifier, the version of `::` or `@` apart: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it('T-01 `dotnet new install <id>::latest --force` says the SDK refuses that version', () => {
+    expect(uncertainOf(`dotnet new install ${TPL}::latest --force`)).toContain(REFUSED);
+  });
+
+  it("T-01 `dotnet new install <id> --add-source ./feed` records ./feed as the command's registry", () => {
+    const cmds = parseInstallCommands(`dotnet new install ${TPL} --add-source ./feed`);
+    expect(cmds.map((c) => pairs(c))).toEqual([[[TPL]]]);
+    expect(cmds.map((c) => c.customRegistry)).toEqual(['./feed']);
+  });
+
+  // ── T-01: `dotnet package download`
+
+  it.each([
+    [`dotnet package download ${LIB}`, [[LIB]]],
+    [`dotnet package download ${LIB}@1.2.3`, [[LIB, '1.2.3']]],
+    ['dotnet package download A B', [['A'], ['B']]],
+    [`dotnet package download ${LIB}@1.* --allow-insecure-connections`, [[LIB]]],
+    [`dotnet package download ${LIB} -o ./out -v q`, [[LIB]]],
+    [`dotnet package download ${LIB} --output ./out --verbosity q`, [[LIB]]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` vets every identifier; `-v` is the verbosity and `-o` a folder, never a version or a package: %j', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+  });
+
+  it('T-01 `dotnet package download <id>@1.* --allow-insecure-connections` says the SDK refuses that version', () => {
+    expect(uncertainOf(`dotnet package download ${LIB}@1.* --allow-insecure-connections`)).toContain(REFUSED);
+  });
+
+  it("T-01 `dotnet package download <id> -s <url>` records the URL as the command's registry", () => {
+    const url = 'https://f.example/v3/index.json';
+    const cmds = parseInstallCommands(`dotnet package download ${LIB} -s ${url}`);
+    expect(cmds.map((c) => pairs(c))).toEqual([[[LIB]]]);
+    expect(cmds.map((c) => c.customRegistry)).toEqual([url]);
+  });
+
+  // ── T-01: `dotnet package update` names go to `updateNames`, not to `packages`
+
+  /** `updateNames` is read through a type that has it, so a parser without it fails by its assertion, not by the compiler. */
+  type WithUpdateNames = ReturnType<typeof parseInstallCommands>[number] & { updateNames?: readonly PackageSpec[] };
+  const updateRead = (command: string): Array<{ packages: Pair[]; updateNames: Pair[] | undefined }> =>
+    parseInstallCommands(command).map((c) => {
+      const names = (c as WithUpdateNames).updateNames;
+      return { packages: pairs(c), updateNames: names === undefined ? undefined : pairs({ packages: names }) };
+    });
+
+  it.each([
+    [`dotnet package update ${LIB}`, [[LIB]]],
+    [`dotnet package update ${LIB}@1.2.3`, [[LIB, '1.2.3']]],
+    ['dotnet package update A B', [['A'], ['B']]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-01 `%s` gives no package to install and the names given to an update: %j', (command, names) => {
+    expect(updateRead(command)).toEqual([{ packages: [], updateNames: names }]);
+  });
+
+  // ── T-03: guard — what is read today stays as it is, and the forms that name no package stay unread
+
+  it.each([
+    ['dotnet add package Some.Pkg', [['Some.Pkg']]],
+    ['dotnet package add Some.Pkg', [['Some.Pkg']]],
+    ['dotnet tool install some.tool', [['some.tool']]],
+  ] as ReadonlyArray<[string, Pair[]]>)('T-03 `%s` is a NuGet command for %j with nothing uncertain', (command, expected) => {
+    expect(read(command)).toEqual(nuget(...expected));
+    expect(parseInstallCommands(command).map((c) => c.uncertain)).toEqual([[]]);
+  });
+
+  it('T-03 `dotnet tool install some.tool.nupkg` keeps the reason that this package manager was not measured', () => {
+    expect(uncertainOf('dotnet tool install some.tool.nupkg')).toContain('this package manager was not measured');
+  });
+
+  it.each([
+    'dotnet package search L',
+    'dotnet package search L --exact-match',
+    'dotnet new details T',
+    'dotnet new update',
+    'dotnet new list',
+    'dotnet new console',
+    'dotnet tool run T',
+    'dotnet tool list',
+    'dotnet tool uninstall T',
+    'dotnet tool restore',
+    'dotnet package remove L',
+    'dotnet package list --outdated',
+    'dotnet restore',
+    'dotnet build',
+    'dotnet run probe.cs',
+    'dotnet store --manifest packages.xml',
+    'dotnet workload install maui',
+  ])('T-03 `%s` is no command to vet', (command) => {
+    expect(parseInstallCommands(command)).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-registry-files-unread — what the parse tells the registry readers of a command
+
+describe('install-vet-registry-files-unread', () => {
+  const first = (command: string) => parseInstallCommands(command)[0];
+
+  it.each([
+    ['bun add P', 'bun add'],
+    ['bun install P', 'bun install'],
+    ['pip install P', 'pip install'],
+    ['uv add P', 'uv add'],
+    ['uv pip install P', 'uv pip install'],
+    ['pipx install P', 'pipx install'],
+    ['pipx run P', 'pipx run'],
+    ['poetry add P', 'poetry add'],
+  ])('T-14 `%s` has the registryForm `%s`', (command, form) => {
+    expect(first(command)?.registryForm).toBe(form);
+  });
+
+  it.each(['bun a P', 'bun i P', 'bunx P', 'bun x P', 'uvx P', 'uv tool install P', 'npm install P', 'pnpm add P', 'yarn add P'])(
+    'T-14 `%s` has no registryForm',
+    (command) => {
+      expect(first(command), 'the command is read').toBeDefined();
+      expect(first(command)?.registryForm).toBeUndefined();
+    },
+  );
+
+  it.each(['pipx run script.py', 'pipx run --path script.py', 'uv run script.py'])(
+    'T-14 `%s` runs a script, which install-vet-inline-script-deps reads: no registryForm',
+    (command) => {
+      expect(first(command)?.registryForm).toBeUndefined();
+    },
+  );
+
+  it.each(['bun add --no-env-file P', 'bun add --env-file=x P', 'bun add --env-file x P', 'bun --env-file=x add P'])(
+    'T-14 `%s` has the envFileFlag',
+    (command) => {
+      expect(first(command)?.envFileFlag).toBe(true);
+    },
+  );
+
+  it.each(['bun add P', 'npm install P'])('T-14 `%s` has no envFileFlag', (command) => {
+    expect(first(command), 'the command is read').toBeDefined();
+    expect(first(command)?.envFileFlag).toBeUndefined();
+  });
+
+  it.each(['bunx P', 'bun x P', 'bun create P', 'bun c P'])('T-14 `%s` is a bunLauncher', (command) => {
+    expect(first(command)?.bunLauncher).toBe(true);
+  });
+
+  it.each(['bun add P', 'bun a P', 'bun update P', 'npx P'])('T-14 `%s` is no bunLauncher', (command) => {
+    expect(first(command), 'the command is read').toBeDefined();
+    expect(first(command)?.bunLauncher).toBeUndefined();
+  });
+});
+
+// ───────────────── pkgvet-archive-names-pipx-composer — what the pipx and the composer measured: a word with an archive ending
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  // The names are made up; no test runs pipx or composer.
+  /** The twelve endings pip reads as a file, in the lower case of the measured form. */
+  const TWELVE = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma'] as const;
+  /** The other twelve endings of the composer: what it was not measured with (`.zip` and `.tar.gz` were). */
+  const COMPOSER_OTHER = ['.whl', '.tar', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma', '.egg', '.nupkg'] as const;
+  const P = 'dgprobe-arc';
+  const NOT_MEASURED = 'this package manager was not measured';
+  /** R1 and R2: the two reasons the requirements give, as written there. */
+  const R1 =
+    'a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)';
+  const R2 =
+    'a name that ends like an archive file — composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known';
+  const LOCAL_PATH = 'local path — not looked up';
+
+  const marked = (command: string): Array<{ name: string; malwareOnly?: true }> =>
+    parseInstallCommands(command).flatMap((c) =>
+      c.packages.map((p) => {
+        const flag = p.malwareOnly;
+        return flag === undefined ? { name: p.name } : { name: p.name, malwareOnly: flag };
+      }),
+    );
+  const uncertainOf = (command: string): string[] => parseInstallCommands(command).flatMap((c) => c.uncertain);
+  const namesOf = (command: string): string[] => parseInstallCommands(command).flatMap((c) => c.packages.map((p) => p.name));
+
+  /** A command's result as one line — a format for the table of T-07, never an expectation computed at run time. */
+  function summarize(command: string): string {
+    return parseInstallCommands(command)
+      .map((c) => {
+        const parts = [`${c.manager}/${c.ecosystem}`];
+        if (c.packages.length > 0) parts.push(`P ${c.packages.map((p) => p.name + (p.range === undefined ? '' : `@${p.range}`)).join(' ')}`);
+        if (c.skipped.length > 0) parts.push(`S ${c.skipped.map((s) => `${s.raw} => ${s.reason}`).join(' ; ')}`);
+        if (c.uncertain.length > 0) parts.push(`U ${c.uncertain.join(' ; ')}`);
+        if (c.manifest !== undefined) parts.push(`M ${JSON.stringify(c.manifest)}`);
+        if (c.prefixed === true) parts.push('prefixed');
+        if (c.customRegistry !== undefined) parts.push(`R ${c.customRegistry}`);
+        return parts.join(' | ');
+      })
+      .join(' || ');
+  }
+
+  it.each(TWELVE)('T-01 `pipx install <p>%s`: the package is marked for malware only, nothing is skipped or uncertain, and no script runs', (ending) => {
+    const command = `pipx install ${P}${ending}`;
+    const cmds = parseInstallCommands(command);
+    expect(marked(command)).toEqual([{ name: `${P}${ending}`, malwareOnly: true }]);
+    expect(cmds.map((c) => c.skipped)).toEqual([[]]);
+    expect(cmds.map((c) => c.uncertain)).toEqual([[]]);
+    expect(cmds[0]).not.toHaveProperty('runsAsScript');
+  });
+
+  it.each([
+    'pipx install x.egg',
+    'pipx install x.nupkg',
+    'pipx run x.egg',
+    'pipx run x.nupkg',
+    'composer require v/x.zip',
+    'composer require v/x.tar.gz',
+  ])('T-02 `%s` is a name like any other: one package, written as typed, and no reason of its own', (command) => {
+    const word = command.split(' ').at(-1) ?? '';
+    const cmds = parseInstallCommands(command);
+    expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([[word]]);
+    expect(cmds.map((c) => c.skipped)).toEqual([[]]);
+    expect(cmds.map((c) => c.uncertain)).toEqual([[]]);
+  });
+
+  it.each(TWELVE)('T-03 `pipx run <p>%s`: marked for malware only, the script named when the file is there, nothing uncertain', (ending) => {
+    const word = `${P}${ending}`;
+    const command = `pipx run ${word}`;
+    const cmds = parseInstallCommands(command);
+    expect(marked(command)).toEqual([{ name: word, malwareOnly: true }]);
+    expect(cmds[0]?.runsAsScript).toBe(word);
+    expect(cmds[0]?.inlineScripts).toEqual([{ file: word, ifFile: true }]);
+    expect(cmds.map((c) => c.uncertain)).toEqual([[]]);
+  });
+
+  it("T-03 `bash -c 'pipx run x.zip'`, the script as a nested one, runs x.zip as a script too", () => {
+    const cmds = parseInstallCommands("bash -c 'pipx run x.zip'", { nested: [{ text: 'pipx run x.zip', shell: 'bash' }] });
+    expect(cmds.map((c) => c.runsAsScript)).toEqual(['x.zip']);
+  });
+
+  it.each(['./x.zip', 'sub/x.whl', '/abs/z.tar.gz'])('T-03 `pipx run %s`, a path: no package, kept as a local path, and the word is the script it runs', (word) => {
+    const cmds = parseInstallCommands(`pipx run ${word}`);
+    expect(cmds.map((c) => c.packages)).toEqual([[]]);
+    expect(cmds.map((c) => c.skipped.map((s) => `${s.raw} => ${s.reason}`))).toEqual([[`${word} => ${LOCAL_PATH}`]]);
+    expect(cmds.map((c) => c.runsAsScript)).toEqual([word]);
+  });
+
+  it.each([
+    'pipx install --force x.whl',
+    'pipx install -q x.egg',
+    'pipx install x.whl y',
+    'pipx install x.WHL',
+    'pipx install --preinstall x.zip y',
+    'pipx run --spec x.zip app',
+    'pipx run --no-cache x.zip',
+    'pipx run x.zip arg',
+    'composer require --dev v/x.zip',
+    'composer require v/x.zip v/y',
+    'composer require v/x.zip ^1.0',
+    'composer req v/x.zip',
+    'composer.phar require v/x.zip',
+    'php composer.phar require v/x.zip',
+    'composer require v/x.Tar.Gz',
+  ])('T-04 `%s` is not the measured form: the word is a package and the command says R1, not "not measured"', (command) => {
+    const word = command.split(' ').find((w) => /\.(?:zip|whl|egg|tar\.gz)$/i.test(w)) ?? '';
+    expect(namesOf(command)).toContain(word);
+    const why = uncertainOf(command);
+    expect(why).toContain(R1);
+    expect(why.some((r) => r.includes(NOT_MEASURED))).toBe(false);
+  });
+
+  it.each(COMPOSER_OTHER)('T-04 `composer require v/x%s` is the measured form with an ending it was not measured with: R2 only', (ending) => {
+    const command = `composer require v/x${ending}`;
+    expect(namesOf(command)).toEqual([`v/x${ending}`]);
+    const why = uncertainOf(command);
+    expect(why).toContain(R2);
+    expect(why).not.toContain(R1);
+    expect(why.some((r) => r.includes(NOT_MEASURED))).toBe(false);
+  });
+
+  it('T-04 `composer require --dev v/x.whl` is outside the measured form and has an ending it was not measured with: R1 and R2', () => {
+    const why = uncertainOf('composer require --dev v/x.whl');
+    expect(why).toContain(R1);
+    expect(why).toContain(R2);
+    expect(why.some((r) => r.includes(NOT_MEASURED))).toBe(false);
+  });
+
+  /** What `parseInstallCommands` gives at `ed53f52c`, the tree task 1 starts from, written out by hand from one run of it. */
+  const UNCHANGED: ReadonlyArray<readonly [string, string]> = [
+    // paths
+    ['pipx install ./x.whl', 'pipx/pypi | S ./x.whl => local path — not looked up'],
+    ['pipx install /abs/x.zip', 'pipx/pypi | S /abs/x.zip => local path — not looked up'],
+    ['composer require ./x.zip', 'composer/packagist | S ./x.zip => local path — not looked up'],
+    ['pipx run ./script.py', 'pipx/pypi | S ./script.py => local path — not looked up'],
+    // a version of its own
+    ['pipx install x.whl==1.0', 'pipx/pypi | P x.whl@==1.0'],
+    ['pipx install x.egg@1.0', 'pipx/pypi | P x.egg@1.0'],
+    ['pipx run thing.egg@1.0', 'pipx/pypi | P thing.egg@1.0'],
+    ['composer require v/x.zip:^1.0', 'composer/packagist | P v/x.zip@^1.0'],
+    ['pipx install foo@bar.tgz', 'pipx/pypi | S foo@bar.tgz => archive file — not looked up'],
+    // an ending outside the fourteen
+    ['pipx install x.tar.zst', 'pipx/pypi | P x.tar.zst'],
+    ['composer require v/x.tar.zst', 'composer/packagist | P v/x.tar.zst'],
+    // no archive ending
+    ['pipx install thing', 'pipx/pypi | P thing'],
+    ['pipx run thing', 'pipx/pypi | P thing'],
+    ['composer require v/pkg', 'composer/packagist | P v/pkg'],
+    // dotnet, which stays unmeasured in every form
+    [
+      'dotnet add package X.Y.zip',
+      'dotnet/nuget | P X.Y.zip | U a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known',
+    ],
+    [
+      'dotnet add package X.Y.nupkg',
+      'dotnet/nuget | P X.Y.nupkg | U a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known',
+    ],
+    // the managers already measured
+    ['pip install x.whl', 'pip/pypi | S x.whl => archive file — not looked up'],
+    ['uv add x.zip', 'uv/pypi | S x.zip => archive file — not looked up'],
+    ['poetry add x.tar', 'poetry/pypi | S x.tar => archive file — not looked up'],
+  ];
+
+  it.each(UNCHANGED)('T-07 `%s` reads as it did before the fix', (command, expected) => {
+    expect(summarize(command)).toBe(expected);
+    expect(parseInstallCommands(command).every((c) => !('runsAsScript' in c))).toBe(true);
   });
 });

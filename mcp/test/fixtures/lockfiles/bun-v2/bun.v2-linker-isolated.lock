@@ -1,0 +1,20 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "probe",
+      "dependencies": {
+        "dgprobe-zzq7731-dep": "^2.0.0",
+        "dgprobe-zzq7731-parent": "^1.0.0",
+      },
+    },
+  },
+  "packages": {
+    "dgprobe-zzq7731-dep": ["dgprobe-zzq7731-dep@2.0.0", "https://packages.example.invalid/dgprobe-zzq7731-dep/-/dgprobe-zzq7731-dep-2.0.0.tgz", {}, "sha512-piN+fZ07GV6npeBNPFvnP4qVPrYXZc48YfCz49UpoH/snbwpSMjiHlFPp85DRVUXxY/PB2kt0VqHD4u89TxTkg=="],
+
+    "dgprobe-zzq7731-parent": ["dgprobe-zzq7731-parent@1.0.0", "https://packages.example.invalid/dgprobe-zzq7731-parent/-/dgprobe-zzq7731-parent-1.0.0.tgz", { "dependencies": { "dgprobe-zzq7731-dep": "^1.0.0" } }, "sha512-YRAf2qWtpmhioB22gGI7NsayvqNvTJGU+Hp+TKzm5BCOQVmLgoNfkxv2+/BgtK6rDzgM7IaNgE1dvm1WT3XFWA=="],
+
+    "dgprobe-zzq7731-parent/dgprobe-zzq7731-dep": ["dgprobe-zzq7731-dep@1.2.3", "https://packages.example.invalid/dgprobe-zzq7731-dep/-/dgprobe-zzq7731-dep-1.2.3.tgz", {}, "sha512-lokrIVJ48pak+WeDGDW8KooWj9Gkg5ii3hCBczhHlKAEv3dD6kmzjFQ8rgaK/rqMku6ra6LA5YDr/PDThHeNww=="],
+  }
+}

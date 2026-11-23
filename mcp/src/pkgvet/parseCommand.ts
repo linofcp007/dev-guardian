@@ -34,11 +34,18 @@ import { powershellAsPosix } from '../hooks/powershellText.js';
 export { powershellAsPosix };
 import type { PackageSpec, PkgEcosystem, SkippedSpec } from './types.js';
 
+/**
+ * A package of a command. `malwareOnly`: the word is one the pipx reads as a FILE (`pipx install x.whl`, `pipx run x.zip`, measured), so
+ * it is asked of the registry and of OSV only to find a malicious package of that name, and nothing else of it is said. The word stays
+ * in `packages`; the parse does no I/O and the hook decides what the mark means ({@link InstallCommand.runsAsScript}).
+ */
+type CommandPackage = PackageSpec & { malwareOnly?: true };
+
 export interface InstallCommand {
   ecosystem: PkgEcosystem;
   /** The tool that runs the install: npm, pnpm, yarn, bun, pip, uv, poetry, composer, dotnet. */
   manager: string;
-  packages: PackageSpec[];
+  packages: CommandPackage[];
   skipped: SkippedSpec[];
   /**
    * A registry / index / source named on the command line itself
@@ -136,6 +143,84 @@ export interface InstallCommand {
    * upgrade` and for Yarn's `up` forms; `[]` when the verb has no positional word. A glob pattern, a path and a URL are no name.
    */
   updateNames?: PackageSpec[];
+  /**
+   * The command updates EVERY tool the manager installed — `pipx upgrade-all`, `uv tool upgrade --all` — and names no package for
+   * it: the tools are the machine's, not the command line's, so none of them is vetted (measured 2026-11-20 and 2026-11-21 in a
+   * Linux container: each installed tool is asked of the index). `updateNames` is then `[]`, or the names given beside `--all`.
+   */
+  updatesEveryTool?: true;
+  /**
+   * The Python files the command runs or reads as inline script metadata (PEP 723), in the order of the line: the script of `uv run`
+   * (a word ending `.py` / `.pyw`, or any word after `--script`, `-s` or `--gui-script`), a `.py` / `.pyw` file given to `uv run
+   * --with-requirements` or `uv pip install -r` (the uv reads it as a script), and the words `pipx run` may take as its app.
+   * `literal: false`: the word has an expansion or a glob, so which file it is cannot be told. `ifFile`: the word is a file only
+   * when one of that name is in the directory — `pipx run script.py` runs the file, and fetches the package of that name otherwise —
+   * and the hook asks the disk. Reading the files is the hook's: this module does no I/O.
+   */
+  inlineScripts?: InlineScriptWord[];
+  /**
+   * The word `pipx run <word>` reads as a FILE, not as a package, whatever the disk holds (measured: with one of the twelve endings pip
+   * reads as a file, the pipx never asks the index for the word — it runs the file as a script, or fails): the word as written, a
+   * path too (`./x.zip`). It is no package; the hook asks the disk whether the file is there (it is also in {@link inlineScripts}),
+   * and says so when it cannot. Only in the measured form of `pipx run` ({@link Detected.measuredArchiveForm}).
+   */
+  runsAsScript?: string;
+  /** Where the uv looks for the script of `uv run`: the value of `--directory` (before or after `run`) or of a leading `UV_WORKING_DIR=`. */
+  scriptDir?: string;
+  /** The directory the uv looks for the script in cannot be told: an expansion in `--directory` or `UV_WORKING_DIR`, or the variable set elsewhere on the line. */
+  scriptDirUnknown?: true;
+  /** A file the line `source`s (or `.`s) before this command: it may have moved the directory or changed the environment. */
+  sourced?: string;
+  /**
+   * The form of the command as the registry files are judged for it, as written: `bun add`, `bun install`, `pip install`, `uv add`,
+   * `uv pip install`, `pipx install`, `pipx run` and `poetry add` (measured 2026-11-20 and 2026-11-21: which project file each one obeys).
+   * Absent for any other form (`bun a`, `bun i`, `uvx`, `uv tool install|run`, a script given to `pipx run`, the npm, pnpm and Yarn
+   * commands): the files are then read as they were before the forms were told apart.
+   */
+  registryForm?: string;
+  /**
+   * The form of a `uv run` or of a script given to `pipx run`, as the registry files are judged for it when a name of it is missing
+   * (`uv run`, `pipx run script`; measured 2026-11-23 with uv 0.13.8 and pipx 1.18.16, install-vet-uv-run-project-index). A field of its
+   * own: {@link registryForm} stays absent for these, as it was when the forms were told apart. Absent for every other command.
+   */
+  explainForm?: string;
+  /** What the flags of a `uv run` say about the file of the project the uv reads for its index; present only for `uv run`. */
+  uvRun?: UvRunFlags;
+  /** A bun command with `--env-file`, `--env-file=…` or `--no-env-file`, before or after the verb: the bun does not read the `.env` files it would. */
+  envFileFlag?: true;
+  /** A bun command that runs a package (`bunx`, `bun x`, `bun create`, `bun c`): the bun reads no `.env` file for it (`bun x` measured, the others by its documentation). */
+  bunLauncher?: true;
+  /**
+   * The flag that names a source for this form, as the refusal of a missing name says it (`--add-source <url>` in code spans), when it is
+   * not the one of the manager ({@link REGISTRY_FLAG} of the decision): `dotnet new install` has no `--source`. Absent for every other form.
+   */
+  sourceFlag?: string;
+  /**
+   * `dotnet new install` reads a word as a path when an entry of that name is in the command's folder, and as an identifier otherwise:
+   * the hook asks the disk (`lstat`, no link followed) before it vets the words. The parse does no I/O and marks the command.
+   */
+  localPathFirst?: true;
+}
+
+/**
+ * What a `uv run` line says about the project's index file (measured, M-1 of install-vet-uv-run-project-index): `noConfig` — `--no-config` or
+ * `--config-file`, the uv then reads no file of the project; `defaultIndexFlag` — `--default-index`, `--index-url` or `-i`, which replace the
+ * default index of the file; `assigned` — a variable is assigned or exported on the line, which the hook does not read; `project` — the folder
+ * of `--project`, where the uv starts its search (`projectUnknown`: it has an expansion).
+ */
+interface UvRunFlags {
+  noConfig: boolean;
+  defaultIndexFlag: boolean;
+  assigned?: true;
+  project?: string;
+  projectUnknown?: true;
+}
+
+/** A word of {@link InstallCommand.inlineScripts}. */
+interface InlineScriptWord {
+  file: string;
+  literal?: false;
+  ifFile?: true;
 }
 
 // ───────────────────────────────────────────────────────────── names
@@ -160,14 +245,41 @@ const UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
 const POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
 /** The endings of the old single list: what a version or range of a Python, Composer or NuGet word is still skipped for. */
 const ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
-/** What an unmeasured manager may read as a file: every ending a measured manager reads as one, plus `.egg` and `.nupkg`. */
+/**
+ * The fourteen endings a word may have that the pipx or the composer reads as a file or as a name: every ending a measured manager
+ * reads as a file, plus `.egg` and `.nupkg`. In any letter case: a word that ends so, outside the measured form, is vetted as a name
+ * and the command says why it is uncertain ({@link FORM_NOT_MEASURED}).
+ */
 const UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
+/** The same fourteen, in lower case and nothing else: the ending of the measured form (a literal expression with no `i`). */
+const MEASURED_ENDING = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/;
+/**
+ * The twelve of {@link PIP_FILE}, in lower case: what the pipx reads as a FILE in `pipx install <word>` and `pipx run <word>`
+ * (measured, pipx 1.18.16: Linux 2026-11-20, motores pip 23.0.1 and uv 0.13.8, `.specs/_findings-2026-11-20/measurements/initializers-python/
+ * part-D-endings-linux-container-2026-11-20.txt`; Windows, motor pip, 2026-11-19, `.specs/pkgvet-archive-like-name/measurements/
+ * managers-composer-dotnet-pipx-windows-2026-11-19.txt`; and with the M-3, Windows, motores pip 26.2.1 and uv 0.13.8, 2026-11-21,
+ * `.specs/pkgvet-archive-names-pipx-composer/measurements/m3-pipx-windows-2026-11-21-r2.txt` and `-r3.txt`). `.egg` and `.nupkg` are
+ * names there: the pipx asks the index for them.
+ */
+const PIPX_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/;
+/** The endings of {@link UNMEASURED_FILE} the composer was NOT measured with (it was, composer 2.10.3, Windows, 2026-11-19, with `.zip` and `.tar.gz`: a name like any other). */
+const COMPOSER_UNMEASURED = /\.(?:whl|tar|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 /** The managers nobody measured: a word that ends like an archive is vetted as a name, and the command is uncertain. */
-const UNMEASURED = new Set(['pipx', 'composer', 'dotnet']);
+const UNMEASURED = new Set(['dotnet']);
 /** Why `npx name@` and the other launchers may not deny a missing name: what a launcher does with a word that ends in `@` was not measured. */
 const LAUNCHER_NAME_AT = 'a name ending in @ under a launcher was not measured';
 const UNMEASURED_ARCHIVE =
   'a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known';
+/** R1: a word of the pipx or the composer that ends like an archive, in a form that was not measured. */
+const FORM_NOT_MEASURED =
+  'a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)';
+/** R2: a word of the composer with an ending it was not measured with. */
+const COMPOSER_ENDING_NOT_MEASURED =
+  'a name that ends like an archive file — composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known';
+/** The reasons a confident command keeps: no doubt about the shape, but about what the manager does with the word. */
+const ARCHIVE_REASONS: ReadonlySet<string> = new Set([UNMEASURED_ARCHIVE, FORM_NOT_MEASURED, COMPOSER_ENDING_NOT_MEASURED]);
+/** Why a word is no package: the path of {@link notAPackage}, said by the pipx's `run` for a path with one of the twelve. */
+const LOCAL_PATH = 'local path — not looked up';
 
 /**
  * Whether `manager` reads a version part or a manifest value that ends like `.tgz`, `.tar.gz` or `.tar` as a file to
@@ -199,9 +311,32 @@ function fileEndings(manager: string | undefined, scoped: boolean): RegExp | nul
   }
 }
 
-/** Why a bare name of an unmeasured manager is uncertain, or `undefined`. */
+/** Why a bare name of an unmeasured manager (the dotnet) is uncertain, or `undefined`. */
 function unmeasuredReason(manager: string, spec: PackageSpec): string | undefined {
   return UNMEASURED.has(manager) && spec.name === spec.raw && UNMEASURED_FILE.test(spec.raw) ? UNMEASURED_ARCHIVE : undefined;
+}
+
+/**
+ * What the pipx and the composer say of a bare word that ends like an archive. In the measured form (`d.measuredArchiveForm`: the words from
+ * the program are exactly `pipx install <word>`, `pipx run <word>` or `composer require <word>`, the ending in lower case) the word is
+ * a name like any other (`.egg`, `.nupkg`; the composer's `.zip` and `.tar.gz`) or a file the pipx reads ({@link readsAsPipxFile}):
+ * no reason of its own; the composer's other twelve endings give R2. Outside it the word is a name, R1, and R2 for those twelve.
+ */
+function archiveReasons(d: Detected, spec: PackageSpec): string[] {
+  if (UNMEASURED.has(d.manager)) {
+    const why = unmeasuredReason(d.manager, spec);
+    return why === undefined ? [] : [why];
+  }
+  if ((d.manager !== 'pipx' && d.manager !== 'composer') || spec.name !== spec.raw || !UNMEASURED_FILE.test(spec.raw)) return [];
+  const measured = d.measuredArchiveForm === true;
+  if (d.manager === 'pipx') return measured ? [] : [FORM_NOT_MEASURED];
+  const ending = COMPOSER_UNMEASURED.test(spec.raw);
+  return [...(measured ? [] : [FORM_NOT_MEASURED]), ...(ending ? [COMPOSER_ENDING_NOT_MEASURED] : [])];
+}
+
+/** Whether the pipx reads this word as a file: the measured form of `pipx install` or `pipx run`, a bare word with one of the twelve endings. */
+function readsAsPipxFile(d: Detected, spec: PackageSpec): boolean {
+  return d.measuredArchiveForm === true && d.manager === 'pipx' && spec.name === spec.raw && PIPX_FILE.test(spec.raw);
 }
 
 function isPathLike(word: string): boolean {
@@ -223,7 +358,7 @@ function isPathLike(word: string): boolean {
 const SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
 
 /** A reason this word is not a package name, or `null` when it may be one. */
-function notAPackage(word: string, archive: RegExp | null): string | null {
+export function notAPackage(word: string, archive: RegExp | null): string | null {
   if (word.length === 0) return 'empty';
   if (SCP_GIT.test(word)) return 'SSH git spec (user@host:path) — not looked up';
   if (isPathLike(word)) return 'local path — not looked up';
@@ -262,7 +397,8 @@ export function isSemverRange(text: string): boolean {
  * package is `key` and `rest` a version, a range or a tag — or an alias when `rest` has a `@range` of its own. Yarn 1 reads an
  * alias, and bun either by the shape of `rest`; the hook does not know which runs, so a `rest` that is a valid name without a
  * range is read both ways. `rest` that is a path, a URL or a shell
- * expansion is `alias`: it is skipped, as for every manager. The one rule of the command line and of a `package.json` value.
+ * expansion is `alias`: it is skipped, as for every manager. The rule of the command line; a `package.json` value starts from
+ * it and reads pnpm 11 and a `~` word as the managers do there (`manifest.ts`, `npmValueReading`).
  *
  * - `alias`: only `rest` is the package (or the word is skipped);
  * - `key`: only `key` is the package, `rest` is its range;
@@ -320,7 +456,7 @@ function npmReadings(spec: PackageSpec, manager: string | undefined): { packages
 }
 
 /** A `~` word with no slash or backslash after it: a spec of the registry, never a path (`~x`, `~abc`, a lone `~`); `~/x` and `~user/x` are paths. */
-function isTildeWord(word: string): boolean {
+export function isTildeWord(word: string): boolean {
   return word.startsWith('~') && !/[\\/]/.test(word);
 }
 
@@ -416,13 +552,18 @@ function parseComposer(raw: string): PackageSpec | SkippedSpec {
   return withRange(checkName('packagist', name, raw), range);
 }
 
-function parseNuget(raw: string): PackageSpec | SkippedSpec {
+/**
+ * A NuGet word as `dotnet add package` reads it: `name`, or `name@version`. With `colons` (`dotnet new install`: the template installer
+ * writes a version after `::` as well, measured 2026-11-21) `name::version` is read too, and is checked as the name before it.
+ */
+function parseNuget(raw: string, colons = false): PackageSpec | SkippedSpec {
   if (/[$`]/.test(raw)) return skip(raw, 'not a literal package name (shell expansion)');
-  const bad = notAPackage(raw, raw.indexOf('@') > 0 ? ARCHIVE : null);
+  const colon = colons ? raw.indexOf('::') : -1;
+  const at = colon > 0 ? colon : raw.indexOf('@');
+  const bad = notAPackage(colon > 0 ? raw.slice(0, colon) : raw, at > 0 ? ARCHIVE : null);
   if (bad !== null) return skip(raw, bad);
-  const at = raw.indexOf('@');
   const name = at > 0 ? raw.slice(0, at) : raw;
-  const range = at > 0 ? raw.slice(at + 1) : undefined;
+  const range = at > 0 ? raw.slice(at + (colon > 0 ? 2 : 1)) : undefined;
   return withRange(checkName('nuget', name, raw), range);
 }
 
@@ -505,6 +646,24 @@ interface FlagTable {
   bothWays?: 'clusters' | 'flags';
   /** After a shell-mode flag a positional of ONE word is the package (`pnpm dlx -c pkg`, measured 2026-11-19); several words are shell text. */
   shellWord?: true;
+  /** Short flags noted under the long flag they are, for the rules that read the long name (npm's `-L` is `--location`). */
+  long?: ReadonlyMap<string, string>;
+  /**
+   * Value flags of type String: they do not take a next word that looks like a flag ({@link NOPT_FLAG_LIKE}), which is then
+   * read as one — npm's option parser (`npm i -m -g P` is global; the owner's answer A to question 5, 2026-11-21).
+   */
+  stringValue?: ReadonlySet<string>;
+  /**
+   * Value flags known only as a word of their own: in a group of letters each stays a letter the table does not know, as
+   * before it was added. The launchers' `-L` and `-m` (2026-11-21): a group inside a launcher keeps the reading of before
+   * (`npx -yL global P` looks up `global`), which was not measured.
+   */
+  notInGroups?: ReadonlySet<string>;
+  /**
+   * `npm`: a group of letters is opened as npm 11.19.0 opens it ({@link openNpmGroup}). Absent: the first letter that takes a
+   * value takes the rest of the group, or the next word (pip's `-rreq.txt`), as for every other manager and the launchers.
+   */
+  groups?: 'npm';
 }
 
 const set = (...xs: string[]): ReadonlySet<string> => new Set(xs);
@@ -524,24 +683,148 @@ const NPM_COMMON_BOOL = [
 /** The loglevel shorthands of npm and pnpm: boolean flags that take no `true` / `false` word (measured 2026-11-19). */
 const LOGLEVEL_FLAGS: ReadonlySet<string> = new Set(['--silent', '--quiet', '-q', '--verbose', '-d', '-s']);
 
-const NPM_TABLE: FlagTable = {
+/**
+ * npm's value flags as they were before its groups of letters were read as npm reads them (install-vet-global-in-short-cluster,
+ * 2026-11-21): the launchers `npm exec` and `npm init` are built from these, and keep the rule of a group they had.
+ */
+const NPM_VALUE_FLAGS = [
   // `-C` is npm's short form of `--prefix`.
-  value: set('--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include',
-    '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix',
-    '--otp', '--scope', '--cpu', '--os', '--libc', '--location',
-    // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
-    '--fetch-retries', '--fetch-retry-factor', '--fetch-retry-mintimeout', '--fetch-retry-maxtimeout',
-    '--fetch-timeout', '--cache-min', '--cache-max', '--maxsockets', '--depth', '--node-options', '--script-shell',
-    '--auth-type', '--cafile', '--https-proxy', '--proxy', '--noproxy', '--local-address', '--user-agent',
-    '--min-release-age'),
-  // npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the
-  // regression tests of this fix use them as the examples of a flag the table lacks.)
-  // `-s` is npm's loglevel shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
-  bool: set(...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl', '-s'),
+  '--registry', '--prefix', '-C', '--tag', '--workspace', '-w', '--omit', '--include',
+  '--install-strategy', '--cache', '--userconfig', '--globalconfig', '--before', '--loglevel', '--save-prefix',
+  '--otp', '--scope', '--cpu', '--os', '--libc', '--location',
+  // npm 11.20.0 `config` (docs/content/using-npm/config.md, measurements/flags/npm-11.20.0-config.txt): each takes a value.
+  '--fetch-retries', '--fetch-retry-factor', '--fetch-retry-mintimeout', '--fetch-retry-maxtimeout',
+  '--fetch-timeout', '--cache-min', '--cache-max', '--maxsockets', '--depth', '--node-options', '--script-shell',
+  '--auth-type', '--cafile', '--https-proxy', '--proxy', '--noproxy', '--local-address', '--user-agent',
+  '--min-release-age',
+];
+/**
+ * npm's boolean flags as they were before its groups were read as npm reads them, the set the launchers are built from.
+ * npm 11.20.0 `config`: Boolean. (`--prefer-dedupe` and `--engine-strict` are Boolean too and left unknown: the regression
+ * tests of install-vet-unknown-flag-hides-package use them as the examples of a flag the table lacks.) `-s` is npm's loglevel
+ * shorthand for `--silent` (measured 2026-11-20, npm 11.20.0: `-sy true P` asks for P, `-ys true P` for `true`).
+ */
+const NPM_BOOL_FLAGS = [...NPM_COMMON_BOOL, '--allow-same-version', '--strict-ssl', '-s'];
+/** npm's flags of a workspace context as they were before its groups were read as npm reads them (`-ws` is NPM_TABLE's own). */
+const NPM_WORKSPACE_FLAGS = ['--workspace', '-w', '--workspaces'];
+
+/** npm's `-L` is `--location`: noted under that name, so that the global rules read it (`-L global` is `--location global`). */
+const NPM_LONG: ReadonlyMap<string, string> = new Map([['-L', '--location']]);
+
+/**
+ * npm's single letters and the words npm expands each to — measured 2026-11-20 with npm 11.19.0 (the config definitions and
+ * shorthands, `.specs/_findings-2026-11-20/measurements/cmd-forms/explore-linux-container-2026-11-20.txt:305-366`), confirmed
+ * 2026-11-21 (`.specs/install-vet-global-in-short-cluster/measurements/single-dash-words-linux-container-2026-11-21.txt:11-15`).
+ * A constant of its own: `NPM_TABLE` holds Yarn's `-T` as well, which npm does not have. `?` is left out: a group is made of
+ * letters only ({@link SHORT_CLUSTER}).
+ */
+const NPM_LETTERS: ReadonlyMap<string, string> = new Map([
+  // No value. `d`, `q` and `s` are two words each.
+  ['a', '--all'], ['f', '--force'], ['g', '--global'], ['l', '--long'], ['p', '--parseable'], ['S', '--save'],
+  ['B', '--save-bundle'], ['D', '--save-dev'], ['E', '--save-exact'], ['O', '--save-optional'], ['P', '--save-prod'],
+  ['y', '--yes'], ['h', '--usage'], ['H', '--usage'], ['v', '--version'], ['n', '--no-yes'],
+  ['d', '--loglevel info'], ['q', '--loglevel warn'], ['s', '--loglevel silent'],
+  // A value: `c` and `m` are of type String; `L`, `C` and `w` take any word.
+  ['c', '--call'], ['m', '--message'], ['L', '--location'], ['C', '--prefix'], ['w', '--workspace'],
+]);
+/**
+ * The letters of {@link NPM_LETTERS} that take a value and, standing before another letter of the group, take that letter's
+ * first word as it (`-Cg` is `--prefix --global`, `-Lq` is `--location --loglevel` and leaves `warn` a positional: measured,
+ * `single-dash-words…:24-25, 27`).
+ */
+const NPM_TAKE_NEXT_LETTER: ReadonlySet<string> = new Set(['L', 'C', 'w']);
+/**
+ * The letters of {@link NPM_LETTERS} of type String: they take no letter of the group after them, and no word that looks like
+ * a flag ({@link NOPT_FLAG_LIKE}): `-mg` is `--message --global`, global (measured, M-1 474 and 476; `single-dash-words…:31-32`).
+ */
+const NPM_STRING_LETTERS: ReadonlySet<string> = new Set(['c', 'm']);
+/** What npm's option parser (`nopt`) takes for a flag, not for the value of a String flag: `-` or `--` and another character. */
+const NOPT_FLAG_LIKE = /^-{1,2}[^-]/;
+
+const NPM_TABLE: FlagTable = {
+  // The value letters of npm 11.19.0 (`-L` is noted as `--location`, NPM_LONG), and `-ca` and `-call`, two of the six words
+  // npm reads whole instead of opening them (`--ca` and `--call`; measured, `single-dash-words…:13-14`).
+  value: set(...NPM_VALUE_FLAGS, '-L', '-m', '-c', '-ca', '-call'),
+  // The letters npm has and the table had not (`-a` … `-H`), and the four other whole words: `-all` (`--all`), `-ws`
+  // (`--workspaces`), `-dd` and `-ddd` (`--loglevel verbose|silly`).
+  bool: set(...NPM_BOOL_FLAGS, '-a', '-l', '-p', '-n', '-h', '-v', '-H', '-all', '-ws', '-dd', '-ddd'),
   registry: set('--registry'),
   dir: set('--prefix', '-C'),
-  workspace: set('--workspace', '-w', '--workspaces'),
-  boolWord: { except: LOGLEVEL_FLAGS },
+  workspace: set(...NPM_WORKSPACE_FLAGS, '-ws'),
+  // The letters added, `-all` and the two loglevel words take no `true` / `false` either: the word after them is a package.
+  boolWord: { except: new Set([...LOGLEVEL_FLAGS, '-a', '-l', '-p', '-n', '-h', '-v', '-H', '-all', '-dd', '-ddd']) },
+  long: NPM_LONG,
+  stringValue: set('-m', '-c', '-call'),
+  groups: 'npm',
+};
+
+const PIP_REQUIREMENTS_REASON = 'requirements file (-r) — read as a manifest, not as a package name';
+const PIP_CONSTRAINTS_REASON = 'constraints file (-c) — not vetted';
+const PIP_EDITABLE_REASON = 'editable install (-e) — local or VCS source, not looked up';
+
+// `pip download` and `pip wheel` (pip 23.0.1, the parser of each verb dumped flag by flag, measured 2026-11-21: 68 and 67 spellings).
+// The flags the two share; each verb adds its own below. A flag of `pip install` that the verb does not have (`-U`, `--user`, `-t`,
+// `--dry-run`, …) is not here: pip refuses it, and a line that has one is uncertain and only warns.
+const PIP_FETCH_VALUE = [
+  '-c', '--constraint', '-r', '--requirement', '--global-option', '--no-binary', '--only-binary', '--src', '--source',
+  '--source-dir', '--source-directory', '--progress-bar', '-i', '--index-url', '--pypi-url', '--extra-index-url', '-f',
+  '--find-links', '--python', '--log', '--log-file', '--local-log', '--proxy', '--retries', '--timeout', '--default-timeout',
+  '--exists-action', '--trusted-host', '--cert', '--client-cert', '--cache-dir', '--use-feature', '--use-deprecated',
+];
+const PIP_FETCH_BOOL = [
+  '--no-deps', '--no-dependencies', '--prefer-binary', '--pre', '--require-hashes', '--no-build-isolation', '--use-pep517',
+  '--no-use-pep517', '--check-build-dependencies', '--ignore-requires-python', '--no-clean', '--no-index', '--debug',
+  '--isolated', '--require-virtualenv', '--require-venv', '-v', '--verbose', '-V', '--version', '-q', '--quiet', '--no-input',
+  '--no-cache-dir', '--disable-pip-version-check', '--no-color', '--no-python-version-warning',
+];
+const PIP_FETCH_REGISTRY = ['-i', '--index-url', '--pypi-url', '--extra-index-url', '-f', '--find-links'];
+const PIP_FETCH_REPORTED: Array<[string, string]> = [
+  ['-r', PIP_REQUIREMENTS_REASON],
+  ['--requirement', PIP_REQUIREMENTS_REASON],
+  ['-c', PIP_CONSTRAINTS_REASON],
+  ['--constraint', PIP_CONSTRAINTS_REASON],
+];
+const PIP_DOWNLOAD_TABLE: FlagTable = {
+  value: set(...PIP_FETCH_VALUE, '-d', '--dest', '--destination-dir', '--destination-directory', '--platform',
+    '--python-version', '--implementation', '--abi'),
+  bool: set(...PIP_FETCH_BOOL),
+  registry: set(...PIP_FETCH_REGISTRY),
+  registryBool: set('--no-index'),
+  reported: new Map(PIP_FETCH_REPORTED),
+};
+const PIP_WHEEL_TABLE: FlagTable = {
+  value: set(...PIP_FETCH_VALUE, '-w', '--wheel-dir', '-e', '--editable', '--config-settings', '--build-option'),
+  bool: set(...PIP_FETCH_BOOL, '--no-verify'),
+  registry: set(...PIP_FETCH_REGISTRY),
+  registryBool: set('--no-index'),
+  reported: new Map([...PIP_FETCH_REPORTED, ['-e', PIP_EDITABLE_REASON], ['--editable', PIP_EDITABLE_REASON]]),
+};
+
+// `pipx upgrade` (pipx, the parser dumped 2026-11-21): the one object of the reading of the verb and of `--install`, which reads it
+// as an install.
+const PIPX_UPGRADE_TABLE: FlagTable = {
+  value: set('--python', '--index-url', '-i', '--pip-args', '--cooldown', '--backend', '--fetch-python', '--output'),
+  bool: set('--install', '--include-injected', '--force', '-f', '--system-site-packages', '--editable', '-e', '--quiet', '-q',
+    '--verbose', '-v', '--skip-maintenance', '--global', '--fetch-missing-python'),
+  registry: set('--index-url', '-i'),
+};
+
+// `uv tool upgrade` (uv, the 64 flags its parser knows, the hidden ones among them, probed 2026-11-21): not `UV_VALUED` / `UV_BOOL`,
+// which hold seven flags the verb refuses.
+const UV_TOOL_UPGRADE_TABLE: FlagTable = {
+  value: set('--python', '-p', '--index', '--index-url', '-i', '--default-index', '--extra-index-url', '--find-links', '-f',
+    '--index-strategy', '--keyring-provider', '--resolution', '--prerelease', '--prerelease-package', '--fork-strategy',
+    '--exclude-newer', '--exclude-newer-package', '--link-mode', '--directory', '--project', '--config-file', '--cache-dir',
+    '--color', '--python-platform', '--no-sources-package', '--reinstall-package', '-C', '--config-setting',
+    '--config-settings', '--config-setting-package', '--no-build-isolation-package', '--no-build-package',
+    '--no-binary-package', '--allow-insecure-host', '--python-preference'),
+  bool: set('--all', '--offline', '-q', '--quiet', '-v', '--verbose', '--no-cache', '-n', '--reinstall', '--no-config',
+    '--no-progress', '--no-python-downloads', '--no-index', '--compile-bytecode', '--managed-python', '--no-managed-python',
+    '--no-sources', '--no-build-isolation', '--no-build', '--no-binary', '--require-build-hashes', '--no-require-build-hashes',
+    '--system-certs', '--isolated', '--upgrade', '-U', '--native-tls', '--no-offline', '--force-reinstall'),
+  registry: set('--index', '--index-url', '-i', '--default-index', '--extra-index-url', '--find-links', '-f'),
+  registryBool: set('--no-index'),
+  dir: set('--directory', '--project'),
 };
 
 const FLAGS: Record<string, FlagTable> = {
@@ -613,16 +896,31 @@ const FLAGS: Record<string, FlagTable> = {
     registry: set('-i', '--index-url', '--extra-index-url', '-f', '--find-links', '--index', '--default-index'),
     registryBool: set('--no-index'),
     reported: new Map([
-      ['-r', 'requirements file (-r) — read as a manifest, not as a package name'],
-      ['--requirement', 'requirements file (-r) — read as a manifest, not as a package name'],
+      ['-r', PIP_REQUIREMENTS_REASON],
+      ['--requirement', PIP_REQUIREMENTS_REASON],
       // `uv pip install` spells it in the plural.
-      ['--requirements', 'requirements file (-r) — read as a manifest, not as a package name'],
-      ['-c', 'constraints file (-c) — not vetted'],
-      ['--constraint', 'constraints file (-c) — not vetted'],
-      ['-e', 'editable install (-e) — local or VCS source, not looked up'],
-      ['--editable', 'editable install (-e) — local or VCS source, not looked up'],
+      ['--requirements', PIP_REQUIREMENTS_REASON],
+      ['-c', PIP_CONSTRAINTS_REASON],
+      ['--constraint', PIP_CONSTRAINTS_REASON],
+      ['-e', PIP_EDITABLE_REASON],
+      ['--editable', PIP_EDITABLE_REASON],
     ]),
   },
+  'pip-download': PIP_DOWNLOAD_TABLE,
+  'pip-wheel': PIP_WHEEL_TABLE,
+  'pipx-upgrade': PIPX_UPGRADE_TABLE,
+  'pipx-reinstall': {
+    value: set('--python', '--fetch-python', '--backend', '--output'),
+    bool: set('--quiet', '-q', '--verbose', '-v', '--skip-maintenance', '--global', '--fetch-missing-python'),
+    registry: set(),
+  },
+  'pipx-upgrade-all': {
+    value: set('--skip', '--pip-args', '--backend', '--index-url', '-i', '--cooldown', '--output'),
+    bool: set('--include-injected', '--force', '-f', '--quiet', '-q', '--verbose', '-v', '--skip-maintenance', '--global',
+      '--system-site-packages', '--editable', '-e'),
+    registry: set('--index-url', '-i'),
+  },
+  'uv-tool-upgrade': UV_TOOL_UPGRADE_TABLE,
   uv: {
     value: set('--group', '--optional', '--index', '--index-url', '--default-index', '--extra-index-url', '--extra',
       '--package', '--script', '-r', '--requirements', '--constraints', '-c', '--rev', '--tag', '--branch',
@@ -681,6 +979,34 @@ const FLAGS: Record<string, FlagTable> = {
       '--interactive', '--allow-downgrade', '--create-manifest-if-needed', '--allow-roll-forward'),
     registry: set('--add-source', '--source', '--configfile'),
   },
+  // The forms that fetch a package by name, each with the flags of its own verb (the help of the SDK 10.0.404,
+  // .specs/_findings-2026-11-20/measurements/dotnet-forms/help-windows-2026-11-20.txt): `-v` is the MSBuild verbosity in every one of
+  // them, a version only in `add package`. `--yes` is accepted by the run command and is not in its help (measured, table-windows-2026-11-20.txt lines 25-26).
+  'dotnet-run': {
+    value: set('--version', '--configfile', '--source', '--add-source', '-v', '--verbosity'),
+    bool: set('--allow-roll-forward', '--prerelease', '--disable-parallel', '--ignore-failed-sources', '--no-http-cache', '--interactive', '--yes'),
+    registry: set('--source', '--add-source', '--configfile'),
+  },
+  'dotnet-tool-update': {
+    value: set('--tool-path', '--version', '--configfile', '--tool-manifest', '--add-source', '--source', '--framework', '-v', '--verbosity'),
+    bool: set('-g', '--global', '--local', '--prerelease', '--disable-parallel', '--ignore-failed-sources', '--no-http-cache', '--interactive', '--allow-downgrade', '--all'),
+    registry: set('--add-source', '--source', '--configfile'),
+  },
+  'dotnet-new-install': {
+    value: set('--add-source', '--nuget-source', '-v', '--verbosity'),
+    bool: set('--interactive', '--force', '-d', '--diagnostics'),
+    registry: set('--add-source', '--nuget-source'),
+  },
+  'dotnet-download': {
+    value: set('--configfile', '-o', '--output', '-s', '--source', '-v', '--verbosity'),
+    bool: set('--allow-insecure-connections', '--interactive', '--prerelease'),
+    registry: set('-s', '--source', '--configfile'),
+  },
+  'dotnet-package-update': {
+    value: set('--file', '--project', '-v', '--verbosity'),
+    bool: set('--vulnerable', '--interactive'),
+    registry: set(),
+  },
 };
 
 const UV_VALUED = [
@@ -704,12 +1030,14 @@ const UV_REGISTRY = ['--index', '--index-url', '--default-index', '--extra-index
  */
 const LAUNCH_FLAGS: Record<string, FlagTable> = {
   npx: {
+    // `-L` (`--location`) and `-m` (`--message`, of type String): measured 2026-11-21 (npm 11.19.0), `npx -L global P` asks the
+    // registry for P, never for `global` (M-4; the owner's answer B to question 4). A group of letters keeps the rule of today.
     value: set('--package', '-p', '--call', '-c', '--registry', '--cache', '--userconfig', '--prefix', '-C', '--workspace', '-w',
-      '--loglevel', '--node-options'),
+      '--loglevel', '--node-options', '-L', '-m'),
     bool: set('--yes', '-y', '--no', '--no-install', '--ignore-existing', '--quiet', '-q', '--silent', '--prefer-offline',
       '--prefer-online', '--offline', '--workspaces', '--include-workspace-root', '--verbose', '--no-yes'),
     registry: set('--registry'),
-    workspace: set('--workspace', '-w', '--workspaces'),
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     packageFlags: set('--package', '-p'),
     shellFlags: set('--call', '-c'),
     noFetchFlags: set('--no', '--no-install', '--offline'),
@@ -718,29 +1046,42 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     // value, the next one is looked up, the command is uncertain): looking up more, never less (US-1.AC-4).
     optionalWord: set('--no', '--no-yes', '--no-install', '--offline'),
     bothWays: 'clusters',
+    long: NPM_LONG,
+    stringValue: set('-m'),
+    notInGroups: set('-L', '-m'),
   },
   // `npm exec` / `npm x` are npm's own command: npm's flags and its `true` / `false` rule, not npx's (measured 2026-11-19:
   // `-p` is a boolean flag here, `--no-install` does not stop the download, `--no` / `--no-yes` / `--ignore-existing` are booleans).
+  // Built from npm's flags as they were before its groups were read as npm reads them, plus `-L` and `-m` (M-4; the owner's
+  // answer B to question 4): `npm exec -L global P` and `npm exec -m <v> P` ask for P. A group of letters keeps the rule of today.
   'npm-exec': {
-    value: set(...NPM_TABLE.value, '--package', '--call', '-c'),
-    bool: set(...NPM_TABLE.bool, '-p', '--no', '--no-install', '--no-yes', '--ignore-existing'),
+    value: set(...NPM_VALUE_FLAGS, '--package', '--call', '-c', '-L', '-m'),
+    bool: set(...NPM_BOOL_FLAGS, '-p', '--no', '--no-install', '--no-yes', '--ignore-existing'),
     registry: NPM_TABLE.registry,
-    workspace: NPM_TABLE.workspace,
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     packageFlags: set('--package'),
     shellFlags: set('--call', '-c'),
     noFetchFlags: set('--no', '--offline'),
     boolWord: { except: LOGLEVEL_FLAGS },
+    long: NPM_LONG,
+    stringValue: set('-m'),
+    notInGroups: set('-L', '-m'),
   },
   // `npm init` / `create` / `innit` (one npm command): npm's flags and its `true` / `false` rule, plus the flags of `npm init --help`
   // (the stored help of npm 11.20.0). Measured 2026-11-20 (npm 11.20.0): `init -y X`, `init --yes X`, `init -q X`, `init --quiet X`,
   // `init --silent X` and `init -w <dir> X` ask the registry for `create-X`.
+  // Built, as `npm exec`, from npm's flags of before plus `-L` and `-m`: `npm init -L global x` asks for `create-x` (M-4).
   'npm-init': {
-    value: set(...NPM_TABLE.value, '--init-author-name', '--init-author-url', '--init-license', '--init-module', '--init-type', '--init-version'),
-    bool: set(...NPM_TABLE.bool, '--init-private', '--no-workspaces-update'),
+    value: set(...NPM_VALUE_FLAGS, '--init-author-name', '--init-author-url', '--init-license', '--init-module', '--init-type', '--init-version',
+      '-L', '-m'),
+    bool: set(...NPM_BOOL_FLAGS, '--init-private', '--no-workspaces-update'),
     registry: NPM_TABLE.registry,
     dir: NPM_TABLE.dir,
-    workspace: NPM_TABLE.workspace,
+    workspace: set(...NPM_WORKSPACE_FLAGS),
     boolWord: { except: LOGLEVEL_FLAGS },
+    long: NPM_LONG,
+    stringValue: set('-m'),
+    notInGroups: set('-L', '-m'),
   },
   // `yarn create`: `-p` / `--package` (the help of Yarn 3 and 4; Yarn 1 has none, not measured) and `-q` / `--quiet` (measured, Yarn 1, 3 and 4).
   'yarn-create': {
@@ -795,6 +1136,28 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     packageFlags: set('--from'),
     extraPackageFlags: set('--with', '-w'),
   },
+  // `uv run` (the help of uv 0.13.8 stored by the measurement M-2 of install-vet-inline-script-deps, `.specs/install-vet-inline-script-deps/
+  // measurements/m2-linux-container-2026-11-21.txt:15-242`): the options written with `<…>` take a value, the others do not. The short
+  // spellings are noted under the long one. The words after the program are the program's own: they are never read with this table.
+  'uv-run': {
+    value: set('--extra', '--no-extra', '--group', '--no-group', '--only-group', '--no-editable-package', '--env-file', '--with', '-w',
+      '--with-editable', '--with-requirements', '--package', '--python-platform', '--index', '--default-index', '--index-url', '-i',
+      '--extra-index-url', '--find-links', '-f', '--index-strategy', '--keyring-provider', '--upgrade-package', '-P', '--upgrade-group',
+      '--resolution', '--prerelease', '--prerelease-package', '--fork-strategy', '--exclude-newer', '--exclude-newer-package',
+      '--no-sources-package', '--reinstall-package', '--link-mode', '--config-setting', '-C', '--config-settings-package',
+      '--no-build-isolation-package', '--no-build-package', '--no-binary-package', '--cache-dir', '--refresh-package', '--python', '-p',
+      '--color', '--allow-insecure-host', '--directory', '--project', '--config-file'),
+    bool: set('--all-extras', '--no-dev', '--only-dev', '--no-default-groups', '--all-groups', '--module', '-m', '--no-editable', '--exact',
+      '--no-env-file', '--isolated', '--active', '--no-sync', '--locked', '--frozen', '--script', '-s', '--gui-script', '--all-packages',
+      '--no-project', '--no-index', '--no-sources', '--upgrade', '-U', '--reinstall', '--compile-bytecode', '--no-build-isolation',
+      '--no-build', '--no-binary', '--require-build-hashes', '--no-require-build-hashes', '--no-cache', '-n', '--refresh',
+      '--managed-python', '--no-managed-python', '--no-python-downloads', '--quiet', '-q', '--verbose', '-v', '--system-certs',
+      '--offline', '--no-progress', '--no-config', '--help', '-h'),
+    registry: set('--index', '--default-index', '--index-url', '--extra-index-url', '--find-links'),
+    registryBool: set('--no-index'),
+    long: new Map([['-m', '--module'], ['-s', '--script'], ['-w', '--with'], ['-i', '--index-url'], ['-f', '--find-links']]),
+    extraPackageFlags: set('--with'),
+  },
   'uv-tool-install': {
     value: set(...UV_VALUED, '--with', '-w', '--editable', '-e'),
     bool: set(...UV_BOOL),
@@ -815,11 +1178,30 @@ const LAUNCH_FLAGS: Record<string, FlagTable> = {
     extraPackageFlags: set('--preinstall', '--spec'),
   },
   'pipx-run': {
-    value: set('--spec', '--index-url', '-i', '--python', '--path'),
-    bool: set('--no-cache', '--quiet', '-q', '--verbose', '-v', '--system-site-packages', '--fetch-missing-python'),
+    // `--path` takes no value (the help of pipx 1.18.16, M-2 of install-vet-inline-script-deps): the app is a path to a script.
+    value: set('--spec', '--index-url', '-i', '--python', '--with'),
+    bool: set('--no-cache', '--quiet', '-q', '--verbose', '-v', '--system-site-packages', '--fetch-missing-python', '--path'),
     registry: set('--index-url', '-i'),
     packageFlags: set('--spec'),
+    extraPackageFlags: set('--with'),
   },
+  // `pipx inject <environment> <package>…` (pipx, the parser dumped 2026-11-21, 23 spellings): `--include-resources-from` names a
+  // package pipx fetches as well, and `-r` a requirements file pip reads (its manifest is read, `collectLaunch`).
+  'pipx-inject': {
+    value: set('-r', '--requirement', '--include-resources-from', '--index-url', '-i', '--pip-args', '--cooldown', '--backend', '--output'),
+    bool: set('--quiet', '-q', '--verbose', '-v', '--skip-maintenance', '--global', '--include-apps', '--include-deps',
+      '--system-site-packages', '--editable', '-e', '--force', '-f', '--with-suffix'),
+    registry: set('--index-url', '-i'),
+    reported: new Map([['-r', PIP_REQUIREMENTS_REASON], ['--requirement', PIP_REQUIREMENTS_REASON]]),
+    extraPackageFlags: set('--include-resources-from'),
+  },
+  // `pipx runpip <environment> <pip arguments>`: only pipx's own flags, the rest is a pip command ({@link runpipDetected}).
+  'pipx-runpip': {
+    value: set(),
+    bool: set('--quiet', '-q', '--verbose', '-v', '--global', '--skip-maintenance'),
+    registry: set(),
+  },
+  'pipx-upgrade': PIPX_UPGRADE_TABLE,
 };
 
 /**
@@ -831,6 +1213,8 @@ export const MAX_CANDIDATES_PER_COMMAND = 50;
 
 interface Positional {
   value: string;
+  /** The index of the word among the words that were walked. */
+  at: number;
   /** The word after a long flag the table does not know: a possible package, or that flag's value ({@link afterUnknownFlag}). */
   candidate?: true;
 }
@@ -843,7 +1227,7 @@ interface WalkResult {
   /** Reasons a missing name in this command must not be denied (ruling (a), (c), (f)). */
   uncertain: string[];
   /** Every flag seen, with its value when it took one — what a launcher's packages are read from. */
-  flags: Array<{ flag: string; value?: string; eq?: true }>;
+  flags: Array<{ flag: string; value?: string; eq?: true; at?: number }>;
   /** How many flags the table of the manager does not know: npm reads abbreviations (`--loc=project`) that it does not hold. */
   unknownFlags: number;
 }
@@ -872,6 +1256,55 @@ function limitCandidates(positionals: readonly Positional[]): { kept: Positional
 const SHORT_CLUSTER = /^-[A-Za-z]{2,}/;
 
 const isBoolWord = (word: string | undefined): boolean => word === 'true' || word === 'false';
+
+/** An npm group of letters as npm 11.19.0 opens it ({@link openNpmGroup}). */
+interface NpmGroup {
+  /** The flags, in order, as the table names them; a value letter that is not the last carries the first word of the letter after it. */
+  flags: Array<{ flag: string; value?: string }>;
+  /** The second word of a `d`, `q` or `s` whose first word a value letter took: npm asks the registry for it (`-Cd` leaves `info`). */
+  positionals: string[];
+  /** What the word after the group is to its last flag: the value (`value`), the value unless it looks like a flag (`string`), nothing (`none`). */
+  next: 'value' | 'string' | 'none';
+}
+
+/** Whether `v` is a word of letters that `table` opens as npm does: npm's table, and not one of its exact flags (the six words npm reads whole are). */
+const isNpmGroupWord = (v: string, table: FlagTable): boolean =>
+  table.groups === 'npm' && !v.startsWith('--') && SHORT_CLUSTER.test(v) && !table.value.has(v) && !table.bool.has(v);
+
+/**
+ * Opens an npm word of letters as npm 11.19.0 does (measured 2026-11-20 and 2026-11-21, {@link NPM_LETTERS}): each letter is the
+ * flag written alone, in order. A letter of {@link NPM_TAKE_NEXT_LETTER} that is not the last takes the first word of the letter
+ * after it as its value, and that letter no longer counts — when it is `d`, `q` or `s` its second word (`info`, `warn`, `silent`)
+ * is a positional, which npm installs (the owner's answer A to question 6). `c` and `m` take nothing inside the group.
+ * `undefined` when a letter is not one of npm's: npm reads the whole word as a flag it does not know (`-gx` is `--gx`, `-gT`
+ * too — `T` is Yarn's). The callers ask {@link isNpmGroupWord} first. One pass over the letters.
+ */
+function openNpmGroup(word: string): NpmGroup | undefined {
+  const letters = [...word.slice(1)];
+  if (!letters.every((c) => NPM_LETTERS.has(c))) return undefined;
+  const group: NpmGroup = { flags: [], positionals: [], next: 'none' };
+  for (let k = 0; k < letters.length; k += 1) {
+    const letter = letters[k] ?? '';
+    const after = letters[k + 1];
+    if (after === undefined) {
+      group.flags.push({ flag: `-${letter}` });
+      group.next = NPM_TAKE_NEXT_LETTER.has(letter) ? 'value' : NPM_STRING_LETTERS.has(letter) ? 'string' : 'none';
+    } else if (NPM_TAKE_NEXT_LETTER.has(letter)) {
+      const [first = '', second] = (NPM_LETTERS.get(after) ?? '').split(' ');
+      group.flags.push({ flag: `-${letter}`, value: first });
+      if (second !== undefined) group.positionals.push(second);
+      k += 1;
+    } else group.flags.push({ flag: `-${letter}` });
+  }
+  return group;
+}
+
+/** Whether a flag that reads the next word as `next` (a value flag: `value`; one of type String: `string`) takes `word`. */
+const takesNextWord = (next: NpmGroup['next'], word: string | undefined): boolean =>
+  word !== undefined && (next === 'value' || (next === 'string' && !NOPT_FLAG_LIKE.test(word)));
+
+/** How the exact value flag `v` of `table` reads the next word: of type String ({@link FlagTable.stringValue}) or any word. */
+const valueKind = (v: string, table: FlagTable): NpmGroup['next'] => (table.stringValue?.has(v) === true ? 'string' : 'value');
 
 /**
  * The one rule for the word after a flag the table does not know: `walk` and `nextPositional` both ask it, so the
@@ -931,7 +1364,9 @@ const productionWordReason = (word: string): string =>
  *
  * Short-flag clusters are expanded letter by letter (`-qr req.txt` is `-q`
  * then `-r req.txt`; `-rreq.txt` is `-r req.txt`): the first letter that
- * takes a value takes the rest of the cluster, or the next word. A flag
+ * takes a value takes the rest of the cluster, or the next word — except in
+ * npm's table, whose groups are opened as npm opens them ({@link openNpmGroup}:
+ * `-gD` is `-g -D`, `-gL project` is `-g --location project`). A flag
  * this table does not know makes the parse uncertain; the word after an
  * unknown LONG flag is both a possible value and a candidate package
  * ({@link afterUnknownFlag}): vetting a flag's value as a name only warns, and
@@ -944,9 +1379,12 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   let unknownFlags = 0;
   let customRegistry: string | undefined;
   const registries: string[] = [];
-  const flags: Array<{ flag: string; value?: string; eq?: true }> = [];
-  const note = (flag: string, value: string | undefined, eq?: true): void => {
-    flags.push(value === undefined ? { flag } : eq === true ? { flag, value, eq } : { flag, value });
+  const flags: Array<{ flag: string; value?: string; eq?: true; at?: number }> = [];
+  // The index of the word being read: a flag is noted with it, so that a launcher can tell the flags before a word from those after.
+  let here = 0;
+  const note = (written: string, value: string | undefined, eq?: true): void => {
+    const flag = table.long?.get(written) ?? written;
+    flags.push(value === undefined ? { flag, at: here } : eq === true ? { flag, value, eq, at: here } : { flag, value, at: here });
     if (table.registry.has(flag) && value !== undefined) {
       registries.push(value);
       customRegistry = customRegistry ?? value;
@@ -965,10 +1403,11 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
   for (let i = 0; i < words.length; i += 1) {
     const w = words[i];
     if (w === undefined) break;
+    here = i;
     const v = w.value;
     if (v === '--') continue;
     if (!v.startsWith('-') || v.length === 1) {
-      positionals.push(i === candidateAt ? { value: v, candidate: true } : { value: v });
+      positionals.push(i === candidateAt ? { value: v, at: i, candidate: true } : { value: v, at: i });
       continue;
     }
     const eqAt = v.indexOf('=');
@@ -982,8 +1421,11 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
       continue;
     }
     if (table.value.has(v)) {
-      note(v, words[i + 1]?.value);
-      i += 1;
+      const word = words[i + 1]?.value;
+      if (takesNextWord(valueKind(v, table), word)) {
+        note(v, word);
+        i += 1;
+      } else note(v, undefined);
       continue;
     }
     if (table.bool.has(v)) {
@@ -1000,10 +1442,31 @@ function walk(words: readonly ShellWord[], table: FlagTable): WalkResult {
       }
       continue;
     }
+    if (isNpmGroupWord(v, table)) {
+      const group = openNpmGroup(v);
+      if (group === undefined) {
+        // A letter npm does not have: the whole word is one flag npm does not know (`-gx`), and a short flag takes no word.
+        uncertain.push(`unknown flag ${v}`);
+        unknownFlags += 1;
+        continue;
+      }
+      const word = words[i + 1]?.value;
+      const last = group.flags.length - 1;
+      for (const [k, f] of group.flags.entries()) {
+        if (k < last || f.value !== undefined) note(f.flag, f.value);
+        // The word after the group is the last letter's: its value, or the `true` / `false` of the rule of today (`-Dg false` is `-g false`).
+        else if (takesNextWord(group.next, word) || (takesWord(v, table) && isBoolWord(word))) {
+          note(f.flag, word);
+          i += 1;
+        } else note(f.flag, undefined);
+      }
+      for (const value of group.positionals) positionals.push({ value, at: i });
+      continue;
+    }
     if (!v.startsWith('--') && SHORT_CLUSTER.test(v)) {
       for (let k = 1; k < v.length; k += 1) {
         const flag = `-${v.charAt(k)}`;
-        if (table.value.has(flag)) {
+        if (table.value.has(flag) && table.notInGroups?.has(flag) !== true) {
           const rest = v.slice(k + 1);
           if (rest !== '') note(flag, rest);
           else {
@@ -1114,15 +1577,19 @@ const beforeDoubleDash = (words: readonly ShellWord[]): ShellWord[] => {
 /**
  * Whether an npm, pnpm or bun command says it is a GLOBAL install, and no word can take that back — measured
  * 2026-11-19 (npm 11, pnpm 10, Yarn 1.22 and 4, bun 1.4): the project's registry file is not obeyed by a global install,
- * but is by `--global=false`, `-g false`, `-g --no-global`, `-g --location=project`. The words before the subcommand
- * and the words after it are two lists, each read up to a `--` word. In doubt the answer is no:
+ * but is by `--global=false`, `-g false` and `-g --no-global`. `-g --location=project` is global and does not obey it either
+ * (`.specs/install-vet-project-registry-said/measurements/global-spellings-windows-2026-11-19.txt:15`; so `-gL project` and
+ * `-L project -g`, measured 2026-11-21), and is read as a doubt on purpose: a line too many, never one too few. The words
+ * before the subcommand and the words after it are two lists, each read up to a `--` word. For npm each list is read as npm
+ * reads it ({@link npmFlagWords}): a group of letters is its flags written apart (`-gD` is `-g -D`, `-Dg false` is
+ * `-D -g false`, measured 2026-11-21 with npm 11.19.0) and `-L` is `--location`. In doubt the answer is no:
  *   - a word with a shell expansion (`$` or a backtick) may be `false` or `--no-global`: not global;
  *   - says global: the exact words `-g` and `--global` (not when the next word of the list is `false`), `--global=true`,
  *     and for npm `--location=global` and `--location global`;
  *   - takes it back: any other word that starts with `-` and has `global` or `location` in it, or starts `-g=`;
- *   - a short cluster that holds a `g` (`-gD`, `-Dg false`) takes it back: the word after it may be the value of its `g`
- *     (measured 2026-11-19, npm 11.20.0: `-g -Dg false` installs the manifest); a package name with "global" in it takes
- *     nothing back.
+ *   - for pnpm and bun, a short cluster that holds a `g` (`-gD`, `-Dg false`) takes it back: the word after it may be the
+ *     value of its `g` (measured 2026-11-19 with npm 11.20.0: `-g -Dg false` installs the manifest; pnpm's and bun's groups
+ *     were not measured); a package name with "global" in it takes nothing back.
  * It is only part of the answer: a global word that stands where another flag's value goes (`--otp --global`) is that
  * flag's value, not a flag — the caller also asks the walker's flags ({@link isGlobalFlag}), which know the flags that
  * take a value, and a flag the manager's table does not know (npm's abbreviations: `--loc=project`) leaves it not global.
@@ -1134,20 +1601,45 @@ function saysGlobal(manager: string, pre: readonly ShellWord[], args: readonly S
   if ([...pre, ...args].some((w) => /[$`]/.test(w.value))) return false;
   let says = false;
   for (const list of [beforeDoubleDash(pre), beforeDoubleDash(args)]) {
-    for (const [at, w] of list.entries()) {
-      const v = w.value;
-      const next = list[at + 1]?.value;
-      if (!v.startsWith('-')) continue;
+    const read = manager === 'npm' ? npmFlagWords(list) : rawFlagWords(list);
+    for (const { flag: v, next } of read) {
       if (v === '-g' || v === '--global') {
         if (next === 'false') return false;
         says = true;
       } else if (v === '--global=true') says = true;
       else if (manager === 'npm' && (v === '--location=global' || (v === '--location' && next === 'global'))) says = true;
       else if (v.startsWith('-g=') || /global|location/.test(v.toLowerCase())) return false;
-      else if (/^-[A-Za-z]{2,}$/.test(v) && v.includes('g')) return false; // a cluster with a `g`: its word may be the value of that `g`
+      // pnpm and bun: a cluster with a `g` takes it back, its word may be the value of that `g`. npm's groups are opened above.
+      else if (manager !== 'npm' && /^-[A-Za-z]{2,}$/.test(v) && v.includes('g')) return false;
     }
   }
   return says;
+}
+
+/** The flag words of `list` as written, each with the word after it. */
+const rawFlagWords = (list: readonly ShellWord[]): Array<{ flag: string; next: string | undefined }> =>
+  list.flatMap((w, at) => (w.value.startsWith('-') ? [{ flag: w.value, next: list[at + 1]?.value }] : []));
+
+/**
+ * The flag words of `list` as npm reads them, each with the word after it: a group of letters is opened ({@link openNpmGroup},
+ * the one function `walk` and `scanPositional` use too) — its flags in order, a value letter's word being the letter it took
+ * (`-Lg` is `--location` with `--global`) and the last flag's the word after the group — and `-L` is `--location`. A word
+ * npm does not open (one with a letter npm does not have) stays as written.
+ */
+function npmFlagWords(list: readonly ShellWord[]): Array<{ flag: string; next: string | undefined }> {
+  const out: Array<{ flag: string; next: string | undefined }> = [];
+  for (const { flag: v, next } of rawFlagWords(list)) {
+    const group = isNpmGroupWord(v, NPM_TABLE) ? openNpmGroup(v) : undefined;
+    if (group === undefined) {
+      out.push({ flag: NPM_LONG.get(v) ?? v, next });
+      continue;
+    }
+    for (const [k, f] of group.flags.entries()) {
+      const following = group.flags[k + 1];
+      out.push({ flag: NPM_LONG.get(f.flag) ?? f.flag, next: f.value ?? (following === undefined ? next : following.flag) });
+    }
+  }
+  return out;
 }
 
 interface Detected {
@@ -1178,7 +1670,11 @@ interface Detected {
     spelling?: string;
     /** The line began `corepack <manager>[@version]` before the launcher. */
     viaCorepack?: true;
+    /** The first positional word is the program the launcher runs (`uv run`), never a package: only the flags name packages. */
+    program?: true;
   };
+  /** The value of a `UV_WORKING_DIR=` assignment that stands before `uv run` (alone, or after `env`). */
+  envDir?: string;
   /**
    * An install of the project's `package.json`: `always` for a subcommand
    * that takes no package (`npm ci`, `pnpm install`, `yarn install`, a bare
@@ -1191,7 +1687,37 @@ interface Detected {
   update?: true;
   /** An update verb that keeps the names it is given ({@link InstallCommand.updateNames}): always, or only with a global flag word on the line. */
   names?: 'always' | 'global-word';
+  /**
+   * An update verb that updates every installed tool ({@link InstallCommand.updatesEveryTool}): `always` (`pipx upgrade-all`, which
+   * takes no name: its words are read as none), or `all-flag` when the line has `--all` (`uv tool upgrade --all`).
+   */
+  everyTool?: 'always' | 'all-flag';
+  /**
+   * The first word of `args` is only a candidate: it follows a flag the table does not know, so the word before it (the
+   * environment of `pipx inject`, which `pre` holds) may have been that flag's value ({@link afterUnknownFlag}).
+   */
+  firstIsCandidate?: true;
+  /** One of the {@link DotnetForm}s that fetch a package by name, and how it is spelled (`dnx`, `dotnet tool exec`, …): {@link collectDotnet} reads it. */
+  dotnet?: { form: DotnetForm; spelling: string };
+  /** The {@link InstallCommand.registryForm} of the command, when it is one of the eight. */
+  registryForm?: string;
+  /**
+   * The words of the command from the program on are exactly `pipx install <word>`, `pipx run <word>` or `composer require <word>` — the program
+   * and the verb written so, one word, no flag — and the word ends in one of the fourteen in lower case: the one form in which the pipx and the
+   * composer were measured with a word that ends like an archive. The one definition of it: {@link collect} and {@link collectLaunch} read it.
+   */
+  measuredArchiveForm?: true;
 }
+/** The .NET forms read since install-vet-dotnet-run-forms: the run command (`dnx`, `dotnet dnx`, `dotnet tool exec` / `execute`) and four verbs. */
+type DotnetForm = 'run' | 'tool-update' | 'new-install' | 'download' | 'package-update';
+/** The {@link FLAGS} table of the flags of each {@link DotnetForm}. */
+const DOTNET_FORM_TABLES: Readonly<Record<DotnetForm, string>> = {
+  run: 'dotnet-run',
+  'tool-update': 'dotnet-tool-update',
+  'new-install': 'dotnet-new-install',
+  download: 'dotnet-download',
+  'package-update': 'dotnet-package-update',
+};
 
 /** A launcher as `detect` returns it. */
 function launcher(
@@ -1221,12 +1747,19 @@ function scanPositional(
     const v = words[i]?.value ?? '';
     if (v.startsWith('-') && v.length > 1) {
       if (v.includes('=')) continue;
-      if (table.value.has(v)) i += 1;
+      const next = words[i + 1]?.value;
+      // An npm group, opened as `walk` opens it: `npm -gL project install P` — the last letter takes the word.
+      const group = isNpmGroupWord(v, table) ? openNpmGroup(v) : undefined;
+      // `npm -L global install P`, `npm -m <v> install P` (the String rule: not `npm -m -g install P`).
+      if (table.value.has(v)) {
+        if (takesNextWord(valueKind(v, table), next)) i += 1;
+      }
       // `npm -D false install`: the word after a boolean flag is its value, not the subcommand.
-      else if (takesWord(v, table) && isBoolWord(words[i + 1]?.value)) i += 1;
-      else if (readsBothWays(v, words[i + 1]?.value, table)) candidateAt = i + 1;
-      else {
-        const next = words[i + 1]?.value;
+      else if (takesWord(v, table) && isBoolWord(next)) i += 1;
+      else if (readsBothWays(v, next, table)) candidateAt = i + 1;
+      else if (group !== undefined) {
+        if (takesNextWord(group.next, next)) i += 1;
+      } else {
         const after = afterUnknownFlag(v, next, table);
         if (after === 'value' || (after === 'candidate' && subcommands !== undefined && !subcommands.has(next ?? ''))) i += 1;
         else if (after === 'candidate') candidateAt = i + 1;
@@ -1255,14 +1788,18 @@ const SUBCOMMANDS: Record<string, ReadonlySet<string>> = {
   pnpm: new Set(['add', 'dlx', 'dedupe', ...PNPM_INSTALL, ...PNPM_UPDATE, ...CREATE_ONLY]),
   bun: new Set([...BUN_ADD, 'update', 'x', ...BUN_INITIALIZER]),
   yarn: new Set(['install', 'add', 'global', 'workspace', 'workspaces', 'dlx', 'dedupe', 'up', ...YARN_UPDATE, ...CREATE_ONLY]),
-  pip: new Set(['install']),
-  uv: new Set(['add', 'pip', 'tool']),
+  pip: new Set(['install', 'download', 'wheel']),
+  uv: new Set(['add', 'pip', 'tool', 'run']),
   poetry: new Set(['add']),
   composer: COMPOSER_REQUIRE,
-  dotnet: new Set(['add', 'package', 'tool']),
+  dotnet: new Set(['add', 'package', 'tool', 'new', 'dnx']),
 };
-const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run']);
-const ADD_ONLY: ReadonlySet<string> = new Set(['add']);
+/** The verbs of pipx the hook reads: the ones that fetch a package, or an update of one that is installed. */
+const PIPX_SUBCOMMANDS: ReadonlySet<string> = new Set(['install', 'run', 'inject', 'upgrade', 'reinstall', 'runpip', 'upgrade-all']);
+/** The verbs of `uv tool` the hook reads. */
+const UV_TOOL_SUBCOMMANDS: ReadonlySet<string> = new Set(['run', 'install', 'upgrade']);
+/** The verbs of pip that fetch a package, and the {@link FLAGS} table of the flags of each (`install`: pip's own). */
+const PIP_FETCH_TABLES: ReadonlyMap<string, string | undefined> = new Map([['install', undefined], ['download', 'pip-download'], ['wheel', 'pip-wheel']]);
 const ADD_OR_UP: ReadonlySet<string> = new Set(['add', 'up']);
 const ADD_OR_UPGRADE: ReadonlySet<string> = new Set(['add', 'upgrade']);
 const FOREACH_ONLY: ReadonlySet<string> = new Set(['foreach']);
@@ -1306,7 +1843,62 @@ function yarnWorkspaceVerb(
   if (verb !== 'add') return null;
   return tag({ manager: head, ecosystem: 'npm', args: words.slice(at + 1), pre, uncertain, manifest: 'bare' });
 }
+/**
+ * `pipx inject <environment> <package>…`: an install into an environment that exists. The environment is the first positional word
+ * `walk` gives with the flags of the verb — a group of letters is opened (`-fr reqs.txt T P`, `-qi URL T P`), which `scanPositional`
+ * does not do — and it is never looked up: the words before it (flags and their values) are `pre`, the ones after it the packages.
+ * When that first word follows a flag the table does not know it may be that flag's value, and the next word the environment: the
+ * first package is then only a candidate ({@link Detected.firstIsCandidate}).
+ */
+function injectDetected(after: ShellWord[], before: ShellWord[]): Detected | null {
+  const table = LAUNCH_FLAGS['pipx-inject'];
+  const environment = table === undefined ? undefined : walk(after, table).positionals[0];
+  if (environment === undefined) return null;
+  const d = launcher('pipx', 'pypi', after.slice(environment.at + 1), [...before, ...after.slice(0, environment.at + 1)], {
+    style: 'install',
+    flags: 'pipx-inject',
+  });
+  return environment.candidate === true ? { ...d, firstIsCandidate: true } : d;
+}
+
+/**
+ * `pipx runpip <environment> <pip arguments>`: the arguments after the environment are a pip command, read as one (`null` when its
+ * verb is not one pip fetches a package with). The environment is the first positional word, never looked up. After a flag of pipx
+ * the table does not know the first word may be that flag's value: the pip command then starts at the first of its verbs that is
+ * the second or the third positional word, and the environment is the word before it.
+ */
+function runpipDetected(after: ShellWord[], before: ShellWord[]): Detected | null {
+  const table = LAUNCH_FLAGS['pipx-runpip'];
+  const [first, second, third] = table === undefined ? [] : walk(after, table).positionals;
+  if (table === undefined || first === undefined) return null;
+  let environment = first;
+  if (first.candidate === true && !(second !== undefined && PIP_FETCH_TABLES.has(second.value))) {
+    if (second === undefined || third === undefined || !PIP_FETCH_TABLES.has(third.value)) return null;
+    environment = second;
+  }
+  const word = after[environment.at];
+  if (word === undefined) return null;
+  const inner = detect([{ ...word, value: 'pip' }, ...after.slice(environment.at + 1)]);
+  if (inner === null) return null;
+  const own = walk([...before, ...after.slice(0, environment.at + 1)], table).uncertain;
+  return { ...inner, uncertain: [...own, ...inner.uncertain] };
+}
+
+/** `pipx upgrade`: with `--install` it installs what is not installed, so it is read as an install; without, the words are names given to an update. */
+function upgradeDetected(after: ShellWord[], before: ShellWord[]): Detected {
+  if (walk(after, PIPX_UPGRADE_TABLE).flags.some((f) => f.flag === '--install')) {
+    return launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-upgrade' });
+  }
+  return { manager: 'pipx', ecosystem: 'pypi', args: after, pre: before, uncertain: [], flagTable: 'pipx-upgrade', names: 'always' };
+}
 const INSTALL_ONLY: ReadonlySet<string> = new Set(['install']);
+const DOTNET_TOOL_VERBS: ReadonlySet<string> = new Set(['install', 'exec', 'execute', 'update']);
+const DOTNET_PACKAGE_VERBS: ReadonlySet<string> = new Set(['add', 'download', 'update']);
+
+/** A .NET form that fetches a package by name, as `detect` returns it: the manager is `dotnet` whatever the spelling (`dnx` too). */
+function dotnetDetected(form: DotnetForm, spelling: string, args: ShellWord[], pre: ShellWord[]): Detected {
+  return { manager: 'dotnet', ecosystem: 'nuget', args, pre, uncertain: [], flagTable: DOTNET_FORM_TABLES[form], dotnet: { form, spelling } };
+}
 const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
 
 /**
@@ -1314,6 +1906,18 @@ const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
  * install p`, `yarn --network-concurrency 1`): the scan for the subcommand takes it as one unless it is a subcommand
  * the hook reads, word by word and in one pass.
  */
+/**
+ * Whether the words from the program on (`start`) are exactly `<program> <verb> <word>`, the program and the verb written as given (not
+ * `pipx.exe`, a path, `composer.phar`, `php composer.phar`, `req`), and the word, no flag, ends in one of the fourteen in lower case: the
+ * {@link Detected.measuredArchiveForm}. `verb` is `install` or `run` for the pipx and `require` for the composer.
+ */
+function measuredWord(words: readonly ShellWord[], start: number, program: 'pipx' | 'composer', verb: string): boolean {
+  const last = words[start + 2]?.value;
+  if (words.length !== start + 3 || last === undefined || last.startsWith('-')) return false;
+  const rightVerb = program === 'pipx' ? verb === 'install' || verb === 'run' : verb === 'require';
+  return words[start]?.value === program && words[start + 1]?.value === verb && rightVerb && MEASURED_ENDING.test(last);
+}
+
 function detect(input: readonly ShellWord[]): Detected | null {
   let words = input;
   const nextPositional = (ws: readonly ShellWord[], from: number, table: FlagTable, subcommands?: ReadonlySet<string>): number =>
@@ -1364,11 +1968,32 @@ function detect(input: readonly ShellWord[]): Detected | null {
   if (head === 'pipx') {
     const sub = nextPositional(words, i, LAUNCH_FLAGS['pipx-run'] ?? FLAGS['pip'] ?? { value: set(), bool: set(), registry: set() }, PIPX_SUBCOMMANDS);
     const subWord = sub < 0 ? '' : (words[sub]?.value ?? '');
-    if (subWord === 'install') return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'install', flags: 'pipx-install' });
-    if (subWord === 'run') return launcher('pipx', 'pypi', words.slice(sub + 1), words.slice(i, sub), { style: 'run', flags: 'pipx-run' });
-    return null;
+    const after = words.slice(sub + 1);
+    const before = words.slice(i, sub);
+    const measured = measuredWord(words, start, 'pipx', subWord) ? ({ measuredArchiveForm: true } as const) : {};
+    switch (subWord) {
+      case 'install':
+        return { ...launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-install' }), registryForm: 'pipx install', ...measured };
+      case 'run':
+        return { ...launcher('pipx', 'pypi', after, before, { style: 'run', flags: 'pipx-run' }), registryForm: 'pipx run', ...measured };
+      case 'inject':
+        return injectDetected(after, before);
+      case 'runpip':
+        return runpipDetected(after, before);
+      case 'upgrade':
+        return upgradeDetected(after, before);
+      // The names of an update (`names`), read with the flags of the verb ({@link FLAGS}).
+      case 'reinstall':
+        return { manager: 'pipx', ecosystem: 'pypi', args: after, pre: before, uncertain: [], flagTable: 'pipx-reinstall', names: 'always' };
+      // `pipx upgrade-all` takes no name: its words are none (a word after `--skip a` is another value of `--skip`).
+      case 'upgrade-all':
+        return { manager: 'pipx', ecosystem: 'pypi', args: after, pre: before, uncertain: [], flagTable: 'pipx-upgrade-all', everyTool: 'always' };
+      default:
+        return null;
+    }
   }
 
+  if (head === 'dnx') return dotnetDetected('run', 'dnx', rest, []);
   const table = FLAGS[head];
   if (table === undefined) return null;
   // An initializer verb after a flag the table does not know may be that flag's value (`npm --dgunknown create install p`,
@@ -1418,11 +2043,14 @@ function detect(input: readonly ShellWord[]): Detected | null {
   if (initVerbs?.has(subName) === true) return initializerLaunch(head, after, before);
   if (head === 'uv' && subName === 'tool') {
     const toolTable = LAUNCH_FLAGS['uvx'] ?? table;
-    const verb = nextPositional(words, sub + 1, toolTable, PIPX_SUBCOMMANDS);
+    const verb = nextPositional(words, sub + 1, toolTable, UV_TOOL_SUBCOMMANDS);
     const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
     const tail = words.slice(verb + 1);
     if (verbName === 'run') return launcher('uv', 'pypi', tail, before, { style: 'run', flags: 'uvx' });
     if (verbName === 'install') return launcher('uv', 'pypi', tail, before, { style: 'install', flags: 'uv-tool-install' });
+    if (verbName === 'upgrade') {
+      return { manager: 'uv', ecosystem: 'pypi', args: tail, pre: before, uncertain: [], flagTable: 'uv-tool-upgrade', names: 'always', everyTool: 'all-flag' };
+    }
     return null;
   }
   const subWord = words[sub]?.value ?? '';
@@ -1454,7 +2082,9 @@ function detect(input: readonly ShellWord[]): Detected | null {
       // `bun a`, and `bun i <pkg>` / `bun install <pkg>` add too, and install the manifest.
       if (subWord === 'update') return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always', update: true, names: 'global-word' };
       if (!BUN_ADD.has(subWord)) return null;
-      return { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
+      const d: Detected = { manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'bare' };
+      // Only the two spellings measured (`bun add`, `bun install`) are told apart; `bun a` and `bun i` read the files as before.
+      return subWord === 'add' || subWord === 'install' ? { ...d, registryForm: `bun ${subWord}` } : d;
     }
     case 'yarn': {
       if (subWord === 'install' || subWord === 'dedupe') return tag({ manager: head, ecosystem: 'npm', args: words.slice(sub + 1), pre, uncertain: [], manifest: 'always' });
@@ -1493,29 +2123,55 @@ function detect(input: readonly ShellWord[]): Detected | null {
       }
       return yarnWorkspaceVerb(words, at, table, head, pre, uncertain, tag);
     }
-    case 'pip':
-      return subWord === 'install' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
+    case 'pip': {
+      // `pip download` and `pip wheel` fetch the package (and build its sdist) as `install` does, with the flags of their own verb.
+      if (!PIP_FETCH_TABLES.has(subWord)) return null;
+      const flagTable = PIP_FETCH_TABLES.get(subWord);
+      const d: Detected = { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
+      if (flagTable !== undefined) return { ...d, flagTable };
+      return subWord === 'install' ? { ...d, registryForm: 'pip install' } : d;
+    }
     case 'uv': {
-      if (subWord === 'add') return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] };
+      if (subWord === 'run') {
+        const d = launcher('uv', 'pypi', words.slice(sub + 1), pre, { style: 'run', flags: 'uv-run', program: true });
+        const envDir = leadingWorkingDir(words.slice(0, start));
+        return envDir === undefined ? d : { ...d, envDir };
+      }
+      if (subWord === 'add') return { manager: 'uv', ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [], registryForm: 'uv add' };
       if (subWord === 'pip') {
         const inst = nextPositional(words, sub + 1, table, INSTALL_ONLY);
         if (inst >= 0 && words[inst]?.value === 'install') {
-          return { manager: 'uv-pip', ecosystem: 'pypi', args: words.slice(inst + 1), pre, uncertain: [] };
+          return { manager: 'uv-pip', ecosystem: 'pypi', args: words.slice(inst + 1), pre, uncertain: [], registryForm: 'uv pip install' };
         }
       }
       return null;
     }
     case 'poetry':
-      return subWord === 'add' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [] } : null;
+      return subWord === 'add' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [], registryForm: 'poetry add' } : null;
     case 'composer':
       return COMPOSER_REQUIRE.has(subWord)
-        ? { manager: head, ecosystem: 'packagist', args: words.slice(sub + 1), pre, uncertain: [] }
+        ? {
+            manager: head,
+            ecosystem: 'packagist',
+            args: words.slice(sub + 1),
+            pre,
+            uncertain: [],
+            ...(measuredWord(words, start, 'composer', subWord) ? ({ measuredArchiveForm: true } as const) : {}),
+          }
         : null;
     case 'dotnet': {
       // dotnet package add <NAME> (.NET 10: the same command as `add package`, the project a flag)
+      if (subWord === 'dnx') return dotnetDetected('run', 'dotnet dnx', words.slice(sub + 1), pre);
+      if (subWord === 'new') {
+        const verb = nextPositional(words, sub + 1, FLAGS['dotnet-new-install'] ?? table, INSTALL_ONLY);
+        return verb >= 0 && words[verb]?.value === 'install' ? dotnetDetected('new-install', 'dotnet new install', words.slice(verb + 1), pre) : null;
+      }
       if (subWord === 'package') {
-        const verb = nextPositional(words, sub + 1, table, ADD_ONLY);
-        if (verb < 0 || words[verb]?.value !== 'add') return null;
+        const verb = nextPositional(words, sub + 1, table, DOTNET_PACKAGE_VERBS);
+        const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
+        if (verbName === 'download') return dotnetDetected('download', 'dotnet package download', words.slice(verb + 1), pre);
+        if (verbName === 'update') return dotnetDetected('package-update', 'dotnet package update', words.slice(verb + 1), pre);
+        if (verbName !== 'add') return null;
         const args = words.slice(verb + 1);
         const uncertain = args.some((w) => /^--(?:project|file)(?:=|$)/.test(w.value))
           ? ['dotnet project argument (the NuGet configuration next to that project was not read)']
@@ -1525,9 +2181,13 @@ function detect(input: readonly ShellWord[]): Detected | null {
       // dotnet tool install <NAME>: the tool is a NuGet package, asked of the sources as `add package` asks.
       if (subWord === 'tool') {
         const toolTable = FLAGS['dotnet-tool'] ?? table;
-        const verb = nextPositional(words, sub + 1, toolTable, INSTALL_ONLY);
-        if (verb < 0 || words[verb]?.value !== 'install') return null;
-        return { manager: head, ecosystem: 'nuget', args: words.slice(verb + 1), pre, uncertain: [], flagTable: 'dotnet-tool' };
+        const verb = nextPositional(words, sub + 1, toolTable, DOTNET_TOOL_VERBS);
+        const verbName = verb < 0 ? '' : (words[verb]?.value ?? '');
+        const after = verb < 0 ? [] : words.slice(verb + 1);
+        if (verbName === 'exec' || verbName === 'execute') return dotnetDetected('run', `dotnet tool ${verbName}`, after, pre);
+        if (verbName === 'update') return dotnetDetected('tool-update', 'dotnet tool update', after, pre);
+        if (verbName !== 'install') return null;
+        return { manager: head, ecosystem: 'nuget', args: after, pre, uncertain: [], flagTable: 'dotnet-tool' };
       }
       if (subWord !== 'add') return null;
       // dotnet add [<PROJECT>] package <NAME>
@@ -1543,6 +2203,13 @@ function detect(input: readonly ShellWord[]): Detected | null {
     default:
       return null;
   }
+}
+
+/** The value of the last `UV_WORKING_DIR=<value>` among the words in front of a command (a leading assignment, or one given to `env`). */
+function leadingWorkingDir(front: readonly ShellWord[]): string | undefined {
+  let found: string | undefined;
+  for (const w of front) if (w.value.startsWith('UV_WORKING_DIR=')) found = w.value.slice('UV_WORKING_DIR='.length);
+  return found;
 }
 
 /** Composer lets a constraint follow its package as a separate word: `vendor/pkg "^2.0"`. */
@@ -1650,6 +2317,9 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
     if (end >= 0) body = d.args.slice(0, end + 1);
   }
   const w = walk(body, table);
+  // The environment `pipx inject` skipped may have been a flag's value: the first word after it is then no more than a candidate.
+  const firstWord = w.positionals[0];
+  if (d.firstIsCandidate === true && firstWord !== undefined) w.positionals[0] = { ...firstWord, candidate: true };
   const flags = [...pre.flags, ...w.flags];
   // A flag of `names` is ON unless it carries a `true` / `false` word (`--no false`, `-c false`): then it is off, and the
   // positional after it is looked up, the command being uncertain (the word may be read the other way).
@@ -1663,10 +2333,12 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
       ? []
       : flags
           .filter((f) => names.has(f.flag))
-          .flatMap((f) => (f.value ?? '').split(','))
+          .flatMap((f) => (d.ecosystem === 'pypi' ? splitOutsideBrackets(f.value ?? '') : (f.value ?? '').split(',')))
           .map((v) => v.trim())
           .filter((v) => v !== '');
   const raws: string[] = [];
+  // `pipx run --path <script>`: the word is a script, never a package (the help of pipx 1.18.16: `--path` takes no value).
+  const pathApp = launch.flags === 'pipx-run' && launch.style === 'run' && flags.some((f) => f.flag === '--path');
   // An initializer's words are rewritten to the package the manager asks for; a candidate that is no registry name is a flag's value.
   const initializer = launch.initializer === true;
   const limited = limitCandidates(initializer ? w.positionals.filter((p) => isInitializerName(p.value, d.manager)) : w.positionals);
@@ -1689,7 +2361,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
     if (named.length > 0) {
       raws.push(...named);
       byPackageFlag = true;
-    } else if (!has(table.shellFlags)) raws.push(...limited.kept.map((p) => p.value));
+    } else if (!has(table.shellFlags) && launch.program !== true && !pathApp) raws.push(...limited.kept.map((p) => p.value));
     // In shell mode the positional is shell text — but a line of ONE word is a package for pnpm (`pnpm dlx -c pkg`, measured
     // 2026-11-19); with more words after it (`-c a b`) or spaces inside it (`-c 'a --version'`) it is a command, not looked up.
     else if (table.shellWord === true && d.args.length === body.length) raws.push(...limited.kept.map((p) => p.value).filter((v) => !/\s/.test(v)));
@@ -1706,18 +2378,19 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
     const parsed = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     // The `raw` of an initializer's package is the word as written, not the name made of it.
     const asWritten = written.get(raw) ?? raw;
-    const spec = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
-    if ('name' in spec) {
+    const parsedAs = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
+    if ('name' in parsedAs) {
+      // A word the pipx reads as a file is looked up for malware only: the mark says it, the word stays a package of the command.
+      const spec: CommandPackage = readsAsPipxFile(d, parsedAs) ? { ...parsedAs, malwareOnly: true } : parsedAs;
       const read = d.ecosystem === 'npm' ? npmReadings(spec, d.manager) : { packages: [spec] };
       for (const each of read.packages) {
         packages.push(each);
         if (!byPackageFlag && candidateRaws.has(asWritten) && !certainRaws.has(asWritten)) candidates.push(each);
       }
       if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
-      const why = unmeasuredReason(d.manager, spec);
-      if (why !== undefined) unsure.push(why);
+      unsure.push(...archiveReasons(d, spec));
       if (d.ecosystem === 'npm' && asWritten.endsWith('@')) unsure.push(LAUNCHER_NAME_AT);
-    } else skipped.push(spec);
+    } else skipped.push(parsedAs);
   }
   const bothWhy = bothReadings(bothPairs);
   if (bothWhy !== undefined) unsure.push(bothWhy);
@@ -1737,11 +2410,136 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
   if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
+  if (launch.flags === 'uv-run') attachUvRun(out, d, pre, w, flags);
+  else if (launch.flags === 'pipx-run' && launch.style === 'run' && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp, d.measuredArchiveForm === true);
+  // A script given to `pipx run` (a `.py` file, or `--path`) is read by `install-vet-inline-script-deps`: no file of the project explains a
+  // name of it (`explainForm`, measured for both engines of the pipx). Any other word may be a file too, but it is the package of that name
+  // unless the folder holds one: the form is measured for it.
+  const script = pathApp || (out.inlineScripts ?? []).some((w) => PYTHON_FILE.test(w.file));
+  if (d.registryForm !== undefined && !script) out.registryForm = d.registryForm;
+  if (d.registryForm === 'pipx run' && script) out.explainForm = 'pipx run script';
+  if (launch.flags === 'uv-run') out.explainForm = 'uv run';
+  if (d.manager === 'bun') out.bunLauncher = true;
+  if (d.manager === 'bun' && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
+  // The requirements files `pipx inject -r` hands to pip, as `pip install -r` hands them, in the order written.
+  if (launch.flags === 'pipx-inject') {
+    const files = requirementFiles(flags, PIPX_REQUIREMENT_FLAGS);
+    if (files.length > 0) out.manifest = { kind: 'requirements', files };
+  }
   return out;
+}
+
+/** A file name the uv reads as a script: `.py` or `.pyw`, in any letter case (measured: `.py`, `.PY`, `.pyw`). */
+const PYTHON_FILE = /\.pyw?$/i;
+
+/** Whether a word may be the name of a file: not the standard input (`-`), not a URL or a VCS spec. */
+const isFileWord = (word: string): boolean => word !== '-' && !word.includes('://') && !URL_OR_VCS.test(word);
+
+/** A script the command surely runs, named by `file`: one with an expansion or a glob cannot be told which file it is. */
+const scriptWord = (file: string): InlineScriptWord => (SHELL_EXPANSION.test(file) ? { file, literal: false } : { file });
+
+/**
+ * What `uv run` reads besides the packages of `--with`: its script — a word that ends `.py` / `.pyw` or follows `--script`, `-s`
+ * or `--gui-script` among the flags of `uv run` BEFORE it, and no `--module` / `-m` there (`uv run evil.py -m msg` and
+ * `python -m uv run s.py` keep it, `uv run -m evil.py` does not) — each word that may be the program (the first positional, and the
+ * next ones while a flag the table does not know may have taken the first) —, the `.py` / `.pyw` files of `--with-requirements` (the
+ * uv reads them as a script), the other files of it as a requirements manifest, and the directory the uv looks in (`--directory`,
+ * before or after `run`, else a leading `UV_WORKING_DIR=`). `--project` does not move it.
+ */
+function attachUvRun(out: InstallCommand, d: Detected, pre: WalkResult, w: WalkResult, flags: ReadonlyArray<{ flag: string; value?: string }>): void {
+  const scripts: InlineScriptWord[] = [];
+  const seen = new Set<string>();
+  const add = (word: InlineScriptWord): void => {
+    const key = `${word.file}|${String(word.literal)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    scripts.push(word);
+  };
+  for (const p of w.positionals) {
+    if (!isFileWord(p.value)) continue;
+    const before = [...pre.flags, ...w.flags.filter((f) => f.at !== undefined && f.at < p.at)];
+    if (before.some((f) => f.flag === '--module')) continue;
+    if (before.some((f) => f.flag === '--script' || f.flag === '--gui-script') || PYTHON_FILE.test(p.value)) add(scriptWord(p.value));
+  }
+  const required = requirementFiles(flags, new Set(['--with-requirements']));
+  for (const file of required) if (PYTHON_FILE.test(file)) add(scriptWord(file));
+  const others = required.filter((file) => !PYTHON_FILE.test(file));
+  if (others.length > 0) out.manifest = { kind: 'requirements', files: others };
+  if (scripts.length > 0) out.inlineScripts = scripts;
+  const projects = flags.filter((f) => f.flag === '--project' && f.value !== undefined && f.value !== '').map((f) => f.value ?? '');
+  const project = projects[projects.length - 1];
+  out.uvRun = {
+    noConfig: flags.some((f) => f.flag === '--no-config' || f.flag === '--config-file'),
+    defaultIndexFlag: flags.some((f) => f.flag === '--default-index' || f.flag === '--index-url'),
+    ...(project === undefined ? {} : SHELL_EXPANSION.test(project) ? { projectUnknown: true as const } : { project }),
+  };
+  const given = flags.filter((f) => f.flag === '--directory' && f.value !== undefined && f.value !== '').map((f) => f.value ?? '');
+  const dir = given.length > 0 ? given[given.length - 1] : d.envDir;
+  if (dir === undefined || dir === '') return;
+  if (SHELL_EXPANSION.test(dir)) out.scriptDirUnknown = true;
+  else out.scriptDir = dir;
+}
+
+/**
+ * The words `pipx run` may take as its app (the first positional, and the next ones while a flag the table does not know may have
+ * taken it) as files: with `--path` the only word is a script for certain and several are each a file only if it is there; without it
+ * each is a file only when one of that name is in the directory, and the hook asks the disk. A word with an expansion is none, but for a
+ * script `--path` names for certain.
+ */
+function attachPipxApp(out: InstallCommand, w: WalkResult, pathApp: boolean, measured: boolean): void {
+  const words = w.positionals.filter((p) => isFileWord(p.value));
+  const scripts: InlineScriptWord[] = [];
+  for (const p of words) {
+    const expands = SHELL_EXPANSION.test(p.value);
+    if (pathApp && words.length === 1) scripts.push(scriptWord(p.value));
+    else if (!expands) scripts.push({ file: p.value, ifFile: true });
+  }
+  if (scripts.length > 0) out.inlineScripts = scripts;
+  // The measured form `pipx run <word>`: the word, a path too, is a file pipx runs when it ends in one of the twelve (it asks the index for none).
+  const word = measured ? words[0]?.value : undefined;
+  if (word === undefined || !PIPX_FILE.test(word) || !scripts.some((s) => s.file === word)) return;
+  const asPath = out.skipped.some((s) => s.raw === word && s.reason === LOCAL_PATH);
+  if (asPath || out.packages.some((p) => p.raw === word && p.malwareOnly === true)) out.runsAsScript = word;
+}
+
+/** The flags of `pipx inject` that name a requirements file. */
+const PIPX_REQUIREMENT_FLAGS: ReadonlySet<string> = new Set(['-r', '--requirement']);
+
+/** The values of the flags `names` among `flags`, in order, none empty. */
+function requirementFiles(flags: ReadonlyArray<{ flag: string; value?: string }>, names: ReadonlySet<string>): string[] {
+  return flags.flatMap((f) => (names.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
+}
+
+/**
+ * The value of a package flag of a launcher of the PyPI split at its commas outside `[...]` (`uvx --with "P[x,y],D"` is `P[x,y]` and
+ * `D`; measured 2026-11-21, M-02 F16: uv reads the extras of one package as one). A counter that a `[` raises and a `]` lowers, never
+ * below 0: a comma at depth 0 separates. A range with a comma (`P>=1,<2`) stays split.
+ */
+function splitOutsideBrackets(value: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let k = 0; k < value.length; k += 1) {
+    const ch = value.charAt(k);
+    if (ch === '[') depth += 1;
+    else if (ch === ']') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) {
+      parts.push(value.slice(start, k));
+      start = k + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
+}
+
+/** A word of the bun's `.env` flags: `--env-file`, `--env-file=<file>` and `--no-env-file`. */
+function isEnvFileWord(w: ShellWord): boolean {
+  return w.value === '--env-file' || w.value === '--no-env-file' || w.value.startsWith('--env-file=');
 }
 
 function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.launch !== undefined) return collectLaunch(d, d.launch, context);
+  if (d.dotnet !== undefined) return collectDotnet(d, d.dotnet, context);
   const table = FLAGS[d.flagTable ?? (d.manager === 'uv-pip' ? 'pip' : d.manager)] ?? FLAGS['npm'];
   const flagTable = table ?? { value: set(), bool: set(), registry: set() };
   const preWalk = walk(d.pre, flagTable);
@@ -1750,7 +2548,8 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   // A subcommand that takes no package names none: its positional words are not looked up.
   const limited = limitCandidates(walked.positionals);
   // The words after an update verb are its names ({@link InstallCommand.updateNames}), never packages.
-  const positionals = d.manifest === 'always' || d.names !== undefined ? [] : limited.kept;
+  const readsNoPackage = d.manifest === 'always' || d.names !== undefined || d.everyTool === 'always';
+  const positionals = readsNoPackage ? [] : limited.kept;
   const allFlags = [...preWalk.flags, ...walked.flags];
   const packages: PackageSpec[] = [];
   const out: InstallCommand = {
@@ -1763,7 +2562,9 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   };
   const registry = preWalk.customRegistry ?? customRegistry;
   if (registry !== undefined) out.customRegistry = registry;
-  if (limited.dropped > 0 && d.manifest !== 'always' && d.names === undefined) out.candidatesDropped = limited.dropped;
+  if (d.registryForm !== undefined) out.registryForm = d.registryForm;
+  if (d.manager === 'bun' && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
+  if (limited.dropped > 0 && !readsNoPackage) out.candidatesDropped = limited.dropped;
 
   // A candidate (the word after a flag the table does not know) may be that flag's value: it is vetted, but it is not a
   // thing the command surely names, so it does not stop the manifest from being read.
@@ -1799,8 +2600,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
         if (p.candidate === true) candidatePackages.push(each);
       }
       if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
-      const why = unmeasuredReason(d.manager, spec);
-      if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
+      for (const why of archiveReasons(d, spec)) if (!out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
       skipped.push(spec);
@@ -1833,18 +2633,23 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
   if (d.names === 'always' || (d.names === 'global-word' && hasGlobalFlagWord(d.pre, d.args))) {
     out.updateNames = [];
     for (const p of limited.kept) {
-      const spec = parseNpm(p.value, d.manager);
+      const spec = d.ecosystem === 'pypi' ? parsePython(p.value, false, d.manager) : parseNpm(p.value, d.manager);
       // A pattern, a path or a URL is no name; it is kept as a skipped word, so that "no word at all" can be told from it.
       if ('name' in spec) out.updateNames.push(spec);
       else skipped.push(spec);
     }
     // The candidate words left out past the ceiling of one command are counted, as they are for an install.
     if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
-  }
+  } else if (d.everyTool === 'always') out.updateNames = [];
+  if (d.everyTool === 'always' || (d.everyTool === 'all-flag' && allFlags.some((f) => f.flag === '--all'))) out.updatesEveryTool = true;
   if (d.global === true || (knownFlagsOnly && allFlags.some(isGlobalFlag) && saysGlobal(d.manager, d.pre, d.args))) out.global = true;
   if (d.manager === 'pip' || d.manager === 'uv-pip') {
-    const files = walked.flags.flatMap((f) => (REQUIREMENT_FLAGS.has(f.flag) && f.value !== undefined && f.value !== '' ? [f.value] : []));
-    if (files.length > 0) out.manifest = { kind: 'requirements', files };
+    const files = requirementFiles(walked.flags, REQUIREMENT_FLAGS);
+    // The uv reads a `.py` / `.pyw` file given to `uv pip install -r` as a script (measured, M-2e); pip reads it as requirements.
+    const scripts = d.manager === 'uv-pip' ? files.filter((f) => PYTHON_FILE.test(f)) : [];
+    const rest = files.filter((f) => !scripts.includes(f));
+    if (scripts.length > 0) out.inlineScripts = scripts.map(scriptWord);
+    if (rest.length > 0) out.manifest = { kind: 'requirements', files: rest };
   } else if (d.manifest !== undefined && out.global !== true) {
     // The manifest is left unread only for an install that is global FOR CERTAIN (`out.global`); in doubt — `-g $X`,
     // `-g --location=project`, `npm ci --global=false` — it is read: vetting more, never less (measured 2026-11-19).
@@ -1854,6 +2659,303 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
     if (d.update === true) out.update = true;
   }
   return out;
+}
+
+/** A version of NuGet as one writes it exact: `1`, `1.2.3.4`, `1.0.0-beta.1`, `1.0.0+build.5` (the form of `NUGET_VERSION` of `privateRegistry.ts`, which this module does not import). */
+const NUGET_EXACT_VERSION = /^\d+(?:\.\d+){0,3}(?:-[0-9a-z-]+(?:\.[0-9a-z-]+)*)?(?:\+[0-9a-z-]+(?:\.[0-9a-z-]+)*)?$/i;
+
+/** The reason of a command that names a version the SDK 10.0.404 refuses before any request (the owner's answer to question 9). */
+const SDK_REFUSED_VERSION = 'a version SDK 10.0.404 refuses before any request — looked up in case another SDK accepts it';
+
+/** Whether `word` is a NuGet name written whole, with no version: `parseNuget` reads it as a name and nothing else. */
+function isPlainNugetName(word: string): boolean {
+  if (word.startsWith('-')) return false;
+  const spec = parseNuget(word);
+  return 'name' in spec && spec.name === word && spec.range === undefined;
+}
+
+/**
+ * The three lines whose version the SDK 10.0.404 refuses before any request (measured 2026-11-21, m 18, 20 and 21: nothing reaches the
+ * source): `dnx <id>@latest`, `dotnet package download <id>@1.* --allow-insecure-connections` and `dotnet new install <id>::latest --force`,
+ * with the same spelling, the same flags and the same place. `args` are the words after the spelling.
+ */
+function refusedVersionLine(spelling: string, args: readonly string[]): boolean {
+  const [word = '', flag] = args;
+  const sep = spelling === 'dotnet new install' ? '::' : '@';
+  const at = word.indexOf(sep);
+  if (at <= 0 || !isPlainNugetName(word.slice(0, at))) return false;
+  const text = word.slice(at + sep.length);
+  switch (spelling) {
+    case 'dnx':
+      return args.length === 1 && text === 'latest';
+    case 'dotnet package download':
+      return args.length === 2 && text === '1.*' && flag === '--allow-insecure-connections';
+    case 'dotnet new install':
+      return args.length === 2 && text === 'latest' && flag === '--force';
+    default:
+      return false;
+  }
+}
+
+/**
+ * What a `dnx`, `dotnet tool exec` / `execute` / `update`, `dotnet new install`, `dotnet package download` or `dotnet package update` line
+ * gives (the forms that ask the sources for a package by name, measured 2026-11-20 and 21):
+ *
+ *   - the run command: the FIRST positional word is the package, the rest are the tool's own arguments (never packages, never skipped);
+ *     its flags are read after the id as well, and a `--` before the id makes the word after it the id, one after it ends what is read;
+ *   - `tool update`: one package, as `tool install` reads it, and a second word is an extra argument;
+ *   - `new install` and `package download`: every positional word is a package;
+ *   - `package update`: the words are names given to an update ({@link InstallCommand.updateNames}), never packages.
+ *
+ * The version is the one after `@` (after `::` too in `new install`) or the value of `--version`; it is dropped, and the command said
+ * uncertain, for the three lines of {@link refusedVersionLine}.
+ */
+function collectDotnet(d: Detected, dotnet: NonNullable<Detected['dotnet']>, context: readonly string[]): InstallCommand {
+  const table = FLAGS[d.flagTable ?? ''] ?? { value: set(), bool: set(), registry: set() };
+  const preWalk = walk(d.pre, table);
+  let body = d.args;
+  if (dotnet.form === 'run') {
+    const dash = d.args.findIndex((w) => w.value === '--');
+    if (dash >= 0) {
+      const before = d.args.slice(0, dash);
+      // A word before the `--` is the id and what follows is the tool's; with none, the word after the `--` is the id.
+      const named = walk(before, table).positionals.length > 0;
+      const idWord = d.args[dash + 1];
+      body = named || idWord === undefined ? before : [...before, idWord];
+    }
+  }
+  const walked = walk(body, table);
+  const limited = limitCandidates(walked.positionals);
+  const colons = dotnet.form === 'new-install';
+  const several = dotnet.form === 'new-install' || dotnet.form === 'download' || dotnet.form === 'package-update';
+  const candidate = limited.kept.some((p) => p.candidate === true);
+  const skipped = walked.skipped;
+  const packages: PackageSpec[] = [];
+  const candidates: PackageSpec[] = [];
+  const names: PackageSpec[] = [];
+  const out: InstallCommand = {
+    ecosystem: 'nuget',
+    manager: 'dotnet',
+    packages,
+    skipped,
+    uncertain: [...new Set([...context, ...d.uncertain, ...preWalk.uncertain, ...walked.uncertain])],
+    registries: [...preWalk.registries, ...walked.registries],
+  };
+  const registry = preWalk.customRegistry ?? walked.customRegistry;
+  if (registry !== undefined) out.customRegistry = registry;
+  if (limited.dropped > 0) out.candidatesDropped = limited.dropped;
+  const spelled = limited.kept.slice(0, several || candidate ? undefined : 1);
+  for (const p of spelled) {
+    const spec = parseNuget(p.value, colons);
+    if (!('name' in spec)) {
+      skipped.push(spec);
+      continue;
+    }
+    if (dotnet.form === 'package-update') names.push(spec);
+    else {
+      packages.push(spec);
+      if (p.candidate === true) candidates.push(spec);
+    }
+    const why = unmeasuredReason('dotnet', spec);
+    if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
+  }
+  // A second word of `tool update` is an extra argument, as it is for `tool install` (a run command's are the tool's, and no one's business).
+  if (dotnet.form === 'tool-update' && !candidate) {
+    for (const p of limited.kept.slice(1)) skipped.push(skip(p.value, 'unexpected extra argument to dotnet tool update'));
+  }
+  if (candidates.length > 0) out.candidates = candidates;
+  const first = packages[0];
+  const version = dotnet.form === 'run' || dotnet.form === 'tool-update' ? flagValue(body, ['--version']) : undefined;
+  if (first !== undefined && version !== undefined) first.range = version;
+  if (first !== undefined && refusedVersionLine(dotnet.spelling, d.pre.length === 0 ? d.args.map((w) => w.value) : [])) {
+    delete first.range;
+    if (!out.uncertain.includes(SDK_REFUSED_VERSION)) out.uncertain.push(SDK_REFUSED_VERSION);
+  }
+  if (dotnet.form === 'package-update') {
+    if (names.length > 0) out.updateNames = names;
+    if (body.some((w) => /^--(?:project|file)(?:=|$)/.test(w.value))) {
+      out.uncertain.push('dotnet project argument (the NuGet configuration next to that project was not read)');
+    }
+  }
+  if (dotnet.form === 'new-install') {
+    out.localPathFirst = true;
+    out.sourceFlag = '`--add-source <url>`';
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────── the measured .NET forms
+
+/**
+ * The lines of the .NET forms that fetch a package by name whose inner command may DENY a name the sources do not have: the 47 forms
+ * measured with SDK 10.0.404 on Windows 11 (`.specs/_findings-2026-11-20/measurements/dotnet-forms/table-windows-2026-11-20.txt` of
+ * 2026-11-20, lines 1-3, 6-8, 11-13, 16-18, 25-26, 34-36, 40-42, 54-59 and 77-79, and `m2-windows-2026-11-21.txt` of 2026-11-21, m 1-17 and
+ * 19, 22-23, 26): the spelling, then the words in the measured order with nothing after the last one. A place stands for a kind of word:
+ * `<id>` a NuGet name (no version, no leading `-`); `<id>@<v>` and `<id>::<v>` that name and an exact version of NuGet; `<id>@<n>.*` that
+ * name, `@`, a number and `.*` (only `dnx`, the word quoted — a `*` outside quotes already takes the confident shape away); `<v>` an
+ * exact version; `<dir>` any word; `<ids>` two or more names; `<args>` one or more words with no `-` in front (the tool's own arguments);
+ * `<rest>` every word after a `--`. The owner widened the places the measurement filled with one value (the answers to questions 5 and 8).
+ * A line that is none of them keeps the reason of what is missing ({@link dotnetGap}).
+ */
+const MEASURED_DOTNET_FORMS: ReadonlyArray<readonly string[]> = (() => {
+  const f = (spelling: string, ...rest: string[]): string[] => [...spelling.split(' '), ...rest];
+  const run = (spelling: string): string[][] => [
+    f(spelling, '<id>'),
+    f(spelling, '<id>@<v>'),
+    f(spelling, '<id>', '--version', '<v>'),
+    f(spelling, '<id>', '<args>'),
+    f(spelling, '--yes', '<id>'),
+  ];
+  return [
+    ...run('dotnet tool execute'),
+    ...run('dotnet tool exec'),
+    f('dotnet tool exec', '<id>', '--yes'),
+    ...run('dotnet dnx'),
+    ...run('dnx'),
+    f('dnx', '<id>', '--yes'),
+    f('dnx', '--version', '<v>', '<id>'),
+    f('dnx', '<id>@<n>.*'),
+    f('dnx', '--', '<id>'),
+    f('dnx', '<id>', '--', '<rest>'),
+    f('dotnet tool update', '-g', '<id>'),
+    f('dotnet tool update', '-g', '<id>', '--version', '<v>'),
+    f('dotnet tool update', '--tool-path', '<dir>', '<id>'),
+    f('dotnet tool update', '--global', '<id>'),
+    f('dotnet tool update', '<id>', '-g'),
+    f('dotnet tool update', '-g', '<id>@<v>'),
+    f('dotnet tool update', '--tool-path', '<dir>', '<id>', '--version', '<v>'),
+    f('dotnet tool update', '<id>'),
+    f('dotnet tool update', '<id>', '--version', '<v>'),
+    f('dotnet tool update', '<id>@<v>'),
+    f('dotnet tool update', '--local', '<id>'),
+    f('dotnet new install', '<id>', '--force'),
+    f('dotnet new install', '<id>::<v>', '--force'),
+    f('dotnet new install', '<id>@<v>', '--force'),
+    f('dotnet new install', '--force', '<id>'),
+    f('dotnet new install', '<ids>', '--force'),
+    f('dotnet package download', '<id>'),
+    f('dotnet package download', '<id>', '--allow-insecure-connections'),
+    f('dotnet package download', '<id>@<v>', '--allow-insecure-connections'),
+    f('dotnet package download', '<id>@<v>'),
+    f('dotnet package download', '<ids>'),
+  ];
+})();
+
+/** Whether `word` is what the single-word place `token` of a measured .NET form stands for (a token without `<` is the word itself). */
+function fitsDotnetPlace(token: string, word: string): boolean {
+  const pair = (sep: string): { id: string; text: string } | undefined => {
+    const at = word.indexOf(sep);
+    return at > 0 ? { id: word.slice(0, at), text: word.slice(at + sep.length) } : undefined;
+  };
+  switch (token) {
+    case '<id>':
+      return isPlainNugetName(word);
+    case '<v>':
+      return NUGET_EXACT_VERSION.test(word);
+    case '<dir>':
+      return word !== '';
+    case '<id>@<v>': {
+      const p = pair('@');
+      return p !== undefined && isPlainNugetName(p.id) && NUGET_EXACT_VERSION.test(p.text);
+    }
+    case '<id>::<v>': {
+      const p = pair('::');
+      return p !== undefined && isPlainNugetName(p.id) && NUGET_EXACT_VERSION.test(p.text);
+    }
+    case '<id>@<n>.*': {
+      const p = pair('@');
+      return p !== undefined && isPlainNugetName(p.id) && /^\d+\.\*$/.test(p.text);
+    }
+    default:
+      return token === word;
+  }
+}
+
+/** Whether the words are, word by word and with nothing after the last, one of the {@link MEASURED_DOTNET_FORMS}. */
+function isMeasuredDotnetForm(words: readonly string[]): boolean {
+  return MEASURED_DOTNET_FORMS.some((form) => {
+    let at = 0;
+    for (const token of form) {
+      if (token === '<ids>' || token === '<args>' || token === '<rest>') {
+        let n = 0;
+        while (at + n < words.length && (token === '<rest>' || (token === '<ids>' ? isPlainNugetName(words[at + n] ?? '') : !(words[at + n] ?? '').startsWith('-')))) n += 1;
+        if (n < (token === '<ids>' ? 2 : 1)) return false;
+        at += n;
+      } else {
+        if (at >= words.length || !fitsDotnetPlace(token, words[at] ?? '')) return false;
+        at += 1;
+      }
+    }
+    return at === words.length;
+  });
+}
+
+/** A line of the forms {@link collectDotnet} reads: the spelling (the words that name it), its form, and the words after them. */
+function dotnetFormOf(words: readonly string[]): { spelling: string; form: DotnetForm; rest: readonly string[] } | undefined {
+  const [a = '', b = '', c = ''] = words;
+  if (a === 'dnx') return { spelling: 'dnx', form: 'run', rest: words.slice(1) };
+  if (a !== 'dotnet') return undefined;
+  if (b === 'dnx') return { spelling: 'dotnet dnx', form: 'run', rest: words.slice(2) };
+  if (b === 'tool' && (c === 'exec' || c === 'execute')) return { spelling: `dotnet tool ${c}`, form: 'run', rest: words.slice(3) };
+  if (b === 'tool' && c === 'update') return { spelling: 'dotnet tool update', form: 'tool-update', rest: words.slice(3) };
+  if (b === 'new' && c === 'install') return { spelling: 'dotnet new install', form: 'new-install', rest: words.slice(3) };
+  if (b === 'package' && c === 'download') return { spelling: 'dotnet package download', form: 'download', rest: words.slice(3) };
+  if (b === 'package' && c === 'update') return { spelling: 'dotnet package update', form: 'package-update', rest: words.slice(3) };
+  return undefined;
+}
+
+/** The text of the version a word of an identifier names: after `@`, or after `::` (`dotnet new install`). */
+function versionTextOf(word: string): string | undefined {
+  const colon = word.indexOf('::');
+  const at = colon > 0 ? colon : word.indexOf('@');
+  return at > 0 ? word.slice(at + (colon > 0 ? 2 : 1)) : undefined;
+}
+
+/** What a line of a read .NET form has that no measured form of its spelling has: the first thing that fits, in the words of the reason. */
+function dotnetGap(spelling: string, form: DotnetForm, rest: readonly string[]): string {
+  const own = MEASURED_DOTNET_FORMS.filter((m) => m.join(' ').startsWith(`${spelling} `));
+  const measuredFlags = new Set(own.flatMap((m) => m.filter((t) => t.startsWith('-') && t !== '--')));
+  if (rest.includes('--')) return 'the `--`';
+  const valueFlags = FLAGS[DOTNET_FORM_TABLES[form]]?.value ?? new Set<string>();
+  const flags: string[] = [];
+  const positionals: string[] = [];
+  for (let i = 0; i < rest.length; i += 1) {
+    const w = rest[i] ?? '';
+    if (!w.startsWith('-')) {
+      positionals.push(w);
+      continue;
+    }
+    flags.push(w);
+    if (valueFlags.has(w)) i += 1;
+  }
+  for (const w of positionals) {
+    const text = versionTextOf(w);
+    if (text !== undefined && !NUGET_EXACT_VERSION.test(text)) return `the version text ${text}`;
+  }
+  const unknown = flags.find((w) => !measuredFlags.has(w.includes('=') ? w.slice(0, w.indexOf('=')) : w));
+  if (unknown !== undefined) return `the flag ${unknown}`;
+  if (positionals.length > 1) return form === 'run' ? 'a tool argument after the package' : 'more than one package';
+  const [only, ...more] = flags;
+  return only !== undefined && more.length === 0 ? `the place of the flag ${only}` : 'the flags together';
+}
+
+/** The reason `dotnet new install` without `--force` may not deny (the owner's answer B to question 3). */
+const NEW_INSTALL_WITHOUT_FORCE =
+  'dotnet new install without --force was measured to contact an https source, not to ask it for the package — not measured';
+
+/**
+ * The judgement of the confident shape for the forms {@link collectDotnet} reads: `null` for one of the {@link MEASURED_DOTNET_FORMS}, the
+ * reason otherwise; `undefined` when the words are no such form. The three lines of {@link refusedVersionLine} say that; `dotnet new
+ * install` with no `--force` says it was not measured; `dotnet package update` names no package, so what it says is only ever a warning.
+ */
+function judgeDotnetForm(words: readonly string[]): string | null | undefined {
+  const line = dotnetFormOf(words);
+  if (line === undefined) return undefined;
+  if (line.form === 'package-update') return notPlain('dotnet package update names a package given to an update');
+  if (line.form === 'new-install' && !line.rest.includes('--force')) return NEW_INSTALL_WITHOUT_FORCE;
+  if (refusedVersionLine(line.spelling, line.rest)) return SDK_REFUSED_VERSION;
+  if (isMeasuredDotnetForm(words)) return null;
+  return `a dotnet command form that was not measured (${dotnetGap(line.spelling, line.form, line.rest)})`;
 }
 
 function flagValue(words: readonly ShellWord[], names: readonly string[]): string | undefined {
@@ -1912,10 +3014,10 @@ export function parseInstallCommands(
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined) continue;
+      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined && c.inlineScripts === undefined && c.runsAsScript === undefined) continue;
       for (const p of packages) seen.add(packageKey(p));
-      // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest read.
-      const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined);
+      // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest or script read.
+      const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined || c.inlineScripts !== undefined);
       out.push({ ...c, packages, ...(unknownDir ? { workdir: null } : {}) });
     }
   }
@@ -1927,6 +3029,11 @@ function manifestKey(c: InstallCommand): string {
   const m = c.manifest;
   if (m === undefined) return '';
   return JSON.stringify([m.kind, m.kind === 'requirements' ? m.files : [], c.workdir ?? null, c.prefixed === true, c.update === true]);
+}
+
+/** What tells two commands that run scripts apart: the files, and where each looks for them. */
+function scriptKey(c: InstallCommand): string {
+  return c.inlineScripts === undefined ? '' : JSON.stringify([c.inlineScripts, c.scriptDir ?? null, c.scriptDirUnknown ?? null, c.workdir ?? null]);
 }
 
 /** Why a package found in a script the command hands a shell is never denied as missing. */
@@ -1942,15 +3049,26 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
   if (asPowerShell === text) return withoutRanges(out);
   const seen = new Set(out.flatMap((c) => c.packages.map(packageKey)));
   const seenManifests = new Set(out.map(manifestKey));
+  const seenScripts = new Set(out.map(scriptKey));
   for (const c of parseReading(asPowerShell, POWERSHELL_READING, cdpath)) {
     const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
     // A manifest install only this reading finds is kept; one both readings find is the same install.
     const newManifest = c.manifest !== undefined && !seenManifests.has(manifestKey(c));
-    if (packages.length === 0 && !newManifest && c.updateNames === undefined) continue;
+    // The scripts a command names, likewise: one both readings find is the same script.
+    const newScripts = c.inlineScripts !== undefined && !seenScripts.has(scriptKey(c));
+    if (packages.length === 0 && !newManifest && !newScripts && c.updateNames === undefined) continue;
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
-    const { manifest: _same, ...withoutManifest } = c;
-    out.push({ ...(newManifest ? c : withoutManifest), packages, skipped: [] });
+    seenScripts.add(scriptKey(c));
+    const { manifest: _same, inlineScripts: _scripts, runsAsScript: _runs, ...stripped } = c;
+    out.push({
+      ...stripped,
+      ...(newManifest && c.manifest !== undefined ? { manifest: c.manifest } : {}),
+      ...(newScripts && c.inlineScripts !== undefined ? { inlineScripts: c.inlineScripts } : {}),
+      ...(newScripts && c.runsAsScript !== undefined ? { runsAsScript: c.runsAsScript } : {}),
+      packages,
+      skipped: [],
+    });
   }
   return withoutRanges(out);
 }
@@ -2024,6 +3142,112 @@ const MEASURED_LAUNCHES: readonly MeasuredLaunch[] = [
   { spelling: 'yarn dlx', launched: 'pnpm', flags: [], dash: 'none', prefix: true },
   { spelling: 'bunx', launched: 'pnpm', flags: [], dash: 'none' },
 ];
+/**
+ * The lines of the Python managers whose inner command may DENY a name the index does not have: the 32 forms measured on 2026-11-20
+ * and 2026-11-21 (pip 23.0.1, pipx and uv in a Linux container against an index that logged every request; the 14 of the first
+ * date, F1-F14 and F27-F30 of the second), each a list of words in the measured order with nothing after the last one. A place stands
+ * for a kind of word — `<P>`, `<D>`, `<T>`: a plain PyPI name (no version, range, extras or comma, no leading `-`); `<ENV>`, `<CMD>`,
+ * `<DIR>`: a word that does not start with `-`; `<V>`: `==` and a version of digits and dots, as `<P>==<V>`; `<ARG>`: any word, a
+ * flag too (the program gets all that follows its name) — and a place may follow a literal prefix (`--from=<P>`). `<DIR>`, `<V>` and
+ * `<ARG>` were each measured with one value and are widened (the owner's answer 2-A). `pipx runpip <ENV> download` is not here: with
+ * the `auto` engine it asks for nothing. A line that is none of them keeps the reason of its flags, or says it was not measured.
+ */
+const MEASURED_PYTHON_FORMS: ReadonlyArray<readonly string[]> = [
+  ['pip', 'download', '<P>'],
+  ['pip', 'wheel', '<P>'],
+  ['pip', 'download', '--no-deps', '<P>'],
+  ['pip', 'download', '--no-binary', ':all:', '<P>'],
+  ['pip', 'install', '--dry-run', '<P>'],
+  ['pipx', 'inject', '<ENV>', '<P>'],
+  ['pipx', 'upgrade', '--install', '<P>'],
+  ['pipx', 'runpip', '<ENV>', 'install', '<P>'],
+  ['pipx', 'run', '--spec', '<P>', '<CMD>'],
+  ['pipx', 'run', '--with', '<D>', '<P>'],
+  ['uvx', '--from', '<P>', '<CMD>'],
+  ['uv', 'tool', 'run', '--from', '<P>', '<CMD>'],
+  ['uvx', '--with', '<P>', '<T>'],
+  ['uv', 'tool', 'install', '--with', '<P>', '<T>'],
+  ['python', '-m', 'pip', 'download', '<P>'],
+  ['pip3', 'wheel', '<P>'],
+  ['python', '-m', 'pip', 'install', '--dry-run', '<P>'],
+  ['pip', 'download', '<P>', '<D>'],
+  ['pip', 'download', '<P>==<V>'],
+  ['pip', 'download', '-d', '<DIR>', '<P>'],
+  ['pip', 'wheel', '--no-deps', '<P>'],
+  ['pip', 'download', '<P>', '--no-deps'],
+  ['pipx', 'inject', '<ENV>', '<P>', '<D>'],
+  ['uvx', '--from=<P>', '<CMD>'],
+  ['uv', 'tool', 'run', '--with', '<P>', '<T>'],
+  ['uvx', '-w', '<P>', '<T>'],
+  ['uv', 'tool', 'install', '<T>', '--with', '<P>'],
+  ['pipx', 'run', '--spec=<P>', '<CMD>'],
+  ['uvx', '--from', '<P>', '<CMD>', '<ARG>'],
+  ['pipx', 'run', '--spec', '<P>', '<CMD>', '<ARG>'],
+  ['uvx', '--with', '<P>', '<T>', '<ARG>'],
+  ['pipx', 'run', '--with', '<D>', '<P>', '<ARG>'],
+];
+
+/** A version of digits separated by dots, and nothing else: `1.0`, `2.0.0` (not `1.*`, `1.0rc1`, `1.0+x`). */
+const PLAIN_VERSION = /^\d+(?:\.\d+)*$/;
+
+/** Whether `word` is a plain PyPI name: `parsePython` reads it as a name written whole, with no range. */
+function isPlainName(word: string): boolean {
+  if (word.startsWith('-')) return false;
+  const spec = parsePython(word, false);
+  return 'name' in spec && spec.name === word && spec.range === undefined;
+}
+
+/** Whether `word` is what the place `token` of a measured form stands for (a token without `<` is the word itself). */
+function fitsPlace(token: string, word: string): boolean {
+  const at = token.indexOf('<');
+  if (at < 0) return token === word;
+  const prefix = token.slice(0, at);
+  if (!word.startsWith(prefix)) return false;
+  const rest = word.slice(prefix.length);
+  switch (token.slice(at)) {
+    case '<P>':
+    case '<D>':
+    case '<T>':
+      return isPlainName(rest);
+    case '<ENV>':
+    case '<CMD>':
+    case '<DIR>':
+      return rest !== '' && !rest.startsWith('-');
+    case '<ARG>':
+      return true;
+    case '<P>==<V>': {
+      const eq = rest.indexOf('==');
+      return eq > 0 && isPlainName(rest.slice(0, eq)) && PLAIN_VERSION.test(rest.slice(eq + 2));
+    }
+    default:
+      return false;
+  }
+}
+
+/** Whether the words are, word by word and with nothing after the last, one of the {@link MEASURED_PYTHON_FORMS}. */
+function isMeasuredPythonForm(words: readonly string[]): boolean {
+  return MEASURED_PYTHON_FORMS.some((form) => form.length === words.length && form.every((token, k) => fitsPlace(token, words[k] ?? '')));
+}
+
+/**
+ * Why a line of a verb read since the Python forms were measured — `pip download`, `pip wheel` (also as `pip3` and `python -m pip`),
+ * `pipx inject`, `pipx runpip`, `pipx upgrade --install` — that is none of the {@link MEASURED_PYTHON_FORMS} may not deny; `undefined`
+ * for any other line. Also asked when the shape already fails on a character (`X==1.*` is a glob): both reasons are then said.
+ */
+function unmeasuredVerb(words: readonly string[]): string | undefined {
+  const [tool = '', first = '', second = '', third = ''] = words;
+  if (isMeasuredPythonForm(words)) return undefined;
+  const verb = (name: string): string => `this form of '${name}' was not measured`;
+  if (tool === 'pipx') {
+    if (first === 'inject' || first === 'runpip') return verb(`pipx ${first}`);
+    return first === 'upgrade' && words.includes('--install') ? verb('pipx upgrade --install') : undefined;
+  }
+  if ((tool === 'pip' || tool === 'pip3') && (first === 'download' || first === 'wheel')) return verb(`pip ${first}`);
+  const viaPython = tool === 'python' || tool === 'python3' || tool === 'py';
+  if (viaPython && first === '-m' && (second === 'pip' || second === 'pip3') && (third === 'download' || third === 'wheel')) return verb(`pip ${third}`);
+  return undefined;
+}
+
 /** The verb of the measured lines. */
 const MEASURED_VERB = 'add';
 /** The launchers of the npm family ({@link LAUNCH_FLAGS} names): the only ones whose launched package may be a package manager. */
@@ -2142,20 +3366,43 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
   // (review of 3.4.0, finding 5): only a move that surely ran counts.
   const dirs = workdirs(split.statements, { cdpath });
   let dirChanged = false;
+  // The first file the line `source`s (or `.`s) so far: it may have moved the directory or changed the environment before a script runs.
+  let sourced: string | undefined;
+  // `UV_WORKING_DIR` anywhere in the line (any letter case): `uv run` only trusts the assignment right before it.
+  const workingDirWords = (text.match(/UV_WORKING_DIR/gi) ?? []).length;
   split.statements.forEach((statement, s) => {
     statement.commands.forEach((words, w) => {
       // A redirection is no package: `pip install x 2>&1` named a package `2`
       // (PEP 508 reads `2>&1` as `2` at a version `>&1`), `2> err.log` two.
+      const sourcedBefore = sourced;
+      const at = commandStart(words);
+      const headWord = words[at]?.value;
+      if (headWord === 'source' || headWord === '.') sourced = sourced ?? words[at + 1]?.value;
       const d = detect(wordsWithoutRedirections(words));
       if (d !== null) {
         const context: string[] = [];
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
         const c = collect(d, context);
-        // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does,
-        // and so does a `key@npm:rest` that Yarn and bun read as either of two packages.
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
-        c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...c.uncertain])];
+        // A variable assigned or exported on the line: the hook does not read it, and the uv may read it for its index.
+        if (envChange && c.uvRun !== undefined) c.uvRun.assigned = true;
+        // `uv run pytest`: nothing to read, no command (the sync of the project stays unread).
+        if (d.launch?.program === true && c.packages.length === 0 && c.skipped.length === 0 && c.inlineScripts === undefined && c.manifest === undefined) {
+          if (changesDirectory(words)) dirChanged = true;
+          return;
+        }
+        // Any other `UV_WORKING_DIR` than the assignment in front of the command leaves the directory unknown.
+        if (d.launch?.flags === 'uv-run' && workingDirWords > (d.envDir === undefined ? 0 : 1)) {
+          delete c.scriptDir;
+          c.scriptDirUnknown = true;
+        }
+        if (sourcedBefore !== undefined && c.inlineScripts !== undefined) c.sourced = sourcedBefore;
+        // A confident shape has no reason of its own, but a name that ends like an archive does when what its manager does with it is not
+        // known (`ARCHIVE_REASONS`: the dotnet, the pipx and the composer outside what was measured), and so does a `key@npm:rest` that
+        // Yarn and bun read as either of two packages.
+        const unmeasured = c.uncertain.filter((r) => ARCHIVE_REASONS.has(r) || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
+        const unmeasuredVerbReason = notConfident === null ? undefined : unmeasuredVerb(words.map((word) => word.value));
+        c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...(unmeasuredVerbReason === undefined ? [] : [unmeasuredVerbReason]), ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
         const elsewhere = runsElsewhere(words);
         const place = (command: InstallCommand): void => {
@@ -2325,6 +3572,8 @@ const ALLOW: Record<string, Allow> = {
   'yarn-dlx': { bool: set('-q', '--quiet'), value: set() },
   bunx: { bool: set('--bun', '--silent', '--verbose'), value: set() },
   uvx: { bool: set('-q', '--quiet', '-v', '--verbose', '--isolated'), value: set() },
+  // `uv run`: the flags of `uvx`; `--with` and `-w` are left out, so a name of them the registry does not have only warns (the owner's answer 2-A).
+  'uv-run': { bool: set('-q', '--quiet', '-v', '--verbose', '--isolated'), value: set() },
   'uv-tool-install': { bool: set('-q', '--quiet', '-v', '--verbose', '--force', '--upgrade', '-U'), value: set() },
   'pipx-install': { bool: set('--force', '-f', '-q', '--quiet', '-v', '--verbose', '--include-deps'), value: set() },
   'pipx-run': { bool: set('-q', '--quiet', '-v', '--verbose', '--no-cache'), value: set() },
@@ -2409,6 +3658,13 @@ function confidentWords(words: readonly string[]): string | null {
   const [named, ...rest] = viaCorepack === undefined ? words : [viaCorepack, ...words.slice(2)];
   const tool = named === 'yarnpkg' ? 'yarn' : named;
   if (tool === undefined) return notSingle('empty');
+  // One of the 32 measured Python forms has the confident shape, and no other line of the forms read since does.
+  if (isMeasuredPythonForm([tool, ...rest])) return null;
+  // The .NET forms read since install-vet-dotnet-run-forms are judged by their measured forms, not by an allowlist of flags.
+  const dotnetForm = judgeDotnetForm([tool, ...rest]);
+  if (dotnetForm !== undefined) return dotnetForm;
+  const unmeasured = unmeasuredVerb([tool, ...rest]);
+  if (unmeasured !== undefined) return unmeasured;
   const at = (k: number): string => rest[k] ?? '';
   let key: string;
   let args: string[];
@@ -2482,6 +3738,7 @@ function confidentWords(words: readonly string[]): string | null {
       if (at(0) === 'add') [key, args] = ['uv', rest.slice(1)];
       else if (at(0) === 'pip' && at(1) === 'install') [key, args] = ['uv-pip', rest.slice(2)];
       else if (at(0) === 'tool' && at(1) === 'run') [key, args, launch] = ['uvx', rest.slice(2), true];
+      else if (at(0) === 'run') [key, args, launch] = ['uv-run', rest.slice(1), true];
       else if (at(0) === 'tool' && at(1) === 'install') [key, args] = ['uv-tool-install', rest.slice(2)];
       else return notPlain(`'uv ${at(0)}'`);
       break;

@@ -84,8 +84,12 @@ The rules file `mcp-config` writes for each host carries this recipe:
   otherwise sequential with `same_context`.
 
 Run end to end on a real host so far: Claude Code (20 findings verified, every
-tool call under 300 ms). The Cursor, VS Code Copilot and Codex recipes follow
-what those hosts document and have not yet been run on them.
+tool call under 300 ms) and Codex CLI 0.165.0 (2026-11-19, with reservations: the
+20 tasks it was handed were closed over two plans and a resume, no call took
+longer than 3.6 s, 8 of the 20 verdicts were `undetermined`, and 9 of the 20
+answers spoke of a summary or of code the subagent could not see). The Cursor
+and VS Code Copilot recipes follow what those hosts document and have not yet
+been run on them.
 
 ## What the verdicts change
 
@@ -128,6 +132,15 @@ the dashboard answer as they would without it, and
 the newer side of `diff_scans { from_scan_id, to_scan_id }`, it measured
 nothing: the other side's findings are `not_remeasured`, never resolved. Named
 as the older side, the newer scan's findings are new.
+
+**`verify_source`.** The answer of `start` for a plan with `verify` in `modes`
+says which input chose the findings and which scans they came from:
+`{ from, scan_ids, scan_ids_total }`, with `from` one of `scan` (the `scan_id`
+passed), `fingerprints` or `open_set`. `scan_ids` are the scans of the findings
+that got a verify task when the plan was made, each once (at most 100 named; the
+total is exact). It is kept in the plan record's metadata, so `start { plan_id }`
+gives it again; a plan made before it existed, or whose record is gone, has no
+`verify_source`. The `scan_id` of the answer stays the plan record's.
 
 **A hunt plan's** record counts what was hunted: its hunt and cross-cutting
 tasks with a valid answer, and its entry points. A task closed as not delivered
@@ -194,8 +207,10 @@ or complete after a limit stopped delivery — keeps saying `full`.
 **`confirm` opens the gate; it never raises the ceiling.** `max_estimated_tokens`
 stays a hard limit on what is handed out. Above it the answer gives
 `deliverable_within_token_limit` — how many tasks fit — and a fixed
-`token_limit_note`. To cover the whole plan, start again with a larger
-`max_estimated_tokens`. The estimate counts the host's own overhead per task
+`token_limit_note`. A plan's limits are fixed when it is made: to cover the
+whole plan, start a new plan, without `plan_id`, with a larger
+`max_estimated_tokens`. With `plan_id`, `start` takes only `project_path` and
+`confirm`; any other parameter is refused with `invalid_input`. The estimate counts the host's own overhead per task
 (`per_task_overhead`, default 60 000 tokens for a subagent). Only the host knows
 the real token use, and the report says so.
 
@@ -216,7 +231,7 @@ and coverage stays `partial`.
 | Code | Meaning |
 | --- | --- |
 | `needs_surface` | a hunt needs `map_attack_surface` first, or again (the project changed since the last snapshot) |
-| `nothing_to_plan` | no finding with a file and line to verify, and nothing to hunt |
+| `nothing_to_plan` | no finding with a file and line to verify, and nothing to hunt; with no `scan_id` the reason names the open set, which a scoped scan is never part of: pass its `scan_id` to verify it |
 | `too_many_open_plans` | five active plans already; the answer lists them |
 | `needs_confirm` | the estimate is above `max_estimated_tokens` and the plan is not confirmed |
 | `limit_reached` | `max_tasks` or the token ceiling stopped delivery |
