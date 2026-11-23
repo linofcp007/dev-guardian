@@ -13210,8 +13210,8 @@ function spellingsOf(config2, ctx, packsDir) {
   const asFile = kind === "file" ? absolute : fp.join(absolute, "x.yml");
   const inProject2 = ctx.projectPath === void 0 ? null : insideRelative(fp, ctx.projectPath, asFile);
   const underCwd = cwd === void 0 ? null : insideRelative(fp, cwd, asFile);
-  const isPack = inProject2 === null && samePath(fp, fp.dirname(asFile), packsDir);
-  const to = inProject2 !== null ? semgrepConfigPrefix(inProject2) : isPack ? "" : semgrepConfigPrefix(asFile);
+  const isPack = samePath(fp, fp.dirname(asFile), packsDir);
+  const to = isPack ? "" : inProject2 !== null ? semgrepConfigPrefix(inProject2) : semgrepConfigPrefix(asFile);
   const froms = /* @__PURE__ */ new Set([semgrepConfigPrefix(asFile), ...underCwd !== null ? [semgrepConfigPrefix(underCwd)] : []]);
   return [...froms].filter((from) => from.length > 0 && from !== to).map((from) => ({ from, to }));
 }

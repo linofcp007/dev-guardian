@@ -9,6 +9,8 @@
  *   - The plugin's own packs moved with every install: every bug_hunt / RGPD
  *     finding became new on each update. They are stored under the rule's own
  *     id, found from the plugin's root (round 2, and round 3's ruling).
+ *     Also inside the analysed project (the plugin's own repository, a copy
+ *     of it that runs): the running plugin's pack folder is checked first.
  *   - A project's own rules keep the id from the project root, however
  *     Semgrep was run (review_pr runs from a temporary tree).
  *   - Any other rule file keeps Semgrep's own id: two files defining the same
@@ -20,13 +22,13 @@
  * Semgrep's string rule on both path shapes.
  */
 
-import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { assignIdentities } from '../../src/fingerprint/findingIdentity.js';
 import { semgrepParserFor } from '../../src/runners/scannerParsers/semgrep.js';
-import { localRuleIdNormalizer, noRuleLoaded, pluginPacksDir, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
+import { localRuleIdNormalizer, noRuleLoaded, pluginPacksDir, ruleIdsInDir, semgrepConfigPrefix } from '../../src/runners/semgrepRuleIds.js';
 import { runSemgrep, semgrepAvailable } from '../helpers/semgrep.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -105,14 +107,6 @@ describe('one stored id per rule', () => {
     expect(n(abs(foreign, 'bugfix-js-x'))).toBe(abs(foreign, 'bugfix-js-x'));
   });
 
-  it("the plugin's own repository: its packs are project files there, and keep the project's id", () => {
-    const repo = join(BASE, 'src', 'dev-guardian');
-    const packs = join(repo, 'configs', 'semgrep');
-    const n = localRuleIdNormalizer([join(packs, 'bugfix-js.yml')], { projectPath: repo, packsDir: packs });
-    expect(n('configs.semgrep.bugfix-js-x')).toBe('configs.semgrep.bugfix-js-x');
-    expect(n(abs(join(packs, 'bugfix-js.yml'), 'bugfix-js-x'))).toBe('configs.semgrep.bugfix-js-x');
-  });
-
   it("a relative config resolves against Semgrep's working directory, not the server's (M-5)", () => {
     const n = localRuleIdNormalizer(['rules/team.yml'], { projectPath: PROJECT, cwd: PROJECT, packsDir: PACKS_B });
     expect(n(abs(TEAM, 'team-rule'))).toBe('rules.team-rule');
@@ -179,6 +173,19 @@ describe('semgrep-pack-rule-id-in-own-repo', () => {
     const vendored = join(mono, 'vendor', 'dev-guardian', 'configs', 'semgrep');
     const copy = localRuleIdNormalizer([join(vendored, 'web-js.yml')], { projectPath: mono, packsDir: vendored });
     expect(copy('vendor.dev-guardian.configs.semgrep.web-js-sql-template')).toBe('web-js-sql-template');
+  });
+
+  it('T-04 every real pack file of the plugin gives the bare id, with the default pack folder', () => {
+    const packs = resolve(REPO_ROOT, 'configs', 'semgrep');
+    expect(resolve(pluginPacksDir())).toBe(packs);
+    const files = readdirSync(packs).filter((name) => name.endsWith('.yml')).map((name) => join(packs, name));
+    expect(files.length).toBeGreaterThan(0);
+    const ids = ruleIdsInDir(pluginPacksDir());
+    expect(ids.size).toBeGreaterThan(0);
+    const n = localRuleIdNormalizer(files, { projectPath: REPO_ROOT });
+    for (const id of ids) {
+      expect(n(`configs.semgrep.${id}`)).toBe(id);
+    }
   });
 });
 
