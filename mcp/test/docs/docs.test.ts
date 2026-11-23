@@ -1167,3 +1167,65 @@ describe('pkgvet-archive-names-pipx-composer', () => {
     });
   });
 });
+
+// ───────────────── llm-scan-codex-smoke-findings — the versioned documents say what the server does
+
+describe('llm-scan-codex-smoke-findings', () => {
+  /** The blocks of a page (split on blank lines), white space collapsed to single spaces. */
+  const blocks = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n/)
+      .map((block) => block.replace(/\s+/g, ' ').trim());
+
+  /** The sentences of a page, each on one line. */
+  const sentencesOf = (text: string): string[] => blocks(text).flatMap((block) => block.split(/(?<=[.!?])\s+/)).filter((s) => s !== '');
+
+  it('T-06 docs/llm-scan.md says that confirm never raises the limit, what the plan record says, why nothing_to_plan and where the Codex run stands', () => {
+    const page = read('docs/llm-scan.md').replace(/\r\n/g, '\n');
+    const confirmParagraph = blocks(page).find((b) => b.startsWith('**`confirm` opens the gate')) ?? '';
+    const recordStart = page.indexOf("## The plan's scan record");
+    const recordEnd = page.indexOf('\n## ', recordStart + 1);
+    const recordSection = recordStart === -1 ? '' : page.slice(recordStart, recordEnd === -1 ? undefined : recordEnd);
+    const nothingToPlanRow = page.split('\n').find((line) => line.startsWith('| `nothing_to_plan`')) ?? '';
+    const runParagraph = blocks(page).find((b) => b.startsWith('Run end to end on a real host so far')) ?? '';
+
+    const found = {
+      'the confirm paragraph exists': confirmParagraph !== '',
+      'the confirm paragraph says new plan': confirmParagraph.includes('new plan'),
+      'the confirm paragraph says without `plan_id`': confirmParagraph.includes('without `plan_id`'),
+      'the confirm paragraph no longer says start again': !confirmParagraph.includes('start again'),
+      'the plan record section names verify_source': recordSection.includes('verify_source'),
+      'the nothing_to_plan row says open set': nothingToPlanRow.includes('open set'),
+      'the nothing_to_plan row says scoped': nothingToPlanRow.includes('scoped'),
+      'the run paragraph names Codex': runParagraph.includes('Codex'),
+      'the run paragraph names 2026-11-19': runParagraph.includes('2026-11-19'),
+      'the run paragraph names reservations': runParagraph.includes('reservations'),
+    };
+    expect(found).toEqual({
+      'the confirm paragraph exists': true,
+      'the confirm paragraph says new plan': true,
+      'the confirm paragraph says without `plan_id`': true,
+      'the confirm paragraph no longer says start again': true,
+      'the plan record section names verify_source': true,
+      'the nothing_to_plan row says open set': true,
+      'the nothing_to_plan row says scoped': true,
+      'the run paragraph names Codex': true,
+      'the run paragraph names 2026-11-19': true,
+      'the run paragraph names reservations': true,
+    });
+  });
+
+  it('T-06 docs/hosts.md says that the project .codex/config.toml was not loaded by Codex CLI 0.165.0 and that -c mcp_servers worked', () => {
+    const sentence = sentencesOf(read('docs/hosts.md')).find((s) => s.includes('Codex CLI 0.165.0')) ?? '';
+    expect({
+      'a sentence names Codex CLI 0.165.0': sentence !== '',
+      'it names .codex/config.toml': sentence.includes('.codex/config.toml'),
+      'it names -c mcp_servers': sentence.includes('-c mcp_servers'),
+    }).toEqual({
+      'a sentence names Codex CLI 0.165.0': true,
+      'it names .codex/config.toml': true,
+      'it names -c mcp_servers': true,
+    });
+  });
+});
