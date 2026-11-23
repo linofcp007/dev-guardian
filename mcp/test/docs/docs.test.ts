@@ -48,6 +48,7 @@ import {
   renderToolsDoc,
   type PackInput,
 } from './renderDocs.js';
+import { listProblems } from './markdownLists.js';
 import { DOCS_DIR, loadPacks, loadRegistry, REPO_ROOT } from './sources.js';
 
 /** The listed tools — what a host sees, and what the docs count and name. */
@@ -65,6 +66,11 @@ beforeAll(async () => {
 
 function read(rel: string): string {
   return readFileSync(resolve(REPO_ROOT, rel), 'utf8');
+}
+
+/** `text` with every run of white space as one space: a record is found wherever the page wraps or indents it. */
+function flat(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
 }
 
 const REGENERATE = 'run `npm run build` in mcp/ to regenerate it — never edit a generated page by hand';
@@ -167,7 +173,7 @@ describe("the hooks' known-limits page", () => {
     expect([...at].sort((x, y) => x - y)).toEqual(at);
 
     for (const l of limits) {
-      expect(page, l.id).toContain(l.doc.trim());
+      expect(flat(page), l.id).toContain(flat(l.doc));
       if (l.examples.length === 0) expect(page, l.id).toContain((l.not_executable ?? '').trim());
     }
     for (const { limit, index, example } of exampleRefs(limits)) {
@@ -847,7 +853,7 @@ describe('install-vet-project-registry-said', () => {
       workspace: true,
     });
     expect(limit.doc, 'the indexes a project file sets are said only when a name is missing').toMatch(/\bonly\b[^.]*\bmissing\b|\bmissing\b[^.]*\bonly\b/i);
-    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
+    expect(flat(read('docs/hooks-known-limits.md')), REGENERATE).toContain(flat(limit.doc));
   });
 });
 
@@ -986,7 +992,7 @@ describe('install-vet-global-in-short-cluster', () => {
       gLProject: true,
       oneDashGlobal: true,
     });
-    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(doc.trim());
+    expect(flat(read('docs/hooks-known-limits.md')), REGENERATE).toContain(flat(doc));
   });
 
   it('T-08 a record npm-short-flag-groups (install-vetting) names `-global`, `-local` and the groups inside the launchers, with its two examples; the generated page has it', () => {
@@ -1007,7 +1013,7 @@ describe('install-vet-global-in-short-cluster', () => {
         { command: 'npx -yL global dgprobe-zzq7731', decision: 'warn' },
       ]),
     );
-    expect(read('docs/hooks-known-limits.md'), REGENERATE).toContain(limit.doc.trim());
+    expect(flat(read('docs/hooks-known-limits.md')), REGENERATE).toContain(flat(limit.doc));
   });
 });
 
@@ -1227,5 +1233,105 @@ describe('llm-scan-codex-smoke-findings', () => {
       'it names .codex/config.toml': true,
       'it names -c mcp_servers': true,
     });
+  });
+});
+
+// ───────────────── known-limits-doc-markdownlint — the page keeps the list layout markdownlint accepts
+
+describe('known-limits-doc-markdownlint', () => {
+  const pageOf = (): string => renderKnownLimitsDoc(loadKnownLimits());
+  /** The generator writes a record as a single block when its text has no line break. */
+  const multiBlock = (limit: { doc: string }): boolean => limit.doc.trim().includes('\n');
+  /** A problem without its explanation: `"<line>: <rule>"`. */
+  const brief = (problems: string[]): string[] =>
+    problems.map((p) => p.split(' ').slice(0, p.includes(': not modelled') ? 3 : 2).join(' '));
+
+  it('T-03 (a) a sample in the layout of the page before the fix is refused with MD005 and MD032', () => {
+    const rules = brief(listProblems('## A\n\n- one\n\n- inner\n\nclosing\n  - ex\n- two\n'));
+    expect(rules).toEqual(['7: MD005', '8: MD032']);
+  });
+
+  // [name, text, line, rule]: the rule and the line the check names.
+  const refused: [string, string, number, string][] = [
+    ['a space at the end of a line (markdownlint: MD009)', '## A\n\n- one \n', 3, 'MD009'],
+    ['two blank lines in a row (markdownlint: MD012)', '## A\n\n\n- one\n', 3, 'MD012'],
+    ['two newlines at the end (markdownlint: MD012)', '## A\n\n- one\n\n', 4, 'MD012'],
+    ['no newline at the end (markdownlint: MD047)', '## A\n\n- one', 3, 'MD047'],
+    ['an item at 4 spaces (markdownlint: MD007)', '## A\n\n- one\n    - deep\n', 4, 'MD007'],
+    ['an item at 2 spaces outside an item (markdownlint: MD007)', '## A\n\n  - stray\n', 3, 'MD007'],
+    ['an item glued to a paragraph at column 0 (markdownlint: MD032)', '## A\n\npara\n- one\n', 4, 'MD032'],
+    ['an item at 2 spaces glued to a paragraph of the item (only this check refuses it)', '## A\n\n- one\n\n  para\n  - ex\n', 6, 'MD032'],
+    ['a paragraph of the item glued to an item at 2 spaces (only this check refuses it)', '## A\n\n- one\n  - ex\n  para\n', 5, 'MD032'],
+    ['a line at column 0 glued to two items of a section (only this check refuses it)', '## A\n\n- one\nloose\n- two\n', 4, 'MD005'],
+    ['a line at column 0 between two lists separated by blank lines (not measured with markdownlint)', '## A\n\n- one\n\nloose\n\n- two\n', 5, 'MD005'],
+  ];
+  for (const [name, text, line, rule] of refused) {
+    it(`T-03 (b) refuses ${name}`, () => {
+      expect(brief(listProblems(text))).toEqual([`${String(line)}: ${rule}`]);
+    });
+  }
+
+  // The shapes the check does not model: refused, with their line and the words "not modelled".
+  const notModelled: [string, string, number][] = [
+    ['a ``` line', '## A\n\n```\n', 3],
+    ['a ~~~ line', '## A\n\n~~~\n', 3],
+    ['an ordered item', '## A\n\n1. one\n', 3],
+    ['an item that starts with "*"', '## A\n\n* one\n', 3],
+    ['an item that starts with "+"', '## A\n\n+ one\n', 3],
+    ['a "-" followed by two spaces', '## A\n\n-  one\n', 3],
+    ['a heading inside an item', '## A\n\n- one\n\n  ### inner\n', 5],
+  ];
+  for (const [name, text, line] of notModelled) {
+    it(`T-03 (b) says it does not model ${name}`, () => {
+      expect(brief(listProblems(text))).toEqual([`${String(line)}: not modelled`]);
+    });
+  }
+
+  it('T-03 (c) passes a record of one block with two examples, and a record of several blocks with examples and without them', () => {
+    const passing = {
+      'one block': '## A\n\n- doc\n  - ex1\n  - ex2\n- doc2\n',
+      'several blocks with examples': '## A\n\n- first\n\n  - stays 1\n  - stays 2\n\n  Examples:\n\n  - ex1\n- next\n',
+      'several blocks without examples': '## A\n\n- first\n\n  - stays 1\n\n  No test runs it: why.\n- next\n',
+    };
+    expect(Object.fromEntries(Object.entries(passing).map(([name, text]) => [name, listProblems(text)]))).toEqual({
+      'one block': [],
+      'several blocks with examples': [],
+      'several blocks without examples': [],
+    });
+  });
+
+  it('T-04 (a) a record of one block with examples keeps its item, its example lines at two spaces and its reason, with no blank line between', () => {
+    const lines = pageOf().split('\n');
+    const failing: string[] = [];
+    for (const limit of loadKnownLimits().filter((l) => !multiBlock(l) && l.examples.length > 0)) {
+      const at = lines.indexOf(`- ${limit.doc.trim()}`);
+      const count = limit.examples.length + (limit.not_executable !== undefined ? 1 : 0);
+      const after = lines.slice(at + 1, at + 1 + count);
+      const next = lines[at + 1 + count];
+      const ok = at >= 0 && after.length === count && after.every((l) => l.startsWith('  - ')) && (next === '' || next?.startsWith('- ') === true);
+      if (!ok) failing.push(limit.id);
+    }
+    expect(failing).toEqual([]);
+  });
+
+  it('T-04 (b) the page and the committed page hold the text of every record, with white space joined', () => {
+    const page = flat(pageOf());
+    const committed = flat(read('docs/hooks-known-limits.md'));
+    const missing = loadKnownLimits().flatMap((l) => [
+      ...(page.includes(flat(l.doc)) ? [] : [`${l.id} (generated)`]),
+      ...(committed.includes(flat(l.doc)) ? [] : [`${l.id} (committed)`]),
+    ]);
+    expect(missing).toEqual([]);
+  });
+
+  it('T-04 (c) the page keeps the titles of its sections in the order of the areas and the introduction with the counts', () => {
+    const limits = loadKnownLimits();
+    const lines = pageOf().split('\n');
+    const used = LIMIT_AREAS.filter((area) => limits.some((l) => l.area === area));
+    expect(lines.filter((line) => line.startsWith('## '))).toEqual(used.map((area) => `## ${AREA_TITLES[area]}`));
+    const counts = executableCounts(limits);
+    const intro = lines.find((line) => line.startsWith('This page is rendered from')) ?? '';
+    expect(intro.startsWith(`This page is rendered from [\`${KNOWN_LIMITS_SOURCE}\`](../${KNOWN_LIMITS_SOURCE}): **${String(counts.total)} limits**, `)).toBe(true);
+    expect(intro).toContain(`${String(counts.withExample)} with at least one example and ${String(counts.without)} with none, which says why.`);
   });
 });
