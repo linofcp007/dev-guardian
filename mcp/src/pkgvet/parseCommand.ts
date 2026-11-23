@@ -34,11 +34,18 @@ import { powershellAsPosix } from '../hooks/powershellText.js';
 export { powershellAsPosix };
 import type { PackageSpec, PkgEcosystem, SkippedSpec } from './types.js';
 
+/**
+ * A package of a command. `malwareOnly`: the word is one the pipx reads as a FILE (`pipx install x.whl`, `pipx run x.zip`, measured), so
+ * it is asked of the registry and of OSV only to find a malicious package of that name, and nothing else of it is said. The word stays
+ * in `packages`; the parse does no I/O and the hook decides what the mark means ({@link InstallCommand.runsAsScript}).
+ */
+type CommandPackage = PackageSpec & { malwareOnly?: true };
+
 export interface InstallCommand {
   ecosystem: PkgEcosystem;
   /** The tool that runs the install: npm, pnpm, yarn, bun, pip, uv, poetry, composer, dotnet. */
   manager: string;
-  packages: PackageSpec[];
+  packages: CommandPackage[];
   skipped: SkippedSpec[];
   /**
    * A registry / index / source named on the command line itself
@@ -151,6 +158,13 @@ export interface InstallCommand {
    * and the hook asks the disk. Reading the files is the hook's: this module does no I/O.
    */
   inlineScripts?: InlineScriptWord[];
+  /**
+   * The word `pipx run <word>` reads as a FILE, not as a package, whatever the disk holds (measured: with one of the twelve endings pip
+   * reads as a file, the pipx never asks the index for the word — it runs the file as a script, or fails): the word as written, a
+   * path too (`./x.zip`). It is no package; the hook asks the disk whether the file is there (it is also in {@link inlineScripts}),
+   * and says so when it cannot. Only in the measured form of `pipx run` ({@link Detected.measuredArchiveForm}).
+   */
+  runsAsScript?: string;
   /** Where the uv looks for the script of `uv run`: the value of `--directory` (before or after `run`) or of a leading `UV_WORKING_DIR=`. */
   scriptDir?: string;
   /** The directory the uv looks for the script in cannot be told: an expansion in `--directory` or `UV_WORKING_DIR`, or the variable set elsewhere on the line. */
@@ -209,14 +223,41 @@ const UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
 const POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
 /** The endings of the old single list: what a version or range of a Python, Composer or NuGet word is still skipped for. */
 const ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
-/** What an unmeasured manager may read as a file: every ending a measured manager reads as one, plus `.egg` and `.nupkg`. */
+/**
+ * The fourteen endings a word may have that the pipx or the composer reads as a file or as a name: every ending a measured manager
+ * reads as a file, plus `.egg` and `.nupkg`. In any letter case: a word that ends so, outside the measured form, is vetted as a name
+ * and the command says why it is uncertain ({@link FORM_NOT_MEASURED}).
+ */
 const UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
+/** The same fourteen, in lower case and nothing else: the ending of the measured form (a literal expression with no `i`). */
+const MEASURED_ENDING = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/;
+/**
+ * The twelve of {@link PIP_FILE}, in lower case: what the pipx reads as a FILE in `pipx install <word>` and `pipx run <word>`
+ * (measured, pipx 1.18.16: Linux 2026-11-20, motores pip 23.0.1 and uv 0.13.8, `.specs/_findings-2026-11-20/measurements/initializers-python/
+ * part-D-endings-linux-container-2026-11-20.txt`; Windows, motor pip, 2026-11-19, `.specs/pkgvet-archive-like-name/measurements/
+ * managers-composer-dotnet-pipx-windows-2026-11-19.txt`; and with the M-3, Windows, motores pip 26.2.1 and uv 0.13.8, 2026-11-21,
+ * `.specs/pkgvet-archive-names-pipx-composer/measurements/m3-pipx-windows-2026-11-21-r2.txt` and `-r3.txt`). `.egg` and `.nupkg` are
+ * names there: the pipx asks the index for them.
+ */
+const PIPX_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/;
+/** The endings of {@link UNMEASURED_FILE} the composer was NOT measured with (it was, composer 2.10.3, Windows, 2026-11-19, with `.zip` and `.tar.gz`: a name like any other). */
+const COMPOSER_UNMEASURED = /\.(?:whl|tar|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
 /** The managers nobody measured: a word that ends like an archive is vetted as a name, and the command is uncertain. */
-const UNMEASURED = new Set(['pipx', 'composer', 'dotnet']);
+const UNMEASURED = new Set(['dotnet']);
 /** Why `npx name@` and the other launchers may not deny a missing name: what a launcher does with a word that ends in `@` was not measured. */
 const LAUNCHER_NAME_AT = 'a name ending in @ under a launcher was not measured';
 const UNMEASURED_ARCHIVE =
   'a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known';
+/** R1: a word of the pipx or the composer that ends like an archive, in a form that was not measured. */
+const FORM_NOT_MEASURED =
+  'a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)';
+/** R2: a word of the composer with an ending it was not measured with. */
+const COMPOSER_ENDING_NOT_MEASURED =
+  'a name that ends like an archive file — composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known';
+/** The reasons a confident command keeps: no doubt about the shape, but about what the manager does with the word. */
+const ARCHIVE_REASONS: ReadonlySet<string> = new Set([UNMEASURED_ARCHIVE, FORM_NOT_MEASURED, COMPOSER_ENDING_NOT_MEASURED]);
+/** Why a word is no package: the path of {@link notAPackage}, said by the pipx's `run` for a path with one of the twelve. */
+const LOCAL_PATH = 'local path — not looked up';
 
 /**
  * Whether `manager` reads a version part or a manifest value that ends like `.tgz`, `.tar.gz` or `.tar` as a file to
@@ -248,9 +289,32 @@ function fileEndings(manager: string | undefined, scoped: boolean): RegExp | nul
   }
 }
 
-/** Why a bare name of an unmeasured manager is uncertain, or `undefined`. */
+/** Why a bare name of an unmeasured manager (the dotnet) is uncertain, or `undefined`. */
 function unmeasuredReason(manager: string, spec: PackageSpec): string | undefined {
   return UNMEASURED.has(manager) && spec.name === spec.raw && UNMEASURED_FILE.test(spec.raw) ? UNMEASURED_ARCHIVE : undefined;
+}
+
+/**
+ * What the pipx and the composer say of a bare word that ends like an archive. In the measured form (`d.measuredArchiveForm`: the words from
+ * the program are exactly `pipx install <word>`, `pipx run <word>` or `composer require <word>`, the ending in lower case) the word is
+ * a name like any other (`.egg`, `.nupkg`; the composer's `.zip` and `.tar.gz`) or a file the pipx reads ({@link readsAsPipxFile}):
+ * no reason of its own; the composer's other twelve endings give R2. Outside it the word is a name, R1, and R2 for those twelve.
+ */
+function archiveReasons(d: Detected, spec: PackageSpec): string[] {
+  if (UNMEASURED.has(d.manager)) {
+    const why = unmeasuredReason(d.manager, spec);
+    return why === undefined ? [] : [why];
+  }
+  if ((d.manager !== 'pipx' && d.manager !== 'composer') || spec.name !== spec.raw || !UNMEASURED_FILE.test(spec.raw)) return [];
+  const measured = d.measuredArchiveForm === true;
+  if (d.manager === 'pipx') return measured ? [] : [FORM_NOT_MEASURED];
+  const ending = COMPOSER_UNMEASURED.test(spec.raw);
+  return [...(measured ? [] : [FORM_NOT_MEASURED]), ...(ending ? [COMPOSER_ENDING_NOT_MEASURED] : [])];
+}
+
+/** Whether the pipx reads this word as a file: the measured form of `pipx install` or `pipx run`, a bare word with one of the twelve endings. */
+function readsAsPipxFile(d: Detected, spec: PackageSpec): boolean {
+  return d.measuredArchiveForm === true && d.manager === 'pipx' && spec.name === spec.raw && PIPX_FILE.test(spec.raw);
 }
 
 function isPathLike(word: string): boolean {
@@ -1615,6 +1679,12 @@ interface Detected {
   dotnet?: { form: DotnetForm; spelling: string };
   /** The {@link InstallCommand.registryForm} of the command, when it is one of the eight. */
   registryForm?: string;
+  /**
+   * The words of the command from the program on are exactly `pipx install <word>`, `pipx run <word>` or `composer require <word>` — the program
+   * and the verb written so, one word, no flag — and the word ends in one of the fourteen in lower case: the one form in which the pipx and the
+   * composer were measured with a word that ends like an archive. The one definition of it: {@link collect} and {@link collectLaunch} read it.
+   */
+  measuredArchiveForm?: true;
 }
 /** The .NET forms read since install-vet-dotnet-run-forms: the run command (`dnx`, `dotnet dnx`, `dotnet tool exec` / `execute`) and four verbs. */
 type DotnetForm = 'run' | 'tool-update' | 'new-install' | 'download' | 'package-update';
@@ -1814,6 +1884,18 @@ const PACKAGE_ONLY: ReadonlySet<string> = new Set(['package']);
  * install p`, `yarn --network-concurrency 1`): the scan for the subcommand takes it as one unless it is a subcommand
  * the hook reads, word by word and in one pass.
  */
+/**
+ * Whether the words from the program on (`start`) are exactly `<program> <verb> <word>`, the program and the verb written as given (not
+ * `pipx.exe`, a path, `composer.phar`, `php composer.phar`, `req`), and the word, no flag, ends in one of the fourteen in lower case: the
+ * {@link Detected.measuredArchiveForm}. `verb` is `install` or `run` for the pipx and `require` for the composer.
+ */
+function measuredWord(words: readonly ShellWord[], start: number, program: 'pipx' | 'composer', verb: string): boolean {
+  const last = words[start + 2]?.value;
+  if (words.length !== start + 3 || last === undefined || last.startsWith('-')) return false;
+  const rightVerb = program === 'pipx' ? verb === 'install' || verb === 'run' : verb === 'require';
+  return words[start]?.value === program && words[start + 1]?.value === verb && rightVerb && MEASURED_ENDING.test(last);
+}
+
 function detect(input: readonly ShellWord[]): Detected | null {
   let words = input;
   const nextPositional = (ws: readonly ShellWord[], from: number, table: FlagTable, subcommands?: ReadonlySet<string>): number =>
@@ -1866,11 +1948,12 @@ function detect(input: readonly ShellWord[]): Detected | null {
     const subWord = sub < 0 ? '' : (words[sub]?.value ?? '');
     const after = words.slice(sub + 1);
     const before = words.slice(i, sub);
+    const measured = measuredWord(words, start, 'pipx', subWord) ? ({ measuredArchiveForm: true } as const) : {};
     switch (subWord) {
       case 'install':
-        return { ...launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-install' }), registryForm: 'pipx install' };
+        return { ...launcher('pipx', 'pypi', after, before, { style: 'install', flags: 'pipx-install' }), registryForm: 'pipx install', ...measured };
       case 'run':
-        return { ...launcher('pipx', 'pypi', after, before, { style: 'run', flags: 'pipx-run' }), registryForm: 'pipx run' };
+        return { ...launcher('pipx', 'pypi', after, before, { style: 'run', flags: 'pipx-run' }), registryForm: 'pipx run', ...measured };
       case 'inject':
         return injectDetected(after, before);
       case 'runpip':
@@ -2045,7 +2128,14 @@ function detect(input: readonly ShellWord[]): Detected | null {
       return subWord === 'add' ? { manager: head, ecosystem: 'pypi', args: words.slice(sub + 1), pre, uncertain: [], registryForm: 'poetry add' } : null;
     case 'composer':
       return COMPOSER_REQUIRE.has(subWord)
-        ? { manager: head, ecosystem: 'packagist', args: words.slice(sub + 1), pre, uncertain: [] }
+        ? {
+            manager: head,
+            ecosystem: 'packagist',
+            args: words.slice(sub + 1),
+            pre,
+            uncertain: [],
+            ...(measuredWord(words, start, 'composer', subWord) ? ({ measuredArchiveForm: true } as const) : {}),
+          }
         : null;
     case 'dotnet': {
       // dotnet package add <NAME> (.NET 10: the same command as `add package`, the project a flag)
@@ -2266,18 +2356,19 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
     const parsed = d.ecosystem === 'npm' ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     // The `raw` of an initializer's package is the word as written, not the name made of it.
     const asWritten = written.get(raw) ?? raw;
-    const spec = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
-    if ('name' in spec) {
+    const parsedAs = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
+    if ('name' in parsedAs) {
+      // A word the pipx reads as a file is looked up for malware only: the mark says it, the word stays a package of the command.
+      const spec: CommandPackage = readsAsPipxFile(d, parsedAs) ? { ...parsedAs, malwareOnly: true } : parsedAs;
       const read = d.ecosystem === 'npm' ? npmReadings(spec, d.manager) : { packages: [spec] };
       for (const each of read.packages) {
         packages.push(each);
         if (!byPackageFlag && candidateRaws.has(asWritten) && !certainRaws.has(asWritten)) candidates.push(each);
       }
       if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
-      const why = unmeasuredReason(d.manager, spec);
-      if (why !== undefined) unsure.push(why);
+      unsure.push(...archiveReasons(d, spec));
       if (d.ecosystem === 'npm' && asWritten.endsWith('@')) unsure.push(LAUNCHER_NAME_AT);
-    } else skipped.push(spec);
+    } else skipped.push(parsedAs);
   }
   const bothWhy = bothReadings(bothPairs);
   if (bothWhy !== undefined) unsure.push(bothWhy);
@@ -2298,7 +2389,7 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
   if (launch.flags === 'uv-run') attachUvRun(out, d, pre, w, flags);
-  else if (launch.flags === 'pipx-run' && launch.style === 'run' && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp);
+  else if (launch.flags === 'pipx-run' && launch.style === 'run' && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp, d.measuredArchiveForm === true);
   // A script given to `pipx run` (a `.py` file, or `--path`) is read by `install-vet-inline-script-deps`: it keeps the answer it had.
   // Any other word may be a file too, but it is the package of that name unless the folder holds one: the form is measured for it.
   const script = pathApp || (out.inlineScripts ?? []).some((w) => PYTHON_FILE.test(w.file));
@@ -2363,7 +2454,7 @@ function attachUvRun(out: InstallCommand, d: Detected, pre: WalkResult, w: WalkR
  * each is a file only when one of that name is in the directory, and the hook asks the disk. A word with an expansion is none, but for a
  * script `--path` names for certain.
  */
-function attachPipxApp(out: InstallCommand, w: WalkResult, pathApp: boolean): void {
+function attachPipxApp(out: InstallCommand, w: WalkResult, pathApp: boolean, measured: boolean): void {
   const words = w.positionals.filter((p) => isFileWord(p.value));
   const scripts: InlineScriptWord[] = [];
   for (const p of words) {
@@ -2372,6 +2463,11 @@ function attachPipxApp(out: InstallCommand, w: WalkResult, pathApp: boolean): vo
     else if (!expands) scripts.push({ file: p.value, ifFile: true });
   }
   if (scripts.length > 0) out.inlineScripts = scripts;
+  // The measured form `pipx run <word>`: the word, a path too, is a file pipx runs when it ends in one of the twelve (it asks the index for none).
+  const word = measured ? words[0]?.value : undefined;
+  if (word === undefined || !PIPX_FILE.test(word) || !scripts.some((s) => s.file === word)) return;
+  const asPath = out.skipped.some((s) => s.raw === word && s.reason === LOCAL_PATH);
+  if (asPath || out.packages.some((p) => p.raw === word && p.malwareOnly === true)) out.runsAsScript = word;
 }
 
 /** The flags of `pipx inject` that name a requirements file. */
@@ -2472,8 +2568,7 @@ function collect(d: Detected, context: readonly string[]): InstallCommand {
         if (p.candidate === true) candidatePackages.push(each);
       }
       if ('pair' in read && read.pair !== undefined) bothPairs.push(read.pair);
-      const why = unmeasuredReason(d.manager, spec);
-      if (why !== undefined && !out.uncertain.includes(why)) out.uncertain.push(why);
+      for (const why of archiveReasons(d, spec)) if (!out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === 'packagist' ? spec : undefined;
     } else {
       skipped.push(spec);
@@ -2887,7 +2982,7 @@ export function parseInstallCommands(
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined && c.inlineScripts === undefined) continue;
+      if (packages.length === 0 && c.manifest === undefined && c.updateNames === undefined && c.inlineScripts === undefined && c.runsAsScript === undefined) continue;
       for (const p of packages) seen.add(packageKey(p));
       // Where a nested command runs is not known once the outer one moved: no installed copy is assumed, no manifest or script read.
       const unknownDir = moved && (c.localFirst === true || c.manifest !== undefined || c.inlineScripts !== undefined);
@@ -2933,11 +3028,12 @@ function readingsOf(command: string, shell: CommandShell, forced: string | null,
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
     seenScripts.add(scriptKey(c));
-    const { manifest: _same, inlineScripts: _scripts, ...stripped } = c;
+    const { manifest: _same, inlineScripts: _scripts, runsAsScript: _runs, ...stripped } = c;
     out.push({
       ...stripped,
       ...(newManifest && c.manifest !== undefined ? { manifest: c.manifest } : {}),
       ...(newScripts && c.inlineScripts !== undefined ? { inlineScripts: c.inlineScripts } : {}),
+      ...(newScripts && c.runsAsScript !== undefined ? { runsAsScript: c.runsAsScript } : {}),
       packages,
       skipped: [],
     });
@@ -3267,9 +3363,10 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
           c.scriptDirUnknown = true;
         }
         if (sourcedBefore !== undefined && c.inlineScripts !== undefined) c.sourced = sourcedBefore;
-        // A confident shape has no reason of its own, but a name of a manager nobody measured that ends like an archive does,
-        // and so does a `key@npm:rest` that Yarn and bun read as either of two packages.
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
+        // A confident shape has no reason of its own, but a name that ends like an archive does when what its manager does with it is not
+        // known (`ARCHIVE_REASONS`: the dotnet, the pipx and the composer outside what was measured), and so does a `key@npm:rest` that
+        // Yarn and bun read as either of two packages.
+        const unmeasured = c.uncertain.filter((r) => ARCHIVE_REASONS.has(r) || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
         const unmeasuredVerbReason = notConfident === null ? undefined : unmeasuredVerb(words.map((word) => word.value));
         c.uncertain = notConfident === null ? unmeasured : [...new Set([notConfident, ...(unmeasuredVerbReason === undefined ? [] : [unmeasuredVerbReason]), ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;

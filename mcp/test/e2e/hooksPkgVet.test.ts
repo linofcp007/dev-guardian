@@ -1492,12 +1492,13 @@ describe('pkgvet-archive-like-name', () => {
     expect(r.requests).toEqual([]);
   });
 
-  it('T-07 a manager that was not measured, with a name the registry does not have: a warning, never a deny', () => {
+  it('T-07 a form that was not measured, with a name the registry does not have: a warning, never a deny', () => {
     const name = 'dgprobe-missing.zip';
-    const r = runHook(`pipx install ${name}`, { [`https://pypi.org/pypi/${name}/json`]: { status: 404 }, [OSV]: { osv: {} } });
+    // With a flag: the bare form is the one the pipx was measured with (pkgvet-archive-names-pipx-composer).
+    const r = runHook(`pipx install --force ${name}`, { [`https://pypi.org/pypi/${name}/json`]: { status: 404 }, [OSV]: { osv: {} } });
     expect(r.status).toBe(0);
     expect(r.requests, 'the name is asked of the registry').toContain(`https://pypi.org/pypi/${name}/json`);
-    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(r.output?.hookSpecificOutput?.permissionDecision, 'never a deny for a form that was not measured').toBeUndefined();
     expect(r.output?.hookSpecificOutput?.additionalContext ?? '').toContain(name);
   });
 
@@ -2987,7 +2988,8 @@ describe('pkgvet-archive-names-pipx-composer', () => {
 
   it('T-06 `cd "$X" && pipx run dgprobe-missing.zip`, X without a value: no refusal, the line of `pipx run` once, no missing name, and the word asked for malware', () => {
     const word = 'dgprobe-missing.zip';
-    const r = runHook(`cd "$X" && pipx run ${word}`, { [pypiUrl(word)]: { status: 404 }, [OSV]: { osv: {} } });
+    // `X` is set to nothing in the hook's environment, so that a value of the machine's own cannot change the line.
+    const r = runHook(`cd "$X" && pipx run ${word}`, { [pypiUrl(word)]: { status: 404 }, [OSV]: { osv: {} } }, { env: { X: '' } });
     expect(r.status).toBe(0);
     expect(decisionOf(r), 'never a deny').toBeUndefined();
     const said = r.output?.hookSpecificOutput?.additionalContext ?? '(no context)';

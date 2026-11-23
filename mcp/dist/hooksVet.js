@@ -2633,9 +2633,16 @@ var UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
 var POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
 var ARCHIVE = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
 var UNMEASURED_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
-var UNMEASURED = /* @__PURE__ */ new Set(["pipx", "composer", "dotnet"]);
+var MEASURED_ENDING = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/;
+var PIPX_FILE = /\.(?:zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/;
+var COMPOSER_UNMEASURED = /\.(?:whl|tar|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma|egg|nupkg)$/i;
+var UNMEASURED = /* @__PURE__ */ new Set(["dotnet"]);
 var LAUNCHER_NAME_AT = "a name ending in @ under a launcher was not measured";
 var UNMEASURED_ARCHIVE = "a name that ends like an archive file \u2014 this package manager was not measured, so whether it reads the word as a file or as a registry name is not known";
+var FORM_NOT_MEASURED = "a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)";
+var COMPOSER_ENDING_NOT_MEASURED = "a name that ends like an archive file \u2014 composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known";
+var ARCHIVE_REASONS = /* @__PURE__ */ new Set([UNMEASURED_ARCHIVE, FORM_NOT_MEASURED, COMPOSER_ENDING_NOT_MEASURED]);
+var LOCAL_PATH = "local path \u2014 not looked up";
 function readsFileValue(manager, value) {
   return (manager === "npm" || manager === "npx" || manager === "bun") && NPM_FILE.test(value);
 }
@@ -2659,6 +2666,20 @@ function fileEndings(manager, scoped) {
 }
 function unmeasuredReason(manager, spec2) {
   return UNMEASURED.has(manager) && spec2.name === spec2.raw && UNMEASURED_FILE.test(spec2.raw) ? UNMEASURED_ARCHIVE : void 0;
+}
+function archiveReasons(d, spec2) {
+  if (UNMEASURED.has(d.manager)) {
+    const why = unmeasuredReason(d.manager, spec2);
+    return why === void 0 ? [] : [why];
+  }
+  if (d.manager !== "pipx" && d.manager !== "composer" || spec2.name !== spec2.raw || !UNMEASURED_FILE.test(spec2.raw)) return [];
+  const measured = d.measuredArchiveForm === true;
+  if (d.manager === "pipx") return measured ? [] : [FORM_NOT_MEASURED];
+  const ending = COMPOSER_UNMEASURED.test(spec2.raw);
+  return [...measured ? [] : [FORM_NOT_MEASURED], ...ending ? [COMPOSER_ENDING_NOT_MEASURED] : []];
+}
+function readsAsPipxFile(d, spec2) {
+  return d.measuredArchiveForm === true && d.manager === "pipx" && spec2.name === spec2.raw && PIPX_FILE.test(spec2.raw);
 }
 function isPathLike(word) {
   return word === "." || word === ".." || word.startsWith("./") || word.startsWith("../") || word.startsWith(".\\") || word.startsWith("..\\") || word.startsWith("/") || word.startsWith("~") || word.startsWith("\\") || /^[A-Za-z]:[\\/]/.test(word);
@@ -4474,6 +4495,12 @@ function dotnetDetected(form, spelling, args, pre) {
   return { manager: "dotnet", ecosystem: "nuget", args, pre, uncertain: [], flagTable: DOTNET_FORM_TABLES[form], dotnet: { form, spelling } };
 }
 var PACKAGE_ONLY = /* @__PURE__ */ new Set(["package"]);
+function measuredWord(words, start, program, verb) {
+  const last = words[start + 2]?.value;
+  if (words.length !== start + 3 || last === void 0 || last.startsWith("-")) return false;
+  const rightVerb = program === "pipx" ? verb === "install" || verb === "run" : verb === "require";
+  return words[start]?.value === program && words[start + 1]?.value === verb && rightVerb && MEASURED_ENDING.test(last);
+}
 function detect(input) {
   let words = input;
   const nextPositional = (ws, from, table2, subcommands2) => scanPositional(ws, from, table2, subcommands2).at;
@@ -4520,11 +4547,12 @@ function detect(input) {
     const subWord2 = sub2 < 0 ? "" : words[sub2]?.value ?? "";
     const after2 = words.slice(sub2 + 1);
     const before2 = words.slice(i, sub2);
+    const measured = measuredWord(words, start, "pipx", subWord2) ? { measuredArchiveForm: true } : {};
     switch (subWord2) {
       case "install":
-        return { ...launcher("pipx", "pypi", after2, before2, { style: "install", flags: "pipx-install" }), registryForm: "pipx install" };
+        return { ...launcher("pipx", "pypi", after2, before2, { style: "install", flags: "pipx-install" }), registryForm: "pipx install", ...measured };
       case "run":
-        return { ...launcher("pipx", "pypi", after2, before2, { style: "run", flags: "pipx-run" }), registryForm: "pipx run" };
+        return { ...launcher("pipx", "pypi", after2, before2, { style: "run", flags: "pipx-run" }), registryForm: "pipx run", ...measured };
       case "inject":
         return injectDetected(after2, before2);
       case "runpip":
@@ -4674,7 +4702,14 @@ function detect(input) {
     case "poetry":
       return subWord === "add" ? { manager: head, ecosystem: "pypi", args: words.slice(sub + 1), pre, uncertain: [], registryForm: "poetry add" } : null;
     case "composer":
-      return COMPOSER_REQUIRE.has(subWord) ? { manager: head, ecosystem: "packagist", args: words.slice(sub + 1), pre, uncertain: [] } : null;
+      return COMPOSER_REQUIRE.has(subWord) ? {
+        manager: head,
+        ecosystem: "packagist",
+        args: words.slice(sub + 1),
+        pre,
+        uncertain: [],
+        ...measuredWord(words, start, "composer", subWord) ? { measuredArchiveForm: true } : {}
+      } : null;
     case "dotnet": {
       if (subWord === "dnx") return dotnetDetected("run", "dotnet dnx", words.slice(sub + 1), pre);
       if (subWord === "new") {
@@ -4832,18 +4867,18 @@ function collectLaunch(d, launch, context) {
   for (const raw of raws) {
     const parsed = d.ecosystem === "npm" ? parseNpm(raw, d.manager) : parsePython(raw, false, d.manager);
     const asWritten = written.get(raw) ?? raw;
-    const spec2 = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
-    if ("name" in spec2) {
+    const parsedAs = asWritten === raw ? parsed : { ...parsed, raw: asWritten };
+    if ("name" in parsedAs) {
+      const spec2 = readsAsPipxFile(d, parsedAs) ? { ...parsedAs, malwareOnly: true } : parsedAs;
       const read2 = d.ecosystem === "npm" ? npmReadings(spec2, d.manager) : { packages: [spec2] };
       for (const each of read2.packages) {
         packages.push(each);
         if (!byPackageFlag && candidateRaws.has(asWritten) && !certainRaws.has(asWritten)) candidates.push(each);
       }
       if ("pair" in read2 && read2.pair !== void 0) bothPairs.push(read2.pair);
-      const why = unmeasuredReason(d.manager, spec2);
-      if (why !== void 0) unsure.push(why);
+      unsure.push(...archiveReasons(d, spec2));
       if (d.ecosystem === "npm" && asWritten.endsWith("@")) unsure.push(LAUNCHER_NAME_AT);
-    } else skipped.push(spec2);
+    } else skipped.push(parsedAs);
   }
   const bothWhy = bothReadings(bothPairs);
   if (bothWhy !== void 0) unsure.push(bothWhy);
@@ -4864,7 +4899,7 @@ function collectLaunch(d, launch, context) {
   if (candidates.length > 0) out.candidates = candidates;
   if (flags.some((f) => f.flag === "--prefix" || f.flag === "-C")) out.prefixed = true;
   if (launch.flags === "uv-run") attachUvRun(out, d, pre, w, flags);
-  else if (launch.flags === "pipx-run" && launch.style === "run" && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp);
+  else if (launch.flags === "pipx-run" && launch.style === "run" && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp, d.measuredArchiveForm === true);
   const script = pathApp || (out.inlineScripts ?? []).some((w2) => PYTHON_FILE.test(w2.file));
   if (d.registryForm !== void 0 && !script) out.registryForm = d.registryForm;
   if (d.manager === "bun") out.bunLauncher = true;
@@ -4904,7 +4939,7 @@ function attachUvRun(out, d, pre, w, flags) {
   if (SHELL_EXPANSION.test(dir)) out.scriptDirUnknown = true;
   else out.scriptDir = dir;
 }
-function attachPipxApp(out, w, pathApp) {
+function attachPipxApp(out, w, pathApp, measured) {
   const words = w.positionals.filter((p) => isFileWord(p.value));
   const scripts = [];
   for (const p of words) {
@@ -4913,6 +4948,10 @@ function attachPipxApp(out, w, pathApp) {
     else if (!expands) scripts.push({ file: p.value, ifFile: true });
   }
   if (scripts.length > 0) out.inlineScripts = scripts;
+  const word = measured ? words[0]?.value : void 0;
+  if (word === void 0 || !PIPX_FILE.test(word) || !scripts.some((s) => s.file === word)) return;
+  const asPath = out.skipped.some((s) => s.raw === word && s.reason === LOCAL_PATH);
+  if (asPath || out.packages.some((p) => p.raw === word && p.malwareOnly === true)) out.runsAsScript = word;
 }
 var PIPX_REQUIREMENT_FLAGS = /* @__PURE__ */ new Set(["-r", "--requirement"]);
 function requirementFiles(flags, names) {
@@ -4995,8 +5034,7 @@ function collect(d, context) {
         if (p.candidate === true) candidatePackages.push(each);
       }
       if ("pair" in read2 && read2.pair !== void 0) bothPairs.push(read2.pair);
-      const why = unmeasuredReason(d.manager, spec2);
-      if (why !== void 0 && !out.uncertain.includes(why)) out.uncertain.push(why);
+      for (const why of archiveReasons(d, spec2)) if (!out.uncertain.includes(why)) out.uncertain.push(why);
       lastComposer = d.ecosystem === "packagist" ? spec2 : void 0;
     } else {
       skipped.push(spec2);
@@ -5297,7 +5335,7 @@ function parseInstallCommands(command, opts = {}) {
   for (const script of opts.nested) {
     for (const c of readingsOf(script.text, script.shell, NESTED_SCRIPT, cdpath)) {
       const packages = c.packages.filter((p) => !seen.has(packageKey(p)));
-      if (packages.length === 0 && c.manifest === void 0 && c.updateNames === void 0 && c.inlineScripts === void 0) continue;
+      if (packages.length === 0 && c.manifest === void 0 && c.updateNames === void 0 && c.inlineScripts === void 0 && c.runsAsScript === void 0) continue;
       for (const p of packages) seen.add(packageKey(p));
       const unknownDir = moved2 && (c.localFirst === true || c.manifest !== void 0 || c.inlineScripts !== void 0);
       out.push({ ...c, packages, ...unknownDir ? { workdir: null } : {} });
@@ -5331,11 +5369,12 @@ function readingsOf(command, shell, forced, cdpath) {
     for (const p of packages) seen.add(packageKey(p));
     seenManifests.add(manifestKey(c));
     seenScripts.add(scriptKey(c));
-    const { manifest: _same, inlineScripts: _scripts, ...stripped } = c;
+    const { manifest: _same, inlineScripts: _scripts, runsAsScript: _runs, ...stripped } = c;
     out.push({
       ...stripped,
       ...newManifest && c.manifest !== void 0 ? { manifest: c.manifest } : {},
       ...newScripts && c.inlineScripts !== void 0 ? { inlineScripts: c.inlineScripts } : {},
+      ...newScripts && c.runsAsScript !== void 0 ? { runsAsScript: c.runsAsScript } : {},
       packages,
       skipped: []
     });
@@ -5559,7 +5598,7 @@ function parseReading(text, forced, cdpath) {
           c.scriptDirUnknown = true;
         }
         if (sourcedBefore !== void 0 && c.inlineScripts !== void 0) c.sourced = sourcedBefore;
-        const unmeasured = c.uncertain.filter((r) => r === UNMEASURED_ARCHIVE || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
+        const unmeasured = c.uncertain.filter((r) => ARCHIVE_REASONS.has(r) || r === LAUNCHER_NAME_AT || r.includes(TWO_READINGS));
         const unmeasuredVerbReason = notConfident === null ? void 0 : unmeasuredVerb(words.map((word) => word.value));
         c.uncertain = notConfident === null ? unmeasured : [.../* @__PURE__ */ new Set([notConfident, ...unmeasuredVerbReason === void 0 ? [] : [unmeasuredVerbReason], ...c.uncertain])];
         const sure = dirs[s]?.[w]?.sure ?? null;
@@ -8748,7 +8787,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
   const user = () => userRegistries ??= npmUserRegistries(registry);
   for (const c of parsed) {
     const scripted = scriptCommands(c, world);
-    out.push(scripted.command, ...scripted.extra);
+    out.push(...archiveFileCommand(scripted.command), ...scripted.extra);
     const pushUpdate = (inManifest) => {
       const more = updateCommand(c, inManifest);
       if (more !== void 0) out.push(more);
@@ -9433,6 +9472,13 @@ function readScript(w, cand, written) {
   return read2;
 }
 var unreadAsk = (file, why) => `the inline dependencies of ${file} could not be read (${why}) \u2014 uv or pipx installs them unvetted; allow it only if you trust this script`;
+function archiveFileCommand(c) {
+  const words = c.packages.filter((p) => p.malwareOnly === true);
+  if (words.length === 0) return [c];
+  const rest = { ...c, packages: c.packages.filter((p) => p.malwareOnly !== true) };
+  return [rest, { ...withoutCandidates(c), packages: words, skipped: [], uncertain: [], fromArchiveFile: true }];
+}
+var runsAsFileLine = (word) => `dev-guardian: pipx run reads ${word} as a file, not a package \u2014 if the file is there, pipx runs it as a script and installs the packages its \`# /// script\` block names; they were not vetted.`;
 function withoutCandidates(c) {
   const { candidates: _candidates, candidatesDropped: _dropped, inlineScripts: _scripts, ...rest } = c;
   return rest;
@@ -9537,7 +9583,11 @@ function scriptCommands(c, w) {
   }
   if (local.size === 0 && maybeLocal.length === 0) return { command: c, extra };
   const here = c.packages.filter((p) => local.has(p.raw));
-  const reasons = maybeLocal.map((word) => `\`${said(word)}\` may be a local script that pipx runs instead \u2014 not checked`);
+  const reasons = [];
+  for (const word of maybeLocal) {
+    if (word === c.runsAsScript) w.notes.push(runsAsFileLine(said(word)));
+    else reasons.push(`\`${said(word)}\` may be a local script that pipx runs instead \u2014 not checked`);
+  }
   const command = { ...c, packages: c.packages.filter((p) => !local.has(p.raw)), uncertain: [...c.uncertain, ...reasons] };
   if (here.length > 0) extra.unshift({ ...base2, packages: here, skipped: [], uncertain: [], fromLocalScript: true });
   return { command, extra };
@@ -9709,9 +9759,9 @@ async function decideInstallCommand(command, opts) {
         }
         continue;
       }
-      if (cmd.fromLocalScript === true) {
+      if (cmd.fromLocalScript === true || cmd.fromArchiveFile === true) {
         if (r.checks.malicious.status === "fail") {
-          denies.push(localScriptDeny(r));
+          denies.push(cmd.fromLocalScript === true ? localScriptDeny(r) : archiveFileDeny(r));
           malicious = true;
         }
         continue;
@@ -9833,10 +9883,12 @@ function decideManifestOne(r, file) {
   if (unknown2 !== void 0) out.unverified = unknown2.detail ?? "";
   return out;
 }
-function localScriptDeny(r) {
+function maliciousFileDeny(lead, r) {
   const why = Object.values(r.checks).filter((c) => c.status === "fail" && c.detail !== void 0).map((c) => c.detail ?? "").join("; ");
-  return `pipx runs the local file '${r.name}' here, and a package of that name is malicious: '${label2(r)}': ${sentence(why)}`;
+  return `${lead} a package of that name is malicious: '${label2(r)}': ${sentence(why)}`;
 }
+var localScriptDeny = (r) => maliciousFileDeny(`pipx runs the local file '${r.name}' here, and`, r);
+var archiveFileDeny = (r) => maliciousFileDeny(`pipx reads '${r.name}' as a file here, not as a package, and`, r);
 function decideUpdateOne(r) {
   if (r.checks.malicious.status === "fail") {
     const why = Object.values(r.checks).filter((c) => c.status === "fail" && c.detail !== void 0).map((c) => c.detail ?? "").join("; ");

@@ -2799,9 +2799,10 @@ describe('selftest-install-vet-canary', () => {
 describe('pkgvet-archive-like-name', () => {
   it('T-11 `composer require vendor/<missing>.zip`, the registry answering 404: a warning, never a deny', async () => {
     const f = fakeRegistry();
-    const d = await decideInstallCommand('composer require dgprobe/missing.zip', opts(f.fetchImpl));
+    // With a flag: the bare form is the one the composer was measured with (pkgvet-archive-names-pipx-composer), where the name is refused.
+    const d = await decideInstallCommand('composer require --dev dgprobe/missing.zip', opts(f.fetchImpl));
     expect(f.calls, 'the name is asked of Packagist').toContain('https://repo.packagist.org/p2/dgprobe/missing.zip.json');
-    expect(d?.deny, 'never a deny for a manager that was not measured').toBeUndefined();
+    expect(d?.deny, 'never a deny for a form that was not measured').toBeUndefined();
     expect(d?.context ?? '', 'a warning that names the package').toContain('dgprobe/missing.zip');
   });
 

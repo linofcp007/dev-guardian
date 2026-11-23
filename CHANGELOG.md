@@ -241,6 +241,35 @@ version bump.
 
 ### Fixed
 
+- **A word that ends like an archive is read as the pipx and the composer read it.** Both were treated as managers nobody
+  measured: the hook asked the registry about words the pipx never asks for and only warned about names the composer asks
+  for. Measured now (pipx 1.18.16 on Linux and on Windows, with the pip and the uv engines; composer 2.10.3 on Windows;
+  the files are named in the source next to the lists of the other managers). What changes:
+  - **Refused when the registry does not have the name,** on a line of the confident shape and only in the measured form
+    (`pipx install <word>`, `pipx run <word>` or `composer require <vendor>/<name>`, one word, no flag, the ending in lower
+    case): `pipx install` and `pipx run` with a word that ends in `.egg` or `.nupkg` (the pipx asks the index for it), and
+    `composer require` with a name that ends in `.zip` or `.tar.gz` (the composer asks Packagist for it). For `pipx run`
+    the disk decides first, as for any word: with a file of that name in the folder, the block is read and nothing is
+    refused for a missing name.
+  - **Silent:** `pipx install <word>` and `pipx run <word>` with a word that ends in `.zip`, `.whl`, `.tar`, `.tar.gz`,
+    `.tgz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.tlz`, `.tar.lz` or `.tar.lzma`, a path too in `pipx run`: the pipx reads
+    the word as a file and never asks the index for it, so it is not called a missing name any more (it was a warning in
+    every one of the 56 measured lines). A malicious package of that name is still refused, with a reason that says the
+    pipx reads the word as a file here.
+  - **A line, once:** when `pipx run` is given such a word and the hook cannot tell whether the file is there (the folder
+    is not known after a `cd "$X"`, the time is spent or 50 words were asked), it says that pipx run reads the word as a
+    file, not a package, and installs what the block of the file names, which was not vetted — instead of "may be a local
+    script that pipx runs instead — not checked".
+  - **Still warns, with a reason of its own:** every other line of the pipx or the composer with such a word (a flag,
+    another word, another spelling of the program or the verb, an ending in capitals, the value of `--spec`,
+    `pipx inject`) says it is a name that ends like an archive in a form that was not measured; the composer's other
+    twelve endings (`.whl`, `.tar`, `.tgz`, `.tar.bz2`, `.tbz`, `.tar.xz`, `.txz`, `.tlz`, `.tar.lz`, `.tar.lzma`, `.egg`,
+    `.nupkg`) say the composer was not measured with that ending. Nothing there is refused for a missing name; the
+    `dotnet` is unchanged (not measured in any form).
+  - **Names that leave the machine:** no word is dropped from the lookups and none is added: the twelve of the pipx go to
+    the registry and to OSV for the malware check only, as before. The known limit `archive-like-names` and
+    `docs/hooks.md` say what was measured and what stays.
+
 - **npm's groups of short flags, and `-L`, `-m` and `-c`, are read as npm reads them.** The install hook took a group
   that holds a `g` (`npm install -gD <name>`) as not global for certain, so it read the project's `package.json` and
   asked the registry for its dependencies, although npm installs the line globally and reads no manifest; it did not

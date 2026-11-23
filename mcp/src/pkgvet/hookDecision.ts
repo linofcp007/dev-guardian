@@ -8,8 +8,9 @@
  *     registry does not have ONLY when the whole command, comments
  *     stripped, is ONE plain install statement with allowlisted flags
  *     (controller ruling, round 2 — `confidentShape` in `parseCommand.ts`;
- *     `InstallCommand.uncertain` is empty then, bar the one reason a name of a
- *     manager nobody measured that ends like an archive carries) AND no custom
+ *     `InstallCommand.uncertain` is empty then, bar the reasons the confident-shape
+ *     filter keeps: a name that ends like an archive, whose manager was not measured
+ *     or in a form it was not measured in, and the two readings of a `key@npm:rest`) AND no custom
  *     registry, npmjs auth token (scoped names) or local workspace package
  *     explains the 404 (`privateRegistry.ts`). Blocking a missing name buys
  *     little — the install would 404 anyway — and a false deny blocks real
@@ -309,9 +310,10 @@ function boundedInstalls(
 /**
  * An install command as it is vetted: the packages a manifest names carry the file that names them, and the names an update
  * verb is given ({@link InstallCommand.updateNames}) are marked `fromUpdate`; the words `pipx run` takes as the name of a local file
- * are looked up for malware only (`fromLocalScript`).
+ * are looked up for malware only (`fromLocalScript`), and so are the words the pipx reads as a file whether or not one is there
+ * (`fromArchiveFile`: {@link archiveFileCommand}).
  */
-type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true; fromLocalScript?: true };
+type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true; fromLocalScript?: true; fromArchiveFile?: true };
 
 /** Why the name given to an update is never denied as missing (measured 2026-11-20: an update fetches only what is installed already). */
 const NAMED_TO_UPDATE = 'not denied: a package named to an update is fetched only when it is already installed';
@@ -419,7 +421,7 @@ function withManifestPackages(
   for (const c of parsed) {
     // The scripts the command runs come first: a `pipx run` word that is a local file leaves its packages, and says so.
     const scripted = scriptCommands(c, world);
-    out.push(scripted.command, ...scripted.extra);
+    out.push(...archiveFileCommand(scripted.command), ...scripted.extra);
     // The names of an update are vetted whatever happens to the manifest below: every early `continue` comes after this.
     const pushUpdate = (inManifest: ReadonlySet<string>): void => {
       const more = updateCommand(c, inManifest);
@@ -1462,6 +1464,22 @@ function readScript(w: ScriptWorld, cand: ScriptPath, written: string): Manifest
 const unreadAsk = (file: string, why: string): string =>
   `the inline dependencies of ${file} could not be read (${why}) — uv or pipx installs them unvetted; allow it only if you trust this script`;
 
+/**
+ * The words the pipx reads as a file (`malwareOnly`, a mark of the parse) that are still packages of the command — a `pipx install <word>`,
+ * or a `pipx run <word>` whose folder has no such file or is not known — as a command of their own (`fromArchiveFile`): they are asked of the
+ * registry and of OSV only to find a malicious package of that name, and nothing else is said of them. What is left is the command without them.
+ */
+function archiveFileCommand(c: VetCommand): VetCommand[] {
+  const words = c.packages.filter((p) => p.malwareOnly === true);
+  if (words.length === 0) return [c];
+  const rest: VetCommand = { ...c, packages: c.packages.filter((p) => p.malwareOnly !== true) };
+  return [rest, { ...withoutCandidates(c), packages: words, skipped: [], uncertain: [], fromArchiveFile: true }];
+}
+
+/** The line said for the word `pipx run` reads as a file when the hook could not ask the disk whether it is there (the folder is not known, or time or the 50 words ran out). */
+const runsAsFileLine = (word: string): string =>
+  `dev-guardian: pipx run reads ${word} as a file, not a package — if the file is there, pipx runs it as a script and installs the packages its \`# /// script\` block names; they were not vetted.`;
+
 /** A command stripped of what only its own packages need, as the base of the commands made of its scripts. */
 function withoutCandidates(c: InstallCommand): VetCommand {
   const { candidates: _candidates, candidatesDropped: _dropped, inlineScripts: _scripts, ...rest } = c;
@@ -1473,7 +1491,8 @@ function withoutCandidates(c: InstallCommand): VetCommand {
  * one more command to vet, as a manifest's packages do (`fromManifest`); what could not be read is a line, and — when the repository can
  * choose it — a question to the user. A word `pipx run` may take as its app (`ifFile`) is asked of the disk: when it is a file the
  * pipx runs it, so the word is looked up for malware only (`fromLocalScript`) and its block is read; when it is not there nothing
- * changes. A word that could not be asked keeps its place as a package and says it may be a local script.
+ * changes. A word that could not be asked keeps its place as a package and says it may be a local script — but the word `pipx run`
+ * reads as a file for certain (`runsAsScript`) says {@link runsAsFileLine} instead, and is no doubt about the command.
  */
 function scriptCommands(c: InstallCommand, w: ScriptWorld): { command: VetCommand; extra: VetCommand[] } {
   const scripts = c.inlineScripts;
@@ -1576,7 +1595,11 @@ function scriptCommands(c: InstallCommand, w: ScriptWorld): { command: VetComman
   }
   if (local.size === 0 && maybeLocal.length === 0) return { command: c, extra };
   const here = c.packages.filter((p) => local.has(p.raw));
-  const reasons = maybeLocal.map((word) => `\`${said(word)}\` may be a local script that pipx runs instead — not checked`);
+  const reasons: string[] = [];
+  for (const word of maybeLocal) {
+    if (word === c.runsAsScript) w.notes.push(runsAsFileLine(said(word)));
+    else reasons.push(`\`${said(word)}\` may be a local script that pipx runs instead — not checked`);
+  }
   const command: VetCommand = { ...c, packages: c.packages.filter((p) => !local.has(p.raw)), uncertain: [...c.uncertain, ...reasons] };
   if (here.length > 0) extra.unshift({ ...base, packages: here, skipped: [], uncertain: [], fromLocalScript: true });
   return { command, extra };
@@ -1788,10 +1811,10 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
         }
         continue;
       }
-      // The word of `pipx run` that is a file the pipx runs: only a package of that name that is malicious is said.
-      if (cmd.fromLocalScript === true) {
+      // The word of `pipx run` that is a file the pipx runs, or a word the pipx reads as a file: only a package of that name that is malicious is said.
+      if (cmd.fromLocalScript === true || cmd.fromArchiveFile === true) {
         if (r.checks.malicious.status === 'fail') {
-          denies.push(localScriptDeny(r));
+          denies.push(cmd.fromLocalScript === true ? localScriptDeny(r) : archiveFileDeny(r));
           malicious = true;
         }
         continue;
@@ -1977,14 +2000,20 @@ function decideManifestOne(
   return out;
 }
 
-/** The sentence for a malicious package whose name is a local file `pipx run` runs: nothing else of the word is said. */
-function localScriptDeny(r: PackageVetResult): string {
+/** The sentence for a malicious package whose name is a word the pipx takes for a file: `lead` says which file and why, and nothing else of the word is said. */
+function maliciousFileDeny(lead: string, r: PackageVetResult): string {
   const why = Object.values(r.checks)
     .filter((c) => c.status === 'fail' && c.detail !== undefined)
     .map((c) => c.detail ?? '')
     .join('; ');
-  return `pipx runs the local file '${r.name}' here, and a package of that name is malicious: '${label(r)}': ${sentence(why)}`;
+  return `${lead} a package of that name is malicious: '${label(r)}': ${sentence(why)}`;
 }
+
+/** The sentence for a malicious package whose name is a local file `pipx run` runs: the hook saw the file. */
+const localScriptDeny = (r: PackageVetResult): string => maliciousFileDeny(`pipx runs the local file '${r.name}' here, and`, r);
+
+/** The sentence for a malicious package whose name is a word the pipx reads as a file (`pipx install <word>`, `pipx run <word>`): the hook did not see one. */
+const archiveFileDeny = (r: PackageVetResult): string => maliciousFileDeny(`pipx reads '${r.name}' as a file here, not as a package, and`, r);
 
 /**
  * One name given to an update verb, in the hook's answer. It is typed on the command line, so a malicious package is denied
@@ -2018,8 +2047,10 @@ function decideUpdateOne(r: PackageVetResult): { deny?: string; malicious?: bool
  *   - malicious (OSV `MAL-` on the version, npm takedown placeholder) → deny, always;
  *   - missing from the public registry → deny ONLY when the vetting found
  *     nothing to explain it (it is `block`, not `unknown`) AND the command
- *     has the confident shape (`uncertain` is empty, bar the one reason an
- *     archive-like name of an unmeasured manager carries); otherwise the ruling's
+ *     has the confident shape (`uncertain` is empty, bar the reasons the confident-shape
+ *     filter keeps: an archive-like name of an unmeasured manager, or of the pipx
+ *     and the composer outside the form measured, and the two readings of a
+ *     `key@npm:rest`); otherwise the ruling's
  *     "not found … ignore this" warning, with the reason;
  *   - every other `warn` check, except known vulnerabilities on a version
  *     the user did not pin exactly (M4: for a range or a bare name the

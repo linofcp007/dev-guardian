@@ -1006,9 +1006,10 @@ describe('pkgvet-archive-like-name', () => {
 
   it('T-04 a manager that was not measured: the archive-like word is a package AND the command says why it is uncertain', () => {
     const cases: Array<[string, string]> = [
-      ['pipx install x.zip', 'x.zip'],
-      ['pipx run x.whl', 'x.whl'],
-      ['composer require v/p.zip', 'v/p.zip'],
+      // Outside the form measured for the pipx and the composer (pkgvet-archive-names-pipx-composer): a flag; the reason is R1, which says archive too.
+      ['pipx install -q x.zip', 'x.zip'],
+      ['pipx run -q x.whl', 'x.whl'],
+      ['composer require --dev v/p.zip', 'v/p.zip'],
       ['dotnet add package X.Y.zip', 'X.Y.zip'],
     ];
     for (const [command, name] of cases) {
@@ -1326,7 +1327,7 @@ describe('pkgvet-archive-like-name', () => {
     ["pipx install foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
     ["pipx install lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
     ["pipx install thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
-    ["pipx install --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known"],
+    ["pipx install --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)"],
     ["pipx install --registry https://r.example/x.zip somepkg", "pipx/pypi | P somepkg | S https://r.example/x.zip => URL / VCS / protocol spec — not looked up | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
     ["pipx install -e ./pkg.tgz somepkg", "pipx/pypi | P somepkg | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist"],
     ["pipx run left-pad", "pipx/pypi | P left-pad"],
@@ -1344,7 +1345,7 @@ describe('pkgvet-archive-like-name', () => {
     ["pipx run foo@bar.tgz", "pipx/pypi | S foo@bar.tgz => archive file — not looked up"],
     ["pipx run lodash.zip@4.2.0", "pipx/pypi | P lodash.zip@4.2.0"],
     ["pipx run thing.egg@1.0", "pipx/pypi | P thing.egg@1.0"],
-    ["pipx run --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known"],
+    ["pipx run --prefix x.tar somepkg", "pipx/pypi | P x.tar somepkg | U flag --prefix is not on the confident-shape allowlist ; unknown flag --prefix ; a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)"],
     ["pipx run --registry https://r.example/x.zip somepkg", "pipx/pypi | P somepkg | S https://r.example/x.zip => URL / VCS / protocol spec — not looked up | U flag --registry is not on the confident-shape allowlist ; unknown flag --registry"],
     ["pipx run -e ./pkg.tgz somepkg", "pipx/pypi | S ./pkg.tgz => local path — not looked up | U flag -e is not on the confident-shape allowlist ; unknown flag -e"],
     ["composer require left-pad", "composer/packagist | S left-pad => platform package or not a vendor/name — not looked up"],
@@ -1462,7 +1463,8 @@ describe('pkgvet-archive-like-name', () => {
 
   it('T-11 pipx hands the word to pip: an ending pip reads as a file but the old list lacked is a package AND an unmeasured reason', () => {
     for (const ending of ['.tbz', '.txz', '.tlz', '.tar.lz', '.tar.lzma']) {
-      const command = `pipx install x${ending}`;
+      // With a flag: the bare form is the measured one, where the word is a file for the pipx (pkgvet-archive-names-pipx-composer).
+      const command = `pipx install -q x${ending}`;
       const cmds = parseInstallCommands(command);
       expect(cmds.map((c) => c.packages.map((p) => p.name)), command).toEqual([[`x${ending}`]]);
       expect(cmds.map((c) => c.skipped), command).toEqual([[]]);
@@ -3773,7 +3775,8 @@ describe('install-vet-python-tool-forms', () => {
   const T = 'dgprobe-zzq7731-tool';
   const CMD = 'dgprobe-zzq7731-cmd';
   const URL = 'https://x.test/simple';
-  const NOT_MEASURED = 'this package manager was not measured';
+  /** Part of R1, the reason of a word of the pipx that ends like an archive in a form that was not measured (pkgvet-archive-names-pipx-composer). */
+  const FORM_NOT_MEASURED = 'in a form that was not measured';
 
   /** What the feature adds to a command; read through a type that has it, so the file type-checks before the field exists. */
   type WithEveryTool = { updatesEveryTool?: boolean };
@@ -3892,9 +3895,9 @@ describe('install-vet-python-tool-forms', () => {
       expect({ manager: r.manager, packages: r.packages, uncertain: r.uncertain.length > 0 }).toEqual({ manager: 'pip', packages: [P], uncertain: true });
     });
 
-    it('T-01 `pipx inject T x.zip` looks up x.zip and says why it is uncertain: the manager was not measured', () => {
+    it('T-01 `pipx inject T x.zip` looks up x.zip and says why it is uncertain: the form was not measured (R1)', () => {
       const r = one(`pipx inject ${T} x.zip`);
-      expect({ manager: r.manager, packages: r.packages, reason: r.uncertain.join(' | ').includes(NOT_MEASURED) }).toEqual({
+      expect({ manager: r.manager, packages: r.packages, reason: r.uncertain.join(' | ').includes(FORM_NOT_MEASURED) }).toEqual({
         manager: 'pipx',
         packages: ['x.zip'],
         reason: true,
@@ -4004,9 +4007,9 @@ describe('install-vet-python-tool-forms', () => {
       expect(parseInstallCommands(command)).toEqual([]);
     });
 
-    it('T-05 `pipx install x.zip` looks up x.zip and says the manager was not measured, as today', () => {
-      const r = one('pipx install x.zip');
-      expect({ packages: r.packages, reason: r.uncertain.join(' | ').includes(NOT_MEASURED) }).toEqual({ packages: ['x.zip'], reason: true });
+    it('T-05 `pipx install -q x.zip` looks up x.zip and says the form was not measured (R1)', () => {
+      const r = one('pipx install -q x.zip');
+      expect({ packages: r.packages, reason: r.uncertain.join(' | ').includes(FORM_NOT_MEASURED) }).toEqual({ packages: ['x.zip'], reason: true });
     });
 
     // ── T-08: protection — the cost of the new readers is linear in the line
@@ -4444,13 +4447,10 @@ describe('pkgvet-archive-names-pipx-composer', () => {
     'a name that ends like an archive file — composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known';
   const LOCAL_PATH = 'local path — not looked up';
 
-  /** The two fields this fix adds, read through narrow local types so the file type-checks before they exist. */
-  type MarkedSpec = PackageSpec & { malwareOnly?: true };
-  type ScriptCommand = { runsAsScript?: string };
   const marked = (command: string): Array<{ name: string; malwareOnly?: true }> =>
     parseInstallCommands(command).flatMap((c) =>
       c.packages.map((p) => {
-        const flag = (p as MarkedSpec).malwareOnly;
+        const flag = p.malwareOnly;
         return flag === undefined ? { name: p.name } : { name: p.name, malwareOnly: flag };
       }),
     );
@@ -4502,21 +4502,21 @@ describe('pkgvet-archive-names-pipx-composer', () => {
     const command = `pipx run ${word}`;
     const cmds = parseInstallCommands(command);
     expect(marked(command)).toEqual([{ name: word, malwareOnly: true }]);
-    expect((cmds[0] as ScriptCommand | undefined)?.runsAsScript).toBe(word);
+    expect(cmds[0]?.runsAsScript).toBe(word);
     expect(cmds[0]?.inlineScripts).toEqual([{ file: word, ifFile: true }]);
     expect(cmds.map((c) => c.uncertain)).toEqual([[]]);
   });
 
   it("T-03 `bash -c 'pipx run x.zip'`, the script as a nested one, runs x.zip as a script too", () => {
     const cmds = parseInstallCommands("bash -c 'pipx run x.zip'", { nested: [{ text: 'pipx run x.zip', shell: 'bash' }] });
-    expect(cmds.map((c) => (c as ScriptCommand).runsAsScript)).toEqual(['x.zip']);
+    expect(cmds.map((c) => c.runsAsScript)).toEqual(['x.zip']);
   });
 
   it.each(['./x.zip', 'sub/x.whl', '/abs/z.tar.gz'])('T-03 `pipx run %s`, a path: no package, kept as a local path, and the word is the script it runs', (word) => {
     const cmds = parseInstallCommands(`pipx run ${word}`);
     expect(cmds.map((c) => c.packages)).toEqual([[]]);
     expect(cmds.map((c) => c.skipped.map((s) => `${s.raw} => ${s.reason}`))).toEqual([[`${word} => ${LOCAL_PATH}`]]);
-    expect(cmds.map((c) => (c as ScriptCommand).runsAsScript)).toEqual([word]);
+    expect(cmds.map((c) => c.runsAsScript)).toEqual([word]);
   });
 
   it.each([
@@ -4536,7 +4536,7 @@ describe('pkgvet-archive-names-pipx-composer', () => {
     'php composer.phar require v/x.zip',
     'composer require v/x.Tar.Gz',
   ])('T-04 `%s` is not the measured form: the word is a package and the command says R1, not "not measured"', (command) => {
-    const word = command.split(' ').find((w) => /\.(?:zip|whl|tar\.gz)$/i.test(w)) ?? '';
+    const word = command.split(' ').find((w) => /\.(?:zip|whl|egg|tar\.gz)$/i.test(w)) ?? '';
     expect(namesOf(command)).toContain(word);
     const why = uncertainOf(command);
     expect(why).toContain(R1);
