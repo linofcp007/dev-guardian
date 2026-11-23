@@ -41,7 +41,7 @@
  */
 
 import { dirname, join, relative, resolve, sep } from 'node:path';
-import { strayAt } from '../pkgvet/strayAt.js';
+import { strayAt, withCommentAt } from '../pkgvet/strayAt.js';
 import { describeReadRefusal, isWithinDir, listProjectDir, projectPathKind, readProjectBytes } from '../platform/projectFs.js';
 
 /** What made a requirements file not installable. */
@@ -166,14 +166,16 @@ const COMMENT = /(^|[ \t]+)#.*$/;
  * `\` at either end of a joined line stripped, and a comment line never
  * joined — then `ignore_comments`.
  */
-function* logicalLines(text: string): Generator<{ line: number; text: string }> {
+function* logicalLines(text: string): Generator<{ line: number; text: string; commentAt: boolean }> {
   const physical = text.split(/\r\n|\r|\n/);
   if (physical.length > 0 && physical[physical.length - 1] === '' && /[\r\n]$/.test(text)) physical.pop();
   let joined: string[] = [];
   let first = 0;
-  const finish = function* (n: number, raw: string): Generator<{ line: number; text: string }> {
-    const stripped = raw.replace(COMMENT, '').trim();
-    if (stripped !== '') yield { line: n, text: stripped };
+  const finish = function* (n: number, raw: string): Generator<{ line: number; text: string; commentAt: boolean }> {
+    const comment = COMMENT.exec(raw);
+    const stripped = (comment === null ? raw : raw.slice(0, comment.index)).trim();
+    // The comment is cut off, but an `@` in it may be the rest of a credential written before it: said with the line.
+    if (stripped !== '') yield { line: n, text: stripped, commentAt: comment?.[0].includes('@') === true };
   };
   for (let i = 0; i < physical.length; i++) {
     let line = physical[i] ?? '';
@@ -286,50 +288,74 @@ function bareHost(value: string): string {
 }
 
 /** A `file:` URL: a local path, or — with a host other than `localhost` — a network path (Windows opens `\\host\…`). */
-function fileUrl(url: string): Pick<PipRefusal, 'kind' | 'host'> {
-  const host = urlHost(url);
+function fileUrl(url: string, cut: string): Pick<PipRefusal, 'kind' | 'host'> {
+  const host = urlHost(withCommentAt(url, cut));
   return host === 'file:' || /^file:\/\/localhost$/i.test(host) ? { kind: 'local path', host: 'file:' } : { kind: 'network path', host };
 }
 
-/** Why a requirement string is not a plain one, or null when it is. Exported for manifests (`pythonProject.ts`). */
-export function judgeRequirement(req: string): Pick<PipRefusal, 'kind' | 'host'> | null {
+/**
+ * Why a requirement string is not a plain one, or null when it is. Exported for manifests (`pythonProject.ts`).
+ * `cutOff`: what the reader cut off the requirement before this (a `setup.cfg` comment).
+ */
+export function judgeRequirement(req: string, cutOff = ''): Pick<PipRefusal, 'kind' | 'host'> | null {
   const beforeMarker = req.split(';', 1)[0] ?? req;
+  // What was cut off the text a host is read from: what the reader cut (`cutOff`), the marker after the first `;`, and a
+  // comment inside the string. An `@` in it may be the rest of a credential written before it: no host is said then.
+  const hash = beforeMarker.search(/[ \t]#/);
+  const cut = `${cutOff}${req.slice(beforeMarker.length)}${hash >= 0 ? beforeMarker.slice(hash) : ''}`;
+  // A host is read from the text before the comment (`https://T #K@H/x` is `https://T`), with the sign of what was cut.
+  const beforeComment = (text: string): string => {
+    const h = text.search(/[ \t]#/);
+    return h >= 0 ? text.slice(0, h) : text;
+  };
+  const hostOf = (text: string): string => urlHost(withCommentAt(beforeComment(text), cut));
   const at = beforeMarker.indexOf('@');
   // A URL first (its userinfo holds `@` too); a direct reference is `name @ url`, and a name has no `:`.
   const startsWithScheme = /^\s*[a-z][a-z0-9+.-]*:/i.test(beforeMarker);
   if (at >= 0 && !startsWithScheme) {
     const url = beforeMarker.slice(at + 1).trim();
-    if (/^file:/i.test(url)) return fileUrl(url);
+    if (/^file:/i.test(url)) return fileUrl(beforeComment(url), cut);
     const kind: PipRefusalKind = VCS.test(url) ? 'VCS requirement' : /^(?:\\\\|\/\/)/.test(url) ? 'network path' : 'direct reference';
-    return { kind, host: urlHost(url) };
+    return { kind, host: hostOf(url) };
   }
   const s = beforeMarker.trim();
-  if (/^(?:\\\\|\/\/)/.test(s)) return { kind: 'network path', host: urlHost(s) };
-  if (VCS.test(s)) return { kind: 'VCS requirement', host: urlHost(s) };
+  if (/^(?:\\\\|\/\/)/.test(s)) return { kind: 'network path', host: hostOf(s) };
+  if (VCS.test(s)) return { kind: 'VCS requirement', host: hostOf(s) };
   if (/^[a-z][a-z0-9+.-]*:/i.test(s)) {
-    if (/^file:/i.test(s)) return fileUrl(s);
-    return /^[A-Za-z]:[\\/]/.test(s) ? { kind: 'local path' } : { kind: 'URL requirement', host: urlHost(s) };
+    if (/^file:/i.test(s)) return fileUrl(beforeComment(s), cut);
+    return /^[A-Za-z]:[\\/]/.test(s) ? { kind: 'local path' } : { kind: 'URL requirement', host: hostOf(s) };
   }
   if (/[\\/]/.test(s) || s.startsWith('.') || s.startsWith('~') || ARCHIVE.test(s)) return { kind: 'local path' };
   return PLAIN_REQUIREMENT.test(req.trim()) ? null : { kind: 'not a plain requirement' };
 }
 
-/** What one logical line asks for: nothing more to read, an include to follow, or a refusal. */
-type LineVerdict = { ok: true; includes: string[] } | { ok: false; refusal: Pick<PipRefusal, 'kind' | 'host' | 'detail'> };
+/** An include a line names, with whether an `@` stands after it on the line (in what follows it, or in the comment cut off). */
+interface IncludeTarget {
+  target: string;
+  cut: boolean;
+}
 
-/** pip's `break_args_options`: tokens split on single spaces; the args are those before the first `-…` token. */
-function judgeLine(text: string): LineVerdict {
+/** What one logical line asks for: nothing more to read, an include to follow, or a refusal. */
+type LineVerdict = { ok: true; includes: IncludeTarget[] } | { ok: false; refusal: Pick<PipRefusal, 'kind' | 'host' | 'detail'> };
+
+/**
+ * pip's `break_args_options`: tokens split on single spaces; the args are those before the first `-…` token.
+ * `commentAt`: the comment {@link logicalLines} cut off held an `@`. A host is said only when no `@` stands after the
+ * value it is read from, on the line or in that comment (one reading per line, never one per word).
+ */
+function judgeLine(text: string, commentAt: boolean): LineVerdict {
   if (text.includes('${')) return { ok: false, refusal: { kind: 'environment variable', detail: 'pip substitutes ${…} from the environment' } };
   const tokens = text.split(' ');
   const firstOption = tokens.findIndex((t) => t.startsWith('-'));
   const args = (firstOption < 0 ? tokens : tokens.slice(0, firstOption)).join(' ');
   const optionText = firstOption < 0 ? '' : tokens.slice(firstOption).join(' ');
   // A network path among the options (`-r \\host\share\x.txt`) is named by its host before the escape rule refuses it.
-  const unc = optionText
-    .split(/[ \t=]+/)
-    .map((t) => t.replace(/^["']+/, ''))
-    .find((t) => /^(?:\\\\|\/\/)[^\\/]/.test(t));
-  if (unc !== undefined) return { ok: false, refusal: { kind: 'network path', host: urlHost(unc) } };
+  const words = optionText.split(/[ \t=]+/).map((t) => t.replace(/^["']+/, ''));
+  const uncAt = words.findIndex((t) => /^(?:\\\\|\/\/)[^\\/]/.test(t));
+  if (uncAt >= 0) {
+    const rest = commentAt || words.slice(uncAt + 1).some((w) => w.includes('@'));
+    return { ok: false, refusal: { kind: 'network path', host: hostOf(words[uncAt] ?? '', rest) } };
+  }
   if (/["']/.test(optionText)) return { ok: false, refusal: { kind: 'quoted or escaped option' } };
   if (optionText.includes('\\')) {
     // Measured with pip 26.2.1: `-r reqs\base.txt` opens `reqsbase.txt` — its shlex takes the backslash as an escape.
@@ -339,9 +365,12 @@ function judgeLine(text: string): LineVerdict {
     };
   }
   const opts = optionText.split(/[ \t]+/).filter((t) => t !== '');
+  // `restAt[j]`: an `@` stands in opts[j..] or in the comment cut off.
+  const restAt: boolean[] = new Array<boolean>(opts.length + 2).fill(commentAt);
+  for (let j = opts.length - 1; j >= 0; j--) restAt[j] = restAt[j + 1] === true || (opts[j] ?? '').includes('@');
 
   if (args.trim() !== '') {
-    const bad = judgeRequirement(args);
+    const bad = judgeRequirement(args, `${commentAt ? '@' : ''}${optionText}`);
     if (bad !== null) return { ok: false, refusal: bad };
     // On a requirement line, only its hashes.
     for (let i = 0; i < opts.length; i++) {
@@ -351,12 +380,12 @@ function judgeLine(text: string): LineVerdict {
         i += 1;
         continue;
       }
-      return { ok: false, refusal: refusedOption(opts, i) };
+      return { ok: false, refusal: refusedOption(opts, i, restAt) };
     }
     return { ok: true, includes: [] };
   }
 
-  const includes: string[] = [];
+  const includes: IncludeTarget[] = [];
   for (let i = 0; i < opts.length; i++) {
     const t = opts[i] ?? '';
     if (t === '--require-hashes' || t === '--pre' || t === '--prefer-binary') continue;
@@ -365,18 +394,25 @@ function judgeLine(text: string): LineVerdict {
     const name = valued?.[1] ?? t;
     if (['--only-binary', '--no-binary', '--requirement', '--constraint', '-r', '-c'].includes(name)) {
       const value = valued?.[2] ?? opts[i + 1];
+      // The comment, and what follows the value on the line.
+      const cut = restAt[valued === null ? i + 2 : i + 1] === true;
       if (valued === null) i += 1;
       if (value === undefined || value === '') return { ok: false, refusal: { kind: 'option', detail: `${name} with no value` } };
       if (name === '--only-binary' || name === '--no-binary') {
         if (!BINARY_VALUE.test(value)) return { ok: false, refusal: { kind: 'option', detail: name } };
         continue;
       }
-      includes.push(value);
+      includes.push({ target: value, cut });
       continue;
     }
-    return { ok: false, refusal: refusedOption(opts, i) };
+    return { ok: false, refusal: refusedOption(opts, i, restAt) };
   }
   return { ok: true, includes };
+}
+
+/** A host or network path as {@link urlHost} says it; `cut`: an `@` stands after it, so no host is said (`withCommentAt`). */
+function hostOf(value: string, cut: boolean): string {
+  return urlHost(withCommentAt(value, cut ? '@' : ''));
 }
 
 /** The option's own name, for a refusal — never its value. */
@@ -388,24 +424,27 @@ function optionName(token: string): string {
 /**
  * A refused option, with the host its value names when it names one: the
  * value after `=`, glued to a short option, or the next token. Only
- * `scheme://host` (or a bare host, sanitised) is ever shown.
+ * `scheme://host` (or a bare host, sanitised) is ever shown — and no host when an `@` stands after the value
+ * (`restAt`, see {@link judgeLine}).
  */
-function refusedOption(opts: readonly string[], i: number): Pick<PipRefusal, 'kind' | 'host' | 'detail'> {
+function refusedOption(opts: readonly string[], i: number, restAt: readonly boolean[]): Pick<PipRefusal, 'kind' | 'host' | 'detail'> {
   const t = opts[i] ?? '';
   const kind = optionKind(t);
+  const glued = t.startsWith('--') ? t.includes('=') : t.length > 2;
   const value = t.startsWith('--') ? (t.includes('=') ? t.slice(t.indexOf('=') + 1) : opts[i + 1]) : t.length > 2 ? t.slice(2) : opts[i + 1];
+  const cut = restAt[glued ? i + 1 : i + 2] === true;
   let host: string | undefined;
   if (value !== undefined && kind === 'trusted-host option' && !value.includes('://')) host = bareHost(value);
-  else if (value !== undefined && /^(?:[a-z][a-z0-9+.-]*:|\\\\|\/\/)/i.test(value)) host = urlHost(value);
+  else if (value !== undefined && /^(?:[a-z][a-z0-9+.-]*:|\\\\|\/\/)/i.test(value)) host = hostOf(value, cut);
   return { kind, detail: optionName(t), ...(host !== undefined ? { host } : {}) };
 }
 
 // ------------------------------------------------------------------ files and includes
 
-/** Why an include cannot be followed inside the checkout, or null. */
-function judgeInclude(target: string): Pick<PipRefusal, 'kind' | 'host'> | null {
-  if (/^(?:\\\\|\/\/)/.test(target)) return { kind: 'network path', host: urlHost(target) };
-  if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[A-Za-z]:[\\/]/.test(target)) return { kind: 'include of a URL', host: urlHost(target) };
+/** Why an include cannot be followed inside the checkout, or null. `cut`: an `@` stands after it on its line. */
+function judgeInclude(target: string, cut: boolean): Pick<PipRefusal, 'kind' | 'host'> | null {
+  if (/^(?:\\\\|\/\/)/.test(target)) return { kind: 'network path', host: hostOf(target, cut) };
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[A-Za-z]:[\\/]/.test(target)) return { kind: 'include of a URL', host: hostOf(target, cut) };
   // An absolute path is opened as written (measured: `-r C:/…/reqs/base.txt` reads that file) — followed, and
   // held to the checkout like any other include. A drive-relative `C:x`, a rooted `/x` on Windows (on whichever
   // drive is current) and `~` are paths this check cannot place.
@@ -493,8 +532,8 @@ export function checkRequirements(
       continue;
     }
     let stop = false;
-    for (const { line, text } of logicalLines(decoded.text)) {
-      const verdict = judgeLine(text);
+    for (const { line, text, commentAt } of logicalLines(decoded.text)) {
+      const verdict = judgeLine(text, commentAt);
       if (!verdict.ok) {
         if (refuse({ file, line, ...verdict.refusal })) {
           stop = true;
@@ -502,8 +541,8 @@ export function checkRequirements(
         }
         continue;
       }
-      for (const target of verdict.includes) {
-        const bad = judgeInclude(target);
+      for (const { target, cut } of verdict.includes) {
+        const bad = judgeInclude(target, cut);
         if (bad !== null) {
           if (refuse({ file, line, ...bad })) {
             stop = true;

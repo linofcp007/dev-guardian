@@ -100,23 +100,7 @@ import { stat } from 'node:fs/promises';
 import { delimiter, extname, isAbsolute, resolve } from 'node:path';
 import type { McpServerEntry } from '../agentaudit/mcpServers.js';
 import { isRemoteOrDeviceTarget } from '../hooks/configFile.js';
-
-/**
- * A special scheme (WHATWG: one whose URLs always have a host) followed by
- * `:`, anywhere: `https:evil.example` reaches evil.example as surely as
- * `https://evil.example` (fix round 5, I-4). `file` is left to
- * {@link ANY_SCHEME_WITH_SLASHES}: `file:x` has no host.
- */
-const SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
-/** Any `scheme://`; what follows is a host only when WHATWG parses one. */
-const ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
-/** Where a URL written into a command line or an env value ends. */
-const URL_END = /[\s"'<>|`]/;
-/**
- * A UNC or device path anywhere: `\\host\…`, `\\?\…`, `\\.\…`, or
- * `//host/…` not preceded by `:` or `/` (a URL's `://`, `file:///`).
- */
-const UNC_ANYWHERE = /\\\\[^\\\s"'<>|]+\\|(?<![:/])\/\/[^/\s"'<>|]+\//;
+import { ANY_SCHEME_WITH_SLASHES, asUrlParsersRead, SPECIAL_SCHEME, UNC_ANYWHERE, URL_END } from '../redaction/urlSaid.js';
 
 /** Schemes whose query string no client takes a host from. */
 const QUERY_SAFE_SCHEMES = new Set(['http:', 'https:', 'ws:', 'wss:']);
@@ -214,17 +198,6 @@ function remoteInText(raw: string): string | null {
     return `names ${hostLabel(url)} (a proxy, a client or a source on another machine)`;
   }
   return null;
-}
-
-/**
- * A value as a URL parser reads it (final review): WHATWG deletes ASCII TAB
- * and newline ANYWHERE in its input, and strips leading and trailing C0
- * controls and spaces — so does Python's `urlsplit` for the first. The gate
- * cut `http://127.0.0.1:80<TAB>@other.example/` at the TAB and exempted the
- * loopback it saw; the server read other.example.
- */
-function asUrlParsersRead(value: string): string {
-  return value.replace(/[\t\n\r]/g, '').replace(/^[\u0000- ]+|[\u0000- ]+$/g, '');
 }
 
 /**

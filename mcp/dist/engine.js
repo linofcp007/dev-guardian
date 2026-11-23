@@ -56695,6 +56695,490 @@ var init_scanToolFactory = __esm({
   }
 });
 
+// src/pkgvet/versions.ts
+function parse9(version2) {
+  let s = version2.trim().replace(/^[vV=]+/, "");
+  const plus = s.indexOf("+");
+  if (plus >= 0) s = s.slice(0, plus);
+  const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s);
+  if (m === null) return null;
+  const releaseText = m[1] ?? "";
+  const rest = m[2] ?? "";
+  const release = releaseText.split(".").map((x) => Number(x));
+  if (release.some((n) => !Number.isFinite(n))) return null;
+  let stage = 2;
+  if (rest !== "") {
+    if (POST_REST.test(rest)) stage = 3;
+    else if (DEV_REST.test(rest)) stage = 0;
+    else stage = 1;
+  }
+  return { release, stage, rest };
+}
+function compareRelease(a, b) {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i += 1) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+function compareRest(a, b) {
+  const ta = a.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const tb = b.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
+  const n = Math.max(ta.length, tb.length);
+  for (let i = 0; i < n; i += 1) {
+    const x = ta[i];
+    const y = tb[i];
+    if (x === void 0) return -1;
+    if (y === void 0) return 1;
+    const nx = Number(x);
+    const ny = Number(y);
+    if (Number.isFinite(nx) && Number.isFinite(ny)) {
+      if (nx !== ny) return nx - ny;
+    } else if (x.toLowerCase() !== y.toLowerCase()) {
+      return x.toLowerCase() < y.toLowerCase() ? -1 : 1;
+    }
+  }
+  return 0;
+}
+function compareVersions(a, b) {
+  const pa = parse9(a);
+  const pb = parse9(b);
+  if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
+  const r = compareRelease(pa.release, pb.release);
+  if (r !== 0) return r;
+  if (pa.stage !== pb.stage) return pa.stage - pb.stage;
+  return compareRest(pa.rest, pb.rest);
+}
+function isPrerelease(version2) {
+  const p = parse9(version2);
+  return p === null || p.stage < 2;
+}
+function partial2(text3) {
+  const t = text3.trim().replace(/^[vV]/, "");
+  if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
+  const plus = t.indexOf("+");
+  const noBuild = plus >= 0 ? t.slice(0, plus) : t;
+  const dash = noBuild.search(/-/);
+  const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
+  const pre = dash >= 0 ? noBuild.slice(dash) : "";
+  const nums = [];
+  for (const part of core.split(".")) {
+    if (WILD.test(part)) break;
+    if (!/^\d+$/.test(part)) return null;
+    nums.push(Number(part));
+  }
+  return { nums, pre };
+}
+function bump(nums) {
+  const next = nums.slice();
+  const last = next.length - 1;
+  next[last] = (next[last] ?? 0) + 1;
+  return fmt(next);
+}
+function comparator(op, text3, composerTilde) {
+  const p = partial2(text3);
+  if (p === null) return null;
+  const { nums, pre } = p;
+  const full = nums.length >= 3;
+  const exact = full ? fmt(nums) + pre : fmt(nums);
+  switch (op) {
+    case "":
+    case "=":
+    case "==":
+      if (nums.length === 0) return [ANY];
+      if (full) return [eq(exact)];
+      return [gte(fmt(nums)), lt(bump(nums))];
+    case "^": {
+      if (nums.length === 0) return [ANY];
+      const [major = 0, minor, patch] = nums;
+      if (major > 0 || nums.length === 1) return [gte(exact), lt(bump([major]))];
+      if ((minor ?? 0) > 0 || nums.length === 2) return [gte(exact), lt(bump([0, minor ?? 0]))];
+      return [gte(exact), lt(bump([0, 0, patch ?? 0]))];
+    }
+    case "~":
+    case "~>": {
+      if (nums.length === 0) return [ANY];
+      if (nums.length === 1) return [gte(exact), lt(bump(nums))];
+      if (composerTilde && nums.length === 2) return [gte(exact), lt(bump(nums.slice(0, 1)))];
+      return [gte(exact), lt(bump(nums.slice(0, 2)))];
+    }
+    case ">=":
+      return [gte(exact)];
+    case ">":
+      return full ? [gt(exact)] : nums.length === 0 ? [() => false] : [gte(bump(nums))];
+    case "<":
+      return [lt(exact)];
+    case "<=":
+      return full ? [lte(exact)] : nums.length === 0 ? [ANY] : [lt(bump(nums))];
+    case "!=":
+      return [(v) => !eq(exact)(v)];
+    default:
+      return null;
+  }
+}
+function semverishRange(range, composer) {
+  const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
+  const out = [];
+  for (const alt of alternatives) {
+    let text3 = alt.trim();
+    if (composer) text3 = text3.replace(/@[a-zA-Z]+$/, "").trim();
+    if (text3 === "" || text3 === "*" || WILD.test(text3)) {
+      out.push([ANY]);
+      continue;
+    }
+    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text3);
+    if (hyphen !== null) {
+      const lo = comparator(">=", hyphen[1] ?? "", composer);
+      const hiPartial = partial2(hyphen[2] ?? "");
+      if (lo === null || hiPartial === null) return null;
+      const hi = hiPartial.nums.length >= 3 ? [lte(fmt(hiPartial.nums) + hiPartial.pre)] : hiPartial.nums.length === 0 ? [ANY] : [lt(bump(hiPartial.nums))];
+      out.push([...lo, ...hi]);
+      continue;
+    }
+    const tokens = text3.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
+    const preds = [];
+    for (const token of tokens) {
+      if (token === "") continue;
+      const m = COMPARATOR.exec(token);
+      if (m === null) return null;
+      const c = comparator(m[1] ?? "", m[2] ?? "", composer);
+      if (c === null) return null;
+      preds.push(...c);
+    }
+    out.push(preds);
+  }
+  return out;
+}
+function pep440Range(range) {
+  const preds = [];
+  for (const spec of range.split(",")) {
+    if (spec.trim() === "") continue;
+    const m = PEP440.exec(spec);
+    if (m === null) return null;
+    const op = m[1] ?? "";
+    const ver = m[2] ?? "";
+    if (op === "===") {
+      preds.push((v) => v === ver);
+      continue;
+    }
+    if (ver.endsWith(".*")) {
+      const prefix = partial2(ver.slice(0, -2));
+      if (prefix === null || prefix.nums.length === 0) return null;
+      const inPrefix = (v) => {
+        const p = parse9(v);
+        return p !== null && prefix.nums.every((n, i) => (p.release[i] ?? 0) === n);
+      };
+      if (op === "==") preds.push(inPrefix);
+      else if (op === "!=") preds.push((v) => !inPrefix(v));
+      else return null;
+      continue;
+    }
+    if (parse9(ver) === null) return null;
+    switch (op) {
+      case "==":
+        preds.push(eq(ver));
+        break;
+      case "!=":
+        preds.push((v) => !eq(ver)(v));
+        break;
+      case ">=":
+        preds.push(gte(ver));
+        break;
+      case "<=":
+        preds.push(lte(ver));
+        break;
+      case ">":
+        preds.push(gt(ver));
+        break;
+      case "<":
+        preds.push(lt(ver));
+        break;
+      case "~=": {
+        const p = parse9(ver);
+        if (p === null || p.release.length < 2) return null;
+        const prefix = p.release.slice(0, -1);
+        preds.push(gte(ver), (v) => {
+          const q = parse9(v);
+          return q !== null && prefix.every((n, i) => (q.release[i] ?? 0) === n);
+        });
+        break;
+      }
+      default:
+        return null;
+    }
+  }
+  return [preds];
+}
+function nugetRange(range) {
+  const r = range.trim();
+  const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
+  if (m === null) return parse9(r) === null ? null : [[eq(r)]];
+  const open2 = m[1];
+  const lo = m[2] ?? "";
+  const hasComma = r.includes(",");
+  const hi = m[3] ?? "";
+  const close = m[4];
+  if (!hasComma) return lo === "" ? null : [[eq(lo)]];
+  const preds = [];
+  if (lo !== "") preds.push(open2 === "[" ? gte(lo) : gt(lo));
+  if (hi !== "") preds.push(close === "]" ? lte(hi) : lt(hi));
+  return [preds];
+}
+function isExactVersion(ecosystem, range) {
+  if (range === void 0) return false;
+  const r = range.trim();
+  switch (ecosystem) {
+    case "npm":
+      return EXACT_SEMVER.test(r);
+    case "pypi":
+      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse9(r) !== null && !/[,<>=!~*]/.test(r);
+    case "packagist":
+      return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
+    case "nuget":
+      return parse9(r) !== null && !/[[\](),]/.test(r);
+    default:
+      return false;
+  }
+}
+function highest(versions) {
+  let best;
+  for (const v of versions) if (best === void 0 || compareVersions(v, best) > 0) best = v;
+  return best;
+}
+function resolveVersion2(ecosystem, range, ctx) {
+  const stable = ctx.versions.filter((v) => !isPrerelease(v));
+  const r = range?.trim() ?? "";
+  if (r === "" || ecosystem === "npm" && r === "latest") {
+    if (ctx.latest !== void 0 && ctx.versions.includes(ctx.latest)) return ctx.latest;
+    return highest(stable);
+  }
+  if (ecosystem === "npm") {
+    const tagged = ctx.tags?.[r];
+    if (tagged !== void 0) return ctx.versions.includes(tagged) ? tagged : void 0;
+  }
+  if (ecosystem === "packagist" && /^dev-|-dev$/i.test(r)) return void 0;
+  if (isExactVersion(ecosystem, r)) {
+    const wanted = r.replace(/^===?\s*/, "");
+    return ctx.versions.find((v) => v === wanted) ?? ctx.versions.find((v) => compareVersions(v, wanted) === 0);
+  }
+  let alternatives;
+  switch (ecosystem) {
+    case "npm":
+      alternatives = semverishRange(r, false);
+      break;
+    case "packagist":
+      alternatives = semverishRange(r, true);
+      break;
+    case "pypi":
+      alternatives = /^(?:\^|~(?!=)|\*$|\d+(?:\.\d+)*\.\*$)/.test(r) ? semverishRange(r, false) : pep440Range(r);
+      break;
+    case "nuget":
+      alternatives = nugetRange(r);
+      break;
+    default:
+      alternatives = null;
+  }
+  if (alternatives === null) return void 0;
+  const matching = stable.filter((v) => alternatives.some((preds) => preds.every((p) => p(v))));
+  if (ecosystem === "npm" && ctx.latest !== void 0 && matching.includes(ctx.latest)) return ctx.latest;
+  return highest(matching);
+}
+var POST_REST, DEV_REST, gte, gt, lt, lte, eq, ANY, WILD, fmt, COMPARATOR, PEP440, EXACT_SEMVER;
+var init_versions2 = __esm({
+  "src/pkgvet/versions.ts"() {
+    "use strict";
+    POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
+    DEV_REST = /(?:^|[-._])dev/i;
+    gte = (x) => (v) => compareVersions(v, x) >= 0;
+    gt = (x) => (v) => compareVersions(v, x) > 0;
+    lt = (x) => (v) => compareVersions(v, x) < 0;
+    lte = (x) => (v) => compareVersions(v, x) <= 0;
+    eq = (x) => (v) => compareVersions(v, x) === 0;
+    ANY = () => true;
+    WILD = /^[xX*]$/;
+    fmt = (nums) => [0, 1, 2].map((i) => nums[i] ?? 0).join(".");
+    COMPARATOR = /^(\^|~>|~|>=|<=|>|<|==|=|!=)?\s*(.*)$/;
+    PEP440 = /^\s*(~=|===|==|!=|<=|>=|<|>)\s*([^\s,]+)\s*$/;
+    EXACT_SEMVER = /^[vV=]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+  }
+});
+
+// src/deps/versionCompare.ts
+function isCleanVersion(v) {
+  return v !== void 0 && /^v?\d+(\.\d+)*$/i.test(v.trim());
+}
+function minCleanVersionAbove(installed, candidates2) {
+  if (!isCleanVersion(installed)) return void 0;
+  let best;
+  for (const c of candidates2) {
+    if (!isCleanVersion(c)) continue;
+    if (compareVersions(c, installed) <= 0) continue;
+    if (best === void 0 || compareVersions(c, best) < 0) best = c;
+  }
+  return best;
+}
+function isLooseVersion(v) {
+  return v !== void 0 && /^v?\d+(\.\d+)*(-[0-9A-Za-z.]+)?$/.test(v.trim());
+}
+function minCleanVersionAboveLoose(installed, candidates2) {
+  if (!isLooseVersion(installed)) return void 0;
+  let best;
+  for (const c of candidates2) {
+    if (!isCleanVersion(c)) continue;
+    if (compareVersions(c, installed) <= 0) continue;
+    if (best === void 0 || compareVersions(c, best) < 0) best = c;
+  }
+  return best;
+}
+var init_versionCompare = __esm({
+  "src/deps/versionCompare.ts"() {
+    "use strict";
+    init_versions2();
+  }
+});
+
+// src/pkgvet/strayAt.ts
+function strayAt(url2, ownName) {
+  let path3 = url2.pathname.toLowerCase();
+  const slash = ownName === void 0 ? -1 : ownName.indexOf("/");
+  if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
+    const scope = ownName.slice(0, slash).toLowerCase();
+    const rest = ownName.slice(slash + 1).toLowerCase();
+    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) path3 = path3.split(form).join("/");
+  }
+  return path3.includes("@") || url2.search.includes("@") || url2.hash.includes("@");
+}
+function withCommentAt(value, cutOff) {
+  return cutOff.includes("@") ? `${value}${COMMENT_HOLDS_AT}` : value;
+}
+var COMMENT_HOLDS_AT;
+var init_strayAt = __esm({
+  "src/pkgvet/strayAt.ts"() {
+    "use strict";
+    COMMENT_HOLDS_AT = "#@";
+  }
+});
+
+// src/redaction/urlSaid.ts
+function asUrlParsersRead(value) {
+  return value.replace(/[\t\n\r]/g, "").replace(/^[\u0000- ]+|[\u0000- ]+$/g, "");
+}
+function urlSaid(written, opts) {
+  const whole = opts.form === "whole";
+  const hasAt = written.includes("@");
+  const cutAt = (opts.cutOff ?? "").includes("@");
+  if (whole && !cutAt && (!hasAt || isLooseVersion(written) || NPM_ALIAS.test(written) || SCP_GIT.test(written))) return written;
+  if (whole && !cutAt) {
+    const scp = SCP_OTHER.exec(written);
+    if (scp?.[1] !== void 0) return scp[1];
+  }
+  let url2 = null;
+  try {
+    url2 = new URL(written);
+  } catch {
+    url2 = null;
+  }
+  if (url2 !== null && url2.hostname !== "") {
+    if (strayAt(url2, opts.ownName) || cutAt) return `${schemeOf(url2)}://${HOST_NOT_SHOWN}`;
+    if (!whole) return `${url2.protocol}//${url2.host}`;
+    if (url2.username !== "" || url2.password !== "") {
+      url2.username = "";
+      url2.password = "";
+      return url2.href;
+    }
+    return written;
+  }
+  if (url2 !== null && !hasAt && !cutAt) return whole ? written : `${url2.protocol}//`;
+  const trimmed = asUrlParsersRead(written);
+  if (url2 === null && (hasAt || cutAt) && NETWORK_BEGIN.test(trimmed)) return `${trimmed.slice(0, 2)}${HOST_NOT_SHOWN}`;
+  return UNPARSEABLE;
+}
+function urlStartIn(t, from, to) {
+  let best = -1;
+  for (let colon = t.indexOf(":", from); colon >= 0 && colon < to; colon = t.indexOf(":", colon + 1)) {
+    let first = colon;
+    while (first > from && SCHEME_CHAR.test(t.charAt(first - 1))) first -= 1;
+    while (first < colon && !LETTER.test(t.charAt(first))) first += 1;
+    if (first === colon) continue;
+    if (t.startsWith("//", colon + 1)) {
+      best = first;
+      break;
+    }
+    const run2 = t.slice(first, colon).toLowerCase();
+    const special = SPECIAL.find((name) => run2.endsWith(name));
+    if (special !== void 0) {
+      best = colon - special.length;
+      break;
+    }
+  }
+  const unc = t.slice(from, to).search(UNC_ANYWHERE);
+  if (unc >= 0 && (best < 0 || from + unc < best)) best = from + unc;
+  return best;
+}
+function beginOf(url2) {
+  return NETWORK_BEGIN.test(url2) ? url2.slice(0, 2) : `${url2.slice(0, url2.indexOf(":")).toLowerCase()}://`;
+}
+function urlsSaidIn(text3) {
+  const t = text3.replace(/[\t\n\r]/g, "");
+  const lastAt = t.lastIndexOf("@");
+  const n = t.length;
+  let out = "";
+  let copied = 0;
+  let found2 = false;
+  let i = 0;
+  while (i < n) {
+    if (URL_END.test(t.charAt(i))) {
+      i += 1;
+      continue;
+    }
+    let end = i;
+    while (end < n && !URL_END.test(t.charAt(end))) end += 1;
+    const start = urlStartIn(t, i, end);
+    if (start < 0) {
+      i = end;
+      continue;
+    }
+    found2 = true;
+    const url2 = t.slice(start, end);
+    let stop = end;
+    let said;
+    if (lastAt >= end) {
+      stop = lastAt;
+      while (stop < n && !URL_END.test(t.charAt(stop))) stop += 1;
+      said = `${beginOf(url2)}${HOST_NOT_SHOWN}`;
+    } else {
+      said = urlSaid(url2, { form: "whole" });
+    }
+    out += t.slice(copied, start) + said;
+    copied = stop;
+    i = stop;
+  }
+  return found2 ? out + t.slice(copied) : text3;
+}
+var HOST_NOT_SHOWN, UNPARSEABLE, SPECIAL_SCHEME, ANY_SCHEME_WITH_SLASHES, URL_END, UNC_ANYWHERE, NPM_ALIAS, SCP_GIT, SCP_OTHER, NETWORK_BEGIN, schemeOf, SCHEME_CHAR, LETTER, SPECIAL;
+var init_urlSaid = __esm({
+  "src/redaction/urlSaid.ts"() {
+    "use strict";
+    init_versionCompare();
+    init_strayAt();
+    HOST_NOT_SHOWN = "(host not shown)";
+    UNPARSEABLE = "(unparseable URL)";
+    SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
+    ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
+    URL_END = /[\s"'<>|`]/;
+    UNC_ANYWHERE = /\\\\[^\\\s"'<>|]+\\|(?<![:/])\/\/[^/\s"'<>|]+\//;
+    NPM_ALIAS = /^npm:(?:@[^:\\@/\s]+\/)?[^:\\@/\s]+@[^/\\:@\s]+$/;
+    SCP_GIT = /^git@[^:/\\\s@]+:[^@\s]*$/;
+    SCP_OTHER = /^[^:/\\\s@]+@([^:/\\\s@]+:[^@\s]*)$/;
+    NETWORK_BEGIN = /^(?:\/\/|\\\\)/;
+    schemeOf = (url2) => url2.protocol.replace(/:$/, "");
+    SCHEME_CHAR = /[A-Za-z0-9+.-]/;
+    LETTER = /[A-Za-z]/;
+    SPECIAL = ["https", "http", "wss", "ws", "ftp"];
+  }
+});
+
 // src/deps/npmPlanningCopy.ts
 import { mkdtempSync as mkdtempSync4, rmSync as rmSync7, writeFileSync as writeFileSync8 } from "node:fs";
 import { tmpdir as tmpdir5 } from "node:os";
@@ -56750,28 +57234,6 @@ var init_npmPlanningCopy = __esm({
   }
 });
 
-// src/pkgvet/strayAt.ts
-function strayAt(url2, ownName) {
-  let path3 = url2.pathname.toLowerCase();
-  const slash = ownName === void 0 ? -1 : ownName.indexOf("/");
-  if (ownName !== void 0 && ownName.startsWith("@") && slash > 1) {
-    const scope = ownName.slice(0, slash).toLowerCase();
-    const rest = ownName.slice(slash + 1).toLowerCase();
-    for (const form of [`/${scope}/${rest}`, `/${scope}%2f${rest}`]) path3 = path3.split(form).join("/");
-  }
-  return path3.includes("@") || url2.search.includes("@") || url2.hash.includes("@");
-}
-function withCommentAt(value, cutOff) {
-  return cutOff.includes("@") ? `${value}${COMMENT_HOLDS_AT}` : value;
-}
-var COMMENT_HOLDS_AT;
-var init_strayAt = __esm({
-  "src/pkgvet/strayAt.ts"() {
-    "use strict";
-    COMMENT_HOLDS_AT = "#@";
-  }
-});
-
 // src/deps/pipRequirements.ts
 import { dirname as dirname17, join as join43, relative as relative13, resolve as resolve16, sep as sep11 } from "node:path";
 function describePipRefusal(r) {
@@ -56817,8 +57279,9 @@ function* logicalLines(text3) {
   let joined = [];
   let first = 0;
   const finish = function* (n, raw) {
-    const stripped = raw.replace(COMMENT, "").trim();
-    if (stripped !== "") yield { line: n, text: stripped };
+    const comment = COMMENT.exec(raw);
+    const stripped = (comment === null ? raw : raw.slice(0, comment.index)).trim();
+    if (stripped !== "") yield { line: n, text: stripped, commentAt: comment?.[0].includes("@") === true };
   };
   for (let i = 0; i < physical.length; i++) {
     let line = physical[i] ?? "";
@@ -56849,7 +57312,7 @@ function optionKind(token) {
 }
 function urlHost(url2) {
   const unc = /^(?:\\\\|\/\/)([^\\/]+)/.exec(url2);
-  if (unc?.[1] !== void 0 && url2.includes("@")) return `\\\\${HOST_NOT_SHOWN}`;
+  if (unc?.[1] !== void 0 && url2.includes("@")) return `\\\\${HOST_NOT_SHOWN2}`;
   if (unc?.[1] !== void 0) return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(unc[1]) ? `\\\\${unc[1]}` : "\\\\(unparseable host)";
   try {
     const u = new URL(url2);
@@ -56857,7 +57320,7 @@ function urlHost(url2) {
     if (!/^[a-z][a-z0-9+.-]{0,30}$/i.test(scheme)) return "(unparseable URL)";
     const host = u.hostname;
     if (host === "") return scheme.toLowerCase() === "file" ? "file:" : "(no host)";
-    if (strayAt(u)) return `${scheme}://${HOST_NOT_SHOWN}`;
+    if (strayAt(u)) return `${scheme}://${HOST_NOT_SHOWN2}`;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? `${scheme}://${host}` : `${scheme}://(unparseable host)`;
   } catch {
     return "(unparseable URL)";
@@ -56866,45 +57329,56 @@ function urlHost(url2) {
 function bareHost(value) {
   try {
     const u = new URL(`http://${value}`);
-    if (strayAt(u)) return HOST_NOT_SHOWN;
+    if (strayAt(u)) return HOST_NOT_SHOWN2;
     const host = u.hostname;
     return /^[A-Za-z0-9._:[\]-]{1,253}$/.test(host) ? host : "(unparseable host)";
   } catch {
     return "(unparseable host)";
   }
 }
-function fileUrl(url2) {
-  const host = urlHost(url2);
+function fileUrl(url2, cut) {
+  const host = urlHost(withCommentAt(url2, cut));
   return host === "file:" || /^file:\/\/localhost$/i.test(host) ? { kind: "local path", host: "file:" } : { kind: "network path", host };
 }
-function judgeRequirement(req) {
+function judgeRequirement(req, cutOff = "") {
   const beforeMarker = req.split(";", 1)[0] ?? req;
+  const hash2 = beforeMarker.search(/[ \t]#/);
+  const cut = `${cutOff}${req.slice(beforeMarker.length)}${hash2 >= 0 ? beforeMarker.slice(hash2) : ""}`;
+  const beforeComment = (text3) => {
+    const h = text3.search(/[ \t]#/);
+    return h >= 0 ? text3.slice(0, h) : text3;
+  };
+  const hostOf3 = (text3) => urlHost(withCommentAt(beforeComment(text3), cut));
   const at = beforeMarker.indexOf("@");
   const startsWithScheme = /^\s*[a-z][a-z0-9+.-]*:/i.test(beforeMarker);
   if (at >= 0 && !startsWithScheme) {
     const url2 = beforeMarker.slice(at + 1).trim();
-    if (/^file:/i.test(url2)) return fileUrl(url2);
+    if (/^file:/i.test(url2)) return fileUrl(beforeComment(url2), cut);
     const kind = VCS.test(url2) ? "VCS requirement" : /^(?:\\\\|\/\/)/.test(url2) ? "network path" : "direct reference";
-    return { kind, host: urlHost(url2) };
+    return { kind, host: hostOf3(url2) };
   }
   const s = beforeMarker.trim();
-  if (/^(?:\\\\|\/\/)/.test(s)) return { kind: "network path", host: urlHost(s) };
-  if (VCS.test(s)) return { kind: "VCS requirement", host: urlHost(s) };
+  if (/^(?:\\\\|\/\/)/.test(s)) return { kind: "network path", host: hostOf3(s) };
+  if (VCS.test(s)) return { kind: "VCS requirement", host: hostOf3(s) };
   if (/^[a-z][a-z0-9+.-]*:/i.test(s)) {
-    if (/^file:/i.test(s)) return fileUrl(s);
-    return /^[A-Za-z]:[\\/]/.test(s) ? { kind: "local path" } : { kind: "URL requirement", host: urlHost(s) };
+    if (/^file:/i.test(s)) return fileUrl(beforeComment(s), cut);
+    return /^[A-Za-z]:[\\/]/.test(s) ? { kind: "local path" } : { kind: "URL requirement", host: hostOf3(s) };
   }
   if (/[\\/]/.test(s) || s.startsWith(".") || s.startsWith("~") || ARCHIVE.test(s)) return { kind: "local path" };
   return PLAIN_REQUIREMENT.test(req.trim()) ? null : { kind: "not a plain requirement" };
 }
-function judgeLine(text3) {
+function judgeLine(text3, commentAt) {
   if (text3.includes("${")) return { ok: false, refusal: { kind: "environment variable", detail: "pip substitutes ${\u2026} from the environment" } };
   const tokens = text3.split(" ");
   const firstOption = tokens.findIndex((t) => t.startsWith("-"));
   const args = (firstOption < 0 ? tokens : tokens.slice(0, firstOption)).join(" ");
   const optionText = firstOption < 0 ? "" : tokens.slice(firstOption).join(" ");
-  const unc = optionText.split(/[ \t=]+/).map((t) => t.replace(/^["']+/, "")).find((t) => /^(?:\\\\|\/\/)[^\\/]/.test(t));
-  if (unc !== void 0) return { ok: false, refusal: { kind: "network path", host: urlHost(unc) } };
+  const words = optionText.split(/[ \t=]+/).map((t) => t.replace(/^["']+/, ""));
+  const uncAt = words.findIndex((t) => /^(?:\\\\|\/\/)[^\\/]/.test(t));
+  if (uncAt >= 0) {
+    const rest = commentAt || words.slice(uncAt + 1).some((w) => w.includes("@"));
+    return { ok: false, refusal: { kind: "network path", host: hostOf(words[uncAt] ?? "", rest) } };
+  }
   if (/["']/.test(optionText)) return { ok: false, refusal: { kind: "quoted or escaped option" } };
   if (optionText.includes("\\")) {
     return {
@@ -56913,8 +57387,10 @@ function judgeLine(text3) {
     };
   }
   const opts = optionText.split(/[ \t]+/).filter((t) => t !== "");
+  const restAt = new Array(opts.length + 2).fill(commentAt);
+  for (let j = opts.length - 1; j >= 0; j--) restAt[j] = restAt[j + 1] === true || (opts[j] ?? "").includes("@");
   if (args.trim() !== "") {
-    const bad = judgeRequirement(args);
+    const bad = judgeRequirement(args, `${commentAt ? "@" : ""}${optionText}`);
     if (bad !== null) return { ok: false, refusal: bad };
     for (let i = 0; i < opts.length; i++) {
       const t = opts[i] ?? "";
@@ -56923,7 +57399,7 @@ function judgeLine(text3) {
         i += 1;
         continue;
       }
-      return { ok: false, refusal: refusedOption(opts, i) };
+      return { ok: false, refusal: refusedOption(opts, i, restAt) };
     }
     return { ok: true, includes: [] };
   }
@@ -56935,35 +57411,41 @@ function judgeLine(text3) {
     const name = valued?.[1] ?? t;
     if (["--only-binary", "--no-binary", "--requirement", "--constraint", "-r", "-c"].includes(name)) {
       const value = valued?.[2] ?? opts[i + 1];
+      const cut = restAt[valued === null ? i + 2 : i + 1] === true;
       if (valued === null) i += 1;
       if (value === void 0 || value === "") return { ok: false, refusal: { kind: "option", detail: `${name} with no value` } };
       if (name === "--only-binary" || name === "--no-binary") {
         if (!BINARY_VALUE.test(value)) return { ok: false, refusal: { kind: "option", detail: name } };
         continue;
       }
-      includes.push(value);
+      includes.push({ target: value, cut });
       continue;
     }
-    return { ok: false, refusal: refusedOption(opts, i) };
+    return { ok: false, refusal: refusedOption(opts, i, restAt) };
   }
   return { ok: true, includes };
+}
+function hostOf(value, cut) {
+  return urlHost(withCommentAt(value, cut ? "@" : ""));
 }
 function optionName(token) {
   if (token.startsWith("--")) return (token.split("=")[0] ?? token).slice(0, 40);
   return token.slice(0, 2);
 }
-function refusedOption(opts, i) {
+function refusedOption(opts, i, restAt) {
   const t = opts[i] ?? "";
   const kind = optionKind(t);
+  const glued = t.startsWith("--") ? t.includes("=") : t.length > 2;
   const value = t.startsWith("--") ? t.includes("=") ? t.slice(t.indexOf("=") + 1) : opts[i + 1] : t.length > 2 ? t.slice(2) : opts[i + 1];
+  const cut = restAt[glued ? i + 1 : i + 2] === true;
   let host;
   if (value !== void 0 && kind === "trusted-host option" && !value.includes("://")) host = bareHost(value);
-  else if (value !== void 0 && /^(?:[a-z][a-z0-9+.-]*:|\\\\|\/\/)/i.test(value)) host = urlHost(value);
+  else if (value !== void 0 && /^(?:[a-z][a-z0-9+.-]*:|\\\\|\/\/)/i.test(value)) host = hostOf(value, cut);
   return { kind, detail: optionName(t), ...host !== void 0 ? { host } : {} };
 }
-function judgeInclude(target) {
-  if (/^(?:\\\\|\/\/)/.test(target)) return { kind: "network path", host: urlHost(target) };
-  if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[A-Za-z]:[\\/]/.test(target)) return { kind: "include of a URL", host: urlHost(target) };
+function judgeInclude(target, cut) {
+  if (/^(?:\\\\|\/\/)/.test(target)) return { kind: "network path", host: hostOf(target, cut) };
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target) && !/^[A-Za-z]:[\\/]/.test(target)) return { kind: "include of a URL", host: hostOf(target, cut) };
   if (/^[A-Za-z]:(?![\\/])/.test(target) || target.startsWith("~")) return { kind: "include out of the checkout" };
   if (process.platform === "win32" && /^[\\/](?![\\/])/.test(target)) return { kind: "include out of the checkout" };
   return null;
@@ -57017,8 +57499,8 @@ function checkRequirements(projectDir, starts, checkoutRoot = projectDir, opts =
       continue;
     }
     let stop = false;
-    for (const { line, text: text3 } of logicalLines(decoded.text)) {
-      const verdict = judgeLine(text3);
+    for (const { line, text: text3, commentAt } of logicalLines(decoded.text)) {
+      const verdict = judgeLine(text3, commentAt);
       if (!verdict.ok) {
         if (refuse({ file: file2, line, ...verdict.refusal })) {
           stop = true;
@@ -57026,8 +57508,8 @@ function checkRequirements(projectDir, starts, checkoutRoot = projectDir, opts =
         }
         continue;
       }
-      for (const target of verdict.includes) {
-        const bad = judgeInclude(target);
+      for (const { target, cut } of verdict.includes) {
+        const bad = judgeInclude(target, cut);
         if (bad !== null) {
           if (refuse({ file: file2, line, ...bad })) {
             stop = true;
@@ -57085,7 +57567,7 @@ function requirementMentions(text3) {
   }
   return out;
 }
-var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, HOST_NOT_SHOWN, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
+var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, HOST_NOT_SHOWN2, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
 var init_pipRequirements = __esm({
   "src/deps/pipRequirements.ts"() {
     "use strict";
@@ -57125,7 +57607,7 @@ var init_pipRequirements = __esm({
       f: "find-links option",
       e: "editable requirement"
     };
-    HOST_NOT_SHOWN = "(host not shown)";
+    HOST_NOT_SHOWN2 = "(host not shown)";
     MAX_REFUSALS = 50;
     INDEX_KINDS = /* @__PURE__ */ new Set(["index option", "find-links option", "trusted-host option"]);
     SOURCE_KINDS = /* @__PURE__ */ new Set([
@@ -57581,7 +58063,8 @@ function planDotnetRestore(root, target, nuget = {}) {
   if (remote.length > 0) {
     plan.blocked = {
       code: "network_path_reference",
-      reason: `not restored: ${remote.map((p) => relative15(root, p) || p).join(", ")} is on a network path, which dotnet restore would open`
+      // The rule decides on the absolute path: with an `@` in it the host is not said; without, as before.
+      reason: `not restored: ${remote.map((p) => p.includes("@") ? urlSaid(p, { form: "whole" }) : relative15(root, p) || p).join(", ")} is on a network path, which dotnet restore would open`
     };
     return plan;
   }
@@ -57626,7 +58109,8 @@ ${stdout}`.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0);
   const kind = KIND_BY_CODE[code] ?? "other";
   const lead = kind === "lock_out_of_sync" ? "packages.lock.json is out of sync with the project (restore runs in --locked-mode and never rewrites it)" : kind === "package_not_found" ? "a package or version could not be found on the configured feeds" : kind === "feed_unreachable" ? "a package feed could not be reached" : "restore failed";
   const stripped = firstLine12.replace(/^.*?\berror\s+[A-Z]+\d+:\s*/, "").replace(/\s*\[[^[\]]*\]\s*$/, "");
-  const message3 = stripped.length > 240 ? `${stripped.slice(0, 237)}...` : stripped;
+  const said = urlsSaidIn(stripped);
+  const message3 = said.length > 240 ? `${said.slice(0, 237)}...` : said;
   return { code, kind, reason: `${lead} (${code}: ${message3})` };
 }
 function readPackageReferences(projects) {
@@ -57645,6 +58129,7 @@ var init_dotnetRestore = __esm({
     "use strict";
     init_configFile();
     init_projectFs();
+    init_urlSaid();
     init_npmPlanningCopy();
     init_nugetCredentials();
     MAX_DOTNET_FILE_BYTES = 4 * 1024 * 1024;
@@ -63338,7 +63823,7 @@ var init_apply = __esm({
 });
 
 // src/secrets/verify/providers.ts
-function hostOf(endpoint) {
+function hostOf2(endpoint) {
   return new URL(endpoint).host;
 }
 function isRecord5(v) {
@@ -63370,7 +63855,7 @@ function isVerifiableRule(ruleId) {
   return BY_RULE.has(ruleId);
 }
 function providerHost(p) {
-  return hostOf(p.endpoint);
+  return hostOf2(p.endpoint);
 }
 var USER_AGENT, GITHUB_ENDPOINT, GITHUB_HOST, github, GITLAB_ENDPOINT, GITLAB_HOST, gitlab, SLACK_ENDPOINT, SLACK_HOST, SLACK_DEAD, slack, STRIPE_ENDPOINT, STRIPE_HOST, stripe, OPENAI_ENDPOINT, OPENAI_HOST, openai, ANTHROPIC_ENDPOINT, ANTHROPIC_HOST, anthropic, NPM_ENDPOINT, NPM_HOST, npm, SENDGRID_ENDPOINT, SENDGRID_HOST, sendgrid, PROVIDERS, BY_RULE, SUPPORTED_RULES;
 var init_providers = __esm({
@@ -63378,7 +63863,7 @@ var init_providers = __esm({
     "use strict";
     USER_AGENT = "dev-guardian-secret-verify";
     GITHUB_ENDPOINT = "https://api.github.com/user";
-    GITHUB_HOST = hostOf(GITHUB_ENDPOINT);
+    GITHUB_HOST = hostOf2(GITHUB_ENDPOINT);
     github = {
       name: "GitHub",
       rules: ["github-pat", "github-fine-grained-pat"],
@@ -63409,7 +63894,7 @@ var init_providers = __esm({
       rotate: "revoke it at https://github.com/settings/tokens (classic) or https://github.com/settings/personal-access-tokens (fine-grained) and issue a new one"
     };
     GITLAB_ENDPOINT = "https://gitlab.com/api/v4/personal_access_tokens/self";
-    GITLAB_HOST = hostOf(GITLAB_ENDPOINT);
+    GITLAB_HOST = hostOf2(GITLAB_ENDPOINT);
     gitlab = {
       name: "GitLab",
       rules: ["gitlab-pat"],
@@ -63430,7 +63915,7 @@ var init_providers = __esm({
       rotate: "revoke it at https://gitlab.com/-/user_settings/personal_access_tokens (or on the instance that issued it)"
     };
     SLACK_ENDPOINT = "https://slack.com/api/auth.test";
-    SLACK_HOST = hostOf(SLACK_ENDPOINT);
+    SLACK_HOST = hostOf2(SLACK_ENDPOINT);
     SLACK_DEAD = ["token_revoked", "account_inactive", "token_expired"];
     slack = {
       name: "Slack",
@@ -63457,7 +63942,7 @@ var init_providers = __esm({
       rotate: "revoke it from the app at https://api.slack.com/apps (OAuth & Permissions), then reinstall to issue a new one"
     };
     STRIPE_ENDPOINT = "https://api.stripe.com/v1/account";
-    STRIPE_HOST = hostOf(STRIPE_ENDPOINT);
+    STRIPE_HOST = hostOf2(STRIPE_ENDPOINT);
     stripe = {
       name: "Stripe",
       rules: ["stripe-access-token"],
@@ -63486,7 +63971,7 @@ var init_providers = __esm({
       rotate: "roll it at https://dashboard.stripe.com/apikeys"
     };
     OPENAI_ENDPOINT = "https://api.openai.com/v1/models";
-    OPENAI_HOST = hostOf(OPENAI_ENDPOINT);
+    OPENAI_HOST = hostOf2(OPENAI_ENDPOINT);
     openai = {
       name: "OpenAI",
       rules: ["openai-api-key"],
@@ -63515,7 +64000,7 @@ var init_providers = __esm({
       rotate: "revoke it at https://platform.openai.com/api-keys"
     };
     ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/models";
-    ANTHROPIC_HOST = hostOf(ANTHROPIC_ENDPOINT);
+    ANTHROPIC_HOST = hostOf2(ANTHROPIC_ENDPOINT);
     anthropic = {
       name: "Anthropic",
       rules: ["anthropic-api-key"],
@@ -63542,7 +64027,7 @@ var init_providers = __esm({
       rotate: "delete it at https://console.anthropic.com/settings/keys and create a new one"
     };
     NPM_ENDPOINT = "https://registry.npmjs.org/-/whoami";
-    NPM_HOST = hostOf(NPM_ENDPOINT);
+    NPM_HOST = hostOf2(NPM_ENDPOINT);
     npm = {
       name: "npm",
       rules: ["npm-access-token"],
@@ -63563,7 +64048,7 @@ var init_providers = __esm({
       rotate: "revoke it with `npm token revoke <id>` or at https://www.npmjs.com/ (Access Tokens)"
     };
     SENDGRID_ENDPOINT = "https://api.sendgrid.com/v3/scopes";
-    SENDGRID_HOST = hostOf(SENDGRID_ENDPOINT);
+    SENDGRID_HOST = hostOf2(SENDGRID_ENDPOINT);
     sendgrid = {
       name: "SendGrid",
       rules: ["sendgrid-api-token"],
@@ -68970,6 +69455,7 @@ function checkSetupCfg(projectDir, checkoutRoot) {
   for (const raw of textLines(read3.text)) {
     n += 1;
     const line = raw.replace(/(^|\s)[#;].*$/, "");
+    const cutOff = raw.slice(line.length);
     if (line.trim() === "") continue;
     const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);
     if (header?.[1] !== void 0) {
@@ -68988,13 +69474,13 @@ function checkSetupCfg(projectDir, checkoutRoot) {
       inRequires = ["install_requires", "setup_requires", "tests_require"].includes(key) || section === "options.extras_require";
       const first = (kv[2] ?? "").trim();
       if (inRequires && first !== "") {
-        const bad = judgeRequirement(first);
+        const bad = judgeRequirement(first, cutOff);
         if (bad !== null) refusals.push({ file: file2, line: n, ...bad, detail: key });
       }
       continue;
     }
     if (inRequires) {
-      const bad = judgeRequirement(line.trim());
+      const bad = judgeRequirement(line.trim(), cutOff);
       if (bad !== null) refusals.push({ file: file2, line: n, ...bad });
     }
   }
@@ -69152,7 +69638,7 @@ function scanNetwork(file2, value, prefix, out) {
     const path3 = frame.path === "" ? key : key.startsWith("[") ? `${frame.path}${key}` : `${frame.path}.${key}`;
     if (typeof v === "string") {
       const host = npmSpecNetworkHost(v);
-      if (host !== null) out.push(`${file2}: ${path3 || "(root)"} (${host})`);
+      if (host !== null) out.push(`${file2}: ${urlsSaidIn(path3) || "(root)"} (${host})`);
     } else if (typeof v === "object" && v !== null) {
       stack.push({ entries: entriesOf2(v), next: 0, path: path3 });
     }
@@ -69170,8 +69656,11 @@ function scanTextLock(file2, text3, out) {
     if (/^\/\/localhost(?:\/|$)/i.test(spec)) continue;
     for (let i = text3.indexOf("\n", last); i >= 0 && i < at; i = text3.indexOf("\n", i + 1)) line += 1;
     last = at;
-    const written = /^[^\s"',]*/.exec(text3.slice(at, at + MAX_WRITTEN_PATH))?.[0] ?? spec;
-    out.push(`${file2}:${line} (${urlHost(written)})`);
+    const window = text3.slice(at, at + MAX_WRITTEN_PATH + 1);
+    const written = /^[^\s"',]*/.exec(window.slice(0, MAX_WRITTEN_PATH))?.[0] ?? spec;
+    const lineEnd = window.indexOf("\n");
+    const restOfLine = lineEnd >= 0 ? window.slice(written.length, lineEnd) : window.length > MAX_WRITTEN_PATH ? "@" : window.slice(written.length);
+    out.push(`${file2}:${line} (${urlHost(withCommentAt(written, restOfLine))})`);
     if (out.length >= MAX_NPM_NAMED) return;
   }
 }
@@ -69288,6 +69777,8 @@ var init_repoPackageConfig = __esm({
     "use strict";
     init_boundedJson();
     init_glob();
+    init_urlSaid();
+    init_strayAt();
     init_projectFs();
     init_pipRequirements();
     init_pythonProject();
@@ -69779,349 +70270,6 @@ var init_npmAudit = __esm({
   }
 });
 
-// src/pkgvet/versions.ts
-function parse9(version2) {
-  let s = version2.trim().replace(/^[vV=]+/, "");
-  const plus = s.indexOf("+");
-  if (plus >= 0) s = s.slice(0, plus);
-  const m = /^(\d+(?:\.\d+)*)(.*)$/.exec(s);
-  if (m === null) return null;
-  const releaseText = m[1] ?? "";
-  const rest = m[2] ?? "";
-  const release = releaseText.split(".").map((x) => Number(x));
-  if (release.some((n) => !Number.isFinite(n))) return null;
-  let stage = 2;
-  if (rest !== "") {
-    if (POST_REST.test(rest)) stage = 3;
-    else if (DEV_REST.test(rest)) stage = 0;
-    else stage = 1;
-  }
-  return { release, stage, rest };
-}
-function compareRelease(a, b) {
-  const n = Math.max(a.length, b.length);
-  for (let i = 0; i < n; i += 1) {
-    const d = (a[i] ?? 0) - (b[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
-}
-function compareRest(a, b) {
-  const ta = a.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
-  const tb = b.split(/[-._]|(?<=\d)(?=\D)|(?<=\D)(?=\d)/).filter(Boolean);
-  const n = Math.max(ta.length, tb.length);
-  for (let i = 0; i < n; i += 1) {
-    const x = ta[i];
-    const y = tb[i];
-    if (x === void 0) return -1;
-    if (y === void 0) return 1;
-    const nx = Number(x);
-    const ny = Number(y);
-    if (Number.isFinite(nx) && Number.isFinite(ny)) {
-      if (nx !== ny) return nx - ny;
-    } else if (x.toLowerCase() !== y.toLowerCase()) {
-      return x.toLowerCase() < y.toLowerCase() ? -1 : 1;
-    }
-  }
-  return 0;
-}
-function compareVersions(a, b) {
-  const pa = parse9(a);
-  const pb = parse9(b);
-  if (pa === null || pb === null) return pa === null ? pb === null ? 0 : -1 : 1;
-  const r = compareRelease(pa.release, pb.release);
-  if (r !== 0) return r;
-  if (pa.stage !== pb.stage) return pa.stage - pb.stage;
-  return compareRest(pa.rest, pb.rest);
-}
-function isPrerelease(version2) {
-  const p = parse9(version2);
-  return p === null || p.stage < 2;
-}
-function partial2(text3) {
-  const t = text3.trim().replace(/^[vV]/, "");
-  if (t === "" || WILD.test(t)) return { nums: [], pre: "" };
-  const plus = t.indexOf("+");
-  const noBuild = plus >= 0 ? t.slice(0, plus) : t;
-  const dash = noBuild.search(/-/);
-  const core = dash >= 0 ? noBuild.slice(0, dash) : noBuild;
-  const pre = dash >= 0 ? noBuild.slice(dash) : "";
-  const nums = [];
-  for (const part of core.split(".")) {
-    if (WILD.test(part)) break;
-    if (!/^\d+$/.test(part)) return null;
-    nums.push(Number(part));
-  }
-  return { nums, pre };
-}
-function bump(nums) {
-  const next = nums.slice();
-  const last = next.length - 1;
-  next[last] = (next[last] ?? 0) + 1;
-  return fmt(next);
-}
-function comparator(op, text3, composerTilde) {
-  const p = partial2(text3);
-  if (p === null) return null;
-  const { nums, pre } = p;
-  const full = nums.length >= 3;
-  const exact = full ? fmt(nums) + pre : fmt(nums);
-  switch (op) {
-    case "":
-    case "=":
-    case "==":
-      if (nums.length === 0) return [ANY];
-      if (full) return [eq(exact)];
-      return [gte(fmt(nums)), lt(bump(nums))];
-    case "^": {
-      if (nums.length === 0) return [ANY];
-      const [major = 0, minor, patch] = nums;
-      if (major > 0 || nums.length === 1) return [gte(exact), lt(bump([major]))];
-      if ((minor ?? 0) > 0 || nums.length === 2) return [gte(exact), lt(bump([0, minor ?? 0]))];
-      return [gte(exact), lt(bump([0, 0, patch ?? 0]))];
-    }
-    case "~":
-    case "~>": {
-      if (nums.length === 0) return [ANY];
-      if (nums.length === 1) return [gte(exact), lt(bump(nums))];
-      if (composerTilde && nums.length === 2) return [gte(exact), lt(bump(nums.slice(0, 1)))];
-      return [gte(exact), lt(bump(nums.slice(0, 2)))];
-    }
-    case ">=":
-      return [gte(exact)];
-    case ">":
-      return full ? [gt(exact)] : nums.length === 0 ? [() => false] : [gte(bump(nums))];
-    case "<":
-      return [lt(exact)];
-    case "<=":
-      return full ? [lte(exact)] : nums.length === 0 ? [ANY] : [lt(bump(nums))];
-    case "!=":
-      return [(v) => !eq(exact)(v)];
-    default:
-      return null;
-  }
-}
-function semverishRange(range, composer) {
-  const alternatives = range.split(composer ? /\s*\|\|?\s*/ : /\s*\|\|\s*/);
-  const out = [];
-  for (const alt of alternatives) {
-    let text3 = alt.trim();
-    if (composer) text3 = text3.replace(/@[a-zA-Z]+$/, "").trim();
-    if (text3 === "" || text3 === "*" || WILD.test(text3)) {
-      out.push([ANY]);
-      continue;
-    }
-    const hyphen = /^(\S+)\s+-\s+(\S+)$/.exec(text3);
-    if (hyphen !== null) {
-      const lo = comparator(">=", hyphen[1] ?? "", composer);
-      const hiPartial = partial2(hyphen[2] ?? "");
-      if (lo === null || hiPartial === null) return null;
-      const hi = hiPartial.nums.length >= 3 ? [lte(fmt(hiPartial.nums) + hiPartial.pre)] : hiPartial.nums.length === 0 ? [ANY] : [lt(bump(hiPartial.nums))];
-      out.push([...lo, ...hi]);
-      continue;
-    }
-    const tokens = text3.replace(/(\^|~>|~|>=|<=|>|<|==|=|!=)\s+/g, "$1").split(composer ? /[\s,]+/ : /\s+/);
-    const preds = [];
-    for (const token of tokens) {
-      if (token === "") continue;
-      const m = COMPARATOR.exec(token);
-      if (m === null) return null;
-      const c = comparator(m[1] ?? "", m[2] ?? "", composer);
-      if (c === null) return null;
-      preds.push(...c);
-    }
-    out.push(preds);
-  }
-  return out;
-}
-function pep440Range(range) {
-  const preds = [];
-  for (const spec of range.split(",")) {
-    if (spec.trim() === "") continue;
-    const m = PEP440.exec(spec);
-    if (m === null) return null;
-    const op = m[1] ?? "";
-    const ver = m[2] ?? "";
-    if (op === "===") {
-      preds.push((v) => v === ver);
-      continue;
-    }
-    if (ver.endsWith(".*")) {
-      const prefix = partial2(ver.slice(0, -2));
-      if (prefix === null || prefix.nums.length === 0) return null;
-      const inPrefix = (v) => {
-        const p = parse9(v);
-        return p !== null && prefix.nums.every((n, i) => (p.release[i] ?? 0) === n);
-      };
-      if (op === "==") preds.push(inPrefix);
-      else if (op === "!=") preds.push((v) => !inPrefix(v));
-      else return null;
-      continue;
-    }
-    if (parse9(ver) === null) return null;
-    switch (op) {
-      case "==":
-        preds.push(eq(ver));
-        break;
-      case "!=":
-        preds.push((v) => !eq(ver)(v));
-        break;
-      case ">=":
-        preds.push(gte(ver));
-        break;
-      case "<=":
-        preds.push(lte(ver));
-        break;
-      case ">":
-        preds.push(gt(ver));
-        break;
-      case "<":
-        preds.push(lt(ver));
-        break;
-      case "~=": {
-        const p = parse9(ver);
-        if (p === null || p.release.length < 2) return null;
-        const prefix = p.release.slice(0, -1);
-        preds.push(gte(ver), (v) => {
-          const q = parse9(v);
-          return q !== null && prefix.every((n, i) => (q.release[i] ?? 0) === n);
-        });
-        break;
-      }
-      default:
-        return null;
-    }
-  }
-  return [preds];
-}
-function nugetRange(range) {
-  const r = range.trim();
-  const m = /^([[(])\s*([^,\])]*?)\s*(?:,\s*([^\])]*?)\s*)?([\])])$/.exec(r);
-  if (m === null) return parse9(r) === null ? null : [[eq(r)]];
-  const open2 = m[1];
-  const lo = m[2] ?? "";
-  const hasComma = r.includes(",");
-  const hi = m[3] ?? "";
-  const close = m[4];
-  if (!hasComma) return lo === "" ? null : [[eq(lo)]];
-  const preds = [];
-  if (lo !== "") preds.push(open2 === "[" ? gte(lo) : gt(lo));
-  if (hi !== "") preds.push(close === "]" ? lte(hi) : lt(hi));
-  return [preds];
-}
-function isExactVersion(ecosystem, range) {
-  if (range === void 0) return false;
-  const r = range.trim();
-  switch (ecosystem) {
-    case "npm":
-      return EXACT_SEMVER.test(r);
-    case "pypi":
-      return /^(?:===?)\s*[^*,<>=!~\s]+$/.test(r) || /^\d/.test(r) && parse9(r) !== null && !/[,<>=!~*]/.test(r);
-    case "packagist":
-      return /^[vV]?\d+(?:\.\d+){0,3}(?:-[0-9A-Za-z.]+)?$/.test(r);
-    case "nuget":
-      return parse9(r) !== null && !/[[\](),]/.test(r);
-    default:
-      return false;
-  }
-}
-function highest(versions) {
-  let best;
-  for (const v of versions) if (best === void 0 || compareVersions(v, best) > 0) best = v;
-  return best;
-}
-function resolveVersion2(ecosystem, range, ctx) {
-  const stable = ctx.versions.filter((v) => !isPrerelease(v));
-  const r = range?.trim() ?? "";
-  if (r === "" || ecosystem === "npm" && r === "latest") {
-    if (ctx.latest !== void 0 && ctx.versions.includes(ctx.latest)) return ctx.latest;
-    return highest(stable);
-  }
-  if (ecosystem === "npm") {
-    const tagged = ctx.tags?.[r];
-    if (tagged !== void 0) return ctx.versions.includes(tagged) ? tagged : void 0;
-  }
-  if (ecosystem === "packagist" && /^dev-|-dev$/i.test(r)) return void 0;
-  if (isExactVersion(ecosystem, r)) {
-    const wanted = r.replace(/^===?\s*/, "");
-    return ctx.versions.find((v) => v === wanted) ?? ctx.versions.find((v) => compareVersions(v, wanted) === 0);
-  }
-  let alternatives;
-  switch (ecosystem) {
-    case "npm":
-      alternatives = semverishRange(r, false);
-      break;
-    case "packagist":
-      alternatives = semverishRange(r, true);
-      break;
-    case "pypi":
-      alternatives = /^(?:\^|~(?!=)|\*$|\d+(?:\.\d+)*\.\*$)/.test(r) ? semverishRange(r, false) : pep440Range(r);
-      break;
-    case "nuget":
-      alternatives = nugetRange(r);
-      break;
-    default:
-      alternatives = null;
-  }
-  if (alternatives === null) return void 0;
-  const matching = stable.filter((v) => alternatives.some((preds) => preds.every((p) => p(v))));
-  if (ecosystem === "npm" && ctx.latest !== void 0 && matching.includes(ctx.latest)) return ctx.latest;
-  return highest(matching);
-}
-var POST_REST, DEV_REST, gte, gt, lt, lte, eq, ANY, WILD, fmt, COMPARATOR, PEP440, EXACT_SEMVER;
-var init_versions2 = __esm({
-  "src/pkgvet/versions.ts"() {
-    "use strict";
-    POST_REST = /^[-._]?(?:post|rev|r|p|patch|pl)[-._]?\d*$/i;
-    DEV_REST = /(?:^|[-._])dev/i;
-    gte = (x) => (v) => compareVersions(v, x) >= 0;
-    gt = (x) => (v) => compareVersions(v, x) > 0;
-    lt = (x) => (v) => compareVersions(v, x) < 0;
-    lte = (x) => (v) => compareVersions(v, x) <= 0;
-    eq = (x) => (v) => compareVersions(v, x) === 0;
-    ANY = () => true;
-    WILD = /^[xX*]$/;
-    fmt = (nums) => [0, 1, 2].map((i) => nums[i] ?? 0).join(".");
-    COMPARATOR = /^(\^|~>|~|>=|<=|>|<|==|=|!=)?\s*(.*)$/;
-    PEP440 = /^\s*(~=|===|==|!=|<=|>=|<|>)\s*([^\s,]+)\s*$/;
-    EXACT_SEMVER = /^[vV=]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-  }
-});
-
-// src/deps/versionCompare.ts
-function isCleanVersion(v) {
-  return v !== void 0 && /^v?\d+(\.\d+)*$/i.test(v.trim());
-}
-function minCleanVersionAbove(installed, candidates2) {
-  if (!isCleanVersion(installed)) return void 0;
-  let best;
-  for (const c of candidates2) {
-    if (!isCleanVersion(c)) continue;
-    if (compareVersions(c, installed) <= 0) continue;
-    if (best === void 0 || compareVersions(c, best) < 0) best = c;
-  }
-  return best;
-}
-function isLooseVersion(v) {
-  return v !== void 0 && /^v?\d+(\.\d+)*(-[0-9A-Za-z.]+)?$/.test(v.trim());
-}
-function minCleanVersionAboveLoose(installed, candidates2) {
-  if (!isLooseVersion(installed)) return void 0;
-  let best;
-  for (const c of candidates2) {
-    if (!isCleanVersion(c)) continue;
-    if (compareVersions(c, installed) <= 0) continue;
-    if (best === void 0 || compareVersions(c, best) < 0) best = c;
-  }
-  return best;
-}
-var init_versionCompare = __esm({
-  "src/deps/versionCompare.ts"() {
-    "use strict";
-    init_versions2();
-  }
-});
-
 // src/runners/scannerParsers/pipAudit.ts
 function stringArray2(value) {
   return asArray(value).filter((v) => typeof v === "string");
@@ -70257,7 +70405,7 @@ function projectNpmRegistry(projectPath) {
     registry2 = m[1].trim().replace(/^["']|["']$/g, "");
   }
   if (registry2 === null || registry2 === "" || NPM_PUBLIC_REGISTRY.test(registry2)) return null;
-  return registry2.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+  return urlSaid(registry2.replace(/^([a-z][a-z0-9+.-]*:\/\/)@/i, "$1"), { form: "whole" });
 }
 function withNpmConfigNotRead(run2, projectPath, notRead) {
   if (notRead.length === 0) return run2;
@@ -70544,6 +70692,7 @@ var init_depsAudit = __esm({
     init_repoConfig();
     init_pipRequirements();
     init_pythonProject();
+    init_urlSaid();
     init_trivyRun();
     init_guardianIgnore();
     init_schemas4();
@@ -72826,7 +72975,7 @@ async function runNpmOutdated(projectPath, cves) {
           package_name: info.name,
           ecosystem: "npm",
           cve_ids: cve.cveIds,
-          reason: `active CVE on a transitive dependency, but no fix version above the installed version ${installed}`
+          reason: `active CVE on a transitive dependency, but no fix version above the installed version ${urlSaid(installed, { form: "whole", ownName: info.name })}`
         });
       }
       continue;
@@ -72867,7 +73016,7 @@ function planDirectNotListed(opts) {
       package_name: name,
       ecosystem: "npm",
       cve_ids: cve.cveIds,
-      reason: `active CVE on a direct dependency, but no fix version above the installed ${installed} is known`
+      reason: `active CVE on a direct dependency, but no fix version above the installed ${urlSaid(installed, { form: "whole", ownName: name })} is known`
     });
     return;
   }
@@ -73146,7 +73295,8 @@ function listNodeModulesPackages(projectPath) {
 function buildOverrideStep(input2) {
   return {
     package_name: input2.package_name,
-    installed_version: input2.installed_version,
+    // A lock's version can be a URL (with credentials): said by the rule; the decisions above read the value as it was.
+    installed_version: urlSaid(input2.installed_version, { form: "whole", ownName: input2.package_name }),
     latest_version: input2.latest_version,
     ecosystem: "npm",
     classification: "security",
@@ -73591,7 +73741,7 @@ function buildStep(input2) {
   const classification = cve ? "security" : semverKind ?? "major";
   const step2 = {
     package_name: input2.package_name,
-    installed_version: input2.installed_version,
+    installed_version: urlSaid(input2.installed_version, { form: "whole", ownName: input2.package_name }),
     latest_version: input2.latest_version,
     ecosystem: input2.ecosystem,
     classification,
@@ -73651,6 +73801,7 @@ var init_depsUpdatePlan = __esm({
     init_processRunner();
     init_pipRequirements();
     init_glob();
+    init_urlSaid();
     init_projectFs();
     init_semverCompare();
     init_dotnetRestore();
@@ -114597,9 +114748,6 @@ function remoteInText(raw) {
   }
   return null;
 }
-function asUrlParsersRead(value) {
-  return value.replace(/[\t\n\r]/g, "").replace(/^[\u0000- ]+|[\u0000- ]+$/g, "");
-}
 function authorityOpen(written) {
   const afterScheme = written.slice(written.indexOf(":") + 1).replace(/^\/*/, "");
   return !/[/?#]/.test(afterScheme);
@@ -114751,15 +114899,12 @@ async function resolveCommand2(command, env, cwd, deadline) {
   }
   return { ok: true, command: found2 };
 }
-var SPECIAL_SCHEME, ANY_SCHEME_WITH_SLASHES, URL_END, UNC_ANYWHERE, QUERY_SAFE_SCHEMES, REMOTE_COMMANDS, ENGINES, ENGINE_FLAG;
+var QUERY_SAFE_SCHEMES, REMOTE_COMMANDS, ENGINES, ENGINE_FLAG;
 var init_launch = __esm({
   "src/mcpaudit/launch.ts"() {
     "use strict";
     init_configFile();
-    SPECIAL_SCHEME = /(?:https?|wss?|ftp):/gi;
-    ANY_SCHEME_WITH_SLASHES = /[a-z][a-z0-9+.-]*:\/\//gi;
-    URL_END = /[\s"'<>|`]/;
-    UNC_ANYWHERE = /\\\\[^\\\s"'<>|]+\\|(?<![:/])\/\/[^/\s"'<>|]+\//;
+    init_urlSaid();
     QUERY_SAFE_SCHEMES = /* @__PURE__ */ new Set(["http:", "https:", "ws:", "wss:"]);
     REMOTE_COMMANDS = /* @__PURE__ */ new Set(["ssh", "sshpass", "plink", "kubectl", "oc"]);
     ENGINES = /* @__PURE__ */ new Set(["docker", "podman", "nerdctl"]);
@@ -115734,7 +115879,7 @@ function isPathLike(word) {
 }
 function notAPackage(word, archive) {
   if (word.length === 0) return "empty";
-  if (SCP_GIT.test(word)) return "SSH git spec (user@host:path) \u2014 not looked up";
+  if (SCP_GIT2.test(word)) return "SSH git spec (user@host:path) \u2014 not looked up";
   if (isPathLike(word)) return "local path \u2014 not looked up";
   if (URL_OR_VCS.test(word)) return "URL / VCS / protocol spec \u2014 not looked up";
   if (archive !== null && archive.test(word)) return "archive file \u2014 not looked up";
@@ -115866,7 +116011,7 @@ function parsePackageSpec(ecosystem, raw, manager) {
       return skip(raw, "unsupported ecosystem");
   }
 }
-var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_VALUE_FLAGS, NPM_BOOL_FLAGS, NPM_WORKSPACE_FLAGS, NPM_LONG, NPM_TABLE, PIP_REQUIREMENTS_REASON, PIP_CONSTRAINTS_REASON, PIP_EDITABLE_REASON, PIP_FETCH_VALUE, PIP_FETCH_BOOL, PIP_FETCH_REGISTRY, PIP_FETCH_REPORTED, PIP_DOWNLOAD_TABLE, PIP_WHEEL_TABLE, PIPX_UPGRADE_TABLE, UV_TOOL_UPGRADE_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, MEASURED_DOTNET_FORMS, NPM_ALLOW_BOOL, ALLOW;
+var NAME_RE, SHELL_EXPANSION, URL_OR_VCS, NPM_FILE, PIP_FILE, UV_FILE, POETRY_FILE, ARCHIVE2, SCP_GIT2, SEMVER_WORD, MAX_RANGE_LENGTH, PEP440_OP, set2, NPM_COMMON_BOOL, LOGLEVEL_FLAGS, NPM_VALUE_FLAGS, NPM_BOOL_FLAGS, NPM_WORKSPACE_FLAGS, NPM_LONG, NPM_TABLE, PIP_REQUIREMENTS_REASON, PIP_CONSTRAINTS_REASON, PIP_EDITABLE_REASON, PIP_FETCH_VALUE, PIP_FETCH_BOOL, PIP_FETCH_REGISTRY, PIP_FETCH_REPORTED, PIP_DOWNLOAD_TABLE, PIP_WHEEL_TABLE, PIPX_UPGRADE_TABLE, UV_TOOL_UPGRADE_TABLE, FLAGS, UV_VALUED, UV_BOOL, UV_REGISTRY, LAUNCH_FLAGS, NPM_INSTALL, NPM_MANIFEST_INSTALL, NPM_UPDATE, NPM_MAINTENANCE, PNPM_UPDATE, YARN_UPDATE, COMPOSER_REQUIRE, BUN_ADD, PNPM_INSTALL, NPM_INITIALIZER, CREATE_ONLY, BUN_INITIALIZER, SUBCOMMANDS, MEASURED_DOTNET_FORMS, NPM_ALLOW_BOOL, ALLOW;
 var init_parseCommand = __esm({
   "src/pkgvet/parseCommand.ts"() {
     "use strict";
@@ -115888,7 +116033,7 @@ var init_parseCommand = __esm({
     UV_FILE = /\.(?:zip|whl|tgz|tar\.gz|tar)$/i;
     POETRY_FILE = /\.(?:zip|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tlz|tar\.lz|tar\.lzma)$/i;
     ARCHIVE2 = /\.(?:tgz|tar|tar\.gz|tar\.bz2|tar\.xz|zip|whl|egg|nupkg)$/i;
-    SCP_GIT = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
+    SCP_GIT2 = /^[A-Za-z0-9._-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+:/;
     SEMVER_WORD = /^(?:\|\||-|\*|[xX]|[<>=~^]{0,2}v?\d[A-Za-z0-9.+-]*|[<>=~^]{1,2}\*)$/;
     MAX_RANGE_LENGTH = 100;
     PEP440_OP = /(===|==|~=|!=|<=|>=|<|>)/;

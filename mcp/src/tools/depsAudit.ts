@@ -74,6 +74,7 @@ import { runProcess } from '../runners/processRunner.js';
 import { nameRepoConfig, withProjectConfig, type HonouredFile } from '../runners/repoConfig.js';
 import { checkRequirements, findRequirementFiles, INDEX_KINDS, SOURCE_KINDS, type PipRefusal } from '../deps/pipRequirements.js';
 import { checkPyproject, checkSetupCfg } from '../deps/pythonProject.js';
+import { urlSaid } from '../redaction/urlSaid.js';
 import { judgeTrivyFs, runTrivy, type TrivyFsJudgement } from '../runners/trivyRun.js';
 import { trivySkipArgs } from '../platform/guardianIgnore.js';
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
@@ -369,8 +370,9 @@ export function projectNpmRegistry(projectPath: string): string | null {
     registry = m[1].trim().replace(/^["']|["']$/g, '');
   }
   if (registry === null || registry === '' || NPM_PUBLIC_REGISTRY.test(registry)) return null;
-  // Never echo a credential written into the URL.
-  return registry.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, '$1');
+  // Never echo a credential written into the URL: said by the rule (`redaction/urlSaid.ts`), which reads it as a URL
+  // parser does. An EMPTY user part (`https://@host/`) was never said and still is not.
+  return urlSaid(registry.replace(/^([a-z][a-z0-9+.-]*:\/\/)@/i, '$1'), { form: 'whole' });
 }
 
 /**

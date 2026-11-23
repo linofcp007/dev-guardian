@@ -35,6 +35,8 @@ import { mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { describeTooComplex, JSON_MAX_NODES, parseJsonBounded } from '../platform/boundedJson.js';
 import { matchesAny } from '../platform/glob.js';
+import { urlsSaidIn } from '../redaction/urlSaid.js';
+import { withCommentAt } from '../pkgvet/strayAt.js';
 import {
   describeReadRefusal,
   isWithinDir,
@@ -273,7 +275,8 @@ function scanNetwork(file: string, value: unknown, prefix: string, out: string[]
     const path = frame.path === '' ? key : key.startsWith('[') ? `${frame.path}${key}` : `${frame.path}.${key}`;
     if (typeof v === 'string') {
       const host = npmSpecNetworkHost(v);
-      if (host !== null) out.push(`${file}: ${path || '(root)'} (${host})`);
+      // The path holds JSON keys, which can be a URL (`name@https://…`): said by the rule, not as written.
+      if (host !== null) out.push(`${file}: ${urlsSaidIn(path) || '(root)'} (${host})`);
     } else if (typeof v === 'object' && v !== null) {
       stack.push({ entries: entriesOf(v), next: 0, path });
     }
@@ -300,8 +303,14 @@ function scanTextLock(file: string, text: string, out: string[]): void {
     for (let i = text.indexOf('\n', last); i >= 0 && i < at; i = text.indexOf('\n', i + 1)) line += 1;
     last = at;
     // The text as written on the line: `spec` stops at the first `/`, so an `@` after it is only seen here.
-    const written = /^[^\s"',]*/.exec(text.slice(at, at + MAX_WRITTEN_PATH))?.[0] ?? spec;
-    out.push(`${file}:${line} (${urlHost(written)})`);
+    // The host is read from the value as before; the rest of the line from the start of the path is searched for an `@`
+    // too, up to MAX_WRITTEN_PATH characters (a line that goes on past that without ending counts as holding one): an
+    // `@` there may be the rest of a credential the reader cut at a space, a quote or a comma.
+    const window = text.slice(at, at + MAX_WRITTEN_PATH + 1);
+    const written = /^[^\s"',]*/.exec(window.slice(0, MAX_WRITTEN_PATH))?.[0] ?? spec;
+    const lineEnd = window.indexOf('\n');
+    const restOfLine = lineEnd >= 0 ? window.slice(written.length, lineEnd) : window.length > MAX_WRITTEN_PATH ? '@' : window.slice(written.length);
+    out.push(`${file}:${line} (${urlHost(withCommentAt(written, restOfLine))})`);
     if (out.length >= MAX_NPM_NAMED) return;
   }
 }
