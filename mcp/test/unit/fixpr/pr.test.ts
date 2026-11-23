@@ -657,7 +657,7 @@ describe('deps-tools-host-other-texts T-07 openPr says a remote, a key and an er
     const said = JSON.stringify(r);
     expect(t07PartsIn(said), said).toEqual([]);
     expect(r.detail).toContain(`http.https://${T07_HOST}/.extraheader`);
-    expect(JSON.stringify(r.git_config_not_applied)).toContain('credential.https://(host not shown)/.helper');
+    expect(JSON.stringify(r.git_config_not_applied)).toContain('credential.https://(host not shown).helper');
   });
 
   it('T-07 the first error line of git push: a URL in it is said without credentials', async () => {
