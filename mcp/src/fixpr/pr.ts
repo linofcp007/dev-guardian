@@ -104,6 +104,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withTextFile } from '../runners/argFile.js';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
+import { gitKeysSaid, urlsSaidIn, urlSaid } from '../redaction/urlSaid.js';
 import { GIT_COMMAND, gitSafetyFor, isRepositoryScope, localReceivePackCommand, parseConfigListing } from '../platform/gitSafety.js';
 import type { CommitScope } from './commitScope.js';
 import type { FixSource } from './types.js';
@@ -333,7 +334,7 @@ export async function openPr(opts: {
   const commit = await run({ command: GIT_COMMAND, args: ['commit', '--no-verify', '-m', title], cwd: worktreePath });
   const notApplied = new Set<string>([...(add.gitNotApplied ?? []), ...(commit.gitNotApplied ?? [])]);
   const withNotApplied = (outcome: PrOutcome): PrOutcome =>
-    notApplied.size > 0 ? { ...outcome, git_config_not_applied: [...notApplied].sort() } : outcome;
+    notApplied.size > 0 ? { ...outcome, git_config_not_applied: gitKeysSaid([...notApplied].sort()) } : outcome;
   if (hasFailed(commit)) {
     return withNotApplied({
       status: 'push_failed',
@@ -371,7 +372,7 @@ export async function openPr(opts: {
         `Push to origin failed for branch '${branch}': ${describeFailure(push, 'git push')}. ` +
         `The commit exists locally on that branch; it was not pushed.` +
         (notApplied.size > 0
-          ? ` The repository's own git configuration was not applied for ${[...notApplied].sort().join(', ')} ` +
+          ? ` The repository's own git configuration was not applied for ${gitKeysSaid([...notApplied].sort()).join(', ')} ` +
             '(dev-guardian never runs a command a scanned repository configures) — set what the push needs in ' +
             'your own git configuration or environment instead.'
           : ''),
@@ -467,9 +468,12 @@ async function repositoryRewrite(worktreePath: string, run: typeof runProcess, e
     const prefix = e.value;
     const hit = raw.find((u) => u.startsWith(prefix));
     if (hit !== undefined) {
+      // Every URL said by the rule: the remote before and after the rewrite, the prefix and the base of the key.
+      const said = (url: string): string => urlSaid(url, { form: 'whole' });
+      const key = `url.${said(rewrite[1] ?? '')}.${rewrite[2] ?? ''}`;
       return (
-        `the repository's own git configuration rewrites where origin is pushed — ${e.key} = ${prefix} turns ${hit} ` +
-        `into ${effective.join(', ')} — and a push carries your credentials, so dev-guardian does not push there`
+        `the repository's own git configuration rewrites where origin is pushed — ${key} = ${said(prefix)} turns ${said(hit)} ` +
+        `into ${effective.map(said).join(', ')} — and a push carries your credentials, so dev-guardian does not push there`
       );
     }
   }
@@ -566,11 +570,12 @@ function hasFailed(result: { outcome: string; exitCode: number | null }): boolea
  * `timed_out` before writing).
  */
 function describeFailure(result: ProcessRunResult, label: string): string {
-  return (
+  // The line is a program's own: a URL in it is said by the rule, not as written.
+  return urlsSaidIn(
     preferredErrorLine(result.stderr) ??
-    firstNonEmptyLine(result.stderr) ??
-    firstNonEmptyLine(result.stdout) ??
-    `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ''}`
+      firstNonEmptyLine(result.stderr) ??
+      firstNonEmptyLine(result.stdout) ??
+      `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ''}`,
   );
 }
 

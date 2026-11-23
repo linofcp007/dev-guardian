@@ -13,6 +13,7 @@
  */
 
 import { isMap, isScalar } from 'yaml';
+import { strayAt } from '../pkgvet/strayAt.js';
 import {
   describeTooComplex,
   describeYamlRefusal,
@@ -284,7 +285,11 @@ function openapiBasePath(root: unknown): { base: string; partial: boolean } {
   if (url === undefined) return { base: '', partial: false };
   if (url.includes('{')) return { base: '', partial: true };
   try {
-    return { base: stripTrailingSlash(new URL(url).pathname), partial: false };
+    const parsed = new URL(url);
+    // An `@` outside the user part makes the parser read the start of a credential as the host and the rest as the
+    // path (`https://T/K@H/v1`): that path is not one, so the base is unknown, as for a URL with `{`.
+    if (strayAt(parsed)) return { base: '', partial: true };
+    return { base: stripTrailingSlash(parsed.pathname), partial: false };
   } catch {
     if (isAbsolutePathReference(url)) return { base: stripTrailingSlash(url), partial: false };
     return { base: '', partial: true };

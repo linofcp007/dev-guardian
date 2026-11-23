@@ -35,6 +35,10 @@ import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
+// The review_pr row checks a head out of a real throwaway repository: 12 s on Windows, over the 10 s default. A file-level
+// ceiling, as reviewPr.test.ts has, not a global one.
+vi.setConfig({ testTimeout: 60_000 });
+
 afterAll(cleanupTempDirs);
 beforeAll(async () => {
   await import('../../src/registerAll.js');

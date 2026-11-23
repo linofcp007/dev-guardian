@@ -32,6 +32,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runProcess, type ProcessRunResult } from '../runners/processRunner.js';
 import { GIT_COMMAND } from '../platform/gitSafety.js';
+import { urlsSaidIn } from '../redaction/urlSaid.js';
 
 interface Worktree {
   /** Absolute path to the worktree directory. */
@@ -337,11 +338,12 @@ function parseWorktreeList(porcelain: string): WorktreeListEntry[] {
  * command) does this fall back to the first non-empty line.
  */
 function describeFailure(result: ProcessRunResult, label: string): string {
-  return (
+  // The line is a program's own: a URL in it is said by the rule, not as written.
+  return urlsSaidIn(
     preferredErrorLine(result.stderr) ??
-    firstNonEmptyLine(result.stderr) ??
-    firstNonEmptyLine(result.stdout) ??
-    `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ''}`
+      firstNonEmptyLine(result.stderr) ??
+      firstNonEmptyLine(result.stdout) ??
+      `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ''}`,
   );
 }
 

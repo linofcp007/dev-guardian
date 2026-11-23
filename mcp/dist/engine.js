@@ -19206,6 +19206,7 @@ async function runProcess(options) {
     stdoutBuf += text3;
   });
   const stderrCap = Math.max(64 * 1024, Math.floor(cap / 10));
+  let pendingLog = "";
   readText2(child.process?.stderr, (text3, totalBytes) => {
     if (totalBytes <= stderrCap) {
       stderrBuf += text3;
@@ -19213,8 +19214,14 @@ async function runProcess(options) {
       stderrBuf += "\u2026(truncated)\n";
     }
     if (options.onLog) {
-      for (const line of text3.split(/\r?\n/)) {
+      const parts = `${pendingLog}${text3}`.split(/\r\n|\r|\n/);
+      pendingLog = parts.pop() ?? "";
+      for (const line of parts) {
         if (line.length > 0) options.onLog(line);
+      }
+      if (pendingLog.length > MAX_PENDING_LOG) {
+        options.onLog(pendingLog);
+        pendingLog = "";
       }
     }
   });
@@ -19243,6 +19250,8 @@ async function runProcess(options) {
     }
   }
   const exit = await child.done;
+  if (options.onLog && pendingLog.length > 0) options.onLog(pendingLog);
+  pendingLog = "";
   if (timer) clearTimeout(timer);
   if (abortListener && options.signal) {
     options.signal.removeEventListener("abort", abortListener);
@@ -19274,7 +19283,7 @@ function envFor(command, env) {
   if (name !== "docker") return env;
   return { ...env, MSYS_NO_PATHCONV: "1", MSYS2_ARG_CONV_EXCL: "*" };
 }
-var FIVE_MB, KILL_GRACE_MS, PIPE_ABANDON_MS, MAX_TIMER_MS, DOTNET_NO_TELEMETRY_ENV;
+var FIVE_MB, KILL_GRACE_MS, PIPE_ABANDON_MS, MAX_TIMER_MS, MAX_PENDING_LOG, DOTNET_NO_TELEMETRY_ENV;
 var init_processRunner = __esm({
   "src/runners/processRunner.ts"() {
     "use strict";
@@ -19286,6 +19295,7 @@ var init_processRunner = __esm({
     KILL_GRACE_MS = 5e3;
     PIPE_ABANDON_MS = 1e3;
     MAX_TIMER_MS = 2147483647;
+    MAX_PENDING_LOG = 4096;
     DOTNET_NO_TELEMETRY_ENV = {
       DOTNET_CLI_TELEMETRY_OPTOUT: "1",
       DOTNET_NOLOGO: "1"
@@ -56042,659 +56052,6 @@ var init_counts = __esm({
   }
 });
 
-// src/tools/scanToolFactory.ts
-import { randomUUID as randomUUID2 } from "node:crypto";
-function makeScanTool(config2) {
-  return {
-    name: config2.name,
-    description: config2.description,
-    ...config2.title ? { title: config2.title } : {},
-    inputSchema: config2.inputSchema,
-    handler: (rawInput, plugin, callMeta) => runScanPipeline(config2, rawInput, plugin, callMeta)
-  };
-}
-async function runScanPipeline(config2, input2, plugin, callMeta) {
-  if (config2.supportsAutoFix !== false && input2.auto_fix === true) {
-    if (input2.allow_dirty !== true) {
-      try {
-        const resolved = resolveProjectPath(input2.project_path);
-        const tree = await workingTreeState(resolved.path);
-        if (tree.state === "dirty") {
-          return failDomain("working_tree_dirty", `auto_fix=true requires a clean working tree.`, {
-            allow_dirty: true
-          });
-        }
-        if (tree.state === "unknown") {
-          return failDomain(
-            "not_a_git_repo",
-            `auto_fix=true requires a working tree git confirms is clean, and git could not (${tree.reason}). Autofix would rewrite files nothing can restore; pass allow_dirty=true to accept that.`,
-            { allow_dirty: true }
-          );
-        }
-      } catch (e) {
-        if (e instanceof InvalidProjectPathError) return invalidProjectPath(config2, e);
-        throw e;
-      }
-    }
-  }
-  let resolvedProject;
-  try {
-    resolvedProject = resolveProjectPath(input2.project_path);
-  } catch (e) {
-    if (e instanceof InvalidProjectPathError) return invalidProjectPath(config2, e);
-    throw e;
-  }
-  const projectPath = resolvedProject.path;
-  const warnings = [];
-  if (resolvedProject.warning) warnings.push(resolvedProject.warning);
-  if (plugin.storageWarning) warnings.push(plugin.storageWarning);
-  const driftAdvisory = configDriftAdvisory(plugin, projectPath);
-  if (driftAdvisory) warnings.push(driftAdvisory);
-  const configRoot = plugin.repoConfigFromRef?.root ?? projectPath;
-  let exclusions = null;
-  const loadedExclusions = await loadProjectExclusions(projectPath, configRoot);
-  if (loadedExclusions !== null) {
-    if ("error" in loadedExclusions) {
-      warnings.push(
-        `${GUARDIAN_IGNORE_FILE} could not be read (${loadedExclusions.error}) \u2014 NOTHING was excluded from this scan.`
-      );
-    } else {
-      exclusions = loadedExclusions;
-    }
-  }
-  let scope = null;
-  if (config2.supportsScope === true && input2.scope !== void 0 && input2.scope !== null) {
-    const parsed2 = ScanScopeInput.safeParse(input2.scope);
-    if (!parsed2.success) {
-      const issues = parsed2.error.issues.map((i) => `${["scope", ...i.path].join(".")}: ${i.message}`);
-      return failDomain("unsupported_target", `scope is not valid: ${issues.join("; ")}`);
-    }
-    if (parsed2.data !== void 0) {
-      try {
-        scope = await resolveScope(projectPath, parsed2.data, { exclusions });
-      } catch (e) {
-        if (e instanceof ScopeError) return failDomain(e.code, e.message);
-        throw e;
-      }
-    }
-  }
-  const treeHash = callMeta?.parentScanId !== void 0 && callMeta.treeHash !== void 0 ? callMeta.treeHash : await computeTreeHash(projectPath);
-  const rulesProjectPath = callMeta?.originProjectPath ?? plugin.repoConfigFromRef?.root ?? projectPath;
-  let cacheState = {};
-  if (config2.cacheState) {
-    try {
-      cacheState = await config2.cacheState(input2, { projectPath, plugin, rulesProjectPath });
-    } catch {
-      cacheState = { uncacheable: randomUUID2() };
-    }
-  }
-  if (scope !== null) cacheState = { ...cacheState, scope: scope.cacheState["scope"] ?? "" };
-  if (exclusions !== null) cacheState = { ...cacheState, guardianignore: exclusions.hash };
-  const settings = await guardianSettingsState(projectPath, configRoot);
-  if (settings !== null) cacheState = { ...cacheState, guardian_settings: settings };
-  const cacheKey = buildCacheKey(config2, input2, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
-  if (config2.configWarnings) {
-    try {
-      warnings.push(...config2.configWarnings(input2, { projectPath, plugin, rulesProjectPath }));
-    } catch {
-    }
-  }
-  const ttl = config2.cacheTtlMs ?? FIVE_MINUTES_MS;
-  const fresh = new Date(Date.now() - ttl).toISOString();
-  if (input2.force !== true && input2.auto_fix !== true) {
-    const cached2 = plugin.storage.scans.findCacheHit({
-      cache_key: cacheKey,
-      freshThreshold: fresh
-    });
-    if (cached2 && computeCoverage(cached2.tools_run, cached2.missing_tools) === "full" && !scannedNothing(cached2.meta?.["scope"])) {
-      return cachedResult(config2, input2, plugin, cached2.scan_id, warnings);
-    }
-  }
-  const scanId = randomUUID2();
-  const parentScanId = callMeta?.parentScanId;
-  const insertMeta = {
-    ...parentScanId !== void 0 ? { parent_scan_id: parentScanId } : {},
-    ...scope !== null ? { scope: scope.meta } : {}
-  };
-  const inserted = plugin.storage.scans.insert({
-    scan_id: scanId,
-    scan_type: config2.scan_type,
-    project_path: projectPath,
-    tree_hash: treeHash,
-    cache_key: cacheKey,
-    ...Object.keys(insertMeta).length > 0 ? { meta: insertMeta } : {}
-  });
-  plugin.storage.scans.attachTreeCache({
-    tree_hash: treeHash,
-    scan_id: scanId,
-    scan_type: config2.scan_type
-  });
-  const controller = new AbortController();
-  const externalSignal = callMeta?.signal;
-  if (externalSignal) {
-    if (externalSignal.aborted) {
-      controller.abort();
-    } else {
-      externalSignal.addEventListener(
-        "abort",
-        () => {
-          controller.abort();
-        },
-        { once: true }
-      );
-    }
-  }
-  const progress = makeProgressEmitter({
-    token: callMeta?.progressToken,
-    notifier: plugin.progressNotifier
-  });
-  const releaseReports = holdReportDirs(scanId);
-  try {
-    return await runScanBody({
-      config: config2,
-      input: input2,
-      plugin,
-      projectPath,
-      treeHash,
-      scanId,
-      startedAt: inserted.started_at,
-      warnings,
-      signal: controller.signal,
-      progress,
-      childCallMeta: {
-        signal: controller.signal,
-        parentScanId: scanId,
-        treeHash,
-        ...callMeta?.progressToken !== void 0 ? { progressToken: callMeta.progressToken } : {},
-        ...callMeta?.originProjectPath !== void 0 ? { originProjectPath: callMeta.originProjectPath } : {}
-      },
-      rulesProjectPath,
-      configRoot,
-      scope,
-      exclusions,
-      ...parentScanId !== void 0 ? { parentScanId } : {}
-    });
-  } finally {
-    releaseReports();
-    progress.dispose();
-  }
-}
-function invalidProjectPath(config2, e) {
-  if (e.reason === "not_a_directory" && config2.supportsScope === true) {
-    const retry2 = suggestScopeForFile(e.path);
-    return failDomain(
-      "unsupported_target",
-      `project_path ${e.path} is a file, and project_path must be a directory. To scan just that file, pass project_path "${retry2.project_path}" with scope: { paths: ["${retry2.scope.paths.join('", "')}"] }.`,
-      retry2
-    );
-  }
-  return failDomain(projectPathErrorCode(e), e.message);
-}
-function runWarnings(value) {
-  return Array.isArray(value) ? value.filter((w) => typeof w === "string") : [];
-}
-function scannedNothing(scopeMeta) {
-  return typeof scopeMeta === "object" && scopeMeta !== null && scopeMeta.nothing_in_scope === true;
-}
-function scopeWarnings(scopeMeta) {
-  if (typeof scopeMeta !== "object" || scopeMeta === null) return [];
-  const block = scopeMeta;
-  const files = typeof block["files"] === "number" ? block["files"] : 0;
-  const outside = typeof block["findings_outside_scope"] === "number" ? block["findings_outside_scope"] : 0;
-  const ignored = typeof block["files_excluded_by_guardianignore"] === "number" ? block["files_excluded_by_guardianignore"] : 0;
-  const what = block["kind"] === "log_opts" ? describeScope(block) : `${describeScope(block)}, ${files} file(s)`;
-  const warnings = [
-    `Scoped scan (${what}): findings outside the scope are not reported${outside > 0 ? ` (${outside} dropped)` : ""}. It is recorded as scoped \u2014 never a baseline, and never counted as the project's current findings.`
-  ];
-  if (scannedNothing(block)) {
-    warnings.push(
-      `The scope held nothing to scan${ignored > 0 ? ` once ${GUARDIAN_IGNORE_FILE} is applied` : ""} \u2014 no scanner ran, nothing was scanned, and 0 findings here says nothing about the project.`
-    );
-  }
-  if (ignored > 0) {
-    warnings.push(`${ignored} file(s) in the scope are excluded by ${GUARDIAN_IGNORE_FILE} and were not scanned.`);
-  }
-  return warnings;
-}
-function stagedContentGap(notAsStaged) {
-  if (notAsStaged.length === 0) return null;
-  const named2 = `${notAsStaged.slice(0, 5).join(", ")}${notAsStaged.length > 5 ? ", \u2026" : ""}`;
-  return {
-    name: STAGED_CONTENT_GAP,
-    status: "failed",
-    reason: `${notAsStaged.length} staged file(s) changed again in the working tree since git add (${named2}): the scanners read the working tree, not the staged content the commit carries \u2014 stage or stash the rest (git stash --keep-index) and re-scan`
-  };
-}
-function describeScope(block) {
-  const diff = block["diff"];
-  if (block["kind"] === "diff" && typeof diff === "object" && diff !== null) {
-    const d = diff;
-    if (typeof d["base"] === "string") return `diff ${d["base"]}...${typeof d["head"] === "string" ? d["head"] : "HEAD"}`;
-    return d["staged"] === true ? "staged changes" : "uncommitted changes";
-  }
-  if (block["kind"] === "since" && typeof block["since"] === "string") return `since ${block["since"]}`;
-  if (block["kind"] === "log_opts" && typeof block["log_opts"] === "string") return `history ${block["log_opts"]}`;
-  return "paths";
-}
-function exclusionWarning(value) {
-  if (typeof value !== "object" || value === null) return null;
-  const r = value;
-  return `${GUARDIAN_IGNORE_FILE} excluded ${r.excluded_files ?? 0} file(s) (${r.patterns ?? 0} pattern(s)) and ${r.findings_excluded ?? 0} finding(s) from this scan.`;
-}
-function childFindingsExcluded(plugin, extras) {
-  const children = extras?.["child_scans"];
-  if (!Array.isArray(children)) return 0;
-  let total = 0;
-  for (const child of children) {
-    const id = typeof child === "object" && child !== null ? child.scan_id : void 0;
-    if (typeof id !== "string") continue;
-    const report = plugin.storage.scans.getById(id)?.meta?.["exclusions"];
-    const n = typeof report === "object" && report !== null ? report.findings_excluded : void 0;
-    if (typeof n === "number") total += n;
-  }
-  return total;
-}
-function cvesStillFound(cves, kept, dropped) {
-  const keys = (list2) => {
-    const out = /* @__PURE__ */ new Set();
-    for (const f of list2) {
-      const coords = dependencyCoordinates(f);
-      if (coords !== null && f.rule_id !== void 0) out.add(`${f.rule_id}\0${coords.name}`);
-    }
-    return out;
-  };
-  const keptKeys = keys(kept);
-  const droppedKeys = keys(dropped);
-  return cves.filter((c) => {
-    const key = `${c.cve_id}\0${c.package_name}`;
-    return keptKeys.has(key) || !droppedKeys.has(key);
-  });
-}
-async function runScanBody(args) {
-  const { config: config2, input: input2, plugin, projectPath, treeHash, scanId, startedAt: startedAt2, warnings, progress } = args;
-  let step2 = 0;
-  const report = (message3) => {
-    step2 += 1;
-    progress.emit({ step: step2, message: `${config2.name}: ${message3}` });
-  };
-  const ctx = {
-    plugin,
-    scanId,
-    projectPath,
-    signal: args.signal,
-    progress,
-    // Every runner forwards stderr here line by line. A line becomes the
-    // message of the next heartbeat, never a notification of its own: a
-    // chatty scanner would otherwise send hundreds per second.
-    onLog: (line) => {
-      const trimmed = line.trim();
-      if (trimmed.length === 0) return;
-      const clipped = trimmed.length > MAX_LOG_LINE ? `${trimmed.slice(0, MAX_LOG_LINE - 1)}\u2026` : trimmed;
-      progress.note(`${config2.name}: ${clipped}`);
-    },
-    scriptEnv: {
-      ...process.env,
-      PROJECT_PATH: projectPath,
-      GUARDIAN_SCAN_ID: scanId
-    },
-    childCallMeta: args.childCallMeta,
-    rulesProjectPath: args.rulesProjectPath,
-    configRoot: args.configRoot,
-    scope: args.scope,
-    exclusions: args.exclusions
-  };
-  const limiter2 = config2.orchestrator === true ? null : getScanLimiter();
-  if (limiter2) {
-    report("waiting for a scanner slot");
-    try {
-      await limiter2.acquire(ctx.signal);
-    } catch (e) {
-      if (!(e instanceof Error && e.name === "AbortError")) throw e;
-      plugin.storage.scans.finalize({ scan_id: scanId, status: "cancelled", tools_run: [], missing_tools: [] });
-      return failDomain("cancelled", "Scan was cancelled by the host.");
-    }
-  }
-  let invocation;
-  try {
-    report(`scanning ${projectPath}`);
-    invocation = await config2.invoke(input2, ctx);
-  } catch (e) {
-    plugin.storage.scans.finalize({
-      scan_id: scanId,
-      status: "failed",
-      tools_run: [],
-      missing_tools: [],
-      error: e instanceof Error ? e.message : String(e)
-    });
-    return failDomain(
-      "scanner_failed",
-      e instanceof Error ? e.message : "Scanner failed with an unknown error"
-    );
-  } finally {
-    limiter2?.release();
-  }
-  report("recording results");
-  if (args.exclusions !== null) {
-    const ignore = honouredRootFiles(args.configRoot, "guardian");
-    invocation = {
-      ...invocation,
-      tools_run: invocation.tools_run.map((run2) => run2.status === "skipped" ? run2 : withProjectConfig(run2, ignore))
-    };
-  }
-  const stagedGap = args.scope !== null ? stagedContentGap(args.scope.notAsStaged) : null;
-  if (stagedGap !== null) {
-    invocation = {
-      ...invocation,
-      tools_run: [...invocation.tools_run, stagedGap],
-      missing_tools: [...invocation.missing_tools, STAGED_CONTENT_GAP]
-    };
-  }
-  let findings = [];
-  const cves = [];
-  const parserCtx = { project_path: projectPath };
-  for (const task of invocation.parser_inputs) {
-    const out = task.parser.parse(task.input, parserCtx);
-    findings.push(...out.findings);
-    cves.push(...out.cves);
-  }
-  if (invocation.dedupeFindings) findings = invocation.dedupeFindings(findings);
-  const placed = (f) => f.file_path === void 0 || f.file_path === "" ? null : f.file_path;
-  const { exclusions, scope } = args;
-  const dropped = [];
-  const keepIf = (test) => {
-    const before = findings.length;
-    findings = findings.filter((f) => {
-      const p = placed(f);
-      if (p === null || test(p)) return true;
-      dropped.push(f);
-      return false;
-    });
-    return before - findings.length;
-  };
-  const inProject2 = projectPathTest(projectPath);
-  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject2(p)));
-  const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
-  if (dropped.length > 0 && cves.length > 0) {
-    const still = cvesStillFound(cves, findings, dropped);
-    cves.length = 0;
-    cves.push(...still);
-  }
-  findings = assignIdentities(findings, {
-    projectPath,
-    readSource: invocation.readSource ?? makeSourceReader(projectPath)
-  });
-  findings = redactCredentialSnippets(findings);
-  if (findings.length > 0) {
-    plugin.storage.findings.bulkInsert(
-      findings.map((f) => ({ ...f, scan_id: scanId }))
-    );
-    plugin.storage.suppressions.adoptIdentities(scanId);
-  }
-  if (cves.length > 0) {
-    plugin.storage.cves.bulkUpsert(cves.map((c) => ({ ...c, scan_id: scanId })));
-  }
-  const status = invocation.outcome === "completed" ? "completed" : invocation.outcome === "cancelled" ? "cancelled" : "failed";
-  const finalize3 = {
-    scan_id: scanId,
-    status,
-    tools_run: invocation.tools_run,
-    missing_tools: invocation.missing_tools
-  };
-  if (invocation.report_paths[0] !== void 0) finalize3.report_dir = invocation.report_paths[0];
-  if (invocation.error !== void 0) finalize3.error = invocation.error;
-  const meta3 = { ...invocation.extras ?? {} };
-  if (input2.severity_min !== void 0) meta3["severity_min"] = input2.severity_min;
-  if (args.parentScanId !== void 0) meta3["parent_scan_id"] = args.parentScanId;
-  const nothingInScope = scope !== null && !invocation.tools_run.some((t) => t.status === "ok") && computeCoverage(invocation.tools_run, invocation.missing_tools) === "full";
-  const scopeMeta = scope !== null ? { ...scope.meta, findings_outside_scope: outsideScope, ...nothingInScope ? { nothing_in_scope: true } : {} } : null;
-  if (scopeMeta !== null) meta3["scope"] = scopeMeta;
-  const excludedHere = config2.orchestrator === true ? findingsExcluded + childFindingsExcluded(plugin, invocation.extras) : findingsExcluded;
-  const exclusionReport = exclusions !== null ? {
-    file: GUARDIAN_IGNORE_FILE,
-    patterns: exclusions.patterns,
-    excluded_files: exclusions.excludedFileCount,
-    findings_excluded: excludedHere
-  } : null;
-  if (exclusionReport !== null) meta3["exclusions"] = exclusionReport;
-  if (invocation.warnings !== void 0 && invocation.warnings.length > 0) meta3["run_warnings"] = invocation.warnings;
-  if (OWASP_SCAN_TYPES.has(config2.scan_type) && meta3[PROJECT_LANGUAGES_META_KEY] === void 0) {
-    meta3[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(
-      plugin.storage.stack,
-      projectPath,
-      // The CI gate's --rules-ref: the ref's .guardianignore (`ci/refConfig.ts`).
-      args.configRoot !== projectPath ? { walk: { guardianIgnoreFrom: args.configRoot } } : {}
-    );
-  }
-  if (Object.keys(meta3).length > 0) finalize3.meta = meta3;
-  const finishedAt = plugin.storage.scans.finalize(finalize3);
-  if (status === "cancelled") {
-    return failDomain("cancelled", "Scan was cancelled by the host.");
-  }
-  if (invocation.outcome === "output_too_large") {
-    return failDomain(
-      "output_too_large",
-      "Scanner output exceeded 5 MB. Read full report from report_paths instead.",
-      { report_paths: invocation.report_paths }
-    );
-  }
-  const view = applyResponseView(config2, input2, findings, scanId);
-  const visible = filterFindings(view.visible, input2.severity_min);
-  const counts = countBySeverity(visible);
-  const top = topFindings(visible, 10);
-  const floor = severityFloorNotice(view.visible, input2.severity_min, scanId);
-  warnings.push(...scopeWarnings(scopeMeta));
-  const excludedNote = exclusionWarning(exclusionReport);
-  if (excludedNote !== null) warnings.push(excludedNote);
-  warnings.push(...invocation.warnings ?? []);
-  warnings.push(...repoSuppressionWarnings(invocation.tools_run));
-  if (view.warning) warnings.push(view.warning);
-  if (floor?.warning) warnings.push(floor.warning);
-  const assessed = assessCoverage(config2.scan_type, invocation.tools_run, invocation.missing_tools, {
-    manifestGaps: invocation.extras?.["manifest_coverage_gaps"]
-  });
-  const coverage = nothingInScope ? "none" : assessed.coverage;
-  const coverageWarning = nothingInScope ? `\u26A0\uFE0F ${config2.scan_type}: coverage none \u2014 no scanner ran on this scope, so its "0 findings" is not a clean result.` : assessed.warning;
-  if (coverageWarning) warnings.unshift(coverageWarning);
-  const result = {
-    scan_id: scanId,
-    scan_type: config2.scan_type,
-    project_path: projectPath,
-    tree_hash: treeHash,
-    started_at: startedAt2,
-    finished_at: finishedAt,
-    duration_ms: durationMs(startedAt2, finishedAt),
-    status,
-    tools_run: invocation.tools_run,
-    missing_tools: invocation.missing_tools,
-    report_paths: invocation.report_paths,
-    findings_count_by_severity: counts,
-    top_findings: top,
-    warnings,
-    coverage,
-    ...floor ? { severity_filter: floor.disclosure } : {}
-  };
-  report("done");
-  const payload = {
-    ...result,
-    ...view.disclosure,
-    ...invocation.extras ?? {},
-    ...scopeMeta !== null ? { scope: scopeMeta } : {},
-    ...nothingInScope ? { nothing_in_scope: true } : {},
-    ...exclusionReport !== null ? { exclusions: exclusionReport } : {}
-  };
-  return { ok: true, ...payload };
-}
-async function guardianSettingsState(projectPath, configRoot) {
-  const scan2 = await hashProjectFile(configRoot, SCAN_SETTINGS_RELATIVE_PATH);
-  const budgets = await hashProjectFile(projectPath, BUDGETS_RELATIVE_PATH);
-  if (scan2 === "missing" && budgets === "missing") return null;
-  return `scan.yml:${scan2};budgets.yml:${budgets}`;
-}
-function buildCacheKey(config2, input2, packCtx, treeHash, cacheState) {
-  const { projectPath } = packCtx;
-  let rulePacksHash;
-  try {
-    rulePacksHash = hashRulePacks(config2.rulePacks ? config2.rulePacks(input2, packCtx) : []);
-  } catch {
-    rulePacksHash = `uncacheable:${randomUUID2()}`;
-  }
-  const keyed = normaliseInput(config2, input2);
-  if (Object.keys(cacheState).length > 0) keyed["__cache_state"] = cacheState;
-  return scanCacheKey({
-    projectPath,
-    tool: config2.name,
-    scanType: config2.scan_type,
-    treeHash,
-    inputHash: hashInput(keyed),
-    pluginVersion: resolveVersion(),
-    rulePacksHash
-  });
-}
-function normaliseInput(config2, input2) {
-  const parsed2 = external_exports.object(config2.inputSchema).safeParse(input2);
-  const source = parsed2.success ? parsed2.data : { ...input2 };
-  const excluded = /* @__PURE__ */ new Set([...KEYLESS_INPUTS, ...config2.responseOnlyInputs ?? []]);
-  const out = {};
-  for (const [key, value] of Object.entries(source)) {
-    if (excluded.has(key) || value === void 0) continue;
-    out[key] = value;
-  }
-  return out;
-}
-function applyResponseView(config2, input2, findings, scanId) {
-  const view = config2.responseView?.(input2, findings, scanId) ?? null;
-  return view ?? { visible: [...findings], disclosure: {}, warning: null };
-}
-function durationMs(startedAt2, finishedAt) {
-  if (finishedAt === null) return null;
-  const ms = Date.parse(finishedAt) - Date.parse(startedAt2);
-  return Number.isFinite(ms) ? ms : null;
-}
-function configDriftAdvisory(plugin, projectPath) {
-  try {
-    return buildDriftAdvisory(
-      detectConfigDrift({
-        projectPath,
-        configsDir: configsDirFromScriptsDir(plugin.scriptsDir),
-        currentVersion: resolveVersion()
-      })
-    );
-  } catch {
-    return null;
-  }
-}
-function cachedResult(config2, input2, plugin, scanId, warnings) {
-  const record8 = plugin.storage.scans.getById(scanId);
-  if (!record8) {
-    return failDomain("unknown_scan_id", `Cached scan ${scanId} could not be loaded.`);
-  }
-  const stored = plugin.storage.findings.listByScan(scanId);
-  const view = applyResponseView(config2, input2, stored, scanId);
-  const visible = filterFindings(view.visible, input2.severity_min);
-  const counts = countBySeverity(visible);
-  const top = topFindings(visible, 10);
-  const floor = severityFloorNotice(view.visible, input2.severity_min, scanId);
-  const { coverage, warning: coverageWarning } = assessCoverage(
-    record8.scan_type,
-    record8.tools_run,
-    record8.missing_tools,
-    { manifestGaps: record8.meta?.["manifest_coverage_gaps"] }
-  );
-  const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
-  const { meta: meta3, ...row } = record8;
-  allWarnings.push(...scopeWarnings(meta3?.["scope"]));
-  const excludedNote = exclusionWarning(meta3?.["exclusions"]);
-  if (excludedNote !== null) allWarnings.push(excludedNote);
-  allWarnings.push(...runWarnings(meta3?.["run_warnings"]));
-  allWarnings.push(...repoSuppressionWarnings(record8.tools_run));
-  if (view.warning) allWarnings.push(view.warning);
-  if (floor?.warning) allWarnings.push(floor.warning);
-  const extras = {};
-  for (const [key, value] of Object.entries(meta3 ?? {})) {
-    if (!FACTORY_META_KEYS.has(key)) extras[key] = value;
-  }
-  const result = {
-    ...row,
-    duration_ms: durationMs(record8.started_at, record8.finished_at),
-    cached: true,
-    cached_from: scanId,
-    findings_count_by_severity: counts,
-    top_findings: top,
-    warnings: allWarnings,
-    coverage,
-    ...floor ? { severity_filter: floor.disclosure } : {}
-  };
-  return {
-    ok: true,
-    ...result,
-    ...view.disclosure,
-    ...extras
-  };
-}
-function severityFloorNotice(all, min, scanId) {
-  if (min === void 0) return null;
-  const shortfall2 = severityShortfall(all, min);
-  const disclosure = {
-    severity_min: min,
-    withheld: shortfall2.total,
-    withheld_by_severity: shortfall2.by_severity,
-    suggested_severity_min: shortfall2.suggested_severity_min,
-    recovered_by_suggestion: shortfall2.recovered_by_suggestion
-  };
-  if (shortfall2.total === 0) return { disclosure, warning: null };
-  const suggestion = shortfall2.suggested_severity_min === null ? "" : ` Pass severity_min "${shortfall2.suggested_severity_min}" to see ${shortfall2.recovered_by_suggestion} of them.`;
-  return {
-    disclosure,
-    warning: `severity_min "${min}" filtered this response only: ${shortfall2.total} finding(s) (${describeShortfallTiers(shortfall2)}) are recorded in scan ${scanId} and are not shown here. Baselines and diffs against this scan include them.${suggestion}`
-  };
-}
-function failDomain(code, message3, retry_with) {
-  const error62 = { code, message: message3 };
-  if (retry_with !== void 0) error62.retry_with = retry_with;
-  return { ok: false, error: error62 };
-}
-var FIVE_MINUTES_MS, KEYLESS_INPUTS, FACTORY_META_KEYS, MAX_LOG_LINE;
-var init_scanToolFactory = __esm({
-  "src/tools/scanToolFactory.ts"() {
-    "use strict";
-    init_coverage();
-    init_projectLanguages();
-    init_zod();
-    init_advisory();
-    init_detect2();
-    init_findingIdentity();
-    init_secretFindingRedaction();
-    init_configsDir();
-    init_guardianIgnore();
-    init_scope();
-    init_version();
-    init_projectFs();
-    init_scanSettings();
-    init_budgets();
-    init_progressEmitter();
-    init_concurrencyLimiter();
-    init_breakdown();
-    init_filter();
-    init_cacheKey();
-    init_computeTreeHash();
-    init_projectPath();
-    init_gitState();
-    init_scanHelpers();
-    init_scanCoverage();
-    init_repoConfig();
-    init_counts();
-    FIVE_MINUTES_MS = 5 * 60 * 1e3;
-    KEYLESS_INPUTS = ["project_path", "severity_min", "force"];
-    FACTORY_META_KEYS = /* @__PURE__ */ new Set([
-      "severity_min",
-      "parent_scan_id",
-      "run_warnings",
-      PROJECT_LANGUAGES_META_KEY
-    ]);
-    MAX_LOG_LINE = 200;
-  }
-});
-
 // src/pkgvet/versions.ts
 function parse9(version2) {
   let s = version2.trim().replace(/^[vV=]+/, "");
@@ -57156,7 +56513,16 @@ function urlsSaidIn(text3) {
   }
   return found2 ? out + t.slice(copied) : text3;
 }
-var HOST_NOT_SHOWN, UNPARSEABLE, SPECIAL_SCHEME, ANY_SCHEME_WITH_SLASHES, URL_END, UNC_ANYWHERE, NPM_ALIAS, SCP_GIT, SCP_OTHER, NETWORK_BEGIN, schemeOf, SCHEME_CHAR, LETTER, SPECIAL;
+function gitKeysSaid(keys) {
+  const said = keys.map((key) => {
+    const first = key.indexOf(".");
+    const last = key.lastIndexOf(".");
+    if (first < 0 || last <= first || !URL_SECTIONS.includes(key.slice(0, first).toLowerCase())) return key;
+    return `${key.slice(0, first + 1)}${urlSaid(key.slice(first + 1, last), { form: "whole" })}${key.slice(last)}`;
+  });
+  return [...new Set(said)];
+}
+var HOST_NOT_SHOWN, UNPARSEABLE, SPECIAL_SCHEME, ANY_SCHEME_WITH_SLASHES, URL_END, UNC_ANYWHERE, NPM_ALIAS, SCP_GIT, SCP_OTHER, NETWORK_BEGIN, schemeOf, SCHEME_CHAR, LETTER, SPECIAL, URL_SECTIONS;
 var init_urlSaid = __esm({
   "src/redaction/urlSaid.ts"() {
     "use strict";
@@ -57176,6 +56542,661 @@ var init_urlSaid = __esm({
     SCHEME_CHAR = /[A-Za-z0-9+.-]/;
     LETTER = /[A-Za-z]/;
     SPECIAL = ["https", "http", "wss", "ws", "ftp"];
+    URL_SECTIONS = ["http", "credential"];
+  }
+});
+
+// src/tools/scanToolFactory.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+function makeScanTool(config2) {
+  return {
+    name: config2.name,
+    description: config2.description,
+    ...config2.title ? { title: config2.title } : {},
+    inputSchema: config2.inputSchema,
+    handler: (rawInput, plugin, callMeta) => runScanPipeline(config2, rawInput, plugin, callMeta)
+  };
+}
+async function runScanPipeline(config2, input2, plugin, callMeta) {
+  if (config2.supportsAutoFix !== false && input2.auto_fix === true) {
+    if (input2.allow_dirty !== true) {
+      try {
+        const resolved = resolveProjectPath(input2.project_path);
+        const tree = await workingTreeState(resolved.path);
+        if (tree.state === "dirty") {
+          return failDomain("working_tree_dirty", `auto_fix=true requires a clean working tree.`, {
+            allow_dirty: true
+          });
+        }
+        if (tree.state === "unknown") {
+          return failDomain(
+            "not_a_git_repo",
+            `auto_fix=true requires a working tree git confirms is clean, and git could not (${tree.reason}). Autofix would rewrite files nothing can restore; pass allow_dirty=true to accept that.`,
+            { allow_dirty: true }
+          );
+        }
+      } catch (e) {
+        if (e instanceof InvalidProjectPathError) return invalidProjectPath(config2, e);
+        throw e;
+      }
+    }
+  }
+  let resolvedProject;
+  try {
+    resolvedProject = resolveProjectPath(input2.project_path);
+  } catch (e) {
+    if (e instanceof InvalidProjectPathError) return invalidProjectPath(config2, e);
+    throw e;
+  }
+  const projectPath = resolvedProject.path;
+  const warnings = [];
+  if (resolvedProject.warning) warnings.push(resolvedProject.warning);
+  if (plugin.storageWarning) warnings.push(plugin.storageWarning);
+  const driftAdvisory = configDriftAdvisory(plugin, projectPath);
+  if (driftAdvisory) warnings.push(driftAdvisory);
+  const configRoot = plugin.repoConfigFromRef?.root ?? projectPath;
+  let exclusions = null;
+  const loadedExclusions = await loadProjectExclusions(projectPath, configRoot);
+  if (loadedExclusions !== null) {
+    if ("error" in loadedExclusions) {
+      warnings.push(
+        `${GUARDIAN_IGNORE_FILE} could not be read (${loadedExclusions.error}) \u2014 NOTHING was excluded from this scan.`
+      );
+    } else {
+      exclusions = loadedExclusions;
+    }
+  }
+  let scope = null;
+  if (config2.supportsScope === true && input2.scope !== void 0 && input2.scope !== null) {
+    const parsed2 = ScanScopeInput.safeParse(input2.scope);
+    if (!parsed2.success) {
+      const issues = parsed2.error.issues.map((i) => `${["scope", ...i.path].join(".")}: ${i.message}`);
+      return failDomain("unsupported_target", `scope is not valid: ${issues.join("; ")}`);
+    }
+    if (parsed2.data !== void 0) {
+      try {
+        scope = await resolveScope(projectPath, parsed2.data, { exclusions });
+      } catch (e) {
+        if (e instanceof ScopeError) return failDomain(e.code, e.message);
+        throw e;
+      }
+    }
+  }
+  const treeHash = callMeta?.parentScanId !== void 0 && callMeta.treeHash !== void 0 ? callMeta.treeHash : await computeTreeHash(projectPath);
+  const rulesProjectPath = callMeta?.originProjectPath ?? plugin.repoConfigFromRef?.root ?? projectPath;
+  let cacheState = {};
+  if (config2.cacheState) {
+    try {
+      cacheState = await config2.cacheState(input2, { projectPath, plugin, rulesProjectPath });
+    } catch {
+      cacheState = { uncacheable: randomUUID2() };
+    }
+  }
+  if (scope !== null) cacheState = { ...cacheState, scope: scope.cacheState["scope"] ?? "" };
+  if (exclusions !== null) cacheState = { ...cacheState, guardianignore: exclusions.hash };
+  const settings = await guardianSettingsState(projectPath, configRoot);
+  if (settings !== null) cacheState = { ...cacheState, guardian_settings: settings };
+  const cacheKey = buildCacheKey(config2, input2, { projectPath, plugin, rulesProjectPath }, treeHash, cacheState);
+  if (config2.configWarnings) {
+    try {
+      warnings.push(...config2.configWarnings(input2, { projectPath, plugin, rulesProjectPath }));
+    } catch {
+    }
+  }
+  const ttl = config2.cacheTtlMs ?? FIVE_MINUTES_MS;
+  const fresh = new Date(Date.now() - ttl).toISOString();
+  if (input2.force !== true && input2.auto_fix !== true) {
+    const cached2 = plugin.storage.scans.findCacheHit({
+      cache_key: cacheKey,
+      freshThreshold: fresh
+    });
+    if (cached2 && computeCoverage(cached2.tools_run, cached2.missing_tools) === "full" && !scannedNothing(cached2.meta?.["scope"])) {
+      return cachedResult(config2, input2, plugin, cached2.scan_id, warnings);
+    }
+  }
+  const scanId = randomUUID2();
+  const parentScanId = callMeta?.parentScanId;
+  const insertMeta = {
+    ...parentScanId !== void 0 ? { parent_scan_id: parentScanId } : {},
+    ...scope !== null ? { scope: scope.meta } : {}
+  };
+  const inserted = plugin.storage.scans.insert({
+    scan_id: scanId,
+    scan_type: config2.scan_type,
+    project_path: projectPath,
+    tree_hash: treeHash,
+    cache_key: cacheKey,
+    ...Object.keys(insertMeta).length > 0 ? { meta: insertMeta } : {}
+  });
+  plugin.storage.scans.attachTreeCache({
+    tree_hash: treeHash,
+    scan_id: scanId,
+    scan_type: config2.scan_type
+  });
+  const controller = new AbortController();
+  const externalSignal = callMeta?.signal;
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener(
+        "abort",
+        () => {
+          controller.abort();
+        },
+        { once: true }
+      );
+    }
+  }
+  const progress = makeProgressEmitter({
+    token: callMeta?.progressToken,
+    notifier: plugin.progressNotifier
+  });
+  const releaseReports = holdReportDirs(scanId);
+  try {
+    return await runScanBody({
+      config: config2,
+      input: input2,
+      plugin,
+      projectPath,
+      treeHash,
+      scanId,
+      startedAt: inserted.started_at,
+      warnings,
+      signal: controller.signal,
+      progress,
+      childCallMeta: {
+        signal: controller.signal,
+        parentScanId: scanId,
+        treeHash,
+        ...callMeta?.progressToken !== void 0 ? { progressToken: callMeta.progressToken } : {},
+        ...callMeta?.originProjectPath !== void 0 ? { originProjectPath: callMeta.originProjectPath } : {}
+      },
+      rulesProjectPath,
+      configRoot,
+      scope,
+      exclusions,
+      ...parentScanId !== void 0 ? { parentScanId } : {}
+    });
+  } finally {
+    releaseReports();
+    progress.dispose();
+  }
+}
+function invalidProjectPath(config2, e) {
+  if (e.reason === "not_a_directory" && config2.supportsScope === true) {
+    const retry2 = suggestScopeForFile(e.path);
+    return failDomain(
+      "unsupported_target",
+      `project_path ${e.path} is a file, and project_path must be a directory. To scan just that file, pass project_path "${retry2.project_path}" with scope: { paths: ["${retry2.scope.paths.join('", "')}"] }.`,
+      retry2
+    );
+  }
+  return failDomain(projectPathErrorCode(e), e.message);
+}
+function runWarnings(value) {
+  return Array.isArray(value) ? value.filter((w) => typeof w === "string") : [];
+}
+function scannedNothing(scopeMeta) {
+  return typeof scopeMeta === "object" && scopeMeta !== null && scopeMeta.nothing_in_scope === true;
+}
+function scopeWarnings(scopeMeta) {
+  if (typeof scopeMeta !== "object" || scopeMeta === null) return [];
+  const block = scopeMeta;
+  const files = typeof block["files"] === "number" ? block["files"] : 0;
+  const outside = typeof block["findings_outside_scope"] === "number" ? block["findings_outside_scope"] : 0;
+  const ignored = typeof block["files_excluded_by_guardianignore"] === "number" ? block["files_excluded_by_guardianignore"] : 0;
+  const what = block["kind"] === "log_opts" ? describeScope(block) : `${describeScope(block)}, ${files} file(s)`;
+  const warnings = [
+    `Scoped scan (${what}): findings outside the scope are not reported${outside > 0 ? ` (${outside} dropped)` : ""}. It is recorded as scoped \u2014 never a baseline, and never counted as the project's current findings.`
+  ];
+  if (scannedNothing(block)) {
+    warnings.push(
+      `The scope held nothing to scan${ignored > 0 ? ` once ${GUARDIAN_IGNORE_FILE} is applied` : ""} \u2014 no scanner ran, nothing was scanned, and 0 findings here says nothing about the project.`
+    );
+  }
+  if (ignored > 0) {
+    warnings.push(`${ignored} file(s) in the scope are excluded by ${GUARDIAN_IGNORE_FILE} and were not scanned.`);
+  }
+  return warnings;
+}
+function stagedContentGap(notAsStaged) {
+  if (notAsStaged.length === 0) return null;
+  const named2 = `${notAsStaged.slice(0, 5).join(", ")}${notAsStaged.length > 5 ? ", \u2026" : ""}`;
+  return {
+    name: STAGED_CONTENT_GAP,
+    status: "failed",
+    reason: `${notAsStaged.length} staged file(s) changed again in the working tree since git add (${named2}): the scanners read the working tree, not the staged content the commit carries \u2014 stage or stash the rest (git stash --keep-index) and re-scan`
+  };
+}
+function describeScope(block) {
+  const diff = block["diff"];
+  if (block["kind"] === "diff" && typeof diff === "object" && diff !== null) {
+    const d = diff;
+    if (typeof d["base"] === "string") return `diff ${d["base"]}...${typeof d["head"] === "string" ? d["head"] : "HEAD"}`;
+    return d["staged"] === true ? "staged changes" : "uncommitted changes";
+  }
+  if (block["kind"] === "since" && typeof block["since"] === "string") return `since ${block["since"]}`;
+  if (block["kind"] === "log_opts" && typeof block["log_opts"] === "string") return `history ${block["log_opts"]}`;
+  return "paths";
+}
+function exclusionWarning(value) {
+  if (typeof value !== "object" || value === null) return null;
+  const r = value;
+  return `${GUARDIAN_IGNORE_FILE} excluded ${r.excluded_files ?? 0} file(s) (${r.patterns ?? 0} pattern(s)) and ${r.findings_excluded ?? 0} finding(s) from this scan.`;
+}
+function childFindingsExcluded(plugin, extras) {
+  const children = extras?.["child_scans"];
+  if (!Array.isArray(children)) return 0;
+  let total = 0;
+  for (const child of children) {
+    const id = typeof child === "object" && child !== null ? child.scan_id : void 0;
+    if (typeof id !== "string") continue;
+    const report = plugin.storage.scans.getById(id)?.meta?.["exclusions"];
+    const n = typeof report === "object" && report !== null ? report.findings_excluded : void 0;
+    if (typeof n === "number") total += n;
+  }
+  return total;
+}
+function cvesStillFound(cves, kept, dropped) {
+  const keys = (list2) => {
+    const out = /* @__PURE__ */ new Set();
+    for (const f of list2) {
+      const coords = dependencyCoordinates(f);
+      if (coords !== null && f.rule_id !== void 0) out.add(`${f.rule_id}\0${coords.name}`);
+    }
+    return out;
+  };
+  const keptKeys = keys(kept);
+  const droppedKeys = keys(dropped);
+  return cves.filter((c) => {
+    const key = `${c.cve_id}\0${c.package_name}`;
+    return keptKeys.has(key) || !droppedKeys.has(key);
+  });
+}
+async function runScanBody(args) {
+  const { config: config2, input: input2, plugin, projectPath, treeHash, scanId, startedAt: startedAt2, warnings, progress } = args;
+  let step2 = 0;
+  const report = (message3) => {
+    step2 += 1;
+    progress.emit({ step: step2, message: `${config2.name}: ${message3}` });
+  };
+  const ctx = {
+    plugin,
+    scanId,
+    projectPath,
+    signal: args.signal,
+    progress,
+    // Every runner forwards stderr here line by line. A line becomes the
+    // message of the next heartbeat, never a notification of its own: a
+    // chatty scanner would otherwise send hundreds per second.
+    onLog: (line) => {
+      const trimmed = urlsSaidIn(line).trim();
+      if (trimmed.length === 0) return;
+      const clipped = trimmed.length > MAX_LOG_LINE ? `${trimmed.slice(0, MAX_LOG_LINE - 1)}\u2026` : trimmed;
+      progress.note(`${config2.name}: ${clipped}`);
+    },
+    scriptEnv: {
+      ...process.env,
+      PROJECT_PATH: projectPath,
+      GUARDIAN_SCAN_ID: scanId
+    },
+    childCallMeta: args.childCallMeta,
+    rulesProjectPath: args.rulesProjectPath,
+    configRoot: args.configRoot,
+    scope: args.scope,
+    exclusions: args.exclusions
+  };
+  const limiter2 = config2.orchestrator === true ? null : getScanLimiter();
+  if (limiter2) {
+    report("waiting for a scanner slot");
+    try {
+      await limiter2.acquire(ctx.signal);
+    } catch (e) {
+      if (!(e instanceof Error && e.name === "AbortError")) throw e;
+      plugin.storage.scans.finalize({ scan_id: scanId, status: "cancelled", tools_run: [], missing_tools: [] });
+      return failDomain("cancelled", "Scan was cancelled by the host.");
+    }
+  }
+  let invocation;
+  try {
+    report(`scanning ${projectPath}`);
+    invocation = await config2.invoke(input2, ctx);
+  } catch (e) {
+    plugin.storage.scans.finalize({
+      scan_id: scanId,
+      status: "failed",
+      tools_run: [],
+      missing_tools: [],
+      error: e instanceof Error ? e.message : String(e)
+    });
+    return failDomain(
+      "scanner_failed",
+      e instanceof Error ? e.message : "Scanner failed with an unknown error"
+    );
+  } finally {
+    limiter2?.release();
+  }
+  report("recording results");
+  if (args.exclusions !== null) {
+    const ignore = honouredRootFiles(args.configRoot, "guardian");
+    invocation = {
+      ...invocation,
+      tools_run: invocation.tools_run.map((run2) => run2.status === "skipped" ? run2 : withProjectConfig(run2, ignore))
+    };
+  }
+  const stagedGap = args.scope !== null ? stagedContentGap(args.scope.notAsStaged) : null;
+  if (stagedGap !== null) {
+    invocation = {
+      ...invocation,
+      tools_run: [...invocation.tools_run, stagedGap],
+      missing_tools: [...invocation.missing_tools, STAGED_CONTENT_GAP]
+    };
+  }
+  let findings = [];
+  const cves = [];
+  const parserCtx = { project_path: projectPath };
+  for (const task of invocation.parser_inputs) {
+    const out = task.parser.parse(task.input, parserCtx);
+    findings.push(...out.findings);
+    cves.push(...out.cves);
+  }
+  if (invocation.dedupeFindings) findings = invocation.dedupeFindings(findings);
+  const placed = (f) => f.file_path === void 0 || f.file_path === "" ? null : f.file_path;
+  const { exclusions, scope } = args;
+  const dropped = [];
+  const keepIf = (test) => {
+    const before = findings.length;
+    findings = findings.filter((f) => {
+      const p = placed(f);
+      if (p === null || test(p)) return true;
+      dropped.push(f);
+      return false;
+    });
+    return before - findings.length;
+  };
+  const inProject2 = projectPathTest(projectPath);
+  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject2(p)));
+  const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
+  if (dropped.length > 0 && cves.length > 0) {
+    const still = cvesStillFound(cves, findings, dropped);
+    cves.length = 0;
+    cves.push(...still);
+  }
+  findings = assignIdentities(findings, {
+    projectPath,
+    readSource: invocation.readSource ?? makeSourceReader(projectPath)
+  });
+  findings = redactCredentialSnippets(findings);
+  if (findings.length > 0) {
+    plugin.storage.findings.bulkInsert(
+      findings.map((f) => ({ ...f, scan_id: scanId }))
+    );
+    plugin.storage.suppressions.adoptIdentities(scanId);
+  }
+  if (cves.length > 0) {
+    plugin.storage.cves.bulkUpsert(cves.map((c) => ({ ...c, scan_id: scanId })));
+  }
+  const status = invocation.outcome === "completed" ? "completed" : invocation.outcome === "cancelled" ? "cancelled" : "failed";
+  const finalize3 = {
+    scan_id: scanId,
+    status,
+    tools_run: invocation.tools_run,
+    missing_tools: invocation.missing_tools
+  };
+  if (invocation.report_paths[0] !== void 0) finalize3.report_dir = invocation.report_paths[0];
+  if (invocation.error !== void 0) finalize3.error = invocation.error;
+  const meta3 = { ...invocation.extras ?? {} };
+  if (input2.severity_min !== void 0) meta3["severity_min"] = input2.severity_min;
+  if (args.parentScanId !== void 0) meta3["parent_scan_id"] = args.parentScanId;
+  const nothingInScope = scope !== null && !invocation.tools_run.some((t) => t.status === "ok") && computeCoverage(invocation.tools_run, invocation.missing_tools) === "full";
+  const scopeMeta = scope !== null ? { ...scope.meta, findings_outside_scope: outsideScope, ...nothingInScope ? { nothing_in_scope: true } : {} } : null;
+  if (scopeMeta !== null) meta3["scope"] = scopeMeta;
+  const excludedHere = config2.orchestrator === true ? findingsExcluded + childFindingsExcluded(plugin, invocation.extras) : findingsExcluded;
+  const exclusionReport = exclusions !== null ? {
+    file: GUARDIAN_IGNORE_FILE,
+    patterns: exclusions.patterns,
+    excluded_files: exclusions.excludedFileCount,
+    findings_excluded: excludedHere
+  } : null;
+  if (exclusionReport !== null) meta3["exclusions"] = exclusionReport;
+  if (invocation.warnings !== void 0 && invocation.warnings.length > 0) meta3["run_warnings"] = invocation.warnings;
+  if (OWASP_SCAN_TYPES.has(config2.scan_type) && meta3[PROJECT_LANGUAGES_META_KEY] === void 0) {
+    meta3[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(
+      plugin.storage.stack,
+      projectPath,
+      // The CI gate's --rules-ref: the ref's .guardianignore (`ci/refConfig.ts`).
+      args.configRoot !== projectPath ? { walk: { guardianIgnoreFrom: args.configRoot } } : {}
+    );
+  }
+  if (Object.keys(meta3).length > 0) finalize3.meta = meta3;
+  const finishedAt = plugin.storage.scans.finalize(finalize3);
+  if (status === "cancelled") {
+    return failDomain("cancelled", "Scan was cancelled by the host.");
+  }
+  if (invocation.outcome === "output_too_large") {
+    return failDomain(
+      "output_too_large",
+      "Scanner output exceeded 5 MB. Read full report from report_paths instead.",
+      { report_paths: invocation.report_paths }
+    );
+  }
+  const view = applyResponseView(config2, input2, findings, scanId);
+  const visible = filterFindings(view.visible, input2.severity_min);
+  const counts = countBySeverity(visible);
+  const top = topFindings(visible, 10);
+  const floor = severityFloorNotice(view.visible, input2.severity_min, scanId);
+  warnings.push(...scopeWarnings(scopeMeta));
+  const excludedNote = exclusionWarning(exclusionReport);
+  if (excludedNote !== null) warnings.push(excludedNote);
+  warnings.push(...invocation.warnings ?? []);
+  warnings.push(...repoSuppressionWarnings(invocation.tools_run));
+  if (view.warning) warnings.push(view.warning);
+  if (floor?.warning) warnings.push(floor.warning);
+  const assessed = assessCoverage(config2.scan_type, invocation.tools_run, invocation.missing_tools, {
+    manifestGaps: invocation.extras?.["manifest_coverage_gaps"]
+  });
+  const coverage = nothingInScope ? "none" : assessed.coverage;
+  const coverageWarning = nothingInScope ? `\u26A0\uFE0F ${config2.scan_type}: coverage none \u2014 no scanner ran on this scope, so its "0 findings" is not a clean result.` : assessed.warning;
+  if (coverageWarning) warnings.unshift(coverageWarning);
+  const result = {
+    scan_id: scanId,
+    scan_type: config2.scan_type,
+    project_path: projectPath,
+    tree_hash: treeHash,
+    started_at: startedAt2,
+    finished_at: finishedAt,
+    duration_ms: durationMs(startedAt2, finishedAt),
+    status,
+    tools_run: invocation.tools_run,
+    missing_tools: invocation.missing_tools,
+    report_paths: invocation.report_paths,
+    findings_count_by_severity: counts,
+    top_findings: top,
+    warnings,
+    coverage,
+    ...floor ? { severity_filter: floor.disclosure } : {}
+  };
+  report("done");
+  const payload = {
+    ...result,
+    ...view.disclosure,
+    ...invocation.extras ?? {},
+    ...scopeMeta !== null ? { scope: scopeMeta } : {},
+    ...nothingInScope ? { nothing_in_scope: true } : {},
+    ...exclusionReport !== null ? { exclusions: exclusionReport } : {}
+  };
+  return { ok: true, ...payload };
+}
+async function guardianSettingsState(projectPath, configRoot) {
+  const scan2 = await hashProjectFile(configRoot, SCAN_SETTINGS_RELATIVE_PATH);
+  const budgets = await hashProjectFile(projectPath, BUDGETS_RELATIVE_PATH);
+  if (scan2 === "missing" && budgets === "missing") return null;
+  return `scan.yml:${scan2};budgets.yml:${budgets}`;
+}
+function buildCacheKey(config2, input2, packCtx, treeHash, cacheState) {
+  const { projectPath } = packCtx;
+  let rulePacksHash;
+  try {
+    rulePacksHash = hashRulePacks(config2.rulePacks ? config2.rulePacks(input2, packCtx) : []);
+  } catch {
+    rulePacksHash = `uncacheable:${randomUUID2()}`;
+  }
+  const keyed = normaliseInput(config2, input2);
+  if (Object.keys(cacheState).length > 0) keyed["__cache_state"] = cacheState;
+  return scanCacheKey({
+    projectPath,
+    tool: config2.name,
+    scanType: config2.scan_type,
+    treeHash,
+    inputHash: hashInput(keyed),
+    pluginVersion: resolveVersion(),
+    rulePacksHash
+  });
+}
+function normaliseInput(config2, input2) {
+  const parsed2 = external_exports.object(config2.inputSchema).safeParse(input2);
+  const source = parsed2.success ? parsed2.data : { ...input2 };
+  const excluded = /* @__PURE__ */ new Set([...KEYLESS_INPUTS, ...config2.responseOnlyInputs ?? []]);
+  const out = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (excluded.has(key) || value === void 0) continue;
+    out[key] = value;
+  }
+  return out;
+}
+function applyResponseView(config2, input2, findings, scanId) {
+  const view = config2.responseView?.(input2, findings, scanId) ?? null;
+  return view ?? { visible: [...findings], disclosure: {}, warning: null };
+}
+function durationMs(startedAt2, finishedAt) {
+  if (finishedAt === null) return null;
+  const ms = Date.parse(finishedAt) - Date.parse(startedAt2);
+  return Number.isFinite(ms) ? ms : null;
+}
+function configDriftAdvisory(plugin, projectPath) {
+  try {
+    return buildDriftAdvisory(
+      detectConfigDrift({
+        projectPath,
+        configsDir: configsDirFromScriptsDir(plugin.scriptsDir),
+        currentVersion: resolveVersion()
+      })
+    );
+  } catch {
+    return null;
+  }
+}
+function cachedResult(config2, input2, plugin, scanId, warnings) {
+  const record8 = plugin.storage.scans.getById(scanId);
+  if (!record8) {
+    return failDomain("unknown_scan_id", `Cached scan ${scanId} could not be loaded.`);
+  }
+  const stored = plugin.storage.findings.listByScan(scanId);
+  const view = applyResponseView(config2, input2, stored, scanId);
+  const visible = filterFindings(view.visible, input2.severity_min);
+  const counts = countBySeverity(visible);
+  const top = topFindings(visible, 10);
+  const floor = severityFloorNotice(view.visible, input2.severity_min, scanId);
+  const { coverage, warning: coverageWarning } = assessCoverage(
+    record8.scan_type,
+    record8.tools_run,
+    record8.missing_tools,
+    { manifestGaps: record8.meta?.["manifest_coverage_gaps"] }
+  );
+  const allWarnings = coverageWarning ? [coverageWarning, ...warnings] : [...warnings];
+  const { meta: meta3, ...row } = record8;
+  allWarnings.push(...scopeWarnings(meta3?.["scope"]));
+  const excludedNote = exclusionWarning(meta3?.["exclusions"]);
+  if (excludedNote !== null) allWarnings.push(excludedNote);
+  allWarnings.push(...runWarnings(meta3?.["run_warnings"]));
+  allWarnings.push(...repoSuppressionWarnings(record8.tools_run));
+  if (view.warning) allWarnings.push(view.warning);
+  if (floor?.warning) allWarnings.push(floor.warning);
+  const extras = {};
+  for (const [key, value] of Object.entries(meta3 ?? {})) {
+    if (!FACTORY_META_KEYS.has(key)) extras[key] = value;
+  }
+  const result = {
+    ...row,
+    duration_ms: durationMs(record8.started_at, record8.finished_at),
+    cached: true,
+    cached_from: scanId,
+    findings_count_by_severity: counts,
+    top_findings: top,
+    warnings: allWarnings,
+    coverage,
+    ...floor ? { severity_filter: floor.disclosure } : {}
+  };
+  return {
+    ok: true,
+    ...result,
+    ...view.disclosure,
+    ...extras
+  };
+}
+function severityFloorNotice(all, min, scanId) {
+  if (min === void 0) return null;
+  const shortfall2 = severityShortfall(all, min);
+  const disclosure = {
+    severity_min: min,
+    withheld: shortfall2.total,
+    withheld_by_severity: shortfall2.by_severity,
+    suggested_severity_min: shortfall2.suggested_severity_min,
+    recovered_by_suggestion: shortfall2.recovered_by_suggestion
+  };
+  if (shortfall2.total === 0) return { disclosure, warning: null };
+  const suggestion = shortfall2.suggested_severity_min === null ? "" : ` Pass severity_min "${shortfall2.suggested_severity_min}" to see ${shortfall2.recovered_by_suggestion} of them.`;
+  return {
+    disclosure,
+    warning: `severity_min "${min}" filtered this response only: ${shortfall2.total} finding(s) (${describeShortfallTiers(shortfall2)}) are recorded in scan ${scanId} and are not shown here. Baselines and diffs against this scan include them.${suggestion}`
+  };
+}
+function failDomain(code, message3, retry_with) {
+  const error62 = { code, message: message3 };
+  if (retry_with !== void 0) error62.retry_with = retry_with;
+  return { ok: false, error: error62 };
+}
+var FIVE_MINUTES_MS, KEYLESS_INPUTS, FACTORY_META_KEYS, MAX_LOG_LINE;
+var init_scanToolFactory = __esm({
+  "src/tools/scanToolFactory.ts"() {
+    "use strict";
+    init_coverage();
+    init_projectLanguages();
+    init_zod();
+    init_advisory();
+    init_detect2();
+    init_findingIdentity();
+    init_secretFindingRedaction();
+    init_configsDir();
+    init_guardianIgnore();
+    init_scope();
+    init_version();
+    init_projectFs();
+    init_scanSettings();
+    init_budgets();
+    init_progressEmitter();
+    init_concurrencyLimiter();
+    init_breakdown();
+    init_filter();
+    init_cacheKey();
+    init_computeTreeHash();
+    init_projectPath();
+    init_gitState();
+    init_scanHelpers();
+    init_scanCoverage();
+    init_repoConfig();
+    init_counts();
+    init_urlSaid();
+    FIVE_MINUTES_MS = 5 * 60 * 1e3;
+    KEYLESS_INPUTS = ["project_path", "severity_min", "force"];
+    FACTORY_META_KEYS = /* @__PURE__ */ new Set([
+      "severity_min",
+      "parent_scan_id",
+      "run_warnings",
+      PROJECT_LANGUAGES_META_KEY
+    ]);
+    MAX_LOG_LINE = 200;
   }
 });
 
@@ -63307,7 +63328,7 @@ async function commitsPass(opts, result, logOpts, own2, expectedCommits, project
     reasons.push(truncation);
     result.missing_tools.push(GITLEAKS_HISTORY);
   }
-  const notApplied = describeNotApplied(run2.gitNotApplied ?? []);
+  const notApplied = describeNotApplied(gitKeysSaid(run2.gitNotApplied ?? []));
   if (notApplied !== null) reasons.push(notApplied);
   if (problems.length === 0 && !result.cancelled && view.merges !== null) {
     const merges = await mergesPass(opts, result, view.merges, view.source, own2, projectPrefix);
@@ -63753,6 +63774,7 @@ var init_gitleaksScan = __esm({
     init_processRunner();
     init_projectFiles();
     init_gitleaks();
+    init_urlSaid();
     init_scannerParsers();
     GITLEAKS_HISTORY = "gitleaks";
     GITLEAKS_WORKING_TREE = "gitleaks-working-tree";
@@ -69078,6 +69100,7 @@ var init_reviewPr = __esm({
     init_gitChanges();
     init_tools();
     init_scanHelpers();
+    init_urlSaid();
     init_scanToolFactory();
     MANIFEST_RE = /^(package\.json|package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|requirements.*\.txt|pyproject\.toml|poetry\.lock|uv\.lock|Pipfile(\.lock)?|composer\.(json|lock)|Gemfile(\.lock)?|Cargo\.(toml|lock)|go\.(mod|sum)|.*\.csproj|packages\.lock\.json|pom\.xml|build\.gradle(\.kts)?|gradle\.lockfile)$/;
     inputSchema3 = {
@@ -69182,7 +69205,7 @@ var init_reviewPr = __esm({
         }
         const preexisting = preexistingNote(out.preexistingGaps);
         if (preexisting !== null) warnings.push(preexisting);
-        const notApplied = tree === null ? null : describeNotApplied(tree.notApplied);
+        const notApplied = tree === null ? null : describeNotApplied(gitKeysSaid(tree.notApplied));
         if (notApplied !== null) warnings.push(`Head checkout: ${notApplied}.`);
         return {
           outcome: out.cancelled ? "cancelled" : "completed",
@@ -104087,7 +104110,9 @@ function openapiBasePath(root) {
   if (url2 === void 0) return { base: "", partial: false };
   if (url2.includes("{")) return { base: "", partial: true };
   try {
-    return { base: stripTrailingSlash(new URL(url2).pathname), partial: false };
+    const parsed2 = new URL(url2);
+    if (strayAt(parsed2)) return { base: "", partial: true };
+    return { base: stripTrailingSlash(parsed2.pathname), partial: false };
   } catch {
     if (isAbsolutePathReference(url2)) return { base: stripTrailingSlash(url2), partial: false };
     return { base: "", partial: true };
@@ -104163,6 +104188,7 @@ var init_specImport = __esm({
   "src/surface/specImport.ts"() {
     "use strict";
     import_yaml2 = __toESM(require_dist(), 1);
+    init_strayAt();
     init_boundedParse();
     OPERATION_KEYS = [
       "get",
@@ -107314,7 +107340,7 @@ function buildFailure(invoked, result) {
     command: invoked,
     outcome: result.outcome,
     exit_code: result.exitCode,
-    stderr_head: firstStderrLine(result.stderr)
+    stderr_head: urlsSaidIn(firstStderrLine(result.stderr))
   };
 }
 function firstStderrLine(stderr) {
@@ -107339,6 +107365,7 @@ var init_apply2 = __esm({
     init_scanHelpers();
     init_dotnetRestore();
     init_testCommandEnv();
+    init_urlSaid();
     NPM_INSTALLING = /* @__PURE__ */ new Set(["install", "i", "add", "ci", "update", "up", "upgrade", "install-clean"]);
     COMPOSER_INSTALLING = /* @__PURE__ */ new Set(["require", "install", "update", "upgrade"]);
     COMPOSER_RELOCKING = /* @__PURE__ */ new Set(["require", "update", "upgrade"]);
@@ -107710,7 +107737,7 @@ async function openPr(opts) {
   }
   const commit = await run2({ command: GIT_COMMAND, args: ["commit", "--no-verify", "-m", title], cwd: worktreePath });
   const notApplied = /* @__PURE__ */ new Set([...add.gitNotApplied ?? [], ...commit.gitNotApplied ?? []]);
-  const withNotApplied = (outcome) => notApplied.size > 0 ? { ...outcome, git_config_not_applied: [...notApplied].sort() } : outcome;
+  const withNotApplied = (outcome) => notApplied.size > 0 ? { ...outcome, git_config_not_applied: gitKeysSaid([...notApplied].sort()) } : outcome;
   if (hasFailed(commit)) {
     return withNotApplied({
       status: "push_failed",
@@ -107736,7 +107763,7 @@ async function openPr(opts) {
     return withNotApplied({
       status: "push_failed",
       url: null,
-      detail: `Push to origin failed for branch '${branch}': ${describeFailure3(push, "git push")}. The commit exists locally on that branch; it was not pushed.` + (notApplied.size > 0 ? ` The repository's own git configuration was not applied for ${[...notApplied].sort().join(", ")} (dev-guardian never runs a command a scanned repository configures) \u2014 set what the push needs in your own git configuration or environment instead.` : "")
+      detail: `Push to origin failed for branch '${branch}': ${describeFailure3(push, "git push")}. The commit exists locally on that branch; it was not pushed.` + (notApplied.size > 0 ? ` The repository's own git configuration was not applied for ${gitKeysSaid([...notApplied].sort()).join(", ")} (dev-guardian never runs a command a scanned repository configures) \u2014 set what the push needs in your own git configuration or environment instead.` : "")
     });
   }
   const create = await withTextFile(
@@ -107798,7 +107825,9 @@ async function repositoryRewrite(worktreePath, run2, effective) {
     const prefix = e.value;
     const hit = raw.find((u) => u.startsWith(prefix));
     if (hit !== void 0) {
-      return `the repository's own git configuration rewrites where origin is pushed \u2014 ${e.key} = ${prefix} turns ${hit} into ${effective.join(", ")} \u2014 and a push carries your credentials, so dev-guardian does not push there`;
+      const said = (url2) => urlSaid(url2, { form: "whole" });
+      const key = `url.${said(rewrite[1] ?? "")}.${rewrite[2] ?? ""}`;
+      return `the repository's own git configuration rewrites where origin is pushed \u2014 ${key} = ${said(prefix)} turns ${said(hit)} into ${effective.map(said).join(", ")} \u2014 and a push carries your credentials, so dev-guardian does not push there`;
     }
   }
   return null;
@@ -107834,7 +107863,9 @@ function hasFailed(result) {
   return result.outcome !== "completed" || result.exitCode !== 0;
 }
 function describeFailure3(result, label) {
-  return preferredErrorLine(result.stderr) ?? firstNonEmptyLine(result.stderr) ?? firstNonEmptyLine(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`;
+  return urlsSaidIn(
+    preferredErrorLine(result.stderr) ?? firstNonEmptyLine(result.stderr) ?? firstNonEmptyLine(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`
+  );
 }
 function preferredErrorLine(text3) {
   for (const line of text3.split(/\r?\n/)) {
@@ -107866,6 +107897,7 @@ var init_pr = __esm({
     "use strict";
     init_argFile();
     init_processRunner();
+    init_urlSaid();
     init_gitSafety();
     EXCLUDE_GUARDIAN_DIR = ":(exclude,glob)**/.guardian/**";
     BRANCH_PREFIX = "dev-guardian/fix-";
@@ -108698,7 +108730,9 @@ function parseWorktreeList(porcelain) {
   return entries3;
 }
 function describeFailure4(result, label) {
-  return preferredErrorLine2(result.stderr) ?? firstNonEmptyLine2(result.stderr) ?? firstNonEmptyLine2(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`;
+  return urlsSaidIn(
+    preferredErrorLine2(result.stderr) ?? firstNonEmptyLine2(result.stderr) ?? firstNonEmptyLine2(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`
+  );
 }
 function preferredErrorLine2(text3) {
   for (const line of text3.split(/\r?\n/)) {
@@ -108729,6 +108763,7 @@ var init_worktree = __esm({
     "use strict";
     init_processRunner();
     init_gitSafety();
+    init_urlSaid();
     WORKTREE_DIR_PREFIX = "guardian-fixpr-wt-";
   }
 });
@@ -109001,7 +109036,7 @@ async function processGroup(opts) {
     };
   }
   const { worktree } = created;
-  if (worktree.notApplied.length > 0) base2.git_config_not_applied = [...worktree.notApplied];
+  if (worktree.notApplied.length > 0) base2.git_config_not_applied = gitKeysSaid(worktree.notApplied);
   let keepBranch = !apply;
   let semgrepFix;
   let setAside = null;
@@ -109389,6 +109424,7 @@ var init_createFixPr = __esm({
     init_gitState();
     init_tools();
     init_projectArg();
+    init_urlSaid();
     DEFAULT_SOURCES = ["deps", "semgrep"];
     DEFAULT_SEVERITY_MIN = "high";
     DEFAULT_MAX_PRS = 3;
@@ -109940,7 +109976,9 @@ function checkPlainHttpRemotes(entries3) {
       continue;
     }
     if (parsed2.protocol !== "http:" || isLoopbackHost(parsed2.hostname)) continue;
-    const shown = maskSecrets(entry.url);
+    const said = urlSaid(entry.url, { form: "whole" });
+    const shown = maskSecrets(said);
+    const identity = said === entry.url ? shown : `${shown} (server '${entry.name}')`;
     out.push(
       finding4({
         rule_id: "agent-audit-http-remote",
@@ -109949,7 +109987,7 @@ function checkPlainHttpRemotes(entries3) {
         title: `MCP server '${entry.name}' connects over plain HTTP`,
         message: `'${entry.name}' points at ${shown} \u2014 an unencrypted transport. Tool calls, responses, and any bearer token/header this server is configured with travel in the clear and can be read or altered in transit. Use https:// instead.`,
         file_path: entry.sourceLabel,
-        snippet: shown
+        snippet: identity
       })
     );
   }
@@ -110199,6 +110237,7 @@ var init_rules = __esm({
     "use strict";
     init_secretScan();
     init_maskSecrets();
+    init_urlSaid();
     init_scannerParsers();
     init_patterns();
     init_yaraSignatures();
@@ -114714,15 +114753,16 @@ function unambiguous(url2, written) {
   }
   return QUERY_SAFE_SCHEMES.has(url2.protocol) || !written.includes("?");
 }
-function hostLabel(url2) {
-  return `${url2.protocol}//${url2.host}`;
+function hostLabel(written, cutOff = "") {
+  return urlSaid(written, { form: "hostPort", cutOff });
 }
 function urlLabel(url2) {
   try {
-    return hostLabel(new URL(url2));
+    new URL(url2);
   } catch {
     return "a URL that does not parse";
   }
+  return hostLabel(url2);
 }
 function remoteInText(raw) {
   const text3 = asUrlParsersRead(raw);
@@ -114736,15 +114776,15 @@ function remoteInText(raw) {
     try {
       url2 = new URL(written);
     } catch {
-      return `names a URL that does not parse (${JSON.stringify(written.slice(0, 80))})`;
+      return "names a URL that does not parse";
     }
     if (url2.hostname === "") continue;
     if (isLoopbackName(url2.hostname)) {
       const cutInAuthority = start + written.length < text3.length && authorityOpen(written);
       if (!cutInAuthority && unambiguous(url2, written)) continue;
-      return `names ${hostLabel(url2)} written so that another client may read another host (a backslash, several @, a host after the @ that is not loopback as written, a query on a non-HTTP scheme, or a space, quote or control character inside its host)`;
+      return `names ${hostLabel(written, text3.slice(start + written.length))} written so that another client may read another host (a backslash, several @, a host after the @ that is not loopback as written, a query on a non-HTTP scheme, or a space, quote or control character inside its host)`;
     }
-    return `names ${hostLabel(url2)} (a proxy, a client or a source on another machine)`;
+    return `names ${hostLabel(written, text3.slice(start + written.length))} (a proxy, a client or a source on another machine)`;
   }
   return null;
 }
@@ -114894,7 +114934,7 @@ async function resolveCommand2(command, env, cwd, deadline) {
   if (found2 === null) {
     return {
       ok: false,
-      reason: `could not start the server: '${command}' was not found on PATH` + (skipped2.length > 0 ? ` (network PATH entries were not searched: ${skipped2.join(", ")})` : "")
+      reason: `could not start the server: '${urlSaid(command, { form: "whole" })}' was not found on PATH` + (skipped2.length > 0 ? ` (network PATH entries were not searched: ${skipped2.map((d) => urlSaid(d, { form: "whole" })).join(", ")})` : "")
     };
   }
   return { ok: true, command: found2 };

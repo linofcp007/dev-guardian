@@ -64,6 +64,7 @@ import { readJsonSafe } from '../tools/scanHelpers.js';
 import { dotnetAddPackageRefusal } from '../deps/dotnetRestore.js';
 import type { SemgrepFixPlan } from './semgrepFix.js';
 import { packageManagerEnv } from './testCommandEnv.js';
+import { urlsSaidIn } from '../redaction/urlSaid.js';
 import type { FixCandidate, FixGroup, UpgradeStep } from './types.js';
 
 export interface ApplyResult {
@@ -413,7 +414,7 @@ function buildFailure(invoked: string, result: ProcessRunResult): NonNullable<Ap
     command: invoked,
     outcome: result.outcome,
     exit_code: result.exitCode,
-    stderr_head: firstStderrLine(result.stderr),
+    stderr_head: urlsSaidIn(firstStderrLine(result.stderr)),
   };
 }
 

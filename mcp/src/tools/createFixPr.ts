@@ -182,6 +182,7 @@ import { bugHuntLocalConfigs } from './bugHunt.js';
 import { isGitRepo } from './gitState.js';
 import { defineTool, registerToolModule, type ToolCallMeta, type ToolInput, TOOLS } from './index.js';
 import { toolProjectPath } from './projectArg.js';
+import { gitKeysSaid } from '../redaction/urlSaid.js';
 
 const DEFAULT_SOURCES: readonly FixSource[] = ['deps', 'semgrep'];
 const DEFAULT_SEVERITY_MIN: Severity = 'high';
@@ -764,7 +765,7 @@ async function processGroup(opts: {
     };
   }
   const { worktree } = created;
-  if (worktree.notApplied.length > 0) base.git_config_not_applied = [...worktree.notApplied];
+  if (worktree.notApplied.length > 0) base.git_config_not_applied = gitKeysSaid(worktree.notApplied);
 
   // Set true only at the one point below where openPr's own status says the
   // branch should survive — see the module comment (C2) and KEEPS_BRANCH.

@@ -202,3 +202,23 @@ export function urlsSaidIn(text: string): string {
   }
   return found ? out + t.slice(copied) : text;
 }
+
+// ── git configuration keys ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** The sections whose keys take a URL as their subsection: `http.<url>.<variable>`, `credential.<url>.<variable>`. */
+const URL_SECTIONS = ['http', 'credential'];
+
+/**
+ * Git configuration keys (`<section>.<subsection>.<variable>`) with the subsection said by {@link urlSaid}: a key such
+ * as `http.https://U:T@H/.extraheader` names the repository's own setting that dev-guardian did not apply, and its URL
+ * holds the credential the repository wrote there. A key with no URL subsection comes out as it was; repeats collapse.
+ */
+export function gitKeysSaid(keys: readonly string[]): string[] {
+  const said = keys.map((key) => {
+    const first = key.indexOf('.');
+    const last = key.lastIndexOf('.');
+    if (first < 0 || last <= first || !URL_SECTIONS.includes(key.slice(0, first).toLowerCase())) return key;
+    return `${key.slice(0, first + 1)}${urlSaid(key.slice(first + 1, last), { form: 'whole' })}${key.slice(last)}`;
+  });
+  return [...new Set(said)];
+}

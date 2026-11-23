@@ -71,6 +71,11 @@ version bump.
   subtable takes no name out of the checks. *What can now be refused:* a malicious name the public registry took down is refused
   when only a file of the project explains the missing name (the old files and the new ones, npm and PyPI); a registry of the
   user, of the machine, of the hook's environment or of the command line keeps the warning, and so does a workspace package.
+- **A finding `agent-audit-http-remote` that appears once as new (deps-tools-host-other-texts).** An `.mcp.json` server over plain
+  HTTP whose URL has a user part, or an `@` that is not one, is now said without them, and its snippet ends with `(server '<name>')`:
+  the finding's identity (its snippet is part of its fingerprint) changes once, so it shows as a new finding and the old one as
+  fixed. Suppress the new one with `suppress_finding`, and never run `baseline update` just for these: it accepts every finding.
+  What the database, `baseline.json` and its git history already hold stays as it was written.
 
 ### Security
 
@@ -209,6 +214,30 @@ version bump.
   registry package (git, a URL, `file:`, `workspace:`, a path, an invalid name, an alias whose range is one of
   those), which leaves only the key; and a source name escaped twice (`%2564…`), which the hook decodes to the end
   and looks up where Yarn decodes once.
+
+- **Credentials of a URL the dev-guardian tools read from a file are no longer written (deps-tools-host-other-texts).** A URL or a
+  network path read from a project file, an `.mcp.json`, the repository's git configuration, or the error line of a program is now
+  said as a URL parser reads it: without its user part (`https://U:T@host/x` is `https://host/x`); with no host at all when an
+  `@` stands outside the user part, or in what a reader cut off at a comment, a `;`, an `=`, a space, a quote, a comma or a
+  size limit (`scheme://(host not shown)`, `\(host not shown)` for a network path); `(unparseable URL)` for an `@` that is no
+  URL. A text with no `@`, a loose version, an `npm:` alias, the scp form `git@host:path` and a URL whose only `@` is the scope
+  of its own package or an empty user part are said as before. It reaches: the `.npmrc` registry, the key of an `overrides` /
+  `resolutions` entry and the `yarn.lock` line of the npm network-path refusal, the pip requirement, option, include and
+  comment cuts, `setup.cfg` and `pyproject.toml`, the .NET network-path reference and the restore error line (also in
+  `scan_sast`), the URL version a lock gives a package in `deps_update_plan` (`unplanned`, a plan step and the label of a
+  `create_fix_pr` candidate), the push refusal of `create_fix_pr` (the remote before and after the `insteadOf`, its key), the
+  git keys with a URL as their subsection (`http.<url>.extraheader`, `credential.<url>.helper`) in `create_fix_pr`,
+  `scan_secrets` and `review_pr`, the first error line of a program in the `create_fix_pr` answers (`stderr_head`, the
+  worktree reason, the push failure), the progress messages of a scan (a program's stderr line, its URLs said before the cut at
+  200 characters), `audit_mcp_tools` (an unreadable URL is no longer quoted; the host and port are not said when it is not the
+  host) and `audit_agent_config`. The `onLog` of a child process now receives whole lines (a line the pipe cut in two reaches
+  it as one; a rest of more than 4 096 characters goes out as a line). An OpenAPI `servers[0].url` with an `@` outside its user
+  part gives its routes an unknown base path (`path_partial: true`) and no piece of the URL. **The host is no longer said** for a
+  URL whose credential held an unencoded separator (`https://T/K@H/` was said `https://T`, a piece of the credential), or whose
+  cut-off part held an `@` (EC-7: `https://T;K@H/x`, `# name@corp` after a requirement). **What was written before holds the
+  credentials of that time** — the database, `.guardian/reports/`, stored maps, a `baseline.json` and its git history, session
+  logs: rotate every credential written in a URL of a project file, an `.mcp.json`, the repository's git configuration, or of
+  your own configuration whose sources an error or progress line may have repeated (`NuGet.Config`, `~/.npmrc`, `pip.conf`).
 
 ### Fixed
 
