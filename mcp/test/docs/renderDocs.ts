@@ -452,10 +452,18 @@ export function renderKnownLimitsDoc(limits: readonly KnownLimit[]): string {
     if (inArea.length === 0) continue;
     out.push(`## ${AREA_TITLES[area]}`, '');
     for (const limit of inArea) {
-      out.push(`- ${limit.doc.trim()}`);
+      // A record is one item: the lines of its text after the first stay inside it, indented by two spaces.
+      const [first = '', ...rest] = limit.doc.trim().split('\n');
+      const several = rest.length > 0;
+      out.push(`- ${first}`, ...rest.map((line) => (line === '' ? '' : `  ${line}`)));
+      // Markdown needs a blank line between the paragraph of such an item and the list (or paragraph) that follows it.
+      if (several && (limit.examples.length > 0 || limit.not_executable !== undefined)) out.push('');
+      if (several && limit.examples.length > 0) out.push('  Examples:', '');
       for (const example of limit.examples) out.push(`  - ${exampleLine(example)}`);
       if (limit.not_executable !== undefined) {
-        out.push(`  - ${limit.examples.length === 0 ? 'No test runs it' : 'What no test runs'}: ${limit.not_executable.trim()}.`);
+        const reason = limit.not_executable.trim();
+        const line = `${limit.examples.length === 0 ? 'No test runs it' : 'What no test runs'}: ${reason}${reason.endsWith('.') ? '' : '.'}`;
+        out.push(several && limit.examples.length === 0 ? `  ${line}` : `  - ${line}`);
       }
     }
     out.push('');

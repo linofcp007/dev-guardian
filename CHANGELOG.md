@@ -354,6 +354,12 @@ version bump.
   - **Still not read as npm reads it** (the known limits `npm-short-flag-groups` and `project-default-registry`): the
     whole words with a letter npm does not have (`-global`, `-local -g`, which npm installs globally), the groups of
     letters given to a launcher, and the groups of pnpm and bun, which were not measured.
+- **The known-limits page passes markdownlint again (known-limits-doc-markdownlint).** `docs/hooks-known-limits.md`
+  had 112 markdownlint errors (MD005, MD007, MD032) and showed 116 items for 26 records in "Install-time package
+  vetting": the generator wrote the lines after the first of a record's text at column 0 and the examples straight after
+  them. It now indents them by two spaces and, for a record of more than one line, writes "Examples:" (or the reason as a
+  paragraph) before the examples, so each record is one item; and it adds no second full stop to a reason that already
+  ends in one (two reasons ended in ".."). A test now checks the list layout the generator writes.
 
 ## [3.15.0] - 2026-11-21
 
