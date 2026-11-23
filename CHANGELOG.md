@@ -8,6 +8,12 @@ version bump.
 
 ## [Unreleased]
 
+## [3.16.1] - 2026-11-23
+
+In the plugin's own repository, the scan no longer gives a finding of the plugin's own rule packs a different key
+depending on whether the CLI runs from the repository or from an installed copy, so the installed CLI no longer
+reports the repository's accepted findings as new. Nothing changes for a project that does not contain the plugin.
+
 ### Fixed
 
 - A rule of the plugin's own `configs/semgrep/` pack is stored under its own id (`web-js-sql-template`) also when that
