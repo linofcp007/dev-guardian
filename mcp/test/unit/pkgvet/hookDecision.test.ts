@@ -7781,3 +7781,310 @@ describe('install-vet-path-forms', () => {
     expect(d?.context ?? '(no context)').toContain("the project's .npmrc sets the default registry (https://registry.example.invalid)");
   });
 });
+
+describe('install-vet-uv-run-project-index', () => {
+  const IDX = 'https://pypi.corp.example/simple/';
+  const CLI = 'https://pypi.cli.example/simple/';
+  const REQUESTS = 'requests';
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const GONE = 'dgprobe-zzq7731-gone';
+  const MISSING = 'dgprobe-zzq7731-missing';
+  const PROJECT = '[project]\nname = "dgprobe-zzq7731-proj"\nversion = "0.1.0"\ndependencies = []\n\n';
+  const PY = 'python -c "print(1)"';
+  const SAYS = 'sets the package index';
+  const CONFIGURED = 'a custom registry is configured (';
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The public registry of the plan: `requests` and EVIL are published, EVIL and GONE have a `MAL-` advisory, the rest is a 404. */
+  const reg = (): ReturnType<typeof registry> => registry({ exists: [REQUESTS, EVIL], malicious: [EVIL, GONE] });
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  const kindOf = (d: Decided): 'null' | 'deny' | 'ask' | 'context' =>
+    d === null ? 'null' : d.deny !== undefined ? 'deny' : d.ask !== undefined ? 'ask' : 'context';
+  const textOf = (d: Decided): string => `${d?.deny ?? ''}\n${d?.context ?? ''}\n${d?.ask ?? ''}`;
+  const put = (rel: string, text: string, at: string = project): void => {
+    mkdirSync(dirname(join(at, rel)), { recursive: true });
+    writeFileSync(join(at, rel), text);
+  };
+  /** A folder that is a repository root: no reader climbs out of it into the temp folder. */
+  const repository = (at: string = project): void => {
+    mkdirSync(join(at, '.git'), { recursive: true });
+  };
+  /** The decision for `command` run in `at` (the folder of the command and the project), against the public registry above. */
+  const decide = async (command: string, o: { at?: string; env?: Record<string, string> } = {}): Promise<{ d: Decided; calls: string[] }> => {
+    const at = o.at ?? project;
+    const r = reg();
+    const d = await decideInstallCommand(command, opts(r.fetchImpl, { popular: {}, cwd: at, projectDir: at, env: { GUARDIAN_OFFLINE: '0', ...(o.env ?? {}) } }));
+    return { d, calls: r.calls };
+  };
+  const pypiAsked = (calls: string[]): string[] => calls.filter((u) => u.startsWith('https://pypi.org/pypi/'));
+
+  // The 7 project files of the table of bug.md, written here and never read from `.specs/`.
+  const FILES: Array<[label: string, files: Record<string, string>]> = [
+    ['no project file', {}],
+    ['uv.toml index-url', { 'uv.toml': `index-url = "${IDX}"\n` }],
+    ['uv.toml [[index]] default = true', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['uv.toml [[index]]', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['uv.toml [pip] index-url', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['pyproject.toml [tool.uv] index-url', { 'pyproject.toml': `${PROJECT}[tool.uv]\nindex-url = "${IDX}"\n` }],
+    ['pyproject.toml [[tool.uv.index]] default = true', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+  ];
+  // The 5 forms, and what each needs on disk for a name.
+  const FORMS: Array<[command: string, files: (name: string) => Record<string, string>]> = [
+    ['uv run s.py', (n) => ({ 's.py': BLOCK(n) })],
+    ['pipx run s.py', (n) => ({ 's.py': BLOCK(n) })],
+    ['pipx run --path s.py', (n) => ({ 's.py': BLOCK(n) })],
+    [`uv run --with-requirements r.txt ${PY}`, (n) => ({ 'r.txt': `${n}\n` })],
+    [`uv run --with {N} ${PY}`, () => ({})],
+  ];
+  // The decision of the table of bug.md, with or without a project file.
+  const NAMES: Array<[name: string, kind: 'null' | 'deny' | 'context']> = [
+    [REQUESTS, 'null'],
+    [MISSING, 'context'],
+    [EVIL, 'deny'],
+    [GONE, 'deny'],
+  ];
+
+  // ── T-04 (a): no verdict changes — the 140 rows (7 files x 5 forms x 4 names)
+
+  it.each(FILES)('T-04 (a) %s: the decision of each of the 5 forms and 4 names is the one of the table, and no answer names the index', async (_label, files) => {
+    let n = 0;
+    for (const [template, filesOf] of FORMS) {
+      for (const [name, kind] of NAMES) {
+        const command = template.replace('{N}', name);
+        const at = join(project, `cell-${String(n)}`);
+        n += 1;
+        repository(at);
+        for (const [rel, text] of [...Object.entries(files), ...Object.entries(filesOf(name))]) put(rel, text, at);
+        const { d, calls } = await decide(command, { at });
+        const row = `${command} (${name})`;
+        expect(kindOf(d), row).toBe(kind);
+        expect(d?.ask, row).toBeUndefined();
+        expect(pypiAsked(calls).some((u) => u.includes(`/pypi/${name}/json`)), `${row}: the name is asked of the PyPI`).toBe(true);
+        expect(textOf(d), `${row}: no line of a project file`).not.toContain(SAYS);
+        // A warning for a missing name may name the index today (a custom registry is configured); no `null` and no refusal does.
+        if (kind !== 'context') expect(textOf(d), `${row}: the index is not named`).not.toContain('pypi.corp.example');
+        if (name === MISSING) expect(d?.context ?? '(no context)', row).toContain(`'${MISSING}': not found on the public registry`);
+        if (name === EVIL) {
+          // A published malicious name: the refusal is the same text with and without the file.
+          const bare = join(project, `bare-${String(n)}`);
+          repository(bare);
+          for (const [rel, text] of Object.entries(filesOf(name))) put(rel, text, bare);
+          const without = await decide(command, { at: bare });
+          expect(d?.deny, row).toBe(without.d?.deny);
+          expect(d?.deny ?? '(no deny)', row).toContain('MAL-2026-77');
+        }
+        if (name === GONE) {
+          expect(d?.deny ?? '(no deny)', row).toContain('OSV lists this name as a malicious package (MAL-2026-77), removed from PyPI');
+        }
+      }
+    }
+  }, 60_000);
+
+  // ── T-04 (b): where the line is not said, with `uv.toml` = IDX and `s.py` = BLOCK('requests')
+
+  const uvProject = (): void => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+  };
+
+  it('T-04 (b) `uv run --no-config s.py` and `uv run --config-file cfg.toml s.py`: nothing said (s1, s3)', async () => {
+    uvProject();
+    put('cfg.toml', `index-url = "${CLI}"\n`);
+    expect((await decide('uv run --no-config s.py')).d).toBeNull();
+    expect((await decide('uv run --config-file cfg.toml s.py')).d).toBeNull();
+  });
+
+  it('T-04 (b) UV_NO_CONFIG=1 and a UV_CONFIG_FILE with no index, outside the folder, in the hook environment: nothing said (s2, s5)', async () => {
+    uvProject();
+    const cfg = join(home, 'no-index.toml');
+    writeFileSync(cfg, 'native-tls = false\n');
+    expect((await decide('uv run s.py', { env: { UV_NO_CONFIG: '1' } })).d).toBeNull();
+    expect((await decide('uv run s.py', { env: { UV_CONFIG_FILE: cfg } })).d).toBeNull();
+  });
+
+  it.each(['--default-index', '--index-url', '-i'])('T-04 (b) `uv run %s CLI s.py`: nothing said (c3-c6)', async (flag) => {
+    uvProject();
+    expect((await decide(`uv run ${flag} ${CLI} s.py`)).d).toBeNull();
+  });
+
+  it.each(['UV_DEFAULT_INDEX', 'UV_INDEX_URL'])('T-04 (b) %s in the hook environment: nothing said (n1, n2)', async (variable) => {
+    uvProject();
+    expect((await decide('uv run s.py', { env: { [variable]: CLI } })).d).toBeNull();
+  });
+
+  it('T-04 (b) UV_DEFAULT_INDEX with a pyproject.toml [tool.uv] index: nothing said (n12)', async () => {
+    repository();
+    put('pyproject.toml', `${PROJECT}[tool.uv]\nindex-url = "${IDX}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py', { env: { UV_DEFAULT_INDEX: CLI } })).d).toBeNull();
+  });
+
+  it('T-04 (b) `UV_DEFAULT_INDEX=x uv run s.py`, an assignment before the command: nothing said', async () => {
+    uvProject();
+    expect((await decide('UV_DEFAULT_INDEX=x uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (b) a project index that is the PyPI itself (EC-3): nothing said', async () => {
+    repository();
+    put('uv.toml', 'index-url = "https://pypi.org/simple"\n');
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (b) the same IDX in the uv.toml of the user (APPDATA / XDG_CONFIG_HOME): nothing said', async () => {
+    uvProject();
+    const cfg = join(home, 'cfg');
+    mkdirSync(join(cfg, 'uv'), { recursive: true });
+    writeFileSync(join(cfg, 'uv', 'uv.toml'), `index-url = "${IDX}"\n`);
+    expect((await decide('uv run s.py', { env: { APPDATA: cfg, XDG_CONFIG_HOME: cfg } })).d).toBeNull();
+  });
+
+  it('T-04 (b) `uv run pytest`, nothing to vet (P2 = A): nothing said', async () => {
+    uvProject();
+    expect((await decide('uv run pytest')).d).toBeNull();
+  });
+
+  it('T-04 (b) `false && cd sub; uv run s.py`, the folder is not known: only the line that the script was not read', async () => {
+    uvProject();
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('false && cd sub; uv run s.py');
+    expect(d?.context).toBe('dev-guardian: s.py was not read (where the command runs could not be determined) — its packages were not vetted.');
+    expect(d?.deny).toBeUndefined();
+    expect(d?.ask).toBeUndefined();
+  });
+
+  const POETRY = (priority: string): string => `[[tool.poetry.source]]\nname = "corp"\nurl = "${IDX}"\n${priority}`;
+  /** The kinds of index `uv run` does not obey (M-1 k6, k9, k12-k16, k18). */
+  const NOT_OBEYED: Array<[label: string, files: Record<string, string>]> = [
+    ['uv.toml [pip] index-url', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['[tool.uv.pip] index-url', { 'pyproject.toml': `${PROJECT}[tool.uv.pip]\nindex-url = "${IDX}"\n` }],
+    ['[[tool.poetry.source]]', { 'pyproject.toml': `${PROJECT}${POETRY('')}` }],
+    ['[[tool.poetry.source]] primary', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "primary"\n')}` }],
+    ['[[tool.poetry.source]] supplemental', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "supplemental"\n')}` }],
+    ['[[tool.poetry.source]] explicit', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "explicit"\n')}` }],
+    ['[[tool.poetry.source]] default', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "default"\n')}` }],
+    ['[[tool.pdm.source]]', { 'pyproject.toml': `${PROJECT}[[tool.pdm.source]]\nname = "corp"\nurl = "${IDX}"\n` }],
+  ];
+
+  it.each(NOT_OBEYED)('T-04 (b) `uv run s.py` with %s and a clean script: nothing said', async (_label, files) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  /** The files of the T-03 plan: every kind of index a project file gives, none of which a script of `pipx run` obeys (M-1 p1-p8, p12-p20). */
+  const PIPX_FILES: Array<[label: string, files: Record<string, string>]> = [
+    ['uv.toml index-url', { 'uv.toml': `index-url = "${IDX}"\n` }],
+    ['uv.toml extra-index-url', { 'uv.toml': `extra-index-url = ["${IDX}"]\n` }],
+    ['uv.toml find-links', { 'uv.toml': 'find-links = ["https://pypi.corp.example/links/"]\n' }],
+    ['uv.toml [[index]]', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['uv.toml [[index]] default = true', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['uv.toml [pip] index-url', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['[tool.uv] index-url', { 'pyproject.toml': `${PROJECT}[tool.uv]\nindex-url = "${IDX}"\n` }],
+    ['[[tool.uv.index]]', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['[[tool.uv.index]] default = true', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['[[tool.poetry.source]]', { 'pyproject.toml': `${PROJECT}${POETRY('')}` }],
+    ['[[tool.poetry.source]] primary', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "primary"\n')}` }],
+    ['[[tool.poetry.source]] default', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "default"\n')}` }],
+    ['[[tool.pdm.source]]', { 'pyproject.toml': `${PROJECT}[[tool.pdm.source]]\nname = "corp"\nurl = "${IDX}"\n` }],
+  ];
+
+  it.each(PIPX_FILES.flatMap(([label, files]) => ['pipx run s.py', 'pipx run --path s.py'].map((command) => ({ label, files, command }))))(
+    'T-04 (b) `$command` with a clean script and $label: nothing said (P3 = A)',
+    async ({ files, command }) => {
+      repository();
+      for (const [rel, text] of Object.entries(files)) put(rel, text);
+      put('s.py', BLOCK(REQUESTS));
+      expect((await decide(command)).d).toBeNull();
+    },
+  );
+
+  // ── T-04 (c): the other commands (P2 = A)
+
+  it.each(['uv add requests', 'uv pip install requests', 'pip install requests', 'uvx requests', 'uv tool install requests', 'pipx install requests', 'pipx run requests'])(
+    'T-04 (c) `%s` with a uv.toml index: nothing said, as today',
+    async (command) => {
+      repository();
+      put('uv.toml', `index-url = "${IDX}"\n`);
+      expect((await decide(command)).d).toBeNull();
+    },
+  );
+
+  // ── T-04 (d): the reader's limits
+
+  it('T-04 (d) EC-4: a uv.toml that is a folder: nothing said', async () => {
+    repository();
+    mkdirSync(join(project, 'uv.toml'));
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (d) EC-4: a uv.toml above 1 MiB with the index-url at the top: nothing said', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n${'#'.repeat(1024 * 1024 + 10)}\n`);
+    put('s.py', BLOCK(REQUESTS));
+    expect((await decide('uv run s.py')).d).toBeNull();
+  });
+
+  it('T-04 (d) EC-10: a uv.toml in the folder above the repository (uv obeys it, f8): nothing said, the hook does not read above the root', async () => {
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    const repo = join(project, 'repo');
+    repository(repo);
+    put('s.py', BLOCK(REQUESTS), repo);
+    expect((await decide('uv run s.py', { at: repo })).d).toBeNull();
+  });
+
+  it('T-04 (d) EC-11: `uv run --with-requirements sub/r.txt` with the uv.toml in sub and nothing at the root: nothing said (w11)', async () => {
+    repository();
+    put('sub/r.txt', `${REQUESTS}\n`);
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    expect((await decide(`uv run --with-requirements sub/r.txt ${PY}`)).d).toBeNull();
+  });
+
+  // ── T-04 (e): the refusals carry no line
+
+  it('T-04 (e) a malicious name in the script, with a uv.toml index: refused with the text of today, no line of the file', async () => {
+    repository();
+    put('s.py', BLOCK(EVIL));
+    const without = (await decide('uv run s.py')).d;
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    const { d } = await decide('uv run s.py');
+    expect(d?.deny ?? '(no deny)').toContain(`names '${EVIL}@1.0.0'`);
+    expect(d?.deny).toBe(without?.deny);
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  it('T-04 (e) `uv run s.py; pip install <a malicious name>`: the pip install is refused with the OSV text of today, with no line of the project file (on a `;` line a missing name only warns)', async () => {
+    uvProject();
+    const { d } = await decide(`uv run s.py; pip install ${EVIL}`);
+    expect(d?.deny ?? '(no deny)').toContain('OSV malicious-package advisory for 1.0.0: MAL-2026-77');
+    expect(d?.deny ?? '').toContain(EVIL);
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  // ── T-04 (f): what stays
+
+  it.each(['uv run s.py', 'pipx run s.py'])('T-04 (f) `%s` with [tool.uv.pip] and a missing name: the reason of a project without the file (k9, p15)', async (command) => {
+    repository();
+    put('pyproject.toml', `${PROJECT}[tool.uv.pip]\nindex-url = "${IDX}"\n`);
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide(command);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(`'${MISSING}': not found on the public registry`);
+    expect(d?.context ?? '(no context)').toContain('not denied: it is named by a manifest');
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+
+  it('T-04 (f) PIP_INDEX_URL in the hook environment and a missing name in `uv run s.py`: the reason "a custom registry is configured", as today (US-1.AC-6)', async () => {
+    repository();
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide('uv run s.py', { env: { PIP_INDEX_URL: IDX } });
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(CONFIGURED);
+    expect(d?.context ?? '').toContain('PIP_INDEX_URL');
+    expect(textOf(d)).not.toContain(SAYS);
+  });
+});
