@@ -10,10 +10,11 @@ version bump.
 
 ### Upgrading from 3.15.0
 
-- **`npx`, `bunx` and `npm exec` in a folder on a network path.** The installed copy is no longer looked for there, so a name
-  the registry does not have, which nothing explains, is no longer refused on a share that answers and has no copy: it warns,
+- **`npx`, `bunx` and `npm exec` in a folder on a network path.** The installed copy is no longer looked for there, so a plain
+  name (no version, no alias, no `--prefix`) the registry does not have, which nothing explains, is no longer refused on a share that
+  answers and has no copy: it warns,
   with the reason "(not denied: it runs in a folder on a network path, where an installed copy was not looked for)". A
-  malicious name is still refused.
+  malicious name is still refused, and so is a name with a version, an alias or `--prefix`, as before.
 - **The default-registry line in a folder on a network path.** The project's `.npmrc` and the other registry files are not
   read there: the line "the project's .npmrc sets the default registry (…)" is replaced by "dev-guardian: the project's registry
   settings were not read (on a network path) — if they set the default registry, what it serves was not vetted."

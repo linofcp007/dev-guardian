@@ -8779,15 +8779,15 @@ var MAX_VETTED_PACKAGES = MAX_CANDIDATES_PER_COMMAND;
 var MAX_MANIFEST_PACKAGES = 150;
 var MANIFEST_UNREPORTED = /* @__PURE__ */ new Set(["publish_age", "install_scripts"]);
 var MAX_PARSED_LENGTH = 512 * 1024;
-function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed], pastDeadline = () => false, onDisk = (c) => c, noCopyReasons = () => []) {
+function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed], pastDeadline = () => false, onDisk = (c) => c, noCopyLookup = () => false) {
   const cut = command.length > MAX_PARSED_LENGTH;
   let unassessed = 0;
   const parsed = withManifests(
     parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) => {
       if (c.localPathFirst === true) return onDisk(c);
       if (c.localFirst !== true) return c;
-      const why = noCopyReasons(c);
-      const withWhy = why.length === 0 ? c : { ...c, uncertain: [...c.uncertain, ...why] };
+      const noCopy = c.packages.length > 0 && c.packages.every((p) => noCopyLookup(p, c));
+      const withWhy = noCopy ? { ...c, uncertain: [...c.uncertain, NETWORK_COPY_REASON] } : c;
       if (pastDeadline()) {
         unassessed += 1;
         return withWhy;
@@ -8962,7 +8962,7 @@ function registryCommand(c) {
   };
 }
 function isDefaultRegistryLine(note) {
-  return /^dev-guardian: the project's \S+ sets the default registry(?: \([^)]*\))? — /.test(note) || /^dev-guardian: \d+ more files? of the project sets? the default registry\.$/.test(note);
+  return /^dev-guardian: the project's \S+ sets the default registry(?: \([^)]*\))? — /.test(note) || /^dev-guardian: \d+ more files? of the project sets? the default registry\.$/.test(note) || note === REGISTRY_FILES_NOT_READ;
 }
 var MAX_REGISTRY_LINES = 3;
 function projectDefaultRegistryLines(c, opts, registry, userRegistries, memo) {
@@ -9379,11 +9379,14 @@ function withoutDiskEntries(c, opts, pastDeadline, said2, spelling) {
   for (const each of why) said2.add(`dev-guardian: ${diskReason(each)} \u2014 its words were vetted as package names.`);
   return { ...c, packages, uncertain: [...c.uncertain, ...[...why].map(diskReason)] };
 }
-function networkCopyReasons(c, opts) {
-  return c.localFirst === true && c.workdir === void 0 && isNetworkPath(resolve4(opts.cwd)) ? [NETWORK_COPY_REASON] : [];
+function copyNotLookedFor(pkg, c, opts) {
+  return c.localFirst === true && copyMayBeLocal(pkg, c) && c.workdir === void 0 && isNetworkPath(resolve4(opts.cwd));
+}
+function copyMayBeLocal(pkg, c) {
+  return pkg.range === void 0 && pkg.raw === pkg.name && c.prefixed !== true;
 }
 function runsInstalledCopy(pkg, c, opts, memo, spelling) {
-  if (pkg.range !== void 0 || pkg.raw !== pkg.name || c.prefixed === true) return false;
+  if (!copyMayBeLocal(pkg, c)) return false;
   const dir = commandDir(c, opts, spelling);
   if (dir === null || isNetworkPath(dir)) return false;
   const key = `${dir}\0${pkg.name}\0${String(c.byPackageFlag === true)}\0${c.manager}`;
@@ -9785,7 +9788,7 @@ async function decideInstallCommand(command, opts) {
     (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt, spelling),
     () => Date.now() > deadlineAt,
     (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes, spelling),
-    (c) => networkCopyReasons(c, opts)
+    (pkg, c) => copyNotLookedFor(pkg, c, opts)
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];

@@ -241,7 +241,7 @@ function boundedInstalls(
   withManifests: (parsed: readonly InstallCommand[]) => VetCommand[] = (parsed) => [...parsed],
   pastDeadline: () => boolean = () => false,
   onDisk: (c: InstallCommand) => InstallCommand = (c) => c,
-  noCopyReasons: (c: InstallCommand) => readonly string[] = () => [],
+  noCopyLookup: (pkg: PackageSpec, c: InstallCommand) => boolean = () => false,
 ): { commands: VetCommand[]; notVetted: number; manifestNotVetted: number; cut: boolean; unassessed: number } {
   const cut = command.length > MAX_PARSED_LENGTH;
   // The safety net of the budget (review round 2): past the deadline a launcher is no longer asked whether the project
@@ -256,8 +256,9 @@ function boundedInstalls(
       // fetch nothing: there is nothing to vet (review P1).
       if (c.localFirst !== true) return c;
       // Where no installed copy is looked for, a missing name is told why it is not denied.
-      const why = noCopyReasons(c);
-      const withWhy = why.length === 0 ? c : { ...c, uncertain: [...c.uncertain, ...why] };
+      // Only when every name is one whose copy would have been looked for: a version, an alias or `--prefix` never was (EC-4).
+      const noCopy = c.packages.length > 0 && c.packages.every((p) => noCopyLookup(p, c));
+      const withWhy = noCopy ? { ...c, uncertain: [...c.uncertain, NETWORK_COPY_REASON] } : c;
       if (pastDeadline()) {
         unassessed += 1;
         return withWhy;
@@ -325,12 +326,12 @@ function boundedInstalls(
  */
 type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true; fromLocalScript?: true; fromArchiveFile?: true };
 
-/** Why the name given to an update is never denied as missing (measured 2026-11-20: an update fetches only what is installed already). */
 /** The line said in place of the project's registry files, which are not read in a folder on the network. */
 const REGISTRY_FILES_NOT_READ =
   "dev-guardian: the project's registry settings were not read (on a network path) — if they set the default registry, what it serves was not vetted.";
 /** Why a missing name of `npx`, `bunx` or `npm exec` is not denied in a folder on the network: the installed copy that would explain it was not looked for. */
 const NETWORK_COPY_REASON = 'it runs in a folder on a network path, where an installed copy was not looked for';
+/** Why the name given to an update is never denied as missing (measured 2026-11-20: an update fetches only what is installed already). */
 const NAMED_TO_UPDATE = 'not denied: a package named to an update is fetched only when it is already installed';
 
 /** Said for a global update that names nothing: the managers update every globally installed package (measured 2026-11-20). */
@@ -538,7 +539,8 @@ function registryCommand(c: InstallCommand): RegistryCommand {
 function isDefaultRegistryLine(note: string): boolean {
   return (
     /^dev-guardian: the project's \S+ sets the default registry(?: \([^)]*\))? — /.test(note) ||
-    /^dev-guardian: \d+ more files? of the project sets? the default registry\.$/.test(note)
+    /^dev-guardian: \d+ more files? of the project sets? the default registry\.$/.test(note) ||
+    note === REGISTRY_FILES_NOT_READ
   );
 }
 
@@ -1186,9 +1188,14 @@ function withoutDiskEntries(c: InstallCommand, opts: HookVetOptions, pastDeadlin
   return { ...c, packages, uncertain: [...c.uncertain, ...[...why].map(diskReason)] };
 }
 
-/** A launcher without a `cd` in a folder on the network: the reason its missing names are not denied ({@link runsInstalledCopy} looked for no copy). */
-function networkCopyReasons(c: InstallCommand, opts: HookVetOptions): readonly string[] {
-  return c.localFirst === true && c.workdir === undefined && isNetworkPath(resolve(opts.cwd)) ? [NETWORK_COPY_REASON] : [];
+/** Whether `pkg` is a name whose copy {@link runsInstalledCopy} did not look for because the launcher runs in a folder on the network, with no `cd`. */
+function copyNotLookedFor(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions): boolean {
+  return c.localFirst === true && copyMayBeLocal(pkg, c) && c.workdir === undefined && isNetworkPath(resolve(opts.cwd));
+}
+
+/** The names whose installed copy {@link runsInstalledCopy} looks for: no range, no alias, no `--prefix` (review of 3.4.0, finding 5). */
+function copyMayBeLocal(pkg: PackageSpec, c: InstallCommand): boolean {
+  return pkg.range === undefined && pkg.raw === pkg.name && c.prefixed !== true;
 }
 
 /**
@@ -1202,7 +1209,7 @@ function networkCopyReasons(c: InstallCommand, opts: HookVetOptions): readonly s
  */
 function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions, memo: Map<string, boolean>, spelling: SpellingMemo): boolean {
   // `--prefix` (`-C`) points npm at another project: where is not read here (review of 3.4.0, finding 5).
-  if (pkg.range !== undefined || pkg.raw !== pkg.name || c.prefixed === true) return false;
+  if (!copyMayBeLocal(pkg, c)) return false;
   const dir = commandDir(c, opts, spelling);
   // On the network no installed copy is looked for (each lstat may cost the SMB timeout): see {@link NETWORK_COPY_REASON}.
   if (dir === null || isNetworkPath(dir)) return false;
@@ -1777,7 +1784,7 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt, spelling),
     () => Date.now() > deadlineAt,
     (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes, spelling),
-    (c) => networkCopyReasons(c, opts),
+    (pkg, c) => copyNotLookedFor(pkg, c, opts),
   );
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {

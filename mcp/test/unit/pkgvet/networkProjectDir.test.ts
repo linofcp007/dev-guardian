@@ -376,6 +376,38 @@ describe("install-vet-network-project-dir-probe", () => {
     },
   );
 
+  win(
+    `T-01 (g) npm install of a missing name, cwd and project dir on a network path: the deny carries NOTREAD${WIN}`,
+    async () => {
+      const f = registries();
+      const d = await decideInstallCommand("npm install dgprobe-zzq7731-missing", opts(f.fetchImpl, NET));
+      expect(d?.deny ?? String(d?.context)).toContain(NOTREAD);
+    },
+  );
+
+  // Every system: the project directory text is read before any `resolve`, and `isNetworkPath` catches `//` anywhere.
+  it("T-01 (a) Linux variant: pip install of a malicious name, project dir //198.51.100.7/share/proj: the deny, no network path asked", async () => {
+    const f = registries();
+    const d = await decideInstallCommand(
+      `pip install ${EVIL}`,
+      opts(f.fetchImpl, tempDir("dg-netdir-local-"), { projectDir: "//198.51.100.7/share/proj" }),
+    );
+    expect(networkPaths()).toEqual([]);
+    expect(d?.deny ?? String(d?.context)).toContain(EVIL_DENY);
+  });
+
+  win(
+    `T-02 (d) npx of a missing name with a version, cwd on a network path: today's deny, without REASON${WIN}`,
+    async () => {
+      const f = registries();
+      const d = await decideInstallCommand("npx dgprobe-zzq7731-missing@1.0.0", opts(f.fetchImpl, NET, { projectDir: undefined }));
+      // EC-4: a version never looked for the installed copy, so a 404 nothing explains stays refused.
+      expect(d?.deny ?? String(d?.context)).toContain("dgprobe-zzq7731-missing");
+      expect(d?.deny).toBeDefined();
+      expect(`${d?.deny ?? ""}${d?.context ?? ""}`).not.toContain(REASON);
+    },
+  );
+
   // The real disk: `203.0.113.N` is a documentation address that does not answer, so the mock lets it through. A fresh N
   // per run (172 and 204 are the M-0's) because Windows remembers a host that did not answer. 90 s, so today's ~42 s is an
   // AssertionError and not a timeout.
