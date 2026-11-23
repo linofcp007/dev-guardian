@@ -178,6 +178,14 @@ export interface InstallCommand {
    * commands): the files are then read as they were before the forms were told apart.
    */
   registryForm?: string;
+  /**
+   * The form of a `uv run` or of a script given to `pipx run`, as the registry files are judged for it when a name of it is missing
+   * (`uv run`, `pipx run script`; measured 2026-11-23 with uv 0.13.8 and pipx 1.18.16, install-vet-uv-run-project-index). A field of its
+   * own: {@link registryForm} stays absent for these, as it was when the forms were told apart. Absent for every other command.
+   */
+  explainForm?: string;
+  /** What the flags of a `uv run` say about the file of the project the uv reads for its index; present only for `uv run`. */
+  uvRun?: UvRunFlags;
   /** A bun command with `--env-file`, `--env-file=…` or `--no-env-file`, before or after the verb: the bun does not read the `.env` files it would. */
   envFileFlag?: true;
   /** A bun command that runs a package (`bunx`, `bun x`, `bun create`, `bun c`): the bun reads no `.env` file for it (`bun x` measured, the others by its documentation). */
@@ -192,6 +200,20 @@ export interface InstallCommand {
    * the hook asks the disk (`lstat`, no link followed) before it vets the words. The parse does no I/O and marks the command.
    */
   localPathFirst?: true;
+}
+
+/**
+ * What a `uv run` line says about the project's index file (measured, M-1 of install-vet-uv-run-project-index): `noConfig` — `--no-config` or
+ * `--config-file`, the uv then reads no file of the project; `defaultIndexFlag` — `--default-index`, `--index-url` or `-i`, which replace the
+ * default index of the file; `assigned` — a variable is assigned or exported on the line, which the hook does not read; `project` — the folder
+ * of `--project`, where the uv starts its search (`projectUnknown`: it has an expansion).
+ */
+interface UvRunFlags {
+  noConfig: boolean;
+  defaultIndexFlag: boolean;
+  assigned?: true;
+  project?: string;
+  projectUnknown?: true;
 }
 
 /** A word of {@link InstallCommand.inlineScripts}. */
@@ -2390,10 +2412,13 @@ function collectLaunch(d: Detected, launch: NonNullable<Detected['launch']>, con
   if (flags.some((f) => f.flag === '--prefix' || f.flag === '-C')) out.prefixed = true;
   if (launch.flags === 'uv-run') attachUvRun(out, d, pre, w, flags);
   else if (launch.flags === 'pipx-run' && launch.style === 'run' && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp, d.measuredArchiveForm === true);
-  // A script given to `pipx run` (a `.py` file, or `--path`) is read by `install-vet-inline-script-deps`: it keeps the answer it had.
-  // Any other word may be a file too, but it is the package of that name unless the folder holds one: the form is measured for it.
+  // A script given to `pipx run` (a `.py` file, or `--path`) is read by `install-vet-inline-script-deps`: no file of the project explains a
+  // name of it (`explainForm`, measured for both engines of the pipx). Any other word may be a file too, but it is the package of that name
+  // unless the folder holds one: the form is measured for it.
   const script = pathApp || (out.inlineScripts ?? []).some((w) => PYTHON_FILE.test(w.file));
   if (d.registryForm !== undefined && !script) out.registryForm = d.registryForm;
+  if (d.registryForm === 'pipx run' && script) out.explainForm = 'pipx run script';
+  if (launch.flags === 'uv-run') out.explainForm = 'uv run';
   if (d.manager === 'bun') out.bunLauncher = true;
   if (d.manager === 'bun' && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
   // The requirements files `pipx inject -r` hands to pip, as `pip install -r` hands them, in the order written.
@@ -2441,6 +2466,13 @@ function attachUvRun(out: InstallCommand, d: Detected, pre: WalkResult, w: WalkR
   const others = required.filter((file) => !PYTHON_FILE.test(file));
   if (others.length > 0) out.manifest = { kind: 'requirements', files: others };
   if (scripts.length > 0) out.inlineScripts = scripts;
+  const projects = flags.filter((f) => f.flag === '--project' && f.value !== undefined && f.value !== '').map((f) => f.value ?? '');
+  const project = projects[projects.length - 1];
+  out.uvRun = {
+    noConfig: flags.some((f) => f.flag === '--no-config' || f.flag === '--config-file'),
+    defaultIndexFlag: flags.some((f) => f.flag === '--default-index' || f.flag === '--index-url'),
+    ...(project === undefined ? {} : SHELL_EXPANSION.test(project) ? { projectUnknown: true as const } : { project }),
+  };
   const given = flags.filter((f) => f.flag === '--directory' && f.value !== undefined && f.value !== '').map((f) => f.value ?? '');
   const dir = given.length > 0 ? given[given.length - 1] : d.envDir;
   if (dir === undefined || dir === '') return;
@@ -3352,6 +3384,8 @@ function parseReading(text: string, forced: string | null, cdpath: boolean): Ins
         if (envChange) context.push('inline environment assignment in the command (it can redirect the registry)');
         if (dirChanged) context.push('directory change earlier in the command (that directory’s registry configuration was not read)');
         const c = collect(d, context);
+        // A variable assigned or exported on the line: the hook does not read it, and the uv may read it for its index.
+        if (envChange && c.uvRun !== undefined) c.uvRun.assigned = true;
         // `uv run pytest`: nothing to read, no command (the sync of the project stays unread).
         if (d.launch?.program === true && c.packages.length === 0 && c.skipped.length === 0 && c.inlineScripts === undefined && c.manifest === undefined) {
           if (changesDirectory(words)) dirChanged = true;

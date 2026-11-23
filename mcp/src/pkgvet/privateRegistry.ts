@@ -139,6 +139,12 @@ export interface RegistryCommand {
   global: boolean;
   envFileFlag: boolean;
   bunLauncher: boolean;
+  /**
+   * The folder the uv starts looking for the project's index file in, for a `uv run` (the folder of its script, else the one the command
+   * runs in, moved by `--directory` and `--project`): the lookups then read the one file the uv reads ({@link uvRunProjectFile}) and not every
+   * file of the project. Absent: the folder is not known, and the files are read as for any other form.
+   */
+  searchFrom?: string | undefined;
 }
 
 /**
@@ -1426,6 +1432,8 @@ type IndexKind =
 interface IndexEntry {
   kind: IndexKind;
   url: string;
+  /** The key a `uv.toml` / `[tool.uv]` entry came from (`index-url`, `extra-index-url`, `find-links`); absent for a table of an array. */
+  key?: string;
 }
 
 /** A table of an array, its header's name and its lines, as read so far. */
@@ -1440,10 +1448,15 @@ function arrayUrl(body: string[]): string {
 }
 
 /** The value of `index-url`, `extra-index-url` or `find-links` on a line (a `"`, `'`, space or `]` ends it), unless it is the public index. */
-function indexKeyValue(line: string, onlyIndexUrl = false): string | undefined {
-  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/.exec(line);
+function indexKeyValue(line: string, onlyIndexUrl = false): { key: string; url: string } | undefined {
+  // `extra-index-url = ["url"]` and `find-links = ["url"]` are arrays in a `uv.toml`: the first URL of the line is the value; an array whose
+  // first element is on another line is a value the reader cannot judge.
+  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*(\[?)\s*["']?([^"'\s\]]*)/.exec(line);
   if (m === null || (onlyIndexUrl && m[1] !== 'index-url')) return undefined;
-  return isPublic('pypi', m[2] ?? '') ? undefined : m[2];
+  const key = m[1] ?? '';
+  const url = m[3] ?? '';
+  if (url === '') return m[2] === '[' ? { key, url: UNREADABLE_VALUE } : undefined;
+  return isPublic('pypi', url) ? undefined : { key, url };
 }
 
 /**
@@ -1485,7 +1498,7 @@ function indexEntries(
     }
     if (keyed === undefined) continue;
     const value = indexKeyValue(line, keyed.onlyIndexUrl === true);
-    if (value !== undefined) out.push({ kind: keyed.kind, url: value });
+    if (value !== undefined) out.push({ kind: keyed.kind, url: value.url, key: value.key });
   }
   flush();
   return out;
@@ -1532,6 +1545,14 @@ const NOT_OBEYED: Readonly<Record<string, ReadonlySet<IndexKind>>> = {
   'uv pip install': new Set<IndexKind>(['poetry-primary']),
   'pipx install': new Set<IndexKind>(['uv-top', 'tool-uv', 'tool-uv-index', 'tool-uv-index-default', 'poetry-primary']),
   'pipx run': new Set<IndexKind>(['uv-top', 'tool-uv']),
+  // `uv run` (measured 2026-11-23, M-1 of install-vet-uv-run-project-index: k6, k9, k12-k16, k18, w5, w10): it obeys the index-url, extra-index-url and
+  // find-links of `uv.toml` and `[tool.uv]` and the tables `[[index]]` and `[[tool.uv.index]]`, and not these.
+  'uv run': new Set<IndexKind>(['uv-pip', 'poetry-none', 'poetry-primary', 'poetry-supplemental', 'poetry-explicit', 'poetry-other', 'pdm']),
+  // A script given to `pipx run` (M-1 p1-p8, p12-p20, both engines): no file of the project is obeyed, whatever its kind.
+  'pipx run script': new Set<IndexKind>([
+    'uv-top', 'uv-pip', 'uv-index', 'uv-index-default', 'tool-uv', 'tool-uv-index', 'tool-uv-index-default',
+    'poetry-none', 'poetry-primary', 'poetry-supplemental', 'poetry-explicit', 'poetry-other', 'pdm',
+  ]),
   'poetry add': new Set<IndexKind>(['poetry-explicit', 'uv-top', 'tool-uv', 'tool-uv-index-default']),
   'pip install': new Set<IndexKind>(['uv-top', 'tool-uv', 'tool-uv-index', 'tool-uv-index-default', 'poetry-primary']),
 };
@@ -1546,6 +1567,113 @@ function explainingIndex(entries: readonly IndexEntry[], ctx: RegistryContext): 
 /** The URL of the first entry of a file of the user or of the machine: every kind but `[tool.uv.pip]`, which only a project's `pyproject.toml` has. */
 function anyIndex(entries: readonly IndexEntry[]): string | undefined {
   return entries.find((e) => e.kind !== 'tool-uv-pip')?.url;
+}
+
+/** Whether a `pyproject.toml` has a `[tool.uv]` table (or `[[tool.uv.index]]`): the uv reads it as its configuration. `[tool.uv.pip]` alone does not stop the search (not measured). */
+function hasToolUv(text: string): boolean {
+  return /^\s*\[\[?\s*tool\.uv(?:\.index)?\s*\]\]?/m.test(text);
+}
+
+/** The one file `uv run` reads for the project, and the indexes it names. */
+export interface UvProjectFile {
+  source: string;
+  entries: readonly IndexEntry[];
+}
+
+/**
+ * The file the uv reads for a `uv run` that starts its search in `dir` (measured, M-1 of install-vet-uv-run-project-index: f2, f6-f8, x1-x4): from `dir`
+ * up, the first `uv.toml` whatever it holds and, in a folder without one, the first `pyproject.toml` with a `[tool.uv]` table — one file, never
+ * the one above it. The walk is {@link ancestors}': the repository root, the home folder and 16 folders at most are its limits, so a file above the
+ * root, which the uv obeys, is not read. `undefined` when there is none.
+ */
+export function uvRunProjectFile(dir: string, ctx: RegistryContext): UvProjectFile | undefined {
+  for (const folder of ancestors({ ...ctx, projectDir: dir })) {
+    const uvToml = join(folder, 'uv.toml');
+    const uvText = read(uvToml, ctx);
+    if (uvText !== undefined) return { source: uvToml, entries: uvTomlEntries(uvText) };
+    const pyproject = join(folder, 'pyproject.toml');
+    const text = read(pyproject, ctx);
+    if (text !== undefined && hasToolUv(text)) return { source: pyproject, entries: pyprojectEntries(text) };
+  }
+  return undefined;
+}
+
+/** Whether an environment variable of the uv is on (`1`, `true`, `yes`, `on`, `y`). */
+function envOn(env: Readonly<Record<string, string | undefined>>, name: string): boolean {
+  return /^(?:1|true|yes|on|y)$/i.test(envValue(env, name) ?? '');
+}
+
+/** `scheme://host/path/` of a URL, as a user registry is compared; `undefined` when it is no URL. */
+function indexOrigin(url: string): string | undefined {
+  try {
+    const u = new URL(url.trim().replace(/^["']|["']$/g, ''));
+    return `${u.origin}${u.pathname.endsWith('/') ? u.pathname : `${u.pathname}/`}`;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The indexes the user's own configuration of the uv names: the `uv.toml` of the user and of the system (`UV_CONFIG_FILE` is a silencer of its own). */
+function uvUserIndexes(ctx: RegistryContext): string[] {
+  const env = envOf(ctx);
+  const home = homeOf(ctx);
+  const etc = ctx.etcDir ?? '/etc';
+  const xdg = envValue(env, 'XDG_CONFIG_HOME') ?? join(home, '.config');
+  const appdata = envValue(env, 'APPDATA') ?? join(home, 'AppData', 'Roaming');
+  const out: string[] = [];
+  for (const path of [join(xdg, 'uv', 'uv.toml'), join(appdata, 'uv', 'uv.toml'), join(etc, 'uv', 'uv.toml')]) {
+    const text = read(path, ctx);
+    if (text === undefined) continue;
+    for (const e of uvTomlEntries(text)) {
+      const origin = indexOrigin(e.url);
+      if (origin !== undefined) out.push(origin);
+    }
+  }
+  return out;
+}
+
+/** An entry that is a default index of the uv: an `index-url`, or a table with `default = true`. */
+function isDefaultIndex(e: IndexEntry): boolean {
+  return e.kind === 'uv-index-default' || e.kind === 'tool-uv-index-default' || ((e.kind === 'uv-top' || e.kind === 'tool-uv') && e.key === 'index-url');
+}
+
+/** The kinds of index `uv run` obeys. */
+const UV_RUN_OBEYED: ReadonlySet<IndexKind> = new Set<IndexKind>(['uv-top', 'uv-index', 'uv-index-default', 'tool-uv', 'tool-uv-index', 'tool-uv-index-default']);
+
+/** What the hook knows of a `uv run` line that decides whether the file of the project is what the uv reads for its index. */
+export interface UvRunSilencers {
+  /** `--no-config` or `--config-file` on the line. */
+  noConfig: boolean;
+  /** `--default-index`, `--index-url` or `-i` on the line. */
+  defaultIndexFlag: boolean;
+}
+
+/**
+ * The index a project file gives `uv run` — the first one it obeys, in the order of the file — for a search that starts in `dir`, or `undefined`
+ * when the line is not to be said (US-1.AC-2, measured): the uv reads no file of the project (`--no-config`, `--config-file`, `UV_NO_CONFIG`,
+ * `UV_CONFIG_FILE`), every index it obeys is a default index and a default index is given on the line or in the environment (`UV_DEFAULT_INDEX`,
+ * `UV_INDEX_URL`), the index is the PyPI or one the user's own `uv.toml` names, or there is no such file. Never throws.
+ */
+export function uvRunProjectIndex(dir: string, silencers: UvRunSilencers, ctx: RegistryContext): { source: string; url: string } | undefined {
+  try {
+    const env = envOf(ctx);
+    if (silencers.noConfig || envOn(env, 'UV_NO_CONFIG') || envValue(env, 'UV_CONFIG_FILE') !== undefined) return undefined;
+    const file = uvRunProjectFile(dir, ctx);
+    if (file === undefined) return undefined;
+    const user = uvUserIndexes(ctx);
+    const obeyed = file.entries.filter((e) => {
+      if (!UV_RUN_OBEYED.has(e.kind) || isPublic('pypi', e.url)) return false;
+      const origin = indexOrigin(e.url);
+      return origin === undefined || !user.some((u) => origin.startsWith(u));
+    });
+    const first = obeyed[0];
+    if (first === undefined) return undefined;
+    const replaced = silencers.defaultIndexFlag || envValue(env, 'UV_DEFAULT_INDEX') !== undefined || envValue(env, 'UV_INDEX_URL') !== undefined;
+    if (replaced && obeyed.every(isDefaultIndex)) return undefined;
+    return { source: file.source, url: first.url };
+  } catch {
+    return undefined;
+  }
 }
 
 /** `path` is inside one of the project's directories (up to the repository root): the `pip.conf` of the virtual environment of the project, say. */
@@ -1615,7 +1743,14 @@ function pypiRegistry(name: string, ctx: RegistryContext): CustomRegistry | null
     }
   }
 
-  for (const dir of ancestors(ctx)) {
+  // `uv run` reads one file, found from the folder of its script (the measured search): the line of the hook and the reason of a missing name agree.
+  const from = ctx.command?.registryForm === 'uv run' ? ctx.command.searchFrom : undefined;
+  if (from !== undefined) {
+    const file = uvRunProjectFile(from, ctx);
+    const url = file === undefined ? undefined : explainingIndex(file.entries, ctx);
+    if (file !== undefined && url !== undefined) take({ kind: 'registry', source: file.source, url, from: 'project' });
+  }
+  for (const dir of from === undefined ? ancestors(ctx) : []) {
     const uvToml = join(dir, 'uv.toml');
     const uvText = read(uvToml, ctx);
     const uvUrl = uvText === undefined ? undefined : explainingIndex(uvTomlEntries(uvText), ctx);

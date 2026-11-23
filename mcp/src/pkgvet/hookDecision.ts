@@ -86,6 +86,7 @@ import {
   npmScopeRegistryOf,
   npmUserRegistries,
   registryCache,
+  uvRunProjectIndex,
   type RegistryCommand,
   type RegistryContext,
 } from './privateRegistry.js';
@@ -324,7 +325,14 @@ function boundedInstalls(
  * are looked up for malware only (`fromLocalScript`), and so are the words the pipx reads as a file whether or not one is there
  * (`fromArchiveFile`: {@link archiveFileCommand}).
  */
-type VetCommand = InstallCommand & { fromManifest?: string; fromUpdate?: true; fromLocalScript?: true; fromArchiveFile?: true };
+type VetCommand = InstallCommand & {
+  fromManifest?: string;
+  fromUpdate?: true;
+  fromLocalScript?: true;
+  fromArchiveFile?: true;
+  /** A `uv run`: the folder the uv starts looking for the project's index file in, for the script or the file these packages came from. */
+  uvSearchDir?: string;
+};
 
 /** The line said in place of the project's registry files, which are not read in a folder on the network. */
 const REGISTRY_FILES_NOT_READ =
@@ -434,13 +442,18 @@ function withManifestPackages(
     reads: new Map<string, ManifestRead>(),
     overflow: new Set<string>(),
     asked: new Set<string>(),
+    uvAsks: new Map<string, UvAsk>(),
   };
   let userRegistries: string[] | undefined;
   const user = (): readonly string[] => (userRegistries ??= npmUserRegistries(registry));
   for (const c of parsed) {
     // The scripts the command runs come first: a `pipx run` word that is a local file leaves its packages, and says so.
     const scripted = scriptCommands(c, world);
-    out.push(...archiveFileCommand(scripted.command), ...scripted.extra);
+    // The names of `uv run --with` are asked of the index the uv reads from where the command runs.
+    const withDirs = c.uvRun !== undefined && c.packages.length > 0 ? uvRunDirs(c, world) : [];
+    const withStart = withDirs[0] === undefined ? undefined : uvSearchStart(c, withDirs[0], world);
+    for (const each of withDirs.slice(1)) uvSearchStart(c, each, world);
+    out.push(...archiveFileCommand(withStart === undefined ? scripted.command : { ...scripted.command, uvSearchDir: withStart }), ...scripted.extra);
     // The names of an update are vetted whatever happens to the manifest below: every early `continue` comes after this.
     const pushUpdate = (inManifest: ReadonlySet<string>): void => {
       const more = updateCommand(c, inManifest);
@@ -525,6 +538,8 @@ function withManifestPackages(
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read.registries];
       const custom = c.customRegistry ?? read.registries[0];
+      // `uv run --with-requirements`: the file the uv reads for its index is looked for from where the command runs, as the names of `--with` are.
+      const uvStart = uvRequirements && c.uvRun !== undefined ? uvSearchStart(c, read.dir ?? dir, world) : undefined;
       out.push({
         ...c,
         packages,
@@ -532,11 +547,13 @@ function withManifestPackages(
         uncertain: [NAMED_BY_MANIFEST],
         registries,
         ...(custom !== undefined ? { customRegistry: custom } : {}),
+        ...(uvStart !== undefined ? { uvSearchDir: uvStart } : {}),
         fromManifest: fileOf(read),
       });
     }
   }
   overflowScripts(world);
+  notes.push(...uvRunLines(world, registry));
   return out;
 }
 
@@ -545,10 +562,12 @@ function withManifestPackages(
  * measured eight, whether it is global for certain, and the two things that stop the bun reading its `.env` files. Without it a lookup
  * reads every file as it did before the commands were told apart.
  */
-function registryCommand(c: InstallCommand): RegistryCommand {
+function registryCommand(c: InstallCommand & { uvSearchDir?: string }): RegistryCommand {
   return {
     manager: c.manager,
-    registryForm: c.registryForm,
+    // The form a `uv run` or a script of `pipx run` is judged by when a name of it is missing (`explainForm`), when it has none of the eight.
+    registryForm: c.registryForm ?? c.explainForm,
+    searchFrom: c.uvSearchDir,
     global: c.global === true,
     envFileFlag: c.envFileFlag === true,
     bunLauncher: c.bunLauncher === true,
@@ -1380,6 +1399,62 @@ interface ScriptWorld {
   overflow: Set<string>;
   /** The words of `pipx run` asked of the disk: at most {@link MAX_VETTED_PACKAGES} a call. */
   asked: Set<string>;
+  /** The places a `uv run` of the line starts looking for the index file of the project in, by what silences the line there. */
+  uvAsks: Map<string, UvAsk>;
+}
+
+/** A search of a `uv run` for the index file of the project: where it starts, and what the line says that silences it. */
+interface UvAsk {
+  dir: string;
+  noConfig: boolean;
+  defaultIndexFlag: boolean;
+}
+
+/**
+ * Where the uv starts looking for the project's index file when it runs `c` from `dir`: `dir`, or the folder `--project` names; `undefined` for a
+ * command that is not a `uv run` and for a `--project` with an expansion. The search is noted for the line of the hook (`uvRunLines`) unless a
+ * variable assigned on the line may have changed what the uv reads.
+ */
+function uvSearchStart(c: InstallCommand, dir: string, w: ScriptWorld): string | undefined {
+  const run = c.uvRun;
+  if (run === undefined || run.projectUnknown === true) return undefined;
+  const start = run.project === undefined ? dir : resolve(dir, run.project);
+  if (run.assigned === true) return start;
+  const key = [start, run.noConfig, run.defaultIndexFlag].join('\u0000');
+  if (!w.uvAsks.has(key)) w.uvAsks.set(key, { dir: start, noConfig: run.noConfig, defaultIndexFlag: run.defaultIndexFlag });
+  return start;
+}
+
+/** The most lines said for the project files that set the package index of a `uv run`: the rest is counted. */
+const MAX_INDEX_LINES = MAX_REGISTRY_LINES;
+
+/**
+ * The lines for the files of the project that give the `uv run` commands of the line a package index (`uvRunProjectIndex`: the one file the uv
+ * reads from the folder of each script, nothing above the repository root): one per file, by its base name and the `scheme://host` of the first
+ * index it obeys ({@link registryHost}), at most {@link MAX_INDEX_LINES}, and a last line that counts the files left out. A folder on the network
+ * is not asked of the disk. Fail-open: an error is no line. Never in a refusal: the lines are no part of {@link isDefaultRegistryLine}.
+ */
+function uvRunLines(w: ScriptWorld, registry: RegistryContext): string[] {
+  const lines = new Map<string, string>();
+  for (const ask of w.uvAsks.values()) {
+    try {
+      if (isNetworkPath(ask.dir)) continue;
+      const found = uvRunProjectIndex(ask.dir, ask, registry);
+      if (found === undefined || lines.has(found.source)) continue;
+      const host = registryHost('pypi', found.url);
+      lines.set(
+        found.source,
+        `dev-guardian: the project's ${basename(found.source)} sets the package index${host === undefined ? '' : ` (${host})`} — packages are fetched from it, and what it serves was not vetted.`,
+      );
+    } catch {
+      // fail-open: no line for this folder
+    }
+  }
+  const said = [...lines.values()];
+  const out = said.slice(0, MAX_INDEX_LINES);
+  const rest = said.length - out.length;
+  if (rest > 0) out.push(rest === 1 ? 'dev-guardian: 1 more file of the project sets the package index.' : `dev-guardian: ${rest} more files of the project set the package index.`);
+  return out;
 }
 
 const hasDotDot = (path: string): boolean => path.split(/[\\/]+/).includes('..');
@@ -1509,6 +1584,13 @@ function folderOf(c: InstallCommand, w: ScriptWorld): Folder {
     w.folders.set(key, folder);
   }
   return folder;
+}
+
+/** The directories a `uv run` that names packages with no script of theirs (`--with`) starts looking for its project file in; none when they are not known. */
+function uvRunDirs(c: InstallCommand, w: ScriptWorld): string[] {
+  if (w.pastDeadline()) return [];
+  const folder = folderOf(c, w);
+  return folder.kind === 'dirs' ? folder.dirs : [];
 }
 
 /** A path a script may be at, and the directory of the command it was reached from. */
@@ -1683,6 +1765,8 @@ function scriptCommands(c: InstallCommand, w: ScriptWorld): { command: VetComman
       }
       if (read.packages.length === 0) continue;
       const custom = c.customRegistry ?? undefined;
+      // `uv run <script>`: the uv reads the project file from the folder of the script, not from where the command runs (measured f1, f4, f10).
+      const uvStart = c.uvRun === undefined ? undefined : uvSearchStart(c, dirname(cand.path), w);
       extra.push({
         ...base,
         packages: read.packages,
@@ -1690,6 +1774,7 @@ function scriptCommands(c: InstallCommand, w: ScriptWorld): { command: VetComman
         uncertain: [NAMED_BY_MANIFEST],
         registries: c.registries,
         ...(custom !== undefined ? { customRegistry: custom } : {}),
+        ...(uvStart !== undefined ? { uvSearchDir: uvStart } : {}),
         fromManifest: read.file,
       });
     }

@@ -7846,6 +7846,9 @@ describe('install-vet-uv-run-project-index', () => {
 
   // ── T-04 (a): no verdict changes — the 140 rows (7 files x 5 forms x 4 names)
 
+  /** The files of the table whose index `uv run` obeys: its forms say the line for a clean name. */
+  const OBEYED_FILES = new Set(['uv.toml index-url', 'uv.toml [[index]] default = true', 'uv.toml [[index]]', 'pyproject.toml [tool.uv] index-url', 'pyproject.toml [[tool.uv.index]] default = true']);
+
   it.each(FILES)('T-04 (a) %s: the decision of each of the 5 forms and 4 names is the one of the table, and no answer names the index', async (_label, files) => {
     let n = 0;
     for (const [template, filesOf] of FORMS) {
@@ -7857,12 +7860,16 @@ describe('install-vet-uv-run-project-index', () => {
         for (const [rel, text] of [...Object.entries(files), ...Object.entries(filesOf(name))]) put(rel, text, at);
         const { d, calls } = await decide(command, { at });
         const row = `${command} (${name})`;
-        expect(kindOf(d), row).toBe(kind);
+        // Revision of 2026-11-23 (the owner's answer after task 3): with a file the uv obeys, a `uv run` form with a clean name says the line, so it is
+        // context only; no refusal and no question appears or disappears, and the index is named by no refusal.
+        const lineSaid = OBEYED_FILES.has(_label) && command.startsWith('uv run');
+        const want = name === REQUESTS && lineSaid ? 'context' : kind;
+        expect(kindOf(d), row).toBe(want);
         expect(d?.ask, row).toBeUndefined();
         expect(pypiAsked(calls).some((u) => u.includes(`/pypi/${name}/json`)), `${row}: the name is asked of the PyPI`).toBe(true);
-        expect(textOf(d), `${row}: no line of a project file`).not.toContain(SAYS);
-        // A warning for a missing name may name the index today (a custom registry is configured); no `null` and no refusal does.
-        if (kind !== 'context') expect(textOf(d), `${row}: the index is not named`).not.toContain('pypi.corp.example');
+        if (!lineSaid || name === EVIL || name === GONE) expect(textOf(d), `${row}: no line of a project file`).not.toContain(SAYS);
+        // A refusal does not name the index.
+        if (want === 'deny') expect(textOf(d), `${row}: the index is not named`).not.toContain('pypi.corp.example');
         if (name === MISSING) expect(d?.context ?? '(no context)', row).toContain(`'${MISSING}': not found on the public registry`);
         if (name === EVIL) {
           // A published malicious name: the refusal is the same text with and without the file.

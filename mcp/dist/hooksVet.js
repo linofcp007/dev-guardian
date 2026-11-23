@@ -4994,6 +4994,8 @@ function collectLaunch(d, launch, context) {
   else if (launch.flags === "pipx-run" && launch.style === "run" && !initializer && !byPackageFlag) attachPipxApp(out, w, pathApp, d.measuredArchiveForm === true);
   const script = pathApp || (out.inlineScripts ?? []).some((w2) => PYTHON_FILE.test(w2.file));
   if (d.registryForm !== void 0 && !script) out.registryForm = d.registryForm;
+  if (d.registryForm === "pipx run" && script) out.explainForm = "pipx run script";
+  if (launch.flags === "uv-run") out.explainForm = "uv run";
   if (d.manager === "bun") out.bunLauncher = true;
   if (d.manager === "bun" && [...d.pre, ...d.args].some(isEnvFileWord)) out.envFileFlag = true;
   if (launch.flags === "pipx-inject") {
@@ -5025,6 +5027,13 @@ function attachUvRun(out, d, pre, w, flags) {
   const others = required.filter((file) => !PYTHON_FILE.test(file));
   if (others.length > 0) out.manifest = { kind: "requirements", files: others };
   if (scripts.length > 0) out.inlineScripts = scripts;
+  const projects = flags.filter((f) => f.flag === "--project" && f.value !== void 0 && f.value !== "").map((f) => f.value ?? "");
+  const project = projects[projects.length - 1];
+  out.uvRun = {
+    noConfig: flags.some((f) => f.flag === "--no-config" || f.flag === "--config-file"),
+    defaultIndexFlag: flags.some((f) => f.flag === "--default-index" || f.flag === "--index-url"),
+    ...project === void 0 ? {} : SHELL_EXPANSION.test(project) ? { projectUnknown: true } : { project }
+  };
   const given = flags.filter((f) => f.flag === "--directory" && f.value !== void 0 && f.value !== "").map((f) => f.value ?? "");
   const dir = given.length > 0 ? given[given.length - 1] : d.envDir;
   if (dir === void 0 || dir === "") return;
@@ -5681,6 +5690,7 @@ function parseReading(text, forced, cdpath) {
         if (envChange) context.push("inline environment assignment in the command (it can redirect the registry)");
         if (dirChanged) context.push("directory change earlier in the command (that directory\u2019s registry configuration was not read)");
         const c = collect(d, context);
+        if (envChange && c.uvRun !== void 0) c.uvRun.assigned = true;
         if (d.launch?.program === true && c.packages.length === 0 && c.skipped.length === 0 && c.inlineScripts === void 0 && c.manifest === void 0) {
           if (changesDirectory(words)) dirChanged = true;
           return;
@@ -7797,9 +7807,12 @@ function arrayUrl(body) {
   return /https?:\/\/[^"'\s]+/.exec(body.join("\n"))?.[0] ?? UNREADABLE_VALUE;
 }
 function indexKeyValue(line, onlyIndexUrl = false) {
-  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/.exec(line);
+  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*(\[?)\s*["']?([^"'\s\]]*)/.exec(line);
   if (m === null || onlyIndexUrl && m[1] !== "index-url") return void 0;
-  return isPublic("pypi", m[2] ?? "") ? void 0 : m[2];
+  const key = m[1] ?? "";
+  const url = m[3] ?? "";
+  if (url === "") return m[2] === "[" ? { key, url: UNREADABLE_VALUE } : void 0;
+  return isPublic("pypi", url) ? void 0 : { key, url };
 }
 function indexEntries(text, arrays, keys, top) {
   const out = [];
@@ -7830,7 +7843,7 @@ function indexEntries(text, arrays, keys, top) {
     }
     if (keyed === void 0) continue;
     const value = indexKeyValue(line, keyed.onlyIndexUrl === true);
-    if (value !== void 0) out.push({ kind: keyed.kind, url: value });
+    if (value !== void 0) out.push({ kind: keyed.kind, url: value.url, key: value.key });
   }
   flush();
   return out;
@@ -7865,6 +7878,25 @@ var NOT_OBEYED = {
   "uv pip install": /* @__PURE__ */ new Set(["poetry-primary"]),
   "pipx install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"]),
   "pipx run": /* @__PURE__ */ new Set(["uv-top", "tool-uv"]),
+  // `uv run` (measured 2026-11-23, M-1 of install-vet-uv-run-project-index: k6, k9, k12-k16, k18, w5, w10): it obeys the index-url, extra-index-url and
+  // find-links of `uv.toml` and `[tool.uv]` and the tables `[[index]]` and `[[tool.uv.index]]`, and not these.
+  "uv run": /* @__PURE__ */ new Set(["uv-pip", "poetry-none", "poetry-primary", "poetry-supplemental", "poetry-explicit", "poetry-other", "pdm"]),
+  // A script given to `pipx run` (M-1 p1-p8, p12-p20, both engines): no file of the project is obeyed, whatever its kind.
+  "pipx run script": /* @__PURE__ */ new Set([
+    "uv-top",
+    "uv-pip",
+    "uv-index",
+    "uv-index-default",
+    "tool-uv",
+    "tool-uv-index",
+    "tool-uv-index-default",
+    "poetry-none",
+    "poetry-primary",
+    "poetry-supplemental",
+    "poetry-explicit",
+    "poetry-other",
+    "pdm"
+  ]),
   "poetry add": /* @__PURE__ */ new Set(["poetry-explicit", "uv-top", "tool-uv", "tool-uv-index-default"]),
   "pip install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"])
 };
@@ -7875,6 +7907,73 @@ function explainingIndex(entries, ctx) {
 }
 function anyIndex(entries) {
   return entries.find((e) => e.kind !== "tool-uv-pip")?.url;
+}
+function hasToolUv(text) {
+  return /^\s*\[\[?\s*tool\.uv(?:\.index)?\s*\]\]?/m.test(text);
+}
+function uvRunProjectFile(dir, ctx) {
+  for (const folder of ancestors({ ...ctx, projectDir: dir })) {
+    const uvToml = join4(folder, "uv.toml");
+    const uvText = read(uvToml, ctx);
+    if (uvText !== void 0) return { source: uvToml, entries: uvTomlEntries(uvText) };
+    const pyproject = join4(folder, "pyproject.toml");
+    const text = read(pyproject, ctx);
+    if (text !== void 0 && hasToolUv(text)) return { source: pyproject, entries: pyprojectEntries(text) };
+  }
+  return void 0;
+}
+function envOn(env, name) {
+  return /^(?:1|true|yes|on|y)$/i.test(envValue(env, name) ?? "");
+}
+function indexOrigin(url) {
+  try {
+    const u = new URL(url.trim().replace(/^["']|["']$/g, ""));
+    return `${u.origin}${u.pathname.endsWith("/") ? u.pathname : `${u.pathname}/`}`;
+  } catch {
+    return void 0;
+  }
+}
+function uvUserIndexes(ctx) {
+  const env = envOf(ctx);
+  const home = homeOf(ctx);
+  const etc = ctx.etcDir ?? "/etc";
+  const xdg = envValue(env, "XDG_CONFIG_HOME") ?? join4(home, ".config");
+  const appdata = envValue(env, "APPDATA") ?? join4(home, "AppData", "Roaming");
+  const out = [];
+  for (const path of [join4(xdg, "uv", "uv.toml"), join4(appdata, "uv", "uv.toml"), join4(etc, "uv", "uv.toml")]) {
+    const text = read(path, ctx);
+    if (text === void 0) continue;
+    for (const e of uvTomlEntries(text)) {
+      const origin = indexOrigin(e.url);
+      if (origin !== void 0) out.push(origin);
+    }
+  }
+  return out;
+}
+function isDefaultIndex(e) {
+  return e.kind === "uv-index-default" || e.kind === "tool-uv-index-default" || (e.kind === "uv-top" || e.kind === "tool-uv") && e.key === "index-url";
+}
+var UV_RUN_OBEYED = /* @__PURE__ */ new Set(["uv-top", "uv-index", "uv-index-default", "tool-uv", "tool-uv-index", "tool-uv-index-default"]);
+function uvRunProjectIndex(dir, silencers, ctx) {
+  try {
+    const env = envOf(ctx);
+    if (silencers.noConfig || envOn(env, "UV_NO_CONFIG") || envValue(env, "UV_CONFIG_FILE") !== void 0) return void 0;
+    const file = uvRunProjectFile(dir, ctx);
+    if (file === void 0) return void 0;
+    const user = uvUserIndexes(ctx);
+    const obeyed = file.entries.filter((e) => {
+      if (!UV_RUN_OBEYED.has(e.kind) || isPublic("pypi", e.url)) return false;
+      const origin = indexOrigin(e.url);
+      return origin === void 0 || !user.some((u) => origin.startsWith(u));
+    });
+    const first = obeyed[0];
+    if (first === void 0) return void 0;
+    const replaced = silencers.defaultIndexFlag || envValue(env, "UV_DEFAULT_INDEX") !== void 0 || envValue(env, "UV_INDEX_URL") !== void 0;
+    if (replaced && obeyed.every(isDefaultIndex)) return void 0;
+    return { source: file.source, url: first.url };
+  } catch {
+    return void 0;
+  }
 }
 function insideProject(path, ctx) {
   return ancestors(ctx).some((dir) => isInside(dir, resolve3(path)));
@@ -7929,7 +8028,13 @@ function pypiRegistry(name, ctx) {
       if (done !== null) return done;
     }
   }
-  for (const dir of ancestors(ctx)) {
+  const from = ctx.command?.registryForm === "uv run" ? ctx.command.searchFrom : void 0;
+  if (from !== void 0) {
+    const file = uvRunProjectFile(from, ctx);
+    const url = file === void 0 ? void 0 : explainingIndex(file.entries, ctx);
+    if (file !== void 0 && url !== void 0) take({ kind: "registry", source: file.source, url, from: "project" });
+  }
+  for (const dir of from === void 0 ? ancestors(ctx) : []) {
     const uvToml = join4(dir, "uv.toml");
     const uvText = read(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : explainingIndex(uvTomlEntries(uvText), ctx);
@@ -8884,13 +8989,17 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
     probes: /* @__PURE__ */ new Map(),
     reads: /* @__PURE__ */ new Map(),
     overflow: /* @__PURE__ */ new Set(),
-    asked: /* @__PURE__ */ new Set()
+    asked: /* @__PURE__ */ new Set(),
+    uvAsks: /* @__PURE__ */ new Map()
   };
   let userRegistries;
   const user = () => userRegistries ??= npmUserRegistries(registry);
   for (const c of parsed) {
     const scripted = scriptCommands(c, world);
-    out.push(...archiveFileCommand(scripted.command), ...scripted.extra);
+    const withDirs = c.uvRun !== void 0 && c.packages.length > 0 ? uvRunDirs(c, world) : [];
+    const withStart = withDirs[0] === void 0 ? void 0 : uvSearchStart(c, withDirs[0], world);
+    for (const each of withDirs.slice(1)) uvSearchStart(c, each, world);
+    out.push(...archiveFileCommand(withStart === void 0 ? scripted.command : { ...scripted.command, uvSearchDir: withStart }), ...scripted.extra);
     const pushUpdate = (inManifest) => {
       const more = updateCommand(c, inManifest);
       if (more !== void 0) out.push(more);
@@ -8957,6 +9066,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
       if (packages.length === 0) continue;
       const registries = [...c.registries, ...read2.registries];
       const custom = c.customRegistry ?? read2.registries[0];
+      const uvStart = uvRequirements && c.uvRun !== void 0 ? uvSearchStart(c, read2.dir ?? dir, world) : void 0;
       out.push({
         ...c,
         packages,
@@ -8964,17 +9074,21 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
         uncertain: [NAMED_BY_MANIFEST],
         registries,
         ...custom !== void 0 ? { customRegistry: custom } : {},
+        ...uvStart !== void 0 ? { uvSearchDir: uvStart } : {},
         fromManifest: fileOf(read2)
       });
     }
   }
   overflowScripts(world);
+  notes.push(...uvRunLines(world, registry));
   return out;
 }
 function registryCommand(c) {
   return {
     manager: c.manager,
-    registryForm: c.registryForm,
+    // The form a `uv run` or a script of `pipx run` is judged by when a name of it is missing (`explainForm`), when it has none of the eight.
+    registryForm: c.registryForm ?? c.explainForm,
+    searchFrom: c.uvSearchDir,
     global: c.global === true,
     envFileFlag: c.envFileFlag === true,
     bunLauncher: c.bunLauncher === true
@@ -9489,6 +9603,37 @@ var NOT_LITERAL_REASON = "not a literal file name";
 var NETWORK_REASON = "on a network path";
 var UNREADABLE_REASON = "could not be read";
 var MAX_DIR_STATES = 8;
+function uvSearchStart(c, dir, w) {
+  const run = c.uvRun;
+  if (run === void 0 || run.projectUnknown === true) return void 0;
+  const start = run.project === void 0 ? dir : resolve4(dir, run.project);
+  if (run.assigned === true) return start;
+  const key = [start, run.noConfig, run.defaultIndexFlag].join("\0");
+  if (!w.uvAsks.has(key)) w.uvAsks.set(key, { dir: start, noConfig: run.noConfig, defaultIndexFlag: run.defaultIndexFlag });
+  return start;
+}
+var MAX_INDEX_LINES = MAX_REGISTRY_LINES;
+function uvRunLines(w, registry) {
+  const lines = /* @__PURE__ */ new Map();
+  for (const ask of w.uvAsks.values()) {
+    try {
+      if (isNetworkPath(ask.dir)) continue;
+      const found = uvRunProjectIndex(ask.dir, ask, registry);
+      if (found === void 0 || lines.has(found.source)) continue;
+      const host = registryHost("pypi", found.url);
+      lines.set(
+        found.source,
+        `dev-guardian: the project's ${basename3(found.source)} sets the package index${host === void 0 ? "" : ` (${host})`} \u2014 packages are fetched from it, and what it serves was not vetted.`
+      );
+    } catch {
+    }
+  }
+  const said2 = [...lines.values()];
+  const out = said2.slice(0, MAX_INDEX_LINES);
+  const rest = said2.length - out.length;
+  if (rest > 0) out.push(rest === 1 ? "dev-guardian: 1 more file of the project sets the package index." : `dev-guardian: ${rest} more files of the project set the package index.`);
+  return out;
+}
 var hasDotDot = (path) => path.split(/[\\/]+/).includes("..");
 var samePath2 = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 function linkOnPath(under, path) {
@@ -9586,6 +9731,11 @@ function folderOf(c, w) {
     w.folders.set(key, folder);
   }
   return folder;
+}
+function uvRunDirs(c, w) {
+  if (w.pastDeadline()) return [];
+  const folder = folderOf(c, w);
+  return folder.kind === "dirs" ? folder.dirs : [];
 }
 function scriptPaths(dirs, written) {
   const out = [];
@@ -9719,6 +9869,7 @@ function scriptCommands(c, w) {
       }
       if (read2.packages.length === 0) continue;
       const custom = c.customRegistry ?? void 0;
+      const uvStart = c.uvRun === void 0 ? void 0 : uvSearchStart(c, dirname4(cand.path), w);
       extra.push({
         ...base2,
         packages: read2.packages,
@@ -9726,6 +9877,7 @@ function scriptCommands(c, w) {
         uncertain: [NAMED_BY_MANIFEST],
         registries: c.registries,
         ...custom !== void 0 ? { customRegistry: custom } : {},
+        ...uvStart !== void 0 ? { uvSearchDir: uvStart } : {},
         fromManifest: read2.file
       });
     }

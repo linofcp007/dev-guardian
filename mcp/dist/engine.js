@@ -118327,9 +118327,12 @@ function arrayUrl(body) {
   return /https?:\/\/[^"'\s]+/.exec(body.join("\n"))?.[0] ?? UNREADABLE_VALUE;
 }
 function indexKeyValue(line, onlyIndexUrl = false) {
-  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*["']?([^"'\s\]]+)/.exec(line);
+  const m = /^\s*(index-url|extra-index-url|find-links)\s*=\s*(\[?)\s*["']?([^"'\s\]]*)/.exec(line);
   if (m === null || onlyIndexUrl && m[1] !== "index-url") return void 0;
-  return isPublic("pypi", m[2] ?? "") ? void 0 : m[2];
+  const key = m[1] ?? "";
+  const url2 = m[3] ?? "";
+  if (url2 === "") return m[2] === "[" ? { key, url: UNREADABLE_VALUE } : void 0;
+  return isPublic("pypi", url2) ? void 0 : { key, url: url2 };
 }
 function indexEntries(text3, arrays, keys, top) {
   const out = [];
@@ -118360,7 +118363,7 @@ function indexEntries(text3, arrays, keys, top) {
     }
     if (keyed === void 0) continue;
     const value = indexKeyValue(line, keyed.onlyIndexUrl === true);
-    if (value !== void 0) out.push({ kind: keyed.kind, url: value });
+    if (value !== void 0) out.push({ kind: keyed.kind, url: value.url, key: value.key });
   }
   flush();
   return out;
@@ -118396,6 +118399,20 @@ function explainingIndex(entries3, ctx) {
 }
 function anyIndex(entries3) {
   return entries3.find((e) => e.kind !== "tool-uv-pip")?.url;
+}
+function hasToolUv(text3) {
+  return /^\s*\[\[?\s*tool\.uv(?:\.index)?\s*\]\]?/m.test(text3);
+}
+function uvRunProjectFile(dir, ctx) {
+  for (const folder of ancestors2({ ...ctx, projectDir: dir })) {
+    const uvToml = join115(folder, "uv.toml");
+    const uvText = read2(uvToml, ctx);
+    if (uvText !== void 0) return { source: uvToml, entries: uvTomlEntries(uvText) };
+    const pyproject = join115(folder, "pyproject.toml");
+    const text3 = read2(pyproject, ctx);
+    if (text3 !== void 0 && hasToolUv(text3)) return { source: pyproject, entries: pyprojectEntries(text3) };
+  }
+  return void 0;
 }
 function insideProject(path3, ctx) {
   return ancestors2(ctx).some((dir) => isInside4(dir, resolve37(path3)));
@@ -118450,7 +118467,13 @@ function pypiRegistry(name, ctx) {
       if (done !== null) return done;
     }
   }
-  for (const dir of ancestors2(ctx)) {
+  const from = ctx.command?.registryForm === "uv run" ? ctx.command.searchFrom : void 0;
+  if (from !== void 0) {
+    const file2 = uvRunProjectFile(from, ctx);
+    const url2 = file2 === void 0 ? void 0 : explainingIndex(file2.entries, ctx);
+    if (file2 !== void 0 && url2 !== void 0) take({ kind: "registry", source: file2.source, url: url2, from: "project" });
+  }
+  for (const dir of from === void 0 ? ancestors2(ctx) : []) {
     const uvToml = join115(dir, "uv.toml");
     const uvText = read2(uvToml, ctx);
     const uvUrl = uvText === void 0 ? void 0 : explainingIndex(uvTomlEntries(uvText), ctx);
@@ -118639,6 +118662,25 @@ var init_privateRegistry = __esm({
       "uv pip install": /* @__PURE__ */ new Set(["poetry-primary"]),
       "pipx install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"]),
       "pipx run": /* @__PURE__ */ new Set(["uv-top", "tool-uv"]),
+      // `uv run` (measured 2026-11-23, M-1 of install-vet-uv-run-project-index: k6, k9, k12-k16, k18, w5, w10): it obeys the index-url, extra-index-url and
+      // find-links of `uv.toml` and `[tool.uv]` and the tables `[[index]]` and `[[tool.uv.index]]`, and not these.
+      "uv run": /* @__PURE__ */ new Set(["uv-pip", "poetry-none", "poetry-primary", "poetry-supplemental", "poetry-explicit", "poetry-other", "pdm"]),
+      // A script given to `pipx run` (M-1 p1-p8, p12-p20, both engines): no file of the project is obeyed, whatever its kind.
+      "pipx run script": /* @__PURE__ */ new Set([
+        "uv-top",
+        "uv-pip",
+        "uv-index",
+        "uv-index-default",
+        "tool-uv",
+        "tool-uv-index",
+        "tool-uv-index-default",
+        "poetry-none",
+        "poetry-primary",
+        "poetry-supplemental",
+        "poetry-explicit",
+        "poetry-other",
+        "pdm"
+      ]),
       "poetry add": /* @__PURE__ */ new Set(["poetry-explicit", "uv-top", "tool-uv", "tool-uv-index-default"]),
       "pip install": /* @__PURE__ */ new Set(["uv-top", "tool-uv", "tool-uv-index", "tool-uv-index-default", "poetry-primary"])
     };
