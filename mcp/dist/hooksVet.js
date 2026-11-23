@@ -8779,18 +8779,20 @@ var MAX_VETTED_PACKAGES = MAX_CANDIDATES_PER_COMMAND;
 var MAX_MANIFEST_PACKAGES = 150;
 var MANIFEST_UNREPORTED = /* @__PURE__ */ new Set(["publish_age", "install_scripts"]);
 var MAX_PARSED_LENGTH = 512 * 1024;
-function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed], pastDeadline = () => false, onDisk = (c) => c) {
+function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cdpath = false, withManifests = (parsed) => [...parsed], pastDeadline = () => false, onDisk = (c) => c, noCopyReasons = () => []) {
   const cut = command.length > MAX_PARSED_LENGTH;
   let unassessed = 0;
   const parsed = withManifests(
     parseInstallCommands(cut ? command.slice(0, MAX_PARSED_LENGTH) : command, { shell, nested, cdpath }).map((c) => {
       if (c.localPathFirst === true) return onDisk(c);
       if (c.localFirst !== true) return c;
+      const why = noCopyReasons(c);
+      const withWhy = why.length === 0 ? c : { ...c, uncertain: [...c.uncertain, ...why] };
       if (pastDeadline()) {
         unassessed += 1;
-        return c;
+        return withWhy;
       }
-      return { ...c, packages: c.packages.filter((p) => !runsLocally(p, c)) };
+      return { ...withWhy, packages: c.packages.filter((p) => !runsLocally(p, c)) };
     })
   );
   const key = (pkg) => `${pkg.ecosystem}\0${pkg.name.toLowerCase()}\0${pkg.range ?? ""}`;
@@ -8836,6 +8838,8 @@ function boundedInstalls(command, shell, isPopular, runsLocally, nested = [], cd
     unassessed
   };
 }
+var REGISTRY_FILES_NOT_READ = "dev-guardian: the project's registry settings were not read (on a network path) \u2014 if they set the default registry, what it serves was not vetted.";
+var NETWORK_COPY_REASON = "it runs in a folder on a network path, where an installed copy was not looked for";
 var NAMED_TO_UPDATE = "not denied: a package named to an update is fetched only when it is already installed";
 var UPDATES_EVERY_GLOBAL = "dev-guardian: this command updates every globally installed package \u2014 none of them was vetted.";
 var UPDATES_EVERY_TOOL = "dev-guardian: this command updates every tool pipx or uv installed \u2014 none of them was vetted.";
@@ -8859,7 +8863,7 @@ function missingCountLine(counted) {
 }
 function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, pastDeadline, memo) {
   const out = [];
-  const top = opts.projectDir === void 0 ? void 0 : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
+  const top = opts.projectDir === void 0 || isNetworkPath(opts.projectDir) ? void 0 : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
   const lineAsked = /* @__PURE__ */ new Map();
   const world = {
     opts,
@@ -8966,6 +8970,7 @@ function projectDefaultRegistryLines(c, opts, registry, userRegistries, memo) {
     if (c.ecosystem !== "npm" || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
     const dir = commandDir(c, opts, memo);
     if (dir === null) return [];
+    if (isNetworkPath(dir)) return [REGISTRY_FILES_NOT_READ];
     const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir, command: registryCommand(c) }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
     const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
       const host = registryHost("npm", f.url);
@@ -9374,10 +9379,13 @@ function withoutDiskEntries(c, opts, pastDeadline, said2, spelling) {
   for (const each of why) said2.add(`dev-guardian: ${diskReason(each)} \u2014 its words were vetted as package names.`);
   return { ...c, packages, uncertain: [...c.uncertain, ...[...why].map(diskReason)] };
 }
+function networkCopyReasons(c, opts) {
+  return c.localFirst === true && c.workdir === void 0 && isNetworkPath(resolve4(opts.cwd)) ? [NETWORK_COPY_REASON] : [];
+}
 function runsInstalledCopy(pkg, c, opts, memo, spelling) {
   if (pkg.range !== void 0 || pkg.raw !== pkg.name || c.prefixed === true) return false;
   const dir = commandDir(c, opts, spelling);
-  if (dir === null) return false;
+  if (dir === null || isNetworkPath(dir)) return false;
   const key = `${dir}\0${pkg.name}\0${String(c.byPackageFlag === true)}\0${c.manager}`;
   const known = memo.get(key);
   if (known !== void 0) return known;
@@ -9776,7 +9784,8 @@ async function decideInstallCommand(command, opts) {
     cdpath,
     (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt, spelling),
     () => Date.now() > deadlineAt,
-    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes, spelling)
+    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes, spelling),
+    (c) => networkCopyReasons(c, opts)
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];

@@ -10,6 +10,13 @@ version bump.
 
 ### Upgrading from 3.15.0
 
+- **`npx`, `bunx` and `npm exec` in a folder on a network path.** The installed copy is no longer looked for there, so a name
+  the registry does not have, which nothing explains, is no longer refused on a share that answers and has no copy: it warns,
+  with the reason "(not denied: it runs in a folder on a network path, where an installed copy was not looked for)". A
+  malicious name is still refused.
+- **The default-registry line in a folder on a network path.** The project's `.npmrc` and the other registry files are not
+  read there: the line "the project's .npmrc sets the default registry (…)" is replaced by "dev-guardian: the project's registry
+  settings were not read (on a network path) — if they set the default registry, what it serves was not vetted."
 - **Files the install hook now reads.** The script of `uv run <x>.py` / `.pyw` (any letter case), `uv run --script <x>`,
   `-s <x>` (also in a group, `-qs`), `--gui-script <x>`, also `python -m uv run`, with `--directory` (before or after `run`)
   or `UV_WORKING_DIR=` in front (also behind `env`), also after a `cd` through a local link; the file of `pipx run --path
@@ -270,6 +277,12 @@ version bump.
   your own configuration whose sources an error or progress line may have repeated (`NuGet.Config`, `~/.npmrc`, `pip.conf`).
 
 ### Fixed
+
+- **A malicious name could pass as "not verified" when the project folder was on a share that stopped answering.** The install
+  hook asked the disk for a `.git`, for the installed copy of an `npx` / `bunx` / `npm exec` name and for the project's
+  registry files in a folder on the network before its first request, and each question of a silent share costs about 21 s:
+  the 8 s deadline ended before the registry or OSV was asked. A network folder now costs the hook no disk question before the
+  vetting (`pip install` of a malicious name with the project folder on a silent share: refused at once).
 
 - **`llm_scan` says what the server did (llm-scan-codex-smoke-findings).** Four defects measured in the Codex smoke of
   2026-11-19, and the texts around them. (1) `llm_scan { step: "start", plan_id, … }` with any parameter other than
