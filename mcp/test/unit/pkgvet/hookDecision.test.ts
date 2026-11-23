@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -9,6 +10,7 @@ import {
   MAX_MANIFEST_PACKAGES,
   vetDeadlineMs,
   type HookVetOptions,
+  type LstatLike,
 } from '../../../src/pkgvet/hookDecision.js';
 import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
@@ -7391,5 +7393,267 @@ describe('pkgvet-archive-names-pipx-composer', () => {
     const f = fakeRegistry();
     expect(await decideInstallCommand(`pipx run ./${MISSING}.zip`, opts(f.fetchImpl))).toBeNull();
     expect(f.calls).toEqual([]);
+  });
+});
+
+// ───────────────── install-vet-path-forms — the guards: what the spelling of a folder must not change (green before the fix)
+
+describe('install-vet-path-forms', () => {
+  /** What the hook gets in a test: `diskImpl` does not exist yet (task 3 adds the field), so the type is local, as `LstatLike` was for dotnet-run-forms. */
+  type DiskImpl = { lstat: LstatLike; realpath: (p: string) => string };
+  type PathFormsOptions = HookVetOptions & { diskImpl: DiskImpl };
+
+  const WINDOWS = process.platform === 'win32';
+  const ROOT_NAME = 'project with a long name';
+  const SUB_NAME = 'sub folder inside';
+  const EVIL_MANIFEST = { name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0', 'evil-pkg': '^1.0.0' } };
+  const COULD_NOT_BE_DETERMINED = /package\.json was not read \(where the command runs could not be determined\)/;
+
+  /** The short (8.3) spelling of an existing folder, as the system says it: `cmd.exe` by its whole path, run in the folder. */
+  const shortOf = (dir: string): string =>
+    (
+      spawnSync(join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'cmd.exe'), ['/d', '/c', '"for %I in (.) do @echo %~sI"'], {
+        cwd: dir,
+        encoding: 'utf8',
+        windowsVerbatimArguments: true,
+      }).stdout ?? ''
+    ).trim();
+
+  /** Decided once per file: this is Windows, on a volume that gives short names, and the two spellings are one folder. */
+  const SHORT_NAMES = ((): boolean => {
+    if (!WINDOWS) return false;
+    const probe = mkdtempSync(join(tmpdir(), 'dg path forms probe '));
+    try {
+      const short = shortOf(probe);
+      return short !== '' && short.toLowerCase() !== probe.toLowerCase() && realpathSync.native(short) === realpathSync.native(probe);
+    } catch {
+      // No `cmd.exe`, or a volume without short names: the tests that need them are skipped, with their label saying so.
+      return false;
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const ifShort = it.skipIf(!SHORT_NAMES);
+  const ifWindows = it.skipIf(!WINDOWS);
+
+  const links: string[] = [];
+  afterEach(() => {
+    // A junction or link made in a test is removed itself, before the folder that holds it is.
+    for (const link of links.splice(0)) rmSync(link, { force: true });
+  });
+  /** A folder link (a junction on Windows, which needs no privilege) from `link` to `target`. */
+  const linkDir = (target: string, link: string): void => {
+    symlinkSync(target, link, WINDOWS ? 'junction' : 'dir');
+    links.push(link);
+  };
+
+  const dirs = (base: string = project): { root: string; sub: string } => {
+    const root = join(base, ROOT_NAME);
+    const sub = join(root, SUB_NAME);
+    mkdirSync(sub, { recursive: true });
+    return { root, sub };
+  };
+  const writeEvil = (dir: string): void => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify(EVIL_MANIFEST));
+  };
+  const evilRegistry = (): ReturnType<typeof registry> => registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
+  /** The options of a hook call from `cwd`, with the project at `projectDir` and a counting `diskImpl`, as task 3 gives the hook one. */
+  function at(fetchImpl: typeof fetch, cwd: string, projectDir: string, extra: Partial<HookVetOptions> = {}): { o: PathFormsOptions; n: { lstat: number; realpath: number } } {
+    const n = { lstat: 0, realpath: 0 };
+    const diskImpl: DiskImpl = {
+      lstat: (p) => {
+        n.lstat += 1;
+        return lstatSync(p);
+      },
+      realpath: (p) => {
+        n.realpath += 1;
+        return realpathSync.native(p);
+      },
+    };
+    return { o: { ...opts(fetchImpl, { cwd, projectDir, ...extra }), diskImpl }, n };
+  }
+
+  /** A package-lock.json of lockfileVersion 3 for a project whose one direct dependency is express (as in `install-vet-manifest-parent-dir`). */
+  const lockOf = (transitive: string, version: string): string =>
+    JSON.stringify({
+      name: 'fixture-app',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } },
+        'node_modules/express': { version: '4.21.2', resolved: 'https://registry.npmjs.org/express/-/express-4.21.2.tgz' },
+        [`node_modules/${transitive}`]: { version, resolved: `https://registry.npmjs.org/${transitive}/-/${transitive}-${version}.tgz` },
+      },
+    });
+  /** The registry and OSV of the lockfile test: every document answers, and the requests are kept. */
+  function lockNet(): { fetchImpl: typeof fetch; registry: string[]; asked: string[] } {
+    const registryCalls: string[] = [];
+    const asked: string[] = [];
+    const json = (body: unknown, status = 200): Response => new Response(JSON.stringify(body), { status });
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url === OSV) {
+        const { queries } = JSON.parse(String(init?.body)) as { queries: Array<{ package?: { name?: string }; version?: string }> };
+        const pairs = queries.map((q) => `${q.package?.name ?? ''}@${q.version ?? ''}`);
+        asked.push(...pairs);
+        return json({ results: pairs.map((p) => (p === 'bad-transitive@1.0.0' ? { vulns: [{ id: 'MAL-2026-77' }] } : {})) });
+      }
+      if (/^https:\/\/registry\.npmjs\.org\/[^/]+$/.test(url)) {
+        registryCalls.push(url);
+        return json(npmDoc('1.0.0').body);
+      }
+      throw new Error(`unexpected network call: ${url}`);
+    }) as typeof fetch;
+    return { fetchImpl, registry: registryCalls, asked };
+  }
+
+  // ── T-04: only the case differs — what was already right stays right
+
+  ifWindows(
+    'T-04 (Windows; skipped otherwise) a session folder written in upper case, the project in lower case: the manifest above is read, named ../package.json',
+    async () => {
+      const { root, sub } = dirs();
+      writeEvil(root);
+      const reg = evilRegistry();
+      const { o } = at(reg.fetchImpl, sub.toUpperCase(), root.toLowerCase());
+      expect((await decideInstallCommand('npm install', o))?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+    },
+  );
+
+  ifWindows('T-04 (Windows; skipped otherwise) `cd` to the subfolder written in upper case, from the root: the same refusal', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, root, root);
+    const d = await decideInstallCommand(`cd "${sub.toUpperCase()}" && npm install`, o);
+    expect(d?.deny ?? '(no deny)').toMatch(/\.\.\/package\.json names 'evil-pkg.*MAL-2026-77/s);
+  });
+
+  // ── T-05: the limits — what the new comparison must not make readable, and what keeps saying "was not read"
+
+  it('T-05 (a) a session folder that is a link from outside the project to the subfolder: null, and nothing is asked', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const link = join(project, 'link outside');
+    linkDir(sub, link);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, link, root);
+    expect(await decideInstallCommand('npm install', o)).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  it('T-05 (b) `cd` to that link, from the project: the line "could not be determined", and nothing is asked', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const link = join(project, 'link outside');
+    linkDir(sub, link);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, root, root);
+    const d = await decideInstallCommand(`cd "${link}" && npm install`, o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifWindows.each([
+    ['a trailing dot', '.'],
+    ['a trailing space', ' '],
+  ])('T-05 (c) (Windows; skipped otherwise) `cd` to the subfolder with %s: the line "could not be determined", and nothing is asked', async (_what, tail) => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const { o } = at(reg.fetchImpl, root, root);
+    const d = await decideInstallCommand(`cd "${sub}${tail}" && npm install`, o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (d) (Windows, a volume with 8.3 names; skipped otherwise) a session in the short spelling of a folder outside the project: that folder alone is read', async () => {
+    const { root } = dirs();
+    const { root: outside, sub: below } = dirs(join(project, 'outside with a long name'));
+    writeEvil(outside);
+    const own = evilRegistry();
+    const denied = await decideInstallCommand('npm install', at(own.fetchImpl, shortOf(outside), root).o);
+    expect(denied?.deny ?? '(no deny)').toMatch(/package\.json.*evil-pkg/s);
+    const lower = evilRegistry();
+    expect(await decideInstallCommand('npm install', at(lower.fetchImpl, shortOf(below), root).o)).toBeNull();
+    expect(lower.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (e) (Windows, a volume with 8.3 names; skipped otherwise) a package.json only above the project root: not read, from the short subfolder', async () => {
+    const above = join(project, 'above with a long name');
+    const { root, sub } = dirs(above);
+    writeEvil(above);
+    const reg = evilRegistry();
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, shortOf(sub), root).o)).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (f) (Windows, a volume with 8.3 names; skipped otherwise) the home directory: its package.json is not read, for a project in the short spelling below it', async () => {
+    const homeDir = join(project, 'home with a long name');
+    mkdirSync(join(homeDir, '.git'), { recursive: true });
+    writeEvil(homeDir);
+    const docs = join(homeDir, 'docs');
+    const sub = join(docs, 'sub');
+    mkdirSync(sub, { recursive: true });
+    const reg = evilRegistry();
+    expect(await decideInstallCommand('npm install', at(reg.fetchImpl, sub, shortOf(docs), { homeDir }).o)).toBeNull();
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (g) (Windows, a volume with 8.3 names; skipped otherwise) `npm install --prefix` the short subfolder: the line "could not be determined", and nothing is asked', async () => {
+    const { root, sub } = dirs();
+    writeEvil(root);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand(`npm install --prefix "${shortOf(sub)}"`, at(reg.fetchImpl, root, root).o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (h) (Windows, a volume with 8.3 names; skipped otherwise) the same package installed 6 800 times, from the short subfolder: looked up once, in time, and the disk is asked no more than for 100', async () => {
+    const { root, sub } = dirs();
+    const run = async (times: number): Promise<{ realpath: number; express: number; ms: number }> => {
+      const reg = registry({ exists: ['express'] });
+      const { o, n } = at(reg.fetchImpl, shortOf(sub), root);
+      const t0 = performance.now();
+      expect(await decideInstallCommand('npm i express; '.repeat(times), o)).toBeNull();
+      return { realpath: n.realpath, express: reg.calls.filter((u) => u.endsWith('/express')).length, ms: performance.now() - t0 };
+    };
+    const few = await run(100);
+    const many = await run(6_800);
+    expect(many.express).toBe(1);
+    expect(many.ms).toBeLessThan(hangBound(3000));
+    // The cost of the spelling is one question per folder, whatever the length of the line. (Before the fix the hook
+    // never asks: 0 = 0; task 3 adds that the number is above 0.)
+    expect(many.realpath).toBe(few.realpath);
+  });
+
+  ifShort('T-05 (i) (Windows, a volume with 8.3 names; skipped otherwise) a relative `cd` from a session folder that is a junction to a folder outside the project: the line "could not be determined"', async () => {
+    const { root } = dirs();
+    const outside = join(project, 'outside');
+    const target = join(outside, SUB_NAME);
+    mkdirSync(target, { recursive: true });
+    writeEvil(target);
+    const jweb = join(root, 'jweb');
+    linkDir(outside, jweb);
+    const reg = evilRegistry();
+    const d = await decideInstallCommand(`cd ${basename(shortOf(target))} && npm install`, at(reg.fetchImpl, jweb, root).o);
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toMatch(COULD_NOT_BE_DETERMINED);
+    expect(reg.calls).toEqual([]);
+  });
+
+  ifShort('T-05 (j) (Windows, a volume with 8.3 names; skipped otherwise) a session in the short spelling of the root itself: its lockfile covers the manifest, so the registry is not asked', async () => {
+    const { root } = dirs();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'fixture-app', version: '1.0.0', dependencies: { express: '^4.21.0' } }));
+    writeFileSync(join(root, 'package-lock.json'), lockOf('ms', '2.1.3'));
+    const net = lockNet();
+    expect(await decideInstallCommand('npm ci', at(net.fetchImpl, shortOf(root), root).o)).toBeNull();
+    expect([...net.asked].sort()).toEqual(['express@4.21.2', 'ms@2.1.3']);
+    expect(net.registry).toEqual([]);
   });
 });
