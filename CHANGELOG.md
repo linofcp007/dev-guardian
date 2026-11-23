@@ -8,6 +8,17 @@ version bump.
 
 ## [Unreleased]
 
+## [3.16.0] - 2026-11-23
+
+The install hook reads much more of what the Python and .NET tools are told to fetch: the inline dependencies of the
+script `uv run` and `pipx run` run, `uv run --with`, the file of `uv run --with-requirements` (in every folder where the
+uv can open it), the Python forms that fetch a package and build it, and the .NET forms that fetch a package by name.
+`uv run` now says the package index the project gives it. The hook reads the registry files the bun obeys, the
+`bun.lock` that bun 1.4.4 writes, `catalog:`, `patch:` and `npm:` dependencies, npm's groups of short flags, and a
+folder written with Windows 8.3 short names. A project folder on a share that stops answering no longer lets a
+malicious name through as "not verified". The dev-guardian tools no longer write the credentials of a URL they read
+from a file, and `llm_scan` says what the server did.
+
 ### Upgrading from 3.15.0
 
 - **`npx`, `bunx` and `npm exec` in a folder on a network path.** The installed copy is no longer looked for there, so a plain
