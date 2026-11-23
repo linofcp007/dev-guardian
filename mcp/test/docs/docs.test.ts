@@ -1445,3 +1445,61 @@ describe('install-vet-with-requirements-directory-link', () => {
     }).toEqual({ pageHasRecord: true, recordNamesDotdotWord: true, recordNamesPip: true, pageNamesDotdotWord: true });
   });
 });
+
+// ───────────────── install-vet-uv-run-project-index — the docs say the line `uv run` gets and what the managers do not obey
+
+describe('install-vet-uv-run-project-index', () => {
+  const paragraph = (start: string): string => {
+    const found = read('docs/hooks.md')
+      .split('\n')
+      .find((line) => line.startsWith(start));
+    expect(found, `the "${start}" paragraph of docs/hooks.md`).toBeDefined();
+    return flat(found ?? '');
+  };
+  const recordDoc = (id: string): string => {
+    const limit = loadKnownLimits().find((l) => l.id === id);
+    expect(limit, `the record ${id}`).toBeDefined();
+    return flat(limit?.doc ?? '');
+  };
+
+  it('T-05 docs/hooks.md "The inline script block." says the line ("sets the package index") and where the search starts ("beside the script")', () => {
+    const text = paragraph('**The inline script block.**');
+    expect({ line: text.includes('sets the package index'), beside: text.includes('beside the script') }).toEqual({ line: true, beside: true });
+  });
+
+  it('T-05 docs/hooks.md "The files a manager does not obey." names `uv run`, and a script given to `pipx run` is no longer one of "Every other pair"', () => {
+    const text = paragraph('**The files a manager does not obey.**');
+    const at = text.indexOf('Every other pair');
+    expect(at, 'the sentence "Every other pair …"').toBeGreaterThan(-1);
+    const sentence = text.slice(at, text.indexOf('. ', at) + 1);
+    expect({ namesUvRun: text.includes('`uv run`'), scriptListed: sentence.includes('a script given to `pipx run`') }).toEqual({
+      namesUvRun: true,
+      scriptListed: false,
+    });
+  });
+
+  it('T-05 docs/hooks-known-limits.md carries the project-default-registry record, with `uv run` and with no script given to `pipx run` (whitespace joined)', () => {
+    const page = flat(read('docs/hooks-known-limits.md'));
+    const doc = recordDoc('project-default-registry');
+    const lines = (loadKnownLimits().find((l) => l.id === 'project-default-registry')?.doc ?? '').split('\n');
+    expect({
+      pageHasRecord: doc !== '' && page.includes(doc),
+      namesUvRun: lines.some((line) => line.includes('gives PyPI') && line.includes('`uv run`')),
+      scriptListed: page.includes('a script given to `pipx run`'),
+    }).toEqual({
+      pageHasRecord: true,
+      namesUvRun: true,
+      scriptListed: false,
+    });
+  });
+
+  it('T-05 docs/hooks-known-limits.md carries the install-inline-script-deps record, with "above the repository root" and no "is not read (`install-vet-registry-files-unread`)" (whitespace joined)', () => {
+    const page = flat(read('docs/hooks-known-limits.md'));
+    const doc = recordDoc('install-inline-script-deps');
+    expect({
+      pageHasRecord: doc !== '' && page.includes(doc),
+      namesRoot: page.includes('above the repository root') && doc.includes('above the repository root'),
+      saysNotRead: page.includes('is not read (`install-vet-registry-files-unread`)'),
+    }).toEqual({ pageHasRecord: true, namesRoot: true, saysNotRead: false });
+  });
+});

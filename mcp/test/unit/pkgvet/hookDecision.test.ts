@@ -8087,6 +8087,310 @@ describe('install-vet-uv-run-project-index', () => {
     expect(d?.context ?? '').toContain('PIP_INDEX_URL');
     expect(textOf(d)).not.toContain(SAYS);
   });
+
+  // ── The regression tests (red until the fix): the line, what `uv run` obeys, what a script of `pipx run` does not
+
+  const IDX2 = 'https://pypi.second.example/simple/';
+  /** The line of the plan, for a file of the project and the host of its index. */
+  const LINE = (file: string, host = 'https://pypi.corp.example'): string =>
+    `dev-guardian: the project's ${file} sets the package index (${host}) — packages are fetched from it, and what it serves was not vetted.`;
+  const LINE2 = (file: string): string => LINE(file, 'https://pypi.second.example');
+  const COUNT1 = 'dev-guardian: 1 more file of the project sets the package index.';
+  const NOT_NAMED_BY_FILE = 'not denied: it is named by a manifest';
+  const contextOf = (d: Decided): string => d?.context ?? '(no context)';
+  const countOf = (text: string, part: string): number => text.split(part).length - 1;
+  const tool = (extra: string): string => `${PROJECT}[tool.uv]\n${extra}`;
+
+  /** The two files `uv run` reads for an index-url, and what each of them says. */
+  const URL_FILES: Array<[file: string, files: Record<string, string>]> = [
+    ['uv.toml', { 'uv.toml': `index-url = "${IDX}"\n` }],
+    ['pyproject.toml', { 'pyproject.toml': tool(`index-url = "${IDX}"\n`) }],
+  ];
+  const T01_COMMANDS: Array<[command: string, files: (name: string) => Record<string, string>]> = [
+    ['uv run s.py', (n) => ({ 's.py': BLOCK(n) })],
+    [`uv run --with {N} ${PY}`, () => ({})],
+    [`uv run --with-requirements r.txt ${PY}`, (n) => ({ 'r.txt': `${n}\n` })],
+  ];
+  const T01_CELLS = URL_FILES.flatMap(([file, files]) => T01_COMMANDS.map(([command, filesOf]) => ({ file, files, command, filesOf })));
+
+  it.each(T01_CELLS)('T-01 (a) `$command` with the index-url of the $file: the line, no refusal, no question (M-1 k1, k7, w1-w4)', async ({ file, files, command, filesOf }) => {
+    repository();
+    for (const [rel, text] of [...Object.entries(files), ...Object.entries(filesOf(REQUESTS))]) put(rel, text);
+    const { d } = await decide(command.replace('{N}', REQUESTS));
+    expect(contextOf(d)).toContain(LINE(file));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.ask).toBeUndefined();
+  });
+
+  it.each(T01_CELLS)('T-01 (b) `$command` with the index-url of the $file and a missing name: the warning of today, and the line', async ({ file, files, command, filesOf }) => {
+    repository();
+    for (const [rel, text] of [...Object.entries(files), ...Object.entries(filesOf(MISSING))]) put(rel, text);
+    const { d } = await decide(command.replace('{N}', MISSING));
+    expect(contextOf(d)).toContain(LINE(file));
+    expect(contextOf(d)).toContain(`'${MISSING}': not found on the public registry`);
+    expect(d?.deny).toBeUndefined();
+  });
+
+  it('T-01 (c) EC-1: a uv.toml and a [tool.uv] in the same folder: the line of the uv.toml, nothing of the other (x1)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('pyproject.toml', tool(`index-url = "${IDX2}"\n`));
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.second.example');
+  });
+
+  it('T-01 (d) EC-2: an index with credentials: the line names the host only, and nothing of the credentials is said', async () => {
+    const user = ['dg', 'user'].join('');
+    const token = ['dgsecret', 'zzq7731'].join('-');
+    repository();
+    put('uv.toml', `index-url = "https://${user}:${token}@pypi.corp.example/simple/"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(textOf(d).includes(user), 'the user').toBe(false);
+    expect(textOf(d).includes(token), 'the token').toBe(false);
+  });
+
+  it('T-01 (e) EC-6: 500 times `uv run s.py` in one line: the line is said once', async () => {
+    uvProject();
+    const { d } = await decide('uv run s.py; '.repeat(500));
+    expect(countOf(contextOf(d), LINE('uv.toml'))).toBe(1);
+  });
+
+  it('T-01 (f) EC-5: a script that may name its own index: the line, and the question of the block', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('s.py', '# /// script\n# dependencies = ["requests"]\n# [tool.uv]\n# index-url = "https://pypi.other.example/simple/"\n# ///\nprint(1)\n');
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(contextOf(d)).toContain('s.py may name its own index or sources ([tool.uv])');
+    expect(d?.ask ?? '(no ask)').toContain('the inline dependencies of s.py may come from its own index or sources');
+  });
+
+  it('T-01 (g) EC-7: `uv run --directory sub s.py` with the uv.toml in sub: the line (f3)', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run --directory sub s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (h) EC-8: `uv run sub/s.py` reads the uv.toml of the folder of the script (f1)', async () => {
+    repository();
+    put('sub/uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run sub/s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (h) EC-8: `uv run sub/s.py` with a uv.toml in the root and another in sub: the one of sub (f4)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `index-url = "${IDX2}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run sub/s.py');
+    expect(contextOf(d)).toContain(LINE2('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.corp.example');
+  });
+
+  it('T-01 (h) EC-8: `cd sub && uv run ../s.py` reads the uv.toml of the folder of the script, the root (f10)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `index-url = "${IDX2}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd sub && uv run ../s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.second.example');
+  });
+
+  it('T-01 (i) EC-9: `cd sub && uv run s.py` with the uv.toml in the root: the search climbs (f2)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd sub && uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (i) EC-9: the search passes a pyproject.toml with no [tool.uv] (f6)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('proj/pyproject.toml', PROJECT);
+    put('proj/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd proj && uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (i) EC-9: the search stops at the first file it finds and does not add the one above (f7)', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `[[index]]\nname = "second"\nurl = "${IDX2}"\n`);
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('cd sub && uv run s.py');
+    expect(contextOf(d)).toContain(LINE2('uv.toml'));
+    expect(textOf(d)).not.toContain('pypi.corp.example');
+  });
+
+  it('T-01 (j) the key of the line: a `uv add` before a `uv run` does not use it up', async () => {
+    uvProject();
+    const { d } = await decide('uv add requests; uv run s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it('T-01 (j) the key of the line: two folders, two lines', async () => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('sub/uv.toml', `index-url = "${IDX2}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    put('sub/s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py; uv run --directory sub s.py');
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+    expect(contextOf(d)).toContain(LINE2('uv.toml'));
+  });
+
+  it('T-01 (k) the ceiling: four folders, three lines and the count of the rest', async () => {
+    repository();
+    for (const f of ['a', 'b', 'c', 'd']) {
+      put(`${f}/uv.toml`, `index-url = "https://pypi-${f}.corp.example/simple/"\n`);
+      put(`${f}/s.py`, BLOCK(REQUESTS));
+    }
+    const { d } = await decide('uv run a/s.py; uv run b/s.py; uv run c/s.py; uv run d/s.py');
+    const context = contextOf(d);
+    for (const f of ['a', 'b', 'c']) expect(context).toContain(LINE('uv.toml', `https://pypi-${f}.corp.example`));
+    expect(context).toContain(COUNT1);
+    expect(textOf(d)).not.toContain('pypi-d');
+  });
+
+  // ── T-02: the other kinds of index `uv run` obeys, and the ones it does not
+
+  const OBEYED: Array<[label: string, file: string, files: Record<string, string>]> = [
+    ['uv.toml extra-index-url (k2)', 'uv.toml', { 'uv.toml': `extra-index-url = ["${IDX}"]\n` }],
+    ['uv.toml find-links (k3)', 'uv.toml', { 'uv.toml': 'find-links = ["https://pypi.corp.example/links/"]\n' }],
+    ['uv.toml [[index]] (k4)', 'uv.toml', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['uv.toml [[index]] default = true (k5)', 'uv.toml', { 'uv.toml': `[[index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['[tool.uv] extra-index-url (k8)', 'pyproject.toml', { 'pyproject.toml': tool(`extra-index-url = ["${IDX}"]\n`) }],
+    ['[[tool.uv.index]] (k10)', 'pyproject.toml', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\n` }],
+    ['[[tool.uv.index]] default = true (k11)', 'pyproject.toml', { 'pyproject.toml': `${PROJECT}[[tool.uv.index]]\nname = "corp"\nurl = "${IDX}"\ndefault = true\n` }],
+    ['[tool.uv] index-url with no [project] (k17)', 'pyproject.toml', { 'pyproject.toml': `[tool.uv]\nindex-url = "${IDX}"\n` }],
+  ];
+
+  it.each(OBEYED)('T-02 (a) `uv run s.py` with %s: the line', async (_label, file, files) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide('uv run s.py');
+    expect(contextOf(d)).toContain(LINE(file));
+  });
+
+  const UNOBEYED_MISSING: Array<[label: string, files: Record<string, string>]> = [
+    ['uv.toml [pip] index-url (k6)', { 'uv.toml': `[pip]\nindex-url = "${IDX}"\n` }],
+    ['[[tool.poetry.source]] (k12)', { 'pyproject.toml': `${PROJECT}${POETRY('')}` }],
+    ['[[tool.poetry.source]] primary (k13)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "primary"\n')}` }],
+    ['[[tool.poetry.source]] supplemental (k14)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "supplemental"\n')}` }],
+    ['[[tool.poetry.source]] explicit (k15)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "explicit"\n')}` }],
+    ['[[tool.poetry.source]] default (k18)', { 'pyproject.toml': `${PROJECT}${POETRY('priority = "default"\n')}` }],
+    ['[[tool.pdm.source]] (k16)', { 'pyproject.toml': `${PROJECT}[[tool.pdm.source]]\nname = "corp"\nurl = "${IDX}"\n` }],
+  ];
+
+  /** The warning of a missing name when no file of the project explains it: the reason of a project with no file, and no line. */
+  const expectNoFileReason = (d: Decided): void => {
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(contextOf(d)).toContain(`'${MISSING}': not found on the public registry`);
+    expect(contextOf(d)).toContain(NOT_NAMED_BY_FILE);
+    expect(textOf(d)).not.toContain(SAYS);
+    expect(d?.deny).toBeUndefined();
+  };
+
+  it.each(UNOBEYED_MISSING)('T-02 (b) `uv run s.py` with %s and a missing name: the reason of a project with no file, no line', async (_label, files) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide('uv run s.py');
+    expectNoFileReason(d);
+  });
+
+  it.each([
+    ['a uv.toml with only [pip] beside it (x2)', `[pip]\nindex-url = "${IDX}"\n`],
+    ['a uv.toml with no index beside it (x3)', 'native-tls = false\n'],
+  ])('T-02 (c) EC-1: the [tool.uv] of a pyproject.toml with %s is not read: the reason of a project with no file, no line', async (_label, uvToml) => {
+    repository();
+    put('uv.toml', uvToml);
+    put('pyproject.toml', tool(`index-url = "${IDX2}"\n`));
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide('uv run s.py');
+    expectNoFileReason(d);
+  });
+
+  it('T-02 (d) `uv run --with <missing name>` with a [pip] index-url: the reason of the flag, no registry', async () => {
+    repository();
+    put('uv.toml', `[pip]\nindex-url = "${IDX}"\n`);
+    const { d } = await decide(`uv run --with ${MISSING} ${PY}`);
+    expect(textOf(d)).not.toContain(CONFIGURED);
+    expect(contextOf(d)).toContain('(not denied: flag --with is not on the confident-shape allowlist)');
+  });
+
+  it('T-02 (e) a withdrawn malicious name with a [pip] index-url: refused, with the text that it does not exist on PyPI', async () => {
+    repository();
+    put('uv.toml', `[pip]\nindex-url = "${IDX}"\n`);
+    put('s.py', BLOCK(GONE));
+    const { d } = await decide('uv run s.py');
+    expect(d?.deny ?? '(no deny)').toContain('does not exist on PyPI — most likely a hallucinated or mistyped name.');
+    expect(d?.deny ?? '').toContain('OSV lists this name as a malicious package (MAL-2026-77), removed from PyPI');
+  });
+
+  // ── T-03: a script of `pipx run` obeys no file of the project (P3 = A)
+
+  const PIPX_COMMANDS = ['pipx run s.py', 'pipx run --path s.py'];
+  const T03_CELLS = PIPX_FILES.flatMap(([label, files]) => PIPX_COMMANDS.map((command) => ({ label, files, command })));
+
+  it.each(T03_CELLS)('T-03 `$command` with $label and a missing name: the reason of a project with no file, no line', async ({ files, command }) => {
+    repository();
+    for (const [rel, text] of Object.entries(files)) put(rel, text);
+    put('s.py', BLOCK(MISSING));
+    const { d } = await decide(command);
+    expectNoFileReason(d);
+  });
+
+  it.each(PIPX_COMMANDS)('T-03 `%s` with the index-url of the uv.toml and a withdrawn malicious name: refused, with the text that it does not exist on PyPI', async (command) => {
+    repository();
+    put('uv.toml', `index-url = "${IDX}"\n`);
+    put('s.py', BLOCK(GONE));
+    const { d } = await decide(command);
+    expect(d?.deny ?? '(no deny)').toContain('does not exist on PyPI — most likely a hallucinated or mistyped name.');
+  });
+
+  // ── T-07: what does not take the line away (US-1.AC-8)
+
+  const HELD: Array<[label: string, command: string, env: Record<string, string>]> = [
+    ['`--index CLI` (c1, c2)', `uv run --index ${CLI} s.py`, {}],
+    ['`--extra-index-url CLI` (c7)', `uv run --extra-index-url ${CLI} s.py`, {}],
+    ['`--find-links` (c8b)', 'uv run --find-links https://pypi.cli.example/links/ s.py', {}],
+    ['`--no-project` (s7)', 'uv run --no-project s.py', {}],
+    ['UV_INDEX (n7)', 'uv run s.py', { UV_INDEX: CLI }],
+    ['UV_EXTRA_INDEX_URL (n5, n6)', 'uv run s.py', { UV_EXTRA_INDEX_URL: CLI }],
+    ['UV_FIND_LINKS (n8b)', 'uv run s.py', { UV_FIND_LINKS: 'https://pypi.cli.example/links/' }],
+    ['UV_NO_INDEX=1 (n9)', 'uv run s.py', { UV_NO_INDEX: '1' }],
+    ['PIP_INDEX_URL (n3)', 'uv run s.py', { PIP_INDEX_URL: CLI }],
+    ['PIP_EXTRA_INDEX_URL (n4)', 'uv run s.py', { PIP_EXTRA_INDEX_URL: CLI }],
+  ];
+
+  it.each(HELD)('T-07 with the index-url of the uv.toml and %s: the line is still said', async (_label, command, env) => {
+    uvProject();
+    const { d } = await decide(command, { env });
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
+
+  it.each([
+    ['UV_DEFAULT_INDEX (n10)', 'uv run s.py', { UV_DEFAULT_INDEX: CLI }],
+    ['`--default-index CLI` (c9)', `uv run --default-index ${CLI} s.py`, {}],
+  ])('T-07 with a [[index]] with no default in the uv.toml and %s: the line is still said', async (_label, command, env) => {
+    repository();
+    put('uv.toml', `[[index]]\nname = "corp"\nurl = "${IDX}"\n`);
+    put('s.py', BLOCK(REQUESTS));
+    const { d } = await decide(command, { env });
+    expect(contextOf(d)).toContain(LINE('uv.toml'));
+  });
 });
 
 // ───────────────── install-vet-with-requirements-directory-link — the guards: what the fix must not change (green before the fix)

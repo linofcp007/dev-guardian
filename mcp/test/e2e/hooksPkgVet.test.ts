@@ -3070,3 +3070,26 @@ describe('install-vet-with-requirements-directory-link', () => {
     }).toEqual({ decision: 'deny', unread: true, file: true });
   });
 });
+
+// ───────────────── install-vet-uv-run-project-index — `uv run` says the index a file of the project gives, through the dispatcher
+
+describe('install-vet-uv-run-project-index', () => {
+  const ROUTES: Record<string, Route> = {
+    'https://pypi.org/pypi/requests/json': {
+      body: { info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+    },
+    [OSV]: { osv: {} },
+  };
+  const LINE =
+    "dev-guardian: the project's uv.toml sets the package index (https://pypi.corp.example) — packages are fetched from it, and what it serves was not vetted.";
+
+  it('T-06 `uv run s.py` with the index-url of a uv.toml and a clean script: the line in additionalContext, no refusal, no question', () => {
+    mkdirSync(join(project, '.git'));
+    writeFileSync(join(project, 'uv.toml'), 'index-url = "https://pypi.corp.example/simple/"\n');
+    writeFileSync(join(project, 's.py'), '# /// script\n# dependencies = ["requests"]\n# ///\nprint(1)\n');
+    const r = runHook('uv run s.py', ROUTES);
+    expect(r.status).toBe(0);
+    expect(r.output?.hookSpecificOutput?.additionalContext ?? '(no context)').toContain(LINE);
+    expect(r.output?.hookSpecificOutput?.permissionDecision).toBeUndefined();
+  });
+});

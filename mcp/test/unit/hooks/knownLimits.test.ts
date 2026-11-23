@@ -599,3 +599,32 @@ describe('install-vet-with-requirements-directory-link', () => {
     expect(['tools/../r.txt', 'pip install -r'].filter((w) => !doc.includes(w))).toEqual([]);
   });
 });
+
+// ───────────────── install-vet-uv-run-project-index — the records say what `uv run` does with the index of a project file
+
+describe('install-vet-uv-run-project-index', () => {
+  const docOf = (id: string): string => {
+    const limit = loadKnownLimits().find((l) => l.id === id);
+    expect(limit, `the record ${id}`).toBeDefined();
+    return limit?.doc ?? '';
+  };
+
+  it('T-05 the record project-default-registry says `uv run` in the sentence on the indexes of the PyPI, and no longer lists a script given to `pipx run` among the pairs nobody measured', () => {
+    const doc = docOf('project-default-registry');
+    const bullet = doc.split('\n').find((line) => line.includes('gives PyPI')) ?? '';
+    const flat = doc.replace(/\s+/g, ' ');
+    expect({ bulletFound: bullet !== '', namesUvRun: bullet.includes('`uv run`'), scriptListed: flat.includes('a script given to `pipx run`') }).toEqual({
+      bulletFound: true,
+      namesUvRun: true,
+      scriptListed: false,
+    });
+  });
+
+  it('T-05 the record install-inline-script-deps no longer says the index of a project file "is not read (`install-vet-registry-files-unread`)", and names the repository root above which nothing is read', () => {
+    const doc = docOf('install-inline-script-deps').replace(/\s+/g, ' ');
+    expect({ saysNotRead: doc.includes('is not read (`install-vet-registry-files-unread`)'), namesRoot: doc.includes('above the repository root') }).toEqual({
+      saysNotRead: false,
+      namesRoot: true,
+    });
+  });
+});
