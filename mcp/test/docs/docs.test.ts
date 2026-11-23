@@ -486,7 +486,7 @@ describe('the docs of the manifest vetting', () => {
     expect(at).toBeGreaterThan(-1);
     const end = hooks.indexOf('\n## ', at + 1);
     const section = hooks.slice(at, end === -1 ? undefined : end);
-    for (const said of ['installs from a manifest', '`npm ci`', '`pnpm install`', '`pip install -r`', '`package.json`']) {
+    for (const said of ['installs from a manifest', '`npm ci`', '`pnpm install`', 'pip install -r', '`package.json`']) {
       expect({ said, found: section.includes(said) }).toEqual({ said, found: true });
     }
     // What leaves the machine is declared, and what stays.
@@ -1414,5 +1414,34 @@ describe('known-limits-doc-markdownlint', () => {
       example: true,
       problems: [],
     });
+  });
+});
+
+// ───────────────── install-vet-with-requirements-directory-link — what the documentation says of where the requirements file is read
+
+describe('install-vet-with-requirements-directory-link', () => {
+  it('T-06 docs/hooks.md: the sentence on where the script is looked for says the file of `uv run --with-requirements` is, and that a `..` after a link reads both paths', () => {
+    const paragraph = read('docs/hooks.md')
+      .split('\n')
+      .find((line) => line.startsWith('**The inline script block.**'));
+    expect(paragraph, 'the "The inline script block." paragraph of docs/hooks.md').toBeDefined();
+    const text = flat(paragraph ?? '');
+    const at = text.indexOf('The script is looked for');
+    expect(at, 'the sentence "The script is looked for …" in that paragraph').toBeGreaterThan(-1);
+    const sentence = text.slice(at, text.indexOf('. ', at) + 1);
+    expect({ requirements: sentence.includes('`--with-requirements`'), dotdot: sentence.includes('`..`') }).toEqual({ requirements: true, dotdot: true });
+  });
+
+  it('T-06 docs/hooks-known-limits.md carries the text of the install-inline-script-deps record, with `tools/../r.txt` and `pip install -r` (whitespace joined)', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'install-inline-script-deps');
+    expect(limit, 'the record install-inline-script-deps').toBeDefined();
+    const page = flat(read('docs/hooks-known-limits.md'));
+    const doc = flat(limit?.doc ?? '');
+    expect({
+      pageHasRecord: doc !== '' && page.includes(doc),
+      recordNamesDotdotWord: doc.includes('tools/../r.txt'),
+      recordNamesPip: doc.includes('pip install -r'),
+      pageNamesDotdotWord: page.includes('tools/../r.txt'),
+    }).toEqual({ pageHasRecord: true, recordNamesDotdotWord: true, recordNamesPip: true, pageNamesDotdotWord: true });
   });
 });

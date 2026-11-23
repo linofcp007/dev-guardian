@@ -3028,3 +3028,29 @@ describe('pkgvet-archive-names-pipx-composer', () => {
     expect(reasonOf(r)).toContain(MAL);
   });
 });
+
+// ───────────────── install-vet-with-requirements-directory-link — the file of `uv run --with-requirements`, through the dispatcher
+
+describe('install-vet-with-requirements-directory-link', () => {
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const ROUTES: Record<string, Route> = {
+    [`https://pypi.org/pypi/${EVIL}/json`]: {
+      body: { info: { version: '1.0.0' }, releases: { '1.0.0': [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+    },
+    [OSV]: { osv: { [`${EVIL}@1.0.0`]: ['MAL-2026-0042'] } },
+  };
+
+  it('T-07 `uv run --directory tools/.. --with-requirements r.txt`, tools a link to sub/inner and only sub/r.txt naming the package, is DENIED, naming sub/r.txt and the package', () => {
+    mkdirSync(join(project, 'sub', 'inner'), { recursive: true });
+    writeFileSync(join(project, 'sub', 'r.txt'), `${EVIL}\n`);
+    symlinkSync(join(project, 'sub', 'inner'), join(project, 'tools'), process.platform === 'win32' ? 'junction' : 'dir');
+    const r = runHook('uv run --directory tools/.. --with-requirements r.txt python -c "print(1)"', ROUTES);
+    expect(r.status).toBe(0);
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+    expect({
+      decision: r.output?.hookSpecificOutput?.permissionDecision,
+      file: reason.includes('sub/r.txt'),
+      named: reason.includes(EVIL),
+    }).toEqual({ decision: 'deny', file: true, named: true });
+  });
+});

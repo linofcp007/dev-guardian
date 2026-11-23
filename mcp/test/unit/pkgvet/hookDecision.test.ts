@@ -8236,4 +8236,141 @@ describe('install-vet-with-requirements-directory-link', () => {
       expect(d?.context ?? '(no context)').toContain(UNKNOWN_DIR);
     },
   );
+
+  // ── The regression tests: red until the fix (T-01, T-02, T-03, T-05)
+
+  const REASON_LINE = (reason: string): string => `dev-guardian: the requirements file was not read (${reason}) — its packages were not vetted.`;
+  /** Folders outside the project that a test made; removed after each test. */
+  const outside: string[] = [];
+  afterEach(() => {
+    for (const dir of outside.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  /** Decided once per file: this account can make the folder link to a network path the tests use. */
+  const CAN_NET_LINK = ((): boolean => {
+    const probe = mkdtempSync(join(tmpdir(), 'pkgvet-ivwrdl-net-'));
+    try {
+      symlinkSync(UNC, join(probe, 'n'), 'dir');
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(join(probe, 'n'), { force: true });
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const ifNetLink = it.skipIf(!CAN_NET_LINK);
+  const netLink = (): string => {
+    const root = realpathSync.native(project);
+    symlinkSync(UNC, join(root, 'netdir'), 'dir');
+    return root;
+  };
+
+  /** The four commands of the plan that move the folder by a `..` after the link, and the file `r.txt` they read. */
+  const DOTDOT = [
+    `uv run --directory tools/.. --with-requirements r.txt ${PY}`,
+    `UV_WORKING_DIR=tools/.. uv run --with-requirements r.txt ${PY}`,
+    `cd tools && uv run --directory .. --with-requirements r.txt ${PY}`,
+    `uv --directory tools/.. run --with-requirements r.txt ${PY}`,
+  ];
+
+  ifLink.each(DOTDOT)('T-01 (a) `%s`, r.txt is requests and sub/r.txt names the package: sub/r.txt is refused', async (command) => {
+    const root = withTools();
+    put('r.txt', 'requests\n', root);
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(command, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifLink.each(DOTDOT)('T-01 (b) `%s`, only sub/r.txt names the package: sub/r.txt is refused', async (command) => {
+    const root = withTools();
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(command, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifLink.each(DOTDOT)('T-01 (d) `%s`, r.txt a folder and sub/r.txt names the package: sub/r.txt is refused, r.txt is said not regular', async (command) => {
+    const root = withTools();
+    mkdirSync(join(root, 'r.txt'));
+    put('sub/r.txt', `${EVIL}\n`, root);
+    const d = await decide(command, reg(), here(root));
+    denies(d, 'sub/r.txt');
+    expect(d?.context ?? '(no context)').toContain(notRead('r.txt', 'not a regular file'));
+  });
+
+  it('T-02 (a) `--directory broken`, a link to a folder that does not exist: the line says it could not be read, no refusal, no question', async () => {
+    const root = realpathSync.native(project);
+    symlinkSync(join(root, 'nowhere'), join(root, 'broken'), DIR_LINK);
+    const d = await decide(`uv run --directory broken --with-requirements r.txt ${PY}`, reg(), here(root));
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('could not be read') });
+  });
+
+  it('T-02 (b) the deadline is past, `--directory sub`, sub/r.txt names the package: the line says the time budget is exhausted, no refusal, no question', async () => {
+    const root = realpathSync.native(project);
+    put('sub/r.txt', `${EVIL}\n`, root);
+    const d = await decide(`uv run --directory sub --with-requirements r.txt ${PY}`, reg(), { ...here(root), deadlineAt: Date.now() - 1 });
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('vetting time budget exhausted') });
+  });
+
+  ifNetLink('T-02 (c) `--directory netdir`, a link to a network path: the line says on a network path, no refusal, no question, in time', async () => {
+    const root = netLink();
+    const t0 = Date.now();
+    const d = await decide(`uv run --directory netdir --with-requirements r.txt ${PY}`, reg(), here(root));
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('on a network path') });
+  });
+
+  ifLink('T-03 (a) `cd tools && uv run --with-requirements r.txt`, tools a link to real-tools that holds r.txt: r.txt is refused', async () => {
+    const root = realpathSync.native(project);
+    put('real-tools/r.txt', `${EVIL}\n`, root);
+    symlinkSync(join(root, 'real-tools'), join(root, 'tools'), DIR_LINK);
+    denies(await decide(`cd tools && uv run --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  ifLink('T-03 (b) `cd tools && cd .. && uv run --with-requirements r.txt`, only sub/r.txt names the package: sub/r.txt is refused', async () => {
+    const root = withTools();
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(`cd tools && cd .. && uv run --with-requirements r.txt ${PY}`, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifNetLink('T-03 (c) `cd netdir && uv run --with-requirements r.txt`, netdir a link to a network path: the line says on a network path, in time', async () => {
+    const root = netLink();
+    const t0 = Date.now();
+    const d = await decide(`cd netdir && uv run --with-requirements r.txt ${PY}`, reg(), here(root));
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect({ deny: d?.deny, ask: askOf(d), context: d?.context }).toEqual({ deny: undefined, ask: undefined, context: REASON_LINE('on a network path') });
+  });
+
+  ifLink('T-03 (d) `cd tools && uv run --with-requirements r.txt`, tools a link to a folder outside the project: r.txt there is refused, and the registry was asked', async () => {
+    const root = realpathSync.native(project);
+    const elsewhere = realpathSync.native(mkdtempSync(join(tmpdir(), 'pkgvet-ivwrdl-out-')));
+    outside.push(elsewhere);
+    put('r.txt', `${EVIL}\n`, elsewhere);
+    symlinkSync(elsewhere, join(root, 'tools'), DIR_LINK);
+    const r = reg();
+    denies(await decide(`cd tools && uv run --with-requirements r.txt ${PY}`, r, here(root)), 'r.txt');
+    expect(r.calls).toContain(pypiUrl(EVIL));
+  });
+
+  /** `r.txt` and `sub/r.txt` each include `a.txt` to `e.txt` (in their own folder), all `requests` but the one `evil` names. */
+  const withIncludes = (evil: string): string => {
+    const root = withTools();
+    const includes = `${['a', 'b', 'c', 'd', 'e'].map((n) => `-r ${n}.txt`).join('\n')}\nrequests\n`;
+    for (const dir of ['', 'sub/']) {
+      put(`${dir}r.txt`, includes, root);
+      for (const n of ['a', 'b', 'c', 'd', 'e']) put(`${dir}${n}.txt`, `${dir}${n}.txt` === evil ? `${EVIL}\n` : 'requests\n', root);
+    }
+    return root;
+  };
+
+  ifLink('T-05 (a) the eighth file, sub/a.txt, names the package: sub/r.txt is refused (a file it includes)', async () => {
+    const root = withIncludes('sub/a.txt');
+    denies(await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, reg(), here(root)), 'sub/r.txt');
+  });
+
+  ifLink('T-05 (b) the ninth file, sub/b.txt, names the package: it is not read, and the line says the limit of 8 files', async () => {
+    const root = withIncludes('sub/b.txt');
+    const r = reg();
+    const d = await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, r, here(root));
+    expect(d?.deny).toBeUndefined();
+    expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+    expect(d?.context ?? '(no context)').toContain('dev-guardian: a file sub/r.txt includes was not read (past the limit of 8 requirement files) — its packages were not vetted.');
+  });
 });

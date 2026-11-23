@@ -588,3 +588,14 @@ describe('install-vet-inline-script-deps', () => {
     expect(shown).toEqual(expect.arrayContaining([{ command: 'uv run pytest', pyproject: true, decision: 'none' }]));
   });
 });
+
+// ───────────────── install-vet-with-requirements-directory-link — the record says the `..` in the word of a requirements file stays unread
+
+describe('install-vet-with-requirements-directory-link', () => {
+  it('T-06 the record install-inline-script-deps has `tools/../r.txt` and `pip install -r` in its doc', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'install-inline-script-deps');
+    expect(limit, 'the record install-inline-script-deps').toBeDefined();
+    const doc = (limit?.doc ?? '').replace(/\s+/g, ' ');
+    expect(['tools/../r.txt', 'pip install -r'].filter((w) => !doc.includes(w))).toEqual([]);
+  });
+});
