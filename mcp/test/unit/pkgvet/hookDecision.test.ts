@@ -8088,3 +8088,152 @@ describe('install-vet-uv-run-project-index', () => {
     expect(textOf(d)).not.toContain(SAYS);
   });
 });
+
+// ───────────────── install-vet-with-requirements-directory-link — the guards: what the fix must not change (green before the fix)
+
+describe('install-vet-with-requirements-directory-link', () => {
+  // The names are the made-up ones of the plan: EVIL is published and has a `MAL-` advisory, `requests` is clean, the rest are 404.
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const PY = 'python -c "print(1)"';
+  const UNC = '\\\\198.51.100.7\\share';
+  const DIR_LINK = process.platform === 'win32' ? 'junction' : 'dir';
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  const reg = (): ReturnType<typeof registry> => registry({ exists: ['requests', EVIL], malicious: [EVIL] });
+
+  type Decided = Awaited<ReturnType<typeof decideInstallCommand>>;
+  const askOf = (d: Decided): string | undefined => (d as (NonNullable<Decided> & { ask?: string }) | null)?.ask;
+  const decide = (command: string, r: { fetchImpl: typeof fetch }, extra: Partial<HookVetOptions> = {}): Promise<Decided> =>
+    decideInstallCommand(command, opts(r.fetchImpl, { popular: {}, ...extra }));
+  const put = (rel: string, text: string, at: string): void => {
+    mkdirSync(dirname(join(at, rel)), { recursive: true });
+    writeFileSync(join(at, rel), text);
+  };
+  /** The refusal of `file`, written at the start of the reason or after a space (so `r.txt` is not `sub/r.txt`), with the name and whose decision it is. */
+  const denies = (d: Decided, file: string): void => {
+    const deny = d?.deny ?? '(no deny)';
+    const needle = `${file} names '${EVIL}@1.0.0'`;
+    expect(deny.startsWith(needle) || deny.includes(` ${needle}`), deny).toBe(true);
+    expect(deny).toContain("is the user's decision");
+  };
+  const notRead = (file: string, reason: string): string => `dev-guardian: ${file} was not read (${reason}) — its packages were not vetted.`;
+  const UNKNOWN_DIR = 'the requirements file was not read (where the command runs could not be determined)';
+
+  /** The project of the test, by its real path, with the folder link `tools` -> `sub/inner` (the one of the plan). */
+  const withTools = (): string => {
+    const root = realpathSync.native(project);
+    mkdirSync(join(root, 'sub', 'inner'), { recursive: true });
+    symlinkSync(join(root, 'sub', 'inner'), join(root, 'tools'), DIR_LINK);
+    return root;
+  };
+  const here = (root: string): Partial<HookVetOptions> => ({ cwd: root, projectDir: root });
+
+  /** Decided once per file: this account can make the folder link the tests use. */
+  const CAN_LINK = ((): boolean => {
+    const probe = mkdtempSync(join(tmpdir(), 'pkgvet-ivwrdl-probe-'));
+    try {
+      mkdirSync(join(probe, 't'));
+      symlinkSync(join(probe, 't'), join(probe, 'l'), DIR_LINK);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      rmSync(join(probe, 'l'), { force: true });
+      rmSync(probe, { recursive: true, force: true });
+    }
+  })();
+  const ifLink = it.skipIf(!CAN_LINK);
+  // A junction or link is removed itself, before the folder that holds it is (as in `install-vet-path-forms`).
+  afterEach(() => {
+    for (const name of ['tools', 'broken', 'netdir']) rmSync(join(project, name), { force: true });
+  });
+
+  ifLink('T-04 (a) r.txt names the package and sub/r.txt is clean, `--directory tools/..`: the logical folder, already read, is refused', async () => {
+    const root = withTools();
+    put('r.txt', `${EVIL}\n`, root);
+    put('sub/r.txt', 'requests\n', root);
+    denies(await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  ifLink('T-04 (b) sub/inner/r.txt names the package, `--directory tools`: one folder, refused as r.txt', async () => {
+    const root = withTools();
+    put('sub/inner/r.txt', `${EVIL}\n`, root);
+    denies(await decide(`uv run --directory tools --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  it('T-04 (c) no link, sub/r.txt names the package, `--directory sub`: refused as r.txt', async () => {
+    const root = realpathSync.native(project);
+    put('sub/r.txt', `${EVIL}\n`, root);
+    denies(await decide(`uv run --directory sub --with-requirements r.txt ${PY}`, reg(), here(root)), 'r.txt');
+  });
+
+  ifLink('T-04 (d) a .py after --with-requirements is read as a script: sub/deps.py with the block, `--directory tools/..`', async () => {
+    const root = withTools();
+    put('sub/deps.py', BLOCK(EVIL), root);
+    denies(await decide(`uv run --directory tools/.. --with-requirements deps.py ${PY}`, reg(), here(root)), 'deps.py');
+  });
+
+  ifLink('T-04 (e) `cd tools && pip install -r r.txt`: pip keeps commandDir, the line says where the command runs could not be determined', async () => {
+    const root = withTools();
+    put('sub/inner/r.txt', `${EVIL}\n`, root);
+    const d = await decide('cd tools && pip install -r r.txt', reg(), here(root));
+    expect(d?.deny).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(UNKNOWN_DIR);
+  });
+
+  ifLink.each([`uv run --with-requirements tools/../r.txt ${PY}`, 'pip install -r tools/../r.txt'])(
+    'T-04 (f) `%s`, only sub/r.txt names the package: the word is resolved in the text, null and nothing asked',
+    async (command) => {
+      const root = withTools();
+      put('sub/r.txt', `${EVIL}\n`, root);
+      const r = reg();
+      expect(await decide(command, r, here(root))).toBeNull();
+      expect(r.calls).toEqual([]);
+    },
+  );
+
+  ifLink('T-04 (g) `--directory broken setup.py`, `broken` a link to nothing: the script is not read, a question says so', async () => {
+    const root = realpathSync.native(project);
+    symlinkSync(join(root, 'nowhere'), join(root, 'broken'), DIR_LINK);
+    const d = await decide('uv run --directory broken setup.py', reg(), here(root));
+    expect(askOf(d) ?? '(no ask)').toContain('could not be read');
+  });
+
+  it('T-04 (h) `uvx --with-requirements r.txt requests` leaves the file unread: null, and the package is not asked', async () => {
+    const root = realpathSync.native(project);
+    put('r.txt', `${EVIL}\n`, root);
+    const r = reg();
+    expect(await decide('uvx --with-requirements r.txt requests', r, here(root))).toBeNull();
+    expect(r.calls.filter((u) => u.includes(EVIL))).toEqual([]);
+  });
+
+  ifLink('T-04 (i) both r.txt and sub/r.txt are `requests`, `--directory tools/..`: null, and requests is looked up', async () => {
+    const root = withTools();
+    put('r.txt', 'requests\n', root);
+    put('sub/r.txt', 'requests\n', root);
+    const r = reg();
+    expect(await decide(`uv run --directory tools/.. --with-requirements r.txt ${PY}`, r, here(root))).toBeNull();
+    expect(r.calls).toContain(pypiUrl('requests'));
+  });
+
+  it('T-04 (j) a session folder on a network path, no `cd` and no flag: the line of today, no refusal and no question, in time', async () => {
+    const proj = `${UNC}\\proj`;
+    const t0 = Date.now();
+    const d = await decide(`uv run --with-requirements r.txt ${PY}`, reg(), { cwd: proj, projectDir: proj });
+    expect(Date.now() - t0).toBeLessThan(hangBound(2000));
+    expect(d?.deny).toBeUndefined();
+    expect(askOf(d)).toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(notRead('r.txt', 'on a network path'));
+  });
+
+  ifLink.each(['cd tools && uv pip install -r r.txt', 'cd tools && pipx inject dgprobe-zzq7731-tool -r r.txt'])(
+    'T-04 (k) `%s`, sub/inner/r.txt names the package: no refusal, the line of the folder not known',
+    async (command) => {
+      const root = withTools();
+      put('sub/inner/r.txt', `${EVIL}\n`, root);
+      const d = await decide(command, reg(), here(root));
+      expect(d?.deny).toBeUndefined();
+      expect(d?.context ?? '(no context)').toContain(UNKNOWN_DIR);
+    },
+  );
+});
