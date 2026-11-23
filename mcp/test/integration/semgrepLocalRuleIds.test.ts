@@ -163,6 +163,25 @@ describe('one stored id per rule', () => {
   });
 });
 
+describe('semgrep-pack-rule-id-in-own-repo', () => {
+  const BASE = resolve('/work');
+  const abs = (file: string, id: string): string => `${semgrepConfigPrefix(file)}.${id}`;
+
+  it("T-01 the running plugin's own pack inside the analysed project keeps the rule's own id, in the plugin's repository and in a copy of it", () => {
+    const repo = join(BASE, 'src', 'dev-guardian');
+    const packs = join(repo, 'configs', 'semgrep');
+    const webJs = join(packs, 'web-js.yml');
+    const own = localRuleIdNormalizer([webJs], { projectPath: repo, packsDir: packs });
+    expect(own('configs.semgrep.web-js-sql-template')).toBe('web-js-sql-template');
+    expect(own(abs(webJs, 'web-js-sql-template'))).toBe('web-js-sql-template');
+
+    const mono = join(BASE, 'src', 'mono');
+    const vendored = join(mono, 'vendor', 'dev-guardian', 'configs', 'semgrep');
+    const copy = localRuleIdNormalizer([join(vendored, 'web-js.yml')], { projectPath: mono, packsDir: vendored });
+    expect(copy('vendor.dev-guardian.configs.semgrep.web-js-sql-template')).toBe('web-js-sql-template');
+  });
+});
+
 describe('noRuleLoaded: every local rule failed and no registry pack ran (M-1)', () => {
   const rule = (id: string): string => `  - id: ${id}\n    languages: [javascript]\n    severity: ERROR\n    message: m\n    pattern: foo()\n`;
   it('true only when every rule every local file declares is among those that failed, and nothing else ran', () => {
