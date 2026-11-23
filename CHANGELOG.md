@@ -271,6 +271,23 @@ version bump.
 
 ### Fixed
 
+- **`llm_scan` says what the server did (llm-scan-codex-smoke-findings).** Four defects measured in the Codex smoke of
+  2026-11-19, and the texts around them. (1) `llm_scan { step: "start", plan_id, … }` with any parameter other than
+  `project_path` and `confirm` (`modes`, `scan_id`, `fingerprints`, `max_tasks`, `max_estimated_tokens`,
+  `per_task_overhead`) answered `ok` and ignored it: the plan kept its limits, and a model believed it had raised one.
+  It is now refused with `invalid_input`, naming the parameters, with `retry_with: { plan_id }`; the plan is neither read
+  nor confirmed. **A call that used to be accepted and ignored now fails:** to read or confirm a plan send `plan_id`
+  with `project_path` and, with the user's agreement, `confirm: true`; for other limits, modes or findings, start a new
+  plan without `plan_id`. (2) The `token_limit_note` (in `start`, `start { plan_id }` and the `needs_confirm` refusal of
+  `task`) says that a plan's limits are fixed when it is made and that covering the whole plan needs a new plan with a
+  larger `max_estimated_tokens`, where it said "start again". (3) A plan with `verify` in `modes` now says in
+  `verify_source` (`{ from, scan_ids, scan_ids_total }`) which input chose the findings and which scans they came from,
+  also in `start { plan_id }` (kept in the plan record's metadata, no migration; an older plan has none). The `scan_id`
+  of the answer stays the plan record's. (4) A verify-only plan with no `scan_id` that finds nothing in the project's
+  open set, for example after a scan with scope, answers `nothing_to_plan` with a reason that names the open set and
+  says to pass the `scan_id` of a scoped scan. The descriptions of `max_estimated_tokens`, `confirm` and `plan_id` of
+  `llm_scan` say the same (within the same budgets), and `docs/llm-scan.md` and `docs/hosts.md` record the Codex run
+  and what was measured of its project configuration.
 - **A word that ends like an archive is read as the pipx and the composer read it.** Both were treated as managers nobody
   measured: the hook asked the registry about words the pipx never asks for and only warned about names the composer asks
   for. Measured now (pipx 1.18.16 on Linux and on Windows, with the pip and the uv engines; composer 2.10.3 on Windows;

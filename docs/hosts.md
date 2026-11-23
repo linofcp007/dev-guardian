@@ -35,6 +35,8 @@ The CLI needs no MCP connection. It fills in the absolute path of `mcp/dist/serv
 | Cline | manual — the CLI prints the snippet to paste into Cline's MCP settings | `.clinerules` |
 | Claude Desktop | `claude_desktop_config.json` (global only; `%APPDATA%\Claude\`, `~/Library/Application Support/Claude/`, `~/.config/Claude/`) | none, and `mcp-config` writes none for it — paste `host-rules/AGENTS.md` into a Project's instructions after replacing every `{{DEV_GUARDIAN_CLI}}` in it (see below) |
 
+Measured on Codex CLI 0.165.0 (2026-11-19, Windows): the project's `.codex/config.toml` that `mcp-config codex --write` wrote was not loaded, so with it alone Codex saw no dev-guardian tool, and it was not loaded either with the two ways the test tried to mark the project as trusted; the cause was not measured, and registering the server per invocation with `-c mcp_servers.…` worked (`--global` was not measured).
+
 | Flag | Meaning |
 | --- | --- |
 | `--write` | write or merge instead of printing |
