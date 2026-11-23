@@ -102,10 +102,11 @@ const sln = (entry: string): string =>
   `Microsoft Visual Studio Solution File, Format Version 12.00\nProject("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Lib", "${entry}", "{11111111-1111-1111-1111-111111111111}"\nEndProject\n`;
 const ALL_NETWORK_PATHS: Array<{ id: string; path: string; windowsOnly: boolean }> = [
   { id: `${BS}${BS}T${BS}K@H${BS}share${BS}Lib.csproj`, path: `${BS}${BS}${T}${BS}${K}@${H}${BS}share${BS}Lib.csproj`, windowsOnly: true },
-  { id: '//T/K@H/share/Lib.csproj', path: `//${T}/${K}@${H}/share/Lib.csproj`, windowsOnly: false },
+  { id: '//T/K@H/share/Lib.csproj', path: `//${T}/${K}@${H}/share/Lib.csproj`, windowsOnly: true },
 ];
 
-// A backslash path is a network path only where Windows reads it; the others are asked everywhere.
+// A network path is one only where Windows reads it: `isNetworkPath` of `platform/projectPath.ts` is never true on POSIX,
+// where `//x` and `\\x` are local paths (the 3.16.0 release run on Linux, 2026-11-23).
 const NETWORK_PATHS = ALL_NETWORK_PATHS.filter((p) => WIN || !p.windowsOnly);
 
 describe(`${FEATURE} T-05 a ProjectReference or a solution entry on a network path`, () => {

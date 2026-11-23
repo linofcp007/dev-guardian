@@ -140,7 +140,8 @@ describe(`${FEATURE} T-09 deps_audit`, () => {
   });
 
   it.each([
-    { id: '//T/K@H/share/Lib.csproj', path: `//${T}/${K}@${H}/share/Lib.csproj`, windowsOnly: false },
+    // Windows only: on POSIX `//x` is a local path (`platform/projectPath.ts`), as the 3.16.0 release run on Linux showed.
+    { id: '//T/K@H/share/Lib.csproj', path: `//${T}/${K}@${H}/share/Lib.csproj`, windowsOnly: true },
     { id: 'UNC T/K@H/share/Lib.csproj', path: `${BS}${BS}${T}${BS}${K}@${H}${BS}share${BS}Lib.csproj`, windowsOnly: true },
   ].filter((c) => WIN || !c.windowsOnly))('T-09 a ProjectReference on a network path, $id', async ({ path }) => {
     nugetHome();

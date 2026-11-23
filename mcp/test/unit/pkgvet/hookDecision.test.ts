@@ -8543,7 +8543,8 @@ describe('install-vet-with-requirements-directory-link', () => {
     expect(r.calls).toContain(pypiUrl('requests'));
   });
 
-  it('T-04 (j) a session folder on a network path, no `cd` and no flag: the line of today, no refusal and no question, in time', async () => {
+  // Windows only: on POSIX `\\h\s` resolves to a local path, so the network line is not said there (the 3.16.0 release run on Linux).
+  it.skipIf(process.platform !== 'win32')('T-04 (j) a session folder on a network path, no `cd` and no flag: the line of today, no refusal and no question, in time (Windows; skipped otherwise)', async () => {
     const proj = `${UNC}\\proj`;
     const t0 = Date.now();
     const d = await decide(`uv run --with-requirements r.txt ${PY}`, reg(), { cwd: proj, projectDir: proj });
