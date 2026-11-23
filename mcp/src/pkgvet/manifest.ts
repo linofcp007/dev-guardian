@@ -64,6 +64,8 @@ export interface ManifestRead {
    * are not in `packages`): what a name given to an update is compared with. A requirements file has its packages' names.
    */
   names: string[];
+  /** With a list of folders: the folder this file was read in (the one the read of {@link readRequirements} was made from). */
+  dir?: string;
   /** The registries / indexes the file itself names (a requirements file's `--index-url` and the like). */
   registries: string[];
   /** With `unreadable`: why, one of {@link MANIFEST_UNREADABLE_REASONS}. */
@@ -109,7 +111,7 @@ const MAX_NAME_LENGTH = 214;
 const MAX_LABEL_LENGTH = 120;
 
 /** A file name as a message may repeat it: no control character, no line break, bounded. */
-function label(file: string): string {
+export function label(file: string): string {
   const clean = file.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
   return clean.length > MAX_LABEL_LENGTH ? `${clean.slice(0, MAX_LABEL_LENGTH)}…` : clean;
 }
@@ -552,19 +554,37 @@ function readRequirementFile(
  * `-r`, relative to `dir` — names, with those of the files it includes (three
  * levels, eight files in all for the command). One answer per file given, in
  * order: an include's packages are its includer's.
+ *
+ * With a list of folders (the places a `..` after a link may mean) every file is read in
+ * each folder, in the order of the list, one walk for the whole command (the eight files and
+ * the three levels are the command's, not the folder's), and each answer says its folder.
+ * `pastDeadline` is asked before each folder after the first: once it says yes, the files
+ * of that folder are not opened and read `unreadable`, for the time budget.
  */
-export function readRequirements(dir: string, files: readonly string[], manager = 'pip'): ManifestRead[] {
+export function readRequirements(
+  dir: string | readonly string[],
+  files: readonly string[],
+  manager = 'pip',
+  pastDeadline: () => boolean = () => false,
+): ManifestRead[] {
   const walk: RequirementsWalk = { files: 0, visited: new Set<string>(), manager };
-  return files.map((given): ManifestRead => {
-    const file = label(given);
-    if (isNetworkPath(given)) return { file, status: 'unreadable', packages: [], names: [], registries: [], reason: REASON.network };
-    const found: RequirementsFound = { packages: [], registries: [], seen: new Set<string>() };
-    const read = readRequirementFile(resolve(dir, given), dir, 0, walk, found);
-    if (read.status === 'absent') return { file, status: 'absent', packages: [], names: [], registries: [] };
-    if (read.status === 'unreadable') return { file, status: 'unreadable', packages: [], names: [], registries: [], reason: read.reason };
-    const out: ManifestRead = { file, status: 'ok', packages: found.packages, names: found.packages.map((p) => p.name), registries: found.registries };
-    if (found.incomplete !== undefined) out.incomplete = found.incomplete;
-    return out;
+  const folders = typeof dir === 'string' ? [dir] : dir;
+  return folders.flatMap((folder, index) => {
+    const late = index > 0 && pastDeadline();
+    return files.map((given): ManifestRead => {
+      const file = label(given);
+      const where = typeof dir === 'string' ? {} : { dir: folder };
+      const none = { file, packages: [], names: [], registries: [], ...where };
+      if (late) return { ...none, status: 'unreadable', reason: REASON.deadline };
+      if (isNetworkPath(given)) return { ...none, status: 'unreadable', reason: REASON.network };
+      const found: RequirementsFound = { packages: [], registries: [], seen: new Set<string>() };
+      const read = readRequirementFile(resolve(folder, given), folder, 0, walk, found);
+      if (read.status === 'absent') return { ...none, status: 'absent' };
+      if (read.status === 'unreadable') return { ...none, status: 'unreadable', reason: read.reason };
+      const out: ManifestRead = { ...none, status: 'ok', packages: found.packages, names: found.packages.map((p) => p.name), registries: found.registries };
+      if (found.incomplete !== undefined) out.incomplete = found.incomplete;
+      return out;
+    });
   });
 }
 

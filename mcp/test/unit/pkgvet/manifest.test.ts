@@ -1228,3 +1228,50 @@ describe('install-vet-inline-script-deps', () => {
     });
   });
 });
+
+// ───────────────── install-vet-with-requirements-directory-link — the requirements file read in a list of folders
+
+describe('install-vet-with-requirements-directory-link', () => {
+  const folders = (): [string, string] => {
+    const a = join(dir, 'a');
+    const b = join(dir, 'b');
+    for (const f of [a, b]) {
+      mkdirSync(f);
+      writeFileSync(join(f, 'r.txt'), 'requests\n');
+    }
+    return [a, b];
+  };
+
+  it('T-08 (a) a deadline that is past when the second folder is reached: the folder of a is read, the one of b is not, for the time budget; the deadline is asked once', () => {
+    const [a, b] = folders();
+    let asked = 0;
+    const reads = readRequirements([a, b], ['r.txt'], 'uv', () => {
+      asked += 1;
+      return true;
+    });
+    expect(reads.map((r) => ({ dir: r.dir, status: r.status, names: r.names, reason: r.reason }))).toEqual([
+      { dir: a, status: 'ok', names: ['requests'], reason: undefined },
+      { dir: b, status: 'unreadable', names: [], reason: 'vetting time budget exhausted' },
+    ]);
+    expect(asked).toBe(1);
+  });
+
+  it('T-08 (b) a deadline that never passes: both folders read ok, in the order of the list', () => {
+    const [a, b] = folders();
+    const reads = readRequirements([a, b], ['r.txt'], 'uv', () => false);
+    expect(reads.map((r) => ({ dir: r.dir, status: r.status, names: r.names }))).toEqual([
+      { dir: a, status: 'ok', names: ['requests'] },
+      { dir: b, status: 'ok', names: ['requests'] },
+    ]);
+  });
+
+  it('T-08 (c) the deadline is not asked before the first folder', () => {
+    const [a] = folders();
+    let asked = 0;
+    const reads = readRequirements([a], ['r.txt'], 'uv', () => {
+      asked += 1;
+      return true;
+    });
+    expect({ asked, status: reads[0]?.status }).toEqual({ asked: 0, status: 'ok' });
+  });
+});

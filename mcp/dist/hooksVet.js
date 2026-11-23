@@ -6406,18 +6406,25 @@ function readRequirementFile(path, under, depth, walk2, found) {
   }
   return { status: "ok" };
 }
-function readRequirements(dir, files, manager = "pip") {
+function readRequirements(dir, files, manager = "pip", pastDeadline = () => false) {
   const walk2 = { files: 0, visited: /* @__PURE__ */ new Set(), manager };
-  return files.map((given) => {
-    const file = label(given);
-    if (isNetworkPath(given)) return { file, status: "unreadable", packages: [], names: [], registries: [], reason: REASON.network };
-    const found = { packages: [], registries: [], seen: /* @__PURE__ */ new Set() };
-    const read2 = readRequirementFile(resolve2(dir, given), dir, 0, walk2, found);
-    if (read2.status === "absent") return { file, status: "absent", packages: [], names: [], registries: [] };
-    if (read2.status === "unreadable") return { file, status: "unreadable", packages: [], names: [], registries: [], reason: read2.reason };
-    const out = { file, status: "ok", packages: found.packages, names: found.packages.map((p) => p.name), registries: found.registries };
-    if (found.incomplete !== void 0) out.incomplete = found.incomplete;
-    return out;
+  const folders = typeof dir === "string" ? [dir] : dir;
+  return folders.flatMap((folder, index) => {
+    const late = index > 0 && pastDeadline();
+    return files.map((given) => {
+      const file = label(given);
+      const where = typeof dir === "string" ? {} : { dir: folder };
+      const none = { file, packages: [], names: [], registries: [], ...where };
+      if (late) return { ...none, status: "unreadable", reason: REASON.deadline };
+      if (isNetworkPath(given)) return { ...none, status: "unreadable", reason: REASON.network };
+      const found = { packages: [], registries: [], seen: /* @__PURE__ */ new Set() };
+      const read2 = readRequirementFile(resolve2(folder, given), folder, 0, walk2, found);
+      if (read2.status === "absent") return { ...none, status: "absent" };
+      if (read2.status === "unreadable") return { ...none, status: "unreadable", reason: read2.reason };
+      const out = { ...none, status: "ok", packages: found.packages, names: found.packages.map((p) => p.name), registries: found.registries };
+      if (found.incomplete !== void 0) out.incomplete = found.incomplete;
+      return out;
+    });
   });
 }
 var isBlank = (c) => c === " " || c === "	";
@@ -8898,11 +8905,22 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
       pushUpdate(/* @__PURE__ */ new Set());
       continue;
     }
-    const moved2 = c.scriptDir !== void 0 || c.scriptDirUnknown === true ? folderOf(c, world) : void 0;
-    const dir = c.prefixed === true ? null : moved2 === void 0 ? commandDir(c, opts, memo) : moved2.kind === "dirs" ? moved2.dirs[0] ?? null : null;
-    if (dir === null) {
+    const uvRequirements = c.manager === "uv" && manifest.kind === "requirements";
+    const moved2 = c.scriptDir !== void 0 || c.scriptDirUnknown === true || uvRequirements && c.workdir !== void 0 ? pastDeadline() ? { kind: "deadline" } : folderOf(c, world) : void 0;
+    let dirs = [];
+    let unread = UNKNOWN_DIRECTORY;
+    if (c.prefixed !== true) {
+      if (moved2 === void 0) {
+        const here = commandDir(c, opts, memo);
+        if (here !== null) dirs = [here];
+      } else if (moved2.kind === "dirs") dirs = moved2.dirs;
+      else if (moved2.kind === "refused") unread = moved2.reason;
+      else if (moved2.kind === "deadline") unread = DEADLINE_REASON;
+    }
+    const dir = dirs[0];
+    if (dir === void 0) {
       const what = manifest.kind === "package-json" ? "package.json" : "the requirements file";
-      notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) \u2014 its packages were not vetted.`);
+      notes.push(`dev-guardian: ${what} was not read (${unread}) \u2014 its packages were not vetted.`);
       pushUpdate(/* @__PURE__ */ new Set());
       continue;
     }
@@ -8914,24 +8932,25 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
         base2 = nearest.dir;
         reads = [nearest.read];
       } else {
-        reads = readRequirements(dir, manifest.files, c.manager);
+        reads = readRequirements(moved2 === void 0 ? dir : dirs, manifest.files, c.manager, pastDeadline);
       }
     } catch {
       notes.push("dev-guardian: the manifest was not read (could not be read) \u2014 its packages were not vetted.");
       pushUpdate(/* @__PURE__ */ new Set());
       continue;
     }
+    const fileOf = (read2) => dirs.length > 1 && read2.dir !== void 0 ? label(relative3(resolve4(opts.cwd), resolve4(read2.dir, read2.file)).split(sep).join("/")) : read2.file;
     pushUpdate(new Set(reads.flatMap((r) => r.status === "ok" ? r.names : [])));
     for (const read2 of reads) {
       if (read2.status === "absent") continue;
       const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, base2, read2, opts, top, registry, notes, memo) : void 0;
       if (lock !== void 0) locked.push(lock);
       if (read2.status === "unreadable") {
-        notes.push(`dev-guardian: ${read2.file} was not read (${read2.reason ?? "could not be read"}) \u2014 its packages were not vetted.`);
+        notes.push(`dev-guardian: ${fileOf(read2)} was not read (${read2.reason ?? "could not be read"}) \u2014 its packages were not vetted.`);
         continue;
       }
       if (read2.incomplete !== void 0) {
-        notes.push(`dev-guardian: a file ${read2.file} includes was not read (${read2.incomplete}) \u2014 its packages were not vetted.`);
+        notes.push(`dev-guardian: a file ${fileOf(read2)} includes was not read (${read2.incomplete}) \u2014 its packages were not vetted.`);
       }
       const inScope = c.ecosystem === "npm" ? withoutOwnRegistryScopes(read2, { ...registry, projectDir: base2, command: registryCommand(c) }, notes) : read2.packages;
       const packages = lock === void 0 || c.update === true ? inScope : withoutCovered(inScope, lock);
@@ -8945,7 +8964,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
         uncertain: [NAMED_BY_MANIFEST],
         registries,
         ...custom !== void 0 ? { customRegistry: custom } : {},
-        fromManifest: read2.file
+        fromManifest: fileOf(read2)
       });
     }
   }
@@ -9930,8 +9949,10 @@ async function decideInstallCommand(command, opts) {
     const counts = [.../* @__PURE__ */ new Set([...lockCounts, ...scriptDenyLines])];
     const registryLines = malicious ? [] : [...new Set(manifestNotes.filter(isDefaultRegistryLine))];
     const tail = [...counts, ...registryLines];
-    return { deny: `dev-guardian blocked this install: ${parts.join(" ")}${tail.length > 0 ? `
-${tail.join("\n")}` : ""}` };
+    const deny = `dev-guardian blocked this install: ${parts.join(" ")}${tail.length > 0 ? `
+${tail.join("\n")}` : ""}`;
+    const unreadLines = [...new Set(manifestNotes.filter((n) => n.includes(" was not read (")))];
+    return unreadLines.length === 0 ? { deny } : { deny, context: unreadLines.join("\n") };
   }
   const lines = [];
   if (warnings.length > 0) {

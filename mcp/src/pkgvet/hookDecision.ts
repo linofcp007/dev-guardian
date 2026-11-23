@@ -75,7 +75,7 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } fr
 import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
 import { diskSpelling, diskStep, homeBarrier, rootBarred, systemDisk, type SpellingMemo } from './folderSpelling.js';
 import { LOCKFILES, lockFormat, readLock, type LockRead, type Pin, type Source } from './lockfile.js';
-import { readInlineScript, readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
+import { label as manifestLabel, readInlineScript, readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
 import { MAX_CANDIDATES_PER_COMMAND, parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
 import { choosePins, MAX_PINS, vetPins, type PinVerdict } from './pins.js';
 import { loadPopularIndex } from './popular.js';
@@ -458,12 +458,29 @@ function withManifestPackages(
       pushUpdate(new Set());
       continue;
     }
-    // `uv run --directory D --with-requirements F`: the file is looked for where the uv moved to.
-    const moved = c.scriptDir !== undefined || c.scriptDirUnknown === true ? folderOf(c, world) : undefined;
-    const dir = c.prefixed === true ? null : moved === undefined ? commandDir(c, opts, memo) : (moved.kind === 'dirs' ? (moved.dirs[0] ?? null) : null);
-    if (dir === null) {
+    // `uv run --directory D --with-requirements F`, and the same after a `cd`: the file is looked for where the uv runs, in every
+    // folder it may be (`tools/..` after a link is two), the way the scripts of the command are. Any other file stays where `commandDir` says.
+    const uvRequirements = c.manager === 'uv' && manifest.kind === 'requirements';
+    const moved =
+      c.scriptDir !== undefined || c.scriptDirUnknown === true || (uvRequirements && c.workdir !== undefined)
+        ? pastDeadline()
+          ? ({ kind: 'deadline' } as const)
+          : folderOf(c, world)
+        : undefined;
+    let dirs: string[] = [];
+    let unread: string = UNKNOWN_DIRECTORY;
+    if (c.prefixed !== true) {
+      if (moved === undefined) {
+        const here = commandDir(c, opts, memo);
+        if (here !== null) dirs = [here];
+      } else if (moved.kind === 'dirs') dirs = moved.dirs;
+      else if (moved.kind === 'refused') unread = moved.reason;
+      else if (moved.kind === 'deadline') unread = DEADLINE_REASON;
+    }
+    const dir = dirs[0];
+    if (dir === undefined) {
       const what = manifest.kind === 'package-json' ? 'package.json' : 'the requirements file';
-      notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) — its packages were not vetted.`);
+      notes.push(`dev-guardian: ${what} was not read (${unread}) — its packages were not vetted.`);
       pushUpdate(new Set());
       continue;
     }
@@ -477,7 +494,7 @@ function withManifestPackages(
         base = nearest.dir;
         reads = [nearest.read];
       } else {
-        reads = readRequirements(dir, manifest.files, c.manager);
+        reads = readRequirements(moved === undefined ? dir : dirs, manifest.files, c.manager, pastDeadline);
       }
     } catch {
       // Fail-open, and said: nothing of the manifest was vetted.
@@ -485,6 +502,9 @@ function withManifestPackages(
       pushUpdate(new Set());
       continue;
     }
+    // The file as the message names it: as written, and from the session's folder when it was read in more than one.
+    const fileOf = (read: ManifestRead): string =>
+      dirs.length > 1 && read.dir !== undefined ? manifestLabel(relative(resolve(opts.cwd), resolve(read.dir, read.file)).split(sep).join('/')) : read.file;
     pushUpdate(new Set(reads.flatMap((r) => (r.status === 'ok' ? r.names : []))));
     for (const read of reads) {
       if (read.status === 'absent') continue;
@@ -492,11 +512,11 @@ function withManifestPackages(
       const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, base, read, opts, top, registry, notes, memo) : undefined;
       if (lock !== undefined) locked.push(lock);
       if (read.status === 'unreadable') {
-        notes.push(`dev-guardian: ${read.file} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
+        notes.push(`dev-guardian: ${fileOf(read)} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
         continue;
       }
       if (read.incomplete !== undefined) {
-        notes.push(`dev-guardian: a file ${read.file} includes was not read (${read.incomplete}) — its packages were not vetted.`);
+        notes.push(`dev-guardian: a file ${fileOf(read)} includes was not read (${read.incomplete}) — its packages were not vetted.`);
       }
       const inScope = c.ecosystem === 'npm' ? withoutOwnRegistryScopes(read, { ...registry, projectDir: base, command: registryCommand(c) }, notes) : read.packages;
       // A direct dependency the lockfile records for this project leaves the registry path: its typosquat check stays.
@@ -512,7 +532,7 @@ function withManifestPackages(
         uncertain: [NAMED_BY_MANIFEST],
         registries,
         ...(custom !== undefined ? { customRegistry: custom } : {}),
-        fromManifest: read.file,
+        fromManifest: fileOf(read),
       });
     }
   }
@@ -1946,7 +1966,11 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     // answers a deny with its reason alone. The deny of a malicious name stays short.
     const registryLines = malicious ? [] : [...new Set(manifestNotes.filter(isDefaultRegistryLine))];
     const tail = [...counts, ...registryLines];
-    return { deny: `dev-guardian blocked this install: ${parts.join(' ')}${tail.length > 0 ? `\n${tail.join('\n')}` : ''}` };
+    const deny = `dev-guardian blocked this install: ${parts.join(' ')}${tail.length > 0 ? `\n${tail.join('\n')}` : ''}`;
+    // The lines of what was not read stay beside the refusal (the dispatcher answers a deny with its reason alone): a file of one folder that
+    // could not be read says so even when the file of the other folder is what is refused.
+    const unreadLines = [...new Set(manifestNotes.filter((n) => n.includes(' was not read (')))];
+    return unreadLines.length === 0 ? { deny } : { deny, context: unreadLines.join('\n') };
   }
   const lines: string[] = [];
   if (warnings.length > 0) {

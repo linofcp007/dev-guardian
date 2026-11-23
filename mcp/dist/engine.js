@@ -18216,8 +18216,8 @@ function classifyTaxonomy(input2) {
     ...new Set(asList(input2.cwe).map(normalizeCwe).filter((c) => c !== null))
   ].sort((a, b) => cweNumber(a) - cweNumber(b));
   const categories = /* @__PURE__ */ new Set();
-  for (const label of asList(input2.owasp)) {
-    const id = parseOwasp2025Label(label);
+  for (const label2 of asList(input2.owasp)) {
+    const id = parseOwasp2025Label(label2);
     if (id !== null) categories.add(id);
   }
   for (const cwe of input2.deriveOwasp === false ? [] : cwes) {
@@ -38215,9 +38215,9 @@ function codePointLengthVar(doc, ctx, accessor, inDoubt) {
   doc.write(`const ${v} = typeof ${accessor} === "string" && ${inDoubt} ? ${cpLen}(${accessor}) : ${accessor}.length;`);
   return v;
 }
-function numericOperand(value, label) {
+function numericOperand(value, label2) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new ZodCompileUnsupportedError(`${label} bound of type ${typeof value}`);
+    throw new ZodCompileUnsupportedError(`${label2} bound of type ${typeof value}`);
   }
   return `${value}`;
 }
@@ -53424,36 +53424,36 @@ async function treeEntry(cwd, commit, fullPath) {
   }
   return null;
 }
-async function blobBytes(cwd, object3, maxBytes, label) {
+async function blobBytes(cwd, object3, maxBytes, label2) {
   const size = await git(cwd, ["cat-file", "-s", object3]);
   const n = Number(size.stdout.trim());
-  if (size.exitCode !== 0 || !Number.isInteger(n)) throw new CiRefError(`${label}: git cat-file -s failed: ${firstLine5(size.stderr)}`);
-  if (n > maxBytes) throw new CiRefError(`${label} is ${n} bytes, over the ${maxBytes}-byte limit \u2014 not read`);
+  if (size.exitCode !== 0 || !Number.isInteger(n)) throw new CiRefError(`${label2}: git cat-file -s failed: ${firstLine5(size.stderr)}`);
+  if (n > maxBytes) throw new CiRefError(`${label2} is ${n} bytes, over the ${maxBytes}-byte limit \u2014 not read`);
   const r = await execGitBuffer(cwd, ["cat-file", "blob", object3], { timeoutMs: 6e4, maxBuffer: maxBytes + 1 });
-  if (r.failure !== null) throw new CiRefError(`${label}: ${r.failure.message}`);
-  if (r.status !== 0) throw new CiRefError(`${label}: git cat-file blob failed`);
+  if (r.failure !== null) throw new CiRefError(`${label2}: ${r.failure.message}`);
+  if (r.status !== 0) throw new CiRefError(`${label2}: git cat-file blob failed`);
   return r.stdout;
 }
 async function readAtRef(projectPath, at, rel2, maxBytes) {
   const fullPath = `${at.prefix}${rel2}`;
-  const label = `${rel2} at ${at.ref}`;
+  const label2 = `${rel2} at ${at.ref}`;
   const entry = await treeEntry(projectPath, at.commit, fullPath);
   if (entry === null) return null;
   if (entry.mode === "120000") {
-    const target = (await blobBytes(projectPath, entry.object, 4096, label)).toString("utf8");
+    const target = (await blobBytes(projectPath, entry.object, 4096, label2)).toString("utf8");
     const resolved = posix2.normalize(posix2.join(posix2.dirname(fullPath), target));
     if (target.startsWith("/") || resolved === ".." || resolved.startsWith("../")) {
-      throw new CiRefError(`${label} is a symbolic link out of the repository (${target}) \u2014 not read`);
+      throw new CiRefError(`${label2} is a symbolic link out of the repository (${target}) \u2014 not read`);
     }
     const followed = await treeEntry(projectPath, at.commit, resolved);
-    if (followed === null) throw new CiRefError(`${label} is a symbolic link to ${target}, which the ref does not have`);
+    if (followed === null) throw new CiRefError(`${label2} is a symbolic link to ${target}, which the ref does not have`);
     if (followed.type !== "blob" || followed.mode === "120000") {
-      throw new CiRefError(`${label} is a symbolic link to ${target}, which is not a regular file \u2014 not read`);
+      throw new CiRefError(`${label2} is a symbolic link to ${target}, which is not a regular file \u2014 not read`);
     }
-    return blobBytes(projectPath, followed.object, maxBytes, label);
+    return blobBytes(projectPath, followed.object, maxBytes, label2);
   }
-  if (entry.type !== "blob") throw new CiRefError(`${label} is not a file (a ${entry.type === "commit" ? "submodule" : "directory"}) \u2014 not read`);
-  return blobBytes(projectPath, entry.object, maxBytes, label);
+  if (entry.type !== "blob") throw new CiRefError(`${label2} is not a file (a ${entry.type === "commit" ? "submodule" : "directory"}) \u2014 not read`);
+  return blobBytes(projectPath, entry.object, maxBytes, label2);
 }
 async function readBaselineAtRef(projectPath, at) {
   const bytes = await readAtRef(projectPath, at, BASELINE_RELATIVE_PATH, BASELINE_MAX_BYTES);
@@ -54495,15 +54495,15 @@ async function runTestIntegrityCheck(cwd, opts) {
     missing: [TEST_INTEGRITY_TOOL],
     findings: []
   });
-  const label = opts.label ?? opts.base;
+  const label2 = opts.label ?? opts.base;
   const from = await mergeBase(cwd, opts.base, opts.head ?? "HEAD");
   if (from === null) {
-    if (await resolveCommit(cwd, opts.base) === null) return fail6(`${label} names no commit: the change could not be read`);
+    if (await resolveCommit(cwd, opts.base) === null) return fail6(`${label2} names no commit: the change could not be read`);
     return {
       toolRun: {
         name: TEST_INTEGRITY_TOOL,
         status: "skipped",
-        reason: `no merge base of ${label} and ${opts.head ?? "HEAD"} in this clone (a shallow fetch?): the change cannot be told from the base's own, so it was not read \u2014 fetch the history between them`
+        reason: `no merge base of ${label2} and ${opts.head ?? "HEAD"} in this clone (a shallow fetch?): the change cannot be told from the base's own, so it was not read \u2014 fetch the history between them`
       },
       missing: [],
       findings: []
@@ -58675,8 +58675,8 @@ async function runBatches(opts, batches) {
     }
     for (const r of verdict.failedRules ?? []) if (!t.failedRules.some((q) => q.rule_id === r.rule_id)) t.failedRules.push(r);
     if (!verdict.ok) {
-      const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : "";
-      t.failures.push(`${label}${verdict.reason ?? "failed"}`);
+      const label2 = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : "";
+      t.failures.push(`${label2}${verdict.reason ?? "failed"}`);
       if (verdict.ruleConfigError === true) t.configFailures += 1;
     }
     if (t.cancelled) break;
@@ -59714,11 +59714,11 @@ function mapIssue(raw, type, file2, ctx) {
   const known = PSALM_TAINT_TYPES[type] ?? { severity: "medium" };
   const message3 = getString(raw, "message") ?? type;
   const trace = asArray(getProp(raw, "taint_trace")).map((step2) => {
-    const label = getString(step2, "label");
-    if (label === void 0) return null;
+    const label2 = getString(step2, "label");
+    if (label2 === void 0) return null;
     const at = getString(step2, "file_path");
     const line = getNumber(step2, "line_from");
-    return at !== void 0 && line !== void 0 ? `${label} (${toRelativeIfPossible(at, ctx.project_path)}:${String(line)})` : label;
+    return at !== void 0 && line !== void 0 ? `${label2} (${toRelativeIfPossible(at, ctx.project_path)}:${String(line)})` : label2;
   }).filter((s) => s !== null);
   const shown = trace.length > TRACE_STEPS ? [...trace.slice(0, TRACE_STEPS - 1), "\u2026", trace[trace.length - 1] ?? ""] : trace;
   const input2 = {
@@ -61598,26 +61598,26 @@ function checkSupabaseMigrations(files, exposedSchemas = DEFAULT_EXPOSED_SCHEMAS
     const open2 = exprs.some(isTrue);
     const anon = p.roles.includes("anon");
     const where = { file: p.file, line: p.line };
-    const label = `policy "${p.name}" on ${display(p.table)} (for ${p.command}, to ${p.roles.join(", ")})`;
+    const label2 = `policy "${p.name}" on ${display(p.table)} (for ${p.command}, to ${p.roles.join(", ")})`;
     if (open2) {
       findings.push(
         finding("supabase-policy-open-write", "high", where, {
           title: `${display(p.table)}: a ${p.command} policy whose check is \`true\``,
-          message: `The ${label} lets ${anon || p.roles.includes("public") ? "anyone, logged in or not," : "every user it names"} ${p.command === "all" ? "write" : p.command} any row: a condition of \`true\` checks nothing (CWE-284). Compare the row with the caller \u2014 \`using ((select auth.uid()) = user_id)\` and the same \`with check\` \u2014 or keep writes to server code holding the service-role key.`
+          message: `The ${label2} lets ${anon || p.roles.includes("public") ? "anyone, logged in or not," : "every user it names"} ${p.command === "all" ? "write" : p.command} any row: a condition of \`true\` checks nothing (CWE-284). Compare the row with the caller \u2014 \`using ((select auth.uid()) = user_id)\` and the same \`with check\` \u2014 or keep writes to server code holding the service-role key.`
         })
       );
     } else if (anon) {
       findings.push(
         finding("supabase-policy-anon-write", "high", where, {
           title: `${display(p.table)}: a ${p.command} policy granted to anon`,
-          message: `The ${label} grants writes to anon \u2014 every visitor, with no account (CWE-284). A visitor has no \`auth.uid()\`, so whatever the condition allows, it allows to anyone holding the public anon key. Grant writes \`to authenticated\` with a condition on \`auth.uid()\`, or keep them in server code.`
+          message: `The ${label2} grants writes to anon \u2014 every visitor, with no account (CWE-284). A visitor has no \`auth.uid()\`, so whatever the condition allows, it allows to anyone holding the public anon key. Grant writes \`to authenticated\` with a condition on \`auth.uid()\`, or keep them in server code.`
         })
       );
     } else if (!exprs.some(readsAuth) && !exprs.every((e) => e === void 0 || isFalse(e))) {
       findings.push(
         finding("supabase-policy-no-auth-check", "low", where, {
           title: `${display(p.table)}: a ${p.command} policy that never reads the caller`,
-          message: `The ${label} decides without \`auth.uid()\`, \`auth.jwt()\` or \`auth.role()\`: whoever its roles include may write the rows its condition allows, whose they are. That can be right (a helper function that reads the caller itself); if not, compare the row with \`auth.uid()\`.`
+          message: `The ${label2} decides without \`auth.uid()\`, \`auth.jwt()\` or \`auth.role()\`: whoever its roles include may write the rows its condition allows, whose they are. That can be right (a helper function that reads the caller itself); if not, compare the row with \`auth.uid()\`.`
         })
       );
     }
@@ -63253,7 +63253,7 @@ async function scopedScan(opts, result, scope) {
   const { history, files } = scope;
   if (history !== null) {
     const logOpts = "base" in history ? `${history.base}..${history.head}` : history.logOpts;
-    const label = "base" in history ? `${short(history.base)}..${short(history.head)}` : history.logOpts;
+    const label2 = "base" in history ? `${short(history.base)}..${short(history.head)}` : history.logOpts;
     let commits = null;
     try {
       commits = "base" in history ? await countCommits(opts.projectPath, logOpts) : await countCommitsSince(opts.projectPath, logOpts);
@@ -63261,7 +63261,7 @@ async function scopedScan(opts, result, scope) {
       result.tools_run.push({ name: GITLEAKS_HISTORY, status: "failed", reason: message2(e) });
     }
     if (commits === 0) {
-      result.tools_run.push({ name: GITLEAKS_HISTORY, status: "skipped", reason: `no commits in ${label}` });
+      result.tools_run.push({ name: GITLEAKS_HISTORY, status: "skipped", reason: `no commits in ${label2}` });
     } else if (commits !== null) {
       await historyPass(opts, result, logOpts, commits, await repoPrefix(opts.projectPath));
       if ("base" in history) await noteSubmodules(opts.projectPath, result, history, opts.guardianIgnoreFrom);
@@ -68590,13 +68590,13 @@ async function runJscpdOnFiles(ctx, reportDir, out, files) {
     });
     if (run2.outcome === "cancelled") out.cancelled = true;
     const report = readJsonSafe(join64(dupDir, "jscpd-report.json"));
-    const label = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : "";
+    const label2 = batches.length > 1 ? `batch ${i + 1}/${batches.length}: ` : "";
     if (run2.outcome === "cancelled" || run2.outcome === "timed_out" || run2.outcome === "output_too_large") {
-      problems.push(`${label}did not finish (${run2.outcome})`);
+      problems.push(`${label2}did not finish (${run2.outcome})`);
     } else if (run2.exitCode !== 0 && run2.exitCode !== 1) {
-      problems.push(`${label}exit ${String(run2.exitCode)}${firstLine9(run2.stderr) ? `: ${firstLine9(run2.stderr)}` : ""}`);
+      problems.push(`${label2}exit ${String(run2.exitCode)}${firstLine9(run2.stderr) ? `: ${firstLine9(run2.stderr)}` : ""}`);
     } else if (report === null || !isObject2(parseInputAsJson(report))) {
-      problems.push(`${label}no readable report was written`);
+      problems.push(`${label2}no readable report was written`);
     } else {
       out.parser_inputs.push({ parser: jscpdParser, input: report });
     }
@@ -73359,16 +73359,16 @@ async function execPackageManager(command, args, opts) {
   if (r.outcome === "output_too_large") return { shortMessage: `printed more than ${PM_OUTPUT_CAP_BYTES} bytes`, stdout: "", stderr: r.stderr };
   return { ...r.exitCode !== null ? { exitCode: r.exitCode } : {}, stdout: r.stdout, stderr: r.stderr };
 }
-function describeExecFailure(label, result, okCodes) {
+function describeExecFailure(label2, result, okCodes) {
   if (typeof result.exitCode === "number") {
     if (okCodes.includes(result.exitCode)) return null;
     const stderr = typeof result.stderr === "string" ? result.stderr : "";
     const first = stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
-    return { code: `exit_${result.exitCode}`, reason: `${label} exited ${result.exitCode}${first ? `: ${first}` : ""}` };
+    return { code: `exit_${result.exitCode}`, reason: `${label2} exited ${result.exitCode}${first ? `: ${first}` : ""}` };
   }
   const code = typeof result.code === "string" ? result.code : "not_runnable";
   const why = typeof result.shortMessage === "string" ? result.shortMessage : code;
-  return { code: code === "ENOENT" ? "not_installed" : code, reason: `${label} could not be run (${why})` };
+  return { code: code === "ENOENT" ? "not_installed" : code, reason: `${label2} could not be run (${why})` };
 }
 async function runPipPlan(projectPath, cves) {
   const steps = [];
@@ -73481,16 +73481,16 @@ function extractDependenciesArray(raw) {
   if (depth !== 0) return null;
   return raw.slice(start, i - 1);
 }
-function parseRunnerJson(ecosystem, label, stdout, failures) {
+function parseRunnerJson(ecosystem, label2, stdout, failures) {
   const text3 = typeof stdout === "string" ? stdout : "";
   if (text3.trim().length === 0) {
-    failures.push({ ecosystem, code: "no_output", reason: `${label} printed nothing` });
+    failures.push({ ecosystem, code: "no_output", reason: `${label2} printed nothing` });
     return void 0;
   }
   try {
     return JSON.parse(text3);
   } catch {
-    failures.push({ ecosystem, code: "unparseable_output", reason: `${label} printed something that is not JSON` });
+    failures.push({ ecosystem, code: "unparseable_output", reason: `${label2} printed something that is not JSON` });
     return void 0;
   }
 }
@@ -76759,8 +76759,8 @@ function exposedEvidence(reachingRoots, routesByFile, exposedFiles) {
   const exposedFile = reachingRoots.find((root) => exposedFiles.has(root));
   if (exposedFile === void 0) return null;
   const route = mostInformative(routesByFile.get(exposedFile));
-  const label = route === void 0 ? exposedFile : `${routeLabel(route)} (${exposedFile})`;
-  return { detail: `${label} is confirmed anonymously exposed by a live scan` };
+  const label2 = route === void 0 ? exposedFile : `${routeLabel(route)} (${exposedFile})`;
+  return { detail: `${label2} is confirmed anonymously exposed by a live scan` };
 }
 function mostInformative(routes) {
   if (routes === void 0) return void 0;
@@ -77431,7 +77431,7 @@ function statementFor(group, names, inputs, active) {
     severity: maxSeverity([...rows.map((r) => r.severity), ...findings.map((f) => f.severity)]),
     subcomponent_purls: sbomPurls.length > 0 ? sbomPurls : built === null ? [] : [built]
   };
-  const label = `${name}${version2 === null ? "" : `@${version2}`}`;
+  const label2 = `${name}${version2 === null ? "" : `@${version2}`}`;
   const vex = findings.map((f) => active.find((s) => matches(s, f) && s.vex_status === "not_affected"));
   const justifications = new Set(vex.map((s) => s?.vex_justification));
   const first = vex[0];
@@ -77442,7 +77442,7 @@ function statementFor(group, names, inputs, active) {
       status: "not_affected",
       justification: first.vex_justification,
       ...impact !== null ? { impact_statement: impact } : {},
-      status_notes: `${label}: stated not_affected (${first.vex_justification}) with suppress_finding in dev-guardian.`
+      status_notes: `${label2}: stated not_affected (${first.vex_justification}) with suppress_finding in dev-guardian.`
     };
   }
   const lacking = findings.filter((_, i) => vex[i] === void 0);
@@ -77453,7 +77453,7 @@ function statementFor(group, names, inputs, active) {
     return {
       ...base2,
       status: "under_investigation",
-      status_notes: `${label}: reachable per ${assessment.evidence[0]?.detail ?? "a file an HTTP route reaches"} \u2014 but ${stale}, so it is not stated affected (run map_attack_surface).${suppressedNote}`
+      status_notes: `${label2}: reachable per ${assessment.evidence[0]?.detail ?? "a file an HTTP route reaches"} \u2014 but ${stale}, so it is not stated affected (run map_attack_surface).${suppressedNote}`
     };
   }
   if (assessment?.verdict === "reachable") {
@@ -77461,13 +77461,13 @@ function statementFor(group, names, inputs, active) {
       ...base2,
       status: "affected",
       action_statement: base2.fixed_version !== null ? `Upgrade ${name}${version2 === null ? "" : ` from ${version2}`} to ${base2.fixed_version} or later.` : `No fixed version of ${name} is recorded by the dependency scan; follow the advisory for a mitigation, or remove the dependency.`,
-      status_notes: `${label}: ${assessment.evidence[0]?.detail ?? "imported by a file an HTTP route reaches"} (file-level reachability, not proof the vulnerable function runs).` + suppressedNote
+      status_notes: `${label2}: ${assessment.evidence[0]?.detail ?? "imported by a file an HTTP route reaches"} (file-level reachability, not proof the vulnerable function runs).` + suppressedNote
     };
   }
   return {
     ...base2,
     status: "under_investigation",
-    status_notes: `${label}: not known to affect the product \u2014 ${whyNot(assessment)}.${suppressedNote}`
+    status_notes: `${label2}: not known to affect the product \u2014 ${whyNot(assessment)}.${suppressedNote}`
   };
 }
 function namesOf(group, names) {
@@ -82359,8 +82359,8 @@ function candidateMarks(dir, hostPids, project, now) {
   return out;
 }
 function clientLabel(client) {
-  const label = [client?.name, client?.version].filter((s) => typeof s === "string" && s.trim() !== "").join(" ");
-  return label === "" ? void 0 : label;
+  const label2 = [client?.name, client?.version].filter((s) => typeof s === "string" && s.trim() !== "").join(" ");
+  return label2 === "" ? void 0 : label2;
 }
 function tooOld(client) {
   if (!/claude/i.test(client?.name ?? "")) return void 0;
@@ -83871,9 +83871,9 @@ var require_codegen = __commonJS({
       }
     };
     var Label = class extends Node {
-      constructor(label) {
+      constructor(label2) {
         super();
-        this.label = label;
+        this.label = label2;
         this.names = {};
       }
       render({ _n }) {
@@ -83881,14 +83881,14 @@ var require_codegen = __commonJS({
       }
     };
     var Break = class extends Node {
-      constructor(label) {
+      constructor(label2) {
         super();
-        this.label = label;
+        this.label = label2;
         this.names = {};
       }
       render({ _n }) {
-        const label = this.label ? ` ${this.label}` : "";
-        return `break${label};` + _n;
+        const label2 = this.label ? ` ${this.label}` : "";
+        return `break${label2};` + _n;
       }
     };
     var Throw = class extends Node {
@@ -84300,12 +84300,12 @@ var require_codegen = __commonJS({
         return this._endBlockNode(For);
       }
       // `label` statement
-      label(label) {
-        return this._leafNode(new Label(label));
+      label(label2) {
+        return this._leafNode(new Label(label2));
       }
       // `break` statement
-      break(label) {
-        return this._leafNode(new Break(label));
+      break(label2) {
+        return this._leafNode(new Break(label2));
       }
       // `return` statement
       return(value) {
@@ -92872,9 +92872,9 @@ function chipColor(sev) {
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
-function severityChip(sev, label) {
+function severityChip(sev, label2) {
   const c = chipColor(sev);
-  return `<span class="pdk-chip" style="background:${c.bg};color:${c.fg};">${escapeHtml(label ?? sev)}</span>`;
+  return `<span class="pdk-chip" style="background:${c.bg};color:${c.fg};">${escapeHtml(label2 ?? sev)}</span>`;
 }
 function severityBar(counts) {
   const parts = ["critical", "high", "medium", "low", "info"].map((s) => {
@@ -94553,14 +94553,14 @@ function build(args) {
       "No framework specified. Re-run with `framework=gdpr|soc2|iso27001` for a labelled mapping, or `owasp-top10-2025|nist-csf-2.0` for per-category evidence."
     );
   } else {
-    const label = FRAMEWORK_LABEL[args.framework] ?? args.framework.toUpperCase();
+    const label2 = FRAMEWORK_LABEL[args.framework] ?? args.framework.toUpperCase();
     out.push(...frameworkPreamble(args.framework, args.owasp));
     const controls = frameworkControls(args.framework, args);
     const evidenced = controls.filter((c) => c.evidenced);
     const partial3 = controls.filter((c) => !c.evidenced && c.partial === true);
     const notCovered = controls.filter((c) => !c.evidenced && c.partial !== true);
     const perCategory = args.framework === "owasp-top10-2025" || args.framework === "nist-csf-2.0";
-    out.push(`### ${label} controls evidenced by this document`);
+    out.push(`### ${label2} controls evidenced by this document`);
     if (evidenced.length === 0) {
       out.push('(none \u2014 see "not covered" below)');
     } else {
@@ -94568,12 +94568,12 @@ function build(args) {
     }
     out.push("");
     if (perCategory) {
-      out.push(`### ${label} controls PARTIALLY covered by this document`);
+      out.push(`### ${label2} controls PARTIALLY covered by this document`);
       if (partial3.length === 0) out.push("(none)");
       else for (const c of partial3) out.push(`- ${c.id} (${c.description}): ${c.note}`);
       out.push("");
     }
-    out.push(`### ${label} controls NOT covered by this document`);
+    out.push(`### ${label2} controls NOT covered by this document`);
     if (notCovered.length === 0) {
       out.push("(none)");
     } else {
@@ -94862,19 +94862,19 @@ async function ensureLabels(cwd, labels) {
   }
   const applied = [];
   const omitted2 = [];
-  for (const label of labels) {
-    if (known.has(label.toLowerCase())) {
-      applied.push(label);
+  for (const label2 of labels) {
+    if (known.has(label2.toLowerCase())) {
+      applied.push(label2);
       continue;
     }
     const created = await runProcess({
       command: "gh",
-      args: ["label", "create", label, "--description", "Filed by dev-guardian"],
+      args: ["label", "create", label2, "--description", "Filed by dev-guardian"],
       cwd,
       timeoutMs: 15e3
     });
-    if (created.outcome === "completed" || /already exists/i.test(created.stderr)) applied.push(label);
-    else omitted2.push(label);
+    if (created.outcome === "completed" || /already exists/i.test(created.stderr)) applied.push(label2);
+    else omitted2.push(label2);
   }
   return { applied, omitted: omitted2 };
 }
@@ -96003,11 +96003,11 @@ function severityFromVuln(raw) {
     if (score >= 4) return "medium";
     return "low";
   }
-  const label = getString(raw, "severity")?.toLowerCase();
-  if (label === "critical") return "critical";
-  if (label === "high") return "high";
-  if (label === "medium") return "medium";
-  if (label === "low") return "low";
+  const label2 = getString(raw, "severity")?.toLowerCase();
+  if (label2 === "critical") return "critical";
+  if (label2 === "high") return "high";
+  if (label2 === "medium") return "medium";
+  if (label2 === "low") return "low";
   return "medium";
 }
 var WPSCAN_TOOL_NAME, wpscanParser;
@@ -96764,9 +96764,9 @@ function inventoryWordPressSource(wpPath) {
     warnings
   };
 }
-function warnUnversioned(warnings, label, stableTag) {
+function warnUnversioned(warnings, label2, stableTag) {
   const stableTagNote = stableTag === void 0 ? "" : stableTag === null ? " (no readme.txt Stable tag either)" : ` (readme.txt's Stable tag is "${stableTag}", not a usable version)`;
-  warnings.push(`${label}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
+  warnings.push(`${label2}: version unknown \u2014 no Version: header${stableTagNote}. Cannot be matched against a vulnerability feed.`);
 }
 function readCoreVersion(src) {
   const text3 = read(src, join93(src.root, "wp-includes", "version.php"), MAX_VERSION_PHP_BYTES);
@@ -107157,14 +107157,14 @@ async function applyGroup(opts) {
   return applyDepsCandidates(run2, opts.worktreePath, opts.timeoutMs, opts.lockfileOnly, opts.group.candidates);
 }
 async function applySemgrepPass(run2, worktreePath, timeoutMs, plan) {
-  const label = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
+  const label2 = `semgrep --metrics=off --autofix [${plan.configLabels.join("; ")}]`;
   const missing = plan.files.filter((f) => !presentInProject(worktreePath, f));
   if (missing.length > 0) {
     return {
       applied: false,
       commands: [],
       failure: {
-        command: label,
+        command: label2,
         outcome: "failed",
         exit_code: null,
         stderr_head: `target file(s) not in the committed tree: ${missing.join(", ")} \u2014 a finding in an uncommitted file can be neither fixed nor verified from HEAD`
@@ -107189,7 +107189,7 @@ async function applySemgrepPass(run2, worktreePath, timeoutMs, plan) {
       },
       run2
     );
-    const invoked = `${label} -- ${batch.join(" ")}`;
+    const invoked = `${label2} -- ${batch.join(" ")}`;
     commands.push(invoked);
     const check2 = checkSemgrepReport({ raw: readJsonSafe(report), exitCode: result.exitCode, outcome: result.outcome, targets: batch.length });
     if (!check2.ok) {
@@ -107289,17 +107289,17 @@ function harden(argv, lockfileOnly) {
 }
 function editPipPin(worktreePath, step2) {
   const file2 = step2.file ?? "";
-  const label = `edit ${file2 || "(no file)"}: ${step2.package_name}==${step2.installed_version} -> ${step2.package_name}==${step2.latest_version}`;
-  if (file2.length === 0) return { ok: false, label, reason: "the pip step names no file to edit" };
+  const label2 = `edit ${file2 || "(no file)"}: ${step2.package_name}==${step2.installed_version} -> ${step2.package_name}==${step2.latest_version}`;
+  if (file2.length === 0) return { ok: false, label: label2, reason: "the pip step names no file to edit" };
   const target = resolve33(worktreePath, file2);
   const rel2 = relative35(worktreePath, target);
   if (isAbsolute21(file2) || rel2 === "" || rel2 === ".." || rel2.startsWith(`..${sep21}`) || isAbsolute21(rel2)) {
-    return { ok: false, label, reason: `'${file2}' is not a file inside the project` };
+    return { ok: false, label: label2, reason: `'${file2}' is not a file inside the project` };
   }
   const read3 = readProjectBytes(worktreePath, file2, PROJECT_FILE_MAX_BYTES);
-  if (read3.status === "absent") return { ok: false, label, reason: `'${file2}' is not in the committed tree` };
+  if (read3.status === "absent") return { ok: false, label: label2, reason: `'${file2}' is not in the committed tree` };
   if (read3.status === "refused") {
-    return { ok: false, label, reason: `'${file2}' was not read: ${describeReadRefusal(read3.reason)}` };
+    return { ok: false, label: label2, reason: `'${file2}' was not read: ${describeReadRefusal(read3.reason)}` };
   }
   const { text: edited, count } = repinPip(
     read3.bytes.toString("utf8"),
@@ -107308,13 +107308,13 @@ function editPipPin(worktreePath, step2) {
     step2.latest_version
   );
   if (count === 0) {
-    return { ok: false, label, reason: `no '${step2.package_name}==${step2.installed_version}' pin in '${file2}'` };
+    return { ok: false, label: label2, reason: `no '${step2.package_name}==${step2.installed_version}' pin in '${file2}'` };
   }
   const written = writeProjectFile(worktreePath, file2, edited, { mode: "replace" });
   if (!written.ok) {
-    return { ok: false, label, reason: `'${file2}' was not written: ${describeWriteRefusal(written.reason, written.detail)}` };
+    return { ok: false, label: label2, reason: `'${file2}' was not written: ${describeWriteRefusal(written.reason, written.detail)}` };
   }
-  return { ok: true, label };
+  return { ok: true, label: label2 };
 }
 function repinPip(text3, name, installed, latest) {
   const pattern = name.split(/[-_.]+/).map(escapeRegExp).join("[-_.]+");
@@ -107862,9 +107862,9 @@ async function deleteLocalBranch(opts) {
 function hasFailed(result) {
   return result.outcome !== "completed" || result.exitCode !== 0;
 }
-function describeFailure3(result, label) {
+function describeFailure3(result, label2) {
   return urlsSaidIn(
-    preferredErrorLine(result.stderr) ?? firstNonEmptyLine(result.stderr) ?? firstNonEmptyLine(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`
+    preferredErrorLine(result.stderr) ?? firstNonEmptyLine(result.stderr) ?? firstNonEmptyLine(result.stdout) ?? `${label2}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`
   );
 }
 function preferredErrorLine(text3) {
@@ -108729,9 +108729,9 @@ function parseWorktreeList(porcelain) {
   flush();
   return entries3;
 }
-function describeFailure4(result, label) {
+function describeFailure4(result, label2) {
   return urlsSaidIn(
-    preferredErrorLine2(result.stderr) ?? firstNonEmptyLine2(result.stderr) ?? firstNonEmptyLine2(result.stdout) ?? `${label}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`
+    preferredErrorLine2(result.stderr) ?? firstNonEmptyLine2(result.stderr) ?? firstNonEmptyLine2(result.stdout) ?? `${label2}: ${result.outcome}${result.exitCode !== null ? ` (exit ${result.exitCode})` : ""}`
   );
 }
 function preferredErrorLine2(text3) {
@@ -111532,10 +111532,10 @@ function pinScheme(stored) {
 }
 function pinnedItems(listing) {
   const byKey = /* @__PURE__ */ new Map();
-  const add = (kind, id, label, hash2) => {
+  const add = (kind, id, label2, hash2) => {
     const key = pinKey(kind, id);
     const slot = byKey.get(key);
-    if (slot === void 0) byKey.set(key, { kind, label, hashes: [hash2] });
+    if (slot === void 0) byKey.set(key, { kind, label: label2, hashes: [hash2] });
     else slot.hashes.push(hash2);
   };
   for (const t of listing.tools) add("tool", t.name, t.name, toolDefinitionHash(t));
@@ -111547,10 +111547,10 @@ function pinnedItems(listing) {
   if (listing.instructions !== void 0) {
     add("instructions", "", "instructions", versioned({ instructions: listing.instructions }));
   }
-  return [...byKey].map(([key, { kind, label, hashes }]) => ({
+  return [...byKey].map(([key, { kind, label: label2, hashes }]) => ({
     key,
     kind,
-    label,
+    label: label2,
     // One definition: its own hash. Several: every one of them, order-free.
     hash: hashes.length === 1 ? hashes[0] ?? "" : versioned({ definitions: [...hashes].sort() })
   }));
@@ -119438,12 +119438,12 @@ function cycloneDxAnalysis(s) {
   switch (s.status) {
     case "not_affected": {
       const justification = s.justification === void 0 ? null : CYCLONEDX_JUSTIFICATION[s.justification];
-      const label = s.justification === void 0 ? "" : ` OpenVEX justification: ${s.justification}.`;
+      const label2 = s.justification === void 0 ? "" : ` OpenVEX justification: ${s.justification}.`;
       const impact = s.impact_statement === void 0 ? "" : ` ${s.impact_statement}`;
       return {
         state: s.justification === "component_not_present" ? "false_positive" : "not_affected",
         ...justification !== null ? { justification } : {},
-        detail: `${s.status_notes}${label}${impact}`
+        detail: `${s.status_notes}${label2}${impact}`
       };
     }
     case "affected":
@@ -119663,18 +119663,18 @@ function productOf(projectPath, sbom) {
   return { id: `pkg:generic/${encodeURIComponent(directory)}`, name, source: "directory" };
 }
 function sbomTrust(sbom, deps) {
-  const label = `the newest SBOM (${sbom.scan_id}, ${sbom.started_at})`;
+  const label2 = `the newest SBOM (${sbom.scan_id}, ${sbom.started_at})`;
   if (sbom.tree_hash !== "" && deps.tree_hash !== "") {
     if (sbom.tree_hash === deps.tree_hash) return { trusted: true, note: null };
     return {
       trusted: false,
-      note: `${label} describes another tree (${sbom.tree_hash}) than the dependency scan (${deps.tree_hash}): its product purl is not used, and it may list other package versions \u2014 run generate_sbom again`
+      note: `${label2} describes another tree (${sbom.tree_hash}) than the dependency scan (${deps.tree_hash}): its product purl is not used, and it may list other package versions \u2014 run generate_sbom again`
     };
   }
   if (Date.parse(sbom.started_at) < Date.parse(deps.started_at)) {
     return {
       trusted: false,
-      note: `${label} is older than the dependency scan (${deps.started_at}) and records no tree: its product purl is not used, and it may list other package versions \u2014 run generate_sbom again`
+      note: `${label2} is older than the dependency scan (${deps.started_at}) and records no tree: its product purl is not used, and it may list other package versions \u2014 run generate_sbom again`
     };
   }
   return { trusted: true, note: null };
@@ -122801,8 +122801,8 @@ function renderHottest(hotspots) {
   const lines = [];
   let isFirst = true;
   for (const h of shown) {
-    const label = isFirst ? "  HOTTEST      " : "               ";
-    lines.push(`${label}${sanitizeTerminalText(h.file_path)}   ${h.count}`);
+    const label2 = isFirst ? "  HOTTEST      " : "               ";
+    lines.push(`${label2}${sanitizeTerminalText(h.file_path)}   ${h.count}`);
     isFirst = false;
   }
   const remaining = hotspots.length - shown.length;
@@ -123014,9 +123014,9 @@ function deltasSection(snapshot, scanType) {
   ${baseline}
 </section>`;
 }
-function renderDelta(label, delta, emptyMessage) {
+function renderDelta(label2, delta, emptyMessage) {
   if (delta === null) {
-    return `<p><strong>${escapeHtml(label)}:</strong> ${escapeHtml(emptyMessage)}</p>`;
+    return `<p><strong>${escapeHtml(label2)}:</strong> ${escapeHtml(emptyMessage)}</p>`;
   }
   const rows = delta.new_findings.map((f) => deltaRow(f)).join("");
   const table = delta.new_findings.length > 0 ? `<table><thead><tr><th>Sev</th><th>Title</th><th>Location</th></tr></thead><tbody>${rows}</tbody></table>` : "";
@@ -123027,7 +123027,7 @@ function renderDelta(label, delta, emptyMessage) {
   }
   const caveat = gaps.length === 0 ? "" : ` \xB7 <span class="pdk-delta-caveat">\u26A0 ${escapeHtml(gaps.join(", "))} (a scanner did not run on one side)</span>`;
   return `<div>
-  <p><strong>${escapeHtml(label)}:</strong> +${delta.new_count} new \xB7 -${delta.resolved_count} resolved \xB7 ${delta.unchanged_count} unchanged${caveat}</p>
+  <p><strong>${escapeHtml(label2)}:</strong> +${delta.new_count} new \xB7 -${delta.resolved_count} resolved \xB7 ${delta.unchanged_count} unchanged${caveat}</p>
   ${table}
 </div>`;
 }
@@ -123079,8 +123079,8 @@ function findingsTableSection(findings) {
 function optionsFor(counts) {
   return Object.keys(counts).sort().map((k) => {
     const n = counts[k] ?? 0;
-    const label = escapeHtml(k);
-    return `<option value="${label}">${label} (${n})</option>`;
+    const label2 = escapeHtml(k);
+    return `<option value="${label2}">${label2} (${n})</option>`;
   }).join("");
 }
 function findingRow(f) {
@@ -123849,15 +123849,15 @@ function observe(control, outcome, canaryRead) {
 function scrubberFor(paths, env) {
   const fold = process.platform !== "linux";
   const swaps = [{ what: canaryToken(), label: "<canary>", isPath: false }];
-  for (const [label, path3] of paths) {
-    if (path3.length >= 4) swaps.push({ what: path3, label, isPath: true });
+  for (const [label2, path3] of paths) {
+    if (path3.length >= 4) swaps.push({ what: path3, label: label2, isPath: true });
   }
   for (const [key, value] of Object.entries(env)) {
     if (value !== void 0 && value.length >= ENV_VALUE_MIN) swaps.push({ what: value, label: `$${key}`, isPath: false });
   }
   swaps.sort((a, b) => Number(b.label === "<canary>") - Number(a.label === "<canary>") || b.what.length - a.what.length);
-  const swap = (text3, what, label, isPath) => {
-    if (!isPath) return text3.split(what).join(label);
+  const swap = (text3, what, label2, isPath) => {
+    if (!isPath) return text3.split(what).join(label2);
     const norm = (s) => {
       const slashed = s.replace(/\\/g, "/");
       const lowered = fold ? slashed.toLowerCase() : slashed;
@@ -123869,7 +123869,7 @@ function scrubberFor(paths, env) {
     for (; ; ) {
       const at = norm(rest).indexOf(needle);
       if (at < 0) return out + rest;
-      out += rest.slice(0, at) + label;
+      out += rest.slice(0, at) + label2;
       rest = rest.slice(at + what.length);
     }
   };
@@ -123929,8 +123929,8 @@ async function runSelftest(opts) {
       };
       const paths = [];
       if (ws !== void 0) paths.push(["<selftest directory>", ws.dir], ["<selftest directory>", basename18(ws.dir)]);
-      for (const [label, path3] of [["<temporary directory>", tmpRoot], ["<data directory>", opts.dataDir]]) {
-        paths.push([label, path3], [label, real(path3)]);
+      for (const [label2, path3] of [["<temporary directory>", tmpRoot], ["<data directory>", opts.dataDir]]) {
+        paths.push([label2, path3], [label2, real(path3)]);
       }
       paths.push(["<current directory>", process.cwd()], ["~", home]);
       scrub = scrubberFor(paths, env);
