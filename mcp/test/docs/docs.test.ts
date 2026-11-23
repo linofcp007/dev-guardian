@@ -486,7 +486,7 @@ describe('the docs of the manifest vetting', () => {
     expect(at).toBeGreaterThan(-1);
     const end = hooks.indexOf('\n## ', at + 1);
     const section = hooks.slice(at, end === -1 ? undefined : end);
-    for (const said of ['installs from a manifest', '`npm ci`', '`pnpm install`', 'pip install -r', '`package.json`']) {
+    for (const said of ['installs from a manifest', '`npm ci`', '`pnpm install`', '`pip install -r`', '`package.json`']) {
       expect({ said, found: section.includes(said) }).toEqual({ said, found: true });
     }
     // What leaves the machine is declared, and what stays.
