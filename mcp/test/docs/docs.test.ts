@@ -1098,3 +1098,72 @@ describe('install-vet-registry-files-unread', () => {
     expect(said(limitRecord(), parts)).toBe(true);
   });
 });
+
+// ───────────────── pkgvet-archive-names-pipx-composer — the docs say what the pipx and the composer were measured to read
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  /** The sentences of a hard-wrapped page, each on one line: a blank line, a list item, a table row and a full stop before white space end one. */
+  const sentences = (text: string): string[] =>
+    text
+      .replace(/\r\n/g, '\n')
+      .split(/\n\s*\n|\n(?=\s*(?:[-*]|\d+\.)\s)|\n(?=\|)/)
+      .flatMap((block) => block.replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s+/))
+      .filter((s) => s !== '');
+
+  const TWELVE = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma'];
+  const OLD_SENTENCE = 'pipx, composer and dotnet were not measured';
+
+  it('T-08 docs/hooks.md says what the pipx and the composer read as a file, and that only the dotnet was not measured', () => {
+    const hooks = read('docs/hooks.md');
+    const at = hooks.indexOf('## Install-time package vetting');
+    expect(at, 'the "Install-time package vetting" section of docs/hooks.md').toBeGreaterThan(-1);
+    const end = hooks.indexOf('\n## ', at + 1);
+    const lines = sentences(hooks.slice(at, end === -1 ? undefined : end));
+    const code = (s: string, endings: readonly string[]): boolean => endings.every((e) => s.includes(`\`${e}\``));
+
+    const found = {
+      'pipx: the twelve endings between backticks, and the word "file"': lines.some((s) => /\bpipx\b/.test(s) && code(s, TWELVE) && /\bfile\b/.test(s)),
+      'composer: .zip and .tar.gz between backticks': lines.some((s) => /\bcomposer\b/.test(s) && code(s, ['.zip', '.tar.gz'])),
+      'dotnet: not measured': lines.some((s) => /\bdotnet\b/.test(s) && /not measured/.test(s)),
+      'no sentence says "pipx, composer and dotnet were not measured"': !lines.some((s) => s.includes(OLD_SENTENCE)),
+    };
+    expect(found).toEqual({
+      'pipx: the twelve endings between backticks, and the word "file"': true,
+      'composer: .zip and .tar.gz between backticks': true,
+      'dotnet: not measured': true,
+      'no sentence says "pipx, composer and dotnet were not measured"': true,
+    });
+  });
+
+  it('T-08 the record archive-like-names says what was measured and where, and runs the examples of the new readings; the generated page has its text', () => {
+    const limit = loadKnownLimits().find((l) => l.id === 'archive-like-names');
+    expect(limit, 'a record with the id archive-like-names in mcp/test/fixtures/hooks/known-limits.yml').toBeDefined();
+    if (limit === undefined) return;
+    const runs = (command: string, decision: string): boolean =>
+      limit.examples.some((e) => e.detector === 'hook' && e.input.command === command && e.expect.decision === decision);
+    const found = {
+      'the text says pipx': /\bpipx\b/.test(limit.doc),
+      'the text says measured': /\bmeasured\b/.test(limit.doc),
+      'the text names Linux': /\bLinux\b/.test(limit.doc),
+      'the text names Windows': /\bWindows\b/.test(limit.doc),
+      'pipx install thing.zip: none': runs('pipx install thing.zip', 'none'),
+      'pipx run thing.zip: none': runs('pipx run thing.zip', 'none'),
+      'cd "$D" && pipx run thing.zip: warn': runs('cd "$D" && pipx run thing.zip', 'warn'),
+      'pipx install --force thing.zip: warn': runs('pipx install --force thing.zip', 'warn'),
+      'composer require vendor/thing.whl: warn': runs('composer require vendor/thing.whl', 'warn'),
+      'the generated page has the text': read('docs/hooks-known-limits.md').includes(limit.doc.trim()),
+    };
+    expect(found).toEqual({
+      'the text says pipx': true,
+      'the text says measured': true,
+      'the text names Linux': true,
+      'the text names Windows': true,
+      'pipx install thing.zip: none': true,
+      'pipx run thing.zip: none': true,
+      'cd "$D" && pipx run thing.zip: warn': true,
+      'pipx install --force thing.zip: warn': true,
+      'composer require vendor/thing.whl: warn': true,
+      'the generated page has the text': true,
+    });
+  });
+});

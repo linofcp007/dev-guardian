@@ -4426,3 +4426,176 @@ describe('install-vet-registry-files-unread', () => {
     expect(first(command)?.bunLauncher).toBeUndefined();
   });
 });
+
+// ───────────────── pkgvet-archive-names-pipx-composer — what the pipx and the composer measured: a word with an archive ending
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  // The names are made up; no test runs pipx or composer.
+  /** The twelve endings pip reads as a file, in the lower case of the measured form. */
+  const TWELVE = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma'] as const;
+  /** The other twelve endings of the composer: what it was not measured with (`.zip` and `.tar.gz` were). */
+  const COMPOSER_OTHER = ['.whl', '.tar', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma', '.egg', '.nupkg'] as const;
+  const P = 'dgprobe-arc';
+  const NOT_MEASURED = 'this package manager was not measured';
+  /** R1 and R2: the two reasons the requirements give, as written there. */
+  const R1 =
+    'a name that ends like an archive file, in a form that was not measured (only pipx install <word>, pipx run <word> and composer require <word> were, with no flag and the ending in lower case)';
+  const R2 =
+    'a name that ends like an archive file — composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known';
+  const LOCAL_PATH = 'local path — not looked up';
+
+  /** The two fields this fix adds, read through narrow local types so the file type-checks before they exist. */
+  type MarkedSpec = PackageSpec & { malwareOnly?: true };
+  type ScriptCommand = { runsAsScript?: string };
+  const marked = (command: string): Array<{ name: string; malwareOnly?: true }> =>
+    parseInstallCommands(command).flatMap((c) =>
+      c.packages.map((p) => {
+        const flag = (p as MarkedSpec).malwareOnly;
+        return flag === undefined ? { name: p.name } : { name: p.name, malwareOnly: flag };
+      }),
+    );
+  const uncertainOf = (command: string): string[] => parseInstallCommands(command).flatMap((c) => c.uncertain);
+  const namesOf = (command: string): string[] => parseInstallCommands(command).flatMap((c) => c.packages.map((p) => p.name));
+
+  /** A command's result as one line — a format for the table of T-07, never an expectation computed at run time. */
+  function summarize(command: string): string {
+    return parseInstallCommands(command)
+      .map((c) => {
+        const parts = [`${c.manager}/${c.ecosystem}`];
+        if (c.packages.length > 0) parts.push(`P ${c.packages.map((p) => p.name + (p.range === undefined ? '' : `@${p.range}`)).join(' ')}`);
+        if (c.skipped.length > 0) parts.push(`S ${c.skipped.map((s) => `${s.raw} => ${s.reason}`).join(' ; ')}`);
+        if (c.uncertain.length > 0) parts.push(`U ${c.uncertain.join(' ; ')}`);
+        if (c.manifest !== undefined) parts.push(`M ${JSON.stringify(c.manifest)}`);
+        if (c.prefixed === true) parts.push('prefixed');
+        if (c.customRegistry !== undefined) parts.push(`R ${c.customRegistry}`);
+        return parts.join(' | ');
+      })
+      .join(' || ');
+  }
+
+  it.each(TWELVE)('T-01 `pipx install <p>%s`: the package is marked for malware only, nothing is skipped or uncertain, and no script runs', (ending) => {
+    const command = `pipx install ${P}${ending}`;
+    const cmds = parseInstallCommands(command);
+    expect(marked(command)).toEqual([{ name: `${P}${ending}`, malwareOnly: true }]);
+    expect(cmds.map((c) => c.skipped)).toEqual([[]]);
+    expect(cmds.map((c) => c.uncertain)).toEqual([[]]);
+    expect(cmds[0]).not.toHaveProperty('runsAsScript');
+  });
+
+  it.each([
+    'pipx install x.egg',
+    'pipx install x.nupkg',
+    'pipx run x.egg',
+    'pipx run x.nupkg',
+    'composer require v/x.zip',
+    'composer require v/x.tar.gz',
+  ])('T-02 `%s` is a name like any other: one package, written as typed, and no reason of its own', (command) => {
+    const word = command.split(' ').at(-1) ?? '';
+    const cmds = parseInstallCommands(command);
+    expect(cmds.map((c) => c.packages.map((p) => p.name))).toEqual([[word]]);
+    expect(cmds.map((c) => c.skipped)).toEqual([[]]);
+    expect(cmds.map((c) => c.uncertain)).toEqual([[]]);
+  });
+
+  it.each(TWELVE)('T-03 `pipx run <p>%s`: marked for malware only, the script named when the file is there, nothing uncertain', (ending) => {
+    const word = `${P}${ending}`;
+    const command = `pipx run ${word}`;
+    const cmds = parseInstallCommands(command);
+    expect(marked(command)).toEqual([{ name: word, malwareOnly: true }]);
+    expect((cmds[0] as ScriptCommand | undefined)?.runsAsScript).toBe(word);
+    expect(cmds[0]?.inlineScripts).toEqual([{ file: word, ifFile: true }]);
+    expect(cmds.map((c) => c.uncertain)).toEqual([[]]);
+  });
+
+  it("T-03 `bash -c 'pipx run x.zip'`, the script as a nested one, runs x.zip as a script too", () => {
+    const cmds = parseInstallCommands("bash -c 'pipx run x.zip'", { nested: [{ text: 'pipx run x.zip', shell: 'bash' }] });
+    expect(cmds.map((c) => (c as ScriptCommand).runsAsScript)).toEqual(['x.zip']);
+  });
+
+  it.each(['./x.zip', 'sub/x.whl', '/abs/z.tar.gz'])('T-03 `pipx run %s`, a path: no package, kept as a local path, and the word is the script it runs', (word) => {
+    const cmds = parseInstallCommands(`pipx run ${word}`);
+    expect(cmds.map((c) => c.packages)).toEqual([[]]);
+    expect(cmds.map((c) => c.skipped.map((s) => `${s.raw} => ${s.reason}`))).toEqual([[`${word} => ${LOCAL_PATH}`]]);
+    expect(cmds.map((c) => (c as ScriptCommand).runsAsScript)).toEqual([word]);
+  });
+
+  it.each([
+    'pipx install --force x.whl',
+    'pipx install -q x.egg',
+    'pipx install x.whl y',
+    'pipx install x.WHL',
+    'pipx install --preinstall x.zip y',
+    'pipx run --spec x.zip app',
+    'pipx run --no-cache x.zip',
+    'pipx run x.zip arg',
+    'composer require --dev v/x.zip',
+    'composer require v/x.zip v/y',
+    'composer require v/x.zip ^1.0',
+    'composer req v/x.zip',
+    'composer.phar require v/x.zip',
+    'php composer.phar require v/x.zip',
+    'composer require v/x.Tar.Gz',
+  ])('T-04 `%s` is not the measured form: the word is a package and the command says R1, not "not measured"', (command) => {
+    const word = command.split(' ').find((w) => /\.(?:zip|whl|tar\.gz)$/i.test(w)) ?? '';
+    expect(namesOf(command)).toContain(word);
+    const why = uncertainOf(command);
+    expect(why).toContain(R1);
+    expect(why.some((r) => r.includes(NOT_MEASURED))).toBe(false);
+  });
+
+  it.each(COMPOSER_OTHER)('T-04 `composer require v/x%s` is the measured form with an ending it was not measured with: R2 only', (ending) => {
+    const command = `composer require v/x${ending}`;
+    expect(namesOf(command)).toEqual([`v/x${ending}`]);
+    const why = uncertainOf(command);
+    expect(why).toContain(R2);
+    expect(why).not.toContain(R1);
+    expect(why.some((r) => r.includes(NOT_MEASURED))).toBe(false);
+  });
+
+  it('T-04 `composer require --dev v/x.whl` is outside the measured form and has an ending it was not measured with: R1 and R2', () => {
+    const why = uncertainOf('composer require --dev v/x.whl');
+    expect(why).toContain(R1);
+    expect(why).toContain(R2);
+    expect(why.some((r) => r.includes(NOT_MEASURED))).toBe(false);
+  });
+
+  /** What `parseInstallCommands` gives at `ed53f52c`, the tree task 1 starts from, written out by hand from one run of it. */
+  const UNCHANGED: ReadonlyArray<readonly [string, string]> = [
+    // paths
+    ['pipx install ./x.whl', 'pipx/pypi | S ./x.whl => local path — not looked up'],
+    ['pipx install /abs/x.zip', 'pipx/pypi | S /abs/x.zip => local path — not looked up'],
+    ['composer require ./x.zip', 'composer/packagist | S ./x.zip => local path — not looked up'],
+    ['pipx run ./script.py', 'pipx/pypi | S ./script.py => local path — not looked up'],
+    // a version of its own
+    ['pipx install x.whl==1.0', 'pipx/pypi | P x.whl@==1.0'],
+    ['pipx install x.egg@1.0', 'pipx/pypi | P x.egg@1.0'],
+    ['pipx run thing.egg@1.0', 'pipx/pypi | P thing.egg@1.0'],
+    ['composer require v/x.zip:^1.0', 'composer/packagist | P v/x.zip@^1.0'],
+    ['pipx install foo@bar.tgz', 'pipx/pypi | S foo@bar.tgz => archive file — not looked up'],
+    // an ending outside the fourteen
+    ['pipx install x.tar.zst', 'pipx/pypi | P x.tar.zst'],
+    ['composer require v/x.tar.zst', 'composer/packagist | P v/x.tar.zst'],
+    // no archive ending
+    ['pipx install thing', 'pipx/pypi | P thing'],
+    ['pipx run thing', 'pipx/pypi | P thing'],
+    ['composer require v/pkg', 'composer/packagist | P v/pkg'],
+    // dotnet, which stays unmeasured in every form
+    [
+      'dotnet add package X.Y.zip',
+      'dotnet/nuget | P X.Y.zip | U a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known',
+    ],
+    [
+      'dotnet add package X.Y.nupkg',
+      'dotnet/nuget | P X.Y.nupkg | U a name that ends like an archive file — this package manager was not measured, so whether it reads the word as a file or as a registry name is not known',
+    ],
+    // the managers already measured
+    ['pip install x.whl', 'pip/pypi | S x.whl => archive file — not looked up'],
+    ['uv add x.zip', 'uv/pypi | S x.zip => archive file — not looked up'],
+    ['poetry add x.tar', 'poetry/pypi | S x.tar => archive file — not looked up'],
+  ];
+
+  it.each(UNCHANGED)('T-07 `%s` reads as it did before the fix', (command, expected) => {
+    expect(summarize(command)).toBe(expected);
+    expect(parseInstallCommands(command).every((c) => !('runsAsScript' in c))).toBe(true);
+  });
+});

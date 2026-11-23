@@ -2913,3 +2913,116 @@ describe('install-vet-registry-files-unread', () => {
   });
 
 });
+
+// ───────────────── pkgvet-archive-names-pipx-composer — the words the pipx and the composer measured, through the dispatcher
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  // The names are made up; the PyPI, the Packagist and OSV are answered by the preload, never by the real network.
+  const FOURTEEN = ['.zip', '.whl', '.tar', '.tar.gz', '.tgz', '.tar.bz2', '.tbz', '.tar.xz', '.txz', '.tlz', '.tar.lz', '.tar.lzma', '.egg', '.nupkg'] as const;
+  const REFUSED_ENDINGS: readonly string[] = ['.egg', '.nupkg'];
+  const pypiUrl = (word: string): string => `https://pypi.org/pypi/${word}/json`;
+  const packagistUrl = (name: string): string => `https://repo.packagist.org/p2/${name}.json`;
+  const MAL = 'MAL-2026-0042';
+  /** A package of the PyPI at 1.0.0. */
+  const pypiPackage = (version: string): Route => ({
+    body: { info: { version }, releases: { [version]: [{ upload_time_iso_8601: '2020-01-01T00:00:00Z' }] } },
+  });
+  /** A package of the Packagist at 1.0.0. */
+  const packagistPackage = (name: string, version: string): Route => ({
+    body: { packages: { [name]: [{ version, time: '2020-01-01T00:00:00+00:00' }] } },
+  });
+  /** The line of criterion 2: what `pipx run <p>` does with a word it reads as a file, said when the folder is not known. */
+  const runLine = (word: string): string =>
+    `dev-guardian: pipx run reads ${word} as a file, not a package — if the file is there, pipx runs it as a script and installs the packages its \`# /// script\` block names; they were not vetted.`;
+  const decisionOf = (r: HookOut): string | undefined => r.output?.hookSpecificOutput?.permissionDecision;
+  const reasonOf = (r: HookOut): string => r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+
+  // ── the 56 lines of SC-001: `pipx install` and `pipx run`, each of the fourteen endings, without and with an empty file
+
+  type Row = { verb: 'install' | 'run'; ending: string; withFile: boolean; word: string; refused: boolean; guard: boolean };
+  const ROWS: Row[] = (['install', 'run'] as const).flatMap((verb) =>
+    FOURTEEN.flatMap((ending) =>
+      [false, true].map((withFile): Row => {
+        const word = `dgprobe-zzq7731-arc${ending}`;
+        // The pipx refuses the missing name where it asks the index for it: `install` always, `run` only with no file.
+        const refused = REFUSED_ENDINGS.includes(ending) && !(verb === 'run' && withFile);
+        // Silent at `ed53f52c` already: `pipx run` with a file, which the disk decides.
+        return { verb, ending, withFile, word, refused, guard: verb === 'run' && withFile };
+      }),
+    ),
+  );
+
+  it('T-06 (guard) the table of SC-001 has 56 lines: 50 silent, 6 refused, 14 of them the guards', () => {
+    expect(ROWS).toHaveLength(56);
+    expect(ROWS.filter((r) => r.refused)).toHaveLength(6);
+    expect(ROWS.filter((r) => !r.refused)).toHaveLength(50);
+    expect(ROWS.filter((r) => r.guard)).toHaveLength(14);
+  });
+
+  it.each(ROWS.map((r) => [`${r.guard ? '(guard) ' : ''}\`pipx ${r.verb} ${r.word}\`${r.withFile ? ' with an empty file' : ''}`, r] as const))(
+    'T-06 %s',
+    (_label, row) => {
+      if (row.withFile) writeFileSync(join(project, row.word), '');
+      const r = runHook(`pipx ${row.verb} ${row.word}`, { [pypiUrl(row.word)]: { status: 404 }, [OSV]: { osv: {} } });
+      expect(r.status).toBe(0);
+      expect(r.requests, 'the word is asked of the PyPI').toContain(pypiUrl(row.word));
+      expect(decisionOf(r)).toBe(row.refused ? 'deny' : undefined);
+      if (row.refused) expect(reasonOf(r)).toContain('does not exist on PyPI');
+      else expect(r.output, 'nothing is said').toBeUndefined();
+    },
+  );
+
+  // ── the composer
+
+  it.each(['.tar.gz', '.zip'])('T-06 `composer require dgprobe/missing%s` is DENIED as a name the Packagist does not have, and the name was asked', (ending) => {
+    const name = `dgprobe/missing${ending}`;
+    const r = runHook(`composer require ${name}`, { [packagistUrl(name)]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(r.requests).toContain(packagistUrl(name));
+    expect(decisionOf(r)).toBe('deny');
+    expect(reasonOf(r)).toContain('does not exist on Packagist');
+  });
+
+  // ── a folder that is not known (SC-002)
+
+  it('T-06 `cd "$X" && pipx run dgprobe-missing.zip`, X without a value: no refusal, the line of `pipx run` once, no missing name, and the word asked for malware', () => {
+    const word = 'dgprobe-missing.zip';
+    const r = runHook(`cd "$X" && pipx run ${word}`, { [pypiUrl(word)]: { status: 404 }, [OSV]: { osv: {} } });
+    expect(r.status).toBe(0);
+    expect(decisionOf(r), 'never a deny').toBeUndefined();
+    const said = r.output?.hookSpecificOutput?.additionalContext ?? '(no context)';
+    expect(said.split(runLine(word)).length - 1).toBe(1);
+    expect(said).not.toContain('not found');
+    expect(r.requests).toContain(pypiUrl(word));
+  });
+
+  // ── a malicious package of the name of an archive: refused, with the sentence of the form
+
+  const EVIL_ROUTES = (word: string): Record<string, Route> => ({ [pypiUrl(word)]: pypiPackage('1.0.0'), [OSV]: { osv: { [`${word}@1.0.0`]: [MAL] } } });
+
+  it.each(['pipx install dgprobe-evil.zip', 'pipx run dgprobe-evil.zip'])(
+    "T-06 `%s`, with no file: the refusal says pipx reads 'dgprobe-evil.zip' as a file here, not as a package",
+    (command) => {
+      const r = runHook(command, EVIL_ROUTES('dgprobe-evil.zip'));
+      expect(decisionOf(r)).toBe('deny');
+      expect(reasonOf(r)).toContain("pipx reads 'dgprobe-evil.zip' as a file here, not as a package, and a package of that name is malicious:");
+    },
+  );
+
+  it.each([
+    ['pipx install dgprobe-evil.egg', 'dgprobe-evil.egg'],
+    ['composer require dgprobe/evil.zip', 'dgprobe/evil.zip'],
+    ['pipx install dgprobe-evil.zip', 'dgprobe-evil.zip'],
+    ['pipx run dgprobe-evil.zip', 'dgprobe-evil.zip'],
+    ['pipx install --force dgprobe-evil.zip', 'dgprobe-evil.zip'],
+    ['composer require dgprobe/evil.whl', 'dgprobe/evil.whl'],
+  ])('T-06 (guard) `%s`, a malicious package the registry has: DENIED, naming the package and its MAL- id', (command, name) => {
+    const routes: Record<string, Route> = name.includes('/')
+      ? { [packagistUrl(name)]: packagistPackage(name, '1.0.0'), [OSV]: { osv: { [`${name}@1.0.0`]: [MAL] } } }
+      : EVIL_ROUTES(name);
+    const r = runHook(command, routes);
+    expect(decisionOf(r)).toBe('deny');
+    expect(reasonOf(r)).toContain(name);
+    expect(reasonOf(r)).toContain(MAL);
+  });
+});

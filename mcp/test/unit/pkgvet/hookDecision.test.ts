@@ -7309,3 +7309,86 @@ describe('install-vet-registry-files-unread', () => {
     expect(d?.deny ?? '(no deny)').toContain('MAL-2026-77');
   });
 });
+
+// ───────────────── pkgvet-archive-names-pipx-composer — the decision for the words the pipx and the composer measured
+
+describe('pkgvet-archive-names-pipx-composer', () => {
+  // The names are made up; no test runs pipx or composer.
+  const EVIL = 'dgprobe-zzq7731-evil';
+  const MISSING = 'dgprobe-missing';
+  const pypiUrl = (name: string): string => `https://pypi.org/pypi/${name}/json`;
+  const BLOCK = (...pkgs: string[]): string => `# /// script\n# dependencies = [${pkgs.map((p) => `"${p}"`).join(', ')}]\n# ///\nprint(1)\n`;
+  /** The line of criterion 2: what `pipx run <p>` does with a word it reads as a file, said when the folder is not known. */
+  const runLine = (word: string): string =>
+    `dev-guardian: pipx run reads ${word} as a file, not a package — if the file is there, pipx runs it as a script and installs the packages its \`# /// script\` block names; they were not vetted.`;
+  const R2 =
+    'a name that ends like an archive file — composer was measured only with .zip and .tar.gz, so whether it reads this ending as a file or as a registry name is not known';
+  const occurrences = (text: string, part: string): number => text.split(part).length - 1;
+  const put = (rel: string, text: string): void => {
+    mkdirSync(dirname(join(project, rel)), { recursive: true });
+    writeFileSync(join(project, rel), text);
+  };
+  /** The registry of the plan for a refusal of the block: EVIL is published and has a `MAL-` advisory, everything else is a 404. */
+  const evilRegistry = (): ReturnType<typeof registry> => registry({ exists: ['requests', EVIL], malicious: [EVIL] });
+
+  it.each([
+    ['composer require dgprobe/missing.zip', 'does not exist on Packagist'],
+    ['pipx install dgprobe-missing.egg', 'does not exist on PyPI'],
+    ['pipx run dgprobe-missing.egg', 'does not exist on PyPI'],
+  ])('T-05 `%s`, a 404 and no file: DENIED as a name the registry does not have', async (command, why) => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand(command, opts(f.fetchImpl));
+    expect(d?.deny ?? '(no deny)').toContain(why);
+  });
+
+  it.each(['pipx install dgprobe-missing.whl', 'pipx run dgprobe-missing.zip'])(
+    'T-05 `%s`, a 404 and no file: nothing said, and the word was asked for malware only',
+    async (command) => {
+      const f = fakeRegistry();
+      const d = await decideInstallCommand(command, opts(f.fetchImpl));
+      expect(d, 'nothing is said').toBeNull();
+      expect(f.calls).toEqual([pypiUrl(command.split(' ').at(-1) ?? ''), OSV]);
+    },
+  );
+
+  it.each(['cd "$X" && pipx run dgprobe-missing.zip', 'cd "$X"; pipx run dgprobe-missing.zip'])(
+    'T-05 `%s`: the folder is not known, so the line of `pipx run` is said once, and the word is not called a missing name',
+    async (command) => {
+      const f = fakeRegistry();
+      const d = await decideInstallCommand(command, opts(f.fetchImpl));
+      expect(d?.deny, 'never a deny').toBeUndefined();
+      const context = d?.context ?? '(no context)';
+      expect(occurrences(context, runLine('dgprobe-missing.zip'))).toBe(1);
+      expect(context).not.toContain('not found');
+    },
+  );
+
+  it('T-05 `composer require dgprobe/missing.whl`: the ending was not measured with the composer, so no refusal, and a warning with R2', async () => {
+    const f = fakeRegistry();
+    const d = await decideInstallCommand('composer require dgprobe/missing.whl', opts(f.fetchImpl));
+    expect(d?.deny, 'never a deny for an ending that was not measured').toBeUndefined();
+    expect(d?.context ?? '(no context)').toContain(R2);
+  });
+
+  it.each(['dgprobe-missing.zip', 'dgprobe-missing.egg'])('T-05 (guard) `pipx run %s` with an empty file of that name in the project: nothing said', async (file) => {
+    put(file, '');
+    const f = fakeRegistry();
+    expect(await decideInstallCommand(`pipx run ${file}`, opts(f.fetchImpl))).toBeNull();
+  });
+
+  it.each(['dgprobe-missing.zip', 'dgprobe-missing.egg'])(
+    'T-05 (guard) `pipx run %s` with a file whose block names a malicious package: DENIED, naming the file',
+    async (file) => {
+      put(file, BLOCK(EVIL));
+      const r = evilRegistry();
+      const d = await decideInstallCommand(`pipx run ${file}`, opts(r.fetchImpl));
+      expect(d?.deny ?? '(no deny)').toContain(`${file} names '${EVIL}@1.0.0'`);
+    },
+  );
+
+  it('T-05 (guard) `pipx run ./dgprobe-missing.zip`, a path: nothing said and nothing asked', async () => {
+    const f = fakeRegistry();
+    expect(await decideInstallCommand(`pipx run ./${MISSING}.zip`, opts(f.fetchImpl))).toBeNull();
+    expect(f.calls).toEqual([]);
+  });
+});
