@@ -120354,22 +120354,45 @@ function tokenLimitFields(plan, tasks) {
   return { deliverable_within_token_limit: n, token_limit_note: tokenLimitNote(n) };
 }
 function findingsToVerify(storage, input2) {
+  const scanOf = /* @__PURE__ */ new Map();
   if (input2.fingerprints !== void 0) {
     const found2 = [];
     const unknown4 = [];
     for (const fp of input2.fingerprints) {
       const hit = storage.findings.findLatestInProject(input2.project, fp);
-      if (hit === null) unknown4.push(fp);
-      else found2.push(hit.finding);
+      if (hit === null) {
+        unknown4.push(fp);
+      } else {
+        found2.push(hit.finding);
+        scanOf.set(hit.finding.fingerprint, hit.scan_id);
+      }
     }
-    return { ok: true, findings: found2, unknown: unknown4 };
+    return { ok: true, findings: found2, unknown: unknown4, from: "fingerprints", scanOf };
   }
   if (input2.scan_id !== void 0) {
     const scan2 = storage.scans.getById(input2.scan_id);
     if (scan2 === null || scan2.project_path !== input2.project) return fail5("unknown_scan_id", `No scan ${input2.scan_id} for this project.`);
-    return { ok: true, findings: storage.findings.listByScan(input2.scan_id).filter((f) => !isHuntFinding(f)), unknown: [] };
+    const findings2 = storage.findings.listByScan(input2.scan_id).filter((f) => !isHuntFinding(f));
+    for (const f of findings2) scanOf.set(f.fingerprint, input2.scan_id);
+    return { ok: true, findings: findings2, unknown: [], from: "scan", scanOf };
   }
-  return { ok: true, findings: openSetForProject(storage, input2.project).findings.filter((f) => !isHuntFinding(f)), unknown: [] };
+  const findings = openSetForProject(storage, input2.project).findings.filter((f) => !isHuntFinding(f));
+  for (const f of findings) scanOf.set(f.fingerprint, f.scan_id);
+  return { ok: true, findings, unknown: [], from: "open_set", scanOf };
+}
+function isVerifySource(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value;
+  return (v["from"] === "scan" || v["from"] === "fingerprints" || v["from"] === "open_set") && Array.isArray(v["scan_ids"]) && typeof v["scan_ids_total"] === "number";
+}
+function verifySourceOf(from, scanOf, tasks) {
+  const scans = /* @__PURE__ */ new Set();
+  for (const t of tasks) {
+    const scan2 = t.kind === "verify" && t.target.fingerprint !== void 0 ? scanOf.get(t.target.fingerprint) : void 0;
+    if (scan2 !== void 0) scans.add(scan2);
+  }
+  const all = listed([...scans]);
+  return { from, scan_ids: all.items, scan_ids_total: all.total };
 }
 async function startPlan(storage, input2) {
   const { project, modes } = input2;
@@ -120393,11 +120416,15 @@ async function startPlan(storage, input2) {
   }
   let findings = [];
   const unknown4 = [];
+  let verifyFrom = null;
+  let scanOf = /* @__PURE__ */ new Map();
   if (modes.includes("verify")) {
     const chosen = findingsToVerify(storage, input2);
     if (!chosen.ok) return chosen;
     findings = chosen.findings;
     unknown4.push(...chosen.unknown);
+    verifyFrom = chosen.from;
+    scanOf = chosen.scanOf;
   }
   const codeFiles = hunting ? listProjectFiles(project).filter((f) => CODE_EXTENSIONS.some((e) => f.toLowerCase().endsWith(e))).slice(0, MAX_FALLBACK_CODE_FILES) : [];
   const plan = buildPlan({
@@ -120414,7 +120441,8 @@ async function startPlan(storage, input2) {
   ];
   const setAside = plan.set_aside.map((s) => isOverLimit(s.reason) ? { ...s, overflow: true } : s);
   if (plan.nothing_to_plan !== null) {
-    return fail5("nothing_to_plan", plan.nothing_to_plan, { not_eligible: listed(notEligible).items });
+    const fromOpenSet = !hunting && verifyFrom === "open_set" && plan.nothing_to_plan.startsWith(NO_ELIGIBLE_FINDING_PREFIX);
+    return fail5("nothing_to_plan", fromOpenSet ? OPEN_SET_NOTHING_TO_PLAN : plan.nothing_to_plan, { not_eligible: listed(notEligible).items });
   }
   const planId = randomUUID22();
   const scanId = randomUUID22();
@@ -120464,8 +120492,15 @@ async function startPlan(storage, input2) {
     created_at: now,
     updated_at: now
   };
+  const verifySource = verifyFrom === null ? null : verifySourceOf(verifyFrom, scanOf, tasks);
   storage.rawHandle().transaction(() => {
-    storage.scans.insert({ scan_id: scanId, scan_type: "llm_scan", project_path: project, tree_hash: treeHash, meta: { plan_id: planId, modes } });
+    storage.scans.insert({
+      scan_id: scanId,
+      scan_type: "llm_scan",
+      project_path: project,
+      tree_hash: treeHash,
+      meta: { plan_id: planId, modes, ...verifySource !== null ? { verify_source: verifySource } : {} }
+    });
     storage.scans.finalize({ scan_id: scanId, status: "completed", ...planRecordBookkeeping(stored, tasks) });
     storage.llmScan.insertPlan(stored, tasks);
   })();
@@ -120487,6 +120522,7 @@ async function startPlan(storage, input2) {
     deliverable_tasks: deliverable.length,
     beyond_max_tasks: tasks.length - deliverable.length,
     needs_confirm: needsConfirm(stored),
+    ...verifySource !== null ? { verify_source: verifySource } : {},
     ...tokenLimitFields(stored, tasks),
     ...needsConfirm(stored) ? { confirm_with: 'llm_scan { step: "start", plan_id, confirm: true }' } : {},
     notes: plan.notes,
@@ -120500,6 +120536,7 @@ function planStatus(storage, planId, project, confirm) {
   if (project !== null && loaded.plan.project_path !== project) return fail5("not_found", `No LLM scan plan with id ${planId} for this project.`);
   if (confirm && loaded.plan.status === "open") storage.llmScan.confirmPlan(planId, nowIso2());
   const plan = settlePlan(storage, storage.llmScan.getPlan(planId) ?? loaded.plan);
+  const recorded = plan.modes.includes("verify") ? storage.scans.getById(plan.scan_id)?.meta?.["verify_source"] : void 0;
   return {
     ok: true,
     plan_id: plan.id,
@@ -120509,6 +120546,7 @@ function planStatus(storage, planId, project, confirm) {
     limits: plan.limits,
     estimate: plan.estimate,
     needs_confirm: needsConfirm(plan),
+    ...isVerifySource(recorded) ? { verify_source: recorded } : {},
     ...tokenLimitFields(plan, storage.llmScan.listTasks(plan.id)),
     prompt_version: plan.prompt_version,
     report: reportOf(storage, plan)
@@ -120750,7 +120788,7 @@ function acceptHunt(storage, plan, task, input2, value, rejected, responseChars,
     progress: progressOf(storage, settlePlan(storage, plan))
   };
 }
-var fail5, nowIso2, MAX_INVALID_SUBMISSIONS, MAX_PLANNED_TASKS, HOST_BRIEF_MAX_TOKENS, MAX_LISTED2, MAX_FALLBACK_CODE_FILES, CODE_EXTENSIONS, isOverLimit, hashesOf, tokenLimitNote, needsConfirm, RECIPE, isLeasable, sizeOf;
+var fail5, nowIso2, MAX_INVALID_SUBMISSIONS, MAX_PLANNED_TASKS, HOST_BRIEF_MAX_TOKENS, MAX_LISTED2, MAX_FALLBACK_CODE_FILES, CODE_EXTENSIONS, isOverLimit, hashesOf, tokenLimitNote, needsConfirm, RECIPE, NO_ELIGIBLE_FINDING_PREFIX, OPEN_SET_NOTHING_TO_PLAN, isLeasable, sizeOf;
 var init_service = __esm({
   "src/llmscan/service.ts"() {
     "use strict";
@@ -120792,6 +120830,8 @@ var init_service = __esm({
       independence: "'subagent' when a fresh context ran the brief; 'same_context' when you ran it yourself (shown, and never used to demote or confirm).",
       lease: `A leased task is yours for ${String(LLM_SCAN_DEFAULTS.lease_minutes)} minutes; after that it goes to whoever asks next.`
     };
+    NO_ELIGIBLE_FINDING_PREFIX = "No finding is eligible for verification";
+    OPEN_SET_NOTHING_TO_PLAN = "No finding in the project's open set is eligible for verification (each needs a file and a line). A scoped scan (one run with scope, or a review_pr) is never part of the open set: to verify one, pass its scan_id.";
     isLeasable = (t, now) => t.status === "open" || t.status === "leased" && t.lease_expires_at !== null && t.lease_expires_at <= now;
     sizeOf = (payload) => {
       try {
