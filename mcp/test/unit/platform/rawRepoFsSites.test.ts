@@ -128,6 +128,13 @@ const ALLOWED: Record<string, Allowed> = {
     kind: 'own',
     reason: "the plugin's own mcp/dist/engine.js, hashed against the digest the build wrote; never a project file",
   },
+  'src/pkgvet/folderSpelling.ts': {
+    apis: { realpathSync: 1 },
+    kind: 'repo-safe',
+    reason:
+      'metadata of a folder that lstat saw without a link (the real path of a drive root, of a folder one name below a real path, and of a home directory): never of a ' +
+      'path that isNetworkPath knows, never a read of any file; a failure gives the answer of before',
+  },
   'src/pkgvet/hookDecision.ts': {
     apis: { statSync: 1, realpathSync: 1 },
     kind: 'repo-safe',

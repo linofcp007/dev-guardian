@@ -123383,6 +123383,14 @@ var init_canaries = __esm({
   }
 });
 
+// src/pkgvet/folderSpelling.ts
+var init_folderSpelling = __esm({
+  "src/pkgvet/folderSpelling.ts"() {
+    "use strict";
+    init_configFile();
+  }
+});
+
 // src/pkgvet/lockfile.ts
 var JSON_PLAIN;
 var init_lockfile = __esm({
@@ -123439,6 +123447,7 @@ var init_hookDecision = __esm({
   "src/pkgvet/hookDecision.ts"() {
     "use strict";
     init_configFile();
+    init_folderSpelling();
     init_lockfile();
     init_manifest2();
     init_parseCommand();

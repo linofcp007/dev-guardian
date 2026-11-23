@@ -10,7 +10,6 @@ import {
   MAX_MANIFEST_PACKAGES,
   vetDeadlineMs,
   type HookVetOptions,
-  type LstatLike,
 } from '../../../src/pkgvet/hookDecision.js';
 import { parseInstallCommands } from '../../../src/pkgvet/parseCommand.js';
 import { HOOK_BUDGET_MS } from '../../../src/pkgvet/vet.js';
@@ -7399,9 +7398,7 @@ describe('pkgvet-archive-names-pipx-composer', () => {
 // ───────────────── install-vet-path-forms — the guards: what the spelling of a folder must not change (green before the fix)
 
 describe('install-vet-path-forms', () => {
-  /** What the hook gets in a test: `diskImpl` does not exist yet (task 3 adds the field), so the type is local, as `LstatLike` was for dotnet-run-forms. */
-  type DiskImpl = { lstat: LstatLike; realpath: (p: string) => string };
-  type PathFormsOptions = HookVetOptions & { diskImpl: DiskImpl };
+  type DiskImpl = NonNullable<HookVetOptions['diskImpl']>;
 
   const WINDOWS = process.platform === 'win32';
   const ROOT_NAME = 'project with a long name';
@@ -7458,8 +7455,8 @@ describe('install-vet-path-forms', () => {
     writeFileSync(join(dir, 'package.json'), JSON.stringify(EVIL_MANIFEST));
   };
   const evilRegistry = (): ReturnType<typeof registry> => registry({ exists: ['express', 'evil-pkg'], malicious: ['evil-pkg'] });
-  /** The options of a hook call from `cwd`, with the project at `projectDir` and a counting `diskImpl`, as task 3 gives the hook one. */
-  function at(fetchImpl: typeof fetch, cwd: string, projectDir: string, extra: Partial<HookVetOptions> = {}): { o: PathFormsOptions; n: { lstat: number; realpath: number } } {
+  /** The options of a hook call from `cwd`, with the project at `projectDir` and a counting `diskImpl`. */
+  function at(fetchImpl: typeof fetch, cwd: string, projectDir: string, extra: Partial<HookVetOptions> = {}): { o: HookVetOptions; n: { lstat: number; realpath: number } } {
     const n = { lstat: 0, realpath: 0 };
     const diskImpl: DiskImpl = {
       lstat: (p) => {
@@ -7471,7 +7468,7 @@ describe('install-vet-path-forms', () => {
         return realpathSync.native(p);
       },
     };
-    return { o: { ...opts(fetchImpl, { cwd, projectDir, ...extra }), diskImpl }, n };
+    return { o: opts(fetchImpl, { cwd, projectDir, diskImpl, ...extra }), n };
   }
 
   /** A package-lock.json of lockfileVersion 3 for a project whose one direct dependency is express (as in `install-vet-manifest-parent-dir`). */
@@ -7627,9 +7624,10 @@ describe('install-vet-path-forms', () => {
     const many = await run(6_800);
     expect(many.express).toBe(1);
     expect(many.ms).toBeLessThan(hangBound(3000));
-    // The cost of the spelling is one question per folder, whatever the length of the line. (Before the fix the hook
-    // never asks: 0 = 0; task 3 adds that the number is above 0.)
+    // The cost of the spelling is one question per folder, whatever the length of the line; and the hook does ask: a
+    // `diskImpl` that is never wired to it would give 0 = 0.
     expect(many.realpath).toBe(few.realpath);
+    expect(many.realpath).toBeGreaterThan(0);
   });
 
   ifShort('T-05 (i) (Windows, a volume with 8.3 names; skipped otherwise) a relative `cd` from a session folder that is a junction to a folder outside the project: the line "could not be determined"', async () => {

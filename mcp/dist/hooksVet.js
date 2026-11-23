@@ -18,7 +18,7 @@ __export(hookDecision_exports, {
   escapeHatch: () => escapeHatch,
   vetDeadlineMs: () => vetDeadlineMs
 });
-import { lstatSync as lstatSync3, realpathSync, statSync as statSync2 } from "node:fs";
+import { lstatSync as lstatSync4, realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import { homedir as homedir2 } from "node:os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute3, join as join5, parse as parse4, relative as relative3, resolve as resolve4, sep } from "node:path";
 
@@ -145,6 +145,98 @@ function readSmallText(path, maxBytes, under) {
     if (!walk2.ok) return { status: "refused", reason: walk2.reason };
   }
   return readText(path, maxBytes);
+}
+
+// src/pkgvet/folderSpelling.ts
+import { lstatSync as lstatSync2, realpathSync } from "node:fs";
+import { win32 } from "node:path";
+var MAX_COMPONENTS = 64;
+var systemDisk = {
+  lstat: (path) => lstatSync2(path),
+  realpath: (path) => realpathSync.native(path)
+};
+var DRIVE_ROOT = /^[A-Za-z]:\\$/;
+var SHORT_NAME = /^(?=[^.]{1,8}(?:\.|$))[A-Za-z0-9$%'@~!(){}^#&_`-]{1,6}~[1-9][0-9]{0,5}(?:\.[A-Za-z0-9$%'@~!(){}^#&_`-]{1,3})?$/;
+function isShortName(name) {
+  return SHORT_NAME.test(name);
+}
+var same = (a, b) => a.toLowerCase() === b.toLowerCase();
+function realOf(path, memo, deps) {
+  const key = `real\0${path}`;
+  const known = memo.get(key);
+  if (known !== void 0) return known;
+  let answer;
+  try {
+    answer = deps.realpath(path);
+  } catch {
+    answer = null;
+  }
+  memo.set(key, answer);
+  return answer;
+}
+function diskStep(realParent, path, typed, memo, deps) {
+  if (isNetworkPath(path) || typed === "" || /[. ]$|[:<>"|?*]/.test(typed)) return null;
+  const key = `step\0${realParent}\0${typed}`;
+  const known = memo.get(key);
+  if (known !== void 0) return known;
+  let answer = null;
+  try {
+    const kind = deps.lstat(path);
+    if (kind.isDirectory() && !kind.isSymbolicLink()) {
+      const real = deps.realpath(path);
+      const name = win32.basename(real);
+      if (same(win32.dirname(real), realParent) && name !== "" && (same(typed, name) || isShortName(typed))) answer = real;
+    }
+  } catch {
+    answer = null;
+  }
+  memo.set(key, answer);
+  return answer;
+}
+function diskSpelling(path, memo, deps = systemDisk, platform = process.platform) {
+  if (platform !== "win32" || isNetworkPath(path)) return null;
+  const whole = win32.resolve(path);
+  const root = win32.parse(whole).root;
+  if (!DRIVE_ROOT.test(root) || isNetworkPath(whole)) return null;
+  const key = `spell\0${whole}`;
+  const known = memo.get(key);
+  if (known !== void 0) return known;
+  const parts = whole.slice(root.length).split("\\").filter((part) => part !== "");
+  let answer = null;
+  if (parts.length <= MAX_COMPONENTS) {
+    const rootReal = realOf(root, memo, deps);
+    if (rootReal !== null && same(rootReal, root)) {
+      answer = rootReal;
+      for (const typed of parts) {
+        const next = diskStep(answer, win32.join(answer, typed), typed, memo, deps);
+        if (next === null) {
+          answer = null;
+          break;
+        }
+        answer = next;
+      }
+    }
+  }
+  memo.set(key, answer);
+  return answer;
+}
+function homeBarrier(homes, memo, deps = systemDisk) {
+  const out = [];
+  for (const home of homes) {
+    if (home === void 0 || home === "") continue;
+    const here = win32.resolve(home);
+    out.push(here);
+    if (isNetworkPath(here)) continue;
+    const real = realOf(here, memo, deps);
+    if (real !== null) out.push(real);
+  }
+  return out;
+}
+function rootBarred(root, barrier) {
+  return barrier.some((home) => {
+    const rel = win32.relative(root, home);
+    return rel === "" || rel !== ".." && !rel.startsWith("..\\") && !win32.isAbsolute(rel);
+  });
 }
 
 // src/platform/boundedJson.ts
@@ -6909,7 +7001,7 @@ function loadPopularIndex(ecosystem, dir = defaultPopularDir()) {
 }
 
 // src/pkgvet/privateRegistry.ts
-import { lstatSync as lstatSync2, readdirSync as readdirSync2 } from "node:fs";
+import { lstatSync as lstatSync3, readdirSync as readdirSync2 } from "node:fs";
 import { homedir } from "node:os";
 import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute2, join as join4, parse as parse3, relative as relative2, resolve as resolve3 } from "node:path";
 function registryCache() {
@@ -6997,7 +7089,7 @@ function readEnvFile(path, ctx) {
 }
 function present(path) {
   try {
-    lstatSync2(path);
+    lstatSync3(path);
     return true;
   } catch {
     return false;
@@ -8765,7 +8857,7 @@ function missingCountLine(counted) {
   const named = rest > 0 ? `${shown.join(", ")} and ${String(rest)} more file${rest === 1 ? "" : "s"}` : shown.length > 1 ? `${shown.slice(0, -1).join(", ")} and ${shown[shown.length - 1] ?? ""}` : shown[0] ?? "";
   return `dev-guardian: ${String(total)} more package${total === 1 ? "" : "s"} of ${named} ${total === 1 ? "is" : "are"} not on the public registry either (in a manifest that is usually a private or a workspace package) \u2014 not listed.`;
 }
-function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, pastDeadline) {
+function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, pastDeadline, memo) {
   const out = [];
   const top = opts.projectDir === void 0 ? void 0 : gitRepositoryRoot({ ...registry, projectDir: opts.projectDir });
   const lineAsked = /* @__PURE__ */ new Map();
@@ -8795,7 +8887,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
     if (c.global === true && c.updateNames?.length === 0 && c.skipped.length === 0) notes.push(UPDATES_EVERY_GLOBAL);
     if (c.updatesEveryTool === true) notes.push(UPDATES_EVERY_TOOL);
     const key = `${c.manager}\0${JSON.stringify(c.workdir)}\0${String(c.prefixed)}\0${String(c.registries.length > 0)}\0${String(c.global === true)}\0${String(c.envFileFlag === true)}\0${String(c.bunLauncher === true)}`;
-    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
+    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user, memo));
     notes.push(...lineAsked.get(key) ?? []);
     const manifest = c.manifest;
     if (manifest === void 0) {
@@ -8803,7 +8895,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
       continue;
     }
     const moved2 = c.scriptDir !== void 0 || c.scriptDirUnknown === true ? folderOf(c, world) : void 0;
-    const dir = c.prefixed === true ? null : moved2 === void 0 ? commandDir(c, opts) : moved2.kind === "dirs" ? moved2.dirs[0] ?? null : null;
+    const dir = c.prefixed === true ? null : moved2 === void 0 ? commandDir(c, opts, memo) : moved2.kind === "dirs" ? moved2.dirs[0] ?? null : null;
     if (dir === null) {
       const what = manifest.kind === "package-json" ? "package.json" : "the requirements file";
       notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) \u2014 its packages were not vetted.`);
@@ -8814,7 +8906,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
     let base2 = dir;
     try {
       if (manifest.kind === "package-json") {
-        const nearest = readNearestManifest(c.manager, dir, opts.projectDir, top);
+        const nearest = readNearestManifest(c.manager, dir, opts.projectDir, top, opts, memo);
         base2 = nearest.dir;
         reads = [nearest.read];
       } else {
@@ -8828,7 +8920,7 @@ function withManifestPackages(parsed, opts, registry, notes, locked, scriptOut, 
     pushUpdate(new Set(reads.flatMap((r) => r.status === "ok" ? r.names : [])));
     for (const read2 of reads) {
       if (read2.status === "absent") continue;
-      const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, base2, read2, opts, top, registry, notes) : void 0;
+      const lock = c.ecosystem === "npm" && manifest.kind === "package-json" ? lockedProject(c, base2, read2, opts, top, registry, notes, memo) : void 0;
       if (lock !== void 0) locked.push(lock);
       if (read2.status === "unreadable") {
         notes.push(`dev-guardian: ${read2.file} was not read (${read2.reason ?? "could not be read"}) \u2014 its packages were not vetted.`);
@@ -8869,10 +8961,10 @@ function isDefaultRegistryLine(note) {
   return /^dev-guardian: the project's \S+ sets the default registry(?: \([^)]*\))? — /.test(note) || /^dev-guardian: \d+ more files? of the project sets? the default registry\.$/.test(note);
 }
 var MAX_REGISTRY_LINES = 3;
-function projectDefaultRegistryLines(c, opts, registry, userRegistries) {
+function projectDefaultRegistryLines(c, opts, registry, userRegistries, memo) {
   try {
     if (c.ecosystem !== "npm" || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
-    const dir = commandDir(c, opts);
+    const dir = commandDir(c, opts, memo);
     if (dir === null) return [];
     const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir, command: registryCommand(c) }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
     const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
@@ -8935,10 +9027,10 @@ function isWithin(root, dir) {
   const rel = relative3(resolve4(root), resolve4(dir));
   return rel === "" || rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute3(rel);
 }
-function findLockfile(manager, dir, projectDir, top) {
+function findLockfile(manager, dir, projectDir, top, opts, memo) {
   const names = manager === "npm" || manager === "pnpm" || manager === "yarn" || manager === "bun" ? LOCKFILES[manager] : [];
   if (names.length === 0) return { status: "absent" };
-  const { root, dirs } = climb(dir, projectDir, top);
+  const { root, dirs } = climb(dir, projectDir, top, opts, memo);
   if (isNetworkPath(dir) || isNetworkPath(root)) return { status: "absent" };
   const candidates = manager === "bun" ? [...names, "bun.lockb"] : names;
   for (const at of dirs) {
@@ -8949,17 +9041,24 @@ function findLockfile(manager, dir, projectDir, top) {
         continue;
       }
       const read2 = readSmallText(path, MAX_LOCKFILE_BYTES, root);
-      if (read2.status === "ok") return { status: "ok", file, dir: at, text: read2.text };
+      if (read2.status === "ok") return { status: "ok", file, dir: at, text: read2.text, start: dirs[0] ?? resolve4(dir) };
       if (read2.status === "refused") return { status: "unread", file, why: refusedWhy(read2.reason) };
     }
   }
   return { status: "absent" };
 }
-function climb(dir, projectDir, top) {
+function climb(dir, projectDir, top, opts, memo) {
   const bound = top ?? projectDir;
-  const root = bound !== void 0 && projectDir !== void 0 && isWithin(bound, dir) ? resolve4(bound) : resolve4(dir);
-  const dirs = [];
+  let root = resolve4(dir);
   let at = resolve4(dir);
+  if (bound !== void 0 && projectDir !== void 0) {
+    if (isWithin(bound, dir)) root = resolve4(bound);
+    else {
+      const real = realClimb(dir, bound, opts, memo);
+      if (real !== null) ({ root, start: at } = real);
+    }
+  }
+  const dirs = [];
   for (let i = 0; i < 64; i += 1) {
     dirs.push(at);
     const parent = dirname4(at);
@@ -8968,11 +9067,22 @@ function climb(dir, projectDir, top) {
   }
   return { root, dirs };
 }
-function readNearestManifest(manager, dir, projectDir, top) {
-  const here = resolve4(dir);
+function realClimb(dir, bound, opts, memo) {
+  const deps = opts.diskImpl ?? systemDisk;
+  const platform = opts.platform ?? process.platform;
+  const root = diskSpelling(bound, memo, deps, platform);
+  if (root === null) return null;
+  const start = diskSpelling(dir, memo, deps, platform);
+  if (start === null || !isWithin(root, start)) return null;
+  if (rootBarred(root, homeBarrier([opts.homeDir, homedir2()], memo, deps))) return null;
+  return { root, start };
+}
+function readNearestManifest(manager, dir, projectDir, top, opts, memo) {
+  const { dirs } = climb(dir, projectDir, top, opts, memo);
+  const here = dirs[0] ?? resolve4(dir);
   const absent = readNpmManifest(here, manager);
   if (absent.status !== "absent") return { read: absent, dir: here };
-  for (const at of climb(dir, projectDir, top).dirs.slice(1)) {
+  for (const at of dirs.slice(1)) {
     const read2 = readNpmManifest(at, manager);
     if (read2.status === "absent") continue;
     return { read: { ...read2, file: `${relative3(here, at).split(sep).join("/")}/${read2.file}` }, dir: at };
@@ -9051,9 +9161,9 @@ function pairsToAsk(read2, registry) {
   }
   return { asked, heldByProject: [...heldKeys].filter((key) => !askedKeys.has(key)).length, scopes, source };
 }
-function lockedProject(c, dir, manifest, opts, top, registry, notes) {
+function lockedProject(c, dir, manifest, opts, top, registry, notes, memo) {
   try {
-    const found = findLockfile(c.manager, dir, opts.projectDir, top);
+    const found = findLockfile(c.manager, dir, opts.projectDir, top, opts, memo);
     if (found.status === "absent") return void 0;
     if (found.status === "unread") {
       notes.push(notReadLine(found.file, found.why));
@@ -9087,7 +9197,7 @@ function lockedProject(c, dir, manifest, opts, top, registry, notes) {
       file: found.file,
       manifestFile: manifest.file,
       read: read2,
-      rel: relative3(found.dir, resolve4(dir)).split(sep).join("/"),
+      rel: relative3(found.dir, found.start).split(sep).join("/"),
       direct: manifest.packages.map((p) => p.name),
       covered: [],
       asked: plan.asked
@@ -9166,7 +9276,7 @@ function popularTest(opts) {
 function presentBelow(under, path) {
   if (!walkLinksUnder(under, path).ok) return false;
   try {
-    lstatSync3(path);
+    lstatSync4(path);
     return true;
   } catch {
     return false;
@@ -9223,10 +9333,10 @@ function installedLocally(name, cwd, byPackageFlag = false, manager = "") {
 }
 var MAX_DISK_WORDS = 50;
 var diskReason = (why) => `whether a file or folder of that name is in the command's folder was not looked for (${why})`;
-function withoutDiskEntries(c, opts, pastDeadline, said2) {
+function withoutDiskEntries(c, opts, pastDeadline, said2, spelling) {
   const why = /* @__PURE__ */ new Set();
-  const lstat = opts.lstatImpl ?? ((path) => lstatSync3(path));
-  const dir = isNetworkPath(opts.cwd) ? void 0 : commandDir(c, opts);
+  const lstat = opts.lstatImpl ?? ((path) => lstatSync4(path));
+  const dir = isNetworkPath(opts.cwd) ? void 0 : commandDir(c, opts, spelling);
   const asked = /* @__PURE__ */ new Map();
   const packages = [];
   for (const pkg of c.packages) {
@@ -9264,9 +9374,9 @@ function withoutDiskEntries(c, opts, pastDeadline, said2) {
   for (const each of why) said2.add(`dev-guardian: ${diskReason(each)} \u2014 its words were vetted as package names.`);
   return { ...c, packages, uncertain: [...c.uncertain, ...[...why].map(diskReason)] };
 }
-function runsInstalledCopy(pkg, c, opts, memo) {
+function runsInstalledCopy(pkg, c, opts, memo, spelling) {
   if (pkg.range !== void 0 || pkg.raw !== pkg.name || c.prefixed === true) return false;
-  const dir = commandDir(c, opts);
+  const dir = commandDir(c, opts, spelling);
   if (dir === null) return false;
   const key = `${dir}\0${pkg.name}\0${String(c.byPackageFlag === true)}\0${c.manager}`;
   const known = memo.get(key);
@@ -9275,7 +9385,7 @@ function runsInstalledCopy(pkg, c, opts, memo) {
   memo.set(key, found);
   return found;
 }
-function commandDir(c, opts) {
+function commandDir(c, opts, memo) {
   if (c.workdir === void 0) return resolve4(opts.cwd);
   if (c.workdir === null) return null;
   const home = opts.homeDir ?? homedir2();
@@ -9286,7 +9396,7 @@ function commandDir(c, opts) {
   for (const step of c.workdir) {
     const target = cdTarget(step, home, windows);
     if (target === null || real === null) return null;
-    const moved2 = plainMove(dir, real, target, windows);
+    const moved2 = plainMove(dir, real, target, windows, opts, memo);
     if (moved2 === null) return null;
     [dir, real] = moved2;
   }
@@ -9299,12 +9409,12 @@ function cdTarget(step, home, windows) {
 }
 function realDir(path) {
   try {
-    return realpathSync.native(path);
+    return realpathSync2.native(path);
   } catch {
     return null;
   }
 }
-function plainMove(dir, real, target, windows) {
+function plainMove(dir, real, target, windows, opts, memo) {
   if (windows && /^[A-Za-z]:(?![\\/])/.test(target)) return null;
   const next = resolve4(dir, target);
   if (isNetworkPath(next)) return null;
@@ -9318,7 +9428,7 @@ function plainMove(dir, real, target, windows) {
     }
     at = join5(at, part);
     try {
-      const kind = lstatSync3(at);
+      const kind = lstatSync4(at);
       if (kind.isSymbolicLink() || !kind.isDirectory()) return null;
     } catch {
       return null;
@@ -9327,7 +9437,21 @@ function plainMove(dir, real, target, windows) {
   const landed = realDir(next);
   if (landed === null) return null;
   const expected = resolve4(real, target);
-  return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
+  if (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) return [next, landed];
+  return windows && spelledAs(dir, real, target, landed, opts, memo) ? [landed, landed] : null;
+}
+function spelledAs(dir, real, target, landed, opts, memo) {
+  const deps = opts.diskImpl ?? systemDisk;
+  const platform = opts.platform ?? process.platform;
+  const root = isAbsolute3(target) ? parse4(target).root : "";
+  let at = diskSpelling(root === "" ? dir : resolve4(dir, root), memo, deps, platform);
+  if (at === null || root === "" && at.toLowerCase() !== real.toLowerCase()) return false;
+  for (const part of target.slice(root.length).split(/[\\/]+/)) {
+    if (part === "" || part === ".") continue;
+    at = part === ".." ? dirname4(at) : diskStep(at, join5(at, part), part, memo, deps);
+    if (at === null) return false;
+  }
+  return at.toLowerCase() === landed.toLowerCase();
 }
 var MAX_SCRIPT_FILES = 8;
 var DEADLINE_REASON = "vetting time budget exhausted";
@@ -9345,7 +9469,7 @@ function linkOnPath(under, path) {
     if (part === "" || part === ".") continue;
     at = join5(at, part);
     try {
-      if (lstatSync3(at).isSymbolicLink()) return true;
+      if (lstatSync4(at).isSymbolicLink()) return true;
     } catch {
       return false;
     }
@@ -9364,7 +9488,7 @@ function physicalPath(real, target, lastIsFile) {
     const next = join5(at, part);
     let link = false;
     try {
-      link = lstatSync3(next).isSymbolicLink();
+      link = lstatSync4(next).isSymbolicLink();
     } catch {
       link = false;
     }
@@ -9641,17 +9765,18 @@ async function decideInstallCommand(command, opts) {
   const isPopular = popularTest(opts);
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
   const localCopies = /* @__PURE__ */ new Map();
+  const spelling = /* @__PURE__ */ new Map();
   const diskNotes = /* @__PURE__ */ new Set();
   const { commands, notVetted, manifestNotVetted, cut, unassessed } = boundedInstalls(
     command,
     shell,
     isPopular,
-    (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies),
+    (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies, spelling),
     opts.nested,
     cdpath,
-    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt),
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt, spelling),
     () => Date.now() > deadlineAt,
-    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes)
+    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes, spelling)
   );
   if (commands.length === 0 && locked.length === 0) {
     const said2 = [...manifestNotes, ...cut ? [CUT_NOTE] : []];

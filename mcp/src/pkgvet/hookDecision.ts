@@ -73,6 +73,7 @@ import { lstatSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from 'node:path';
 import { isNetworkPath, readSmallText, walkLinksUnder } from '../hooks/configFile.js';
+import { diskSpelling, diskStep, homeBarrier, rootBarred, systemDisk, type SpellingMemo } from './folderSpelling.js';
 import { LOCKFILES, lockFormat, readLock, type LockRead, type Pin, type Source } from './lockfile.js';
 import { readInlineScript, readNpmManifest, readRequirements, UNKNOWN_DIRECTORY, type ManifestRead } from './manifest.js';
 import { MAX_CANDIDATES_PER_COMMAND, parseInstallCommands, type CommandShell, type InstallCommand } from './parseCommand.js';
@@ -111,6 +112,11 @@ export interface HookVetOptions {
   fetchImpl?: typeof fetch;
   /** How an entry of the command's folder is looked up (`dotnet new install`): by default `lstatSync`, which follows no link. */
   lstatImpl?: LstatLike;
+  /**
+   * How a folder's spelling is asked of the disk (`install-vet-path-forms`): by default `lstatSync` and `realpathSync.native`; a test gives
+   * counting ones. Beside `lstatImpl`, which is the disk of `dotnet new install` and which this does not replace.
+   */
+  diskImpl?: { lstat: LstatLike; realpath: (p: string) => string };
   budgetMs?: number;
   now?: number;
   /** `configs/popular-packages`, located by the hook from the plugin root. */
@@ -397,6 +403,7 @@ function withManifestPackages(
   locked: LockedProject[],
   scriptOut: { asks: string[]; withDeny: string[] },
   pastDeadline: () => boolean,
+  memo: SpellingMemo,
 ): VetCommand[] {
   const out: VetCommand[] = [];
   // The root a manifest or a lockfile is looked for up to: the project directory, or the root of the git repository it is in.
@@ -432,7 +439,7 @@ function withManifestPackages(
     if (c.updatesEveryTool === true) notes.push(UPDATES_EVERY_TOOL);
     // A line of thousands of commands asks once per manager and directory: the answer is the same.
     const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)} ${String(c.envFileFlag === true)} ${String(c.bunLauncher === true)}`;
-    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user));
+    if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user, memo));
     notes.push(...(lineAsked.get(key) ?? []));
     const manifest = c.manifest;
     if (manifest === undefined) {
@@ -441,7 +448,7 @@ function withManifestPackages(
     }
     // `uv run --directory D --with-requirements F`: the file is looked for where the uv moved to.
     const moved = c.scriptDir !== undefined || c.scriptDirUnknown === true ? folderOf(c, world) : undefined;
-    const dir = c.prefixed === true ? null : moved === undefined ? commandDir(c, opts) : (moved.kind === 'dirs' ? (moved.dirs[0] ?? null) : null);
+    const dir = c.prefixed === true ? null : moved === undefined ? commandDir(c, opts, memo) : (moved.kind === 'dirs' ? (moved.dirs[0] ?? null) : null);
     if (dir === null) {
       const what = manifest.kind === 'package-json' ? 'package.json' : 'the requirements file';
       notes.push(`dev-guardian: ${what} was not read (${UNKNOWN_DIRECTORY}) — its packages were not vetted.`);
@@ -454,7 +461,7 @@ function withManifestPackages(
     let base = dir;
     try {
       if (manifest.kind === 'package-json') {
-        const nearest = readNearestManifest(c.manager, dir, opts.projectDir, top);
+        const nearest = readNearestManifest(c.manager, dir, opts.projectDir, top, opts, memo);
         base = nearest.dir;
         reads = [nearest.read];
       } else {
@@ -470,7 +477,7 @@ function withManifestPackages(
     for (const read of reads) {
       if (read.status === 'absent') continue;
       // The lockfile is what the manager installs, whether or not the manifest could be read.
-      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, base, read, opts, top, registry, notes) : undefined;
+      const lock = c.ecosystem === 'npm' && manifest.kind === 'package-json' ? lockedProject(c, base, read, opts, top, registry, notes, memo) : undefined;
       if (lock !== undefined) locked.push(lock);
       if (read.status === 'unreadable') {
         notes.push(`dev-guardian: ${read.file} was not read (${read.reason ?? 'could not be read'}) — its packages were not vetted.`);
@@ -542,10 +549,11 @@ function projectDefaultRegistryLines(
   opts: HookVetOptions,
   registry: RegistryContext,
   userRegistries: () => readonly string[],
+  memo: SpellingMemo,
 ): string[] {
   try {
     if (c.ecosystem !== 'npm' || c.registries.length > 0 || c.prefixed === true || c.global === true || npmEnvNamesDefaultRegistry(registry)) return [];
-    const dir = commandDir(c, opts);
+    const dir = commandDir(c, opts, memo);
     if (dir === null) return [];
     const found = npmProjectDefaultRegistry(c.manager, { ...registry, projectDir: dir, command: registryCommand(c) }).filter((f) => !fromUserRegistry(f.url, userRegistries()));
     const lines = found.slice(0, MAX_REGISTRY_LINES).map((f) => {
@@ -663,7 +671,7 @@ function isWithin(root: string, dir: string): boolean {
 type LockFound =
   | { status: 'absent' }
   | { status: 'unread'; file: string; why: string }
-  | { status: 'ok'; file: string; dir: string; text: string };
+  | { status: 'ok'; file: string; dir: string; text: string; start: string };
 
 /**
  * The lockfile of the manager that runs `manager`: in `dir` and, when there is
@@ -672,10 +680,10 @@ type LockFound =
  * the hooks' bounded reader, below the project root (a link to a network path
  * is refused), so a FIFO, a device or a share in its place cannot hold the hook.
  */
-function findLockfile(manager: string, dir: string, projectDir: string | undefined, top: string | undefined): LockFound {
+function findLockfile(manager: string, dir: string, projectDir: string | undefined, top: string | undefined, opts: HookVetOptions, memo: SpellingMemo): LockFound {
   const names = manager === 'npm' || manager === 'pnpm' || manager === 'yarn' || manager === 'bun' ? LOCKFILES[manager] : [];
   if (names.length === 0) return { status: 'absent' };
-  const { root, dirs } = climb(dir, projectDir, top);
+  const { root, dirs } = climb(dir, projectDir, top, opts, memo);
   // The manifest read already says that a directory on the network was not read.
   if (isNetworkPath(dir) || isNetworkPath(root)) return { status: 'absent' };
   const candidates = manager === 'bun' ? [...names, 'bun.lockb'] : names;
@@ -688,7 +696,7 @@ function findLockfile(manager: string, dir: string, projectDir: string | undefin
         continue;
       }
       const read = readSmallText(path, MAX_LOCKFILE_BYTES, root);
-      if (read.status === 'ok') return { status: 'ok', file, dir: at, text: read.text };
+      if (read.status === 'ok') return { status: 'ok', file, dir: at, text: read.text, start: dirs[0] ?? resolve(dir) };
       if (read.status === 'refused') return { status: 'unread', file, why: refusedWhy(read.reason) };
     }
   }
@@ -701,12 +709,20 @@ function findLockfile(manager: string, dir: string, projectDir: string | undefin
  * repository the project directory is in ({@link gitRepositoryRoot}) — or else `projectDir`. With no `projectDir`, or
  * a `dir` outside that root, only `dir`: nothing above that root is ever read.
  */
-function climb(dir: string, projectDir: string | undefined, top: string | undefined): { root: string; dirs: string[] } {
+function climb(dir: string, projectDir: string | undefined, top: string | undefined, opts: HookVetOptions, memo: SpellingMemo): { root: string; dirs: string[] } {
   // Inside the project is inside the repository root when there is one: a sibling folder of the session's is the project's.
   const bound = top ?? projectDir;
-  const root = bound !== undefined && projectDir !== undefined && isWithin(bound, dir) ? resolve(bound) : resolve(dir);
-  const dirs: string[] = [];
+  let root = resolve(dir);
   let at = resolve(dir);
+  if (bound !== undefined && projectDir !== undefined) {
+    if (isWithin(bound, dir)) root = resolve(bound);
+    else {
+      // The text says "outside": it may be the same folder spelled another way (a short 8.3 name), which only the disk can say.
+      const real = realClimb(dir, bound, opts, memo);
+      if (real !== null) ({ root, start: at } = real);
+    }
+  }
+  const dirs: string[] = [];
   for (let i = 0; i < 64; i += 1) {
     dirs.push(at);
     const parent = dirname(at);
@@ -717,16 +733,40 @@ function climb(dir: string, projectDir: string | undefined, top: string | undefi
 }
 
 /**
+ * The climb in real space: the real paths of the folder and of the root, when {@link diskSpelling} gives both, the folder
+ * is within the root, and the root is no home directory nor above one. `null` otherwise: the climb is the folder alone, as it was.
+ */
+function realClimb(dir: string, bound: string, opts: HookVetOptions, memo: SpellingMemo): { root: string; start: string } | null {
+  const deps = opts.diskImpl ?? systemDisk;
+  const platform = opts.platform ?? process.platform;
+  const root = diskSpelling(bound, memo, deps, platform);
+  if (root === null) return null;
+  const start = diskSpelling(dir, memo, deps, platform);
+  if (start === null || !isWithin(root, start)) return null;
+  if (rootBarred(root, homeBarrier([opts.homeDir, homedir()], memo, deps))) return null;
+  return { root, start };
+}
+
+/**
  * The `package.json` a manager installs from `dir`: the nearest one from `dir` up to the project root, as the
  * managers find theirs — the first found is the manifest, several are never merged. One that cannot be read is
  * the answer too (a manager would stop there). None at all: the `absent` of `dir`. A manifest above `dir` is named
  * by its path from `dir`, in POSIX form (`../package.json`); `dir` of the answer is the directory it was read in.
  */
-function readNearestManifest(manager: string, dir: string, projectDir: string | undefined, top: string | undefined): { read: ManifestRead; dir: string } {
-  const here = resolve(dir);
+function readNearestManifest(
+  manager: string,
+  dir: string,
+  projectDir: string | undefined,
+  top: string | undefined,
+  opts: HookVetOptions,
+  memo: SpellingMemo,
+): { read: ManifestRead; dir: string } {
+  // The climb's first step is where the names start: the folder as the disk spells it when the climb went by the real paths.
+  const { dirs } = climb(dir, projectDir, top, opts, memo);
+  const here = dirs[0] ?? resolve(dir);
   const absent = readNpmManifest(here, manager);
   if (absent.status !== 'absent') return { read: absent, dir: here };
-  for (const at of climb(dir, projectDir, top).dirs.slice(1)) {
+  for (const at of dirs.slice(1)) {
     const read = readNpmManifest(at, manager);
     if (read.status === 'absent') continue;
     return { read: { ...read, file: `${relative(here, at).split(sep).join('/')}/${read.file}` }, dir: at };
@@ -841,9 +881,10 @@ function lockedProject(
   top: string | undefined,
   registry: RegistryContext,
   notes: string[],
+  memo: SpellingMemo,
 ): LockedProject | undefined {
   try {
-    const found = findLockfile(c.manager, dir, opts.projectDir, top);
+    const found = findLockfile(c.manager, dir, opts.projectDir, top, opts, memo);
     if (found.status === 'absent') return undefined;
     if (found.status === 'unread') {
       notes.push(notReadLine(found.file, found.why));
@@ -877,7 +918,7 @@ function lockedProject(
       file: found.file,
       manifestFile: manifest.file,
       read,
-      rel: relative(found.dir, resolve(dir)).split(sep).join('/'),
+      rel: relative(found.dir, found.start).split(sep).join('/'),
       direct: manifest.packages.map((p) => p.name),
       covered: [],
       asked: plan.asked,
@@ -1089,10 +1130,10 @@ const diskReason = (why: string): string => `whether a file or folder of that na
  * known, an `lstat` that fails for another reason, the deadline, a word past the first {@link MAX_DISK_WORDS} — the word is vetted and the command
  * says why it may not deny. At most {@link MAX_DISK_WORDS} distinct words are asked.
  */
-function withoutDiskEntries(c: InstallCommand, opts: HookVetOptions, pastDeadline: () => boolean, said: Set<string>): InstallCommand {
+function withoutDiskEntries(c: InstallCommand, opts: HookVetOptions, pastDeadline: () => boolean, said: Set<string>, spelling: SpellingMemo): InstallCommand {
   const why = new Set<string>();
   const lstat: LstatLike = opts.lstatImpl ?? ((path) => lstatSync(path));
-  const dir = isNetworkPath(opts.cwd) ? undefined : commandDir(c, opts);
+  const dir = isNetworkPath(opts.cwd) ? undefined : commandDir(c, opts, spelling);
   const asked = new Map<string, boolean>();
   const packages: PackageSpec[] = [];
   for (const pkg of c.packages) {
@@ -1141,10 +1182,10 @@ function withoutDiskEntries(c: InstallCommand, opts: HookVetOptions, pastDeadlin
  * ({@link commandDir}): `cd mcp && npx vitest run` from the repository root ran
  * `mcp`'s own vitest, and the hook warned about the registry's newest one.
  */
-function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions, memo: Map<string, boolean>): boolean {
+function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOptions, memo: Map<string, boolean>, spelling: SpellingMemo): boolean {
   // `--prefix` (`-C`) points npm at another project: where is not read here (review of 3.4.0, finding 5).
   if (pkg.range !== undefined || pkg.raw !== pkg.name || c.prefixed === true) return false;
-  const dir = commandDir(c, opts);
+  const dir = commandDir(c, opts, spelling);
   if (dir === null) return false;
   const key = `${dir}\0${pkg.name}\0${String(c.byPackageFlag === true)}\0${c.manager}`;
   const known = memo.get(key);
@@ -1165,7 +1206,7 @@ function runsInstalledCopy(pkg: PackageSpec, c: InstallCommand, opts: HookVetOpt
  * a link is not followed either ({@link plainMove}). `null` when a move cannot
  * be read or did not surely happen: nothing is then taken as installed.
  */
-function commandDir(c: InstallCommand, opts: HookVetOptions): string | null {
+function commandDir(c: InstallCommand, opts: HookVetOptions, memo: SpellingMemo): string | null {
   if (c.workdir === undefined) return resolve(opts.cwd);
   if (c.workdir === null) return null;
   const home = opts.homeDir ?? homedir();
@@ -1176,7 +1217,7 @@ function commandDir(c: InstallCommand, opts: HookVetOptions): string | null {
   for (const step of c.workdir) {
     const target = cdTarget(step, home, windows);
     if (target === null || real === null) return null;
-    const moved = plainMove(dir, real, target, windows);
+    const moved = plainMove(dir, real, target, windows, opts, memo);
     if (moved === null) return null;
     [dir, real] = moved;
   }
@@ -1212,7 +1253,7 @@ function realDir(path: string): string | null {
  * with no slash after it (`C:`, `C:x`), whose meaning depends on the shell,
  * is `null`. Never on the network.
  */
-function plainMove(dir: string, real: string, target: string, windows: boolean): [string, string] | null {
+function plainMove(dir: string, real: string, target: string, windows: boolean, opts: HookVetOptions, memo: SpellingMemo): [string, string] | null {
   if (windows && /^[A-Za-z]:(?![\\/])/.test(target)) return null;
   const next = resolve(dir, target);
   if (isNetworkPath(next)) return null;
@@ -1235,7 +1276,26 @@ function plainMove(dir: string, real: string, target: string, windows: boolean):
   const landed = realDir(next);
   if (landed === null) return null;
   const expected = resolve(real, target);
-  return (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) ? [next, landed] : null;
+  if (windows ? landed.toLowerCase() === expected.toLowerCase() : landed === expected) return [next, landed];
+  // The text says "elsewhere": it may be the same folder spelled another way (a short 8.3 name). Only on Windows, and only
+  // when the folder it starts from and each component are the same folder through no link (install-vet-path-forms).
+  return windows && spelledAs(dir, real, target, landed, opts, memo) ? [landed, landed] : null;
+}
+
+/** Whether `cd target` from `dir` (real path `real`) lands on `landed` by the closed grammar of {@link diskStep}, component by component. */
+function spelledAs(dir: string, real: string, target: string, landed: string, opts: HookVetOptions, memo: SpellingMemo): boolean {
+  const deps = opts.diskImpl ?? systemDisk;
+  const platform = opts.platform ?? process.platform;
+  const root = isAbsolute(target) ? parse(target).root : '';
+  // A relative `cd` starts from a folder that is behind no link; an absolute one from its drive root.
+  let at = diskSpelling(root === '' ? dir : resolve(dir, root), memo, deps, platform);
+  if (at === null || (root === '' && at.toLowerCase() !== real.toLowerCase())) return false;
+  for (const part of target.slice(root.length).split(/[\\/]+/)) {
+    if (part === '' || part === '.') continue;
+    at = part === '..' ? dirname(at) : diskStep(at, join(at, part), part, memo, deps);
+    if (at === null) return false;
+  }
+  return at.toLowerCase() === landed.toLowerCase();
 }
 
 // ───────────────────────────────────────────────────── inline scripts (PEP 723)
@@ -1684,18 +1744,20 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
   const deadlineAt = opts.deadlineAt ?? (opts.startedAt ?? Date.now()) + vetDeadlineMs(env);
   // One lookup per directory and name, however many statements of the line name them (review round 2: 8 000 x `npx lodash;`).
   const localCopies = new Map<string, boolean>();
+  // What the disk said of the spelling of a folder: asked once per folder in this call, whatever the commands (install-vet-path-forms).
+  const spelling: SpellingMemo = new Map();
   /** What the disk could not say about the words of `dotnet new install`: one line each, said whatever else happens. */
   const diskNotes = new Set<string>();
   const { commands, notVetted, manifestNotVetted, cut, unassessed } = boundedInstalls(
     command,
     shell,
     isPopular,
-    (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies),
+    (pkg, c) => runsInstalledCopy(pkg, c, opts, localCopies, spelling),
     opts.nested,
     cdpath,
-    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt),
+    (parsed) => withManifestPackages(parsed, opts, registry, manifestNotes, locked, { asks: scriptAsks, withDeny: scriptDenyLines }, () => Date.now() > deadlineAt, spelling),
     () => Date.now() > deadlineAt,
-    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes),
+    (c) => withoutDiskEntries(c, opts, () => Date.now() > deadlineAt, diskNotes, spelling),
   );
   // A cut command whose start installs nothing still says what was not read — and so does a manifest that was not.
   if (commands.length === 0 && locked.length === 0) {

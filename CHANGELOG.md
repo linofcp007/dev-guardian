@@ -76,9 +76,39 @@ version bump.
   the finding's identity (its snippet is part of its fingerprint) changes once, so it shows as a new finding and the old one as
   fixed. Suppress the new one with `suppress_finding`, and never run `baseline update` just for these: it accepts every finding.
   What the database, `baseline.json` and its git history already hold stays as it was written.
+- **A folder written with short (8.3) names (install-vet-path-forms; Windows only, nothing changes elsewhere).** The install hook
+  now reads the `package.json`, the lockfile, the requirements files and the project's registry files of a folder written with
+  8.3 names or in other letter case, as it reads the long spelling: for a session folder or a project folder written
+  `PROJEC~1`, and for a `cd`, `pushd` or `Set-Location` to such a folder (absolute, relative or MSYS). A folder counts as the same
+  one only by a closed grammar: from a local drive root, at most 64 components, each a directory reached through no link
+  (symbolic link or junction), written as the name the disk has in other case or as its 8.3 name. A trailing dot or space, a
+  stream suffix, a device path, a `subst` drive for another folder, a link, or a network path keeps today's answer. *What can
+  now be refused:* only a package OSV lists as malicious, in a manifest or lockfile that used to go unread. *What can now be
+  warned or asked:* the lines of those files (a name the registry does not have, a typosquat, the project's default registry),
+  and the packages a manifest names now leave the machine (to the public registry and OSV) as they do with the long spelling.
+  *Files now read:* `package.json`, the lockfile, the requirements files and the registry files of the folder, never above the
+  project or repository root, and never a home directory or a folder above one. *Launchers:* after a `cd` to the short spelling
+  a launcher installed in that folder (`npx <tool>`, `bunx`) is no longer looked up, as after the long one. *`dotnet new
+  install`:* after a `cd` to the short spelling the word is now looked for in the folder, as in the long spelling: a folder or a
+  file of that name no longer sends the word to NuGet, and an id that is not there is vetted without the reason "the folder is
+  not known" (it warns, as with the long spelling: a line with a `cd` is never confident). *New disk questions:* `lstat` and the
+  real path of each component, once per folder in a call, never for a network path. On a mapped drive letter, a `subst` to a share
+  or a DFS point the text cannot tell from a local folder, so those questions go to the network, as today's `exists` and `lstat`
+  of the session folder and of a `cd` already do. *What is unchanged:* `--prefix`, `-C`, `--dir` and `--cwd`, and a `cd` that may
+  not have run, still say "package.json was not read (where the command runs could not be determined)". *Measured and inferred:*
+  the forms of npm and pnpm (the session in a short subfolder, a `cd` to the short spelling in Git Bash and in PowerShell) and
+  `npx` installed in the project were measured with npm 11.20.0 and pnpm 10.33.2: the manager installs the manifest of the
+  project, with its lockfile, from the short spelling, and obeys the project's `.npmrc`. The forms of Yarn and bun, `bunx`
+  included, are inferred (the same folder on the disk): neither was installed on the machine of the measurement.
 
 ### Security
 
+- **On Windows, an install in a folder written with 8.3 short names is no longer skipped by the install hook.** The hook compared
+  the session folder, the project folder and the target of a `cd` as text, so `PROJEC~1` and `project with a long name` were two
+  folders: a `cd` to the short spelling made the hook say "package.json was not read", and a session opened in a short
+  subfolder read no manifest above it (a file the project, or a hostile one, can make the model `cd` into). It now reads the
+  manifest, the lockfile and the requirements files of the folder as it does for the long spelling, and refuses a package OSV
+  lists as malicious. Not closed: the same folder reached through a link or a junction (`install-vet-junction-path-forms`).
 - **The install hook reads the registry files the bun obeys, and only those, and no project file can turn the refusal of a
   malicious name into a warning for npm and PyPI.** Measured with bun 1.4.4, uv 0.13.8, poetry 2.5.1, pipx 1.18.16 and pip 23.0.1 in a Linux
   container without network (2026-11-20 and 2026-11-21): a `bunfig.toml` with `[install.registry]`, `install.registry = …` or
