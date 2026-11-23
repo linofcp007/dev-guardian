@@ -1334,4 +1334,85 @@ describe('known-limits-doc-markdownlint', () => {
     expect(intro.startsWith(`This page is rendered from [\`${KNOWN_LIMITS_SOURCE}\`](../${KNOWN_LIMITS_SOURCE}): **${String(counts.total)} limits**, `)).toBe(true);
     expect(intro).toContain(`${String(counts.withExample)} with at least one example and ${String(counts.without)} with none, which says why.`);
   });
+
+  /** The text of the reason line of a record: the reason with a single full stop at the end. */
+  const reasonLine = (limit: { examples: readonly unknown[]; not_executable?: string | undefined }): string => {
+    const reason = (limit.not_executable ?? '').trim();
+    return `${limit.examples.length === 0 ? 'No test runs it' : 'What no test runs'}: ${reason}${reason.endsWith('.') ? '' : '.'}`;
+  };
+
+  it('T-01 the generated page and the committed page pass the list check', () => {
+    const problems = { generated: listProblems(pageOf()), committed: listProblems(read('docs/hooks-known-limits.md')) };
+    expect(problems.generated, `generated page:\n${problems.generated.join('\n')}`).toEqual([]);
+    expect(problems.committed, `committed page:\n${problems.committed.join('\n')}`).toEqual([]);
+  });
+
+  it('T-02 (a) every section has one top-level item per record of its area', () => {
+    const limits = loadKnownLimits();
+    const lines = pageOf().split('\n');
+    const wrong: string[] = [];
+    for (const area of LIMIT_AREAS) {
+      const records = limits.filter((l) => l.area === area).length;
+      if (records === 0) continue;
+      const start = lines.indexOf(`## ${AREA_TITLES[area]}`);
+      const rest = lines.slice(start + 1);
+      const end = rest.findIndex((line) => line.startsWith('## '));
+      const items = (end === -1 ? rest : rest.slice(0, end)).filter((line) => line.startsWith('- ')).length;
+      if (items !== records) wrong.push(`${AREA_TITLES[area]}: ${String(items)} items for ${String(records)} records`);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('T-02 (b) a record of several blocks keeps its lines at two spaces, then "Examples:", its examples and its reason', () => {
+    const lines = pageOf().split('\n');
+    const wrong: string[] = [];
+    for (const limit of loadKnownLimits().filter(multiBlock)) {
+      const docLines = limit.doc.trim().split('\n');
+      const at = lines.indexOf(`- ${docLines[0] ?? ''}`);
+      const expected = docLines.slice(1).map((line) => (line === '' ? '' : `  ${line}`));
+      const hasReason = limit.not_executable !== undefined;
+      const exampleCount = limit.examples.length;
+      if (exampleCount > 0) expected.push('', '  Examples:', '');
+      else if (hasReason) expected.push('');
+      const start = at + 1;
+      const doc = lines.slice(start, start + expected.length);
+      const exampleLines = lines.slice(start + expected.length, start + expected.length + exampleCount);
+      const reasonAt = start + expected.length + exampleCount;
+      const reason = hasReason ? (exampleCount > 0 ? `  - ${reasonLine(limit)}` : `  ${reasonLine(limit)}`) : undefined;
+      const next = lines[reasonAt + (reason === undefined ? 0 : 1)];
+      const ok =
+        at >= 0 &&
+        JSON.stringify(doc) === JSON.stringify(expected) &&
+        exampleLines.length === exampleCount &&
+        exampleLines.every((line) => line.startsWith('  - ')) &&
+        (reason === undefined || lines[reasonAt] === reason) &&
+        (next === '' || next?.startsWith('- ') === true);
+      if (!ok) wrong.push(limit.id);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('T-02 (c) the reason of every record ends with a single full stop', () => {
+    const lines = pageOf().split('\n');
+    const wrong: string[] = [];
+    for (const limit of loadKnownLimits().filter((l) => l.not_executable !== undefined)) {
+      const indent = !multiBlock(limit) || limit.examples.length > 0 ? '  - ' : '  ';
+      if (!lines.includes(`${indent}${reasonLine(limit)}`)) wrong.push(limit.id);
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it('T-02 (d) a record of two lines with no blank line between them keeps the second line in the item, then "Examples:"', () => {
+    const example = loadKnownLimits().flatMap((l) => l.examples)[0];
+    expect(example, 'an example of a real record').toBeDefined();
+    if (example === undefined) return;
+    const page = renderKnownLimitsDoc([{ id: 'synthetic', area: 'install-vetting', doc: 'one\ntwo', examples: [example] }]);
+    const lines = page.split('\n');
+    const at = lines.indexOf('- one');
+    expect({ shape: lines.slice(at, at + 5), example: lines[at + 5]?.startsWith('  - ') === true, problems: listProblems(page) }).toEqual({
+      shape: ['- one', '  two', '', '  Examples:', ''],
+      example: true,
+      problems: [],
+    });
+  });
 });
