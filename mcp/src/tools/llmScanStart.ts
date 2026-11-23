@@ -29,10 +29,17 @@ const inputSchema = {
     .int()
     .min(1)
     .optional()
-    .describe(`Above this estimate the plan needs confirm: true. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`),
+    .describe(
+      `Above this estimate the plan needs confirm: true, which never raises it; a larger limit needs a new plan. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`,
+    ),
   per_task_overhead: z.number().int().min(0).optional().describe(`Host tokens assumed per task. Default ${String(LLM_SCAN_DEFAULTS.per_task_overhead)}.`),
-  confirm: z.boolean().optional().describe('Accept an estimate above the limit.'),
-  plan_id: z.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning (with confirm: true, confirm it)."),
+  confirm: z.boolean().optional().describe('Start a plan above max_estimated_tokens once the user agrees; delivery still stops at that limit.'),
+  plan_id: z
+    .string()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe("Return this plan's status and report instead of planning; takes project_path and confirm only (confirm: true confirms it)."),
 };
 
 const parser = z.object(inputSchema).strict();

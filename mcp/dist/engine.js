@@ -120900,10 +120900,12 @@ var init_llmScanStart = __esm({
       scan_id: external_exports.guid().optional().describe("Verify the findings of this scan. Default: the project open set."),
       fingerprints: external_exports.array(external_exports.string().min(1).max(200)).min(1).max(1e3).optional().describe("Verify only these findings."),
       max_tasks: external_exports.number().int().min(1).optional().describe(`Stop handing out tasks after this many. Default ${String(LLM_SCAN_DEFAULTS.max_tasks)}.`),
-      max_estimated_tokens: external_exports.number().int().min(1).optional().describe(`Above this estimate the plan needs confirm: true. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`),
+      max_estimated_tokens: external_exports.number().int().min(1).optional().describe(
+        `Above this estimate the plan needs confirm: true, which never raises it; a larger limit needs a new plan. Default ${String(LLM_SCAN_DEFAULTS.max_estimated_tokens)}.`
+      ),
       per_task_overhead: external_exports.number().int().min(0).optional().describe(`Host tokens assumed per task. Default ${String(LLM_SCAN_DEFAULTS.per_task_overhead)}.`),
-      confirm: external_exports.boolean().optional().describe("Accept an estimate above the limit."),
-      plan_id: external_exports.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning (with confirm: true, confirm it).")
+      confirm: external_exports.boolean().optional().describe("Start a plan above max_estimated_tokens once the user agrees; delivery still stops at that limit."),
+      plan_id: external_exports.string().min(1).max(100).optional().describe("Return this plan's status and report instead of planning; takes project_path and confirm only (confirm: true confirms it).")
     };
     parser = external_exports.object(inputSchema50).strict();
     PLAN_ID_KEYS = ["plan_id", "project_path", "confirm"];
@@ -121269,7 +121271,7 @@ var init_folds = __esm({
       modeDescription: "start: plan (with plan_id: its report). task {plan_id}: lease the next task. submit {plan_id, task_id, lease_token, independence, payload}: that task's answer.",
       modes: { start: "llm_scan_start", task: "llm_scan_task", submit: "llm_scan_submit" },
       params: {
-        plan_id: "task, submit: the plan step start returned. start: report on this plan instead of planning (confirm: true confirms it).",
+        plan_id: "task, submit: the plan step start returned. start: report on this plan instead of planning; takes project_path and confirm only (confirm: true confirms it).",
         task_id: "submit: the task, as step task returned it.",
         lease_token: "submit: the lease_token step task returned with the task.",
         payload: "submit: the answer, matching the task's response_schema. At most 64 KiB serialized."

@@ -163,8 +163,8 @@ registerFold({
   modes: { start: 'llm_scan_start', task: 'llm_scan_task', submit: 'llm_scan_submit' },
   params: {
     plan_id:
-      'task, submit: the plan step start returned. start: report on this plan instead of planning (confirm: ' +
-      'true confirms it).',
+      'task, submit: the plan step start returned. start: report on this plan instead of planning; takes ' +
+      'project_path and confirm only (confirm: true confirms it).',
     task_id: 'submit: the task, as step task returned it.',
     lease_token: 'submit: the lease_token step task returned with the task.',
     payload: "submit: the answer, matching the task's response_schema. At most 64 KiB serialized.",
