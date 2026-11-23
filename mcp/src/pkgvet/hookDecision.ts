@@ -1965,12 +1965,11 @@ export async function decideInstallCommand(command: string, opts: HookVetOptions
     // did not explain the name (a value the reader cannot judge, a workspace root it cannot tell). It is in the text because the dispatcher
     // answers a deny with its reason alone. The deny of a malicious name stays short.
     const registryLines = malicious ? [] : [...new Set(manifestNotes.filter(isDefaultRegistryLine))];
-    const tail = [...counts, ...registryLines];
-    const deny = `dev-guardian blocked this install: ${parts.join(' ')}${tail.length > 0 ? `\n${tail.join('\n')}` : ''}`;
-    // The lines of what was not read stay beside the refusal (the dispatcher answers a deny with its reason alone): a file of one folder that
-    // could not be read says so even when the file of the other folder is what is refused.
+    // The lines of a file that was not read ride in the text too, for the same reason: a file of one folder that could not be read says so
+    // even when the file of the other folder is what is refused. A refusal with no such line keeps its text.
     const unreadLines = [...new Set(manifestNotes.filter((n) => n.includes(' was not read (')))];
-    return unreadLines.length === 0 ? { deny } : { deny, context: unreadLines.join('\n') };
+    const tail = [...counts, ...registryLines, ...unreadLines.filter((n) => !registryLines.includes(n))];
+    return { deny: `dev-guardian blocked this install: ${parts.join(' ')}${tail.length > 0 ? `\n${tail.join('\n')}` : ''}` };
   }
   const lines: string[] = [];
   if (warnings.length > 0) {

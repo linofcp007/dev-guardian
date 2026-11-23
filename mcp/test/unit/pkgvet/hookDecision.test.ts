@@ -8292,7 +8292,9 @@ describe('install-vet-with-requirements-directory-link', () => {
     put('sub/r.txt', `${EVIL}\n`, root);
     const d = await decide(command, reg(), here(root));
     denies(d, 'sub/r.txt');
-    expect(d?.context ?? '(no context)').toContain(notRead('r.txt', 'not a regular file'));
+    // The dispatcher sends a refusal's text alone: the line is inside it, and the decision has no context.
+    expect(d?.deny ?? '(no deny)').toContain(notRead('r.txt', 'not a regular file'));
+    expect(d?.context).toBeUndefined();
   });
 
   it('T-02 (a) `--directory broken`, a link to a folder that does not exist: the line says it could not be read, no refusal, no question', async () => {

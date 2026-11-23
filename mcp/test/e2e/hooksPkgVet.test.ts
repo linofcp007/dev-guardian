@@ -3053,4 +3053,20 @@ describe('install-vet-with-requirements-directory-link', () => {
       named: reason.includes(EVIL),
     }).toEqual({ decision: 'deny', file: true, named: true });
   });
+
+  it('T-07 (b) r.txt a folder and sub/r.txt naming the package: DENIED, and the reason says r.txt was not read (not a regular file) and names sub/r.txt', () => {
+    mkdirSync(join(project, 'sub', 'inner'), { recursive: true });
+    mkdirSync(join(project, 'r.txt'));
+    writeFileSync(join(project, 'sub', 'r.txt'), `${EVIL}
+`);
+    symlinkSync(join(project, 'sub', 'inner'), join(project, 'tools'), process.platform === 'win32' ? 'junction' : 'dir');
+    const r = runHook('uv run --directory tools/.. --with-requirements r.txt python -c "print(1)"', ROUTES);
+    expect(r.status).toBe(0);
+    const reason = r.output?.hookSpecificOutput?.permissionDecisionReason ?? '(no reason)';
+    expect({
+      decision: r.output?.hookSpecificOutput?.permissionDecision,
+      unread: reason.includes('r.txt was not read (not a regular file)'),
+      file: reason.includes('sub/r.txt'),
+    }).toEqual({ decision: 'deny', unread: true, file: true });
+  });
 });
