@@ -109,7 +109,8 @@ const ALL_NETWORK_PATHS: Array<{ id: string; path: string; windowsOnly: boolean 
 // where `//x` and `\\x` are local paths (the 3.16.0 release run on Linux, 2026-11-23).
 const NETWORK_PATHS = ALL_NETWORK_PATHS.filter((p) => WIN || !p.windowsOnly);
 
-describe(`${FEATURE} T-05 a ProjectReference or a solution entry on a network path`, () => {
+// Skipped where no path is a network path (POSIX): an empty `it.each` would leave the suite with no test, which vitest fails.
+describe.skipIf(NETWORK_PATHS.length === 0)(`${FEATURE} T-05 a ProjectReference or a solution entry on a network path`, () => {
   describe.each([
     { kind: 'a ProjectReference', files: (p: string) => ({ 'App.csproj': csproj(p), 'Lib.csproj': LIB }), target: 'App.csproj' },
     { kind: 'a .sln entry', files: (p: string) => ({ 'App.sln': sln(p), 'Lib.csproj': LIB }), target: 'App.sln' },
