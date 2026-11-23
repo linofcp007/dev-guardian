@@ -449,7 +449,7 @@ function withManifestPackages(
     // `pipx upgrade-all` and `uv tool upgrade --all` (also with names beside `--all`): said before any request is made.
     if (c.updatesEveryTool === true) notes.push(UPDATES_EVERY_TOOL);
     // A line of thousands of commands asks once per manager and directory: the answer is the same.
-    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)} ${String(c.envFileFlag === true)} ${String(c.bunLauncher === true)}`;
+    const key = `${c.manager}\u0000${JSON.stringify(c.workdir)}\u0000${String(c.prefixed)}\u0000${String(c.registries.length > 0)}\u0000${String(c.global === true)}\u0000${String(c.envFileFlag === true)}\u0000${String(c.bunLauncher === true)}`;
     if (!lineAsked.has(key)) lineAsked.set(key, projectDefaultRegistryLines(c, opts, registry, user, memo));
     notes.push(...(lineAsked.get(key) ?? []));
     const manifest = c.manifest;
