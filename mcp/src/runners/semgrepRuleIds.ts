@@ -25,13 +25,14 @@
  * temporary tree).
  *
  * The parser stores one id per rule (`scannerParsers/semgrep.ts#semgrepParserFor`):
- *   - a rule of a file INSIDE the project: the id Semgrep gives it from the
- *     project root (`rules.r`, `configs.semgrep.r`) — what every scan run
- *     from the project always stored, so nothing stored changes;
  *   - a rule of one of the PLUGIN's own packs — a file directly in the
  *     plugin's own `configs/semgrep/`, found from the plugin's root
  *     (`platform/configsDir.ts`), never from a path segment of that name:
- *     the rule's own id;
+ *     the rule's own id, also when that folder lies inside the project (the
+ *     plugin's repository, a vendored copy that runs);
+ *   - a rule of any other file INSIDE the project: the id Semgrep gives it
+ *     from the project root (`rules.r`, and `configs.semgrep.r` for the
+ *     project's own `configs/semgrep/`);
  *   - a rule of any other file (a rule directory registered outside the
  *     project): Semgrep's own id, the absolute path prefixed — stable while
  *     that directory stays where it is, and two files that define the same
@@ -162,8 +163,10 @@ function spellingsOf(config: string, ctx: RuleIdContext, packsDir: string): Arra
   const asFile = kind === 'file' ? absolute : fp.join(absolute, 'x.yml');
   const inProject = ctx.projectPath === undefined ? null : insideRelative(fp, ctx.projectPath, asFile);
   const underCwd = cwd === undefined ? null : insideRelative(fp, cwd, asFile);
-  const isPack = inProject === null && samePath(fp, fp.dirname(asFile), packsDir);
-  const to = inProject !== null ? semgrepConfigPrefix(inProject) : isPack ? '' : semgrepConfigPrefix(asFile);
+  // The running plugin's own pack folder first, even inside the project (the plugin's repository, a vendored copy):
+  // one stored id for the rule whichever copy of the CLI ran. Exact folder only: a project's own configs/semgrep/ is not it.
+  const isPack = samePath(fp, fp.dirname(asFile), packsDir);
+  const to = isPack ? '' : inProject !== null ? semgrepConfigPrefix(inProject) : semgrepConfigPrefix(asFile);
   const froms = new Set([semgrepConfigPrefix(asFile), ...(underCwd !== null ? [semgrepConfigPrefix(underCwd)] : [])]);
   return [...froms].filter((from) => from.length > 0 && from !== to).map((from) => ({ from, to }));
 }

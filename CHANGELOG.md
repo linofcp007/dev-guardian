@@ -8,6 +8,21 @@ version bump.
 
 ## [Unreleased]
 
+## [3.16.1] - 2026-11-23
+
+In the plugin's own repository, the scan no longer gives a finding of the plugin's own rule packs a different key
+depending on whether the CLI runs from the repository or from an installed copy, so the installed CLI no longer
+reports the repository's accepted findings as new. Nothing changes for a project that does not contain the plugin.
+
+### Fixed
+
+- A rule of the plugin's own `configs/semgrep/` pack is stored under its own id (`web-js-sql-template`) also when that
+  folder lies inside the analysed project, as it already was when the pack lay outside it. In the plugin's own
+  repository the copy of the CLI no longer changes the key of a finding, so the installed CLI no longer reports the
+  22 accepted `web-js-sql-template` findings as new. This repository's `.guardian/baseline.json` was re-keyed once.
+  A project that vendors a copy of the plugin and runs it sees the baseline entries of that copy's pack findings as
+  new once; its own `configs/semgrep/` rules keep the project's id.
+
 ## [3.16.0] - 2026-11-23
 
 The install hook reads much more of what the Python and .NET tools are told to fetch: the inline dependencies of the

@@ -27,7 +27,9 @@
  * project's own rules are stored as scans run from the project always stored
  * them, and a rule file elsewhere keeps Semgrep's own id — so two distinct
  * rules are never merged. A project that contains the plugin's packs (the
- * plugin's own repository) is left alone: there its packs are project files.
+ * plugin's own repository) is left alone at startup (`containsPacks`): its
+ * stored rows keep the spelling they were written with; new scans store the
+ * short id there too (`semgrepRuleIds.ts`).
  * A row whose new fingerprint would collide with another row of the same scan
  * keeps its old one (`UPDATE OR IGNORE`).
  *
@@ -46,9 +48,11 @@
  * failed it yet. Waiting on it held the re-key back a whole start (round 3's
  * review, M-1). Changes values, never the schema.
  *
- * `.guardian/baseline.json` is not touched and needs nothing: it never holds
- * a plugin-pack finding (`dev-guardian scan` runs no plugin pack), and the
- * ids of a project's own rules did not change.
+ * `.guardian/baseline.json` is not touched here: a scan passes the plugin's
+ * packs (`semgrepConfigs.ts`), so a baseline can hold their findings. The ones
+ * of the plugin's own repository were re-keyed once, by hand, when the short
+ * id began to be stored there too; the ids of a project's own rules did not
+ * change.
  */
 
 import path from 'node:path';
