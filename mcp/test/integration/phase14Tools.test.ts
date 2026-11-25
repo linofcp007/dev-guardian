@@ -922,6 +922,46 @@ describe('license_compatibility', () => {
     expect(r.incompatibilities[0]?.dep_license).toBe('AGPL-3.0');
   });
 
+  // CRIT_G3 #4: the compliance row was the first `compliance` row among the
+  // project's 50 newest rows of ANY type. Each perf_check run is a row of its
+  // own (3.17.0): after a tuning session of 50 runs the compliance scan fell
+  // out of that window, and the tool read "no compliance scan" — zero
+  // incompatibilities, last_compliance_scan_id null — on a project with an
+  // AGPL dependency. Still passes: the tests above and below (one compliance
+  // row, nothing newer).
+  it('finds the latest compliance scan behind 60 newer scans of another type', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'package.json'), '{"name":"x","license":"MIT"}', 'utf8');
+    const plugin = makePlugin(project);
+    plugin.storage.scans.insert({ scan_id: 'old-compliance', scan_type: 'compliance', project_path: project, tree_hash: 'h' });
+    plugin.storage.scans.finalize({
+      scan_id: 'old-compliance',
+      status: 'completed',
+      tools_run: [],
+      missing_tools: [],
+      meta: { licenses_summary: [{ license: 'AGPL-3.0', packages: ['risky-pkg'], risk: 'high' }] },
+    });
+    for (let i = 0; i < 60; i += 1) {
+      const id = `perf-${i}`;
+      plugin.storage.scans.insert({ scan_id: id, scan_type: 'perf', project_path: project, tree_hash: '' });
+      plugin.storage.scans.finalize({
+        scan_id: id,
+        status: 'completed',
+        tools_run: [{ name: 'lighthouse', status: 'ok' }],
+        missing_tools: [],
+        meta: { series: 's', metrics: { 'perf.lcp_ms': { value: 2000 + i, unit: 'ms' } }, verdicts: {} },
+      });
+    }
+
+    const r = (await getTool('license_compatibility').handler({ project_path: project }, plugin)) as {
+      ok: true;
+      last_compliance_scan_id: string | null;
+      incompatibilities: Array<{ dep_license: string }>;
+    };
+    expect(r.last_compliance_scan_id).toBe('old-compliance');
+    expect(r.incompatibilities.map((i) => i.dep_license)).toEqual(['AGPL-3.0']);
+  });
+
   function seedComplianceLicenses(
     plugin: PluginContext,
     project: string,
