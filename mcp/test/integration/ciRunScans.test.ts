@@ -17,6 +17,7 @@ import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { Finding, ToolResult } from '../../src/types.js';
+import { suppressionCase } from '../helpers/suppressionCases.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -688,5 +689,58 @@ describe('runScans', () => {
     const plain = await runScans({ projectPath });
     expect(plain.steps.some((s) => s.tool === 'guardian-test-integrity')).toBe(false);
     expect(plain.findings.some((f) => f.tool === 'guardian-test-integrity')).toBe(false);
+  });
+
+  // 3.17.0: the suppressions step reads the same change, as its own step. A bare scanner suppression is medium: it
+  // blocks at --fail-on medium, never at the default high, and the step is never a gap.
+  it('with diffBase: a bare nosemgrep added is a guardian-suppressions medium — exit 0 at --fail-on high, 1 at medium', async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git('init', '-q');
+    mkdirSync(join(projectPath, 'src'), { recursive: true });
+    writeFileSync(join(projectPath, 'src', 'app.py'), 'print(1)\n');
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    const bare = suppressionCase('Semgrep: a comment').lines[0] ?? '';
+    writeFileSync(join(projectPath, 'src', 'app.py'), `print(1)\n${bare}\n`);
+
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    const step = result.steps.find((s) => s.tool === 'guardian-suppressions');
+    expect(step).toMatchObject({ ran: true, missing_tools: [] });
+    expect(step?.notes).toBeUndefined();
+    expect(step?.tools_run[0]).toMatchObject({ name: 'guardian-suppressions', status: 'ok' });
+    // No test file changed: the test-integrity step does not apply, as before.
+    expect(result.steps.some((s) => s.tool === 'guardian-test-integrity')).toBe(false);
+    const added = result.findings.filter((f) => f.tool === 'guardian-suppressions');
+    expect(added.map((f) => `${f.rule_id ?? ''} ${f.file_path ?? ''}:${String(f.line_start)} ${f.severity}`)).toEqual([
+      'scanner-suppression-added src/app.py:2 medium',
+    ]);
+    const atHigh = evaluateGate({ findings: result.findings, baseline: null, failOn: 'high', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(atHigh.exitCode).toBe(CI_EXIT.PASS);
+    const atMedium = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(atMedium.exitCode).toBe(CI_EXIT.GATE_FAILED);
+    expect(atMedium.blocking.map((f) => f.rule_id)).toEqual(['scanner-suppression-added']);
+
+    // The same line with a reason: counted, no finding — nothing blocks at medium either.
+    writeFileSync(join(projectPath, 'src', 'app.py'), `print(1)\n${suppressionCase('Semgrep: a reason').lines[0] ?? ''}\n`);
+    const reasoned = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(reasoned.findings.filter((f) => f.tool === 'guardian-suppressions')).toEqual([]);
+    expect(reasoned.steps.find((s) => s.tool === 'guardian-suppressions')?.tools_run[0]?.reason).toMatch(/1 suppression\(s\) added — 1 with a reason/);
+    expect(evaluateGate({ findings: reasoned.findings, baseline: null, failOn: 'medium', steps: reasoned.steps, droppedBaselineEntries: 0 }).exitCode).toBe(CI_EXIT.PASS);
+
+    // A file past the text bound: not read, said as the step's note — the verdict's coverage_notes, never a gap.
+    writeFileSync(join(projectPath, 'src', 'big.py'), `${bare}\n${'# x\n'.repeat(600_000)}`);
+    const bounded = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    const noted = bounded.steps.find((s) => s.tool === 'guardian-suppressions');
+    expect(noted?.notes).toEqual(['guardian-suppressions: 1 changed file(s) over 2 MiB or unreadable were not read for suppressions']);
+    const verdict = evaluateGate({ findings: bounded.findings, baseline: null, failOn: 'high', steps: bounded.steps, droppedBaselineEntries: 0 });
+    expect(verdict.coverageNotes).toEqual(noted?.notes);
+    expect(verdict.coverageGaps).toEqual([]);
+    expect(verdict.exitCode).toBe(CI_EXIT.PASS);
   });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);

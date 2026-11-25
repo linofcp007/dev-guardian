@@ -34,6 +34,8 @@ const SLOW_UNIT_FILES = [
   'test/unit/pkgvet/lockfile.test.ts',
   // the vetting's network rounds: documents held back until OSV has been asked, and the tool's own budget (5 s to its half)
   'test/unit/pkgvet/vet.test.ts',
+  // the suppressions pass's cost, one 16 KiB / 128 KiB comparison per row of its table
+  'test/unit/testintegrity/suppressionsTiming.test.ts',
 ];
 
 export default defineConfig({

@@ -47,6 +47,7 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolRun } from '../../src/types.js';
+import { caseText, suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -799,5 +800,25 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
     const res = r as unknown as ReviewResult;
     expect(res.tools_run.some((t) => t.name === 'guardian-test-integrity')).toBe(false);
     expect(res.tools_run.some((t) => t.name === 'guardian-client-trust')).toBe(false);
+    expect(res.tools_run.some((t) => t.name === 'guardian-suppressions')).toBe(false);
+  });
+
+  // 3.17.0: the suppressions the diff adds, a pass of its own beside the test-integrity one.
+  it('a suppression added with no reason: a finding of guardian-suppressions, read at head, checked out or not', async () => {
+    const dir = await repo('main', { 'src/sum.ts': 'export {};\n', 'src/sum.test.ts': TEST });
+    write(dir, 'src/sum.ts', `${caseText(suppressionCase('ESLint: the whole file, every rule'))}export {};\n`);
+    write(dir, 'src/util.ts', `${caseText(suppressionCase('ESLint: the next line, a rule'))}`);
+    await commitAll(dir, 'silence it');
+    for (const args of [{ base_ref: 'main' }, { base_ref: 'main', head_ref: 'feature' }]) {
+      if ('head_ref' in args) await git(dir, 'checkout', '-q', 'main');
+      const { r, p } = await review(dir, args);
+      expect(r.ok).toBe(true);
+      const res = r as unknown as ReviewResult;
+      const pass = res.tools_run.find((t) => t.name === 'guardian-suppressions');
+      expect(pass).toMatchObject({ status: 'ok', reason: expect.stringMatching(/2 suppression\(s\) added — 1 with no reason reported, 1 naming/) });
+      expect(rowsOf(p, res.scan_id, 'guardian-suppressions')).toEqual(['suppression-added src/sum.ts:1 medium']);
+      // Its own name: nothing of it is a test-integrity finding.
+      expect(res.tools_run.some((t) => t.name === 'guardian-test-integrity')).toBe(false);
+    }
   });
 });

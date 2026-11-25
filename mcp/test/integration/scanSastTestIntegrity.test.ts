@@ -27,6 +27,7 @@ import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import type { ToolRun } from '../../src/types.js';
+import { caseText, suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -55,7 +56,7 @@ function repo(): string {
   return dir;
 }
 
-async function scan(dir: string, scope: Record<string, unknown>): Promise<{ rows: string[]; run: ToolRun | undefined }> {
+async function scan(dir: string, scope: Record<string, unknown>, pass = 'guardian-test-integrity'): Promise<{ rows: string[]; run: ToolRun | undefined }> {
   const db = new Database(':memory:');
   runMigrations(db);
   const plugin: PluginContext = { storage: new Storage(db), shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
@@ -65,10 +66,10 @@ async function scan(dir: string, scope: Record<string, unknown>): Promise<{ rows
   expect(r.ok).toBe(true);
   const rows = plugin.storage.findings
     .listByScan(r.scan_id)
-    .filter((f) => f.tool === 'guardian-test-integrity')
+    .filter((f) => f.tool === pass)
     .map((f) => `${f.rule_id} ${f.file_path}:${f.line_start ?? '-'}`)
     .sort();
-  return { rows, run: r.tools_run.find((t) => t.name === 'guardian-test-integrity') };
+  return { rows, run: r.tools_run.find((t) => t.name === pass) };
 }
 
 describe('scan_sast with a change scope reports weakened tests, deletions included', () => {
@@ -92,6 +93,37 @@ describe('scan_sast with a change scope reports weakened tests, deletions includ
     const dir = repo();
     writeFileSync(join(dir, 'src', 'b.test.ts'), "it.only('b', () => {});\n");
     const { rows, run } = await scan(dir, { paths: ['src'] });
+    expect(run).toBeUndefined();
+    expect(rows).toEqual([]);
+  });
+});
+
+// 3.17.0: the suppressions the change adds, a pass of its own on the same scopes.
+describe('scan_sast with a change scope reports the suppressions it adds, as guardian-suppressions', () => {
+  const bare = caseText(suppressionCase('ESLint: the whole file, every rule'));
+
+  it('scope.diff {}: an untracked file and an edited one, each with a bare whole-file disable', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'src', 'app.ts'), `${bare}export const x = 1;\n`);
+    writeFileSync(join(dir, 'src', 'new.ts'), bare);
+    const { rows, run } = await scan(dir, { diff: {} }, 'guardian-suppressions');
+    expect(run?.status).toBe('ok');
+    expect(rows).toEqual(['suppression-added src/app.ts:1', 'suppression-added src/new.ts:1']);
+  });
+
+  it('scope.diff { staged: true }: what is staged only', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'src', 'app.ts'), `${bare}export const x = 1;\n`);
+    git(dir, 'add', 'src/app.ts');
+    writeFileSync(join(dir, 'src', 'new.ts'), bare);
+    const { rows } = await scan(dir, { diff: { staged: true } }, 'guardian-suppressions');
+    expect(rows).toEqual(['suppression-added src/app.ts:1']);
+  });
+
+  it('scope.paths: no change set, no pass', async () => {
+    const dir = repo();
+    writeFileSync(join(dir, 'src', 'app.ts'), `${bare}export const x = 1;\n`);
+    const { rows, run } = await scan(dir, { paths: ['src'] }, 'guardian-suppressions');
     expect(run).toBeUndefined();
     expect(rows).toEqual([]);
   });

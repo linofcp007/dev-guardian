@@ -578,6 +578,30 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
     ]);
   });
 
+  // 3.17.0 (CRIT_G1 #1, DECISIONS Shared 6): the suppressions step's bounds and a failed -G listing are said as its
+  // own notes — never a gap, never the exit code, never `coverage`: a pass that judges nothing at --fail-on high
+  // cannot fail a scan that passed before it.
+  it("a step's own notes: coverage_notes and non-gating details, exit 0, coverage full", () => {
+    const note = 'guardian-suppressions: 3 more changed file(s) with a suppression token past the first 500 were not read';
+    const v = evaluateGate(input({
+      steps: [step(), step({ tool: 'guardian-suppressions', tools_run: [{ name: 'guardian-suppressions', status: 'ok' }], notes: [note] })],
+    }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.coverage).toBe('full');
+    expect(v.gatingCoverage).toBe('full');
+    expect(v.coverageGaps).toEqual([]);
+    expect(v.coverageNotes).toEqual([note]);
+    expect(v.coverageGapDetails).toEqual([
+      expect.objectContaining({ tool: 'guardian-suppressions', kind: 'other', gating: false, detail: note, remedy: expect.stringMatching(/^Nothing to do for the gate \(not gating\)/) }),
+    ]);
+    // A skipped step (the listing failed) with its note: still no gap.
+    const skipped = evaluateGate(input({
+      steps: [step({ tool: 'guardian-suppressions', tools_run: [{ name: 'guardian-suppressions', status: 'skipped', reason: 'x' }], notes: [note] })],
+    }));
+    expect(skipped.exitCode).toBe(CI_EXIT.PASS);
+    expect(skipped.coverageNotes).toEqual([note]);
+  });
+
   it('a Fixpoint timeout beside an unaccepted parse gap: the parse gap gates, the timeout is still a note', () => {
     const v = evaluateGate(input({
       steps: [partialStep([WP, 'b.js'], {

@@ -14,6 +14,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { CLEAN_JS, RULES, RUN_REAL, SCAN_TIMEOUT_MS, commitAll, newRepo, scanJson, write } from '../helpers/ciRefGate.js';
+import { suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs } from '../helpers/tempDir.js';
 
 vi.setConfig({ testTimeout: 3 * SCAN_TIMEOUT_MS, hookTimeout: 3 * SCAN_TIMEOUT_MS });
@@ -59,5 +60,38 @@ describe.skipIf(!RUN_REAL)('scan --diff-base: weakened tests in the change gate 
     const { status, report } = scanJson(repo, '--baseline-ref', base);
     expect(status).toBe(1);
     expect(report.blocking_findings.map((f) => f.rule_id)).toEqual(['test-focused']);
+  });
+});
+
+// 3.17.0: a bare scanner suppression the change adds is a medium of its own step (guardian-suppressions) — new, never
+// blocking at the default --fail-on high, blocking at --fail-on medium. Here it hides the rule's own high finding (the
+// `eval` on its line), so at --fail-on high the scan passes where, without the directive, it would block.
+describe.skipIf(!RUN_REAL)('scan --diff-base: a suppression added with no reason (real scanners)', () => {
+  let repo = '';
+  let base = '';
+
+  beforeAll(async () => {
+    repo = await newRepo('ci-diff-base-suppression-');
+    write(repo, '.semgrep.yml', RULES);
+    write(repo, 'index.js', CLEAN_JS);
+    write(repo, '.guardian/baseline.json', `${JSON.stringify({ version: 1, generated_at: '2026-10-28T00:00:00.000Z', entries: [] }, null, 2)}\n`);
+    base = await commitAll(repo, 'base');
+    write(repo, 'index.js', `${CLEAN_JS}${suppressionCase('Semgrep: nosem').lines[0] ?? ''}\n`);
+    await commitAll(repo, 'silence it');
+  });
+
+  it('--fail-on high: exit 0, the bare nosemgrep a new medium of guardian-suppressions', () => {
+    const { status, report } = scanJson(repo, '--diff-base', base);
+    expect(status).toBe(0);
+    const added = (report.new_findings as Array<{ tool?: string; rule_id?: string; severity?: string }>)
+      .filter((f) => f.tool === 'guardian-suppressions')
+      .map((f) => `${f.rule_id ?? ''} ${f.severity ?? ''}`);
+    expect(added).toEqual(['scanner-suppression-added medium']);
+  });
+
+  it('--fail-on medium: exit 1, blocked by it', () => {
+    const { status, report } = scanJson(repo, '--diff-base', base, '--fail-on', 'medium');
+    expect(status).toBe(1);
+    expect(report.blocking_findings.map((f) => f.rule_id)).toEqual(['scanner-suppression-added']);
   });
 });
