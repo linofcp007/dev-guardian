@@ -148,7 +148,7 @@ node ~/tools/dev-guardian/cli/dev-guardian.mjs baseline update --project .      
 node ~/tools/dev-guardian/cli/dev-guardian.mjs scan --project . --fail-on high --sarif results.sarif
 ```
 
-`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. On a pull request the generated pipeline gates against the base commit's baseline and Semgrep rules (`--baseline-ref`, `--rules-ref`), never the pull request's own. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network). To bring another scanner's SARIF log into the same history, use the `import_sarif` tool or `import-sarif <file>` — see [docs/sarif-import.md](docs/sarif-import.md).
+`ci-init` generates a pipeline with every action pinned by commit SHA and every scanner by version and checksum. `scan` exits 0 on a pass, 1 when a finding new to the baseline reaches `--fail-on`, **2 when a scanner did not run** (never read that as a pass) and 3 on a usage error. On a pull request the generated pipeline gates against the base commit's baseline and Semgrep rules (`--baseline-ref`, `--rules-ref`), never the pull request's own. See [docs/ci.md](docs/ci.md). Run these from your project, with the path of your clone (the plugin's own copy works too). For a local view: `status` and `dashboard` (a self-contained HTML page, no network). `metrics --head <file> --base <file>` compares the METRIC lines that a change and its base print (`metric-lines/1`, the line dev-spec-driven reads too), advisory unless `--strict`, and `ci-init github --metrics-command "<cmd>"` adds a job that runs it on every pull request. To bring another scanner's SARIF log into the same history, use the `import_sarif` tool or `import-sarif <file>` — see [docs/sarif-import.md](docs/sarif-import.md).
 
 **With dev-spec-driven (1.29+).** Its `/spec-finish` can run this gate as a project check (`spec_init { guardian: true }` in a session, or `node "<dev-spec-driven plugin>/cli/dev-spec.js" init --guardian` in a terminal): only a finding new to the baseline, at `high` or above, blocks the finish, and exit 2 is an incomplete scan, never a pass. Record the baseline on the base branch before you turn the check on. Accept one finding you have reviewed with a suppression its scanner reads (`nosemgrep: <rule> -- <reason>`, `.trivyignore`, `.gitleaksignore`), never with `baseline update` — it accepts every current finding, the feature's own included — and never by forcing the finish; see [docs/ci.md](docs/ci.md).
 
@@ -178,7 +178,7 @@ dev-guardian sends no telemetry of its own. Some tools do reach the network — 
 commands/         the 10 slash commands
 skills/           the 13 skills
 hooks/            hooks.json + guardian-hook.mjs
-cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, status, dashboard, db adopt, import-sarif, selftest)
+cli/              dev-guardian.mjs (mcp-config, check, scan, baseline, ci-init, metrics, status, dashboard, db adopt, import-sarif, selftest)
 mcp/              the MCP server: src/, test/, dist/ (committed)
 configs/          Semgrep packs, CI templates, gitleaks/Renovate/pre-commit configs, compliance templates
 host-rules/       rules templates for other hosts
