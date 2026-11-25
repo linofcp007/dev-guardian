@@ -111,3 +111,17 @@ describe('the judge — the two rules both readers add', () => {
     expect(tiny.verdict).toBe('regressed');
   });
 });
+
+describe('the judge — parity with dev-spec 1.41 metric.js where the fixture is silent', () => {
+  it('parity with dev-spec 1.41 metric.js: a changed unit and a flipped better= say loosened unit, and why lists the missing terms, then unit', () => {
+    expect(judged('METRIC s=120 kB better=lower tolerance=2%', 'METRIC s=0.1 MB better=higher tolerance=2%')).toEqual({
+      verdict: 'unjudged', why: ['unit'], loosened: 'unit', delta: null, applied: null,
+    });
+    expect(judged('METRIC s=120 kB better=lower', 'METRIC s=0.1 MB better=higher')).toEqual({
+      verdict: 'unjudged', why: ['tolerance', 'unit'], loosened: 'unit', delta: null, applied: null,
+    });
+    expect(judged('METRIC s=120 kB', 'METRIC s=0.1 MB better=higher tolerance=1')).toEqual({
+      verdict: 'unjudged', why: ['better', 'tolerance', 'unit'], loosened: 'unit', delta: null, applied: null,
+    });
+  });
+});

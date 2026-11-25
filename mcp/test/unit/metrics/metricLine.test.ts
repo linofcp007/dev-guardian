@@ -275,3 +275,29 @@ describe('metric-lines/1 — the walk is linear (cost guard)', () => {
     );
   });
 });
+
+// Where the fixture is silent, dev-spec-driven 1.41's reader (mcp/lib/engine/metric.js) chose these, and both
+// readers must agree: one test per point.
+describe('metric-lines/1 — parity with dev-spec 1.41 metric.js where the fixture is silent', () => {
+  it('parity with dev-spec 1.41 metric.js: a known key given twice on one line is malformed', () => {
+    expect(readMetricLine('METRIC x=1 better=lower better=lower')).toEqual({ kind: 'malformed', part: 'better' });
+    expect(readMetricLine('METRIC x=1 tolerance=2% tolerance=2%')).toEqual({ kind: 'malformed', part: 'tolerance' });
+  });
+
+  it('parity with dev-spec 1.41 metric.js: a unit only right after the number, never after a key=value', () => {
+    expect(metric('METRIC x=12 ms better=lower').unit).toBe('ms');
+    expect(readMetricLine('METRIC x=12 better=lower ms')).toEqual({ kind: 'malformed', part: 'token' });
+    expect(readMetricLine('METRIC x=12 runs=5 ms')).toEqual({ kind: 'malformed', part: 'token' });
+  });
+
+  it('parity with dev-spec 1.41 metric.js: a negative tolerance is malformed', () => {
+    for (const t of ['-1', '-2%', '-0']) expect(readMetricLine(`METRIC x=1 tolerance=${t}`), t).toEqual({ kind: 'malformed', part: 'tolerance' });
+  });
+
+  it('parity with dev-spec 1.41 metric.js: a lone CR is no line start; only a CR before the LF is stripped', () => {
+    const o = readMetricOutput('progress 50%\rMETRIC a=1\nMETRIC b=2\r\n');
+    expect([...o.metrics.keys()]).toEqual(['b']);
+    expect(o.malformed).toBe(0);
+    expect(readMetricLine('METRIC c=3\r')).toMatchObject({ kind: 'metric' });
+  });
+});
