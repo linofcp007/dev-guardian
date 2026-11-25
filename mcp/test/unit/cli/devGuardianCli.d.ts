@@ -31,4 +31,6 @@ declare module '*/cli/dev-guardian.mjs' {
     vars: Record<string, string>,
     sections?: Record<string, boolean>,
   ): string;
+  /** Why a `ci-init --metrics-command` value is refused, or null — ciInitRender.test.ts. */
+  export function metricsCommandProblem(cmd: string): string | null;
 }

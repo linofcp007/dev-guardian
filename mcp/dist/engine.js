@@ -4639,6 +4639,94 @@ var init_version = __esm({
   }
 });
 
+// src/metrics/decimal.ts
+function pow10(n) {
+  const hit = pow10Cache.get(n);
+  if (hit !== void 0) return hit;
+  const v = 10n ** BigInt(n);
+  if (pow10Cache.size < 4096) pow10Cache.set(n, v);
+  return v;
+}
+function parseDecimal(text3) {
+  const m = DECIMAL.exec(text3);
+  if (m === null) return null;
+  const int2 = m[2] ?? "0";
+  const frac = m[3] ?? "";
+  const exp = Number(m[4] ?? "0") - frac.length;
+  if (!Number.isSafeInteger(exp)) return null;
+  const coef = BigInt(int2 + frac);
+  return { coef: m[1] === "-" ? -coef : coef, exp };
+}
+function decimalOfNumber(n) {
+  return Number.isFinite(n) ? parseDecimal(String(n)) : null;
+}
+function aligned(a, b) {
+  const exp = Math.min(a.exp, b.exp);
+  return [a.coef * pow10(a.exp - exp), b.coef * pow10(b.exp - exp), exp];
+}
+function subtract(a, b) {
+  const [x, y, exp] = aligned(a, b);
+  return { coef: x - y, exp };
+}
+function add(a, b) {
+  const [x, y, exp] = aligned(a, b);
+  return { coef: x + y, exp };
+}
+function multiply(a, b) {
+  return { coef: a.coef * b.coef, exp: a.exp + b.exp };
+}
+function shift(a, n) {
+  return { coef: a.coef, exp: a.exp + n };
+}
+function negate(a) {
+  return { coef: -a.coef, exp: a.exp };
+}
+function absolute(a) {
+  return a.coef < 0n ? negate(a) : a;
+}
+function compare(a, b) {
+  const [x, y] = aligned(a, b);
+  return x < y ? -1 : x > y ? 1 : 0;
+}
+function minimum(a, b) {
+  return compare(a, b) <= 0 ? a : b;
+}
+function maximum(a, b) {
+  return compare(a, b) >= 0 ? a : b;
+}
+function half(a) {
+  return { coef: a.coef * 5n, exp: a.exp - 1 };
+}
+function decimalString(a) {
+  let coef = a.coef;
+  let exp = a.exp;
+  if (coef === 0n) return "0";
+  while (exp < 0 && coef % 10n === 0n) {
+    coef /= 10n;
+    exp += 1;
+  }
+  const negative = coef < 0n;
+  const digits = (negative ? -coef : coef).toString();
+  let body;
+  if (exp >= 0) body = digits + "0".repeat(exp);
+  else {
+    const point = digits.length + exp;
+    body = point > 0 ? `${digits.slice(0, point)}.${digits.slice(point)}` : `0.${"0".repeat(-point)}${digits}`;
+  }
+  return negative ? `-${body}` : body;
+}
+function decimalNumber(a) {
+  return Number(decimalString(a));
+}
+var DECIMAL, pow10Cache;
+var init_decimal = __esm({
+  "src/metrics/decimal.ts"() {
+    "use strict";
+    DECIMAL = /^(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([-+]?[0-9]+))?$/;
+    pow10Cache = /* @__PURE__ */ new Map();
+  }
+});
+
 // src/platform/pathSpelling.ts
 import { lstatSync as lstatSync5, statSync as statSync4 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join9, parse as parse4, resolve as resolve9, sep as sep2 } from "node:path";
@@ -4708,7 +4796,7 @@ var init_scriptsDir = __esm({
 });
 
 // src/storage/dbError.ts
-function reasonOf(error62) {
+function reasonOf2(error62) {
   if (error62 instanceof GuardianDbError) return error62.reason ?? error62.message;
   return error62 instanceof Error ? error62.message : String(error62);
 }
@@ -4823,13 +4911,13 @@ var init_userData = __esm({
 // src/storage/dbRegistry.ts
 import { randomBytes as randomBytes3 } from "node:crypto";
 import {
-  closeSync as closeSync3,
-  constants as constants4,
-  fstatSync as fstatSync3,
+  closeSync as closeSync4,
+  constants as constants5,
+  fstatSync as fstatSync4,
   lstatSync as lstatSync7,
-  openSync as openSync3,
+  openSync as openSync4,
   readdirSync as readdirSync3,
-  readSync as readSync3,
+  readSync as readSync4,
   renameSync as renameSync3,
   rmSync as rmSync2,
   writeFileSync as writeFileSync2
@@ -4909,20 +4997,20 @@ function forgetDbId(id) {
   }
 }
 function readBounded(path3, max) {
-  const fd = openSync3(path3, constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0));
+  const fd = openSync4(path3, constants5.O_RDONLY | (constants5.O_NONBLOCK ?? 0));
   try {
-    const st = fstatSync3(fd);
+    const st = fstatSync4(fd);
     if (!st.isFile() || st.size > max) throw new Error("not a registry entry");
     const buf = Buffer.alloc(st.size);
     let got = 0;
     while (got < st.size) {
-      const n = readSync3(fd, buf, got, st.size - got, got);
+      const n = readSync4(fd, buf, got, st.size - got, got);
       if (n === 0) break;
       got += n;
     }
     return buf.subarray(0, got).toString("utf8");
   } finally {
-    closeSync3(fd);
+    closeSync4(fd);
   }
 }
 var DB_ID_SHAPE, DB_ID_KEY;
@@ -5150,14 +5238,14 @@ function summarizeDatabase(dbPath) {
       contents.null_scoped_suppressions = columnsOf("suppressions").includes("project_path") ? count("SELECT COUNT(*) AS n FROM suppressions WHERE project_path IS NULL") : contents.suppressions;
     }
     if (isTable("baselines")) contents.baselines = count("SELECT COUNT(*) AS n FROM baselines");
-    const rows = /* @__PURE__ */ new Map();
+    const rows2 = /* @__PURE__ */ new Map();
     for (const table of PROJECT_KEYED_TABLES) {
       if (!isTable(table) || !columnsOf(table).includes("project_path")) continue;
       for (const r of db.prepare(`SELECT project_path AS p, COUNT(*) AS n FROM "${table}" WHERE project_path IS NOT NULL GROUP BY project_path`).all()) {
-        if (typeof r.p === "string") rows.set(r.p, (rows.get(r.p) ?? 0) + r.n);
+        if (typeof r.p === "string") rows2.set(r.p, (rows2.get(r.p) ?? 0) + r.n);
       }
     }
-    contents.paths = [...rows.entries()].map(([project_path, n]) => ({ project_path, rows: n })).sort((a, b) => b.rows - a.rows || a.project_path.localeCompare(b.project_path));
+    contents.paths = [...rows2.entries()].map(([project_path, n]) => ({ project_path, rows: n })).sort((a, b) => b.rows - a.rows || a.project_path.localeCompare(b.project_path));
     return contents;
   });
 }
@@ -5310,8 +5398,8 @@ function sharedSecretCount(group) {
   const secrets = new Set(group.map((f) => f.fingerprint)).size;
   return secrets > 1 ? secrets : null;
 }
-function rekeyStoredIdentities(rows, projectPath) {
-  const keyed = rows.flatMap((finding5, index) => {
+function rekeyStoredIdentities(rows2, projectPath) {
+  const keyed = rows2.flatMap((finding5, index) => {
     if (finding5.content_key === void 0) return [];
     const contentKey = isCredentialFinding(finding5) && finding5.tool.toLowerCase() !== "gitleaks" ? sha2562(`secret
 ${finding5.rule_id ?? ""}`) : finding5.content_key;
@@ -5326,7 +5414,7 @@ ${finding5.rule_id ?? ""}`) : finding5.content_key;
   });
   const identities = identitiesOf(keyed);
   const contentKeys = new Map(keyed.map((k) => [k.index, k.contentKey]));
-  return rows.map((_, index) => ({
+  return rows2.map((_, index) => ({
     identity: identities.get(index) ?? null,
     content_key: contentKeys.get(index) ?? null
   }));
@@ -13867,7 +13955,7 @@ function rekeyStoredLocalRuleIds(db, opts = {}) {
     const last = scans[scans.length - 1];
     if (last === void 0) break;
     const candidates2 = scans.filter((s) => !containsPacks(s.project_path, packsDir)).map((s) => s.id);
-    const rows = candidates2.length === 0 ? [] : db.prepare(
+    const rows2 = candidates2.length === 0 ? [] : db.prepare(
       `SELECT rowid AS rid, scan_id, fingerprint, tool, rule_id, subcategory, file_path, line_start, line_end,
                       snippet, identity, content_key
                  FROM findings
@@ -13876,7 +13964,7 @@ function rekeyStoredLocalRuleIds(db, opts = {}) {
     ).all(...candidates2);
     db.transaction(() => {
       if (readWatermark(db) >= last.rid) return;
-      if (rows.length > 0) changed += rekeyRows(db, rows, matcherNow(), new Map(scans.map((s) => [s.id, s.project_path])));
+      if (rows2.length > 0) changed += rekeyRows(db, rows2, matcherNow(), new Map(scans.map((s) => [s.id, s.project_path])));
       db.prepare(
         `INSERT INTO schema_meta(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`
       ).run(WATERMARK_KEY, String(last.rid));
@@ -13888,9 +13976,9 @@ function rekeyStoredLocalRuleIds(db, opts = {}) {
   }
   return changed;
 }
-function rekeyRows(db, rows, match, projectOf) {
+function rekeyRows(db, rows2, match, projectOf) {
   const byScan = /* @__PURE__ */ new Map();
-  for (const row of rows) {
+  for (const row of rows2) {
     const short2 = match(row.rule_id);
     if (short2 === null) continue;
     const list2 = byScan.get(row.scan_id) ?? [];
@@ -14665,7 +14753,7 @@ function judgeProjectDatabase(projectPath, dbPath) {
   } catch (error62) {
     const unfit = fileSystemProblem(error62);
     if (unfit !== null) return { kind: "foreign", foreign: { kind: "file-system", why: unfit } };
-    const detail = reasonOf(error62);
+    const detail = reasonOf2(error62);
     return findEntryForDbPath(safeCanonical(dbPath)) !== null ? { kind: "own-unreadable", detail } : { kind: "foreign", foreign: { kind: "unreadable", detail } };
   }
   if (probe3.empty) return { kind: "create" };
@@ -14733,7 +14821,7 @@ function inspectProjectDatabase(projectPath) {
     if (schema !== null) report.blockers.push(schema);
     report.contents = summarizeDatabase(dbPath);
   } catch (error62) {
-    report.blockers.push(fileSystemProblem(error62) ?? `it cannot be read (${reasonOf(error62)})`);
+    report.blockers.push(fileSystemProblem(error62) ?? `it cannot be read (${reasonOf2(error62)})`);
     return report;
   }
   const contents = report.contents;
@@ -14954,7 +15042,7 @@ function probeDatabaseWritable(db) {
 function fileSystemProblem(error62) {
   const code = sqliteErrorCode(error62);
   if (code !== 10 && code !== 14) return null;
-  return `the project's .guardian is on a file system SQLite's WAL can't use (network drive?) \u2014 SQLite said "${reasonOf(error62)}"${code === 14 ? ", which a directory that is not writable also causes" : ""}`;
+  return `the project's .guardian is on a file system SQLite's WAL can't use (network drive?) \u2014 SQLite said "${reasonOf2(error62)}"${code === 14 ? ", which a directory that is not writable also causes" : ""}`;
 }
 function isNotWritableError(error62) {
   if (error62 instanceof Error && "code" in error62) {
@@ -16184,20 +16272,20 @@ var require_cross_spawn = __commonJS({
 });
 
 // src/runners/npmCmdShim.ts
-import { closeSync as closeSync4, fstatSync as fstatSync4, openSync as openSync4, readSync as readSync4, statSync as statSync7 } from "node:fs";
+import { closeSync as closeSync5, fstatSync as fstatSync5, openSync as openSync5, readSync as readSync5, statSync as statSync7 } from "node:fs";
 import { dirname as dirname9, join as join18 } from "node:path";
 function readShim(file2) {
   let fd;
   try {
-    fd = openSync4(file2, "r");
-    if (!fstatSync4(fd).isFile() || fstatSync4(fd).size > MAX_SHIM_BYTES) return null;
+    fd = openSync5(file2, "r");
+    if (!fstatSync5(fd).isFile() || fstatSync5(fd).size > MAX_SHIM_BYTES) return null;
     const buf = Buffer.alloc(MAX_SHIM_BYTES);
-    const n = readSync4(fd, buf, 0, MAX_SHIM_BYTES, 0);
+    const n = readSync5(fd, buf, 0, MAX_SHIM_BYTES, 0);
     return buf.subarray(0, n).toString("utf8");
   } catch {
     return null;
   } finally {
-    if (fd !== void 0) closeSync4(fd);
+    if (fd !== void 0) closeSync5(fd);
   }
 }
 function isFile(path3) {
@@ -22357,10 +22445,10 @@ function exitCodeForCoverage(coverage) {
 function describeMissing(name, toolsRun) {
   const own2 = toolsRun.filter((run2) => run2.name === name);
   const ok = own2.find((run2) => run2.status === "ok");
-  if (ok !== void 0) return { line: `${name} ran with reduced coverage${withReason(ok.reason)}`, shape: "reduced", ...reasonOf2(ok) };
+  if (ok !== void 0) return { line: `${name} ran with reduced coverage${withReason(ok.reason)}`, shape: "reduced", ...reasonOf3(ok) };
   if (own2.some((run2) => run2.status === "failed")) return { line: null, shape: "failed" };
   const skipped2 = own2.find((run2) => run2.status === "skipped" && run2.reason && run2.reason !== "not_installed");
-  if (skipped2 !== void 0) return { line: `${name} skipped${withReason(skipped2.reason)}`, shape: "skipped", ...reasonOf2(skipped2) };
+  if (skipped2 !== void 0) return { line: `${name} skipped${withReason(skipped2.reason)}`, shape: "skipped", ...reasonOf3(skipped2) };
   const colon = name.indexOf(":");
   if (own2.length === 0 && colon > 0) {
     const scanner2 = name.slice(0, colon);
@@ -22370,13 +22458,13 @@ function describeMissing(name, toolsRun) {
       return {
         line: `${scanner2} ran with reduced coverage \u2014 ${part} not covered${withReason(base2.reason)}`,
         shape: "part",
-        ...reasonOf2(base2)
+        ...reasonOf3(base2)
       };
     }
   }
   return { line: `${name} not installed`, shape: "not_installed" };
 }
-function reasonOf2(run2) {
+function reasonOf3(run2) {
   return run2.reason !== void 0 ? { reason: run2.reason } : {};
 }
 function timeoutAccepted(file2, accept) {
@@ -23390,17 +23478,17 @@ var init_agentAuditRepo = __esm({
       upsertStmt;
       /** Every hash recorded for `projectPath`, keyed by entry_key. Empty map when none. */
       getHashes(projectPath) {
-        const rows = this.getHashesStmt.all(projectPath);
+        const rows2 = this.getHashesStmt.all(projectPath);
         const out = /* @__PURE__ */ new Map();
-        for (const row of rows) out.set(row.entry_key, row.hash);
+        for (const row of rows2) out.set(row.entry_key, row.hash);
         return out;
       }
       /** Insert-or-update `entries` for `projectPath` in one transaction. No-op on an empty array. */
       upsertHashes(projectPath, entries3) {
         if (entries3.length === 0) return;
         const updatedAt = nowIso();
-        const tx = this.db.transaction((rows) => {
-          for (const entry of rows) {
+        const tx = this.db.transaction((rows2) => {
+          for (const entry of rows2) {
             this.upsertStmt.run(projectPath, entry.entry_key, entry.hash, updatedAt);
           }
         });
@@ -23552,8 +23640,8 @@ var init_cveIntelRepo = __esm({
       }
       db;
       upsertStmt;
-      upsertMany(rows) {
-        if (rows.length === 0) return;
+      upsertMany(rows2) {
+        if (rows2.length === 0) return;
         const tx = this.db.transaction((items) => {
           for (const r of items) {
             this.upsertStmt.run(
@@ -23566,7 +23654,7 @@ var init_cveIntelRepo = __esm({
             );
           }
         });
-        tx(rows);
+        tx(rows2);
       }
       /** Exactly the requested `cveIds` that have a cached row — a `cve_id` this
        *  table has never cached is simply absent from the returned map. */
@@ -23574,8 +23662,8 @@ var init_cveIntelRepo = __esm({
         const ids2 = [...new Set(cveIds)];
         if (ids2.length === 0) return /* @__PURE__ */ new Map();
         const placeholders = ids2.map(() => "?").join(", ");
-        const rows = this.db.prepare(`SELECT * FROM cve_intel WHERE cve_id IN (${placeholders})`).all(...ids2);
-        return new Map(rows.map((r) => [r.cve_id, rowToIntel(r)]));
+        const rows2 = this.db.prepare(`SELECT * FROM cve_intel WHERE cve_id IN (${placeholders})`).all(...ids2);
+        return new Map(rows2.map((r) => [r.cve_id, rowToIntel(r)]));
       }
     };
   }
@@ -23648,12 +23736,12 @@ var init_cvesRepo = __esm({
           input2.severity
         );
       }
-      bulkUpsert(rows) {
-        if (rows.length === 0) return;
+      bulkUpsert(rows2) {
+        if (rows2.length === 0) return;
         const tx = this.db.transaction((items) => {
           for (const r of items) this.upsert(r);
         });
-        tx(rows);
+        tx(rows2);
       }
       /**
        * Exactly the CVEs the given scan saw, one per (cve, package, installed
@@ -23867,9 +23955,9 @@ var init_findingsRepo = __esm({
       }
       /** One chunk of {@link bulkInsert}, in one write transaction. */
       insertChunk(chunk) {
-        const tx = this.db.transaction((rows) => {
+        const tx = this.db.transaction((rows2) => {
           let inserted = 0;
-          for (const f of rows) {
+          for (const f of rows2) {
             const info = this.insertStmt.run(
               f.fingerprint,
               f.scan_id,
@@ -24154,8 +24242,8 @@ var init_llmScanRepo = __esm({
       }
       /** The next sequential task id (`t-0001`, …) of the plan. */
       nextTaskNumber(planId) {
-        const rows = this.db.prepare(`SELECT task_id FROM llm_scan_tasks WHERE plan_id = ?`).all(planId);
-        return rows.reduce((max, r) => Math.max(max, Number(r.task_id.slice(2)) || 0), 0) + 1;
+        const rows2 = this.db.prepare(`SELECT task_id FROM llm_scan_tasks WHERE plan_id = ?`).all(planId);
+        return rows2.reduce((max, r) => Math.max(max, Number(r.task_id.slice(2)) || 0), 0) + 1;
       }
       /** Whether a plan row exists, whether or not it can be read (a corrupt one is not "no such plan"). */
       planRowExists(planId) {
@@ -24984,8 +25072,8 @@ var init_validationsRepo = __esm({
        * identity is the finding plus the provider; the project only scopes
        * the query.
        */
-      upsert(projectPath, rows) {
-        if (rows.length === 0) return;
+      upsert(projectPath, rows2) {
+        if (rows2.length === 0) return;
         const tx = this.db.transaction((items) => {
           for (const r of items) {
             this.upsertStmt.run(
@@ -25002,7 +25090,7 @@ var init_validationsRepo = __esm({
             );
           }
         });
-        tx(rows);
+        tx(rows2);
       }
       listByProject(projectPath) {
         return this.listByProjectStmt.all(projectPath).map(rowToValidation);
@@ -26724,7 +26812,7 @@ var init_checks = __esm({
       def.format = def.format || "float64";
       const isInt = def.format?.includes("int");
       const origin = isInt ? "int" : "number";
-      const [minimum, maximum2] = NUMBER_FORMAT_RANGES[def.format];
+      const [minimum2, maximum2] = NUMBER_FORMAT_RANGES[def.format];
       inst._zod.check = (payload) => {
         const input2 = payload.value;
         if (isInt) {
@@ -26766,12 +26854,12 @@ var init_checks = __esm({
             return;
           }
         }
-        if (input2 < minimum) {
+        if (input2 < minimum2) {
           payload.issues.push({
             origin: "number",
             input: input2,
             code: "too_small",
-            minimum,
+            minimum: minimum2,
             inclusive: true,
             inst,
             continue: !def.abort
@@ -26792,15 +26880,15 @@ var init_checks = __esm({
     });
     $ZodCheckBigIntFormat = /* @__PURE__ */ $constructor("$ZodCheckBigIntFormat", (inst, def) => {
       $ZodCheck.init(inst, def);
-      const [minimum, maximum2] = BIGINT_FORMAT_RANGES[def.format];
+      const [minimum2, maximum2] = BIGINT_FORMAT_RANGES[def.format];
       inst._zod.check = (payload) => {
         const input2 = payload.value;
-        if (input2 < minimum) {
+        if (input2 < minimum2) {
           payload.issues.push({
             origin: "bigint",
             input: input2,
             code: "too_small",
-            minimum,
+            minimum: minimum2,
             inclusive: true,
             inst,
             continue: !def.abort
@@ -27793,7 +27881,7 @@ function leafPattern(schema) {
   const def = schema._zod.def;
   let pattern = def.pattern;
   let isInt = !!def.format?.includes("int");
-  let minimum;
+  let minimum2;
   let maximum2;
   for (const ch of def.checks ?? []) {
     const d = ch._zod.def;
@@ -27802,17 +27890,17 @@ function leafPattern(schema) {
     isInt || (isInt = !!d.format?.includes("int"));
     const lo = d.minimum ?? d.length;
     const hi = d.maximum ?? d.length;
-    if (lo !== void 0 && (minimum === void 0 || lo > minimum))
-      minimum = lo;
+    if (lo !== void 0 && (minimum2 === void 0 || lo > minimum2))
+      minimum2 = lo;
     if (hi !== void 0 && (maximum2 === void 0 || hi < maximum2))
       maximum2 = hi;
   }
   if (pattern)
     return pattern.source;
-  if (minimum !== void 0 && maximum2 !== void 0 && minimum > maximum2)
+  if (minimum2 !== void 0 && maximum2 !== void 0 && minimum2 > maximum2)
     return "(?!)";
-  if (minimum !== void 0 || maximum2 !== void 0)
-    return string({ minimum, maximum: maximum2 }).source;
+  if (minimum2 !== void 0 || maximum2 !== void 0)
+    return string({ minimum: minimum2, maximum: maximum2 }).source;
   const own2 = schema._zod.pattern;
   return (isInt && own2 === number ? integer : own2)?.source;
 }
@@ -40148,11 +40236,11 @@ function _maxSize(maximum2, params) {
   });
 }
 // @__NO_SIDE_EFFECTS__
-function _minSize(minimum, params) {
+function _minSize(minimum2, params) {
   return new $ZodCheckMinSize({
     check: "min_size",
     ...normalizeParams(params),
-    minimum
+    minimum: minimum2
   });
 }
 // @__NO_SIDE_EFFECTS__
@@ -40173,11 +40261,11 @@ function _maxLength(maximum2, params) {
   return ch;
 }
 // @__NO_SIDE_EFFECTS__
-function _minLength(minimum, params) {
+function _minLength(minimum2, params) {
   return new $ZodCheckMinLength({
     check: "min_length",
     ...normalizeParams(params),
-    minimum
+    minimum: minimum2
   });
 }
 // @__NO_SIDE_EFFECTS__
@@ -41263,7 +41351,7 @@ function stringifyKeyNames(bySchema, json2, visited) {
   const values2 = json2.enum ?? (json2.const !== void 0 ? [json2.const] : void 0);
   if (!numericType && !values2?.some((v) => typeof v === "number"))
     return json2;
-  const { minimum, maximum: maximum2, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json2;
+  const { minimum: minimum2, maximum: maximum2, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json2;
   if (rest.enum)
     rest.enum = rest.enum.map((v) => typeof v === "number" ? String(v) : v);
   else if (typeof rest.const === "number")
@@ -41388,8 +41476,8 @@ var init_json_schema_processors = __esm({
     maxContributor = (agg, def) => narrowMax(agg, "maximum", def.maximum);
     formatContributor = (ranges) => (agg, def) => {
       setFormat(agg, def.format);
-      const [minimum, maximum2] = ranges[def.format];
-      narrowMin(agg, "minimum", minimum);
+      const [minimum2, maximum2] = ranges[def.format];
+      narrowMin(agg, "minimum", minimum2);
       narrowMax(agg, "maximum", maximum2);
     };
     contributors = {
@@ -41431,9 +41519,9 @@ var init_json_schema_processors = __esm({
     stringProcessor = (schema, ctx, _json, _params) => {
       const json2 = _json;
       json2.type = "string";
-      const { minimum, maximum: maximum2, format, patterns, contentEncoding, laxFormat } = aggregateChecks(schema);
-      if (typeof minimum === "number")
-        json2.minLength = minimum;
+      const { minimum: minimum2, maximum: maximum2, format, patterns, contentEncoding, laxFormat } = aggregateChecks(schema);
+      if (typeof minimum2 === "number")
+        json2.minLength = minimum2;
       if (typeof maximum2 === "number")
         json2.maxLength = maximum2;
       if (format) {
@@ -41462,9 +41550,9 @@ var init_json_schema_processors = __esm({
     };
     numberProcessor = (schema, ctx, _json, params) => {
       const json2 = _json;
-      const { minimum, maximum: maximum2, multipleOf, exclusiveMaximum, exclusiveMinimum, isInt } = aggregateChecks(schema);
+      const { minimum: minimum2, maximum: maximum2, multipleOf, exclusiveMaximum, exclusiveMinimum, isInt } = aggregateChecks(schema);
       json2.type = isInt ? "integer" : "number";
-      const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY);
+      const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum2 ?? Number.NEGATIVE_INFINITY);
       const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum2 ?? Number.POSITIVE_INFINITY);
       const legacy = ctx.target === "draft-04" || ctx.target === "openapi-3.0";
       if (exMin) {
@@ -41474,8 +41562,8 @@ var init_json_schema_processors = __esm({
         } else {
           json2.exclusiveMinimum = exclusiveMinimum;
         }
-      } else if (typeof minimum === "number") {
-        json2.minimum = minimum;
+      } else if (typeof minimum2 === "number") {
+        json2.minimum = minimum2;
       }
       if (exMax) {
         if (legacy) {
@@ -41605,9 +41693,9 @@ var init_json_schema_processors = __esm({
       _json.type = "string";
       _json.format = "binary";
       _json.contentEncoding = "binary";
-      const { minimum, maximum: maximum2, mime } = aggregateChecks(schema);
-      if (minimum !== void 0)
-        _json.minLength = minimum;
+      const { minimum: minimum2, maximum: maximum2, mime } = aggregateChecks(schema);
+      if (minimum2 !== void 0)
+        _json.minLength = minimum2;
       if (maximum2 !== void 0)
         _json.maxLength = maximum2;
       if (!mime)
@@ -41640,9 +41728,9 @@ var init_json_schema_processors = __esm({
     arrayProcessor = (schema, ctx, _json, params) => {
       const json2 = _json;
       const def = schema._zod.def;
-      const { minimum, maximum: maximum2 } = aggregateChecks(schema);
-      if (typeof minimum === "number")
-        json2.minItems = minimum;
+      const { minimum: minimum2, maximum: maximum2 } = aggregateChecks(schema);
+      if (typeof minimum2 === "number")
+        json2.minItems = minimum2;
       if (typeof maximum2 === "number")
         json2.maxItems = maximum2;
       json2.type = "array";
@@ -41778,9 +41866,9 @@ var init_json_schema_processors = __esm({
         if (isClosed)
           json2.maxItems = maxItems;
       }
-      const { minimum, maximum: maximum2 } = aggregateChecks(schema);
-      if (typeof minimum === "number")
-        json2.minItems = minimum;
+      const { minimum: minimum2, maximum: maximum2 } = aggregateChecks(schema);
+      if (typeof minimum2 === "number")
+        json2.minItems = minimum2;
       if (typeof maximum2 === "number")
         json2.maxItems = maximum2;
     };
@@ -49658,8 +49746,8 @@ var init_schemas3 = __esm({
       },
       /* @__PURE__ */ util_exports.derived({
         minValue: (inst) => {
-          const { minimum, exclusiveMinimum } = aggregateChecks(inst);
-          return Math.max(minimum ?? Number.NEGATIVE_INFINITY, exclusiveMinimum ?? Number.NEGATIVE_INFINITY);
+          const { minimum: minimum2, exclusiveMinimum } = aggregateChecks(inst);
+          return Math.max(minimum2 ?? Number.NEGATIVE_INFINITY, exclusiveMinimum ?? Number.NEGATIVE_INFINITY);
         },
         maxValue: (inst) => {
           const { maximum: maximum2, exclusiveMaximum } = aggregateChecks(inst);
@@ -49824,8 +49912,8 @@ var init_schemas3 = __esm({
       },
       /* @__PURE__ */ util_exports.derived({
         minDate: (inst) => {
-          const { minimum } = aggregateChecks(inst);
-          return minimum ? new Date(minimum) : null;
+          const { minimum: minimum2 } = aggregateChecks(inst);
+          return minimum2 ? new Date(minimum2) : null;
         },
         maxDate: (inst) => {
           const { maximum: maximum2 } = aggregateChecks(inst);
@@ -57606,7 +57694,7 @@ function requirementMentions(text3) {
   }
   return out;
 }
-var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, HOST_NOT_SHOWN2, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
+var MAX_REQUIREMENT_FILES, MAX_REQUIREMENTS_BYTES, UNUSUAL, COMMENT_START, COMMENT, NAME2, VERSION_CLAUSE, VERSIONS, MARKER, PLAIN_REQUIREMENT, ARCHIVE, HASH_VALUE, BINARY_VALUE, VCS, LONG_OPTIONS, SHORT_OPTIONS, HOST_NOT_SHOWN2, MAX_REFUSALS, INDEX_KINDS, SOURCE_KINDS, SPEC, SPECIFIER;
 var init_pipRequirements = __esm({
   "src/deps/pipRequirements.ts"() {
     "use strict";
@@ -57617,12 +57705,12 @@ var init_pipRequirements = __esm({
     UNUSUAL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u00a0\u1680\u2000-\u200f\u2028-\u202f\u205f-\u2064\u2066-\u206f\u3000\ufeff]/;
     COMMENT_START = /^(?:[ \t]*)#/;
     COMMENT = /(^|[ \t]+)#.*$/;
-    NAME = "[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?";
+    NAME2 = "[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?";
     VERSION_CLAUSE = "(?:~=|===|==|!=|<=|>=|<|>)[ \\t]*[A-Za-z0-9_.*+!-]+";
     VERSIONS = `${VERSION_CLAUSE}(?:[ \\t]*,[ \\t]*${VERSION_CLAUSE})*`;
     MARKER = `[A-Za-z0-9_ \\t.<>=!~"'(),*+-]*`;
     PLAIN_REQUIREMENT = new RegExp(
-      `^${NAME}[ \\t]*(?:\\[[ \\t]*(?:${NAME}(?:[ \\t]*,[ \\t]*${NAME})*)?[ \\t]*\\])?[ \\t]*(?:${VERSIONS}|\\([ \\t]*${VERSIONS}[ \\t]*\\))?[ \\t]*(?:;${MARKER})?$`
+      `^${NAME2}[ \\t]*(?:\\[[ \\t]*(?:${NAME2}(?:[ \\t]*,[ \\t]*${NAME2})*)?[ \\t]*\\])?[ \\t]*(?:${VERSIONS}|\\([ \\t]*${VERSIONS}[ \\t]*\\))?[ \\t]*(?:;${MARKER})?$`
     );
     ARCHIVE = /\.(zip|whl|tar|tar\.gz|tgz|tar\.bz2|tbz|tar\.xz|txz|tar\.lz|tlz)$/i;
     HASH_VALUE = /^[a-z0-9]+:[0-9a-fA-F]+$/;
@@ -57659,7 +57747,7 @@ var init_pipRequirements = __esm({
       "source table",
       "dynamic dependencies"
     ]);
-    SPEC = new RegExp(`^(${NAME})[ \\t]*(\\[[^\\]]*\\])?[ \\t]*(.*)$`);
+    SPEC = new RegExp(`^(${NAME2})[ \\t]*(\\[[^\\]]*\\])?[ \\t]*(.*)$`);
     SPECIFIER = new RegExp(`^${VERSIONS}$`);
   }
 });
@@ -59276,7 +59364,7 @@ function compileDatabase(projectPath) {
 async function cppcheckSources(args) {
   const sources = cppSources(args.files);
   if (sources.length === 0) {
-    const headers = args.files.filter((f) => HEADER2.test(f)).length;
+    const headers = args.files.filter((f) => HEADER3.test(f)).length;
     if (headers === 0) return { toolRun: null, missing: [], reports: [], cancelled: false };
     return {
       toolRun: {
@@ -59391,7 +59479,7 @@ async function cppcheckOnce(args, name, target) {
   };
   return { run: run2, xml: read3(out), filesTxt: read3(join48(buildDir, "files.txt")) };
 }
-var CPPCHECK, TRANSLATION_UNIT, HEADER2, CPPCHECK_TIMEOUT_MS, CPPCHECK_MIN_VERSION, COMPILE_DATABASES, CPPCHECK_COVERAGE_IDS, ENTITIES2, SHALLOWER_IDS;
+var CPPCHECK, TRANSLATION_UNIT, HEADER3, CPPCHECK_TIMEOUT_MS, CPPCHECK_MIN_VERSION, COMPILE_DATABASES, CPPCHECK_COVERAGE_IDS, ENTITIES2, SHALLOWER_IDS;
 var init_cppcheckRun = __esm({
   "src/runners/cppcheckRun.ts"() {
     "use strict";
@@ -59402,7 +59490,7 @@ var init_cppcheckRun = __esm({
     init_scannerParsers();
     CPPCHECK = "cppcheck";
     TRANSLATION_UNIT = /\.(c|cc|cpp|cxx|c\+\+)$/i;
-    HEADER2 = /\.(h|hh|hpp|hxx|h\+\+)$/i;
+    HEADER3 = /\.(h|hh|hpp|hxx|h\+\+)$/i;
     CPPCHECK_TIMEOUT_MS = 20 * 6e4;
     CPPCHECK_MIN_VERSION = "2.13";
     COMPILE_DATABASES = ["compile_commands.json", "build/compile_commands.json"];
@@ -62804,7 +62892,7 @@ var init_scanSast = __esm({
 });
 
 // src/secrets/verify/rawReport.ts
-import { chmodSync as chmodSync3, closeSync as closeSync5, lstatSync as lstatSync13, mkdtempSync as mkdtempSync7, openSync as openSync5, readdirSync as readdirSync15, rmSync as rmSync12 } from "node:fs";
+import { chmodSync as chmodSync3, closeSync as closeSync6, lstatSync as lstatSync13, mkdtempSync as mkdtempSync7, openSync as openSync6, readdirSync as readdirSync15, rmSync as rmSync12 } from "node:fs";
 import { tmpdir as tmpdir8 } from "node:os";
 import { join as join55 } from "node:path";
 function openPrivateReportDir() {
@@ -62815,7 +62903,7 @@ function openPrivateReportDir() {
     dir,
     pathFor(name) {
       const path3 = join55(dir, name);
-      closeSync5(openSync5(path3, "w", 384));
+      closeSync6(openSync6(path3, "w", 384));
       if (POSIX) chmodSync3(path3, 384);
       return path3;
     },
@@ -72370,7 +72458,7 @@ function carriedFrom(args) {
     for (const r of lookup2.rules) rules2.add(r);
   }
   if (!anyOpen) return [];
-  const rows = everything ? storage.findings.listByScan(scan2.scan_id).filter((f) => !known.holds(f)) : storage.findings.listByScanMatching(
+  const rows2 = everything ? storage.findings.listByScan(scan2.scan_id).filter((f) => !known.holds(f)) : storage.findings.listByScanMatching(
     scan2.scan_id,
     { tools: [...tools], files: [...files], rules: [...rules2] },
     (keys) => known.holds(keys)
@@ -72378,7 +72466,7 @@ function carriedFrom(args) {
   const newest2 = index.bookAt(0);
   const labels = /* @__PURE__ */ new Map();
   const carried = [];
-  for (const finding5 of rows) {
+  for (const finding5 of rows2) {
     if (!findingInSlot(scan2, finding5, slot) || isSuppressed(finding5)) continue;
     const key = findingKey(finding5);
     const file2 = finding5.file_path === void 0 ? void 0 : finding5.file_path.replace(/\\/g, "/");
@@ -72426,16 +72514,16 @@ function isConfirming(marker) {
 function isHuntFinding(f) {
   return f.tool === LLM_HUNT_TOOL;
 }
-function splitHuntCandidates(storage, projectPath, rows) {
-  if (!rows.some(isHuntFinding)) return { counted: [...rows], unconfirmed: [] };
+function splitHuntCandidates(storage, projectPath, rows2) {
+  if (!rows2.some(isHuntFinding)) return { counted: [...rows2], unconfirmed: [] };
   const markers = llmMarkersOf(storage, projectPath);
   const counted = [];
   const unconfirmed = [];
-  for (const f of rows) (isHuntFinding(f) && !isConfirming(markers.get(f)) ? unconfirmed : counted).push(f);
+  for (const f of rows2) (isHuntFinding(f) && !isConfirming(markers.get(f)) ? unconfirmed : counted).push(f);
   return { counted, unconfirmed };
 }
-function countableFindings(storage, projectPath, rows) {
-  return splitHuntCandidates(storage, projectPath, rows).counted;
+function countableFindings(storage, projectPath, rows2) {
+  return splitHuntCandidates(storage, projectPath, rows2).counted;
 }
 function openSetForProject(storage, projectPath, opts = {}) {
   const isSuppressed = suppressionMatcher(storage.suppressions.listAll(), opts.now ?? Date.now(), projectPath);
@@ -72455,12 +72543,12 @@ function openSetForProject(storage, projectPath, opts = {}) {
   }
   const byScan = /* @__PURE__ */ new Map();
   const rowsOf = (scan2) => {
-    let rows = byScan.get(scan2.scan_id);
-    if (rows === void 0) {
-      rows = storage.findings.listByScan(scan2.scan_id);
-      byScan.set(scan2.scan_id, rows);
+    let rows2 = byScan.get(scan2.scan_id);
+    if (rows2 === void 0) {
+      rows2 = storage.findings.listByScan(scan2.scan_id);
+      byScan.set(scan2.scan_id, rows2);
     }
-    return rows;
+    return rows2;
   };
   const carried = [];
   for (const p of picked) {
@@ -72519,10 +72607,10 @@ function openSetForProject(storage, projectPath, opts = {}) {
     });
   };
   for (const p of picked) if (!isSarifSlot(p.slot)) admitSource(p);
-  for (const { slot, scan: scan2, coverage: coverage2, findings: rows } of carried) {
+  for (const { slot, scan: scan2, coverage: coverage2, findings: rows2 } of carried) {
     const gaps = /* @__PURE__ */ new Set();
     const batch = [];
-    for (const { finding: finding5, gap } of rows) {
+    for (const { finding: finding5, gap } of rows2) {
       if (seen.has(finding5)) continue;
       const { marker, show } = admitted(finding5);
       if (!show) continue;
@@ -75397,91 +75485,6 @@ public static class Metrics
   }
 });
 
-// src/metrics/decimal.ts
-function pow10(n) {
-  const hit = pow10Cache.get(n);
-  if (hit !== void 0) return hit;
-  const v = 10n ** BigInt(n);
-  if (pow10Cache.size < 4096) pow10Cache.set(n, v);
-  return v;
-}
-function parseDecimal(text3) {
-  const m = DECIMAL.exec(text3);
-  if (m === null) return null;
-  const int2 = m[2] ?? "0";
-  const frac = m[3] ?? "";
-  const exp = Number(m[4] ?? "0") - frac.length;
-  if (!Number.isSafeInteger(exp)) return null;
-  const coef = BigInt(int2 + frac);
-  return { coef: m[1] === "-" ? -coef : coef, exp };
-}
-function decimalOfNumber(n) {
-  return Number.isFinite(n) ? parseDecimal(String(n)) : null;
-}
-function aligned(a, b) {
-  const exp = Math.min(a.exp, b.exp);
-  return [a.coef * pow10(a.exp - exp), b.coef * pow10(b.exp - exp), exp];
-}
-function subtract(a, b) {
-  const [x, y, exp] = aligned(a, b);
-  return { coef: x - y, exp };
-}
-function add(a, b) {
-  const [x, y, exp] = aligned(a, b);
-  return { coef: x + y, exp };
-}
-function multiply(a, b) {
-  return { coef: a.coef * b.coef, exp: a.exp + b.exp };
-}
-function shift(a, n) {
-  return { coef: a.coef, exp: a.exp + n };
-}
-function negate(a) {
-  return { coef: -a.coef, exp: a.exp };
-}
-function absolute(a) {
-  return a.coef < 0n ? negate(a) : a;
-}
-function compare(a, b) {
-  const [x, y] = aligned(a, b);
-  return x < y ? -1 : x > y ? 1 : 0;
-}
-function maximum(a, b) {
-  return compare(a, b) >= 0 ? a : b;
-}
-function half(a) {
-  return { coef: a.coef * 5n, exp: a.exp - 1 };
-}
-function decimalString(a) {
-  let coef = a.coef;
-  let exp = a.exp;
-  if (coef === 0n) return "0";
-  while (exp < 0 && coef % 10n === 0n) {
-    coef /= 10n;
-    exp += 1;
-  }
-  const negative = coef < 0n;
-  const digits = (negative ? -coef : coef).toString();
-  let body;
-  if (exp >= 0) body = digits + "0".repeat(exp);
-  else {
-    const point = digits.length + exp;
-    body = point > 0 ? `${digits.slice(0, point)}.${digits.slice(point)}` : `0.${"0".repeat(-point)}${digits}`;
-  }
-  return negative ? `-${body}` : body;
-}
-function decimalNumber(a) {
-  return Number(decimalString(a));
-}
-var DECIMAL, pow10Cache;
-var init_decimal = __esm({
-  "src/metrics/decimal.ts"() {
-    "use strict";
-    DECIMAL = /^(-?)([0-9]+)(?:\.([0-9]+))?(?:[eE]([-+]?[0-9]+))?$/;
-    pow10Cache = /* @__PURE__ */ new Map();
-  }
-});
-
 // src/metrics/perfSeries.ts
 import { createHash as createHash14 } from "node:crypto";
 function ruleFor(name) {
@@ -75551,11 +75554,11 @@ function seriesRunOf(row) {
   }
   return { startedAt: row.started_at, metrics: out, verdicts };
 }
-function exactOf(n) {
+function exactOf2(n) {
   return decimalOfNumber(n) ?? { coef: 0n, exp: 0 };
 }
 function median(values2) {
-  const sorted = values2.map(exactOf).sort(compare);
+  const sorted = values2.map(exactOf2).sort(compare);
   const mid = Math.floor(sorted.length / 2);
   const hi = sorted[mid] ?? { coef: 0n, exp: 0 };
   const lo = sorted[mid - 1];
@@ -75588,7 +75591,7 @@ function judgeSeries(earlier2, samples) {
     const oldestRun = usable[usable.length - 1];
     const since = oldestRun === void 0 ? {} : { since: { value: decimalNumber(median(usable.slice(-SINCE_RUNS).map(valueIn))), at: oldestRun.startedAt } };
     const reference = window.length > 0 ? median(window.map(valueIn)) : null;
-    const delta = reference === null ? null : subtract(exactOf(s.value), reference);
+    const delta = reference === null ? null : subtract(exactOf2(s.value), reference);
     const shown = {
       ...base2,
       reference: reference === null ? null : decimalNumber(reference),
@@ -75661,18 +75664,18 @@ function takePruneBatch(db, pending, maxScans, maxRows = PRUNE_BATCH_ROWS) {
   const head = pending.slice(0, Math.max(1, maxScans));
   if (head.length <= 1) return pending.splice(0, head.length);
   const list2 = head.map(() => "?").join(", ");
-  const rows = /* @__PURE__ */ new Map();
+  const rows2 = /* @__PURE__ */ new Map();
   for (const table of ["findings", "scan_cves"]) {
     for (const r of db.prepare(
       `SELECT scan_id AS id, COUNT(*) AS n FROM ${table} WHERE scan_id IN (${list2}) GROUP BY scan_id`
     ).all(...head)) {
-      rows.set(r.id, (rows.get(r.id) ?? 0) + r.n);
+      rows2.set(r.id, (rows2.get(r.id) ?? 0) + r.n);
     }
   }
   let total = 0;
   let take = 0;
   for (const id of head) {
-    const n = rows.get(id) ?? 0;
+    const n = rows2.get(id) ?? 0;
     if (take > 0 && total + n > maxRows) break;
     total += n;
     take += 1;
@@ -78072,9 +78075,9 @@ function statementKeysOf(members2) {
     keys.push({ name, pkg: member.pkg, version: member.version, first: index });
   };
   const indexed = members2.map((member, index) => ({ member, index }));
-  const inOrder = (rows, exact) => indexed.filter(({ member }) => member.row !== void 0 === rows && member.version !== null === exact).sort((a, b) => a.member.ids.length - b.member.ids.length || a.index - b.index);
-  for (const [rows, exact] of [[true, true], [false, true], [true, false], [false, false]]) {
-    for (const { member, index } of inOrder(rows, exact)) add2(member, index);
+  const inOrder = (rows2, exact) => indexed.filter(({ member }) => member.row !== void 0 === rows2 && member.version !== null === exact).sort((a, b) => a.member.ids.length - b.member.ids.length || a.index - b.index);
+  for (const [rows2, exact] of [[true, true], [false, true], [true, false], [false, false]]) {
+    for (const { member, index } of inOrder(rows2, exact)) add2(member, index);
   }
   return keys.sort((a, b) => a.first - b.first).map(({ name, pkg, version: version2 }) => ({ name, pkg, version: version2 }));
 }
@@ -78082,10 +78085,10 @@ function groupMembers(members2) {
   return statementKeysOf(members2).map((key) => ({ ...key, members: members2.filter((m) => isMemberOf(m, key)) }));
 }
 function statementFor(group, names, inputs, active) {
-  const rows = group.members.flatMap((m) => m.row === void 0 ? [] : [m.row]);
+  const rows2 = group.members.flatMap((m) => m.row === void 0 ? [] : [m.row]);
   const findings = uniqueFindings(group.members.flatMap((m) => m.finding === void 0 ? [] : [m.finding]));
   const version2 = group.version;
-  const name = rows[0]?.package_name ?? group.members[0]?.name ?? "";
+  const name = rows2[0]?.package_name ?? group.members[0]?.name ?? "";
   const { vulnerability, aliases } = namesOf(group, names);
   const subjects = findings.flatMap((f) => {
     const subject = dependencySubjectOf(f);
@@ -78099,8 +78102,8 @@ function statementFor(group, names, inputs, active) {
     aliases,
     package_name: name,
     installed_version: version2,
-    fixed_version: rows.find((r) => r.fixed_version !== void 0)?.fixed_version ?? null,
-    severity: maxSeverity([...rows.map((r) => r.severity), ...findings.map((f) => f.severity)]),
+    fixed_version: rows2.find((r) => r.fixed_version !== void 0)?.fixed_version ?? null,
+    severity: maxSeverity([...rows2.map((r) => r.severity), ...findings.map((f) => f.severity)]),
     subcomponent_purls: sbomPurls.length > 0 ? sbomPurls : built === null ? [] : [built]
   };
   const label2 = `${name}${version2 === null ? "" : `@${version2}`}`;
@@ -81223,9 +81226,9 @@ function findFirstCsproj(projectPath) {
   const name = listProjectDir(projectPath, projectPath).map((e) => e.name).filter((n) => n.toLowerCase().endsWith(".csproj")).sort()[0];
   return name ? join81(projectPath, name) : null;
 }
-function groupByLicense(rows) {
+function groupByLicense(rows2) {
   const out = {};
-  for (const r of rows) {
+  for (const r of rows2) {
     out[r.dep_license] = (out[r.dep_license] ?? 0) + r.packages.length;
   }
   return out;
@@ -82898,7 +82901,7 @@ var init_registerCustomRules = __esm({
 
 // src/hooks/heartbeat.ts
 import { createHash as createHash15, randomBytes as randomBytes7 } from "node:crypto";
-import { accessSync as accessSync2, constants as constants5, readdirSync as readdirSync16, realpathSync as realpathSync6, statSync as statSync13 } from "node:fs";
+import { accessSync as accessSync2, constants as constants6, readdirSync as readdirSync16, realpathSync as realpathSync6, statSync as statSync13 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { dirname as dirname26, join as join84, parse as parse10, resolve as resolve26 } from "node:path";
 function comparablePath(path3, platform) {
@@ -82999,10 +83002,10 @@ function probeWritable(dataDir) {
     }
     if (!st.isDirectory()) return "it is not a directory";
     try {
-      accessSync2(dir, constants5.W_OK);
+      accessSync2(dir, constants6.W_OK);
       return null;
     } catch (error62) {
-      return `it is not writable (${reasonOf3(error62)})`;
+      return `it is not writable (${reasonOf4(error62)})`;
     }
   }
   return "it does not exist";
@@ -83097,7 +83100,7 @@ function isInside3(path3, dir, platform) {
   const parent = comparablePath(dir, platform);
   return child === parent || child.startsWith(`${parent}/`);
 }
-var HEARTBEAT_DIR, GRACE_MS2, TOLERANCE_MS, MAX_AGE_MS, LIST_MAX, READ_MAX, HOOKS_MIN_CLAUDE_CODE, SOURCES, MARK_NAME, isPid, reasonOf3, newest, MIN_VERSION, DISABLED_BY;
+var HEARTBEAT_DIR, GRACE_MS2, TOLERANCE_MS, MAX_AGE_MS, LIST_MAX, READ_MAX, HOOKS_MIN_CLAUDE_CODE, SOURCES, MARK_NAME, isPid, reasonOf4, newest, MIN_VERSION, DISABLED_BY;
 var init_heartbeat = __esm({
   "src/hooks/heartbeat.ts"() {
     "use strict";
@@ -83113,7 +83116,7 @@ var init_heartbeat = __esm({
     SOURCES = ["startup", "resume", "clear", "compact", "fork"];
     MARK_NAME = /^p([0-9a-f]{16})\.h(\d{1,10})\.json$/;
     isPid = (n) => typeof n === "number" && Number.isInteger(n) && n > 0 && n <= 4294967295;
-    reasonOf3 = (error62) => {
+    reasonOf4 = (error62) => {
       const code = error62?.code;
       return code !== void 0 ? code : error62 instanceof Error ? error62.message : String(error62);
     };
@@ -84498,11 +84501,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants6);
+          this.rhs = optimizeExpr(this.rhs, names, constants7);
         return this;
       }
       get names() {
@@ -84519,10 +84522,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants6);
+        this.rhs = optimizeExpr(this.rhs, names, constants7);
         return this;
       }
       get names() {
@@ -84583,8 +84586,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants6) {
-        this.code = optimizeExpr(this.code, names, constants6);
+      optimizeNames(names, constants7) {
+        this.code = optimizeExpr(this.code, names, constants7);
         return this;
       }
       get names() {
@@ -84613,12 +84616,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants6))
+          if (n.optimizeNames(names, constants7))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -84671,12 +84674,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         var _a3;
-        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants6);
-        if (!(super.optimizeNames(names, constants6) || this.else))
+        this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants7);
+        if (!(super.optimizeNames(names, constants7) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants6);
+        this.condition = optimizeExpr(this.condition, names, constants7);
         return this;
       }
       get names() {
@@ -84699,10 +84702,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants6) {
-        if (!super.optimizeNames(names, constants6))
+      optimizeNames(names, constants7) {
+        if (!super.optimizeNames(names, constants7))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants6);
+        this.iteration = optimizeExpr(this.iteration, names, constants7);
         return this;
       }
       get names() {
@@ -84738,10 +84741,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants6) {
-        if (!super.optimizeNames(names, constants6))
+      optimizeNames(names, constants7) {
+        if (!super.optimizeNames(names, constants7))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants6);
+        this.iterable = optimizeExpr(this.iterable, names, constants7);
         return this;
       }
       get names() {
@@ -84783,11 +84786,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         var _a3, _b;
-        super.optimizeNames(names, constants6);
-        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants6);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants6);
+        super.optimizeNames(names, constants7);
+        (_a3 = this.catch) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants7);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants7);
         return this;
       }
       get names() {
@@ -85088,7 +85091,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants6) {
+    function optimizeExpr(expr, names, constants7) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -85103,14 +85106,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants6[n.str];
+        const c = constants7[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants6[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants7[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -93704,9 +93707,9 @@ function splitRow(line) {
   if (l.endsWith("|")) l = l.slice(0, -1);
   return l.split("|").map((c) => c.trim());
 }
-function renderTable(header, rows) {
+function renderTable(header, rows2) {
   const th = header.map((c) => `<th>${inline(c)}</th>`).join("");
-  const trs = rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("");
+  const trs = rows2.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("");
   return `<table><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>`;
 }
 function isBlockStart(line, next) {
@@ -93749,12 +93752,12 @@ function markdownToSafeHtml(md) {
     if (line.includes("|") && TABLE_SEP.test(at(i + 1))) {
       const header = splitRow(line);
       i += 2;
-      const rows = [];
+      const rows2 = [];
       while (i < lines.length && at(i).includes("|") && at(i).trim() !== "") {
-        rows.push(splitRow(at(i)));
+        rows2.push(splitRow(at(i)));
         i++;
       }
-      out.push(renderTable(header, rows));
+      out.push(renderTable(header, rows2));
       continue;
     }
     if (/^>\s?/.test(line)) {
@@ -93922,7 +93925,7 @@ function owaspCoverageMarkdown(cov) {
   return lines;
 }
 function owaspCoverageHtml(cov) {
-  const rows = cov.categories.map((c) => {
+  const rows2 = cov.categories.map((c) => {
     const why = c.status === "partial" ? `<br><small>${escapeHtml(c.reasons.join("; "))}</small>` : c.status === "not_tested" ? `<br><small>${escapeHtml(untestedHint(c, cov))}</small>` : "";
     return `<tr>
   <td><a href="${escapeHtml(c.url)}" target="_blank" rel="noopener">${escapeHtml(c.id)}</a> ${escapeHtml(c.title)}</td>
@@ -93935,7 +93938,7 @@ function owaspCoverageHtml(cov) {
   return `<h2>OWASP Top 10:2025 coverage</h2>
 <p class="pdk-meta">${escapeHtml(COVERAGE_RULE)}</p>
 <p class="pdk-meta">${escapeHtml(languagesLine(cov))}</p>
-<table><thead><tr><th>Category</th><th>Coverage</th><th>Tested by</th><th>Findings</th></tr></thead><tbody>${rows}</tbody></table>
+<table><thead><tr><th>Category</th><th>Coverage</th><th>Tested by</th><th>Findings</th></tr></thead><tbody>${rows2}</tbody></table>
 ` + unmapped;
 }
 var COVERAGE_RULE, STATUS_LABEL;
@@ -96223,25 +96226,25 @@ function checksumRows(stdout) {
   try {
     const arr = JSON.parse(text3);
     if (!Array.isArray(arr) || arr.length === 0) return null;
-    const rows = arr.filter((x) => typeof x === "object" && x !== null && !Array.isArray(x));
-    return rows.length === arr.length && rows.every((x) => typeof x["file"] === "string") ? rows : null;
+    const rows2 = arr.filter((x) => typeof x === "object" && x !== null && !Array.isArray(x));
+    return rows2.length === arr.length && rows2.every((x) => typeof x["file"] === "string") ? rows2 : null;
   } catch {
     return null;
   }
 }
 function parseChecksumOutput(r) {
-  const rows = checksumRows(r.stdout);
-  if (rows === null) return [];
-  return rows.map((x) => ({
+  const rows2 = checksumRows(r.stdout);
+  if (rows2 === null) return [];
+  return rows2.map((x) => ({
     file: str3(x["file"]) ?? "(unknown)",
     status: normaliseStatus(str3(x["status"]) ?? str3(x["message"]))
   }));
 }
 function groupByComponent(r) {
-  const rows = checksumRows(r.stdout);
-  if (rows === null) return {};
+  const rows2 = checksumRows(r.stdout);
+  if (rows2 === null) return {};
   const out = {};
-  for (const row of rows) {
+  for (const row of rows2) {
     const slug = str3(row["plugin_name"]) ?? "(unknown)";
     const f = {
       file: str3(row["file"]) ?? "(unknown)",
@@ -98103,14 +98106,14 @@ async function probeInstalled(probePath, slug) {
     return failed(`${r.outcome}, exit ${r.exitCode ?? "?"}${stderr ? `: ${stderr.trim().slice(0, 300)}` : ""}`);
   }
   if (r.stdout.trim() === "") return failed("WP-CLI printed nothing");
-  let rows;
+  let rows2;
   try {
-    rows = JSON.parse(r.stdout);
+    rows2 = JSON.parse(r.stdout);
   } catch {
     return failed(`WP-CLI output is not JSON: ${r.stdout.trim().slice(0, 120)}`);
   }
-  if (!Array.isArray(rows)) return failed("WP-CLI output is not a JSON list");
-  const match = rows.find(
+  if (!Array.isArray(rows2)) return failed("WP-CLI output is not a JSON list");
+  const match = rows2.find(
     (p) => p?.name === slug
   );
   if (!match) return { run: { name: "wp-cli", status: "ok" }, installed: false, version: null, active: null, warning: null };
@@ -98731,21 +98734,21 @@ async function handler35(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
   const projects = collectCsprojFiles(projectPath, 6);
-  const rows = [];
+  const rows2 = [];
   for (const file2 of projects) {
     const xml = readProjectTextOrUndefined(projectPath, file2);
     if (xml === void 0) continue;
     const tfms = extractTfms(xml);
     if (tfms.length === 0) continue;
     const statuses = tfms.map((tfm) => SUPPORT[tfm] ?? unknownStatus(tfm));
-    rows.push({
+    rows2.push({
       file: relative31(projectPath, file2).replace(/\\/g, "/"),
       target_frameworks: tfms,
       statuses
     });
   }
-  const eol = rows.flatMap((r) => r.statuses).filter((s) => s.status === "eol");
-  const legacy = rows.flatMap((r) => r.statuses).filter((s) => s.status === "legacy");
+  const eol = rows2.flatMap((r) => r.statuses).filter((s) => s.status === "eol");
+  const legacy = rows2.flatMap((r) => r.statuses).filter((s) => s.status === "legacy");
   const scanId = randomUUID15();
   ctx.storage.scans.insert({
     scan_id: scanId,
@@ -98759,19 +98762,19 @@ async function handler35(inp, ctx) {
     tools_run: [{ name: "dotnet_target_framework_check", status: "ok" }],
     missing_tools: [],
     meta: {
-      project_count: rows.length,
+      project_count: rows2.length,
       eol_count: eol.length,
       legacy_count: legacy.length,
-      projects: rows
+      projects: rows2
     }
   });
   return {
     ok: true,
     scan_id: scanId,
-    project_count: rows.length,
+    project_count: rows2.length,
     eol_count: eol.length,
     legacy_count: legacy.length,
-    projects: rows,
+    projects: rows2,
     hint: eol.length > 0 ? `Migrate EOL framework(s) \u2014 they receive no security patches. Suggested target: net8.0 LTS.` : "All target frameworks are in active support."
   };
 }
@@ -108026,19 +108029,19 @@ async function prExists(opts) {
   if (hasFailed(result)) {
     return { known: false, reason: describeFailure3(result, "gh pr list") };
   }
-  let rows;
+  let rows2;
   try {
-    rows = JSON.parse(result.stdout || "[]");
+    rows2 = JSON.parse(result.stdout || "[]");
   } catch (e) {
     return {
       known: false,
       reason: `'gh pr list' printed output that could not be parsed as JSON: ${errorMessage2(e)}`
     };
   }
-  if (!Array.isArray(rows)) {
+  if (!Array.isArray(rows2)) {
     return { known: false, reason: "'gh pr list' returned JSON that was not an array" };
   }
-  return { known: true, exists: rows.length > 0 };
+  return { known: true, exists: rows2.length > 0 };
 }
 async function openPr(opts) {
   const run2 = opts.run ?? runProcess;
@@ -109659,7 +109662,7 @@ async function rescanAfterFix(targets, origins, worktreePath, projectPath, ctx, 
     const scanId = result.scan_id;
     if (typeof scanId !== "string") return { ok: false, reason: `${origin.toolName} returned no scan_id` };
     const row = ctx.storage.scans.getById(scanId);
-    const rows = ctx.storage.findings.listByScan(scanId);
+    const rows2 = ctx.storage.findings.listByScan(scanId);
     try {
       deleteScans(ctx.storage.rawHandle(), [scanId]);
     } catch {
@@ -109673,7 +109676,7 @@ async function rescanAfterFix(targets, origins, worktreePath, projectPath, ctx, 
       };
     }
     scanIds.push(scanId);
-    findings.push(...rows);
+    findings.push(...rows2);
   }
   return { ok: true, scanIds, findings };
 }
@@ -111222,18 +111225,18 @@ var init_rules2 = __esm({
 
 // src/mcpaudit/analyze.ts
 function normalizeListing(raw) {
-  let malformed = 0;
+  let malformed2 = 0;
   const pick2 = (items, build3) => {
     const out = [];
     for (const item of items ?? []) {
       if (item === null || typeof item !== "object" || Array.isArray(item)) {
-        malformed += 1;
+        malformed2 += 1;
         continue;
       }
       const o = item;
       const name = o["name"];
       if (typeof name !== "string") {
-        malformed += 1;
+        malformed2 += 1;
         continue;
       }
       out.push(build3(o, name));
@@ -111281,7 +111284,7 @@ function normalizeListing(raw) {
     if (uri !== void 0) r.uri = uri;
     return r;
   });
-  return { tools, prompts, resources, resourceTemplates, malformed };
+  return { tools, prompts, resources, resourceTemplates, malformed: malformed2 };
 }
 function* walkStrings(value, root, item, onTooDeep) {
   const stack = [{ v: value, path: root, depth: 0 }];
@@ -120345,24 +120348,24 @@ function renderExcerpt(text3, flagged, maxChars = MAX_EXCERPT_CHARS) {
   const [from, to] = excerptRange(lines, at);
   const scrubbed = scrubSecrets(lines.slice(from - 1, to).join("\n"), from).split("\n");
   const width = String(to).length;
-  const rows = scrubbed.map((line, i) => {
+  const rows2 = scrubbed.map((line, i) => {
     const n = from + i;
     const cap = n === at ? MAX_FLAGGED_LINE_CHARS : MAX_LINE_CHARS;
     return `${n === at ? ">" : " "}${String(n).padStart(width)} | ${clip4(line, cap)}`;
   });
   let lo = 0;
-  let hi = rows.length;
-  let size = rows.reduce((a, r) => a + r.length + 1, 0);
+  let hi = rows2.length;
+  let size = rows2.reduce((a, r) => a + r.length + 1, 0);
   const flaggedIdx = at - from;
   while (size > maxChars && hi - lo > 1) {
-    if (flaggedIdx - lo >= hi - 1 - flaggedIdx) size -= (rows[lo++] ?? "").length + 1;
-    else size -= (rows[--hi] ?? "").length + 1;
+    if (flaggedIdx - lo >= hi - 1 - flaggedIdx) size -= (rows2[lo++] ?? "").length + 1;
+    else size -= (rows2[--hi] ?? "").length + 1;
   }
-  return note + rows.slice(lo, hi).join("\n");
+  return note + rows2.slice(lo, hi).join("\n");
 }
 function renderFinding(f, file2) {
   const line = file2 !== void 0 && f.line_start !== void 0 ? `:${String(f.line_start)}` : "";
-  const rows = [
+  const rows2 = [
     `tool: ${scrubSecrets(f.tool)}`,
     `rule: ${scrubSecrets(f.rule_id ?? "(none)")}`,
     `severity: ${f.severity}`,
@@ -120370,8 +120373,8 @@ function renderFinding(f, file2) {
     `title: ${clip4(scrubSecrets(f.title), 300)}`,
     `message: ${clip4(scrubSecrets(f.message ?? ""), MAX_MESSAGE_CHARS)}`
   ];
-  if (f.snippet !== void 0 && f.snippet !== "") rows.push(`snippet: ${clip4(scrubSecrets(f.snippet), MAX_SNIPPET_CHARS)}`);
-  return rows.join("\n");
+  if (f.snippet !== void 0 && f.snippet !== "") rows2.push(`snippet: ${clip4(scrubSecrets(f.snippet), MAX_SNIPPET_CHARS)}`);
+  return rows2.join("\n");
 }
 function renderList(items, more) {
   if (items.length === 0) return "(none)";
@@ -121153,12 +121156,12 @@ function acceptVerdict(storage, plan, task, input2, verdict, responseChars, now)
 }
 function acceptHunt(storage, plan, task, input2, value, rejected, responseChars, now) {
   const repo = storage.llmScan;
-  const rows = new Map(value.findings.map((f) => huntFindingRow(f)).map((r) => [r.fingerprint, r]));
+  const rows2 = new Map(value.findings.map((f) => huntFindingRow(f)).map((r) => [r.fingerprint, r]));
   const stored = storage.rawHandle().transaction(() => {
-    const result = { entry_points_reviewed: value.entry_points_reviewed, findings: value.findings, fingerprints: [...rows.keys()] };
+    const result = { entry_points_reviewed: value.entry_points_reviewed, findings: value.findings, fingerprints: [...rows2.keys()] };
     if (!repo.closeTask(plan.id, task.task_id, input2.lease_token, { independence: input2.independence, result, closed_reason: "valid", response_chars: responseChars }, now)) return null;
     const known = new Set(storage.findings.listByScan(plan.scan_id).map((f) => f.fingerprint));
-    const fresh = [...rows.values()].filter((f) => !known.has(f.fingerprint));
+    const fresh = [...rows2.values()].filter((f) => !known.has(f.fingerprint));
     const withIdentity = assignIdentities(fresh, { projectPath: plan.project_path, readSource: makeSourceReader(plan.project_path) });
     storage.findings.bulkInsert(withIdentity.map((f) => ({ ...f, scan_id: plan.scan_id })));
     const firstNumber = repo.nextTaskNumber(plan.id);
@@ -122426,9 +122429,9 @@ function partialParsesOf(name, result, toolsRun, missingTools) {
 }
 function collectFindings(storage, projectPath) {
   const project = scannedProject(projectPath);
-  const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
+  const rows2 = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
   const all = [];
-  for (const scan2 of rows) {
+  for (const scan2 of rows2) {
     if (isScopedScan(scan2)) continue;
     all.push(...storage.findings.listByScan(scan2.scan_id));
   }
@@ -122436,8 +122439,8 @@ function collectFindings(storage, projectPath) {
 }
 function fullContentFindings(storage, projectPath) {
   const project = scannedProject(projectPath);
-  const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
-  return rows.filter((scan2) => isScopedScan(scan2) && scan2.scan_type === "secrets").flatMap((scan2) => storage.findings.listByScan(scan2.scan_id)).filter((f) => f.tool.toLowerCase() === "gitleaks" && !/;commit=[0-9a-f]+$/i.test(f.snippet ?? "")).filter((f) => f.line_start !== void 0);
+  const rows2 = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
+  return rows2.filter((scan2) => isScopedScan(scan2) && scan2.scan_type === "secrets").flatMap((scan2) => storage.findings.listByScan(scan2.scan_id)).filter((f) => f.tool.toLowerCase() === "gitleaks" && !/;commit=[0-9a-f]+$/i.test(f.snippet ?? "")).filter((f) => f.line_start !== void 0);
 }
 function withoutRepeats(findings, wholeFiles) {
   const seen = /* @__PURE__ */ new Set();
@@ -122454,8 +122457,8 @@ function withoutRepeats(findings, wholeFiles) {
 }
 function reportDirsOf(storage, projectPath) {
   const project = scannedProject(projectPath);
-  const rows = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
-  return rows.flatMap((scan2) => scan2.report_paths);
+  const rows2 = storage.scans.listHistoryForProject(project, storage.scans.countForProject(project));
+  return rows2.flatMap((scan2) => scan2.report_paths);
 }
 function scannedProject(projectPath) {
   try {
@@ -123391,7 +123394,7 @@ function severitySection(findings) {
 function owaspSection(findings, coverage) {
   const entries3 = coverage.owasp ?? [];
   if (entries3.length === 0) return null;
-  const rows = entries3.map(
+  const rows2 = entries3.map(
     (e) => `<tr>
   <td>${escapeHtml(e.id)} ${escapeHtml(e.title)}</td>
   <td>${e.status === "not_tested" ? "<strong>not tested</strong>" : escapeHtml(OWASP_STATUS_TEXT[e.status])}${(e.reasons ?? []).length > 0 ? `<br><small>${escapeHtml((e.reasons ?? []).join("; "))}</small>` : ""}</td>
@@ -123404,7 +123407,7 @@ function owaspSection(findings, coverage) {
   return `<section>
   <h2>OWASP Top 10:2025</h2>
   <p class="pdk-meta">${escapeHtml(`A category is tested only when, for every source language of the project, a scanner that ran fully ok has at least three rules for it naming two or more CWEs; a scanner that sees only a slice of it (secrets, vulnerable dependencies) makes it partial at most \u2014 "not tested" is not clean.${langText}`)}${unmapped > 0 ? ` ${unmapped} open finding${unmapped === 1 ? "" : "s"} carry no OWASP 2025 category.` : ""}</p>
-  <table><thead><tr><th>Category</th><th>Coverage</th><th>Open findings</th></tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th>Category</th><th>Coverage</th><th>Open findings</th></tr></thead><tbody>${rows2}</tbody></table>
 </section>`;
 }
 function deltasSection(snapshot, scanType) {
@@ -123424,8 +123427,8 @@ function renderDelta(label2, delta, emptyMessage) {
   if (delta === null) {
     return `<p><strong>${escapeHtml(label2)}:</strong> ${escapeHtml(emptyMessage)}</p>`;
   }
-  const rows = delta.new_findings.map((f) => deltaRow(f)).join("");
-  const table = delta.new_findings.length > 0 ? `<table><thead><tr><th>Sev</th><th>Title</th><th>Location</th></tr></thead><tbody>${rows}</tbody></table>` : "";
+  const rows2 = delta.new_findings.map((f) => deltaRow(f)).join("");
+  const table = delta.new_findings.length > 0 ? `<table><thead><tr><th>Sev</th><th>Title</th><th>Location</th></tr></thead><tbody>${rows2}</tbody></table>` : "";
   const gaps = [];
   if ((delta.not_remeasured_count ?? 0) > 0) gaps.push(`${delta.not_remeasured_count} not re-measured`);
   if ((delta.not_previously_measured_count ?? 0) > 0) {
@@ -123457,7 +123460,7 @@ function findingsTableSection(findings) {
   const severityOptions = SEVERITY_ORDER2.map((s) => `<option value="${s}">${s} (${findings.by_severity[s]})</option>`).join("");
   const toolOptions = optionsFor(findings.by_tool);
   const categoryOptions = optionsFor(findings.by_category);
-  const rows = findings.items.map((f) => findingRow(f)).join("");
+  const rows2 = findings.items.map((f) => findingRow(f)).join("");
   const shownCount = findings.items.length;
   return `<section>
   <h2>Open findings (<span id="pdk-findings-count">${shownCount} of ${shownCount} shown</span>)</h2>
@@ -123478,7 +123481,7 @@ function findingsTableSection(findings) {
         <th id="pdk-th-file">Location</th>
       </tr>
     </thead>
-    <tbody id="pdk-findings-body">${rows}</tbody>
+    <tbody id="pdk-findings-body">${rows2}</tbody>
   </table>
 </section>`;
 }
@@ -123511,10 +123514,10 @@ function hotspotsSection(hotspots) {
   <p class="pdk-empty">No hotspots.</p>
 </section>`;
   }
-  const rows = hotspots.map((h) => `<tr><td><code>${escapeHtml(h.file_path)}</code></td><td>${h.count}</td></tr>`).join("");
+  const rows2 = hotspots.map((h) => `<tr><td><code>${escapeHtml(h.file_path)}</code></td><td>${h.count}</td></tr>`).join("");
   return `<section>
   <h2>Hottest files</h2>
-  <table><thead><tr><th>File</th><th>Findings</th></tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th>File</th><th>Findings</th></tr></thead><tbody>${rows2}</tbody></table>
 </section>`;
 }
 function cvesSection(cves) {
@@ -123524,10 +123527,10 @@ function cvesSection(cves) {
   <p class="pdk-empty">No CVEs indexed for this scan.</p>
 </section>`;
   }
-  const rows = cves.items.map((c) => cveRow(c)).join("");
+  const rows2 = cves.items.map((c) => cveRow(c)).join("");
   return `<section>
   <h2>Active CVEs (${cves.total})</h2>
-  <table><thead><tr><th>CVE</th><th>Sev</th><th>Package</th><th>Installed</th><th>Fixed</th></tr></thead><tbody>${rows}</tbody></table>
+  <table><thead><tr><th>CVE</th><th>Sev</th><th>Package</th><th>Installed</th><th>Fixed</th></tr></thead><tbody>${rows2}</tbody></table>
 </section>`;
 }
 function cveRow(c) {
@@ -123548,14 +123551,14 @@ function suppressionsSection(s) {
   <p class="pdk-empty">No suppressions active.</p>
 </section>`;
   }
-  const rows = s.expiring_soon.map(
+  const rows2 = s.expiring_soon.map(
     (e) => `<tr>
   <td><code>${escapeHtml(e.fingerprint)}</code></td>
   <td>${escapeHtml(e.reason)}</td>
   <td>${escapeHtml(e.expires_at)}</td>
 </tr>`
   ).join("");
-  const expiring = s.expiring_soon.length > 0 ? `<h3>Expiring within 7 days</h3><table><thead><tr><th>Fingerprint</th><th>Reason</th><th>Expires</th></tr></thead><tbody>${rows}</tbody></table>` : "";
+  const expiring = s.expiring_soon.length > 0 ? `<h3>Expiring within 7 days</h3><table><thead><tr><th>Fingerprint</th><th>Reason</th><th>Expires</th></tr></thead><tbody>${rows2}</tbody></table>` : "";
   return `<section>
   <h2>Suppressions</h2>
   <p>${s.active_count} active.</p>
@@ -124120,7 +124123,7 @@ function nextStepFor(control, ctx = {}) {
   if (hooks) return "run the selftest again; if it repeats, run the dispatcher with GUARDIAN_HOOKS_DEBUG=1";
   return `see the reason, fix it and run the selftest again; check_toolchain shows whether ${control.scanner} itself runs`;
 }
-function summaryLine(run2) {
+function summaryLine2(run2) {
   const parts = VERDICTS2.filter((v) => v !== "no_canary" && run2.summary[v] > 0).map((v) => `${run2.summary[v]} ${v}`);
   return `${run2.controls.length} control${run2.controls.length === 1 ? "" : "s"}: ${parts.length > 0 ? parts.join(", ") : "none ran"}.`;
 }
@@ -124145,7 +124148,7 @@ function renderTable2(report) {
     if (c.next !== void 0) lines.push(`  ${pad("", idWidth)}  next: ${c.next}`);
   }
   lines.push("");
-  lines.push(summaryLine(run2));
+  lines.push(summaryLine2(run2));
   if (report.interrupted === true) lines.push("Interrupted: the controls not reached are unverified, and nothing was saved.");
   if (run2.no_canary.length > 0) {
     lines.push(`Installed, with no canary \u2014 not verified by this command: ${run2.no_canary.join(", ")}.`);
@@ -124182,7 +124185,7 @@ function renderHistory(runs, problem) {
 `;
   }
   for (const run2 of runs) {
-    lines.push(`${run2.ran_at}  dev-guardian ${run2.plugin_version} on ${run2.platform} \u2014 ${summaryLine(run2)} (exit ${run2.exit_code})`);
+    lines.push(`${run2.ran_at}  dev-guardian ${run2.plugin_version} on ${run2.platform} \u2014 ${summaryLine2(run2)} (exit ${run2.exit_code})`);
     const idWidth = Math.max(7, ...run2.controls.map((c) => c.id.length));
     for (const c of run2.controls) {
       lines.push(`  ${pad(c.id, idWidth)}  ${pad(c.verdict, 16)}  ${c.scanner_version ?? "-"}${c.regressed === true ? "  REGRESSED" : ""}`);
@@ -129475,6 +129478,393 @@ function decodeText(bytes) {
 init_untrustedText();
 init_version();
 init_projectFs();
+
+// src/metrics/compare.ts
+init_untrustedText();
+init_decimal();
+
+// src/metrics/judge.ts
+init_decimal();
+var TERM_ORDER = ["better", "tolerance", "unit"];
+function exactOf(raw) {
+  return parseDecimal(raw) ?? { coef: 0n, exp: 0 };
+}
+function amountOf(t, referenceAbs) {
+  const n = exactOf(t.raw);
+  return t.percent ? shift(multiply(n, referenceAbs), -2) : n;
+}
+function loosenedTerm(reference, current, referenceAbs) {
+  if (reference.unit !== current.unit) return "unit";
+  if (reference.better !== null && current.better !== reference.better) return "better";
+  if (reference.tolerance !== null) {
+    if (current.tolerance === null) return "tolerance";
+    if (compare(amountOf(current.tolerance, referenceAbs), amountOf(reference.tolerance, referenceAbs)) > 0) return "tolerance";
+  }
+  return null;
+}
+function judgeMetric(reference, current) {
+  if (reference === null) return { verdict: "new", why: null, loosened: null, delta: null, applied: null };
+  const ref = exactOf(reference.raw);
+  const refAbs = absolute(ref);
+  const loosened = loosenedTerm(reference, current, refAbs);
+  const missing = /* @__PURE__ */ new Set();
+  if (reference.better === null) missing.add("better");
+  if (reference.tolerance === null) missing.add("tolerance");
+  if (reference.unit !== current.unit) missing.add("unit");
+  const delta = missing.has("unit") ? null : subtract(exactOf(current.raw), ref);
+  const better = reference.better;
+  const tolerance = reference.tolerance;
+  if (delta === null || better === null || tolerance === null) {
+    return { verdict: "unjudged", why: TERM_ORDER.filter((t) => missing.has(t)), loosened, delta, applied: null };
+  }
+  const stated = amountOf(tolerance, refAbs);
+  const applied = current.tolerance === null ? stated : minimum(stated, amountOf(current.tolerance, refAbs));
+  const worse = better === "lower" ? delta : negate(delta);
+  const verdict = compare(worse, applied) > 0 ? "regressed" : compare(negate(worse), applied) > 0 ? "improved" : "within";
+  return { verdict, why: null, loosened, delta, applied };
+}
+function judgmentNumbers(j) {
+  return {
+    delta: j.delta === null ? null : decimalNumber(j.delta),
+    applied: j.applied === null ? null : decimalNumber(j.applied)
+  };
+}
+
+// src/metrics/metricLine.ts
+var METRIC_FORMAT = "metric-lines/1";
+var METRIC_BOUNDS = {
+  readBytes: 64 * 1024 * 1024,
+  candidateBytes: 512,
+  candidates: 1e3,
+  names: 20
+};
+var BOUND_ORDER = ["readBytes", "candidateBytes", "candidates", "names"];
+var MALFORMED_KEPT = 5;
+var NAME = /^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$/;
+var NUMBER = /^-?(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,9})?(?:[eE][-+]?[0-9]{1,3})?$/;
+var TOLERANCE = /^((?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,9})?(?:[eE][-+]?[0-9]{1,3})?)(%?)$/;
+var UNIT_MAX_CHARS = 16;
+var START = /^[ \t]*(?:# )?METRIC(?=[ \t]|$)/;
+var BLANKS = /[ \t]+/;
+var CSI = /\u001B\[[0-?]*[ -/]*[A-Za-z]/g;
+var KEYWORD = "METRIC";
+function cleanLine(line) {
+  const noCr = line.endsWith("\r") ? line.slice(0, -1) : line;
+  return noCr.includes("\x1B") ? noCr.replace(CSI, "") : noCr;
+}
+function malformed(part) {
+  return { kind: "malformed", part };
+}
+function readCandidate(rest) {
+  const tokens = rest.split(BLANKS).filter((t) => t.length > 0);
+  const first = tokens[0];
+  if (first === void 0) return { kind: "ignored" };
+  const eq2 = first.indexOf("=");
+  if (eq2 < 0) return { kind: "ignored" };
+  const name = first.slice(0, eq2);
+  const raw = first.slice(eq2 + 1);
+  if (!NAME.test(name)) return malformed("name");
+  if (!NUMBER.test(raw)) return malformed("value");
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return malformed("value");
+  let at = 1;
+  let unit = null;
+  const second = tokens[1];
+  if (second !== void 0 && !second.includes("=")) {
+    if (Array.from(second).length > UNIT_MAX_CHARS) return malformed("unit");
+    unit = second;
+    at = 2;
+  }
+  let better = null;
+  let tolerance = null;
+  let sawBetter = false;
+  let sawTolerance = false;
+  for (const token of tokens.slice(at)) {
+    const k = token.indexOf("=");
+    if (k < 0) return malformed("token");
+    const key = token.slice(0, k);
+    const val = token.slice(k + 1);
+    if (key === "better") {
+      if (sawBetter || val !== "lower" && val !== "higher") return malformed("better");
+      sawBetter = true;
+      better = val;
+    } else if (key === "tolerance") {
+      const t = TOLERANCE.exec(val);
+      if (sawTolerance || t === null || !Number.isFinite(Number(t[1]))) return malformed("tolerance");
+      sawTolerance = true;
+      tolerance = { raw: t[1] ?? "", percent: t[2] === "%" };
+    }
+  }
+  return { kind: "metric", reading: { name, value, raw, unit, better, tolerance } };
+}
+function readMetricOutput(text3, opts = {}) {
+  const bounds = { ...METRIC_BOUNDS, ...opts.bounds };
+  const kept = /* @__PURE__ */ new Map();
+  const dropped = /* @__PURE__ */ new Set();
+  if (opts.truncated === true) dropped.add("readBytes");
+  const malformedLines = [];
+  let repeats = 0;
+  let malformedCount = 0;
+  let candidates2 = 0;
+  let from = text3.length;
+  while (from >= 0) {
+    const hit = text3.lastIndexOf(KEYWORD, from);
+    if (hit < 0) break;
+    const lineStart = text3.lastIndexOf("\n", hit) + 1;
+    const nl = text3.indexOf("\n", hit);
+    const lineEnd = nl < 0 ? text3.length : nl;
+    const cut = opts.truncated === true && lineStart === 0;
+    if (!cut) {
+      const line = cleanLine(text3.slice(lineStart, lineEnd));
+      const start = START.exec(line);
+      if (start !== null) {
+        candidates2 += 1;
+        if (candidates2 > bounds.candidates) {
+          dropped.add("candidates");
+          break;
+        }
+        if (line.length > bounds.candidateBytes || Buffer.byteLength(line, "utf8") > bounds.candidateBytes) {
+          dropped.add("candidateBytes");
+        } else {
+          const read3 = readCandidate(line.slice(start[0].length));
+          if (read3.kind === "malformed") {
+            malformedCount += 1;
+            if (malformedLines.length < MALFORMED_KEPT) malformedLines.push({ text: line, part: read3.part, at: lineStart });
+          } else if (read3.kind === "metric") {
+            const name = read3.reading.name;
+            if (kept.has(name)) repeats += 1;
+            else if (kept.size >= bounds.names) dropped.add("names");
+            else kept.set(name, { reading: read3.reading, at: lineStart });
+          }
+        }
+      }
+    }
+    if (lineStart === 0) break;
+    from = lineStart - 1;
+  }
+  const metrics = new Map(
+    [...kept.values()].sort((a, b) => a.at - b.at).map((k) => [k.reading.name, k.reading])
+  );
+  return {
+    metrics,
+    repeats,
+    malformed: malformedCount,
+    malformedLines: malformedLines.sort((a, b) => a.at - b.at).map(({ text: t, part }) => ({ text: t, part })),
+    dropped: BOUND_ORDER.filter((b) => dropped.has(b))
+  };
+}
+
+// src/metrics/compare.ts
+function compareMetricOutputs(head, base2) {
+  const comparisons = [...head.metrics.values()].map((reading) => {
+    const reference = base2?.metrics.get(reading.name) ?? null;
+    return { name: reading.name, head: reading, base: reference, judgment: judgeMetric(reference, reading) };
+  });
+  const missing = base2 === null ? [] : [...base2.metrics.keys()].filter((name) => !head.metrics.has(name));
+  return { head, base: base2, comparisons, missing };
+}
+function metricsExitCode(c, strict) {
+  if (c.head.metrics.size === 0) return 2;
+  if (!strict) return 0;
+  const failing = c.comparisons.some((m) => m.judgment.verdict === "regressed" || m.judgment.loosened !== null) || c.missing.length > 0 || c.head.malformed > 0;
+  return failing ? 1 : 0;
+}
+function namesWith(c, keep) {
+  return c.comparisons.filter(keep).map((m) => m.name);
+}
+var verdictIs = (v) => (m) => m.judgment.verdict === v;
+function toleranceJson(t) {
+  return t === null ? null : { amount: Number(t.raw), percent: t.percent };
+}
+function outputJson(file2, o) {
+  return {
+    file: file2,
+    metrics: o.metrics.size,
+    malformed: o.malformed,
+    malformed_lines: o.malformedLines.map((l) => ({ text: untrustedText(l.text), part: l.part })),
+    repeats: o.repeats,
+    dropped: [...o.dropped]
+  };
+}
+function metricsJson(c, ctx) {
+  return {
+    format: METRIC_FORMAT,
+    tool_version: ctx.toolVersion,
+    exit_code: ctx.exitCode,
+    strict: ctx.strict,
+    head: outputJson(ctx.headFile, c.head),
+    base: c.base === null || ctx.baseFile === null ? null : outputJson(ctx.baseFile, c.base),
+    comparisons: c.comparisons.map((m) => {
+      const { delta, applied } = judgmentNumbers(m.judgment);
+      return {
+        name: m.name,
+        unit: m.head.unit === null ? null : untrustedText(m.head.unit),
+        base: m.base === null ? null : m.base.value,
+        head: m.head.value,
+        delta,
+        applied,
+        // The judge's terms: the reference's.
+        better: m.base === null ? null : m.base.better,
+        tolerance: m.base === null ? null : toleranceJson(m.base.tolerance),
+        verdict: m.judgment.verdict,
+        why: m.judgment.why === null ? null : [...m.judgment.why],
+        loosened: m.judgment.loosened
+      };
+    }),
+    regressed: namesWith(c, verdictIs("regressed")),
+    improved: namesWith(c, verdictIs("improved")),
+    within: namesWith(c, verdictIs("within")),
+    new: namesWith(c, verdictIs("new")),
+    unjudged: namesWith(c, verdictIs("unjudged")),
+    loosened: namesWith(c, (m) => m.judgment.loosened !== null),
+    missing: [...c.missing]
+  };
+}
+var TERM_WORD = { better: "no better=", tolerance: "no tolerance=", unit: "the unit changed" };
+function withUnit(value, unit, cell2) {
+  return unit === null ? value : `${value} ${cell2(unit)}`;
+}
+function changeText(m) {
+  const delta = m.judgment.delta;
+  if (delta === null || m.base === null) return "\u2014";
+  const text3 = decimalString(delta);
+  const signed = text3.startsWith("-") || text3 === "0" ? text3 : `+${text3}`;
+  const base2 = m.base.value;
+  if (base2 === 0) return signed;
+  const pct = Number(text3) / Math.abs(base2) * 100;
+  return `${signed} (${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%)`;
+}
+function ruleText(m) {
+  if (m.base === null) return "\u2014";
+  const better = m.base.better ?? "no direction";
+  const t = m.base.tolerance;
+  const tol = t === null ? "no tolerance" : `${t.raw}${t.percent ? "%" : ""}`;
+  return `${better}, ${tol}`;
+}
+function verdictText(m) {
+  const j = m.judgment;
+  const head = j.verdict === "unjudged" && j.why !== null ? `unjudged: ${j.why.map((w) => TERM_WORD[w]).join(", ")}` : j.verdict;
+  const applied = j.applied === null ? "" : ` (tolerance ${decimalString(j.applied)})`;
+  return j.loosened === null ? `${head}${applied}` : `${head}${applied}; loosened ${j.loosened}`;
+}
+function summaryLine(c) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const m of c.comparisons) counts.set(m.judgment.verdict, (counts.get(m.judgment.verdict) ?? 0) + 1);
+  const parts = ["regressed", "improved", "within", "unjudged", "new"].filter((v) => (counts.get(v) ?? 0) > 0).map((v) => `${counts.get(v) ?? 0} ${v}`);
+  const loosened = c.comparisons.filter((m) => m.judgment.loosened !== null).length;
+  if (loosened > 0) parts.push(`${loosened} loosened`);
+  if (c.missing.length > 0) parts.push(`${c.missing.length} missing from the head`);
+  return parts.length > 0 ? parts.join(", ") : "nothing to compare";
+}
+function readNotes(label2, o, cell2) {
+  const notes = [];
+  if (o.malformed > 0) {
+    const shown = o.malformedLines.map((l) => `${cell2(l.text.trim())} (${l.part})`).join("; ");
+    notes.push(`${label2}: ${o.malformed} malformed METRIC line(s), not read: ${shown}`);
+  }
+  if (o.repeats > 0) notes.push(`${label2}: ${o.repeats} earlier line(s) of a name replaced by its last one`);
+  for (const b of o.dropped) notes.push(`${label2}: ${DROPPED_WORDS[b]}`);
+  return notes;
+}
+var DROPPED_WORDS = {
+  readBytes: "over 64 MiB: only its last 64 MiB were read",
+  candidateBytes: "a METRIC line over 512 bytes was not read",
+  candidates: "past 1,000 METRIC lines: the earlier ones were not read",
+  names: "past 20 names: the names printed first were not read"
+};
+function markdownCell(s) {
+  return `\`${untrustedText(s).replace(/`/g, "'").replace(/\|/g, "\\|")}\``;
+}
+function humanCell(s) {
+  return untrustedText(s);
+}
+function valueText(r, cell2) {
+  if (r === null) return "\u2014";
+  const exact = parseDecimal(r.raw);
+  return withUnit(exact === null ? r.raw : decimalString(exact), r.unit, cell2);
+}
+function rows(c, cell2, name) {
+  return c.comparisons.map((m) => [name(m.name), valueText(m.base, cell2), valueText(m.head, cell2), changeText(m), ruleText(m), verdictText(m)]);
+}
+var HEADER2 = ["metric", "base", "head", "change", "rule (the base line's)", "verdict"];
+function metricsMarkdown(c, ctx) {
+  const lines = ["### dev-guardian metrics", ""];
+  if (c.head.metrics.size === 0) {
+    lines.push("The head output holds no METRIC line that could be read: nothing was measured.", "");
+  } else {
+    lines.push(`| ${HEADER2.join(" | ")} |`, `| ${HEADER2.map(() => "---").join(" | ")} |`);
+    for (const r of rows(c, markdownCell, (n) => `\`${n}\``)) lines.push(`| ${r.join(" | ")} |`);
+    lines.push("");
+  }
+  lines.push(`${c.base === null ? "No base output: the values are shown, nothing is compared." : summaryLine(c)}`);
+  if (c.missing.length > 0) lines.push("", `Missing from the head: ${c.missing.map((n) => `\`${n}\``).join(", ")}.`);
+  const notes = [...readNotes("head", c.head, markdownCell), ...c.base === null ? [] : readNotes("base", c.base, markdownCell)];
+  if (notes.length > 0) lines.push("", ...notes.map((n) => `- ${n}`));
+  lines.push("", `${METRIC_FORMAT}, dev-guardian ${ctx.toolVersion}${ctx.strict ? ", --strict" : ""}: exit ${ctx.exitCode}.`);
+  return `${lines.join("\n")}
+`;
+}
+function padTable(table) {
+  const widths = table[0]?.map((_, i) => Math.max(...table.map((r) => (r[i] ?? "").length))) ?? [];
+  return table.map((r) => r.map((cell2, i) => cell2.padEnd(widths[i] ?? 0)).join("  ").trimEnd());
+}
+function metricsHuman(c, ctx) {
+  const lines = [`dev-guardian metrics (${METRIC_FORMAT}) \u2014 head: ${humanCell(ctx.headFile)}${ctx.baseFile === null ? "" : ` \xB7 base: ${humanCell(ctx.baseFile)}`}`];
+  if (c.head.metrics.size === 0) {
+    lines.push("The head output holds no METRIC line that could be read: nothing was measured (exit 2).");
+  } else {
+    lines.push("", ...padTable([HEADER2, ...rows(c, humanCell, (n) => n)]), "");
+    lines.push(c.base === null ? "No base output: the values are shown, nothing is compared." : summaryLine(c));
+  }
+  if (c.missing.length > 0) lines.push(`Missing from the head: ${c.missing.join(", ")}.`);
+  lines.push(...readNotes("head", c.head, humanCell), ...c.base === null ? [] : readNotes("base", c.base, humanCell));
+  lines.push(`exit ${ctx.exitCode}${ctx.strict ? " (--strict)" : ""}`);
+  return `${lines.join("\n")}
+`;
+}
+
+// src/metrics/metricFile.ts
+import { closeSync as closeSync3, constants as constants4, fstatSync as fstatSync3, openSync as openSync3, readSync as readSync3 } from "node:fs";
+var OPEN_FLAGS3 = constants4.O_RDONLY | (constants4.O_NONBLOCK ?? 0);
+function reasonOf(e) {
+  const code = e instanceof Error && "code" in e && typeof e.code === "string" ? e.code : "";
+  if (code === "ENOENT") return "no such file";
+  if (code === "EISDIR") return "a directory, not a file";
+  if (code === "EACCES" || code === "EPERM") return "permission denied";
+  return code !== "" ? `could not be read (${code})` : "could not be read";
+}
+function readMetricFile(path3, maxBytes = METRIC_BOUNDS.readBytes) {
+  let fd;
+  try {
+    fd = openSync3(path3, OPEN_FLAGS3);
+  } catch (e) {
+    return { ok: false, reason: reasonOf(e) };
+  }
+  try {
+    const st = fstatSync3(fd);
+    if (st.isDirectory()) return { ok: false, reason: "a directory, not a file" };
+    if (!st.isFile()) return { ok: false, reason: "not a regular file" };
+    const length = Math.min(st.size, maxBytes);
+    const start = st.size - length;
+    const buf = Buffer.alloc(length);
+    let got = 0;
+    while (got < length) {
+      const n = readSync3(fd, buf, got, length - got, start + got);
+      if (n === 0) break;
+      got += n;
+    }
+    return { ok: true, text: decodeText(buf.subarray(0, got)), truncated: start > 0 };
+  } catch (e) {
+    return { ok: false, reason: reasonOf(e) };
+  } finally {
+    try {
+      closeSync3(fd);
+    } catch {
+    }
+  }
+}
+
+// src/cli.ts
 function requireNodeSqlite(db) {
   if (db.nodeSqliteAvailable()) return;
   throw Object.assign(new Error(db.NODE_SQLITE_REQUIRED), { code: "ERR_UNKNOWN_BUILTIN_MODULE" });
@@ -129586,6 +129976,7 @@ export {
   PROJECT_LOCKFILE_MAX_BYTES,
   assessBashCommand,
   canonicalPath,
+  compareMetricOutputs,
   decodeText,
   describeReadRefusal,
   describeWriteRefusal,
@@ -129599,8 +129990,14 @@ export {
   loadDbModules,
   loadImportSarifModules,
   loadSelftestModules,
+  metricsExitCode,
+  metricsHuman,
+  metricsJson,
+  metricsMarkdown,
   previewMcpConfig,
   projectWriteRefusal,
+  readMetricFile,
+  readMetricOutput,
   readProjectText,
   resolveProjectPath,
   resolveVersion,

@@ -93,6 +93,17 @@ leaf: nothing under `runners/`, `ci/`, `history/` or the scan tools imports it, 
 It opens no database and reads no project. A new raw `node:fs` call there goes in `rawRepoFsSites.test.ts` like any
 other, and a new rule pack needs a canary (`configs/selftest/README.md`).
 
+## The metrics module
+
+`mcp/src/metrics/` (3.17.0) is a leaf: no storage, no runner, no tool module imported. It reads the METRIC
+lines of `metric-lines/1` (`metricLine.ts` — the contract is the fixture shared with dev-spec-driven,
+[build-and-test.md](build-and-test.md)), judges them (`judge.ts`, exact decimals in `decimal.ts`), compares two
+outputs and renders the `metrics` command's report (`compare.ts`; `metricFile.ts` is the one file read, a path
+the operator named), and holds `perf_check`'s series rules (`perfSeries.ts`). `tools/perfCheck.ts` reads and
+writes the `perf` rows (`scansRepo.listCompletedPerfSeries`, one statement per series); `src/cli.ts` re-exports
+what the CLI uses directly — it is light, so `metrics` loads no `load*Modules()`. A `perf` row is `'never'`
+(`history/scanRoles.ts`): it reports through `meta`, and as `'state'` it would be `latestStateScan`'s default.
+
 ## What a scan of the project's own files leaves out
 
 Only the ROOT `.guardian/`'s generated output — `reports/`, the database,

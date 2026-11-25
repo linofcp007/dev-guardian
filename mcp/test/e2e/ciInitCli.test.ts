@@ -1226,3 +1226,225 @@ describe('ci-init: pull-request pipelines pass the base ref; push pipelines pass
     expect(existsSync(join(dir, 'scanned.txt'))).toBe(false);
   });
 });
+
+/**
+ * `ci-init github --metrics-command "<cmd>"` (3.17.0): a `metrics` job that runs
+ * the command on the change and, on a pull request, on its base, and compares
+ * their METRIC lines (`dev-guardian metrics`). GitHub only; argv only; the
+ * command through `env:` and `bash -c`; the job advisory and `contents: read`.
+ * Without the flag the output does not move a byte (the snapshots above).
+ */
+describe('ci-init --metrics-command (GitHub only): a metrics job comparing the change with its base', () => {
+  const CMD = "npm run size # bundle total, with 'quotes'";
+
+  function metricsJob(extra: string[] = []) {
+    const { body, doc } = renderGithub(['--metrics-command', CMD, ...extra]);
+    const job = doc.jobs['metrics'] as unknown as {
+      permissions?: Record<string, string>;
+      steps: Array<{ name?: string; uses?: string; run?: string; env?: Record<string, string>; with?: Record<string, unknown> }>;
+    };
+    return { body, doc, job };
+  }
+
+  it('I4, I13: the job holds contents: read only; with two jobs the workflow grants nothing and the scan job keeps its own', () => {
+    for (const extra of [[], ['--attest']]) {
+      const { doc, job } = metricsJob(extra);
+      expect(job.permissions, extra.join(' ')).toEqual({ contents: 'read' });
+      expect(doc.permissions, extra.join(' ')).toEqual({});
+      expect(doc.jobs['scan']?.permissions, extra.join(' ')).toEqual({ contents: 'read', 'security-events': 'write', actions: 'read' });
+    }
+    expect(Object.keys(metricsJob(['--attest']).doc.jobs)).toEqual(['scan', 'attest', 'metrics']);
+  });
+
+  it('I11: full history, no persisted credentials; dev-guardian cloned and verified as in the scan job', () => {
+    const { doc, job } = metricsJob();
+    const checkout = job.steps[0];
+    expect(checkout?.uses).toBe(`actions/checkout@${pinnedAction('checkout').sha}`);
+    expect(checkout?.with).toEqual({ 'fetch-depth': 0, 'persist-credentials': false });
+    const clone = (s: { name?: string }) => s.name?.startsWith('Clone dev-guardian') === true;
+    expect(job.steps.find(clone)?.run).toBe(doc.jobs['scan']?.steps.find(clone)?.run);
+    expect(job.steps.find((s) => s.uses?.startsWith('actions/setup-node@') === true)?.with).toEqual({ 'node-version': '22', 'package-manager-cache': false });
+  });
+
+  it('I8, I14: the command reaches the step through env, exactly as given, and the script never holds an expression', () => {
+    const { job } = metricsJob();
+    const step = job.steps.find((s) => s.name?.startsWith('Measure this change') === true);
+    expect(step?.env).toEqual({ BASE_SHA: '${{ github.event.pull_request.base.sha }}', METRICS_COMMAND: CMD });
+    expect(step?.run ?? '').not.toMatch(/\$\{\{/);
+    expect(step?.run ?? '').not.toContain('npm run size');
+    expect(step?.run ?? '').toContain('bash -c "$METRICS_COMMAND"');
+  });
+
+  it('I7: gitlab and bitbucket refuse it (exit 3) and write nothing', () => {
+    for (const target of ['gitlab', 'bitbucket']) {
+      const project = makeProject();
+      const r = runCli(['ci-init', target, '--project', project, '--metrics-command', 'npm run size', '--write']);
+      expect(r.status, target).toBe(3);
+      expect(r.stderr).toMatch(/--metrics-command is GitHub-only/);
+      expect(readdirSync(project)).toEqual([]);
+    }
+  });
+
+  // A NUL cannot reach a process's argv (Node refuses it): ciInitRender.test.ts holds metricsCommandProblem to it.
+  it('I2: a command that would change the YAML or the workflow is refused (exit 3) — never one the shell would read', () => {
+    const refused = ['', '   ', 'a'.repeat(1001), 'npm run size\nrm -rf /', 'a\rb', 'echo ${{ secrets.X }}', 'echo {{DEV_GUARDIAN_SHA}}', 'a }} b', 'a\u0007b', 'a\u202eb', 'a\u200bb'];
+    for (const cmd of refused) {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--metrics-command', cmd]);
+      expect(r.status, JSON.stringify(cmd)).toBe(3);
+      expect(r.stderr, JSON.stringify(cmd)).toMatch(/--metrics-command/);
+    }
+    for (const cmd of ['a'.repeat(1000), "echo 'x' # y", 'echo "$HOME" && ls ) (', 'npm\trun size', 'echo é ✓ 漢']) {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, `--metrics-command=${cmd}`]);
+      expect(r.status, JSON.stringify(cmd)).toBe(0);
+      const doc = parseYaml(r.stdout.split('\n').slice(2, -2).join('\n')) as RenderedWorkflow;
+      const step = (doc.jobs['metrics'] as unknown as { steps: Array<{ env?: Record<string, string> }> }).steps.find((s) => s.env !== undefined);
+      expect(step?.env?.['METRICS_COMMAND'], JSON.stringify(cmd)).toBe(cmd);
+    }
+  });
+
+  it('I3: a repository file declaring "metrics_command" is refused, whatever argv says — command line only', () => {
+    for (const argv of [[], ['--metrics-command', 'npm run size']]) {
+      const project = makeProject();
+      mkdirSync(join(project, '.guardian'));
+      writeFileSync(join(project, '.guardian', 'ci.json'), JSON.stringify({ metrics_command: 'curl x | sh' }));
+      const r = runCli(['ci-init', 'github', '--project', project, '--write', ...argv]);
+      expect(r.status, argv.join(' ')).toBe(3);
+      expect(r.stderr).toMatch(/declares "metrics_command"/);
+      expect(existsSync(join(project, '.github'))).toBe(false);
+    }
+  });
+
+  it('--help and the --write message say what the job does', () => {
+    const help = runCli(['--help']);
+    expect(help.stdout).toMatch(/--metrics-command "<cmd>"/);
+    const project = makeProject();
+    const w = runCli(['ci-init', 'github', '--project', project, '--metrics-command', 'npm run size', '--write']);
+    expect(w.status, w.stderr).toBe(0);
+    expect(w.stdout).toMatch(/The metrics job runs the --metrics-command on the change/);
+  });
+
+  it('renders exactly as expected (snapshot), alone and with --attest', () => {
+    for (const extra of [[], ['--attest']]) {
+      const project = makeProject();
+      const r = runCli(['ci-init', 'github', '--project', project, '--metrics-command', 'npm run size', ...extra]);
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout.split('\n').slice(2).join('\n')).toMatchSnapshot();
+    }
+  });
+
+  it.skipIf(!ACTIONLINT_INSTALLED)('actionlint accepts the --metrics-command workflow with zero errors', () => {
+    for (const extra of [[], ['--attest']]) {
+      const project = makeProject();
+      expect(runCli(['ci-init', 'github', '--project', project, '--metrics-command', CMD, '--write', ...extra]).status).toBe(0);
+      const result = spawnSyncCapped('actionlint', [join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8', timeout: LINTER_TIMEOUT_MS });
+      expect(result.status, `actionlint stdout:\n${result.stdout}\nstderr:\n${result.stderr}`).toBe(0);
+    }
+  });
+
+  it.skipIf(!ZIZMOR_INSTALLED)('zizmor accepts the --metrics-command workflow with zero findings', () => {
+    for (const extra of [[], ['--attest']]) {
+      const project = makeProject();
+      expect(runCli(['ci-init', 'github', '--project', project, '--metrics-command', CMD, '--write', ...extra]).status).toBe(0);
+      const result = spawnSyncCapped('zizmor', ['--format=json', join(project, '.github', 'workflows', 'dev-guardian.yml')], { encoding: 'utf8', timeout: LINTER_TIMEOUT_MS });
+      const findings = JSON.parse(result.stdout || '[]') as unknown[];
+      expect(findings, `zizmor findings:\n${JSON.stringify(findings, null, 2)}`).toEqual([]);
+    }
+  });
+
+  /**
+   * The step, run as GitHub runs it (`bash -e` — plus the step's own `-u` and
+   * pipefail), with a stand-in `node` (records its arguments, exits as told)
+   * and `git` (records its arguments; `worktree add` makes the directory, or
+   * fails as told), and a real METRICS_COMMAND that holds `#` and `'`.
+   */
+  it.skipIf(PROBE_BASH === null)(`I5, I6, I9, I10, I12: the measuring step, run under bash${PROBE_BASH === null ? ` (${NO_BASH_REASON})` : ''}`, () => {
+    const { job } = metricsJob();
+    const step = job.steps.find((s) => s.name?.startsWith('Measure this change') === true);
+    const script = step?.run ?? '';
+    const BASE = 'c'.repeat(40);
+    interface Case {
+      label: string;
+      base: string;
+      command: string;
+      nodeExit?: number;
+      worktreeFails?: boolean;
+      status: number;
+      nodeArgs: string[] | null;
+      git: string | null;
+      out?: RegExp;
+    }
+    const measured = "echo 'METRIC size=1 kB better=lower tolerance=1%' # a comment";
+    const cases: Case[] = [
+      // I5: a push measures no base.
+      { label: 'push', base: '', command: measured, status: 0, nodeArgs: ['--head', 'HEAD', '--format', 'markdown'], git: null },
+      { label: 'pull request', base: BASE, command: measured, status: 0, nodeArgs: ['--head', 'HEAD', '--base', 'BASE', '--format', 'markdown'], git: `worktree add --detach OUT/base ${BASE}` },
+      // I6: the command failing on the change fails the step with its status, its output shown.
+      { label: 'head command fails', base: BASE, command: "echo 'boom on head'; exit 7", status: 7, nodeArgs: null, git: null, out: /boom on head[\s\S]*::error::the metrics command failed on this change \(exit 7\)/ },
+      // I12: a base that cannot be measured is no --base, said, exit 0.
+      { label: 'worktree fails', base: BASE, command: measured, worktreeFails: true, status: 0, nodeArgs: ['--head', 'HEAD', '--format', 'markdown'], git: `worktree add --detach OUT/base ${BASE}`, out: /::warning::the base commit c+ could not be measured/ },
+      { label: 'base command fails', base: BASE, command: `if [ -f base-marker ]; then echo 'old tree'; exit 4; fi; ${measured}`, status: 0, nodeArgs: ['--head', 'HEAD', '--format', 'markdown'], git: `worktree add --detach OUT/base ${BASE}`, out: /old tree[\s\S]*::warning::the base commit/ },
+      // I9: the comparison's exit 2 (nothing measured) is a warning, never a failed job.
+      { label: 'metrics exit 2', base: '', command: 'echo nothing', nodeExit: 2, status: 0, nodeArgs: ['--head', 'HEAD', '--format', 'markdown'], git: null, out: /::warning::the metrics command printed no METRIC line/ },
+      // I10: a usage error is not swallowed.
+      { label: 'metrics exit 3', base: '', command: measured, nodeExit: 3, status: 3, nodeArgs: ['--head', 'HEAD', '--format', 'markdown'], git: null },
+    ];
+    for (const c of cases) {
+      const dir = makeProject();
+      const bin = join(dir, 'bin');
+      const tmp = join(dir, 'runner-temp');
+      mkdirSync(bin);
+      mkdirSync(tmp);
+      writeFileSync(
+        join(bin, 'node'),
+        `#!/bin/sh\nshift 2\nfor a in "$@"; do printf '%s\\n' "$a" >> "${dir.split('\\').join('/')}/node-args.txt"; done\necho "| metric | report |"\nexit ${c.nodeExit ?? 0}\n`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        join(bin, 'git'),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "${dir.split('\\').join('/')}/git.txt"\n` +
+          (c.worktreeFails === true ? 'exit 128\n' : 'mkdir -p "$4" && : > "$4/base-marker"\nexit 0\n'),
+        { mode: 0o755 },
+      );
+      writeFileSync(join(dir, 'step.sh'), `export PATH="$PWD/bin:$PATH"\n${script}`);
+      const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        BASE_SHA: c.base,
+        METRICS_COMMAND: c.command,
+        RUNNER_TEMP: tmp,
+        GITHUB_STEP_SUMMARY: join(dir, 'summary.md'),
+        DEV_GUARDIAN_HOME: dir,
+      };
+      const r = spawnSyncCapped(PROBE_BASH ?? 'bash', ['-e', 'step.sh'], { cwd: dir, encoding: 'utf8', timeout: BASH_TIMEOUT_MS, env });
+      const out = `${r.stdout}${r.stderr}`;
+      expect(r.status, `${c.label}: ${out}`).toBe(c.status);
+      if (c.out !== undefined) expect(out, c.label).toMatch(c.out);
+      const read = (name: string): string | null => (existsSync(join(dir, name)) ? readFileSync(join(dir, name), 'utf8') : null);
+      const outDir = `${tmp.split('\\').join('/')}/dev-guardian-metrics`;
+      const nodeArgs = read('node-args.txt')
+        ?.split('\n')
+        .filter((l) => l.length > 0)
+        .map((l) => l.split('\\').join('/').replace(`${outDir}/head.txt`, 'HEAD').replace(`${outDir}/base.txt`, 'BASE'));
+      expect(nodeArgs ?? null, c.label).toEqual(c.nodeArgs);
+      expect(read('git.txt')?.trim().split('\\').join('/').replace(outDir, 'OUT') ?? null, c.label).toBe(c.git);
+      if (c.nodeArgs !== null) {
+        // The head output is the command's, `#` and quotes and all; the summary gets the report.
+        if (c.command === measured) expect(read(`runner-temp/dev-guardian-metrics/head.txt`), c.label).toBe('METRIC size=1 kB better=lower tolerance=1%\n');
+        expect(read('summary.md'), c.label).toBe('| metric | report |\n');
+      }
+    }
+  }, 240_000);
+
+  it('a step a command with # or an unbalanced quote renders still parses (bash -n)', () => {
+    if (PROBE_BASH === null) return;
+    for (const cmd of ['npm run size # bundle total', "echo 'unbalanced", 'npm run size )']) {
+      const { doc } = renderGithub(['--metrics-command', cmd]);
+      const run = ((doc.jobs['metrics'] as unknown as { steps: Array<{ name?: string; run?: string }> }).steps.find((s) => s.name?.startsWith('Measure this change') === true))?.run ?? '';
+      const dir = makeProject();
+      writeFileSync(join(dir, 'step.sh'), run);
+      const r = spawnSyncCapped(PROBE_BASH, ['-n', 'step.sh'], { cwd: dir, encoding: 'utf8', timeout: BASH_TIMEOUT_MS });
+      expect(r.status, `${cmd}: ${r.stderr}`).toBe(0);
+    }
+  });
+});
