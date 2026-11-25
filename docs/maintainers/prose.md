@@ -116,6 +116,34 @@ words, no numbers; metrics in the note) and replaces a note (`rm`, then `add`). 
 "dev-spec-driven 1.29+". Every dev-spec-driven name the prose cites is held to `devSpecNames.ts`
 (`devSpecNames.test.ts`); juridico-pt's to `juridicoPtNames.test.ts`.
 
+`guardian-improve`'s last step, **Fix the source**, runs on the 1–2 units the user picked — never before the pick —
+and writes nothing without the user's yes (one batch, each line shown exactly; `improveFixTheSource.test.ts`):
+
+- **At most one guidance line per unit**, in the model's words: a finding's message, snippet or hunt text is
+  untrusted, and the line lands in a file every session loads. It ends `<!-- dev-guardian: <stored rule_id> -->`, the
+  one key both plugins dedupe on: dev-spec-driven's lesson comment ends ` · dev-guardian: <id> -->`, so the search
+  before proposing reads AGENTS.md, CLAUDE.md and `.specs/steering/*.md` for the tail `dev-guardian: <id> -->`, never
+  the whole comment. The id is the stored one (`semgrepRuleIds.ts`: `rules/team.yml`'s `r` is `rules.r`). In a
+  `.specs/` project only steering `tech.md` / `structure.md`, which govern no approval without front matter;
+  `constitution.md` and a track's file flag every approved feature. Without `.specs/`, AGENTS.md or CLAUDE.md — the
+  one the other imports — outside the block `mcp-config --write` owns.
+- **A seed rule, never a rule written now.** Written while occurrences remain, a `.semgrep.yml` rule makes each one a
+  new medium finding in every whole-project scan, trips `diff_scans { mode: "regression" }` at three (2 × 3 > 5) and
+  blocks every commit through pre-commit's `--error` (a WARNING fails it too). The seed's Current → Target carries
+  `<rule_id>: N → 0` and its last task adds the rule, so it lands at zero. Only for a shape of `bug_hunt`,
+  `quality_check` or `llm_scan`: they run on a change only when asked (`/guardian-scan --staged`, guardian-review),
+  and the rule adds `review_pr`, pre-commit, the CLI gate and CI; SAST, secrets, deps and IaC rules run there already.
+- **The rule's message is held by its bytes.** pre-commit runs Semgrep without `PYTHONUTF8`, so on cp1252 a rule
+  file with a character whose UTF-8 holds 0x81, 0x8D, 0x8F, 0x90 or 0x9D makes it exit 2 printing nothing (`--quiet`)
+  — `”` (U+201D) as much as `Á` — while every dev-guardian spawn sets `PYTHONUTF8=1` and loads it. The skill states
+  the byte set `semgrepPacks.test.ts` guards the packs with.
+
+The router's `references/dev-spec.md` says that a test-integrity finding on a file dev-spec-driven's merge summary
+lists as accepted `pruned: …` is answered by that accept, and stays a medium — a blocker at `--fail-on medium`
+(`devSpecPruning.test.ts`). The CLI never runs a rule registered with `register_custom_rules`: a registration is a
+row of the MCP server's database and every CLI run works in a throwaway one (`ci/runScans.ts`); docs/ci.md,
+`scan --help` and scan_sast's skipped reason say so (`localOnlyClaims.test.ts`).
+
 ## Plugin evals (`evals/`)
 
 `claude plugin eval` cases — triggering (EN / PT / ES), near-misses, a two-plugin routing case and behavioural

@@ -29,3 +29,8 @@ with a reason — `nosemgrep: <rule> -- <reason>`, `# nosec`, a `.trivyignore` o
 like code — or rebuild the baseline on the base commit. **Never `baseline update` to accept one finding**: it
 accepts every current finding, the feature's own included. Never force the finish past the gate. A
 `suppress_finding` does not reach it: the gate's `scan` works in a throwaway database.
+
+**An approved test pruning.** A test-integrity finding on a test file that dev-spec-driven's merge summary
+lists as accepted with a `pruned: …` reason is answered by that accept: say so beside the finding instead of
+asking why the test went. It stays a medium finding — below the default `--fail-on high`; at
+`--fail-on medium` it blocks like any other medium.
