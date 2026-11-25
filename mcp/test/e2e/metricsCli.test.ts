@@ -102,12 +102,20 @@ describe('metrics: the verdicts and the exit code', () => {
 
   it('C10, C11: usage errors are exit 3 — an unreadable --base, no --head, an unknown flag, a bad --format', () => {
     const f = files(BASE);
-    expect(run(['--head', f.head, '--base', join(f.dir, 'nope.txt')]).status).toBe(3);
-    expect(run(['--base', f.head]).status).toBe(3);
-    expect(run(['--head', f.head, '--wat']).status).toBe(3);
-    expect(run(['--head', f.head, '--format', 'sarif']).status).toBe(3);
-    expect(run(['--head']).status).toBe(3);
-    expect(run(['--head', '']).status).toBe(3);
+    // Each is the usage error it names, on one line — never the exit 3 of a crash.
+    const usage = (args: string[], message: RegExp): void => {
+      const r = run(args);
+      expect({ status: r.status, stdout: r.stdout }, args.join(' ')).toEqual({ status: 3, stdout: '' });
+      expect(r.stderr, args.join(' ')).toMatch(message);
+      expect(r.stderr.trim().split('\n'), args.join(' ')).toHaveLength(1);
+    };
+    usage(['--head', f.head, '--base', join(f.dir, 'nope.txt')], /^error: metrics: --base .*nope\.txt: no such file$/m);
+    usage(['--base', f.head], /^error: metrics requires --head <file>/m);
+    usage(['--head', f.head, '--wat'], /^error: Unknown argument: --wat$/m);
+    usage(['--head', f.head, '--format', 'sarif'], /^error: --format must be human, json or markdown \(got "sarif"\)$/m);
+    usage(['--head'], /^error: --head requires a value$/m);
+    usage(['--head', ''], /^error: --head requires a value$/m);
+    usage(['--head='], /^error: --head requires a value$/m);
   });
 
   it('markdown and human render the same comparison; --head=<file> works; nothing is written', () => {
