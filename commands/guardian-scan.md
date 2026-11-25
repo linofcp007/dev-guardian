@@ -44,7 +44,7 @@ Also, for `<path>…`: `quality_check { project_path: "<project>", scope: <scope
 
 When the change set touches a dependency manifest or lock file, add `scan_deps { project_path: "<project>", packages: ["<added or bumped package>"] }` — Trivy reads the whole project, and the response is narrowed to those packages (`package_filter.not_found` names any it had nothing on).
 
-With a change set (`diff`, or `since` a commit), `scan_sast` also reports the tests the change weakened (`guardian-test-integrity`): a focused `.only` is 🟡 High — it silently disables the rest of the suite — and an added skip, a deleted test file, fewer assertions or a test script made to always pass are 🟢 Medium: ask for the reason.
+With a change set (`diff`, or `since` a commit), `scan_sast` also reports the tests the change weakened (`guardian-test-integrity`): a focused `.only` is 🟡 High — it silently disables the rest of the suite — and an added skip, a deleted test file, fewer assertions or a test script made to always pass are 🟢 Medium: ask for the reason. It reports the suppressions the change adds with no reason too (`guardian-suppressions`): a scanner's naming no rule (`nosemgrep`, `# nosec`, `gitleaks:allow`) or a linter's for the whole file is 🟢 Medium, a linter's for one line is 🟢 Low — and one naming its rule, or giving a reason, is only counted.
 
 A scoped scan is recorded with `meta.scope`: it never becomes a baseline and never replaces a whole-project scan in the open findings. Its silence about files outside the scope says nothing about them.
 

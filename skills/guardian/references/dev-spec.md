@@ -25,7 +25,7 @@ Record the baseline on the base branch, before the feature's code, when the chec
 user's decision, not yours.
 
 When the gate blocks, show the finding. To accept **one** reviewed finding, use a suppression its scanner reads,
-with a reason — `nosemgrep: <rule> -- <reason>`, `# nosec`, a `.trivyignore` or `.gitleaksignore` entry, reviewed
-like code — or rebuild the baseline on the base commit. **Never `baseline update` to accept one finding**: it
+with a reason — `nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`, a `.trivyignore` or `.gitleaksignore`
+entry, reviewed like code — or rebuild the baseline on the base commit. **Never `baseline update` to accept one finding**: it
 accepts every current finding, the feature's own included. Never force the finish past the gate. A
 `suppress_finding` does not reach it: the gate's `scan` works in a throwaway database.
