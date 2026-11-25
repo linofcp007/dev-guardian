@@ -115,6 +115,20 @@ example is corrected) in the same commit; one that answers less strictly got
 weaker — fix the guard, never the record. A new limit is a new record, never a
 line of prose in `docs/hooks.md`, which the docs test refuses.
 
+**The METRIC line's contract is one file shared with dev-spec-driven (3.17.0).**
+`test/fixtures/metrics/metric-lines.v1.json` (`metric-lines/1`: the line's
+grammar and the one set of reader bounds, the judge's rule, 36 lines, 5 whole
+outputs and 21 judge cases) is committed byte-identical at dev-spec-driven's
+`mcp/tests/fixtures/`, and both suites pin the same sha256 literal
+(`test/unit/metrics/metricLinesFixture.test.ts` here, `09-evidence-runs.js`
+there). The two readers are written in two languages and no suite can read the
+other repository, so the pin is what keeps them on one contract. The file is
+never edited: a change is `metric-lines/2`, a new file landed in both
+repositories before either tags. The pin test also holds the file's shape —
+every case's fields (an absent value is `null`, never a missing key), the cases
+the decisions name, ASCII with LF ends, no CI or PR word — and the readers are
+tested against its cases in their own files.
+
 On Windows, run the full suite from **Git Bash**. From PowerShell, `bash` can
 resolve to the WSL launcher stub, and the `ci-init` e2e fails for that reason
 alone.
