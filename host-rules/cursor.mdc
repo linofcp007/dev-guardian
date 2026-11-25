@@ -99,8 +99,8 @@ Declare independence honestly: a `same_context` verdict never demotes or confirm
 `node {{DEV_GUARDIAN_CLI}} scan` runs the same pipeline headless, gated against a committed `.guardian/baseline.json`
 (exit `0` pass, `1` blocked, `2` incomplete — never a pass, `3` usage error); only
 `node {{DEV_GUARDIAN_CLI}} baseline update` writes that file, and it accepts EVERY current finding — never run it to accept
-one finding: leave it to the user. Accept one reviewed finding with an inline suppression and a reason
-(`nosemgrep: <rule> -- <reason>`, `# nosec`). Pipelines and pull requests: the plugin's `docs/ci.md`.
+one finding: leave it to the user. Accept one reviewed finding inline, with a reason
+(`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`). Pipelines and pull requests: the plugin's `docs/ci.md`.
 `.gitignore` keeps `.guardian/` out of git but its shared files: `**/.guardian/*`, `!**/.guardian/baseline.json`,
 `!**/.guardian/budgets.yml`, `!**/.guardian/hooks.config.json`, `!**/.guardian/hooks-allowlist.json`,
 `!**/.guardian/scan.yml` (never a bare `.guardian/`). dev-spec-driven 1.29+ runs this gate when it closes a feature; from

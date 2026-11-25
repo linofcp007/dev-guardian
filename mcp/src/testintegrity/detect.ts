@@ -62,8 +62,8 @@ export interface ChangedFile {
 
 type Lang = 'js' | 'py' | 'go' | 'jvm' | 'cs' | 'rs' | 'php' | 'rb';
 
-/** Folders of test data, not tests: a `.only` in a fixture is the fixture's text. */
-const NOT_TESTS = /(?:^|\/)(?:fixtures?|__fixtures__|__snapshots__|testdata|__mocks__|mocks?|snapshots?)\//i;
+/** Folders of test data, not tests: a `.only` in a fixture is the fixture's text (a suppression there too — `suppressions.ts`). */
+export const NOT_TESTS =/(?:^|\/)(?:fixtures?|__fixtures__|__snapshots__|testdata|__mocks__|mocks?|snapshots?)\//i;
 
 /** The language of a source file by its extension, or null. */
 function languageOf(path: string): Lang | null {

@@ -180,7 +180,8 @@ import {
 import { legacyRegistrationNote, legacyRegistrationsNotApplied } from '../platform/customRules.js';
 import { CLIENT_TRUST_TOOL, clientTrustParser, envFilesState, runClientTrustChecks } from '../clienttrust/clientTrustPass.js';
 import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
-import { runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
+import { runSuppressionCheck, runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
+import { SUPPRESSIONS_TOOL } from '../testintegrity/suppressions.js';
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import { listProjectDir, presentInProject, readProjectTextOrUndefined, realpathInProject } from '../platform/projectFs.js';
 import { readSmallTextFile } from '../hooks/configFile.js';
@@ -304,6 +305,7 @@ registerToolModule(
           { name: 'dotnet-analyzers', run: async (c) => dotnetNotApplicableToScope({ ctx, files, ...c }) },
           { name: CLIENT_TRUST_TOOL, run: (c) => runClientTrust({ ctx, files, ...c }) },
           { name: TEST_INTEGRITY_TOOL, run: (c) => runTestIntegrity({ ctx, ...c }) },
+          { name: SUPPRESSIONS_TOOL, run: (c) => runSuppressions({ ctx, ...c }) },
         ];
       } else {
         passes = [
@@ -1178,6 +1180,27 @@ async function runTestIntegrity(args: Collect & { ctx: InvokeContext }): Promise
   missing_tools.push(...result.missing);
   const findings = result.findings;
   parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
+}
+
+/**
+ * The suppressions the same change set adds (`testintegrity/suppressions.ts`),
+ * a pass of its own: the same scopes as {@link runTestIntegrity}, never a gap
+ * (its bounds are said in its reason).
+ */
+async function runSuppressions(args: Collect & { ctx: InvokeContext }): Promise<void> {
+  const { ctx, tools_run, parser_inputs } = args;
+  const changes = ctx.scope?.changes ?? null;
+  if (changes === null) return;
+  const scope = ctx.scope;
+  const result = await runSuppressionCheck(ctx.projectPath, {
+    base: changes.base,
+    target: changes.target === 'index' ? { kind: 'index' } : { kind: 'worktree', untracked: changes.untracked },
+    ...(scope !== null ? { member: (p: string) => scope.member(p) } : {}),
+  });
+  if (result === null) return;
+  tools_run.push(result.toolRun);
+  const findings = result.findings;
+  parser_inputs.push({ parser: { name: SUPPRESSIONS_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
 }
 
 function dotnetNotApplicableToScope(args: Collect & { ctx: InvokeContext; files: readonly string[] }): void {
