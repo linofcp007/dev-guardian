@@ -50,6 +50,10 @@ export {
   readProjectText,
   writeProjectFile,
 } from './platform/projectFs.js';
+// `metrics`: the METRIC lines of two files, compared — no storage, no runner (metrics/ is a leaf).
+export { compareMetricOutputs, metricsExitCode, metricsHuman, metricsJson, metricsMarkdown } from './metrics/compare.js';
+export { readMetricFile } from './metrics/metricFile.js';
+export { readMetricOutput } from './metrics/metricLine.js';
 
 /** Rejects, as Node does for a builtin it lacks, when this Node cannot load `node:sqlite`. */
 function requireNodeSqlite(db: typeof DbModule): void {

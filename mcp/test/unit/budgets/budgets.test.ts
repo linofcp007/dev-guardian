@@ -181,4 +181,21 @@ describe('budgetViolationFindings', () => {
     expect(f?.message).toMatch(/perf_check/);
     expect(f?.message).toMatch(/quality_check/);
   });
+
+  // 3.17.0: bundle_size_kb is read against Lighthouse's total-byte-weight — every
+  // byte the page loaded — and its finding said "bundle" and nothing else.
+  it("says bundle_size_kb measured the page's total weight, not one bundle; the other budgets say nothing more", () => {
+    const [bundle, lcp] = budgetViolationFindings(
+      [
+        { budget: 'perf.bundle_size_kb', measured: 1800, limit: 1600, unit: 'KB' },
+        { budget: 'perf.lcp_ms', measured: 4000, limit: 2500, unit: 'ms' },
+      ],
+      '.guardian/budgets.yml',
+    );
+    expect(bundle?.message).toMatch(
+      /^perf\.bundle_size_kb measured 1800KB \(Lighthouse's total-byte-weight: every byte the page loaded, not one bundle\), over the 1600KB budget/,
+    );
+    expect(lcp?.message).toMatch(/^perf\.lcp_ms measured 4000ms, over the 2500ms budget/);
+    expect(bundle?.title).toBe('perf.bundle_size_kb over budget: 1800KB > 1600KB');
+  });
 });

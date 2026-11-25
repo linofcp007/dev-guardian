@@ -287,6 +287,14 @@ describe.skipIf(!IN_CHECKOUT)('a plugin install — a git archive, at a path wit
       timeoutAbove(SCAN_TIMEOUT_MS),
     );
 
+    it('metrics compares two files of METRIC lines', () => {
+      writeFileSync(join(project, 'head.txt'), 'METRIC size=125 kB better=lower tolerance=2%\n');
+      writeFileSync(join(project, 'base.txt'), 'METRIC size=120 kB better=lower tolerance=2%\n');
+      const r = run(['metrics', '--head', join(project, 'head.txt'), '--base', join(project, 'base.txt'), '--format', 'json']);
+      loaded(r, 0);
+      expect(JSON.parse(r.stdout)).toMatchObject({ format: 'metric-lines/1', regressed: ['size'] });
+    });
+
     it('status on a project never scanned', () => {
       const r = run(['status', '--project', project]);
       loaded(r, 0);

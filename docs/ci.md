@@ -285,7 +285,7 @@ Nothing here is high, so nothing blocks at the default `--fail-on high`. **At `-
 ## `ci-init`
 
 ```text
-node dev-guardian.mjs ci-init <github|gitlab|bitbucket> [--project <path>] [--branch <name>] [--write] [--force] [--attest]
+node dev-guardian.mjs ci-init <github|gitlab|bitbucket> [--project <path>] [--branch <name>] [--write] [--force] [--attest] [--metrics-command "<cmd>"]
 ```
 
 | Target | File written |
@@ -336,6 +336,54 @@ gh attestation verify dev-guardian-report.json --repo OWNER/REPO \
 Use the branch you passed to `--branch` (`ci-init` prints the command with it). Keep `--source-ref`: `--signer-workflow` names the workflow **file**, and a copy of it on any other branch — edited to run on a push there — signs as the same path.
 
 `--attest` is **command line only**, like `scan --start-command`: a `.guardian/ci.json` declaring `attest` makes `ci-init` refuse (exit 3), because a pull request could edit that file and hand a job the right to sign in the repository's name. GitLab and Bitbucket refuse `--attest` (exit 3): Bitbucket's OIDC tokens are no Sigstore identity, and on GitLab a cosign keyless signature of the reports would carry no provenance and have no store to be verified against — not the same guarantee, so the generator does not pretend it is.
+
+### Comparing metrics (`--metrics-command`, GitHub only)
+
+`ci-init github --metrics-command "npm run size"` adds a `metrics` job. On a pull request it runs the command on the change and on its base — a `git worktree` of the base commit, which `fetch-depth: 0` already fetched, so there is no second fetch and no token — and runs [`metrics`](#metrics) on the two outputs; the table goes to the job summary. On a push it shows the values, with nothing to compare. It stores nothing.
+
+- **Advisory.** The job fails when the command fails on the change (with its exit code, its output shown) or on a usage error. A regression does not fail it, nor a base that could not be measured (a warning, the values shown), nor an output with no METRIC line (a warning).
+- **The command runs twice**, its dependencies included: the job takes about twice the command, plus a few seconds for the clone.
+- The command reaches the step through `env:`, as a YAML single-quoted value, and runs under `bash -c` — never pasted into the script, where a `#` in it commented out the rest of the line. `ci-init` refuses a command with a line break, a control or invisible character, `${{` (GitHub evaluates it in an `env:` value) or `{{` / `}}`, or over 1,000 characters.
+- The job holds `contents: read` and nothing else. With two jobs the workflow grants nothing, and the scan job states its own permissions, as with `--attest`.
+- **Command line only**, like `--attest`: a `.guardian/ci.json` declaring `metrics_command` makes `ci-init` refuse (exit 3). The command is the workflow file's, and a pull request can edit that file: protect it like the rest of it (CODEOWNERS, a required review).
+- GitLab and Bitbucket refuse the flag (exit 3). To compare there by hand: run the command into `head.txt`; check out the base into a second directory (GitLab: `$CI_MERGE_REQUEST_DIFF_BASE_SHA`; Bitbucket gives only the destination branch, `$BITBUCKET_PR_DESTINATION_BRANCH`, to fetch first); run it there into `base.txt`; then `node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" metrics --head head.txt --base base.txt`.
+
+## `metrics`
+
+```text
+node dev-guardian.mjs metrics --head head.txt [--base base.txt] [--format human|json|markdown] [--strict]
+```
+
+Compares the METRIC lines of two outputs a pipeline step wrote: the change's (`--head`) and its base's (`--base`). It opens no database, runs no command and writes nothing — the `--metrics-command` job runs it, and so can anything else.
+
+A line is `metric-lines/1`, the format dev-spec-driven reads too:
+
+```text
+METRIC <name>=<number>[ <unit>][ better=lower|higher][ tolerance=<n>[%]][ <key>=<value>…]
+```
+
+- at a line's start, after blanks or one `# ` (node's TAP reporter prints a test's output as `# …`); ANSI colour codes are removed first;
+- a name is ASCII, `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}`; the number has at most 15 integer and 9 fraction digits and an optional exponent, and is finite; the unit is the one token after it, of at most 16 characters, holding no `=` (`x=5 higher` has the unit `higher`: there is no bare direction); an unknown `key=value` is ignored;
+- a line whose first token holds `=` but breaks these rules is **malformed** — counted and shown, never read; any other `METRIC …` line (a table header, another tool's log) is ignored;
+- the last line of a name wins, whole; the lines it replaced are counted as repeats;
+- what is read is bounded — the last 64 MiB of a file, lines of at most 512 bytes, the last 1,000 METRIC lines, 20 names (those printed last) — and each bound says what it dropped.
+
+The judge:
+
+- The terms are the **base** line's: `better=` and `tolerance=` (`n%` is n percent of |base|; `n` alone is an amount in the value's unit). The head line may only tighten the tolerance. A flipped or dropped `better=`, a raised or dropped tolerance or a changed unit is said as `loosened`, and the value is judged by the base's terms; a changed unit is not compared at all.
+- **No defaults.** Without both a direction and a tolerance on the base line, a value is `unjudged`, shown with its delta. Timings of unchanged code on shared runners move by several percent from run to run — a 10% default would flag about one unchanged benchmark in six — so state the tolerance your numbers hold.
+- `regressed` when worse by more than the tolerance, `improved` when better by more, `within` otherwise, the boundary included; values compare as exact decimals (2% of 120 kB is 2.4 kB, and 122.4 kB is within). A name the base lacks is `new`; one the head lacks is listed as `missing`.
+
+| Exit code | Meaning |
+| ---: | --- |
+| 0 | compared — advisory: a regression is reported, not failed |
+| 1 | `--strict`, and a metric regressed or loosened, a metric of the base is missing from the head, or a head line is malformed |
+| 2 | the head holds no METRIC line that could be read, or cannot be read: nothing was measured |
+| 3 | usage error — an unknown flag, no `--head`, a bad `--format`, an unreadable `--base` |
+
+`--format json` holds `format` (`metric-lines/1`), `tool_version`, `exit_code`, `strict`, `head` and `base` (each `file`, `metrics`, `malformed`, `malformed_lines`, `repeats`, `dropped`), `comparisons` (per head metric: `name`, `unit`, `base`, `head`, `delta`, `applied` — the tolerance the verdict used —, `better`, `tolerance`, `verdict`, `why`, `loosened`) and the name lists `regressed`, `improved`, `within`, `new`, `unjudged`, `loosened` and `missing`; for a head that cannot be read, `format`, `tool_version`, `exit_code` (2) and `error`. Text read from the files is shown with control and invisible characters escaped.
+
+A change measures itself and can print any number: this is feedback, not a security gate. Keep the measuring script where a review sees it change (CODEOWNERS). `perf_check`'s own runs are judged against their history instead (the `history` field of its result).
 
 ## Scanning workflows
 

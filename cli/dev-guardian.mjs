@@ -57,10 +57,24 @@
  *                             --attest            github only, CLI ARGV ONLY: attest the JSON report
  *                                                 and the SARIF (actions/attest-build-provenance)
  *                                                 in a job of their own
+ *                             --metrics-command "<cmd>"  github only, CLI ARGV ONLY: a `metrics`
+ *                                                 job that runs <cmd> on the change and its base
+ *                                                 and compares their METRIC lines (advisory)
  *                             Needs network + git: resolves the release tag to its
  *                             commit SHA and pins that, not just the tag.
  *                             Exit codes: 0 done, 1 refused overwrite, 3 usage
  *                             error (a missing/unknown target too)
+ *   metrics                 Compare the METRIC lines (metric-lines/1) of two
+ *                           outputs a pipeline wrote: --head <file> against
+ *                           --base <file>, by the base line's terms. Opens no
+ *                           database, runs no command, writes nothing.
+ *                             --format human|json|markdown   default: human
+ *                             --strict            exit 1 on a regressed or loosened
+ *                                                 metric, a missing one or a malformed
+ *                                                 head line
+ *                             Exit codes: 0 compared (advisory), 1 --strict and
+ *                             one of those, 2 the head holds no METRIC line it
+ *                             could read, 3 usage error (an unreadable --base too)
  *   status                  One-screen terminal summary of the latest scan
  *                           for this project (read-only — no scan runs).
  *                           Reports; does not gate: exits 0 even on a
@@ -93,6 +107,7 @@
  *   node cli/dev-guardian.mjs status --project .
  *   node cli/dev-guardian.mjs dashboard --project .
  *   node cli/dev-guardian.mjs db adopt --project . --yes
+ *   node cli/dev-guardian.mjs metrics --head head.txt --base base.txt
  *
  * `--start-command`, and why it may only come from argv:
  *   scan_dast's own MCP tool deliberately has no way to start the app it
@@ -248,6 +263,7 @@ const ENGINE_EXPORTS = [
   'ALL_HOSTS',
   'assessBashCommand',
   'canonicalPath',
+  'compareMetricOutputs',
   'decodeText',
   'describeReadRefusal',
   'describeWriteRefusal',
@@ -262,9 +278,15 @@ const ENGINE_EXPORTS = [
   'loadDbModules',
   'loadImportSarifModules',
   'loadSelftestModules',
+  'metricsExitCode',
+  'metricsHuman',
+  'metricsJson',
+  'metricsMarkdown',
   'previewMcpConfig',
   'PROJECT_LOCKFILE_MAX_BYTES',
   'projectWriteRefusal',
+  'readMetricFile',
+  'readMetricOutput',
   'readProjectText',
   'resolveProjectPath',
   'resolveVersion',
@@ -348,6 +370,7 @@ const {
   ALL_HOSTS,
   assessBashCommand,
   canonicalPath,
+  compareMetricOutputs,
   decodeText,
   describeReadRefusal,
   describeWriteRefusal,
@@ -362,9 +385,15 @@ const {
   loadDbModules: loadDbEngine,
   loadImportSarifModules: loadImportSarifEngine,
   loadSelftestModules: loadSelftestEngine,
+  metricsExitCode,
+  metricsHuman,
+  metricsJson,
+  metricsMarkdown,
   previewMcpConfig,
   PROJECT_LOCKFILE_MAX_BYTES,
   projectWriteRefusal,
+  readMetricFile,
+  readMetricOutput,
   readProjectText,
   resolveProjectPath,
   resolveVersion,
@@ -477,6 +506,7 @@ Usage:
   node cli/dev-guardian.mjs db adopt [--project <path>] [--yes [--rehome]]
   node cli/dev-guardian.mjs import-sarif <file> [--project <path>] [--allow-outside-project] [--max-results <n>]
   node cli/dev-guardian.mjs selftest [--json] [--keep] [--no-save] [--history]
+  node cli/dev-guardian.mjs metrics --head <file> [--base <file>] [--format human|json|markdown] [--strict]
   node cli/dev-guardian.mjs --version
 
 mcp-config — wire the MCP server into an AI host
@@ -689,6 +719,16 @@ ci-init <github|gitlab|bitbucket> — generate a CI pipeline for the project bei
                             --source-ref refs/heads/<branch>
                         (--signer-workflow names the file; a copy of it on
                         another branch signs as the same path.)
+  --metrics-command "<cmd>"
+                        GitHub only (refused for gitlab/bitbucket, exit 3). The
+                        pipeline also gets a \`metrics\` job, contents: read only,
+                        that runs <cmd> (one line, at most 1,000 characters, no
+                        \${{, {{ or }}) under bash on the change and, on a pull
+                        request, on its base, and adds \`metrics\`'s comparison of
+                        the METRIC lines they printed to the job summary.
+                        Advisory: it fails only when <cmd> fails on the change.
+                        CLI ARGV ONLY, like scan's --start-command: a
+                        .guardian/ci.json declaring "metrics_command" is refused.
   Writes: github -> .github/workflows/dev-guardian.yml
           gitlab -> .gitlab-ci.yml
           bitbucket -> bitbucket-pipelines.yml
@@ -787,6 +827,22 @@ selftest — does each core control DETECT on this machine? (installed is not th
               2 none is silent and one is unverified or missing (or the
               temporary directory could not be removed), 3 usage error.
 
+metrics — compare the METRIC lines of two outputs (metric-lines/1, docs/ci.md)
+  --head <file>         The change's output (required)
+  --base <file>         Its base's output; without it the values are shown
+  --format human|json|markdown   Report format on stdout (default: human)
+  --strict              Exit 1 on a regressed or loosened metric, a metric the
+                        base has and the head lacks, or a malformed head line
+  A line: METRIC <name>=<number>[ <unit>][ better=lower|higher][ tolerance=<n>[%]]
+  at a line's start (after blanks or one "# "); the last line of a name wins.
+  Judged by the BASE line's direction and tolerance only (the head may only
+  tighten them; a loosened one is said) — with either missing the value is
+  shown unjudged, never judged by a default. A changed unit is not compared.
+  Reads the files only: no database, no command, nothing written.
+  Exit codes: 0 compared (advisory: a regression included), 1 --strict and
+              one of the above, 2 the head holds no METRIC line it could read
+              (or cannot be read), 3 usage error (an unreadable --base too).
+
 Examples:
   node cli/dev-guardian.mjs mcp-config cursor          # print the block to paste
   node cli/dev-guardian.mjs mcp-config codex --write   # write + merge into the project
@@ -799,6 +855,7 @@ Examples:
   node cli/dev-guardian.mjs dashboard --project . --no-open
   node cli/dev-guardian.mjs db adopt --project .          # show; add --yes to register
   node cli/dev-guardian.mjs selftest                      # do the scanners detect here?
+  node cli/dev-guardian.mjs metrics --head head.txt --base base.txt
 `);
 }
 
@@ -1537,6 +1594,22 @@ function takeProject(argv, i, a) {
   if (a === '--project') return takeOperand(argv, i, a, true);
   const value = a.slice('--project='.length);
   return isMissingOperand(value, true) ? { error: '--project requires a value' } : { value, nextIndex: i };
+}
+
+/**
+ * `<flag> <value>` or `<flag>=<value>` at `argv[i]` (`a`), an empty value
+ * refused in both spellings — {@link takeProject}'s rule for any flag.
+ *
+ * @param {string[]} argv
+ * @param {number} i
+ * @param {string} a
+ * @param {string} flag
+ * @returns {Operand}
+ */
+function takeFlagValue(argv, i, a, flag) {
+  if (a === flag) return takeOperand(argv, i, a, true);
+  const value = a.slice(flag.length + 1);
+  return isMissingOperand(value, true) ? { error: `${flag} requires a value` } : { value, nextIndex: i };
 }
 
 /**
@@ -2500,16 +2573,31 @@ const CI_TARGETS = {
 
 /**
  * @param {string[]} argv
- * @returns {Parsed<{ _: string[], project: string, write: boolean, force: boolean, attest: boolean, branch: string }>}
+ * @returns {Parsed<{ _: string[], project: string, write: boolean, force: boolean, attest: boolean, branch: string, metricsCommand: string | null }>}
  */
 function parseCiInitArgs(argv) {
-  const out = { _: /** @type {string[]} */ ([]), project: process.cwd(), write: false, force: false, attest: false, branch: DEFAULT_CI_BRANCH };
+  const out = {
+    _: /** @type {string[]} */ ([]),
+    project: process.cwd(),
+    write: false,
+    force: false,
+    attest: false,
+    branch: DEFAULT_CI_BRANCH,
+    metricsCommand: /** @type {string | null} */ (null),
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
     if (a === '--write') out.write = true;
     else if (a === '--force') out.force = true;
     else if (a === '--attest') out.attest = true;
-    else if (a === '--project' || a.startsWith('--project=')) {
+    else if (a === '--metrics-command' || a.startsWith('--metrics-command=')) {
+      const r = takeFlagValue(argv, i, a, '--metrics-command');
+      if (r.error !== undefined) return { error: r.error };
+      const problem = metricsCommandProblem(r.value);
+      if (problem !== null) return { error: `--metrics-command ${problem}` };
+      out.metricsCommand = r.value;
+      i = r.nextIndex;
+    } else if (a === '--project' || a.startsWith('--project=')) {
       const r = takeProject(argv, i, a);
       if (r.error !== undefined) return { error: r.error };
       out.project = r.value;
@@ -2527,6 +2615,46 @@ function parseCiInitArgs(argv) {
     else out._.push(a);
   }
   return { value: out };
+}
+
+/** The longest `--metrics-command` the generated step takes. */
+const METRICS_COMMAND_MAX_CHARS = 1000;
+
+/**
+ * Why `cmd` cannot be the metrics job's command, or null. It reaches the step
+ * as a YAML single-quoted scalar in `env:` and runs under `bash -c`, never
+ * pasted into the step's script (where a `#` in it commented out the
+ * rest of the line). So what is refused is what would change the YAML or the
+ * workflow, never the shell: a line break, NUL, any character a YAML file
+ * cannot hold or a reader would not see (the controls, the invisible and bidi
+ * characters `untrustedText` writes as `\u{…}`), GitHub's `${{` — GitHub
+ * evaluates an expression in an `env:` value — and the template's own
+ * `{{` / `}}`.
+ *
+ * @param {string} cmd
+ * @returns {string | null}
+ */
+export function metricsCommandProblem(cmd) {
+  if (cmd.trim() === '') return 'requires a command';
+  if (cmd.length > METRICS_COMMAND_MAX_CHARS) return `is over ${METRICS_COMMAND_MAX_CHARS} characters`;
+  if (/[\r\n\u0000]/.test(cmd)) return 'must be one line (no CR, LF or NUL)';
+  const unseen = [...cmd].some((ch) => {
+    const cp = ch.codePointAt(0) ?? 0;
+    return cp === 0xfffe || cp === 0xffff || (cp >= 0xd800 && cp <= 0xdfff);
+  });
+  if (unseen || untrustedText(cmd) !== cmd) return 'holds a control or invisible character';
+  if (cmd.includes('${{')) return 'holds "${{": GitHub would evaluate it as an expression';
+  if (cmd.includes('{{') || cmd.includes('}}')) return 'holds "{{" or "}}", which the pipeline template reserves';
+  return null;
+}
+
+/**
+ * `cmd` as a YAML single-quoted scalar: the one escape is a doubled quote.
+ *
+ * @param {string} cmd
+ */
+function yamlSingleQuoted(cmd) {
+  return `'${cmd.replace(/'/g, "''")}'`;
 }
 
 /**
@@ -3095,6 +3223,30 @@ function findAttestInRepoConfig(projectPath) {
 }
 
 /**
+ * The config path when `.guardian/ci.json` declares `key` at all, else null —
+ * `findAttestInRepoConfig`'s rule for any argv-only key.
+ *
+ * @param {string} projectPath
+ * @param {string} key
+ * @returns {string | null}
+ */
+function repoConfigDeclaring(projectPath, key) {
+  const data = readRepoJson(projectPath, CI_CONFIG_RELATIVE_PATH);
+  return isRecord(data) && data[key] !== undefined ? resolve(projectPath, CI_CONFIG_RELATIVE_PATH) : null;
+}
+
+/**
+ * Why `--metrics-command` is refused on GitLab and Bitbucket: GitHub is the one
+ * host whose generated job this repository can lint (actionlint, zizmor) and
+ * run in its tests. Their base is passed differently too — GitLab's by a
+ * branch-name fallback, Bitbucket's with no commit at all (docs/ci.md says how
+ * to do it by hand there).
+ */
+const METRICS_GITHUB_ONLY =
+  '--metrics-command is GitHub-only for now: the GitLab and Bitbucket templates would measure their base ' +
+  'another way (docs/ci.md, "metrics", says how to add the step by hand). Generate the pipeline without it.';
+
+/**
  * Why `--attest` is refused on GitLab and Bitbucket. GitHub's artifact
  * attestations bind a file's digest to the workflow, commit and run that
  * produced it, signed by Sigstore with the job's own OIDC identity and
@@ -3157,6 +3309,9 @@ function cmdCiInit(argv) {
     process.exit(USAGE_ERROR_EXIT);
   }
   if (args.attest && targetArg !== 'github') return usageError(`ci-init ${targetArg}: ${ATTEST_GITHUB_ONLY}`);
+  if (args.metricsCommand !== null && targetArg !== 'github') {
+    return usageError(`ci-init ${targetArg}: ${METRICS_GITHUB_ONLY}`);
+  }
 
   const projectPath = resolveProjectOrExit(args.project);
   if (isDevGuardianOwnRepo(projectPath)) {
@@ -3177,6 +3332,16 @@ function cmdCiInit(argv) {
         `repository's name. Remove attest from ${CI_CONFIG_RELATIVE_PATH} and pass --attest to ci-init instead.`,
     );
   }
+  // The same for the command the metrics job runs: argv only, whatever argv says.
+  const metricsConfig = repoConfigDeclaring(projectPath, 'metrics_command');
+  if (metricsConfig) {
+    return usageError(
+      `ci-init: refusing to run: '${CI_CONFIG_RELATIVE_PATH}' declares "metrics_command" (found at ${metricsConfig}). ` +
+        '--metrics-command may only be given on the command line, never from a file inside the repository — a pull ' +
+        'request could otherwise edit that file and choose the command a pipeline job runs. Remove metrics_command ' +
+        `from ${CI_CONFIG_RELATIVE_PATH} and pass --metrics-command to ci-init instead.`,
+    );
+  }
 
   const plugin = readJsonOrExit(PLUGIN_JSON_PATH, 'dev-guardian plugin.json');
   const pinned = readJsonOrExit(PINNED_PATH, 'configs/ci/pinned.json');
@@ -3187,10 +3352,17 @@ function cmdCiInit(argv) {
     return usageError(`ci-init: template missing: ${templatePath}`);
   }
   const templateText = readFileSync(templatePath, 'utf8');
-  // Only the GitHub template has an ATTEST section (--attest is refused for
-  // the others above); declaring it for every target keeps a stray marker in
-  // any template a loud error rather than an unknown section.
-  const rendered = renderCiTemplate(templateText, vars, { ATTEST: args.attest });
+  // Only the GitHub template has ATTEST, METRICS and MULTI_JOB sections (the
+  // flags are refused for the others above); declaring them for every target
+  // keeps a stray marker in any template a loud error rather than an unknown
+  // section. MULTI_JOB: more than one job, so each states its own permissions
+  // and the workflow grants none.
+  const metrics = args.metricsCommand !== null;
+  const rendered = renderCiTemplate(
+    templateText,
+    { ...vars, METRICS_COMMAND_YAML: yamlSingleQuoted(args.metricsCommand ?? '') },
+    { ATTEST: args.attest, METRICS: metrics, MULTI_JOB: args.attest || metrics },
+  );
 
   const outPath = resolve(projectPath, target.outputPath);
 
@@ -3246,6 +3418,14 @@ function cmdCiInit(argv) {
         'private one — elsewhere it fails.\n' +
         `${ATTEST_SCOPE_NOTE}\n` +
         `${attestVerifyHint(args.branch)}\n`,
+    );
+  }
+  if (metrics) {
+    process.stdout.write(
+      'The metrics job runs the --metrics-command on the change and, on a pull request, on its base, and adds the ' +
+        'comparison of their METRIC lines to the job summary (docs/ci.md, "metrics"). It is advisory: it fails only ' +
+        'when the command fails on the change. Print a line per value: METRIC <name>=<number> [<unit>] ' +
+        'better=lower|higher tolerance=<n>[%] — without better= and tolerance= a value is shown, never judged.\n',
     );
   }
   process.stdout.write(
@@ -4056,6 +4236,77 @@ async function cmdDb(argv) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// metrics — the METRIC lines of a change's output against its base's
+// ---------------------------------------------------------------------------
+// `metric-lines/1`, the format dev-spec-driven reads too (mcp/src/metrics/):
+// the files a pipeline step wrote, compared by the base line's terms. No
+// database, no command run, nothing written; light enough to load with the
+// CLI (no `load*Modules()`). Advisory unless --strict.
+
+const METRICS_FORMATS = new Set(['human', 'json', 'markdown']);
+
+/**
+ * @param {string[]} argv
+ * @returns {Parsed<{ head: string, base: string | null, format: string, strict: boolean }>}
+ */
+function parseMetricsArgs(argv) {
+  /** @type {{ head: string | null, base: string | null, format: string, strict: boolean }} */
+  const out = { head: null, base: null, format: 'human', strict: false };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] ?? '';
+    if (a === '--strict') {
+      out.strict = true;
+      continue;
+    }
+    const flag = ['--head', '--base', '--format'].find((f) => a === f || a.startsWith(`${f}=`));
+    if (flag === undefined) return { error: `Unknown argument: ${a}` };
+    const r = takeFlagValue(argv, i, a, flag);
+    if (r.error !== undefined) return { error: r.error };
+    i = r.nextIndex;
+    if (flag === '--head') out.head = r.value;
+    else if (flag === '--base') out.base = r.value;
+    else if (METRICS_FORMATS.has(r.value)) out.format = r.value;
+    else return { error: `--format must be human, json or markdown (got ${JSON.stringify(r.value)})` };
+  }
+  if (out.head === null) return { error: 'metrics requires --head <file> (the change\'s output)' };
+  return { value: { head: out.head, base: out.base, format: out.format, strict: out.strict } };
+}
+
+/** @param {string[]} argv */
+function cmdMetrics(argv) {
+  const parsed = parseMetricsArgs(argv);
+  if (parsed.error !== undefined) return usageError(parsed.error);
+  const args = parsed.value;
+  // A base that cannot be read is the caller's mistake (the job passes --base only
+  // for a base it measured): a usage error, never a comparison with nothing.
+  const base = args.base === null ? null : readMetricFile(args.base);
+  if (base !== null && !base.ok) return usageError(`metrics: --base ${args.base}: ${base.reason}`);
+  const head = readMetricFile(args.head);
+  if (!head.ok) {
+    const error = `metrics: --head ${args.head}: ${head.reason} — nothing was measured`;
+    if (args.format === 'json') {
+      process.stdout.write(`${JSON.stringify({ format: 'metric-lines/1', tool_version: resolveVersion(), exit_code: 2, error }, null, 2)}\n`);
+    } else process.stderr.write(`${error}\n`);
+    process.exitCode = 2;
+    return;
+  }
+  const comparison = compareMetricOutputs(
+    readMetricOutput(head.text, { truncated: head.truncated }),
+    base === null ? null : readMetricOutput(base.text, { truncated: base.truncated }),
+  );
+  const exitCode = metricsExitCode(comparison, args.strict);
+  const ctx = { toolVersion: resolveVersion(), headFile: args.head, baseFile: args.base, strict: args.strict, exitCode };
+  process.stdout.write(
+    args.format === 'json'
+      ? `${JSON.stringify(metricsJson(comparison, ctx), null, 2)}\n`
+      : args.format === 'markdown'
+        ? metricsMarkdown(comparison, ctx)
+        : metricsHuman(comparison, ctx),
+  );
+  process.exitCode = exitCode;
+}
+
 const HELP_FLAGS = new Set(['-h', '--help', 'help']);
 
 /**
@@ -4103,6 +4354,9 @@ const VALUE_FLAGS = new Set([
   '--branch',
   '--out',
   '--max-results',
+  '--metrics-command',
+  '--head',
+  '--base',
 ]);
 
 function main() {
@@ -4145,6 +4399,13 @@ function main() {
   if (cmd === 'db') return void cmdDb(argv.slice(1)).catch(fatal);
   if (cmd === 'import-sarif') return void cmdImportSarif(argv.slice(1)).catch(fatal);
   if (cmd === 'selftest') return void cmdSelftest(argv.slice(1)).catch(fatal);
+  if (cmd === 'metrics') {
+    try {
+      return cmdMetrics(argv.slice(1));
+    } catch (e) {
+      return fatal(e);
+    }
+  }
 
   process.stderr.write(`Unknown command: ${cmd}\n\n`);
   usage();

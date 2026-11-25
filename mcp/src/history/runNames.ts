@@ -295,6 +295,10 @@ export const RUN_NAMES = {
   dotnet_efcore_audit: scanner('dotnet_efcore_audit'),
   dotnet_target_framework_check: scanner(),
 
+  // perf_check's `perf` rows (3.17.0): report through meta, no finding.
+  lighthouse: scanner(),
+  k6: scanner(),
+
   // compliance_check: its policy-document walk, and the RGPD Semgrep pack
   // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.
   'policy-docs': scanner(),
