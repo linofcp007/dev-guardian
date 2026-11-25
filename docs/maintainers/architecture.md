@@ -101,8 +101,8 @@ its own `tools_run` name (`history/runNames.ts`):
 - `guardian-test-integrity` (`detect.ts`, `gitChanges.ts#runTestIntegrityCheck`): weakened tests. Null when the
   change touches no test file, `package.json` or Rust source; a change git cannot read is a failed run, a gap.
 - `guardian-suppressions` (3.17.0, `suppressions.ts`, `gitChanges.ts#runSuppressionCheck`): the suppressions the
-  change adds with no reason. Its own name so a reader of the verdict (dev-spec-driven's finish labels this tool's
-  findings "weakened test") never takes one for the other. It never gates: no finding is high, a failed listing or
+  change adds with no reason. Its own name so a reader of the verdict (dev-spec-driven's finish labels every
+  `guardian-test-integrity` finding a weakened test) never takes one for the other. It never gates: no finding is high, a failed listing or
   a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
   `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
 

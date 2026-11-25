@@ -17,7 +17,7 @@ what the model needs **now**; history goes to `CHANGELOG.md` and the rule packs'
 | `skills/<name>/references/*.md` | ≤ 6 KB each, and linked from its `SKILL.md` | same |
 | `host-rules/AGENTS.md` (the rendered body) | ≤ 8 000 bytes — Codex reads 32 KiB of AGENTS.md in all, dev-spec-driven's block included | `hostRulesDrift.test.ts` |
 | The Windsurf rule | ≤ 11 000 characters — Windsurf truncates at 12 000 | same |
-| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (71 586 on 2026-11-13: 70 687 + 899) | `descriptionLimits.test.ts` |
+| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (71 811 on 2026-11-25: 70 912 + 899) | `descriptionLimits.test.ts` |
 | A listed tool's `description` / `title` | ≤ 600 / ≤ 60 characters | same |
 | A parameter's description (nested ones too) | ≤ 200 characters | same |
 | The MCP `instructions` (`mcp/src/tools/instructions.ts`) | ≤ 900 characters | same |
@@ -104,7 +104,9 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   (`${CLAUDE_PLUGIN_ROOT}` in a command), or `node .specs/guardian.cjs …` from a dev-spec-driven project — a plugin
   install puts no `dev-guardian` on `PATH`.
 - Never advise `baseline update` to accept one finding: it accepts every current finding. One reviewed finding
-  takes an inline suppression with a reason, or a baseline rebuilt on the base commit.
+  takes an inline suppression with a reason, or a baseline rebuilt on the base commit. Every suppression example
+  names its rule and gives the reason (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`): an agent copies
+  the example, and a bare one is what `guardian-suppressions` reports.
 
 ## dev-spec-driven
 
