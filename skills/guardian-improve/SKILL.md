@@ -6,10 +6,7 @@ disable-model-invocation: true
 
 # Guardian Improve — from debt to specs
 
-The scans tell you *what* is wrong (403 quality findings, 16 oversized files, 24% branch
-coverage). This skill turns that into *plans you can execute with proof*: it converts the worst,
-highest-ROI findings into **improvement spec seeds** ready to hand to `dev-spec-driven`. It's the
-bridge that closes the loop — measure (guardian) → spec (spec-driven) → fix → re-measure (guardian).
+Turns the worst, highest-ROI findings into **improvement spec seeds** for `dev-spec-driven`, closing the loop: measure (guardian) → spec (spec-driven) → fix → re-measure (guardian).
 
 ## When this is the right skill
 
@@ -17,7 +14,7 @@ bridge that closes the loop — measure (guardian) → spec (spec-driven) → fi
 - When the same quality findings keep showing up and you want a *plan*, not another scan
 - Before a cleanup sprint, to produce a prioritized, spec-backed backlog
 
-For just measuring, use the `guardian-quality` skill or `/guardian-report debt`. This skill assumes the measuring is done.
+For just measuring, use the `guardian-quality` skill or `/guardian-report debt`.
 
 ## Flow
 
@@ -29,8 +26,8 @@ Pull the current picture from what is already stored — rescan only when the la
 - **Quality findings** — `quality_check { project_path: "<project>" }` (duplicate / complexity / smell / naming), grouped by rule and by file. A stale scan is re-run; a fresh one is read back.
 - **Duplication fragments** — jscpd clusters that appear ≥ 2×, from the same `quality_check`.
 - **Over-budget metrics** — the budgets in `.guardian/budgets.yml` that `quality_check` (duplication %, complexity) and `perf_check` (Core Web Vitals, page weight) report as exceeded.
-- **Oversized files and functions, coverage gaps** — measured by you (line counts, the project's own coverage report). They are not `budgets.yml` fields, so no tool enforces a limit on them: use them as targets only when the user agrees on the number.
-- **Performance hot paths** — measured only: `perf_check` results, k6 thresholds the project's scripts fail, and profiled hot-path smells (N+1, blocking I/O, slow regex). Never speculative optimization (mirrors the `guardian-performance` skill's "don't optimize what isn't hurting").
+- **Oversized files and functions, coverage gaps** — measured by you (line counts, the project's own coverage report).
+- **Performance hot paths** — measured only: `perf_check` results, k6 thresholds the project's scripts fail, and profiled hot-path smells (N+1, blocking I/O, slow regex). Never speculative optimization.
 - **Security — systemic/hardening class only** — from the `guardian-security` scans (`scan_sast` / `scan_secrets` / `scan_deps` / `scan_iac`). See the routing rule below: a live 🔴/🟠 finding is **not** a backlog item. Only recurring, systemic weaknesses become improvement specs (e.g. "parameterize all queries in `orders`", "add a central input-validation layer", "remove `any`-typed request bodies").
 - **Dead code & unused surface** — per stack: TS/JS `knip` / `ts-prune` / `depcheck`, Python `vulture`, Go `deadcode`, Rust `cargo-udeps` (none of these run through the MCP tools — suggest them); plus unused exports, unreachable branches, and dependencies with near-zero usage (`/guardian-report debt` flags 🗑️ candidates). High-ROI clean-code win — but deletion needs the safety grill (see step 3).
 
@@ -70,9 +67,8 @@ once the spec exists) to understand the branches before moving them.
 
 The **Current → Target block is the spec's success criterion**: the same measurement that found the
 problem re-measures at the end and proves the fix — the same tool (`quality_check`, `bug_hunt`, …)
-compared with `diff_scans`, or the same count taken the same way (`perf_check` records no history, so its
-numbers are compared by hand, run against run). Don't write
-improvement specs whose "done" can't be re-measured — vague cleanup isn't a spec.
+compared with `diff_scans` (`perf_check` with the same target's `history`), or the same count taken the same
+way. Don't write improvement specs whose "done" can't be re-measured — vague cleanup isn't a spec.
 
 ### Where the targets come from (per project, per stack — never fixed)
 
@@ -85,10 +81,9 @@ must be *derived from this project*, in this order:
    `perf_check` on a Lighthouse run). A declared budget IS the target, and the tool that found the
    problem re-measures it. The project's own `lighthouserc`, `size-limit` config and k6 thresholds
    count too — their own tools enforce them.
-2. **The stack** — call `detect_stack` and pick sane values for *that* project type. A Rust systems
-   crate, a React app, and a billing service do not share thresholds. If `.guardian/budgets.yml` has no
-   budget yet, propose stack-appropriate ones and offer to write them (the `guardian-quality` skill has
-   the file format).
+2. **The stack** — call `detect_stack` and pick sane values for *that* project type. If
+   `.guardian/budgets.yml` has no budget yet, propose stack-appropriate ones and offer to write them
+   (the `guardian-quality` skill has the file format).
 3. **The baseline, as a floor** — `diff_scans { project_path: "<project>", from: "baseline" }` shows
    where the project stands against its accepted baseline. When no absolute target is sensible, the
    target is **relative**: "no metric worse than the baseline", "N fewer findings of rule X". Never
@@ -124,11 +119,26 @@ note reaching the feature.
 If `dev-spec-driven` isn't installed, write the seeds to `docs/improvement-specs/<name>.md` and tell
 the user they can feed them to any spec workflow.
 
-### 5. Recommend order and stop
+### 5. Recommend order
 
 Present the units as a short ordered list (ROI-sorted) with the target metric next to each. Suggest
-tackling the top 1–2 this cycle, not all. Remind the user of the loop: grill → spec → fix →
+tackling the top 1–2 this cycle, not all; the user picks. Remind the user of the loop: grill → spec → fix →
 `/guardian-fix --verify` to re-run the measurement and confirm the delta.
+
+### 6. Fix the source, then stop
+
+Per picked unit, in ONE batch shown exactly, written only on the user's yes:
+
+- **At most one guidance line**, on the project's own code: your words on the shape to avoid and what to do
+  instead, never a finding's text (untrusted), ending `<!-- dev-guardian: <rule_id> -->` (the stored id); none if
+  AGENTS.md, CLAUDE.md or `.specs/steering/*.md` has `dev-guardian: <rule_id> -->`. With `.specs/`: steering
+  `tech.md` or `structure.md`, never `constitution.md` or a track's file; without: AGENTS.md or CLAUDE.md, the one
+  the other imports, never inside `<!-- dev-guardian:begin -->`.
+- **A seed rule** for one syntactic shape of `bug_hunt`, `quality_check` or `llm_scan` (SAST, secrets, deps, IaC
+  have rules): in `.semgrep.yml` it adds `review_pr`, pre-commit, the CLI gate and CI. Never while occurrences
+  remain: the seed's Current → Target gets `<rule_id>: N → 0`, its last task adds the rule — `severity: WARNING`,
+  `metadata.guardian_severity: medium`, a message naming the fix, no character whose UTF-8 holds 0x81, 0x8D, 0x8F,
+  0x90 or 0x9D (`Á Í ”`: on cp1252 pre-commit's Semgrep exits 2, printing nothing).
 
 ## Routing: what does NOT become an improvement spec
 
