@@ -11,7 +11,7 @@ npm ci               # first time only — Node >= 22.13; no native modules, sto
 npm run lint         # tsc over src/ AND test/ (tsconfig.test.json), then the hand-written JS (tsconfig.js.json)
 npm run build        # tsc type-check, esbuild bundles -> mcp/dist, copy-assets, host-rules, docs
 npm test             # vitest run (full suite) — the gate before a commit
-npm run test:fast    # unit + docs minus the 15 slowest unit files (vitest.fast.config.ts) — the inner loop
+npm run test:fast    # unit + docs minus the 18 slowest unit files (vitest.fast.config.ts) — the inner loop
 npm run test:coverage # the coverage thresholds, natively
 npm run test:docker  # Linux containers: Node 22.13 (with coverage) and the LTS (scripts/test-docker.mjs)
 ```

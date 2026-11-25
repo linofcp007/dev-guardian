@@ -71,6 +71,7 @@ import { SEVERITY_ORDER, type Finding, type RepoSuppression, type ScanCoverage, 
 import { computeCoverage } from '../tools/scanCoverage.js';
 import { FIXPOINT_TIMEOUT_TYPE } from '../runners/semgrepReport.js';
 import { PATH_TOO_LONG_TYPE } from '../runners/semgrepCoverageGaps.js';
+import { SUPPRESSIONS_TOOL } from '../testintegrity/suppressions.js';
 import { newFindings } from './baseline.js';
 import { BASELINE_RELATIVE_PATH } from './baseline.js';
 import {
@@ -578,6 +579,9 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
     default:
       if (/shallow|history truncated/i.test(detail)) return 'Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.';
       if (/^baseline: /.test(detail)) return 'Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.';
+      if (tool === SUPPRESSIONS_TOOL) {
+        return 'Nothing to do for the gate (not gating): the suppressions the note counts were not read — review the new suppressions in those files by hand.';
+      }
       if (/\.guardian\/'s generated output/.test(detail)) {
         return "Stop tracking the named files (`git rm --cached <file>`) and move any code they hold out of .guardian/ — dev-guardian's reports, database and dashboard are never committed, and no scan reads them.";
       }
@@ -683,6 +687,8 @@ function tallyStep(t: StepTally, step: ScanStepResult, accept: Acceptances): voi
   }
 
   for (const missing of step.missing_tools) tallyMissing(t, step, missing, accept);
+  // A step's own notes (`ScanStepResult.notes`): said, never gating.
+  for (const note of step.notes ?? []) pushNote(t, note, step.tool, 'other');
 
   for (const run of step.tools_run) {
     if (run.status === 'failed') {

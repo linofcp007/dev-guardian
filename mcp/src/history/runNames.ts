@@ -164,6 +164,9 @@ export const RUN_NAMES = {
   // review_pr's and a diff-scoped scan_sast's check of the change for weakened tests
   // (testintegrity/): absent when the change touches no test file.
   'guardian-test-integrity': scanner('guardian-test-integrity'),
+  // The same callers' pass over the suppressions the change adds (testintegrity/suppressions.ts):
+  // absent when no changed file holds a suppression's token; skipped, never failed.
+  'guardian-suppressions': scanner('guardian-suppressions'),
   // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
   'dotnet-sdk': scanner('security-code-scan', 'dotnet-analyzers'),
 

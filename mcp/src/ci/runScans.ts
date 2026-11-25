@@ -48,6 +48,10 @@
  * (`testintegrity/`, {@link TEST_INTEGRITY_STEP}) — a whole-project scan has
  * no diff of its own to read them from. Its findings join the scan's, so the
  * gate judges them like any other: a focused `.only` is high, the rest medium.
+ * A second step, `guardian-suppressions`, reads the same change for the
+ * suppressions it adds with no reason (`testintegrity/suppressions.ts`):
+ * medium or low, so nothing of it blocks at the default `--fail-on high`, and
+ * what its bounds left unread is a note (`ScanStepResult.notes`), never a gap.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -71,7 +75,8 @@ import { filesChangedFrom } from './changedSince.js';
 import { acceptedByHistoryIgnores } from './gitleaksIgnore.js';
 import { readInHistoryHunks } from './historyHunks.js';
 import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
-import { runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
+import { runSuppressionCheck, runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
+import { SUPPRESSIONS_TOOL } from '../testintegrity/suppressions.js';
 import { rememberSecretValues, secretValueOf } from './secretValues.js';
 import type { PartialParseRef, RulesSource, ScanStepResult } from './types.js';
 
@@ -134,6 +139,9 @@ export interface RunScansOptions {
 
 /** The step that reads the change since {@link RunScansOptions.diffBase} for weakened tests: its pass's own name. */
 export const TEST_INTEGRITY_STEP = TEST_INTEGRITY_TOOL;
+
+/** The step that reads the same change for the suppressions it adds: its pass's own name. */
+const SUPPRESSIONS_STEP = SUPPRESSIONS_TOOL;
 
 /**
  * The extra step under a ref: `scan_secrets` with `scope.paths` — the files
@@ -211,11 +219,18 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
 
       const integrity = opts.diffBase !== undefined ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);
+      const suppressions = opts.diffBase !== undefined ? await suppressionsStep(opts.projectPath, opts.diffBase) : null;
+      if (suppressions !== null) steps.push(suppressions.step);
 
       const read = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read);
       const wholeFiles = read.filter((f) => !accepted.has(f));
-      const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles, ...(integrity?.findings ?? [])]);
+      const all = dedupeFindings([
+        ...collectFindings(storage, opts.projectPath),
+        ...wholeFiles,
+        ...(integrity?.findings ?? []),
+        ...(suppressions?.findings ?? []),
+      ]);
       // The gate keys secrets by their values, read in memory from where
       // gitleaks' reports of this run locate them (ci/secretValues.ts): a
       // secret replaced in place, or added above another, is new.
@@ -257,6 +272,27 @@ async function testIntegrityStep(projectPath: string, ref: ResolvedRef): Promise
   if (result === null) return null;
   return {
     step: { tool: TEST_INTEGRITY_STEP, ran: true, tools_run: [result.toolRun], missing_tools: result.missing },
+    findings: result.findings,
+  };
+}
+
+/**
+ * {@link SUPPRESSIONS_STEP} over the same change — null when the change has
+ * no file to read. Never a gap: a bound that left files unread, or a change
+ * git could not list, is one of the step's `notes` (the verdict's
+ * `coverage_notes`), and nothing it reports is high.
+ */
+async function suppressionsStep(projectPath: string, ref: ResolvedRef): Promise<{ step: ScanStepResult; findings: Finding[] } | null> {
+  const result = await runSuppressionCheck(projectPath, { base: ref.commit, target: { kind: 'worktree', untracked: true }, label: ref.ref });
+  if (result === null) return null;
+  return {
+    step: {
+      tool: SUPPRESSIONS_STEP,
+      ran: true,
+      tools_run: [result.toolRun],
+      missing_tools: [],
+      ...(result.notes.length > 0 ? { notes: result.notes.map((n) => `${SUPPRESSIONS_STEP}: ${n}`) } : {}),
+    },
     findings: result.findings,
   };
 }

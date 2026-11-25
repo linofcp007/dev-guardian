@@ -2403,7 +2403,7 @@ async function cmdBaseline(argv) {
       // 1.30): every current finding is now "known", the newest included.
       'Every finding of this scan is in the baseline now, new ones included: commit .guardian/baseline.json. ' +
       'Run this on the base commit, before a change is made — never to accept one finding; for that, ' +
-      'suppress it where its scanner reads suppressions (`nosemgrep: <rule> -- <reason>`, `# nosec`), ' +
+      'suppress it where its scanner reads suppressions (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`), ' +
       'reviewed like code.\n',
   );
   if (verdict.coverageGaps.length > 0) {

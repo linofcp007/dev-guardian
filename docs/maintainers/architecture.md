@@ -93,6 +93,32 @@ leaf: nothing under `runners/`, `ci/`, `history/` or the scan tools imports it, 
 It opens no database and reads no project. A new raw `node:fs` call there goes in `rawRepoFsSites.test.ts` like any
 other, and a new rule pack needs a canary (`configs/selftest/README.md`).
 
+## The diff's own passes (`mcp/src/testintegrity/`)
+
+`review_pr`, a diff-scoped `scan_sast` and the CLI's `scan --diff-base` read the change itself in two passes, each
+its own `tools_run` name (`history/runNames.ts`):
+
+- `guardian-test-integrity` (`detect.ts`, `gitChanges.ts#runTestIntegrityCheck`): weakened tests. Null when the
+  change touches no test file, `package.json` or Rust source; a change git cannot read is a failed run, a gap.
+- `guardian-suppressions` (3.17.0, `suppressions.ts`, `gitChanges.ts#runSuppressionCheck`): the suppressions the
+  change adds with no reason. Its own name so a reader of the verdict (dev-spec-driven's finish labels this tool's
+  findings "weakened test") never takes one for the other. It never gates: no finding is high, a failed listing or
+  a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
+  `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
+
+The suppressions table (`ROWS`) is closed: each row is read the way its tool reads it (Semgrep anywhere on the line,
+strings included; Bandit and gosec in comments only), and a line inside a multi-line literal is not read — the
+lexer (`readLines`) carries a block comment, a string that runs on, a heredoc from line to line. Every row's match
+holds one of its tokens, and `PICKAXE_ERE` (the tokens, `|`-joined: literals, bracket classes, `!?` — POSIX ERE and
+V8 alike) is the one `git diff -G` listing, so a file whose diff holds no token is never diffed. A new row needs a
+case in `test/fixtures/suppressions/examples.json` (bare and reasoned), a token its match always holds, and a
+timing row (`suppressionsTiming.test.ts` loops over every row): a row's arguments grammar is the likeliest place
+for a superlinear regex. The cases live under `test/fixtures/` because the pass never reads it: a test source that
+held a bare `nosemgrep` in a string would be a real Semgrep suppression on dev-guardian's own branches. The bundles
+in `mcp/dist/` are read like any file — `engine.js` is past the 2 MiB bound (counted in a note when its diff holds a
+token), and the directives a bundle copies from its sources (all four of today's name their rule) are counted, never
+reported.
+
 ## What a scan of the project's own files leaves out
 
 Only the ROOT `.guardian/`'s generated output — `reports/`, the database,

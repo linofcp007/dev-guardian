@@ -2350,7 +2350,7 @@ const RULE_BASELINE_UPDATE: MatchedRule = {
   reason:
     'dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the ' +
     'gate stops reporting them — the user decides. To accept one reviewed finding, suppress it inline with a reason ' +
-    '(`nosemgrep: <rule> -- <reason>`, `# nosec`), or rebuild the baseline on the base commit',
+    '(`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`), or rebuild the baseline on the base commit',
 };
 
 const START_PROCESS = new Set(['start-process', 'saps', 'start']);
