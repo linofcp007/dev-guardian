@@ -483,6 +483,25 @@ export class ScansRepo {
   }
 
   /**
+   * One `perf_check` series of ONE project — its completed `perf` rows whose
+   * `meta.series` is `series` — newest first, at most `limit`: one statement on
+   * `idx_scans_project_type`, the series matched in SQL so another target's
+   * runs are never paged in (`metrics/perfSeries.ts`).
+   */
+  listCompletedPerfSeries(projectPath: string, series: string, limit: number): ScanRecord[] {
+    return this.db
+      .prepare<[string, string, number], ScanRow>(
+        `SELECT * FROM scans
+          WHERE project_path = ? AND status = 'completed' AND scan_type = 'perf' AND ${READABLE}
+            AND (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.series') END) = ?
+          ORDER BY started_at DESC, rowid DESC
+          LIMIT ?`,
+      )
+      .all(projectPath, series, limit)
+      .map(rowToRecord);
+  }
+
+  /**
    * `scanIds`, newest first in the one order every "latest" query here uses
    * — `started_at DESC, rowid DESC` — so two scans started in the same
    * millisecond still sort the way SQL picked them. Unknown ids are dropped.

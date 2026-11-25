@@ -34,7 +34,7 @@ perf:
   bundle_size_kb: 1600  # peso total da página, KB
 ```
 
-São estes os cinco campos, e só estes. Latências por endpoint (p95 / p99) não são um budget do ficheiro: são os **thresholds do próprio script k6** (secção seguinte), e o k6 falha a corrida quando não os cumpre. Os limites começam tolerantes; aperta-os à medida que melhoras.
+São estes os cinco campos, e só estes. Latências por endpoint (p95 / p99) não são um budget do ficheiro: são os **thresholds do próprio script k6** (secção seguinte), e o k6 falha a corrida quando não os cumpre. Os limites começam tolerantes; aperta-os à medida que melhoras. Uma corrida k6 não o lê: um teste de carga não mede a página.
 
 ## Load testing
 
@@ -112,7 +112,7 @@ scenarios:
 - **web-vitals** library — recolhe métricas reais de utilizadores
 - **WebPageTest** (público) — runs reais multi-localização
 
-Para Lighthouse na CI do próprio projeto (o dev-guardian não gera workflows — é um exemplo para o utilizador adaptar, com um budget no formato do Lighthouse CI, que é independente de `.guardian/budgets.yml`):
+Para Lighthouse na CI do próprio projeto (o `ci-init` não corre o Lighthouse, que precisa da aplicação e de um Chrome — é um exemplo para o utilizador adaptar, com um budget no formato do Lighthouse CI, que é independente de `.guardian/budgets.yml`):
 
 ```yaml
 # .github/workflows/lighthouse.yml (escrito pelo utilizador)
@@ -185,19 +185,14 @@ Suspeitos comuns:
 
 ## Performance regressions
 
-Em CI, comparar tempo de testes selecionados ou de endpoints contra baseline:
-
-```bash
-# Exemplo simples — falha se ficou >10% mais lento
-k6 run --out json=results.json load-test.js
-node compare-vs-baseline.js results.json baseline.json --max-regression 10%
-```
+- **O `perf_check` guarda cada corrida medida** (um scan `perf` sem findings, nunca "o último scan" de `diff_scans`) e `history` compara-a com a mediana das últimas 3-5 corridas do mesmo alvo (a página, a versão maior do Lighthouse e as categorias; no k6, o script, o conteúdo e o `vus_max`): `regressed` além da tolerância, `confirmed` se a anterior também regrediu. Uma corrida que regrediu nunca entra numa referência seguinte — correr de novo não apaga a regressão; `since` mostra a mediana das 3 mais antigas. Com menos de 3 anteriores: `unjudged` (`too_few_runs`).
+- **Na CI**, o comando de medida imprime `METRIC <nome>=<valor> [<unidade>] better=lower|higher tolerance=<n>[%]` e `node "<plugin root>/cli/dev-guardian.mjs" metrics --head head.txt --base base.txt` julga a mudança pelos termos da linha da base — sem `better=` e `tolerance=` não há juízo, e sai 0 salvo `--strict`. `ci-init github --metrics-command "<cmd>"` gera o job que mede os dois lados ([docs/ci.md](../../docs/ci.md)).
 
 Ferramenta open-source: `hyperfine` para benchmark de comandos CLI.
 
 ## Output
 
-Cada `perf_check` escreve o relatório JSON bruto em `.guardian/reports/perf-<id>/` e devolve o caminho absoluto. Ao contrário dos scans de segurança e qualidade, **não fica no histórico** da base de dados — não há `diff_scans` de performance. Para acompanhar a evolução, guarda os relatórios (ou os números) de cada release e compara-os tu, ou deixa os thresholds do k6 e os budgets do `.guardian/budgets.yml` fazerem de alarme.
+Cada `perf_check` escreve o relatório JSON bruto em `.guardian/reports/perf-<id>/` e devolve o caminho absoluto; os números da corrida ficam em `guardian://scans/{scan_id}` (o `history.scan_id`). Se o histórico falhar, a medição não falha: `history.recorded: false` diz porquê.
 
 ## Quando NÃO otimizar
 

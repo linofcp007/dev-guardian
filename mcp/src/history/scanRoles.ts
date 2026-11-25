@@ -26,7 +26,12 @@
  *   - `review_pr` — scoped to a diff: its silence about a file says nothing
  *     about that file;
  *   - `wp_audit`, `wp_cron_audit`, `wp_rest_audit`, `dotnet_target_framework`
- *     — report through `meta`, never through findings.
+ *     — report through `meta`, never through findings;
+ *   - `perf` — one row per measured `perf_check` run, its numbers in `meta`
+ *     (`metrics/perfSeries.ts`) and no finding: as `'state'`, a perf run would
+ *     become `latestStateScan`'s default — the scan `diff_scans`,
+ *     `regression_alert`, `report_export` and `set_baseline` read — as an SBOM
+ *     did (above).
  *
  * Independently of type, a scan whose `meta.scope` is set (diff or partial
  * runs) is never a state scan — see {@link isScopedScan}. Nor is the
@@ -61,7 +66,6 @@ export const SCAN_TYPE_ROLE = {
   quality: 'state',
   dast: 'state',
   compliance: 'state',
-  perf: 'state',
   wordpress: 'state',
   wp_vuln_check: 'state',
   wp_vuln_check_source: 'state',
@@ -86,6 +90,7 @@ export const SCAN_TYPE_ROLE = {
   wp_cron_audit: 'never',
   wp_rest_audit: 'never',
   dotnet_target_framework: 'never',
+  perf: 'never',
 } as const satisfies Record<ScanType, ScanTypeRole>;
 
 /** Every `'state'` type, in the declaration order above. */

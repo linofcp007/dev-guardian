@@ -42,7 +42,7 @@ import {
 import type { MetricVerdict } from './judge.js';
 import type { Better } from './metricLine.js';
 
-interface PerfSample {
+export interface PerfSample {
   readonly name: string;
   readonly value: number;
   readonly unit: string | null;
@@ -124,7 +124,7 @@ export function k6Samples(summary: Record<string, unknown>): PerfSample[] {
   return out;
 }
 
-interface PerfSeries {
+export interface PerfSeries {
   /** Stored as `meta.series`: a digest, so a URL's credentials never reach the column. */
   readonly key: string;
   readonly label: string;
