@@ -530,19 +530,21 @@ scan — headless CI: run the scan pipeline, gate against the baseline, report
                          they are the same origin, so one flag names both.
   --authorized-target   Confirm you are authorized to DAST-test that target
   --local-only          Keeps Semgrep local: only rules on disk — the
-                         project's .semgrep.yml and registered custom rules,
-                         plus the plugin's own packs (the LLM-application
-                         pack still runs) — with --metrics=off and no
-                         registry download. Fewer rules than the default
-                         registry ruleset. It is NOT "nothing leaves the
-                         machine": Trivy still fetches its vulnerability
-                         database and a .NET project is still restored from
-                         its NuGet feeds (SECURITY.md, network egress).
-                         Semgrep's own version check is off on every run.
-                         It needs Semgrep rules of the project's own: with none,
-                         Semgrep is skipped and the scan exits 2 (commit a
-                         .semgrep.yml — the init_project MCP tool installs
-                         dev-guardian's base ruleset as one — or drop the flag).
+                         project's .semgrep.yml, plus the plugin's own packs
+                         (the LLM-application pack still runs) — with
+                         --metrics=off and no registry download. Fewer rules
+                         than the default registry ruleset. It is NOT
+                         "nothing leaves the machine": Trivy still fetches its
+                         vulnerability database and a .NET project is still
+                         restored from its NuGet feeds (SECURITY.md, network
+                         egress). Semgrep's own version check is off on every
+                         run. It needs Semgrep rules of the project's own:
+                         with none, Semgrep is skipped and the scan exits 2
+                         (commit a .semgrep.yml — the init_project MCP tool
+                         installs dev-guardian's base ruleset as one — or drop
+                         the flag). Rules registered with register_custom_rules
+                         never run here: they live in the MCP server's
+                         database, and each CLI run uses a fresh one.
   --start-command <cmd> [args…]
                          Start <cmd> (argv, never a shell) for the DAST pass
                          and stop it — whole process tree — when the scan

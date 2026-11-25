@@ -61867,7 +61867,7 @@ async function runSemgrep2(args) {
     tools_run.push({
       name: "semgrep",
       status: "skipped",
-      reason: `local_only=true but this project has no local Semgrep rules \u2014 no .semgrep.yml, nothing registered with register_custom_rules (the plugin's own packs, ${PLUGIN_PACK_FILES.join(", ")} are an addition and not run alone as a SAST scan). Run init_project, or drop local_only to use the Semgrep registry.`
+      reason: `${NO_LOCAL_RULES}; the plugin's own packs, ${PLUGIN_PACK_FILES.join(", ")} are an addition and not run alone as a SAST scan. Run init_project, or drop local_only to use the Semgrep registry.`
     });
     missing_tools.push("semgrep");
     return;
@@ -62239,7 +62239,7 @@ async function runSemgrepOnScope(args) {
     tools_run.push({
       name: "semgrep",
       status: "skipped",
-      reason: "local_only=true but this project has no local Semgrep rules \u2014 no .semgrep.yml, nothing registered with register_custom_rules."
+      reason: `${NO_LOCAL_RULES}.`
     });
     missing_tools.push("semgrep");
     return;
@@ -62593,7 +62593,7 @@ function projectReferencesScs(projectPath) {
   }
   return false;
 }
-var MAX_DOTNET_PROJECT_FILE_BYTES, DOTNET_BUILD_TIMEOUT_MS, analysedIn, NO_LONG_FILES, NEUTRAL_BANDIT_INI, NEUTRAL_BANDIT_INI_TEXT, isPython, DOTNET_SOURCE, SARIF_TARGETS;
+var MAX_DOTNET_PROJECT_FILE_BYTES, DOTNET_BUILD_TIMEOUT_MS, NO_LOCAL_RULES, analysedIn, NO_LONG_FILES, NEUTRAL_BANDIT_INI, NEUTRAL_BANDIT_INI_TEXT, isPython, DOTNET_SOURCE, SARIF_TARGETS;
 var init_scanSast = __esm({
   "src/tools/scanSast.ts"() {
     "use strict";
@@ -62765,6 +62765,7 @@ var init_scanSast = __esm({
         }
       })
     );
+    NO_LOCAL_RULES = "local_only=true but this project has no local Semgrep rules \u2014 no .semgrep.yml, nothing registered with register_custom_rules in this database (the CLI's runs never read a registration: each uses a fresh database)";
     analysedIn = (analysed, rel2) => {
       const key = rel2.toLowerCase();
       return analysed.some((a) => a === key || a.endsWith(`/${key}`));

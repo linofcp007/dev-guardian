@@ -363,6 +363,16 @@ interface Collect {
   parser_inputs: ScannerInvocation['parser_inputs'];
 }
 
+/**
+ * Why `local_only` has no rule of the project's own to run — both paths' skipped
+ * reason, which the CLI prints too. A registration is a row of THIS database
+ * (`platform/customRules.ts`), and every CLI run works in a throwaway one
+ * (`ci/runScans.ts`): registering never gives the CLI rules.
+ */
+const NO_LOCAL_RULES =
+  'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, nothing registered with ' +
+  "register_custom_rules in this database (the CLI's runs never read a registration: each uses a fresh database)";
+
 async function runSemgrep(args: Collect & {
   ctx: InvokeContext;
   reportDir: string;
@@ -380,10 +390,8 @@ async function runSemgrep(args: Collect & {
       name: 'semgrep',
       status: 'skipped',
       reason:
-        'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
-        'nothing registered with register_custom_rules (the plugin\'s own packs, ' +
-        `${PLUGIN_PACK_FILES.join(', ')} are an addition and not run alone as a SAST scan). Run init_project, or drop ` +
-        'local_only to use the Semgrep registry.',
+        `${NO_LOCAL_RULES}; the plugin's own packs, ${PLUGIN_PACK_FILES.join(', ')} are an addition and not run ` +
+        'alone as a SAST scan. Run init_project, or drop local_only to use the Semgrep registry.',
     });
     missing_tools.push('semgrep');
     return;
@@ -936,9 +944,7 @@ async function runSemgrepOnScope(args: Collect & {
     tools_run.push({
       name: 'semgrep',
       status: 'skipped',
-      reason:
-        'local_only=true but this project has no local Semgrep rules — no .semgrep.yml, ' +
-        'nothing registered with register_custom_rules.',
+      reason: `${NO_LOCAL_RULES}.`,
     });
     missing_tools.push('semgrep');
     return;
