@@ -80343,11 +80343,8 @@ function detectProjectLicense(projectPath) {
   return null;
 }
 function findLatestCompliance(ctx, projectPath) {
-  const history = ctx.storage.scans.listHistoryForProject(projectPath, 50);
-  const row = history.find((s) => s.scan_type === "compliance" && s.status === "completed");
-  if (!row) return null;
-  const full = ctx.storage.scans.getById(row.scan_id);
-  return full ? { scan_id: row.scan_id, meta: full.meta } : null;
+  const row = ctx.storage.scans.listCompletedOfTypes(projectPath, ["compliance"], { limit: 1 })[0];
+  return row === void 0 ? null : { scan_id: row.scan_id, meta: row.meta };
 }
 function withSuffixes(...bases) {
   const out = /* @__PURE__ */ new Set();

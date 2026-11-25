@@ -922,7 +922,7 @@ describe('license_compatibility', () => {
     expect(r.incompatibilities[0]?.dep_license).toBe('AGPL-3.0');
   });
 
-  // CRIT_G3 #4: the compliance row was the first `compliance` row among the
+  // 3.17.0: the compliance row was the first `compliance` row among the
   // project's 50 newest rows of ANY type. Each perf_check run is a row of its
   // own (3.17.0): after a tuning session of 50 runs the compliance scan fell
   // out of that window, and the tool read "no compliance scan" — zero
