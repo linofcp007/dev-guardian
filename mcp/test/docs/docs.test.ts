@@ -502,6 +502,19 @@ describe("docs/ci.md on dev-spec-driven's finish check and on a name printed on 
     expect(metrics).toContain("dev-spec-driven reads stdout, then stderr, so stderr's line wins there");
     expect(metrics).toContain('print a name on one stream to get the same reading from both');
   });
+
+  // Review 2 (R2-DG-HZ-8): "ANSI colour codes are removed first" read as if a code inside the keyword were
+  // removed too; the reader (and dev-spec-driven's) reads the keyword as printed (R2-MF-6).
+  it('R2-DG-HZ-8 the grammar says a colour code that splits the keyword reads nothing', () => {
+    expect(section('## `metrics`')).toContain(
+      'ANSI colour codes are removed first, but the keyword is read as printed: a colour code inside it (`MET`, the code, `RIC`) splits it, and the line reads nothing;',
+    );
+  });
+
+  it('R2-DG-HZ-8 the upgrade note names both blanket IaC ignores, `#trivy:ignore:*` and `#tfsec:ignore:*`', () => {
+    const upgrading = flat(read('CHANGELOG.md')).split('### Upgrading from 3.16.1')[1]?.split('### Added')[0] ?? '';
+    expect(upgrading).toContain('`#trivy:ignore:*` or `#tfsec:ignore:*`');
+  });
 });
 
 // ───────────────── install-vet-manifest-install — the docs say a manifest install is vetted

@@ -133,14 +133,15 @@ Per picked unit, in ONE batch shown exactly, written only on the user's yes:
   instead, never a finding's text (untrusted), ending `<!-- dev-guardian: <rule_id> -->` (the stored id); none if
   AGENTS.md, CLAUDE.md or `.specs/steering/*.md` has `dev-guardian: <rule_id> -->`. With `.specs/`: steering
   `tech.md` or `structure.md` (one without front matter; else AGENTS.md / CLAUDE.md), never `constitution.md` or a
-  track's file; without: AGENTS.md or CLAUDE.md, the one the other imports, else the one that exists, else
-  AGENTS.md, never inside `<!-- dev-guardian:begin -->`.
+  track's file; without: AGENTS.md or CLAUDE.md, the one the other imports, else AGENTS.md if it exists,
+  else CLAUDE.md, else AGENTS.md, never inside `<!-- dev-guardian:begin -->`.
 - **A seed rule** for one syntactic shape of `bug_hunt`, `quality_check` or `llm_scan` (SAST, secrets, deps, IaC
   have rules): in `.semgrep.yml` it adds `review_pr`, pre-commit, the CLI gate and CI. Never while occurrences
   remain: the seed's Current → Target gets `<rule_id>: N → 0`, its last task adds the rule — `severity: WARNING`,
   `metadata.guardian_severity: medium`, a message naming the fix, no character whose UTF-8 holds 0x81, 0x8D, 0x8F,
   0x90 or 0x9D (`Á Í ”`: on cp1252 pre-commit's Semgrep exits 2, printing nothing). Write that change where step 4
-  put the seed: the unit's backlog note replaced (`rm`, then `add`) with `<rule_id>: N → 0` and the rule's terms,
+  put the seed: the unit's backlog note replaced (`rm`, then `add`) while the unit is still in the backlog
+  (`spec_create` removes it), with `<rule_id>: N → 0` and the rule's terms,
   and `requirements.md` or `docs/improvement-specs/<name>.md` if already written.
 
 ## Routing: what does NOT become an improvement spec

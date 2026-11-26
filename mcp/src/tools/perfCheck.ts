@@ -48,6 +48,7 @@ import {
   judgeSeries,
   k6Samples,
   k6Series,
+  k6Settings,
   lighthouseSamples,
   lighthouseSeries,
   type PerfMetricHistory,
@@ -528,14 +529,16 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
   }
 
   const summaryFile = join(opts.reportDir, 'k6-summary.json');
+  // The script is code, and k6 hands it the environment as `__ENV`: only
+  // what k6 needs, its own `K6_*` options and the proxy — never a token the
+  // server was started with (review of 3.6, finding 14). Its `K6_*` settings
+  // key the series, read from this object: what k6 is handed.
+  const env = allowlistedEnv((name) => K6_ENV.test(name));
   const result = await runProcess({
     command: 'k6',
     args: ['run', `--summary-export=${summaryFile}`, script],
     cwd: opts.projectPath,
-    // The script is code, and k6 hands it the environment as `__ENV`: only
-    // what k6 needs, its own `K6_*` options and the proxy — never a token the
-    // server was started with (review of 3.6, finding 14).
-    env: allowlistedEnv((name) => K6_ENV.test(name)),
+    env,
     extendEnv: false,
     timeoutMs: 30 * 60_000,
   });
@@ -560,11 +563,11 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
   }
 
   const summary = summariseK6(parsed);
-  // The series: the script as the project names it, its content, and the load: the VUs k6 set up
-  // before the start — `vus_max`'s min. Its max is that too for the VU-based executors, but an
-  // arrival-rate executor adds VUs as the target slows down: keyed by the max, a slower run left
-  // its series and was never judged.
-  const vusMax = getProp(getProp(parsed, 'metrics'), 'vus_max');
+  // The series is the run's inputs only: the script as the project names it, its content (its
+  // `options` are in it) and the `K6_*` settings it was handed. Never a VU count k6 measured: an
+  // arrival-rate executor adds VUs as the target slows down (keyed by the max, a slower run left its
+  // series), and k6 samples them from the start of the VUs' init, so a minimum jitters when the init
+  // outlasts the first sample (keyed by it, every run was new).
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
     scanId: opts.scanId,
@@ -572,11 +575,7 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
     reportPath: summaryFile,
     tool: 'k6',
     toolVersion: undefined,
-    series: k6Series(
-      relative(opts.projectPath, script).split(sep).join('/'),
-      await hashProjectFile(opts.projectPath, script),
-      getNumber(vusMax, 'min') ?? getNumber(vusMax, 'max') ?? getNumber(vusMax, 'value') ?? null,
-    ),
+    series: k6Series(relative(opts.projectPath, script).split(sep).join('/'), await hashProjectFile(opts.projectPath, script), k6Settings(env)),
     samples: k6Samples(summary),
   });
   return {

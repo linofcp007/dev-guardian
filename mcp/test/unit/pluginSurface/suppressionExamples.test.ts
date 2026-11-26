@@ -59,6 +59,19 @@ describe('the sentences that offer a form, and those that only name one', () => 
     expect(problemsOf('a.md', `Suppress it inline with a reason (\`${SEMGREP}\`, \`${BANDIT}\`).`)).toEqual([]);
   });
 
+  // Review 2 (R2-DG-HZ-2): only the English "with a reason" asked for one, so "Suprima-o com um motivo (`# nosec`)"
+  // offered nothing and its bare form passed.
+  it('a Portuguese or Spanish sentence that asks for the reason offers its forms too; one that says "without" offers none', () => {
+    expect(problemsOf('a.md', `Suprima-o com um motivo (\`${BARE}\`).`)).toHaveLength(1);
+    expect(problemsOf('a.md', `Suprima-o com uma razão (\`${BARE}\`).`)).toHaveLength(1);
+    expect(problemsOf('a.md', `Suprímelo con un motivo (\`${BARE}\`).`)).toHaveLength(1);
+    expect(problemsOf('a.md', `Suprímelo con una razón (\`${BARE}\`).`)).toHaveLength(1);
+    expect(problemsOf('a.md', `Suprima-o com um motivo (\`${SEMGREP_WORD}: <regra> -- <motivo>\`).`)).toEqual([]);
+    // The READMEs' own sentences that name what is reported.
+    expect(problemsOf('a.md', `Uma supressão nova sem razão (um \`${SEMGREP_WORD}\` ou \`${BARE}\` sem mais) é reportada.`)).toEqual([]);
+    expect(problemsOf('a.md', `Una supresión nueva sin motivo (un \`${SEMGREP_WORD}\` o \`${BARE}\` sin más) se informa.`)).toEqual([]);
+  });
+
   it('a sentence that names the bare forms offers none; a sentence ends at its period, a block at a blank line', () => {
     expect(problemsOf('a.md', `A new suppression with no reason (a bare \`${SEMGREP_WORD}\` or \`${BARE}\`) is reported.`)).toEqual([]);
     expect(problemsOf('a.md', `A directive naming its rule (\`${SEMGREP_WORD}: <rule-id>\`, \`# ${NOSEC} B602\`) is counted.`)).toEqual([]);
@@ -95,6 +108,9 @@ describe('every `nosec` / `nosemgrep` example in the prose names its rule and gi
       'skills/guardian-bugfix/references/coverage.md',
       'host-rules/AGENTS.md',
       'README.md',
+      // R2-DG-HZ-2: the other two READMEs show one too (`<regra> -- <motivo>`, `<regla> -- <motivo>`).
+      'README.pt-PT.md',
+      'README.es.md',
       'cli/dev-guardian.mjs',
       'mcp/src/hooks/bashGuard.ts',
       'mcp/src/hostsetup/rulesTemplate.ts',

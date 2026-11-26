@@ -14,6 +14,7 @@ import {
   judgeSeries,
   k6Samples,
   k6Series,
+  k6Settings,
   lighthouseSamples,
   lighthouseSeries,
   PERF_RULES,
@@ -224,18 +225,64 @@ describe('the series key — a property of the run', () => {
 
   it('H-8: the label keeps no query string and no fragment; another query is still another series', () => {
     const s = lighthouseSeries('https://h.example/app?access_token=tok3n&x=1#top', '13.5.0', ['performance']);
-    expect(s.label).toBe('Lighthouse 13 · https://h.example/app · performance');
+    expect(s.label).not.toMatch(/tok3n|access_token|x=1|#top/);
     expect(s.key).not.toBe(lh('https://h.example/app?x=2', '13.5.0', ['performance']));
     expect(s.key).not.toBe(lh('https://h.example/app', '13.5.0', ['performance']));
     expect(s.key).toBe(lh('https://h.example/app?access_token=tok3n&x=1', '13.5.0', ['performance']));
   });
 
-  it('H6 and H6c: k6 — the script, its content, and the load k6 measured', () => {
-    const a = k6Series('load/smoke.js', 'a'.repeat(64), 10).key;
-    expect(k6Series('load/smoke.js', 'b'.repeat(64), 10).key).not.toBe(a);
-    expect(k6Series('load/other.js', 'a'.repeat(64), 10).key).not.toBe(a);
-    expect(k6Series('load/smoke.js', 'a'.repeat(64), 100).key).not.toBe(a);
-    expect(k6Series('load/smoke.js', 'a'.repeat(64), 10).key).toBe(a);
+  // Review 2 (R2-DG-HZ-4): two series differing only by their query shared one label, so a rotating
+  // `?access_token=` read as `new` on every run under one name, and nothing said why.
+  it('R2-DG-HZ-4: a query shows as a short digest of it (`?…#ab12cd`), never itself — two queries, two labels', () => {
+    const label = (url: string) => lighthouseSeries(url, '13.5.0', ['performance']).label;
+    const tok = label('https://h.example/app?access_token=tok3n&x=1#top');
+    expect(tok).toMatch(/^Lighthouse 13 · https:\/\/h\.example\/app\?…#[0-9a-f]{6} · performance$/);
+    expect(label('https://h.example/app?access_token=t0ken2&x=1')).not.toBe(tok);
+    expect(label('https://h.example/app?x=2')).not.toBe(tok);
+    // The fragment keys nothing, and shows nothing.
+    expect(label('https://h.example/app?access_token=tok3n&x=1')).toBe(tok);
+    // No query, no digest.
+    expect(label('https://h.example/app#top')).toBe('Lighthouse 13 · https://h.example/app · performance');
+    // A bare `?` keys a series of its own, so it shows a digest of its own.
+    expect(lh('https://h.example/app?', '13.5.0', ['performance'])).not.toBe(lh('https://h.example/app', '13.5.0', ['performance']));
+    expect(label('https://h.example/app?')).toMatch(/^Lighthouse 13 · https:\/\/h\.example\/app\?…#[0-9a-f]{6} · performance$/);
+    expect(label('https://h.example/app?')).not.toBe(tok);
+  });
+
+  // Review 2 (R2-DG-HZ-1, the user's ruling "only inputs"): keyed by `vus_max`'s min, a constant-vus run
+  // whose VU init outlasted k6's first sample (min 187 / 203 / 176 / 198 of 500) was `new` on every run.
+  it('R2-DG-HZ-1: k6 — the script, its content and the K6_* settings perf_check hands k6, never a VU count k6 measured', () => {
+    const none = k6Settings({ PATH: '/usr/bin' });
+    const a = k6Series('load/smoke.js', 'a'.repeat(64), none).key;
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+    expect(k6Series('load/smoke.js', 'b'.repeat(64), none).key).not.toBe(a);
+    expect(k6Series('load/other.js', 'a'.repeat(64), none).key).not.toBe(a);
+    expect(k6Series('load/smoke.js', 'a'.repeat(64), k6Settings({ PATH: '/usr/bin', K6_VUS: '10' })).key).not.toBe(a);
+    // What is handed but is no K6_* setting (the proxy, the toolchain's own) keys nothing.
+    expect(k6Series('load/smoke.js', 'a'.repeat(64), k6Settings({ PATH: '/bin', HTTPS_PROXY: 'http://proxy.internal:3128' })).key).toBe(a);
+    expect(k6Series('load/smoke.js', 'a'.repeat(64), k6Settings({})).key).toBe(a);
+  });
+
+  it('R2-DG-HZ-1: the K6_* settings are their sorted name=value pairs; a value reaches the digest only', () => {
+    expect(k6Settings({ K6_VUS: '10', K6_DURATION: '30s' })).toEqual(k6Settings({ K6_DURATION: '30s', K6_VUS: '10' }));
+    expect(k6Settings({ K6_VUS: '10' }).digest).not.toBe(k6Settings({ K6_VUS: '100' }).digest);
+    expect(k6Settings({ K6_A: 'x' }).digest).not.toBe(k6Settings({ K6_B: 'x' }).digest);
+    expect(k6Settings({ K6_VUS: '10', K6_UNSET: undefined })).toEqual(k6Settings({ K6_VUS: '10' }));
+    expect(k6Settings({ K6_VUS: '10', K6_DURATION: '30s', PATH: '/bin', HTTPS_PROXY: 'http://p:3128' }).count).toBe(2);
+    expect(k6Settings({ PATH: '/bin' }).count).toBe(0);
+    // The allowlist reads a name upper-cased (`K6_ENV`), so a `k6_vus` it hands is one too.
+    expect(k6Settings({ k6_vus: '10' }).count).toBe(1);
+
+    const value = 'influxdb=http://k6:pa55word9@db.internal:8086/k6';
+    const s = k6Series('load.js', 'c'.repeat(64), k6Settings({ K6_OUT: value }));
+    expect(s.label).toMatch(/^k6 · load\.js \(cccccccccccc\) · K6_\* #[0-9a-f]{6}$/);
+    expect(s.label).not.toMatch(/pa55word9|influxdb|K6_OUT/);
+    expect(s.key).not.toContain(value);
+    // Two settings, two labels; none, no digest.
+    expect(k6Series('load.js', 'c'.repeat(64), k6Settings({ K6_VUS: '10' })).label).not.toBe(
+      k6Series('load.js', 'c'.repeat(64), k6Settings({ K6_VUS: '100' })).label,
+    );
+    expect(k6Series('load.js', 'c'.repeat(64), k6Settings({ PATH: '/bin' })).label).toBe('k6 · load.js (cccccccccccc)');
   });
 });
 

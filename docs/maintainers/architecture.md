@@ -154,7 +154,12 @@ what the CLI uses directly — it is light, so `metrics` loads no `load*Modules(
 (`history/scanRoles.ts`): it reports through `meta`, and as `'state'` it would be `latestStateScan`'s default.
 `guardian://scans/history` leaves `perf` rows out (`scansRepo.listScanHistory`, in SQL, so its 50 are the other scans),
 and `set_baseline` refuses a `'never'` type by `scan_id` and by `scan_type` alike. A run's samples come from its report:
-CLS unrounded (its 0.01 tolerance is the summary's rounding step), the k6 load from `vus_max`'s min.
+CLS unrounded (its 0.01 tolerance is the summary's rounding step); the k6 series from its inputs only: the script, its
+content and a digest of the `K6_*` settings perf_check hands k6, never a VU count k6 measured (k6 samples `vus_max`
+from the start of the VUs' init, so its minimum jitters). What the key leaves out: the modules the script imports,
+k6's own config file and the other variables k6 is handed (`CI`, `LANG`, the proxy), which a script can read through
+`__ENV` to set its load; a `K6_*` setting that names a per-run file makes every run a new series. A label shows a
+query, and the `K6_*` settings, as six hex digits of a digest (`?…#ab12cd`).
 
 ## What a scan of the project's own files leaves out
 

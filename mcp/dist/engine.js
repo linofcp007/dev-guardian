@@ -76745,19 +76745,26 @@ function lighthouseSeries(url2, lighthouseVersion, categories) {
   page.hash = "";
   const major = /^([0-9]+)\./.exec(lighthouseVersion ?? "")?.[1] ?? null;
   const scored = [...new Set(categories)].sort();
+  const at = page.href.indexOf("?");
   const shown = new URL(page.href);
   shown.username = "";
   shown.password = "";
   shown.search = "";
+  const query = at < 0 ? "" : `?\u2026#${digest(["query", page.href.slice(at)]).slice(0, SHOWN_DIGEST)}`;
   return {
     key: digest(["lighthouse", major, page.href, scored]),
-    label: `Lighthouse ${major ?? "?"} \xB7 ${shown.href} \xB7 ${scored.length > 0 ? scored.join(", ") : "no category"}`
+    label: `Lighthouse ${major ?? "?"} \xB7 ${shown.href}${query} \xB7 ${scored.length > 0 ? scored.join(", ") : "no category"}`
   };
 }
-function k6Series(script, contentSha256, vusMax) {
+function k6Settings(env) {
+  const pairs = Object.entries(env).filter((e) => e[1] !== void 0 && e[0].toUpperCase().startsWith("K6_")).map(([name, value]) => `${name}=${value}`).sort();
+  return { digest: digest(pairs), count: pairs.length };
+}
+function k6Series(script, contentSha256, settings) {
+  const shown = settings.count > 0 ? ` \xB7 K6_* #${settings.digest.slice(0, SHOWN_DIGEST)}` : "";
   return {
-    key: digest(["k6", script, contentSha256, vusMax]),
-    label: `k6 \xB7 ${script} (${contentSha256.slice(0, 12)}) \xB7 ${vusMax === null ? "? VUs" : `${vusMax} VUs`}`
+    key: digest(["k6", script, contentSha256, settings.digest]),
+    label: `k6 \xB7 ${script} (${contentSha256.slice(0, 12)})${shown}`
   };
 }
 function seriesRunOf(row) {
@@ -76851,7 +76858,7 @@ function seriesHint(metrics) {
   const improved = metrics.filter((m) => m.verdict === "improved").map((m) => m.name);
   return improved.length > 0 ? `Nothing regressed; ${improved.join(", ")} improved beyond its tolerance.` : "Nothing regressed: every judged metric is within its tolerance of this target's median.";
 }
-var PERF_RULES, LIGHTHOUSE_AUDITS, finite, isRecord9, WINDOW_MAX, WINDOW_MIN, SINCE_RUNS;
+var PERF_RULES, LIGHTHOUSE_AUDITS, finite, SHOWN_DIGEST, isRecord9, WINDOW_MAX, WINDOW_MIN, SINCE_RUNS;
 var init_perfSeries = __esm({
   "src/metrics/perfSeries.ts"() {
     "use strict";
@@ -76874,6 +76881,7 @@ var init_perfSeries = __esm({
       ["cumulative-layout-shift", "perf.cls", null]
     ];
     finite = (v) => typeof v === "number" && Number.isFinite(v);
+    SHOWN_DIGEST = 6;
     isRecord9 = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
     WINDOW_MAX = 5;
     WINDOW_MIN = 3;
@@ -77449,14 +77457,12 @@ async function runK6(opts) {
     return failDomain2("scanner_failed", `k6 script not found in the project: ${opts.scriptPath}`);
   }
   const summaryFile = join78(opts.reportDir, "k6-summary.json");
+  const env = allowlistedEnv((name) => K6_ENV.test(name));
   const result = await runProcess({
     command: "k6",
     args: ["run", `--summary-export=${summaryFile}`, script],
     cwd: opts.projectPath,
-    // The script is code, and k6 hands it the environment as `__ENV`: only
-    // what k6 needs, its own `K6_*` options and the proxy — never a token the
-    // server was started with (review of 3.6, finding 14).
-    env: allowlistedEnv((name) => K6_ENV.test(name)),
+    env,
     extendEnv: false,
     timeoutMs: 30 * 6e4
   });
@@ -77476,7 +77482,6 @@ async function runK6(opts) {
     return failDomain2("scanner_failed", "k6 summary was not valid JSON.");
   }
   const summary2 = summariseK6(parsed2);
-  const vusMax = getProp(getProp(parsed2, "metrics"), "vus_max");
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
     scanId: opts.scanId,
@@ -77484,11 +77489,7 @@ async function runK6(opts) {
     reportPath: summaryFile,
     tool: "k6",
     toolVersion: void 0,
-    series: k6Series(
-      relative26(opts.projectPath, script).split(sep18).join("/"),
-      await hashProjectFile(opts.projectPath, script),
-      getNumber(vusMax, "min") ?? getNumber(vusMax, "max") ?? getNumber(vusMax, "value") ?? null
-    ),
+    series: k6Series(relative26(opts.projectPath, script).split(sep18).join("/"), await hashProjectFile(opts.projectPath, script), k6Settings(env)),
     samples: k6Samples(summary2)
   });
   return {
@@ -77611,7 +77612,7 @@ async function handler7(inp, ctx) {
     if (SCAN_TYPE_ROLE[scan2.scan_type] !== "state") {
       return failDomain3(
         "unsupported_target",
-        `Scan '${inp.scan_id}' is a ${scan2.scan_type} scan, which records no findings to compare against, so it cannot be a baseline. Baseline a scan of a finding-producing type.`
+        `Scan '${inp.scan_id}' is ${aScanOf(scan2.scan_type)}, which is never a project's baseline. ${BASELINE_INSTEAD}`
       );
     }
     if (computeCoverage(scan2.tools_run, scan2.missing_tools) === "none") {
@@ -77623,10 +77624,8 @@ async function handler7(inp, ctx) {
     targetScanId = inp.scan_id;
   } else {
     if (inp.scan_type !== void 0 && SCAN_TYPE_ROLE[inp.scan_type] !== "state") {
-      return failDomain3(
-        "unsupported_target",
-        `A ${inp.scan_type} scan records no findings to compare against, so it cannot be a baseline. Baseline a scan of a finding-producing type.`
-      );
+      const scan2 = aScanOf(inp.scan_type);
+      return failDomain3("unsupported_target", `${scan2.charAt(0).toUpperCase()}${scan2.slice(1)} is never a project's baseline. ${BASELINE_INSTEAD}`);
     }
     const projectPath = toolProjectPath(inp.project_path);
     if (typeof projectPath !== "string") return projectPath;
@@ -77664,7 +77663,10 @@ async function handler7(inp, ctx) {
 function failDomain3(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
-var inputSchema10, tool10;
+function aScanOf(type) {
+  return `${/^[aeiou]/i.test(type) ? "an" : "a"} \`${type}\` scan`;
+}
+var inputSchema10, tool10, BASELINE_INSTEAD;
 var init_setBaseline = __esm({
   "src/tools/setBaseline.ts"() {
     "use strict";
@@ -77693,6 +77695,7 @@ var init_setBaseline = __esm({
       handler: async (input2, ctx) => handler7(input2, ctx)
     });
     registerToolModule(tool10);
+    BASELINE_INSTEAD = "Baseline a scan of a finding-producing type.";
   }
 });
 

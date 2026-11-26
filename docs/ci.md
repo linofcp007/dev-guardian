@@ -362,7 +362,7 @@ A line is `metric-lines/1`, the format dev-spec-driven reads too:
 METRIC <name>=<number>[ <unit>][ better=lower|higher][ tolerance=<n>[%]][ <key>=<value>…]
 ```
 
-- at a line's start, after blanks or one `# ` (node's TAP reporter prints a test's output as `# …`); ANSI colour codes are removed first;
+- at a line's start, after blanks or one `# ` (node's TAP reporter prints a test's output as `# …`); ANSI colour codes are removed first, but the keyword is read as printed: a colour code inside it (`MET`, the code, `RIC`) splits it, and the line reads nothing;
 - a name is ASCII, `[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}`; the number has at most 15 integer and 9 fraction digits and an optional exponent, and is finite; the unit is the one token after it, of at most 16 characters, holding no `=` (`x=5 higher` has the unit `higher`: there is no bare direction); an unknown `key=value` is ignored;
 - a line whose first token holds `=` but breaks these rules is **malformed** — counted and shown, never read; any other `METRIC …` line (a table header, another tool's log) is ignored;
 - the last line of a name wins, whole; the lines it replaced are counted as repeats;
