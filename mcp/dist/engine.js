@@ -126496,10 +126496,8 @@ Semgrep's registry mode sends metrics \u2014 pass \`local_only: true\` to avoid 
   setup posture).
 - **History and reports** \u2014 full audit: \`audit_executive\` \xB7 \`risk_score\` \xB7 what is new: \`diff_scans\` \xB7
   regressions: \`diff_scans\` with \`mode: "regression"\` \xB7 \`set_baseline\` \xB7 order: \`prioritize_findings\`, noise:
-  its \`view: "triage"\` \xB7
-  how to fix X: \`suggest_fix\` (context; you write the patch) \xB7 scanner
-  fixes as PRs: \`create_fix_pr\` \xB7 \`report_export\` \xB7 GitHub issues: \`create_github_issues\` \xB7 server health:
-  \`health_status\`.
+  its \`view: "triage"\` \xB7 how to fix X: \`suggest_fix\` (context; you write the patch) \xB7 scanner fixes as PRs:
+  \`create_fix_pr\` \xB7 \`report_export\` \xB7 GitHub issues: \`create_github_issues\` \xB7 server health: \`health_status\`.
 - **CLI** \u2014 a one-screen summary: \`node ${CLI_PATH_PLACEHOLDER} status\`; the same as an HTML page:
   \`node ${CLI_PATH_PLACEHOLDER} dashboard\` (both read-only) \xB7 another AI host: \`node ${CLI_PATH_PLACEHOLDER} mcp-config <host>\`.
 
@@ -126514,10 +126512,10 @@ after the user agrees. Then \`llm_scan { step: "task", plan_id }\` leases one ta
 minutes); run THAT brief as below and \`llm_scan { step: "submit", plan_id, task_id, lease_token, independence,
 payload }\`; repeat until \`done\`.
 
-- **Claude Code** \u2014 each \`llm_scan\` task brief in a fresh subagent, one task per subagent: \`subagent\`.
-- **Codex** \u2014 spawns a subagent only when asked: ask it to spawn one per task brief; otherwise \`same_context\`.
-- **Cline** \u2014 no MCP-capable subagent: run the tasks sequentially, one after another: \`same_context\`.
-- **Claude Desktop / Cowork chat** \u2014 no subagents: sequentially, one at a time: \`same_context\`.
+- **Claude Code** \u2014 each \`llm_scan\` task brief in a fresh subagent: \`subagent\`.
+- **Codex** \u2014 spawns a subagent only when asked: ask for one per task brief; otherwise \`same_context\`.
+- **Cline** \u2014 no MCP-capable subagent: run the tasks one after another: \`same_context\`.
+- **Claude Desktop / Cowork chat** \u2014 no subagents: one at a time: \`same_context\`.
 - **MCP sampling (VS Code Copilot)** \u2014 \`llm_scan { step: "task", plan_id, execute: "sampling" }\` runs
   verification tasks through the client's model.
 - **Other hosts** \u2014 a fresh subagent per task if one can call these tools, else \`same_context\`.
@@ -126534,7 +126532,8 @@ one finding: leave it to the user. Accept one reviewed finding inline, with a re
 \`.gitignore\` keeps \`.guardian/\` out of git but its shared files: \`**/.guardian/*\`, \`!**/.guardian/baseline.json\`,
 \`!**/.guardian/budgets.yml\`, \`!**/.guardian/hooks.config.json\`, \`!**/.guardian/hooks-allowlist.json\`,
 \`!**/.guardian/scan.yml\` (never a bare \`.guardian/\`). dev-spec-driven 1.29+ runs this gate when it closes a feature; from
-such a project the line is \`node .specs/guardian.cjs <arguments>\`.
+such a project \`node .specs/guardian.cjs <arguments>\` runs \`scan\`, \`baseline\`, \`status\` and \`help\` (\`metrics\`: the
+CLI above).
 `;
 var RULES_DESCRIPTION = "dev-guardian MCP tools \u2014 use for security scans, secrets, dependency CVEs, bug hunts, code quality, compliance, WordPress or .NET audits, and before installing a package, an AI skill or an MCP server.";
 var HOST_FRONTMATTER = {

@@ -47,8 +47,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   among the 50 most recent scans of `guardian://scans/history` and can be what `guardian://scans/latest` and
   `health_status.last_scan` show. `/guardian-report trend` leaves those rows out.
 - **The verdict JSON can carry `coverage_notes` lines that start `guardian-suppressions: `** — the files the pass did
-  not read — with the remedy "Nothing to do for the gate (not gating)…", and `tools_run` names `guardian-suppressions`
-  when a changed file holds a suppression's token.
+  not read — each also in `coverage_gap_details` with `gating: false` and the remedy "Nothing to do for the gate (not
+  gating)…". `review_pr` and a diff-scoped `scan_sast` list the pass in `tools_run` when a changed file holds a
+  suppression's token, its `reason` counting what was added and what was not read.
 
 ### Added
 
@@ -106,8 +107,13 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   asks before an agent's `baseline update` and the message `baseline update` prints, instead of a bare `# nosec` —
   the form the new pass reports; and `// nosemgrep: <rule> -- <reason>` in the bug packs' coverage reference, which
   said a bare `// nosemgrep` "with a reason". A test holds every example the prose offers to its rule and reason.
-- **docs/ci.md says dev-spec-driven 1.33+ passes `--diff-base` at its finish**, so the weakened-tests and suppressions
-  checks run there too.
+- **docs/ci.md says dev-spec-driven 1.33+'s `finish --run` passes `--diff-base`**, so the weakened-tests and
+  suppressions checks run there too — a check reported over MCP gets no base, and neither runs in it.
+- **What dev-spec-driven's launcher forwards** — `scan`, `baseline`, `status` and `help`; `metrics` and the rest run
+  from dev-guardian's own CLI — in docs/ci.md, the router's dev-spec-driven reference and the rules file every host
+  reads, which said it forwards every argument. docs/ci.md's `metrics` section says how a name printed on both
+  streams reads (last printed here, stderr's in dev-spec-driven), and the router's test-pruning line says what to do
+  when no `pruned: …` accept is listed (dev-spec-driven records one only with `guard: tests`): ask why the test went.
 - **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** leaves the
   `perf` rows out of the scans it compares and says when the 50 most recent scans held other types.
 

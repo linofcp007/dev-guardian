@@ -102,7 +102,9 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   `toolReach.test.ts`).
 - A CLI line the model gives the user is runnable: `node "<plugin root>/cli/dev-guardian.mjs" …`
   (`${CLAUDE_PLUGIN_ROOT}` in a command), or `node .specs/guardian.cjs …` from a dev-spec-driven project — a plugin
-  install puts no `dev-guardian` on `PATH`.
+  install puts no `dev-guardian` on `PATH`. That launcher forwards `scan`, `baseline`, `status` and `help` only
+  (`metrics` and the rest exit 3 there): a line that gives it names those, and `devSpecNames.test.ts` holds the
+  list to a live dev-spec-driven's `GUARDIAN_FORWARDED`.
 - Never advise `baseline update` to accept one finding: it accepts every current finding. One reviewed finding
   takes an inline suppression with a reason, or a baseline rebuilt on the base commit. Every suppression example
   names its rule and gives the reason (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`): an agent copies

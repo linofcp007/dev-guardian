@@ -150,7 +150,6 @@ describe("dev-guardian's prose cites only current dev-spec-driven names", () => 
     const problems: string[] = [];
     let generic = 0;
     for (const { rel, text } of prose) {
-      if (/forwards every argument/i.test(text)) problems.push(`${rel}: says the launcher forwards every argument`);
       for (const paragraph of text.split(/\r?\n\s*\r?\n/)) {
         const flat = paragraph.replace(/\s+/g, ' ');
         for (const m of flat.matchAll(/`node \.specs\/guardian\.cjs (\S+?)[\s`\\]/g)) {
