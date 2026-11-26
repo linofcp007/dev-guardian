@@ -65,6 +65,8 @@ describe('the sentences that offer a form, and those that only name one', () => 
     expect(problemsOf('a.md', `Suppress it inline with a reason (\`${SEMGREP}\`). The pass reports a bare \`${BARE}\`.`)).toEqual([]);
     expect(problemsOf('a.md', `Suppress it inline with a reason (\`${SEMGREP}\`)\n\nA bare \`${BARE}\` is reported`)).toEqual([]);
     expect(sentences('One `a. b` here. Two.').map((s) => s.spans)).toEqual([['a. b'], []]);
+    // A span keeps its blanks (the form shown is the form copied); a line end inside it reads as one blank.
+    expect(sentences('Write `x  y` or `p\n  q`.')[0]?.spans).toEqual(['x  y', 'p q']);
   });
 
   it('a fenced block is not read; a source file is read by its strings, the pieces a `+` joins as one, a template cooked', () => {
@@ -75,6 +77,8 @@ describe('the sentences that offer a form, and those that only name one', () => 
     // A comment is not a string.
     expect(problemsOf('a.ts', `// Suppress it with a reason (\`${BARE}\`).\nconst d = 1;`)).toEqual([]);
     expect(proseUnits('a.ts', "const e = 'x' + y + 'z';")).toEqual(['x${…}z']);
+    // A hole is read too: a string inside it is prose of its own.
+    expect(problemsOf('a.ts', `const f = \`Note: \${ok ? '' : 'Suppress it with a reason (\`${BARE}\`).'}\`;`)).toHaveLength(1);
   });
 });
 
