@@ -77600,7 +77600,7 @@ async function handler7(inp, ctx) {
     if (SCAN_TYPE_ROLE[scan2.scan_type] !== "state") {
       return failDomain3(
         "unsupported_target",
-        `Scan '${inp.scan_id}' is a ${scan2.scan_type} scan, which records no findings to compare against, so it cannot be a baseline. Baseline a scan of a finding-producing type.`
+        `Scan '${inp.scan_id}' is ${aScanOf(scan2.scan_type)}, which is never a project's baseline. ${BASELINE_INSTEAD}`
       );
     }
     if (computeCoverage(scan2.tools_run, scan2.missing_tools) === "none") {
@@ -77612,10 +77612,8 @@ async function handler7(inp, ctx) {
     targetScanId = inp.scan_id;
   } else {
     if (inp.scan_type !== void 0 && SCAN_TYPE_ROLE[inp.scan_type] !== "state") {
-      return failDomain3(
-        "unsupported_target",
-        `A ${inp.scan_type} scan records no findings to compare against, so it cannot be a baseline. Baseline a scan of a finding-producing type.`
-      );
+      const scan2 = aScanOf(inp.scan_type);
+      return failDomain3("unsupported_target", `${scan2.charAt(0).toUpperCase()}${scan2.slice(1)} is never a project's baseline. ${BASELINE_INSTEAD}`);
     }
     const projectPath = toolProjectPath(inp.project_path);
     if (typeof projectPath !== "string") return projectPath;
@@ -77653,7 +77651,10 @@ async function handler7(inp, ctx) {
 function failDomain3(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
-var inputSchema10, tool10;
+function aScanOf(type) {
+  return `${/^[aeiou]/i.test(type) ? "an" : "a"} \`${type}\` scan`;
+}
+var inputSchema10, tool10, BASELINE_INSTEAD;
 var init_setBaseline = __esm({
   "src/tools/setBaseline.ts"() {
     "use strict";
@@ -77682,6 +77683,7 @@ var init_setBaseline = __esm({
       handler: async (input2, ctx) => handler7(input2, ctx)
     });
     registerToolModule(tool10);
+    BASELINE_INSTEAD = "Baseline a scan of a finding-producing type.";
   }
 });
 

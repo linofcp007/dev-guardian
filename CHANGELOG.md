@@ -29,7 +29,7 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   never `missing_tools`, never exit 2.
 - **At `--fail-on medium` or lower, a suppression a change adds can block (exit 1).** In `review_pr`, a diff-scoped
   `scan_sast` and `scan --diff-base` (which dev-spec-driven 1.33+'s `finish --run` passes), a bare scanner directive —
-  `nosemgrep`, Bandit's `# nosec`, gosec's `#nosec`, `gitleaks:allow`, `#trivy:ignore:*`, a bare
+  `nosemgrep`, Bandit's `# nosec`, gosec's `#nosec`, `gitleaks:allow`, `#trivy:ignore:*` or `#tfsec:ignore:*`, a bare
   `@SuppressFBWarnings` or `#pragma warning disable`, naming no rule and giving no reason — is
   `scanner-suppression-added`, medium, and a bare whole-file linter directive (`/* eslint-disable */`,
   `@ts-nocheck`, `# ruff: noqa`, `# mypy: ignore-errors`, `# pylint: skip-file`, `phpcs:ignoreFile`, and before the
@@ -103,9 +103,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   project — written in the model's words, never a finding's text, and keyed `<!-- dev-guardian: <rule_id> -->` (not
   proposed again when a file already holds the key, dev-spec-driven's lesson comments included); and a seed for a
   Semgrep rule that lands only once the occurrences are fixed (`<rule_id>: N → 0` and the rule's terms, written
-  where the seed went: its backlog note replaced, and its spec once written), never while they would block every
-  commit. Nothing is written without your yes. Its re-measure step names `perf_check`'s `history` for a performance
-  unit.
+  where the seed went: its backlog note replaced while the unit is still in the backlog, and its spec once
+  written), never while they would block every commit. Nothing is written without your yes. Its re-measure step
+  names `perf_check`'s `history` for a performance unit.
 
 ### Changed
 
@@ -113,7 +113,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   docs/hooks.md, the router's dev-spec-driven reference, the rules file every host reads, the question the shell guard
   asks before an agent's `baseline update` and the message `baseline update` prints, instead of a bare `# nosec` —
   the form the new pass reports; and `// nosemgrep: <rule> -- <reason>` in the bug packs' coverage reference, which
-  said a bare `// nosemgrep` "with a reason". A test holds every example the prose offers to its rule and reason.
+  said a bare `// nosemgrep` "with a reason". A test holds to its rule and reason each `nosec` / `nosemgrep` example
+  in a sentence that asks for a reason (`with a reason`, `com um motivo`, `con un motivo`) or shows a complete form.
 - **docs/ci.md says dev-spec-driven 1.33+'s `finish --run` passes `--diff-base`**, so the weakened-tests and
   suppressions checks run there too — a check reported over MCP gets no base, and neither runs in it.
 - **What dev-spec-driven's launcher forwards** — `scan`, `baseline`, `status` and `help`; `metrics` and the rest run
@@ -133,8 +134,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
 - **`perf_check` read no error rate from a k6 run.** The file `k6 run --summary-export` writes holds a rate as
   `{ passes, fails, value }`, and `summary.error_rate` read only `rate`: it was null on every run. It now reads
   `value` too, so the error rate is in `summary` and judged in `history`.
-- **`set_baseline { scan_type }` baselined a scan of a type that records no findings** — an SBOM, and now a `perf`
-  run. It refuses one, as `set_baseline { scan_id }` already did.
+- **`set_baseline { scan_type }` baselined a scan of a type that is never a project's baseline** — an SBOM, an
+  `audit_executive` roll-up, a `review_pr` diff, and now a `perf` run. It refuses one, as `set_baseline { scan_id }`
+  already did, and both refusals say "… is a `<type>` scan, which is never a project's baseline".
 - **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
   `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
   run works in a throwaway database).

@@ -7,8 +7,9 @@
  * An agent copies the example it reads, so every `nosec` / `nosemgrep` form
  * the prose offers names its rule and gives the reason
  * (docs/maintainers/prose.md, Bodies). Which code spans are offered is read
- * per sentence, by syntax: a sentence that asks for the form "with a reason",
- * or that shows one complete form, offers forms to write — every `nosec` /
+ * per sentence, by syntax: a sentence that asks for the form "with a reason"
+ * (or in the READMEs' Portuguese or Spanish), or that shows one complete form,
+ * offers forms to write — every `nosec` /
  * `nosemgrep` span in it must be complete; a sentence that only names the
  * bare forms (what the pass reports, what a scanner reads) offers none. So a
  * form to avoid is named in a sentence of its own.
@@ -34,8 +35,12 @@ import type { Prose } from './pluginDocs.js';
 /** The directives whose examples are held here. */
 const DIRECTIVE = /nos(?:ec|em)/i;
 
-/** A sentence that asks for the reason offers the forms it shows. */
-const ASKS_A_REASON = /\bwith a reason\b/i;
+/**
+ * A sentence that asks for the reason offers the forms it shows: "with a reason", and the READMEs' Portuguese and
+ * Spanish for it ("com um motivo", "con un motivo", "com uma razão", "con una razón") — never "sem razão" or
+ * "sin motivo", which name what the pass reports.
+ */
+const ASKS_A_REASON = /\b(?:with a reason|com um motivo|com uma razão|con un motivo|con una razón)(?![\p{L}\p{N}_])/iu;
 
 /** What fills a `<placeholder>`: a rule name to Semgrep (any word) and to Bandit (a snake_case test name), and a reason to all (three letters). */
 const FILL = 'filled_in';

@@ -90,8 +90,7 @@ async function handler(
     if (SCAN_TYPE_ROLE[scan.scan_type] !== 'state') {
       return failDomain(
         'unsupported_target',
-        `Scan '${inp.scan_id}' is a ${scan.scan_type} scan, which records no findings to compare against, so it ` +
-          'cannot be a baseline. Baseline a scan of a finding-producing type.',
+        `Scan '${inp.scan_id}' is ${aScanOf(scan.scan_type)}, which is never a project's baseline. ${BASELINE_INSTEAD}`,
       );
     }
     if (computeCoverage(scan.tools_run, scan.missing_tools) === 'none') {
@@ -106,11 +105,8 @@ async function handler(
     // The scan_id path's rule, for a type named: `latestStateScan` searches the type it is given, so
     // `scan_type: "perf"` (or "sbom") made such a scan the untyped baseline.
     if (inp.scan_type !== undefined && SCAN_TYPE_ROLE[inp.scan_type] !== 'state') {
-      return failDomain(
-        'unsupported_target',
-        `A ${inp.scan_type} scan records no findings to compare against, so it cannot be a baseline. ` +
-          'Baseline a scan of a finding-producing type.',
-      );
+      const scan = aScanOf(inp.scan_type);
+      return failDomain('unsupported_target', `${scan.charAt(0).toUpperCase()}${scan.slice(1)} is never a project's baseline. ${BASELINE_INSTEAD}`);
     }
     const projectPath = toolProjectPath(inp.project_path);
     if (typeof projectPath !== 'string') return projectPath;
@@ -179,3 +175,14 @@ function failDomain(
 ): ToolResult<Record<string, unknown>> {
   return { ok: false, error: { code, message } };
 }
+
+/**
+ * "a `perf` scan", "an `audit` scan": a type `SCAN_TYPE_ROLE` holds `'never'`. Some record findings
+ * (`review_pr`, `audit`, the audits of a skill or an agent's config), some none (an SBOM, a `perf` run):
+ * none describes the project's findings, so the refusal says that, never "records no findings".
+ */
+function aScanOf(type: string): string {
+  return `${/^[aeiou]/i.test(type) ? 'an' : 'a'} \`${type}\` scan`;
+}
+
+const BASELINE_INSTEAD = 'Baseline a scan of a finding-producing type.';
