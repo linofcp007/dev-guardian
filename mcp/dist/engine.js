@@ -5394,7 +5394,7 @@ function identitiesOf(keyed) {
 }
 function sharedSecretCount(group) {
   const first = group[0];
-  if (first === void 0 || !isCredentialFinding(first) || isHistoryLocator(first)) return null;
+  if (first === void 0 || !keyedWithoutLine(first) || isHistoryLocator(first)) return null;
   const secrets = new Set(group.map((f) => f.fingerprint)).size;
   return secrets > 1 ? secrets : null;
 }
@@ -5603,6 +5603,8 @@ function contentSource(f, readable2, linesOf2) {
   const dependency = dependencyCoordinates(f);
   if (dependency !== null) return `dep
 ${dependency.name}@${dependency.version}`;
+  if (isSuppressionsFinding(f)) return `suppression
+${f.rule_id ?? ""}`;
   if (isCredentialFinding(f)) {
     const locator = isHistoryLocator(f) && f.snippet !== void 0 ? `
 ${collapse(f.snippet)}` : "";
@@ -5631,6 +5633,12 @@ function snippetText(tool54, snippet) {
 function isCredentialFinding(f) {
   if ((f.subcategory ?? "").toLowerCase() === "secret") return true;
   return CREDENTIAL_RULE.test(f.rule_id ?? "") || CREDENTIAL_RULE.test(f.subcategory ?? "");
+}
+function isSuppressionsFinding(f) {
+  return f.tool.toLowerCase() === "guardian-suppressions";
+}
+function keyedWithoutLine(f) {
+  return isSuppressionsFinding(f) || isCredentialFinding(f);
 }
 function isHistoryLocator(f) {
   return f.tool.toLowerCase() === "gitleaks" && /;commit=[0-9a-f]{7,64}$/i.test(f.snippet ?? "");
