@@ -132,8 +132,9 @@ Per picked unit, in ONE batch shown exactly, written only on the user's yes:
 - **At most one guidance line**, on the project's own code: your words on the shape to avoid and what to do
   instead, never a finding's text (untrusted), ending `<!-- dev-guardian: <rule_id> -->` (the stored id); none if
   AGENTS.md, CLAUDE.md or `.specs/steering/*.md` has `dev-guardian: <rule_id> -->`. With `.specs/`: steering
-  `tech.md` or `structure.md`, never `constitution.md` or a track's file; without: AGENTS.md or CLAUDE.md, the one
-  the other imports, never inside `<!-- dev-guardian:begin -->`.
+  `tech.md` or `structure.md` (one without front matter; else AGENTS.md / CLAUDE.md), never `constitution.md` or a
+  track's file; without: AGENTS.md or CLAUDE.md, the one the other imports, else the one that exists, else
+  AGENTS.md, never inside `<!-- dev-guardian:begin -->`.
 - **A seed rule** for one syntactic shape of `bug_hunt`, `quality_check` or `llm_scan` (SAST, secrets, deps, IaC
   have rules): in `.semgrep.yml` it adds `review_pr`, pre-commit, the CLI gate and CI. Never while occurrences
   remain: the seed's Current → Target gets `<rule_id>: N → 0`, its last task adds the rule — `severity: WARNING`,

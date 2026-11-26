@@ -126,9 +126,11 @@ and writes nothing without the user's yes (one batch, each line shown exactly; `
   one key both plugins dedupe on: dev-spec-driven's lesson comment ends ` · dev-guardian: <id> -->`, so the search
   before proposing reads AGENTS.md, CLAUDE.md and `.specs/steering/*.md` for the tail `dev-guardian: <id> -->`, never
   the whole comment. The id is the stored one (`semgrepRuleIds.ts`: `rules/team.yml`'s `r` is `rules.r`). In a
-  `.specs/` project only steering `tech.md` / `structure.md`, which govern no approval without front matter;
-  `constitution.md` and a track's file flag every approved feature. Without `.specs/`, AGENTS.md or CLAUDE.md — the
-  one the other imports — outside the block `mcp-config --write` owns.
+  `.specs/` project only a steering `tech.md` / `structure.md` without front matter, which governs no approval
+  (with front matter — a Kiro import's `inclusion: always` — it does, like `constitution.md` and a track's file,
+  which flag every approved feature); with neither, AGENTS.md / CLAUDE.md. Without `.specs/`, AGENTS.md or
+  CLAUDE.md — the one the other imports, else the one that exists, else AGENTS.md — outside the block
+  `mcp-config --write` owns.
 - **A seed rule, never a rule written now.** Written while occurrences remain, a `.semgrep.yml` rule makes each one a
   new medium finding in every whole-project scan, trips `diff_scans { mode: "regression" }` at three (2 × 3 > 5) and
   blocks every commit through pre-commit's `--error` (a WARNING fails it too). The seed's Current → Target carries
