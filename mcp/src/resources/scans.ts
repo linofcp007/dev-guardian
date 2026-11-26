@@ -3,7 +3,9 @@
  *   - guardian://scans/latest      → the server's project's latest completed
  *                                    scan (any type — this is history, not
  *                                    the open set: see guardian://findings/open)
- *   - guardian://scans/history     → that project's 50 most recent scans
+ *   - guardian://scans/history     → that project's 50 most recent scans,
+ *                                    `perf` rows left out (perf_check's own
+ *                                    history reads them)
  *   - guardian://scans/{scan_id}   → full ScanResult by id
  *
  * The first two used to answer from the whole database, i.e. from whichever
@@ -38,12 +40,12 @@ registerResourceModule({
   name: 'guardian-scans-history',
   uri: 'guardian://scans/history',
   description:
-    "Up to 50 most-recent scans of the server's working-directory project, across every type, " +
-    'ordered by start time descending. Records are sparse — call `guardian://scans/{scan_id}` for ' +
-    'the full ScanResult.',
+    "Up to 50 most-recent scans of the server's working-directory project, of every type but " +
+    "`perf` (perf_check's runs: its `history` reads them), ordered by start time descending. " +
+    'Records are sparse — call `guardian://scans/{scan_id}` for the full ScanResult.',
   handler: async (_uri, _params, ctx) => {
     const projectPath = serverProjectPath();
-    const scans = ctx.storage.scans.listHistoryForProject(projectPath, 50);
+    const scans = ctx.storage.scans.listScanHistory(projectPath, 50);
     return { json: { project_path: projectPath, scans } };
   },
 });

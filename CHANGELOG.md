@@ -45,9 +45,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   reason. The router now answers the finding with that accept instead of asking why the test went, and at
   `--fail-on medium` it blocks like any other medium.
 - **`perf_check` runs are in the history.** Every measured run is now a `perf` scan with no finding. It is never the
-  default latest scan that `diff_scans`, `report_export`, `set_baseline` and the regression alert read, but it counts
-  among the 50 most recent scans of `guardian://scans/history` and can be what `guardian://scans/latest` and
-  `health_status.last_scan` show. `/guardian-report trend` leaves those rows out.
+  default latest scan that `diff_scans`, `report_export`, `set_baseline` and the regression alert read, and
+  `guardian://scans/history` leaves it out (its 50 most recent scans are every other type, as before), but it can be
+  what `guardian://scans/latest` and `health_status.last_scan` show.
 - **The verdict JSON can carry `coverage_notes` lines that start `guardian-suppressions: `** — the files the pass did
   not read — with the remedy "Nothing to do for the gate (not gating)…", and `tools_run` names `guardian-suppressions`
   when a changed file holds a suppression's token.
@@ -73,12 +73,14 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   the pass is `skipped`.
 - **`perf_check` judges each run against its target's history (`history`).** Every measured run is kept and compared
   with the median of the last 3 to 5 runs of the same series — for Lighthouse the page, its major version and the
-  categories it scored; for k6 the script, its content and the `vus_max` it measured — each metric over the runs that
+  categories it scored; for k6 the script, its content and the VUs k6 set up before the start (`vus_max`'s minimum:
+  an arrival-rate run that adds VUs as the target slows down stays in its series) — each metric over the runs that
   have it; fewer than 3 is `unjudged` (`too_few_runs`). Tolerances: timings 10% with a floor of 50 ms (5 ms for
   k6), CLS 0.01, page weight 1%, scores 2 points, the k6 error rate 0.5 points. A run that regressed never enters a
   later reference, so running again does not wash a regression out (`confirmed` says the run before regressed too),
   and `since` shows the median of the oldest 3 runs kept. `history.recorded: false` says why a run was not kept; a
-  history that fails never fails the measurement.
+  history that fails never fails the measurement. Retention keeps a project's 50 newest runs across all its targets
+  (`GUARDIAN_RETENTION_SCANS`), so measuring many targets in rotation can leave one below 3 runs.
 - **`metrics --head <file> [--base <file>]`, a CLI command that compares METRIC lines.** It reads `metric-lines/1`
   (`METRIC <name>=<number>[ <unit>][ better=lower|higher][ tolerance=<n>[%]]`) and judges by the base line's terms:
   the head may only tighten the tolerance, and a flipped or dropped direction, a raised or dropped tolerance or a
@@ -109,8 +111,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   the form the new pass reports.
 - **docs/ci.md says dev-spec-driven 1.33+ passes `--diff-base` at its finish**, so the weakened-tests and suppressions
   checks run there too.
-- **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** leaves the
-  `perf` rows out of the scans it compares and says when the 50 most recent scans held other types.
+- **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** says when the
+  50 most recent scans held other types; it and `/guardian-incident` say `perf_check`'s runs are not among them.
 
 ### Fixed
 
@@ -118,6 +120,11 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   scan out of the window it read — which `perf_check`'s new rows would have made common. It now reads the latest
   compliance scan by its type.
 - **The `perf.bundle_size_kb` finding** says it measures Lighthouse's total page weight, not one bundle.
+- **`perf_check` read no error rate from a k6 run.** The file `k6 run --summary-export` writes holds a rate as
+  `{ passes, fails, value }`, and `summary.error_rate` read only `rate`: it was null on every run. It now reads
+  `value` too, so the error rate is in `summary` and judged in `history`.
+- **`set_baseline { scan_type }` baselined a scan of a type that records no findings** — an SBOM, and now a `perf`
+  run. It refuses one, as `set_baseline { scan_id }` already did.
 - **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
   `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
   run works in a throwaway database).

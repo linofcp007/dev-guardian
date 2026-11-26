@@ -13626,6 +13626,12 @@ var init_scansRepo = __esm({
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
+        this.listScanHistoryStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND scan_type <> 'perf' AND ${READABLE}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
         this.findCacheStmt = db.prepare(`
       SELECT * FROM scans
       WHERE cache_key = ? AND status = 'completed' AND started_at >= ? AND ${READABLE}
@@ -13652,6 +13658,7 @@ var init_scansRepo = __esm({
       getLatestForProjectStmt;
       listHistoryStmt;
       listHistoryForProjectStmt;
+      listScanHistoryStmt;
       findCacheStmt;
       attachCacheStmt;
       countForProjectStmt;
@@ -13789,6 +13796,16 @@ var init_scansRepo = __esm({
        */
       listHistoryForProject(projectPath, limit = 50) {
         return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
+      }
+      /**
+       * `guardian://scans/history`'s list: {@link listHistoryForProject} without
+       * `perf` rows, in SQL so the limit counts only what is listed. Every
+       * measured `perf_check` run is one (3.17.0), and a tuning session of 50 runs
+       * left the window no security scan; a series is read by its own query
+       * ({@link listCompletedPerfSeries}).
+       */
+      listScanHistory(projectPath, limit) {
+        return this.listScanHistoryStmt.all(projectPath, limit).map(rowToRecord);
       }
       /**
        * Every pass name the completed scans of `type` for `projectPath` ever
@@ -76719,6 +76736,7 @@ function lighthouseSeries(url2, lighthouseVersion, categories) {
   const shown = new URL(page.href);
   shown.username = "";
   shown.password = "";
+  shown.search = "";
   return {
     key: digest(["lighthouse", major, page.href, scored]),
     label: `Lighthouse ${major ?? "?"} \xB7 ${shown.href} \xB7 ${scored.length > 0 ? scored.join(", ") : "no category"}`
@@ -77251,6 +77269,8 @@ async function runLighthouse(opts) {
   const summary2 = summariseLighthouse(parsed2);
   const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary2.core_web_vitals);
   const categories = getProp(parsed2, "categories");
+  const cls = getNumber(getProp(getProp(parsed2, "audits"), "cumulative-layout-shift"), "numericValue");
+  const sampled = { ...summary2, core_web_vitals: { ...summary2.core_web_vitals, "cumulative-layout-shift": cls ?? null } };
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
     scanId: opts.scanId,
@@ -77263,7 +77283,7 @@ async function runLighthouse(opts) {
       getString(parsed2, "lighthouseVersion"),
       categories !== null && typeof categories === "object" ? Object.keys(categories) : []
     ),
-    samples: lighthouseSamples(summary2)
+    samples: lighthouseSamples(sampled)
   });
   return {
     ok: true,
@@ -77455,7 +77475,7 @@ async function runK6(opts) {
     series: k6Series(
       relative26(opts.projectPath, script).split(sep18).join("/"),
       await hashProjectFile(opts.projectPath, script),
-      getNumber(vusMax, "max") ?? getNumber(vusMax, "value") ?? null
+      getNumber(vusMax, "min") ?? getNumber(vusMax, "max") ?? getNumber(vusMax, "value") ?? null
     ),
     samples: k6Samples(summary2)
   });
@@ -77479,7 +77499,8 @@ function summariseK6(root) {
   const thresholds = getProp(root, "root_group") ? asArray(getProp(getProp(root, "root_group"), "checks")).map((c) => getString(c, "name")) : [];
   return {
     requests_total: getNumber(requests, "count") ?? null,
-    error_rate: getNumber(failed, "rate") ?? null,
+    // `--summary-export` writes the legacy summary, where a Rate metric is `{ passes, fails, value }`.
+    error_rate: getNumber(failed, "rate") ?? getNumber(failed, "value") ?? null,
     latency_avg_ms: getNumber(duration3, "avg") ?? null,
     latency_p95_ms: getNumber(duration3, "p(95)") ?? null,
     latency_p99_ms: getNumber(duration3, "p(99)") ?? null,
@@ -77589,6 +77610,12 @@ async function handler7(inp, ctx) {
     }
     targetScanId = inp.scan_id;
   } else {
+    if (inp.scan_type !== void 0 && SCAN_TYPE_ROLE[inp.scan_type] !== "state") {
+      return failDomain3(
+        "unsupported_target",
+        `A ${inp.scan_type} scan records no findings to compare against, so it cannot be a baseline. Baseline a scan of a finding-producing type.`
+      );
+    }
     const projectPath = toolProjectPath(inp.project_path);
     if (typeof projectPath !== "string") return projectPath;
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
@@ -122927,10 +122954,10 @@ var init_scans = __esm({
     registerResourceModule({
       name: "guardian-scans-history",
       uri: "guardian://scans/history",
-      description: "Up to 50 most-recent scans of the server's working-directory project, across every type, ordered by start time descending. Records are sparse \u2014 call `guardian://scans/{scan_id}` for the full ScanResult.",
+      description: "Up to 50 most-recent scans of the server's working-directory project, of every type but `perf` (perf_check's runs: its `history` reads them), ordered by start time descending. Records are sparse \u2014 call `guardian://scans/{scan_id}` for the full ScanResult.",
       handler: async (_uri, _params, ctx) => {
         const projectPath = serverProjectPath();
-        const scans = ctx.storage.scans.listHistoryForProject(projectPath, 50);
+        const scans = ctx.storage.scans.listScanHistory(projectPath, 50);
         return { json: { project_path: projectPath, scans } };
       }
     });
@@ -130769,12 +130796,19 @@ var NUMBER = /^-?(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,9})?(?:[eE][-+]?[0-9]{1,3})?
 var TOLERANCE = /^((?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,9})?(?:[eE][-+]?[0-9]{1,3})?)(%?)$/;
 var UNIT_MAX_CHARS = 16;
 var START = /^[ \t]*(?:# )?METRIC(?=[ \t]|$)/;
+var HEAD = /^[ \t]*(?:# )?$/;
 var BLANKS = /[ \t]+/;
 var CSI = /\u001B\[[0-?]*[ -/]*[A-Za-z]/g;
 var KEYWORD = "METRIC";
 function cleanLine(line) {
   const noCr = line.endsWith("\r") ? line.slice(0, -1) : line;
   return noCr.includes("\x1B") ? noCr.replace(CSI, "") : noCr;
+}
+function keywordPrinted(raw) {
+  const first = raw.indexOf(KEYWORD);
+  if (first < 0) return false;
+  const head = raw.slice(0, first);
+  return HEAD.test(head.includes("\x1B") ? head.replace(CSI, "") : head);
 }
 function malformed(part) {
   return { kind: "malformed", part };
@@ -130839,9 +130873,10 @@ function readMetricOutput(text3, opts = {}) {
     const lineEnd = nl < 0 ? text3.length : nl;
     const cut = opts.truncated === true && lineStart === 0;
     if (!cut) {
-      const line = cleanLine(text3.slice(lineStart, lineEnd));
+      const raw = text3.slice(lineStart, lineEnd);
+      const line = cleanLine(raw);
       const start = START.exec(line);
-      if (start !== null) {
+      if (start !== null && keywordPrinted(raw)) {
         candidates2 += 1;
         if (candidates2 > bounds.candidates) {
           dropped.add("candidates");

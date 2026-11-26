@@ -54,6 +54,8 @@ interface LhRun {
   version?: string;
   categories?: string[];
   runtimeError?: boolean;
+  /** Lighthouse's numericValue, unrounded (default: a real run's 0.1480355010107018). */
+  cls?: number;
 }
 
 /** Lighthouse, scripted: writes a report of the real run's shape. */
@@ -74,7 +76,7 @@ function scriptLighthouse(run: LhRun): void {
             'first-contentful-paint': { numericValue: run.lcp },
             'speed-index': { numericValue: run.lcp },
             'total-blocking-time': { numericValue: 0 },
-            'cumulative-layout-shift': { numericValue: 0.1480355010107018 },
+            'cumulative-layout-shift': { numericValue: run.cls ?? 0.1480355010107018 },
             'server-response-time': { numericValue: run.ttfb ?? 0 },
             'total-byte-weight': { numericValue: 40269 },
           },
@@ -97,9 +99,11 @@ type History = {
   hint?: string;
 };
 
-async function lighthouse(s: Seeded, project: string, run: LhRun, url = 'http://127.0.0.1:64288/'): Promise<{ ok: boolean; history?: History }> {
+type LhResult = { ok: boolean; history?: History; summary?: { core_web_vitals: Record<string, number | null> } };
+
+async function lighthouse(s: Seeded, project: string, run: LhRun, url = 'http://127.0.0.1:64288/'): Promise<LhResult> {
   scriptLighthouse(run);
-  return (await tool('perf_check').handler({ project_path: project, target_url: url }, s.plugin)) as { ok: boolean; history?: History };
+  return (await tool('perf_check').handler({ project_path: project, target_url: url }, s.plugin)) as LhResult;
 }
 
 const verdictOf = (h: History | undefined, name: string): string | undefined => h?.metrics?.find((m) => m.name === name)?.verdict;
@@ -165,6 +169,28 @@ describe('perf_check history: Lighthouse', () => {
     expect(verdictOf((await lighthouse(s, project, { lcp: 9000 })).history, 'perf.lcp_ms')).toBe('regressed');
   });
 
+  it('H-5: CLS is sampled unrounded — 0.1351 x3 then 0.1549 (+0.0198) regresses, then 0.1449 (+0.0098) is within', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-hist-');
+    for (let i = 0; i < 3; i += 1) await lighthouse(s, project, { lcp: 2000, cls: 0.1351 });
+    const worse = await lighthouse(s, project, { lcp: 2000, cls: 0.1549 });
+    expect(worse.history?.metrics?.find((m) => m.name === 'perf.cls')).toMatchObject({ verdict: 'regressed', reference: 0.1351 });
+    expect(verdictOf((await lighthouse(s, project, { lcp: 2000, cls: 0.1449 })).history, 'perf.cls')).toBe('within');
+    // The response's summary is unchanged: rounded to 0.01, as before.
+    expect(worse.summary?.core_web_vitals['cumulative-layout-shift']).toBe(0.15);
+  });
+
+  it('H-8: the stored series label keeps no query string and no fragment; the query still keys the series', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-hist-');
+    const first = await lighthouse(s, project, { lcp: 2000 }, 'http://127.0.0.1:64288/app?access_token=tok3n#top');
+    expect(first.history?.series).toBe('Lighthouse 13 · http://127.0.0.1:64288/app · performance');
+    expect(JSON.stringify(perfRows(s, project)[0]?.meta)).not.toMatch(/tok3n|#top/);
+    for (let i = 0; i < 2; i += 1) await lighthouse(s, project, { lcp: 2000 }, 'http://127.0.0.1:64288/app?access_token=tok3n');
+    expect(verdictOf((await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?access_token=tok3n')).history, 'perf.lcp_ms')).toBe('regressed');
+    expect(verdictOf((await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?other=1')).history, 'perf.lcp_ms')).toBe('new');
+  });
+
   it('H17: another project\'s runs of the same page are never read', async () => {
     const s = freshPlugin();
     const a = projectDir('perf-hist-a-');
@@ -223,6 +249,34 @@ describe('perf_check history: Lighthouse', () => {
     };
     expect(named).toMatchObject({ ok: false, error: { code: 'unsupported_target' } });
   });
+
+  it('H-6: set_baseline {scan_type} refuses a type that records no findings (perf, sbom), as the scan_id path does', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-hist-');
+    seedScan(s, { id: 'sast-1', type: 'sast', project, tools_run: [{ name: 'semgrep', status: 'ok' }], findings: [{ rule_id: 'r1' }] });
+    seedScan(s, { id: 'sbom-1', type: 'sbom', project, tools_run: [{ name: 'syft', status: 'ok' }] });
+    await lighthouse(s, project, { lcp: 2000 });
+    const set = async (scanType: string) =>
+      (await tool('set_baseline').handler({ project_path: project, scan_type: scanType }, s.plugin)) as {
+        ok: boolean;
+        scan_id?: string;
+        error?: { code: string; message: string };
+      };
+    for (const type of ['perf', 'sbom']) {
+      expect(await set(type), type).toEqual({
+        ok: false,
+        error: {
+          code: 'unsupported_target',
+          message:
+            `A ${type} scan records no findings to compare against, so it cannot be a baseline. ` +
+            'Baseline a scan of a finding-producing type.',
+        },
+      });
+    }
+    expect(s.storage.baselines.getActiveForProject(project)).toBeNull();
+    // Still-pass: a finding-producing type is baselined as before.
+    expect(await set('sast')).toMatchObject({ ok: true, scan_id: 'sast-1' });
+  });
 });
 
 describe('perf_check history: k6', () => {
@@ -267,6 +321,89 @@ describe('perf_check history: k6', () => {
     // An edited script starts a new series.
     writeFileSync(join(project, 'smoke.js'), 'export default function () { /* edited */ }\n', 'utf8');
     expect(verdictOf((await k6(s, project, 'smoke.js', 0, 10, 400)).history, 'k6.latency_p95_ms')).toBe('new');
+  });
+
+  /**
+   * The file `k6 run --summary-export` writes (the legacy summary, k6 0.3x to 1.x): a Rate metric is
+   * `{ passes, fails, value }` — its rate is `value` — and a gauge `{ value, min, max }`.
+   */
+  function scriptK6Summary(summary: Record<string, unknown>): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'k6' ? '/fake/bin/k6' : null));
+    vi.mocked(runProcess).mockImplementationOnce(async (opts) => {
+      const file = opts.args?.find((a) => a.startsWith('--summary-export='))?.replace('--summary-export=', '');
+      if (file !== undefined) writeFileSync(file, JSON.stringify(summary), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+  }
+  const legacy = (p95: number, failRate: number, vusMax: Record<string, number>) => ({
+    root_group: { name: '', path: '', id: 'd41d8cd98f00b204e9800998ecf8427e', groups: {}, checks: {} },
+    metrics: {
+      http_reqs: { count: 1000, rate: 99.8 },
+      http_req_duration: { avg: p95 / 2, min: 1, med: p95 / 2, max: p95 * 2, 'p(90)': p95 * 0.9, 'p(95)': p95 },
+      http_req_failed: { passes: Math.round(failRate * 1000), fails: 1000 - Math.round(failRate * 1000), value: failRate },
+      vus_max: vusMax,
+      vus: { value: 0, min: 0, max: vusMax['max'] ?? 0 },
+    },
+  });
+  type K6Result = { ok: boolean; summary?: Record<string, unknown>; history?: History };
+  async function k6Summary(s: Seeded, project: string, summary: Record<string, unknown>): Promise<K6Result> {
+    scriptK6Summary(summary);
+    return (await tool('perf_check').handler({ project_path: project, k6_script_path: 'load.js' }, s.plugin)) as K6Result;
+  }
+  const vus = (min: number, max: number) => ({ value: max, min, max });
+
+  it("H-1: the error rate of k6's --summary-export (http_req_failed.value) is read and judged", async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
+    const failing = await k6Summary(s, project, legacy(20, 0.3, vus(10, 10)));
+    expect(failing.summary?.['error_rate']).toBe(0.3);
+    expect(failing.history?.metrics?.find((m) => m.name === 'k6.error_rate_pct')).toMatchObject({ verdict: 'regressed', reference: 0 });
+    expect(perfRows(s, project)[0]?.meta?.['metrics']).toMatchObject({ 'k6.error_rate_pct': { value: 30, unit: '%' } });
+  });
+
+  it('H-1 still-pass: a summary whose http_req_failed holds `rate` is still read', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    const summary = legacy(20, 0, vus(10, 10));
+    const r = await k6Summary(s, project, { ...summary, metrics: { ...summary.metrics, http_req_failed: { rate: 0.07 } } });
+    expect(r.summary?.['error_rate']).toBe(0.07);
+    expect(verdictOf(r.history, 'k6.error_rate_pct')).toBe('new');
+  });
+
+  it('H-2: an arrival-rate run that allocated more VUs (vus_max min 10, max 23) stays in its series and reads regressed', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(
+      join(project, 'load.js'),
+      'export const options = { scenarios: { s: { executor: "constant-arrival-rate", rate: 100, preAllocatedVUs: 10, maxVUs: 100 } } };\n',
+      'utf8',
+    );
+    for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
+    const slow = await k6Summary(s, project, legacy(45, 0, vus(10, 23)));
+    expect(slow.history?.series).toMatch(/ · 10 VUs$/);
+    expect(verdictOf(slow.history, 'k6.latency_p95_ms')).toBe('regressed');
+    // Jitter in what k6 added (11 vs 23) is no new load either.
+    expect((await k6Summary(s, project, legacy(20, 0, vus(10, 11)))).history?.series).toBe(slow.history?.series);
+  });
+
+  it('H-2 still-pass: another pre-allocation (min 10 vs 100) is another series', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 23)));
+    const bigger = await k6Summary(s, project, legacy(45, 0, vus(100, 100)));
+    expect(bigger.history?.series).toMatch(/ · 100 VUs$/);
+    expect(verdictOf(bigger.history, 'k6.latency_p95_ms')).toBe('new');
+  });
+
+  it('H-2: a vus_max with no min is keyed by its max', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    expect((await k6Summary(s, project, legacy(20, 0, { max: 10 }))).history?.series).toMatch(/ · 10 VUs$/);
   });
 
   it('a run whose summary holds no metric is not kept, and says so', async () => {

@@ -126,6 +126,25 @@ describe('guardian://scans/* resources', () => {
     expect(payload.scans[0]?.scan_id).toBe('s-3');
   });
 
+  it("history leaves out perf_check's runs: 2 sast scans then 50 perf runs, the sast scans are in the window", async () => {
+    seedScan(plugin, { id: 'sast-1', type: 'sast' });
+    seedScan(plugin, { id: 'sbom-1', type: 'sbom' });
+    seedScan(plugin, { id: 'sast-2', type: 'sast' });
+    for (let i = 0; i < 50; i++) seedScan(plugin, { id: `perf-${i}`, type: 'perf' });
+    const r = await getResource('guardian-scans-history').handler(fakeUri, {}, plugin);
+    const payload = r.json as { scans: Array<{ scan_id: string; scan_type: string }> };
+    // Still-pass: every other type is listed, an SBOM too, newest first.
+    expect(payload.scans.map((s) => s.scan_id)).toEqual(['sast-2', 'sbom-1', 'sast-1']);
+  });
+
+  it('history holds at most the 50 newest of the types it lists', async () => {
+    for (let i = 0; i < 52; i++) seedScan(plugin, { id: `s-${i}`, type: 'sast' });
+    const r = await getResource('guardian-scans-history').handler(fakeUri, {}, plugin);
+    const payload = r.json as { scans: Array<{ scan_id: string }> };
+    expect(payload.scans).toHaveLength(50);
+    expect(payload.scans[0]?.scan_id).toBe('s-51');
+  });
+
   it('by-id returns ScanResult shape', async () => {
     seedScan(plugin, { id: 'one', type: 'sast', findings: 2 });
     const r = await getResource('guardian-scans-by-id').handler(

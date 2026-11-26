@@ -150,6 +150,7 @@ export class ScansRepo {
   private readonly getLatestForProjectStmt: Statement<[string], ScanRow>;
   private readonly listHistoryStmt: Statement<[number], ScanRow>;
   private readonly listHistoryForProjectStmt: Statement<[string, number], ScanRow>;
+  private readonly listScanHistoryStmt: Statement<[string, number], ScanRow>;
   private readonly findCacheStmt: Statement<[string, string], ScanRow>;
   private readonly attachCacheStmt: Statement<[string, string, string, string]>;
   private readonly countForProjectStmt: Statement<[string], { n: number }>;
@@ -243,6 +244,14 @@ export class ScansRepo {
     this.listHistoryForProjectStmt = db.prepare<[string, number], ScanRow>(`
       SELECT * FROM scans
       WHERE project_path = ? AND ${READABLE}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
+
+    // listHistoryForProjectStmt without `perf` rows — see listScanHistory.
+    this.listScanHistoryStmt = db.prepare<[string, number], ScanRow>(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND scan_type <> 'perf' AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
@@ -410,6 +419,17 @@ export class ScansRepo {
    */
   listHistoryForProject(projectPath: string, limit = 50): ScanRecord[] {
     return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
+  }
+
+  /**
+   * `guardian://scans/history`'s list: {@link listHistoryForProject} without
+   * `perf` rows, in SQL so the limit counts only what is listed. Every
+   * measured `perf_check` run is one (3.17.0), and a tuning session of 50 runs
+   * left the window no security scan; a series is read by its own query
+   * ({@link listCompletedPerfSeries}).
+   */
+  listScanHistory(projectPath: string, limit: number): ScanRecord[] {
+    return this.listScanHistoryStmt.all(projectPath, limit).map(rowToRecord);
   }
 
   /**

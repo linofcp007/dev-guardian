@@ -10,7 +10,11 @@
  * - The keyword starts the line, after blanks or one `# ` (node's TAP reporter
  *   prints a test's output as `# …`), or blanks then `# ` (a nested subtest).
  *   A CR before the LF is no part of the line, and ANSI CSI sequences
- *   (`ESC [ … letter`, a coloured log) are removed before anything is read.
+ *   (`ESC [ … letter`, a coloured log) are removed before anything is read —
+ *   but the keyword is read as printed: it is the line's first `METRIC`, with
+ *   only blanks, the `# ` and CSI sequences before it, so a colour code inside
+ *   it (`MET ESC[0m RIC`) splits it, as dev-spec-driven's reader, which finds
+ *   the keyword in the raw output, reads it.
  * - An ATTEMPT is a line whose first token after the keyword holds `=`. An
  *   attempt the grammar refuses is `malformed` — counted and said; any other
  *   `METRIC …` line (a table header, a JSON payload, another tool's log) is
@@ -102,6 +106,8 @@ const TOLERANCE = /^((?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,9})?(?:[eE][-+]?[0-9]{1,
 const UNIT_MAX_CHARS = 16;
 /** The keyword at the line's start: blanks, then at most one `# `, then `METRIC` and a blank or the end. */
 const START = /^[ \t]*(?:# )?METRIC(?=[ \t]|$)/;
+/** What may stand before the printed keyword once its CSI sequences are removed. */
+const HEAD = /^[ \t]*(?:# )?$/;
 const BLANKS = /[ \t]+/;
 /** An ANSI CSI sequence: ESC [, parameter and intermediate bytes, a final letter. */
 const CSI = /\u001B\[[0-?]*[ -/]*[A-Za-z]/g;
@@ -115,13 +121,26 @@ const KEYWORD = 'METRIC';
 export function readMetricLine(line: string): LineRead {
   const text = cleanLine(line);
   const start = START.exec(text);
-  return start === null ? { kind: 'ignored' } : readCandidate(text.slice(start[0].length));
+  return start === null || !keywordPrinted(line) ? { kind: 'ignored' } : readCandidate(text.slice(start[0].length));
 }
 
 /** A line as the grammar reads it: no CR at its end, no CSI sequence. */
 function cleanLine(line: string): string {
   const noCr = line.endsWith('\r') ? line.slice(0, -1) : line;
   return noCr.includes('\u001B') ? noCr.replace(CSI, '') : noCr;
+}
+
+/**
+ * Whether the raw line's first `METRIC` has only blanks, the `# ` and CSI
+ * sequences before it — with {@link START} on the cleaned line, that the
+ * keyword the grammar reads was printed whole, never made by removing a CSI
+ * sequence inside it.
+ */
+function keywordPrinted(raw: string): boolean {
+  const first = raw.indexOf(KEYWORD);
+  if (first < 0) return false;
+  const head = raw.slice(0, first);
+  return HEAD.test(head.includes('\u001B') ? head.replace(CSI, '') : head);
 }
 
 function malformed(part: MalformedPart): LineRead {
@@ -204,9 +223,10 @@ export function readMetricOutput(
     const lineEnd = nl < 0 ? text.length : nl;
     const cut = opts.truncated === true && lineStart === 0;
     if (!cut) {
-      const line = cleanLine(text.slice(lineStart, lineEnd));
+      const raw = text.slice(lineStart, lineEnd);
+      const line = cleanLine(raw);
       const start = START.exec(line);
-      if (start !== null) {
+      if (start !== null && keywordPrinted(raw)) {
         candidates += 1;
         if (candidates > bounds.candidates) {
           dropped.add('candidates');

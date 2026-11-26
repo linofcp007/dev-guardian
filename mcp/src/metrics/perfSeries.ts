@@ -7,8 +7,9 @@
  * - The series key is a property of the run, never a list of names: for
  *   Lighthouse the page (its href without the fragment), Lighthouse's major
  *   version and the categories the report scored; for k6 the script's
- *   project-relative path and content (sha256) and the `vus_max` k6 measured —
- *   10 VUs against 100 is another load, not a regression.
+ *   project-relative path and content (sha256) and the VUs k6 set up before the
+ *   start (`vus_max`'s min, `tools/perfCheck.ts`) — 10 VUs against 100 is another
+ *   load, not a regression.
  * - Each metric is judged over the earlier runs that HAVE it: the reference is
  *   the median of the last 3–5 of them, and fewer than 3 is `unjudged`
  *   (`too_few_runs`), shown with its delta. A run whose verdict for the metric
@@ -125,8 +126,9 @@ export function k6Samples(summary: Record<string, unknown>): PerfSample[] {
 }
 
 export interface PerfSeries {
-  /** Stored as `meta.series`: a digest, so a URL's credentials never reach the column. */
+  /** Stored as `meta.series`: a digest of the parts, so the page's credentials and query reach the column only hashed. */
   readonly key: string;
+  /** Shown as `history.series` and stored as `meta.series_label`: the page with no credentials, query or fragment. */
   readonly label: string;
 }
 
@@ -139,9 +141,11 @@ export function lighthouseSeries(url: string, lighthouseVersion: string | undefi
   page.hash = '';
   const major = /^([0-9]+)\./.exec(lighthouseVersion ?? '')?.[1] ?? null;
   const scored = [...new Set(categories)].sort();
+  // A query can hold a token (`?access_token=…`): it keys the series, and is never shown or stored.
   const shown = new URL(page.href);
   shown.username = '';
   shown.password = '';
+  shown.search = '';
   return {
     key: digest(['lighthouse', major, page.href, scored]),
     label: `Lighthouse ${major ?? '?'} · ${shown.href} · ${scored.length > 0 ? scored.join(', ') : 'no category'}`,
