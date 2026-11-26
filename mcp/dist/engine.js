@@ -77445,7 +77445,8 @@ function summariseK6(root) {
   const thresholds = getProp(root, "root_group") ? asArray(getProp(getProp(root, "root_group"), "checks")).map((c) => getString(c, "name")) : [];
   return {
     requests_total: getNumber(requests, "count") ?? null,
-    error_rate: getNumber(failed, "rate") ?? null,
+    // `--summary-export` writes the legacy summary, where a Rate metric is `{ passes, fails, value }`.
+    error_rate: getNumber(failed, "rate") ?? getNumber(failed, "value") ?? null,
     latency_avg_ms: getNumber(duration3, "avg") ?? null,
     latency_p95_ms: getNumber(duration3, "p(95)") ?? null,
     latency_p99_ms: getNumber(duration3, "p(99)") ?? null,

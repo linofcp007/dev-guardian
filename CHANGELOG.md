@@ -114,6 +114,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   scan out of the window it read — which `perf_check`'s new rows would have made common. It now reads the latest
   compliance scan by its type.
 - **The `perf.bundle_size_kb` finding** says it measures Lighthouse's total page weight, not one bundle.
+- **`perf_check` read no error rate from a k6 run.** The file `k6 run --summary-export` writes holds a rate as
+  `{ passes, fails, value }`, and `summary.error_rate` read only `rate`: it was null on every run. It now reads
+  `value` too, so the error rate is in `summary` and judged in `history`.
 - **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
   `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
   run works in a throwaway database).
