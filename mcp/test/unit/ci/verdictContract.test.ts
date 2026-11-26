@@ -40,11 +40,14 @@
  * Change one of these and this test fails before dev-spec-driven's gate
  * quietly stops reading the verdict.
  */
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { evaluateGate } from '../../../src/ci/gate.js';
 import { renderJson } from '../../../src/ci/report.js';
 import { CI_EXIT, GAP_KINDS, type ScanStepResult } from '../../../src/ci/types.js';
 import { SEVERITIES, type Finding } from '../../../src/types.js';
+import { REPO_ROOT } from '../pluginSurface/pluginDocs.js';
 
 /** The GapKind set of the contract: dev-spec-driven 1.30.x's `GUARDIAN_GAP_KINDS` (an unknown kind reads `other` there). */
 const CONTRACT_GAP_KINDS = [
@@ -256,5 +259,44 @@ describe('the JSON verdict dev-spec-driven parses (contract)', () => {
     expect(bySeverity['medium']).toBe(1);
     expect(compact['compact']).toBe(true);
     expect(json['compact']).toBe(false);
+  });
+});
+
+// The cross-plugin review of 1.41 × 3.17.0 (RX-8): the CHANGELOG's upgrade note put `tools_run` among what the verdict
+// JSON carries, and it has none — `review_pr` and `scan_sast` results do. The note is held to a verdict rendered here.
+describe("the CHANGELOG's note on the suppressions pass names what the verdict JSON holds", () => {
+  const note = 'guardian-suppressions: 1 changed file(s) over 2 MiB or unreadable were not read for suppressions';
+  const step: ScanStepResult = {
+    tool: 'guardian-suppressions',
+    ran: true,
+    tools_run: [{ name: 'guardian-suppressions', status: 'ok' }],
+    missing_tools: [],
+    notes: [note],
+  };
+  const verdict = JSON.parse(
+    renderJson(evaluateGate({ findings: [], baseline: null, failOn: 'high', steps: [step], droppedBaselineEntries: 0 })),
+  ) as Record<string, unknown>;
+  const log = readFileSync(resolve(REPO_ROOT, 'CHANGELOG.md'), 'utf8').replace(/\r\n/g, '\n');
+  const entry = log.slice(log.indexOf('## [3.17.0]'), log.indexOf('## [3.16.1]'));
+  const bullet = (entry.split(/\n(?=- )/).find((b) => b.startsWith('- **The verdict JSON can carry `coverage_notes`')) ?? '').replace(/\s+/g, ' ');
+  const sentences = bullet.split(/(?<=[.!?])\s+(?=[A-Z`])/);
+
+  it('RX-8 the verdict: the note in coverage_notes and in coverage_gap_details with gating false, and no tools_run', () => {
+    expect(verdict['coverage_notes']).toEqual([note]);
+    const detail = (verdict['coverage_gap_details'] as Array<Record<string, unknown>>).find((d) => d['tool'] === 'guardian-suppressions');
+    expect(detail).toMatchObject({ kind: 'other', gating: false, detail: note });
+    expect(String(detail?.['remedy'])).toMatch(/^Nothing to do for the gate \(not gating\)/);
+    expect('tools_run' in verdict).toBe(false);
+  });
+
+  it('RX-8 the note says so: coverage_gap_details with gating false and the remedy; tools_run only of review_pr / scan_sast', () => {
+    expect(bullet, 'the 3.17.0 bullet on the verdict JSON').not.toBe('');
+    expect(bullet).toContain('each also in `coverage_gap_details` with `gating: false` and the remedy "Nothing to do for the gate (not gating)…"');
+    const withToolsRun = sentences.filter((s) => s.includes('`tools_run`'));
+    expect(withToolsRun.length).toBeGreaterThan(0);
+    for (const s of withToolsRun) {
+      expect(s).toContain('`review_pr`');
+      expect(s).not.toMatch(/verdict JSON can carry/);
+    }
   });
 });

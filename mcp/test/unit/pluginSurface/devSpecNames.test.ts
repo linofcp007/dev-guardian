@@ -34,6 +34,7 @@ import {
   DEV_SPEC_COMMANDS,
   DEV_SPEC_FIXTURE_VERSION,
   DEV_SPEC_HIDDEN_ALIASES,
+  DEV_SPEC_LAUNCHER_FORWARDS,
   DEV_SPEC_RETIRED_COMMANDS,
   DEV_SPEC_TOOLS,
 } from './devSpecNames.js';
@@ -140,6 +141,32 @@ describe("dev-guardian's prose cites only current dev-spec-driven names", () => 
         return why === null ? [] : [`${rel}: ${why}`];
       }),
     );
+    expect(problems).toEqual([]);
+  });
+
+  // The cross-plugin review (RX-10): the prose said the launcher "forwards every argument"; it forwards
+  // DEV_SPEC_LAUNCHER_FORWARDS only, and `node .specs/guardian.cjs metrics …` exits 3.
+  it("cites dev-spec-driven's launcher only with what it forwards, and names that wherever it gives the generic line", () => {
+    const problems: string[] = [];
+    let generic = 0;
+    for (const { rel, text } of prose) {
+      if (/forwards every argument/i.test(text)) problems.push(`${rel}: says the launcher forwards every argument`);
+      for (const paragraph of text.split(/\r?\n\s*\r?\n/)) {
+        const flat = paragraph.replace(/\s+/g, ' ');
+        for (const m of flat.matchAll(/`node \.specs\/guardian\.cjs (\S+?)[\s`\\]/g)) {
+          const word = m[1] ?? '';
+          if (/^(?:<[^<>]+>|…)$/.test(word)) {
+            generic += 1;
+            const unnamed = DEV_SPEC_LAUNCHER_FORWARDS.filter((s) => !flat.includes(`\`${s}\``) && !flat.includes(`\\\`${s}\\\``));
+            if (unnamed.length > 0) problems.push(`${rel}: \`node .specs/guardian.cjs ${word}\` without naming ${unnamed.join(', ')}`);
+          } else if (!DEV_SPEC_LAUNCHER_FORWARDS.includes(word)) {
+            problems.push(`${rel}: \`node .specs/guardian.cjs ${word}\` — the launcher does not forward ${word}`);
+          }
+        }
+      }
+    }
+    // A positive control: the rules files, the router's reference and docs/ci.md give the generic line.
+    expect(generic).toBeGreaterThan(5);
     expect(problems).toEqual([]);
   });
 
@@ -284,5 +311,15 @@ describe(`the fixture against a live dev-spec-driven (${SOURCE})`, () => {
     );
     expect(DEV_SPEC_COMMANDS.filter((n) => !files.has(n))).toEqual([]);
     expect(Object.keys(DEV_SPEC_RETIRED_COMMANDS).filter((n) => files.has(n))).toEqual([]);
+  });
+
+  it.skipIf(live === null)('its launcher forwards what the fixture says: its GUARDIAN_FORWARDED, and help', () => {
+    if (live === null) return;
+    const src = readFileSync(join(live.root, 'mcp', 'lib', 'engine', 'guardian.js'), 'utf8');
+    const m = /const GUARDIAN_FORWARDED = \[([^\]]*)\]/.exec(src);
+    expect(m, 'GUARDIAN_FORWARDED in mcp/lib/engine/guardian.js').not.toBeNull();
+    const forwarded = (m?.[1] ?? '').split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
+    expect([...forwarded, 'help']).toEqual(DEV_SPEC_LAUNCHER_FORWARDS);
+    expect(src).toMatch(/GUARDIAN_FORWARDED\.concat\(\["help"/);
   });
 });
