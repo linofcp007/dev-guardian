@@ -8,7 +8,7 @@ version bump.
 
 ## [Unreleased]
 
-## [3.17.0]
+## [3.17.0] - 2026-11-26
 
 The gardening round, shared with dev-spec-driven 1.41.0: both plugins now tend what a change leaves for the next one,
 and both read the same METRIC line, `metric-lines/1`, held to one contract — the fixture
