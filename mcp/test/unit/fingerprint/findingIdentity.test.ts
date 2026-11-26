@@ -412,8 +412,8 @@ describe('assignIdentities — credential findings are never keyed on their line
 
 /**
  * Review 1 of 3.17.0, R1-DG-D-2: a finding of the diff's suppressions pass sits
- * on the directive's line, and a bare `gitleaks:allow` sits on the secret's own
- * line — so its identity, exported as SARIF's `devGuardianIdentity` and as the
+ * on the directive's line, and gitleaks' bare allow directive sits on the
+ * secret's own line — so its identity, exported as SARIF's `devGuardianIdentity` and as the
  * `[guardian:<12 hex>]` tag of an issue's title, is keyed like a credential's:
  * on its rule, the occurrence and the group's count, never on the line. The
  * directive lines come from the suppression cases (no test source holds one).

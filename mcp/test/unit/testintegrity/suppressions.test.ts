@@ -12,8 +12,9 @@
  * pass (`detect.test.ts`, `testIntegrityGit.test.ts`) is unchanged.
  */
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   detectSuppressions,
@@ -147,6 +148,13 @@ describe('the findings', () => {
     expect(all.filter((f) => f.severity !== 'medium' && f.severity !== 'low')).toEqual([]);
   });
 
+  // Review 1 of 3.17.0, R1-DG-D-10: "adds a the C# compiler suppression".
+  it("each title's article fits its tool's name", () => {
+    const titles = CASES.flatMap((c) => detectSuppressions([fileOf(c)]).findings.map((f) => f.title));
+    expect(titles.some((t) => t.includes('C# compiler'))).toBe(true);
+    expect(titles.filter((t) => /\ban? the\b/.test(t))).toEqual([]);
+  });
+
   it("dev-spec-driven's launcher (.specs/guardian.cjs, 1.40) reads as counts only: three rule-naming nosemgrep lines, no finding", () => {
     const text = readFileSync(join(FIXTURES, 'guardian.cjs'), 'utf8');
     const { findings, counts } = one('.specs/guardian.cjs', ...text.split('\n'));
@@ -237,5 +245,40 @@ describe('the languages read, and the lexer', () => {
     const [l] = readLines('foo("a // b", `c`); // d', 'js');
     expect(l?.code).toBe('foo(        ,    );     ');
     expect(l?.comments.map((c) => c.start)).toEqual([22]);
+  });
+});
+
+/**
+ * Review 1 of 3.17.0, R1-DG-D-9: dev-guardian's own branches are read by this
+ * pass (`scan --diff-base`, review_pr), and its source by Semgrep and gitleaks
+ * on every scan. So mcp/src holds no directive the tools that read a whole
+ * line honour (Semgrep's blank-led one, gitleaks' allow — its table builds
+ * them), and the pass finds nothing in it: every file read as added, which is
+ * every range of a release at once.
+ */
+describe("dev-guardian's own source", () => {
+  const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'src');
+  const files = readdirSync(SRC, { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile())
+    .map((e) => {
+      const text = readFileSync(join(e.parentPath, e.name), 'utf8');
+      const path = `src/${join(e.parentPath, e.name).slice(SRC.length + 1).split(/[\\/]/).join('/')}`;
+      return { path, text };
+    });
+
+  it('holds no directive of a row its tool reads on the whole line (Semgrep, gitleaks)', () => {
+    expect(files.length).toBeGreaterThan(300);
+    const wholeLine = SUPPRESSION_ROWS.filter((r) => r.id === 'nosemgrep' || r.id === 'gitleaks-allow');
+    expect(wholeLine).toHaveLength(2);
+    const token = new RegExp(wholeLine.flatMap((r) => r.tokens).join('|'));
+    const holding = files.flatMap((f) => f.text.split('\n').flatMap((line, i) => (token.test(line) ? [`${f.path}:${String(i + 1)}`] : [])));
+    expect(holding).toEqual([]);
+  });
+
+  it('the pass reports nothing in it, every line read as added', () => {
+    const { findings } = detectSuppressions(
+      files.map((f) => ({ path: f.path, added: f.text.split('\n').map((text, i) => ({ line: i + 1, text })), removed: [], after: f.text })),
+    );
+    expect(findings.map((f) => f.title)).toEqual([]);
   });
 });
