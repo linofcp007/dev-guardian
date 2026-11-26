@@ -24,9 +24,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, relative, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -37,38 +37,11 @@ import {
   DEV_SPEC_RETIRED_COMMANDS,
   DEV_SPEC_TOOLS,
 } from './devSpecNames.js';
-import { REPO_ROOT } from './pluginDocs.js';
+import { proseFiles, REPO_ROOT, walkText } from './pluginDocs.js';
 
 afterAll(cleanupTempDirs);
 
 // ------------------------------------------------------------------ prose
-
-/** What dev-guardian ships as text a model or a user reads: files, or directories walked whole. */
-const PROSE_ROOTS = [
-  'skills',
-  'commands',
-  'evals',
-  'docs',
-  'host-rules',
-  'hooks',
-  'cli',
-  'mcp/src',
-  'mcp/README.md',
-  '.cursor/rules',
-  '.windsurf/rules',
-  '.github/copilot-instructions.md',
-  'README.md',
-  'README.pt-PT.md',
-  'README.es.md',
-  'AGENTS.md',
-  'GEMINI.md',
-  'CLAUDE.md',
-  'CONTRIBUTING.md',
-  'SECURITY.md',
-];
-
-/** Text files, plus extensionless templates (`host-rules/clinerules`). */
-const TEXT_FILE = /\.(?:md|mdc|ts|mjs|js|json)$|^[^.]+$/;
 
 /**
  * dev-guardian's own `spec_*` identifiers: `map_attack_surface`'s OpenAPI
@@ -96,26 +69,6 @@ const COMMAND_NAME = new RegExp(
   `(?<![\\w/.~:-])/(spec[\\w-]*|${Object.keys(DEV_SPEC_RETIRED_COMMANDS).join('|')})(?![\\w-])`,
   'g',
 );
-
-interface Prose {
-  rel: string;
-  text: string;
-}
-
-function walk(abs: string, out: string[]): void {
-  if (!existsSync(abs)) return;
-  if (statSync(abs).isDirectory()) {
-    for (const entry of readdirSync(abs)) if (entry !== 'node_modules') walk(join(abs, entry), out);
-  } else if (TEXT_FILE.test(abs.split(sep).pop() ?? '')) {
-    out.push(abs);
-  }
-}
-
-function proseFiles(): Prose[] {
-  const files: string[] = [];
-  for (const root of PROSE_ROOTS) walk(resolve(REPO_ROOT, root), files);
-  return files.map((abs) => ({ rel: relative(REPO_ROOT, abs).split(sep).join('/'), text: readFileSync(abs, 'utf8') }));
-}
 
 const toolNames = (text: string): string[] => [...text.matchAll(TOOL_NAME)].map((m) => m[1] ?? '');
 const commandNames = (text: string): string[] => [...text.matchAll(COMMAND_NAME)].map((m) => m[1] ?? '');
@@ -192,7 +145,7 @@ describe("dev-guardian's prose cites only current dev-spec-driven names", () => 
 
   it("dev-guardian's own spec_* names are still its own, and none is a dev-spec-driven tool", () => {
     const src: string[] = [];
-    walk(resolve(REPO_ROOT, 'mcp', 'src'), src);
+    walkText(resolve(REPO_ROOT, 'mcp', 'src'), src);
     const used = new Set(src.flatMap((f) => toolNames(readFileSync(f, 'utf8'))));
     expect([...OWN_NAMES].filter((n) => !used.has(n))).toEqual([]);
     expect([...OWN_NAMES].filter((n) => TOOLS.has(n))).toEqual([]);
