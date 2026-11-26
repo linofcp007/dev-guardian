@@ -69,7 +69,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   the pass is `skipped`.
 - **`perf_check` judges each run against its target's history (`history`).** Every measured run is kept and compared
   with the median of the last 3 to 5 runs of the same series — for Lighthouse the page, its major version and the
-  categories it scored; for k6 the script, its content and the `vus_max` it measured — each metric over the runs that
+  categories it scored; for k6 the script, its content and the VUs k6 set up before the start (`vus_max`'s minimum:
+  an arrival-rate run that adds VUs as the target slows down stays in its series) — each metric over the runs that
   have it; fewer than 3 is `unjudged` (`too_few_runs`). Tolerances: timings 10% with a floor of 50 ms (5 ms for
   k6), CLS 0.01, page weight 1%, scores 2 points, the k6 error rate 0.5 points. A run that regressed never enters a
   later reference, so running again does not wash a regression out (`confirmed` says the run before regressed too),

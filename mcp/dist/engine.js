@@ -77421,7 +77421,7 @@ async function runK6(opts) {
     series: k6Series(
       relative26(opts.projectPath, script).split(sep18).join("/"),
       await hashProjectFile(opts.projectPath, script),
-      getNumber(vusMax, "max") ?? getNumber(vusMax, "value") ?? null
+      getNumber(vusMax, "min") ?? getNumber(vusMax, "max") ?? getNumber(vusMax, "value") ?? null
     ),
     samples: k6Samples(summary2)
   });

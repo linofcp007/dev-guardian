@@ -550,7 +550,10 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
   }
 
   const summary = summariseK6(parsed);
-  // The series: the script as the project names it, its content, and the load k6 measured.
+  // The series: the script as the project names it, its content, and the load: the VUs k6 set up
+  // before the start — `vus_max`'s min. Its max is that too for the VU-based executors, but an
+  // arrival-rate executor adds VUs as the target slows down: keyed by the max, a slower run left
+  // its series and was never judged.
   const vusMax = getProp(getProp(parsed, 'metrics'), 'vus_max');
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
@@ -562,7 +565,7 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
     series: k6Series(
       relative(opts.projectPath, script).split(sep).join('/'),
       await hashProjectFile(opts.projectPath, script),
-      getNumber(vusMax, 'max') ?? getNumber(vusMax, 'value') ?? null,
+      getNumber(vusMax, 'min') ?? getNumber(vusMax, 'max') ?? getNumber(vusMax, 'value') ?? null,
     ),
     samples: k6Samples(summary),
   });

@@ -185,7 +185,7 @@ Suspeitos comuns:
 
 ## Performance regressions
 
-- **O `perf_check` guarda cada corrida medida** (um scan `perf` sem findings, nunca "o último scan" de `diff_scans`) e `history` compara-a com a mediana das últimas 3-5 corridas do mesmo alvo (a página, a versão maior do Lighthouse e as categorias; no k6, o script, o conteúdo e o `vus_max`): `regressed` além da tolerância, `confirmed` se a anterior também regrediu. Uma corrida que regrediu nunca entra numa referência seguinte — correr de novo não apaga a regressão; `since` mostra a mediana das 3 mais antigas. Com menos de 3 anteriores: `unjudged` (`too_few_runs`).
+- **O `perf_check` guarda cada corrida medida** (um scan `perf` sem findings, nunca "o último scan" de `diff_scans`) e `history` compara-a com a mediana das últimas 3-5 corridas do mesmo alvo (a página, a versão maior do Lighthouse e as categorias; no k6, o script, o conteúdo e os VUs criados antes do arranque, o mínimo de `vus_max`): `regressed` além da tolerância, `confirmed` se a anterior também regrediu. Uma corrida que regrediu nunca entra numa referência seguinte — correr de novo não apaga a regressão; `since` mostra a mediana das 3 mais antigas. Com menos de 3 anteriores: `unjudged` (`too_few_runs`).
 - **Na CI**, o comando de medida imprime `METRIC <nome>=<valor> [<unidade>] better=lower|higher tolerance=<n>[%]` e `node "<plugin root>/cli/dev-guardian.mjs" metrics --head head.txt --base base.txt` julga a mudança pelos termos da linha da base — sem `better=` e `tolerance=` não há juízo, e sai 0 salvo `--strict`. `ci-init github --metrics-command "<cmd>"` gera o job que mede os dois lados ([docs/ci.md](../../docs/ci.md)).
 
 Ferramenta open-source: `hyperfine` para benchmark de comandos CLI.
