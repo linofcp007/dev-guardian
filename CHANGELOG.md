@@ -94,7 +94,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   AGENTS.md or CLAUDE.md, or `.specs/steering/tech.md` / `structure.md` in a dev-spec-driven project — written in
   the model's words, never a finding's text, and keyed `<!-- dev-guardian: <rule_id> -->` (not proposed again when a
   file already holds the key, dev-spec-driven's lesson comments included); and a seed for a Semgrep rule that lands
-  only once the occurrences are fixed (`<rule_id>: N → 0`), never while they would block every commit. Nothing is
+  only once the occurrences are fixed (`<rule_id>: N → 0` and the rule's terms, written where the seed went: its
+  backlog note replaced, and its spec once written), never while they would block every commit. Nothing is
   written without your yes. Its re-measure step names `perf_check`'s `history` for a performance unit.
 
 ### Changed

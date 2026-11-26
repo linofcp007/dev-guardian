@@ -23,7 +23,7 @@ For just measuring, use the `guardian-quality` skill or `/guardian-report debt`.
 Pull the current picture from what is already stored — rescan only when the latest scan is stale:
 
 - **Hotspots by ROI** — the same ranking as `/guardian-report debt`: `prioritize_findings { project_path: "<project>", limit: 50 }` for the weighted open findings, `risk_score { project_path: "<project>" }` for the project-level picture, and git churn (`git log --since="6 months ago" --name-only --format=`). No tool ranks files — you combine findings per file × severity × churn.
-- **Quality findings** — `quality_check { project_path: "<project>" }` (duplicate / complexity / smell / naming), grouped by rule and by file. A stale scan is re-run; a fresh one is read back.
+- **Quality findings** — `quality_check { project_path: "<project>" }` (duplicate / complexity / smell / naming), grouped by rule and by file.
 - **Duplication fragments** — jscpd clusters that appear ≥ 2×, from the same `quality_check`.
 - **Over-budget metrics** — the budgets in `.guardian/budgets.yml` that `quality_check` (duplication %, complexity) and `perf_check` (Core Web Vitals, page weight) report as exceeded.
 - **Oversized files and functions, coverage gaps** — measured by you (line counts, the project's own coverage report).
@@ -72,7 +72,7 @@ way. Don't write improvement specs whose "done" can't be re-measured — vague c
 
 ### Where the targets come from (per project, per stack — never fixed)
 
-The numbers in the seed above (60 lines, 300 lines, 45%) are **examples, not defaults**. Real targets
+The numbers in the seed above (60 lines, 45%) are **examples, not defaults**. Real targets
 must be *derived from this project*, in this order:
 
 1. **The project's declared budgets** — `.guardian/budgets.yml`, the one budget file dev-guardian
@@ -138,7 +138,9 @@ Per picked unit, in ONE batch shown exactly, written only on the user's yes:
   have rules): in `.semgrep.yml` it adds `review_pr`, pre-commit, the CLI gate and CI. Never while occurrences
   remain: the seed's Current → Target gets `<rule_id>: N → 0`, its last task adds the rule — `severity: WARNING`,
   `metadata.guardian_severity: medium`, a message naming the fix, no character whose UTF-8 holds 0x81, 0x8D, 0x8F,
-  0x90 or 0x9D (`Á Í ”`: on cp1252 pre-commit's Semgrep exits 2, printing nothing).
+  0x90 or 0x9D (`Á Í ”`: on cp1252 pre-commit's Semgrep exits 2, printing nothing). Write that change where step 4
+  put the seed: the unit's backlog note replaced (`rm`, then `add`) with `<rule_id>: N → 0` and the rule's terms,
+  and `requirements.md` or `docs/improvement-specs/<name>.md` if already written.
 
 ## Routing: what does NOT become an improvement spec
 
@@ -148,15 +150,12 @@ Per picked unit, in ONE batch shown exactly, written only on the user's yes:
   a backlog. Only the *systemic* pattern behind repeated findings becomes a hardening spec.
 - **Dead-code deletion is not automatic.** A "dead" symbol may be reached via reflection, a dynamic
   route/DI, a public API, a feature flag, or another package. Before a removal spec is real, it must
-  pass the deletion safety grill (`/guardian-grill` on the removal) — see below.
+  pass the deletion safety grill (`/guardian-grill` on the removal); when unsure, spec a *deprecation*
+  (mark + log + wait), not a delete.
 
 ## Guardrails
 
-- Never propose a mass rewrite. Smallest move, biggest metric gain.
-- Security: criticals block, hardening specs. Never turn an active vulnerability into backlog.
-- Dead code: prove it's unreachable (grill for reflection / dynamic dispatch / public API / flags)
-  before spec'ing a deletion. When unsure, spec a *deprecation* (mark + log + wait), not a delete.
-- Every seed must have a re-measurable target — if nothing can re-measure it, it's not a spec.
+- Never propose a mass rewrite.
 - Refactors must pin behaviour first (characterization tests) so "clean code" never means "broke it cleanly".
 - Don't invent AC IDs — `dev-spec-driven` owns those.
 - Mirror the user's language (EN/PT/ES).

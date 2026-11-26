@@ -132,7 +132,10 @@ and writes nothing without the user's yes (one batch, each line shown exactly; `
 - **A seed rule, never a rule written now.** Written while occurrences remain, a `.semgrep.yml` rule makes each one a
   new medium finding in every whole-project scan, trips `diff_scans { mode: "regression" }` at three (2 × 3 > 5) and
   blocks every commit through pre-commit's `--error` (a WARNING fails it too). The seed's Current → Target carries
-  `<rule_id>: N → 0` and its last task adds the rule, so it lands at zero. Only for a shape of `bug_hunt`,
+  `<rule_id>: N → 0` and its last task adds the rule, so it lands at zero. That change goes where step 4 put the
+  seed — the unit's backlog note replaced (`rm`, then `add`) with the target and the rule's terms, and
+  `requirements.md` or `docs/improvement-specs/<name>.md` once written: a seed changed nowhere never lands, or lands
+  without its terms. Only for a shape of `bug_hunt`,
   `quality_check` or `llm_scan`: they run on a change only when asked (`/guardian-scan --staged`, guardian-review),
   and the rule adds `review_pr`, pre-commit, the CLI gate and CI; SAST, secrets, deps and IaC rules run there already.
 - **The rule's message is held by its bytes.** pre-commit runs Semgrep without `PYTHONUTF8`, so on cp1252 a rule
