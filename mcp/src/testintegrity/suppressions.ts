@@ -25,11 +25,12 @@
  * tool reads it: Semgrep honours a blank-led `nosem` anywhere on the line,
  * a string included, and not `//nosemgrep` with no blank; Bandit and gosec
  * read comments only, gosec one that STARTS with `#nosec`; gitleaks reads
- * `gitleaks:allow` anywhere on the line; ESLint reads its file-wide form in a
+ * its allow directive anywhere on the line; ESLint reads its file-wide form in a
  * block comment only. A reason is three letters in a row: after the
  * directive and its arguments in the same comment (the tool's own field —
  * `-- why`, `reason = "why"`, `Justification = "why"` — or free text), or in
- * a whole-line comment directly above that is not itself a directive. The
+ * a whole-line comment directly above that is not itself a directive (nor
+ * the file's shebang or a line-1/2 coding or magic comment). The
  * reason is never judged, and a doubt never is: a line inside a multi-line
  * string, template, raw string or heredoc an earlier line opened is not read
  * (but by Semgrep's and gitleaks' rows, whose tools read it too), a line
@@ -484,8 +485,15 @@ export function readLines(text: string, lang: SuppressionLang): LineRead[] {
  */
 type At = 'line' | 'start' | 'segment' | 'inside' | 'code';
 
-/** `leading`: the whole file before the file's first code, else the line; `leading-only`: nothing after code (TypeScript reads `@ts-nocheck` only there). */
-type Scope = 'line' | 'file' | 'leading' | 'leading-only';
+/**
+ * `leading`: the whole file before the file's first code, else the line; `leading-only`: nothing after code
+ * (TypeScript reads `@ts-nocheck` only there). `leading-bare`: an own-line form whose region runs on (Pylint,
+ * RuboCop, ShellCheck), the whole file when it names no rule before the file's first code, else the line;
+ * `package-bare`: golangci-lint's, the whole file when it names no rule in the comment group the file's
+ * `package` clause carries ({@link packageDocOf}), else the line. Anywhere else the region is not certain by
+ * syntax, and a named form stays counted as every rule-naming line form is.
+ */
+type Scope = 'line' | 'file' | 'leading' | 'leading-only' | 'leading-bare' | 'package-bare';
 
 interface Row {
   id: string;
@@ -539,6 +547,14 @@ const RULE_LIST = String.raw`[ \t]+[@\w./-]+(?:[ \t]*,[ \t]*[@\w./-]+)*`;
 /** flake8 / Ruff codes: `E501`, `W291,E402`. */
 const CODES = String.raw`[a-z]+\d+(?:[\s,]+[a-z]+\d+)*`;
 
+/**
+ * The two directives their tools read anywhere on a line — this file's lines
+ * too, so written literally they would be real ones on dev-guardian's own
+ * branches (Semgrep's needs the blank before it): built.
+ */
+const SEMGREP_SHORT = ['no', 'sem'].join('');
+const GITLEAKS_ALLOW = ['gitleaks', 'allow'].join(':');
+
 const ROWS: readonly Row[] = [
   // ---- the scanners dev-guardian runs: hidden from its own scans and gate
   {
@@ -547,9 +563,9 @@ const ROWS: readonly Row[] = [
     cls: 'scanner',
     langs: ALL_LANGS,
     at: 'line',
-    // Semgrep's own reading: a blank, then nosem or nosemgrep in any case; `:` or `=` and ids name the rules (read
+    // Semgrep's own reading: a blank, then `nosem` or `nosemgrep` in any case; `:` or `=` and ids name the rules (read
     // here up to a `--`, so the reason after the documented `nosemgrep: <id> -- <reason>` stays one).
-    re: / nosem(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?/i,
+    re: new RegExp(String.raw` ${SEMGREP_SHORT}(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?`, 'i'),
     scope: 'line',
     label: 'nosemgrep',
     form: '`nosemgrep: <rule-id> -- <reason>`',
@@ -590,12 +606,13 @@ const ROWS: readonly Row[] = [
     cls: 'scanner',
     langs: ALL_LANGS,
     at: 'line',
-    re: /gitleaks:allow/, // gitleaks reads its own directive anywhere on the line: this is its name, with no secret
+    // gitleaks reads its allow directive anywhere on the line: this is its name, with no secret.
+    re: new RegExp(GITLEAKS_ALLOW),
     scope: 'line',
-    label: 'gitleaks:allow',
-    form: '`gitleaks:allow` and the reason after it',
+    label: GITLEAKS_ALLOW,
+    form: `${BACKTICK}${GITLEAKS_ALLOW}${BACKTICK} and the reason after it`,
     hides: "gitleaks' findings on this line",
-    tokens: ['gitleaks:allow'],
+    tokens: [GITLEAKS_ALLOW],
   },
   {
     id: 'trivy-ignore',
@@ -605,10 +622,11 @@ const ROWS: readonly Row[] = [
     at: 'start',
     re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)/,
     scope: 'line',
-    named: true,
+    // `*` names no check: Trivy then reports none here.
+    check: (g) => ({ names: g['names'] !== '*' }),
     label: 'trivy:ignore',
     form: '`trivy:ignore:<id>` and a comment saying why',
-    hides: "Trivy's finding of that check here",
+    hides: "Trivy's findings of every check here",
     tokens: ['trivy:ignore:', 'tfsec:ignore:'],
   },
   {
@@ -671,7 +689,7 @@ const ROWS: readonly Row[] = [
   },
   {
     id: 'cs-pragma-warning',
-    reader: 'the C# compiler',
+    reader: 'C# compiler',
     cls: 'scanner',
     langs: ['cs'],
     at: 'code',
@@ -803,8 +821,8 @@ const ROWS: readonly Row[] = [
     cls: 'lint',
     langs: ['py'],
     at: 'segment',
-    re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?:-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
-    scope: 'line',
+    re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?<line>-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
+    scope: 'leading-bare',
     allNames: true,
     label: (g) => (g['file'] !== undefined ? '# pylint: skip-file' : '# pylint: disable'),
     form: '`# pylint: disable=<check>  # <reason>`',
@@ -817,7 +835,7 @@ const ROWS: readonly Row[] = [
     langs: ['go'],
     at: 'start',
     re: /nolint(?![\w-])(?::(?<names>[\w-]+(?:,[\w-]+)*))?/,
-    scope: 'line',
+    scope: 'package-bare',
     allNames: true,
     label: '//nolint',
     form: '`//nolint:<linter> // <reason>`',
@@ -950,7 +968,7 @@ const ROWS: readonly Row[] = [
     langs: ['rb'],
     at: 'start',
     re: /rubocop[ \t]*:[ \t]*(?:disable|todo)[ \t]+(?<names>[\w/]+(?:[ \t]*,[ \t]*[\w/]+)*)/,
-    scope: 'line',
+    scope: 'leading-bare',
     allNames: true,
     label: '# rubocop:disable',
     form: '`# rubocop:disable <Cop> -- <reason>`',
@@ -963,7 +981,7 @@ const ROWS: readonly Row[] = [
     langs: ['sh'],
     at: 'start',
     re: /shellcheck[ \t]+disable=(?<names>[\w,-]+)/,
-    scope: 'line',
+    scope: 'leading-bare',
     allNames: true,
     label: '# shellcheck disable',
     form: '`# shellcheck disable=<code>  # <reason>`',
@@ -1158,13 +1176,30 @@ function sameLineReason(line: string, read: LineRead, hits: readonly Hit[], h: H
   return h.row.at === 'inside' && LETTERS.test(line.slice(Math.max(prev, h.part.start), h.start));
 }
 
-/** Whether the line above gives a reason: a whole-line comment with words that is not itself a directive — or a doubt. */
+/**
+ * The file's own comments on line 1 or 2, never a reason: Python's and Ruby's
+ * coding declaration (PEP 263's own pattern), Ruby's `frozen_string_literal`
+ * magic comment, Go's generated-code header.
+ */
+const MAGIC_COMMENTS: readonly RegExp[] = [
+  /^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+/,
+  /^#[ \t]*(?:-\*-[ \t]*)?frozen_string_literal[ \t]*:[ \t]*\w+/,
+  /^\/\/ Code generated .* DO NOT EDIT\.$/,
+];
+
+/**
+ * Whether the line above gives a reason: a whole-line comment with words that
+ * is not itself a directive, nor the file's shebang or a line-1/2 magic
+ * comment ({@link MAGIC_COMMENTS}) — or a doubt.
+ */
 function aboveReason(lines: readonly LineRead[], raw: readonly string[], idx: number, lang: SuppressionLang): boolean {
   const r = lines[idx - 1];
   const text = raw[idx - 1];
   if (r === undefined || text === undefined) return false;
   if (r.literal) return true;
   if (r.substance || r.comments.length === 0) return false;
+  if (idx === 1 && text.startsWith('#!')) return false;
+  if (idx <= 2 && MAGIC_COMMENTS.some((m) => m.test(text))) return false;
   if (hitsOn(text, r, lang).length > 0) return false;
   return r.comments.some((p) => LETTERS.test(text.slice(p.start, p.end)));
 }
@@ -1174,8 +1209,14 @@ function aboveReason(lines: readonly LineRead[], raw: readonly string[], idx: nu
  * the whole file, and whether that is a doubt (its arguments may be on the
  * next line: counted, never judged); or skip it.
  */
-function readHit(h: Hit, line: string, leading: boolean, testFile: boolean): { names: boolean; file: boolean; doubt: boolean } | null {
+function readHit(
+  h: Hit,
+  line: string,
+  where: { leading: boolean; packageDoc: boolean },
+  testFile: boolean,
+): { names: boolean; file: boolean; doubt: boolean } | null {
   const row = h.row;
+  const { leading } = where;
   const extra = row.check?.(h.groups, line.slice(h.end)) ?? {};
   if (extra.skip === true) return null;
   if (row.id === 'ts-ignore' && h.groups['kind'] === 'expect-error' && testFile) return null;
@@ -1191,7 +1232,12 @@ function readHit(h: Hit, line: string, leading: boolean, testFile: boolean): { n
   const file =
     h.groups['line'] !== undefined
       ? false
-      : h.groups['file'] !== undefined || row.scope === 'file' || row.scope === 'leading-only' || (row.scope === 'leading' && leading);
+      : h.groups['file'] !== undefined ||
+        row.scope === 'file' ||
+        row.scope === 'leading-only' ||
+        (row.scope === 'leading' && leading) ||
+        (row.scope === 'leading-bare' && leading && !names) ||
+        (row.scope === 'package-bare' && where.packageDoc && !names);
   // A block comment running on past the line: its arguments may be on the next one.
   return { names, file, doubt: !names && h.part !== null && h.part.unclosed };
 }
@@ -1278,6 +1324,14 @@ function splitLines(text: string): string[] {
   return text.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
 }
 
+/** U+FEFF, built (never written literally in a source). */
+const BOM = String.fromCharCode(0xfeff);
+
+/** `text` without the byte-order mark it starts with, if any. */
+function withoutBom(text: string): string {
+  return text.startsWith(BOM) ? text.slice(BOM.length) : text;
+}
+
 /** The index of the first line with code on it — a shebang first line aside; the lines before it are the file's leading ones. */
 function firstSubstance(lines: readonly LineRead[], raw: readonly string[]): number {
   for (let i = 0; i < lines.length; i += 1) {
@@ -1285,6 +1339,24 @@ function firstSubstance(lines: readonly LineRead[], raw: readonly string[]): num
     if (lines[i]?.substance === true) return i;
   }
   return lines.length;
+}
+
+/**
+ * The lines of the comment group a Go file's `package` clause carries — the
+ * group golangci-lint widens a `//nolint` in to the whole file: the lines
+ * directly above the first code (no blank line between), when that code is
+ * `package` at column 1 and the group's first comment opens at column 1 too
+ * (its column must be the clause's). `[from, to)`, or null. A blank line
+ * inside a block comment there ends the group early: it reads as smaller,
+ * never larger.
+ */
+function packageDocOf(lines: readonly LineRead[], raw: readonly string[], firstCode: number): { from: number; to: number } | null {
+  if (!/^package\b/.test(raw[firstCode] ?? '')) return null;
+  let from = firstCode;
+  while (from > 0 && NOT_BLANK.test(raw[from - 1] ?? '')) from -= 1;
+  const first = lines[from]?.comments[0];
+  if (first === undefined || first.start !== first.marker.length) return null;
+  return { from, to: firstCode };
 }
 
 /** Every finding and count of one change's files (see the module comment). */
@@ -1312,20 +1384,24 @@ export function detectSuppressions(files: readonly SuppressionFile[]): { finding
       counts.unread += 1;
       continue;
     }
-    const raw = splitLines(f.after);
-    const lines = readLines(f.after, lang);
+    const after = withoutBom(f.after);
+    const raw = splitLines(after);
+    const lines = readLines(after, lang);
     const leadingUntil = firstSubstance(lines, raw);
+    const doc = packageDocOf(lines, raw, leadingUntil);
     const testFile = isTestFile(f.path);
     for (const a of f.added) {
       const idx = a.line - 1;
       const text = raw[idx];
       const lexed = lines[idx];
-      const addedText = a.text.endsWith('\r') ? a.text.slice(0, -1) : a.text;
+      const crlf = a.text.endsWith('\r') ? a.text.slice(0, -1) : a.text;
+      // A byte-order mark is no part of line 1: git's diff keeps it, a read of the working tree drops it.
+      const addedText = a.line === 1 ? withoutBom(crlf) : crlf;
       // The diff and the text disagree on this line: a doubt, not read.
       if (text === undefined || lexed === undefined || text !== addedText) continue;
       const hits = hitsOn(text, lexed, lang);
       for (const h of hits) {
-        const what = readHit(h, text, idx < leadingUntil, testFile);
+        const what = readHit(h, text, { leading: idx < leadingUntil, packageDoc: doc !== null && idx >= doc.from && idx < doc.to }, testFile);
         if (what === null) continue;
         const key = keyOf(h, text);
         const left = carried.get(key) ?? 0;

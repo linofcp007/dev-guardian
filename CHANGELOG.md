@@ -29,15 +29,17 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   never `missing_tools`, never exit 2.
 - **At `--fail-on medium` or lower, a suppression a change adds can block (exit 1).** In `review_pr`, a diff-scoped
   `scan_sast` and `scan --diff-base` (which dev-spec-driven 1.33+ passes at its finish), a bare scanner directive —
-  `nosemgrep`, Bandit's `# nosec`, gosec's `#nosec`, `gitleaks:allow`, a bare `@SuppressFBWarnings` or `#pragma
-  warning disable`, naming no rule and giving no reason — is `scanner-suppression-added`, medium, and a bare
-  whole-file linter directive (`/* eslint-disable */`, `@ts-nocheck`, `# ruff: noqa`, `# mypy: ignore-errors`,
-  `# pylint: skip-file`, `phpcs:ignoreFile`) is `suppression-added`, medium. Both are new to the baseline, so they
+  `nosemgrep`, Bandit's `# nosec`, gosec's `#nosec`, `gitleaks:allow`, `#trivy:ignore:*`, a bare
+  `@SuppressFBWarnings` or `#pragma warning disable`, naming no rule and giving no reason — is
+  `scanner-suppression-added`, medium, and a bare whole-file linter directive (`/* eslint-disable */`,
+  `@ts-nocheck`, `# ruff: noqa`, `# mypy: ignore-errors`, `# pylint: skip-file`, `phpcs:ignoreFile`, and before the
+  file's first code `# pylint: disable=all`, `# rubocop:disable all`, `# shellcheck disable=all` or a `//nolint`
+  directly above `package`) is `suppression-added`, medium. Both are new to the baseline, so they
   block at `--fail-on medium`. Name the rule or give the reason next to the directive (`# nosec B602  # <reason>`,
   `nosemgrep: <rule-id> -- <reason>`) and it is only counted on the pass's reason line. At `--fail-on low` the low
   `suppression-added` findings block too: a whole-file directive naming its rules (`#![allow(…)]`,
   `@file:Suppress(…)`, `[assembly: SuppressMessage(…)]`) and a line directive naming none (`# noqa`, `//nolint`,
-  `@ts-ignore`, `// NOSONAR`). A whole-project scan reads no diff and is unchanged.
+  `@ts-ignore`, `// NOSONAR` in a JVM file). A whole-project scan reads no diff and is unchanged.
 - **An approved dev-spec-driven test pruning stays a medium.** A test file the change deletes is still a
   `guardian-test-integrity` finding when dev-spec-driven's merge summary lists it as accepted with a `pruned: …`
   reason. The router now answers the finding with that accept instead of asking why the test went, and at
@@ -59,11 +61,13 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   `gitleaks:allow`, Trivy and tfsec, zizmor, hadolint, cppcheck, SpotBugs, `#pragma warning disable` (Semgrep honours
   a blank-led `nosemgrep` inside a string too, and not `//nosemgrep` with no blank; Bandit and gosec read real
   comments only) — and those of the linters and type checkers (ESLint, TypeScript, flake8 / Ruff, mypy, Pyright,
-  Pylint, golangci-lint, staticcheck, rustc / Clippy, javac / Kotlin, SonarQube, the .NET analyzers, PHPStan, Psalm,
-  PHP_CodeSniffer, RuboCop, ShellCheck, clang-tidy, GCC / Clang, Checkov). A line inside a multi-line string,
-  template, raw string or heredoc is not read, except by the rows whose tool reads it there. Only added lines count,
-  and a directive a moved or edited line carries is not new. A directive that names its rule or gives a reason is
-  counted, never reported. No finding quotes the line: a `gitleaks:allow` line can hold the secret. Bounds: 500
+  Pylint, golangci-lint, staticcheck, rustc / Clippy, javac / Kotlin, SonarQube's `NOSONAR` (in JVM files), the .NET
+  analyzers, PHPStan, Psalm, PHP_CodeSniffer, RuboCop, ShellCheck, clang-tidy, GCC / Clang, Checkov). A line inside a
+  multi-line string, template, raw string or heredoc is not read, except by the rows whose tool reads it there. Only
+  added lines count, and a directive a moved or edited line carries is not new. A directive that names its rule or
+  gives a reason is counted, never reported (a shebang, or a coding or magic comment on line 1 or 2, is no reason).
+  No finding quotes the line, and none is keyed on it — its identity holds its rule, never the line: a
+  `gitleaks:allow` line can hold the secret. What `.guardianignore` leaves out is not reported. Bounds: 500
   changed files whose diff holds a directive's token (one `git diff -G` listing), 500 untracked files, 2 MiB a file;
   what a bound leaves unread is counted in a `coverage_notes` line. With no merge base, or a change git cannot list,
   the pass is `skipped`.
@@ -117,6 +121,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
 - **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
   `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
   run works in a throwaway database).
+- **`scan --diff-base` reported a weakened test in a path `.guardianignore` lists**, which `review_pr` and a
+  diff-scoped `scan_sast` leave out. Both diff steps now apply the file — the `--rules-ref` copy's when given.
 
 ## [3.16.1] - 2026-11-23
 

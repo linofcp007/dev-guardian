@@ -52,6 +52,8 @@
  * suppressions it adds with no reason (`testintegrity/suppressions.ts`):
  * medium or low, so nothing of it blocks at the default `--fail-on high`, and
  * what its bounds left unread is a note (`ScanStepResult.notes`), never a gap.
+ * Both steps' findings are kept to what `.guardianignore` declares — the
+ * `rulesRef` copy's when given — as `review_pr` keeps them (3.17.0).
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -59,6 +61,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { isScopedScan } from '../history/scanRoles.js';
+import { loadProjectExclusions, projectPathTest } from '../platform/guardianIgnore.js';
 import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
@@ -221,6 +224,8 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
       if (integrity !== null) steps.push(integrity.step);
       const suppressions = opts.diffBase !== undefined ? await suppressionsStep(opts.projectPath, opts.diffBase) : null;
       if (suppressions !== null) steps.push(suppressions.step);
+      // No tool handler made the diff steps' findings, so the factory's result filter never saw them.
+      const declared = integrity !== null || suppressions !== null ? await declaredFilter(opts.projectPath, ctx) : () => true;
 
       const read = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read);
@@ -228,8 +233,8 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
       const all = dedupeFindings([
         ...collectFindings(storage, opts.projectPath),
         ...wholeFiles,
-        ...(integrity?.findings ?? []),
-        ...(suppressions?.findings ?? []),
+        ...(integrity?.findings ?? []).filter(declared),
+        ...(suppressions?.findings ?? []).filter(declared),
       ]);
       // The gate keys secrets by their values, read in memory from where
       // gitleaks' reports of this run locate them (ci/secretValues.ts): a
@@ -295,6 +300,23 @@ async function suppressionsStep(projectPath: string, ref: ResolvedRef): Promise<
     },
     findings: result.findings,
   };
+}
+
+/**
+ * Whether a diff step's finding stays: the project's `.guardianignore` —
+ * the `--rules-ref` copy's when given (`ci/refConfig.ts`) — applied as the
+ * scan-tool factory applies it to `review_pr`'s and a diff-scoped
+ * `scan_sast`'s (`tools/scanToolFactory.ts`): a path it ignores that is in
+ * the project is dropped; one with no path, or no longer in the project, is
+ * kept. A file that cannot be read excludes nothing (the scans' own warning
+ * says so).
+ */
+async function declaredFilter(projectPath: string, ctx: PluginContext): Promise<(f: Finding) => boolean> {
+  const project = scannedProject(projectPath);
+  const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
+  if (exclusions === null || 'error' in exclusions) return () => true;
+  const inProject = projectPathTest(project);
+  return (f) => f.file_path === undefined || f.file_path === '' || !(exclusions.ignores(f.file_path) && inProject(f.file_path));
 }
 
 /** `SCAN_SEQUENCE`, minus `scan_dast` when the caller gave no base url. */

@@ -5394,7 +5394,7 @@ function identitiesOf(keyed) {
 }
 function sharedSecretCount(group) {
   const first = group[0];
-  if (first === void 0 || !isCredentialFinding(first) || isHistoryLocator(first)) return null;
+  if (first === void 0 || !keyedWithoutLine(first) || isHistoryLocator(first)) return null;
   const secrets = new Set(group.map((f) => f.fingerprint)).size;
   return secrets > 1 ? secrets : null;
 }
@@ -5603,6 +5603,8 @@ function contentSource(f, readable2, linesOf2) {
   const dependency = dependencyCoordinates(f);
   if (dependency !== null) return `dep
 ${dependency.name}@${dependency.version}`;
+  if (isSuppressionsFinding(f)) return `suppression
+${f.rule_id ?? ""}`;
   if (isCredentialFinding(f)) {
     const locator = isHistoryLocator(f) && f.snippet !== void 0 ? `
 ${collapse(f.snippet)}` : "";
@@ -5631,6 +5633,12 @@ function snippetText(tool54, snippet) {
 function isCredentialFinding(f) {
   if ((f.subcategory ?? "").toLowerCase() === "secret") return true;
   return CREDENTIAL_RULE.test(f.rule_id ?? "") || CREDENTIAL_RULE.test(f.subcategory ?? "");
+}
+function isSuppressionsFinding(f) {
+  return f.tool.toLowerCase() === "guardian-suppressions";
+}
+function keyedWithoutLine(f) {
+  return isSuppressionsFinding(f) || isCredentialFinding(f);
 }
 function isHistoryLocator(f) {
   return f.tool.toLowerCase() === "gitleaks" && /;commit=[0-9a-f]{7,64}$/i.test(f.snippet ?? "");
@@ -11275,7 +11283,7 @@ var require_cst = __commonJS({
     var cstScalar = require_cst_scalar();
     var cstStringify = require_cst_stringify();
     var cstVisit = require_cst_visit();
-    var BOM2 = "\uFEFF";
+    var BOM3 = "\uFEFF";
     var DOCUMENT = "";
     var FLOW_END = "";
     var SCALAR = "";
@@ -11283,7 +11291,7 @@ var require_cst = __commonJS({
     var isScalar3 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
-        case BOM2:
+        case BOM3:
           return "<BOM>";
         case DOCUMENT:
           return "<DOC>";
@@ -11297,7 +11305,7 @@ var require_cst = __commonJS({
     }
     function tokenType(source) {
       switch (source) {
-        case BOM2:
+        case BOM3:
           return "byte-order-mark";
         case DOCUMENT:
           return "doc-mode";
@@ -11359,7 +11367,7 @@ var require_cst = __commonJS({
     exports.setScalarValue = cstScalar.setScalarValue;
     exports.stringify = cstStringify.stringify;
     exports.visit = cstVisit.visit;
-    exports.BOM = BOM2;
+    exports.BOM = BOM3;
     exports.DOCUMENT = DOCUMENT;
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
@@ -23097,11 +23105,14 @@ function aboveReason(lines, raw, idx, lang) {
   if (r === void 0 || text3 === void 0) return false;
   if (r.literal) return true;
   if (r.substance || r.comments.length === 0) return false;
+  if (idx === 1 && text3.startsWith("#!")) return false;
+  if (idx <= 2 && MAGIC_COMMENTS.some((m) => m.test(text3))) return false;
   if (hitsOn(text3, r, lang).length > 0) return false;
   return r.comments.some((p) => LETTERS.test(text3.slice(p.start, p.end)));
 }
-function readHit(h, line, leading, testFile) {
+function readHit(h, line, where, testFile) {
   const row = h.row;
+  const { leading } = where;
   const extra = row.check?.(h.groups, line.slice(h.end)) ?? {};
   if (extra.skip === true) return null;
   if (row.id === "ts-ignore" && h.groups["kind"] === "expect-error" && testFile) return null;
@@ -23113,7 +23124,7 @@ function readHit(h, line, leading, testFile) {
     const listed2 = (h.groups["names"] ?? "").trim();
     names = /\w/.test(listed2) && !(row.allNames === true && /^all$/i.test(listed2));
   }
-  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading;
+  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading || row.scope === "leading-bare" && leading && !names || row.scope === "package-bare" && where.packageDoc && !names;
   return { names, file: file2, doubt: !names && h.part !== null && h.part.unclosed };
 }
 function keyOf(h, line) {
@@ -23160,12 +23171,23 @@ function finding(h, path3, line, severity, names, file2) {
 function splitLines2(text3) {
   return text3.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
 }
+function withoutBom(text3) {
+  return text3.startsWith(BOM2) ? text3.slice(BOM2.length) : text3;
+}
 function firstSubstance(lines, raw) {
   for (let i = 0; i < lines.length; i += 1) {
     if (i === 0 && (raw[0] ?? "").startsWith("#!")) continue;
     if (lines[i]?.substance === true) return i;
   }
   return lines.length;
+}
+function packageDocOf(lines, raw, firstCode) {
+  if (!/^package\b/.test(raw[firstCode] ?? "")) return null;
+  let from = firstCode;
+  while (from > 0 && NOT_BLANK.test(raw[from - 1] ?? "")) from -= 1;
+  const first = lines[from]?.comments[0];
+  if (first === void 0 || first.start !== first.marker.length) return null;
+  return { from, to: firstCode };
 }
 function detectSuppressions(files) {
   const counts = { files: 0, added: 0, reported: 0, named: 0, reasoned: 0, carried: 0, unread: 0 };
@@ -23190,19 +23212,22 @@ function detectSuppressions(files) {
       counts.unread += 1;
       continue;
     }
-    const raw = splitLines2(f.after);
-    const lines = readLines(f.after, lang);
+    const after2 = withoutBom(f.after);
+    const raw = splitLines2(after2);
+    const lines = readLines(after2, lang);
     const leadingUntil = firstSubstance(lines, raw);
+    const doc = packageDocOf(lines, raw, leadingUntil);
     const testFile = isTestFile(f.path);
     for (const a of f.added) {
       const idx = a.line - 1;
       const text3 = raw[idx];
       const lexed = lines[idx];
-      const addedText = a.text.endsWith("\r") ? a.text.slice(0, -1) : a.text;
+      const crlf = a.text.endsWith("\r") ? a.text.slice(0, -1) : a.text;
+      const addedText = a.line === 1 ? withoutBom(crlf) : crlf;
       if (text3 === void 0 || lexed === void 0 || text3 !== addedText) continue;
       const hits = hitsOn(text3, lexed, lang);
       for (const h of hits) {
-        const what = readHit(h, text3, idx < leadingUntil, testFile);
+        const what = readHit(h, text3, { leading: idx < leadingUntil, packageDoc: doc !== null && idx >= doc.from && idx < doc.to }, testFile);
         if (what === null) continue;
         const key = keyOf(h, text3);
         const left = carried.get(key) ?? 0;
@@ -23225,7 +23250,7 @@ function detectSuppressions(files) {
   }
   return { findings, counts };
 }
-var SUPPRESSIONS_TOOL, C_BLOCK, BACKTICK, LEXERS, CODE, HEREDOC, RUST_RAW, RUST_CHAR, CPP_RAW, WORD_BEFORE, SPECIAL, NOT_BLANK, TAB, SP, ALL_LANGS, JS, IAC, RULE_LIST, CODES, ROWS, SUPPRESSION_ROWS, PICKAXE_ERE, PICKAXE_JS, COMPILED, LETTERS;
+var SUPPRESSIONS_TOOL, C_BLOCK, BACKTICK, LEXERS, CODE, HEREDOC, RUST_RAW, RUST_CHAR, CPP_RAW, WORD_BEFORE, SPECIAL, NOT_BLANK, TAB, SP, ALL_LANGS, JS, IAC, RULE_LIST, CODES, SEMGREP_SHORT, GITLEAKS_ALLOW, ROWS, SUPPRESSION_ROWS, PICKAXE_ERE, PICKAXE_JS, COMPILED, LETTERS, MAGIC_COMMENTS, BOM2;
 var init_suppressions = __esm({
   "src/testintegrity/suppressions.ts"() {
     "use strict";
@@ -23271,6 +23296,8 @@ var init_suppressions = __esm({
     IAC = ["tf", "yaml", "docker"];
     RULE_LIST = String.raw`[ \t]+[@\w./-]+(?:[ \t]*,[ \t]*[@\w./-]+)*`;
     CODES = String.raw`[a-z]+\d+(?:[\s,]+[a-z]+\d+)*`;
+    SEMGREP_SHORT = ["no", "sem"].join("");
+    GITLEAKS_ALLOW = ["gitleaks", "allow"].join(":");
     ROWS = [
       // ---- the scanners dev-guardian runs: hidden from its own scans and gate
       {
@@ -23279,9 +23306,9 @@ var init_suppressions = __esm({
         cls: "scanner",
         langs: ALL_LANGS,
         at: "line",
-        // Semgrep's own reading: a blank, then nosem or nosemgrep in any case; `:` or `=` and ids name the rules (read
+        // Semgrep's own reading: a blank, then `nosem` or `nosemgrep` in any case; `:` or `=` and ids name the rules (read
         // here up to a `--`, so the reason after the documented `nosemgrep: <id> -- <reason>` stays one).
-        re: / nosem(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?/i,
+        re: new RegExp(String.raw` ${SEMGREP_SHORT}(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?`, "i"),
         scope: "line",
         label: "nosemgrep",
         form: "`nosemgrep: <rule-id> -- <reason>`",
@@ -23322,13 +23349,13 @@ var init_suppressions = __esm({
         cls: "scanner",
         langs: ALL_LANGS,
         at: "line",
-        re: /gitleaks:allow/,
-        // gitleaks reads its own directive anywhere on the line: this is its name, with no secret
+        // gitleaks reads its allow directive anywhere on the line: this is its name, with no secret.
+        re: new RegExp(GITLEAKS_ALLOW),
         scope: "line",
-        label: "gitleaks:allow",
-        form: "`gitleaks:allow` and the reason after it",
+        label: GITLEAKS_ALLOW,
+        form: `${BACKTICK}${GITLEAKS_ALLOW}${BACKTICK} and the reason after it`,
         hides: "gitleaks' findings on this line",
-        tokens: ["gitleaks:allow"]
+        tokens: [GITLEAKS_ALLOW]
       },
       {
         id: "trivy-ignore",
@@ -23338,10 +23365,11 @@ var init_suppressions = __esm({
         at: "start",
         re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)/,
         scope: "line",
-        named: true,
+        // `*` names no check: Trivy then reports none here.
+        check: (g) => ({ names: g["names"] !== "*" }),
         label: "trivy:ignore",
         form: "`trivy:ignore:<id>` and a comment saying why",
-        hides: "Trivy's finding of that check here",
+        hides: "Trivy's findings of every check here",
         tokens: ["trivy:ignore:", "tfsec:ignore:"]
       },
       {
@@ -23404,7 +23432,7 @@ var init_suppressions = __esm({
       },
       {
         id: "cs-pragma-warning",
-        reader: "the C# compiler",
+        reader: "C# compiler",
         cls: "scanner",
         langs: ["cs"],
         at: "code",
@@ -23535,8 +23563,8 @@ var init_suppressions = __esm({
         cls: "lint",
         langs: ["py"],
         at: "segment",
-        re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?:-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
-        scope: "line",
+        re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?<line>-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
+        scope: "leading-bare",
         allNames: true,
         label: (g) => g["file"] !== void 0 ? "# pylint: skip-file" : "# pylint: disable",
         form: "`# pylint: disable=<check>  # <reason>`",
@@ -23549,7 +23577,7 @@ var init_suppressions = __esm({
         langs: ["go"],
         at: "start",
         re: /nolint(?![\w-])(?::(?<names>[\w-]+(?:,[\w-]+)*))?/,
-        scope: "line",
+        scope: "package-bare",
         allNames: true,
         label: "//nolint",
         form: "`//nolint:<linter> // <reason>`",
@@ -23682,7 +23710,7 @@ var init_suppressions = __esm({
         langs: ["rb"],
         at: "start",
         re: /rubocop[ \t]*:[ \t]*(?:disable|todo)[ \t]+(?<names>[\w/]+(?:[ \t]*,[ \t]*[\w/]+)*)/,
-        scope: "line",
+        scope: "leading-bare",
         allNames: true,
         label: "# rubocop:disable",
         form: "`# rubocop:disable <Cop> -- <reason>`",
@@ -23695,7 +23723,7 @@ var init_suppressions = __esm({
         langs: ["sh"],
         at: "start",
         re: /shellcheck[ \t]+disable=(?<names>[\w,-]+)/,
-        scope: "line",
+        scope: "leading-bare",
         allNames: true,
         label: "# shellcheck disable",
         form: "`# shellcheck disable=<code>  # <reason>`",
@@ -23758,6 +23786,12 @@ var init_suppressions = __esm({
       ])
     );
     LETTERS = new RegExp("\\p{L}{3}", "u");
+    MAGIC_COMMENTS = [
+      /^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+/,
+      /^#[ \t]*(?:-\*-[ \t]*)?frozen_string_literal[ \t]*:[ \t]*\w+/,
+      /^\/\/ Code generated .* DO NOT EDIT\.$/
+    ];
+    BOM2 = String.fromCharCode(65279);
   }
 });
 
@@ -56174,8 +56208,8 @@ var init_header = __esm({
 // src/configdrift/hash.ts
 import { createHash as createHash9 } from "node:crypto";
 function canonicaliseConfig(text3) {
-  const withoutBom = text3.charCodeAt(0) === 65279 ? text3.slice(1) : text3;
-  const lf = withoutBom.replace(/\r\n?/g, "\n");
+  const withoutBom2 = text3.charCodeAt(0) === 65279 ? text3.slice(1) : text3;
+  const lf = withoutBom2.replace(/\r\n?/g, "\n");
   return stripProvenanceHeader(lf).replace(/\n+$/, "");
 }
 function hashConfigText(text3) {
@@ -123453,14 +123487,15 @@ async function runScans(opts) {
       if (integrity !== null) steps.push(integrity.step);
       const suppressions = opts.diffBase !== void 0 ? await suppressionsStep(opts.projectPath, opts.diffBase) : null;
       if (suppressions !== null) steps.push(suppressions.step);
+      const declared = integrity !== null || suppressions !== null ? await declaredFilter(opts.projectPath, ctx) : () => true;
       const read3 = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read3);
       const wholeFiles = read3.filter((f) => !accepted.has(f));
       const all = dedupeFindings([
         ...collectFindings(storage, opts.projectPath),
         ...wholeFiles,
-        ...integrity?.findings ?? [],
-        ...suppressions?.findings ?? []
+        ...(integrity?.findings ?? []).filter(declared),
+        ...(suppressions?.findings ?? []).filter(declared)
       ]);
       await rememberSecretValues(scannedProject(opts.projectPath), all, {
         reportDirs: reportDirsOf(storage, opts.projectPath)
@@ -123507,6 +123542,13 @@ async function suppressionsStep(projectPath, ref) {
     },
     findings: result.findings
   };
+}
+async function declaredFilter(projectPath, ctx) {
+  const project = scannedProject(projectPath);
+  const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
+  if (exclusions === null || "error" in exclusions) return () => true;
+  const inProject2 = projectPathTest(project);
+  return (f) => f.file_path === void 0 || f.file_path === "" || !(exclusions.ignores(f.file_path) && inProject2(f.file_path));
 }
 function buildSequence(opts) {
   if (opts.baseUrl !== void 0) return SCAN_SEQUENCE;
@@ -123651,6 +123693,7 @@ var init_runScans = __esm({
   "src/ci/runScans.ts"() {
     "use strict";
     init_scanRoles();
+    init_guardianIgnore();
     init_projectPath();
     init_scriptsDir();
     init_findingMerge();

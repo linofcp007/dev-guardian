@@ -239,6 +239,36 @@ describe('runSuppressionCheck: moves, scope, the null rule', () => {
     const r = await runSuppressionCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true }, member: (p) => p === 'src/a.ts' });
     expect(r?.findings.map((f) => f.file_path)).toEqual(['src/a.ts']);
   });
+
+  // Review 1 of 3.17.0, R1-DG-D-7: a byte-order mark before line 1. git's -U0 diff keeps it on the added line; the
+  // worktree's text is read with it stripped, a commit's (git show) with it kept — and the C# pragma's grammar is
+  // anchored at the line's start. Each target reads both files' first lines.
+  for (const target of ['worktree', 'commit'] as const) {
+    it(`a byte-order mark before line 1, ${target} target: the line is read`, async () => {
+      const BOM = String.fromCharCode(0xfeff);
+      const dir = newRepo('suppressions-bom-');
+      write(dir, 'src/gen.ts', 'export const x = 1;\n');
+      write(dir, 'src/A.cs', 'class A {}\n');
+      branch(dir);
+      write(dir, 'src/gen.ts', `${BOM}${caseText(BLANKET)}export const x = 1;\n`);
+      write(dir, 'src/A.cs', `${BOM}${caseText(suppressionCase('C# pragma: bare'))}class A {}\n`);
+      let head: string | undefined;
+      if (target === 'commit') {
+        git(dir, 'add', '-A');
+        git(dir, 'commit', '-qm', 'generated');
+        head = git(dir, 'rev-parse', 'HEAD');
+        git(dir, 'checkout', '-q', 'main');
+      }
+      const r = await runSuppressionCheck(dir, {
+        base: 'main',
+        ...(head !== undefined ? { head, target: { kind: 'commit', sha: head } } : { target: { kind: 'worktree', untracked: true } }),
+      });
+      expect((r?.findings ?? []).map((f) => `${f.rule_id ?? ''} ${f.file_path ?? ''}:${String(f.line_start)} ${f.severity}`).sort()).toEqual([
+        'scanner-suppression-added src/A.cs:1 medium',
+        'suppression-added src/gen.ts:1 medium',
+      ]);
+    });
+  }
 });
 
 describe('runSuppressionCheck: its git calls, counted', () => {

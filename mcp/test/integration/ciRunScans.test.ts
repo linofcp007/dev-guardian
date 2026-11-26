@@ -7,7 +7,7 @@
  * — never scanning itself, so none of it needs Semgrep installed.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { evaluateGate } from '../../src/ci/gate.js';
@@ -17,6 +17,7 @@ import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { Finding, ToolResult } from '../../src/types.js';
+import { DELETED_DIR, IGNORED_BASE, ignoredChange, REPORTED_BY_BOTH, rowOf } from '../helpers/ignoredChange.js';
 import { suppressionCase } from '../helpers/suppressionCases.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
@@ -742,5 +743,51 @@ describe('runScans', () => {
     expect(verdict.coverageNotes).toEqual(noted?.notes);
     expect(verdict.coverageGaps).toEqual([]);
     expect(verdict.exitCode).toBe(CI_EXIT.PASS);
+  });
+
+  // Review 1 of 3.17.0, R1-DG-D-1: the project's .guardianignore applies to both diff steps, as review_pr and a
+  // diff-scoped scan_sast apply it (the factory's result filter) — the same change reports the same in both
+  // (reviewPr.test.ts holds review_pr's side). With --rules-ref, the ref's copy decides: a change cannot leave
+  // its own suppression out by adding its directory to the file.
+  it("with diffBase: a path .guardianignore leaves out is reported by neither diff step — the ref's copy under rulesRef", async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const write = (rel: string, text: string): void => {
+      const abs = join(projectPath, ...rel.split('/'));
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, text);
+    };
+    git('init', '-q');
+    for (const [rel, text] of Object.entries(IGNORED_BASE)) write(rel, text);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    for (const [rel, text] of Object.entries(ignoredChange())) write(rel, text);
+    rmSync(join(projectPath, DELETED_DIR), { recursive: true, force: true });
+    const of = (r: Awaited<ReturnType<typeof runScans>>, tool: string): string[] =>
+      r.findings
+        .filter((f) => f.tool === tool)
+        .map(rowOf)
+        .sort();
+
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(of(result, 'guardian-suppressions')).toEqual(REPORTED_BY_BOTH.suppressions);
+    expect(of(result, 'guardian-test-integrity')).toEqual(REPORTED_BY_BOTH.integrity);
+    const atMedium = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(atMedium.blocking.map((f) => f.file_path ?? '').sort()).toEqual(['legacy/old.test.js', 'src/b.py', 'src/c.test.js']);
+
+    // The change adds its own directory to .guardianignore: read from the tree, src/ is left out; read from the
+    // base (--rules-ref), it is reported.
+    write('.guardianignore', `${IGNORED_BASE['.guardianignore'] ?? ''}src/\n`);
+    const fromTree = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(of(fromTree, 'guardian-suppressions')).toEqual([]);
+    expect(of(fromTree, 'guardian-test-integrity')).toEqual(['test-file-deleted legacy/old.test.js:- medium']);
+    const fromRef = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' }, rulesRef: { ref: 'BASE', commit, prefix: '' } });
+    expect(of(fromRef, 'guardian-suppressions')).toEqual(REPORTED_BY_BOTH.suppressions);
+    expect(of(fromRef, 'guardian-test-integrity')).toEqual(REPORTED_BY_BOTH.integrity);
   });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);
