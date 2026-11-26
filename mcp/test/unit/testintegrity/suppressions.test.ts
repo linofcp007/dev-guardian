@@ -187,6 +187,25 @@ describe('the findings', () => {
     expect(r.counts).toMatchObject({ carried: 1, added: 0, files: 2, unread: 0 });
   });
 
+  // Review 1 of 3.17.0, R1-DG-D-7: a byte-order mark opening the file is no part of line 1 — git's diff keeps it, a
+  // read of the working tree drops it (platform/projectFs.ts), and a grammar anchored at the line's start (C#'s
+  // #pragma) misses it. Stripped from line 1 on both sides before they are compared; on any other line it is the
+  // line's own text.
+  it('a byte-order mark before line 1 is no part of it, on either side', () => {
+    const BOM = String.fromCharCode(0xfeff);
+    const blanket = byName('ESLint: the whole file, every rule').lines[0] ?? '';
+    const pragma = byName('C# pragma: bare').lines[0] ?? '';
+    const severities = (path: string, line: number, added: string, after: string): string[] =>
+      detectSuppressions([{ path, added: [{ line, text: added }], removed: [], after }]).findings.map((f) => `${String(f.line_start)} ${f.severity}`);
+    // The diff keeps it, the text does not (the working tree).
+    expect(severities('src/a.ts', 1, `${BOM}${blanket}`, `${blanket}\n`)).toEqual(['1 medium']);
+    // Both keep it (git show: a commit, the index), the anchored grammar included.
+    expect(severities('src/A.cs', 1, `${BOM}${pragma}`, `${BOM}${pragma}\n`)).toEqual(['1 medium']);
+    expect(severities('src/a.ts', 1, `${BOM}${blanket}`, `${BOM}${blanket}\n`)).toEqual(['1 medium']);
+    // On line 2 it is the line's own: kept on both sides, read as they are.
+    expect(severities('src/a.ts', 2, `${BOM}${blanket}`, `export {};\n${BOM}${blanket}\n`)).toEqual(['2 medium']);
+  });
+
   it('a CRLF file reads as an LF one', () => {
     const c = byName('noqa: every code');
     const r = detectSuppressions([{ ...fileOf(c), after: `${c.lines.join('\r\n')}\r\n` }]);
