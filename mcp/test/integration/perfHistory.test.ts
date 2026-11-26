@@ -319,6 +319,39 @@ describe('perf_check history: k6', () => {
     expect(verdictOf(r.history, 'k6.error_rate_pct')).toBe('new');
   });
 
+  it('H-2: an arrival-rate run that allocated more VUs (vus_max min 10, max 23) stays in its series and reads regressed', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(
+      join(project, 'load.js'),
+      'export const options = { scenarios: { s: { executor: "constant-arrival-rate", rate: 100, preAllocatedVUs: 10, maxVUs: 100 } } };\n',
+      'utf8',
+    );
+    for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
+    const slow = await k6Summary(s, project, legacy(45, 0, vus(10, 23)));
+    expect(slow.history?.series).toMatch(/ · 10 VUs$/);
+    expect(verdictOf(slow.history, 'k6.latency_p95_ms')).toBe('regressed');
+    // Jitter in what k6 added (11 vs 23) is no new load either.
+    expect((await k6Summary(s, project, legacy(20, 0, vus(10, 11)))).history?.series).toBe(slow.history?.series);
+  });
+
+  it('H-2 still-pass: another pre-allocation (min 10 vs 100) is another series', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 23)));
+    const bigger = await k6Summary(s, project, legacy(45, 0, vus(100, 100)));
+    expect(bigger.history?.series).toMatch(/ · 100 VUs$/);
+    expect(verdictOf(bigger.history, 'k6.latency_p95_ms')).toBe('new');
+  });
+
+  it('H-2: a vus_max with no min is keyed by its max', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    expect((await k6Summary(s, project, legacy(20, 0, { max: 10 }))).history?.series).toMatch(/ · 10 VUs$/);
+  });
+
   it('a run whose summary holds no metric is not kept, and says so', async () => {
     const s = freshPlugin();
     const project = projectDir('perf-k6-');
