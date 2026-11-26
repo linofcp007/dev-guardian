@@ -214,6 +214,22 @@ describe('the findings', () => {
     expect(severities('src/a.ts', 2, `${BOM}${blanket}`, `export {};\n${BOM}${blanket}\n`)).toEqual(['2 medium']);
   });
 
+  // Review 2 of 3.17.0, R2-DG-D-2: the removed side is read the same way. A change that only strips the mark from
+  // a pragma's line 1 adds nothing — the removed line, read without its mark, carries the added one; a removed line
+  // other than 1 keeps a U+FEFF as its own text, as an added one does (the anchored grammar then reads no pragma).
+  it('a byte-order mark before a removed line 1 is no part of it either', () => {
+    const BOM = String.fromCharCode(0xfeff);
+    const pragma = byName('C# pragma: bare').lines[0] ?? '';
+    const change = (line: number, after: string): ReturnType<typeof detectSuppressions> =>
+      detectSuppressions([{ path: 'src/A.cs', added: [{ line, text: pragma }], removed: [{ line, text: `${BOM}${pragma}` }], after }]);
+    const stripped = change(1, `${pragma}\nclass A {}\n`);
+    expect(stripped.findings).toEqual([]);
+    expect(stripped.counts).toMatchObject({ carried: 1, added: 0 });
+    const inside = change(3, `class A {}\n// x\n${pragma}\n`);
+    expect(inside.findings.map((f) => `${String(f.line_start)} ${f.severity}`)).toEqual(['3 medium']);
+    expect(inside.counts.carried).toBe(0);
+  });
+
   it('a CRLF file reads as an LF one', () => {
     const c = byName('noqa: every code');
     const r = detectSuppressions([{ ...fileOf(c), after: `${c.lines.join('\r\n')}\r\n` }]);

@@ -268,6 +268,32 @@ describe('runSuppressionCheck: moves, scope, the null rule', () => {
         'suppression-added src/gen.ts:1 medium',
       ]);
     });
+
+    // Review 2 of 3.17.0, R2-DG-D-2: the removed side too — a change that only strips the mark from a file whose
+    // line 1 already held a directive adds none. git's diff keeps the mark on the removed line, and the C# pragma's
+    // grammar is anchored at the line's start: read with the mark, the removed pragma carried nothing.
+    it(`a byte-order mark removed from line 1, ${target} target: nothing is added`, async () => {
+      const BOM = String.fromCharCode(0xfeff);
+      const dir = newRepo('suppressions-bom-removed-');
+      write(dir, 'src/A.cs', `${BOM}${caseText(suppressionCase('C# pragma: bare'))}class A {}\n`);
+      write(dir, 'src/gen.ts', `${BOM}${caseText(BLANKET)}export const x = 1;\n`);
+      branch(dir);
+      write(dir, 'src/A.cs', `${caseText(suppressionCase('C# pragma: bare'))}class A {}\n`);
+      write(dir, 'src/gen.ts', `${caseText(BLANKET)}export const x = 1;\n`);
+      let head: string | undefined;
+      if (target === 'commit') {
+        git(dir, 'add', '-A');
+        git(dir, 'commit', '-qm', 'no mark');
+        head = git(dir, 'rev-parse', 'HEAD');
+        git(dir, 'checkout', '-q', 'main');
+      }
+      const r = await runSuppressionCheck(dir, {
+        base: 'main',
+        ...(head !== undefined ? { head, target: { kind: 'commit', sha: head } } : { target: { kind: 'worktree', untracked: true } }),
+      });
+      expect(r?.findings).toEqual([]);
+      expect(r?.toolRun.reason).toMatch(/no suppression added; 2 kept or moved from a removed line \(not new\)/);
+    });
   }
 });
 
