@@ -106,6 +106,12 @@ its own `tools_run` name (`history/runNames.ts`):
   a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
   `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
 
+Neither pass reads `.guardianignore`: `review_pr` and `scan_sast` hand their findings to the scan-tool factory, whose
+result filter drops a path the file ignores; `ci/runScans.ts#declaredFilter` applies the same loader and rule to the
+CLI's two diff steps (the `--rules-ref` copy's file when given). A suppressions-pass finding is keyed like a
+credential (`fingerprint/findingIdentity.ts#keyedWithoutLine`: `suppression\n<rule id>`, the occurrence and the
+group's count, never the line — a bare gitleaks allow line holds the secret).
+
 The suppressions table (`ROWS`) is closed: each row is read the way its tool reads it (Semgrep anywhere on the line,
 strings included; Bandit and gosec in comments only), and a line inside a multi-line literal is not read — the
 lexer (`readLines`) carries a block comment, a string that runs on, a heredoc from line to line. Every row's match
@@ -114,10 +120,20 @@ V8 alike) is the one `git diff -G` listing, so a file whose diff holds no token 
 case in `test/fixtures/suppressions/examples.json` (bare and reasoned), a token its match always holds, and a
 timing row (`suppressionsTiming.test.ts` loops over every row): a row's arguments grammar is the likeliest place
 for a superlinear regex. The cases live under `test/fixtures/` because the pass never reads it: a test source that
-held a bare `nosemgrep` in a string would be a real Semgrep suppression on dev-guardian's own branches. The bundles
-in `mcp/dist/` are read like any file — `engine.js` is past the 2 MiB bound (counted in a note when its diff holds a
-token), and the directives a bundle copies from its sources (all four of today's name their rule) are counted, never
-reported.
+held a bare `nosemgrep` in a string would be a real Semgrep suppression on dev-guardian's own branches. For the same
+reason the table builds the two directives read on a whole line (gitleaks' allow, Semgrep's blank-led one) instead
+of spelling them, and `suppressions.test.ts` holds every file of `mcp/src` to no token of those rows and no finding.
+A tracked file git diffs as binary or `-diff` — the bundles in `mcp/dist/` (`.gitattributes`) — is never read: `git
+diff -G` does not search it, so it is not listed, and no note says so; an untracked one is read from disk like any.
+
+A row's scope says when a directive covers the whole file. Beyond `file`, the leading forms are certain by syntax
+only before the file's first code: `leading` (mypy's `# type: ignore`), `leading-only` (`@ts-nocheck`),
+`leading-bare` (own-line Pylint, RuboCop and ShellCheck forms naming no rule — their region runs on to the file's
+end) and `package-bare` (a bare `//nolint` in the comment group directly above `package`, at its column, which
+golangci-lint widens to the file: `packageDocOf`). Anywhere else, or naming its rules, such a form reads as its
+line's. The line above a directive is no reason when it is the shebang or a line-1/2 coding or magic comment
+(`MAGIC_COMMENTS`), and a byte-order mark is stripped from line 1 on both sides before the diff and the text are
+compared (git's diff keeps it, `readProjectText` drops it).
 
 ## The metrics module
 
