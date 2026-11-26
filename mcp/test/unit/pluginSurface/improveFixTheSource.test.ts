@@ -128,6 +128,19 @@ describe('/guardian-improve: Fix the source', () => {
     expect(STEP).toMatch(/Never while occurrences remain: the seed's Current → Target gets `<rule_id>: N → 0`, its last task adds the rule/);
   });
 
+  // Review 1 (R1-DG-IZ-1): step 6 changed a seed step 4 had already handed off, and never said where the change
+  // went — so the rule never landed, or landed without its terms.
+  it('writes the changed seed where step 4 put it: the backlog note replaced, and the spec file once written', () => {
+    expect(STEP).toMatch(
+      /its last task adds the rule — `severity: WARNING`.+ Write that change where step 4 put the seed: the unit's backlog note replaced \(`rm`, then `add`\) with `<rule_id>: N → 0` and the rule's terms, and `requirements\.md` or `docs\/improvement-specs\/<name>\.md` if already written\./,
+    );
+    // Where step 4 put it: the note replaced by rm then add, requirements.md, and the file without dev-spec-driven.
+    const handoff = flat(STEPS.find((s) => s.title.startsWith('Hand off'))?.body ?? '');
+    expect(handoff).toMatch(/`spec_roadmap_edit \{ kind: "backlog", action: "rm", name: "<name>" \}`, then the `add` above/);
+    expect(handoff).toContain('into `requirements.md` yourself');
+    expect(handoff).toContain('write the seeds to `docs/improvement-specs/<name>.md`');
+  });
+
   it('only for the shapes no gate meets; says what a rule adds, never that no change meets bug_hunt', () => {
     expect(STEP).toMatch(/one syntactic shape of `bug_hunt`, `quality_check` or `llm_scan` \(SAST, secrets, deps, IaC have rules\)/);
     expect(STEP).toMatch(/in `\.semgrep\.yml` it adds `review_pr`, pre-commit, the CLI gate and CI/);
