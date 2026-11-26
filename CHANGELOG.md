@@ -138,7 +138,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   `value` too, so the error rate is in `summary` and judged in `history`.
 - **`set_baseline { scan_type }` baselined a scan of a type that is never a project's baseline** — an SBOM, an
   `audit_executive` roll-up, a `review_pr` diff, and now a `perf` run. It refuses one, as `set_baseline { scan_id }`
-  already did, and both refusals say "… is a `<type>` scan, which is never a project's baseline".
+  already did. The refusal reads, by `scan_id`, "Scan '<id>' is a `<type>` scan, which is never a project's
+  baseline." and, by `scan_type`, "A `<type>` scan is never a project's baseline." (an before a vowel in both),
+  each followed by "Baseline a scan of a finding-producing type."
 - **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
   `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
   run works in a throwaway database).

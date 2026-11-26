@@ -24178,6 +24178,10 @@ var init_gate = __esm({
 });
 
 // src/report/sarif.ts
+function ruleName(f) {
+  const name = f.subcategory ?? f.category;
+  return f.tool === SUPPRESSIONS_TOOL ? name.split(":")[0] ?? name : name;
+}
 function toSarif(findings, opts = {}) {
   const suppressed = opts.suppressed ?? [];
   const rulesById = /* @__PURE__ */ new Map();
@@ -24185,7 +24189,7 @@ function toSarif(findings, opts = {}) {
     const id = f.rule_id ?? `${f.tool}/${f.category}`;
     if (!rulesById.has(id)) {
       const rule2 = { id };
-      rule2.name = f.subcategory ?? f.category;
+      rule2.name = ruleName(f);
       rule2.shortDescription = { text: f.title };
       if (f.message) rule2.fullDescription = { text: f.message };
       rule2.defaultConfiguration = { level: levelFor(f.severity) };
@@ -24271,6 +24275,7 @@ var init_sarif = __esm({
     init_taxonomy();
     init_version();
     init_secretFindingRedaction();
+    init_suppressions();
     DEFAULT_TOOL_VERSION = resolveVersion();
     SARIF_LEVEL_BY_SEVERITY = {
       critical: "error",
