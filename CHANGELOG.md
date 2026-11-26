@@ -28,7 +28,7 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   gap: a bound it reaches is a `coverage_notes` line (not gating), and a change git cannot list skips the pass —
   never `missing_tools`, never exit 2.
 - **At `--fail-on medium` or lower, a suppression a change adds can block (exit 1).** In `review_pr`, a diff-scoped
-  `scan_sast` and `scan --diff-base` (which dev-spec-driven 1.33+ passes at its finish), a bare scanner directive —
+  `scan_sast` and `scan --diff-base` (which dev-spec-driven 1.33+'s `finish --run` passes), a bare scanner directive —
   `nosemgrep`, Bandit's `# nosec`, gosec's `#nosec`, `gitleaks:allow`, `#trivy:ignore:*`, a bare
   `@SuppressFBWarnings` or `#pragma warning disable`, naming no rule and giving no reason — is
   `scanner-suppression-added`, medium, and a bare whole-file linter directive (`/* eslint-disable */`,
@@ -49,8 +49,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   `guardian://scans/history` leaves it out (its 50 most recent scans are every other type, as before), but it can be
   what `guardian://scans/latest` and `health_status.last_scan` show.
 - **The verdict JSON can carry `coverage_notes` lines that start `guardian-suppressions: `** — the files the pass did
-  not read — with the remedy "Nothing to do for the gate (not gating)…", and `tools_run` names `guardian-suppressions`
-  when a changed file holds a suppression's token.
+  not read — each also in `coverage_gap_details` with `gating: false` and the remedy "Nothing to do for the gate (not
+  gating)…". `review_pr` and a diff-scoped `scan_sast` list the pass in `tools_run` when a changed file holds a
+  suppression's token, its `reason` counting what was added and what was not read.
 
 ### Added
 
@@ -97,20 +98,28 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   line only). GitLab and Bitbucket refuse the flag; docs/ci.md says how to compare there by hand. Without the flag the
   generated pipeline is unchanged.
 - **`/guardian-improve` ends with "Fix the source"** for the units you pick: at most one guidance line per unit — in
-  AGENTS.md or CLAUDE.md, or `.specs/steering/tech.md` / `structure.md` in a dev-spec-driven project — written in
-  the model's words, never a finding's text, and keyed `<!-- dev-guardian: <rule_id> -->` (not proposed again when a
-  file already holds the key, dev-spec-driven's lesson comments included); and a seed for a Semgrep rule that lands
-  only once the occurrences are fixed (`<rule_id>: N → 0`), never while they would block every commit. Nothing is
-  written without your yes. Its re-measure step names `perf_check`'s `history` for a performance unit.
+  AGENTS.md or CLAUDE.md, or a `.specs/steering/tech.md` / `structure.md` without front matter in a dev-spec-driven
+  project — written in the model's words, never a finding's text, and keyed `<!-- dev-guardian: <rule_id> -->` (not
+  proposed again when a file already holds the key, dev-spec-driven's lesson comments included); and a seed for a
+  Semgrep rule that lands only once the occurrences are fixed (`<rule_id>: N → 0` and the rule's terms, written
+  where the seed went: its backlog note replaced, and its spec once written), never while they would block every
+  commit. Nothing is written without your yes. Its re-measure step names `perf_check`'s `history` for a performance
+  unit.
 
 ### Changed
 
 - **Every suppression example names its id and gives a reason**: `# nosec <id>  # <reason>` in docs/ci.md,
   docs/hooks.md, the router's dev-spec-driven reference, the rules file every host reads, the question the shell guard
   asks before an agent's `baseline update` and the message `baseline update` prints, instead of a bare `# nosec` —
-  the form the new pass reports.
-- **docs/ci.md says dev-spec-driven 1.33+ passes `--diff-base` at its finish**, so the weakened-tests and suppressions
-  checks run there too.
+  the form the new pass reports; and `// nosemgrep: <rule> -- <reason>` in the bug packs' coverage reference, which
+  said a bare `// nosemgrep` "with a reason". A test holds every example the prose offers to its rule and reason.
+- **docs/ci.md says dev-spec-driven 1.33+'s `finish --run` passes `--diff-base`**, so the weakened-tests and
+  suppressions checks run there too — a check reported over MCP gets no base, and neither runs in it.
+- **What dev-spec-driven's launcher forwards** — `scan`, `baseline`, `status` and `help`; `metrics` and the rest run
+  from dev-guardian's own CLI — in docs/ci.md, the router's dev-spec-driven reference and the rules file every host
+  reads, which said it forwards every argument. docs/ci.md's `metrics` section says how a name printed on both
+  streams reads (last printed here, stderr's in dev-spec-driven), and the router's test-pruning line says what to do
+  when no `pruned: …` accept is listed (dev-spec-driven records one only with `guard: tests`): ask why the test went.
 - **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** says when the
   50 most recent scans held other types; it and `/guardian-incident` say `perf_check`'s runs are not among them.
 

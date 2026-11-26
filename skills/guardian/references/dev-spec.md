@@ -17,7 +17,8 @@ dev-spec-driven 1.29 or later can run dev-guardian's gate as a project check: `s
 session, or `node "<dev-spec-driven plugin root>/cli/dev-spec.js" init --guardian` in a terminal. It runs
 `scan --fail-on high` against the committed `.guardian/baseline.json`: only a finding new to the baseline, at
 `high` or above, blocks the finish, and exit 2 is an incomplete scan — never a pass. From that project the
-runnable line is `node .specs/guardian.cjs <arguments>` (the launcher forwards every argument); elsewhere,
+runnable line is `node .specs/guardian.cjs <arguments>` for `scan`, `baseline`, `status` and `help` (the
+launcher forwards no other: `metrics` and the rest exit 3 there); elsewhere, and for those,
 `node "<plugin root>/cli/dev-guardian.mjs" <arguments>` — a plugin install puts no `dev-guardian` on `PATH`.
 
 Record the baseline on the base branch, before the feature's code, when the check is turned on:
@@ -32,5 +33,6 @@ accepts every current finding, the feature's own included. Never force the finis
 
 **An approved test pruning.** A test-integrity finding on a test file that dev-spec-driven's merge summary
 lists as accepted with a `pruned: …` reason is answered by that accept: say so beside the finding instead of
-asking why the test went. It stays a medium finding — below the default `--fail-on high`; at
-`--fail-on medium` it blocks like any other medium.
+asking why the test went. With no accept listed (dev-spec-driven records one only with `guard: tests`), ask the
+user why the test went: a pruning they approved in the feature's test-plan re-approval answers it. Either way it
+stays a medium finding — below the default `--fail-on high`; at `--fail-on medium` it blocks like any other medium.

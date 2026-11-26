@@ -102,11 +102,16 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   `toolReach.test.ts`).
 - A CLI line the model gives the user is runnable: `node "<plugin root>/cli/dev-guardian.mjs" …`
   (`${CLAUDE_PLUGIN_ROOT}` in a command), or `node .specs/guardian.cjs …` from a dev-spec-driven project — a plugin
-  install puts no `dev-guardian` on `PATH`.
+  install puts no `dev-guardian` on `PATH`. That launcher forwards `scan`, `baseline`, `status` and `help` only
+  (`metrics` and the rest exit 3 there): a line that gives it names those, and `devSpecNames.test.ts` holds the
+  list to a live dev-spec-driven's `GUARDIAN_FORWARDED`.
 - Never advise `baseline update` to accept one finding: it accepts every current finding. One reviewed finding
   takes an inline suppression with a reason, or a baseline rebuilt on the base commit. Every suppression example
   names its rule and gives the reason (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`): an agent copies
-  the example, and a bare one is what `guardian-suppressions` reports.
+  the example, and a bare one is what `guardian-suppressions` reports. `suppressionExamples.test.ts` holds every file
+  of the prose surface to it, by the pass's own reader: a sentence that asks for the form "with a reason", or shows
+  one complete form, offers every form of the two directives it holds — so a form to avoid is named in a sentence of
+  its own.
 
 ## dev-spec-driven
 
@@ -126,13 +131,18 @@ and writes nothing without the user's yes (one batch, each line shown exactly; `
   one key both plugins dedupe on: dev-spec-driven's lesson comment ends ` · dev-guardian: <id> -->`, so the search
   before proposing reads AGENTS.md, CLAUDE.md and `.specs/steering/*.md` for the tail `dev-guardian: <id> -->`, never
   the whole comment. The id is the stored one (`semgrepRuleIds.ts`: `rules/team.yml`'s `r` is `rules.r`). In a
-  `.specs/` project only steering `tech.md` / `structure.md`, which govern no approval without front matter;
-  `constitution.md` and a track's file flag every approved feature. Without `.specs/`, AGENTS.md or CLAUDE.md — the
-  one the other imports — outside the block `mcp-config --write` owns.
+  `.specs/` project only a steering `tech.md` / `structure.md` without front matter, which governs no approval
+  (with front matter — a Kiro import's `inclusion: always` — it does, like `constitution.md` and a track's file,
+  which flag every approved feature); with neither, AGENTS.md / CLAUDE.md. Without `.specs/`, AGENTS.md or
+  CLAUDE.md — the one the other imports, else the one that exists, else AGENTS.md — outside the block
+  `mcp-config --write` owns.
 - **A seed rule, never a rule written now.** Written while occurrences remain, a `.semgrep.yml` rule makes each one a
   new medium finding in every whole-project scan, trips `diff_scans { mode: "regression" }` at three (2 × 3 > 5) and
   blocks every commit through pre-commit's `--error` (a WARNING fails it too). The seed's Current → Target carries
-  `<rule_id>: N → 0` and its last task adds the rule, so it lands at zero. Only for a shape of `bug_hunt`,
+  `<rule_id>: N → 0` and its last task adds the rule, so it lands at zero. That change goes where step 4 put the
+  seed — the unit's backlog note replaced (`rm`, then `add`) with the target and the rule's terms, and
+  `requirements.md` or `docs/improvement-specs/<name>.md` once written: a seed changed nowhere never lands, or lands
+  without its terms. Only for a shape of `bug_hunt`,
   `quality_check` or `llm_scan`: they run on a change only when asked (`/guardian-scan --staged`, guardian-review),
   and the rule adds `review_pr`, pre-commit, the CLI gate and CI; SAST, secrets, deps and IaC rules run there already.
 - **The rule's message is held by its bytes.** pre-commit runs Semgrep without `PYTHONUTF8`, so on cp1252 a rule
