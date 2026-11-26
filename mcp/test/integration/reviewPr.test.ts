@@ -47,6 +47,7 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolRun } from '../../src/types.js';
+import { DELETED_DIR, IGNORED_BASE, ignoredChange, REPORTED_BY_BOTH, rowOf } from '../helpers/ignoredChange.js';
 import { caseText, suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -820,5 +821,26 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
       // Its own name: nothing of it is a test-integrity finding.
       expect(res.tools_run.some((t) => t.name === 'guardian-test-integrity')).toBe(false);
     }
+  });
+
+  // Review 1 of 3.17.0, R1-DG-D-1: the project's .guardianignore drops both passes' findings in the paths it leaves
+  // out (the factory's result filter) — the same change the CLI's scan --diff-base reads in ciRunScans.test.ts,
+  // reported the same there.
+  it('a path .guardianignore leaves out: neither pass reports it, the control files are', async () => {
+    const dir = await repo('main', { ...IGNORED_BASE });
+    for (const [rel, text] of Object.entries(ignoredChange())) write(dir, rel, text);
+    rmSync(join(dir, DELETED_DIR), { recursive: true, force: true });
+    await commitAll(dir, 'vendor bump');
+    const { r, p } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    const rows = (tool: string): string[] =>
+      p.storage.findings
+        .listByScan(res.scan_id)
+        .filter((f) => f.tool === tool)
+        .map(rowOf)
+        .sort();
+    expect(rows('guardian-suppressions')).toEqual(REPORTED_BY_BOTH.suppressions);
+    expect(rows('guardian-test-integrity')).toEqual(REPORTED_BY_BOTH.integrity);
   });
 });
