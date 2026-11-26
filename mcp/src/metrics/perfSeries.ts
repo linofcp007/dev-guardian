@@ -6,10 +6,12 @@
  *
  * - The series key is a property of the run, never a list of names: for
  *   Lighthouse the page (its href without the fragment), Lighthouse's major
- *   version and the categories the report scored; for k6 the script's
- *   project-relative path and content (sha256) and the VUs k6 set up before the
- *   start (`vus_max`'s min, `tools/perfCheck.ts`) — 10 VUs against 100 is another
- *   load, not a regression.
+ *   version and the categories the report scored; for k6 its inputs only, the
+ *   script's project-relative path and content (sha256)
+ *   and the `K6_*` settings perf_check hands k6 (`tools/perfCheck.ts`; one
+ *   digest, since a value can be a token), so a changed setting starts a new
+ *   series. Never a VU count k6 measured: k6 samples it from the start of the
+ *   VUs' init, so its minimum jitters when the init outlasts the first sample.
  * - Each metric is judged over the earlier runs that HAVE it: the reference is
  *   the median of the last 3–5 of them, and fewer than 3 is `unjudged`
  *   (`too_few_runs`), shown with its delta. A run whose verdict for the metric
@@ -126,9 +128,12 @@ export function k6Samples(summary: Record<string, unknown>): PerfSample[] {
 }
 
 export interface PerfSeries {
-  /** Stored as `meta.series`: a digest of the parts, so the page's credentials and query reach the column only hashed. */
+  /** Stored as `meta.series`: a digest of the parts, so the page's credentials and query, and a `K6_*` value, reach the column only hashed. */
   readonly key: string;
-  /** Shown as `history.series` and stored as `meta.series_label`: the page with no credentials, query or fragment. */
+  /**
+   * Shown as `history.series` and stored as `meta.series_label`: the page with no credentials or fragment, its query
+   * as a short digest of it (`?…#ab12cd`), and k6's settings as one (`K6_* #ab12cd`) — two series, two labels.
+   */
   readonly label: string;
 }
 
@@ -136,26 +141,54 @@ function digest(parts: readonly unknown[]): string {
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
 }
 
+/** The hex digits of a digest a label shows: enough to tell two series apart, never to read what it hashes. */
+const SHOWN_DIGEST = 6;
+
 export function lighthouseSeries(url: string, lighthouseVersion: string | undefined, categories: readonly string[]): PerfSeries {
   const page = new URL(url);
   page.hash = '';
   const major = /^([0-9]+)\./.exec(lighthouseVersion ?? '')?.[1] ?? null;
   const scored = [...new Set(categories)].sort();
-  // A query can hold a token (`?access_token=…`): it keys the series, and is never shown or stored.
+  // A query can hold a token (`?access_token=…`): it keys the series, and is shown and stored only as a short
+  // digest. Its `?` is the href's first (a `?` in the credentials or the path is percent-encoded); a bare `?`
+  // keys a series of its own, so it shows a digest too.
+  const at = page.href.indexOf('?');
   const shown = new URL(page.href);
   shown.username = '';
   shown.password = '';
   shown.search = '';
+  const query = at < 0 ? '' : `?…#${digest(['query', page.href.slice(at)]).slice(0, SHOWN_DIGEST)}`;
   return {
     key: digest(['lighthouse', major, page.href, scored]),
-    label: `Lighthouse ${major ?? '?'} · ${shown.href} · ${scored.length > 0 ? scored.join(', ') : 'no category'}`,
+    label: `Lighthouse ${major ?? '?'} · ${shown.href}${query} · ${scored.length > 0 ? scored.join(', ') : 'no category'}`,
   };
 }
 
-export function k6Series(script: string, contentSha256: string, vusMax: number | null): PerfSeries {
+/** The `K6_*` settings perf_check hands k6: how many, and one digest of them. */
+export interface K6Settings {
+  /** A sha256 of their sorted `name=value` pairs. A value can be a token (`K6_OUT` naming a URL with its credentials): it reaches only this. */
+  readonly digest: string;
+  readonly count: number;
+}
+
+/**
+ * The `K6_*` settings of `env`, the environment perf_check hands k6 (`tools/perfCheck.ts`): what `allowlistedEnv`
+ * passed, so a credential-shaped name k6 is never given is none. A name is read upper-cased, as the allowlist reads it.
+ */
+export function k6Settings(env: Readonly<Record<string, string | undefined>>): K6Settings {
+  const pairs = Object.entries(env)
+    .filter((e): e is [string, string] => e[1] !== undefined && e[0].toUpperCase().startsWith('K6_'))
+    .map(([name, value]) => `${name}=${value}`)
+    .sort();
+  return { digest: digest(pairs), count: pairs.length };
+}
+
+/** A k6 run's series: its inputs only — never a VU count k6 measured (the module comment). */
+export function k6Series(script: string, contentSha256: string, settings: K6Settings): PerfSeries {
+  const shown = settings.count > 0 ? ` · K6_* #${settings.digest.slice(0, SHOWN_DIGEST)}` : '';
   return {
-    key: digest(['k6', script, contentSha256, vusMax]),
-    label: `k6 · ${script} (${contentSha256.slice(0, 12)}) · ${vusMax === null ? '? VUs' : `${vusMax} VUs`}`,
+    key: digest(['k6', script, contentSha256, settings.digest]),
+    label: `k6 · ${script} (${contentSha256.slice(0, 12)})${shown}`,
   };
 }
 

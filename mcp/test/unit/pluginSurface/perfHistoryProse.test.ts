@@ -51,7 +51,7 @@ describe("perf_check's history in the prose", () => {
   // measured, whose min jitters when the VUs' init outlasts k6's first sample.
   it('R2-DG-HZ-1: the prose says the k6 series is the script, its content and the K6_* settings, a changed setting a new series', () => {
     const skill = read('skills/guardian-performance/SKILL.md');
-    expect(skill).toContain('no k6, o script, o conteúdo e as variáveis `K6_*` que o `perf_check` lhe passa (mudar uma começa outra série)');
+    expect(skill).toContain('no k6, o script, o conteúdo e as variáveis `K6_*` que recebe — mudar uma começa outra série)');
     expect(skill).not.toMatch(/vus_max/);
     const changelog = read('CHANGELOG.md');
     expect(changelog).toContain(
