@@ -6,7 +6,7 @@ var __export = (target, all) => {
 };
 
 // <define:__GUARDIAN_ENGINE_DIGEST__>
-var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 5279896, sha256: "d147848750fd5e0ca511759d7b7e838fabbb7c2fd595013f50d79280da261d06" };
+var define_GUARDIAN_ENGINE_DIGEST_default = { bytes: 5280286, sha256: "c1b1c3660ef5958bc874e63c7282072ce5aa85eb3abe56ef789d90171b56e172" };
 
 // src/platform/gitSafety.ts
 var gitSafety_exports = {};

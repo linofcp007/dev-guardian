@@ -118,7 +118,7 @@ import {
 import { packageManagerEnvOptions } from '../fixpr/childEnv.js';
 import { packageManagerEnv } from '../fixpr/testCommandEnv.js';
 import { gitSafetyFor } from '../platform/gitSafety.js';
-import { banditExcludeArgs, listScannedFiles, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
+import { banditExcludeArgs, keptByExclusions, listScannedFiles, semgrepExcludeArgs } from '../platform/guardianIgnore.js';
 import { ScanScopeInput } from '../platform/scope.js';
 import { banditOnFiles, checkBanditReport, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import { gosecOnPackages, isGoSource } from '../runners/gosecRun.js';
@@ -1191,17 +1191,20 @@ async function runTestIntegrity(args: Collect & { ctx: InvokeContext }): Promise
 /**
  * The suppressions the same change set adds (`testintegrity/suppressions.ts`),
  * a pass of its own: the same scopes as {@link runTestIntegrity}, never a gap
- * (its bounds are said in its reason).
+ * (its bounds are said in its reason). It lists only the scope's paths that
+ * `.guardianignore` keeps — the factory's own rules, applied before the
+ * bounds, so a left-out tree never fills them.
  */
 async function runSuppressions(args: Collect & { ctx: InvokeContext }): Promise<void> {
   const { ctx, tools_run, parser_inputs } = args;
   const changes = ctx.scope?.changes ?? null;
   if (changes === null) return;
   const scope = ctx.scope;
+  const kept = ctx.exclusions !== null ? keptByExclusions(ctx.exclusions, ctx.projectPath) : null;
   const result = await runSuppressionCheck(ctx.projectPath, {
     base: changes.base,
     target: changes.target === 'index' ? { kind: 'index' } : { kind: 'worktree', untracked: changes.untracked },
-    ...(scope !== null ? { member: (p: string) => scope.member(p) } : {}),
+    ...(scope !== null ? { member: (p: string) => scope.member(p) && (kept === null || kept(p)) } : {}),
   });
   if (result === null) return;
   tools_run.push(result.toolRun);
