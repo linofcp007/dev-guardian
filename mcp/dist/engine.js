@@ -13618,6 +13618,12 @@ var init_scansRepo = __esm({
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
+        this.listScanHistoryStmt = db.prepare(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND scan_type <> 'perf' AND ${READABLE}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
         this.findCacheStmt = db.prepare(`
       SELECT * FROM scans
       WHERE cache_key = ? AND status = 'completed' AND started_at >= ? AND ${READABLE}
@@ -13644,6 +13650,7 @@ var init_scansRepo = __esm({
       getLatestForProjectStmt;
       listHistoryStmt;
       listHistoryForProjectStmt;
+      listScanHistoryStmt;
       findCacheStmt;
       attachCacheStmt;
       countForProjectStmt;
@@ -13781,6 +13788,16 @@ var init_scansRepo = __esm({
        */
       listHistoryForProject(projectPath, limit = 50) {
         return this.listHistoryForProjectStmt.all(projectPath, limit).map(rowToRecord);
+      }
+      /**
+       * `guardian://scans/history`'s list: {@link listHistoryForProject} without
+       * `perf` rows, in SQL so the limit counts only what is listed. Every
+       * measured `perf_check` run is one (3.17.0), and a tuning session of 50 runs
+       * left the window no security scan; a series is read by its own query
+       * ({@link listCompletedPerfSeries}).
+       */
+      listScanHistory(projectPath, limit) {
+        return this.listScanHistoryStmt.all(projectPath, limit).map(rowToRecord);
       }
       /**
        * Every pass name the completed scans of `type` for `projectPath` ever
@@ -122894,10 +122911,10 @@ var init_scans = __esm({
     registerResourceModule({
       name: "guardian-scans-history",
       uri: "guardian://scans/history",
-      description: "Up to 50 most-recent scans of the server's working-directory project, across every type, ordered by start time descending. Records are sparse \u2014 call `guardian://scans/{scan_id}` for the full ScanResult.",
+      description: "Up to 50 most-recent scans of the server's working-directory project, of every type but `perf` (perf_check's runs: its `history` reads them), ordered by start time descending. Records are sparse \u2014 call `guardian://scans/{scan_id}` for the full ScanResult.",
       handler: async (_uri, _params, ctx) => {
         const projectPath = serverProjectPath();
-        const scans = ctx.storage.scans.listHistoryForProject(projectPath, 50);
+        const scans = ctx.storage.scans.listScanHistory(projectPath, 50);
         return { json: { project_path: projectPath, scans } };
       }
     });

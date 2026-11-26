@@ -43,9 +43,9 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   reason. The router now answers the finding with that accept instead of asking why the test went, and at
   `--fail-on medium` it blocks like any other medium.
 - **`perf_check` runs are in the history.** Every measured run is now a `perf` scan with no finding. It is never the
-  default latest scan that `diff_scans`, `report_export`, `set_baseline` and the regression alert read, but it counts
-  among the 50 most recent scans of `guardian://scans/history` and can be what `guardian://scans/latest` and
-  `health_status.last_scan` show. `/guardian-report trend` leaves those rows out.
+  default latest scan that `diff_scans`, `report_export`, `set_baseline` and the regression alert read, and
+  `guardian://scans/history` leaves it out (its 50 most recent scans are every other type, as before), but it can be
+  what `guardian://scans/latest` and `health_status.last_scan` show.
 - **The verdict JSON can carry `coverage_notes` lines that start `guardian-suppressions: `** — the files the pass did
   not read — with the remedy "Nothing to do for the gate (not gating)…", and `tools_run` names `guardian-suppressions`
   when a changed file holds a suppression's token.
@@ -106,8 +106,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   the form the new pass reports.
 - **docs/ci.md says dev-spec-driven 1.33+ passes `--diff-base` at its finish**, so the weakened-tests and suppressions
   checks run there too.
-- **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** leaves the
-  `perf` rows out of the scans it compares and says when the 50 most recent scans held other types.
+- **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** says when the
+  50 most recent scans held other types; it and `/guardian-incident` say `perf_check`'s runs are not among them.
 
 ### Fixed
 

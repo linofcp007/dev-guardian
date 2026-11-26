@@ -39,7 +39,7 @@ Arguments: $ARGUMENTS
 
 ## `trend` — findings over time
 
-1. Read `guardian://scans/history` (the 50 most recent scans of every type). Default window: the last 10 scans of each type, or the window in the hint. Every `perf_check` run is a `perf` scan there too, with no findings: leave those out, and when a type has fewer scans than the window, say the 50 held other types — never that it has no history.
+1. Read `guardian://scans/history` (the 50 most recent scans of every type but `perf_check`'s runs, which are not in it). Default window: the last 10 scans of each type, or the window in the hint. When a type has fewer scans than the window, say the 50 held other types — never that it has no history.
 2. For each consecutive pair of the same type: `diff_scans { project_path: "<project>", from_scan_id: "<older>", to_scan_id: "<newer>" }` — `new`, `resolved`, and `not_remeasured` (a scanner that did not run, never a resolution). A finding under an active suppression is in `suppressed_findings` (`summary.suppressed`), never in `resolved`: report a jump there as a suppression, not a fix.
 3. `diff_scans { mode: "regression", project_path: "<project>", scan_type: "<type>" }` — the latest scan of that type against its baseline; `suppressed_by_severity` counts what suppressions kept out of its score.
    Another scanner's SARIF log joins the history with `import_sarif { project_path: "<project>", sarif_path: "<log>" }` (`sarif_import` scans); `diff_scans` (both modes) and `set_baseline` then take `source_tool` to say which tool's imports to compare — see `docs/sarif-import.md`.
