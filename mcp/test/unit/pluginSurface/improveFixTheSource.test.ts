@@ -115,12 +115,19 @@ describe('/guardian-improve: Fix the source', () => {
     expect(RULES_BLOCK_END).not.toMatch(key);
   });
 
-  it('writes steering only to tech.md / structure.md, never constitution.md or a track file', () => {
-    expect(STEP).toMatch(/With `\.specs\/`: steering `tech\.md` or `structure\.md`, never `constitution\.md` or a track's file;/);
+  // Review 1 (R1-DG-IZ-2): a steering file with front matter (a Kiro import's `inclusion: always`) governs
+  // approvals like constitution.md, so the line goes to one without, else to AGENTS.md / CLAUDE.md.
+  it('writes steering only to a tech.md / structure.md without front matter, never constitution.md or a track file', () => {
+    expect(STEP).toMatch(
+      /With `\.specs\/`: steering `tech\.md` or `structure\.md` \(one without front matter; else AGENTS\.md \/ CLAUDE\.md\), never `constitution\.md` or a track's file;/,
+    );
   });
 
-  it('without .specs/, writes the file the other imports, never inside the dev-guardian rules block', () => {
-    expect(STEP).toContain(`without: AGENTS.md or CLAUDE.md, the one the other imports, never inside \`${RULES_BLOCK_BEGIN}\`.`);
+  // Review 1 (R1-DG-IZ-3): "the one the other imports" named no file when neither imports the other.
+  it('without .specs/, writes the file the other imports, else the one that exists, else AGENTS.md — never inside the rules block', () => {
+    expect(STEP).toContain(
+      `without: AGENTS.md or CLAUDE.md, the one the other imports, else the one that exists, else AGENTS.md, never inside \`${RULES_BLOCK_BEGIN}\`.`,
+    );
   });
 
   it('a seed rule never lands while occurrences remain: the seed carries it to zero', () => {
