@@ -54,6 +54,8 @@ interface LhRun {
   version?: string;
   categories?: string[];
   runtimeError?: boolean;
+  /** Lighthouse's numericValue, unrounded (default: a real run's 0.1480355010107018). */
+  cls?: number;
 }
 
 /** Lighthouse, scripted: writes a report of the real run's shape. */
@@ -74,7 +76,7 @@ function scriptLighthouse(run: LhRun): void {
             'first-contentful-paint': { numericValue: run.lcp },
             'speed-index': { numericValue: run.lcp },
             'total-blocking-time': { numericValue: 0 },
-            'cumulative-layout-shift': { numericValue: 0.1480355010107018 },
+            'cumulative-layout-shift': { numericValue: run.cls ?? 0.1480355010107018 },
             'server-response-time': { numericValue: run.ttfb ?? 0 },
             'total-byte-weight': { numericValue: 40269 },
           },
@@ -97,9 +99,11 @@ type History = {
   hint?: string;
 };
 
-async function lighthouse(s: Seeded, project: string, run: LhRun, url = 'http://127.0.0.1:64288/'): Promise<{ ok: boolean; history?: History }> {
+type LhResult = { ok: boolean; history?: History; summary?: { core_web_vitals: Record<string, number | null> } };
+
+async function lighthouse(s: Seeded, project: string, run: LhRun, url = 'http://127.0.0.1:64288/'): Promise<LhResult> {
   scriptLighthouse(run);
-  return (await tool('perf_check').handler({ project_path: project, target_url: url }, s.plugin)) as { ok: boolean; history?: History };
+  return (await tool('perf_check').handler({ project_path: project, target_url: url }, s.plugin)) as LhResult;
 }
 
 const verdictOf = (h: History | undefined, name: string): string | undefined => h?.metrics?.find((m) => m.name === name)?.verdict;
@@ -165,6 +169,28 @@ describe('perf_check history: Lighthouse', () => {
     expect(verdictOf((await lighthouse(s, project, { lcp: 9000 })).history, 'perf.lcp_ms')).toBe('regressed');
   });
 
+  it('H-5: CLS is sampled unrounded — 0.1351 x3 then 0.1549 (+0.0198) regresses, then 0.1449 (+0.0098) is within', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-hist-');
+    for (let i = 0; i < 3; i += 1) await lighthouse(s, project, { lcp: 2000, cls: 0.1351 });
+    const worse = await lighthouse(s, project, { lcp: 2000, cls: 0.1549 });
+    expect(worse.history?.metrics?.find((m) => m.name === 'perf.cls')).toMatchObject({ verdict: 'regressed', reference: 0.1351 });
+    expect(verdictOf((await lighthouse(s, project, { lcp: 2000, cls: 0.1449 })).history, 'perf.cls')).toBe('within');
+    // The response's summary is unchanged: rounded to 0.01, as before.
+    expect(worse.summary?.core_web_vitals['cumulative-layout-shift']).toBe(0.15);
+  });
+
+  it('H-8: the stored series label keeps no query string and no fragment; the query still keys the series', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-hist-');
+    const first = await lighthouse(s, project, { lcp: 2000 }, 'http://127.0.0.1:64288/app?access_token=tok3n#top');
+    expect(first.history?.series).toBe('Lighthouse 13 · http://127.0.0.1:64288/app · performance');
+    expect(JSON.stringify(perfRows(s, project)[0]?.meta)).not.toMatch(/tok3n|#top/);
+    for (let i = 0; i < 2; i += 1) await lighthouse(s, project, { lcp: 2000 }, 'http://127.0.0.1:64288/app?access_token=tok3n');
+    expect(verdictOf((await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?access_token=tok3n')).history, 'perf.lcp_ms')).toBe('regressed');
+    expect(verdictOf((await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?other=1')).history, 'perf.lcp_ms')).toBe('new');
+  });
+
   it('H17: another project\'s runs of the same page are never read', async () => {
     const s = freshPlugin();
     const a = projectDir('perf-hist-a-');
@@ -222,6 +248,34 @@ describe('perf_check history: Lighthouse', () => {
       error?: { code: string };
     };
     expect(named).toMatchObject({ ok: false, error: { code: 'unsupported_target' } });
+  });
+
+  it('H-6: set_baseline {scan_type} refuses a type that records no findings (perf, sbom), as the scan_id path does', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-hist-');
+    seedScan(s, { id: 'sast-1', type: 'sast', project, tools_run: [{ name: 'semgrep', status: 'ok' }], findings: [{ rule_id: 'r1' }] });
+    seedScan(s, { id: 'sbom-1', type: 'sbom', project, tools_run: [{ name: 'syft', status: 'ok' }] });
+    await lighthouse(s, project, { lcp: 2000 });
+    const set = async (scanType: string) =>
+      (await tool('set_baseline').handler({ project_path: project, scan_type: scanType }, s.plugin)) as {
+        ok: boolean;
+        scan_id?: string;
+        error?: { code: string; message: string };
+      };
+    for (const type of ['perf', 'sbom']) {
+      expect(await set(type), type).toEqual({
+        ok: false,
+        error: {
+          code: 'unsupported_target',
+          message:
+            `A ${type} scan records no findings to compare against, so it cannot be a baseline. ` +
+            'Baseline a scan of a finding-producing type.',
+        },
+      });
+    }
+    expect(s.storage.baselines.getActiveForProject(project)).toBeNull();
+    // Still-pass: a finding-producing type is baselined as before.
+    expect(await set('sast')).toMatchObject({ ok: true, scan_id: 'sast-1' });
   });
 });
 

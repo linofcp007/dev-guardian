@@ -179,6 +179,22 @@ describe("metric-lines/1 — what the fixture leaves to each reader's suite", ()
     expect(readMetricLine('\u001b]0;title\u0007METRIC x=1').kind).toBe('ignored');
   });
 
+  it('(9) parity with dev-spec-driven 1.41: the keyword is read as printed — a CSI sequence inside it splits it', () => {
+    // dev-spec-driven finds the keyword in the raw output; a keyword that only removing a colour code forms is none.
+    const split = 'MET\u001b[0mRIC a=1 METRIC\n';
+    expect(readMetricOutput(split)).toMatchObject({ repeats: 0, malformed: 0, dropped: [] });
+    expect([...readMetricOutput(split).metrics.keys()]).toEqual([]);
+    expect(readMetricOutput('MET\u001b[0mRIC a=bad METRIC\n').malformed).toBe(0);
+    expect(readMetricLine('MET\u001b[0mRIC a=1 METRIC').kind).toBe('ignored');
+    expect(readMetricLine('MET\u001b[0mRIC a=1').kind).toBe('ignored');
+    // Still read: a colour code around the keyword, and a later METRIC token on a line that starts with one.
+    const around = readMetricOutput('\u001b[1mMETRIC\u001b[0m a=1 ms\n# \u001b[2mMETRIC b=2\n');
+    expect(asFixture(around.metrics.get('a') ?? metric('METRIC none=0'))).toMatchObject({ value: 1, unit: 'ms' });
+    expect(around.metrics.get('b')?.value).toBe(2);
+    expect(asFixture(metric('METRIC a=1 METRIC'))).toMatchObject({ value: 1, unit: 'METRIC' });
+    expect(readMetricOutput('METRIC a=1 METRIC\n').metrics.get('a')?.unit).toBe('METRIC');
+  });
+
   it('(10) a unit is one token of at most 16 characters, any but a blank or =', () => {
     expect(metric('METRIC x=1 abcdefghijklmnop').unit).toBe('abcdefghijklmnop');
     expect(metric('METRIC x=1 µs/req').unit).toBe('µs/req');

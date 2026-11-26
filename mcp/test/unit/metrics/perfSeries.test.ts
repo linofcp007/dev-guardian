@@ -222,6 +222,14 @@ describe('the series key — a property of the run', () => {
     expect(s.key).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it('H-8: the label keeps no query string and no fragment; another query is still another series', () => {
+    const s = lighthouseSeries('https://h.example/app?access_token=tok3n&x=1#top', '13.5.0', ['performance']);
+    expect(s.label).toBe('Lighthouse 13 · https://h.example/app · performance');
+    expect(s.key).not.toBe(lh('https://h.example/app?x=2', '13.5.0', ['performance']));
+    expect(s.key).not.toBe(lh('https://h.example/app', '13.5.0', ['performance']));
+    expect(s.key).toBe(lh('https://h.example/app?access_token=tok3n&x=1', '13.5.0', ['performance']));
+  });
+
   it('H6 and H6c: k6 — the script, its content, and the load k6 measured', () => {
     const a = k6Series('load/smoke.js', 'a'.repeat(64), 10).key;
     expect(k6Series('load/smoke.js', 'b'.repeat(64), 10).key).not.toBe(a);
