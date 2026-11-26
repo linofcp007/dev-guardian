@@ -484,8 +484,15 @@ export function readLines(text: string, lang: SuppressionLang): LineRead[] {
  */
 type At = 'line' | 'start' | 'segment' | 'inside' | 'code';
 
-/** `leading`: the whole file before the file's first code, else the line; `leading-only`: nothing after code (TypeScript reads `@ts-nocheck` only there). */
-type Scope = 'line' | 'file' | 'leading' | 'leading-only';
+/**
+ * `leading`: the whole file before the file's first code, else the line; `leading-only`: nothing after code
+ * (TypeScript reads `@ts-nocheck` only there). `leading-bare`: an own-line form whose region runs on (Pylint,
+ * RuboCop, ShellCheck), the whole file when it names no rule before the file's first code, else the line;
+ * `package-bare`: golangci-lint's, the whole file when it names no rule in the comment group the file's
+ * `package` clause carries ({@link packageDocOf}), else the line. Anywhere else the region is not certain by
+ * syntax, and a named form stays counted as every rule-naming line form is.
+ */
+type Scope = 'line' | 'file' | 'leading' | 'leading-only' | 'leading-bare' | 'package-bare';
 
 interface Row {
   id: string;
@@ -804,8 +811,8 @@ const ROWS: readonly Row[] = [
     cls: 'lint',
     langs: ['py'],
     at: 'segment',
-    re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?:-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
-    scope: 'line',
+    re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?<line>-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
+    scope: 'leading-bare',
     allNames: true,
     label: (g) => (g['file'] !== undefined ? '# pylint: skip-file' : '# pylint: disable'),
     form: '`# pylint: disable=<check>  # <reason>`',
@@ -818,7 +825,7 @@ const ROWS: readonly Row[] = [
     langs: ['go'],
     at: 'start',
     re: /nolint(?![\w-])(?::(?<names>[\w-]+(?:,[\w-]+)*))?/,
-    scope: 'line',
+    scope: 'package-bare',
     allNames: true,
     label: '//nolint',
     form: '`//nolint:<linter> // <reason>`',
@@ -951,7 +958,7 @@ const ROWS: readonly Row[] = [
     langs: ['rb'],
     at: 'start',
     re: /rubocop[ \t]*:[ \t]*(?:disable|todo)[ \t]+(?<names>[\w/]+(?:[ \t]*,[ \t]*[\w/]+)*)/,
-    scope: 'line',
+    scope: 'leading-bare',
     allNames: true,
     label: '# rubocop:disable',
     form: '`# rubocop:disable <Cop> -- <reason>`',
@@ -964,7 +971,7 @@ const ROWS: readonly Row[] = [
     langs: ['sh'],
     at: 'start',
     re: /shellcheck[ \t]+disable=(?<names>[\w,-]+)/,
-    scope: 'line',
+    scope: 'leading-bare',
     allNames: true,
     label: '# shellcheck disable',
     form: '`# shellcheck disable=<code>  # <reason>`',
@@ -1175,8 +1182,14 @@ function aboveReason(lines: readonly LineRead[], raw: readonly string[], idx: nu
  * the whole file, and whether that is a doubt (its arguments may be on the
  * next line: counted, never judged); or skip it.
  */
-function readHit(h: Hit, line: string, leading: boolean, testFile: boolean): { names: boolean; file: boolean; doubt: boolean } | null {
+function readHit(
+  h: Hit,
+  line: string,
+  where: { leading: boolean; packageDoc: boolean },
+  testFile: boolean,
+): { names: boolean; file: boolean; doubt: boolean } | null {
   const row = h.row;
+  const { leading } = where;
   const extra = row.check?.(h.groups, line.slice(h.end)) ?? {};
   if (extra.skip === true) return null;
   if (row.id === 'ts-ignore' && h.groups['kind'] === 'expect-error' && testFile) return null;
@@ -1192,7 +1205,12 @@ function readHit(h: Hit, line: string, leading: boolean, testFile: boolean): { n
   const file =
     h.groups['line'] !== undefined
       ? false
-      : h.groups['file'] !== undefined || row.scope === 'file' || row.scope === 'leading-only' || (row.scope === 'leading' && leading);
+      : h.groups['file'] !== undefined ||
+        row.scope === 'file' ||
+        row.scope === 'leading-only' ||
+        (row.scope === 'leading' && leading) ||
+        (row.scope === 'leading-bare' && leading && !names) ||
+        (row.scope === 'package-bare' && where.packageDoc && !names);
   // A block comment running on past the line: its arguments may be on the next one.
   return { names, file, doubt: !names && h.part !== null && h.part.unclosed };
 }
@@ -1288,6 +1306,24 @@ function firstSubstance(lines: readonly LineRead[], raw: readonly string[]): num
   return lines.length;
 }
 
+/**
+ * The lines of the comment group a Go file's `package` clause carries — the
+ * group golangci-lint widens a `//nolint` in to the whole file: the lines
+ * directly above the first code (no blank line between), when that code is
+ * `package` at column 1 and the group's first comment opens at column 1 too
+ * (its column must be the clause's). `[from, to)`, or null. A blank line
+ * inside a block comment there ends the group early: it reads as smaller,
+ * never larger.
+ */
+function packageDocOf(lines: readonly LineRead[], raw: readonly string[], firstCode: number): { from: number; to: number } | null {
+  if (!/^package\b/.test(raw[firstCode] ?? '')) return null;
+  let from = firstCode;
+  while (from > 0 && NOT_BLANK.test(raw[from - 1] ?? '')) from -= 1;
+  const first = lines[from]?.comments[0];
+  if (first === undefined || first.start !== first.marker.length) return null;
+  return { from, to: firstCode };
+}
+
 /** Every finding and count of one change's files (see the module comment). */
 export function detectSuppressions(files: readonly SuppressionFile[]): { findings: Finding[]; counts: SuppressionCounts } {
   const counts: SuppressionCounts = { files: 0, added: 0, reported: 0, named: 0, reasoned: 0, carried: 0, unread: 0 };
@@ -1316,6 +1352,7 @@ export function detectSuppressions(files: readonly SuppressionFile[]): { finding
     const raw = splitLines(f.after);
     const lines = readLines(f.after, lang);
     const leadingUntil = firstSubstance(lines, raw);
+    const doc = packageDocOf(lines, raw, leadingUntil);
     const testFile = isTestFile(f.path);
     for (const a of f.added) {
       const idx = a.line - 1;
@@ -1326,7 +1363,7 @@ export function detectSuppressions(files: readonly SuppressionFile[]): { finding
       if (text === undefined || lexed === undefined || text !== addedText) continue;
       const hits = hitsOn(text, lexed, lang);
       for (const h of hits) {
-        const what = readHit(h, text, idx < leadingUntil, testFile);
+        const what = readHit(h, text, { leading: idx < leadingUntil, packageDoc: doc !== null && idx >= doc.from && idx < doc.to }, testFile);
         if (what === null) continue;
         const key = keyOf(h, text);
         const left = carried.get(key) ?? 0;

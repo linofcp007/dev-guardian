@@ -111,6 +111,7 @@
     { "name": "nolint: all, in the comment group directly above package", "row": "nolint", "path": "pkg/a.go", "lines": ["//nolint:all", "// Package a reads things.", "package a"], "added": [1], "out": "M" },
     { "name": "nolint: a linter above package stays named", "row": "nolint", "path": "pkg/a.go", "lines": ["//nolint:errcheck", "package a"], "added": [1], "out": "N" },
     { "name": "nolint: a blank line before package (golangci-lint does not attach it to the file)", "row": "nolint", "path": "pkg/a.go", "lines": ["//nolint", "", "package a"], "added": [1], "out": "L" },
+    { "name": "nolint: above a blank line and the package's own doc comment (not in that group)", "row": "nolint", "path": "pkg/a.go", "lines": ["//nolint", "", "// Package a reads things.", "package a"], "added": [1], "out": "L" },
     { "name": "nolint: an indented line in its group (the group is not at package's column)", "row": "nolint", "path": "pkg/a.go", "lines": ["  // x", "//nolint", "package a"], "added": [2], "out": "L" },
     { "name": "nolint: an indented package clause (not at the group's column)", "row": "nolint", "path": "pkg/a.go", "lines": ["//nolint", "  package a"], "added": [1], "out": "L" },
     { "name": "nolint: on its own line above a function (that function's)", "row": "nolint", "path": "pkg/a.go", "lines": ["package a", "", "//nolint", "func f() {}"], "added": [3], "out": "L" },

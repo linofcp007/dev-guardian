@@ -23108,8 +23108,9 @@ function aboveReason(lines, raw, idx, lang) {
   if (hitsOn(text3, r, lang).length > 0) return false;
   return r.comments.some((p) => LETTERS.test(text3.slice(p.start, p.end)));
 }
-function readHit(h, line, leading, testFile) {
+function readHit(h, line, where, testFile) {
   const row = h.row;
+  const { leading } = where;
   const extra = row.check?.(h.groups, line.slice(h.end)) ?? {};
   if (extra.skip === true) return null;
   if (row.id === "ts-ignore" && h.groups["kind"] === "expect-error" && testFile) return null;
@@ -23121,7 +23122,7 @@ function readHit(h, line, leading, testFile) {
     const listed2 = (h.groups["names"] ?? "").trim();
     names = /\w/.test(listed2) && !(row.allNames === true && /^all$/i.test(listed2));
   }
-  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading;
+  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading || row.scope === "leading-bare" && leading && !names || row.scope === "package-bare" && where.packageDoc && !names;
   return { names, file: file2, doubt: !names && h.part !== null && h.part.unclosed };
 }
 function keyOf(h, line) {
@@ -23175,6 +23176,14 @@ function firstSubstance(lines, raw) {
   }
   return lines.length;
 }
+function packageDocOf(lines, raw, firstCode) {
+  if (!/^package\b/.test(raw[firstCode] ?? "")) return null;
+  let from = firstCode;
+  while (from > 0 && NOT_BLANK.test(raw[from - 1] ?? "")) from -= 1;
+  const first = lines[from]?.comments[0];
+  if (first === void 0 || first.start !== first.marker.length) return null;
+  return { from, to: firstCode };
+}
 function detectSuppressions(files) {
   const counts = { files: 0, added: 0, reported: 0, named: 0, reasoned: 0, carried: 0, unread: 0 };
   const findings = [];
@@ -23201,6 +23210,7 @@ function detectSuppressions(files) {
     const raw = splitLines2(f.after);
     const lines = readLines(f.after, lang);
     const leadingUntil = firstSubstance(lines, raw);
+    const doc = packageDocOf(lines, raw, leadingUntil);
     const testFile = isTestFile(f.path);
     for (const a of f.added) {
       const idx = a.line - 1;
@@ -23210,7 +23220,7 @@ function detectSuppressions(files) {
       if (text3 === void 0 || lexed === void 0 || text3 !== addedText) continue;
       const hits = hitsOn(text3, lexed, lang);
       for (const h of hits) {
-        const what = readHit(h, text3, idx < leadingUntil, testFile);
+        const what = readHit(h, text3, { leading: idx < leadingUntil, packageDoc: doc !== null && idx >= doc.from && idx < doc.to }, testFile);
         if (what === null) continue;
         const key = keyOf(h, text3);
         const left = carried.get(key) ?? 0;
@@ -23544,8 +23554,8 @@ var init_suppressions = __esm({
         cls: "lint",
         langs: ["py"],
         at: "segment",
-        re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?:-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
-        scope: "line",
+        re: /pylint:[ \t]*(?:(?<file>skip-file)|disable(?<line>-next)?[ \t]*=[ \t]*(?<names>[\w-]+(?:[ \t]*,[ \t]*[\w-]+)*))/,
+        scope: "leading-bare",
         allNames: true,
         label: (g) => g["file"] !== void 0 ? "# pylint: skip-file" : "# pylint: disable",
         form: "`# pylint: disable=<check>  # <reason>`",
@@ -23558,7 +23568,7 @@ var init_suppressions = __esm({
         langs: ["go"],
         at: "start",
         re: /nolint(?![\w-])(?::(?<names>[\w-]+(?:,[\w-]+)*))?/,
-        scope: "line",
+        scope: "package-bare",
         allNames: true,
         label: "//nolint",
         form: "`//nolint:<linter> // <reason>`",
@@ -23691,7 +23701,7 @@ var init_suppressions = __esm({
         langs: ["rb"],
         at: "start",
         re: /rubocop[ \t]*:[ \t]*(?:disable|todo)[ \t]+(?<names>[\w/]+(?:[ \t]*,[ \t]*[\w/]+)*)/,
-        scope: "line",
+        scope: "leading-bare",
         allNames: true,
         label: "# rubocop:disable",
         form: "`# rubocop:disable <Cop> -- <reason>`",
@@ -23704,7 +23714,7 @@ var init_suppressions = __esm({
         langs: ["sh"],
         at: "start",
         re: /shellcheck[ \t]+disable=(?<names>[\w,-]+)/,
-        scope: "line",
+        scope: "leading-bare",
         allNames: true,
         label: "# shellcheck disable",
         form: "`# shellcheck disable=<code>  # <reason>`",
