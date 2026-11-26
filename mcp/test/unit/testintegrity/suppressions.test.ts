@@ -99,7 +99,8 @@ describe('the findings', () => {
       rule_id: 'scanner-suppression-added',
       severity: 'medium',
       category: 'quality',
-      subcategory: 'suppression',
+      // The directive's kind, its row of the table: part of its identity, never the line (R2-DG-D-4).
+      subcategory: 'suppression:gitleaks-allow',
       file_path: 'cfg/a.py',
       line_start: 1,
       line_end: 1,

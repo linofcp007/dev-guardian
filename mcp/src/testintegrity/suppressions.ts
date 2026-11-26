@@ -620,7 +620,8 @@ const ROWS: readonly Row[] = [
     cls: 'scanner',
     langs: IAC,
     at: 'start',
-    re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)/,
+    // Its expiry (`:exp:<date>`) and workspace (`:ws:<name>`) are the directive's own, never a reason.
+    re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)(?::(?:exp:\d{4}-\d{2}-\d{2}|ws:[\w-]+))*/,
     scope: 'line',
     // `*` names no check: Trivy then reports none here.
     check: (g) => ({ names: g['names'] !== '*' }),
@@ -1237,7 +1238,8 @@ function readHit(
         row.scope === 'leading-only' ||
         (row.scope === 'leading' && leading) ||
         (row.scope === 'leading-bare' && leading && !names) ||
-        (row.scope === 'package-bare' && where.packageDoc && !names);
+        // golangci-lint widens a `//nolint` only: one in a block comment reads as its line's.
+        (row.scope === 'package-bare' && where.packageDoc && !names && h.part !== null && h.part.marker === '//');
   // A block comment running on past the line: its arguments may be on the next one.
   return { names, file, doubt: !names && h.part !== null && h.part.unclosed };
 }
@@ -1283,6 +1285,15 @@ function outcomeOf(cls: Row['cls'], names: boolean, file: boolean, reasoned: boo
   return names ? 'named' : 'low';
 }
 
+/**
+ * A finding's `subcategory`: `suppression:` and its row's id — the directive's
+ * kind, part of its identity (`fingerprint/findingIdentity.ts`), which holds
+ * nothing of its line: identities never move from one kind to another.
+ */
+function kindOf(row: Row): string {
+  return `suppression:${row.id}`;
+}
+
 function finding(h: Hit, path: string, line: number, severity: Severity, names: boolean, file: boolean): Finding {
   const row = h.row;
   const label = `\`${typeof row.label === 'string' ? row.label : row.label(h.groups)}\``;
@@ -1292,7 +1303,7 @@ function finding(h: Hit, path: string, line: number, severity: Severity, names: 
       rule_id: 'scanner-suppression-added',
       severity,
       category: 'quality',
-      subcategory: 'suppression',
+      subcategory: kindOf(row),
       title: `${path}:${line} adds a ${row.reader} suppression with no reason and no rule named (${label})`,
       message:
         `This change hides ${row.hides ?? `${row.reader}'s findings here`} from every scan, dev-guardian's gate included, and ` +
@@ -1308,7 +1319,7 @@ function finding(h: Hit, path: string, line: number, severity: Severity, names: 
     rule_id: 'suppression-added',
     severity,
     category: 'quality',
-    subcategory: 'suppression',
+    subcategory: kindOf(row),
     title: `${path}:${line} silences ${row.reader} with no reason (${label}${scope})`,
     message:
       `This change silences ${row.reader} here (${label}${scope}) and does not say why. A suppression is sometimes right — a ` +
@@ -1370,7 +1381,9 @@ export function detectSuppressions(files: readonly SuppressionFile[]): { finding
     const lang = suppressionLanguageOf(f.path);
     if (lang === null) continue;
     for (const r of f.removed) {
-      const text = r.text.endsWith('\r') ? r.text.slice(0, -1) : r.text;
+      const crlf = r.text.endsWith('\r') ? r.text.slice(0, -1) : r.text;
+      // As on the added side: git's diff keeps a byte-order mark on line 1, and it is no part of the line.
+      const text = r.line === 1 ? withoutBom(crlf) : crlf;
       const lexed = readLine(text, LEXERS[lang], CODE).read;
       for (const h of hitsOn(text, lexed, lang)) carried.set(keyOf(h, text), (carried.get(keyOf(h, text)) ?? 0) + 1);
     }

@@ -5604,7 +5604,8 @@ function contentSource(f, readable2, linesOf2) {
   if (dependency !== null) return `dep
 ${dependency.name}@${dependency.version}`;
   if (isSuppressionsFinding(f)) return `suppression
-${f.rule_id ?? ""}`;
+${f.rule_id ?? ""}
+${f.subcategory ?? ""}`;
   if (isCredentialFinding(f)) {
     const locator = isHistoryLocator(f) && f.snippet !== void 0 ? `
 ${collapse(f.snippet)}` : "";
@@ -23145,7 +23146,8 @@ function readHit(h, line, where, testFile) {
     const listed2 = (h.groups["names"] ?? "").trim();
     names = /\w/.test(listed2) && !(row.allNames === true && /^all$/i.test(listed2));
   }
-  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading || row.scope === "leading-bare" && leading && !names || row.scope === "package-bare" && where.packageDoc && !names;
+  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading || row.scope === "leading-bare" && leading && !names || // golangci-lint widens a `//nolint` only: one in a block comment reads as its line's.
+  row.scope === "package-bare" && where.packageDoc && !names && h.part !== null && h.part.marker === "//";
   return { names, file: file2, doubt: !names && h.part !== null && h.part.unclosed };
 }
 function keyOf(h, line) {
@@ -23158,6 +23160,9 @@ function outcomeOf(cls, names, file2, reasoned) {
   if (file2) return names ? "low" : "medium";
   return names ? "named" : "low";
 }
+function kindOf(row) {
+  return `suppression:${row.id}`;
+}
 function finding(h, path3, line, severity, names, file2) {
   const row = h.row;
   const label2 = `\`${typeof row.label === "string" ? row.label : row.label(h.groups)}\``;
@@ -23167,7 +23172,7 @@ function finding(h, path3, line, severity, names, file2) {
       rule_id: "scanner-suppression-added",
       severity,
       category: "quality",
-      subcategory: "suppression",
+      subcategory: kindOf(row),
       title: `${path3}:${line} adds a ${row.reader} suppression with no reason and no rule named (${label2})`,
       message: `This change hides ${row.hides ?? `${row.reader}'s findings here`} from every scan, dev-guardian's gate included, and does not say why. If it is a false positive, say so in the scanner's own form (${row.form}); if not, fix the code.`,
       file_path: path3,
@@ -23181,7 +23186,7 @@ function finding(h, path3, line, severity, names, file2) {
     rule_id: "suppression-added",
     severity,
     category: "quality",
-    subcategory: "suppression",
+    subcategory: kindOf(row),
     title: `${path3}:${line} silences ${row.reader} with no reason (${label2}${scope})`,
     message: `This change silences ${row.reader} here (${label2}${scope}) and does not say why. A suppression is sometimes right \u2014 a false positive, a deliberate exception \u2014 so say which next to it (${row.form}), or fix what the rule found: an agent copies the suppressions it finds, and one without a reason teaches the next change to silence the same rule.`,
     file_path: path3,
@@ -23219,7 +23224,8 @@ function detectSuppressions(files) {
     const lang = suppressionLanguageOf(f.path);
     if (lang === null) continue;
     for (const r of f.removed) {
-      const text3 = r.text.endsWith("\r") ? r.text.slice(0, -1) : r.text;
+      const crlf = r.text.endsWith("\r") ? r.text.slice(0, -1) : r.text;
+      const text3 = r.line === 1 ? withoutBom(crlf) : crlf;
       const lexed = readLine(text3, LEXERS[lang], CODE).read;
       for (const h of hitsOn(text3, lexed, lang)) carried.set(keyOf(h, text3), (carried.get(keyOf(h, text3)) ?? 0) + 1);
     }
@@ -23384,7 +23390,8 @@ var init_suppressions = __esm({
         cls: "scanner",
         langs: IAC,
         at: "start",
-        re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)/,
+        // Its expiry (`:exp:<date>`) and workspace (`:ws:<name>`) are the directive's own, never a reason.
+        re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)(?::(?:exp:\d{4}-\d{2}-\d{2}|ws:[\w-]+))*/,
         scope: "line",
         // `*` names no check: Trivy then reports none here.
         check: (g) => ({ names: g["names"] !== "*" }),
@@ -98309,7 +98316,7 @@ function read(src, path3, maxBytes) {
   if (r.status === "refused") noteUnread2(src, path3, describeReadRefusal(r.reason));
   return null;
 }
-function kindOf(src, abs, e) {
+function kindOf2(src, abs, e) {
   if (e.kind === "directory") return "directory";
   if (e.kind === "file") return "file";
   if (e.kind === "other") return "unreachable";
@@ -98370,7 +98377,7 @@ function inventoryPlugins(src, warnings) {
   const out = [];
   for (const entry of listDir2(src, pluginsDir) ?? []) {
     const abs = join93(pluginsDir, entry.name);
-    const kind = kindOf(src, abs, entry);
+    const kind = kindOf2(src, abs, entry);
     if (kind === "directory") {
       const main2 = findMainFile(src, abs, entry.name, "Plugin Name");
       if (main2 === null) {
@@ -98412,7 +98419,7 @@ function inventoryThemes(src, warnings) {
   const out = [];
   for (const entry of listDir2(src, themesDir) ?? []) {
     const abs = join93(themesDir, entry.name);
-    const kind = kindOf(src, abs, entry);
+    const kind = kindOf2(src, abs, entry);
     if (kind === "unreachable") {
       noteUnread2(src, abs, "a link out of the install, to a network or device path, or not a regular file or directory \u2014 not inventoried");
       continue;
