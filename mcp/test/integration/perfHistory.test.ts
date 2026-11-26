@@ -255,28 +255,29 @@ describe('perf_check history: Lighthouse', () => {
     expect(named).toMatchObject({ ok: false, error: { code: 'unsupported_target' } });
   });
 
-  it('H-6: set_baseline {scan_type} refuses a type that records no findings (perf, sbom), as the scan_id path does', async () => {
+  // R2-DG-HZ-6: the refusal said "records no findings" of review_pr, audit and the audits, which do record
+  // findings, and its article read "A init" / "A audit".
+  it("H-6: set_baseline refuses a type that is never a project's baseline, by scan_type and by scan_id, and says so", async () => {
     const s = freshPlugin();
     const project = projectDir('perf-hist-');
-    seedScan(s, { id: 'sast-1', type: 'sast', project, tools_run: [{ name: 'semgrep', status: 'ok' }], findings: [{ rule_id: 'r1' }] });
+    const ran = [{ name: 'semgrep', status: 'ok' as const }];
+    seedScan(s, { id: 'sast-1', type: 'sast', project, tools_run: ran, findings: [{ rule_id: 'r1' }] });
     seedScan(s, { id: 'sbom-1', type: 'sbom', project, tools_run: [{ name: 'syft', status: 'ok' }] });
+    seedScan(s, { id: 'audit-1', type: 'audit', project, tools_run: ran, findings: [{ rule_id: 'r1' }] });
+    seedScan(s, { id: 'review-1', type: 'review_pr', project, tools_run: ran, findings: [{ rule_id: 'r1' }] });
+    seedScan(s, { id: 'init-1', type: 'init', project, tools_run: ran });
+    seedScan(s, { id: 'obs-1', type: 'observability', project, tools_run: ran });
     await lighthouse(s, project, { lcp: 2000 });
+    type Result = { ok: boolean; scan_id?: string; error?: { code: string; message: string } };
     const set = async (scanType: string) =>
-      (await tool('set_baseline').handler({ project_path: project, scan_type: scanType }, s.plugin)) as {
-        ok: boolean;
-        scan_id?: string;
-        error?: { code: string; message: string };
-      };
-    for (const type of ['perf', 'sbom']) {
-      expect(await set(type), type).toEqual({
-        ok: false,
-        error: {
-          code: 'unsupported_target',
-          message:
-            `A ${type} scan records no findings to compare against, so it cannot be a baseline. ` +
-            'Baseline a scan of a finding-producing type.',
-        },
-      });
+      (await tool('set_baseline').handler({ project_path: project, scan_type: scanType }, s.plugin)) as Result;
+    const named = async (scanId: string) => (await tool('set_baseline').handler({ project_path: project, scan_id: scanId }, s.plugin)) as Result;
+    const refused = (message: string) => ({ ok: false, error: { code: 'unsupported_target', message: `${message} Baseline a scan of a finding-producing type.` } });
+    for (const [type, article] of [['perf', 'A'], ['sbom', 'A'], ['review_pr', 'A'], ['audit', 'An'], ['init', 'An'], ['observability', 'An']] as const) {
+      expect(await set(type), type).toEqual(refused(`${article} \`${type}\` scan is never a project's baseline.`));
+    }
+    for (const [id, type, article] of [['audit-1', 'audit', 'an'], ['review-1', 'review_pr', 'a'], ['init-1', 'init', 'an'], ['sbom-1', 'sbom', 'a']] as const) {
+      expect(await named(id), id).toEqual(refused(`Scan '${id}' is ${article} \`${type}\` scan, which is never a project's baseline.`));
     }
     expect(s.storage.baselines.getActiveForProject(project)).toBeNull();
     // Still-pass: a finding-producing type is baselined as before.

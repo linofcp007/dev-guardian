@@ -65,4 +65,19 @@ describe("perf_check's history in the prose", () => {
     expect(source).toContain('and the `K6_*` settings perf_check hands k6');
     expect(source).not.toMatch(/vus_max/);
   });
+
+  // Review 2 (R2-DG-HZ-6): review_pr, audit and the audits record findings; they are never a project's baseline.
+  // An audit_executive run is a baselined one only from a baseline set before 3.17.
+  it("R2-DG-HZ-6: the CHANGELOG says a refused type is never a project's baseline; docs/env.md dates a baselined audit_executive run", () => {
+    const changelog = read('CHANGELOG.md');
+    const release = changelog.split('## [3.17.0]')[1]?.split('## [3.16.1]')[0] ?? '';
+    expect(release).toContain("`set_baseline { scan_type }` baselined a scan of a type that is never a project's baseline");
+    expect(release).toContain("is a `<type>` scan, which is never a project's baseline");
+    expect(release).not.toMatch(/records no findings/);
+    const retention =
+      readFileSync(resolve(REPO_ROOT, 'docs/env.md'), 'utf8')
+        .split('\n')
+        .find((l) => l.startsWith('| `GUARDIAN_RETENTION_SCANS`')) ?? '';
+    expect(retention).toContain('the scans a baselined `security_scan_full` run stands on (its children) or, from a baseline set before 3.17, an `audit_executive` run (its sub-scans)');
+  });
 });

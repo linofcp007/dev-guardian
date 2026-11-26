@@ -124,9 +124,12 @@ describe('/guardian-improve: Fix the source', () => {
   });
 
   // Review 1 (R1-DG-IZ-3): "the one the other imports" named no file when neither imports the other.
-  it('without .specs/, writes the file the other imports, else the one that exists, else AGENTS.md — never inside the rules block', () => {
-    expect(STEP).toContain(
-      `without: AGENTS.md or CLAUDE.md, the one the other imports, else the one that exists, else AGENTS.md, never inside \`${RULES_BLOCK_BEGIN}\`.`,
+  // Review 2 (R2-DG-HZ-5): "else the one that exists" named none when both exist and neither imports.
+  it('without .specs/, writes the file the other imports, else AGENTS.md if it exists, else CLAUDE.md, else AGENTS.md — never inside the rules block', () => {
+    const rule = 'the one the other imports, else AGENTS.md if it exists, else CLAUDE.md, else AGENTS.md';
+    expect(STEP).toContain(`without: AGENTS.md or CLAUDE.md, ${rule}, never inside \`${RULES_BLOCK_BEGIN}\`.`);
+    expect(flat(readFileSync(resolve(REPO_ROOT, 'docs/maintainers/prose.md'), 'utf8'))).toContain(
+      `Without \`.specs/\`, AGENTS.md or CLAUDE.md — ${rule} — outside the block`,
     );
   });
 
@@ -137,9 +140,11 @@ describe('/guardian-improve: Fix the source', () => {
 
   // Review 1 (R1-DG-IZ-1): step 6 changed a seed step 4 had already handed off, and never said where the change
   // went — so the rule never landed, or landed without its terms.
-  it('writes the changed seed where step 4 put it: the backlog note replaced, and the spec file once written', () => {
+  // Review 2 (R2-DG-HZ-3): once the unit has a spec, dev-spec-driven 1.41 has pruned its backlog entry and refuses
+  // an `add` of that name — the note is replaced only while the unit is still in the backlog.
+  it('writes the changed seed where step 4 put it: the backlog note replaced while the unit is in it, and the spec file once written', () => {
     expect(STEP).toMatch(
-      /its last task adds the rule — `severity: WARNING`.+ Write that change where step 4 put the seed: the unit's backlog note replaced \(`rm`, then `add`\) with `<rule_id>: N → 0` and the rule's terms, and `requirements\.md` or `docs\/improvement-specs\/<name>\.md` if already written\./,
+      /its last task adds the rule — `severity: WARNING`.+ Write that change where step 4 put the seed: the unit's backlog note replaced \(`rm`, then `add`\) while the unit is still in the backlog \(`spec_create` removes it\), with `<rule_id>: N → 0` and the rule's terms, and `requirements\.md` or `docs\/improvement-specs\/<name>\.md` if already written\./,
     );
     // Where step 4 put it: the note replaced by rm then add, requirements.md, and the file without dev-spec-driven.
     const handoff = flat(STEPS.find((s) => s.title.startsWith('Hand off'))?.body ?? '');
