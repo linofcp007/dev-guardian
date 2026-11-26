@@ -106,11 +106,16 @@ its own `tools_run` name (`history/runNames.ts`):
   a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
   `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
 
-Neither pass reads `.guardianignore`: `review_pr` and `scan_sast` hand their findings to the scan-tool factory, whose
-result filter drops a path the file ignores; `ci/runScans.ts#declaredFilter` applies the same loader and rule to the
-CLI's two diff steps (the `--rules-ref` copy's file when given). A suppressions-pass finding is keyed like a
-credential (`fingerprint/findingIdentity.ts#keyedWithoutLine`: `suppression\n<rule id>`, the occurrence and the
-group's count, never the line — a bare gitleaks allow line holds the secret).
+The suppressions pass lists only the paths `.guardianignore` keeps: its three callers hand it the factory's own
+result-filter rule (`platform/guardianIgnore.ts#keptByExclusions`) as `member`, applied before its bounds, so a
+left-out tree never fills them (scan_sast's with its scope's member; `ci/runScans.ts#declaredPaths` loads the
+`--rules-ref` copy's file when given). A rename into a listed path is listed by its old one: the factory's filter
+drops its finding, and the CLI applies the same predicate to the step's findings. The test-integrity pass reads every
+path: `review_pr`'s and `scan_sast`'s findings go through the factory's filter, the CLI's do not (as in 3.16.1 — a
+focused test in a listed path blocks `scan --diff-base`). A suppressions-pass finding is keyed like a credential
+(`fingerprint/findingIdentity.ts#keyedWithoutLine`: `suppression\n<rule id>\n<subcategory>` — the subcategory is
+`suppression:<row id>`, the directive's kind, so no identity moves from one kind to another — the occurrence and the
+group's count, never the line: a bare gitleaks allow line holds the secret).
 
 The suppressions table (`ROWS`) is closed: each row is read the way its tool reads it (Semgrep anywhere on the line,
 strings included; Bandit and gosec in comments only), and a line inside a multi-line literal is not read — the
@@ -129,11 +134,13 @@ diff -G` does not search it, so it is not listed, and no note says so; an untrac
 A row's scope says when a directive covers the whole file. Beyond `file`, the leading forms are certain by syntax
 only before the file's first code: `leading` (mypy's `# type: ignore`), `leading-only` (`@ts-nocheck`),
 `leading-bare` (own-line Pylint, RuboCop and ShellCheck forms naming no rule — their region runs on to the file's
-end) and `package-bare` (a bare `//nolint` in the comment group directly above `package`, at its column, which
-golangci-lint widens to the file: `packageDocOf`). Anywhere else, or naming its rules, such a form reads as its
-line's. The line above a directive is no reason when it is the shebang or a line-1/2 coding or magic comment
-(`MAGIC_COMMENTS`), and a byte-order mark is stripped from line 1 on both sides before the diff and the text are
-compared (git's diff keeps it, `readProjectText` drops it).
+end) and `package-bare` (a bare `//nolint` — a `//` comment, never a block one — in the comment group directly above
+`package`, at its column, which golangci-lint widens to the file: `packageDocOf`). Anywhere else, or naming its
+rules, such a form reads as its line's. The line above a directive is no reason when it is the shebang or a line-1/2
+coding or magic comment (`MAGIC_COMMENTS`); a Trivy / tfsec `:exp:<date>` or `:ws:<name>` after the directive is
+part of it (the row's match takes them), never a reason; and a byte-order mark is stripped from line 1 — the added line, the text after the change and a
+removed line 1 alike — before they are compared or read (git's diff keeps it, `readProjectText` drops it; on any
+other line a U+FEFF is that line's own text).
 
 ## The metrics module
 
