@@ -104,7 +104,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
 - **Every suppression example names its id and gives a reason**: `# nosec <id>  # <reason>` in docs/ci.md,
   docs/hooks.md, the router's dev-spec-driven reference, the rules file every host reads, the question the shell guard
   asks before an agent's `baseline update` and the message `baseline update` prints, instead of a bare `# nosec` —
-  the form the new pass reports.
+  the form the new pass reports; and `// nosemgrep: <rule> -- <reason>` in the bug packs' coverage reference, which
+  said a bare `// nosemgrep` "with a reason". A test holds every example the prose offers to its rule and reason.
 - **docs/ci.md says dev-spec-driven 1.33+ passes `--diff-base` at its finish**, so the weakened-tests and suppressions
   checks run there too.
 - **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** leaves the

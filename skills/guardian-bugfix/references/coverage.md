@@ -13,7 +13,7 @@ of these rules at any `severity_min` (none ships a `fix:`): use `suggest_fix` an
 
 - `empty-catch`, `empty-promise-catch` — FP: a deliberate fail-open explained by a comment (Semgrep reads no
   comments). A binding named `ignore`, `ignored`, `expected` or starting with `_` is honoured; otherwise
-  `// nosemgrep` with a reason.
+  `// nosemgrep: <rule> -- <reason>`.
 - `unchecked-find` — needs a literal callback (that is what tells `Array#find` from a Mongoose query); FN: a
   named predicate, `users.find(byId).name`.
 - `floating-mutation` — the receiver must look like persistence (`repo.save`); excludes `void`,

@@ -106,7 +106,10 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
 - Never advise `baseline update` to accept one finding: it accepts every current finding. One reviewed finding
   takes an inline suppression with a reason, or a baseline rebuilt on the base commit. Every suppression example
   names its rule and gives the reason (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`): an agent copies
-  the example, and a bare one is what `guardian-suppressions` reports.
+  the example, and a bare one is what `guardian-suppressions` reports. `suppressionExamples.test.ts` holds every file
+  of the prose surface to it, by the pass's own reader: a sentence that asks for the form "with a reason", or shows
+  one complete form, offers every form of the two directives it holds — so a form to avoid is named in a sentence of
+  its own.
 
 ## dev-spec-driven
 
