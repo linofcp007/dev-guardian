@@ -123453,14 +123453,15 @@ async function runScans(opts) {
       if (integrity !== null) steps.push(integrity.step);
       const suppressions = opts.diffBase !== void 0 ? await suppressionsStep(opts.projectPath, opts.diffBase) : null;
       if (suppressions !== null) steps.push(suppressions.step);
+      const declared = integrity !== null || suppressions !== null ? await declaredFilter(opts.projectPath, ctx) : () => true;
       const read3 = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read3);
       const wholeFiles = read3.filter((f) => !accepted.has(f));
       const all = dedupeFindings([
         ...collectFindings(storage, opts.projectPath),
         ...wholeFiles,
-        ...integrity?.findings ?? [],
-        ...suppressions?.findings ?? []
+        ...(integrity?.findings ?? []).filter(declared),
+        ...(suppressions?.findings ?? []).filter(declared)
       ]);
       await rememberSecretValues(scannedProject(opts.projectPath), all, {
         reportDirs: reportDirsOf(storage, opts.projectPath)
@@ -123507,6 +123508,13 @@ async function suppressionsStep(projectPath, ref) {
     },
     findings: result.findings
   };
+}
+async function declaredFilter(projectPath, ctx) {
+  const project = scannedProject(projectPath);
+  const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
+  if (exclusions === null || "error" in exclusions) return () => true;
+  const inProject2 = projectPathTest(project);
+  return (f) => f.file_path === void 0 || f.file_path === "" || !(exclusions.ignores(f.file_path) && inProject2(f.file_path));
 }
 function buildSequence(opts) {
   if (opts.baseUrl !== void 0) return SCAN_SEQUENCE;
@@ -123651,6 +123659,7 @@ var init_runScans = __esm({
   "src/ci/runScans.ts"() {
     "use strict";
     init_scanRoles();
+    init_guardianIgnore();
     init_projectPath();
     init_scriptsDir();
     init_findingMerge();
