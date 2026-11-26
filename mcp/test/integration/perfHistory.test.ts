@@ -269,6 +269,56 @@ describe('perf_check history: k6', () => {
     expect(verdictOf((await k6(s, project, 'smoke.js', 0, 10, 400)).history, 'k6.latency_p95_ms')).toBe('new');
   });
 
+  /**
+   * The file `k6 run --summary-export` writes (the legacy summary, k6 0.3x to 1.x): a Rate metric is
+   * `{ passes, fails, value }` — its rate is `value` — and a gauge `{ value, min, max }`.
+   */
+  function scriptK6Summary(summary: Record<string, unknown>): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'k6' ? '/fake/bin/k6' : null));
+    vi.mocked(runProcess).mockImplementationOnce(async (opts) => {
+      const file = opts.args?.find((a) => a.startsWith('--summary-export='))?.replace('--summary-export=', '');
+      if (file !== undefined) writeFileSync(file, JSON.stringify(summary), 'utf8');
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+  }
+  const legacy = (p95: number, failRate: number, vusMax: Record<string, number>) => ({
+    root_group: { name: '', path: '', id: 'd41d8cd98f00b204e9800998ecf8427e', groups: {}, checks: {} },
+    metrics: {
+      http_reqs: { count: 1000, rate: 99.8 },
+      http_req_duration: { avg: p95 / 2, min: 1, med: p95 / 2, max: p95 * 2, 'p(90)': p95 * 0.9, 'p(95)': p95 },
+      http_req_failed: { passes: Math.round(failRate * 1000), fails: 1000 - Math.round(failRate * 1000), value: failRate },
+      vus_max: vusMax,
+      vus: { value: 0, min: 0, max: vusMax['max'] ?? 0 },
+    },
+  });
+  type K6Result = { ok: boolean; summary?: Record<string, unknown>; history?: History };
+  async function k6Summary(s: Seeded, project: string, summary: Record<string, unknown>): Promise<K6Result> {
+    scriptK6Summary(summary);
+    return (await tool('perf_check').handler({ project_path: project, k6_script_path: 'load.js' }, s.plugin)) as K6Result;
+  }
+  const vus = (min: number, max: number) => ({ value: max, min, max });
+
+  it("H-1: the error rate of k6's --summary-export (http_req_failed.value) is read and judged", async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
+    const failing = await k6Summary(s, project, legacy(20, 0.3, vus(10, 10)));
+    expect(failing.summary?.['error_rate']).toBe(0.3);
+    expect(failing.history?.metrics?.find((m) => m.name === 'k6.error_rate_pct')).toMatchObject({ verdict: 'regressed', reference: 0 });
+    expect(perfRows(s, project)[0]?.meta?.['metrics']).toMatchObject({ 'k6.error_rate_pct': { value: 30, unit: '%' } });
+  });
+
+  it('H-1 still-pass: a summary whose http_req_failed holds `rate` is still read', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    const summary = legacy(20, 0, vus(10, 10));
+    const r = await k6Summary(s, project, { ...summary, metrics: { ...summary.metrics, http_req_failed: { rate: 0.07 } } });
+    expect(r.summary?.['error_rate']).toBe(0.07);
+    expect(verdictOf(r.history, 'k6.error_rate_pct')).toBe('new');
+  });
+
   it('a run whose summary holds no metric is not kept, and says so', async () => {
     const s = freshPlugin();
     const project = projectDir('perf-k6-');
