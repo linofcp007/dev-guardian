@@ -22,7 +22,14 @@ import {
   CAP_REPORTED,
   capBase,
   capChange,
+  CARRY_REPORTED,
+  CARRY_TREE,
+  carryBase,
+  carryChange,
   DELETED_DIR,
+  DELETED_TREE,
+  deletedTreeBase,
+  deletedTreeChange,
   IGNORED_BASE,
   ignoredChange,
   MOVED_INTO_IGNORED,
@@ -862,5 +869,51 @@ describe('runScans', () => {
     const verdict = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
     expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
     expect(verdict.coverageNotes).toEqual([]);
+  });
+
+  // Review 3 of 3.17.0, R3-DG-1: a listed tree the change DELETES whole is no longer in the project, and the step
+  // still never lists it — its member is .guardianignore's own test (a git listing holds only project paths), while
+  // the findings' post-filter keeps the result filter's rule (reviewPr.test.ts holds review_pr's side).
+  const deletedTree = async (base: Record<string, string>, change: Record<string, string>, tree: string) => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const write = (rel: string, text: string): void => {
+      const abs = join(projectPath, ...rel.split('/'));
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, text);
+    };
+    git('init', '-q');
+    for (const [rel, text] of Object.entries(base)) write(rel, text);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    rmSync(join(projectPath, tree), { recursive: true, force: true });
+    for (const [rel, text] of Object.entries(change)) write(rel, text);
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    const step = result.steps.find((s) => s.tool === 'guardian-suppressions');
+    const verdict = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
+    return { rows: result.findings.filter((f) => f.tool === 'guardian-suppressions').map(rowOf), step, verdict };
+  };
+
+  it("with diffBase: a listed tree's 600 files the change deletes never fill the suppressions step's bound", async () => {
+    const { rows, step, verdict } = await deletedTree(deletedTreeBase(), deletedTreeChange(), DELETED_TREE);
+    expect(rows).toEqual(CAP_REPORTED);
+    expect(step?.tools_run[0]?.reason).toMatch(CAP_REASON);
+    expect(step?.notes).toBeUndefined();
+    expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
+    expect(verdict.coverageNotes).toEqual([]);
+  });
+
+  it('with diffBase: a directive of a listed tree the change deletes carries none it adds elsewhere', async () => {
+    const { rows, step, verdict } = await deletedTree(carryBase(), carryChange(), CARRY_TREE);
+    expect(rows).toEqual(CARRY_REPORTED);
+    // One file read (src/z.py), nothing carried.
+    expect(step?.tools_run[0]?.reason).toMatch(CAP_REASON);
+    expect(step?.tools_run[0]?.reason).not.toMatch(/kept or moved/);
+    expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
   });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);

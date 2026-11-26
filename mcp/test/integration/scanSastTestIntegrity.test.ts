@@ -27,7 +27,7 @@ import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import type { ToolRun } from '../../src/types.js';
-import { CAP_REASON, CAP_REPORTED, capBase, capChange } from '../helpers/ignoredChange.js';
+import { CAP_REASON, CAP_REPORTED, capBase, capChange, DELETED_TREE, deletedTreeBase, deletedTreeChange } from '../helpers/ignoredChange.js';
 import { caseText, suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -144,6 +144,27 @@ describe('scan_sast with a change scope reports the suppressions it adds, as gua
     git(dir, 'add', '-A');
     git(dir, 'commit', '-qm', 'base');
     put(capChange());
+    const { rows, run } = await scan(dir, { diff: {} }, 'guardian-suppressions');
+    expect(rows).toEqual(CAP_REPORTED.map((r) => r.replace(/ medium$/, '')));
+    expect(run?.reason).toMatch(CAP_REASON);
+  });
+
+  // Review 3 of 3.17.0, R3-DG-1: a listed tree the change DELETES whole is in the diff scope (a deletion is a
+  // member) and no longer in the project; the pass still never lists it — its member is .guardianignore's own test.
+  it("scope.diff {}: a listed tree's 600 files the change deletes never fill the pass's bound", async () => {
+    const dir = makeTempDir('sast-suppressions-deleted-');
+    const put = (files: Record<string, string>): void => {
+      for (const [rel, text] of Object.entries(files)) {
+        mkdirSync(join(dir, rel, '..'), { recursive: true });
+        writeFileSync(join(dir, rel), text);
+      }
+    };
+    git(dir, 'init', '-q');
+    put(deletedTreeBase());
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    rmSync(join(dir, DELETED_TREE), { recursive: true, force: true });
+    put(deletedTreeChange());
     const { rows, run } = await scan(dir, { diff: {} }, 'guardian-suppressions');
     expect(rows).toEqual(CAP_REPORTED.map((r) => r.replace(/ medium$/, '')));
     expect(run?.reason).toMatch(CAP_REASON);
