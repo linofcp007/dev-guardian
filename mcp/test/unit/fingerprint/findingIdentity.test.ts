@@ -22,8 +22,11 @@ import {
   REDACTED_SNIPPET,
   resolutionKey,
 } from '../../../src/fingerprint/findingIdentity.js';
+import { toSarif } from '../../../src/report/sarif.js';
 import { makeFinding } from '../../../src/runners/scannerParsers/index.js';
+import { detectSuppressions, SUPPRESSIONS_TOOL } from '../../../src/testintegrity/suppressions.js';
 import type { Finding } from '../../../src/types.js';
+import { suppressionCase } from '../../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -404,6 +407,69 @@ describe('assignIdentities — credential findings are never keyed on their line
     const dir = project({ 'a.js': 'eval(userInput);\n' });
     const out = only(identify(dir, [semgrepHit('js.eval', 'a.js', 1)]));
     expect(out.content_key).toBe(sha('text\neval(userInput);'));
+  });
+});
+
+/**
+ * Review 1 of 3.17.0, R1-DG-D-2: a finding of the diff's suppressions pass sits
+ * on the directive's line, and a bare `gitleaks:allow` sits on the secret's own
+ * line — so its identity, exported as SARIF's `devGuardianIdentity` and as the
+ * `[guardian:<12 hex>]` tag of an issue's title, is keyed like a credential's:
+ * on its rule, the occurrence and the group's count, never on the line. The
+ * directive lines come from the suppression cases (no test source holds one).
+ */
+describe("assignIdentities — the suppressions pass's findings are never keyed on their line", () => {
+  const sha = (text: string): string => createHash('sha256').update(text).digest('hex');
+  const value = (n: number): string => ['guessable', 'value', String(n)].join('-');
+  const allowLine = (v: string): string => (suppressionCase('gitleaks: a comment').lines[0] ?? '').replace('not-a-real-token', v);
+  const semgrepLine = suppressionCase('Semgrep: a comment').lines[0] ?? '';
+  /** The pass's findings over `cfg/a.py` (every line added), with their identities from the file on disk. */
+  const passOver = (dir: string, lines: readonly string[]): Finding[] => {
+    const text = `${lines.join('\n')}\n`;
+    writeFiles(dir, { 'cfg/a.py': text });
+    const { findings } = detectSuppressions([{ path: 'cfg/a.py', added: lines.map((t, i) => ({ line: i + 1, text: t })), removed: [], after: text }]);
+    return identify(dir, findings);
+  };
+  const exported = (f: Finding): unknown =>
+    (JSON.parse(toSarif([f])) as { runs: Array<{ results: Array<{ partialFingerprints?: Record<string, string> }> }> }).runs[0]?.results[0]?.partialFingerprints?.['devGuardianIdentity'];
+
+  it('the secret on the line changed: the same identity, SARIF devGuardianIdentity and issue tag; no hash of the line', () => {
+    const dir = project({});
+    const first = only(passOver(dir, ['x = 1', allowLine(value(1))]));
+    expect(first).toMatchObject({ tool: SUPPRESSIONS_TOOL, rule_id: 'scanner-suppression-added', line_start: 2 });
+    const rotated = only(passOver(dir, ['x = 1', allowLine(value(2))]));
+    expect(rotated.identity).toBe(first.identity);
+    expect(rotated.content_key).toBe(first.content_key);
+    expect(exported(rotated)).toBe(exported(first));
+    expect(exported(first)).toBe(first.identity);
+    // The issue's tag is the identity's first 12 hex (createGithubIssues.ts#tagOf).
+    expect(rotated.identity?.slice(0, 12)).toBe(first.identity?.slice(0, 12));
+    // Alone in its file, it keeps its identity when it moves.
+    expect(only(passOver(dir, ['# a header', 'x = 1', allowLine(value(2))])).identity).toBe(first.identity);
+    const persisted = JSON.stringify([first, rotated, toSarif([first, rotated])]);
+    for (const v of [value(1), value(2)]) {
+      const line = allowLine(v);
+      for (const h of [sha(line), sha(`text\n${line.replace(/\s+/g, ' ').trim()}`)]) expect(persisted).not.toContain(h);
+      expect(persisted).not.toContain(v);
+    }
+  });
+
+  it('two findings in one file keep two identities', () => {
+    const out = passOver(project({}), [semgrepLine, allowLine(value(1))]);
+    expect(out.map((f) => f.rule_id)).toEqual(['scanner-suppression-added', 'scanner-suppression-added']);
+    expect(new Set(out.map((f) => f.identity)).size).toBe(2);
+  });
+
+  // Keyed without its line, a directive is told from another of its rule in its file by its place alone: one added
+  // ABOVE must never take the identity a suppression of the other names (the credentials' rule, sharedSecretCount).
+  it('a bare directive added above another never takes its identity', () => {
+    const dir = project({});
+    const kept = only(passOver(dir, ['x = 1', allowLine(value(1))]));
+    const [added, old] = passOver(dir, [semgrepLine, 'x = 1', allowLine(value(1))]);
+    expect(added?.identity).not.toBe(kept.identity);
+    // The group re-keyed, the old one too: a suppression of it lapses and it is shown again — the safe direction.
+    expect(old?.identity).not.toBe(kept.identity);
+    expect(added?.identity).not.toBe(old?.identity);
   });
 });
 
