@@ -157,6 +157,25 @@
 #      copy of it on any other branch, edited to run on a push there, signs
 #      as the same path.
 # {{/ATTEST}}
+# {{#METRICS}}
+#
+# The `metrics` job (`ci-init --metrics-command`) runs the command given to
+# ci-init on this change and, on a pull request, on its base (a git worktree:
+# `fetch-depth: 0` already fetched the base, so no second fetch and no token),
+# then compares the METRIC lines the two printed with `dev-guardian metrics`
+# (docs/ci.md, "metrics") and adds the table to the job summary. Advisory: a
+# regression is reported, never failed — the job fails only when the command
+# fails on this change, or the comparison itself is a usage error. On a push
+# the values are shown, with nothing to compare. It stores nothing.
+#   - The command reaches the step through `env:` and runs under `bash -c`,
+#     never pasted into the script: a `#` or a quote in it cannot change the
+#     step. It is this file's, and a pull request can edit this file: protect
+#     it (CODEOWNERS, a required review), as for the scan job.
+#   - A change measures itself and can print any number: this is feedback,
+#     not a security gate.
+#   - The job holds `contents: read` and nothing else; with two jobs, nothing
+#     is granted at the workflow level.
+# {{/METRICS}}
 name: dev-guardian
 
 on:
@@ -164,26 +183,26 @@ on:
     branches: ["{{DEFAULT_BRANCH}}"]
   pull_request:
 
-# {{^ATTEST}}
+# {{^MULTI_JOB}}
 permissions:
   contents: read
   security-events: write
   actions: read
-# {{/ATTEST}}
-# {{#ATTEST}}
+# {{/MULTI_JOB}}
+# {{#MULTI_JOB}}
 # Nothing at the workflow level: each job states exactly what it holds.
 permissions: {}
-# {{/ATTEST}}
+# {{/MULTI_JOB}}
 
 jobs:
   scan:
     runs-on: ubuntu-latest
-    # {{#ATTEST}}
+    # {{#MULTI_JOB}}
     permissions:
       contents: read
       security-events: write
       actions: read
-    # {{/ATTEST}}
+    # {{/MULTI_JOB}}
     steps:
       - name: Checkout
         uses: actions/checkout@{{CHECKOUT_SHA}} # {{CHECKOUT_VERSION}}
@@ -438,3 +457,73 @@ jobs:
             dev-guardian-report.json
             dev-guardian-results.sarif
       # {{/ATTEST}}
+  # {{#METRICS}}
+
+  metrics:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@{{CHECKOUT_SHA}} # {{CHECKOUT_VERSION}}
+        with:
+          # The base is measured from a worktree of this clone: full history, no second fetch.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@{{SETUP_NODE_SHA}} # {{SETUP_NODE_VERSION}}
+        with:
+          node-version: '22'
+          package-manager-cache: false
+
+      - name: Point DEV_GUARDIAN_HOME outside this checkout
+        run: echo "DEV_GUARDIAN_HOME=$RUNNER_TEMP/dev-guardian" >> "$GITHUB_ENV"
+
+      - name: Clone dev-guardian (outside this checkout — see the header comment)
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "{{DEV_GUARDIAN_TAG}}" "{{DEV_GUARDIAN_REPO}}.git" "$DEV_GUARDIAN_HOME"
+          actual_sha="$(git -C "$DEV_GUARDIAN_HOME" rev-parse HEAD)"
+          if [ "$actual_sha" != "{{DEV_GUARDIAN_SHA}}" ]; then
+            echo "dev-guardian clone at {{DEV_GUARDIAN_TAG}} resolved to $actual_sha, expected {{DEV_GUARDIAN_SHA}} -- the tag may have moved since this pipeline was generated (a supply-chain red flag). Re-run 'dev-guardian ci-init' after checking why, then commit the refreshed pipeline." >&2
+            exit 1
+          fi
+
+      - name: Measure this change and its base, then compare (advisory)
+        env:
+          # Empty on a push: the values are shown, nothing is compared.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          # ci-init --metrics-command, as given: run by `bash -c`, never pasted into this script.
+          METRICS_COMMAND: {{METRICS_COMMAND_YAML}}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/dev-guardian-metrics"
+          mkdir -p "$out"
+          measure() ( cd "$1" && bash -c "$METRICS_COMMAND" )
+          status=0
+          measure . > "$out/head.txt" 2>&1 || status=$?
+          if [ "$status" -ne 0 ]; then
+            cat "$out/head.txt"
+            echo "::error::the metrics command failed on this change (exit $status)"
+            exit "$status"
+          fi
+          set --
+          if [ -n "$BASE_SHA" ]; then
+            if git worktree add --detach "$out/base" "$BASE_SHA" && measure "$out/base" > "$out/base.txt" 2>&1; then
+              set -- --base "$out/base.txt"
+            else
+              if [ -f "$out/base.txt" ]; then cat "$out/base.txt"; fi
+              echo "::warning::the base commit $BASE_SHA could not be measured: the values are shown, nothing is compared"
+            fi
+          fi
+          status=0
+          node "$DEV_GUARDIAN_HOME/cli/dev-guardian.mjs" metrics --head "$out/head.txt" "$@" --format markdown > "$out/report.md" || status=$?
+          cat "$out/report.md"
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$status" -eq 2 ]; then
+            echo "::warning::the metrics command printed no METRIC line dev-guardian could read: nothing was measured"
+            exit 0
+          fi
+          exit "$status"
+  # {{/METRICS}}

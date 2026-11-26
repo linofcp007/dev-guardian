@@ -3,7 +3,9 @@
  * `skills/<name>/SKILL.md` and the `skills/<name>/references/*.md` a skill
  * loads on demand — shared by the tests that hold that surface to the MCP
  * tools it drives. A reference file is model-facing prose like its SKILL.md,
- * so `allDocs()` holds it to every check the skill gets.
+ * so `allDocs()` holds it to every check the skill gets. `proseFiles()` is
+ * the whole surface — every text file dev-guardian ships for a model or a
+ * user to read — for the tests that hold a property over all of it.
  *
  * Two things live here and nowhere else:
  *
@@ -18,8 +20,8 @@
  *     schema, nested keys (`scope.diff.base`) and enum values included.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import type { z } from 'zod';
@@ -77,6 +79,56 @@ export function referenceDocs(): PluginDoc[] {
 
 export function allDocs(): PluginDoc[] {
   return [...commandDocs(), ...skillDocs(), ...referenceDocs()];
+}
+
+/** What dev-guardian ships as text a model or a user reads: files, or directories walked whole. */
+const PROSE_ROOTS = [
+  'skills',
+  'commands',
+  'evals',
+  'docs',
+  'host-rules',
+  'hooks',
+  'cli',
+  'mcp/src',
+  'mcp/README.md',
+  '.cursor/rules',
+  '.windsurf/rules',
+  '.github/copilot-instructions.md',
+  'README.md',
+  'README.pt-PT.md',
+  'README.es.md',
+  'AGENTS.md',
+  'GEMINI.md',
+  'CLAUDE.md',
+  'CONTRIBUTING.md',
+  'SECURITY.md',
+];
+
+/** Text files, plus extensionless templates (`host-rules/clinerules`). */
+const TEXT_FILE = /\.(?:md|mdc|ts|mjs|js|json)$|^[^.]+$/;
+
+export interface Prose {
+  /** Repo-relative, POSIX. */
+  rel: string;
+  text: string;
+}
+
+/** The text files under `abs` (a file, or a directory walked whole but its `node_modules`), appended to `out`. */
+export function walkText(abs: string, out: string[]): void {
+  if (!existsSync(abs)) return;
+  if (statSync(abs).isDirectory()) {
+    for (const entry of readdirSync(abs)) if (entry !== 'node_modules') walkText(join(abs, entry), out);
+  } else if (TEXT_FILE.test(abs.split(sep).pop() ?? '')) {
+    out.push(abs);
+  }
+}
+
+/** Every file of the prose surface (CHANGELOG.md is history and names old spellings on purpose: not read). */
+export function proseFiles(root: string = REPO_ROOT): Prose[] {
+  const files: string[] = [];
+  for (const r of PROSE_ROOTS) walkText(resolve(root, r), files);
+  return files.map((abs) => ({ rel: relative(root, abs).split(sep).join('/'), text: readFileSync(abs, 'utf8') }));
 }
 
 /** The frontmatter as a strict YAML loader sees it; throws on invalid YAML. */

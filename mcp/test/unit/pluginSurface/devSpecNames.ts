@@ -105,6 +105,15 @@ export const DEV_SPEC_HIDDEN_ALIASES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * The dev-guardian subcommands dev-spec-driven's launcher `.specs/guardian.cjs`
+ * hands on: its `GUARDIAN_FORWARDED` (`mcp/lib/engine/guardian.js`) and help.
+ * Any other exits 3 there, so `metrics` and the rest run from dev-guardian's
+ * own CLI — the prose said the launcher "forwards every argument" (the
+ * cross-plugin review of 1.41 × 3.17, RX-10).
+ */
+export const DEV_SPEC_LAUNCHER_FORWARDS: readonly string[] = ['scan', 'baseline', 'status', 'help'];
+
+/**
  * The retired commands whose names do not start with `/spec` (every `/spec…`
  * name outside DEV_SPEC_COMMANDS fails anyway), without the leading `/`.
  * `/design`, `/scan`, `/coverage` and `/reverse` were retired too, but they

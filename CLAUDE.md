@@ -72,9 +72,11 @@ npm run pins          # every pinned scanner / action version against upstream's
 Read the file BEFORE you change its area:
 
 - [`architecture.md`](docs/maintainers/architecture.md) — the plugin's halves in full, the hooks' fail-open and
-  file-reading rules (`configFile.ts`).
+  file-reading rules (`configFile.ts`), the selftest, the diff's own passes (weakened tests, suppressions), the
+  metrics module.
 - [`build-and-test.md`](docs/maintainers/build-and-test.md) — the build's generated files, the Semgrep-dependent
-  e2e tests and their `GUARDIAN_REQUIRE_*` switches, timing tests, containers.
+  e2e tests and their `GUARDIAN_REQUIRE_*` switches, timing tests, containers, the METRIC-line contract shared
+  with dev-spec-driven.
 - [`conventions.md`](docs/maintainers/conventions.md) — TypeScript conventions (no `!`, no `any`, NodeNext), the
   dist / bundle rules in full, markdownlint, the cp1252 pack rule, releases.
 - [`ablation.md`](docs/maintainers/ablation.md) — `npm run ablate`: the axes, the coverage line, `DEAD`, the

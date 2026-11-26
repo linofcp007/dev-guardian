@@ -28,16 +28,37 @@
  * only), and k6 a script path with no `"` (`platform/toolArgs.ts`): on
  * Windows an npm-installed Lighthouse is `lighthouse.cmd`, and a `"` in the
  * URL closed the quotes `cmd.exe` wraps it in (review 10, finding 3).
+ *
+ * Every MEASURED run (3.17.0) is kept as a `perf` scan row — its numbers in
+ * `meta`, no finding — and `history` on the response judges it against the
+ * earlier runs of the same target (`metrics/perfSeries.ts`). A run that
+ * measured nothing (a page Lighthouse could not load, a k6 script error)
+ * writes no row; a history that cannot be read or written never fails the
+ * measurement — `history.recorded` is false and says why.
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { budgetViolationFindings, evaluatePerfBudgets, loadBudgets, type PerfBudgets } from '../budgets/budgets.js';
 import { allowlistedEnv } from '../fixpr/testCommandEnv.js';
-import { projectPathKind } from '../platform/projectFs.js';
+import {
+  judgeSeries,
+  k6Samples,
+  k6Series,
+  k6Settings,
+  lighthouseSamples,
+  lighthouseSeries,
+  type PerfMetricHistory,
+  type PerfSample,
+  type PerfSeries,
+  seriesHint,
+  seriesRunOf,
+} from '../metrics/perfSeries.js';
+import { hashProjectFile, projectPathKind } from '../platform/projectFs.js';
+import { DEFAULT_RETENTION_SCANS } from '../storage/maintenance.js';
 import { runProcess } from '../runners/processRunner.js';
 import { httpUrl, pathArgProblem } from '../platform/toolArgs.js';
 import { httpUrlField, ProjectPath } from '../schemas.js';
@@ -119,13 +140,14 @@ async function handler(
       categories: inp.lighthouse_categories,
       reportDir,
       projectPath,
+      scanId,
       ctx,
     });
   }
   if (k6Script === undefined) {
     return failDomain('scanner_failed', 'Provide exactly one of target_url or k6_script_path.');
   }
-  return runK6({ scriptPath: k6Script, reportDir, projectPath, ctx });
+  return runK6({ scriptPath: k6Script, reportDir, projectPath, scanId, ctx });
 }
 
 /**
@@ -145,6 +167,8 @@ interface LighthouseOpts {
   categories?: string[];
   reportDir: string;
   projectPath: string;
+  /** The run's id: its report directory's, and its history row's. */
+  scanId: string;
   ctx: PluginContext;
 }
 
@@ -214,6 +238,25 @@ async function runLighthouse(
 
   const summary = summariseLighthouse(parsed);
   const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
+  const categories = getProp(parsed, 'categories');
+  // The history samples CLS unrounded: its tolerance is 0.01, the summary's rounding step, so a
+  // CLS of 0.1351 x3 then 0.1549 (+0.0198) read 0.14 -> 0.15, within.
+  const cls = getNumber(getProp(getProp(parsed, 'audits'), 'cumulative-layout-shift'), 'numericValue');
+  const sampled = { ...summary, core_web_vitals: { ...summary.core_web_vitals, 'cumulative-layout-shift': cls ?? null } };
+  const history = recordPerfRun(opts.ctx, {
+    projectPath: opts.projectPath,
+    scanId: opts.scanId,
+    reportDir: opts.reportDir,
+    reportPath: outFile,
+    tool: 'lighthouse',
+    toolVersion: getString(parsed, 'lighthouseVersion'),
+    series: lighthouseSeries(
+      opts.url,
+      getString(parsed, 'lighthouseVersion'),
+      categories !== null && typeof categories === 'object' ? Object.keys(categories) : [],
+    ),
+    samples: lighthouseSamples(sampled),
+  });
   return {
     ok: true,
     tool: 'lighthouse',
@@ -223,7 +266,106 @@ async function runLighthouse(
     findings: budgetResult.findings,
     budgets: budgetResult.budgets,
     ...(budgetResult.warnings.length > 0 ? { warnings: budgetResult.warnings } : {}),
+    history,
   };
+}
+
+/** `history` on a measured run's response. */
+interface PerfHistory {
+  series: string;
+  recorded: boolean;
+  scan_id?: string;
+  /** recorded false: why the run is not in the history. */
+  reason?: string;
+  metrics?: PerfMetricHistory[];
+  regressed?: string[];
+  improved?: string[];
+  hint?: string;
+}
+
+/**
+ * The series' runs a judgment reads, newest first, in one statement: retention's
+ * default keep. Retention keeps N `perf` rows per project, shared by all its
+ * targets (docs/env.md), so a series holds at most N. Not `GUARDIAN_RETENTION_SCANS`
+ * itself: its `0` (keep everything) would make this an unbounded read, and a keep
+ * below 3 would leave no series judgeable, not even within one server session
+ * (retention prunes at the start). What that hides:
+ * with N above 50, `since` is the oldest 3 of a series' 50 newest runs, not of
+ * every run kept.
+ */
+const SERIES_READ = DEFAULT_RETENTION_SCANS;
+
+interface PerfRunRecord {
+  projectPath: string;
+  scanId: string;
+  reportDir: string;
+  reportPath: string;
+  tool: 'lighthouse' | 'k6';
+  toolVersion: string | undefined;
+  series: PerfSeries;
+  samples: PerfSample[];
+}
+
+function errorText(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Judges a measured run against its series and keeps it as a `perf` row.
+ * Neither step may fail the measurement: a history that cannot be read is
+ * said, and a run that cannot be written is said, with its judgment kept.
+ */
+function recordPerfRun(ctx: PluginContext, run: PerfRunRecord): PerfHistory {
+  if (run.samples.length === 0) {
+    return { series: run.series.label, recorded: false, reason: 'the run measured no metric, so it is not kept' };
+  }
+  let metrics: PerfMetricHistory[];
+  try {
+    const earlier = ctx.storage.scans
+      .listCompletedPerfSeries(run.projectPath, run.series.key, SERIES_READ)
+      .flatMap((row) => seriesRunOf(row) ?? []);
+    metrics = judgeSeries(earlier, run.samples);
+  } catch (e) {
+    return { series: run.series.label, recorded: false, reason: `the history could not be read, so the run was neither judged nor kept: ${errorText(e)}` };
+  }
+  const judged = {
+    metrics,
+    regressed: metrics.filter((m) => m.verdict === 'regressed').map((m) => m.name),
+    improved: metrics.filter((m) => m.verdict === 'improved').map((m) => m.name),
+    hint: seriesHint(metrics),
+  };
+  try {
+    ctx.storage.scans.insert({
+      scan_id: run.scanId,
+      scan_type: 'perf',
+      project_path: run.projectPath,
+      tree_hash: '',
+      report_dir: run.reportDir,
+    });
+    ctx.storage.scans.finalize({
+      scan_id: run.scanId,
+      status: 'completed',
+      // Literal names: runNames.ts places them (they report through meta, no finding).
+      tools_run: [
+        run.tool === 'k6'
+          ? { name: 'k6', status: 'ok' }
+          : { name: 'lighthouse', status: 'ok', ...(run.toolVersion !== undefined ? { version: run.toolVersion } : {}) },
+      ],
+      missing_tools: [],
+      meta: {
+        series: run.series.key,
+        series_label: run.series.label,
+        tool: run.tool,
+        ...(run.toolVersion !== undefined ? { tool_version: run.toolVersion } : {}),
+        report_path: run.reportPath,
+        metrics: Object.fromEntries(run.samples.map((s) => [s.name, { value: s.value, unit: s.unit }])),
+        verdicts: Object.fromEntries(metrics.map((m) => [m.name, m.verdict])),
+      },
+    });
+  } catch (e) {
+    return { series: run.series.label, recorded: false, reason: `the run was judged but could not be kept in the history: ${errorText(e)}`, ...judged };
+  }
+  return { series: run.series.label, recorded: true, scan_id: run.scanId, ...judged };
 }
 
 /**
@@ -362,6 +504,7 @@ interface K6Opts {
   scriptPath: string;
   reportDir: string;
   projectPath: string;
+  scanId: string;
   ctx: PluginContext;
 }
 
@@ -386,14 +529,16 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
   }
 
   const summaryFile = join(opts.reportDir, 'k6-summary.json');
+  // The script is code, and k6 hands it the environment as `__ENV`: only
+  // what k6 needs, its own `K6_*` options and the proxy — never a token the
+  // server was started with (review of 3.6, finding 14). Its `K6_*` settings
+  // key the series, read from this object: what k6 is handed.
+  const env = allowlistedEnv((name) => K6_ENV.test(name));
   const result = await runProcess({
     command: 'k6',
     args: ['run', `--summary-export=${summaryFile}`, script],
     cwd: opts.projectPath,
-    // The script is code, and k6 hands it the environment as `__ENV`: only
-    // what k6 needs, its own `K6_*` options and the proxy — never a token the
-    // server was started with (review of 3.6, finding 14).
-    env: allowlistedEnv((name) => K6_ENV.test(name)),
+    env,
     extendEnv: false,
     timeoutMs: 30 * 60_000,
   });
@@ -418,6 +563,21 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
   }
 
   const summary = summariseK6(parsed);
+  // The series is the run's inputs only: the script as the project names it, its content (its
+  // `options` are in it) and the `K6_*` settings it was handed. Never a VU count k6 measured: an
+  // arrival-rate executor adds VUs as the target slows down (keyed by the max, a slower run left its
+  // series), and k6 samples them from the start of the VUs' init, so a minimum jitters when the init
+  // outlasts the first sample (keyed by it, every run was new).
+  const history = recordPerfRun(opts.ctx, {
+    projectPath: opts.projectPath,
+    scanId: opts.scanId,
+    reportDir: opts.reportDir,
+    reportPath: summaryFile,
+    tool: 'k6',
+    toolVersion: undefined,
+    series: k6Series(relative(opts.projectPath, script).split(sep).join('/'), await hashProjectFile(opts.projectPath, script), k6Settings(env)),
+    samples: k6Samples(summary),
+  });
   return {
     ok: true,
     tool: 'k6',
@@ -427,6 +587,7 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
     exit_code: result.exitCode,
     ...(thresholdsFailed ? { note: 'k6 exited 99: the run completed, and at least one threshold failed' } : {}),
     summary,
+    history,
   };
 }
 
@@ -447,7 +608,8 @@ function summariseK6(root: unknown): Record<string, unknown> {
 
   return {
     requests_total: getNumber(requests, 'count') ?? null,
-    error_rate: getNumber(failed, 'rate') ?? null,
+    // `--summary-export` writes the legacy summary, where a Rate metric is `{ passes, fails, value }`.
+    error_rate: getNumber(failed, 'rate') ?? getNumber(failed, 'value') ?? null,
     latency_avg_ms: getNumber(duration, 'avg') ?? null,
     latency_p95_ms: getNumber(duration, 'p(95)') ?? null,
     latency_p99_ms: getNumber(duration, 'p(99)') ?? null,

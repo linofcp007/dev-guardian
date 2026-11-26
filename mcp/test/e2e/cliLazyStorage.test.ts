@@ -170,6 +170,14 @@ describe('cli/dev-guardian.mjs — on a Node without node:sqlite', () => {
     expect(r.stderr).toBe('');
   });
 
+  it('metrics still works: it reads two files and opens no database', () => {
+    writeFileSync(join(project, 'head.txt'), 'METRIC a=2 better=lower tolerance=0\n');
+    writeFileSync(join(project, 'base.txt'), 'METRIC a=1 better=lower tolerance=0\n');
+    const r = run(['metrics', '--head', join(project, 'head.txt'), '--base', join(project, 'base.txt'), '--format', 'json']);
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(r.stdout)).toMatchObject({ regressed: ['a'], exit_code: 0 });
+  });
+
   it('mcp-config preview (no --write) still works', () => {
     const r = run(['mcp-config', 'cursor']);
     expect(r.status).toBe(0);

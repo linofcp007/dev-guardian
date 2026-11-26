@@ -48,6 +48,14 @@
  * (`testintegrity/`, {@link TEST_INTEGRITY_STEP}) — a whole-project scan has
  * no diff of its own to read them from. Its findings join the scan's, so the
  * gate judges them like any other: a focused `.only` is high, the rest medium.
+ * A second step, `guardian-suppressions`, reads the same change for the
+ * suppressions it adds with no reason (`testintegrity/suppressions.ts`):
+ * medium or low, so nothing of it blocks at the default `--fail-on high`, and
+ * what its bounds left unread is a note (`ScanStepResult.notes`), never a gap.
+ * That step lists only what `.guardianignore` keeps — the `rulesRef` copy's
+ * when given — before its bounds, as `review_pr`'s and a diff-scoped
+ * `scan_sast`'s pass do (3.17.0). The weakened-tests step reads every path,
+ * as it always has: a focused test in a path the file lists still blocks.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -55,6 +63,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { isScopedScan } from '../history/scanRoles.js';
+import { keptByExclusions, loadProjectExclusions } from '../platform/guardianIgnore.js';
 import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
@@ -71,7 +80,8 @@ import { filesChangedFrom } from './changedSince.js';
 import { acceptedByHistoryIgnores } from './gitleaksIgnore.js';
 import { readInHistoryHunks } from './historyHunks.js';
 import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
-import { runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
+import { runSuppressionCheck, runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
+import { SUPPRESSIONS_TOOL } from '../testintegrity/suppressions.js';
 import { rememberSecretValues, secretValueOf } from './secretValues.js';
 import type { PartialParseRef, RulesSource, ScanStepResult } from './types.js';
 
@@ -134,6 +144,9 @@ export interface RunScansOptions {
 
 /** The step that reads the change since {@link RunScansOptions.diffBase} for weakened tests: its pass's own name. */
 export const TEST_INTEGRITY_STEP = TEST_INTEGRITY_TOOL;
+
+/** The step that reads the same change for the suppressions it adds: its pass's own name. */
+const SUPPRESSIONS_STEP = SUPPRESSIONS_TOOL;
 
 /**
  * The extra step under a ref: `scan_secrets` with `scope.paths` — the files
@@ -211,11 +224,21 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
 
       const integrity = opts.diffBase !== undefined ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);
+      // No tool handler makes the suppressions step's findings, so .guardianignore is applied here: what it
+      // lists is not listed (before the step's bounds), nor kept by the factory's rule when a rename leads into it.
+      const declared = opts.diffBase !== undefined ? await declaredPaths(opts.projectPath, ctx) : null;
+      const suppressions = opts.diffBase !== undefined ? await suppressionsStep(opts.projectPath, opts.diffBase, declared?.member ?? null) : null;
+      if (suppressions !== null) steps.push(suppressions.step);
 
       const read = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read);
       const wholeFiles = read.filter((f) => !accepted.has(f));
-      const all = dedupeFindings([...collectFindings(storage, opts.projectPath), ...wholeFiles, ...(integrity?.findings ?? [])]);
+      const all = dedupeFindings([
+        ...collectFindings(storage, opts.projectPath),
+        ...wholeFiles,
+        ...(integrity?.findings ?? []),
+        ...(suppressions?.findings ?? []).filter((f) => declared === null || f.file_path === undefined || f.file_path === '' || declared.kept(f.file_path)),
+      ]);
       // The gate keys secrets by their values, read in memory from where
       // gitleaks' reports of this run locate them (ci/secretValues.ts): a
       // secret replaced in place, or added above another, is new.
@@ -259,6 +282,59 @@ async function testIntegrityStep(projectPath: string, ref: ResolvedRef): Promise
     step: { tool: TEST_INTEGRITY_STEP, ran: true, tools_run: [result.toolRun], missing_tools: result.missing },
     findings: result.findings,
   };
+}
+
+/**
+ * {@link SUPPRESSIONS_STEP} over the same change — null when the change has
+ * no file to read. Never a gap: a bound that left files unread, or a change
+ * git could not list, is one of the step's `notes` (the verdict's
+ * `coverage_notes`), and nothing it reports is high. `member`: the paths
+ * `.guardianignore` does not ignore ({@link declaredPaths}), when it lists any.
+ */
+async function suppressionsStep(
+  projectPath: string,
+  ref: ResolvedRef,
+  member: ((path: string) => boolean) | null,
+): Promise<{ step: ScanStepResult; findings: Finding[] } | null> {
+  const result = await runSuppressionCheck(projectPath, {
+    base: ref.commit,
+    target: { kind: 'worktree', untracked: true },
+    label: ref.ref,
+    ...(member !== null ? { member } : {}),
+  });
+  if (result === null) return null;
+  return {
+    step: {
+      tool: SUPPRESSIONS_STEP,
+      ran: true,
+      tools_run: [result.toolRun],
+      missing_tools: [],
+      ...(result.notes.length > 0 ? { notes: result.notes.map((n) => `${SUPPRESSIONS_STEP}: ${n}`) } : {}),
+    },
+    findings: result.findings,
+  };
+}
+
+/**
+ * The project-relative paths the suppressions step reads and reports, by the
+ * project's `.guardianignore` — the `--rules-ref` copy's when given
+ * (`ci/refConfig.ts`) — as `review_pr`'s and a diff-scoped `scan_sast`'s pass
+ * apply it. `member`, the paths the step lists: every one the file does not
+ * ignore — a git listing holds only project paths, so one of a listed tree the
+ * change deletes whole is left out too. `kept`, the step's findings: the
+ * scan-tool factory's result filter
+ * (`platform/guardianIgnore.ts#keptByExclusions`). Null when there is no such
+ * file, or it cannot be read — then nothing is left out (the scans' own
+ * warning says so).
+ */
+async function declaredPaths(
+  projectPath: string,
+  ctx: PluginContext,
+): Promise<{ member: (path: string) => boolean; kept: (path: string) => boolean } | null> {
+  const project = scannedProject(projectPath);
+  const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
+  if (exclusions === null || 'error' in exclusions) return null;
+  return { member: (p) => !exclusions.ignores(p), kept: keptByExclusions(exclusions, project) };
 }
 
 /** `SCAN_SEQUENCE`, minus `scan_dast` when the caller gave no base url. */

@@ -662,6 +662,18 @@ export function projectPathTest(projectPath: string): (relPath: string) => boole
   };
 }
 
+/**
+ * Whether a project-relative path stays in a scan's result: not one the
+ * exclusions ignore that is in the project ({@link projectPathTest}). The
+ * scan-tool factory's result filter, and the CLI's `scan --diff-base` filter
+ * of its suppressions step's findings (`ci/runScans.ts#declaredPaths`). One
+ * per scan: the disk answers are memoised for its lifetime.
+ */
+export function keptByExclusions(exclusions: ProjectExclusions, projectPath: string): (relPath: string) => boolean {
+  const inProject = projectPathTest(projectPath);
+  return (relPath) => !(exclusions.ignores(relPath) && inProject(relPath));
+}
+
 /** A `.git` (directory or worktree file) in the project or one of its ancestors. */
 function insideGitWorkTree(projectPath: string): boolean {
   for (let dir = resolve(projectPath); ; dir = dirname(dir)) {

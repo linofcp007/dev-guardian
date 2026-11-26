@@ -7,7 +7,7 @@
  * — never scanning itself, so none of it needs Semgrep installed.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { evaluateGate } from '../../src/ci/gate.js';
@@ -17,6 +17,26 @@ import { resolveProjectPath } from '../../src/platform/projectPath.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolModule } from '../../src/tools/index.js';
 import type { Finding, ToolResult } from '../../src/types.js';
+import {
+  CAP_REASON,
+  CAP_REPORTED,
+  capBase,
+  capChange,
+  CARRY_REPORTED,
+  CARRY_TREE,
+  carryBase,
+  carryChange,
+  DELETED_DIR,
+  DELETED_TREE,
+  deletedTreeBase,
+  deletedTreeChange,
+  IGNORED_BASE,
+  ignoredChange,
+  MOVED_INTO_IGNORED,
+  REPORTED,
+  rowOf,
+} from '../helpers/ignoredChange.js';
+import { suppressionCase } from '../helpers/suppressionCases.js';
 import { makeTempDir, cleanupTempDirs } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -688,5 +708,212 @@ describe('runScans', () => {
     const plain = await runScans({ projectPath });
     expect(plain.steps.some((s) => s.tool === 'guardian-test-integrity')).toBe(false);
     expect(plain.findings.some((f) => f.tool === 'guardian-test-integrity')).toBe(false);
+  });
+
+  // 3.17.0: the suppressions step reads the same change, as its own step. A bare scanner suppression is medium: it
+  // blocks at --fail-on medium, never at the default high, and the step is never a gap.
+  it('with diffBase: a bare nosemgrep added is a guardian-suppressions medium — exit 0 at --fail-on high, 1 at medium', async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    git('init', '-q');
+    mkdirSync(join(projectPath, 'src'), { recursive: true });
+    writeFileSync(join(projectPath, 'src', 'app.py'), 'print(1)\n');
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    const bare = suppressionCase('Semgrep: a comment').lines[0] ?? '';
+    writeFileSync(join(projectPath, 'src', 'app.py'), `print(1)\n${bare}\n`);
+
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    const step = result.steps.find((s) => s.tool === 'guardian-suppressions');
+    expect(step).toMatchObject({ ran: true, missing_tools: [] });
+    expect(step?.notes).toBeUndefined();
+    expect(step?.tools_run[0]).toMatchObject({ name: 'guardian-suppressions', status: 'ok' });
+    // No test file changed: the test-integrity step does not apply, as before.
+    expect(result.steps.some((s) => s.tool === 'guardian-test-integrity')).toBe(false);
+    const added = result.findings.filter((f) => f.tool === 'guardian-suppressions');
+    expect(added.map((f) => `${f.rule_id ?? ''} ${f.file_path ?? ''}:${String(f.line_start)} ${f.severity}`)).toEqual([
+      'scanner-suppression-added src/app.py:2 medium',
+    ]);
+    const atHigh = evaluateGate({ findings: result.findings, baseline: null, failOn: 'high', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(atHigh.exitCode).toBe(CI_EXIT.PASS);
+    const atMedium = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(atMedium.exitCode).toBe(CI_EXIT.GATE_FAILED);
+    expect(atMedium.blocking.map((f) => f.rule_id)).toEqual(['scanner-suppression-added']);
+
+    // The same line with a reason: counted, no finding — nothing blocks at medium either.
+    writeFileSync(join(projectPath, 'src', 'app.py'), `print(1)\n${suppressionCase('Semgrep: a reason').lines[0] ?? ''}\n`);
+    const reasoned = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(reasoned.findings.filter((f) => f.tool === 'guardian-suppressions')).toEqual([]);
+    expect(reasoned.steps.find((s) => s.tool === 'guardian-suppressions')?.tools_run[0]?.reason).toMatch(/1 suppression\(s\) added — 1 with a reason/);
+    expect(evaluateGate({ findings: reasoned.findings, baseline: null, failOn: 'medium', steps: reasoned.steps, droppedBaselineEntries: 0 }).exitCode).toBe(CI_EXIT.PASS);
+
+    // A file past the text bound: not read, said as the step's note — the verdict's coverage_notes, never a gap.
+    writeFileSync(join(projectPath, 'src', 'big.py'), `${bare}\n${'# x\n'.repeat(600_000)}`);
+    const bounded = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    const noted = bounded.steps.find((s) => s.tool === 'guardian-suppressions');
+    expect(noted?.notes).toEqual(['guardian-suppressions: 1 changed file(s) over 2 MiB or unreadable were not read for suppressions']);
+    const verdict = evaluateGate({ findings: bounded.findings, baseline: null, failOn: 'high', steps: bounded.steps, droppedBaselineEntries: 0 });
+    expect(verdict.coverageNotes).toEqual(noted?.notes);
+    expect(verdict.coverageGaps).toEqual([]);
+    expect(verdict.exitCode).toBe(CI_EXIT.PASS);
+  });
+
+  // Review 1 of 3.17.0, R1-DG-D-1, narrowed by review 2 (R2-DG-D-1): the suppressions step skips what the
+  // project's .guardianignore lists, as review_pr's and a diff-scoped scan_sast's pass do (reviewPr.test.ts holds
+  // review_pr's side) — a file moved INTO a left-out directory included. The weakened-tests step reads every path,
+  // as in 3.16.1. With --rules-ref, the ref's copy decides: a change cannot leave its own suppression out by
+  // adding its directory to the file.
+  it("with diffBase: the suppressions step skips a path .guardianignore lists, the weakened-tests step does not — the ref's copy under rulesRef", async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const write = (rel: string, text: string): void => {
+      const abs = join(projectPath, ...rel.split('/'));
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, text);
+    };
+    git('init', '-q');
+    for (const [rel, text] of Object.entries(IGNORED_BASE)) write(rel, text);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    for (const [rel, text] of Object.entries(ignoredChange())) write(rel, text);
+    rmSync(join(projectPath, DELETED_DIR), { recursive: true, force: true });
+    rmSync(join(projectPath, ...MOVED_INTO_IGNORED.from.split('/')));
+    // Staged, the move is a rename git reads (`-M`): listed by its old path, which is kept, and read.
+    git('add', '-A', '--', MOVED_INTO_IGNORED.from, MOVED_INTO_IGNORED.to);
+    const of = (r: Awaited<ReturnType<typeof runScans>>, tool: string): string[] =>
+      r.findings
+        .filter((f) => f.tool === tool)
+        .map(rowOf)
+        .sort();
+
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(of(result, 'guardian-suppressions')).toEqual(REPORTED.suppressions);
+    expect(of(result, 'guardian-test-integrity')).toEqual(REPORTED.integrityCli);
+    const atMedium = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(atMedium.blocking.map((f) => f.file_path ?? '').sort()).toEqual(['legacy/old.test.js', 'src/b.py', 'src/c.test.js', 'third_party/lib/a.test.js']);
+
+    // The change adds its own directory to .guardianignore: read from the tree, src/ is left out of the
+    // suppressions step; read from the base (--rules-ref), it is reported. The weakened-tests step reads either way.
+    write('.guardianignore', `${IGNORED_BASE['.guardianignore'] ?? ''}src/\n`);
+    const fromTree = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(of(fromTree, 'guardian-suppressions')).toEqual([]);
+    expect(of(fromTree, 'guardian-test-integrity')).toEqual(REPORTED.integrityCli);
+    const fromRef = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' }, rulesRef: { ref: 'BASE', commit, prefix: '' } });
+    expect(of(fromRef, 'guardian-suppressions')).toEqual(REPORTED.suppressions);
+    expect(of(fromRef, 'guardian-test-integrity')).toEqual(REPORTED.integrityCli);
+  });
+
+  // Review 2 of 3.17.0, R2-DG-D-1: nothing at the default --fail-on high changes from 3.16.1 — a focused test in a
+  // path .guardianignore lists still blocks the CLI (dev-spec-driven's finish --run reads this exit code).
+  it('with diffBase: a focused test in a path .guardianignore lists is high and blocks at --fail-on high, as in 3.16.1', async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const test = (name: string, mod = ''): string => `it${mod}('${name}', () => { expect(1).toBe(1); });\n`;
+    git('init', '-q');
+    mkdirSync(join(projectPath, 'e2e'), { recursive: true });
+    writeFileSync(join(projectPath, '.guardianignore'), 'e2e/\n');
+    writeFileSync(join(projectPath, 'e2e', 'login.test.js'), test('login'));
+    writeFileSync(join(projectPath, 'e2e', 'cart.test.js'), test('cart'));
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    writeFileSync(join(projectPath, 'e2e', 'login.test.js'), test('login', '.only'));
+
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(result.findings.filter((f) => f.tool === 'guardian-test-integrity').map(rowOf)).toEqual(['test-focused e2e/login.test.js:1 high']);
+    const verdict = evaluateGate({ findings: result.findings, baseline: null, failOn: 'high', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
+    expect(verdict.blocking.map((f) => f.file_path)).toEqual(['e2e/login.test.js']);
+  });
+
+  // Review 2 of 3.17.0, R2-DG-D-3: the step lists only what .guardianignore keeps, BEFORE its 500-file bound — a
+  // left-out tree's 600 changed files never fill it, so the bare directive under src/ is read and reported.
+  it("with diffBase: a left-out tree's changed files never fill the suppressions step's bound", async () => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const write = (rel: string, text: string): void => {
+      const abs = join(projectPath, ...rel.split('/'));
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, text);
+    };
+    git('init', '-q');
+    for (const [rel, text] of Object.entries(capBase())) write(rel, text);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    for (const [rel, text] of Object.entries(capChange())) write(rel, text);
+
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    expect(result.findings.filter((f) => f.tool === 'guardian-suppressions').map(rowOf)).toEqual(CAP_REPORTED);
+    const step = result.steps.find((s) => s.tool === 'guardian-suppressions');
+    expect(step?.tools_run[0]?.reason).toMatch(CAP_REASON);
+    expect(step?.notes).toBeUndefined();
+    const verdict = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
+    expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
+    expect(verdict.coverageNotes).toEqual([]);
+  });
+
+  // Review 3 of 3.17.0, R3-DG-1: a listed tree the change DELETES whole is no longer in the project, and the step
+  // still never lists it — its member is .guardianignore's own test (a git listing holds only project paths), while
+  // the findings' post-filter keeps the result filter's rule (reviewPr.test.ts holds review_pr's side).
+  const deletedTree = async (base: Record<string, string>, change: Record<string, string>, tree: string) => {
+    const projectPath = resolveProjectPath(makeProjectDir()).path;
+    const git = (...args: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...args], { cwd: projectPath, encoding: 'utf8' });
+      if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+      return r.stdout.trim();
+    };
+    const write = (rel: string, text: string): void => {
+      const abs = join(projectPath, ...rel.split('/'));
+      mkdirSync(join(abs, '..'), { recursive: true });
+      writeFileSync(abs, text);
+    };
+    git('init', '-q');
+    for (const [rel, text] of Object.entries(base)) write(rel, text);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const commit = git('rev-parse', 'HEAD');
+    rmSync(join(projectPath, tree), { recursive: true, force: true });
+    for (const [rel, text] of Object.entries(change)) write(rel, text);
+    const result = await runScans({ projectPath, diffBase: { ref: 'BASE', commit, prefix: '' } });
+    const step = result.steps.find((s) => s.tool === 'guardian-suppressions');
+    const verdict = evaluateGate({ findings: result.findings, baseline: null, failOn: 'medium', steps: result.steps, droppedBaselineEntries: 0 });
+    return { rows: result.findings.filter((f) => f.tool === 'guardian-suppressions').map(rowOf), step, verdict };
+  };
+
+  it("with diffBase: a listed tree's 600 files the change deletes never fill the suppressions step's bound", async () => {
+    const { rows, step, verdict } = await deletedTree(deletedTreeBase(), deletedTreeChange(), DELETED_TREE);
+    expect(rows).toEqual(CAP_REPORTED);
+    expect(step?.tools_run[0]?.reason).toMatch(CAP_REASON);
+    expect(step?.notes).toBeUndefined();
+    expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
+    expect(verdict.coverageNotes).toEqual([]);
+  });
+
+  it('with diffBase: a directive of a listed tree the change deletes carries none it adds elsewhere', async () => {
+    const { rows, step, verdict } = await deletedTree(carryBase(), carryChange(), CARRY_TREE);
+    expect(rows).toEqual(CARRY_REPORTED);
+    // One file read (src/z.py), nothing carried.
+    expect(step?.tools_run[0]?.reason).toMatch(CAP_REASON);
+    expect(step?.tools_run[0]?.reason).not.toMatch(/kept or moved/);
+    expect(verdict.exitCode).toBe(CI_EXIT.GATE_FAILED);
   });
 }, RUN_SCANS_SUITE_TIMEOUT_MS);

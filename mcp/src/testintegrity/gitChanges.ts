@@ -14,13 +14,31 @@
  * per file, so a path git would quote in a header is never parsed out of one.
  * Bounded: at most {@link MAX_FILES} files are read, each at most
  * {@link MAX_TEXT_BYTES}; past either the run says what it left out.
+ *
+ * The same change is read again, its own way, by the suppressions pass
+ * ({@link runSuppressionCheck}, `suppressions.ts`): one `git diff -G`
+ * listing of the files whose added or removed lines hold a directive's
+ * token, then a `-U0` diff and the text of each one listed. Its bounds and a
+ * failed listing are notes, never a gap: nothing it adds gates a scan.
  */
 
 import { createHash } from 'node:crypto';
 import { readProjectText } from '../platform/projectFs.js';
-import { git, resolveCommit, splitNul } from '../runners/git.js';
+import { git, resolveCommit, splitNul, type GitResult } from '../runners/git.js';
 import type { Finding, ToolRun } from '../types.js';
-import { detectTestWeakening, isRelevantPath, TEST_INTEGRITY_TOOL, type ChangedFile, type DiffLine } from './detect.js';
+import { detectTestWeakening, isRelevantPath, NOT_TESTS, TEST_INTEGRITY_TOOL, type ChangedFile, type DiffLine } from './detect.js';
+import {
+  detectSuppressions,
+  mayHoldSuppression,
+  PICKAXE_ERE,
+  SUPPRESSIONS_TOOL,
+  suppressionLanguageOf,
+  type SuppressionCounts,
+  type SuppressionFile,
+} from './suppressions.js';
+
+/** How the suppressions pass runs git: `git` itself, or a test's counting wrapper. */
+type GitRunner = (cwd: string, args: readonly string[]) => Promise<GitResult>;
 
 /** What the base is compared with. */
 type ChangeTarget =
@@ -41,8 +59,8 @@ function diffRange(base: string, target: ChangeTarget): string[] {
 }
 
 /** The merge base of `a` and `b`, or null. */
-async function mergeBase(cwd: string, a: string, b: string): Promise<string | null> {
-  const r = await git(cwd, ['merge-base', '--end-of-options', a, b]);
+async function mergeBase(cwd: string, a: string, b: string, run: GitRunner = git): Promise<string | null> {
+  const r = await run(cwd, ['merge-base', '--end-of-options', a, b]);
   if (r.exitCode !== 0) return null;
   const sha = r.stdout.trim();
   return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
@@ -110,15 +128,15 @@ export function parseUnifiedZero(diff: string): { added: DiffLine[]; removed: Di
 }
 
 /** A file's text at a revision (`<rev>:./<path>`), or null. */
-async function showAt(cwd: string, rev: string, path: string): Promise<string | null> {
-  const r = await git(cwd, ['show', '--no-textconv', `${rev}:./${path}`]);
+async function showAt(cwd: string, rev: string, path: string, run: GitRunner = git): Promise<string | null> {
+  const r = await run(cwd, ['show', '--no-textconv', `${rev}:./${path}`]);
   if (r.exitCode !== 0 || r.stdout.length > MAX_TEXT_BYTES) return null;
   return r.stdout;
 }
 
-async function textAfter(cwd: string, target: ChangeTarget, path: string): Promise<string | null> {
-  if (target.kind === 'commit') return showAt(cwd, target.sha, path);
-  if (target.kind === 'index') return showAt(cwd, '', path);
+async function textAfter(cwd: string, target: ChangeTarget, path: string, run: GitRunner = git): Promise<string | null> {
+  if (target.kind === 'commit') return showAt(cwd, target.sha, path, run);
+  if (target.kind === 'index') return showAt(cwd, '', path, run);
   const r = readProjectText(cwd, path, MAX_TEXT_BYTES);
   return r.status === 'ok' ? r.text : null;
 }
@@ -431,5 +449,160 @@ export async function runTestIntegrityCheck(
     },
     missing: read.skipped > 0 ? [TEST_INTEGRITY_TOOL] : [],
     findings,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The suppressions pass (`suppressions.ts`): its own listing, its own name.
+// ---------------------------------------------------------------------------
+
+/** What the suppressions pass read of a change. */
+interface SuppressionRead {
+  files: SuppressionFile[];
+  /** No file to read: none listed by `-G` (after the language, `NOT_TESTS` and scope filters), none untracked, nothing left out. */
+  empty: boolean;
+  /** Files it could not read (a failed diff, an untracked file over the bound): their lines were not judged. */
+  unread: number;
+  /** What a bound or a failed listing left out. */
+  notes: string[];
+}
+
+function firstLineOf(r: GitResult): string {
+  return r.stderr.split(/\r?\n/).find((l) => l.trim() !== '') ?? `exit ${r.exitCode}`;
+}
+
+/**
+ * The change's files that may add a suppression: one `git diff -G` listing
+ * of the files whose added or removed lines hold a token (`PICKAXE_ERE` —
+ * the same work as one `-U0` diff of the range: git diffs every pair once),
+ * a deletion included (its removed directives carry the added ones), then
+ * one `-U0` diff per candidate and its text after the change — read only
+ * when an added line holds a token. Untracked files (a worktree target that
+ * asks for them) are read from disk and kept when they hold one. At most
+ * `cap` of each are read; past that, a note.
+ */
+async function readSuppressionChanges(
+  cwd: string,
+  from: string,
+  target: ChangeTarget,
+  member: ((path: string) => boolean) | undefined,
+  run: GitRunner,
+  cap: number,
+): Promise<SuppressionRead | { error: string }> {
+  const range = diffRange(from, target);
+  const listing = await run(cwd, ['diff', '-z', '--name-status', '-M', '--relative', '--no-ext-diff', '--no-textconv', '-G', PICKAXE_ERE, ...range, '--']);
+  if (listing.exitCode !== 0) return { error: firstLineOf(listing) };
+  const wanted = (p: string): boolean => suppressionLanguageOf(p) !== null && !NOT_TESTS.test(p) && (member === undefined || member(p));
+  const listed = parseNameStatus(listing.stdout).filter((l) => wanted(l.path) || (l.oldPath !== undefined && wanted(l.oldPath)));
+  const files: SuppressionFile[] = [];
+  const notes: string[] = [];
+  let unread = 0;
+  for (const l of listed.slice(0, cap)) {
+    const paths = l.oldPath !== undefined ? [l.oldPath, l.path] : [l.path];
+    const d = await run(cwd, ['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--relative', ...range, '--', ...paths]);
+    if (d.exitCode !== 0) {
+      unread += 1;
+      continue;
+    }
+    const lines = parseUnifiedZero(d.stdout);
+    // A file whose added lines hold no token adds nothing to judge: its text is not read (its removals still carry).
+    const judged = l.status !== 'deleted' && lines.added.some((a) => mayHoldSuppression(a.text));
+    const after = judged ? await textAfter(cwd, target, l.path, run) : null;
+    files.push({ path: l.path, added: judged ? lines.added : [], removed: lines.removed, after });
+  }
+  if (listed.length > cap) notes.push(`${listed.length - cap} more changed file(s) with a suppression token past the first ${cap} were not read`);
+  let fresh = 0;
+  if (target.kind === 'worktree' && target.untracked) {
+    const u = await run(cwd, ['ls-files', '-z', '--others', '--exclude-standard']);
+    if (u.exitCode !== 0) {
+      notes.push(`the untracked files could not be listed (${firstLineOf(u)}): none was read for suppressions`);
+    } else {
+      const untracked = splitNul(u.stdout).filter(wanted);
+      for (const path of untracked.slice(0, cap)) {
+        const t = readProjectText(cwd, path, MAX_TEXT_BYTES);
+        if (t.status !== 'ok') {
+          unread += 1;
+          continue;
+        }
+        if (!mayHoldSuppression(t.text)) continue;
+        fresh += 1;
+        files.push({ path, added: numbered(t.text), removed: [], after: t.text });
+      }
+      if (untracked.length > cap) notes.push(`${untracked.length - cap} more untracked file(s) past the first ${cap} were not read for suppressions`);
+    }
+  }
+  return { files, empty: listed.length === 0 && fresh === 0 && unread === 0 && notes.length === 0, unread, notes };
+}
+
+/** What the suppressions pass gives its caller: its `tools_run` entry, its findings, and its notes (never a gap). */
+interface SuppressionResult {
+  toolRun: ToolRun;
+  findings: Finding[];
+  /** What a bound or a failed listing left out: the CLI's `coverage_notes`, never `missing_tools` (nothing new gates). */
+  notes: string[];
+}
+
+function suppressionSummary(c: SuppressionCounts, from: string, where: string): string {
+  const head = `read ${c.files} changed file(s) with a suppression token from ${from.slice(0, 12)} to ${where}`;
+  const carried = c.carried > 0 ? `; ${c.carried} kept or moved from a removed line (not new)` : '';
+  if (c.added === 0) return `${head}: no suppression added${carried}`;
+  const parts = [
+    `${c.reported} with no reason reported`,
+    `${c.named} naming the rule(s) they silence`,
+    `${c.reasoned} with a reason`,
+  ].filter((p) => !p.startsWith('0 '));
+  return `${head}: ${c.added} suppression(s) added — ${parts.join(', ')}${carried}`;
+}
+
+/**
+ * The suppressions pass over the change from `base` (its merge base with
+ * `head`) to `target` — see `suppressions.ts`. Null when the change has no
+ * file to read (none whose diff holds a token, no untracked one): the pass
+ * does not apply. It never gates: a base with no merge base, or a change git
+ * cannot list, is `skipped` with the reason; a bound that leaves files
+ * unread is a note. `git` and `maxFiles`: a test's counting runner and a
+ * smaller bound.
+ */
+export async function runSuppressionCheck(
+  cwd: string,
+  opts: {
+    base: string;
+    head?: string;
+    target: ChangeTarget;
+    member?: (path: string) => boolean;
+    label?: string;
+    git?: GitRunner;
+    maxFiles?: number;
+  },
+): Promise<SuppressionResult | null> {
+  const run = opts.git ?? git;
+  const label = opts.label ?? opts.base;
+  const head = opts.head ?? 'HEAD';
+  const skipped = (reason: string, notes: string[]): SuppressionResult => ({
+    toolRun: { name: SUPPRESSIONS_TOOL, status: 'skipped', reason },
+    findings: [],
+    notes,
+  });
+  const from = await mergeBase(cwd, opts.base, head, run);
+  if (from === null) {
+    // The test-integrity pass says the same, as a gap or a skip: this one adds neither a gap nor a note.
+    const why = (await resolveCommit(cwd, opts.base)) === null ? `${label} names no commit` : `no merge base of ${label} and ${head} in this clone`;
+    return skipped(`${why}: the change was not read for suppressions`, []);
+  }
+  const read = await readSuppressionChanges(cwd, from, opts.target, opts.member, run, opts.maxFiles ?? MAX_FILES);
+  if ('error' in read) {
+    const note = `the change could not be listed for suppressions (${read.error}): no file was read for them`;
+    return skipped(note, [note]);
+  }
+  if (read.empty) return null;
+  const { findings, counts } = detectSuppressions(read.files);
+  const unread = counts.unread + read.unread;
+  const notes = [...read.notes, ...(unread > 0 ? [`${unread} changed file(s) over ${MAX_TEXT_BYTES / (1024 * 1024)} MiB or unreadable were not read for suppressions`] : [])];
+  const where =
+    opts.target.kind === 'index' ? 'the staged changes' : opts.target.kind === 'commit' ? opts.target.sha.slice(0, 12) : 'the working tree';
+  return {
+    toolRun: { name: SUPPRESSIONS_TOOL, status: 'ok', reason: [suppressionSummary(counts, from, where), ...notes].join('; ') },
+    findings,
+    notes,
   };
 }

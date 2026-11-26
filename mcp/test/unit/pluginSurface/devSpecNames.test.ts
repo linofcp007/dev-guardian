@@ -24,9 +24,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, relative, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -34,41 +34,15 @@ import {
   DEV_SPEC_COMMANDS,
   DEV_SPEC_FIXTURE_VERSION,
   DEV_SPEC_HIDDEN_ALIASES,
+  DEV_SPEC_LAUNCHER_FORWARDS,
   DEV_SPEC_RETIRED_COMMANDS,
   DEV_SPEC_TOOLS,
 } from './devSpecNames.js';
-import { REPO_ROOT } from './pluginDocs.js';
+import { proseFiles, REPO_ROOT, walkText } from './pluginDocs.js';
 
 afterAll(cleanupTempDirs);
 
 // ------------------------------------------------------------------ prose
-
-/** What dev-guardian ships as text a model or a user reads: files, or directories walked whole. */
-const PROSE_ROOTS = [
-  'skills',
-  'commands',
-  'evals',
-  'docs',
-  'host-rules',
-  'hooks',
-  'cli',
-  'mcp/src',
-  'mcp/README.md',
-  '.cursor/rules',
-  '.windsurf/rules',
-  '.github/copilot-instructions.md',
-  'README.md',
-  'README.pt-PT.md',
-  'README.es.md',
-  'AGENTS.md',
-  'GEMINI.md',
-  'CLAUDE.md',
-  'CONTRIBUTING.md',
-  'SECURITY.md',
-];
-
-/** Text files, plus extensionless templates (`host-rules/clinerules`). */
-const TEXT_FILE = /\.(?:md|mdc|ts|mjs|js|json)$|^[^.]+$/;
 
 /**
  * dev-guardian's own `spec_*` identifiers: `map_attack_surface`'s OpenAPI
@@ -96,26 +70,6 @@ const COMMAND_NAME = new RegExp(
   `(?<![\\w/.~:-])/(spec[\\w-]*|${Object.keys(DEV_SPEC_RETIRED_COMMANDS).join('|')})(?![\\w-])`,
   'g',
 );
-
-interface Prose {
-  rel: string;
-  text: string;
-}
-
-function walk(abs: string, out: string[]): void {
-  if (!existsSync(abs)) return;
-  if (statSync(abs).isDirectory()) {
-    for (const entry of readdirSync(abs)) if (entry !== 'node_modules') walk(join(abs, entry), out);
-  } else if (TEXT_FILE.test(abs.split(sep).pop() ?? '')) {
-    out.push(abs);
-  }
-}
-
-function proseFiles(): Prose[] {
-  const files: string[] = [];
-  for (const root of PROSE_ROOTS) walk(resolve(REPO_ROOT, root), files);
-  return files.map((abs) => ({ rel: relative(REPO_ROOT, abs).split(sep).join('/'), text: readFileSync(abs, 'utf8') }));
-}
 
 const toolNames = (text: string): string[] => [...text.matchAll(TOOL_NAME)].map((m) => m[1] ?? '');
 const commandNames = (text: string): string[] => [...text.matchAll(COMMAND_NAME)].map((m) => m[1] ?? '');
@@ -190,9 +144,34 @@ describe("dev-guardian's prose cites only current dev-spec-driven names", () => 
     expect(problems).toEqual([]);
   });
 
+  // The cross-plugin review (RX-10): the prose said the launcher "forwards every argument"; it forwards
+  // DEV_SPEC_LAUNCHER_FORWARDS only, and `node .specs/guardian.cjs metrics …` exits 3.
+  it("cites dev-spec-driven's launcher only with what it forwards, and names that wherever it gives the generic line", () => {
+    const problems: string[] = [];
+    let generic = 0;
+    for (const { rel, text } of prose) {
+      for (const paragraph of text.split(/\r?\n\s*\r?\n/)) {
+        const flat = paragraph.replace(/\s+/g, ' ');
+        for (const m of flat.matchAll(/`node \.specs\/guardian\.cjs (\S+?)[\s`\\]/g)) {
+          const word = m[1] ?? '';
+          if (/^(?:<[^<>]+>|…)$/.test(word)) {
+            generic += 1;
+            const unnamed = DEV_SPEC_LAUNCHER_FORWARDS.filter((s) => !flat.includes(`\`${s}\``) && !flat.includes(`\\\`${s}\\\``));
+            if (unnamed.length > 0) problems.push(`${rel}: \`node .specs/guardian.cjs ${word}\` without naming ${unnamed.join(', ')}`);
+          } else if (!DEV_SPEC_LAUNCHER_FORWARDS.includes(word)) {
+            problems.push(`${rel}: \`node .specs/guardian.cjs ${word}\` — the launcher does not forward ${word}`);
+          }
+        }
+      }
+    }
+    // A positive control: the rules files, the router's reference and docs/ci.md give the generic line.
+    expect(generic).toBeGreaterThan(5);
+    expect(problems).toEqual([]);
+  });
+
   it("dev-guardian's own spec_* names are still its own, and none is a dev-spec-driven tool", () => {
     const src: string[] = [];
-    walk(resolve(REPO_ROOT, 'mcp', 'src'), src);
+    walkText(resolve(REPO_ROOT, 'mcp', 'src'), src);
     const used = new Set(src.flatMap((f) => toolNames(readFileSync(f, 'utf8'))));
     expect([...OWN_NAMES].filter((n) => !used.has(n))).toEqual([]);
     expect([...OWN_NAMES].filter((n) => TOOLS.has(n))).toEqual([]);
@@ -331,5 +310,15 @@ describe(`the fixture against a live dev-spec-driven (${SOURCE})`, () => {
     );
     expect(DEV_SPEC_COMMANDS.filter((n) => !files.has(n))).toEqual([]);
     expect(Object.keys(DEV_SPEC_RETIRED_COMMANDS).filter((n) => files.has(n))).toEqual([]);
+  });
+
+  it.skipIf(live === null)('its launcher forwards what the fixture says: its GUARDIAN_FORWARDED, and help', () => {
+    if (live === null) return;
+    const src = readFileSync(join(live.root, 'mcp', 'lib', 'engine', 'guardian.js'), 'utf8');
+    const m = /const GUARDIAN_FORWARDED = \[([^\]]*)\]/.exec(src);
+    expect(m, 'GUARDIAN_FORWARDED in mcp/lib/engine/guardian.js').not.toBeNull();
+    const forwarded = (m?.[1] ?? '').split(',').map((s) => s.trim().replace(/^"|"$/g, ''));
+    expect([...forwarded, 'help']).toEqual(DEV_SPEC_LAUNCHER_FORWARDS);
+    expect(src).toMatch(/GUARDIAN_FORWARDED\.concat\(\["help"/);
   });
 });

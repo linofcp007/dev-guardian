@@ -101,6 +101,22 @@ describe('scan --help: what --local-only does and does not keep local', () => {
     expect(para).toMatch(/restored from its NuGet feeds/);
     expect(para).toMatch(/SECURITY\.md, network egress/);
   });
+
+  // The CLI runs on a throwaway database (ci/runScans.ts), and a rule
+  // registered with register_custom_rules is a row of the MCP server's
+  // database: the CLI never runs one. The help listed "registered custom
+  // rules" among the rules --local-only runs (3.17.0, G2).
+  it('never lists registered rules among what runs, and says the CLI does not run them', () => {
+    const r = spawnSyncCapped(process.execPath, [CLI, 'scan', '--help'], { cwd: dir, encoding: 'utf8', timeout: TIMEOUT_MS });
+    expect(r.status).toBe(0);
+    const out = r.stdout ?? '';
+    const start = out.indexOf('  --local-only');
+    const para = out.slice(start, out.indexOf('  --start-command', start)).replace(/\s+/g, ' ');
+    const runs = para.slice(0, para.indexOf('with --metrics=off'));
+    expect(runs).toMatch(/project's \.semgrep\.yml/);
+    expect(runs).not.toMatch(/regist/i);
+    expect(para).toMatch(/Rules registered with register_custom_rules never run here: they live in the MCP server's database, and each CLI run uses a fresh one/);
+  });
 });
 
 // Round 2: the three READMEs and docs/ci.md say the same as the help text, in

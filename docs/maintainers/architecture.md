@@ -93,6 +93,76 @@ leaf: nothing under `runners/`, `ci/`, `history/` or the scan tools imports it, 
 It opens no database and reads no project. A new raw `node:fs` call there goes in `rawRepoFsSites.test.ts` like any
 other, and a new rule pack needs a canary (`configs/selftest/README.md`).
 
+## The diff's own passes (`mcp/src/testintegrity/`)
+
+`review_pr`, a diff-scoped `scan_sast` and the CLI's `scan --diff-base` read the change itself in two passes, each
+its own `tools_run` name (`history/runNames.ts`):
+
+- `guardian-test-integrity` (`detect.ts`, `gitChanges.ts#runTestIntegrityCheck`): weakened tests. Null when the
+  change touches no test file, `package.json` or Rust source; a change git cannot read is a failed run, a gap.
+- `guardian-suppressions` (3.17.0, `suppressions.ts`, `gitChanges.ts#runSuppressionCheck`): the suppressions the
+  change adds with no reason. Its own name so a reader of the verdict (dev-spec-driven's finish labels every
+  `guardian-test-integrity` finding a weakened test) never takes one for the other. It never gates: no finding is high, a failed listing or
+  a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
+  `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
+
+The suppressions pass lists only the paths `.guardianignore` does not ignore: its three callers hand it
+`(p) => !exclusions.ignores(p)` as `member`, applied before its bounds, so a left-out tree never fills them — one the
+change deletes whole too (scan_sast's with its scope's member; `ci/runScans.ts#declaredPaths` loads the `--rules-ref`
+copy's file when given). Not the result filter's rule (`platform/guardianIgnore.ts#keptByExclusions`), which keeps a
+path no longer in the project: a git listing holds only project paths. A rename into a listed path is listed by its
+old one: the factory's filter drops its finding, and the CLI applies that filter to the step's findings. The
+test-integrity pass reads every path: `review_pr`'s and `scan_sast`'s findings go through the factory's filter, the
+CLI's do not (as in 3.16.1 — a focused test in a listed path blocks `scan --diff-base`). A suppressions-pass finding
+is keyed like a credential
+(`fingerprint/findingIdentity.ts#keyedWithoutLine`: `suppression\n<rule id>\n<subcategory>` — the subcategory is
+`suppression:<row id>`, the directive's kind, so no identity moves from one kind to another — the occurrence and the
+group's count, never the line: a bare gitleaks allow line holds the secret).
+
+The suppressions table (`ROWS`) is closed: each row is read the way its tool reads it (Semgrep anywhere on the line,
+strings included; Bandit and gosec in comments only), and a line inside a multi-line literal is not read — the
+lexer (`readLines`) carries a block comment, a string that runs on, a heredoc from line to line. Every row's match
+holds one of its tokens, and `PICKAXE_ERE` (the tokens, `|`-joined: literals, bracket classes, `!?` — POSIX ERE and
+V8 alike) is the one `git diff -G` listing, so a file whose diff holds no token is never diffed. A new row needs a
+case in `test/fixtures/suppressions/examples.json` (bare and reasoned), a token its match always holds, and a
+timing row (`suppressionsTiming.test.ts` loops over every row): a row's arguments grammar is the likeliest place
+for a superlinear regex. The cases live under `test/fixtures/` because the pass never reads it: a test source that
+held a bare `nosemgrep` in a string would be a real Semgrep suppression on dev-guardian's own branches. For the same
+reason the table builds the two directives read on a whole line (gitleaks' allow, Semgrep's blank-led one) instead
+of spelling them, and `suppressions.test.ts` holds every file of `mcp/src` to no token of those rows and no finding.
+A tracked file git diffs as binary or `-diff` — the bundles in `mcp/dist/` (`.gitattributes`) — is never read: `git
+diff -G` does not search it, so it is not listed, and no note says so; an untracked one is read from disk like any.
+
+A row's scope says when a directive covers the whole file. Beyond `file`, the leading forms are certain by syntax
+only before the file's first code: `leading` (mypy's `# type: ignore`), `leading-only` (`@ts-nocheck`),
+`leading-bare` (own-line Pylint, RuboCop and ShellCheck forms naming no rule — their region runs on to the file's
+end) and `package-bare` (a bare `//nolint` — a `//` comment, never a block one — in the comment group directly above
+`package`, at its column, which golangci-lint widens to the file: `packageDocOf`). Anywhere else, or naming its
+rules, such a form reads as its line's. The line above a directive is no reason when it is the shebang or a line-1/2
+coding or magic comment (`MAGIC_COMMENTS`); a Trivy / tfsec `:exp:<date>` or `:ws:<name>` after the directive is
+part of it (the row's match takes them), never a reason; and a byte-order mark is stripped from line 1 — the added line, the text after the change and a
+removed line 1 alike — before they are compared or read (git's diff keeps it, `readProjectText` drops it; on any
+other line a U+FEFF is that line's own text).
+
+## The metrics module
+
+`mcp/src/metrics/` (3.17.0) is a leaf: no storage, no runner, no tool module imported. It reads the METRIC
+lines of `metric-lines/1` (`metricLine.ts` — the contract is the fixture shared with dev-spec-driven,
+[build-and-test.md](build-and-test.md)), judges them (`judge.ts`, exact decimals in `decimal.ts`), compares two
+outputs and renders the `metrics` command's report (`compare.ts`; `metricFile.ts` is the one file read, a path
+the operator named), and holds `perf_check`'s series rules (`perfSeries.ts`). `tools/perfCheck.ts` reads and
+writes the `perf` rows (`scansRepo.listCompletedPerfSeries`, one statement per series); `src/cli.ts` re-exports
+what the CLI uses directly — it is light, so `metrics` loads no `load*Modules()`. A `perf` row is `'never'`
+(`history/scanRoles.ts`): it reports through `meta`, and as `'state'` it would be `latestStateScan`'s default.
+`guardian://scans/history` leaves `perf` rows out (`scansRepo.listScanHistory`, in SQL, so its 50 are the other scans),
+and `set_baseline` refuses a `'never'` type by `scan_id` and by `scan_type` alike. A run's samples come from its report:
+CLS unrounded (its 0.01 tolerance is the summary's rounding step); the k6 series from its inputs only: the script, its
+content and a digest of the `K6_*` settings perf_check hands k6, never a VU count k6 measured (k6 samples `vus_max`
+from the start of the VUs' init, so its minimum jitters). What the key leaves out: the modules the script imports,
+k6's own config file and the other variables k6 is handed (`CI`, `LANG`, the proxy), which a script can read through
+`__ENV` to set its load; a `K6_*` setting that names a per-run file makes every run a new series. A label shows a
+query, and the `K6_*` settings, as six hex digits of a digest (`?…#ab12cd`).
+
 ## What a scan of the project's own files leaves out
 
 Only the ROOT `.guardian/`'s generated output — `reports/`, the database,

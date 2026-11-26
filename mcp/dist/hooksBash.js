@@ -3613,7 +3613,7 @@ function updatesBaseline(words, at) {
 var RULE_BASELINE_UPDATE = {
   id: "baseline-update",
   level: "warn",
-  reason: "dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the gate stops reporting them \u2014 the user decides. To accept one reviewed finding, suppress it inline with a reason (`nosemgrep: <rule> -- <reason>`, `# nosec`), or rebuild the baseline on the base commit"
+  reason: "dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the gate stops reporting them \u2014 the user decides. To accept one reviewed finding, suppress it inline with a reason (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`), or rebuild the baseline on the base commit"
 };
 var START_PROCESS = /* @__PURE__ */ new Set(["start-process", "saps", "start"]);
 function plainWords(values) {

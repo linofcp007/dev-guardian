@@ -55,7 +55,12 @@
  * nothing derived from the value, so rotating the secret in place keeps the
  * identity, and the occurrence alone keeps two secrets of one rule in one
  * file apart — with their count, so a secret added above another never takes
- * its identity, and a suppression with it ({@link sharedSecretCount}). For every other finding, the text read from disk is hashed and
+ * its identity, and a suppression with it ({@link sharedSecretCount}). A finding of the diff's suppressions
+ * pass (`testintegrity/suppressions.ts`) is keyed the same way, on `suppression` + its rule id + its
+ * `subcategory` (the directive's kind, the row of that pass's table — never the line): it sits on the
+ * directive's line, and a bare `gitleaks` allow directive sits on the secret's own ({@link keyedWithoutLine});
+ * with the kind, a directive going and one of another kind arriving never hand an identity over.
+ * For every other finding, the text read from disk is hashed and
  * dropped: never written to the finding, the database or a response.
  *
  * `fingerprint` is untouched and stays each row's per-scan key. Everything
@@ -231,7 +236,7 @@ function identitiesOf<T extends IdentitySubject & { fingerprint: string }>(
  */
 function sharedSecretCount(group: ReadonlyArray<IdentitySubject & { fingerprint: string }>): number | null {
   const first = group[0];
-  if (first === undefined || !isCredentialFinding(first) || isHistoryLocator(first)) return null;
+  if (first === undefined || !keyedWithoutLine(first) || isHistoryLocator(first)) return null;
   // A repeated fingerprint is one finding (see `assignIdentities`).
   const secrets = new Set(group.map((f) => f.fingerprint)).size;
   return secrets > 1 ? secrets : null;
@@ -667,6 +672,7 @@ function contentSource(
   // Never the line, never its hash — see "Secrets" in the module comment.
   // Checked before anything reads the file, so a credential line is not even
   // loaded for this finding.
+  if (isSuppressionsFinding(f)) return `suppression\n${f.rule_id ?? ''}\n${f.subcategory ?? ''}`;
   if (isCredentialFinding(f)) {
     const locator = isHistoryLocator(f) && f.snippet !== undefined ? `\n${collapse(f.snippet)}` : '';
     return `secret\n${f.rule_id ?? ''}${locator}`;
@@ -725,6 +731,25 @@ const CREDENTIAL_RULE =
 export function isCredentialFinding(f: Pick<IdentitySubject, 'subcategory' | 'rule_id'>): boolean {
   if ((f.subcategory ?? '').toLowerCase() === 'secret') return true;
   return CREDENTIAL_RULE.test(f.rule_id ?? '') || CREDENTIAL_RULE.test(f.subcategory ?? '');
+}
+
+/**
+ * A finding of the diff's suppressions pass — its `tool`, spelled here as
+ * `testintegrity/suppressions.ts#SUPPRESSIONS_TOOL` does (that module
+ * reaches this one through the parsers: importing it would be a cycle).
+ */
+function isSuppressionsFinding(f: Pick<IdentitySubject, 'tool'>): boolean {
+  return f.tool.toLowerCase() === 'guardian-suppressions';
+}
+
+/**
+ * A finding keyed with nothing of its line, told from another of its rule (and,
+ * for the suppressions pass, its kind) in its file by its place and their
+ * count alone ({@link sharedSecretCount}): a credential, and a
+ * suppressions-pass finding (its line may hold a secret).
+ */
+function keyedWithoutLine(f: IdentitySubject): boolean {
+  return isSuppressionsFinding(f) || isCredentialFinding(f);
 }
 
 /** A gitleaks finding whose snippet names the commit it was found in. */

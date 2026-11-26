@@ -94,6 +94,14 @@ export interface ScanStepResult {
    * Absent when there are none.
    */
   partial_parses?: Record<string, PartialParseRef[]>;
+  /**
+   * What the step's bounds left unread, said and never gating: one
+   * `coverage_notes` line each (`gate.ts`), out of `coverage` and the exit
+   * code. The suppressions step's (3.17.0) — its candidate bound, a failed
+   * `-G` listing — so a pass that judges nothing at `--fail-on high` cannot
+   * fail a scan it would not have failed. Absent when there are none.
+   */
+  notes?: string[];
 }
 
 /** One file a step's scanner could read only in part, and Semgrep's error type for it. */

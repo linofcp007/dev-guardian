@@ -60,10 +60,8 @@ Semgrep's registry mode sends metrics — pass `local_only: true` to avoid it.
   setup posture).
 - **History and reports** — full audit: `audit_executive` · `risk_score` · what is new: `diff_scans` ·
   regressions: `diff_scans` with `mode: "regression"` · `set_baseline` · order: `prioritize_findings`, noise:
-  its `view: "triage"` ·
-  how to fix X: `suggest_fix` (context; you write the patch) · scanner
-  fixes as PRs: `create_fix_pr` · `report_export` · GitHub issues: `create_github_issues` · server health:
-  `health_status`.
+  its `view: "triage"` · how to fix X: `suggest_fix` (context; you write the patch) · scanner fixes as PRs:
+  `create_fix_pr` · `report_export` · GitHub issues: `create_github_issues` · server health: `health_status`.
 - **CLI** — a one-screen summary: `node cli/dev-guardian.mjs status`; the same as an HTML page:
   `node cli/dev-guardian.mjs dashboard` (both read-only) · another AI host: `node cli/dev-guardian.mjs mcp-config <host>`.
 
@@ -78,10 +76,10 @@ after the user agrees. Then `llm_scan { step: "task", plan_id }` leases one task
 minutes); run THAT brief as below and `llm_scan { step: "submit", plan_id, task_id, lease_token, independence,
 payload }`; repeat until `done`.
 
-- **Claude Code** — each `llm_scan` task brief in a fresh subagent, one task per subagent: `subagent`.
-- **Codex** — spawns a subagent only when asked: ask it to spawn one per task brief; otherwise `same_context`.
-- **Cline** — no MCP-capable subagent: run the tasks sequentially, one after another: `same_context`.
-- **Claude Desktop / Cowork chat** — no subagents: sequentially, one at a time: `same_context`.
+- **Claude Code** — each `llm_scan` task brief in a fresh subagent: `subagent`.
+- **Codex** — spawns a subagent only when asked: ask for one per task brief; otherwise `same_context`.
+- **Cline** — no MCP-capable subagent: run the tasks one after another: `same_context`.
+- **Claude Desktop / Cowork chat** — no subagents: one at a time: `same_context`.
 - **MCP sampling (VS Code Copilot)** — `llm_scan { step: "task", plan_id, execute: "sampling" }` runs
   verification tasks through the client's model.
 - **Other hosts** — a fresh subagent per task if one can call these tools, else `same_context`.
@@ -93,9 +91,10 @@ Declare independence honestly: a `same_context` verdict never demotes or confirm
 `node cli/dev-guardian.mjs scan` runs the same pipeline headless, gated against a committed `.guardian/baseline.json`
 (exit `0` pass, `1` blocked, `2` incomplete — never a pass, `3` usage error); only
 `node cli/dev-guardian.mjs baseline update` writes that file, and it accepts EVERY current finding — never run it to accept
-one finding: leave it to the user. Accept one reviewed finding with an inline suppression and a reason
-(`nosemgrep: <rule> -- <reason>`, `# nosec`). Pipelines and pull requests: the plugin's `docs/ci.md`.
+one finding: leave it to the user. Accept one reviewed finding inline, with a reason
+(`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`). Pipelines and pull requests: the plugin's `docs/ci.md`.
 `.gitignore` keeps `.guardian/` out of git but its shared files: `**/.guardian/*`, `!**/.guardian/baseline.json`,
 `!**/.guardian/budgets.yml`, `!**/.guardian/hooks.config.json`, `!**/.guardian/hooks-allowlist.json`,
 `!**/.guardian/scan.yml` (never a bare `.guardian/`). dev-spec-driven 1.29+ runs this gate when it closes a feature; from
-such a project the line is `node .specs/guardian.cjs <arguments>`.
+such a project `node .specs/guardian.cjs <arguments>` runs `scan`, `baseline`, `status` and `help` (`metrics`: the
+CLI above).

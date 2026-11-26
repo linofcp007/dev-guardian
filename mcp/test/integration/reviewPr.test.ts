@@ -47,6 +47,26 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolRun } from '../../src/types.js';
+import {
+  CAP_REASON,
+  CAP_REPORTED,
+  capBase,
+  capChange,
+  CARRY_REPORTED,
+  CARRY_TREE,
+  carryBase,
+  carryChange,
+  DELETED_DIR,
+  DELETED_TREE,
+  deletedTreeBase,
+  deletedTreeChange,
+  IGNORED_BASE,
+  ignoredChange,
+  MOVED_INTO_IGNORED,
+  REPORTED,
+  rowOf,
+} from '../helpers/ignoredChange.js';
+import { caseText, suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -799,5 +819,96 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
     const res = r as unknown as ReviewResult;
     expect(res.tools_run.some((t) => t.name === 'guardian-test-integrity')).toBe(false);
     expect(res.tools_run.some((t) => t.name === 'guardian-client-trust')).toBe(false);
+    expect(res.tools_run.some((t) => t.name === 'guardian-suppressions')).toBe(false);
+  });
+
+  // 3.17.0: the suppressions the diff adds, a pass of its own beside the test-integrity one.
+  it('a suppression added with no reason: a finding of guardian-suppressions, read at head, checked out or not', async () => {
+    const dir = await repo('main', { 'src/sum.ts': 'export {};\n', 'src/sum.test.ts': TEST });
+    write(dir, 'src/sum.ts', `${caseText(suppressionCase('ESLint: the whole file, every rule'))}export {};\n`);
+    write(dir, 'src/util.ts', `${caseText(suppressionCase('ESLint: the next line, a rule'))}`);
+    await commitAll(dir, 'silence it');
+    for (const args of [{ base_ref: 'main' }, { base_ref: 'main', head_ref: 'feature' }]) {
+      if ('head_ref' in args) await git(dir, 'checkout', '-q', 'main');
+      const { r, p } = await review(dir, args);
+      expect(r.ok).toBe(true);
+      const res = r as unknown as ReviewResult;
+      const pass = res.tools_run.find((t) => t.name === 'guardian-suppressions');
+      expect(pass).toMatchObject({ status: 'ok', reason: expect.stringMatching(/2 suppression\(s\) added — 1 with no reason reported, 1 naming/) });
+      expect(rowsOf(p, res.scan_id, 'guardian-suppressions')).toEqual(['suppression-added src/sum.ts:1 medium']);
+      // Its own name: nothing of it is a test-integrity finding.
+      expect(res.tools_run.some((t) => t.name === 'guardian-test-integrity')).toBe(false);
+    }
+  });
+
+  // Review 1 of 3.17.0, R1-DG-D-1, narrowed by review 2 (R2-DG-D-1): the suppressions pass skips the paths the
+  // project's .guardianignore lists — the same change the CLI's scan --diff-base reads in ciRunScans.test.ts,
+  // reported the same there; the factory's result filter drops a left-out test (the CLI keeps it, as in 3.16.1).
+  it('a path .guardianignore leaves out: neither pass reports it, the control files are', async () => {
+    const dir = await repo('main', { ...IGNORED_BASE });
+    for (const [rel, text] of Object.entries(ignoredChange())) write(dir, rel, text);
+    rmSync(join(dir, DELETED_DIR), { recursive: true, force: true });
+    rmSync(join(dir, MOVED_INTO_IGNORED.from));
+    await commitAll(dir, 'vendor bump');
+    const { r, p } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    const rows = (tool: string): string[] =>
+      p.storage.findings
+        .listByScan(res.scan_id)
+        .filter((f) => f.tool === tool)
+        .map(rowOf)
+        .sort();
+    expect(rows('guardian-suppressions')).toEqual(REPORTED.suppressions);
+    expect(rows('guardian-test-integrity')).toEqual(REPORTED.integrityReview);
+  });
+
+  // Review 2 of 3.17.0, R2-DG-D-3: the pass lists only what .guardianignore keeps, before its 500-file bound — a
+  // left-out tree's 600 changed files never fill it (ciRunScans.test.ts holds the CLI's side).
+  it("a left-out tree's changed files never fill the suppressions pass's bound", async () => {
+    const dir = await repo('main', capBase());
+    for (const [rel, text] of Object.entries(capChange())) write(dir, rel, text);
+    await commitAll(dir, 'regenerate');
+    const { r, p } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    const rows = p.storage.findings
+      .listByScan(res.scan_id)
+      .filter((f) => f.tool === 'guardian-suppressions')
+      .map(rowOf);
+    expect(rows).toEqual(CAP_REPORTED);
+    expect(res.tools_run.find((t) => t.name === 'guardian-suppressions')?.reason).toMatch(CAP_REASON);
+  });
+
+  // Review 3 of 3.17.0, R3-DG-1: a listed tree the change DELETES whole is no longer in the project, and the pass
+  // still never lists it — its member is .guardianignore's own test (a git listing holds only project paths); the
+  // factory's result filter keeps its rule (the legacy/ row above). ciRunScans.test.ts holds the CLI's side.
+  const deletedTree = async (base: Record<string, string>, change: Record<string, string>, tree: string) => {
+    const dir = await repo('main', base);
+    rmSync(join(dir, tree), { recursive: true, force: true });
+    for (const [rel, text] of Object.entries(change)) write(dir, rel, text);
+    await commitAll(dir, 'drop the tree');
+    const { r, p } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    const rows = p.storage.findings
+      .listByScan(res.scan_id)
+      .filter((f) => f.tool === 'guardian-suppressions')
+      .map(rowOf);
+    return { rows, reason: res.tools_run.find((t) => t.name === 'guardian-suppressions')?.reason };
+  };
+
+  it("a listed tree's 600 files the change deletes never fill the suppressions pass's bound", async () => {
+    const { rows, reason } = await deletedTree(deletedTreeBase(), deletedTreeChange(), DELETED_TREE);
+    expect(rows).toEqual(CAP_REPORTED);
+    expect(reason).toMatch(CAP_REASON);
+  });
+
+  it('a directive of a listed tree the change deletes carries none it adds elsewhere', async () => {
+    const { rows, reason } = await deletedTree(carryBase(), carryChange(), CARRY_TREE);
+    expect(rows).toEqual(CARRY_REPORTED);
+    // One file read (src/z.py), nothing carried.
+    expect(reason).toMatch(CAP_REASON);
+    expect(reason).not.toMatch(/kept or moved/);
   });
 });

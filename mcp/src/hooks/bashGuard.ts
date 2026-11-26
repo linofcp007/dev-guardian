@@ -2262,7 +2262,8 @@ const RULE_DB_ADOPT: MatchedRule = {
 /**
  * The CLI, as a command or a script: `dev-guardian`, `dev-guardian.mjs`,
  * `dev-guardian.cmd`, `dev-guardian@3.0.1` — and `guardian.cjs`, the launcher
- * dev-spec-driven writes into `.specs/`, which hands every argument on to it.
+ * dev-spec-driven writes into `.specs/`, which forwards `scan`, `baseline`, `status` and `help` to it
+ * (`baseline update` among them; any other subcommand exits 3 there).
  */
 const CLI_NAME = /^(?:dev-guardian(?:@[\w.^~<>=-]*)?(?:\.(?:mjs|cjs|js|cmd|ps1|exe))?|guardian\.cjs)$/i;
 /** What runs the CLI named as its program: node and the other runtimes, and the package runners. */
@@ -2350,7 +2351,7 @@ const RULE_BASELINE_UPDATE: MatchedRule = {
   reason:
     'dev-guardian baseline update accepts EVERY current finding into .guardian/baseline.json, new ones included, and the ' +
     'gate stops reporting them — the user decides. To accept one reviewed finding, suppress it inline with a reason ' +
-    '(`nosemgrep: <rule> -- <reason>`, `# nosec`), or rebuild the baseline on the base commit',
+    '(`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`), or rebuild the baseline on the base commit',
 };
 
 const START_PROCESS = new Set(['start-process', 'saps', 'start']);

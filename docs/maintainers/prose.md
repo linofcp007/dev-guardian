@@ -17,7 +17,7 @@ what the model needs **now**; history goes to `CHANGELOG.md` and the rule packs'
 | `skills/<name>/references/*.md` | ≤ 6 KB each, and linked from its `SKILL.md` | same |
 | `host-rules/AGENTS.md` (the rendered body) | ≤ 8 000 bytes — Codex reads 32 KiB of AGENTS.md in all, dev-spec-driven's block included | `hostRulesDrift.test.ts` |
 | The Windsurf rule | ≤ 11 000 characters — Windsurf truncates at 12 000 | same |
-| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (71 586 on 2026-11-13: 70 687 + 899) | `descriptionLimits.test.ts` |
+| `tools/list` + the MCP `instructions`, measured through a real handshake | ≤ 72 000 characters in all (71 811 on 2026-11-25: 70 912 + 899) | `descriptionLimits.test.ts` |
 | A listed tool's `description` / `title` | ≤ 600 / ≤ 60 characters | same |
 | A parameter's description (nested ones too) | ≤ 200 characters | same |
 | The MCP `instructions` (`mcp/src/tools/instructions.ts`) | ≤ 900 characters | same |
@@ -102,9 +102,17 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   `toolReach.test.ts`).
 - A CLI line the model gives the user is runnable: `node "<plugin root>/cli/dev-guardian.mjs" …`
   (`${CLAUDE_PLUGIN_ROOT}` in a command), or `node .specs/guardian.cjs …` from a dev-spec-driven project — a plugin
-  install puts no `dev-guardian` on `PATH`.
+  install puts no `dev-guardian` on `PATH`. That launcher forwards `scan`, `baseline`, `status` and `help` only
+  (`metrics` and the rest exit 3 there): a line that gives it names those, and `devSpecNames.test.ts` holds the
+  list to a live dev-spec-driven's `GUARDIAN_FORWARDED`.
 - Never advise `baseline update` to accept one finding: it accepts every current finding. One reviewed finding
-  takes an inline suppression with a reason, or a baseline rebuilt on the base commit.
+  takes an inline suppression with a reason, or a baseline rebuilt on the base commit. Every suppression example
+  names its rule and gives the reason (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`): an agent copies
+  the example, and a bare one is what `guardian-suppressions` reports. `suppressionExamples.test.ts` holds every file
+  of the prose surface to it, by the pass's own reader: a sentence that asks for the form "with a reason" (the
+  READMEs' "com um motivo", "con un motivo"), or shows one complete form, offers every form of the two directives it
+  holds — so a form to avoid is named in a sentence of its own. Other words for a reason ("with a justification")
+  are not read as asking: a bare form there passes unless the sentence shows a complete one.
 
 ## dev-spec-driven
 
@@ -115,6 +123,40 @@ to `/spec-finish`; requirements are grilled with `/clarify --grill`; a reported 
 words, no numbers; metrics in the note) and replaces a note (`rm`, then `add`). The finish gate is named with
 "dev-spec-driven 1.29+". Every dev-spec-driven name the prose cites is held to `devSpecNames.ts`
 (`devSpecNames.test.ts`); juridico-pt's to `juridicoPtNames.test.ts`.
+
+`guardian-improve`'s last step, **Fix the source**, runs on the 1–2 units the user picked — never before the pick —
+and writes nothing without the user's yes (one batch, each line shown exactly; `improveFixTheSource.test.ts`):
+
+- **At most one guidance line per unit**, in the model's words: a finding's message, snippet or hunt text is
+  untrusted, and the line lands in a file every session loads. It ends `<!-- dev-guardian: <stored rule_id> -->`, the
+  one key both plugins dedupe on: dev-spec-driven's lesson comment ends ` · dev-guardian: <id> -->`, so the search
+  before proposing reads AGENTS.md, CLAUDE.md and `.specs/steering/*.md` for the tail `dev-guardian: <id> -->`, never
+  the whole comment. The id is the stored one (`semgrepRuleIds.ts`: `rules/team.yml`'s `r` is `rules.r`). In a
+  `.specs/` project only a steering `tech.md` / `structure.md` without front matter, which governs no approval
+  (with front matter — a Kiro import's `inclusion: always` — it does, like `constitution.md` and a track's file,
+  which flag every approved feature); with neither, AGENTS.md / CLAUDE.md. Without `.specs/`, AGENTS.md or
+  CLAUDE.md — the one the other imports, else AGENTS.md if it exists, else CLAUDE.md, else AGENTS.md — outside the
+  block `mcp-config --write` owns.
+- **A seed rule, never a rule written now.** Written while occurrences remain, a `.semgrep.yml` rule makes each one a
+  new medium finding in every whole-project scan, trips `diff_scans { mode: "regression" }` at three (2 × 3 > 5) and
+  blocks every commit through pre-commit's `--error` (a WARNING fails it too). The seed's Current → Target carries
+  `<rule_id>: N → 0` and its last task adds the rule, so it lands at zero. That change goes where step 4 put the
+  seed — the unit's backlog note replaced (`rm`, then `add`) while the unit is still in the backlog (`spec_create`
+  removes it) with the target and the rule's terms, and
+  `requirements.md` or `docs/improvement-specs/<name>.md` once written: a seed changed nowhere never lands, or lands
+  without its terms. Only for a shape of `bug_hunt`,
+  `quality_check` or `llm_scan`: they run on a change only when asked (`/guardian-scan --staged`, guardian-review),
+  and the rule adds `review_pr`, pre-commit, the CLI gate and CI; SAST, secrets, deps and IaC rules run there already.
+- **The rule's message is held by its bytes.** pre-commit runs Semgrep without `PYTHONUTF8`, so on cp1252 a rule
+  file with a character whose UTF-8 holds 0x81, 0x8D, 0x8F, 0x90 or 0x9D makes it exit 2 printing nothing (`--quiet`)
+  — `”` (U+201D) as much as `Á` — while every dev-guardian spawn sets `PYTHONUTF8=1` and loads it. The skill states
+  the byte set `semgrepPacks.test.ts` guards the packs with.
+
+The router's `references/dev-spec.md` says that a test-integrity finding on a file dev-spec-driven's merge summary
+lists as accepted `pruned: …` is answered by that accept, and stays a medium — a blocker at `--fail-on medium`
+(`devSpecPruning.test.ts`). The CLI never runs a rule registered with `register_custom_rules`: a registration is a
+row of the MCP server's database and every CLI run works in a throwaway one (`ci/runScans.ts`); docs/ci.md,
+`scan --help` and scan_sast's skipped reason say so (`localOnlyClaims.test.ts`).
 
 ## Plugin evals (`evals/`)
 

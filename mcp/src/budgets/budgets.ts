@@ -207,6 +207,11 @@ export function evaluateQualityBudgets(
 
 // ---------------------------------------------------------------------- findings
 
+/** What a budget's measurement is, where its name alone would mislead: bundle_size_kb is no one bundle's size. */
+const MEASURED_AS: Readonly<Record<string, string>> = {
+  'perf.bundle_size_kb': " (Lighthouse's total-byte-weight: every byte the page loaded, not one bundle)",
+};
+
 /**
  * A budget violation as a {@link Finding}, in the same shape as every other
  * scanner's — `perf.*` budgets are `category: 'performance'`, `quality.*`
@@ -226,7 +231,7 @@ export function budgetViolationFindings(violations: readonly BudgetViolation[], 
       subcategory: 'budget',
       title: `${v.budget} over budget: ${v.measured}${v.unit} > ${v.limit}${v.unit}`,
       message:
-        `${v.budget} measured ${v.measured}${v.unit}, over the ${v.limit}${v.unit} budget set in ${filePath}. ` +
+        `${v.budget} measured ${v.measured}${v.unit}${MEASURED_AS[v.budget] ?? ''}, over the ${v.limit}${v.unit} budget set in ${filePath}. ` +
         'Either bring it back under budget or, if the budget itself is wrong, edit that file — it is the ' +
         'single source of truth perf_check and quality_check both read.',
       file_path: filePath,

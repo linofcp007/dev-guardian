@@ -164,6 +164,9 @@ export const RUN_NAMES = {
   // review_pr's and a diff-scoped scan_sast's check of the change for weakened tests
   // (testintegrity/): absent when the change touches no test file.
   'guardian-test-integrity': scanner('guardian-test-integrity'),
+  // The same callers' pass over the suppressions the change adds (testintegrity/suppressions.ts):
+  // absent when no changed file holds a suppression's token; skipped, never failed.
+  'guardian-suppressions': scanner('guardian-suppressions'),
   // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
   'dotnet-sdk': scanner('security-code-scan', 'dotnet-analyzers'),
 
@@ -291,6 +294,10 @@ export const RUN_NAMES = {
   scan_dotnet_secrets: scanner('scan_dotnet_secrets'),
   dotnet_efcore_audit: scanner('dotnet_efcore_audit'),
   dotnet_target_framework_check: scanner(),
+
+  // perf_check's `perf` rows (3.17.0): report through meta, no finding.
+  lighthouse: scanner(),
+  k6: scanner(),
 
   // compliance_check: its policy-document walk, and the RGPD Semgrep pack
   // (configs/semgrep/rgpd.yml), whose findings say `semgrep`.

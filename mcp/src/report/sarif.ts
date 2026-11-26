@@ -18,6 +18,7 @@ import type { Finding, Severity } from '../types.js';
 import { sarifTaxonomyTags } from '../frameworks/taxonomy.js';
 import { resolveVersion } from '../platform/version.js';
 import { credentialSafeFingerprint } from '../redaction/secretFindingRedaction.js';
+import { SUPPRESSIONS_TOOL } from '../testintegrity/suppressions.js';
 
 interface SarifOptions {
   toolName?: string;
@@ -59,6 +60,19 @@ interface SarifRule {
 
 type SarifLevel = 'error' | 'warning' | 'note' | 'none';
 
+/**
+ * A rule's `name`: its first finding's subcategory, else its category. The
+ * suppressions pass's subcategory is `suppression:<kind>` — each finding's own
+ * directive kind — while its rule is one of two whatever the kind, so its name
+ * is the text before the first `:` (`suppression`), never the kind of
+ * whichever finding came first. Another tool's subcategory is the name as it
+ * is; every result keeps its own whole subcategory.
+ */
+function ruleName(f: Finding): string {
+  const name = f.subcategory ?? f.category;
+  return f.tool === SUPPRESSIONS_TOOL ? (name.split(':')[0] ?? name) : name;
+}
+
 export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
   const suppressed = opts.suppressed ?? [];
   const rulesById = new Map<string, SarifRule>();
@@ -66,7 +80,7 @@ export function toSarif(findings: Finding[], opts: SarifOptions = {}): string {
     const id = f.rule_id ?? `${f.tool}/${f.category}`;
     if (!rulesById.has(id)) {
       const rule: SarifRule = { id };
-      rule.name = f.subcategory ?? f.category;
+      rule.name = ruleName(f);
       rule.shortDescription = { text: f.title };
       if (f.message) rule.fullDescription = { text: f.message };
       rule.defaultConfiguration = { level: levelFor(f.severity) };

@@ -425,6 +425,7 @@ const NOT_ENV_VARS = new Set([
   'GUARDIAN_IGNORE_FILE',
   'GUARDIAN_REQUIRE',
   'GUARDIAN_GAP_KINDS',
+  'GUARDIAN_FORWARDED',
   'GUARDIAN_ANYTHING',
   'GUARDIAN_SOMETHING_NEW',
   'GUARDIAN_EXPLICIT',
@@ -470,6 +471,49 @@ describe('the release gate, as CONTRIBUTING states it', () => {
     const step0 = /^0\. [^]*?(?=^1\. )/m.exec(contributing)?.[0] ?? '';
     expect(step0).toMatch(/`npm run test:docker -- --toolchain`/);
     expect(read('docs/env.md')).toMatch(/^\| `GUARDIAN_REQUIRE_WPSCAN` \| test suite \|/m);
+  });
+});
+
+// ───────────────── the cross-plugin review (dev-spec-driven 1.41 × 3.17.0): who hands the finish its base, two streams
+
+describe("docs/ci.md on dev-spec-driven's finish check and on a name printed on two streams", () => {
+  /** A `## ` section of docs/ci.md, up to the next one, whitespace joined. */
+  const section = (heading: string): string => {
+    const ci = read('docs/ci.md').replace(/\r\n/g, '\n');
+    const at = ci.indexOf(`\n${heading}\n`);
+    expect(at, heading).toBeGreaterThan(-1);
+    const rest = ci.slice(at + heading.length + 2);
+    const end = rest.search(/^## /m);
+    return flat(end === -1 ? rest : rest.slice(0, end));
+  };
+
+  it('RX-1 the base comes from `finish --run`; a check reported over MCP gets none, so neither diff pass runs in it', () => {
+    const finish = section("## As dev-spec-driven's finish check");
+    expect(finish).not.toMatch(/its finish hands the launcher/);
+    expect(finish).toContain("its `finish --run` (1.33 or later) hands the launcher the feature's base (`DEV_SPEC_DIFF_BASE`)");
+    expect(finish).toContain(
+      'a check run by hand and reported over MCP (`spec_finish` with its evidence) gets no base, so neither diff pass runs in it unless that run sets `DEV_SPEC_DIFF_BASE`',
+    );
+  });
+
+  it('RX-6 `metrics` reads one file in print order, dev-spec-driven stdout then stderr: one stream reads the same in both', () => {
+    const metrics = section('## `metrics`');
+    expect(metrics).toContain('`metrics` reads one file, in print order: a job that captures `2>&1`');
+    expect(metrics).toContain("dev-spec-driven reads stdout, then stderr, so stderr's line wins there");
+    expect(metrics).toContain('print a name on one stream to get the same reading from both');
+  });
+
+  // Review 2 (R2-DG-HZ-8): "ANSI colour codes are removed first" read as if a code inside the keyword were
+  // removed too; the reader (and dev-spec-driven's) reads the keyword as printed (R2-MF-6).
+  it('R2-DG-HZ-8 the grammar says a colour code that splits the keyword reads nothing', () => {
+    expect(section('## `metrics`')).toContain(
+      'ANSI colour codes are removed first, but the keyword is read as printed: a colour code inside it (`MET`, the code, `RIC`) splits it, and the line reads nothing;',
+    );
+  });
+
+  it('R2-DG-HZ-8 the upgrade note names both blanket IaC ignores, `#trivy:ignore:*` and `#tfsec:ignore:*`', () => {
+    const upgrading = flat(read('CHANGELOG.md')).split('### Upgrading from 3.16.1')[1]?.split('### Added')[0] ?? '';
+    expect(upgrading).toContain('`#trivy:ignore:*` or `#tfsec:ignore:*`');
   });
 });
 

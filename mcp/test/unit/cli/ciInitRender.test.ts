@@ -20,7 +20,7 @@
 import { describe, expect, it } from 'vitest';
 
 // mcp/test/unit/cli -> ../../../.. -> repo root -> cli/dev-guardian.mjs
-const { renderCiTemplate } = await import('../../../../cli/dev-guardian.mjs');
+const { metricsCommandProblem, renderCiTemplate } = await import('../../../../cli/dev-guardian.mjs');
 
 describe('renderCiTemplate', () => {
   it('substitutes every {{KEY}} token from vars', () => {
@@ -115,4 +115,35 @@ describe('renderCiTemplate: sections', () => {
     const text = "if: ${{ !cancelled() && github.event_name == 'push' }}\nx: ${{ github.ref }}";
     expect(renderCiTemplate(text, {}, { ATTEST: true })).toBe(text);
   });
+});
+
+// `ci-init --metrics-command` (3.17.0): the command reaches the step as a YAML
+// single-quoted value in `env:` and runs under `bash -c`, so only what would
+// change the YAML or the workflow is refused — a NUL among it, which no
+// process argument can carry (the e2e test cannot pass one).
+describe('metricsCommandProblem', () => {
+  it.each([
+    ['', /requires a command/],
+    ['a'.repeat(1001), /over 1000 characters/],
+    ['a\u0000b', /one line/],
+    ['a\nb', /one line/],
+    ['a\u001bb', /control or invisible/],
+    ['a\u0085b', /control or invisible/],
+    ['a\u2028b', /control or invisible/],
+    ['a\ufeffb', /control or invisible/],
+    ['a\uffffb', /control or invisible/],
+    ['a\ud800b', /control or invisible/],
+    ['echo ${{ github.token }}', /GitHub would evaluate it/],
+    ['echo {{X}}', /reserves/],
+    ['echo }}', /reserves/],
+  ])('refuses %j', (cmd, why) => {
+    expect(metricsCommandProblem(cmd)).toMatch(why);
+  });
+
+  it.each(['npm run size', "echo 'x' # y", 'a'.repeat(1000), 'npm\trun size', 'echo $HOME ${X} {x}', 'echo é ✓ 漢 \u{1f600}'])(
+    'takes %j',
+    (cmd) => {
+      expect(metricsCommandProblem(cmd)).toBeNull();
+    },
+  );
 });

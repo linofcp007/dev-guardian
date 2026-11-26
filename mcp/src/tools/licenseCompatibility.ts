@@ -201,19 +201,17 @@ interface ComplianceRow {
   meta?: unknown;
 }
 
-/** `listHistoryForProject`, never `listHistory` (fix round 1, item 5): the
- *  latter is unscoped across the WHOLE database, so a `compliance_check` of
- *  a DIFFERENT project on the same server could win here and attribute its
- *  dependency licenses to this one — the exact class of bug already fixed
- *  for `deps_update_plan`'s CVE source (`scansRepo.ts`'s own module
- *  comment). Filtered to `status === 'completed'` in JS, matching that same
- *  file's convention for its project-scoped siblings. */
+/** The project's latest completed `compliance` scan, found by its type in one
+ *  query (`listCompletedOfTypes`, as `export_vex` finds its SBOM) — never the
+ *  first compliance row among the project's 50 newest rows of ANY type
+ *  (3.17.0): every `perf_check` run is a row of its own, and after
+ *  a session of 50 of them that window held no compliance scan and the tool
+ *  read zero incompatibilities. Scoped to this project, never the whole
+ *  database (fix round 1, item 5): another project's `compliance_check` would
+ *  attribute its dependency licenses to this one. */
 function findLatestCompliance(ctx: PluginContext, projectPath: string): ComplianceRow | null {
-  const history = ctx.storage.scans.listHistoryForProject(projectPath, 50);
-  const row = history.find((s) => s.scan_type === 'compliance' && s.status === 'completed');
-  if (!row) return null;
-  const full = ctx.storage.scans.getById(row.scan_id);
-  return full ? { scan_id: row.scan_id, meta: full.meta } : null;
+  const row = ctx.storage.scans.listCompletedOfTypes(projectPath, ['compliance'], { limit: 1 })[0];
+  return row === undefined ? null : { scan_id: row.scan_id, meta: row.meta };
 }
 
 /**

@@ -54,7 +54,7 @@ Produce the document itself, ready to paste into the incident tracker — not a 
 1. **Timeline** from commit timestamps, deploy SHAs, merged PRs and the incident time in the arguments.
 2. **Root cause**: a best-effort hypothesis from `git log` and the findings — `diff_scans { project_path: "<project>", from: "baseline" }` for what appeared since the accepted baseline, `prioritize_findings { project_path: "<project>" }` for what was open.
 3. **Impact**: the blast radius of the offending change's diff.
-4. **Detection gaps**: from `guardian://scans/history`, which scanners were skipped or failed around the incident, and which findings were suppressed.
+4. **Detection gaps**: from `guardian://scans/history` (the 50 most recent scans; `perf_check`'s runs are not in it), which scanners were skipped or failed around the incident, and which findings were suppressed.
 5. **Action items** — owned, dated, each mapped to the command that prevents a recurrence (for example `/guardian-release predeploy` before every deploy, `/guardian-scan --unpushed` before every push).
 
 Respond in the user's language (EN/PT/ES).

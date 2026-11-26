@@ -11,7 +11,7 @@ npm ci               # first time only — Node >= 22.13; no native modules, sto
 npm run lint         # tsc over src/ AND test/ (tsconfig.test.json), then the hand-written JS (tsconfig.js.json)
 npm run build        # tsc type-check, esbuild bundles -> mcp/dist, copy-assets, host-rules, docs
 npm test             # vitest run (full suite) — the gate before a commit
-npm run test:fast    # unit + docs minus the 15 slowest unit files (vitest.fast.config.ts) — the inner loop
+npm run test:fast    # unit + docs minus the 18 slowest unit files (vitest.fast.config.ts) — the inner loop
 npm run test:coverage # the coverage thresholds, natively
 npm run test:docker  # Linux containers: Node 22.13 (with coverage) and the LTS (scripts/test-docker.mjs)
 ```
@@ -114,6 +114,24 @@ more strictly has closed the limit, and its record leaves the file (or its
 example is corrected) in the same commit; one that answers less strictly got
 weaker — fix the guard, never the record. A new limit is a new record, never a
 line of prose in `docs/hooks.md`, which the docs test refuses.
+
+**The METRIC line's contract is one file shared with dev-spec-driven (3.17.0).**
+`test/fixtures/metrics/metric-lines.v1.json` (`metric-lines/1`: the line's
+grammar and the one set of reader bounds, the judge's rule, 36 lines, 5 whole
+outputs and 21 judge cases) is committed byte-identical at dev-spec-driven's
+`mcp/tests/fixtures/`, and both suites pin the same sha256 literal
+(`test/unit/metrics/metricLinesFixture.test.ts` here, `09-evidence-runs.js`
+there). The two readers are written in two languages and no suite can read the
+other repository, so the pin is what keeps them on one contract. The file is
+never edited: a change is `metric-lines/2`, a new file landed in both
+repositories before either tags. The pin test also holds the file's shape —
+every case's fields (an absent value is `null`, never a missing key), the cases
+the decisions name, ASCII with LF ends, no CI or PR word — and the readers are
+tested against its cases in their own files — here `test/unit/metrics/metricLine.test.ts` (every line
+and output case, and the points the fixture leaves to each suite: tokens split on runs of blanks, keys in
+any order, `__proto__` an ordinary name, a 513-byte candidate a drop, CSI removed — but a keyword one splits
+is none, as dev-spec-driven reads the keyword in the raw output —, each bound's drop said) and
+`judge.test.ts` (every judge case, the symmetric verdict, terms a current line adds creating no judgment).
 
 On Windows, run the full suite from **Git Bash**. From PowerShell, `bash` can
 resolve to the WSL launcher stub, and the `ci-init` e2e fails for that reason

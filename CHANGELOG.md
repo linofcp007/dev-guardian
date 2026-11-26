@@ -8,6 +8,143 @@ version bump.
 
 ## [Unreleased]
 
+## [3.17.0] - 2026-11-26
+
+The gardening round, shared with dev-spec-driven 1.41.0: both plugins now tend what a change leaves for the next one,
+and both read the same METRIC line, `metric-lines/1`, held to one contract — the fixture
+`mcp/test/fixtures/metrics/metric-lines.v1.json`, committed byte-identical in both repositories and pinned by the
+same sha256 in both suites. `review_pr`, a diff-scoped `scan_sast` and `scan --diff-base` report, in a pass of their
+own (`guardian-suppressions`), a suppression a change adds with no reason; `/guardian-improve` ends by fixing the
+source of the debt you pick — one guidance line, and a rule that lands only once the old occurrences are gone;
+`perf_check` keeps every measured run and judges it against the earlier runs of the same target; and the new
+`metrics` command compares the METRIC lines a change and its base print, with `ci-init github --metrics-command` to
+run it on every pull request. Nothing new is high. `license_compatibility` no longer loses its compliance scan
+behind newer scans of other types. No tool, resource, skill or command is added: 50 tools, 18 resources, 13 skills,
+10 commands.
+
+### Upgrading from 3.16.1
+
+- **Nothing new blocks at the default `--fail-on high`.** No new finding is high, and the new pass never makes a
+  gap: a bound it reaches is a `coverage_notes` line (not gating), and a change git cannot list skips the pass —
+  never `missing_tools`, never exit 2.
+- **At `--fail-on medium` or lower, a suppression a change adds can block (exit 1).** In `review_pr`, a diff-scoped
+  `scan_sast` and `scan --diff-base` (which dev-spec-driven 1.33+'s `finish --run` passes), a bare scanner directive —
+  `nosemgrep`, Bandit's `# nosec`, gosec's `#nosec`, `gitleaks:allow`, `#trivy:ignore:*` or `#tfsec:ignore:*`, a bare
+  `@SuppressFBWarnings` or `#pragma warning disable`, naming no rule and giving no reason — is
+  `scanner-suppression-added`, medium, and a bare whole-file linter directive (`/* eslint-disable */`,
+  `@ts-nocheck`, `# ruff: noqa`, `# mypy: ignore-errors`, `# pylint: skip-file`, `phpcs:ignoreFile`, and before the
+  file's first code `# pylint: disable=all`, `# rubocop:disable all`, `# shellcheck disable=all` or a `//nolint`
+  directly above `package`) is `suppression-added`, medium. Both are new to the baseline, so they
+  block at `--fail-on medium`. Name the rule or give the reason next to the directive (`# nosec B602  # <reason>`,
+  `nosemgrep: <rule-id> -- <reason>`) and it is only counted on the pass's reason line. At `--fail-on low` the low
+  `suppression-added` findings block too: a whole-file directive naming its rules (`#![allow(…)]`,
+  `@file:Suppress(…)`, `[assembly: SuppressMessage(…)]`) and a line directive naming none (`# noqa`, `//nolint`,
+  `@ts-ignore`, `// NOSONAR` in a JVM file). A whole-project scan reads no diff and is unchanged.
+- **An approved dev-spec-driven test pruning stays a medium.** A test file the change deletes is still a
+  `guardian-test-integrity` finding when dev-spec-driven's merge summary lists it as accepted with a `pruned: …`
+  reason. The router now answers the finding with that accept instead of asking why the test went, and at
+  `--fail-on medium` it blocks like any other medium.
+- **`perf_check` runs are in the history.** Every measured run is now a `perf` scan with no finding. It is never the
+  default latest scan that `diff_scans`, `report_export`, `set_baseline` and the regression alert read, and
+  `guardian://scans/history` leaves it out (its 50 most recent scans are every other type, as before), but it can be
+  what `guardian://scans/latest` and `health_status.last_scan` show.
+- **The verdict JSON can carry `coverage_notes` lines that start `guardian-suppressions: `** — the files the pass did
+  not read — each also in `coverage_gap_details` with `gating: false` and the remedy "Nothing to do for the gate (not
+  gating)…". `review_pr` and a diff-scoped `scan_sast` list the pass in `tools_run` when a changed file holds a
+  suppression's token, its `reason` counting what was added and what was not read.
+
+### Added
+
+- **`guardian-suppressions`, the suppressions a change adds with no reason.** A pass of its own in `review_pr`, a
+  diff-scoped `scan_sast` and `scan --diff-base`, beside `guardian-test-integrity` and under its own name, so a
+  reader of the verdict never takes a suppression for a weakened test. Each directive is read the way its tool reads
+  it: those of the scanners dev-guardian runs — Semgrep's `nosem` / `nosemgrep`, Bandit's `nosec`, gosec's `#nosec`,
+  `gitleaks:allow`, Trivy and tfsec, zizmor, hadolint, cppcheck, SpotBugs, `#pragma warning disable` (Semgrep honours
+  a blank-led `nosemgrep` inside a string too, and not `//nosemgrep` with no blank; Bandit and gosec read real
+  comments only) — and those of the linters and type checkers (ESLint, TypeScript, flake8 / Ruff, mypy, Pyright,
+  Pylint, golangci-lint, staticcheck, rustc / Clippy, javac / Kotlin, SonarQube's `NOSONAR` (in JVM files), the .NET
+  analyzers, PHPStan, Psalm, PHP_CodeSniffer, RuboCop, ShellCheck, clang-tidy, GCC / Clang, Checkov). A line inside a
+  multi-line string, template, raw string or heredoc is not read, except by the rows whose tool reads it there. Only
+  added lines count, and a directive a moved or edited line carries is not new. A directive that names its rule or
+  gives a reason is counted, never reported (a shebang, a coding or magic comment on line 1 or 2, or a Trivy / tfsec
+  `:exp:` date or `:ws:` workspace, is no reason). No finding quotes the line, and none is keyed on it — its identity
+  holds its rule and the directive's kind (its `subcategory`, `suppression:<kind>`), never the line: a
+  `gitleaks:allow` line can hold the secret. The paths `.guardianignore` lists are skipped before the bounds count
+  (they never fill them). Bounds: 500
+  changed files whose diff holds a directive's token (one `git diff -G` listing), 500 untracked files, 2 MiB a file;
+  what a bound leaves unread is counted in a `coverage_notes` line. With no merge base, or a change git cannot list,
+  the pass is `skipped`.
+- **`perf_check` judges each run against its target's history (`history`).** Every measured run is kept and compared
+  with the median of the last 3 to 5 runs of the same series — for Lighthouse the page, its major version and the
+  categories it scored; for k6 the script, its content and the `K6_*` settings perf_check hands k6 (a digest of
+  them: a value is never stored or shown) — never a VU count k6 measured, so a changed setting starts a new series —
+  each metric over the runs that have it; fewer than 3 is `unjudged` (`too_few_runs`). Tolerances: timings 10% with a
+  floor of 50 ms (5 ms for k6), CLS 0.01, page weight 1%, scores 2 points, the k6 error rate 0.5 points. A run that
+  regressed never enters a later reference, so running again does not wash a regression out (`confirmed` says the
+  run before regressed too), and `since` shows the median of the oldest 3 runs kept. `history.recorded: false` says
+  why a run was not kept; a history that fails never fails the measurement. Retention keeps a project's 50 newest
+  runs across all its targets (`GUARDIAN_RETENTION_SCANS`), so measuring many targets in rotation can leave one
+  below 3 runs.
+- **`metrics --head <file> [--base <file>]`, a CLI command that compares METRIC lines.** It reads `metric-lines/1`
+  (`METRIC <name>=<number>[ <unit>][ better=lower|higher][ tolerance=<n>[%]]`) and judges by the base line's terms:
+  the head may only tighten the tolerance, and a flipped or dropped direction, a raised or dropped tolerance or a
+  changed unit is `loosened`. No defaults: a value is judged only when its base line states both a direction and a
+  tolerance, and is otherwise `unjudged`, shown with its delta. Advisory: exit 0 when compared, 1 only with
+  `--strict` and a regressed or loosened metric, a missing one or a malformed head line, 2 when the head holds no
+  readable METRIC line, 3 on a usage error; `--format human|json|markdown`. It opens no database, runs no command and
+  writes nothing. See [docs/ci.md](docs/ci.md#metrics).
+- **`ci-init github --metrics-command "<cmd>"`.** An advisory `metrics` job holding `contents: read`: on a pull
+  request it runs the command on the change and on its base (a `git worktree` of the base commit, `fetch-depth: 0`,
+  `persist-credentials: false`) and puts the `metrics` table in the job summary; the command reaches the step
+  through `env:` and runs under `bash -c`. `ci-init` refuses an empty command, one over 1,000 characters, a line
+  break, a control or invisible character, `${{`, `{{` or `}}`, and a `.guardian/ci.json` that declares it (command
+  line only). GitLab and Bitbucket refuse the flag; docs/ci.md says how to compare there by hand. Without the flag the
+  generated pipeline is unchanged.
+- **`/guardian-improve` ends with "Fix the source"** for the units you pick: at most one guidance line per unit — in
+  AGENTS.md or CLAUDE.md, or a `.specs/steering/tech.md` / `structure.md` without front matter in a dev-spec-driven
+  project — written in the model's words, never a finding's text, and keyed `<!-- dev-guardian: <rule_id> -->` (not
+  proposed again when a file already holds the key, dev-spec-driven's lesson comments included); and a seed for a
+  Semgrep rule that lands only once the occurrences are fixed (`<rule_id>: N → 0` and the rule's terms, written
+  where the seed went: its backlog note replaced while the unit is still in the backlog, and its spec once
+  written), never while they would block every commit. Nothing is written without your yes. Its re-measure step
+  names `perf_check`'s `history` for a performance unit.
+
+### Changed
+
+- **Every suppression example names its id and gives a reason**: `# nosec <id>  # <reason>` in docs/ci.md,
+  docs/hooks.md, the router's dev-spec-driven reference, the rules file every host reads, the question the shell guard
+  asks before an agent's `baseline update` and the message `baseline update` prints, instead of a bare `# nosec` —
+  the form the new pass reports; and `// nosemgrep: <rule> -- <reason>` in the bug packs' coverage reference, which
+  said a bare `// nosemgrep` "with a reason". A test holds to its rule and reason each `nosec` / `nosemgrep` example
+  in a sentence that asks for a reason (`with a reason`, `com um motivo`, `con un motivo`) or shows a complete form.
+- **docs/ci.md says dev-spec-driven 1.33+'s `finish --run` passes `--diff-base`**, so the weakened-tests and
+  suppressions checks run there too — a check reported over MCP gets no base, and neither runs in it.
+- **What dev-spec-driven's launcher forwards** — `scan`, `baseline`, `status` and `help`; `metrics` and the rest run
+  from dev-guardian's own CLI — in docs/ci.md, the router's dev-spec-driven reference and the rules file every host
+  reads, which said it forwards every argument. docs/ci.md's `metrics` section says how a name printed on both
+  streams reads (last printed here, stderr's in dev-spec-driven), and the router's test-pruning line says what to do
+  when no `pruned: …` accept is listed (dev-spec-driven records one only with `guard: tests`): ask why the test went.
+- **The `guardian-performance` skill** reads `perf_check`'s `history`, and **`/guardian-report trend`** says when the
+  50 most recent scans held other types; it and `/guardian-incident` say `perf_check`'s runs are not among them.
+
+### Fixed
+
+- **`license_compatibility` reported zero incompatibilities once 50 newer scans of other types** pushed the compliance
+  scan out of the window it read — which `perf_check`'s new rows would have made common. It now reads the latest
+  compliance scan by its type.
+- **The `perf.bundle_size_kb` finding** says it measures Lighthouse's total page weight, not one bundle.
+- **`perf_check` read no error rate from a k6 run.** The file `k6 run --summary-export` writes holds a rate as
+  `{ passes, fails, value }`, and `summary.error_rate` read only `rate`: it was null on every run. It now reads
+  `value` too, so the error rate is in `summary` and judged in `history`.
+- **`set_baseline { scan_type }` baselined a scan of a type that is never a project's baseline** — an SBOM, an
+  `audit_executive` roll-up, a `review_pr` diff, and now a `perf` run. It refuses one, as `set_baseline { scan_id }`
+  already did. The refusal reads, by `scan_id`, "Scan '<id>' is a `<type>` scan, which is never a project's
+  baseline." and, by `scan_type`, "A `<type>` scan is never a project's baseline." (an before a vowel in both),
+  each followed by "Baseline a scan of a finding-producing type."
+- **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
+  `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
+  run works in a throwaway database).
+
 ## [3.16.1] - 2026-11-23
 
 In the plugin's own repository, the scan no longer gives a finding of the plugin's own rule packs a different key

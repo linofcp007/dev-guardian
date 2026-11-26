@@ -27,7 +27,8 @@ describe('SCAN_TYPE_ROLE', () => {
   });
 
   it('never counts artefacts, roll-ups, third-party targets or diff reviews', () => {
-    for (const t of ['sbom', 'detect_stack', 'init', 'observability', 'audit', 'skill_audit', 'review_pr'] as const) {
+    // `perf`: one row per perf_check run, its numbers in meta (3.17.0) — never "the latest scan".
+    for (const t of ['sbom', 'detect_stack', 'init', 'observability', 'audit', 'skill_audit', 'review_pr', 'perf'] as const) {
       expect(STATE_SCAN_TYPES).not.toContain(t);
     }
   });

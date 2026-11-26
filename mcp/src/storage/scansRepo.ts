@@ -150,6 +150,7 @@ export class ScansRepo {
   private readonly getLatestForProjectStmt: Statement<[string], ScanRow>;
   private readonly listHistoryStmt: Statement<[number], ScanRow>;
   private readonly listHistoryForProjectStmt: Statement<[string, number], ScanRow>;
+  private readonly listScanHistoryStmt: Statement<[string, number], ScanRow>;
   private readonly findCacheStmt: Statement<[string, string], ScanRow>;
   private readonly attachCacheStmt: Statement<[string, string, string, string]>;
   private readonly countForProjectStmt: Statement<[string], { n: number }>;
@@ -243,6 +244,14 @@ export class ScansRepo {
     this.listHistoryForProjectStmt = db.prepare<[string, number], ScanRow>(`
       SELECT * FROM scans
       WHERE project_path = ? AND ${READABLE}
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT ?
+    `);
+
+    // listHistoryForProjectStmt without `perf` rows — see listScanHistory.
+    this.listScanHistoryStmt = db.prepare<[string, number], ScanRow>(`
+      SELECT * FROM scans
+      WHERE project_path = ? AND scan_type <> 'perf' AND ${READABLE}
       ORDER BY started_at DESC, rowid DESC
       LIMIT ?
     `);
@@ -413,6 +422,17 @@ export class ScansRepo {
   }
 
   /**
+   * `guardian://scans/history`'s list: {@link listHistoryForProject} without
+   * `perf` rows, in SQL so the limit counts only what is listed. Every
+   * measured `perf_check` run is one (3.17.0), and a tuning session of 50 runs
+   * left the window no security scan; a series is read by its own query
+   * ({@link listCompletedPerfSeries}).
+   */
+  listScanHistory(projectPath: string, limit: number): ScanRecord[] {
+    return this.listScanHistoryStmt.all(projectPath, limit).map(rowToRecord);
+  }
+
+  /**
    * Every pass name the completed scans of `type` for `projectPath` ever
    * recorded in `tools_run`, and whether one of them recorded no bookkeeping
    * at all — the widest holder the open set's carry-forward walk has to
@@ -480,6 +500,25 @@ export class ScansRepo {
     if (opts.afterScanId !== undefined) params.push(opts.afterScanId);
     params.push(opts.limit, opts.offset ?? 0);
     return stmt.all(...params).map(rowToRecord);
+  }
+
+  /**
+   * One `perf_check` series of ONE project — its completed `perf` rows whose
+   * `meta.series` is `series` — newest first, at most `limit`: one statement on
+   * `idx_scans_project_type`, the series matched in SQL so another target's
+   * runs are never paged in (`metrics/perfSeries.ts`).
+   */
+  listCompletedPerfSeries(projectPath: string, series: string, limit: number): ScanRecord[] {
+    return this.db
+      .prepare<[string, string, number], ScanRow>(
+        `SELECT * FROM scans
+          WHERE project_path = ? AND status = 'completed' AND scan_type = 'perf' AND ${READABLE}
+            AND (CASE WHEN json_valid(meta) THEN json_extract(meta, '$.series') END) = ?
+          ORDER BY started_at DESC, rowid DESC
+          LIMIT ?`,
+      )
+      .all(projectPath, series, limit)
+      .map(rowToRecord);
   }
 
   /**
