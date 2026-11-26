@@ -165,7 +165,7 @@ export function lighthouseSeries(url: string, lighthouseVersion: string | undefi
 }
 
 /** The `K6_*` settings perf_check hands k6: how many, and one digest of them. */
-export interface K6Settings {
+interface K6Settings {
   /** A sha256 of their sorted `name=value` pairs. A value can be a token (`K6_OUT` naming a URL with its credentials): it reaches only this. */
   readonly digest: string;
   readonly count: number;
