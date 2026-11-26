@@ -52,8 +52,10 @@
  * suppressions it adds with no reason (`testintegrity/suppressions.ts`):
  * medium or low, so nothing of it blocks at the default `--fail-on high`, and
  * what its bounds left unread is a note (`ScanStepResult.notes`), never a gap.
- * Both steps' findings are kept to what `.guardianignore` declares — the
- * `rulesRef` copy's when given — as `review_pr` keeps them (3.17.0).
+ * That step lists only what `.guardianignore` keeps — the `rulesRef` copy's
+ * when given — before its bounds, as `review_pr`'s and a diff-scoped
+ * `scan_sast`'s pass do (3.17.0). The weakened-tests step reads every path,
+ * as it always has: a focused test in a path the file lists still blocks.
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -61,7 +63,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginContext } from '../context.js';
 import { isScopedScan } from '../history/scanRoles.js';
-import { loadProjectExclusions, projectPathTest } from '../platform/guardianIgnore.js';
+import { keptByExclusions, loadProjectExclusions } from '../platform/guardianIgnore.js';
 import { canonicalPath, resolveProjectPath } from '../platform/projectPath.js';
 import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
@@ -222,10 +224,11 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
 
       const integrity = opts.diffBase !== undefined ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);
-      const suppressions = opts.diffBase !== undefined ? await suppressionsStep(opts.projectPath, opts.diffBase) : null;
+      // No tool handler makes the suppressions step's findings, so the factory's rule is applied here: what
+      // .guardianignore lists is not listed (before the step's bounds), nor kept when a rename leads into it.
+      const declared = opts.diffBase !== undefined ? await declaredPaths(opts.projectPath, ctx) : null;
+      const suppressions = opts.diffBase !== undefined ? await suppressionsStep(opts.projectPath, opts.diffBase, declared) : null;
       if (suppressions !== null) steps.push(suppressions.step);
-      // No tool handler made the diff steps' findings, so the factory's result filter never saw them.
-      const declared = integrity !== null || suppressions !== null ? await declaredFilter(opts.projectPath, ctx) : () => true;
 
       const read = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read);
@@ -233,8 +236,8 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
       const all = dedupeFindings([
         ...collectFindings(storage, opts.projectPath),
         ...wholeFiles,
-        ...(integrity?.findings ?? []).filter(declared),
-        ...(suppressions?.findings ?? []).filter(declared),
+        ...(integrity?.findings ?? []),
+        ...(suppressions?.findings ?? []).filter((f) => declared === null || f.file_path === undefined || f.file_path === '' || declared(f.file_path)),
       ]);
       // The gate keys secrets by their values, read in memory from where
       // gitleaks' reports of this run locate them (ci/secretValues.ts): a
@@ -285,10 +288,20 @@ async function testIntegrityStep(projectPath: string, ref: ResolvedRef): Promise
  * {@link SUPPRESSIONS_STEP} over the same change — null when the change has
  * no file to read. Never a gap: a bound that left files unread, or a change
  * git could not list, is one of the step's `notes` (the verdict's
- * `coverage_notes`), and nothing it reports is high.
+ * `coverage_notes`), and nothing it reports is high. `member`: the paths
+ * `.guardianignore` keeps ({@link declaredPaths}), when it lists any.
  */
-async function suppressionsStep(projectPath: string, ref: ResolvedRef): Promise<{ step: ScanStepResult; findings: Finding[] } | null> {
-  const result = await runSuppressionCheck(projectPath, { base: ref.commit, target: { kind: 'worktree', untracked: true }, label: ref.ref });
+async function suppressionsStep(
+  projectPath: string,
+  ref: ResolvedRef,
+  member: ((path: string) => boolean) | null,
+): Promise<{ step: ScanStepResult; findings: Finding[] } | null> {
+  const result = await runSuppressionCheck(projectPath, {
+    base: ref.commit,
+    target: { kind: 'worktree', untracked: true },
+    label: ref.ref,
+    ...(member !== null ? { member } : {}),
+  });
   if (result === null) return null;
   return {
     step: {
@@ -303,20 +316,20 @@ async function suppressionsStep(projectPath: string, ref: ResolvedRef): Promise<
 }
 
 /**
- * Whether a diff step's finding stays: the project's `.guardianignore` —
- * the `--rules-ref` copy's when given (`ci/refConfig.ts`) — applied as the
- * scan-tool factory applies it to `review_pr`'s and a diff-scoped
- * `scan_sast`'s (`tools/scanToolFactory.ts`): a path it ignores that is in
- * the project is dropped; one with no path, or no longer in the project, is
- * kept. A file that cannot be read excludes nothing (the scans' own warning
- * says so).
+ * The project-relative paths the suppressions step reads and reports: the
+ * project's `.guardianignore` — the `--rules-ref` copy's when given
+ * (`ci/refConfig.ts`) — applied as the scan-tool factory applies it to
+ * `review_pr`'s and a diff-scoped `scan_sast`'s pass
+ * (`platform/guardianIgnore.ts#keptByExclusions`): a path it ignores that is
+ * in the project is left out; one no longer in the project is kept. Null when
+ * there is no such file, or it cannot be read — then nothing is left out (the
+ * scans' own warning says so).
  */
-async function declaredFilter(projectPath: string, ctx: PluginContext): Promise<(f: Finding) => boolean> {
+async function declaredPaths(projectPath: string, ctx: PluginContext): Promise<((path: string) => boolean) | null> {
   const project = scannedProject(projectPath);
   const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
-  if (exclusions === null || 'error' in exclusions) return () => true;
-  const inProject = projectPathTest(project);
-  return (f) => f.file_path === undefined || f.file_path === '' || !(exclusions.ignores(f.file_path) && inProject(f.file_path));
+  if (exclusions === null || 'error' in exclusions) return null;
+  return keptByExclusions(exclusions, project);
 }
 
 /** `SCAN_SEQUENCE`, minus `scan_dast` when the caller gave no base url. */

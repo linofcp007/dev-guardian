@@ -27,6 +27,7 @@ import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import { scannerAvailable } from '../../src/tools/scanHelpers.js';
 import type { ToolRun } from '../../src/types.js';
+import { CAP_REASON, CAP_REPORTED, capBase, capChange } from '../helpers/ignoredChange.js';
 import { caseText, suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -126,5 +127,25 @@ describe('scan_sast with a change scope reports the suppressions it adds, as gua
     const { rows, run } = await scan(dir, { paths: ['src'] }, 'guardian-suppressions');
     expect(run).toBeUndefined();
     expect(rows).toEqual([]);
+  });
+
+  // Review 2 of 3.17.0, R2-DG-D-3: the pass lists only what .guardianignore keeps, before its 500-file bound — a
+  // left-out tree's 600 changed files never fill it (the CLI's and review_pr's sides: ciRunScans, reviewPr).
+  it("scope.diff {}: a left-out tree's changed files never fill the pass's bound", async () => {
+    const dir = makeTempDir('sast-suppressions-cap-');
+    const put = (files: Record<string, string>): void => {
+      for (const [rel, text] of Object.entries(files)) {
+        mkdirSync(join(dir, rel, '..'), { recursive: true });
+        writeFileSync(join(dir, rel), text);
+      }
+    };
+    git(dir, 'init', '-q');
+    put(capBase());
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    put(capChange());
+    const { rows, run } = await scan(dir, { diff: {} }, 'guardian-suppressions');
+    expect(rows).toEqual(CAP_REPORTED.map((r) => r.replace(/ medium$/, '')));
+    expect(run?.reason).toMatch(CAP_REASON);
   });
 });

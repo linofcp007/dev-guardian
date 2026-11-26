@@ -5604,7 +5604,8 @@ function contentSource(f, readable2, linesOf2) {
   if (dependency !== null) return `dep
 ${dependency.name}@${dependency.version}`;
   if (isSuppressionsFinding(f)) return `suppression
-${f.rule_id ?? ""}`;
+${f.rule_id ?? ""}
+${f.subcategory ?? ""}`;
   if (isCredentialFinding(f)) {
     const locator = isHistoryLocator(f) && f.snippet !== void 0 ? `
 ${collapse(f.snippet)}` : "";
@@ -20803,6 +20804,10 @@ function projectPathTest(projectPath) {
     return false;
   };
 }
+function keptByExclusions(exclusions, projectPath) {
+  const inProject2 = projectPathTest(projectPath);
+  return (relPath) => !(exclusions.ignores(relPath) && inProject2(relPath));
+}
 function insideGitWorkTree(projectPath) {
   for (let dir = resolve14(projectPath); ; dir = dirname12(dir)) {
     if (projectEntryKind(join30(dir, ".git")) !== "absent") return true;
@@ -23141,7 +23146,8 @@ function readHit(h, line, where, testFile) {
     const listed2 = (h.groups["names"] ?? "").trim();
     names = /\w/.test(listed2) && !(row.allNames === true && /^all$/i.test(listed2));
   }
-  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading || row.scope === "leading-bare" && leading && !names || row.scope === "package-bare" && where.packageDoc && !names;
+  const file2 = h.groups["line"] !== void 0 ? false : h.groups["file"] !== void 0 || row.scope === "file" || row.scope === "leading-only" || row.scope === "leading" && leading || row.scope === "leading-bare" && leading && !names || // golangci-lint widens a `//nolint` only: one in a block comment reads as its line's.
+  row.scope === "package-bare" && where.packageDoc && !names && h.part !== null && h.part.marker === "//";
   return { names, file: file2, doubt: !names && h.part !== null && h.part.unclosed };
 }
 function keyOf(h, line) {
@@ -23154,6 +23160,9 @@ function outcomeOf(cls, names, file2, reasoned) {
   if (file2) return names ? "low" : "medium";
   return names ? "named" : "low";
 }
+function kindOf(row) {
+  return `suppression:${row.id}`;
+}
 function finding(h, path3, line, severity, names, file2) {
   const row = h.row;
   const label2 = `\`${typeof row.label === "string" ? row.label : row.label(h.groups)}\``;
@@ -23163,7 +23172,7 @@ function finding(h, path3, line, severity, names, file2) {
       rule_id: "scanner-suppression-added",
       severity,
       category: "quality",
-      subcategory: "suppression",
+      subcategory: kindOf(row),
       title: `${path3}:${line} adds a ${row.reader} suppression with no reason and no rule named (${label2})`,
       message: `This change hides ${row.hides ?? `${row.reader}'s findings here`} from every scan, dev-guardian's gate included, and does not say why. If it is a false positive, say so in the scanner's own form (${row.form}); if not, fix the code.`,
       file_path: path3,
@@ -23177,7 +23186,7 @@ function finding(h, path3, line, severity, names, file2) {
     rule_id: "suppression-added",
     severity,
     category: "quality",
-    subcategory: "suppression",
+    subcategory: kindOf(row),
     title: `${path3}:${line} silences ${row.reader} with no reason (${label2}${scope})`,
     message: `This change silences ${row.reader} here (${label2}${scope}) and does not say why. A suppression is sometimes right \u2014 a false positive, a deliberate exception \u2014 so say which next to it (${row.form}), or fix what the rule found: an agent copies the suppressions it finds, and one without a reason teaches the next change to silence the same rule.`,
     file_path: path3,
@@ -23215,7 +23224,8 @@ function detectSuppressions(files) {
     const lang = suppressionLanguageOf(f.path);
     if (lang === null) continue;
     for (const r of f.removed) {
-      const text3 = r.text.endsWith("\r") ? r.text.slice(0, -1) : r.text;
+      const crlf = r.text.endsWith("\r") ? r.text.slice(0, -1) : r.text;
+      const text3 = r.line === 1 ? withoutBom(crlf) : crlf;
       const lexed = readLine(text3, LEXERS[lang], CODE).read;
       for (const h of hitsOn(text3, lexed, lang)) carried.set(keyOf(h, text3), (carried.get(keyOf(h, text3)) ?? 0) + 1);
     }
@@ -23380,7 +23390,8 @@ var init_suppressions = __esm({
         cls: "scanner",
         langs: IAC,
         at: "start",
-        re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)/,
+        // Its expiry (`:exp:<date>`) and workspace (`:ws:<name>`) are the directive's own, never a reason.
+        re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)(?::(?:exp:\d{4}-\d{2}-\d{2}|ws:[\w-]+))*/,
         scope: "line",
         // `*` names no check: Trivy then reports none here.
         check: (g) => ({ names: g["names"] !== "*" }),
@@ -58205,8 +58216,7 @@ async function runScanBody(args) {
     });
     return before - findings.length;
   };
-  const inProject2 = projectPathTest(projectPath);
-  const findingsExcluded = exclusions === null ? 0 : keepIf((p) => !(exclusions.ignores(p) && inProject2(p)));
+  const findingsExcluded = exclusions === null ? 0 : keepIf(keptByExclusions(exclusions, projectPath));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {
     const still = cvesStillFound(cves, findings, dropped);
@@ -63702,10 +63712,11 @@ async function runSuppressions(args) {
   const changes = ctx.scope?.changes ?? null;
   if (changes === null) return;
   const scope = ctx.scope;
+  const kept = ctx.exclusions !== null ? keptByExclusions(ctx.exclusions, ctx.projectPath) : null;
   const result = await runSuppressionCheck(ctx.projectPath, {
     base: changes.base,
     target: changes.target === "index" ? { kind: "index" } : { kind: "worktree", untracked: changes.untracked },
-    ...scope !== null ? { member: (p) => scope.member(p) } : {}
+    ...scope !== null ? { member: (p) => scope.member(p) && (kept === null || kept(p)) } : {}
   });
   if (result === null) return;
   tools_run.push(result.toolRun);
@@ -70483,7 +70494,8 @@ var init_reviewPr = __esm({
               const findings = integrity.findings;
               out.parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
             }
-            const suppressions = await runSuppressionCheck(ctx.projectPath, { base: base2, head, target });
+            const kept = ctx.exclusions !== null ? keptByExclusions(ctx.exclusions, ctx.projectPath) : null;
+            const suppressions = await runSuppressionCheck(ctx.projectPath, { base: base2, head, target, ...kept !== null ? { member: kept } : {} });
             if (suppressions !== null) {
               out.tools_run.push(suppressions.toolRun);
               const added = suppressions.findings;
@@ -98304,7 +98316,7 @@ function read(src, path3, maxBytes) {
   if (r.status === "refused") noteUnread2(src, path3, describeReadRefusal(r.reason));
   return null;
 }
-function kindOf(src, abs, e) {
+function kindOf2(src, abs, e) {
   if (e.kind === "directory") return "directory";
   if (e.kind === "file") return "file";
   if (e.kind === "other") return "unreachable";
@@ -98365,7 +98377,7 @@ function inventoryPlugins(src, warnings) {
   const out = [];
   for (const entry of listDir2(src, pluginsDir) ?? []) {
     const abs = join93(pluginsDir, entry.name);
-    const kind = kindOf(src, abs, entry);
+    const kind = kindOf2(src, abs, entry);
     if (kind === "directory") {
       const main2 = findMainFile(src, abs, entry.name, "Plugin Name");
       if (main2 === null) {
@@ -98407,7 +98419,7 @@ function inventoryThemes(src, warnings) {
   const out = [];
   for (const entry of listDir2(src, themesDir) ?? []) {
     const abs = join93(themesDir, entry.name);
-    const kind = kindOf(src, abs, entry);
+    const kind = kindOf2(src, abs, entry);
     if (kind === "unreachable") {
       noteUnread2(src, abs, "a link out of the install, to a network or device path, or not a regular file or directory \u2014 not inventoried");
       continue;
@@ -123512,17 +123524,17 @@ async function runScans(opts) {
       }
       const integrity = opts.diffBase !== void 0 ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);
-      const suppressions = opts.diffBase !== void 0 ? await suppressionsStep(opts.projectPath, opts.diffBase) : null;
+      const declared = opts.diffBase !== void 0 ? await declaredPaths(opts.projectPath, ctx) : null;
+      const suppressions = opts.diffBase !== void 0 ? await suppressionsStep(opts.projectPath, opts.diffBase, declared) : null;
       if (suppressions !== null) steps.push(suppressions.step);
-      const declared = integrity !== null || suppressions !== null ? await declaredFilter(opts.projectPath, ctx) : () => true;
       const read3 = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read3);
       const wholeFiles = read3.filter((f) => !accepted.has(f));
       const all = dedupeFindings([
         ...collectFindings(storage, opts.projectPath),
         ...wholeFiles,
-        ...(integrity?.findings ?? []).filter(declared),
-        ...(suppressions?.findings ?? []).filter(declared)
+        ...integrity?.findings ?? [],
+        ...(suppressions?.findings ?? []).filter((f) => declared === null || f.file_path === void 0 || f.file_path === "" || declared(f.file_path))
       ]);
       await rememberSecretValues(scannedProject(opts.projectPath), all, {
         reportDirs: reportDirsOf(storage, opts.projectPath)
@@ -123556,8 +123568,13 @@ async function testIntegrityStep(projectPath, ref) {
     findings: result.findings
   };
 }
-async function suppressionsStep(projectPath, ref) {
-  const result = await runSuppressionCheck(projectPath, { base: ref.commit, target: { kind: "worktree", untracked: true }, label: ref.ref });
+async function suppressionsStep(projectPath, ref, member) {
+  const result = await runSuppressionCheck(projectPath, {
+    base: ref.commit,
+    target: { kind: "worktree", untracked: true },
+    label: ref.ref,
+    ...member !== null ? { member } : {}
+  });
   if (result === null) return null;
   return {
     step: {
@@ -123570,12 +123587,11 @@ async function suppressionsStep(projectPath, ref) {
     findings: result.findings
   };
 }
-async function declaredFilter(projectPath, ctx) {
+async function declaredPaths(projectPath, ctx) {
   const project = scannedProject(projectPath);
   const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
-  if (exclusions === null || "error" in exclusions) return () => true;
-  const inProject2 = projectPathTest(project);
-  return (f) => f.file_path === void 0 || f.file_path === "" || !(exclusions.ignores(f.file_path) && inProject2(f.file_path));
+  if (exclusions === null || "error" in exclusions) return null;
+  return keptByExclusions(exclusions, project);
 }
 function buildSequence(opts) {
   if (opts.baseUrl !== void 0) return SCAN_SEQUENCE;

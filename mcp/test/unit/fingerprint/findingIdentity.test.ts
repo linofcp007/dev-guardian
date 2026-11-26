@@ -460,16 +460,53 @@ describe("assignIdentities — the suppressions pass's findings are never keyed 
     expect(new Set(out.map((f) => f.identity)).size).toBe(2);
   });
 
-  // Keyed without its line, a directive is told from another of its rule in its file by its place alone: one added
+  // Keyed without its line, a directive is told from another of its kind in its file by its place alone: one added
   // ABOVE must never take the identity a suppression of the other names (the credentials' rule, sharedSecretCount).
-  it('a bare directive added above another never takes its identity', () => {
+  it('a bare directive added above another of its kind never takes its identity', () => {
     const dir = project({});
     const kept = only(passOver(dir, ['x = 1', allowLine(value(1))]));
-    const [added, old] = passOver(dir, [semgrepLine, 'x = 1', allowLine(value(1))]);
+    const [added, old] = passOver(dir, [allowLine(value(2)), 'x = 1', allowLine(value(1))]);
     expect(added?.identity).not.toBe(kept.identity);
     // The group re-keyed, the old one too: a suppression of it lapses and it is shown again — the safe direction.
     expect(old?.identity).not.toBe(kept.identity);
     expect(added?.identity).not.toBe(old?.identity);
+  });
+
+  // Review 2 of 3.17.0, R2-DG-D-4: the key also holds the directive's row of the table (its kind — never the line,
+  // never its text), so identities never move across kinds. One finding of a rule leaves a file and one of another
+  // kind arrives: the one that stays keeps its identity, and the newcomer takes none an earlier finding had.
+  it("a directive of another kind going or arriving leaves the others' identities; none moves across kinds", () => {
+    const dir = project({});
+    const reasoned = suppressionCase('Semgrep: a reason').lines[0] ?? '';
+    const bandit = suppressionCase('Bandit: bare').lines[0] ?? '';
+    const [a1, b1] = passOver(dir, [semgrepLine, 'x = 1', allowLine(value(1))]);
+    // A is given a reason (no finding now), C is added below B.
+    const [b2, c2] = passOver(dir, [reasoned, 'x = 1', allowLine(value(1)), 'y = 2', bandit]);
+    expect(b2?.line_start).toBe(3);
+    expect(b2?.identity).toBe(b1?.identity);
+    expect(c2?.line_start).toBe(5);
+    expect([a1?.identity, b1?.identity]).not.toContain(c2?.identity);
+    // C added above both: neither moves.
+    const [c3, a3, b3] = passOver(dir, [bandit, semgrepLine, 'x = 1', allowLine(value(1))]);
+    expect([a3?.identity, b3?.identity]).toEqual([a1?.identity, b1?.identity]);
+    expect(c3?.identity).toBe(c2?.identity);
+    // The key holds the kind, never the line: still nothing of either value.
+    const persisted = JSON.stringify([a1, b1, b2, c2, a3, b3, c3]);
+    expect(persisted).not.toContain(value(1));
+    expect(persisted).not.toContain(sha(allowLine(value(1))));
+  });
+
+  // Review 2 of 3.17.0, R2-DG-D-7 (mutant MI1): a linter's directive is keyed without its line too — `# noqa` on a
+  // token's line, the value rotated in place, keeps its identity.
+  it("a linter's suppression-added on a secret's line is keyed without it too", () => {
+    const dir = project({});
+    const noqaLine = (v: string): string => (suppressionCase('noqa: every code').lines[0] ?? '').replace('import os', `TOKEN = "${v}"`);
+    const first = only(passOver(dir, ['x = 1', noqaLine(value(1))]));
+    expect(first).toMatchObject({ tool: SUPPRESSIONS_TOOL, rule_id: 'suppression-added', severity: 'low', line_start: 2 });
+    const rotated = only(passOver(dir, ['x = 1', noqaLine(value(2))]));
+    expect(rotated.identity).toBe(first.identity);
+    expect(rotated.content_key).toBe(first.content_key);
+    expect(JSON.stringify([first, rotated])).not.toContain(sha(noqaLine(value(1))));
   });
 });
 

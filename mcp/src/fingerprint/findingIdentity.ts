@@ -56,8 +56,10 @@
  * identity, and the occurrence alone keeps two secrets of one rule in one
  * file apart — with their count, so a secret added above another never takes
  * its identity, and a suppression with it ({@link sharedSecretCount}). A finding of the diff's suppressions
- * pass (`testintegrity/suppressions.ts`) is keyed the same way, on `suppression` + its rule id: it sits on
- * the directive's line, and a bare `gitleaks` allow directive sits on the secret's own ({@link keyedWithoutLine}).
+ * pass (`testintegrity/suppressions.ts`) is keyed the same way, on `suppression` + its rule id + its
+ * `subcategory` (the directive's kind, the row of that pass's table — never the line): it sits on the
+ * directive's line, and a bare `gitleaks` allow directive sits on the secret's own ({@link keyedWithoutLine});
+ * with the kind, a directive going and one of another kind arriving never hand an identity over.
  * For every other finding, the text read from disk is hashed and
  * dropped: never written to the finding, the database or a response.
  *
@@ -670,7 +672,7 @@ function contentSource(
   // Never the line, never its hash — see "Secrets" in the module comment.
   // Checked before anything reads the file, so a credential line is not even
   // loaded for this finding.
-  if (isSuppressionsFinding(f)) return `suppression\n${f.rule_id ?? ''}`;
+  if (isSuppressionsFinding(f)) return `suppression\n${f.rule_id ?? ''}\n${f.subcategory ?? ''}`;
   if (isCredentialFinding(f)) {
     const locator = isHistoryLocator(f) && f.snippet !== undefined ? `\n${collapse(f.snippet)}` : '';
     return `secret\n${f.rule_id ?? ''}${locator}`;
@@ -741,9 +743,10 @@ function isSuppressionsFinding(f: Pick<IdentitySubject, 'tool'>): boolean {
 }
 
 /**
- * A finding keyed with nothing of its line, told from another of its rule in
- * its file by its place and their count alone ({@link sharedSecretCount}): a
- * credential, and a suppressions-pass finding (its line may hold a secret).
+ * A finding keyed with nothing of its line, told from another of its rule (and,
+ * for the suppressions pass, its kind) in its file by its place and their
+ * count alone ({@link sharedSecretCount}): a credential, and a
+ * suppressions-pass finding (its line may hold a secret).
  */
 function keyedWithoutLine(f: IdentitySubject): boolean {
   return isSuppressionsFinding(f) || isCredentialFinding(f);

@@ -66,9 +66,11 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   analyzers, PHPStan, Psalm, PHP_CodeSniffer, RuboCop, ShellCheck, clang-tidy, GCC / Clang, Checkov). A line inside a
   multi-line string, template, raw string or heredoc is not read, except by the rows whose tool reads it there. Only
   added lines count, and a directive a moved or edited line carries is not new. A directive that names its rule or
-  gives a reason is counted, never reported (a shebang, or a coding or magic comment on line 1 or 2, is no reason).
-  No finding quotes the line, and none is keyed on it — its identity holds its rule, never the line: a
-  `gitleaks:allow` line can hold the secret. What `.guardianignore` leaves out is not reported. Bounds: 500
+  gives a reason is counted, never reported (a shebang, a coding or magic comment on line 1 or 2, or a Trivy / tfsec
+  `:exp:` date or `:ws:` workspace, is no reason). No finding quotes the line, and none is keyed on it — its identity
+  holds its rule and the directive's kind (its `subcategory`, `suppression:<kind>`), never the line: a
+  `gitleaks:allow` line can hold the secret. The paths `.guardianignore` lists are skipped before the bounds count
+  (they never fill them). Bounds: 500
   changed files whose diff holds a directive's token (one `git diff -G` listing), 500 untracked files, 2 MiB a file;
   what a bound leaves unread is counted in a `coverage_notes` line. With no merge base, or a change git cannot list,
   the pass is `skipped`.
@@ -137,8 +139,6 @@ behind newer scans of other types. No tool, resource, skill or command is added:
 - **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
   `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
   run works in a throwaway database).
-- **`scan --diff-base` reported a weakened test in a path `.guardianignore` lists**, which `review_pr` and a
-  diff-scoped `scan_sast` leave out. Both diff steps now apply the file — the `--rules-ref` copy's when given.
 
 ## [3.16.1] - 2026-11-23
 

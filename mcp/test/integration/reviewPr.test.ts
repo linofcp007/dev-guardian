@@ -47,7 +47,18 @@ import { runMigrations } from '../../src/storage/migrations/runner.js';
 import { Storage } from '../../src/storage/index.js';
 import { TOOLS } from '../../src/tools/index.js';
 import type { ToolRun } from '../../src/types.js';
-import { DELETED_DIR, IGNORED_BASE, ignoredChange, REPORTED_BY_BOTH, rowOf } from '../helpers/ignoredChange.js';
+import {
+  CAP_REASON,
+  CAP_REPORTED,
+  capBase,
+  capChange,
+  DELETED_DIR,
+  IGNORED_BASE,
+  ignoredChange,
+  MOVED_INTO_IGNORED,
+  REPORTED,
+  rowOf,
+} from '../helpers/ignoredChange.js';
 import { caseText, suppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -823,13 +834,14 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
     }
   });
 
-  // Review 1 of 3.17.0, R1-DG-D-1: the project's .guardianignore drops both passes' findings in the paths it leaves
-  // out (the factory's result filter) — the same change the CLI's scan --diff-base reads in ciRunScans.test.ts,
-  // reported the same there.
+  // Review 1 of 3.17.0, R1-DG-D-1, narrowed by review 2 (R2-DG-D-1): the suppressions pass skips the paths the
+  // project's .guardianignore lists — the same change the CLI's scan --diff-base reads in ciRunScans.test.ts,
+  // reported the same there; the factory's result filter drops a left-out test (the CLI keeps it, as in 3.16.1).
   it('a path .guardianignore leaves out: neither pass reports it, the control files are', async () => {
     const dir = await repo('main', { ...IGNORED_BASE });
     for (const [rel, text] of Object.entries(ignoredChange())) write(dir, rel, text);
     rmSync(join(dir, DELETED_DIR), { recursive: true, force: true });
+    rmSync(join(dir, MOVED_INTO_IGNORED.from));
     await commitAll(dir, 'vendor bump');
     const { r, p } = await review(dir, { base_ref: 'main' });
     expect(r.ok).toBe(true);
@@ -840,7 +852,24 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
         .filter((f) => f.tool === tool)
         .map(rowOf)
         .sort();
-    expect(rows('guardian-suppressions')).toEqual(REPORTED_BY_BOTH.suppressions);
-    expect(rows('guardian-test-integrity')).toEqual(REPORTED_BY_BOTH.integrity);
+    expect(rows('guardian-suppressions')).toEqual(REPORTED.suppressions);
+    expect(rows('guardian-test-integrity')).toEqual(REPORTED.integrityReview);
+  });
+
+  // Review 2 of 3.17.0, R2-DG-D-3: the pass lists only what .guardianignore keeps, before its 500-file bound — a
+  // left-out tree's 600 changed files never fill it (ciRunScans.test.ts holds the CLI's side).
+  it("a left-out tree's changed files never fill the suppressions pass's bound", async () => {
+    const dir = await repo('main', capBase());
+    for (const [rel, text] of Object.entries(capChange())) write(dir, rel, text);
+    await commitAll(dir, 'regenerate');
+    const { r, p } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    const rows = p.storage.findings
+      .listByScan(res.scan_id)
+      .filter((f) => f.tool === 'guardian-suppressions')
+      .map(rowOf);
+    expect(rows).toEqual(CAP_REPORTED);
+    expect(res.tools_run.find((t) => t.name === 'guardian-suppressions')?.reason).toMatch(CAP_REASON);
   });
 });
