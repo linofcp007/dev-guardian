@@ -10,8 +10,9 @@
  *   - `guardian://scans/history` holds no `perf` row, so /guardian-report
  *     trend and /guardian-incident never tell the model to leave them out, and
  *     say they are not there (R1-DG-H-3);
- *   - the k6 series is keyed by the VUs k6 set up before the start, `vus_max`'s
- *     min (R1-DG-H-2).
+ *   - the k6 series is keyed by its inputs only — the script, its content and
+ *     the `K6_*` settings perf_check hands k6 —, never a VU count k6 measured
+ *     (R2-DG-HZ-1, the user's ruling; R1-DG-H-2's `vus_max` min jittered).
  */
 
 import { readFileSync } from 'node:fs';
@@ -46,7 +47,22 @@ describe("perf_check's history in the prose", () => {
     expect(read('commands/guardian-incident.md')).toContain("`perf_check`'s runs are not in it");
   });
 
-  it("H-2: the skill names the k6 load the series is keyed by, vus_max's min", () => {
-    expect(read('skills/guardian-performance/SKILL.md')).toContain('os VUs criados antes do arranque, o mínimo de `vus_max`');
+  // Review 2 (R2-DG-HZ-1, the user's ruling): the k6 series is keyed by its inputs only — never a VU count k6
+  // measured, whose min jitters when the VUs' init outlasts k6's first sample.
+  it('R2-DG-HZ-1: the prose says the k6 series is the script, its content and the K6_* settings, a changed setting a new series', () => {
+    const skill = read('skills/guardian-performance/SKILL.md');
+    expect(skill).toContain('no k6, o script, o conteúdo e as variáveis `K6_*` que o `perf_check` lhe passa (mudar uma começa outra série)');
+    expect(skill).not.toMatch(/vus_max/);
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toContain(
+      'for k6 the script, its content and the `K6_*` settings perf_check hands k6 (a digest of them: a value is never stored or shown) — never a VU count k6 measured, so a changed setting starts a new series',
+    );
+    expect(changelog).not.toMatch(/VUs k6 set up before the start/);
+    expect(read('docs/maintainers/architecture.md')).toContain(
+      'the k6 series from its inputs only: the script, its content and a digest of the `K6_*` settings perf_check hands k6, never a VU count k6 measured',
+    );
+    const source = read('mcp/src/metrics/perfSeries.ts');
+    expect(source).toContain('and the `K6_*` settings perf_check hands k6');
+    expect(source).not.toMatch(/vus_max/);
   });
 });

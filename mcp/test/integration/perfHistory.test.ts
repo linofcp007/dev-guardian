@@ -14,7 +14,7 @@
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
 vi.mock('../../src/tools/scanHelpers.js', async () => {
@@ -184,11 +184,16 @@ describe('perf_check history: Lighthouse', () => {
     const s = freshPlugin();
     const project = projectDir('perf-hist-');
     const first = await lighthouse(s, project, { lcp: 2000 }, 'http://127.0.0.1:64288/app?access_token=tok3n#top');
-    expect(first.history?.series).toBe('Lighthouse 13 · http://127.0.0.1:64288/app · performance');
-    expect(JSON.stringify(perfRows(s, project)[0]?.meta)).not.toMatch(/tok3n|#top/);
+    // R2-DG-HZ-4: the query shows as a short digest of it, so another query shows another label.
+    expect(first.history?.series).toMatch(/^Lighthouse 13 · http:\/\/127\.0\.0\.1:64288\/app\?…#[0-9a-f]{6} · performance$/);
+    expect(JSON.stringify(perfRows(s, project)[0]?.meta)).not.toMatch(/tok3n|access_token|#top/);
     for (let i = 0; i < 2; i += 1) await lighthouse(s, project, { lcp: 2000 }, 'http://127.0.0.1:64288/app?access_token=tok3n');
-    expect(verdictOf((await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?access_token=tok3n')).history, 'perf.lcp_ms')).toBe('regressed');
-    expect(verdictOf((await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?other=1')).history, 'perf.lcp_ms')).toBe('new');
+    const same = await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?access_token=tok3n');
+    expect(verdictOf(same.history, 'perf.lcp_ms')).toBe('regressed');
+    expect(same.history?.series).toBe(first.history?.series);
+    const other = await lighthouse(s, project, { lcp: 9000 }, 'http://127.0.0.1:64288/app?other=1');
+    expect(verdictOf(other.history, 'perf.lcp_ms')).toBe('new');
+    expect(other.history?.series).not.toBe(first.history?.series);
   });
 
   it('H17: another project\'s runs of the same page are never read', async () => {
@@ -280,6 +285,18 @@ describe('perf_check history: Lighthouse', () => {
 });
 
 describe('perf_check history: k6', () => {
+  // Hermetic: the K6_* settings perf_check hands k6 are part of the key (R2-DG-HZ-1), so the shell's own never
+  // reach these runs — only what a test sets.
+  beforeEach(() => {
+    for (const name of Object.keys(process.env)) if (name.toUpperCase().startsWith('K6_')) vi.stubEnv(name, undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** The stored series keys, newest first. */
+  const seriesKeys = (s: Seeded, project: string): string[] => perfRows(s, project).map((r) => String(r.meta?.['series']));
+
   function scriptK6(exitCode: number, vusMax: number, p95: number): void {
     vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'k6' ? '/fake/bin/k6' : null));
     vi.mocked(runProcess).mockImplementationOnce(async (opts) => {
@@ -305,19 +322,25 @@ describe('perf_check history: k6', () => {
     return (await tool('perf_check').handler({ project_path: project, k6_script_path: script }, s.plugin)) as { ok: boolean; passed?: boolean; history?: History };
   }
 
-  it('H16: a completed run whose threshold failed (exit 99) is kept; the key is the script, its content and vus_max', async () => {
+  it('H16: a completed run whose threshold failed (exit 99) is kept; the key is the script, its content and the K6_* settings', async () => {
     const s = freshPlugin();
     const project = projectDir('perf-k6-');
     writeFileSync(join(project, 'smoke.js'), 'export default function () {}\n', 'utf8');
     const failedThreshold = await k6(s, project, 'smoke.js', 99);
     expect(failedThreshold).toMatchObject({ ok: true, passed: false, history: { recorded: true } });
-    expect(failedThreshold.history?.series).toMatch(/^k6 · smoke\.js \([0-9a-f]{12}\) · 10 VUs$/);
+    expect(failedThreshold.history?.series).toMatch(/^k6 · smoke\.js \([0-9a-f]{12}\)$/);
     for (let i = 0; i < 2; i += 1) await k6(s, project, 'smoke.js');
     const judged = await k6(s, project, 'smoke.js', 0, 10, 40);
     expect(verdictOf(judged.history, 'k6.latency_p95_ms')).toBe('regressed');
     expect(judged.history?.metrics?.find((m) => m.name === 'k6.requests')).toMatchObject({ verdict: 'unjudged', why: ['better', 'tolerance'] });
-    // 100 VUs is another load, not a regression.
-    expect(verdictOf((await k6(s, project, 'smoke.js', 0, 100, 400)).history, 'k6.latency_p95_ms')).toBe('new');
+    // R2-DG-HZ-1: a VU count k6 measured is no part of the key — the same inputs are the same load.
+    expect(verdictOf((await k6(s, project, 'smoke.js', 0, 100, 400)).history, 'k6.latency_p95_ms')).toBe('regressed');
+    // Another K6_VUS is another load: a new series, unjudged until it has 3 runs.
+    vi.stubEnv('K6_VUS', '100');
+    const more = await k6(s, project, 'smoke.js', 0, 100, 400);
+    expect(verdictOf(more.history, 'k6.latency_p95_ms')).toBe('new');
+    expect(more.history?.series).toMatch(/^k6 · smoke\.js \([0-9a-f]{12}\) · K6_\* #[0-9a-f]{6}$/);
+    vi.stubEnv('K6_VUS', undefined);
     // An edited script starts a new series.
     writeFileSync(join(project, 'smoke.js'), 'export default function () { /* edited */ }\n', 'utf8');
     expect(verdictOf((await k6(s, project, 'smoke.js', 0, 10, 400)).history, 'k6.latency_p95_ms')).toBe('new');
@@ -383,27 +406,80 @@ describe('perf_check history: k6', () => {
     );
     for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
     const slow = await k6Summary(s, project, legacy(45, 0, vus(10, 23)));
-    expect(slow.history?.series).toMatch(/ · 10 VUs$/);
     expect(verdictOf(slow.history, 'k6.latency_p95_ms')).toBe('regressed');
     // Jitter in what k6 added (11 vs 23) is no new load either.
-    expect((await k6Summary(s, project, legacy(20, 0, vus(10, 11)))).history?.series).toBe(slow.history?.series);
+    const next = await k6Summary(s, project, legacy(20, 0, vus(10, 11)));
+    expect(next.history?.series).toBe(slow.history?.series);
+    expect(new Set(seriesKeys(s, project)).size).toBe(1);
   });
 
-  it('H-2 still-pass: another pre-allocation (min 10 vs 100) is another series', async () => {
+  // Review 2 (R2-DG-HZ-1, the user's ruling "only inputs"): k6 samples `vus_max` from the start of the VUs'
+  // init, so a constant-vus run whose init outlasts the first 1 s sample has a min that jitters — keyed by
+  // it, every run was `new` and none was ever judged; a heavy init read "0 VUs".
+  it("R2-DG-HZ-1: constant-vus 500 whose VU init outlasts k6's first sample (vus_max min 187, 203, 176, 198) is one series, and the slow run reads regressed", async () => {
     const s = freshPlugin();
     const project = projectDir('perf-k6-');
-    writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
+    writeFileSync(join(project, 'load.js'), 'export const options = { vus: 500, duration: "30s" };\nexport default function () {}\n', 'utf8');
+    const labels: Array<string | undefined> = [];
+    for (const min of [187, 203, 176]) labels.push((await k6Summary(s, project, legacy(20, 0, vus(min, 500)))).history?.series);
+    const slow = await k6Summary(s, project, legacy(45, 0, vus(198, 500)));
+    expect(verdictOf(slow.history, 'k6.latency_p95_ms')).toBe('regressed');
+    labels.push(slow.history?.series);
+    // A heavy init's min 0, and a summary with no vus_max at all: the same series still.
+    labels.push((await k6Summary(s, project, legacy(20, 0, vus(0, 500)))).history?.series);
+    const summary = legacy(20, 0, vus(0, 0));
+    const metrics: Record<string, unknown> = { ...summary.metrics };
+    delete metrics['vus_max'];
+    labels.push((await k6Summary(s, project, { ...summary, metrics })).history?.series);
+    expect(seriesKeys(s, project)).toHaveLength(6);
+    expect(new Set(seriesKeys(s, project)).size).toBe(1);
+    expect([...new Set(labels)]).toEqual([expect.stringMatching(/^k6 · load\.js \([0-9a-f]{12}\)$/)]);
+  });
+
+  it("R2-DG-HZ-1 still-pass: another load is another series when an input sets it — the script's options or a K6_* setting", async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-');
+    const script = (pre: number): string =>
+      `export const options = { scenarios: { s: { executor: "constant-arrival-rate", rate: 100, preAllocatedVUs: ${pre}, maxVUs: 200 } } };\n`;
+    const p95 = async (summary: Record<string, unknown>) => verdictOf((await k6Summary(s, project, summary)).history, 'k6.latency_p95_ms');
+    writeFileSync(join(project, 'load.js'), script(10), 'utf8');
     for (let i = 0; i < 3; i += 1) await k6Summary(s, project, legacy(20, 0, vus(10, 23)));
-    const bigger = await k6Summary(s, project, legacy(45, 0, vus(100, 100)));
-    expect(bigger.history?.series).toMatch(/ · 100 VUs$/);
-    expect(verdictOf(bigger.history, 'k6.latency_p95_ms')).toBe('new');
+    writeFileSync(join(project, 'load.js'), script(100), 'utf8');
+    expect(await p95(legacy(45, 0, vus(100, 100)))).toBe('new');
+    // The first script again: its series, judged.
+    writeFileSync(join(project, 'load.js'), script(10), 'utf8');
+    expect(await p95(legacy(45, 0, vus(10, 23)))).toBe('regressed');
+    vi.stubEnv('K6_VUS', '50');
+    expect(await p95(legacy(45, 0, vus(10, 23)))).toBe('new');
+    vi.stubEnv('K6_VUS', undefined);
+    expect(await p95(legacy(45, 0, vus(10, 23)))).toBe('regressed');
   });
 
-  it('H-2: a vus_max with no min is keyed by its max', async () => {
+  it('R2-DG-HZ-1: a K6_* value reaches the key as a digest only, never the stored meta or the label; what k6 is not handed keys nothing', async () => {
     const s = freshPlugin();
     const project = projectDir('perf-k6-');
     writeFileSync(join(project, 'load.js'), 'export default function () {}\n', 'utf8');
-    expect((await k6Summary(s, project, legacy(20, 0, { max: 10 }))).history?.series).toMatch(/ · 10 VUs$/);
+    vi.stubEnv('K6_OUT', 'influxdb=http://k6:pa55word9@db.internal:8086/k6');
+    // A credential-shaped name is never handed to k6 (allowlistedEnv), so it is no part of the key.
+    vi.stubEnv('K6_CLOUD_TOKEN', 'cloudvalue1');
+    // Handed (the proxy), but no K6_* setting.
+    vi.stubEnv('HTTPS_PROXY', 'http://proxy.internal:3128');
+    const first = await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
+    const handed = vi.mocked(runProcess).mock.calls.at(-1)?.[0].env ?? {};
+    expect(handed['K6_OUT']).toContain('pa55word9');
+    expect(handed).not.toHaveProperty('K6_CLOUD_TOKEN');
+    expect(first.history?.series).toMatch(/^k6 · load\.js \([0-9a-f]{12}\) · K6_\* #[0-9a-f]{6}$/);
+    expect(JSON.stringify(perfRows(s, project)[0]?.meta)).not.toMatch(/pa55word9|influxdb|cloudvalue1|K6_OUT|K6_CLOUD/);
+    vi.stubEnv('K6_CLOUD_TOKEN', 'cloudvalue2');
+    vi.stubEnv('HTTPS_PROXY', 'http://proxy2.internal:3128');
+    const second = await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
+    expect(second.history?.series).toBe(first.history?.series);
+    expect(new Set(seriesKeys(s, project)).size).toBe(1);
+    // The handed value does key it.
+    vi.stubEnv('K6_OUT', 'influxdb=http://db.internal:8086/k6');
+    const third = await k6Summary(s, project, legacy(20, 0, vus(10, 10)));
+    expect(third.history?.series).not.toBe(first.history?.series);
+    expect(new Set(seriesKeys(s, project)).size).toBe(2);
   });
 
   it('a run whose summary holds no metric is not kept, and says so', async () => {
