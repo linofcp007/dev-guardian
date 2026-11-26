@@ -126,8 +126,9 @@ export function k6Samples(summary: Record<string, unknown>): PerfSample[] {
 }
 
 export interface PerfSeries {
-  /** Stored as `meta.series`: a digest, so a URL's credentials never reach the column. */
+  /** Stored as `meta.series`: a digest of the parts, so the page's credentials and query reach the column only hashed. */
   readonly key: string;
+  /** Shown as `history.series` and stored as `meta.series_label`: the page with no credentials, query or fragment. */
   readonly label: string;
 }
 
@@ -140,9 +141,11 @@ export function lighthouseSeries(url: string, lighthouseVersion: string | undefi
   page.hash = '';
   const major = /^([0-9]+)\./.exec(lighthouseVersion ?? '')?.[1] ?? null;
   const scored = [...new Set(categories)].sort();
+  // A query can hold a token (`?access_token=…`): it keys the series, and is never shown or stored.
   const shown = new URL(page.href);
   shown.username = '';
   shown.password = '';
+  shown.search = '';
   return {
     key: digest(['lighthouse', major, page.href, scored]),
     label: `Lighthouse ${major ?? '?'} · ${shown.href} · ${scored.length > 0 ? scored.join(', ') : 'no category'}`,

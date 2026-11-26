@@ -129,7 +129,8 @@ every case's fields (an absent value is `null`, never a missing key), the cases
 the decisions name, ASCII with LF ends, no CI or PR word — and the readers are
 tested against its cases in their own files — here `test/unit/metrics/metricLine.test.ts` (every line
 and output case, and the points the fixture leaves to each suite: tokens split on runs of blanks, keys in
-any order, `__proto__` an ordinary name, a 513-byte candidate a drop, CSI removed, each bound's drop said) and
+any order, `__proto__` an ordinary name, a 513-byte candidate a drop, CSI removed — but a keyword one splits
+is none, as dev-spec-driven reads the keyword in the raw output —, each bound's drop said) and
 `judge.test.ts` (every judge case, the symmetric verdict, terms a current line adds creating no judgment).
 
 On Windows, run the full suite from **Git Bash**. From PowerShell, `bash` can

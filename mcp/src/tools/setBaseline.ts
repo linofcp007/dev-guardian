@@ -103,6 +103,15 @@ async function handler(
     }
     targetScanId = inp.scan_id;
   } else {
+    // The scan_id path's rule, for a type named: `latestStateScan` searches the type it is given, so
+    // `scan_type: "perf"` (or "sbom") made such a scan the untyped baseline.
+    if (inp.scan_type !== undefined && SCAN_TYPE_ROLE[inp.scan_type] !== 'state') {
+      return failDomain(
+        'unsupported_target',
+        `A ${inp.scan_type} scan records no findings to compare against, so it cannot be a baseline. ` +
+          'Baseline a scan of a finding-producing type.',
+      );
+    }
     const projectPath = toolProjectPath(inp.project_path);
     if (typeof projectPath !== 'string') return projectPath;
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);

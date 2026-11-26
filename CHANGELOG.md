@@ -75,7 +75,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
   k6), CLS 0.01, page weight 1%, scores 2 points, the k6 error rate 0.5 points. A run that regressed never enters a
   later reference, so running again does not wash a regression out (`confirmed` says the run before regressed too),
   and `since` shows the median of the oldest 3 runs kept. `history.recorded: false` says why a run was not kept; a
-  history that fails never fails the measurement.
+  history that fails never fails the measurement. Retention keeps a project's 50 newest runs across all its targets
+  (`GUARDIAN_RETENTION_SCANS`), so measuring many targets in rotation can leave one below 3 runs.
 - **`metrics --head <file> [--base <file>]`, a CLI command that compares METRIC lines.** It reads `metric-lines/1`
   (`METRIC <name>=<number>[ <unit>][ better=lower|higher][ tolerance=<n>[%]]`) and judges by the base line's terms:
   the head may only tighten the tolerance, and a flipped or dropped direction, a raised or dropped tolerance or a
@@ -118,6 +119,8 @@ behind newer scans of other types. No tool, resource, skill or command is added:
 - **`perf_check` read no error rate from a k6 run.** The file `k6 run --summary-export` writes holds a rate as
   `{ passes, fails, value }`, and `summary.error_rate` read only `rate`: it was null on every run. It now reads
   `value` too, so the error rate is in `summary` and judged in `history`.
+- **`set_baseline { scan_type }` baselined a scan of a type that records no findings** — an SBOM, and now a `perf`
+  run. It refuses one, as `set_baseline { scan_id }` already did.
 - **docs/ci.md, `scan --help` and `scan_sast`'s skipped reason** no longer suggest that rules registered with
   `register_custom_rules` give the CLI's `--local-only` something to run: the CLI never reads a registration (every
   run works in a throwaway database).

@@ -76702,6 +76702,7 @@ function lighthouseSeries(url2, lighthouseVersion, categories) {
   const shown = new URL(page.href);
   shown.username = "";
   shown.password = "";
+  shown.search = "";
   return {
     key: digest(["lighthouse", major, page.href, scored]),
     label: `Lighthouse ${major ?? "?"} \xB7 ${shown.href} \xB7 ${scored.length > 0 ? scored.join(", ") : "no category"}`
@@ -77234,6 +77235,8 @@ async function runLighthouse(opts) {
   const summary2 = summariseLighthouse(parsed2);
   const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary2.core_web_vitals);
   const categories = getProp(parsed2, "categories");
+  const cls = getNumber(getProp(getProp(parsed2, "audits"), "cumulative-layout-shift"), "numericValue");
+  const sampled = { ...summary2, core_web_vitals: { ...summary2.core_web_vitals, "cumulative-layout-shift": cls ?? null } };
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
     scanId: opts.scanId,
@@ -77246,7 +77249,7 @@ async function runLighthouse(opts) {
       getString(parsed2, "lighthouseVersion"),
       categories !== null && typeof categories === "object" ? Object.keys(categories) : []
     ),
-    samples: lighthouseSamples(summary2)
+    samples: lighthouseSamples(sampled)
   });
   return {
     ok: true,
@@ -77573,6 +77576,12 @@ async function handler7(inp, ctx) {
     }
     targetScanId = inp.scan_id;
   } else {
+    if (inp.scan_type !== void 0 && SCAN_TYPE_ROLE[inp.scan_type] !== "state") {
+      return failDomain3(
+        "unsupported_target",
+        `A ${inp.scan_type} scan records no findings to compare against, so it cannot be a baseline. Baseline a scan of a finding-producing type.`
+      );
+    }
     const projectPath = toolProjectPath(inp.project_path);
     if (typeof projectPath !== "string") return projectPath;
     const choice = chooseSourceTool(ctx.storage, projectPath, inp.scan_type, inp.source_tool);
@@ -130744,12 +130753,19 @@ var NUMBER = /^-?(?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,9})?(?:[eE][-+]?[0-9]{1,3})?
 var TOLERANCE = /^((?:0|[1-9][0-9]{0,14})(?:\.[0-9]{1,9})?(?:[eE][-+]?[0-9]{1,3})?)(%?)$/;
 var UNIT_MAX_CHARS = 16;
 var START = /^[ \t]*(?:# )?METRIC(?=[ \t]|$)/;
+var HEAD = /^[ \t]*(?:# )?$/;
 var BLANKS = /[ \t]+/;
 var CSI = /\u001B\[[0-?]*[ -/]*[A-Za-z]/g;
 var KEYWORD = "METRIC";
 function cleanLine(line) {
   const noCr = line.endsWith("\r") ? line.slice(0, -1) : line;
   return noCr.includes("\x1B") ? noCr.replace(CSI, "") : noCr;
+}
+function keywordPrinted(raw) {
+  const first = raw.indexOf(KEYWORD);
+  if (first < 0) return false;
+  const head = raw.slice(0, first);
+  return HEAD.test(head.includes("\x1B") ? head.replace(CSI, "") : head);
 }
 function malformed(part) {
   return { kind: "malformed", part };
@@ -130814,9 +130830,10 @@ function readMetricOutput(text3, opts = {}) {
     const lineEnd = nl < 0 ? text3.length : nl;
     const cut = opts.truncated === true && lineStart === 0;
     if (!cut) {
-      const line = cleanLine(text3.slice(lineStart, lineEnd));
+      const raw = text3.slice(lineStart, lineEnd);
+      const line = cleanLine(raw);
       const start = START.exec(line);
-      if (start !== null) {
+      if (start !== null && keywordPrinted(raw)) {
         candidates2 += 1;
         if (candidates2 > bounds.candidates) {
           dropped.add("candidates");

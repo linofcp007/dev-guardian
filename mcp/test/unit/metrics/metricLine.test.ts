@@ -5,7 +5,8 @@
  * leaves to each reader's own suite: tokens split on runs
  * of blanks, the known keys in any order, `__proto__` an ordinary name, a
  * candidate over 512 bytes a drop, a malformed repeat never replacing a
- * reading, CSI sequences removed, and each bound's drop said.
+ * reading, CSI sequences removed (a keyword one splits is none, as
+ * dev-spec-driven reads it), and each bound's drop said.
  */
 
 import { readFileSync } from 'node:fs';

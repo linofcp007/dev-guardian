@@ -129,7 +129,9 @@ the operator named), and holds `perf_check`'s series rules (`perfSeries.ts`). `t
 writes the `perf` rows (`scansRepo.listCompletedPerfSeries`, one statement per series); `src/cli.ts` re-exports
 what the CLI uses directly — it is light, so `metrics` loads no `load*Modules()`. A `perf` row is `'never'`
 (`history/scanRoles.ts`): it reports through `meta`, and as `'state'` it would be `latestStateScan`'s default.
-`guardian://scans/history` leaves `perf` rows out (`scansRepo.listScanHistory`, in SQL, so its 50 are the other scans).
+`guardian://scans/history` leaves `perf` rows out (`scansRepo.listScanHistory`, in SQL, so its 50 are the other scans),
+and `set_baseline` refuses a `'never'` type by `scan_id` and by `scan_type` alike. A run's samples come from its report:
+CLS unrounded (its 0.01 tolerance is the summary's rounding step), the k6 load from `vus_max`'s min.
 
 ## What a scan of the project's own files leaves out
 

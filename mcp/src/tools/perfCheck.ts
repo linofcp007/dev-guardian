@@ -238,6 +238,10 @@ async function runLighthouse(
   const summary = summariseLighthouse(parsed);
   const budgetResult = evaluateLighthouseBudgets(opts.projectPath, summary.core_web_vitals);
   const categories = getProp(parsed, 'categories');
+  // The history samples CLS unrounded: its tolerance is 0.01, the summary's rounding step, so a
+  // CLS of 0.1351 x3 then 0.1549 (+0.0198) read 0.14 -> 0.15, within.
+  const cls = getNumber(getProp(getProp(parsed, 'audits'), 'cumulative-layout-shift'), 'numericValue');
+  const sampled = { ...summary, core_web_vitals: { ...summary.core_web_vitals, 'cumulative-layout-shift': cls ?? null } };
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
     scanId: opts.scanId,
@@ -250,7 +254,7 @@ async function runLighthouse(
       getString(parsed, 'lighthouseVersion'),
       categories !== null && typeof categories === 'object' ? Object.keys(categories) : [],
     ),
-    samples: lighthouseSamples(summary),
+    samples: lighthouseSamples(sampled),
   });
   return {
     ok: true,
@@ -279,8 +283,14 @@ interface PerfHistory {
 }
 
 /**
- * The series' runs a judgment reads: retention's default keep, the oldest of
- * which `since` is the median of. Read in one statement, newest first.
+ * The series' runs a judgment reads, newest first, in one statement: retention's
+ * default keep. Retention keeps N `perf` rows per project, shared by all its
+ * targets (docs/env.md), so a series holds at most N. Not `GUARDIAN_RETENTION_SCANS`
+ * itself: its `0` (keep everything) would make this an unbounded read, and a keep
+ * below 3 would leave no series judgeable, not even within one server session
+ * (retention prunes at the start). What that hides:
+ * with N above 50, `since` is the oldest 3 of a series' 50 newest runs, not of
+ * every run kept.
  */
 const SERIES_READ = DEFAULT_RETENTION_SCANS;
 
