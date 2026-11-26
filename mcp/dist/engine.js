@@ -23346,10 +23346,11 @@ var init_suppressions = __esm({
         at: "start",
         re: /(?:trivy|tfsec):ignore:(?<names>[\w*.-]+)/,
         scope: "line",
-        named: true,
+        // `*` names no check: Trivy then reports none here.
+        check: (g) => ({ names: g["names"] !== "*" }),
         label: "trivy:ignore",
         form: "`trivy:ignore:<id>` and a comment saying why",
-        hides: "Trivy's finding of that check here",
+        hides: "Trivy's findings of every check here",
         tokens: ["trivy:ignore:", "tfsec:ignore:"]
       },
       {
