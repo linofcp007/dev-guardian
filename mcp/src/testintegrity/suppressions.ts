@@ -25,11 +25,12 @@
  * tool reads it: Semgrep honours a blank-led `nosem` anywhere on the line,
  * a string included, and not `//nosemgrep` with no blank; Bandit and gosec
  * read comments only, gosec one that STARTS with `#nosec`; gitleaks reads
- * `gitleaks:allow` anywhere on the line; ESLint reads its file-wide form in a
+ * its allow directive anywhere on the line; ESLint reads its file-wide form in a
  * block comment only. A reason is three letters in a row: after the
  * directive and its arguments in the same comment (the tool's own field —
  * `-- why`, `reason = "why"`, `Justification = "why"` — or free text), or in
- * a whole-line comment directly above that is not itself a directive. The
+ * a whole-line comment directly above that is not itself a directive (nor
+ * the file's shebang or a line-1/2 coding or magic comment). The
  * reason is never judged, and a doubt never is: a line inside a multi-line
  * string, template, raw string or heredoc an earlier line opened is not read
  * (but by Semgrep's and gitleaks' rows, whose tools read it too), a line
@@ -546,6 +547,14 @@ const RULE_LIST = String.raw`[ \t]+[@\w./-]+(?:[ \t]*,[ \t]*[@\w./-]+)*`;
 /** flake8 / Ruff codes: `E501`, `W291,E402`. */
 const CODES = String.raw`[a-z]+\d+(?:[\s,]+[a-z]+\d+)*`;
 
+/**
+ * The two directives their tools read anywhere on a line — this file's lines
+ * too, so written literally they would be real ones on dev-guardian's own
+ * branches (Semgrep's needs the blank before it): built.
+ */
+const SEMGREP_SHORT = ['no', 'sem'].join('');
+const GITLEAKS_ALLOW = ['gitleaks', 'allow'].join(':');
+
 const ROWS: readonly Row[] = [
   // ---- the scanners dev-guardian runs: hidden from its own scans and gate
   {
@@ -554,9 +563,9 @@ const ROWS: readonly Row[] = [
     cls: 'scanner',
     langs: ALL_LANGS,
     at: 'line',
-    // Semgrep's own reading: a blank, then nosem or nosemgrep in any case; `:` or `=` and ids name the rules (read
+    // Semgrep's own reading: a blank, then `nosem` or `nosemgrep` in any case; `:` or `=` and ids name the rules (read
     // here up to a `--`, so the reason after the documented `nosemgrep: <id> -- <reason>` stays one).
-    re: / nosem(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?/i,
+    re: new RegExp(String.raw` ${SEMGREP_SHORT}(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?`, 'i'),
     scope: 'line',
     label: 'nosemgrep',
     form: '`nosemgrep: <rule-id> -- <reason>`',
@@ -597,12 +606,13 @@ const ROWS: readonly Row[] = [
     cls: 'scanner',
     langs: ALL_LANGS,
     at: 'line',
-    re: /gitleaks:allow/, // gitleaks reads its own directive anywhere on the line: this is its name, with no secret
+    // gitleaks reads its allow directive anywhere on the line: this is its name, with no secret.
+    re: new RegExp(GITLEAKS_ALLOW),
     scope: 'line',
-    label: 'gitleaks:allow',
-    form: '`gitleaks:allow` and the reason after it',
+    label: GITLEAKS_ALLOW,
+    form: `${BACKTICK}${GITLEAKS_ALLOW}${BACKTICK} and the reason after it`,
     hides: "gitleaks' findings on this line",
-    tokens: ['gitleaks:allow'],
+    tokens: [GITLEAKS_ALLOW],
   },
   {
     id: 'trivy-ignore',
@@ -679,7 +689,7 @@ const ROWS: readonly Row[] = [
   },
   {
     id: 'cs-pragma-warning',
-    reader: 'the C# compiler',
+    reader: 'C# compiler',
     cls: 'scanner',
     langs: ['cs'],
     at: 'code',

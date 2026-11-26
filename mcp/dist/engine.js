@@ -23250,7 +23250,7 @@ function detectSuppressions(files) {
   }
   return { findings, counts };
 }
-var SUPPRESSIONS_TOOL, C_BLOCK, BACKTICK, LEXERS, CODE, HEREDOC, RUST_RAW, RUST_CHAR, CPP_RAW, WORD_BEFORE, SPECIAL, NOT_BLANK, TAB, SP, ALL_LANGS, JS, IAC, RULE_LIST, CODES, ROWS, SUPPRESSION_ROWS, PICKAXE_ERE, PICKAXE_JS, COMPILED, LETTERS, MAGIC_COMMENTS, BOM2;
+var SUPPRESSIONS_TOOL, C_BLOCK, BACKTICK, LEXERS, CODE, HEREDOC, RUST_RAW, RUST_CHAR, CPP_RAW, WORD_BEFORE, SPECIAL, NOT_BLANK, TAB, SP, ALL_LANGS, JS, IAC, RULE_LIST, CODES, SEMGREP_SHORT, GITLEAKS_ALLOW, ROWS, SUPPRESSION_ROWS, PICKAXE_ERE, PICKAXE_JS, COMPILED, LETTERS, MAGIC_COMMENTS, BOM2;
 var init_suppressions = __esm({
   "src/testintegrity/suppressions.ts"() {
     "use strict";
@@ -23296,6 +23296,8 @@ var init_suppressions = __esm({
     IAC = ["tf", "yaml", "docker"];
     RULE_LIST = String.raw`[ \t]+[@\w./-]+(?:[ \t]*,[ \t]*[@\w./-]+)*`;
     CODES = String.raw`[a-z]+\d+(?:[\s,]+[a-z]+\d+)*`;
+    SEMGREP_SHORT = ["no", "sem"].join("");
+    GITLEAKS_ALLOW = ["gitleaks", "allow"].join(":");
     ROWS = [
       // ---- the scanners dev-guardian runs: hidden from its own scans and gate
       {
@@ -23304,9 +23306,9 @@ var init_suppressions = __esm({
         cls: "scanner",
         langs: ALL_LANGS,
         at: "line",
-        // Semgrep's own reading: a blank, then nosem or nosemgrep in any case; `:` or `=` and ids name the rules (read
+        // Semgrep's own reading: a blank, then `nosem` or `nosemgrep` in any case; `:` or `=` and ids name the rules (read
         // here up to a `--`, so the reason after the documented `nosemgrep: <id> -- <reason>` stays one).
-        re: / nosem(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?/i,
+        re: new RegExp(String.raw` ${SEMGREP_SHORT}(?:grep)?(?<names>[:=]\s?[^,\s-][^,\s]*(?:[,\s]+[^,\s-][^,\s]*)*)?`, "i"),
         scope: "line",
         label: "nosemgrep",
         form: "`nosemgrep: <rule-id> -- <reason>`",
@@ -23347,13 +23349,13 @@ var init_suppressions = __esm({
         cls: "scanner",
         langs: ALL_LANGS,
         at: "line",
-        re: /gitleaks:allow/,
-        // gitleaks reads its own directive anywhere on the line: this is its name, with no secret
+        // gitleaks reads its allow directive anywhere on the line: this is its name, with no secret.
+        re: new RegExp(GITLEAKS_ALLOW),
         scope: "line",
-        label: "gitleaks:allow",
-        form: "`gitleaks:allow` and the reason after it",
+        label: GITLEAKS_ALLOW,
+        form: `${BACKTICK}${GITLEAKS_ALLOW}${BACKTICK} and the reason after it`,
         hides: "gitleaks' findings on this line",
-        tokens: ["gitleaks:allow"]
+        tokens: [GITLEAKS_ALLOW]
       },
       {
         id: "trivy-ignore",
@@ -23430,7 +23432,7 @@ var init_suppressions = __esm({
       },
       {
         id: "cs-pragma-warning",
-        reader: "the C# compiler",
+        reader: "C# compiler",
         cls: "scanner",
         langs: ["cs"],
         at: "code",
