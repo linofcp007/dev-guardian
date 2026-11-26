@@ -72,6 +72,7 @@
     { "name": "TypeScript: /// @ts-ignore", "row": "ts-ignore", "path": "src/a.ts", "lines": ["/// @ts-ignore"], "out": "L" },
     { "name": "TypeScript: a block comment", "row": "ts-ignore", "path": "src/a.ts", "lines": ["/* @ts-ignore */"], "out": "L" },
     { "name": "TypeScript: a JSDoc comment", "row": "ts-ignore", "path": "src/a.ts", "lines": ["/** @ts-ignore */"], "out": "L" },
+    { "name": "TypeScript: a later line of a JSDoc block is not read (TypeScript reads a block's last line only)", "row": "ts-ignore", "path": "src/a.ts", "lines": ["/**", " * @ts-ignore", " */", "foo(bar);"], "added": [2], "out": "" },
     { "name": "TypeScript: two letters are no reason", "row": "ts-ignore", "path": "src/a.ts", "lines": ["// @ts-ignore ok"], "out": "L" },
     { "name": "TypeScript: @ts-expect-error outside a test", "row": "ts-ignore", "path": "src/a.ts", "lines": ["// @ts-expect-error"], "out": "L" },
     { "name": "TypeScript: @ts-expect-error in a test (a type test)", "row": "ts-ignore", "path": "src/a.test.ts", "lines": ["// @ts-expect-error"], "out": "" },

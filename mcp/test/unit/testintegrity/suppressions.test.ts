@@ -167,6 +167,16 @@ describe('the findings', () => {
     expect(r.findings).toEqual([]);
   });
 
+  // Review 1 of 3.17.0, R1-DG-D-5: the other side of the line above — the text holds a directive on a line the
+  // diff says it added as something else (a stale read, a rewrite between the diff and the read). Not read
+  // either: only what the diff added is judged (kills mutant M15, the comparison dropped).
+  it("a text whose line holds a directive the diff did not add: that line is not read", () => {
+    const blanket = byName('ESLint: the whole file, every rule').lines[0] ?? '';
+    const r = detectSuppressions([{ path: 'src/a.ts', added: [{ line: 1, text: 'export const x = 1;' }], removed: [], after: `${blanket}\nexport const x = 1;\n` }]);
+    expect(r.findings).toEqual([]);
+    expect(r.counts).toMatchObject({ files: 1, added: 0, unread: 0 });
+  });
+
   it('a removed directive in another file carries the added one (a file moved without git mv)', () => {
     const c = byName('ESLint: the whole file, every rule');
     const r = detectSuppressions([
