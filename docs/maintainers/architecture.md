@@ -106,13 +106,15 @@ its own `tools_run` name (`history/runNames.ts`):
   a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
   `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
 
-The suppressions pass lists only the paths `.guardianignore` keeps: its three callers hand it the factory's own
-result-filter rule (`platform/guardianIgnore.ts#keptByExclusions`) as `member`, applied before its bounds, so a
-left-out tree never fills them (scan_sast's with its scope's member; `ci/runScans.ts#declaredPaths` loads the
-`--rules-ref` copy's file when given). A rename into a listed path is listed by its old one: the factory's filter
-drops its finding, and the CLI applies the same predicate to the step's findings. The test-integrity pass reads every
-path: `review_pr`'s and `scan_sast`'s findings go through the factory's filter, the CLI's do not (as in 3.16.1 — a
-focused test in a listed path blocks `scan --diff-base`). A suppressions-pass finding is keyed like a credential
+The suppressions pass lists only the paths `.guardianignore` does not ignore: its three callers hand it
+`(p) => !exclusions.ignores(p)` as `member`, applied before its bounds, so a left-out tree never fills them — one the
+change deletes whole too (scan_sast's with its scope's member; `ci/runScans.ts#declaredPaths` loads the `--rules-ref`
+copy's file when given). Not the result filter's rule (`platform/guardianIgnore.ts#keptByExclusions`), which keeps a
+path no longer in the project: a git listing holds only project paths. A rename into a listed path is listed by its
+old one: the factory's filter drops its finding, and the CLI applies that filter to the step's findings. The
+test-integrity pass reads every path: `review_pr`'s and `scan_sast`'s findings go through the factory's filter, the
+CLI's do not (as in 3.16.1 — a focused test in a listed path blocks `scan --diff-base`). A suppressions-pass finding
+is keyed like a credential
 (`fingerprint/findingIdentity.ts#keyedWithoutLine`: `suppression\n<rule id>\n<subcategory>` — the subcategory is
 `suppression:<row id>`, the directive's kind, so no identity moves from one kind to another — the occurrence and the
 group's count, never the line: a bare gitleaks allow line holds the secret).

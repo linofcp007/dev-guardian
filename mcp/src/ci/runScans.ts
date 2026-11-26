@@ -224,10 +224,10 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
 
       const integrity = opts.diffBase !== undefined ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);
-      // No tool handler makes the suppressions step's findings, so the factory's rule is applied here: what
-      // .guardianignore lists is not listed (before the step's bounds), nor kept when a rename leads into it.
+      // No tool handler makes the suppressions step's findings, so .guardianignore is applied here: what it
+      // lists is not listed (before the step's bounds), nor kept by the factory's rule when a rename leads into it.
       const declared = opts.diffBase !== undefined ? await declaredPaths(opts.projectPath, ctx) : null;
-      const suppressions = opts.diffBase !== undefined ? await suppressionsStep(opts.projectPath, opts.diffBase, declared) : null;
+      const suppressions = opts.diffBase !== undefined ? await suppressionsStep(opts.projectPath, opts.diffBase, declared?.member ?? null) : null;
       if (suppressions !== null) steps.push(suppressions.step);
 
       const read = fullContentFindings(storage, opts.projectPath);
@@ -237,7 +237,7 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
         ...collectFindings(storage, opts.projectPath),
         ...wholeFiles,
         ...(integrity?.findings ?? []),
-        ...(suppressions?.findings ?? []).filter((f) => declared === null || f.file_path === undefined || f.file_path === '' || declared(f.file_path)),
+        ...(suppressions?.findings ?? []).filter((f) => declared === null || f.file_path === undefined || f.file_path === '' || declared.kept(f.file_path)),
       ]);
       // The gate keys secrets by their values, read in memory from where
       // gitleaks' reports of this run locate them (ci/secretValues.ts): a
@@ -289,7 +289,7 @@ async function testIntegrityStep(projectPath: string, ref: ResolvedRef): Promise
  * no file to read. Never a gap: a bound that left files unread, or a change
  * git could not list, is one of the step's `notes` (the verdict's
  * `coverage_notes`), and nothing it reports is high. `member`: the paths
- * `.guardianignore` keeps ({@link declaredPaths}), when it lists any.
+ * `.guardianignore` does not ignore ({@link declaredPaths}), when it lists any.
  */
 async function suppressionsStep(
   projectPath: string,
@@ -316,20 +316,25 @@ async function suppressionsStep(
 }
 
 /**
- * The project-relative paths the suppressions step reads and reports: the
+ * The project-relative paths the suppressions step reads and reports, by the
  * project's `.guardianignore` — the `--rules-ref` copy's when given
- * (`ci/refConfig.ts`) — applied as the scan-tool factory applies it to
- * `review_pr`'s and a diff-scoped `scan_sast`'s pass
- * (`platform/guardianIgnore.ts#keptByExclusions`): a path it ignores that is
- * in the project is left out; one no longer in the project is kept. Null when
- * there is no such file, or it cannot be read — then nothing is left out (the
- * scans' own warning says so).
+ * (`ci/refConfig.ts`) — as `review_pr`'s and a diff-scoped `scan_sast`'s pass
+ * apply it. `member`, the paths the step lists: every one the file does not
+ * ignore — a git listing holds only project paths, so one of a listed tree the
+ * change deletes whole is left out too. `kept`, the step's findings: the
+ * scan-tool factory's result filter
+ * (`platform/guardianIgnore.ts#keptByExclusions`). Null when there is no such
+ * file, or it cannot be read — then nothing is left out (the scans' own
+ * warning says so).
  */
-async function declaredPaths(projectPath: string, ctx: PluginContext): Promise<((path: string) => boolean) | null> {
+async function declaredPaths(
+  projectPath: string,
+  ctx: PluginContext,
+): Promise<{ member: (path: string) => boolean; kept: (path: string) => boolean } | null> {
   const project = scannedProject(projectPath);
   const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
   if (exclusions === null || 'error' in exclusions) return null;
-  return keptByExclusions(exclusions, project);
+  return { member: (p) => !exclusions.ignores(p), kept: keptByExclusions(exclusions, project) };
 }
 
 /** `SCAN_SEQUENCE`, minus `scan_dast` when the caller gave no base url. */
