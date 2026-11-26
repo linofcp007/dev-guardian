@@ -11283,7 +11283,7 @@ var require_cst = __commonJS({
     var cstScalar = require_cst_scalar();
     var cstStringify = require_cst_stringify();
     var cstVisit = require_cst_visit();
-    var BOM2 = "\uFEFF";
+    var BOM3 = "\uFEFF";
     var DOCUMENT = "";
     var FLOW_END = "";
     var SCALAR = "";
@@ -11291,7 +11291,7 @@ var require_cst = __commonJS({
     var isScalar3 = (token) => !!token && (token.type === "scalar" || token.type === "single-quoted-scalar" || token.type === "double-quoted-scalar" || token.type === "block-scalar");
     function prettyToken(token) {
       switch (token) {
-        case BOM2:
+        case BOM3:
           return "<BOM>";
         case DOCUMENT:
           return "<DOC>";
@@ -11305,7 +11305,7 @@ var require_cst = __commonJS({
     }
     function tokenType(source) {
       switch (source) {
-        case BOM2:
+        case BOM3:
           return "byte-order-mark";
         case DOCUMENT:
           return "doc-mode";
@@ -11367,7 +11367,7 @@ var require_cst = __commonJS({
     exports.setScalarValue = cstScalar.setScalarValue;
     exports.stringify = cstStringify.stringify;
     exports.visit = cstVisit.visit;
-    exports.BOM = BOM2;
+    exports.BOM = BOM3;
     exports.DOCUMENT = DOCUMENT;
     exports.FLOW_END = FLOW_END;
     exports.SCALAR = SCALAR;
@@ -23105,6 +23105,8 @@ function aboveReason(lines, raw, idx, lang) {
   if (r === void 0 || text3 === void 0) return false;
   if (r.literal) return true;
   if (r.substance || r.comments.length === 0) return false;
+  if (idx === 1 && text3.startsWith("#!")) return false;
+  if (idx <= 2 && MAGIC_COMMENTS.some((m) => m.test(text3))) return false;
   if (hitsOn(text3, r, lang).length > 0) return false;
   return r.comments.some((p) => LETTERS.test(text3.slice(p.start, p.end)));
 }
@@ -23169,6 +23171,9 @@ function finding(h, path3, line, severity, names, file2) {
 function splitLines2(text3) {
   return text3.split("\n").map((l) => l.endsWith("\r") ? l.slice(0, -1) : l);
 }
+function withoutBom(text3) {
+  return text3.startsWith(BOM2) ? text3.slice(BOM2.length) : text3;
+}
 function firstSubstance(lines, raw) {
   for (let i = 0; i < lines.length; i += 1) {
     if (i === 0 && (raw[0] ?? "").startsWith("#!")) continue;
@@ -23207,8 +23212,9 @@ function detectSuppressions(files) {
       counts.unread += 1;
       continue;
     }
-    const raw = splitLines2(f.after);
-    const lines = readLines(f.after, lang);
+    const after2 = withoutBom(f.after);
+    const raw = splitLines2(after2);
+    const lines = readLines(after2, lang);
     const leadingUntil = firstSubstance(lines, raw);
     const doc = packageDocOf(lines, raw, leadingUntil);
     const testFile = isTestFile(f.path);
@@ -23216,7 +23222,8 @@ function detectSuppressions(files) {
       const idx = a.line - 1;
       const text3 = raw[idx];
       const lexed = lines[idx];
-      const addedText = a.text.endsWith("\r") ? a.text.slice(0, -1) : a.text;
+      const crlf = a.text.endsWith("\r") ? a.text.slice(0, -1) : a.text;
+      const addedText = a.line === 1 ? withoutBom(crlf) : crlf;
       if (text3 === void 0 || lexed === void 0 || text3 !== addedText) continue;
       const hits = hitsOn(text3, lexed, lang);
       for (const h of hits) {
@@ -23243,7 +23250,7 @@ function detectSuppressions(files) {
   }
   return { findings, counts };
 }
-var SUPPRESSIONS_TOOL, C_BLOCK, BACKTICK, LEXERS, CODE, HEREDOC, RUST_RAW, RUST_CHAR, CPP_RAW, WORD_BEFORE, SPECIAL, NOT_BLANK, TAB, SP, ALL_LANGS, JS, IAC, RULE_LIST, CODES, ROWS, SUPPRESSION_ROWS, PICKAXE_ERE, PICKAXE_JS, COMPILED, LETTERS;
+var SUPPRESSIONS_TOOL, C_BLOCK, BACKTICK, LEXERS, CODE, HEREDOC, RUST_RAW, RUST_CHAR, CPP_RAW, WORD_BEFORE, SPECIAL, NOT_BLANK, TAB, SP, ALL_LANGS, JS, IAC, RULE_LIST, CODES, ROWS, SUPPRESSION_ROWS, PICKAXE_ERE, PICKAXE_JS, COMPILED, LETTERS, MAGIC_COMMENTS, BOM2;
 var init_suppressions = __esm({
   "src/testintegrity/suppressions.ts"() {
     "use strict";
@@ -23777,6 +23784,12 @@ var init_suppressions = __esm({
       ])
     );
     LETTERS = new RegExp("\\p{L}{3}", "u");
+    MAGIC_COMMENTS = [
+      /^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+/,
+      /^#[ \t]*(?:-\*-[ \t]*)?frozen_string_literal[ \t]*:[ \t]*\w+/,
+      /^\/\/ Code generated .* DO NOT EDIT\.$/
+    ];
+    BOM2 = String.fromCharCode(65279);
   }
 });
 
@@ -56193,8 +56206,8 @@ var init_header = __esm({
 // src/configdrift/hash.ts
 import { createHash as createHash9 } from "node:crypto";
 function canonicaliseConfig(text3) {
-  const withoutBom = text3.charCodeAt(0) === 65279 ? text3.slice(1) : text3;
-  const lf = withoutBom.replace(/\r\n?/g, "\n");
+  const withoutBom2 = text3.charCodeAt(0) === 65279 ? text3.slice(1) : text3;
+  const lf = withoutBom2.replace(/\r\n?/g, "\n");
   return stripProvenanceHeader(lf).replace(/\n+$/, "");
 }
 function hashConfigText(text3) {

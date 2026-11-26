@@ -1166,13 +1166,30 @@ function sameLineReason(line: string, read: LineRead, hits: readonly Hit[], h: H
   return h.row.at === 'inside' && LETTERS.test(line.slice(Math.max(prev, h.part.start), h.start));
 }
 
-/** Whether the line above gives a reason: a whole-line comment with words that is not itself a directive — or a doubt. */
+/**
+ * The file's own comments on line 1 or 2, never a reason: Python's and Ruby's
+ * coding declaration (PEP 263's own pattern), Ruby's `frozen_string_literal`
+ * magic comment, Go's generated-code header.
+ */
+const MAGIC_COMMENTS: readonly RegExp[] = [
+  /^[ \t\f]*#.*?coding[:=][ \t]*[-\w.]+/,
+  /^#[ \t]*(?:-\*-[ \t]*)?frozen_string_literal[ \t]*:[ \t]*\w+/,
+  /^\/\/ Code generated .* DO NOT EDIT\.$/,
+];
+
+/**
+ * Whether the line above gives a reason: a whole-line comment with words that
+ * is not itself a directive, nor the file's shebang or a line-1/2 magic
+ * comment ({@link MAGIC_COMMENTS}) — or a doubt.
+ */
 function aboveReason(lines: readonly LineRead[], raw: readonly string[], idx: number, lang: SuppressionLang): boolean {
   const r = lines[idx - 1];
   const text = raw[idx - 1];
   if (r === undefined || text === undefined) return false;
   if (r.literal) return true;
   if (r.substance || r.comments.length === 0) return false;
+  if (idx === 1 && text.startsWith('#!')) return false;
+  if (idx <= 2 && MAGIC_COMMENTS.some((m) => m.test(text))) return false;
   if (hitsOn(text, r, lang).length > 0) return false;
   return r.comments.some((p) => LETTERS.test(text.slice(p.start, p.end)));
 }
@@ -1297,6 +1314,14 @@ function splitLines(text: string): string[] {
   return text.split('\n').map((l) => (l.endsWith('\r') ? l.slice(0, -1) : l));
 }
 
+/** U+FEFF, built (never written literally in a source). */
+const BOM = String.fromCharCode(0xfeff);
+
+/** `text` without the byte-order mark it starts with, if any. */
+function withoutBom(text: string): string {
+  return text.startsWith(BOM) ? text.slice(BOM.length) : text;
+}
+
 /** The index of the first line with code on it — a shebang first line aside; the lines before it are the file's leading ones. */
 function firstSubstance(lines: readonly LineRead[], raw: readonly string[]): number {
   for (let i = 0; i < lines.length; i += 1) {
@@ -1349,8 +1374,9 @@ export function detectSuppressions(files: readonly SuppressionFile[]): { finding
       counts.unread += 1;
       continue;
     }
-    const raw = splitLines(f.after);
-    const lines = readLines(f.after, lang);
+    const after = withoutBom(f.after);
+    const raw = splitLines(after);
+    const lines = readLines(after, lang);
     const leadingUntil = firstSubstance(lines, raw);
     const doc = packageDocOf(lines, raw, leadingUntil);
     const testFile = isTestFile(f.path);
@@ -1358,7 +1384,9 @@ export function detectSuppressions(files: readonly SuppressionFile[]): { finding
       const idx = a.line - 1;
       const text = raw[idx];
       const lexed = lines[idx];
-      const addedText = a.text.endsWith('\r') ? a.text.slice(0, -1) : a.text;
+      const crlf = a.text.endsWith('\r') ? a.text.slice(0, -1) : a.text;
+      // A byte-order mark is no part of line 1: git's diff keeps it, a read of the working tree drops it.
+      const addedText = a.line === 1 ? withoutBom(crlf) : crlf;
       // The diff and the text disagree on this line: a doubt, not read.
       if (text === undefined || lexed === undefined || text !== addedText) continue;
       const hits = hitsOn(text, lexed, lang);
