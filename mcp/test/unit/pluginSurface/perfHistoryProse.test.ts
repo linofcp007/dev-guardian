@@ -72,7 +72,10 @@ describe("perf_check's history in the prose", () => {
     const changelog = read('CHANGELOG.md');
     const release = changelog.split('## [3.17.0]')[1]?.split('## [3.16.1]')[0] ?? '';
     expect(release).toContain("`set_baseline { scan_type }` baselined a scan of a type that is never a project's baseline");
-    expect(release).toContain("is a `<type>` scan, which is never a project's baseline");
+    // Review 3 (R3-DG-3): each refusal quoted as setBaseline.ts prints it — the two differ.
+    expect(release).toContain("by `scan_id`, \"Scan '<id>' is a `<type>` scan, which is never a project's baseline.\"");
+    expect(release).toContain("by `scan_type`, \"A `<type>` scan is never a project's baseline.\"");
+    expect(release).not.toMatch(/both refusals say/);
     expect(release).not.toMatch(/records no findings/);
     const retention =
       readFileSync(resolve(REPO_ROOT, 'docs/env.md'), 'utf8')

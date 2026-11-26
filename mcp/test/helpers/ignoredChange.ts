@@ -95,3 +95,44 @@ export function capChange(): Record<string, string> {
 /** What the pass reports over the bound's shape, and how its reason starts. */
 export const CAP_REPORTED = ['scanner-suppression-added src/z.py:1 medium'];
 export const CAP_REASON = /^read 1 changed file\(s\) with a suppression token from [0-9a-f]{12} to /;
+
+/**
+ * Review 3 of 3.17.0, R3-DG-1: a tree `.guardianignore` lists that the change
+ * DELETES whole. Its paths are no longer in the project, and the pass still
+ * never lists one: its member is the file's own test (a git listing holds
+ * only project paths), not the result filter's, which keeps a path no longer
+ * in the project. (1) {@link DELETED_TREE}'s 600 files, each with a token,
+ * never fill the bound — {@link CAP_REPORTED}, {@link CAP_REASON}; (2) a
+ * directive of {@link CARRY_TREE}'s carries none the change adds under `src/`.
+ */
+export const DELETED_TREE = 'dist';
+
+/** The base commit's files of the deleted tree's shape: 600 generated files with ESLint's whole-file form. */
+export function deletedTreeBase(): Record<string, string> {
+  const token = caseText(suppressionCase('ESLint: the whole file, every rule'));
+  const files: Record<string, string> = { '.guardianignore': `${DELETED_TREE}/\n`, 'src/z.py': 'x = 1\n' };
+  for (let i = 0; i < GENERATED; i += 1) files[`${DELETED_TREE}/m${String(i).padStart(4, '0')}.js`] = `${token}var x = 1;\n`;
+  return files;
+}
+
+/** The change over {@link deletedTreeBase} (then {@link DELETED_TREE} is removed whole): `src/z.py` given a bare directive. */
+export function deletedTreeChange(): Record<string, string> {
+  return { 'src/z.py': `${suppressionCase('Semgrep: a comment').lines[0] ?? ''}\n` };
+}
+
+/** The listed directory of the carried shape, which the change deletes whole. */
+export const CARRY_TREE = 'vendor';
+
+/** The base commit's files of the carried shape: a listed file holding the bare directive. */
+export function carryBase(): Record<string, string> {
+  const bare = suppressionCase('Semgrep: a comment').lines[0] ?? '';
+  return { '.guardianignore': `${CARRY_TREE}/\n`, [`${CARRY_TREE}/lib.py`]: `${bare}\n`, 'src/z.py': 'x = 1\n' };
+}
+
+/** The change over {@link carryBase} (then {@link CARRY_TREE} is removed whole): the same directive added under `src/`. */
+export function carryChange(): Record<string, string> {
+  return { 'src/z.py': `x = 1\n${suppressionCase('Semgrep: a comment').lines[0] ?? ''}\n` };
+}
+
+/** What the pass reports over the carried shape: the directive added under `src/` is new. */
+export const CARRY_REPORTED = ['scanner-suppression-added src/z.py:2 medium'];

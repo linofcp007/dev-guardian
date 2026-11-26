@@ -889,7 +889,8 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // pattern is not a file the project declared (`isProjectPath`). The
   // pattern first — it costs no disk — and then one existence check per
   // directory (`projectPathTest`), never one per finding. The diff's
-  // suppressions pass lists its files by the same rule (`keptByExclusions`).
+  // suppressions pass lists its files by the pattern alone (a git listing
+  // holds only project paths); its findings come through here too.
   const findingsExcluded = exclusions === null ? 0 : keepIf(keptByExclusions(exclusions, projectPath));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {

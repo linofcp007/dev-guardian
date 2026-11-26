@@ -24178,6 +24178,10 @@ var init_gate = __esm({
 });
 
 // src/report/sarif.ts
+function ruleName(f) {
+  const name = f.subcategory ?? f.category;
+  return f.tool === SUPPRESSIONS_TOOL ? name.split(":")[0] ?? name : name;
+}
 function toSarif(findings, opts = {}) {
   const suppressed = opts.suppressed ?? [];
   const rulesById = /* @__PURE__ */ new Map();
@@ -24185,7 +24189,7 @@ function toSarif(findings, opts = {}) {
     const id = f.rule_id ?? `${f.tool}/${f.category}`;
     if (!rulesById.has(id)) {
       const rule2 = { id };
-      rule2.name = f.subcategory ?? f.category;
+      rule2.name = ruleName(f);
       rule2.shortDescription = { text: f.title };
       if (f.message) rule2.fullDescription = { text: f.message };
       rule2.defaultConfiguration = { level: levelFor(f.severity) };
@@ -24271,6 +24275,7 @@ var init_sarif = __esm({
     init_taxonomy();
     init_version();
     init_secretFindingRedaction();
+    init_suppressions();
     DEFAULT_TOOL_VERSION = resolveVersion();
     SARIF_LEVEL_BY_SEVERITY = {
       critical: "error",
@@ -63712,11 +63717,11 @@ async function runSuppressions(args) {
   const changes = ctx.scope?.changes ?? null;
   if (changes === null) return;
   const scope = ctx.scope;
-  const kept = ctx.exclusions !== null ? keptByExclusions(ctx.exclusions, ctx.projectPath) : null;
+  const exclusions = ctx.exclusions;
   const result = await runSuppressionCheck(ctx.projectPath, {
     base: changes.base,
     target: changes.target === "index" ? { kind: "index" } : { kind: "worktree", untracked: changes.untracked },
-    ...scope !== null ? { member: (p) => scope.member(p) && (kept === null || kept(p)) } : {}
+    ...scope !== null ? { member: (p) => scope.member(p) && (exclusions === null || !exclusions.ignores(p)) } : {}
   });
   if (result === null) return;
   tools_run.push(result.toolRun);
@@ -70494,8 +70499,9 @@ var init_reviewPr = __esm({
               const findings = integrity.findings;
               out.parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
             }
-            const kept = ctx.exclusions !== null ? keptByExclusions(ctx.exclusions, ctx.projectPath) : null;
-            const suppressions = await runSuppressionCheck(ctx.projectPath, { base: base2, head, target, ...kept !== null ? { member: kept } : {} });
+            const exclusions = ctx.exclusions;
+            const member = exclusions !== null ? (p) => !exclusions.ignores(p) : null;
+            const suppressions = await runSuppressionCheck(ctx.projectPath, { base: base2, head, target, ...member !== null ? { member } : {} });
             if (suppressions !== null) {
               out.tools_run.push(suppressions.toolRun);
               const added = suppressions.findings;
@@ -123528,7 +123534,7 @@ async function runScans(opts) {
       const integrity = opts.diffBase !== void 0 ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);
       const declared = opts.diffBase !== void 0 ? await declaredPaths(opts.projectPath, ctx) : null;
-      const suppressions = opts.diffBase !== void 0 ? await suppressionsStep(opts.projectPath, opts.diffBase, declared) : null;
+      const suppressions = opts.diffBase !== void 0 ? await suppressionsStep(opts.projectPath, opts.diffBase, declared?.member ?? null) : null;
       if (suppressions !== null) steps.push(suppressions.step);
       const read3 = fullContentFindings(storage, opts.projectPath);
       const accepted = await acceptedByHistoryIgnores(scannedProject(opts.projectPath), read3);
@@ -123537,7 +123543,7 @@ async function runScans(opts) {
         ...collectFindings(storage, opts.projectPath),
         ...wholeFiles,
         ...integrity?.findings ?? [],
-        ...(suppressions?.findings ?? []).filter((f) => declared === null || f.file_path === void 0 || f.file_path === "" || declared(f.file_path))
+        ...(suppressions?.findings ?? []).filter((f) => declared === null || f.file_path === void 0 || f.file_path === "" || declared.kept(f.file_path))
       ]);
       await rememberSecretValues(scannedProject(opts.projectPath), all, {
         reportDirs: reportDirsOf(storage, opts.projectPath)
@@ -123594,7 +123600,7 @@ async function declaredPaths(projectPath, ctx) {
   const project = scannedProject(projectPath);
   const exclusions = await loadProjectExclusions(project, ctx.repoConfigFromRef?.root ?? project);
   if (exclusions === null || "error" in exclusions) return null;
-  return keptByExclusions(exclusions, project);
+  return { member: (p) => !exclusions.ignores(p), kept: keptByExclusions(exclusions, project) };
 }
 function buildSequence(opts) {
   if (opts.baseUrl !== void 0) return SCAN_SEQUENCE;

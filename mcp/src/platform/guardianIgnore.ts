@@ -665,11 +665,9 @@ export function projectPathTest(projectPath: string): (relPath: string) => boole
 /**
  * Whether a project-relative path stays in a scan's result: not one the
  * exclusions ignore that is in the project ({@link projectPathTest}). The
- * scan-tool factory's result filter, and the rule the diff's suppressions
- * pass lists its files by — in `review_pr`, a diff-scoped `scan_sast` and the
- * CLI's `scan --diff-base` alike (`testintegrity/gitChanges.ts#runSuppressionCheck`'s
- * `member`, applied before its bounds). One per scan: the disk answers are
- * memoised for its lifetime.
+ * scan-tool factory's result filter, and the CLI's `scan --diff-base` filter
+ * of its suppressions step's findings (`ci/runScans.ts#declaredPaths`). One
+ * per scan: the disk answers are memoised for its lifetime.
  */
 export function keptByExclusions(exclusions: ProjectExclusions, projectPath: string): (relPath: string) => boolean {
   const inProject = projectPathTest(projectPath);

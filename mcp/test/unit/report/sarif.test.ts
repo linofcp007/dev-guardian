@@ -173,3 +173,35 @@ describe('toSarif — a credential finding\'s fingerprint', () => {
     expect(doc).toContain(computeFingerprint({ ...at, snippet: REDACTED_SECRET_SNIPPET }));
   });
 });
+
+describe("toSarif — a rule's name", () => {
+  interface Doc {
+    runs: Array<{
+      tool: { driver: { rules: Array<{ id: string; name?: string }> } };
+      results: Array<{ ruleId: string; properties: { subcategory?: string } }>;
+    }>;
+  }
+  const parse = (findings: Finding[]): Doc => JSON.parse(toSarif(findings)) as Doc;
+  const suppression = (fingerprint: string, kind: string): Finding =>
+    finding({ fingerprint, tool: 'guardian-suppressions', rule_id: 'suppression-added', severity: 'medium', category: 'quality', subcategory: `suppression:${kind}` });
+
+  // Review 3 of 3.17.0, R3-DG-2: the suppressions pass's subcategory is `suppression:<kind>`, each finding's own
+  // directive kind, while its rule is one of two whatever the kind — the name was the first finding's kind.
+  it('a suppressions-pass rule is named `suppression` in either order of its kinds; each result keeps its kind', () => {
+    for (const kinds of [['noqa', 'eslint-disable'], ['eslint-disable', 'noqa']]) {
+      const doc = parse(kinds.map((k, i) => suppression(`fp${String(i)}`, k)));
+      const run = doc.runs[0];
+      expect(run?.tool.driver.rules.map((r) => [r.id, r.name])).toEqual([['suppression-added', 'suppression']]);
+      expect(run?.results.map((r) => r.properties.subcategory)).toEqual(kinds.map((k) => `suppression:${k}`));
+    }
+  });
+
+  // Still-pass: another tool's subcategory is its rule's name as it is, a `:` in it included.
+  it("another tool's subcategory is its rule's name unchanged", () => {
+    const doc = parse([finding({ tool: 'codeql', rule_id: 'js/sql-injection', subcategory: 'A03:2021' }), finding({ fingerprint: 'fp2', rule_id: 'B602', tool: 'bandit', subcategory: 'subprocess_popen_with_shell_equals_true' })]);
+    expect(doc.runs[0]?.tool.driver.rules.map((r) => [r.id, r.name])).toEqual([
+      ['js/sql-injection', 'A03:2021'],
+      ['B602', 'subprocess_popen_with_shell_equals_true'],
+    ]);
+  });
+});

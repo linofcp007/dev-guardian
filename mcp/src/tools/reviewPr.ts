@@ -54,7 +54,7 @@ import { z } from 'zod';
 import { clientTrustParser, runClientTrustChecks } from '../clienttrust/clientTrustPass.js';
 import { makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
-import { GUARDIAN_IGNORE_FILE, keptByExclusions } from '../platform/guardianIgnore.js';
+import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import {
@@ -233,9 +233,11 @@ const reviewPr = makeScanTool({
           out.parser_inputs.push({ parser: { name: TEST_INTEGRITY_TOOL, parse: () => ({ findings, cves: [] }) }, input: null });
         }
         // Its own pass and name, never a gap: its bounds are said in its reason. It lists only what
-        // .guardianignore keeps — the factory's own rule, before the bounds, so a left-out tree never fills them.
-        const kept = ctx.exclusions !== null ? keptByExclusions(ctx.exclusions, ctx.projectPath) : null;
-        const suppressions = await runSuppressionCheck(ctx.projectPath, { base, head, target, ...(kept !== null ? { member: kept } : {}) });
+        // .guardianignore does not ignore, before the bounds, so a left-out tree never fills them — one the change
+        // deletes whole too (a git listing holds only project paths). The factory's result filter keeps its rule.
+        const exclusions = ctx.exclusions;
+        const member = exclusions !== null ? (p: string): boolean => !exclusions.ignores(p) : null;
+        const suppressions = await runSuppressionCheck(ctx.projectPath, { base, head, target, ...(member !== null ? { member } : {}) });
         if (suppressions !== null) {
           out.tools_run.push(suppressions.toolRun);
           const added = suppressions.findings;

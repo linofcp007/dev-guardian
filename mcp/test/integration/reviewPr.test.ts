@@ -52,7 +52,14 @@ import {
   CAP_REPORTED,
   capBase,
   capChange,
+  CARRY_REPORTED,
+  CARRY_TREE,
+  carryBase,
+  carryChange,
   DELETED_DIR,
+  DELETED_TREE,
+  deletedTreeBase,
+  deletedTreeChange,
   IGNORED_BASE,
   ignoredChange,
   MOVED_INTO_IGNORED,
@@ -871,5 +878,37 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
       .map(rowOf);
     expect(rows).toEqual(CAP_REPORTED);
     expect(res.tools_run.find((t) => t.name === 'guardian-suppressions')?.reason).toMatch(CAP_REASON);
+  });
+
+  // Review 3 of 3.17.0, R3-DG-1: a listed tree the change DELETES whole is no longer in the project, and the pass
+  // still never lists it — its member is .guardianignore's own test (a git listing holds only project paths); the
+  // factory's result filter keeps its rule (the legacy/ row above). ciRunScans.test.ts holds the CLI's side.
+  const deletedTree = async (base: Record<string, string>, change: Record<string, string>, tree: string) => {
+    const dir = await repo('main', base);
+    rmSync(join(dir, tree), { recursive: true, force: true });
+    for (const [rel, text] of Object.entries(change)) write(dir, rel, text);
+    await commitAll(dir, 'drop the tree');
+    const { r, p } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const res = r as unknown as ReviewResult;
+    const rows = p.storage.findings
+      .listByScan(res.scan_id)
+      .filter((f) => f.tool === 'guardian-suppressions')
+      .map(rowOf);
+    return { rows, reason: res.tools_run.find((t) => t.name === 'guardian-suppressions')?.reason };
+  };
+
+  it("a listed tree's 600 files the change deletes never fill the suppressions pass's bound", async () => {
+    const { rows, reason } = await deletedTree(deletedTreeBase(), deletedTreeChange(), DELETED_TREE);
+    expect(rows).toEqual(CAP_REPORTED);
+    expect(reason).toMatch(CAP_REASON);
+  });
+
+  it('a directive of a listed tree the change deletes carries none it adds elsewhere', async () => {
+    const { rows, reason } = await deletedTree(carryBase(), carryChange(), CARRY_TREE);
+    expect(rows).toEqual(CARRY_REPORTED);
+    // One file read (src/z.py), nothing carried.
+    expect(reason).toMatch(CAP_REASON);
+    expect(reason).not.toMatch(/kept or moved/);
   });
 });
