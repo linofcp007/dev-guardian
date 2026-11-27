@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { resolveScope } from '../../src/platform/scope.js';
 import { parseUnifiedZero, readChangeSet, runTestIntegrityCheck } from '../../src/testintegrity/gitChanges.js';
+import { gitAtLeast } from '../helpers/gitVersion.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -240,6 +241,9 @@ describe("the tree's own .gitattributes are set aside", () => {
     git(dir, 'checkout', '-q', '-b', 'feature');
     return dir;
   }
+  // `GIT_ATTR_SOURCE` needs git 2.40: on an older one (Debian 12's 2.39.5) the tree's attributes still apply — the
+  // limit docs/ci.md states — so the two attack rows pin what that git reads (nothing), and the attack on a newer one.
+  const AS_WRITTEN = gitAtLeast(2, 40);
   // git's `ident` turns `$Id:` up to the next `$` of the line into `$Id$`: the skip sits between the two.
   const ID_TEST = "const id = '$Id$';\nit('adds', () => { expect(1 + 1).toBe(2); });\n";
   const ID_SKIP = "const id = '$Id: '; it.skip('adds', () => { expect(1 + 1).toBe(2); }); const end = '$';\nit('adds', () => { expect(1 + 1).toBe(2); });\n";
@@ -270,7 +274,7 @@ describe("the tree's own .gitattributes are set aside", () => {
     // The premise: git, with the tree's attributes, sees no change at all.
     expect(git(dir, 'diff', '--name-only', 'main', '--')).toBe('');
     const worktree = await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } });
-    expect(rows(worktree?.findings ?? [])).toEqual(['test-skipped src/id.test.ts:1 medium']);
+    expect(rows(worktree?.findings ?? [])).toEqual(AS_WRITTEN ? ['test-skipped src/id.test.ts:1 medium'] : []);
   });
 
   // The stated limit (docs/ci.md): once `git add` has stored the cleaned file (`$Id$`: the commit holds no skip), git
@@ -296,11 +300,11 @@ describe("the tree's own .gitattributes are set aside", () => {
     git(dir, 'add', '-A');
     expect(git(dir, 'diff', '--cached', '--numstat', 'main', '--', 'src/b.test.ts')).toMatch(/^-\t-\t/);
     const staged = await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'index' } });
-    expect(rows(staged?.findings ?? [])).toEqual(['test-skipped src/b.test.ts:1 medium']);
+    expect(rows(staged?.findings ?? [])).toEqual(AS_WRITTEN ? ['test-skipped src/b.test.ts:1 medium'] : []);
     git(dir, 'commit', '-qm', 'binary');
     const head = git(dir, 'rev-parse', 'HEAD');
     const committed = await runTestIntegrityCheck(dir, { base: 'main', head, target: { kind: 'commit', sha: head } });
-    expect(rows(committed?.findings ?? [])).toEqual(['test-skipped src/b.test.ts:1 medium']);
+    expect(rows(committed?.findings ?? [])).toEqual(AS_WRITTEN ? ['test-skipped src/b.test.ts:1 medium'] : []);
   });
 });
 

@@ -19,6 +19,7 @@ import { afterAll, describe, expect, it, vi } from 'vitest';
 import { git as realGit, type GitResult } from '../../src/runners/git.js';
 import { runSuppressionCheck } from '../../src/testintegrity/gitChanges.js';
 import { mayHoldSuppression } from '../../src/testintegrity/suppressions.js';
+import { gitAtLeast } from '../helpers/gitVersion.js';
 import { caseText, SUPPRESSION_CASES, suppressionCase, type SuppressionCase } from '../helpers/suppressionCases.js';
 import { cleanupTempDirs, makeTempDir } from '../helpers/tempDir.js';
 
@@ -307,6 +308,9 @@ describe("runSuppressionCheck: the tree's own .gitattributes are set aside", () 
   const SEMGREP = suppressionCase('Semgrep: upper case');
   const rowsOf = (r: Awaited<ReturnType<typeof runSuppressionCheck>>): string[] =>
     (r?.findings ?? []).map((f) => `${f.rule_id ?? ''} ${f.file_path ?? ''}:${String(f.line_start)} ${f.severity}`);
+  // `GIT_ATTR_SOURCE` needs git 2.40: on an older one (Debian 12's 2.39.5) the tree's attributes still apply — the
+  // limit docs/ci.md states — so the two attack rows pin what that git reads (nothing), and the attack on a newer one.
+  const AS_WRITTEN = gitAtLeast(2, 40);
 
   it('a repository that checks out CRLF (`* text eol=crlf`): a touched file is no change, and an old directive is not new', async () => {
     const dir = newRepo('suppressions-crlf-');
@@ -334,7 +338,7 @@ describe("runSuppressionCheck: the tree's own .gitattributes are set aside", () 
     write(dir, SEMGREP.path, `/* $Id: */ ${SEMGREP.lines.join(' ')} /* $ */\nexport const a = 1;\n`);
     expect(git(dir, 'diff', '--name-only', 'main', '--')).toBe('');
     const r = await runSuppressionCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } });
-    expect(rowsOf(r)).toEqual([`scanner-suppression-added ${SEMGREP.path}:1 medium`]);
+    expect(rowsOf(r)).toEqual(AS_WRITTEN ? [`scanner-suppression-added ${SEMGREP.path}:1 medium`] : []);
   });
 
   it('a `binary` attribute the change adds hides no committed directive', async () => {
@@ -347,7 +351,7 @@ describe("runSuppressionCheck: the tree's own .gitattributes are set aside", () 
     git(dir, 'commit', '-qm', 'binary');
     const head = git(dir, 'rev-parse', 'HEAD');
     const r = await runSuppressionCheck(dir, { base: 'main', head, target: { kind: 'commit', sha: head } });
-    expect(rowsOf(r)).toEqual([`suppression-added ${BLANKET.path}:1 medium`]);
+    expect(rowsOf(r)).toEqual(AS_WRITTEN ? [`suppression-added ${BLANKET.path}:1 medium`] : []);
   });
 });
 
