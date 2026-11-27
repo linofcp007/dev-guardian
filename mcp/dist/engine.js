@@ -16797,6 +16797,8 @@ __export(git_exports, {
   initialisedSubmodules: () => initialisedSubmodules,
   isGitUnanswered: () => isGitUnanswered,
   materialiseCommit: () => materialiseCommit,
+  mergeBase: () => mergeBase,
+  parseNameStatus: () => parseNameStatus,
   repoState: () => repoState,
   resolveCommit: () => resolveCommit,
   shallowBoundary: () => shallowBoundary,
@@ -16916,6 +16918,33 @@ async function resolveCommit(cwd, ref) {
   if (r.exitCode !== 0) return null;
   const sha = r.stdout.trim();
   return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+async function mergeBase(cwd, a, b, run2 = git) {
+  const r = await run2(cwd, ["merge-base", "--end-of-options", a, b]);
+  if (r.exitCode !== 0) return null;
+  const sha = r.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+function parseNameStatus(stdout) {
+  const parts = splitNul(stdout);
+  const out = [];
+  for (let i = 0; i < parts.length; ) {
+    const code = parts[i] ?? "";
+    const letter = code.charAt(0);
+    if (letter === "R" || letter === "C") {
+      const oldPath = parts[i + 1] ?? "";
+      const path4 = parts[i + 2] ?? "";
+      i += 3;
+      out.push(letter === "R" ? { status: "renamed", path: path4, oldPath } : { status: "added", path: path4 });
+      continue;
+    }
+    const path3 = parts[i + 1] ?? "";
+    i += 2;
+    if (letter === "A") out.push({ status: "added", path: path3 });
+    else if (letter === "D") out.push({ status: "deleted", path: path3 });
+    else if (letter === "M" || letter === "T") out.push({ status: "modified", path: path3 });
+  }
+  return out;
 }
 async function changedFiles(cwd, base2, head) {
   const r = await git(cwd, [
@@ -55480,33 +55509,6 @@ function diffRange(base2, target) {
   if (target.kind === "index") return ["--cached", base2];
   if (target.kind === "commit") return [base2, target.sha];
   return [base2];
-}
-async function mergeBase(cwd, a, b, run2 = git) {
-  const r = await run2(cwd, ["merge-base", "--end-of-options", a, b]);
-  if (r.exitCode !== 0) return null;
-  const sha = r.stdout.trim();
-  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
-}
-function parseNameStatus(stdout) {
-  const parts = splitNul(stdout);
-  const out = [];
-  for (let i = 0; i < parts.length; ) {
-    const code = parts[i] ?? "";
-    const letter = code.charAt(0);
-    if (letter === "R" || letter === "C") {
-      const oldPath = parts[i + 1] ?? "";
-      const path4 = parts[i + 2] ?? "";
-      i += 3;
-      out.push(letter === "R" ? { status: "renamed", path: path4, oldPath } : { status: "added", path: path4 });
-      continue;
-    }
-    const path3 = parts[i + 1] ?? "";
-    i += 2;
-    if (letter === "A") out.push({ status: "added", path: path3 });
-    else if (letter === "D") out.push({ status: "deleted", path: path3 });
-    else if (letter === "M" || letter === "T") out.push({ status: "modified", path: path3 });
-  }
-  return out;
 }
 function parseUnifiedZero(diff) {
   const added = [];
