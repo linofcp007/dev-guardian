@@ -201,8 +201,8 @@ describe('readChangeSet and the -U0 reader', () => {
     });
   });
 
-  // 3.18.0 review 1: review_pr's merge-base compare reads the added lines too, and `GIT_DIFF_OPTS` overrides `-U`
-  // (`diff.interHunkContext` fuses hunks): a kept line in a hunk still counts a line.
+  // 3.18.0 review 1: `GIT_DIFF_OPTS` overrides `-U` and `diff.interHunkContext` fuses hunks, so the check's own
+  // `-U0` diffs can hold kept lines: a kept line in a hunk still counts a line.
   it('a diff with context lines numbers the added lines the same as its -U0 form', () => {
     const before = ['a', 'b', 'c', 'd', 'e', '', 'f'];
     const after = ['a', 'B', 'c', 'd', 'E', '', 'f', 'g'];

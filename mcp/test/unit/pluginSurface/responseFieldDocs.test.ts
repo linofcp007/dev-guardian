@@ -50,8 +50,7 @@ const DOCUMENTED: Record<string, readonly string[]> = {
   check_toolchain: ['selftest', 'never_verified', 'silent', 'stale'],
   risk_score: ['suppressed_count', 'future_dated_note'],
   report_export: ['retry_with', 'still running'],
-  // 3.18.0: each Semgrep finding judged at the merge base; the skill reads the listed ones, never an absence.
-  review_pr: ['preexisting_manifest_gaps', 'introduced', 'preexisting'],
+  review_pr: ['preexisting_manifest_gaps'],
   // The pull request may install a version above the plan's: the minimum fix had an advisory of its own.
   create_fix_pr: ['raised', 'filtered'],
   scan_sast: ['honoured_config', 'plugin_packs'],

@@ -417,8 +417,7 @@ describe('review_pr — which tree is scanned', () => {
     await commitAll(dir);
     await git(dir, 'checkout', '-q', 'main');
 
-    // The head run, then (3.18.0) the merge-base run over the files holding a head result.
-    const runs: Array<{ cwd: string; targets: string[]; a: string }> = [];
+    let seen: { cwd: string; targets: string[]; a: string } | undefined;
     vi.mocked(runProcess).mockImplementation(async (opts) => {
       const call: Call = { ...opts, args: opts.args ?? [] };
       calls.push(call);
@@ -426,7 +425,7 @@ describe('review_pr — which tree is scanned', () => {
         const { targets } = semgrepTargets(call.args);
         // Line endings are the checkout's (core.autocrlf), the content is head's.
         const a = readFileSync(join(opts.cwd, 'a.py'), 'utf8').replace(/\r\n/g, '\n');
-        runs.push({ cwd: opts.cwd, targets: [...targets].sort(), a });
+        seen = { cwd: opts.cwd, targets: [...targets].sort(), a };
         return fakeSemgrep(call);
       }
       if (opts.command === 'gitleaks') return fakeGitleaks(call);
@@ -440,23 +439,16 @@ describe('review_pr — which tree is scanned', () => {
     const { r } = await review(dir, { base_ref: 'main', head_ref: 'feature' });
     expect(r.ok).toBe(true);
     const res = r as unknown as ReviewResult;
-    const seen = runs[0];
     // Both files, at the head's version — not "b.py not on disk", not main's a.py.
     expect(seen?.targets).toEqual(['a.py', 'b.py']);
     expect(seen?.a).toBe('eval(feature)\n');
     expect(seen?.cwd).not.toBe(dir);
-    // The merge-base run: the one modified file holding a head result, at main's version, in a tree of its own.
-    expect(runs).toHaveLength(2);
-    expect(runs[1]?.targets).toEqual(['a.py']);
-    expect(runs[1]?.a).toBe('a = 1\n');
-    expect(runs[1]?.cwd).not.toBe(seen?.cwd);
     expect(res.missing_tools, JSON.stringify(res.tools_run)).toEqual([]);
     expect(res.coverage, JSON.stringify(res.tools_run)).toBe('full');
     // Uncommitted changes of whatever is checked out are not the PR's.
     expect(calls.some((c) => c.args.includes('--no-git'))).toBe(false);
-    // The materialised trees are gone, and git no longer lists them.
+    // The materialised tree is gone, and git no longer lists it.
     expect(existsSync(seen?.cwd ?? dir)).toBe(false);
-    expect(existsSync(runs[1]?.cwd ?? dir)).toBe(false);
     const worktrees = (await execa('git', ['worktree', 'list', '--porcelain'], { cwd: dir })).stdout;
     expect(worktrees.match(/^worktree /gm)).toHaveLength(1);
   });
@@ -977,262 +969,5 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
     // One file read (src/z.py), nothing carried.
     expect(reason).toMatch(CAP_REASON);
     expect(reason).not.toMatch(/kept or moved/);
-  });
-});
-
-// 3.18.0 (DG-12, review/baseCompare.ts): each Semgrep finding judged at the merge base — `introduced` — by a second
-// Semgrep run over the modified or renamed files that hold a head result, in a checkout of the merge base. No
-// tools_run entry and no coverage gap of its own; any failure is `compared: false`; a cancel cancels the review.
-describe('review_pr — introduced: the Semgrep findings judged at the merge base', () => {
-  interface Introduced {
-    compared: boolean;
-    reason?: string;
-    base_sha?: string;
-    counts?: { introduced: number; preexisting: number; unknown: number; not_compared: number };
-    preexisting?: Array<{ file_path?: string; tool: string }>;
-  }
-  const introducedOf = (r: unknown): Introduced => (r as { introduced: Introduced }).introduced;
-
-  it('an old finding in a modified file is preexisting; the base run reads only the files holding a head result', async () => {
-    const dir = await repo('main', { 'a.js': 'eval(x)\n', 'b.js': 'b = 1\n' });
-    write(dir, 'a.js', 'eval(x)\nmore = 1\n');
-    write(dir, 'b.js', 'b = 2\n');
-    await commitAll(dir);
-    const { r } = await review(dir, { base_ref: 'main' });
-    expect(r.ok).toBe(true);
-    const res = r as unknown as ReviewResult;
-    const runs = semgrepCalls();
-    expect(runs).toHaveLength(2);
-    // fakeSemgrep reports on its first target: a.py at head, so only a.py is read at the merge base.
-    expect(semgrepTargets(runs[1]?.args ?? []).targets).toEqual(['a.js']);
-    expect(runs[1]?.cwd).not.toBe(dir);
-    // The same flags on both sides: one array.
-    const flags = (c: Call | undefined): string[] => (c?.args ?? []).slice(0, (c?.args ?? []).indexOf('--output'));
-    expect(flags(runs[1])).toEqual(flags(runs[0]));
-    const introduced = introducedOf(r);
-    expect(introduced.compared).toBe(true);
-    expect(introduced.base_sha).toMatch(/^[0-9a-f]{40}$/);
-    expect(introduced.counts).toEqual({ introduced: 0, preexisting: 1, unknown: 0, not_compared: 0 });
-    expect(introduced.preexisting?.map((f) => f.file_path)).toEqual(['a.js']);
-    // Nothing of the base checkout's temporary paths reaches the result; the review's own bookkeeping is unchanged.
-    expect(JSON.stringify(introduced)).not.toMatch(/guardian-review-/);
-    expect(res.tools_run.filter((t) => t.name === 'semgrep')).toHaveLength(1);
-    expect(res.coverage).toBe('full');
-  });
-
-  it('an added file has no counterpart: its findings are introduced, and no base run is made for it', async () => {
-    const dir = await repo('main', { 'keep.txt': 'x\n' });
-    write(dir, 'c.js', 'eval(c)\n');
-    await commitAll(dir);
-    const { r } = await review(dir, { base_ref: 'main' });
-    expect(semgrepCalls()).toHaveLength(1);
-    expect(introducedOf(r)).toMatchObject({ compared: true, counts: { introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 } });
-  });
-
-  it('a base run that fails: compared false, and no gap of the review', async () => {
-    const dir = await repo('main', { 'a.js': 'eval(x)\n' });
-    write(dir, 'a.js', 'eval(x)\nmore = 1\n');
-    await commitAll(dir);
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const call: Call = { ...opts, args: opts.args ?? [] };
-      calls.push(call);
-      if (opts.command === 'semgrep') return opts.cwd === dir ? fakeSemgrep(call) : ok(2, 'semgrep crashed');
-      if (opts.command === 'gitleaks') return fakeGitleaks(call);
-      return ok();
-    });
-    const { r } = await review(dir, { base_ref: 'main' });
-    expect(r.ok).toBe(true);
-    const res = r as unknown as ReviewResult;
-    expect(introducedOf(r)).toMatchObject({ compared: false });
-    expect(introducedOf(r).reason).toMatch(/^Semgrep at the merge base [0-9a-f]{12}: failed/);
-    expect(res.tools_run.filter((t) => t.name === 'semgrep').map((t) => t.status)).toEqual(['ok']);
-    expect(res.coverage).toBe('full');
-  });
-
-  it('a cancel during the merge-base run cancels the review', async () => {
-    const dir = await repo('main', { 'a.js': 'eval(x)\n' });
-    write(dir, 'a.js', 'eval(x)\nmore = 1\n');
-    await commitAll(dir);
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const call: Call = { ...opts, args: opts.args ?? [] };
-      calls.push(call);
-      if (opts.command === 'semgrep') {
-        if (opts.cwd === dir) return fakeSemgrep(call);
-        return { outcome: 'cancelled', exitCode: null, stdout: '', stderr: '', truncated: false };
-      }
-      if (opts.command === 'gitleaks') return fakeGitleaks(call);
-      return ok();
-    });
-    const { r } = await review(dir, { base_ref: 'main' });
-    expect(r.ok).toBe(false);
-    expect((r as { error?: { code?: string } }).error?.code).toBe('cancelled');
-    expect(semgrepCalls()).toHaveLength(2);
-  });
-
-  /** A Semgrep whose head run (cwd: the project) and merge-base run (any other cwd) each answer as `side` says. */
-  function semgrepBySide(dir: string, side: (call: Call, atHead: boolean) => ProcessRunResult): void {
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const call: Call = { ...opts, args: opts.args ?? [] };
-      calls.push(call);
-      if (opts.command === 'semgrep') return side(call, opts.cwd === dir);
-      if (opts.command === 'gitleaks') return fakeGitleaks(call);
-      return ok();
-    });
-  }
-  /** A Semgrep report: `results` of [path, line, rule], and what it says it scanned. */
-  function semgrepReport(call: Call, results: Array<[string, number, string]>, scanned: readonly string[]): ProcessRunResult {
-    const { out } = semgrepTargets(call.args);
-    writeFileSync(
-      out,
-      JSON.stringify({
-        results: results.map(([path, line, rule]) => ({
-          check_id: rule,
-          path,
-          start: { line, col: 1 },
-          end: { line, col: 2 },
-          extra: { severity: 'ERROR', message: 'bad', lines: 'x' },
-        })),
-        errors: [],
-        paths: { scanned },
-      }),
-    );
-    return ok(results.length > 0 ? 1 : 0);
-  }
-
-  // 3.18.0 review 1 (DGBASE-6, M2): a target the base run's report leaves out of `paths.scanned` was not measured.
-  it('a modified file the merge-base run did not scan: its findings are unknown, never introduced nor preexisting', async () => {
-    const dir = await repo('main', { 'a.js': 'eval(a)\n', 'b.js': 'eval(b)\n' });
-    write(dir, 'a.js', 'eval(a)\nmore = 1\n');
-    write(dir, 'b.js', 'eval(b)\nmore = 1\n');
-    await commitAll(dir);
-    semgrepBySide(dir, (call, atHead) => {
-      const { targets } = semgrepTargets(call.args);
-      if (atHead) return semgrepReport(call, targets.map((t): [string, number, string] => [t, 1, 'test.rule']), targets);
-      return semgrepReport(call, [], targets.filter((t) => t.replace(/\\/g, '/').endsWith('a.js')));
-    });
-    const { r } = await review(dir, { base_ref: 'main' });
-    expect(r.ok).toBe(true);
-    expect(introducedOf(r)).toMatchObject({ compared: true, counts: { introduced: 1, preexisting: 0, unknown: 1, not_compared: 0 } });
-  });
-
-  // 3.18.0 review 1 (DGBASE-6, M3): a base run that scanned nothing read nothing — not "every file unknown".
-  it('a merge-base run that scanned nothing: compared false', async () => {
-    const dir = await repo('main', { 'a.js': 'eval(x)\n' });
-    write(dir, 'a.js', 'eval(x)\nmore = 1\n');
-    await commitAll(dir);
-    semgrepBySide(dir, (call, atHead) => (atHead ? fakeSemgrep(call) : semgrepReport(call, [], [])));
-    const { r } = await review(dir, { base_ref: 'main' });
-    expect(r.ok).toBe(true);
-    expect(introducedOf(r)).toMatchObject({ compared: false });
-    expect(introducedOf(r).reason).toMatch(/^Semgrep at the merge base [0-9a-f]{12}: skipped/);
-  });
-
-  // 3.18.0 review 1 (DGBASE-2): a credential rule's finding is keyed without its line, so a NEW secret took the
-  // identity of the one the change removed. A finding on a line the change added is introduced — the line numbers
-  // from `git diff --no-index` of the two files the runs read: the working tree's when head is checked out
-  // (uncommitted, an assume-unchanged flag hiding it from `git diff`), head's checkout when it is not.
-  it('a finding on a line the change added is introduced, though its identity matches one at the merge base', async () => {
-    const RULE = 'test.hardcoded-secret';
-    let dir = '';
-    const counts = async (input: Record<string, unknown>): Promise<Introduced['counts']> => introducedOf((await review(dir, input)).r).counts;
-    /** The head run reports its finding at `headLine`, the merge-base run at line 1 (the old secret). */
-    const atLine = (headLine: number): void =>
-      semgrepBySide(dir, (call, atHead) => {
-        const { targets } = semgrepTargets(call.args);
-        return semgrepReport(call, targets.map((t): [string, number, string] => [t, atHead ? headLine : 1, RULE]), targets);
-      });
-    // The reviewer's shape, committed: the old secret moved to the environment, a new one in a new line.
-    dir = await repo('main', { 'auth.js': "const k = 'old-literal';\nmodule.exports = { k };\n" });
-    write(dir, 'auth.js', "const k = process.env.K;\nconst admin = 'brand-new-literal';\nmodule.exports = { k, admin };\n");
-    await commitAll(dir);
-    atLine(2);
-    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
-    // Head not checked out: the lines of its own checkout.
-    await git(dir, 'checkout', '-q', 'main');
-    expect(await counts({ base_ref: 'main', head_ref: 'feature' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
-
-    // Head checked out with an uncommitted new secret on line 2, which the committed head keeps as line 1's
-    // neighbour — and an assume-unchanged flag hiding the edit from `git diff`: the working tree's own lines decide.
-    dir = await repo('main', { 'auth.js': "const k = 'old-literal';\nmodule.exports = { k };\n" });
-    write(dir, 'auth.js', "const k = 'old-literal';\nmodule.exports = { k };\n// reviewed\n");
-    await commitAll(dir);
-    write(dir, 'auth.js', "const k = 'old-literal';\nconst admin = 'another-literal';\nmodule.exports = { k };\n// reviewed\n");
-    await git(dir, 'update-index', '--assume-unchanged', 'auth.js');
-    expect((await execa('git', ['diff', '--name-only'], { cwd: dir })).stdout).toBe('');
-    atLine(2);
-    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
-    // The control: the old secret's own line, which the change kept.
-    atLine(1);
-    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 0, preexisting: 1, unknown: 0, not_compared: 0 });
-    await git(dir, 'update-index', '--no-assume-unchanged', 'auth.js');
-
-    // A file git would call binary — a `binary` attribute, a NUL byte in the new line — still has its lines read.
-    write(dir, '.gitattributes', 'auth.js binary\n');
-    write(dir, 'auth.js', "const k = 'old-literal';\nconst admin = 'nul-literal'; // \0\nmodule.exports = { k };\n// reviewed\n");
-    atLine(2);
-    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
-    // A CRLF working tree against the merge base's LF lines: the same lines, so the old secret's is still kept. The
-    // repository's own `core.autocrlf=false` (a Linux checkout's): with `true`, git converts both sides itself.
-    await git(dir, 'config', 'core.autocrlf', 'false');
-    write(dir, '.gitattributes', '');
-    write(dir, 'auth.js', "const k = 'old-literal';\r\nmodule.exports = { k };\r\n// reviewed\r\n");
-    atLine(1);
-    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 0, preexisting: 1, unknown: 0, not_compared: 0 });
-  });
-
-  // A pair git cannot diff — the head file gone after the head run, or the base file — compares nothing.
-  it('a file pair that cannot be diffed against the merge base: compared false, never "nothing added"', async () => {
-    const reasons = { head: /^a\.js could not be diffed against the merge base: not a file at head$/, base: /^a\.js could not be diffed against the merge base \(git exited 1\)$/ };
-    for (const gone of ['head', 'base'] as const) {
-      const dir = await repo('main', { 'a.js': 'eval(x)\n' });
-      write(dir, 'a.js', 'eval(x)\nmore = 1\n');
-      await commitAll(dir);
-      semgrepBySide(dir, (call, atHead) => {
-        const { targets } = semgrepTargets(call.args);
-        if (!atHead) rmSync(gone === 'head' ? join(dir, 'a.js') : join(call.cwd ?? '', 'a.js'));
-        return semgrepReport(call, targets.map((t): [string, number, string] => [t, 1, 'test.rule']), targets);
-      });
-      const { r } = await review(dir, { base_ref: 'main' });
-      expect(r.ok, gone).toBe(true);
-      expect(introducedOf(r), gone).toMatchObject({ compared: false });
-      expect(introducedOf(r).reason, gone).toMatch(reasons[gone]);
-    }
-  });
-});
-
-// [INT-6]: the merge-base run reads only files the review keeps — the factory's own .guardianignore predicate, the
-// one its result filter applies (keptByExclusions, head's tree when head is not checked out).
-describe('review_pr — the merge-base run reads only what the review keeps', () => {
-  it('a modified file .guardianignore leaves out is never read at the merge base', async () => {
-    const dir = await repo('main', { 'a.js': 'eval(a)\n', 'vendor/x.js': 'eval(v)\n', '.guardianignore': 'vendor/\n' });
-    write(dir, 'a.js', 'eval(a)\nmore = 1\n');
-    write(dir, 'vendor/x.js', 'eval(v)\nmore = 1\n');
-    await commitAll(dir);
-    // A Semgrep that reports on every target, so both files hold a head result.
-    vi.mocked(runProcess).mockImplementation(async (opts) => {
-      const call: Call = { ...opts, args: opts.args ?? [] };
-      calls.push(call);
-      if (opts.command === 'semgrep') {
-        const { out, targets } = semgrepTargets(call.args);
-        writeFileSync(
-          out,
-          JSON.stringify({
-            results: targets.map((path) => ({ check_id: 'test.rule', path, start: { line: 1, col: 1 }, end: { line: 1, col: 2 }, extra: { severity: 'ERROR', message: 'bad', lines: 'eval(x)' } })),
-            errors: [],
-            paths: { scanned: targets },
-          }),
-        );
-        return ok(1);
-      }
-      if (opts.command === 'gitleaks') return fakeGitleaks(call);
-      return ok();
-    });
-    const { r } = await review(dir, { base_ref: 'main' });
-    expect(r.ok).toBe(true);
-    const runs = semgrepCalls();
-    expect(runs).toHaveLength(2);
-    expect([...semgrepTargets(runs[0]?.args ?? []).targets].sort()).toEqual(['a.js', 'vendor/x.js']);
-    expect(semgrepTargets(runs[1]?.args ?? []).targets).toEqual(['a.js']);
-    expect((r as unknown as { introduced: { counts: unknown } }).introduced.counts).toEqual({ introduced: 0, preexisting: 1, unknown: 0, not_compared: 0 });
   });
 });
