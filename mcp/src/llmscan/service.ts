@@ -22,6 +22,7 @@ import { assignIdentities, makeSourceReader } from '../fingerprint/findingIdenti
 import { isHuntFinding, openSetForProject } from '../history/openSet.js';
 import type { Bookkeeping } from '../history/runCompare.js';
 import { readProjectBytes, readProjectText } from '../platform/projectFs.js';
+import { resolveCommit } from '../runners/git.js';
 import { listProjectFiles } from '../runners/projectFiles.js';
 import { makeFinding } from '../runners/scannerParsers/index.js';
 import type { Storage } from '../storage/index.js';
@@ -232,34 +233,87 @@ const RECIPE = {
   lease: `A leased task is yours for ${String(LLM_SCAN_DEFAULTS.lease_minutes)} minutes; after that it goes to whoever asks next.`,
 } as const;
 
+/**
+ * The one head rule: llm_scan's subagents read the WORKING TREE, so a finding a `review_pr` scan read at a head
+ * that is not the checked-out commit cannot be checked here — its brief would quote, and its file hash pin,
+ * another version of the file, and an independent `not_real` would demote the finding on it. Keyed on what the
+ * scan recorded (`meta.head_sha`), never on `scanned_tree`: a review of the working tree is another commit's
+ * once HEAD moves (a switch, a commit). Other scan types are not judged. `HEAD` is resolved once per plan, and
+ * only when a review_pr scan is met. Returns the reason a scan's findings cannot be verified here, or null.
+ */
+function reviewHeadRule(storage: Storage, project: string): (scanId: string) => Promise<string | null> {
+  let checkedOut: Promise<string | null> | undefined;
+  const memo = new Map<string, string | null>();
+  return async (scanId) => {
+    const known = memo.get(scanId);
+    if (known !== undefined) return known;
+    let reason: string | null = null;
+    const scan = storage.scans.getById(scanId);
+    if (scan !== null && scan.scan_type === 'review_pr') {
+      checkedOut ??= resolveCommit(project, 'HEAD');
+      const head = await checkedOut;
+      const recorded = scan.meta?.['head_sha'];
+      const read = typeof recorded === 'string' && recorded !== '' ? recorded : null;
+      const fix = 'llm_scan reads the working tree. Check out the reviewed head, or run review_pr on what is checked out, and plan again.';
+      if (read === null) reason = `review_pr scan ${scanId} records no head commit: ${fix}`;
+      else if (head === null) reason = `review_pr scan ${scanId} read head ${read.slice(0, 12)}, and the checked-out commit could not be read: ${fix}`;
+      else if (head !== read) reason = `review_pr scan ${scanId} read head ${read.slice(0, 12)}, and ${head.slice(0, 12)} is checked out: ${fix}`;
+    }
+    memo.set(scanId, reason);
+    return reason;
+  };
+}
+
 /** The scanner findings a verify plan checks: named fingerprints, one scan, or the project's open set (hunt findings are checked by their own tasks). */
-function findingsToVerify(storage: Storage, input: StartInput): { ok: true; findings: Finding[]; unknown: string[]; from: VerifySource['from']; scanOf: Map<string, string> } | Fail {
+async function findingsToVerify(
+  storage: Storage,
+  input: StartInput,
+): Promise<
+  | {
+      ok: true;
+      findings: Finding[];
+      unknown: string[];
+      /** Fingerprints whose latest finding a review_pr scan read at another head ({@link reviewHeadRule}). */
+      elsewhere: Array<{ fingerprint: string; reason: string }>;
+      from: VerifySource['from'];
+      scanOf: Map<string, string>;
+    }
+  | Fail
+> {
   /** The scan each finding was read from, by fingerprint: what `verify_source` reports. */
   const scanOf = new Map<string, string>();
+  const unverifiable = reviewHeadRule(storage, input.project);
   if (input.fingerprints !== undefined) {
     const found: Finding[] = [];
     const unknown: string[] = [];
+    const elsewhere: Array<{ fingerprint: string; reason: string }> = [];
     for (const fp of input.fingerprints) {
       const hit = storage.findings.findLatestInProject(input.project, fp);
+      const reason = hit === null ? null : await unverifiable(hit.scan_id);
       if (hit === null) {
         unknown.push(fp);
+      } else if (reason !== null) {
+        elsewhere.push({ fingerprint: fp, reason });
       } else {
         found.push(hit.finding);
         scanOf.set(hit.finding.fingerprint, hit.scan_id);
       }
     }
-    return { ok: true, findings: found, unknown, from: 'fingerprints', scanOf };
+    return { ok: true, findings: found, unknown, elsewhere, from: 'fingerprints', scanOf };
   }
   if (input.scan_id !== undefined) {
     const scan = storage.scans.getById(input.scan_id);
     if (scan === null || scan.project_path !== input.project) return fail('unknown_scan_id', `No scan ${input.scan_id} for this project.`);
+    const reason = await unverifiable(input.scan_id);
+    if (reason !== null) return fail('unsupported_target', reason);
     const findings = storage.findings.listByScan(input.scan_id).filter((f) => !isHuntFinding(f));
     for (const f of findings) scanOf.set(f.fingerprint, input.scan_id);
-    return { ok: true, findings, unknown: [], from: 'scan', scanOf };
+    return { ok: true, findings, unknown: [], elsewhere: [], from: 'scan', scanOf };
   }
+  // The open set holds no review_pr scan (a scoped scan is never in it): nothing for the head rule to judge.
   const findings = openSetForProject(storage, input.project).findings.filter((f) => !isHuntFinding(f));
   for (const f of findings) scanOf.set(f.fingerprint, f.scan_id);
-  return { ok: true, findings, unknown: [], from: 'open_set', scanOf };
+  return { ok: true, findings, unknown: [], elsewhere: [], from: 'open_set', scanOf };
 }
 
 /** US-1.AC-3: which input chose the findings of a verify plan, and the scans they were read from. */
@@ -319,13 +373,15 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
 
   let findings: Finding[] = [];
   const unknown: string[] = [];
+  const elsewhere: Array<{ fingerprint: string; reason: string }> = [];
   let verifyFrom: VerifySource['from'] | null = null;
   let scanOf: ReadonlyMap<string, string> = new Map();
   if (modes.includes('verify')) {
-    const chosen = findingsToVerify(storage, input);
+    const chosen = await findingsToVerify(storage, input);
     if (!chosen.ok) return chosen;
     findings = chosen.findings;
     unknown.push(...chosen.unknown);
+    elsewhere.push(...chosen.elsewhere);
     verifyFrom = chosen.from;
     scanOf = chosen.scanOf;
   }
@@ -344,6 +400,7 @@ export async function startPlan(storage: Storage, input: StartInput): Promise<Ou
   const notEligible = [
     ...plan.not_eligible.map((n) => (isOverLimit(n.reason) ? { ...n, overflow: true as const } : n)),
     ...unknown.map((fingerprint) => ({ fingerprint, reason: 'not found among this project\'s stored findings' })),
+    ...elsewhere,
   ];
   const setAside = plan.set_aside.map((s) => (isOverLimit(s.reason) ? { ...s, overflow: true as const } : s));
   if (plan.nothing_to_plan !== null) {

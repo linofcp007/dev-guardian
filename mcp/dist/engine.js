@@ -122031,32 +122031,61 @@ function tokenLimitFields(plan, tasks) {
   const n = deliverableWithinTokenLimit(plan, tasks);
   return { deliverable_within_token_limit: n, token_limit_note: tokenLimitNote(n) };
 }
-function findingsToVerify(storage, input2) {
+function reviewHeadRule(storage, project) {
+  let checkedOut;
+  const memo2 = /* @__PURE__ */ new Map();
+  return async (scanId) => {
+    const known = memo2.get(scanId);
+    if (known !== void 0) return known;
+    let reason = null;
+    const scan2 = storage.scans.getById(scanId);
+    if (scan2 !== null && scan2.scan_type === "review_pr") {
+      checkedOut ??= resolveCommit(project, "HEAD");
+      const head = await checkedOut;
+      const recorded = scan2.meta?.["head_sha"];
+      const read3 = typeof recorded === "string" && recorded !== "" ? recorded : null;
+      const fix = "llm_scan reads the working tree. Check out the reviewed head, or run review_pr on what is checked out, and plan again.";
+      if (read3 === null) reason = `review_pr scan ${scanId} records no head commit: ${fix}`;
+      else if (head === null) reason = `review_pr scan ${scanId} read head ${read3.slice(0, 12)}, and the checked-out commit could not be read: ${fix}`;
+      else if (head !== read3) reason = `review_pr scan ${scanId} read head ${read3.slice(0, 12)}, and ${head.slice(0, 12)} is checked out: ${fix}`;
+    }
+    memo2.set(scanId, reason);
+    return reason;
+  };
+}
+async function findingsToVerify(storage, input2) {
   const scanOf = /* @__PURE__ */ new Map();
+  const unverifiable = reviewHeadRule(storage, input2.project);
   if (input2.fingerprints !== void 0) {
     const found2 = [];
     const unknown4 = [];
+    const elsewhere = [];
     for (const fp of input2.fingerprints) {
       const hit = storage.findings.findLatestInProject(input2.project, fp);
+      const reason = hit === null ? null : await unverifiable(hit.scan_id);
       if (hit === null) {
         unknown4.push(fp);
+      } else if (reason !== null) {
+        elsewhere.push({ fingerprint: fp, reason });
       } else {
         found2.push(hit.finding);
         scanOf.set(hit.finding.fingerprint, hit.scan_id);
       }
     }
-    return { ok: true, findings: found2, unknown: unknown4, from: "fingerprints", scanOf };
+    return { ok: true, findings: found2, unknown: unknown4, elsewhere, from: "fingerprints", scanOf };
   }
   if (input2.scan_id !== void 0) {
     const scan2 = storage.scans.getById(input2.scan_id);
     if (scan2 === null || scan2.project_path !== input2.project) return fail5("unknown_scan_id", `No scan ${input2.scan_id} for this project.`);
+    const reason = await unverifiable(input2.scan_id);
+    if (reason !== null) return fail5("unsupported_target", reason);
     const findings2 = storage.findings.listByScan(input2.scan_id).filter((f) => !isHuntFinding(f));
     for (const f of findings2) scanOf.set(f.fingerprint, input2.scan_id);
-    return { ok: true, findings: findings2, unknown: [], from: "scan", scanOf };
+    return { ok: true, findings: findings2, unknown: [], elsewhere: [], from: "scan", scanOf };
   }
   const findings = openSetForProject(storage, input2.project).findings.filter((f) => !isHuntFinding(f));
   for (const f of findings) scanOf.set(f.fingerprint, f.scan_id);
-  return { ok: true, findings, unknown: [], from: "open_set", scanOf };
+  return { ok: true, findings, unknown: [], elsewhere: [], from: "open_set", scanOf };
 }
 function isVerifySource(value) {
   if (typeof value !== "object" || value === null) return false;
@@ -122094,13 +122123,15 @@ async function startPlan(storage, input2) {
   }
   let findings = [];
   const unknown4 = [];
+  const elsewhere = [];
   let verifyFrom = null;
   let scanOf = /* @__PURE__ */ new Map();
   if (modes.includes("verify")) {
-    const chosen = findingsToVerify(storage, input2);
+    const chosen = await findingsToVerify(storage, input2);
     if (!chosen.ok) return chosen;
     findings = chosen.findings;
     unknown4.push(...chosen.unknown);
+    elsewhere.push(...chosen.elsewhere);
     verifyFrom = chosen.from;
     scanOf = chosen.scanOf;
   }
@@ -122115,7 +122146,8 @@ async function startPlan(storage, input2) {
   });
   const notEligible = [
     ...plan.not_eligible.map((n) => isOverLimit(n.reason) ? { ...n, overflow: true } : n),
-    ...unknown4.map((fingerprint) => ({ fingerprint, reason: "not found among this project's stored findings" }))
+    ...unknown4.map((fingerprint) => ({ fingerprint, reason: "not found among this project's stored findings" })),
+    ...elsewhere
   ];
   const setAside = plan.set_aside.map((s) => isOverLimit(s.reason) ? { ...s, overflow: true } : s);
   if (plan.nothing_to_plan !== null) {
@@ -122473,6 +122505,7 @@ var init_service = __esm({
     init_findingIdentity();
     init_openSet();
     init_projectFs();
+    init_git();
     init_projectFiles();
     init_scannerParsers();
     init_computeTreeHash();
