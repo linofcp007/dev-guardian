@@ -40,7 +40,8 @@
  *     past its budget, 0.2 s of the whole Semgrep process's CPU time, which
  *     every analysis domain spends at once (the budget has no setting;
  *     `semgrep.jobs` — the machine's cores, at most 4, by default since
- *     3.18.0 — sets the domains, and at 1 a function gets all of it) — never
+ *     3.18.0, and never more — sets the domains, and at 1 a function gets
+ *     all of it) — never
  *     gates: it is a NOTE, reported, not a coverage gap (review
  *     8, finding 3 — a medium-sized codebase never reached exit 0:
  *     dev-spec-driven's own tree had taint timeouts in 210 functions);
@@ -602,11 +603,10 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
       // Before the rule test (a "timed_out" line can name the rules): Semgrep
       // past the run's time limit, whole runs and batches alike
       // (`checkSemgrepReport`) — the cost a low `semgrep.jobs` adds (3.18.0).
+      // The run-time limit only: more domains would buy the time with
+      // findings, and `semgrep.jobs` can only lower them (3.18.0 review 1).
       if (/semgrep did not finish \(timed_out\)/.test(detail)) {
-        return (
-          "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the " +
-          'scan, or set a higher semgrep.jobs in .guardian/scan.yml — faster, but taint analysis then gives up on more functions.'
-        );
+        return "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the scan, then rerun.";
       }
       // Before the rule test: the line says "registry rules" (review 11, finding 10).
       if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {

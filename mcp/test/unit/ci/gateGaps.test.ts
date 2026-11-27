@@ -207,9 +207,10 @@ describe('every gap as data', () => {
   });
 
   // 3.18.0: fewer Semgrep domains (`semgrep.jobs`, platform/scanSettings.ts) cost time, and a large tree can run past
-  // the run's limit — a failed scan. Its remedy names both ways out, ahead of the rule test: the line of a run that
-  // also names a rule file is still a timeout, not a rule to fix.
-  it('a Semgrep run past the time limit: the remedy names GUARDIAN_SCAN_TIMEOUT_MS and semgrep.jobs, not "fix the rule"', () => {
+  // the run's limit — a failed scan. Its remedy names the run-time limit alone, ahead of the rule test: the line of a
+  // run that also names a rule file is still a timeout, not a rule to fix. Never "a higher semgrep.jobs" (3.18.0 review
+  // 1, R1-XPLUG-01): more domains buy the time with findings, and dev-spec-driven relays the remedy to an agent.
+  it('a Semgrep run past the time limit: the remedy names GUARDIAN_SCAN_TIMEOUT_MS alone, not "fix the rule" nor semgrep.jobs', () => {
     const reasons = [
       'semgrep did not finish (timed_out)',
       'ran via docker; 1 registered rule file(s) outside the project did not run — the Docker fallback sees the project only ' +
@@ -222,8 +223,10 @@ describe('every gap as data', () => {
       expect(v.exitCode, reason).toBe(CI_EXIT.INCOMPLETE_SCAN);
       const gap = v.coverageGapDetails[0];
       expect(gap?.kind, reason).toBe('scanner_failed');
-      expect(gap?.remedy, reason).toMatch(/^Semgrep ran past dev-guardian's time limit \(GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default\)/);
-      expect(gap?.remedy, reason).toMatch(/set a higher semgrep\.jobs in \.guardian\/scan\.yml/);
+      expect(gap?.remedy, reason).toBe(
+        "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the scan, then rerun.",
+      );
+      expect(gap?.remedy, reason).not.toMatch(/jobs/);
     }
     // Still its own: a rule that did not load, and another failure.
     expect(remedyFor('scanner_failed', 'semgrep', 'security_scan_full: semgrep failed (a rule did not load)')).toBe(

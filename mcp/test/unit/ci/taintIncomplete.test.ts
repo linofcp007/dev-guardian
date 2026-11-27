@@ -126,7 +126,7 @@ describe('recordTaintIncomplete: what baseline update writes', () => {
     step([semgrepRun(files.map((f, i) => fixpoint(f.replace(/\//g, '\\'), i + 1)), files)]),
   ];
 
-  it("each file's git blob after the scan — `git hash-object`'s — in one rev-parse and one hash-object call", async () => {
+  it("each file's git blob after the scan — `git hash-object`'s — in one rev-parse, one check-attr and one hash-object call", async () => {
     const { dir, git } = repo();
     mkdirSync(join(dir, 'src'));
     writeFileSync(join(dir, 'src', 'heavy.js'), BODY);
@@ -141,7 +141,26 @@ describe('recordTaintIncomplete: what baseline update writes', () => {
       { tool: 'semgrep', file: 'src/other.js', blob: git('hash-object', 'src/other.js') },
     ]);
     expect(r.records[0]?.blob).toMatch(/^[0-9a-f]{40}$/);
-    expect(calls.map((c) => c[0])).toEqual(['rev-parse', 'hash-object']);
+    expect(calls.map((c) => c[0])).toEqual(['rev-parse', 'check-attr', 'hash-object']);
+  });
+
+  // 3.18.0 review 1 (DGBASE-1): git's clean step applies `ident` (`$Id:<anything>$` → `$Id$`), a `filter` or a
+  // `working-tree-encoding` before it hashes, so the blob was no longer the bytes the scan read.
+  it('a file git stores as other than its bytes (ident, filter, working-tree-encoding) is never recorded; line endings are', async () => {
+    const { dir, git } = repo();
+    for (const f of ['id.js', 'filtered.js', 'encoded.js', 'eol.js', 'unset.js']) writeFileSync(join(dir, f), `/* $Id$ */\n${BODY}`);
+    writeFileSync(
+      join(dir, '.gitattributes'),
+      'id.js ident\nfiltered.js filter=lfs\nencoded.js working-tree-encoding=UTF-16LE-BOM\n* text=auto eol=lf\nunset.js -ident\n',
+    );
+    // Not committed: the attributes the working tree's .gitattributes sets are the ones hash-object applies.
+    const { run, calls } = counting();
+    const r = await recordTaintIncomplete(dir, steps('id.js', 'filtered.js', 'encoded.js', 'eol.js', 'unset.js'), Date.now() + 60_000, { run });
+    expect(r.records.map((x) => x.file)).toEqual(['eol.js', 'unset.js']);
+    expect(r.records.find((x) => x.file === 'eol.js')?.blob).toBe(git('hash-object', 'eol.js'));
+    // The attributes are read for every file in one call, and only the two kept are hashed.
+    expect(calls.map((c) => c[0])).toEqual(['rev-parse', 'check-attr', 'hash-object']);
+    expect(calls[2]?.slice(-2)).toEqual(['eol.js', 'unset.js']);
   });
 
   it('a file written at or after the scan started is not recorded, and is named', async () => {
@@ -231,7 +250,7 @@ describe('unchangedTaintIncomplete: what the gate reads against the records', ()
     expect(calls).toEqual([]);
   });
 
-  it('every record hashed at once: one rev-parse and one hash-object; an edited file is no longer unchanged', async () => {
+  it('every record hashed at once: one rev-parse, one check-attr and one hash-object; an edited file is no longer unchanged', async () => {
     const { dir, git } = repo();
     for (const f of ['a.js', 'b.js', 'c.js']) writeFileSync(join(dir, f), BODY);
     git('add', '-A');
@@ -246,7 +265,66 @@ describe('unchangedTaintIncomplete: what the gate reads against the records', ()
       { file: 'c.js', packOnly: false },
     ]);
     expect(r?.packRuleIds).toBe(pluginPackRuleIds());
-    expect(calls.map((c) => c[0])).toEqual(['rev-parse', 'hash-object']);
+    expect(calls.map((c) => c[0])).toEqual(['rev-parse', 'check-attr', 'hash-object']);
+  });
+
+  // 3.18.0 review 1 (DGBASE-1), the reviewer's shape: new code put between a recorded file's `$Id:` and `$`, plus one
+  // `.gitattributes` line — committed or not, git's own hash is still the recorded blob.
+  it('an edit hidden by `ident` is not unchanged, though git hash-object prints the recorded blob', async () => {
+    const { dir, git } = repo();
+    writeFileSync(join(dir, 'heavy.js'), `/* $Id$ */\n${BODY}`);
+    writeFileSync(join(dir, 'plain.js'), `/* $Id$ */\n${BODY}`);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const records = await recorded(dir, 'heavy.js', 'plain.js');
+    expect(records.map((r) => r.file)).toEqual(['heavy.js', 'plain.js']);
+    const attack = "/* $Id: */ eval(require('fs').readFileSync(0, 'utf8')); /* $ */";
+    writeFileSync(join(dir, 'heavy.js'), `${attack}\n${BODY}`);
+    writeFileSync(join(dir, '.gitattributes'), 'heavy.js ident\n');
+    // The collapse itself: git's hash of the edited file is the recorded one.
+    expect(git('hash-object', 'heavy.js')).toBe(records[0]?.blob);
+    const findings = [finding({ file_path: 'heavy.js' }), finding({ file_path: 'plain.js' })];
+    expect((await unchangedTaintIncomplete(dir, records, findings))?.unchanged).toEqual([{ file: 'plain.js', packOnly: false }]);
+    // Committed in two steps, as a pull request would — the edit first (with the attribute, `add` would clean it
+    // back to the recorded blob), then the attribute: the same.
+    rmSync(join(dir, '.gitattributes'));
+    git('add', 'heavy.js');
+    git('commit', '-qm', 'the change');
+    writeFileSync(join(dir, '.gitattributes'), 'heavy.js ident\n');
+    git('add', '.gitattributes');
+    git('commit', '-qm', 'attributes');
+    expect((await unchangedTaintIncomplete(dir, records, findings))?.unchanged).toEqual([{ file: 'plain.js', packOnly: false }]);
+    // `-ident` (unset) and an unspecified attribute read as the file's bytes.
+    writeFileSync(join(dir, '.gitattributes'), 'heavy.js -ident\n');
+    writeFileSync(join(dir, 'heavy.js'), `/* $Id$ */\n${BODY}`);
+    expect((await unchangedTaintIncomplete(dir, records, findings))?.unchanged.map((u) => u.file)).toEqual(['heavy.js', 'plain.js']);
+  });
+
+  it('a repository that normalises line endings (`* text=auto eol=lf`) keeps its records: the conversion drops a CR only', async () => {
+    const { dir, git } = repo();
+    writeFileSync(join(dir, '.gitattributes'), '* text=auto eol=lf\n*.js text eol=lf\n');
+    writeFileSync(join(dir, 'heavy.js'), BODY);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const records = await recorded(dir, 'heavy.js');
+    expect(records).toHaveLength(1);
+    writeFileSync(join(dir, 'heavy.js'), BODY.replace(/\n/g, '\r\n'));
+    expect((await unchangedTaintIncomplete(dir, records, [finding({ file_path: 'heavy.js' })]))?.unchanged).toEqual([{ file: 'heavy.js', packOnly: false }]);
+  });
+
+  it('git that cannot read the attributes: nothing relaxed', async () => {
+    const { dir, git } = repo();
+    writeFileSync(join(dir, 'heavy.js'), BODY);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const records = await recorded(dir, 'heavy.js');
+    const failing: GitRunner = async (cwd, args) =>
+      args[0] === 'check-attr' ? { exitCode: 128, stdout: '', stderr: 'fatal: cannot read attributes' } : realGit(cwd, args);
+    expect(await unchangedTaintIncomplete(dir, records, [finding({ file_path: 'heavy.js' })], { run: failing })).toBeUndefined();
+    // An answer that leaves a path out, or names one only in part, is no answer for it.
+    const partial: GitRunner = async (cwd, args) =>
+      args[0] === 'check-attr' ? { exitCode: 0, stdout: 'heavy.js\0ident\0unspecified\0', stderr: '' } : realGit(cwd, args);
+    expect(await unchangedTaintIncomplete(dir, records, [finding({ file_path: 'heavy.js' })], { run: partial })).toBeUndefined();
   });
 
   it('a pack-only record says so; a finding path spelt with backslashes or ./ is the same file', async () => {

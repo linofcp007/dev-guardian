@@ -131,3 +131,83 @@ describe('taint-incomplete files: recorded by baseline update, read by scan (rea
     expect(v.coverage_notes.filter((n) => /^semgrep: \d+ finding\(s\) in 1 file\(s\) not counted as new — .*: heavy\.js$/.test(n))).toHaveLength(1);
   });
 });
+
+/**
+ * 3.18.0 review 1 (DGBASE-1), the reviewer's repro: a change puts new code between a recorded file's `$Id:` and the
+ * next `$`, then adds `<file> ident` to `.gitattributes` — git's clean step collapses `$Id:<anything>$` to `$Id$`, so
+ * `git hash-object` printed the recorded blob and the edit's finding read "not new" (exit 0). A file git stores as
+ * other than its bytes is never unchanged: the finding is new, both in a CI clone gated with `--baseline-ref main`
+ * and in the working tree with no ref (dev-spec-driven's finish gate); heavy2.js, the same edit without the
+ * attribute, is the control.
+ */
+describe('taint-incomplete files: an edit git’s `ident` hides is new (real Semgrep)', () => {
+  const EVAL_RULE = `  - id: fixture-eval-any
+    languages: [javascript]
+    severity: ERROR
+    message: eval call
+    pattern: eval(...)
+`;
+  const ATTACK = "/* $Id: */ eval(require('fs').readFileSync(0, 'utf8')); /* $ */";
+  let work = '';
+  let recorded: string[] = [];
+  let hashes: Record<string, string> = {};
+  const scans: Record<'local' | 'ci', { status: number | null; verdict: Verdict | null }> = {
+    local: { status: null, verdict: null },
+    ci: { status: null, verdict: null },
+  };
+
+  beforeAll(async () => {
+    if (!SEMGREP_INSTALLED) return;
+    work = makeTempDir('ci-taint-ident-');
+    const origin = join(work, 'origin');
+    const ci = join(work, 'ci');
+    const gitIn = async (cwd: string, ...args: string[]): Promise<string> =>
+      (await execa('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'core.autocrlf=false', ...args], { cwd })).stdout.trim();
+    await execa('git', ['init', '-q', '-b', 'main', origin]);
+    await gitIn(origin, 'config', 'core.autocrlf', 'false');
+    for (const [file, links] of [['heavy.js', 1500], ['heavy2.js', 1501]] as const) writeFileSync(join(origin, file), `/* $Id$ */\n${heavySource(links)}`);
+    writeFileSync(join(origin, '.semgrep.yml'), `rules:\n${TAINT_RULE}${EVAL_RULE}`);
+    await gitIn(origin, 'add', '-A');
+    await gitIn(origin, 'commit', '-qm', 'base');
+    cli(['baseline', 'update', '--project', origin, '--local-only']);
+    const baseline = JSON.parse(readFileSync(join(origin, '.guardian', 'baseline.json'), 'utf8')) as { taint_incomplete?: Array<{ file: string }> };
+    recorded = (baseline.taint_incomplete ?? []).map((r) => r.file);
+    await gitIn(origin, 'add', '-f', '.guardian/baseline.json');
+    await gitIn(origin, 'commit', '-qm', 'baseline');
+    // The change, two commits: the edit (git stores the bytes as written), then the attribute for heavy.js only.
+    await gitIn(origin, 'checkout', '-q', '-b', 'pr');
+    for (const file of ['heavy.js', 'heavy2.js']) writeFileSync(join(origin, file), readFileSync(join(origin, file), 'utf8').replace('/* $Id$ */', ATTACK));
+    await gitIn(origin, 'add', 'heavy.js', 'heavy2.js');
+    await gitIn(origin, 'commit', '-qm', 'pr: the change');
+    writeFileSync(join(origin, '.gitattributes'), 'heavy.js ident\n');
+    await gitIn(origin, 'add', '.gitattributes');
+    await gitIn(origin, 'commit', '-qm', 'pr: attributes');
+    hashes = { 'heavy.js': await gitIn(origin, 'hash-object', 'heavy.js'), recorded: await gitIn(origin, 'rev-parse', 'main:heavy.js') };
+
+    const local = cli(['scan', '--project', origin, '--local-only', '--format', 'json']);
+    scans.local = { status: local.status, verdict: JSON.parse(local.stdout) as Verdict };
+    await execa('git', ['clone', '-q', '--no-local', origin, ci]);
+    await gitIn(ci, 'checkout', '-q', 'pr');
+    await gitIn(ci, 'branch', '-q', 'main', 'origin/main');
+    const inCi = cli(['scan', '--project', ci, '--local-only', '--baseline-ref', 'main', '--format', 'json']);
+    scans.ci = { status: inCi.status, verdict: JSON.parse(inCi.stdout) as Verdict };
+  });
+
+  it.skipIf(!SEMGREP_INSTALLED)('the premise: both files recorded, and git hashes the edited heavy.js to its recorded blob', () => {
+    expect(recorded).toEqual(['heavy.js', 'heavy2.js']);
+    expect(hashes['heavy.js']).toBe(hashes['recorded']);
+  });
+
+  for (const where of ['local', 'ci'] as const) {
+    it.skipIf(!SEMGREP_INSTALLED)(`${where === 'ci' ? 'a CI clone, --baseline-ref main' : 'the working tree, no ref'}: the edit's finding is new in both files, and blocks`, () => {
+      const { status, verdict } = scans[where];
+      expect(verdict).not.toBeNull();
+      const v = verdict as Verdict;
+      const evals = (list: Verdict['new_findings']) =>
+        list.filter((f) => (f.rule_id ?? '').endsWith('fixture-eval-any')).map((f) => f.file_path).sort();
+      expect(evals(v.new_findings)).toEqual(['heavy.js', 'heavy2.js']);
+      expect(evals(v.taint_incomplete_at_baseline)).toEqual([]);
+      expect(status).toBe(1);
+    });
+  }
+});

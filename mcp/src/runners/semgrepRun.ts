@@ -35,6 +35,7 @@ import {
   DEFAULT_SEMGREP_TIMEOUT_S,
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
   loadScanSettings,
+  SCAN_SETTINGS_RELATIVE_PATH,
   semgrepSettingArgs,
 } from '../platform/scanSettings.js';
 import { semgrepGuardianOutputExcludes } from '../platform/guardianOutput.js';
@@ -69,18 +70,23 @@ export const SEMGREP_COMMAND = 'semgrep';
  * code, and 3.3.0's unanchored `--exclude=.guardian` let a
  * `lib/.guardian/handler.js` through the gate unscanned (review 10, finding 1)
  * — the spelling, and why, is `platform/guardianOutput.ts`'s. `warning`: the
- * settings file was there but not applied, and why — the caller says so on
- * the run.
+ * settings file was there but not applied, and why, or its `semgrep.jobs` was
+ * above the default and lowered to it — the caller says so on the run.
  */
 export function semgrepScanFlags(configRoot: string): { args: string[]; warning: string | null } {
   const loaded = loadScanSettings(configRoot);
+  const above = loaded.settings.semgrep.jobsAboveDefault;
   return {
     args: [...semgrepSettingArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
     warning:
       loaded.kind === 'invalid'
         ? `${loaded.path} was not applied (${loaded.error}) — Semgrep ran with dev-guardian's defaults ` +
           `(--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})`
-        : null,
+        : above !== undefined
+          ? `${SCAN_SETTINGS_RELATIVE_PATH} semgrep.jobs ${above} is above dev-guardian's default, so Semgrep ran with ` +
+            `--jobs ${DEFAULT_SEMGREP_JOBS}: the setting can only lower it (more domains share one taint budget, and taint ` +
+            'analysis gives up on more functions)'
+          : null,
   };
 }
 

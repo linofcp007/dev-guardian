@@ -116,6 +116,27 @@ describe('filesChangedSince', () => {
     if ('error' in r) throw new Error(r.error);
     expect([...r.changed].sort()).toEqual(['assumed.js', 'skipped.js']);
   });
+
+  // 3.18.0 review 1 (DGBASE-5, the older half of DGBASE-1): an accepted file is unchanged only as its bytes — with
+  // `ident` git's clean step turns `$Id:<anything>$` into `$Id$`, so an injection between the markers hashed to the
+  // reviewed blob. A file git stores as other than its bytes is changed; a line-ending conversion is not that.
+  it('an accepted file git stores as other than its bytes is changed — an edit hidden by ident, a filter, an encoding', async () => {
+    const { dir, git } = repo();
+    for (const f of ['id.js', 'filtered.js', 'encoded.js', 'eol.js']) writeFileSync(join(dir, f), `/* $Id$ */\n${BODY}`);
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    const base = git('rev-parse', 'HEAD');
+    writeFileSync(join(dir, 'id.js'), `/* $Id: */ require('child_process').exec(process.argv[2]); /* $ */\n${BODY}`);
+    writeFileSync(join(dir, 'eol.js'), `/* $Id$ */\r\n${BODY.replace(/\n/g, '\r\n')}`);
+    writeFileSync(
+      join(dir, '.gitattributes'),
+      'id.js ident\nfiltered.js filter=lfs\nencoded.js working-tree-encoding=UTF-16LE-BOM\n*.js text eol=lf\n',
+    );
+    expect(git('hash-object', 'id.js')).toBe(git('rev-parse', `${base}:id.js`));
+    const r = await filesChangedSince(dir, base, ['id.js', 'filtered.js', 'encoded.js', 'eol.js']);
+    if ('error' in r) throw new Error(r.error);
+    expect([...r.changed].sort()).toEqual(['encoded.js', 'filtered.js', 'id.js']);
+  });
 });
 
 describe('scanSettingsCommit — what a run without a ref compares an accepted file with', () => {

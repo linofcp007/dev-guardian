@@ -6,8 +6,8 @@
  *       timeout: 30            # seconds per rule per file (Semgrep --timeout; 0: no limit)
  *       timeout_threshold: 0   # rules that may time out on a file before Semgrep drops
  *                              # the whole file (--timeout-threshold; 0: never drop it)
- *       jobs: 4                # Semgrep's --jobs: the analysis domains it runs at once
- *                              # (default: the machine's cores, at most 4)
+ *       jobs: 1                # Semgrep's --jobs: the analysis domains it runs at once
+ *                              # (default, and the most: the machine's cores, at most 4)
  *       accept_timeouts:       # files whose per-file Semgrep Timeout the CI gate accepts
  *         - src/generated/parser.js
  *
@@ -40,7 +40,17 @@
  * sixth of the domains on 24 cores (22 timeouts in 12 files, not 167 in 34);
  * the baseline's taint-incomplete records carry the flicker that is left
  * (`ci/taintIncomplete.ts`). `semgrep.jobs: 1` buys the last few functions at
- * that price in time; a larger one buys time back with more timeouts.
+ * that price in time.
+ *
+ * The setting can only LOWER the domains: a value above the default runs at
+ * the default, and the scan says so ({@link ScanSettings}'s `jobsAboveDefault`,
+ * `runners/semgrepRun.ts#semgrepScanFlags`). A larger one bought time with
+ * findings — every domain more shares the one budget —, and the file is read
+ * from the working tree in every ref-less run (dev-spec-driven's finish gate)
+ * and from a reviewed head in `review_pr`: one agent-written `jobs: 24` on a
+ * 24-core machine passed a feature's command injection the default blocked
+ * (3.18.0 review 1, R1-XPLUG-01). Only a run-time limit
+ * (`GUARDIAN_SCAN_TIMEOUT_MS`) buys time, and it never costs a finding.
  *
  * ---- Who may accept a timeout ---------------------------------------------
  *
@@ -87,8 +97,10 @@ export interface ScanSettings {
     timeout: number;
     /** `--timeout-threshold`; 0 is no limit. */
     timeoutThreshold: number;
-    /** `--jobs`, 1 to 256: the analysis domains Semgrep runs at once. */
+    /** `--jobs`: the analysis domains Semgrep runs at once — 1 to {@link DEFAULT_SEMGREP_JOBS}, never more. */
     jobs: number;
+    /** The `semgrep.jobs` the file wrote when it was above the default — and so not applied (the module doc). */
+    jobsAboveDefault?: number;
     /** Project-relative, `/`-separated, without `./`: files whose per-file Timeout the gate accepts. */
     acceptTimeouts: string[];
   };
@@ -164,7 +176,9 @@ export function parseSettings(doc: unknown): ScanSettings | string {
       if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_SEMGREP_JOBS) {
         return `semgrep.jobs must be a whole number from 1 to ${MAX_SEMGREP_JOBS}, got ${JSON.stringify(value)}`;
       }
-      out.semgrep.jobs = value;
+      // A lowering only: above the default, the default (the module doc).
+      out.semgrep.jobs = Math.min(value, DEFAULT_SEMGREP_JOBS);
+      if (value > DEFAULT_SEMGREP_JOBS) out.semgrep.jobsAboveDefault = value;
     } else if (key === 'accept_timeouts') {
       if (value === null) continue;
       if (!Array.isArray(value)) return 'semgrep.accept_timeouts must be a list of project-relative file paths';

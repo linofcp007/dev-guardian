@@ -15546,7 +15546,8 @@ function parseSettings(doc) {
       if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_SEMGREP_JOBS) {
         return `semgrep.jobs must be a whole number from 1 to ${MAX_SEMGREP_JOBS}, got ${JSON.stringify(value)}`;
       }
-      out.semgrep.jobs = value;
+      out.semgrep.jobs = Math.min(value, DEFAULT_SEMGREP_JOBS);
+      if (value > DEFAULT_SEMGREP_JOBS) out.semgrep.jobsAboveDefault = value;
     } else if (key === "accept_timeouts") {
       if (value === null) continue;
       if (!Array.isArray(value)) return "semgrep.accept_timeouts must be a list of project-relative file paths";
@@ -24085,9 +24086,10 @@ import { readFileSync as readFileSync5, rmSync as rmSync6, writeFileSync as writ
 import { win32 as win323 } from "node:path";
 function semgrepScanFlags(configRoot) {
   const loaded = loadScanSettings(configRoot);
+  const above = loaded.settings.semgrep.jobsAboveDefault;
   return {
     args: [...semgrepSettingArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
-    warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})` : null
+    warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})` : above !== void 0 ? `${SCAN_SETTINGS_RELATIVE_PATH} semgrep.jobs ${above} is above dev-guardian's default, so Semgrep ran with --jobs ${DEFAULT_SEMGREP_JOBS}: the setting can only lower it (more domains share one taint budget, and taint analysis gives up on more functions)` : null
   };
 }
 function metricsSetting(env) {
@@ -24702,7 +24704,7 @@ function remedyFor(kind, tool54, detail, cause) {
       return "Move the project to a shorter path. dev-guardian already hands Semgrep and Bandit such files as extended-length paths (\\\\?\\C:\\\u2026), so a file named here could not be read even that way; Windows long paths (LongPathsEnabled=1) do not help Semgrep, whose engine is not long-path aware.";
     case "scanner_failed":
       if (/semgrep did not finish \(timed_out\)/.test(detail)) {
-        return "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the scan, or set a higher semgrep.jobs in .guardian/scan.yml \u2014 faster, but taint analysis then gives up on more functions.";
+        return "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the scan, then rerun.";
       }
       if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {
         return "Unset SEMGREP_SEND_METRICS, or set it to on, off or auto (Semgrep refuses any other value, in any case), then rerun the scan.";
@@ -55907,12 +55909,17 @@ async function gitBlobsOf(projectPath, paths, run2 = git) {
   const blobs = /* @__PURE__ */ new Map();
   const wanted = [...new Set(paths)];
   for (let i = 0; i < wanted.length; i += BATCH) {
-    const toHash = [];
+    const regular = [];
     for (const path3 of wanted.slice(i, i + BATCH)) {
-      const regular = projectPathKind(projectPath, path3) === "file" && projectEntryKind(join36(projectPath, path3)) === "file";
-      if (regular) toHash.push(path3);
+      const isRegular = projectPathKind(projectPath, path3) === "file" && projectEntryKind(join36(projectPath, path3)) === "file";
+      if (isRegular) regular.push(path3);
       else blobs.set(path3, null);
     }
+    if (regular.length === 0) continue;
+    const asRead = await storedAsRead(projectPath, regular, run2);
+    if ("error" in asRead) return asRead;
+    const toHash = regular.filter((path3) => asRead.paths.has(path3));
+    for (const path3 of regular) if (!asRead.paths.has(path3)) blobs.set(path3, null);
     if (toHash.length === 0) continue;
     const hashed = await run2(projectPath, ["hash-object", "--", ...toHash]);
     if (hashed.exitCode !== 0) return { error: firstLine6(hashed.stderr) || `git hash-object exited ${hashed.exitCode}` };
@@ -55921,6 +55928,22 @@ async function gitBlobsOf(projectPath, paths, run2 = git) {
     toHash.forEach((path3, n) => blobs.set(path3, shas[n]?.trim() ?? null));
   }
   return { blobs };
+}
+async function storedAsRead(projectPath, paths, run2) {
+  const r = await run2(projectPath, ["check-attr", "-z", ...CONTENT_ATTRIBUTES, "--", ...paths]);
+  if (r.exitCode !== 0) return { error: firstLine6(r.stderr) || `git check-attr exited ${r.exitCode}` };
+  const fields = r.stdout.split("\0");
+  const off = /* @__PURE__ */ new Map();
+  const on = /* @__PURE__ */ new Set();
+  for (let i = 0; i + 2 < fields.length; i += 3) {
+    const path3 = fields[i] ?? "";
+    const attribute = fields[i + 1] ?? "";
+    const value = fields[i + 2] ?? "";
+    if (!CONTENT_ATTRIBUTES.includes(attribute)) continue;
+    if (value === "unspecified" || value === "unset") off.set(path3, (off.get(path3) ?? 0) + 1);
+    else on.add(path3);
+  }
+  return { paths: new Set(paths.filter((path3) => !on.has(path3) && off.get(path3) === CONTENT_ATTRIBUTES.length)) };
 }
 async function filesChangedFrom(projectPath, commit) {
   const listed2 = /* @__PURE__ */ new Set();
@@ -55946,7 +55969,7 @@ async function scanSettingsCommit(projectPath) {
 function firstLine6(text3) {
   return text3.split(/\r?\n/).find((l) => l.trim() !== "")?.trim() ?? "";
 }
-var BATCH, SCAN_SETTINGS_PATH;
+var BATCH, SCAN_SETTINGS_PATH, CONTENT_ATTRIBUTES;
 var init_changedSince = __esm({
   "src/ci/changedSince.ts"() {
     "use strict";
@@ -55954,6 +55977,7 @@ var init_changedSince = __esm({
     init_git();
     BATCH = 100;
     SCAN_SETTINGS_PATH = ".guardian/scan.yml";
+    CONTENT_ATTRIBUTES = ["ident", "filter", "working-tree-encoding"];
   }
 });
 
@@ -56136,6 +56160,8 @@ function parseUnifiedZero(diff) {
       removed.push({ line: Math.max(1, newLine), text: line.slice(1) });
     } else if (line.startsWith("diff --git")) {
       inHunk = false;
+    } else if (line.startsWith(" ") || line === "") {
+      newLine += 1;
     }
   }
   return { added, removed };
@@ -70312,17 +70338,27 @@ function posix5(path3) {
   while (out.startsWith("./")) out = out.slice(2);
   return out;
 }
+function onAddedLine(f, added) {
+  const ranges = f.file_path !== void 0 ? added.get(posix5(f.file_path)) : void 0;
+  if (ranges === void 0) return false;
+  const start = f.line_start;
+  if (start === void 0) return true;
+  const end = Math.max(start, f.line_end ?? start);
+  return ranges.some((r) => r.start <= end && r.end >= start);
+}
 function classifyAgainstBase(head, base2) {
   if (!base2.compared) return { compared: false, reason: base2.reason };
   const semgrep2 = head.filter((f) => f.tool === SEMGREP_TOOL_NAME);
-  const fresh = new Set(newFindings(semgrep2, buildBaseline(base2.findings, null, ""), base2.renamedFrom));
-  const preexisting = semgrep2.filter((f) => !fresh.has(f));
-  const unknown4 = semgrep2.filter((f) => fresh.has(f) && f.file_path !== void 0 && base2.unknownFiles.has(posix5(f.file_path)));
+  const added = new Set(semgrep2.filter((f) => onAddedLine(f, base2.addedLines)));
+  const kept = semgrep2.filter((f) => !added.has(f));
+  const fresh = new Set(newFindings(kept, buildBaseline(base2.findings, null, ""), base2.renamedFrom));
+  const preexisting = kept.filter((f) => !fresh.has(f));
+  const unknown4 = kept.filter((f) => fresh.has(f) && f.file_path !== void 0 && base2.unknownFiles.has(posix5(f.file_path)));
   return {
     compared: true,
     base_sha: base2.base_sha,
     counts: {
-      introduced: fresh.size - unknown4.length,
+      introduced: added.size + fresh.size - unknown4.length,
       preexisting: preexisting.length,
       unknown: unknown4.length,
       not_compared: head.length - semgrep2.length
@@ -70644,7 +70680,10 @@ async function semgrepAtMergeBase(ctx, out, args) {
   if (listing.exitCode !== 0) return notCompared(`the change since the merge base could not be listed (git exited ${listing.exitCode})`);
   const targets = baseTargetsOf(parseNameStatus(listing.stdout), args.headRun.resultPaths, args.kept);
   if (targets.size === 0) {
-    return { side: { compared: true, base_sha: mb, findings: [], renamedFrom: /* @__PURE__ */ new Map(), unknownFiles: /* @__PURE__ */ new Set() }, cleanup: null };
+    return {
+      side: { compared: true, base_sha: mb, findings: [], renamedFrom: /* @__PURE__ */ new Map(), unknownFiles: /* @__PURE__ */ new Set(), addedLines: /* @__PURE__ */ new Map() },
+      cleanup: null
+    };
   }
   let tree;
   try {
@@ -70683,25 +70722,55 @@ async function semgrepAtMergeBase(ctx, out, args) {
     } else if (run2 !== null && (run2.toolRun.status !== "ok" || run2.nothingScanned)) {
       side = { compared: false, reason: `Semgrep at the merge base ${mb.slice(0, 12)}: ${run2.toolRun.status}${run2.toolRun.reason !== void 0 ? ` (${run2.toolRun.reason})` : ""}` };
     } else {
-      const parser4 = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: baseRoot });
-      const reports = run2?.reports ?? [];
-      const parsed2 = reports.flatMap((raw) => parser4.parse(raw, { project_path: ctx.projectPath }).findings);
-      const findings = assignIdentities(parsed2, { projectPath: ctx.projectPath, readSource: snapshotSources(baseRoot, present5) });
-      const scanned = scannedPathsOf(reports, baseRoot);
-      const unmeasured2 = /* @__PURE__ */ new Set([...(run2?.partial ?? []).map((p) => projectRelative(p.file, baseRoot)), ...files.filter((f) => !scanned.has(f))]);
-      side = {
-        compared: true,
-        base_sha: mb,
-        findings,
-        renamedFrom: new Map([...targets].filter(([headPath, basePath]) => headPath !== basePath)),
-        unknownFiles: new Set([...targets].filter(([, basePath]) => unmeasured2.has(basePath)).map(([headPath]) => headPath))
-      };
+      const onDisk2 = new Set(present5);
+      const pairs = [...targets].filter(([, basePath]) => onDisk2.has(basePath)).map(([headPath, basePath]) => ({ headPath, baseFile: join65(baseRoot, basePath), headFile: join65(args.scanRoot, headPath) }));
+      const added = await addedLinesOf(ctx.projectPath, pairs);
+      if ("error" in added) {
+        side = { compared: false, reason: added.error };
+      } else {
+        const parser4 = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: baseRoot });
+        const reports = run2?.reports ?? [];
+        const parsed2 = reports.flatMap((raw) => parser4.parse(raw, { project_path: ctx.projectPath }).findings);
+        const findings = assignIdentities(parsed2, { projectPath: ctx.projectPath, readSource: snapshotSources(baseRoot, present5) });
+        const scanned = scannedPathsOf(reports, baseRoot);
+        const unmeasured2 = /* @__PURE__ */ new Set([...(run2?.partial ?? []).map((p) => projectRelative(p.file, baseRoot)), ...files.filter((f) => !scanned.has(f))]);
+        side = {
+          compared: true,
+          base_sha: mb,
+          findings,
+          renamedFrom: new Map([...targets].filter(([headPath, basePath]) => headPath !== basePath)),
+          unknownFiles: new Set([...targets].filter(([, basePath]) => unmeasured2.has(basePath)).map(([headPath]) => headPath)),
+          addedLines: added.lines
+        };
+      }
     }
   } catch (e) {
     side = { compared: false, reason: `the merge-base run could not be read: ${e instanceof Error ? e.message : String(e)}` };
   }
   const cleanup = await tree.remove();
   return { side, cleanup: cleanup !== null ? `merge base: ${cleanup}` : null };
+}
+async function addedLinesOf(cwd, pairs) {
+  const lines = /* @__PURE__ */ new Map();
+  for (const pair of pairs) {
+    if (!isFileOnDisk(pair.headFile)) return { error: `${pair.headPath} could not be diffed against the merge base: not a file at head` };
+    const r = await git(cwd, [...ADDED_LINES_DIFF, "--", pair.baseFile, pair.headFile]);
+    const differs = r.exitCode === 1 && /^diff --git /m.test(r.stdout);
+    if (r.exitCode !== 0 && !differs) {
+      return { error: `${pair.headPath} could not be diffed against the merge base (git exited ${r.exitCode})` };
+    }
+    lines.set(pair.headPath, differs ? rangesOf(parseUnifiedZero(r.stdout).added.map((a) => a.line)) : []);
+  }
+  return { lines };
+}
+function rangesOf(numbers) {
+  const ranges = [];
+  for (const n of numbers) {
+    const last = ranges[ranges.length - 1];
+    if (last !== void 0 && n === last.end + 1) last.end = n;
+    else ranges.push({ start: n, end: n });
+  }
+  return ranges;
 }
 async function runBandit2(ctx, out, args) {
   if (args.files.length === 0) return;
@@ -70889,7 +70958,7 @@ async function defaultBaseRef(cwd) {
 function refused(code, message3) {
   return { ok: false, error: { code, message: message3 } };
 }
-var MANIFEST_RE, inputSchema3, reviewPr, SOURCE_SNAPSHOT_MAX_CHARS, isPython2, isManifest, MAX_PREEXISTING_NAMED, tool3;
+var MANIFEST_RE, inputSchema3, reviewPr, SOURCE_SNAPSHOT_MAX_CHARS, isPython2, isManifest, ADDED_LINES_DIFF, MAX_PREEXISTING_NAMED, tool3;
 var init_reviewPr = __esm({
   "src/tools/reviewPr.ts"() {
     "use strict";
@@ -70942,7 +71011,7 @@ var init_reviewPr = __esm({
     reviewPr = makeScanTool({
       name: "review_pr",
       title: "Pre-PR diff review",
-      description: "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed, changed .env files and Supabase migrations, and weakened tests or new suppressions. An unresolvable ref is an error, never \"no files changed\". `introduced`: Semgrep findings judged at the merge base (`preexisting`: not the change's). `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch.",
+      description: "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed, changed .env files and Supabase migrations, and weakened tests or new suppressions. An unresolvable ref is an error, never \"no files changed\". `introduced`: Semgrep findings judged at the merge base (`preexisting`: found there, on a line the change kept). `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch.",
       scan_type: "review_pr",
       category: "security",
       supportsAutoFix: false,
@@ -70997,7 +71066,7 @@ var init_reviewPr = __esm({
             if (!out.cancelled && headSemgrep !== null) {
               const exclusions = ctx.exclusions;
               const kept = exclusions === null ? () => true : keptByExclusions(exclusions, ctx.projectPath, inProject2);
-              const atBase = await semgrepAtMergeBase(ctx, out, { base: base2, head, reportDir, headRun: headSemgrep, kept });
+              const atBase = await semgrepAtMergeBase(ctx, out, { base: base2, head, reportDir, scanRoot, headRun: headSemgrep, kept });
               baseSide = atBase.side;
               baseCleanup = atBase.cleanup;
             } else if (headSemgrep === null) {
@@ -71092,6 +71161,20 @@ var init_reviewPr = __esm({
     SOURCE_SNAPSHOT_MAX_CHARS = 64 * 1024 * 1024;
     isPython2 = (f) => f.toLowerCase().endsWith(".py");
     isManifest = (f) => MANIFEST_RE.test(basename9(f));
+    ADDED_LINES_DIFF = [
+      "diff",
+      "--no-index",
+      "-U0",
+      // Hunks never fused across kept lines (`diff.interHunkContext`): `parseUnifiedZero` reads `-U0` hunks.
+      "--inter-hunk-context=0",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      // A `-diff` / `binary` attribute, or a NUL byte, would print "Binary files differ" and no line at all.
+      "--text",
+      // One side checked out with CRLF, the other with LF: the same lines.
+      "--ignore-cr-at-eol"
+    ];
     MAX_PREEXISTING_NAMED = 5;
     tool3 = defineTool({
       ...reviewPr,

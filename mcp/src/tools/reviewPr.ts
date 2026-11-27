@@ -93,7 +93,7 @@ import { cppcheckParser } from '../runners/scannerParsers/cppcheck.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
 import { toRelativeIfPossible } from '../runners/scannerParsers/index.js';
-import { baseTargetsOf, classifyAgainstBase, type BaseSide } from '../review/baseCompare.js';
+import { baseTargetsOf, classifyAgainstBase, type BaseSide, type LineRange } from '../review/baseCompare.js';
 import { squawkParser } from '../runners/scannerParsers/squawk.js';
 import { isSqlFile, SQUAWK, squawkConfigWarning, squawkMigrations, squawkOptIn } from '../runners/squawkRun.js';
 import { MANIFEST_ECOSYSTEM_LOCKFILES, trivyParser } from '../runners/scannerParsers/trivy.js';
@@ -103,7 +103,7 @@ import { mayHoldTaintRules, pluginPackCheckIds } from '../runners/semgrepRuleIds
 import { Force, ProjectPath, SeverityMin } from '../schemas.js';
 import type { DomainError, ToolResult, ToolRun } from '../types.js';
 import { TEST_INTEGRITY_TOOL } from '../testintegrity/detect.js';
-import { runSuppressionCheck, runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
+import { parseUnifiedZero, runSuppressionCheck, runTestIntegrityCheck } from '../testintegrity/gitChanges.js';
 import { SUPPRESSIONS_TOOL } from '../testintegrity/suppressions.js';
 import { defineTool, registerToolModule } from './index.js';
 import { ensureReportDir, readJsonSafe, scannerAvailable } from './scanHelpers.js';
@@ -150,8 +150,8 @@ const reviewPr = makeScanTool({
     "Scan a branch's changes between base_ref and head_ref: Semgrep (scan_sast's rules), Bandit, gosec and cppcheck on " +
     'changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest ' +
     'changed, changed .env files and Supabase migrations, and weakened tests or new suppressions. An unresolvable ref is ' +
-    'an error, never "no files changed". `introduced`: Semgrep findings judged at the merge base (`preexisting`: not the ' +
-    "change's). `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch.",
+    'an error, never "no files changed". `introduced`: Semgrep findings judged at the merge base (`preexisting`: found ' +
+    'there, on a line the change kept). `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch.',
   scan_type: 'review_pr',
   category: 'security',
   supportsAutoFix: false,
@@ -242,7 +242,7 @@ const reviewPr = makeScanTool({
         if (!out.cancelled && headSemgrep !== null) {
           const exclusions = ctx.exclusions;
           const kept = exclusions === null ? (): boolean => true : keptByExclusions(exclusions, ctx.projectPath, inProject);
-          const atBase = await semgrepAtMergeBase(ctx, out, { base, head, reportDir, headRun: headSemgrep, kept });
+          const atBase = await semgrepAtMergeBase(ctx, out, { base, head, reportDir, scanRoot, headRun: headSemgrep, kept });
           baseSide = atBase.side;
           baseCleanup = atBase.cleanup;
         } else if (headSemgrep === null) {
@@ -555,14 +555,23 @@ function projectRelative(path: string, root: string): string {
  * The head's Semgrep findings judged at the merge base (`review/baseCompare.ts`): the files that hold a head
  * result and are in the review (`kept`, the factory's own predicate) and that the merge base has — modified,
  * or renamed from — checked out at the merge base (no hooks, no filter drivers: `materialiseCommit`) and
- * scanned with the head's own Semgrep arguments, their identities from the base files' own lines. Any failure
+ * scanned with the head's own Semgrep arguments, their identities from the base files' own lines, and each
+ * such file diffed against the head file the head run read in `scanRoot` ({@link addedLinesOf}). Any failure
  * is `compared: false`, never "nothing there"; a cancel cancels the review. Adds no `tools_run` entry and no
  * coverage gap: the base side is evidence for the comparison, not part of the review's coverage.
  */
 async function semgrepAtMergeBase(
   ctx: InvokeContext,
   out: Collected,
-  args: { base: string; head: string; reportDir: string; headRun: HeadSemgrep; kept: (headPath: string) => boolean },
+  args: {
+    base: string;
+    head: string;
+    reportDir: string;
+    /** The tree the head run read: the working tree when head is checked out, else head's checkout. */
+    scanRoot: string;
+    headRun: HeadSemgrep;
+    kept: (headPath: string) => boolean;
+  },
 ): Promise<{ side: BaseSide; cleanup: string | null }> {
   const notCompared = (reason: string): { side: BaseSide; cleanup: string | null } => ({ side: { compared: false, reason }, cleanup: null });
   const mb = await mergeBase(ctx.projectPath, args.base, args.head);
@@ -576,7 +585,10 @@ async function semgrepAtMergeBase(
   if (listing.exitCode !== 0) return notCompared(`the change since the merge base could not be listed (git exited ${listing.exitCode})`);
   const targets = baseTargetsOf(parseNameStatus(listing.stdout), args.headRun.resultPaths, args.kept);
   if (targets.size === 0) {
-    return { side: { compared: true, base_sha: mb, findings: [], renamedFrom: new Map(), unknownFiles: new Set() }, cleanup: null };
+    return {
+      side: { compared: true, base_sha: mb, findings: [], renamedFrom: new Map(), unknownFiles: new Set(), addedLines: new Map() },
+      cleanup: null,
+    };
   }
   let tree: MaterialisedTree;
   try {
@@ -618,26 +630,88 @@ async function semgrepAtMergeBase(
     } else if (run !== null && (run.toolRun.status !== 'ok' || run.nothingScanned)) {
       side = { compared: false, reason: `Semgrep at the merge base ${mb.slice(0, 12)}: ${run.toolRun.status}${run.toolRun.reason !== undefined ? ` (${run.toolRun.reason})` : ''}` };
     } else {
-      const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: baseRoot });
-      const reports = run?.reports ?? [];
-      const parsed = reports.flatMap((raw) => parser.parse(raw, { project_path: ctx.projectPath }).findings);
-      // Read before the checkout is removed, as the head's own snapshot is.
-      const findings = assignIdentities(parsed, { projectPath: ctx.projectPath, readSource: snapshotSources(baseRoot, present) });
-      const scanned = scannedPathsOf(reports, baseRoot);
-      const unmeasured = new Set([...(run?.partial ?? []).map((p) => projectRelative(p.file, baseRoot)), ...files.filter((f) => !scanned.has(f))]);
-      side = {
-        compared: true,
-        base_sha: mb,
-        findings,
-        renamedFrom: new Map([...targets].filter(([headPath, basePath]) => headPath !== basePath)),
-        unknownFiles: new Set([...targets].filter(([, basePath]) => unmeasured.has(basePath)).map(([headPath]) => headPath)),
-      };
+      // Every head file whose base file the run read, diffed while both trees are there.
+      const onDisk = new Set(present);
+      const pairs = [...targets]
+        .filter(([, basePath]) => onDisk.has(basePath))
+        .map(([headPath, basePath]) => ({ headPath, baseFile: join(baseRoot, basePath), headFile: join(args.scanRoot, headPath) }));
+      const added = await addedLinesOf(ctx.projectPath, pairs);
+      if ('error' in added) {
+        side = { compared: false, reason: added.error };
+      } else {
+        const parser = semgrepParserFor(plan.rulePacks, { projectPath: ctx.projectPath, cwd: baseRoot });
+        const reports = run?.reports ?? [];
+        const parsed = reports.flatMap((raw) => parser.parse(raw, { project_path: ctx.projectPath }).findings);
+        // Read before the checkout is removed, as the head's own snapshot is.
+        const findings = assignIdentities(parsed, { projectPath: ctx.projectPath, readSource: snapshotSources(baseRoot, present) });
+        const scanned = scannedPathsOf(reports, baseRoot);
+        const unmeasured = new Set([...(run?.partial ?? []).map((p) => projectRelative(p.file, baseRoot)), ...files.filter((f) => !scanned.has(f))]);
+        side = {
+          compared: true,
+          base_sha: mb,
+          findings,
+          renamedFrom: new Map([...targets].filter(([headPath, basePath]) => headPath !== basePath)),
+          unknownFiles: new Set([...targets].filter(([, basePath]) => unmeasured.has(basePath)).map(([headPath]) => headPath)),
+          addedLines: added.lines,
+        };
+      }
     }
   } catch (e) {
     side = { compared: false, reason: `the merge-base run could not be read: ${e instanceof Error ? e.message : String(e)}` };
   }
   const cleanup = await tree.remove();
   return { side, cleanup: cleanup !== null ? `merge base: ${cleanup}` : null };
+}
+
+/** `git diff --no-index`'s options for {@link addedLinesOf}, each overriding what a configuration could change. */
+const ADDED_LINES_DIFF = [
+  'diff',
+  '--no-index',
+  '-U0',
+  // Hunks never fused across kept lines (`diff.interHunkContext`): `parseUnifiedZero` reads `-U0` hunks.
+  '--inter-hunk-context=0',
+  '--no-color',
+  '--no-ext-diff',
+  '--no-textconv',
+  // A `-diff` / `binary` attribute, or a NUL byte, would print "Binary files differ" and no line at all.
+  '--text',
+  // One side checked out with CRLF, the other with LF: the same lines.
+  '--ignore-cr-at-eol',
+];
+
+/**
+ * The lines the change added to each compared file, by its head path: one `git diff --no-index -U0` of the file
+ * the merge-base run read against the file the head run read — so the working tree's own lines when head is
+ * checked out, uncommitted edits included, and never the index's (an `assume-unchanged` flag hides nothing).
+ * One git call per pair. `error` when git cannot diff a pair (exit 0 is no difference; exit 1 is one only with a
+ * `diff --git` header, since a missing file exits 1 too) — never read as "nothing added".
+ */
+async function addedLinesOf(
+  cwd: string,
+  pairs: ReadonlyArray<{ headPath: string; baseFile: string; headFile: string }>,
+): Promise<{ lines: Map<string, LineRange[]> } | { error: string }> {
+  const lines = new Map<string, LineRange[]>();
+  for (const pair of pairs) {
+    if (!isFileOnDisk(pair.headFile)) return { error: `${pair.headPath} could not be diffed against the merge base: not a file at head` };
+    const r = await git(cwd, [...ADDED_LINES_DIFF, '--', pair.baseFile, pair.headFile]);
+    const differs = r.exitCode === 1 && /^diff --git /m.test(r.stdout);
+    if (r.exitCode !== 0 && !differs) {
+      return { error: `${pair.headPath} could not be diffed against the merge base (git exited ${r.exitCode})` };
+    }
+    lines.set(pair.headPath, differs ? rangesOf(parseUnifiedZero(r.stdout).added.map((a) => a.line)) : []);
+  }
+  return { lines };
+}
+
+/** Ascending line numbers as runs of consecutive lines. */
+function rangesOf(numbers: readonly number[]): LineRange[] {
+  const ranges: LineRange[] = [];
+  for (const n of numbers) {
+    const last = ranges[ranges.length - 1];
+    if (last !== undefined && n === last.end + 1) last.end = n;
+    else ranges.push({ start: n, end: n });
+  }
+  return ranges;
 }
 
 

@@ -37,6 +37,11 @@
  *   - a finding of any other scanner, or one whose file is not recorded;
  *   - a file whose content changed — committed or not, an index flag or not —
  *     or that is not a regular file (a link, a FIFO), or gone;
+ *   - a file git stores as something other than its bytes up to line endings
+ *     (an `ident`, `filter` or `working-tree-encoding` attribute,
+ *     `changedSince.ts#gitBlobsOf`): never recorded, never unchanged — with
+ *     `ident`, an edit between a recorded file's `$Id:` and `$`, plus one
+ *     `.gitattributes` line, hashed to the recorded blob (3.18.0 review 1);
  *   - a renamed file: its findings are judged again under the new path;
  *   - no git repository, or git that cannot hash: nothing is recorded, and
  *     nothing is relaxed — "could not compare" is never "unchanged";
@@ -51,10 +56,10 @@
  *
  * ---- Cost -----------------------------------------------------------------
  *
- * Recording: one `rev-parse` and `ceil(files / 100)` `hash-object` calls,
- * for the 2-4 files a `--jobs 1` run leaves. At the gate: none unless a
- * Semgrep finding lies in a recorded file — one boolean, no second matcher —
- * then the same, over every record at once.
+ * Recording: one `rev-parse`, then `ceil(files / 100)` `check-attr` and as
+ * many `hash-object` calls, for the few files a run leaves. At the gate: none
+ * unless a Semgrep finding lies in a recorded file — one boolean, no second
+ * matcher — then the same, over every record at once.
  */
 
 import { lstatSync } from 'node:fs';

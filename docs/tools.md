@@ -400,7 +400,7 @@ Write a scan report as markdown (default), html (self-contained, light/dark), sa
 
 ### `review_pr`
 
-Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed, changed .env files and Supabase migrations, and weakened tests or new suppressions. An unresolvable ref is an error, never "no files changed". `introduced`: Semgrep findings judged at the merge base (`preexisting`: not the change's). `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch.
+Scan a branch's changes between base\_ref and head\_ref: Semgrep (scan\_sast's rules), Bandit, gosec and cppcheck on changed files, gitleaks on those commits (and uncommitted files when head is checked out), Trivy when a manifest changed, changed .env files and Supabase migrations, and weakened tests or new suppressions. An unresolvable ref is an error, never "no files changed". `introduced`: Semgrep findings judged at the merge base (`preexisting`: found there, on a line the change kept). `preexisting_manifest_gaps`: manifests Trivy could not read that the diff did not touch.
 
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
