@@ -6,6 +6,7 @@ import { z } from 'zod';
 import type { PluginContext } from '../../../src/context.js';
 import type { ProgressPayload } from '../../../src/progress/progressEmitter.js';
 import {
+  LATE_RESERVED_KEYS,
   makeScanTool,
   type InvokeContext,
   type ScannerInvocation,
@@ -1114,5 +1115,101 @@ describe('makeScanTool: severity_min filters the response, not the history', () 
       expect(diff.new_findings.some((n) => n.fingerprint === f.fingerprint)).toBe(false);
       expect(diff.unchanged_findings.some((u) => u.fingerprint === f.fingerprint)).toBe(true);
     }
+  });
+});
+
+// 3.18.0 (DG-12): `afterIdentities` — keys a tool computes from the scan's FINAL findings (review_pr's merge-base
+// comparison, `introduced`): after `.guardianignore`, the identities and the redaction; in the response and in `meta`,
+// so a cache hit answers with them; never a key the factory writes itself; a hook that throws adds nothing and says so.
+describe('makeScanTool: afterIdentities, keys from the final findings', () => {
+  let projectPath: string;
+  let plugin: PluginContext;
+
+  beforeEach(() => {
+    projectPath = tempProject();
+    plugin = buildPlugin(projectPath);
+  });
+
+  const kept = makeFinding({ tool: 'semgrep', rule_id: 'r', severity: 'high', category: 'security', title: 'kept', file_path: 'src/app.ts', line_start: 1, line_end: 1, snippet: 'eval(x)' });
+  const ignored = makeFinding({ tool: 'semgrep', rule_id: 'r', severity: 'high', category: 'security', title: 'ignored', file_path: 'vendor/lib.ts', line_start: 1, line_end: 1, snippet: 'eval(y)' });
+  const credential = makeFinding({ tool: 'bandit', rule_id: 'B105', subcategory: 'hardcoded_password_string', severity: 'low', category: 'security', title: 'hardcoded password', file_path: 'app.py', line_start: 1, line_end: 1, snippet: '1 password = "hunter2"' });
+
+  function hooked(name: string, hook: ScannerInvocation['afterIdentities'], calls: { invoke: number }) {
+    return makeScanTool({
+      name,
+      scan_type: 'sast',
+      category: 'security',
+      description: '',
+      inputSchema: tinySchema,
+      invoke: async () => {
+        calls.invoke += 1;
+        const run: ScannerInvocation = {
+          outcome: 'completed',
+          tools_run: [{ name: 'mock', status: 'ok' }],
+          missing_tools: [],
+          parser_inputs: [{ parser: constantParser([kept, ignored, credential]), input: {} }],
+          report_paths: [],
+          extras: { own: 1 },
+        };
+        if (hook !== undefined) run.afterIdentities = hook;
+        return run;
+      },
+    });
+  }
+
+  it('sees the final findings — identified, redacted, .guardianignore applied — and its key reaches the response, meta and a cache hit', async () => {
+    mkdirSync(join(projectPath, 'vendor'));
+    writeFileSync(join(projectPath, 'vendor', 'lib.ts'), 'eval(y)\n');
+    writeFileSync(join(projectPath, '.guardianignore'), 'vendor/\n');
+    const seen: Finding[][] = [];
+    const calls = { invoke: 0 };
+    const tool = hooked('late_scan', (fs) => {
+      seen.push([...fs]);
+      return { late: { titles: fs.map((f) => f.title).sort() } };
+    }, calls);
+    const fresh = okResult<CachePayload>(await tool.handler({ project_path: projectPath, severity_min: 'critical' }, plugin));
+    expect(seen).toHaveLength(1);
+    const final = seen[0] ?? [];
+    expect(final.map((f) => f.title).sort()).toEqual(['hardcoded password', 'kept']);
+    for (const f of final) expect(f.identity).toMatch(/^[0-9a-f]{64}$/);
+    expect(final.find((f) => f.tool === 'bandit')?.snippet ?? '').not.toContain('hunter2');
+    expect(fresh['late']).toEqual({ titles: ['hardcoded password', 'kept'] });
+    expect(fresh['own']).toBe(1);
+    const row = plugin.storage.scans.getById(String(fresh['scan_id']));
+    expect((row?.meta as Record<string, unknown> | undefined)?.['late']).toEqual({ titles: ['hardcoded password', 'kept'] });
+    // A cache hit at another floor: the key replayed, the hook not run again.
+    const cached = okResult<CachePayload>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(cached.cached).toBe(true);
+    expect(cached['late']).toEqual({ titles: ['hardcoded password', 'kept'] });
+    expect(calls.invoke).toBe(1);
+    expect(seen).toHaveLength(1);
+  });
+
+  it('never replaces a key the factory writes itself: each reserved key refused with a warning, the others kept', async () => {
+    expect([...LATE_RESERVED_KEYS].sort()).toEqual(['parent_scan_id', 'project_languages', 'run_warnings', 'scope', 'severity_min', 'exclusions'].sort());
+    const calls = { invoke: 0 };
+    const tool = hooked('late_reserved_scan', () => ({ scope: 'mine', exclusions: 'mine', run_warnings: ['x'], late: true }), calls);
+    const r = okResult<CachePayload & { warnings: string[] }>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(r['late']).toBe(true);
+    expect(r['scope']).toBeUndefined();
+    expect(r['exclusions']).toBeUndefined();
+    for (const key of ['scope', 'exclusions', 'run_warnings']) {
+      expect(r.warnings).toContain(`late_reserved_scan: the result key "${key}" is the scan's own and was not replaced.`);
+    }
+  });
+
+  it('a hook that throws adds nothing and says so — on the fresh run and on the cache hit', async () => {
+    const calls = { invoke: 0 };
+    const tool = hooked('late_throw_scan', () => {
+      throw new Error('the base checkout could not be read');
+    }, calls);
+    const said = 'late_throw_scan: a result computed from the findings was not added (the base checkout could not be read).';
+    const fresh = okResult<CachePayload & { warnings: string[] }>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(fresh.warnings).toContain(said);
+    expect(fresh['own']).toBe(1);
+    expect(Object.keys(fresh)).not.toContain('late');
+    const cached = okResult<CachePayload & { warnings: string[] }>(await tool.handler({ project_path: projectPath }, plugin));
+    expect(cached.cached).toBe(true);
+    expect(cached.warnings).toContain(said);
   });
 });

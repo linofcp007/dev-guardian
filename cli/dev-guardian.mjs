@@ -2047,6 +2047,7 @@ async function cmdScan(argv) {
     SCAN_SETTINGS_RELATIVE_PATH,
     filesChangedSince,
     scanSettingsCommit,
+    unchangedTaintIncomplete,
   } = ci;
 
   const failOn = SEVERITIES.find((s) => s === opts.failOn);
@@ -2237,6 +2238,12 @@ async function cmdScan(argv) {
     }
   }
 
+  // The baseline's taint-incomplete files still unchanged (3.18.0,
+  // mcp/src/ci/taintIncomplete.ts) — the records come with the baseline read,
+  // the --baseline-ref ref's under that flag: a pull request adds none there.
+  const records = parsedBaseline?.file.taint_incomplete;
+  const taintIncomplete = records !== undefined ? await unchangedTaintIncomplete(projectPath, records, result.findings) : undefined;
+
   const verdict = evaluateGate({
     findings: result.findings,
     baseline: parsedBaseline ? parsedBaseline.file : null,
@@ -2252,6 +2259,7 @@ async function cmdScan(argv) {
     rulesSource: result.rulesSource,
     exclusionsReset,
     renamedFrom,
+    ...(taintIncomplete !== undefined ? { taintIncomplete } : {}),
   });
 
   // --sarif is independent of --format: a pipeline commonly wants a human
@@ -2339,6 +2347,7 @@ async function cmdBaseline(argv) {
     renamesSince,
     loadScanSettings,
     SCAN_SETTINGS_RELATIVE_PATH,
+    recordTaintIncomplete,
   } = ci;
 
   const projectPath = resolveProjectOrExit(opts.project);
@@ -2384,6 +2393,9 @@ async function cmdBaseline(argv) {
   /** @type {{ error: unknown } | null} */
   let pipelineFailure = null;
   let result;
+  // A taint-incomplete file written at or after this instant is not recorded
+  // (mcp/src/ci/taintIncomplete.ts): its blob may not be what the scan read.
+  let scanStartedAt = Date.now();
   try {
     if (start !== null) {
       startingApp = startApp({
@@ -2395,6 +2407,7 @@ async function cmdBaseline(argv) {
       });
       app = await startingApp;
     }
+    scanStartedAt = Date.now();
     result = await runScans({
       projectPath,
       baseUrl: opts.baseUrl,
@@ -2418,7 +2431,10 @@ async function cmdBaseline(argv) {
 
   // An entry's date survives its file being renamed (mcp/src/ci/renames.ts).
   const renamedFrom = await renamesSince(projectPath, null);
-  const updated = buildBaseline(result.findings, previousFile, new Date().toISOString(), renamedFrom);
+  // The files this scan's taint analysis gave up on, as git stores them now
+  // (3.18.0, mcp/src/ci/taintIncomplete.ts) — this run's alone, never carried.
+  const taint = await recordTaintIncomplete(projectPath, result.steps, scanStartedAt);
+  const updated = buildBaseline(result.findings, previousFile, new Date().toISOString(), renamedFrom, taint.records);
 
   // The only command that writes .guardian/baseline.json — `scan` never
   // does (see the module doc). NOT "the only write path in this whole CLI"
@@ -2479,6 +2495,20 @@ async function cmdBaseline(argv) {
       'suppress it where its scanner reads suppressions (`nosemgrep: <rule> -- <reason>`, `# nosec <id>  # <reason>`), ' +
       'reviewed like code.\n',
   );
+  // 3.18.0 (mcp/src/ci/taintIncomplete.ts): what the records do, said when there are any.
+  const recorded = taint.records.length;
+  const unrecorded = taint.changedDuringScan.length;
+  if (recorded > 0 || unrecorded > 0) {
+    const parts = [];
+    if (recorded > 0) {
+      parts.push(
+        `taint analysis gave up in ${recorded} file(s), now recorded in ${BASELINE_RELATIVE_PATH} (taint_incomplete): ` +
+          'while such a file is unchanged, a later scan does not count its Semgrep findings as new',
+      );
+    }
+    if (unrecorded > 0) parts.push(`${unrecorded} file(s) whose taint analysis gave up were written during the scan, and are not recorded`);
+    process.stdout.write(`${parts.join('; ')}.\n`);
+  }
   if (verdict.coverageGaps.length > 0) {
     process.stdout.write(
       '\nWARNING: the baseline above was written from an INCOMPLETE scan. It may be missing ' +

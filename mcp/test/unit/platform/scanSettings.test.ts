@@ -1,17 +1,19 @@
 /**
  * `.guardian/scan.yml` (review 8, finding 3): Semgrep's per-file timeout and
- * threshold, and the per-file timeouts the CI gate accepts — committed,
- * reviewed, never half-read.
+ * threshold, its jobs (3.18.0), and the per-file timeouts the CI gate accepts
+ * — committed, reviewed, never half-read.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_SEMGREP_JOBS,
   DEFAULT_SEMGREP_TIMEOUT_S,
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
   loadScanSettings,
   parseSettings,
-  semgrepTimeoutArgs,
+  semgrepSettingArgs,
 } from '../../../src/platform/scanSettings.js';
 import { semgrepScanFlags } from '../../../src/runners/semgrepRun.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
@@ -33,7 +35,24 @@ describe('loadScanSettings', () => {
     expect(r.kind).toBe('none');
     expect(DEFAULT_SEMGREP_TIMEOUT_S).toBeGreaterThan(5);
     expect(DEFAULT_SEMGREP_TIMEOUT_THRESHOLD).toBe(0);
-    expect(semgrepTimeoutArgs(r.settings)).toEqual(['--timeout', String(DEFAULT_SEMGREP_TIMEOUT_S), '--timeout-threshold', '0']);
+    expect(semgrepSettingArgs(r.settings)).toEqual([
+      '--timeout',
+      String(DEFAULT_SEMGREP_TIMEOUT_S),
+      '--timeout-threshold',
+      '0',
+      '--jobs',
+      String(DEFAULT_SEMGREP_JOBS),
+    ]);
+  });
+
+  // 3.18.0: without -j Semgrep runs a domain per core, which share one taint
+  // budget of the process's CPU time — taint findings lost and flickering from
+  // run to run (platform/scanSettings.ts). The default is the decision: the
+  // machine's cores, at most 4 (one domain ran past the 10-minute limit).
+  it("no file: --jobs is the machine's cores, at most 4 — never Semgrep's domain per core on a larger machine", () => {
+    expect(DEFAULT_SEMGREP_JOBS).toBe(Math.min(4, availableParallelism()));
+    expect(DEFAULT_SEMGREP_JOBS).toBeGreaterThanOrEqual(1);
+    expect(loadScanSettings(project()).settings.semgrep.jobs).toBe(DEFAULT_SEMGREP_JOBS);
   });
 
   it('reads the timeout, the threshold and the accepted files, normalised', () => {
@@ -41,8 +60,28 @@ describe('loadScanSettings', () => {
       project('semgrep:\n  timeout: 60\n  timeout_threshold: 2\n  accept_timeouts:\n    - ./src/gen/parser.js\n    - "lib\\\\big.js"\n'),
     );
     expect(r.kind).toBe('loaded');
-    expect(r.settings.semgrep).toEqual({ timeout: 60, timeoutThreshold: 2, acceptTimeouts: ['src/gen/parser.js', 'lib/big.js'] });
-    expect(semgrepTimeoutArgs(r.settings)).toEqual(['--timeout', '60', '--timeout-threshold', '2']);
+    expect(r.settings.semgrep).toEqual({
+      timeout: 60,
+      timeoutThreshold: 2,
+      jobs: DEFAULT_SEMGREP_JOBS,
+      acceptTimeouts: ['src/gen/parser.js', 'lib/big.js'],
+    });
+    expect(semgrepSettingArgs(r.settings)).toEqual(['--timeout', '60', '--timeout-threshold', '2', '--jobs', String(DEFAULT_SEMGREP_JOBS)]);
+  });
+
+  it('reads semgrep.jobs, a whole number from 1 to 256 — a YAML 1.0 is the number 1', () => {
+    for (const [yaml, jobs] of [
+      ['semgrep:\n  jobs: 1\n', 1],
+      ['semgrep:\n  jobs: 4\n  timeout: 45\n', 4],
+      ['semgrep:\n  jobs: 256\n', 256],
+      ['semgrep:\n  jobs: 1.0\n', 1],
+    ] as const) {
+      const r = loadScanSettings(project(yaml));
+      expect(r.kind, yaml).toBe('loaded');
+      expect(r.settings.semgrep.jobs, yaml).toBe(jobs);
+      const args = semgrepSettingArgs(r.settings);
+      expect(args.slice(args.indexOf('--jobs')), yaml).toEqual(['--jobs', String(jobs)]);
+    }
   });
 
   it('a name with brackets or braces is a file, read as written (Next.js `pages/[id].js`)', () => {
@@ -67,7 +106,18 @@ describe('loadScanSettings', () => {
       ['semgrep:\n  accept_timeouts: src/a.js\n', /must be a list/],
       ['semgrep:\n  accept_timeouts:\n    - /etc/passwd\n', /absolute/],
       ['semgrep:\n  accept_timeouts:\n    - ../outside.js\n', /leaves the project/],
-      ['semgrep:\n  acept_timeouts: []\n', /unrecognised semgrep setting "acept_timeouts"/],
+      ['semgrep:\n  acept_timeouts: []\n', /unrecognised semgrep setting "acept_timeouts" \(known: timeout, timeout_threshold, jobs, accept_timeouts\)/],
+      // semgrep.jobs (3.18.0): a whole number from 1 to 256, nothing else — a
+      // null is no setting, never "Semgrep's own default" (a domain per core).
+      ['semgrep:\n  jobs: 0\n', /semgrep\.jobs must be a whole number from 1 to 256, got 0/],
+      ['semgrep:\n  jobs: 257\n', /semgrep\.jobs must be a whole number from 1 to 256, got 257/],
+      ['semgrep:\n  jobs: 1.5\n', /semgrep\.jobs must be a whole number from 1 to 256, got 1\.5/],
+      ['semgrep:\n  jobs: -2\n', /semgrep\.jobs must be a whole number from 1 to 256, got -2/],
+      ['semgrep:\n  jobs: "4"\n', /semgrep\.jobs must be a whole number from 1 to 256, got "4"/],
+      ['semgrep:\n  jobs: null\n', /semgrep\.jobs must be a whole number from 1 to 256, got null/],
+      ['semgrep:\n  jobs:\n', /semgrep\.jobs must be a whole number from 1 to 256, got null/],
+      ['semgrep:\n  jobs: [2]\n', /semgrep\.jobs must be a whole number/],
+      ['semgrep:\n  jobs: 2\n  jobs: 1\n', /the key "jobs" appears twice/],
       // A key written twice: the reviewer read the first, the scan applied the
       // last (review 11, finding 15e) — refused, the key named.
       ['semgrep:\n  timeout: 30\n  timeout: 1\n', /invalid YAML: the key "timeout" appears twice/],
@@ -83,6 +133,7 @@ describe('loadScanSettings', () => {
       expect(r.kind === 'invalid' ? r.error : '', yaml).toMatch(why);
       expect(r.settings.semgrep.acceptTimeouts).toEqual([]);
       expect(r.settings.semgrep.timeout).toBe(DEFAULT_SEMGREP_TIMEOUT_S);
+      expect(r.settings.semgrep.jobs).toBe(DEFAULT_SEMGREP_JOBS);
     }
   });
 
@@ -117,5 +168,20 @@ describe('semgrepScanFlags', () => {
     const flags = semgrepScanFlags(project('semgrep:\n  timeout: -1\n'));
     expect(flags.args).toContain('--exclude=.guardian/reports');
     expect(flags.warning).toMatch(/\.guardian\/scan\.yml was not applied \(semgrep\.timeout must be/);
+    expect(flags.warning).toMatch(
+      new RegExp(`\\(--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS}\\)$`),
+    );
+    const jobsAt = flags.args.indexOf('--jobs');
+    expect(flags.args.slice(jobsAt, jobsAt + 2)).toEqual(['--jobs', String(DEFAULT_SEMGREP_JOBS)]);
+  });
+
+  it('semgrep.jobs reaches the scan as --jobs, exactly once; the default with no file (3.18.0)', () => {
+    const count = (args: string[]): number => args.filter((a) => a === '--jobs' || a.startsWith('--jobs=') || a === '-j').length;
+    const set = semgrepScanFlags(project('semgrep:\n  jobs: 3\n')).args;
+    expect(count(set)).toBe(1);
+    expect(set.slice(set.indexOf('--jobs'), set.indexOf('--jobs') + 2)).toEqual(['--jobs', '3']);
+    const none = semgrepScanFlags(project()).args;
+    expect(count(none)).toBe(1);
+    expect(none.slice(none.indexOf('--jobs'), none.indexOf('--jobs') + 2)).toEqual(['--jobs', String(DEFAULT_SEMGREP_JOBS)]);
   });
 });

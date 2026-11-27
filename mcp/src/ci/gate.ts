@@ -36,11 +36,14 @@
  *     (`timeoutAcceptanceRef`): a pull request appended a command injection
  *     to an accepted file, the rule that would have caught it timed out, and
  *     the gate passed (review 11, finding 1);
- *   - a taint `Fixpoint timeout` (the dataflow analysis of some functions
- *     gave up; Semgrep has no setting for it) never gates: it is a NOTE,
- *     reported, not a coverage gap (review 8, finding 3 — a medium-sized
- *     codebase never reached exit 0: dev-spec-driven's own tree had taint
- *     timeouts in 210 functions);
+ *   - a taint `Fixpoint timeout` — the dataflow analysis of a function ran
+ *     past its budget, 0.2 s of the whole Semgrep process's CPU time, which
+ *     every analysis domain spends at once (the budget has no setting;
+ *     `semgrep.jobs` — the machine's cores, at most 4, by default since
+ *     3.18.0 — sets the domains, and at 1 a function gets all of it) — never
+ *     gates: it is a NOTE, reported, not a coverage gap (review
+ *     8, finding 3 — a medium-sized codebase never reached exit 0:
+ *     dev-spec-driven's own tree had taint timeouts in 210 functions);
  *   - a file at a path too long for Windows (`Path too long`) was never
  *     opened, and nothing accepts it.
  *
@@ -72,8 +75,10 @@ import { computeCoverage } from '../tools/scanCoverage.js';
 import { FIXPOINT_TIMEOUT_TYPE } from '../runners/semgrepReport.js';
 import { PATH_TOO_LONG_TYPE } from '../runners/semgrepCoverageGaps.js';
 import { SUPPRESSIONS_TOOL } from '../testintegrity/suppressions.js';
+import { SEMGREP_TOOL_NAME } from '../runners/scannerParsers/semgrep.js';
 import { newFindings } from './baseline.js';
 import { BASELINE_RELATIVE_PATH } from './baseline.js';
+import type { GateTaintIncomplete } from './taintIncomplete.js';
 import {
   CI_EXIT,
   type AcceptedGapDetail,
@@ -153,6 +158,14 @@ export interface GateInput {
    * renamed file matches its entry under the old path (review 8, finding 6).
    */
   renamedFrom?: ReadonlyMap<string, string>;
+  /**
+   * The baseline's taint-incomplete files still unchanged since it was
+   * recorded (`ci/taintIncomplete.ts#unchangedTaintIncomplete`, 3.18.0): a
+   * Semgrep finding new to the baseline in one of them — a pack rule's only,
+   * for a `packOnly` one — is not counted as new
+   * ({@link GateVerdict.taintIncompleteAtBaseline}). Omitted: none.
+   */
+  taintIncomplete?: GateTaintIncomplete;
 }
 
 export interface GateVerdict {
@@ -160,6 +173,12 @@ export interface GateVerdict {
   newFindings: Finding[];
   /** New findings at or above `failOn`. Subset of `newFindings`. */
   blocking: Finding[];
+  /**
+   * Semgrep findings the baseline does not know, in files its run named as
+   * taint-incomplete and unchanged since (`GateInput.taintIncomplete`,
+   * 3.18.0): not in `newFindings`, never blocking — listed, with one note.
+   */
+  taintIncompleteAtBaseline: Finding[];
   coverage: ScanCoverage;
   /**
    * Coverage over the gaps that gate only — what the exit code is decided on
@@ -467,6 +486,37 @@ function describeTaint(refs: readonly PartialParseRef[]): string {
   );
 }
 
+/**
+ * The findings of `unknown` (new to the baseline) that are Semgrep's, in a
+ * file of `taint.unchanged` — for a `packOnly` file, of a pack rule only
+ * (`ci/taintIncomplete.ts`, "two rules, two predicates").
+ */
+function taintIncompleteAtBaseline(unknown: readonly Finding[], taint: GateTaintIncomplete | undefined): Finding[] {
+  if (taint === undefined || taint.unchanged.length === 0) return [];
+  const packOnly = new Map(taint.unchanged.map((u) => [normalizeAcceptedPath(u.file), u.packOnly]));
+  return unknown.filter((f) => {
+    if (f.tool !== SEMGREP_TOOL_NAME || f.file_path === undefined) return false;
+    const only = packOnly.get(normalizeAcceptedPath(f.file_path));
+    if (only === undefined) return false;
+    return !only || (f.rule_id !== undefined && taint.packRuleIds.has(f.rule_id));
+  });
+}
+
+/** The prefix of the note {@link describeTaintIncompleteAtBaseline} writes, and its remedy's key. */
+const TAINT_AT_BASELINE_NOTE = /^semgrep: \d+ finding\(s\) in \d+ file\(s\) not counted as new — /;
+
+/** `semgrep: N finding(s) in M file(s) not counted as new — …: a.js, b.js, +K more`. */
+function describeTaintIncompleteAtBaseline(found: readonly Finding[]): string {
+  const files = [...new Set(found.map((f) => normalizeAcceptedPath(f.file_path ?? '')))].sort();
+  const shown = files.slice(0, 5);
+  const more = files.length > shown.length ? `, +${files.length - shown.length} more` : '';
+  return (
+    `semgrep: ${found.length} finding(s) in ${files.length} file(s) not counted as new — unchanged since the baseline was ` +
+    'recorded, and its taint analysis had given up in them, so a finding a rule or Semgrep update now reports there reads ' +
+    `the same: ${shown.join(', ')}${more}`
+  );
+}
+
 /** The kind of a gap line `describeMissing` wrote. */
 function kindOfMissing(shape: MissingShape, reason: string | undefined): GapKind {
   if (shape === 'not_installed') return 'missing_tool';
@@ -537,7 +587,11 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
     case 'file_timeout':
       return 'Raise semgrep.timeout in .guardian/scan.yml, or after review list the file under semgrep.accept_timeouts there and commit it.';
     case 'taint_timeout':
-      return 'Nothing to do for the gate (not gating): taint findings in the named functions may be missing — splitting very large functions helps Semgrep.';
+      return (
+        'Nothing to do for the gate (not gating): taint findings in the named functions may be missing. Semgrep\'s ' +
+        'analysis domains share the taint budget (semgrep.jobs in .guardian/scan.yml, at most 4 by default): semgrep.jobs: 1 ' +
+        'gives each function all of it, at a cost in time; at 1, the function is genuinely heavy.'
+      );
     case 'path_too_long':
       return (
         'Move the project to a shorter path. dev-guardian already hands Semgrep and Bandit such files as ' +
@@ -545,6 +599,15 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
         'paths (LongPathsEnabled=1) do not help Semgrep, whose engine is not long-path aware.'
       );
     case 'scanner_failed':
+      // Before the rule test (a "timed_out" line can name the rules): Semgrep
+      // past the run's time limit, whole runs and batches alike
+      // (`checkSemgrepReport`) — the cost a low `semgrep.jobs` adds (3.18.0).
+      if (/semgrep did not finish \(timed_out\)/.test(detail)) {
+        return (
+          "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the " +
+          'scan, or set a higher semgrep.jobs in .guardian/scan.yml — faster, but taint analysis then gives up on more functions.'
+        );
+      }
       // Before the rule test: the line says "registry rules" (review 11, finding 10).
       if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {
         return 'Unset SEMGREP_SEND_METRICS, or set it to on, off or auto (Semgrep refuses any other value, in any case), then rerun the scan.';
@@ -577,6 +640,13 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
         ? 'Add rules of the project\'s own (a committed .semgrep.yml, or the init_project tool), or drop --local-only.'
         : 'Read why the scanner was skipped in the detail and give it something it can scan, or rerun where it can run.';
     default:
+      // First: the note names files, and a file named "shallow.js" or "a-submodule.js" is not those gaps.
+      if (TAINT_AT_BASELINE_NOTE.test(detail)) {
+        return (
+          'Nothing to do for the gate (not gating): these findings are in code unchanged since the baseline was recorded; ' +
+          'review them, then re-record the baseline on the base commit to accept them.'
+        );
+      }
       if (/shallow|history truncated/i.test(detail)) return 'Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.';
       if (/^baseline: /.test(detail)) return 'Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.';
       if (tool === SUPPRESSIONS_TOOL) {
@@ -755,7 +825,13 @@ export function evaluateGate(input: GateInput): GateVerdict {
 
   // Historical debt must not fail the build: `newFindings` already excludes
   // anything the baseline recognises, however severe.
-  const newlyFound = newFindings(findings, baseline, input.renamedFrom);
+  // A Semgrep finding the baseline does not know, in a file its run gave up
+  // the taint analysis of and unchanged since, is not the change's
+  // (`ci/taintIncomplete.ts`): listed, never new, never blocking.
+  const unknown = newFindings(findings, baseline, input.renamedFrom);
+  const atBaseline = taintIncompleteAtBaseline(unknown, input.taintIncomplete);
+  const newlyFound = atBaseline.length === 0 ? unknown : unknown.filter((f) => !atBaseline.includes(f));
+  if (atBaseline.length > 0) pushNote(t, describeTaintIncompleteAtBaseline(atBaseline), SEMGREP_TOOL_NAME, 'other');
   const blocking = newlyFound.filter(
     (finding) => SEVERITY_ORDER[finding.severity] >= SEVERITY_ORDER[failOn],
   );
@@ -772,6 +848,7 @@ export function evaluateGate(input: GateInput): GateVerdict {
     exitCode,
     newFindings: newlyFound,
     blocking,
+    taintIncompleteAtBaseline: atBaseline,
     coverage,
     gatingCoverage,
     coverageGaps: t.coverageGaps,

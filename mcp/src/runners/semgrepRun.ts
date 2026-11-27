@@ -31,10 +31,11 @@
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { win32 } from 'node:path';
 import {
+  DEFAULT_SEMGREP_JOBS,
   DEFAULT_SEMGREP_TIMEOUT_S,
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
   loadScanSettings,
-  semgrepTimeoutArgs,
+  semgrepSettingArgs,
 } from '../platform/scanSettings.js';
 import { semgrepGuardianOutputExcludes } from '../platform/guardianOutput.js';
 import { runProcess, type ProcessRunOptions, type ProcessRunResult } from './processRunner.js';
@@ -58,7 +59,7 @@ export const SEMGREP_COMMAND = 'semgrep';
 
 /**
  * The flags every Semgrep scan of a project takes besides its rules: the
- * per-file timeout and threshold from `.guardian/scan.yml` under `configRoot`
+ * per-file timeout and threshold and the jobs from `.guardian/scan.yml` under `configRoot`
  * (the project, or the CI gate's `--rules-ref` copy — `platform/scanSettings.ts`)
  * and the exclusion of dev-guardian's own output in the root `.guardian/` —
  * reports of earlier scans (`sast.json`, `surface.json`: 1.5 MB a run), the
@@ -74,11 +75,11 @@ export const SEMGREP_COMMAND = 'semgrep';
 export function semgrepScanFlags(configRoot: string): { args: string[]; warning: string | null } {
   const loaded = loadScanSettings(configRoot);
   return {
-    args: [...semgrepTimeoutArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
+    args: [...semgrepSettingArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
     warning:
       loaded.kind === 'invalid'
         ? `${loaded.path} was not applied (${loaded.error}) — Semgrep ran with dev-guardian's defaults ` +
-          `(--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD})`
+          `(--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})`
         : null,
   };
 }

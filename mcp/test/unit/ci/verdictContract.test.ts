@@ -243,6 +243,35 @@ describe('the JSON verdict dev-spec-driven parses (contract)', () => {
     expect(changed['unused_timeout_acceptances']).toEqual(['src/gone.js']);
   });
 
+  // 3.18.0 (ci/taintIncomplete.ts): added keys, always there. dev-spec-driven reads neither — the findings not counted
+  // as new leave `new_findings_count`, and their one note is counted among `coverage_notes` (kind `other`, not gating).
+  it('taint_incomplete_at_baseline (a finding array) and taint_incomplete_at_baseline_count, always there (3.18.0)', () => {
+    expect(json['taint_incomplete_at_baseline']).toEqual([]);
+    expect(json['taint_incomplete_at_baseline_count']).toBe(0);
+    const late = finding({ fingerprint: 'fp-late', file_path: 'src/heavy.js' });
+    const relaxed = JSON.parse(
+      renderJson(
+        evaluateGate({
+          findings: [late],
+          baseline: { version: 1, generated_at: 'x', entries: [] },
+          failOn: 'high',
+          steps: [],
+          droppedBaselineEntries: 0,
+          taintIncomplete: { unchanged: [{ file: 'src/heavy.js', packOnly: false }], packRuleIds: new Set() },
+        }),
+      ),
+    ) as Record<string, unknown>;
+    expect(relaxed['exit_code']).toBe(CI_EXIT.PASS);
+    expect(relaxed['new_findings_count']).toBe(0);
+    expect(relaxed['blocking_findings']).toEqual([]);
+    expect(relaxed['taint_incomplete_at_baseline_count']).toBe(1);
+    expect((relaxed['taint_incomplete_at_baseline'] as Array<Record<string, unknown>>)[0]).toMatchObject({ file_path: 'src/heavy.js', tool: 'semgrep' });
+    expect(relaxed['coverage_notes']).toHaveLength(1);
+    const note = (relaxed['coverage_gap_details'] as Array<Record<string, unknown>>)[0];
+    expect(note).toMatchObject({ tool: 'semgrep', kind: 'other', gating: false });
+    expect(CONTRACT_GAP_KINDS).toContain(note?.['kind']);
+  });
+
   it('the GapKind set is exactly the contract’s', () => {
     expect([...GAP_KINDS].sort()).toEqual([...CONTRACT_GAP_KINDS].sort());
   });

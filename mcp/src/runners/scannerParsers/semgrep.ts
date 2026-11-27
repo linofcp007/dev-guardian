@@ -38,7 +38,8 @@ import {
   type ScannerParser,
 } from './index.js';
 
-const SEMGREP_TOOL_NAME = 'semgrep';
+/** The `tool` of every Semgrep finding (the CI gate's taint-incomplete relaxation reads only those, `ci/gate.ts`). */
+export const SEMGREP_TOOL_NAME = 'semgrep';
 
 export const semgrepParser: ScannerParser = {
   name: SEMGREP_TOOL_NAME,
