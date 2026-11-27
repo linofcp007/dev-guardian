@@ -162,10 +162,12 @@ const SHELLCHECK_VERSION = '0.11.0';
 /** The k6 release a Linux install fetches ({@link PINNED_RELEASES}); `npm run pins` reports a newer one. */
 const K6_VERSION = '2.4.0';
 /**
- * The squawk release every install asks PyPI for (`squawk-cli`, the Rust binary in a wheel per platform). PyPI
- * never lets a file be uploaded twice under one name, so the version pins the content — where squawk's GitHub
- * release assets can be replaced (not immutable) and come with no checksums file. 2.71.0 (2026-10-29) is the
- * newest on PyPI at least two weeks old on 2026-11-27: 2.72.0 and 2.73.0 were never uploaded there.
+ * The squawk release every install asks PyPI for (`squawk-cli`, the Rust binary in a wheel per platform). Pinned
+ * by VERSION, not by hash: PyPI refuses a second upload of a file name, but can take a new file for 2.71.0 (another
+ * platform or build tag, `squawk_cli-2.71.0-1-….whl`), which pip may prefer — whoever can upload squawk-cli can
+ * change what is installed. squawk's GitHub release assets can be replaced too (not immutable) and come with no
+ * checksums file. 2.71.0 (2026-10-29) is the newest on PyPI at least two weeks old on 2026-11-27: 2.72.0 and
+ * 2.73.0 were never uploaded there.
  */
 export const SQUAWK_VERSION = '2.71.0';
 

@@ -572,8 +572,9 @@ describe('k6: the pinned archive on Linux, its binary nested; Windows and macOS 
   });
 });
 
-// DG-8: squawk is a wheel on PyPI, where a file is never uploaded twice under one name: the exact version pins the
-// content, everywhere, through pipx (squawk's GitHub assets can be replaced and come with no checksums file).
+// DG-8: squawk is a wheel on PyPI, installed through pipx at one exact version, everywhere (squawk's GitHub assets
+// can be replaced and come with no checksums file). A version pin, not a content pin: PyPI refuses a second upload
+// of a file name, but can take a new file (another platform or build tag) for the same version, which pip may prefer.
 describe('squawk: the pinned PyPI wheel through pipx on every OS', () => {
   it('every install names squawk-cli at the one pinned version — never unpinned, never another source', () => {
     expect(SQUAWK_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
@@ -583,6 +584,20 @@ describe('squawk: the pinned PyPI wheel through pipx on every OS', () => {
     const specs = Object.values(entry?.install ?? {}).flatMap((os) => Object.values(os));
     expect(specs.length).toBeGreaterThanOrEqual(3);
     for (const spec of specs) expect(spec).toMatchObject({ command: 'pipx', args: ['install', `squawk-cli==${SQUAWK_VERSION}`], needs_elevation: false });
+  });
+
+  // 3.18.0 fix round 1 (R1-DGTOOLS-1, -6): SECURITY.md's install row names as sha256-checked exactly what a pinned
+  // release archive installs — every PINNED_RELEASES tool, k6 among them — and squawk as pinned by version only.
+  it('SECURITY.md: every pinned release archive is named sha256-checked; squawk is pinned by version, not by hash', () => {
+    const security = readFileSync(fileURLToPath(new URL('../../../../SECURITY.md', import.meta.url)), 'utf8');
+    const row = security.split('\n').find((l) => l.startsWith('| Package managers and install scripts')) ?? '';
+    const checked = /\. ([^.]*?) are pinned to one release and sha256-checked before they are unpacked/.exec(row)?.[1] ?? '';
+    expect(checked, 'the sha256-checked sentence').not.toBe('');
+    for (const tool of Object.keys(PINNED_RELEASES)) expect(checked.toLowerCase(), tool).toContain(tool.toLowerCase());
+    expect(checked.toLowerCase()).not.toContain('squawk');
+    expect(row).toMatch(/squawk is pinned by version, not by hash \(`pipx install squawk-cli==[\d.]+`: PyPI refuses a second upload of a file name, but can take a new file for that version/);
+    const source = readFileSync(fileURLToPath(new URL('../../../src/runners/installCatalog.ts', import.meta.url)), 'utf8');
+    expect(source.replace(/\n\s*\*\s*/g, ' ')).toMatch(/Pinned by VERSION, not by hash: PyPI refuses a second upload of a file name, but can take a new file for 2\.71\.0/);
   });
 });
 
