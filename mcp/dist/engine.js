@@ -163,8 +163,8 @@ function readText(path3, maxBytes) {
 }
 function readSmallJsonFile(path3, maxBytes = MAX_HOOK_CONFIG_BYTES, under) {
   if (under !== void 0) {
-    const walk5 = walkLinksUnder(under, path3);
-    if (!walk5.ok) return { status: "refused", reason: walk5.reason };
+    const walk6 = walkLinksUnder(under, path3);
+    if (!walk6.ok) return { status: "refused", reason: walk6.reason };
   }
   const r = readText(path3, maxBytes);
   if (r.status !== "ok") return r;
@@ -176,8 +176,8 @@ function readSmallJsonFile(path3, maxBytes = MAX_HOOK_CONFIG_BYTES, under) {
 }
 function readSmallText(path3, maxBytes, under) {
   if (under !== void 0) {
-    const walk5 = walkLinksUnder(under, path3);
-    if (!walk5.ok) return { status: "refused", reason: walk5.reason };
+    const walk6 = walkLinksUnder(under, path3);
+    if (!walk6.ok) return { status: "refused", reason: walk6.reason };
   }
   return readText(path3, maxBytes);
 }
@@ -269,8 +269,8 @@ function realRoot(root) {
 function locate(root, path3) {
   const abs = resolve2(root, path3);
   if (!isWithinDir(root, abs)) return { ok: false, read: { status: "refused", reason: "outside-project" } };
-  const walk5 = walkLinksUnder(root, abs);
-  if (!walk5.ok) return { ok: false, read: { status: "refused", reason: walk5.reason } };
+  const walk6 = walkLinksUnder(root, abs);
+  if (!walk6.ok) return { ok: false, read: { status: "refused", reason: walk6.reason } };
   let real;
   try {
     real = realpathSync.native(abs);
@@ -389,8 +389,8 @@ function projectEntryKind(path3) {
 function projectEntryKindIn(root, path3) {
   const abs = resolve2(root, path3);
   if (!isWithinDir(root, abs)) return "absent";
-  const walk5 = walkLinksUnder(root, abs);
-  if (!walk5.ok) return walk5.reason === "remote-link" ? "remote" : "other";
+  const walk6 = walkLinksUnder(root, abs);
+  if (!walk6.ok) return walk6.reason === "remote-link" ? "remote" : "other";
   return projectEntryKind(abs);
 }
 function entryKindAnywhere(path3) {
@@ -414,8 +414,8 @@ function realpathInProject(root, path3) {
 function projectPathKind(root, path3) {
   const abs = resolve2(root, path3);
   if (!isWithinDir(root, abs)) return "outside";
-  const walk5 = walkLinksUnder(root, abs);
-  if (!walk5.ok) return walk5.reason === "remote-link" ? "outside" : "other";
+  const walk6 = walkLinksUnder(root, abs);
+  if (!walk6.ok) return walk6.reason === "remote-link" ? "outside" : "other";
   if (projectEntryKind(abs) === "absent") return "absent";
   const real = realpathOrNull(abs);
   if (real === null) return "absent";
@@ -432,8 +432,8 @@ function projectPathKind(root, path3) {
 }
 function linkTargetKind(root, path3) {
   const abs = resolve2(root, path3);
-  const walk5 = walkLinksUnder(root, abs);
-  if (!walk5.ok) return walk5.reason === "remote-link" ? "remote" : "other";
+  const walk6 = walkLinksUnder(root, abs);
+  if (!walk6.ok) return walk6.reason === "remote-link" ? "remote" : "other";
   const real = realpathOrNull(abs);
   if (real === null) return "absent";
   try {
@@ -1456,7 +1456,7 @@ async function gitSafetyFor(dirs, opts = {}) {
   const env = opts.env ?? process.env;
   const problem = countProblem(env, platform);
   if (problem !== null) return { ...staticGitSafety(platform), refused: problem };
-  const walk5 = {
+  const walk6 = {
     git: opts.git ?? gitExecutable(env),
     env: probeEnv(env, platform),
     timeoutMs: opts.timeoutMs ?? PROBE_TIMEOUT_MS,
@@ -1465,15 +1465,15 @@ async function gitSafetyFor(dirs, opts = {}) {
     visited: /* @__PURE__ */ new Set(),
     submodules: 0
   };
-  for (const dir of new Set(dirs)) await walkAsync(walk5, dir, dir, 0);
-  return combine(walk5.read, env, platform);
+  for (const dir of new Set(dirs)) await walkAsync(walk6, dir, dir, 0);
+  return combine(walk6.read, env, platform);
 }
 function gitSafetyForSync(dirs, opts = {}) {
   const platform = opts.platform ?? process.platform;
   const env = opts.env ?? process.env;
   const problem = countProblem(env, platform);
   if (problem !== null) return { ...staticGitSafety(platform), refused: problem };
-  const walk5 = {
+  const walk6 = {
     git: opts.git ?? gitExecutable(env),
     env: probeEnv(env, platform),
     timeoutMs: opts.timeoutMs ?? PROBE_TIMEOUT_MS,
@@ -1482,21 +1482,21 @@ function gitSafetyForSync(dirs, opts = {}) {
     visited: /* @__PURE__ */ new Set(),
     submodules: 0
   };
-  for (const dir of new Set(dirs)) walkSync(walk5, dir, dir, 0);
-  return combine(walk5.read, env, platform);
+  for (const dir of new Set(dirs)) walkSync(walk6, dir, dir, 0);
+  return combine(walk6.read, env, platform);
 }
-function nextSubmodules(walk5, dir, depth, links) {
+function nextSubmodules(walk6, dir, depth, links) {
   if (links.kind === "refused") {
-    walk5.read.push({ dir, probe: { kind: "refused", message: links.message } });
+    walk6.read.push({ dir, probe: { kind: "refused", message: links.message } });
     return [];
   }
   const next = [];
   for (const sub of links.dirs) {
-    if (walk5.visited.has(sub)) continue;
-    walk5.visited.add(sub);
-    walk5.submodules += 1;
-    if (walk5.submodules > MAX_SUBMODULES || depth + 1 > MAX_SUBMODULE_DEPTH) {
-      walk5.read.push({
+    if (walk6.visited.has(sub)) continue;
+    walk6.visited.add(sub);
+    walk6.submodules += 1;
+    if (walk6.submodules > MAX_SUBMODULES || depth + 1 > MAX_SUBMODULE_DEPTH) {
+      walk6.read.push({
         dir: sub,
         probe: {
           kind: "refused",
@@ -1509,23 +1509,23 @@ function nextSubmodules(walk5, dir, depth, links) {
   }
   return next;
 }
-async function walkAsync(walk5, root, dir, depth) {
-  walk5.visited.add(dir);
+async function walkAsync(walk6, root, dir, depth) {
+  walk6.visited.add(dir);
   const [probe3, links] = await Promise.all([
-    probeAsync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs),
-    gitlinksAsync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs)
+    probeAsync(walk6.git, dir, walk6.env, walk6.timeoutMs, walk6.reuseMs),
+    gitlinksAsync(walk6.git, dir, walk6.env, walk6.timeoutMs, walk6.reuseMs)
   ]);
-  walk5.read.push(depth === 0 ? { dir, probe: probe3 } : { dir, probe: probe3, submodule: relativeLabel(root, dir) });
+  walk6.read.push(depth === 0 ? { dir, probe: probe3 } : { dir, probe: probe3, submodule: relativeLabel(root, dir) });
   if (probe3.kind !== "listing") return;
-  for (const sub of nextSubmodules(walk5, dir, depth, links)) await walkAsync(walk5, root, sub, depth + 1);
+  for (const sub of nextSubmodules(walk6, dir, depth, links)) await walkAsync(walk6, root, sub, depth + 1);
 }
-function walkSync(walk5, root, dir, depth) {
-  walk5.visited.add(dir);
-  const probe3 = probeSync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs);
-  walk5.read.push(depth === 0 ? { dir, probe: probe3 } : { dir, probe: probe3, submodule: relativeLabel(root, dir) });
+function walkSync(walk6, root, dir, depth) {
+  walk6.visited.add(dir);
+  const probe3 = probeSync(walk6.git, dir, walk6.env, walk6.timeoutMs, walk6.reuseMs);
+  walk6.read.push(depth === 0 ? { dir, probe: probe3 } : { dir, probe: probe3, submodule: relativeLabel(root, dir) });
   if (probe3.kind !== "listing") return;
-  const links = gitlinksSync(walk5.git, dir, walk5.env, walk5.timeoutMs, walk5.reuseMs);
-  for (const sub of nextSubmodules(walk5, dir, depth, links)) walkSync(walk5, root, sub, depth + 1);
+  const links = gitlinksSync(walk6.git, dir, walk6.env, walk6.timeoutMs, walk6.reuseMs);
+  for (const sub of nextSubmodules(walk6, dir, depth, links)) walkSync(walk6, root, sub, depth + 1);
 }
 function relativeLabel(root, dir) {
   const rel2 = relative3(root, dir).split("\\").join("/");
@@ -1959,8 +1959,8 @@ function networkPathOf(raw) {
   const candidate = resolve6(raw);
   if (isNetworkPath2(candidate)) return { path: candidate };
   if (process.platform === "win32") {
-    const walk5 = walkLinksUnder(parse3(candidate).root, candidate);
-    if (!walk5.ok && walk5.reason === "remote-link") return { path: candidate, via: walk5.at };
+    const walk6 = walkLinksUnder(parse3(candidate).root, candidate);
+    if (!walk6.ok && walk6.reason === "remote-link") return { path: candidate, via: walk6.at };
   }
   return null;
 }
@@ -16409,16 +16409,16 @@ function isSpawnFailure(proc, error62) {
 }
 function readText2(stream, onText) {
   if (stream === null || stream === void 0) return;
-  const decoder = new StringDecoder("utf8");
+  const decoder2 = new StringDecoder("utf8");
   let total = 0;
   stream.on("data", (chunk) => {
     const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
     total += buf.length;
-    const text3 = decoder.write(buf);
+    const text3 = decoder2.write(buf);
     if (text3 !== "") onText(text3, total);
   });
   stream.on("end", () => {
-    const rest = decoder.end();
+    const rest = decoder2.end();
     if (rest !== "") onText(rest, total);
   });
 }
@@ -17055,7 +17055,7 @@ var init_git = __esm({
 import { mkdirSync as mkdirSync5, mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync4 } from "node:fs";
 import { delimiter, join as join21 } from "node:path";
 import { tmpdir as tmpdir3 } from "node:os";
-async function openHistoryView(cwd, env, walk5) {
+async function openHistoryView(cwd, env, walk6) {
   const limits = [];
   const base2 = await withoutTreeAttributes(cwd, env);
   const version2 = await gitVersion(cwd, base2);
@@ -17092,7 +17092,7 @@ async function openHistoryView(cwd, env, walk5) {
     }
   }
   const config2 = [];
-  const large = await largeBlobPaths(cwd, base2, walk5);
+  const large = await largeBlobPaths(cwd, base2, walk6);
   if ("why" in large) {
     limits.push(`files git reads as binary by their content (a NUL byte) were not read: ${large.why}`);
   } else {
@@ -17110,7 +17110,7 @@ async function openHistoryView(cwd, env, walk5) {
     }
   }
   const commitsEnv = config2.length === 0 && !source.detached ? base2 : applyGitSafety({ config: config2, vars: away, notApplied: [], refused: null }, base2);
-  const count = await countWalk(cwd, base2, walk5, "--merges");
+  const count = await countWalk(cwd, base2, walk6, "--merges");
   if (count === 0) return { env: commitsEnv, merges: null, limits, source, remove };
   const some = count === null ? "merge commits" : `${count} merge commit(s)`;
   if (version2 === null || !atLeast(version2, 2, 36)) {
@@ -17124,7 +17124,7 @@ async function openHistoryView(cwd, env, walk5) {
     limits.push(`${some}' own changes were not read (git's object directory: ${message(e)})`);
     return { env: commitsEnv, merges: null, limits, source, remove };
   }
-  const octopus = await countWalk(cwd, base2, walk5, "--min-parents=3");
+  const octopus = await countWalk(cwd, base2, walk6, "--min-parents=3");
   if (octopus !== 0) {
     limits.push(`${octopus === null ? "octopus merges" : `${octopus} octopus merge(s)`}' own changes were not read (remerge-diff shows none for a merge of three or more parents)`);
   }
@@ -17180,7 +17180,7 @@ async function scratchObjects(cwd, base2, env, odb) {
     GIT_ALTERNATE_OBJECT_DIRECTORIES: [alternate(dir), ...others !== void 0 && others !== "" ? [others] : []].join(delimiter)
   };
 }
-async function largeBlobPaths(cwd, env, walk5) {
+async function largeBlobPaths(cwd, env, walk6) {
   const objects = await git(cwd, ["cat-file", "--batch-all-objects", "--unordered", "--batch-check=%(objecttype) %(objectsize) %(objectname)"], void 0, env);
   if (objects.exitCode !== 0) return { why: `git could not list the repository's objects (${firstLine3(objects.stderr) || `exit ${objects.exitCode}`})` };
   const large = /* @__PURE__ */ new Set();
@@ -17189,7 +17189,7 @@ async function largeBlobPaths(cwd, env, walk5) {
     if (type === "blob" && id !== void 0 && Number(size) > TEXT_LIMIT_BYTES) large.add(id);
   }
   if (large.size === 0) return { paths: [] };
-  const raw = await git(cwd, ["log", ...walk5, "--full-history", "--diff-merges=first-parent", "--raw", "-z", "--no-abbrev", "--no-renames", "--format=", "--"], void 0, env);
+  const raw = await git(cwd, ["log", ...walk6, "--full-history", "--diff-merges=first-parent", "--raw", "-z", "--no-abbrev", "--no-renames", "--format=", "--"], void 0, env);
   if (raw.exitCode !== 0) return { why: `git could not list the paths of the files over 1 MiB (${firstLine3(raw.stderr) || `exit ${raw.exitCode}`})` };
   const paths = /* @__PURE__ */ new Set();
   const parts = raw.stdout.split("\0");
@@ -17213,9 +17213,9 @@ function unspecifiedDiff(path3) {
   const quoted = pattern.replace(/[\\"]/g, "\\$&").replace(/[\u0000-\u001f\u007f]/g, (c) => `\\${c.charCodeAt(0).toString(8).padStart(3, "0")}`);
   return `"${quoted}" !diff`;
 }
-async function countWalk(cwd, env, walk5, filter) {
-  const hasRevision = walk5.some((t) => t === "--all" || t.includes(".."));
-  const r = await git(cwd, ["rev-list", "--count", filter, ...walk5, ...hasRevision ? [] : ["HEAD"], "--"], void 0, env);
+async function countWalk(cwd, env, walk6, filter) {
+  const hasRevision = walk6.some((t) => t === "--all" || t.includes(".."));
+  const r = await git(cwd, ["rev-list", "--count", filter, ...walk6, ...hasRevision ? [] : ["HEAD"], "--"], void 0, env);
   const n = Number(r.stdout.trim());
   return r.exitCode === 0 && Number.isInteger(n) ? n : null;
 }
@@ -17770,17 +17770,17 @@ function expandGlob(root, pattern) {
   const glob = compileGlob(pattern);
   const out = [];
   let visited = 0;
-  const walk5 = (dir) => {
+  const walk6 = (dir) => {
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (visited++ > MAX_VISITED) return;
       const abs = join23(dir, name);
       const rel2 = relative6(root, abs).split(sep4).join("/");
       if (kind === "link" && projectPathKind(root, abs) === "outside") continue;
       if (glob.test(rel2)) out.push(abs);
-      if (kind === "directory" && !SKIP_DIRS.has(name)) walk5(abs);
+      if (kind === "directory" && !SKIP_DIRS.has(name)) walk6(abs);
     }
   };
-  walk5(root);
+  walk6(root);
   return out.sort();
 }
 var isSlash, notSlash, notLineBreak, SKIP_DIRS, MAX_VISITED;
@@ -21174,8 +21174,8 @@ async function longPathWalk(root, platform = process.platform, opts = {}) {
   }
   return { dirs: out.dirs.sort(), files: out.files.sort(), semgrepignores: new NestedSemgrepIgnores(root, out.ignoreDirs) };
 }
-function semgrepIgnores(walk5, rel2) {
-  return walk5.semgrepignores.ignores(rel2);
+function semgrepIgnores(walk6, rel2) {
+  return walk6.semgrepignores.ignores(rel2);
 }
 function semgrepExcludeForDir(rel2) {
   return `--exclude=${rel2.replace(/[\\*?[\]!#]/g, (c) => `\\${c}`)}`;
@@ -55904,17 +55904,17 @@ function validateSemgrepRulesFile(path3) {
 }
 function yamlFilesUnder2(dir) {
   const out = [];
-  const walk5 = (d, depth) => {
+  const walk6 = (d, depth) => {
     if (depth > 8) return;
     const entries3 = listProjectDir(dir, d).sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
     for (const { name, kind } of entries3) {
       if (name === ".git" || name === "node_modules") continue;
       const abs = join36(d, name);
-      if (kind === "directory") walk5(abs, depth + 1);
+      if (kind === "directory") walk6(abs, depth + 1);
       else if ((kind === "file" || kind === "link") && /\.ya?ml$/i.test(name)) out.push(abs);
     }
   };
-  walk5(dir, 0);
+  walk6(dir, 0);
   return out;
 }
 function registeredEntries(ctx, projectPath) {
@@ -57102,7 +57102,7 @@ function hashInput(input2) {
 }
 function listFilesRecursive(dir) {
   const out = [];
-  const walk5 = (current) => {
+  const walk6 = (current) => {
     let entries3;
     try {
       entries3 = readdirSync10(current, { withFileTypes: true });
@@ -57111,11 +57111,11 @@ function listFilesRecursive(dir) {
     }
     for (const entry of entries3) {
       const abs = join40(current, entry.name);
-      if (entry.isDirectory()) walk5(abs);
+      if (entry.isDirectory()) walk6(abs);
       else if (entry.isFile()) out.push(relative11(dir, abs).split(sep9).join("/"));
     }
   };
-  walk5(dir);
+  walk6(dir);
   return out.sort();
 }
 function describePack(entry) {
@@ -59248,17 +59248,17 @@ function findDotnetTargets(projectPath) {
 }
 function findProjectFiles(projectPath) {
   const out = [];
-  const walk5 = (dir, depth) => {
+  const walk6 = (dir, depth) => {
     if (depth > PROJECT_WALK_MAX_DEPTH) return;
     const entries3 = listProjectDir(projectPath, dir).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries3) {
       if (SKIP_DIRS2.has(entry.name)) continue;
       const abs = join45(dir, entry.name);
-      if (entry.kind === "directory") walk5(abs, depth + 1);
+      if (entry.kind === "directory") walk6(abs, depth + 1);
       else if (entry.kind === "file" && PROJECT_EXTENSIONS.has(extname2(entry.name).toLowerCase())) out.push(abs);
     }
   };
-  walk5(projectPath, 0);
+  walk6(projectPath, 0);
   return out;
 }
 function resolveFromFile(file2, written) {
@@ -59774,20 +59774,20 @@ async function runSemgrep(opts, run2 = runProcess, platform = process.platform) 
   const out = outputOf(args);
   const listingFailed = first.exitCode !== 0 && failedToListTargets(readReport(out), first.stdout, first.stderr);
   if (!listingFailed && out === void 0) return first;
-  const walk5 = await longPathWalk(target, platform, { dirs: listingFailed });
-  if (walk5.dirs.length === 0 && walk5.files.length === 0) return first;
+  const walk6 = await longPathWalk(target, platform, { dirs: listingFailed });
+  if (walk6.dirs.length === 0 && walk6.files.length === 0) return first;
   let result = first;
-  if (listingFailed && walk5.dirs.length > 0 && deadline > Date.now()) {
+  if (listingFailed && walk6.dirs.length > 0 && deadline > Date.now()) {
     const retry2 = await run2({
       ...opts,
-      args: [...args.slice(0, -1), ...walk5.dirs.map(semgrepExcludeForDir), target],
+      args: [...args.slice(0, -1), ...walk6.dirs.map(semgrepExcludeForDir), target],
       timeoutMs: deadline - Date.now(),
       ...semgrepSpawn(opts.env)
     });
-    result = { ...retry2, excludedLongDirs: walk5.dirs };
+    result = { ...retry2, excludedLongDirs: walk6.dirs };
   }
-  if (walk5.files.length === 0 || out === void 0 || result.exitCode === null || result.outcome === "cancelled") return result;
-  const long = await readLongFiles({ opts, run: run2, target, out, files: walk5.files, semgrepignores: walk5.semgrepignores, deadline });
+  if (walk6.files.length === 0 || out === void 0 || result.exitCode === null || result.outcome === "cancelled") return result;
+  const long = await readLongFiles({ opts, run: run2, target, out, files: walk6.files, semgrepignores: walk6.semgrepignores, deadline });
   if (long.cancelled) return { ...result, outcome: "cancelled" };
   return {
     ...result,
@@ -70349,17 +70349,17 @@ function scopeManifestGaps(judged, touched) {
     if (mine.length > 0) gaps.push({ ecosystem: g.ecosystem, files: mine });
     if (theirs.length > 0) preexisting.push({ ecosystem: g.ecosystem, files: theirs });
   }
-  const walk5 = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP || m === TRIVY_MAVEN_OFFLINE_GAP);
+  const walk6 = judged.missing.filter((m) => m === TRIVY_MANIFEST_WALK_GAP || m === TRIVY_MAVEN_OFFLINE_GAP);
   let toolRun = judged.toolRun;
   let missing;
   if (gaps.length > 0) {
-    missing = judged.toolRun.status === "skipped" ? ["trivy", ...walk5] : [...gaps.map((g) => `trivy:${g.ecosystem}`), ...walk5];
+    missing = judged.toolRun.status === "skipped" ? ["trivy", ...walk6] : [...gaps.map((g) => `trivy:${g.ecosystem}`), ...walk6];
   } else {
     const reason = judged.toolRun.reason?.replace(/^no_supported_manifest(; )?/, "");
     toolRun = { ...judged.toolRun, status: "ok" };
     if (reason !== void 0 && reason.length > 0) toolRun.reason = reason;
     else delete toolRun.reason;
-    missing = walk5;
+    missing = walk6;
   }
   return { toolRun, missing, gaps, preexisting };
 }
@@ -75804,16 +75804,16 @@ function anyDeepMatching(root, suffix, maxDepth) {
     "build",
     "packages"
   ]);
-  function walk5(dir, depth) {
+  function walk6(dir, depth) {
     if (depth > maxDepth) return false;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP.has(name) || name.startsWith(".")) continue;
       if (name.endsWith(suffix)) return true;
-      if (kind === "directory" && walk5(join75(dir, name), depth + 1)) return true;
+      if (kind === "directory" && walk6(join75(dir, name), depth + 1)) return true;
     }
     return false;
   }
-  return walk5(root, 0);
+  return walk6(root, 0);
 }
 var inputSchema6, tool6;
 var init_detectStack = __esm({
@@ -76768,11 +76768,14 @@ function k6Settings(env) {
   const pairs = Object.entries(env).filter((e) => e[1] !== void 0 && e[0].toUpperCase().startsWith("K6_")).map(([name, value]) => `${name}=${value}`).sort();
   return { digest: digest(pairs), count: pairs.length };
 }
-function k6Series(script, contentSha256, settings) {
+function k6Series(script, contentSha256, settings, inputs) {
   const shown = settings.count > 0 ? ` \xB7 K6_* #${settings.digest.slice(0, SHOWN_DIGEST)}` : "";
+  const files = inputs?.files ?? [];
+  const modules = files.length > 0 ? ` \xB7 ${String(files.length)} local module${files.length === 1 ? "" : "s"} #${digest(files).slice(0, SHOWN_DIGEST)}` : "";
+  const partly = (inputs?.partial.length ?? 0) > 0 ? " \xB7 inputs partly keyed" : "";
   return {
-    key: digest(["k6", script, contentSha256, settings.digest]),
-    label: `k6 \xB7 ${script} (${contentSha256.slice(0, 12)})${shown}`
+    key: files.length > 0 ? digest(["k6", script, contentSha256, settings.digest, files]) : digest(["k6", script, contentSha256, settings.digest]),
+    label: `k6 \xB7 ${script} (${contentSha256.slice(0, 12)})${modules}${shown}${partly}`
   };
 }
 function seriesRunOf(row) {
@@ -76894,6 +76897,89 @@ var init_perfSeries = __esm({
     WINDOW_MAX = 5;
     WINDOW_MIN = 3;
     SINCE_RUNS = 3;
+  }
+});
+
+// src/metrics/k6Inputs.ts
+import { createHash as createHash15 } from "node:crypto";
+function k6Specifiers(text3) {
+  const specifiers = [];
+  for (const re of [FROM, IMPORT_BARE]) {
+    re.lastIndex = 0;
+    for (let m = re.exec(text3); m !== null; m = re.exec(text3)) specifiers.push(m[2] ?? "");
+  }
+  let dynamic = false;
+  CALL.lastIndex = 0;
+  for (let m = CALL.exec(text3); m !== null; m = CALL.exec(text3)) {
+    CALL_LITERAL.lastIndex = m.index;
+    const literal3 = CALL_LITERAL.exec(text3);
+    if (literal3 === null) dynamic = true;
+    else specifiers.push(literal3[2] ?? "");
+  }
+  return { specifiers, dynamic };
+}
+function isLocalSpecifier(spec) {
+  return spec.startsWith("./") || spec.startsWith("../") || spec.startsWith("/") || spec.startsWith("file://");
+}
+function k6LocalInputs(entry, reader) {
+  try {
+    return walk4(entry, reader);
+  } catch {
+    return K6_WALK_FAILED;
+  }
+}
+function walk4(entry, reader) {
+  const files = /* @__PURE__ */ new Map();
+  const partial3 = /* @__PURE__ */ new Set();
+  const seen = /* @__PURE__ */ new Set([entry]);
+  const queue = [entry];
+  for (let next = queue.shift(); next !== void 0; next = queue.shift()) {
+    const read3 = reader.read(next);
+    if (read3.kind !== "ok") {
+      if (read3.kind === "too-large") partial3.add("bound");
+      else if (read3.kind === "refused" || next === entry) partial3.add("unreadable");
+      files.set(next === entry ? "" : next, read3.kind === "absent" ? "missing" : read3.kind === "refused" ? "unreadable" : "too-large");
+      continue;
+    }
+    if (next !== entry) files.set(next, sha2564(read3.bytes));
+    const { specifiers, dynamic } = k6Specifiers(decoder.decode(read3.bytes));
+    if (dynamic) partial3.add("dynamic");
+    for (const spec of specifiers) {
+      if (!isLocalSpecifier(spec)) continue;
+      const resolved = reader.resolve(dirOf4(next), spec);
+      if (resolved === null) {
+        partial3.add("outside");
+        continue;
+      }
+      const rel2 = resolved === "" ? "." : resolved;
+      if (seen.has(rel2)) continue;
+      if (seen.size - 1 >= K6_INPUT_FILES_MAX) {
+        partial3.add("bound");
+        continue;
+      }
+      seen.add(rel2);
+      queue.push(rel2);
+    }
+  }
+  return {
+    files: [...files].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0),
+    partial: [...partial3].sort()
+  };
+}
+var K6_INPUT_FILES_MAX, K6_WALK_FAILED, SPEC2, FROM, IMPORT_BARE, CALL, CALL_LITERAL, dirOf4, sha2564, decoder;
+var init_k6Inputs = __esm({
+  "src/metrics/k6Inputs.ts"() {
+    "use strict";
+    K6_INPUT_FILES_MAX = 64;
+    K6_WALK_FAILED = { files: [["", "unreadable"]], partial: ["unreadable"] };
+    SPEC2 = String.raw`[^'"\x60\r\n$]{1,1024}`;
+    FROM = new RegExp(String.raw`\bfrom\s*(['"])(${SPEC2})\1`, "g");
+    IMPORT_BARE = new RegExp(String.raw`\bimport\s*(['"])(${SPEC2})\1`, "g");
+    CALL = /\b(?:import|require)\s*\(/g;
+    CALL_LITERAL = new RegExp(String.raw`(?:import|require)\s*\(\s*(['"\x60])(${SPEC2})\1\s*[,)]`, "y");
+    dirOf4 = (rel2) => rel2.includes("/") ? rel2.slice(0, rel2.lastIndexOf("/")) : "";
+    sha2564 = (bytes) => createHash15("sha256").update(bytes).digest("hex");
+    decoder = new TextDecoder("utf-8");
   }
 });
 
@@ -77206,6 +77292,7 @@ var init_maintenance = __esm({
 import { existsSync as existsSync17, readFileSync as readFileSync12, writeFileSync as writeFileSync21 } from "node:fs";
 import { join as join78, relative as relative26, resolve as resolve23, sep as sep18 } from "node:path";
 import { randomUUID as randomUUID5 } from "node:crypto";
+import { fileURLToPath as fileURLToPath10 } from "node:url";
 async function handler6(inp, ctx) {
   const projectPath = toolProjectPath(inp.project_path);
   if (typeof projectPath !== "string") return projectPath;
@@ -77466,6 +77553,9 @@ async function runK6(opts) {
   }
   const summaryFile = join78(opts.reportDir, "k6-summary.json");
   const env = allowlistedEnv((name) => K6_ENV.test(name));
+  const scriptRel = relative26(opts.projectPath, script).split(sep18).join("/");
+  const contentSha256 = await hashProjectFile(opts.projectPath, script);
+  const inputs = k6LocalInputs(scriptRel, k6ModuleReader(opts.projectPath));
   const result = await runProcess({
     command: "k6",
     // `--no-usage-report`: k6 otherwise sends Grafana a usage report on every run (and keeps an installation id in
@@ -77499,7 +77589,7 @@ async function runK6(opts) {
     reportPath: summaryFile,
     tool: "k6",
     toolVersion: void 0,
-    series: k6Series(relative26(opts.projectPath, script).split(sep18).join("/"), await hashProjectFile(opts.projectPath, script), k6Settings(env)),
+    series: k6Series(scriptRel, contentSha256, k6Settings(env), inputs),
     samples: k6Samples(summary2)
   });
   return {
@@ -77512,6 +77602,25 @@ async function runK6(opts) {
     ...thresholdsFailed ? { note: "k6 exited 99: the run completed, and at least one threshold failed" } : {},
     summary: summary2,
     history
+  };
+}
+function k6ModuleReader(projectPath) {
+  return {
+    read(rel2) {
+      const r = readProjectBytes(projectPath, rel2, PROJECT_FILE_MAX_BYTES);
+      if (r.status === "ok") return { kind: "ok", bytes: r.bytes };
+      if (r.status === "absent") return { kind: "absent" };
+      return r.reason === "too-large" ? { kind: "too-large" } : { kind: "refused" };
+    },
+    resolve(fromDir, spec) {
+      let abs;
+      try {
+        abs = spec.startsWith("file://") ? fileURLToPath10(spec) : resolve23(projectPath, fromDir, spec);
+      } catch {
+        return null;
+      }
+      return isWithinDir(projectPath, abs) ? relative26(projectPath, abs).split(sep18).join("/") : null;
+    }
   };
 }
 function k6Thresholds(metrics) {
@@ -77559,6 +77668,7 @@ var init_perfCheck = __esm({
     init_budgets();
     init_testCommandEnv();
     init_perfSeries();
+    init_k6Inputs();
     init_projectFs();
     init_maintenance();
     init_processRunner();
@@ -78289,7 +78399,7 @@ function atMostOne(hit) {
 }
 function resolveJsTs(importingFile, specifier, byPosixPath) {
   if (!specifier.startsWith(".")) return void 0;
-  const base2 = stripJsTsExtension(joinAndNormalize(dirOf4(importingFile), specifier));
+  const base2 = stripJsTsExtension(joinAndNormalize(dirOf5(importingFile), specifier));
   return lookupCandidates(byPosixPath, JS_TS_SUFFIXES.map((suffix) => `${base2}${suffix}`));
 }
 function stripJsTsExtension(path3) {
@@ -78308,7 +78418,7 @@ function resolveRust(importingFile, specifier, byPosixPath) {
     root = "src";
     tail2 = specifier.slice("crate::".length);
   } else if (specifier.startsWith("self::")) {
-    root = dirOf4(importingFile);
+    root = dirOf5(importingFile);
     tail2 = specifier.slice("self::".length);
   } else {
     return void 0;
@@ -78340,7 +78450,7 @@ function buildResolutionIndex(projectFiles) {
     const posix6 = toPosix2(file2);
     byPosixPath.set(posix6, file2);
     if (!posix6.endsWith(".go")) continue;
-    const dir = dirOf4(posix6);
+    const dir = dirOf5(posix6);
     if (dir === "" || dir === "/") continue;
     const existing = goPackages.get(dir);
     if (existing === void 0) goPackages.set(dir, [file2]);
@@ -78358,7 +78468,7 @@ function lookupCandidates(byPosixPath, candidates2) {
 function toPosix2(path3) {
   return path3.replace(/\\/g, "/");
 }
-function dirOf4(file2) {
+function dirOf5(file2) {
   const posix6 = toPosix2(file2);
   const parts = posix6.split("/");
   parts.pop();
@@ -78752,7 +78862,7 @@ function assessDependency(subject, index) {
   if (index.external === void 0) return unknown2([PREDATES_GAP]);
   const matcher = matcherFor(subject);
   if ("gap" in matcher) return unknown2([matcher.gap]);
-  const scopeDir = subject.ecosystem === "npm" && subject.manifest !== null ? dirOf5(subject.manifest) : null;
+  const scopeDir = subject.ecosystem === "npm" && subject.manifest !== null ? dirOf6(subject.manifest) : null;
   const matching = index.external.entries.filter(
     (entry) => matcher.languages.has(entry.language) && matcher.matches(entry.specifier) && !outsideProjectCode(entry.file)
   );
@@ -78793,7 +78903,7 @@ function assessDependency(subject, index) {
         unverified.push(file2);
         continue;
       }
-      const resolved = index.npmResolver?.(dirOf5(file2), scopeDir ?? "", name) ?? {
+      const resolved = index.npmResolver?.(dirOf6(file2), scopeDir ?? "", name) ?? {
         version: null,
         reason: "no lockfile or installed tree was read"
       };
@@ -78898,7 +79008,7 @@ function sample(files) {
 function unique2(values2) {
   return [...new Set(values2)].sort();
 }
-function dirOf5(path3) {
+function dirOf6(path3) {
   const posix6 = path3.replace(/\\/g, "/");
   const at = posix6.lastIndexOf("/");
   return at === -1 ? "" : posix6.slice(0, at);
@@ -80400,12 +80510,12 @@ function pinnedFileInstaller(os, pin2) {
     user_bin: pin2.file
   };
 }
-function psDownloadChecked(variable, name, url2, sha2564, what) {
+function psDownloadChecked(variable, name, url2, sha2565, what) {
   return [
     `  $${variable} = Join-Path $tmp '${name}'`,
     `  Invoke-WebRequest -UseBasicParsing -Uri '${url2}' -OutFile $${variable}`,
     `  $got = (Get-FileHash -Algorithm SHA256 -LiteralPath $${variable}).Hash.ToLowerInvariant()`,
-    `  if ($got -ne '${sha2564}') { throw ('${what}: sha256 mismatch, got ' + $got) }`
+    `  if ($got -ne '${sha2565}') { throw ('${what}: sha256 mismatch, got ' + $got) }`
   ];
 }
 function pinnedFileWindowsInstaller(pin2) {
@@ -84162,7 +84272,7 @@ var init_registerCustomRules = __esm({
 });
 
 // src/hooks/heartbeat.ts
-import { createHash as createHash15, randomBytes as randomBytes7 } from "node:crypto";
+import { createHash as createHash16, randomBytes as randomBytes7 } from "node:crypto";
 import { accessSync as accessSync2, constants as constants6, readdirSync as readdirSync16, realpathSync as realpathSync6, statSync as statSync13 } from "node:fs";
 import { homedir as homedir9 } from "node:os";
 import { dirname as dirname26, join as join84, parse as parse10, resolve as resolve26 } from "node:path";
@@ -84173,7 +84283,7 @@ function comparablePath(path3, platform) {
   return platform === "win32" || platform === "darwin" ? p.toLowerCase() : p;
 }
 function projectKey(root, platform = process.platform) {
-  return createHash15("sha256").update(comparablePath(root, platform)).digest("hex").slice(0, 16);
+  return createHash16("sha256").update(comparablePath(root, platform)).digest("hex").slice(0, 16);
 }
 function hostPidsOf(env, ppid) {
   const given = env["CLAUDE_PID"]?.trim() ?? "";
@@ -95590,9 +95700,9 @@ var init_reportExport = __esm({
 });
 
 // src/sarif/importSarif.ts
-import { createHash as createHash16 } from "node:crypto";
+import { createHash as createHash17 } from "node:crypto";
 import { isAbsolute as isAbsolute17, relative as relative27, resolve as resolve27 } from "node:path";
-import { fileURLToPath as fileURLToPath10 } from "node:url";
+import { fileURLToPath as fileURLToPath11 } from "node:url";
 function importSarif(text3, ctx) {
   const runs = parseLog(text3);
   const maxResults = Math.min(ctx.maxResults ?? DEFAULT_MAX_RESULTS, MAX_RESULTS_CEILING);
@@ -95690,7 +95800,7 @@ function separateSharedFingerprints(findings, keys) {
   for (const f of findings) uses.set(f.fingerprint, (uses.get(f.fingerprint) ?? 0) + 1);
   findings.forEach((f, i) => {
     if ((uses.get(f.fingerprint) ?? 0) < 2) return;
-    f.fingerprint = createHash16("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
+    f.fingerprint = createHash17("sha256").update(JSON.stringify(["sarif-fp-v1", f.fingerprint, keys[i] ?? ""])).digest("hex");
   });
 }
 function resolveRule(result, rc) {
@@ -95836,7 +95946,7 @@ function identityOf(result, tool54, ruleId) {
   let key = usableFingerprints(partial3);
   if (key.length === 0) key = usableFingerprints(getProp(result, "fingerprints"));
   if (key.length === 0) return void 0;
-  return createHash16("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
+  return createHash17("sha256").update(JSON.stringify(["sarif-v1", tool54, ruleId ?? "", key])).digest("hex");
 }
 function locate5(result, rc) {
   const physical = getProp(asArray(getProp(result, "locations"))[0], "physicalLocation");
@@ -95861,7 +95971,7 @@ function nativePath(uri) {
   if (DRIVE_PATH.test(uri)) return uri;
   if (URI_SCHEME.exec(uri)?.[1]?.toLowerCase() !== "file") return void 0;
   try {
-    return fileURLToPath10(uri);
+    return fileURLToPath11(uri);
   } catch {
     return void 0;
   }
@@ -98007,7 +98117,7 @@ var init_vulnFeed = __esm({
 
 // src/tools/wpVulnCheck.ts
 import { existsSync as existsSync21, mkdirSync as mkdirSync15, readdirSync as readdirSync17, readFileSync as readFileSync14, rmSync as rmSync18, writeFileSync as writeFileSync26 } from "node:fs";
-import { createHash as createHash17, randomUUID as randomUUID10 } from "node:crypto";
+import { createHash as createHash18, randomUUID as randomUUID10 } from "node:crypto";
 import { dirname as dirname30, join as join92 } from "node:path";
 async function handler27(inp, ctx) {
   if (!inp.target_url && !inp.wp_install_path) {
@@ -98178,7 +98288,7 @@ function urlReportsDir(url2) {
     host = new URL(key).host.replace(/[^A-Za-z0-9.-]/g, "_") || "site";
   } catch {
   }
-  const hash2 = createHash17("sha256").update(key).digest("hex").slice(0, 12);
+  const hash2 = createHash18("sha256").update(key).digest("hex").slice(0, 12);
   return join92(defaultWordfenceCacheDir(), "wp-vuln-check", `${host}-${hash2}`);
 }
 function pruneUrlReports(siteDir, current) {
@@ -99858,19 +99968,19 @@ async function handler34(inp, ctx) {
 }
 function collectConfigFiles(root, maxDepth) {
   const out = [];
-  function walk5(dir, depth) {
+  function walk6(dir, depth) {
     if (depth > maxDepth) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP_DIRS3.has(name)) continue;
       const abs = join94(dir, name);
       if (kind === "directory") {
-        walk5(abs, depth + 1);
+        walk6(abs, depth + 1);
       } else if ((kind === "file" || kind === "link") && TARGET_FILES.some((re) => re.test(name))) {
         out.push(abs);
       }
     }
   }
-  walk5(root, 0);
+  walk6(root, 0);
   return out;
 }
 var onLine, SERVER_KEY, HOST_KEY, PASSWORD_KEY, INTEGRATED_SECURITY, PATTERNS, TARGET_FILES, SKIP_DIRS3, inputSchema36, tool37, MAX_FILE_BYTES3;
@@ -100067,16 +100177,16 @@ function unknownStatus(tfm) {
 }
 function collectCsprojFiles(root, maxDepth) {
   const out = [];
-  function walk5(dir, depth) {
+  function walk6(dir, depth) {
     if (depth > maxDepth) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP_DIRS4.has(name)) continue;
       const abs = join95(dir, name);
-      if (kind === "directory") walk5(abs, depth + 1);
+      if (kind === "directory") walk6(abs, depth + 1);
       else if (name.endsWith(".csproj") || name.endsWith(".fsproj")) out.push(abs);
     }
   }
-  walk5(root, 0);
+  walk6(root, 0);
   return out;
 }
 var SUPPORT, inputSchema37, tool38, SKIP_DIRS4;
@@ -100192,7 +100302,7 @@ async function handler36(inp, ctx) {
 function findMigrationsDirs(root) {
   const out = [];
   const SKIP = /* @__PURE__ */ new Set(["bin", "obj", "node_modules", ".git", ".guardian", "packages", ".vs"]);
-  function walk5(dir, depth) {
+  function walk6(dir, depth) {
     if (depth > 6) return;
     for (const { name, kind } of listProjectDir(root, dir)) {
       if (SKIP.has(name)) continue;
@@ -100201,11 +100311,11 @@ function findMigrationsDirs(root) {
       if (name === "Migrations") {
         out.push(abs);
       } else {
-        walk5(abs, depth + 1);
+        walk6(abs, depth + 1);
       }
     }
   }
-  walk5(root, 0);
+  walk6(root, 0);
   return out;
 }
 var RULES, inputSchema38, tool39;
@@ -103421,10 +103531,10 @@ function executedCommands(file2) {
     return [];
   }
   const out = [];
-  const walk5 = (node2, depth) => {
+  const walk6 = (node2, depth) => {
     if (depth > 12 || node2 === null || typeof node2 !== "object") return;
     if (Array.isArray(node2)) {
-      for (const item of node2) walk5(item, depth + 1);
+      for (const item of node2) walk6(item, depth + 1);
       return;
     }
     const obj = node2;
@@ -103438,9 +103548,9 @@ function executedCommands(file2) {
         what: obj["type"] === "command" || name === "hooks.json" ? `a hook in ${name}` : `an MCP server in ${name}`
       });
     }
-    for (const value of Object.values(obj)) walk5(value, depth + 1);
+    for (const value of Object.values(obj)) walk6(value, depth + 1);
   };
-  walk5(json2, 0);
+  walk6(json2, 0);
   return out;
 }
 function isMarkdownLike(relPath) {
@@ -104224,7 +104334,7 @@ var init_ingest = __esm({
 });
 
 // src/tools/scanSkill.ts
-import { createHash as createHash18, randomUUID as randomUUID17 } from "node:crypto";
+import { createHash as createHash19, randomUUID as randomUUID17 } from "node:crypto";
 import { writeFileSync as writeFileSync28 } from "node:fs";
 import { join as join100 } from "node:path";
 async function handler39(inp, ctx, callMeta) {
@@ -104412,7 +104522,7 @@ function nonZeroBreakdown(breakdown) {
   return out.sort((a, b) => b.count - a.count);
 }
 function hashFiles(parts) {
-  const h = createHash18("sha256");
+  const h = createHash19("sha256");
   for (const p of [...parts].sort()) h.update(p).update("\n");
   return h.digest("hex").slice(0, 32);
 }
@@ -105388,7 +105498,7 @@ import { join as join104, relative as relative34, resolve as resolve31, sep as s
 function discoverSpecs(projectPath, explicit) {
   const root = resolve31(projectPath);
   const isExplicit = explicit !== void 0 && explicit.length > 0;
-  const found2 = isExplicit ? null : walk4(root, root);
+  const found2 = isExplicit ? null : walk5(root, root);
   const candidates2 = found2 === null ? dedupeResolved(explicit ?? []) : [...found2.exact.sort(), ...found2.widened.sort()];
   const truncated = candidates2.length > MAX_SPEC_FILES;
   const selected = candidates2.slice(0, MAX_SPEC_FILES);
@@ -105419,7 +105529,7 @@ function readCandidates(root, paths, widened) {
   }
   return { specs, oversized, truncated: false };
 }
-function walk4(root, dir) {
+function walk5(root, dir) {
   const out = { exact: [], widened: [] };
   let entries3;
   try {
@@ -105430,7 +105540,7 @@ function walk4(root, dir) {
   for (const entry of entries3) {
     if (entry.isDirectory()) {
       if (FS_EXCLUDE.has(entry.name)) continue;
-      const sub = walk4(root, join104(dir, entry.name));
+      const sub = walk5(root, join104(dir, entry.name));
       out.exact.push(...sub.exact);
       out.widened.push(...sub.widened);
     } else if (entry.isFile()) {
@@ -107488,7 +107598,7 @@ var init_normalizeNuclei = __esm({
 });
 
 // src/dast/probe.ts
-import { createHash as createHash19 } from "node:crypto";
+import { createHash as createHash20 } from "node:crypto";
 async function executeProbe(req, opts) {
   const started = Date.now();
   const controller = new AbortController();
@@ -107521,7 +107631,7 @@ async function executeProbe(req, opts) {
       status: res.status,
       headers,
       body_prefix: text3.slice(0, BODY_PREFIX_BYTES),
-      body_hash: createHash19("sha256").update(text3).digest("hex"),
+      body_hash: createHash20("sha256").update(text3).digest("hex"),
       elapsed_ms: Date.now() - started,
       error: null
     };
@@ -109002,7 +109112,7 @@ var init_apply2 = __esm({
 });
 
 // src/fixpr/candidates.ts
-import { createHash as createHash20 } from "node:crypto";
+import { createHash as createHash21 } from "node:crypto";
 function buildGroups(input2) {
   const rescannable = input2.rescannable ?? (() => true);
   const eligible = input2.findings.filter(
@@ -109140,7 +109250,7 @@ function makeGroup(source, key, candidates2) {
     if (SEVERITY_ORDER[candidate.severity] > SEVERITY_ORDER[severity]) severity = candidate.severity;
   }
   const fingerprints = candidates2.flatMap((candidate) => candidate.fingerprints);
-  const hash2 = createHash20("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
+  const hash2 = createHash21("sha256").update([...fingerprints].sort().join("\n")).digest("hex").slice(0, 12);
   return { source, key, candidates: candidates2, severity, hash: hash2 };
 }
 function countFingerprints(group) {
@@ -109250,7 +109360,7 @@ var init_exclusions = __esm({
 
 // src/fixpr/pr.ts
 import { resolve as resolve34 } from "node:path";
-import { fileURLToPath as fileURLToPath11 } from "node:url";
+import { fileURLToPath as fileURLToPath12 } from "node:url";
 function changedPaths(stdout) {
   const records2 = stdout.split("\0");
   const out = [];
@@ -109464,7 +109574,7 @@ async function repositoryRewrite(worktreePath, run2, effective) {
 function localPath(worktreePath, url2) {
   if (/^file:\/\//i.test(url2)) {
     try {
-      return fileURLToPath11(url2);
+      return fileURLToPath12(url2);
     } catch {
       return null;
     }
@@ -111355,7 +111465,7 @@ var init_configSources = __esm({
 });
 
 // src/agentaudit/hash.ts
-import { createHash as createHash21 } from "node:crypto";
+import { createHash as createHash22 } from "node:crypto";
 function omitted(v) {
   return v === void 0 || typeof v === "function" || typeof v === "symbol";
 }
@@ -111396,7 +111506,7 @@ function stableStringify2(value) {
   return parts.join("");
 }
 function hashConfigValue(value) {
-  return createHash21("sha256").update(stableStringify2(value)).digest("hex");
+  return createHash22("sha256").update(stableStringify2(value)).digest("hex");
 }
 var Literal;
 var init_hash2 = __esm({
@@ -114361,11 +114471,11 @@ var init_dist2 = __esm({
             __privateMethod(this, _EventSource_instances, failConnection_fn).call(this, "Invalid response body, expected a web ReadableStream", status), this.close();
             return;
           }
-          const decoder = new TextDecoder(), reader = body.getReader();
+          const decoder2 = new TextDecoder(), reader = body.getReader();
           let open2 = true;
           do {
             const { done, value } = await reader.read();
-            value && __privateGet(this, _parser).feed(decoder.decode(value, { stream: !done })), done && (open2 = false, __privateGet(this, _parser).reset(), __privateMethod(this, _EventSource_instances, scheduleReconnect_fn).call(this));
+            value && __privateGet(this, _parser).feed(decoder2.decode(value, { stream: !done })), done && (open2 = false, __privateGet(this, _parser).reset(), __privateMethod(this, _EventSource_instances, scheduleReconnect_fn).call(this));
           } while (open2);
         }), __privateAdd(this, _onFetchError, (err) => {
           __privateSet(this, _controller, void 0), !(err.name === "AbortError" || err.type === "aborted") && __privateMethod(this, _EventSource_instances, scheduleReconnect_fn).call(this, flattenError2(err));
@@ -121946,7 +122056,7 @@ var init_planRecord = __esm({
 });
 
 // src/llmscan/service.ts
-import { createHash as createHash22, randomUUID as randomUUID22 } from "node:crypto";
+import { createHash as createHash23, randomUUID as randomUUID22 } from "node:crypto";
 import { posix as posix5, relative as relative40, isAbsolute as isAbsolute27 } from "node:path";
 function listed(items) {
   return { items: items.slice(0, MAX_LISTED2), total: items.length };
@@ -121957,7 +122067,7 @@ function relPosix(project, file2) {
 }
 function fileHash(project, rel2) {
   const read3 = readProjectBytes(project, rel2);
-  return read3.status === "ok" ? createHash22("sha256").update(read3.bytes).digest("hex") : "unreadable";
+  return read3.status === "ok" ? createHash23("sha256").update(read3.bytes).digest("hex") : "unreadable";
 }
 function isStale(project, task) {
   return Object.entries(task.file_hashes).some(([file2, hash2]) => fileHash(project, file2) !== hash2);
@@ -126070,7 +126180,7 @@ async function semgrep(args) {
   if (run2.outcome === "cancelled") return ended("not_run", INTERRUPTED);
   const raw = readJsonSafe(outFile);
   const { config: config2, cwd } = invocation.rules;
-  const ruleIds = { cwd, packsDir: dirOf6(config2) };
+  const ruleIds = { cwd, packsDir: dirOf7(config2) };
   const check2 = checkSemgrepReport({
     raw,
     exitCode: run2.exitCode,
@@ -126194,7 +126304,7 @@ async function trivy(args) {
 function defaultRunners() {
   return { probe: probe2, semgrep, gitleaks, trivy, hook: runDispatcher, installedTools };
 }
-var ended, seconds2, offlineIn, INTERRUPTED, PROBE_CONCURRENCY2, probeDir, SEMGREP_LOCAL_ONLY, dirOf6, NO_VULNERABILITY_DB, NO_CHECKS_DOWNLOAD;
+var ended, seconds2, offlineIn, INTERRUPTED, PROBE_CONCURRENCY2, probeDir, SEMGREP_LOCAL_ONLY, dirOf7, NO_VULNERABILITY_DB, NO_CHECKS_DOWNLOAD;
 var init_defaultRunners = __esm({
   "src/selftest/defaultRunners.ts"() {
     "use strict";
@@ -126223,7 +126333,7 @@ var init_defaultRunners = __esm({
     PROBE_CONCURRENCY2 = 6;
     probeDir = () => tmpdir19();
     SEMGREP_LOCAL_ONLY = "--metrics=off";
-    dirOf6 = (file2) => file2.replace(/[\\/]+[^\\/]*$/, "");
+    dirOf7 = (file2) => file2.replace(/[\\/]+[^\\/]*$/, "");
     NO_VULNERABILITY_DB = /DB error|vulnerability DB|trivy-db/i;
     NO_CHECKS_DOWNLOAD = "--skip-check-update";
   }
@@ -129137,9 +129247,9 @@ function textOutputOf(members2, feed = {}, end = members2.length) {
     if (name === "echo") return decoded(args.filter((a, k) => !(k === 0 && /^-[neE]+$/.test(a))).join(" "));
     if (name === "printf") return decoded(args[args.length - 1] ?? "");
     if (!(name === "cat" && args.every((a) => a === "-") || name === "tee")) {
-      const decoder = decoderOf(last);
-      if (decoder === void 0) return decodes > 0 ? "opaque" : void 0;
-      if (decoder === "other") return "opaque";
+      const decoder2 = decoderOf(last);
+      if (decoder2 === void 0) return decodes > 0 ? "opaque" : void 0;
+      if (decoder2 === "other") return "opaque";
       decodes += 1;
     }
     const here = hereStringText(last);
@@ -130445,7 +130555,7 @@ function collect(command, depth, out, scope, source) {
   const startDir = scope.dir;
   let memoSteps;
   let memoDir;
-  const dirOf7 = (steps) => {
+  const dirOf8 = (steps) => {
     if (steps !== memoSteps) {
       memoSteps = steps;
       memoDir = dirAfter(startDir, steps, { homePath: scope.homePath, vars: scope.vars, bareDriveRoot: scope.bareDriveRoot === true && scope.powershell !== true && scope.cmdLine !== true });
@@ -130490,7 +130600,7 @@ function collect(command, depth, out, scope, source) {
       }
       const resolved = resolveCommand(words);
       if (resolved.elevated) out.push({ ...SUDO_RULE });
-      const here = dirOf7(dirs[s]?.[c]?.may ?? null);
+      const here = dirOf8(dirs[s]?.[c]?.may ?? null);
       const deleting = {
         dir: here,
         vars: scope.vars,
@@ -130553,7 +130663,7 @@ function collect(command, depth, out, scope, source) {
       moveCwd(scope, words, resolved.index);
     }
     const fed = fedScripts(statement, readsScript, scope.powershell === true);
-    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf7(dirs[s]?.[0]?.may ?? null) });
+    if (fed.length > 0) collectFed(fed, depth, out, { ...scope, dir: dirOf8(dirs[s]?.[0]?.may ?? null) });
     for (const { text: text3, reader, opaque, unread } of fedScripts(statement, isBareInterpreterStdin, scope.powershell === true)) {
       if (unread === true) continue;
       if (opaque === true) out.push({ ...RULE_DECODED_SCRIPT });

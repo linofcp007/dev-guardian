@@ -41,6 +41,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { budgetViolationFindings, evaluatePerfBudgets, loadBudgets, type PerfBudgets } from '../budgets/budgets.js';
@@ -58,7 +59,8 @@ import {
   seriesHint,
   seriesRunOf,
 } from '../metrics/perfSeries.js';
-import { hashProjectFile, projectPathKind } from '../platform/projectFs.js';
+import { type K6InputReader, k6LocalInputs } from '../metrics/k6Inputs.js';
+import { hashProjectFile, isWithinDir, PROJECT_FILE_MAX_BYTES, projectPathKind, readProjectBytes } from '../platform/projectFs.js';
 import { DEFAULT_RETENTION_SCANS } from '../storage/maintenance.js';
 import { runProcess } from '../runners/processRunner.js';
 import { httpUrl, pathArgProblem } from '../platform/toolArgs.js';
@@ -534,6 +536,11 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
   // server was started with (review of 3.6, finding 14). Its `K6_*` settings
   // key the series, read from this object: what k6 is handed.
   const env = allowlistedEnv((name) => K6_ENV.test(name));
+  // The series' inputs as k6 reads them at its start, so read before it runs: the script's content and the
+  // local modules it imports (`metrics/k6Inputs.ts`, which never throws).
+  const scriptRel = relative(opts.projectPath, script).split(sep).join('/');
+  const contentSha256 = await hashProjectFile(opts.projectPath, script);
+  const inputs = k6LocalInputs(scriptRel, k6ModuleReader(opts.projectPath));
   const result = await runProcess({
     command: 'k6',
     // `--no-usage-report`: k6 otherwise sends Grafana a usage report on every run (and keeps an installation id in
@@ -566,10 +573,10 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
 
   const summary = summariseK6(parsed);
   // The series is the run's inputs only: the script as the project names it, its content (its
-  // `options` are in it) and the `K6_*` settings it was handed. Never a VU count k6 measured: an
-  // arrival-rate executor adds VUs as the target slows down (keyed by the max, a slower run left its
-  // series), and k6 samples them from the start of the VUs' init, so a minimum jitters when the init
-  // outlasts the first sample (keyed by it, every run was new).
+  // `options` are in it), the local modules it imports and the `K6_*` settings it was handed. Never a VU
+  // count k6 measured: an arrival-rate executor adds VUs as the target slows down (keyed by the max, a
+  // slower run left its series), and k6 samples them from the start of the VUs' init, so a minimum
+  // jitters when the init outlasts the first sample (keyed by it, every run was new).
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
     scanId: opts.scanId,
@@ -577,7 +584,7 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
     reportPath: summaryFile,
     tool: 'k6',
     toolVersion: undefined,
-    series: k6Series(relative(opts.projectPath, script).split(sep).join('/'), await hashProjectFile(opts.projectPath, script), k6Settings(env)),
+    series: k6Series(scriptRel, contentSha256, k6Settings(env), inputs),
     samples: k6Samples(summary),
   });
   return {
@@ -595,6 +602,31 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
 
 /** k6's exit code for a run that completed with a failed threshold. */
 const K6_THRESHOLDS_FAILED = 99;
+
+/**
+ * What `k6LocalInputs` reads the script's modules with: contained project reads (a link out of the project, a
+ * FIFO or a directory refused, never waited on), each under the project file cap, which a larger module is keyed
+ * past (`too-large`).
+ */
+function k6ModuleReader(projectPath: string): K6InputReader {
+  return {
+    read(rel) {
+      const r = readProjectBytes(projectPath, rel, PROJECT_FILE_MAX_BYTES);
+      if (r.status === 'ok') return { kind: 'ok', bytes: r.bytes };
+      if (r.status === 'absent') return { kind: 'absent' };
+      return r.reason === 'too-large' ? { kind: 'too-large' } : { kind: 'refused' };
+    },
+    resolve(fromDir, spec) {
+      let abs: string;
+      try {
+        abs = spec.startsWith('file://') ? fileURLToPath(spec) : resolve(projectPath, fromDir, spec);
+      } catch {
+        return null;
+      }
+      return isWithinDir(projectPath, abs) ? relative(projectPath, abs).split(sep).join('/') : null;
+    },
+  };
+}
 
 /** What k6 is given besides the test command's allowlist: its own options and the proxy. */
 const K6_ENV = /^(?:K6_.+|HTTPS?_PROXY|NO_PROXY|ALL_PROXY|SSL_CERT_FILE|SSL_CERT_DIR)$/;

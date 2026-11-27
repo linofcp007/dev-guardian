@@ -158,10 +158,25 @@ what the CLI uses directly — it is light, so `metrics` loads no `load*Modules(
 and `set_baseline` refuses a `'never'` type by `scan_id` and by `scan_type` alike. A run's samples come from its report:
 CLS unrounded (its 0.01 tolerance is the summary's rounding step); the k6 series from its inputs only: the script, its
 content and a digest of the `K6_*` settings perf_check hands k6, never a VU count k6 measured (k6 samples `vus_max`
-from the start of the VUs' init, so its minimum jitters). What the key leaves out: the modules the script imports,
-k6's own config file and the other variables k6 is handed (`CI`, `LANG`, the proxy), which a script can read through
-`__ENV` to set its load; a `K6_*` setting that names a per-run file makes every run a new series. A label shows a
-query, and the `K6_*` settings, as six hex digits of a digest (`?…#ab12cd`).
+from the start of the VUs' init, so its minimum jitters) — and, since 3.18.0, the local modules the script imports
+(`k6Inputs.ts`: the `./`, `../`, `/` and `file://` specifiers of `… from '…'`, `import '…'`, `import('…')` and
+`require('…')`, followed from module to module, each keyed by the sha256 of its bytes; at most 64, each under the
+project file cap, all read before k6 runs). The formula is chosen by the script's text, never by a read: a module
+that cannot be read is keyed as such (`missing`, `unreadable`, `too-large`) and a walk that throws keys a sentinel,
+so a failed read can split a series, never join the runs from before the upgrade; a script that names no local
+module keeps its 3.17.0 key. What the key leaves out: the files the script `open()`s (its data: one regenerated before
+each run would make every run new, and k6 does not document what a relative `open()` resolves against), a module
+named at run time (the label then says `inputs partly keyed`), a remote module beyond its URL, a commented-out import
+(keyed anyway: comments are not stripped), k6's own config file and the other variables k6 is handed (`CI`, `LANG`,
+`TZ`, `NODE_*`, the proxy), which a script can read through `__ENV` to set its load — `k6 run` hands it the system
+environment by default, and `test/e2e/k6PerfCheck.test.ts` (E5) pins that `__ENV.CI` changes the load and keeps the
+key. The `K6_*` settings are read from the MCP server's environment, so a value that changes between server starts
+(a dated `K6_OUT` file) starts a new series at each start, not at each run. `--summary-export` has two shapes: the
+legacy one perf_check reads (each metric's thresholds as `{ "<expression>": <failed> }`), and the raw one an option
+(`newMachineReadableSummary`, which a `K6_*` setting can turn on) switches it to, with no metric perf_check reads — such
+a run is not kept, and says so. A script's `handleSummary` never suppresses the export: k6's `summary-wrapper.js`
+writes it whatever `handleSummary` returns. A label shows a query, the local modules and the `K6_*` settings as six
+hex digits of a digest (`?…#ab12cd`).
 
 ## What a scan of the project's own files leaves out
 

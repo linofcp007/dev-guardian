@@ -10,9 +10,10 @@
  *   - `guardian://scans/history` holds no `perf` row, so /guardian-report
  *     trend and /guardian-incident never tell the model to leave them out, and
  *     say they are not there (R1-DG-H-3);
- *   - the k6 series is keyed by its inputs only — the script, its content and
- *     the `K6_*` settings perf_check hands k6 —, never a VU count k6 measured
- *     (R2-DG-HZ-1, the user's ruling; R1-DG-H-2's `vus_max` min jittered).
+ *   - the k6 series is keyed by its inputs only — the script, its content, the
+ *     local modules it imports (3.18.0) and the `K6_*` settings perf_check
+ *     hands k6 —, never a VU count k6 measured (R2-DG-HZ-1, the user's ruling;
+ *     R1-DG-H-2's `vus_max` min jittered).
  */
 
 import { readFileSync } from 'node:fs';
@@ -51,16 +52,25 @@ describe("perf_check's history in the prose", () => {
   // measured, whose min jitters when the VUs' init outlasts k6's first sample.
   it('R2-DG-HZ-1: the prose says the k6 series is the script, its content and the K6_* settings, a changed setting a new series', () => {
     const skill = read('skills/guardian-performance/SKILL.md');
-    expect(skill).toContain('no k6, o script, o conteúdo e as variáveis `K6_*` que recebe — mudar uma começa outra série)');
+    // DG-15: the local modules the script imports are inputs too; a file it open()s is not.
+    expect(skill).toContain(
+      'no k6, o script, o conteúdo, os módulos locais que importa e as variáveis `K6_*` que recebe — mudar um deles começa outra série; um ficheiro que o script abre com `open()` não conta)',
+    );
     expect(skill).not.toMatch(/vus_max/);
     const changelog = read('CHANGELOG.md');
     expect(changelog).toContain(
       'for k6 the script, its content and the `K6_*` settings perf_check hands k6 (a digest of them: a value is never stored or shown) — never a VU count k6 measured, so a changed setting starts a new series',
     );
     expect(changelog).not.toMatch(/VUs k6 set up before the start/);
-    expect(read('docs/maintainers/architecture.md')).toContain(
+    const architecture = read('docs/maintainers/architecture.md');
+    expect(architecture).toContain(
       'the k6 series from its inputs only: the script, its content and a digest of the `K6_*` settings perf_check hands k6, never a VU count k6 measured',
     );
+    // B142-04: what the key leaves out, as measured — the settings are the server's, fixed per start, not per run.
+    expect(architecture).toContain('the local modules the script imports');
+    expect(architecture).toContain('the files the script `open()`s');
+    expect(architecture).toContain('so a value that changes between server starts (a dated `K6_OUT` file) starts a new series at each start, not at each run');
+    expect(architecture).not.toMatch(/names a per-run file makes every run a new series/);
     const source = read('mcp/src/metrics/perfSeries.ts');
     expect(source).toContain('and the `K6_*` settings perf_check hands k6');
     expect(source).not.toMatch(/vus_max/);
