@@ -1,7 +1,8 @@
 # dev-guardian Semgrep config client-trust.
 # Confiar no cliente: o que uma app web (Next.js, Vite, Expo, SvelteKit,
-# Astro, Nuxt, Gatsby, CRA) entrega ao browser e o que um webhook de
-# pagamentos aceita sem provar de onde veio. Em JS e TS. Corre dentro do
+# Astro, Nuxt, Gatsby, CRA) entrega ao browser, o que um webhook de
+# pagamentos aceita sem provar de onde veio, e de quem são os dados que uma
+# API lê ou escreve quando o pedido o diz. Em JS e TS. Corre dentro do
 # `scan_sast` como o `web-js.yml` (ficheiro do plugin, também no
 # `local_only`), e por isso também no `security_scan_full` e no `review_pr`.
 #
@@ -20,6 +21,10 @@
 #   |                                |         | decide pelo tipo sem verificar      |
 #   | client-webhook-parsed-body     | CWE-347 | `constructEvent` com o corpo já     |
 #   |                                |         | interpretado como JSON              |
+#   | client-identity-from-request   | CWE-639 | o dono de um registo (`userId`,     |
+#   |                                |         | `ownerId`, `tenantId`...) numa      |
+#   |                                |         | chamada à base de dados vem do      |
+#   |                                |         | pedido de um parâmetro da função    |
 #
 # Os ficheiros `.env*` (também os que o git ignora, como o `.env.local`,
 # onde estes segredos costumam estar) não são lidos aqui: o Semgrep não lê
@@ -125,6 +130,64 @@
 #     e a "correção" habitual é desligar a verificação. Um `req.body` de uma
 #     rota de API do Next.js (pages/) sem `bodyParser: false` não é visto.
 #
+# client-identity-from-request (3.18.0)
+#   - Um IDOR: o dono de um registo vem do pedido, e quem faz o pedido
+#     escolhe de quem são os dados que a chamada lê, cria, altera ou apaga.
+#     Em modo de pesquisa, não de taint: um rascunho em taint acertava nos
+#     mesmos casos e deixava 63 timeouts de ponto fixo em 32 dos 69 ficheiros
+#     de JS do dev-spec-driven (cada um, um achado que pode piscar entre
+#     corridas); este deixa 0.
+#   - O pedido é um PARÂMETRO de uma função que envolve a chamada, qualquer
+#     uma (o handler de uma rota, também dentro de uma transação ou de um
+#     `.then`): `<p>.body.X`, `<p>.query.X`, `<p>.params.X`, o
+#     `<p>.request.body.X` e o `<p>.request.query.X` do Koa, o
+#     `await <p>.json()` e os search params (`new URL(<p>.url)`,
+#     `<p>.nextUrl.searchParams.get`) do Next.js; direto no objeto, ou numa
+#     variável tirada dele antes na mesma função (`const { userId } =
+#     req.body`, `let x = req.query.y`). Um objeto que não é parâmetro de
+#     nenhuma função à volta (um `opts` local, o `route` do Vue, a resposta
+#     de um `fetch`, um `cache.get('userId')`) não conta.
+#   - A chave do dono: `user`, `owner`, `account`, `tenant`, `customer` ou
+#     `author`, com ou sem `Id` / `_id`, em qualquer caixa (o `UserId` do
+#     Sequelize), num objeto dentro de uma chamada `x.<op>(...)` com um nome
+#     de operação de base de dados (Prisma, Mongoose, Sequelize, Knex,
+#     MongoDB: find*, count, where, create*, insert*, update*, upsert,
+#     replaceOne, delete*, destroy, findOneAnd*). E o próprio registo de um
+#     utilizador escolhido pela sua chave (`_id`, `id`) com um valor do pedido
+#     cujo nome diz id de um dono (`req.body.userId`, `accountId`), só numa
+#     ESCRITA: ler um perfil público pelo id não dispara. Um achado por
+#     objeto.
+#   - Cala-se com uma comparação que recusa: o valor pedido (o membro ou a
+#     variável) comparado com `!==` ou `!=`, em qualquer ordem, com um valor
+#     que não é um literal nem um campo do pedido, num `if` antes da chamada
+#     cujo ramo sai (`return`, `throw`, ou um bloco com um deles). Um
+#     `if (!userId)`, uma comparação com um literal ou com outro campo do
+#     mesmo pedido (consistência, não autorização) e um ramo que não sai (um
+#     aviso, o `res.sendStatus(403)` do Express sem `return`) não calam.
+#   - Falsos positivos conhecidos: uma verificação que a regra não lê (um
+#     helper de autorização que recebe o id, `assertMember(userId)`; o papel
+#     de quem chama, `req.user.role`; um middleware, como o
+#     `security.appendUserId()` do Juice Shop, que escreve o id da sessão em
+#     `req.body.UserId`; um endpoint de administração que age por outro
+#     utilizador); uma tarefa atribuída a outro (`userId: assignee`); uma
+#     comparação positiva à volta da chamada (`if (userId === req.user.id)
+#     { ... }`); um `author` que é só um nome (um livro de visitas); um
+#     parâmetro com nome de pedido que não o é (`function f(opts)` com
+#     `opts.query.userId`). Falsos negativos do silenciador: um alias de um
+#     campo do pedido do outro lado da comparação ainda cala, e um bloco com
+#     um `return` em qualquer ponto conta como sair, também dentro de um `if`
+#     aninhado ou de um callback (o Semgrep procura o `return` no bloco
+#     inteiro).
+#   - Não vê: um valor que passa por outra função ou outro ficheiro, ou
+#     embrulhado (`Number(req.params.userId)`); os DTOs do Nest (`@Body()`)
+#     com TypeORM; SQL cru (é do `web-js-sql-template`); o Knex
+#     `.where('user_id', req.query.userId)` (dois argumentos); uma chave de
+#     dono fora da lista (`orgId`, `workspaceId`, `teamId`, `createdBy`); um
+#     handler que desestrutura o pedido (`({ body })`). Só JS e TS: o Python
+#     fica de fora.
+#   - Médio (WARNING), nunca alto: decide por um nome e por uma forma, não
+#     pelo que a sessão permite; nunca bloqueia um `--fail-on high`.
+#
 # CORPUS REAL (2026-10-28, Semgrep 1.182.0): três starters públicos de
 # Next.js + Supabase + Stripe, clonados com --depth 1 —
 # vercel/nextjs-subscription-payments (bdd0813), KolbySisk/
@@ -212,6 +275,20 @@
 # 3 vazio; o corpus real e o mcp/src continuam com 0 achados, e um ficheiro
 # de 0,9 MB de linhas cheias de aspas e barras corre no mesmo tempo que com
 # a expressão da revisão 3.
+#
+# client-identity-from-request (3.18.0, Semgrep 1.182.0). Recall, num código
+# com IDORs conhecidos: OWASP Juice Shop (1618a61, o pin das avaliações do
+# llm_scan), a rota da "forged review" (`routes/createProductReviews.ts`,
+# `author: req.body.author` num `insert`) dispara; a da "forged feedback" é a
+# API REST gerada pelo finale (nenhum código com a forma) e não é vista. Os
+# outros 12 achados no Juice Shop são todos `UserId: req.body.UserId` que o
+# middleware `security.appendUserId()` escreveu antes a partir do token:
+# falsos positivos da classe "um middleware". Precisão: o corpus do web-js
+# (uptime-kuma e7420f8fa5, actual 7e683249a9, outline aaab59d8ca) e duas APIs
+# Express (gothinkster/node-express-realworld-example-app 30b68e1e88, Prisma;
+# hagopj13/node-express-boilerplate 179ae84efe, Mongoose), 0 achados; o
+# mcp/src deste repositório e o JS do dev-spec-driven (mcp/lib, cli, hooks),
+# 0 achados.
 #
 # Fixtures em mcp/test/fixtures/client-trust/{hits,misses}/ (hits/ com uma
 # linha `// BUG: <id-da-regra>` por achado, na linha onde ele começa),
@@ -484,3 +561,184 @@ rules:
           - pattern-either:
               - pattern: $S.constructEvent($REQ.body, ...)
               - pattern: $S.constructEventAsync($REQ.body, ...)
+
+  # O dono de um registo vem do pedido (um IDOR). Modo de pesquisa, nunca
+  # taint (os timeouts de ponto fixo do cabeçalho). O achado é o objeto que
+  # tem a chave do dono: um por objeto (a mensagem não cita a chave, para não
+  # repetir o mesmo objeto por cada chave que ele tenha).
+  - id: client-identity-from-request
+    metadata:
+      category: security
+      subcategory: client-trust
+      cwe:
+        - "CWE-639: Authorization Bypass Through User-Controlled Key"
+      owasp:
+        - "A01:2025 - Broken Access Control"
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >-
+      O dono deste registo vem do pedido: quem faz o pedido escolhe de quem
+      são os dados que esta chamada lê, cria, altera ou apaga (CWE-639). Tirar
+      o dono da sessão autenticada (`req.user.id`, `session.user.id`, o `sub`
+      de um token verificado), ou comparar o id pedido com o da sessão e
+      recusar o pedido antes da chamada quando diferem. Um endpoint de
+      administração que age por outro utilizador verifica primeiro o papel de
+      quem chama.
+    patterns:
+      # O pedido é um parâmetro de uma função à volta, QUALQUER uma: a de uma
+      # transação (`$transaction(async (tx) => ...)`) ou de um `.then` dentro
+      # do handler não o é, e o handler continua a ser. As duas formas cobrem
+      # as funções com nome, async, métodos, expressões de função e arrows.
+      - pattern-either:
+          - pattern-inside: |
+              function $FN(..., $P, ...) { ... }
+          - pattern-inside: |
+              function (..., $P, ...) { ... }
+      # A chave do dono num objeto dentro de uma chamada à base de dados; ou o
+      # registo de um utilizador escolhido pela sua chave com um id de dono do
+      # pedido, numa escrita. (Cada ramo liga o seu `$OP`: uma condição só vê
+      # as metavariáveis que o seu ramo liga.)
+      - pattern-either:
+          - patterns:
+              - pattern-inside: $DB.$OP(...)
+              - pattern: '{..., $K: $V, ...}'
+              - metavariable-regex:
+                  metavariable: $OP
+                  regex: ^(?:find|findMany|findFirst|findFirstOrThrow|findUnique|findUniqueOrThrow|findOne|findAll|findAndCountAll|findOrCreate|count|where|create|createMany|bulkCreate|insert|insertOne|insertMany|update|updateMany|updateOne|upsert|replaceOne|delete|deleteMany|deleteOne|destroy|findOneAndUpdate|findOneAndDelete|findOneAndReplace)$
+              - metavariable-regex:
+                  metavariable: $K
+                  regex: (?i)^(?:user|owner|account|tenant|customer|author)(?:_?id)?$
+          - patterns:
+              - pattern-inside: $DB.$OP(...)
+              - pattern: '{..., $K: $V, ...}'
+              - metavariable-regex:
+                  metavariable: $OP
+                  regex: ^(?:update|updateMany|updateOne|upsert|replaceOne|delete|deleteMany|deleteOne|destroy|findOneAndUpdate|findOneAndDelete|findOneAndReplace)$
+              - metavariable-regex:
+                  metavariable: $K
+                  regex: ^_?id$
+              # O `metavariable-regex` ancora no início do texto: daí o `.*`.
+              - metavariable-regex:
+                  metavariable: $V
+                  regex: (?i)^(?:.*\.)?(?:user|owner|account|tenant|customer|author)_?id$
+      # O valor vem do pedido de `$P`: um membro, ou uma variável tirada dele
+      # antes, na mesma função. Cada ramo casa o próprio objeto com a forma
+      # do valor (nunca todos os objetos do ficheiro para os filtrar depois:
+      # custava mais do que a regra inteira); o `$V` dos ramos de cima é o
+      # mesmo valor, pela mesma chave do mesmo objeto.
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: '{..., $K: $P.$W.$F, ...}'
+                  - pattern: '{..., $K: $P.request.$W.$F, ...}'
+              - metavariable-regex:
+                  metavariable: $W
+                  regex: ^(?:body|query|params)$
+          - pattern: '{..., $K: $P.nextUrl.searchParams.get(...), ...}'
+          - patterns:
+              - pattern-inside: |
+                  $B = await $P.json();
+                  ...
+              - pattern: '{..., $K: $B.$F, ...}'
+          - patterns:
+              - pattern-inside: |
+                  {..., searchParams, ...} = new URL($P.url);
+                  ...
+              - pattern: '{..., $K: searchParams.get(...), ...}'
+          # `$X = ...` casa também `const`, `let`, `var` e uma atribuição.
+          - patterns:
+              - pattern-either:
+                  - pattern-inside: |
+                      $V = $P.$W.$G;
+                      ...
+                  - pattern-inside: |
+                      $V = $P.request.$W.$G;
+                      ...
+                  - pattern-inside: |
+                      {..., $V, ...} = $P.$W;
+                      ...
+                  - pattern-inside: |
+                      {..., $V, ...} = $P.request.$W;
+                      ...
+              - pattern: '{..., $K: $V, ...}'
+              - metavariable-regex:
+                  metavariable: $W
+                  regex: ^(?:body|query|params)$
+          - patterns:
+              - pattern-inside: |
+                  {..., $V, ...} = await $P.json();
+                  ...
+              - pattern: '{..., $K: $V, ...}'
+          - patterns:
+              - pattern-inside: |
+                  {..., searchParams, ...} = new URL($P.url);
+                  ...
+              - pattern-inside: |
+                  $V = searchParams.get(...);
+                  ...
+              - pattern: '{..., $K: $V, ...}'
+      # Calado por uma comparação que recusa: `$V` (o membro ou a variável)
+      # com `!==` ou `!=`, em qualquer ordem, num `if` antes da chamada cujo
+      # ramo sai: um `return`, um `throw`, ou um bloco com um deles. Nunca
+      # `===` / `==`: uma comparação positiva só guarda o que está dentro do
+      # seu ramo. As 16 formas por extenso, nunca um `if ($C) $R` com um
+      # `metavariable-pattern` sobre a condição e o ramo: esse lia cada `if`
+      # do ficheiro e custava mais do que a regra inteira (medido), e no ramo
+      # achava um `return` em qualquer ponto.
+      - pattern-not-inside:
+          patterns:
+            - pattern-either:
+                - pattern-inside: |
+                    if (<... $V !== $Y ...>) return ...;
+                    ...
+                - pattern-inside: |
+                    if (<... $V !== $Y ...>) throw $E;
+                    ...
+                - pattern-inside: |
+                    if (<... $V !== $Y ...>) { ... return ...; }
+                    ...
+                - pattern-inside: |
+                    if (<... $V !== $Y ...>) { ... throw $E; }
+                    ...
+                - pattern-inside: |
+                    if (<... $Y !== $V ...>) return ...;
+                    ...
+                - pattern-inside: |
+                    if (<... $Y !== $V ...>) throw $E;
+                    ...
+                - pattern-inside: |
+                    if (<... $Y !== $V ...>) { ... return ...; }
+                    ...
+                - pattern-inside: |
+                    if (<... $Y !== $V ...>) { ... throw $E; }
+                    ...
+                - pattern-inside: |
+                    if (<... $V != $Y ...>) return ...;
+                    ...
+                - pattern-inside: |
+                    if (<... $V != $Y ...>) throw $E;
+                    ...
+                - pattern-inside: |
+                    if (<... $V != $Y ...>) { ... return ...; }
+                    ...
+                - pattern-inside: |
+                    if (<... $V != $Y ...>) { ... throw $E; }
+                    ...
+                - pattern-inside: |
+                    if (<... $Y != $V ...>) return ...;
+                    ...
+                - pattern-inside: |
+                    if (<... $Y != $V ...>) throw $E;
+                    ...
+                - pattern-inside: |
+                    if (<... $Y != $V ...>) { ... return ...; }
+                    ...
+                - pattern-inside: |
+                    if (<... $Y != $V ...>) { ... throw $E; }
+                    ...
+            # O outro lado não é um literal (uma verificação de tipo ou de
+            # presença) nem um campo de um pedido (a consistência de duas
+            # afirmações de quem pede).
+            - metavariable-regex:
+                metavariable: $Y
+                regex: ^(?!(?:undefined|null|true|false|NaN|-?\d[\d_.]*|'[^']*'|"[^"]*"|`[^`$]*`)$)(?![\w$]+(?:\.request)?\.(?:body|query|params)\.)
