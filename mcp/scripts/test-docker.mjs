@@ -13,11 +13,12 @@
  * `node:sqlite` lacks `isTransaction` and the busy-timeout option — run with
  * coverage, so the thresholds in `vitest.config.ts` are enforced there; and
  * `node:24-bookworm-slim`, the current LTS. `--image` (repeatable) replaces
- * the list. `--toolchain` adds pinned Semgrep and Bandit (pip) and gitleaks,
- * Trivy and k6 (release archives, the same versions and sha256 sums as
- * `src/runners/installCatalog.ts`) and sets `GUARDIAN_REQUIRE_SEMGREP=1`,
- * `GUARDIAN_REQUIRE_GITLEAKS=1` and `GUARDIAN_REQUIRE_K6=1`, so a missing
- * scanner fails instead of skipping.
+ * the list. `--toolchain` adds pinned Semgrep, Bandit and squawk (pip; squawk
+ * at the catalog's PyPI pin) and gitleaks, Trivy and k6 (release archives, the
+ * same versions and sha256 sums as `src/runners/installCatalog.ts`) and sets
+ * `GUARDIAN_REQUIRE_SEMGREP=1`, `GUARDIAN_REQUIRE_GITLEAKS=1`,
+ * `GUARDIAN_REQUIRE_K6=1` and `GUARDIAN_REQUIRE_SQUAWK=1`, so a missing scanner
+ * fails instead of skipping.
  *
  * How it runs: `git archive HEAD` of the repository is streamed into
  * `docker run --rm --init -i` — the committed tree, so commit first — unpacked
@@ -52,7 +53,7 @@ const USAGE = `usage: node scripts/test-docker.mjs [--image <name>]... [--toolch
 
 Runs the vitest suite in Linux containers (git archive HEAD, npm ci, vitest run as the node user).
   --image <name>      a Docker image with Node >= 22.13 and apt (repeatable; replaces ${DEFAULT_IMAGES.join(', ')})
-  --toolchain         add pinned Semgrep, Bandit, gitleaks, Trivy and k6; a missing scanner then fails the tests
+  --toolchain         add pinned Semgrep, Bandit, squawk, gitleaks, Trivy and k6; a missing scanner then fails the tests
   --no-coverage       skip coverage on the floor image (${FLOOR_IMAGE} runs with coverage by default)
   --max-workers <n>   vitest workers per container (default 4)
   --only <path>       run only these test files or directories (repeatable)
@@ -134,9 +135,10 @@ function pinnedReleases(arch) {
   const trivyVersion = /TRIVY_INSTALL_TAG = 'v([^']+)'/.exec(text)?.[1];
   const gitleaksVersion = /GITLEAKS_VERSION = '([^']+)'/.exec(text)?.[1];
   const k6Version = /const K6_VERSION = '([^']+)'/.exec(text)?.[1];
+  const squawkVersion = /export const SQUAWK_VERSION = '([^']+)'/.exec(text)?.[1];
   // A catalog that no longer spells them so must fail here, not build a URL holding "undefined".
-  if (trivyVersion === undefined || gitleaksVersion === undefined || k6Version === undefined) {
-    throw new Error('no Trivy, gitleaks or k6 version in installCatalog.ts');
+  if (trivyVersion === undefined || gitleaksVersion === undefined || k6Version === undefined || squawkVersion === undefined) {
+    throw new Error('no Trivy, gitleaks, k6 or squawk version in installCatalog.ts');
   }
   /**
    * @param {string} tool
@@ -155,6 +157,8 @@ function pinnedReleases(arch) {
     trivy: { ...asset('trivy', trivyVersion), url: `https://github.com/aquasecurity/trivy/releases/download/v${trivyVersion}/` },
     gitleaks: { ...asset('gitleaks', gitleaksVersion), url: `https://github.com/gitleaks/gitleaks/releases/download/v${gitleaksVersion}/` },
     k6: { ...asset('k6', k6Version), url: `https://github.com/grafana/k6/releases/download/v${k6Version}/` },
+    // squawk is a wheel: the catalog's PyPI pin.
+    squawk: squawkVersion,
   };
 }
 
@@ -208,7 +212,7 @@ function prepare(image, o, arch) {
       );
     };
     lines.push(
-      `RUN python3 -m venv /opt/scanners && /opt/scanners/bin/pip install --no-cache-dir ${PIP_PINS.join(' ')}`,
+      `RUN python3 -m venv /opt/scanners && /opt/scanners/bin/pip install --no-cache-dir ${[...PIP_PINS, `squawk-cli==${r.squawk}`].join(' ')}`,
       fetch(r.gitleaks, 'gitleaks'),
       fetch(r.trivy, 'trivy'),
       fetch(r.k6, 'k6'),
@@ -255,7 +259,7 @@ function runIn(ref, image, o, tar) {
     'npm ci --no-audit --no-fund --loglevel=error',
     `exec ${vitest.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
   ].join('\n');
-  const env = o.toolchain ? ['-e', 'GUARDIAN_REQUIRE_SEMGREP=1', '-e', 'GUARDIAN_REQUIRE_GITLEAKS=1', '-e', 'GUARDIAN_REQUIRE_K6=1'] : [];
+  const env = o.toolchain ? ['-e', 'GUARDIAN_REQUIRE_SEMGREP=1', '-e', 'GUARDIAN_REQUIRE_GITLEAKS=1', '-e', 'GUARDIAN_REQUIRE_K6=1', '-e', 'GUARDIAN_REQUIRE_SQUAWK=1'] : [];
   const name = `dev-guardian-test-${process.pid}-${Date.now()}`;
   return new Promise((resolveRun) => {
     const child = spawn('docker', ['run', '--rm', '--init', '-i', '--name', name, '--user', 'node', '-e', 'HOME=/home/node', ...env, ref, 'sh', '-c', script], {

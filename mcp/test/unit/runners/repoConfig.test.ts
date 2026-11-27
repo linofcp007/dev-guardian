@@ -186,6 +186,7 @@ const SPAWNS: Readonly<Record<string, RepoConfigRunner | 'none' | `reads none he
   'tools/qualityCheck.ts|staticcheck': 'staticcheck',
   'runners/shellcheckRun.ts|shellcheck': 'shellcheck',
   'runners/cppcheckRun.ts|cppcheck': 'cppcheck',
+  'runners/squawkRun.ts|squawk': 'squawk',
   'runners/gosecRun.ts|gosec': 'none',
   'runners/govulncheckRun.ts|govulncheck': 'none',
   'runners/psalmRun.ts|php': 'none',

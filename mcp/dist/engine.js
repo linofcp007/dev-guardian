@@ -19766,6 +19766,14 @@ var init_repoConfig = __esm({
         { file: "compile_commands.json", decides: "its files, defines and include paths decide what is analysed" },
         { file: "build/compile_commands.json", decides: "its files, defines and include paths decide what is analysed" }
       ],
+      // The root one only, passed with `--config` (runners/squawkRun.ts): squawk would otherwise look for one from its
+      // working directory upwards, past the project. A nested one is never read.
+      squawk: [
+        {
+          file: ".squawk.toml",
+          decides: "its excluded rules and paths, the Postgres version and whether each file runs in a transaction decide what is reported"
+        }
+      ],
       // ESLint runs only on the project's own configuration (quality_check).
       eslint: [
         ...["eslint.config.js", "eslint.config.mjs", "eslint.config.cjs", "eslint.config.ts", "eslint.config.mts", "eslint.config.cts"].map(
@@ -55274,7 +55282,9 @@ var init_refConfig = __esm({
       staticcheck: "not_in_gate",
       eslint: "not_in_gate",
       shellcheck: "not_in_gate",
-      detekt: "not_in_gate"
+      detekt: "not_in_gate",
+      // review_pr only (runners/squawkRun.ts): the CLI gate runs no squawk.
+      squawk: "not_in_gate"
     };
     RESET_ROOT_FILES = [".gitleaksignore", ".gitleaks.toml"];
     RESET_NESTED_FILE = ".semgrepignore";
@@ -70146,6 +70156,165 @@ var init_qualityCheck = __esm({
   }
 });
 
+// src/runners/scannerParsers/squawk.ts
+function mapViolation(raw, ctx) {
+  const rule = getString(raw, "rule_name");
+  const file2 = getString(raw, "file");
+  if (rule === void 0 || rule === "" || rule === SQUAWK_SYNTAX_ERROR_RULE || file2 === void 0 || file2 === "") return null;
+  const message3 = getString(raw, "message") ?? rule;
+  const help = getString(raw, "help");
+  const note = getString(raw, "note");
+  const line = getNumber(raw, "line");
+  const lineEnd = getNumber(raw, "line_end");
+  const input2 = {
+    tool: SQUAWK_TOOL_NAME,
+    rule_id: rule,
+    severity: "low",
+    category: "bug",
+    subcategory: "migration-safety",
+    title: message3,
+    message: `${rule}: ${message3}${note ? ` (${note})` : ""}${help ? ` \u2014 ${help}` : ""} (https://squawkhq.com/docs/${rule})`,
+    file_path: toRelativeIfPossible(file2, ctx.project_path),
+    fix_available: false
+  };
+  if (line !== void 0) input2.line_start = line + 1;
+  const end = lineEnd !== void 0 && line !== void 0 && lineEnd >= line ? lineEnd : line;
+  if (end !== void 0) input2.line_end = end + 1;
+  return makeFinding(input2);
+}
+var SQUAWK_TOOL_NAME, SQUAWK_SYNTAX_ERROR_RULE, squawkParser;
+var init_squawk = __esm({
+  "src/runners/scannerParsers/squawk.ts"() {
+    "use strict";
+    init_scannerParsers();
+    SQUAWK_TOOL_NAME = "squawk";
+    SQUAWK_SYNTAX_ERROR_RULE = "syntax-error";
+    squawkParser = {
+      name: SQUAWK_TOOL_NAME,
+      parse(input2, ctx = {}) {
+        const findings = [];
+        for (const raw of asArray(parseInputAsJson(input2))) {
+          const finding6 = mapViolation(raw, ctx);
+          if (finding6) findings.push(finding6);
+        }
+        return { findings, cves: [] };
+      }
+    };
+  }
+});
+
+// src/runners/squawkRun.ts
+function isSqlFile(path3) {
+  return /\.sql$/i.test(path3);
+}
+function squawkOptIn(scanRoot) {
+  const kind = projectPathKind(scanRoot, SQUAWK_CONFIG);
+  return kind === "absent" ? "absent" : kind === "file" ? "file" : "unusable";
+}
+function globLiteral(path3) {
+  return path3.replace(/[*?[\]]/g, (c) => `[${c}]`);
+}
+async function squawkMigrations(args) {
+  const fixed = ["--reporter", "json", "--config", SQUAWK_CONFIG, "--no-error-on-unmatched-pattern", "--"];
+  const batches = batchArgs(args.files.map(globLiteral), { command: SQUAWK, fixedArgs: fixed });
+  const env = testCommandEnv();
+  const reports = [];
+  const failures = [];
+  const partial3 = [];
+  let cancelled = false;
+  for (const [i, batch] of batches.entries()) {
+    if (args.signal.aborted) {
+      cancelled = true;
+      break;
+    }
+    const run2 = await runProcess({
+      command: "squawk",
+      args: [...fixed, ...batch],
+      cwd: args.scanRoot,
+      env,
+      extendEnv: false,
+      signal: args.signal,
+      ...args.onLog ? { onLog: args.onLog } : {},
+      stdoutCapBytes: REPORT_CAP_BYTES
+    });
+    const at = batches.length > 1 ? `batch ${String(i + 1)}/${String(batches.length)}: ` : "";
+    if (run2.outcome === "cancelled") {
+      cancelled = true;
+      break;
+    }
+    if (run2.outcome !== "completed" && run2.outcome !== "failed") {
+      failures.push(`${at}did not finish (${run2.outcome})`);
+      continue;
+    }
+    const report = judgeSquawk(run2);
+    if ("failure" in report) {
+      failures.push(`${at}${report.failure}`);
+      continue;
+    }
+    if (report.text !== null) reports.push(report.text);
+    for (const p of report.partial) if (!partial3.some((q) => q.file === p.file)) partial3.push(p);
+  }
+  const described = `${String(args.files.length)} changed .sql file(s)${batches.length > 1 ? ` in ${String(batches.length)} batches` : ""}`;
+  if (failures.length > 0 || cancelled) {
+    return {
+      toolRun: { name: SQUAWK, status: "failed", reason: cancelled && failures.length === 0 ? "cancelled" : `${described}: ${failures.join("; ")}` },
+      missing: true,
+      reports,
+      cancelled
+    };
+  }
+  const toolRun = { name: SQUAWK, status: "ok", reason: `${described} checked` };
+  if (partial3.length > 0) {
+    const shown = partial3.slice(0, 5).map((p) => p.file).join(", ");
+    toolRun.reason += `; partial: ${String(partial3.length)} file(s) squawk could not parse past an error (${shown}${partial3.length > 5 ? ", \u2026" : ""})`;
+    toolRun.partially_parsed = partial3;
+  }
+  return { toolRun: await nameRepoConfig(toolRun, args.scanRoot, SQUAWK), missing: partial3.length > 0, reports, cancelled };
+}
+function judgeSquawk(run2) {
+  const why = () => run2.stderr.split(/\r?\n/).map((l) => l.trim()).find((l) => l !== "") ?? "no report was written";
+  if (run2.exitCode !== 0 && run2.exitCode !== 1) return { failure: `exit ${String(run2.exitCode)}: ${why()}` };
+  if (run2.stdout.trim() === "") return run2.exitCode === 0 ? { text: null, partial: [] } : { failure: `exit 1: ${why()}` };
+  const parsed2 = parseInputAsJson(run2.stdout);
+  if (!Array.isArray(parsed2)) return { failure: `exit ${String(run2.exitCode)}: no readable report (${why()})` };
+  const partial3 = [];
+  for (const v of asArray(parsed2)) {
+    if (getString(v, "rule_name") !== SQUAWK_SYNTAX_ERROR_RULE) continue;
+    const file2 = getString(v, "file");
+    if (file2 !== void 0 && !partial3.some((p) => p.file === file2)) {
+      partial3.push({ file: file2, type: "Syntax error", message: getString(v, "message") ?? "could not parse" });
+    }
+  }
+  return { text: run2.stdout, partial: partial3 };
+}
+async function squawkConfigWarning(cwd, base2, head) {
+  const r = await git(cwd, ["diff", "-z", "--name-status", "--relative", "--no-renames", `${base2}...${head}`, "--", SQUAWK_CONFIG]);
+  if (r.exitCode !== 0) return null;
+  const entry = parseNameStatus(r.stdout).find((e) => e.path === SQUAWK_CONFIG);
+  if (entry === void 0) return null;
+  if (entry.status === "deleted") {
+    return `This diff removes ${SQUAWK_CONFIG}, which turns squawk on: after it, no review runs squawk over this project's migrations. Review that change: a removal hides every lock and rewrite squawk would report, it does not fix them.`;
+  }
+  return `This diff changes ${SQUAWK_CONFIG}, which squawk honours: a rule or path it excludes is not reported (this review applied the reviewed tree's copy). Review that change before trusting a quiet migration result: an exclusion added there hides a finding, it does not fix it.`;
+}
+var SQUAWK, SQUAWK_CONFIG, REPORT_CAP_BYTES;
+var init_squawkRun = __esm({
+  "src/runners/squawkRun.ts"() {
+    "use strict";
+    init_testCommandEnv();
+    init_projectFs();
+    init_argBatches();
+    init_git();
+    init_processRunner();
+    init_repoConfig();
+    init_scannerParsers();
+    init_squawk();
+    SQUAWK = "squawk";
+    SQUAWK_CONFIG = ".squawk.toml";
+    REPORT_CAP_BYTES = 50 * 1024 * 1024;
+  }
+});
+
 // src/tools/reviewPr.ts
 import { lstatSync as lstatSync15 } from "node:fs";
 import { basename as basename9, join as join65 } from "node:path";
@@ -70288,6 +70457,26 @@ async function runClientTrust2(out, args) {
   out.missing_tools.push(...result.missing);
   out.parser_inputs.push({ parser: clientTrustParser(result.findings), input: null });
 }
+async function runSquawk(ctx, out, args) {
+  if (args.files.length === 0) return;
+  const optIn = squawkOptIn(args.scanRoot);
+  if (optIn === "absent") return;
+  if (optIn === "unusable") {
+    out.tools_run.push({ name: SQUAWK, status: "failed", reason: "the root .squawk.toml is not a regular file inside the project, and was not read" });
+    out.missing_tools.push(SQUAWK);
+    return;
+  }
+  if (!await scannerAvailable(SQUAWK)) {
+    out.tools_run.push({ name: SQUAWK, status: "skipped", reason: "not_installed" });
+    out.missing_tools.push(SQUAWK);
+    return;
+  }
+  const pass2 = await squawkMigrations({ scanRoot: args.scanRoot, files: args.files, signal: ctx.signal, ...ctx.onLog ? { onLog: ctx.onLog } : {} });
+  for (const report of pass2.reports) out.parser_inputs.push({ parser: squawkParser, input: report });
+  out.tools_run.push(pass2.toolRun);
+  if (pass2.missing) out.missing_tools.push(SQUAWK);
+  out.cancelled ||= pass2.cancelled;
+}
 async function runTrivy2(ctx, out, args) {
   if (!await scannerAvailable("trivy")) {
     out.tools_run.push({ name: "trivy", status: "skipped", reason: "not_installed" });
@@ -70417,6 +70606,8 @@ var init_reviewPr = __esm({
     init_cppcheck();
     init_gosec();
     init_semgrep();
+    init_squawk();
+    init_squawkRun();
     init_trivy();
     init_semgrepConfigs();
     init_semgrepReport();
@@ -70481,6 +70672,7 @@ var init_reviewPr = __esm({
             if (changed.some(isGoSource)) out.tools_run.push({ name: GOSEC, status: "failed", reason: unavailable });
             if (cppSources(changed).length > 0) out.tools_run.push({ name: "cppcheck", status: "failed", reason: unavailable });
             if (touched.some(isManifest)) out.tools_run.push({ name: "trivy", status: "failed", reason: unavailable });
+            if (changed.some(isSqlFile)) out.tools_run.push({ name: SQUAWK, status: "failed", reason: unavailable });
           } else {
             const present5 = changed.filter((f) => isFileOnDisk(join65(scanRoot, f)));
             if (tree !== null) readSource = snapshotSources(scanRoot, present5);
@@ -70491,6 +70683,7 @@ var init_reviewPr = __esm({
             if (!out.cancelled) await runCppcheck2(ctx, out, { scanRoot, reportDir, files: cppSources(present5) });
             if (!out.cancelled && touched.some(isManifest)) await runTrivy2(ctx, out, { scanRoot, reportDir, touched });
             if (!out.cancelled) await runClientTrust2(out, { scanRoot, files: present5 });
+            if (!out.cancelled) await runSquawk(ctx, out, { scanRoot, files: present5.filter(isSqlFile) });
           }
           if (!out.cancelled) {
             const target = headIsCheckedOut ? { kind: "worktree", untracked: true } : { kind: "commit", sha: head };
@@ -70535,6 +70728,8 @@ var init_reviewPr = __esm({
             `This diff changes ${PROJECT_TRIVYIGNORE}, which Trivy honours: every vulnerability id listed there is not reported (this review applied the reviewed tree's copy). Review that change before trusting a quiet dependency result: an entry added there hides a finding, it does not fix it.`
           );
         }
+        const squawkNote = await squawkConfigWarning(ctx.projectPath, base2, head);
+        if (squawkNote !== null) warnings.push(squawkNote);
         const preexisting = preexistingNote(out.preexistingGaps);
         if (preexisting !== null) warnings.push(preexisting);
         const notApplied = tree === null ? null : describeNotApplied(gitKeysSaid(tree.notApplied));
@@ -72561,6 +72756,9 @@ var init_runNames = __esm({
       // The same callers' pass over the suppressions the change adds (testintegrity/suppressions.ts):
       // absent when no changed file holds a suppression's token; skipped, never failed.
       "guardian-suppressions": scanner("guardian-suppressions"),
+      // review_pr's pass over the changed .sql files when the reviewed tree has a root .squawk.toml
+      // (runners/squawkRun.ts): absent without one, or with no changed .sql file.
+      squawk: scanner("squawk"),
       // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
       "dotnet-sdk": scanner("security-code-scan", "dotnet-analyzers"),
       // Secrets — scan_secrets, scan_wordpress, review_pr (runners/gitleaksScan.ts).
@@ -80804,7 +81002,7 @@ function knownCompromise(toolName, version2) {
   }
   return null;
 }
-var TRIVY_INSTALL_TAG, COSIGN_VERSION, COSIGN_RELEASE_SHA256, SYFT_VERSION, TRIVY_VERSION, GITLEAKS_VERSION, CPPCHECK_VERSION, PSALM_VERSION, PSALM_PHAR_SHA256, PSALM_PHAR_URL, GOSEC_VERSION, SHELLCHECK_VERSION, K6_VERSION, DETEKT_VERSION, DETEKT_JAR_URL, DETEKT_JAR_SHA256, SPOTBUGS_VERSION, SPOTBUGS_TGZ_URL, SPOTBUGS_TGZ_SHA256, SPOTBUGS_ZIP_URL, SPOTBUGS_ZIP_SHA256, FINDSECBUGS_VERSION, FINDSECBUGS_JAR_URL, FINDSECBUGS_JAR_SHA256, RUBOCOP_VERSION, WP_CLI_VERSION, WP_CLI_PHAR_SHA256, ACTIONLINT_VERSION, PSALM_PHAR, WP_CLI_PHAR, DETEKT_JAR2, PS_PROLOGUE, GOVULNCHECK_MODULE, PINNED_RELEASES, TOOL_CATALOG, MANUAL_ONLY_TOOLS;
+var TRIVY_INSTALL_TAG, COSIGN_VERSION, COSIGN_RELEASE_SHA256, SYFT_VERSION, TRIVY_VERSION, GITLEAKS_VERSION, CPPCHECK_VERSION, PSALM_VERSION, PSALM_PHAR_SHA256, PSALM_PHAR_URL, GOSEC_VERSION, SHELLCHECK_VERSION, K6_VERSION, SQUAWK_VERSION, DETEKT_VERSION, DETEKT_JAR_URL, DETEKT_JAR_SHA256, SPOTBUGS_VERSION, SPOTBUGS_TGZ_URL, SPOTBUGS_TGZ_SHA256, SPOTBUGS_ZIP_URL, SPOTBUGS_ZIP_SHA256, FINDSECBUGS_VERSION, FINDSECBUGS_JAR_URL, FINDSECBUGS_JAR_SHA256, RUBOCOP_VERSION, WP_CLI_VERSION, WP_CLI_PHAR_SHA256, ACTIONLINT_VERSION, PSALM_PHAR, WP_CLI_PHAR, DETEKT_JAR2, PS_PROLOGUE, GOVULNCHECK_MODULE, PINNED_RELEASES, TOOL_CATALOG, MANUAL_ONLY_TOOLS;
 var init_installCatalog = __esm({
   "src/runners/installCatalog.ts"() {
     "use strict";
@@ -80829,6 +81027,7 @@ var init_installCatalog = __esm({
     GOSEC_VERSION = "2.30.0";
     SHELLCHECK_VERSION = "0.11.0";
     K6_VERSION = "2.4.0";
+    SQUAWK_VERSION = "2.71.0";
     DETEKT_VERSION = "1.23.8";
     DETEKT_JAR_URL = `https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar`;
     DETEKT_JAR_SHA256 = "3afe89a11120303c73c9bdda3d8fe558dd9070a6937d27819ddc04b275381245";
@@ -81365,6 +81564,23 @@ var init_installCatalog = __esm({
           // apt repository and key first, which nothing added, and failed on a stock Debian or Ubuntu.
           linux: { curl: releaseArchiveInstaller("k6", "linux") },
           darwin: { brew: brewInstall("k6") }
+        },
+        default: false
+      },
+      // review_pr's Postgres migration linter, run only when the reviewed tree has a root .squawk.toml
+      // (runners/squawkRun.ts). The same pinned wheel everywhere, through pipx (semgrep's shape).
+      squawk: {
+        name: "squawk",
+        version_floor: "2.0.0",
+        probe: { command: "squawk", args: ["--version"] },
+        required_by: ["review_pr"],
+        install: {
+          win32: {
+            scoop: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`),
+            choco: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`)
+          },
+          linux: { pipx: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`) },
+          darwin: { pipx: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`) }
         },
         default: false
       },

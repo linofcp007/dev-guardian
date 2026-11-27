@@ -13,6 +13,7 @@ import {
   PINNED_RELEASES,
   PSALM_PHAR_SHA256,
   PSALM_VERSION,
+  SQUAWK_VERSION,
   TOOL_CATALOG,
   TRIVY_INSTALL_TAG,
   WP_CLI_PHAR_SHA256,
@@ -568,6 +569,20 @@ describe('k6: the pinned archive on Linux, its binary nested; Windows and macOS 
     const named = [...map.matchAll(/([A-Za-z0-9_]+): '[^']+'/g)].map((m) => m[1]);
     expect(named.sort()).toEqual(Object.keys(PINNED_RELEASES).sort());
     expect(map).toContain("k6: 'grafana/k6'");
+  });
+});
+
+// DG-8: squawk is a wheel on PyPI, where a file is never uploaded twice under one name: the exact version pins the
+// content, everywhere, through pipx (squawk's GitHub assets can be replaced and come with no checksums file).
+describe('squawk: the pinned PyPI wheel through pipx on every OS', () => {
+  it('every install names squawk-cli at the one pinned version — never unpinned, never another source', () => {
+    expect(SQUAWK_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    const entry = TOOL_CATALOG['squawk'];
+    expect(entry?.required_by).toEqual(['review_pr']);
+    expect(entry?.default).toBe(false);
+    const specs = Object.values(entry?.install ?? {}).flatMap((os) => Object.values(os));
+    expect(specs.length).toBeGreaterThanOrEqual(3);
+    for (const spec of specs) expect(spec).toMatchObject({ command: 'pipx', args: ['install', `squawk-cli==${SQUAWK_VERSION}`], needs_elevation: false });
   });
 });
 

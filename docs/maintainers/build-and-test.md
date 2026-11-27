@@ -26,9 +26,10 @@ user — and on the floor image with `--coverage`, so the thresholds in
 `vitest.config.ts` are enforced in the run every release makes (CONTRIBUTING,
 Releases, step 0). Not in `npm test`: coverage instrumentation adds a third or
 more to an already long run on every commit, and the floor is a release
-question. `--toolchain` adds Semgrep and Bandit (pip-pinned) and gitleaks,
-Trivy and k6 (the release archives `src/runners/installCatalog.ts` pins, sha256-
-checked) and sets `GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`/`_K6`, so a missing scanner
+question. `--toolchain` adds Semgrep, Bandit and squawk (pip-pinned; squawk at the
+catalog's own PyPI pin) and gitleaks, Trivy and k6 (the release archives
+`src/runners/installCatalog.ts` pins, sha256-checked) and sets
+`GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`/`_K6`/`_SQUAWK`, so a missing scanner
 fails instead of skipping. It is the run a release makes (CONTRIBUTING, Releases,
 step 0): without it every test of a real scanner is skipped on Linux, and the
 suite had never been green with it until 3.9.3 — ten tests, among them a rule
@@ -157,7 +158,8 @@ switch requires Trivy in the tests that need a real one,
 `GUARDIAN_REQUIRE_GITLEAKS=1` gitleaks, and `GUARDIAN_REQUIRE_K6=1` k6
 (`test/e2e/k6PerfCheck.test.ts`: perf_check against the real k6 and a local
 server — the summary's thresholds, the series and the modules it keys, the
-`__ENV.CI` limit, no usage report through a refusing proxy, with a control run).
+`__ENV.CI` limit, no usage report through a refusing proxy, with a control run),
+and `GUARDIAN_REQUIRE_SQUAWK=1` squawk (`test/e2e/squawkReviewPr.test.ts`).
 
 "Installed" is asked the way the server asks it (`test/helpers/toolchain.ts`):
 on `PATH`, or in the per-user tools directory `install_toolchain` writes to

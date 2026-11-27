@@ -77,6 +77,7 @@ export type RepoConfigRunner =
   | 'shellcheck'
   | 'cppcheck'
   | 'detekt'
+  | 'squawk'
   | 'guardian';
 
 const NUGET_CONFIGS = ['NuGet.config', 'nuget.config', 'NuGet.Config'];
@@ -182,6 +183,14 @@ export const REPO_CONFIG: Readonly<Record<RepoConfigRunner, readonly RepoConfigF
   cppcheck: [
     { file: 'compile_commands.json', decides: 'its files, defines and include paths decide what is analysed' },
     { file: 'build/compile_commands.json', decides: 'its files, defines and include paths decide what is analysed' },
+  ],
+  // The root one only, passed with `--config` (runners/squawkRun.ts): squawk would otherwise look for one from its
+  // working directory upwards, past the project. A nested one is never read.
+  squawk: [
+    {
+      file: '.squawk.toml',
+      decides: 'its excluded rules and paths, the Postgres version and whether each file runs in a transaction decide what is reported',
+    },
   ],
   // ESLint runs only on the project's own configuration (quality_check).
   eslint: [

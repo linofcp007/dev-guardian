@@ -178,6 +178,8 @@ export const GATE_CONFIG: Readonly<Record<RepoConfigRunner, 'ref' | 'tree' | 'no
   eslint: 'not_in_gate',
   shellcheck: 'not_in_gate',
   detekt: 'not_in_gate',
+  // review_pr only (runners/squawkRun.ts): the CLI gate runs no squawk.
+  squawk: 'not_in_gate',
 };
 
 /** What `--rules-ref` copied, for the gate's output. */

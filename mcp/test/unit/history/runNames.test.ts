@@ -105,7 +105,7 @@ function bookkeepingNames(): string[] {
     ...collect(/export const GITLEAKS_[A-Z_]+\s*=\s*'([^']+)'/g),
     // gosec's, govulncheck's, shellcheck's, cppcheck's, Psalm's, detekt's, RuboCop's and SpotBugs' passes, and the
     // Go, PHP, Java and Ruby runtimes' gaps.
-    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK|PSALM|PHP_RUNTIME|DETEKT|RUBOCOP|SPOTBUGS|JAVA_RUNTIME|RUBY_RUNTIME)\s*=\s*'([^']+)'/g),
+    ...collect(/(?:export )?const (?:GOSEC|GO_TOOLCHAIN|GOVULNCHECK|SHELLCHECK|CPPCHECK|PSALM|PHP_RUNTIME|DETEKT|RUBOCOP|SPOTBUGS|JAVA_RUNTIME|RUBY_RUNTIME|SQUAWK)\s*=\s*'([^']+)'/g),
     // dev-guardian's own in-process passes: the client-trust checks, the test-integrity check and the suppressions pass.
     ...collect(/export const (?:CLIENT_TRUST_TOOL|TEST_INTEGRITY_TOOL|SUPPRESSIONS_TOOL)\s*=\s*'([^']+)'/g),
     // A staged scope's files changed again since `git add`: `export const STAGED_CONTENT_GAP = 'staged-content'`.
@@ -181,6 +181,8 @@ const NAME_EXPRESSIONS: Readonly<Record<string, string>> = {
   'runners/detektRun.ts:DETEKT': 'the DETEKT / JAVA_RUNTIME constants',
   'runners/rubocopRun.ts:RUBOCOP': 'the RUBOCOP / RUBY_RUNTIME constants',
   'runners/spotbugsRun.ts:SPOTBUGS': 'the SPOTBUGS / JAVA_RUNTIME constants',
+  'runners/squawkRun.ts:SQUAWK': 'the SQUAWK constant',
+  'tools/reviewPr.ts:SQUAWK': 'the SQUAWK constant (runners/squawkRun.ts)',
   'tools/qualityCheck.ts:SHELLCHECK': 'the SHELLCHECK constant',
   'tools/depsAudit.ts:name': "runners/govulncheckRun.ts#govulncheckModules' `missing`: GOVULNCHECK or 'go'",
   'tools/reviewPr.ts:GOSEC': 'the GOSEC / GO_TOOLCHAIN constants',

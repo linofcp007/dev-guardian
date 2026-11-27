@@ -161,6 +161,13 @@ const GOSEC_VERSION = '2.30.0';
 const SHELLCHECK_VERSION = '0.11.0';
 /** The k6 release a Linux install fetches ({@link PINNED_RELEASES}); `npm run pins` reports a newer one. */
 const K6_VERSION = '2.4.0';
+/**
+ * The squawk release every install asks PyPI for (`squawk-cli`, the Rust binary in a wheel per platform). PyPI
+ * never lets a file be uploaded twice under one name, so the version pins the content — where squawk's GitHub
+ * release assets can be replaced (not immutable) and come with no checksums file. 2.71.0 (2026-10-29) is the
+ * newest on PyPI at least two weeks old on 2026-11-27: 2.72.0 and 2.73.0 were never uploaded there.
+ */
+export const SQUAWK_VERSION = '2.71.0';
 
 /**
  * detekt's command-line jar, from Maven Central — not the GitHub release's:
@@ -821,6 +828,23 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
       // apt repository and key first, which nothing added, and failed on a stock Debian or Ubuntu.
       linux: { curl: releaseArchiveInstaller('k6', 'linux') },
       darwin: { brew: brewInstall('k6') },
+    },
+    default: false,
+  },
+  // review_pr's Postgres migration linter, run only when the reviewed tree has a root .squawk.toml
+  // (runners/squawkRun.ts). The same pinned wheel everywhere, through pipx (semgrep's shape).
+  squawk: {
+    name: 'squawk',
+    version_floor: '2.0.0',
+    probe: { command: 'squawk', args: ['--version'] },
+    required_by: ['review_pr'],
+    install: {
+      win32: {
+        scoop: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`),
+        choco: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`),
+      },
+      linux: { pipx: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`) },
+      darwin: { pipx: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`) },
     },
     default: false,
   },

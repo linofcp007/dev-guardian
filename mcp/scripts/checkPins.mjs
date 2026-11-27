@@ -145,6 +145,11 @@ pins.push({ name: 'detekt (install_toolchain)', pinned: fromCatalog(/const DETEK
 pins.push({ name: 'spotbugs (install_toolchain)', pinned: fromCatalog(/const SPOTBUGS_VERSION = '([^']+)'/), latest: fromGithub('spotbugs/spotbugs') });
 pins.push({ name: 'findsecbugs (install_toolchain)', pinned: fromCatalog(/const FINDSECBUGS_VERSION = '([^']+)'/), latest: fromGithub('find-sec-bugs/find-sec-bugs') });
 pins.push({
+  name: 'squawk-cli (install_toolchain, pipx)',
+  pinned: fromCatalog(/export const SQUAWK_VERSION = '([^']+)'/),
+  latest: async () => ({ version: await latestPypi('squawk-cli') }),
+});
+pins.push({
   name: 'rubocop (install_toolchain, gem)',
   pinned: fromCatalog(/const RUBOCOP_VERSION = '([^']+)'/),
   latest: async () => ({ version: await latestGem('rubocop') }),

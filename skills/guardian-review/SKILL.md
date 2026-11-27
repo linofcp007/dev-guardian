@@ -42,7 +42,8 @@ git diff <last-tag>..HEAD       # pre-release
    dependency manifest changed. It also reads the changed `.env*` files and Supabase migrations
    (`guardian-client-trust`: a secret behind a browser prefix such as `NEXT_PUBLIC_`, a table without RLS, a
    write policy open to anyone) and the diff itself for weakened tests (`guardian-test-integrity`) and for
-   suppressions added with no reason (`guardian-suppressions`). Files
+   suppressions added with no reason (`guardian-suppressions`); with a root `.squawk.toml`, squawk on changed `.sql`
+   files (low: a lock or rewrite on a table holding data is 🟡 — ask). Files
    are read at `head` — the working tree when it is checked out, otherwise a temporary checkout. An unknown ref is an error, never "no changed files". `local_only: true` avoids Semgrep's
    registry.
 2. Bugs and quality on **the diff's files only** (`review_pr` does not run them), with `head` checked out:

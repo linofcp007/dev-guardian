@@ -167,6 +167,9 @@ export const RUN_NAMES = {
   // The same callers' pass over the suppressions the change adds (testintegrity/suppressions.ts):
   // absent when no changed file holds a suppression's token; skipped, never failed.
   'guardian-suppressions': scanner('guardian-suppressions'),
+  // review_pr's pass over the changed .sql files when the reviewed tree has a root .squawk.toml
+  // (runners/squawkRun.ts): absent without one, or with no changed .sql file.
+  squawk: scanner('squawk'),
   // scan_sast's missing_tools entry when the SDK that runs both analyzers is absent.
   'dotnet-sdk': scanner('security-code-scan', 'dotnet-analyzers'),
 
