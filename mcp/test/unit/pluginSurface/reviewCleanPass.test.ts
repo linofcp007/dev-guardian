@@ -110,13 +110,14 @@ describe('guardian-review: the fresh-eyes passes', () => {
   // `~~~`, an env prefix, `cd … &&`, a program other than git, `{name}` — with the shapes it caught. Fix round 3
   // (R3-DGREV-03): a command after `&&`, `||`, `;` or `|` whose first part is no program (a `[ … ]` test, `$GIT`), so
   // only the split reads it. Then code that is no command.
-  // The reader reads these shapes, not every way to write a command (R3-DGREV-01). It does not read: a program that is
-  // no bare name opening a part (PowerShell's `& git …` and `.\check.ps1 …`, a quoted `"git"`, a subshell `( … )`, a
-  // group `{ …; }`, a function's body, a `%` or `PS>` prompt); a placeholder on a continued line (`\`, PowerShell's
-  // backtick) or in a heredoc's body; code in no ``` or ~~~ fence and no one-line span (a fence in a blockquote, a
-  // four-backtick fence, an indented block, HTML `<code>`, a span wrapped across lines, which also shifts the pairing
-  // of the spans after it); any part of a line that opens with an MCP call; and, as a name, a placeholder with a space
-  // (`<base ref>`), one ending in `-sha`, a bare word (`BRANCH`). Review 3 found none of these in the skill's texts.
+  // The reader reads these shapes, not every way to write a command (R3-DGREV-01). Among those it does not read: a
+  // program that is no bare name opening a part (PowerShell's `& git …` and `.\check.ps1 …`, a quoted `"git"`, a
+  // subshell `( … )`, a group `{ …; }`, a function's body, a `%` or `PS>` prompt); a placeholder on a continued line
+  // (`\`, PowerShell's backtick) or in a heredoc's body; code in no ``` or ~~~ fence and no one-line span (a fence in
+  // a blockquote, a four-backtick fence, an indented block, HTML `<code>`, a span wrapped across lines, which also
+  // shifts the pairing of the spans after it); any part of a line that opens with an MCP call; and, as a name, a
+  // placeholder with a space (`<base ref>`), one ending in `-sha`, a bare word (`BRANCH`). Review 3 found no command of
+  // the skill's texts written in any of these shapes.
   // The other way (R3-DGREV-04), it reads code that is no shell command — a slash command, a span of words, a
   // word-led line of a ```markdown fence (the info string is not read) — so such a line holding a name fails the
   // property row below: reword it. The last assertion pins that limit.
