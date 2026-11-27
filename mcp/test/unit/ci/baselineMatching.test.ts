@@ -148,6 +148,32 @@ describe('finding 6: a finding in a renamed file', () => {
   });
 });
 
+/**
+ * DG-4 (3.18.0, no change — a pinned limit): lines a rule flags that read the
+ * same are one group, told apart by order (`findingIdentity.ts`: by line). One
+ * more such line makes exactly one finding new, and the one named is the
+ * group's last in file order — whichever line the change added. Pinned so a
+ * change to it is deliberate; docs/ci.md says it.
+ */
+describe('several identical flagged lines in a file: one more is one new finding, named as the last', () => {
+  const sink = (line: number): Finding =>
+    finding({ fingerprint: `fp-exec-${line}`, rule_id: 'js-child-process-exec', file_path: 'src/run.js', line_start: line, line_end: line, snippet: 'exec(cmd);' });
+
+  it('a group of 2 grows to 3 with the new line first: one new, and it is the last occurrence', () => {
+    const baseline = buildBaseline(assignIdentities([sink(10), sink(20)]), null, '2026-01-01');
+    // The change inserts the same line at 5; the old two shift down by one.
+    const after = assignIdentities([sink(5), sink(11), sink(21)]);
+    const fresh = newFindings(after, baseline);
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]?.line_start).toBe(21);
+  });
+
+  it('the same group, unchanged but shifted: nothing new', () => {
+    const baseline = buildBaseline(assignIdentities([sink(10), sink(20)]), null, '2026-01-01');
+    expect(newFindings(assignIdentities([sink(12), sink(22)]), baseline)).toEqual([]);
+  });
+});
+
 describe('old baselines keep matching', () => {
   const recorded = [code('src/app.js', 'f1'), dep('4.17.15')];
   const current = buildBaseline(recorded, null, '2026-01-01');
