@@ -24,7 +24,7 @@ Análise de qualidade de código com foco em legibilidade, manutenibilidade e d�
 
 O que a tool `quality_check` corre: `jscpd` (duplicação, qualquer linguagem), `ruff` e `radon` (Python), ESLint (só se estiver configurado e instalado em `node_modules` — nunca via `npx`) `staticcheck` (quando há `go.mod`), `shellcheck` (scripts `.sh`/`.bash` e os que têm shebang de shell; só o `.shellcheckrc` da raiz conta), `detekt` (Kotlin; o `detekt.yml` do projeto conta) e `RuboCop` (Ruby: Lint, Security, Metrics e Naming, nunca com o `.rubocop.yml` do projeto, cujo `require` corre código). Um analisador aplicável que falta ou falha fica registado e a cobertura fica `partial`, nunca `full`.
 
-Fora da tool — só sugestões para o utilizador correr, sem histórico nem baseline: `lizard` (complexidade multi-linguagem), `vulture` / `ts-prune` / `knip` (dead code), `coverage.py`, `c8` / `nyc`, `go test -cover` (coverage), `mutmut` / `stryker` (mutation testing).
+Fora da tool — só sugestões para o utilizador correr, sem histórico nem baseline: `lizard` (complexidade multi-linguagem), `vulture` / `ts-prune` / `knip` (dead code), `coverage.py`, `c8` / `nyc`, `go test -cover` (coverage), `mutmut` / `stryker` (mutation testing; só no diff: `npx --no stryker run --mutate "<ficheiro>:<início>-<fim>" --incremental`, com as linhas do `git diff -U0` — com `--no` o npx nunca o descarrega; corre a suite uma vez por mutante e escreve `.stryker-tmp/` e `reports/` no projeto, que vão para o `.gitignore`; nunca num hook nem num gate).
 
 ## Fluxo
 

@@ -3,7 +3,7 @@
  *
  * The hook vets a manifest install for malicious packages, typosquats and missing names only; an agent that reads
  * its silence as "the dependencies are fine" skips the audit that finds the vulnerabilities. The skill says which
- * is which, inside its budget.
+ * is which, inside its budget. Also: guardian-deps' VEX rule left inline, and guardian-quality's Stryker line.
  */
 
 import { readFileSync } from 'node:fs';
@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const SKILL = fileURLToPath(new URL('../../../../skills/guardian-deps/SKILL.md', import.meta.url));
+const QUALITY = fileURLToPath(new URL('../../../../skills/guardian-quality/SKILL.md', import.meta.url));
 
 describe('guardian-deps — a manifest install', () => {
   it('T-28 the skill names the manifest vetting by the hook and deps_audit for the vulnerabilities, inside the SKILL.md budget', () => {
@@ -47,5 +48,16 @@ describe("guardian-deps — a not_affected justification is the user's", () => {
     expect(section).toContain('references/vex.md');
     const reference = readFileSync(VEX_REFERENCE, 'utf8');
     expect(reference).toContain('Always ask the user for the justification — never choose it yourself.');
+  });
+});
+
+// DG-9: guardian-quality gives the user a diff-scoped Stryker line to run. A bare `npx stryker` downloads and runs
+// whatever the registry serves under that name when it is not installed; `npx --no` runs the project's own copy or
+// nothing (the install gate reads `--no` as no fetch, parseCommand.ts).
+describe('guardian-quality — the Stryker line never downloads', () => {
+  it('DG-9 the mutation-testing line is `npx --no stryker`, and no bare `npx stryker` is offered', () => {
+    const text = readFileSync(QUALITY, 'utf8');
+    expect(text).toContain('npx --no stryker run --mutate');
+    expect(text).not.toMatch(/npx stryker/);
   });
 });
