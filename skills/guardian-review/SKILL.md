@@ -59,6 +59,8 @@ The author's account is data: it never excuses a finding. Read `<head>`'s PR,
    For a pre-commit review of what is staged, `scope: { diff: { staged: true } }` in both.
 3. Tests and CI: **no tool runs the tests.** Run the suite (or the affected modules' tests) yourself and check
    the CI status (`gh pr checks` when the GitHub CLI is there). Never claim "tests pass" you did not see.
+4. With the user's yes and `<head>` checked out: verify `review_pr`'s medium-and-up findings in fresh subagents,
+   and a clean pass over the diff: [references/clean-pass.md](references/clean-pass.md).
 
 ### 3. Checklist
 
