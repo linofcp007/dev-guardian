@@ -83,11 +83,7 @@ Vulnerabilidades conhecidas não são o único risco — packages maliciosos tam
 
 ## 6. Renovate
 
-- `init_project { project_path: "<project>", apply: false }` mostra os ficheiros que instalaria, `renovate.json` incluído; com `apply: true` instala-o (nunca por cima de um ficheiro existente — um igual ao distribuído é adotado no manifesto).
-  - perfil `standard`: automerge de patches de dev-dependencies e de minors de tooling seguro (`@types`, eslint, prettier), sempre com **3 dias** de idade mínima; majors precisam de revisão;
-  - perfil `paranoid` (`profile: "paranoid"`): **nenhum** automerge e **7 dias** de idade mínima.
-- O Renovate corre como GitHub App: `github.com/apps/renovate` → Install → escolher o repo → ele abre o PR "Configure Renovate". Self-hosted: `renovate-runner` na CI.
-- Já há `.github/dependabot.yml`? Pergunta se migra (comenta o ficheiro, não o apaga) ou se corre em paralelo; os PRs antigos do Dependabot fecham-se à mão.
+Instalar o Renovate (`init_project`, perfis `standard` / `paranoid`) ou migrar de um `.github/dependabot.yml`: lê [`references/renovate.md`](references/renovate.md).
 
 ## 7. Triagem de PRs do Renovate / Dependabot
 
@@ -97,17 +93,11 @@ Vulnerabilidades conhecidas não são o único risco — packages maliciosos tam
 
 ## 8. Licenças e SBOM
 
-São da `guardian-compliance` (`compliance_check`, `license_compatibility`, `generate_sbom`, `sbom_diff`): segue essa skill. O `generate_sbom` também é o primeiro passo do VEX, abaixo.
+São da `guardian-compliance` (`compliance_check`, `license_compatibility`, `generate_sbom`, `sbom_diff`): segue essa skill. O `generate_sbom` também é o primeiro passo do VEX (secção 9).
 
 ## 9. VEX
 
-`export_vex { project_path: "<project>" }` escreve um documento OpenVEX (ou CycloneDX com `format: "cyclonedx"`) em `.guardian/reports/vex-*/`, uma declaração por vulnerabilidade (CVE, ou o id GHSA/PYSEC próprio, com os aliases que o scanner deu) e versão do package, do scan de dependências mais recente. Nunca inventa um estado:
-
-- `not_affected` só quando o utilizador o declarou: `suppress_finding` com `vex_status: "not_affected"` e uma `justification` OpenVEX (por exemplo `vulnerable_code_not_in_execute_path`), mais um `impact_statement` opcional. Pergunta sempre a justificação — não a escolhas tu. Tem de estar em **todas** as cópias da vulnerabilidade: se a resposta trouxer `warning` e `vex.other_open_findings`, mostra-as ao utilizador. Com `vex.exportable: false` (finding sem versão de package, como um template nuclei) a supressão fica registada mas não entra no documento;
-- `affected` quando um ficheiro que uma rota alcança importa o package e carrega a versão vulnerável, num snapshot da mesma árvore que o scan de dependências;
-- `under_investigation` no resto; `fixed` nunca.
-
-Corre antes `generate_sbom` (dá os purls) e `map_attack_surface` (dá a alcançabilidade), e mostra ao utilizador a lista `unknowns` — é o que o documento não sabe.
+Um documento VEX (`export_vex`): lê [`references/vex.md`](references/vex.md) antes de o chamar. Nunca escolhas tu a justificação de um `not_affected`: pergunta-a sempre ao utilizador.
 
 ## Frequência sugerida
 
