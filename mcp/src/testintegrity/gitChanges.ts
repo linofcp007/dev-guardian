@@ -10,7 +10,8 @@
  * Every listing is `-z` and `--relative` (paths relative to the project,
  * which may be a subdirectory of its repository), with renames detected
  * (`-M`, so a moved test file is not a deleted one), no external diff driver
- * and no textconv: a repository's own drivers never run here. One `-U0` diff
+ * and no textconv: a repository's own drivers never run here — and, from git
+ * 2.40, none of the working tree's `.gitattributes` ({@link asWritten}). One `-U0` diff
  * per file, so a path git would quote in a header is never parsed out of one.
  * Bounded: at most {@link MAX_FILES} files are read, each at most
  * {@link MAX_TEXT_BYTES}; past either the run says what it left out.
@@ -30,6 +31,7 @@ import {
   parseNameStatus,
   resolveCommit,
   splitNul,
+  withoutTreeAttributes,
   type GitResult,
   type GitRunner,
   type NameStatusEntry,
@@ -56,6 +58,25 @@ type ChangeTarget =
 const MAX_FILES = 500;
 /** A file over this is judged on its diff alone (no assertion count). */
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The git both passes read the change with: the working tree's `.gitattributes` set aside
+ * (`runners/git.ts#withoutTreeAttributes`, git 2.40 and later), so each diff compares the files as written. Those
+ * attributes are the change's own: an `ident` one turned a skip written inside `$Id:…$` in the working tree back into
+ * the base's `$Id$` line (the file was not even listed), and a `binary` or `-diff` one printed "Binary files differ"
+ * and no line, on every target. The line endings they also convert are compared with {@link SAME_EOL}. Still applied:
+ * the user's own attributes (`core.attributesFile`, `$GIT_DIR/info/attributes`), and all of them on an older git.
+ */
+async function asWritten(cwd: string): Promise<GitRunner> {
+  const env = await withoutTreeAttributes(cwd, process.env);
+  return (dir, args) => git(dir, args, undefined, env);
+}
+
+/**
+ * A CRLF checkout of LF blobs (`text eol=crlf`, `core.autocrlf` off), which git no longer converts without the tree's
+ * attributes, reads as the same lines — not every line changed, an old skip reported again.
+ */
+const SAME_EOL = '--ignore-cr-at-eol';
 
 /** `git diff`'s arguments for `base` against `target`, before `--`. */
 function diffRange(base: string, target: ChangeTarget): string[] {
@@ -139,7 +160,8 @@ export async function readChangeSet(
   target: ChangeTarget,
   member?: (path: string) => boolean,
 ): Promise<ChangeSetRead> {
-  const r = await git(cwd, ['diff', '-z', '--name-status', '-M', '--relative', '--no-ext-diff', ...diffRange(base, target), '--']);
+  const run = await asWritten(cwd);
+  const r = await run(cwd, ['diff', '-z', '--name-status', '-M', '--relative', '--no-ext-diff', SAME_EOL, ...diffRange(base, target), '--']);
   if (r.exitCode !== 0) {
     throw new Error(`git diff could not list the changes: ${r.stderr.split(/\r?\n/).find((l) => l.trim() !== '') ?? `exit ${r.exitCode}`}`);
   }
@@ -171,7 +193,7 @@ export async function readChangeSet(
       lines = l.oldPath !== undefined && before !== null ? lineChanges(before, after) : { added: numbered(after), removed: [] };
     } else {
       const paths = l.oldPath !== undefined ? [l.oldPath, l.path] : [l.path];
-      const d = await git(cwd, ['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--relative', ...diffRange(base, target), '--', ...paths]);
+      const d = await run(cwd, ['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', SAME_EOL, '-M', '--relative', ...diffRange(base, target), '--', ...paths]);
       lines = d.exitCode === 0 ? parseUnifiedZero(d.stdout) : { added: [], removed: [] };
     }
     changes.push({
@@ -469,7 +491,7 @@ async function readSuppressionChanges(
   cap: number,
 ): Promise<SuppressionRead | { error: string }> {
   const range = diffRange(from, target);
-  const listing = await run(cwd, ['diff', '-z', '--name-status', '-M', '--relative', '--no-ext-diff', '--no-textconv', '-G', PICKAXE_ERE, ...range, '--']);
+  const listing = await run(cwd, ['diff', '-z', '--name-status', '-M', '--relative', '--no-ext-diff', '--no-textconv', SAME_EOL, '-G', PICKAXE_ERE, ...range, '--']);
   if (listing.exitCode !== 0) return { error: firstLineOf(listing) };
   const wanted = (p: string): boolean => suppressionLanguageOf(p) !== null && !NOT_TESTS.test(p) && (member === undefined || member(p));
   const listed = parseNameStatus(listing.stdout).filter((l) => wanted(l.path) || (l.oldPath !== undefined && wanted(l.oldPath)));
@@ -478,7 +500,7 @@ async function readSuppressionChanges(
   let unread = 0;
   for (const l of listed.slice(0, cap)) {
     const paths = l.oldPath !== undefined ? [l.oldPath, l.path] : [l.path];
-    const d = await run(cwd, ['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', '-M', '--relative', ...range, '--', ...paths]);
+    const d = await run(cwd, ['diff', '-U0', '--no-color', '--no-ext-diff', '--no-textconv', SAME_EOL, '-M', '--relative', ...range, '--', ...paths]);
     if (d.exitCode !== 0) {
       unread += 1;
       continue;
@@ -554,7 +576,8 @@ export async function runSuppressionCheck(
     maxFiles?: number;
   },
 ): Promise<SuppressionResult | null> {
-  const run = opts.git ?? git;
+  // A test's counting runner as given; otherwise the git that reads the change as written (`asWritten`).
+  const run = opts.git ?? (await asWritten(cwd));
   const label = opts.label ?? opts.base;
   const head = opts.head ?? 'HEAD';
   const skipped = (reason: string, notes: string[]): SuppressionResult => ({
