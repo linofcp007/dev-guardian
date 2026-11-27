@@ -431,6 +431,20 @@ export async function showPrefix(cwd: string): Promise<string> {
   return r.stdout.trim();
 }
 
+/**
+ * The names of the entries directly under `cwd` in commit `sha`'s tree (files, directories, links and
+ * submodules alike): what `review_pr` of a head that is not checked out asks "is this path in the project?"
+ * (`platform/guardianIgnore.ts#treePathTest`), since the working tree then holds another commit's files.
+ * `ls-tree` is cwd-relative: a project in a subdirectory of its repository gets that directory's own entries
+ * (none when the commit has no such directory). One git call. Null when git does not answer (a refusal, a
+ * timeout); the caller then keeps the working tree's answer.
+ */
+export async function headTopLevel(cwd: string, sha: string): Promise<Set<string> | null> {
+  const r = await git(cwd, ['ls-tree', '-z', '--name-only', '--end-of-options', sha]);
+  if (r.exitCode !== 0) return null;
+  return new Set(splitNul(r.stdout));
+}
+
 export interface MaterialisedTree {
   /** The checkout's root (the repository root at `sha`). */
   root: string;

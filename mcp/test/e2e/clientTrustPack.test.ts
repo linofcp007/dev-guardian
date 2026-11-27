@@ -10,15 +10,22 @@
  *   - `client-webhook-unverified` (CWE-345): a handler that decides on a
  *     payment event type with no signature verification in sight;
  *   - `client-webhook-parsed-body` (CWE-347): `constructEvent` fed a parsed
- *     body.
+ *     body;
+ *   - `client-identity-from-request` (CWE-639, 3.18.0): a record's owner key
+ *     (`userId`, `ownerId`, `tenantId`…) in a database call, taken from the
+ *     request of a parameter of an enclosing function, with no refusing
+ *     comparison before the call.
  *
  *   hits/    every `// BUG: <rule-id>` line fires that rule exactly once (the
- *            line a finding STARTS on: a webhook finding covers its handler),
- *            and no rule fires anywhere else;
+ *            line a finding STARTS on: a webhook finding covers its handler,
+ *            an identity finding is the object literal), and no rule fires
+ *            anywhere else — `identity-decoys.js` holds the checks that do not
+ *            silence the identity rule and its stated false positives;
  *   misses/  the safe shape of every exclusion — public-by-design keys,
  *            server-only modules, verified webhooks (constructEvent, an HMAC,
  *            a verify helper, Paddle's unmarshal), non-payment events, a raw
- *            body. Nothing fires.
+ *            body, the owner from the session or compared and refused, a
+ *            request namesake that is no parameter. Nothing fires.
  *
  * Fixtures are copied to a temp dir before scanning (their in-repo path holds
  * `test/`, which Semgrep's default ignore list skips), and the scanned count
@@ -60,6 +67,7 @@ const RULES: Readonly<Record<string, { cwe: string; severity: string }>> = {
   'client-supabase-service-role': { cwe: 'CWE-284', severity: 'high' },
   'client-webhook-unverified': { cwe: 'CWE-345', severity: 'high' },
   'client-webhook-parsed-body': { cwe: 'CWE-347', severity: 'medium' },
+  'client-identity-from-request': { cwe: 'CWE-639', severity: 'medium' },
 };
 const RULE_IDS = Object.keys(RULES);
 
@@ -139,7 +147,7 @@ describe('configs/semgrep/client-trust.yml', () => {
     expect(PLUGIN_PACK_FILES).toContain('client-trust.yml');
   });
 
-  it('declares exactly the four rules, each with its CWE, category security and the planned Semgrep severity', () => {
+  it('declares exactly the five rules, each with its CWE, category security and the planned Semgrep severity', () => {
     expectPack();
     const doc = parseYaml(readFileSync(PACK, 'utf8')) as {
       rules: Array<{ id: string; severity: string; metadata: { category: string; cwe: string[]; guardian_severity?: string } }>;
@@ -189,5 +197,19 @@ describe('configs/semgrep/client-trust.yml', () => {
     const prose = text.replace(/\n#\s+/g, ' ');
     expect(prose).toMatch(/falso positivo; nesse caso a corre..o . uma supress.o com a raz.o/);
     expect(prose).toMatch(/pages\/\) sem `bodyParser: false` n.o . visto/);
+  });
+
+  it('the identity rule states its false positives and what it does not see, and its message names no suppression', () => {
+    expectPack();
+    const text = readFileSync(PACK, 'utf8');
+    const prose = text.replace(/\n#\s+/g, ' ');
+    expect(prose).toMatch(/client-identity-from-request \(3\.18\.0\)/);
+    expect(prose).toMatch(/Falsos positivos conhecidos: uma verifica..o que a regra n.o l./);
+    expect(prose).toMatch(/um middleware, como o `security\.appendUserId\(\)` do Juice Shop/);
+    expect(prose).toMatch(/N.o v.: um valor que passa por outra fun..o ou outro ficheiro/);
+    const doc = parseYaml(text) as { rules: Array<{ id: string; message: string }> };
+    const message = doc.rules.find((r) => r.id === 'client-identity-from-request')?.message ?? '';
+    expect(message).toMatch(/CWE-639/);
+    expect(message).not.toMatch(/nosemgrep|supress/i);
   });
 });

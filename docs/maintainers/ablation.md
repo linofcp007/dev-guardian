@@ -60,7 +60,7 @@ a clause, and is the only one that reaches a rule with no clauses at all:
 a **clause**, so a rule with no ablatable clause has no verdict on any of them.
 Two shapes have none: a bare `pattern:` (or `pattern-regex:`) with no
 `patterns:` group and no `pattern-either:`, and a `patterns:` group holding
-nothing but positive terms. **42 of the 182 rules** across the fifteen packs are
+nothing but positive terms. **42 of the 183 rules** across the fifteen packs are
 one of those — 36 bare and 6 positive-only — and they used to appear
 **nowhere** in the report: not in the clause list, not under `skipped`. So
 `44/44 live, 0 DEAD` read as "the pack was checked" when it covered 10 rules of
@@ -82,7 +82,7 @@ prints `N/A`.
 | `rgpd` | 8 | 8 | 0 |
 | `llm` | 9 | 8 | 1 |
 | `web-js` | 3 | 3 | 0 |
-| `client-trust` | 4 | 4 | 0 |
+| `client-trust` | 5 | 5 | 0 |
 | `mobile` | 14 | 2 | 12 |
 | `wordpress` | 1 | 1 | 0 |
 
@@ -193,6 +193,23 @@ line starting with `*` (not `*/`) or with an unclosed `/*` is comment. The ablat
 unit, a string as a unit, the word inside a string, an open `/*` mid-line, a `*/` line, an open `/*` at a line's
 start): each turns `clientTrustPack.test.ts` red; a `(?<=:)//` unit for a URL outside a string turned nothing red and
 was dropped. Re-ablated: 28/28 live, axis 2 27/28, axis 3 vacuous.
+
+**`client-identity-from-request`, 3.18.0** (Semgrep 1.182.0, pack sha256 `ac7b95d0…`, 18 min),
+`npm run ablate -- client-trust --filter=client-identity-from-request --real-code=<dir>`, the real code a tree of
+OWASP Juice Shop `1618a61` (`routes/`, `lib/`, `models/`, `server.ts`) and two Express APIs
+(`gothinkster/node-express-realworld-example-app` `30b68e1e88`, `hagopj13/node-express-boilerplate` `179ae84efe`):
+13 baseline findings, all comparable, noise floor 0. The first run read 12 of the silencer's 16 forms DEAD (`!==` /
+`!=`, either side, a `return`, a `throw` or a block with one): one fixture each was missing, and
+`misses/identity-compared-forms.js` holds all sixteen as a table. It also read DEAD the Koa variable forms and the
+direct `searchParams` branch (fixtures added) and, in a factorized silencer (`if ($C) $R` with a
+`metavariable-pattern` on each), the block forms and both `!=` orders as MOVES pairs: that silencer found a `return`
+anywhere in the branch and read every `if` of a file, so it was replaced by the sixteen structural forms. Final: axis
+0 5/5, axis 1 **49/49 live, 0 DEAD**, axis 2 47/49 (the operation and owner-key regexes: without them the hits' own
+neighbours fire — the guards working), axis 3 44/49 (five working positive branches: the anonymous-function anchor,
+the owner-key branch and its database-call anchor, the direct-member source; Juice Shop's 13 findings are one true
+IDOR, the forged review's `author: req.body.author`, and twelve `UserId: req.body.UserId` written by its
+`appendUserId()` middleware — the stated false-positive class). The web-js corpus, dev-guardian's `mcp/src` and
+dev-spec-driven's JS give 0 findings (precision there is vacuous: the shapes are absent).
 
 The `bugfix-js`, `bugfix-py`, `bugfix-go` and `mobile` rows were re-measured
 in review 3.7.0 (Semgrep 1.182.0) to put the five rule changes of 3.6.1 on

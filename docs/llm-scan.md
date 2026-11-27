@@ -232,6 +232,7 @@ and coverage stays `partial`.
 | --- | --- |
 | `needs_surface` | a hunt needs `map_attack_surface` first, or again (the project changed since the last snapshot) |
 | `nothing_to_plan` | no finding with a file and line to verify, and nothing to hunt; with no `scan_id` the reason names the open set, which a scoped scan is never part of: pass its `scan_id` to verify it |
+| `unsupported_target` | `scan_id` names a `review_pr` scan whose head is not the checked-out commit (a branch switched, or a commit made, since the review): the subagents read the working tree, so the verdicts would be about another version of the files. Check out the reviewed head, or run `review_pr` on what is checked out, and plan again. The same findings named by `fingerprints` are each `not_eligible`, with that reason |
 | `too_many_open_plans` | five active plans already; the answer lists them |
 | `needs_confirm` | the estimate is above `max_estimated_tokens` and the plan is not confirmed |
 | `limit_reached` | `max_tasks` or the token ceiling stopped delivery |
