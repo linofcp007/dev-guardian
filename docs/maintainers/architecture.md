@@ -208,3 +208,18 @@ runs before git is killed — and answers at most 2 s after a stop, whatever
 still holds the pipes (`gitSafetyPlainSpawn.test.ts`). Before 3.4.0's merge it
 killed git alone and waited for the pipes, so a helper git had started held
 the SessionStart briefing for as long as it lived.
+
+## review_pr at the merge base (`mcp/src/review/baseCompare.ts`)
+
+Since 3.18.0 `review_pr` judges each Semgrep finding of the head against a second Semgrep run over the same files at
+the merge base: the modified (M, T) or renamed files that hold a head result and that the factory keeps (the same
+`keptByExclusions` predicate as its result filter, head's tree when head is not checked out), checked out by
+`materialiseCommit`, scanned with the head run's very `configArgs` array (the same rules, timeouts and jobs) and
+parsed with the base checkout as Semgrep's cwd. The verdict is the CI gate's matcher (`buildBaseline` of the base
+findings, then `newFindings` with the rename map), handed to the scan factory's `afterIdentities` hook, so it reads
+the final findings (after `.guardianignore`, the identities and the redaction) and lands in `meta`: a cache hit
+answers with it. Only the preexisting findings are listed (`introduced.preexisting`, ten at most, `topFindings`
+order, never cut by `severity_min`) — the skill reads that list, never an absence. Any failure is
+`compared: false`; the base run adds no `tools_run` entry and no coverage gap; a cancel during it cancels the
+review. Its one limit is the identity's: a new source flowing into a sink line that already had a finding keeps
+the finding preexisting (`e2e/reviewPrBase.test.ts` pins it), which the skill and `docs/ci.md` say.
