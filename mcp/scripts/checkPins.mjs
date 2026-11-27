@@ -131,7 +131,7 @@ const pins = [];
 /** @param {string} ownerRepo */
 const fromGithub = (ownerRepo) => () => latestRelease(ownerRepo);
 
-const RELEASE_REPOS = { syft: 'anchore/syft', trivy: 'aquasecurity/trivy', gitleaks: 'gitleaks/gitleaks', gosec: 'securego/gosec', shellcheck: 'koalaman/shellcheck' };
+const RELEASE_REPOS = { syft: 'anchore/syft', trivy: 'aquasecurity/trivy', gitleaks: 'gitleaks/gitleaks', gosec: 'securego/gosec', shellcheck: 'koalaman/shellcheck', k6: 'grafana/k6' };
 for (const [name, release] of Object.entries(PINNED_RELEASES)) {
   const ownerRepo = RELEASE_REPOS[/** @type {keyof typeof RELEASE_REPOS} */ (name)];
   pins.push({ name: `${name} (install_toolchain)`, pinned: release.version, latest: fromGithub(ownerRepo), files: Object.values(release.assets).map((a) => a.file) });

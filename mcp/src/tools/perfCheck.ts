@@ -608,7 +608,7 @@ const K6_THRESHOLDS_FAILED = 99;
  * FIFO or a directory refused, never waited on), each under the project file cap, which a larger module is keyed
  * past (`too-large`).
  */
-function k6ModuleReader(projectPath: string): K6InputReader {
+export function k6ModuleReader(projectPath: string): K6InputReader {
   return {
     read(rel) {
       const r = readProjectBytes(projectPath, rel, PROJECT_FILE_MAX_BYTES);

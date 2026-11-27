@@ -524,6 +524,53 @@ describe('shellcheck: the pinned archive, its binary nested in a versioned direc
   });
 });
 
+// DG-16: k6 on Linux was `apt-get install k6`, which needs Grafana's own apt repository and key first — nothing
+// added them, so it failed on a stock Debian or Ubuntu. Now the pinned release archive, as Trivy's and shellcheck's.
+describe('k6: the pinned archive on Linux, its binary nested; Windows and macOS on their package managers', () => {
+  const r = PINNED_RELEASES.k6;
+
+  it('every sum is a sha256, every asset of the pinned version, each binary nested in a versioned directory', () => {
+    expect(r.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(r.base).toBe(`https://github.com/grafana/k6/releases/download/v${r.version}`);
+    for (const [platform, a] of Object.entries(r.assets)) {
+      expect(a.sha256, platform).toMatch(/^[0-9a-f]{64}$/);
+      expect(a.file, platform).toContain(`k6-v${r.version}-`);
+      expect(a.member, platform).toMatch(new RegExp(`^k6-v${r.version.replace(/\./g, '\\.')}-[a-z]+-(?:amd|arm)64/k6(?:\\.exe)?$`));
+    }
+  });
+
+  it('on Linux: only the pinned archive — each CPU its asset, sum and member, checked before it is unpacked, into ~/.local/bin', () => {
+    const linux = TOOL_CATALOG['k6']?.install.linux ?? {};
+    expect(Object.keys(linux)).toEqual(['curl']);
+    const spec = linux.curl;
+    const script = spec?.args[1] ?? '';
+    expect(spec?.command).toBe('bash');
+    expect(spec?.needs_elevation).toBe(false);
+    for (const arch of ['amd64', 'arm64'] as const) {
+      const a = r.assets[`linux-${arch}`];
+      expect(a.member).toBe(`k6-v${r.version}-linux-${arch}/k6`);
+      expect(script).toContain(`asset=${a.file}; sum=${a.sha256}; member=${a.member ?? ''}`);
+    }
+    expect(script.indexOf('sha256sum -c -')).toBeLessThan(script.indexOf('tar -xzf "$tmp/k6.tar.gz" -C "$tmp" "$member"'));
+    expect(script).toContain('install -m 0755 "$tmp/$member" "$HOME/.local/bin/k6"');
+    expect(spec?.description).toBe(`k6 v${r.version} release archive (linux, sha256-checked) → ~/.local/bin/k6`);
+    expect(pickInstallSpec('k6', 'linux', [{ name: 'apt' }, { name: 'curl' }])?.manager).toBe('curl');
+  });
+
+  it('on Windows and macOS: their package managers, unpinned (the ZIPs nest the binary, which no pinned installer unpacks)', () => {
+    expect(Object.keys(TOOL_CATALOG['k6']?.install.win32 ?? {}).sort()).toEqual(['choco', 'scoop', 'winget']);
+    expect(Object.keys(TOOL_CATALOG['k6']?.install.darwin ?? {})).toEqual(['brew']);
+  });
+
+  it('`npm run pins` knows the repository of every pinned release (scripts/checkPins.mjs RELEASE_REPOS)', () => {
+    const source = readFileSync(fileURLToPath(new URL('../../../scripts/checkPins.mjs', import.meta.url)), 'utf8');
+    const map = /const RELEASE_REPOS = \{([^}]*)\}/.exec(source)?.[1] ?? '';
+    const named = [...map.matchAll(/([A-Za-z0-9_]+): '[^']+'/g)].map((m) => m[1]);
+    expect(named.sort()).toEqual(Object.keys(PINNED_RELEASES).sort());
+    expect(map).toContain("k6: 'grafana/k6'");
+  });
+});
+
 describe('govulncheck: go install of a pinned tag into the per-user tools directory', () => {
   it('POSIX: GOBIN is ~/.local/bin, the tag exact', () => {
     for (const os of ['linux', 'darwin'] as const) {

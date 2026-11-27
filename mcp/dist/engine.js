@@ -80804,7 +80804,7 @@ function knownCompromise(toolName, version2) {
   }
   return null;
 }
-var TRIVY_INSTALL_TAG, COSIGN_VERSION, COSIGN_RELEASE_SHA256, SYFT_VERSION, TRIVY_VERSION, GITLEAKS_VERSION, CPPCHECK_VERSION, PSALM_VERSION, PSALM_PHAR_SHA256, PSALM_PHAR_URL, GOSEC_VERSION, SHELLCHECK_VERSION, DETEKT_VERSION, DETEKT_JAR_URL, DETEKT_JAR_SHA256, SPOTBUGS_VERSION, SPOTBUGS_TGZ_URL, SPOTBUGS_TGZ_SHA256, SPOTBUGS_ZIP_URL, SPOTBUGS_ZIP_SHA256, FINDSECBUGS_VERSION, FINDSECBUGS_JAR_URL, FINDSECBUGS_JAR_SHA256, RUBOCOP_VERSION, WP_CLI_VERSION, WP_CLI_PHAR_SHA256, ACTIONLINT_VERSION, PSALM_PHAR, WP_CLI_PHAR, DETEKT_JAR2, PS_PROLOGUE, GOVULNCHECK_MODULE, PINNED_RELEASES, TOOL_CATALOG, MANUAL_ONLY_TOOLS;
+var TRIVY_INSTALL_TAG, COSIGN_VERSION, COSIGN_RELEASE_SHA256, SYFT_VERSION, TRIVY_VERSION, GITLEAKS_VERSION, CPPCHECK_VERSION, PSALM_VERSION, PSALM_PHAR_SHA256, PSALM_PHAR_URL, GOSEC_VERSION, SHELLCHECK_VERSION, K6_VERSION, DETEKT_VERSION, DETEKT_JAR_URL, DETEKT_JAR_SHA256, SPOTBUGS_VERSION, SPOTBUGS_TGZ_URL, SPOTBUGS_TGZ_SHA256, SPOTBUGS_ZIP_URL, SPOTBUGS_ZIP_SHA256, FINDSECBUGS_VERSION, FINDSECBUGS_JAR_URL, FINDSECBUGS_JAR_SHA256, RUBOCOP_VERSION, WP_CLI_VERSION, WP_CLI_PHAR_SHA256, ACTIONLINT_VERSION, PSALM_PHAR, WP_CLI_PHAR, DETEKT_JAR2, PS_PROLOGUE, GOVULNCHECK_MODULE, PINNED_RELEASES, TOOL_CATALOG, MANUAL_ONLY_TOOLS;
 var init_installCatalog = __esm({
   "src/runners/installCatalog.ts"() {
     "use strict";
@@ -80828,6 +80828,7 @@ var init_installCatalog = __esm({
     PSALM_PHAR_URL = `https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`;
     GOSEC_VERSION = "2.30.0";
     SHELLCHECK_VERSION = "0.11.0";
+    K6_VERSION = "2.4.0";
     DETEKT_VERSION = "1.23.8";
     DETEKT_JAR_URL = `https://repo1.maven.org/maven2/io/gitlab/arturbosch/detekt/detekt-cli/${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar`;
     DETEKT_JAR_SHA256 = "3afe89a11120303c73c9bdda3d8fe558dd9070a6937d27819ddc04b275381245";
@@ -80942,6 +80943,18 @@ var init_installCatalog = __esm({
             member: `shellcheck-v${SHELLCHECK_VERSION}/shellcheck`
           },
           "windows-amd64": { file: `shellcheck-v${SHELLCHECK_VERSION}.zip`, sha256: "8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e" }
+        }
+      },
+      k6: {
+        version: K6_VERSION,
+        base: `https://github.com/grafana/k6/releases/download/v${K6_VERSION}`,
+        // One line per Linux asset: scripts/test-docker.mjs reads them from this file.
+        assets: {
+          "linux-amd64": { file: `k6-v${K6_VERSION}-linux-amd64.tar.gz`, sha256: "5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87", member: `k6-v${K6_VERSION}-linux-amd64/k6` },
+          "linux-arm64": { file: `k6-v${K6_VERSION}-linux-arm64.tar.gz`, sha256: "7bb415f59d81ad649a86f6da6b3e1bd2e4e64e84909deef13e9bca70608abccb", member: `k6-v${K6_VERSION}-linux-arm64/k6` },
+          "darwin-amd64": { file: `k6-v${K6_VERSION}-macos-amd64.zip`, sha256: "e4ab42bf4546fb13d54008dee1d018a37ff74f74536da27496c12cc1dfedfd59", member: `k6-v${K6_VERSION}-macos-amd64/k6` },
+          "darwin-arm64": { file: `k6-v${K6_VERSION}-macos-arm64.zip`, sha256: "5715745adf4e5ebc92965b26b7785e54e685a370466448cb587b383330a24f20", member: `k6-v${K6_VERSION}-macos-arm64/k6` },
+          "windows-amd64": { file: `k6-v${K6_VERSION}-windows-amd64.zip`, sha256: "aaa90b3afc336faf90172c7addf45c4f41305f6f188e3d564f79466e80ac68e3", member: `k6-v${K6_VERSION}-windows-amd64/k6.exe` }
         }
       }
     };
@@ -81341,12 +81354,16 @@ var init_installCatalog = __esm({
         probe: { command: "k6", args: ["version"] },
         required_by: ["perf_check"],
         install: {
+          // Windows and macOS stay on their package managers, unpinned: k6's ZIPs nest the binary, which neither
+          // pinned installer unpacks (PINNED_RELEASES).
           win32: {
             scoop: scoopInstall("k6"),
             choco: chocoInstall("k6"),
             winget: wingetInstall("k6.k6")
           },
-          linux: { apt: aptInstall("k6") },
+          // The pinned release archive, sha256-checked, into ~/.local/bin: `apt-get install k6` needed Grafana's own
+          // apt repository and key first, which nothing added, and failed on a stock Debian or Ubuntu.
+          linux: { curl: releaseArchiveInstaller("k6", "linux") },
           darwin: { brew: brewInstall("k6") }
         },
         default: false

@@ -13,11 +13,11 @@
  * `node:sqlite` lacks `isTransaction` and the busy-timeout option — run with
  * coverage, so the thresholds in `vitest.config.ts` are enforced there; and
  * `node:24-bookworm-slim`, the current LTS. `--image` (repeatable) replaces
- * the list. `--toolchain` adds pinned Semgrep and Bandit (pip) and gitleaks
- * and Trivy (release archives, the same versions and sha256 sums as
- * `src/runners/installCatalog.ts`) and sets `GUARDIAN_REQUIRE_SEMGREP=1` and
- * `GUARDIAN_REQUIRE_GITLEAKS=1`, so a missing scanner fails instead of
- * skipping.
+ * the list. `--toolchain` adds pinned Semgrep and Bandit (pip) and gitleaks,
+ * Trivy and k6 (release archives, the same versions and sha256 sums as
+ * `src/runners/installCatalog.ts`) and sets `GUARDIAN_REQUIRE_SEMGREP=1`,
+ * `GUARDIAN_REQUIRE_GITLEAKS=1` and `GUARDIAN_REQUIRE_K6=1`, so a missing
+ * scanner fails instead of skipping.
  *
  * How it runs: `git archive HEAD` of the repository is streamed into
  * `docker run --rm --init -i` — the committed tree, so commit first — unpacked
@@ -52,7 +52,7 @@ const USAGE = `usage: node scripts/test-docker.mjs [--image <name>]... [--toolch
 
 Runs the vitest suite in Linux containers (git archive HEAD, npm ci, vitest run as the node user).
   --image <name>      a Docker image with Node >= 22.13 and apt (repeatable; replaces ${DEFAULT_IMAGES.join(', ')})
-  --toolchain         add pinned Semgrep, Bandit, gitleaks and Trivy; a missing scanner then fails the tests
+  --toolchain         add pinned Semgrep, Bandit, gitleaks, Trivy and k6; a missing scanner then fails the tests
   --no-coverage       skip coverage on the floor image (${FLOOR_IMAGE} runs with coverage by default)
   --max-workers <n>   vitest workers per container (default 4)
   --only <path>       run only these test files or directories (repeatable)
@@ -123,7 +123,8 @@ function checkDocker() {
 }
 
 /**
- * gitleaks' and Trivy's pinned release for this architecture, read from the install catalog so the two never drift.
+ * gitleaks', Trivy's and k6's pinned release for this architecture, read from the install catalog so the two never
+ * drift. `member`: the binary's path inside the archive when it is nested (k6's `k6-v<version>-linux-<arch>/k6`).
  *
  * @param {string | undefined} arch
  */
@@ -132,20 +133,28 @@ function pinnedReleases(arch) {
   const platform = arch === 'arm64' ? 'linux-arm64' : 'linux-amd64';
   const trivyVersion = /TRIVY_INSTALL_TAG = 'v([^']+)'/.exec(text)?.[1];
   const gitleaksVersion = /GITLEAKS_VERSION = '([^']+)'/.exec(text)?.[1];
+  const k6Version = /const K6_VERSION = '([^']+)'/.exec(text)?.[1];
   // A catalog that no longer spells them so must fail here, not build a URL holding "undefined".
-  if (trivyVersion === undefined || gitleaksVersion === undefined) throw new Error('no Trivy or gitleaks version in installCatalog.ts');
-  /** @param {string} tool */
-  const asset = (tool) => {
-    const block = text.slice(text.indexOf(`version: ${tool.toUpperCase()}_VERSION`));
-    const m = new RegExp(`'${platform}': \\{ file: \`([^\`]+)\`, sha256: '([0-9a-f]{64})'`).exec(block);
+  if (trivyVersion === undefined || gitleaksVersion === undefined || k6Version === undefined) {
+    throw new Error('no Trivy, gitleaks or k6 version in installCatalog.ts');
+  }
+  /**
+   * @param {string} tool
+   * @param {string} version
+   */
+  const asset = (tool, version) => {
+    const name = `${tool.toUpperCase()}_VERSION`;
+    const block = text.slice(text.indexOf(`version: ${name}`));
+    const m = new RegExp(`'${platform}': \\{ file: \`([^\`]+)\`, sha256: '([0-9a-f]{64})'(?:, member: \`([^\`]+)\`)?`).exec(block);
     if (m === null) throw new Error(`no ${platform} asset for ${tool} in installCatalog.ts`);
-    return { file: m[1] ?? '', sha256: m[2] ?? '' };
+    /** @param {string} s */
+    const spelled = (s) => s.replace(`\${${name}}`, version);
+    return { file: spelled(m[1] ?? ''), sha256: m[2] ?? '', member: m[3] === undefined ? undefined : spelled(m[3]) };
   };
-  const trivy = asset('trivy');
-  const gitleaks = asset('gitleaks');
   return {
-    trivy: { ...trivy, file: trivy.file.replace('${TRIVY_VERSION}', trivyVersion), url: `https://github.com/aquasecurity/trivy/releases/download/v${trivyVersion}/` },
-    gitleaks: { ...gitleaks, file: gitleaks.file.replace('${GITLEAKS_VERSION}', gitleaksVersion), url: `https://github.com/gitleaks/gitleaks/releases/download/v${gitleaksVersion}/` },
+    trivy: { ...asset('trivy', trivyVersion), url: `https://github.com/aquasecurity/trivy/releases/download/v${trivyVersion}/` },
+    gitleaks: { ...asset('gitleaks', gitleaksVersion), url: `https://github.com/gitleaks/gitleaks/releases/download/v${gitleaksVersion}/` },
+    k6: { ...asset('k6', k6Version), url: `https://github.com/grafana/k6/releases/download/v${k6Version}/` },
   };
 }
 
@@ -187,16 +196,22 @@ function prepare(image, o, arch) {
   if (o.toolchain) {
     const r = pinnedReleases(arch);
     /**
-     * @param {{ url: string, file: string, sha256: string }} rel
+     * @param {{ url: string, file: string, sha256: string, member?: string | undefined }} rel
      * @param {string} binary
      */
-    const fetch = (rel, binary) =>
-      `RUN curl -fsSL -o /tmp/a.tgz ${rel.url}${rel.file} && echo "${rel.sha256}  /tmp/a.tgz" | sha256sum -c - ` +
-      `&& tar -C /usr/local/bin -xzf /tmp/a.tgz ${binary} && rm /tmp/a.tgz`;
+    const fetch = (rel, binary) => {
+      // A nested binary is unpacked alone, its directories stripped, so it lands in /usr/local/bin as `binary`.
+      const unpack = rel.member === undefined ? binary : `--strip-components=${String(rel.member.split('/').length - 1)} ${rel.member}`;
+      return (
+        `RUN curl -fsSL -o /tmp/a.tgz ${rel.url}${rel.file} && echo "${rel.sha256}  /tmp/a.tgz" | sha256sum -c - ` +
+        `&& tar -C /usr/local/bin -xzf /tmp/a.tgz ${unpack} && rm /tmp/a.tgz`
+      );
+    };
     lines.push(
       `RUN python3 -m venv /opt/scanners && /opt/scanners/bin/pip install --no-cache-dir ${PIP_PINS.join(' ')}`,
       fetch(r.gitleaks, 'gitleaks'),
       fetch(r.trivy, 'trivy'),
+      fetch(r.k6, 'k6'),
       'ENV PATH=/opt/scanners/bin:$PATH',
     );
   }
@@ -240,7 +255,7 @@ function runIn(ref, image, o, tar) {
     'npm ci --no-audit --no-fund --loglevel=error',
     `exec ${vitest.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(' ')}`,
   ].join('\n');
-  const env = o.toolchain ? ['-e', 'GUARDIAN_REQUIRE_SEMGREP=1', '-e', 'GUARDIAN_REQUIRE_GITLEAKS=1'] : [];
+  const env = o.toolchain ? ['-e', 'GUARDIAN_REQUIRE_SEMGREP=1', '-e', 'GUARDIAN_REQUIRE_GITLEAKS=1', '-e', 'GUARDIAN_REQUIRE_K6=1'] : [];
   const name = `dev-guardian-test-${process.pid}-${Date.now()}`;
   return new Promise((resolveRun) => {
     const child = spawn('docker', ['run', '--rm', '--init', '-i', '--name', name, '--user', 'node', '-e', 'HOME=/home/node', ...env, ref, 'sh', '-c', script], {
