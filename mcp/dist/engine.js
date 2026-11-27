@@ -15495,6 +15495,7 @@ __export(scanSettings_exports, {
   relativePathProblem: () => relativePathProblem,
   semgrepSettingArgs: () => semgrepSettingArgs
 });
+import { availableParallelism } from "node:os";
 import { posix } from "node:path";
 function defaultScanSettings() {
   return {
@@ -15602,7 +15603,7 @@ var init_scanSettings = __esm({
     SCAN_SETTINGS_RELATIVE_PATH = ".guardian/scan.yml";
     DEFAULT_SEMGREP_TIMEOUT_S = 30;
     DEFAULT_SEMGREP_TIMEOUT_THRESHOLD = 0;
-    DEFAULT_SEMGREP_JOBS = 1;
+    DEFAULT_SEMGREP_JOBS = Math.min(4, availableParallelism());
     MAX_SEMGREP_JOBS = 256;
     MAX_BYTES = 256 * 1024;
   }
@@ -24667,12 +24668,12 @@ function remedyFor(kind, tool54, detail, cause) {
     case "file_timeout":
       return "Raise semgrep.timeout in .guardian/scan.yml, or after review list the file under semgrep.accept_timeouts there and commit it.";
     case "taint_timeout":
-      return "Nothing to do for the gate (not gating): taint findings in the named functions may be missing. With semgrep.jobs above 1 in .guardian/scan.yml, Semgrep's domains share the taint budget \u2014 set it back to 1; at 1, the function is genuinely heavy.";
+      return "Nothing to do for the gate (not gating): taint findings in the named functions may be missing. Semgrep's analysis domains share the taint budget (semgrep.jobs in .guardian/scan.yml, at most 4 by default): semgrep.jobs: 1 gives each function all of it, at a cost in time; at 1, the function is genuinely heavy.";
     case "path_too_long":
       return "Move the project to a shorter path. dev-guardian already hands Semgrep and Bandit such files as extended-length paths (\\\\?\\C:\\\u2026), so a file named here could not be read even that way; Windows long paths (LongPathsEnabled=1) do not help Semgrep, whose engine is not long-path aware.";
     case "scanner_failed":
       if (/semgrep did not finish \(timed_out\)/.test(detail)) {
-        return "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the scan, or set semgrep.jobs above 1 in .guardian/scan.yml \u2014 faster, but taint analysis then gives up on more functions.";
+        return "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the scan, or set a higher semgrep.jobs in .guardian/scan.yml \u2014 faster, but taint analysis then gives up on more functions.";
       }
       if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {
         return "Unset SEMGREP_SEND_METRICS, or set it to on, off or auto (Semgrep refuses any other value, in any case), then rerun the scan.";
@@ -60704,7 +60705,7 @@ var init_gosecRun = __esm({
 });
 
 // src/runners/cppcheckRun.ts
-import { availableParallelism } from "node:os";
+import { availableParallelism as availableParallelism2 } from "node:os";
 import { join as join49 } from "node:path";
 import { mkdirSync as mkdirSync8, readFileSync as readFileSync6, writeFileSync as writeFileSync10 } from "node:fs";
 function cppSources(files) {
@@ -60939,7 +60940,7 @@ async function cppcheckOnce(args, name, target) {
   const run2 = await runProcess({
     command: "cppcheck",
     args: [
-      `-j${String(Math.max(1, Math.min(availableParallelism(), 8)))}`,
+      `-j${String(Math.max(1, Math.min(availableParallelism2(), 8)))}`,
       "-q",
       "--enable=warning,information,missingInclude",
       "--inconclusive",
@@ -61056,7 +61057,7 @@ var init_cppcheck = __esm({
 });
 
 // src/runners/psalmRun.ts
-import { availableParallelism as availableParallelism2, tmpdir as tmpdir6 } from "node:os";
+import { availableParallelism as availableParallelism3, tmpdir as tmpdir6 } from "node:os";
 import { join as join50 } from "node:path";
 import { mkdirSync as mkdirSync9, mkdtempSync as mkdtempSync5, readFileSync as readFileSync7, rmSync as rmSync10, writeFileSync as writeFileSync11 } from "node:fs";
 function phpSources(files) {
@@ -61176,7 +61177,7 @@ ${versionRun.stderr}`;
         `--config=${config2}`,
         `--root=${root}`,
         "--no-cache",
-        `--threads=${String(Math.max(1, Math.min(availableParallelism2(), 8)))}`,
+        `--threads=${String(Math.max(1, Math.min(availableParallelism3(), 8)))}`,
         "--taint-analysis",
         "--output-format=count",
         `--report=${out}`,

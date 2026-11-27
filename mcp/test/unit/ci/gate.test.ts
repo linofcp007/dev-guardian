@@ -565,8 +565,7 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
 
   // Review 8, finding 3: a taint fixpoint timeout (Semgrep gave up the
   // dataflow analysis of some functions; the budget has no setting, and
-  // `semgrep.jobs: 1` — the default since 3.18.0 — gives one function all of
-  // it) gated exactly
+  // `semgrep.jobs: 1` — 3.18.0 — gives one function all of it) gated exactly
   // like a per-file Timeout, and a medium-sized codebase never reached exit
   // 0 — dev-spec-driven's own tree had them in 210 functions. It is a NOTE
   // now: reported (human, JSON), never a coverage gap, never the exit code;

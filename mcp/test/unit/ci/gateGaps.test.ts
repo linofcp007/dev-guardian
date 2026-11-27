@@ -206,9 +206,9 @@ describe('every gap as data', () => {
     expect(remedyFor('scanner_failed', 'semgrep', 'semgrep failed (a rule did not load)')).toMatch(/rule/);
   });
 
-  // 3.18.0: `semgrep.jobs: 1` by default (platform/scanSettings.ts) costs time, and a large tree can run past the
-  // run's limit — a failed scan on upgrade. Its remedy names both ways out, ahead of the rule test: the line of a
-  // run that also names a rule file is still a timeout, not a rule to fix.
+  // 3.18.0: fewer Semgrep domains (`semgrep.jobs`, platform/scanSettings.ts) cost time, and a large tree can run past
+  // the run's limit — a failed scan. Its remedy names both ways out, ahead of the rule test: the line of a run that
+  // also names a rule file is still a timeout, not a rule to fix.
   it('a Semgrep run past the time limit: the remedy names GUARDIAN_SCAN_TIMEOUT_MS and semgrep.jobs, not "fix the rule"', () => {
     const reasons = [
       'semgrep did not finish (timed_out)',
@@ -223,7 +223,7 @@ describe('every gap as data', () => {
       const gap = v.coverageGapDetails[0];
       expect(gap?.kind, reason).toBe('scanner_failed');
       expect(gap?.remedy, reason).toMatch(/^Semgrep ran past dev-guardian's time limit \(GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default\)/);
-      expect(gap?.remedy, reason).toMatch(/set semgrep\.jobs above 1 in \.guardian\/scan\.yml/);
+      expect(gap?.remedy, reason).toMatch(/set a higher semgrep\.jobs in \.guardian\/scan\.yml/);
     }
     // Still its own: a rule that did not load, and another failure.
     expect(remedyFor('scanner_failed', 'semgrep', 'security_scan_full: semgrep failed (a rule did not load)')).toBe(
@@ -234,12 +234,12 @@ describe('every gap as data', () => {
     );
   });
 
-  it('a taint fixpoint timeout: nothing for the gate, and semgrep.jobs above 1 named as a cause — never "split the function"', () => {
+  it('a taint fixpoint timeout: nothing for the gate, and semgrep.jobs named as its cause — never "split the function"', () => {
     const v = evaluateGate(input({ steps: [semgrepStep([{ file: F, type: 'Fixpoint timeout' }])] }));
     const note = v.coverageGapDetails.find((d) => d.kind === 'taint_timeout');
     expect(note?.gating).toBe(false);
     expect(note?.remedy).toMatch(/^Nothing to do for the gate \(not gating\): taint findings in the named functions may be missing\./);
-    expect(note?.remedy).toMatch(/semgrep\.jobs above 1 in \.guardian\/scan\.yml.* set it back to 1/);
+    expect(note?.remedy).toMatch(/\(semgrep\.jobs in \.guardian\/scan\.yml, at most 4 by default\): semgrep\.jobs: 1 gives each function all of it/);
     expect(note?.remedy).not.toMatch(/split/i);
   });
 

@@ -6,7 +6,8 @@
  *       timeout: 30            # seconds per rule per file (Semgrep --timeout; 0: no limit)
  *       timeout_threshold: 0   # rules that may time out on a file before Semgrep drops
  *                              # the whole file (--timeout-threshold; 0: never drop it)
- *       jobs: 1                # Semgrep's --jobs: the analysis domains it runs at once
+ *       jobs: 4                # Semgrep's --jobs: the analysis domains it runs at once
+ *                              # (default: the machine's cores, at most 4)
  *       accept_timeouts:       # files whose per-file Semgrep Timeout the CI gate accepts
  *         - src/generated/parser.js
  *
@@ -22,17 +23,23 @@
  * threshold of 0 only the rules that timed out miss the file, which is what
  * makes accepting a timeout honest.
  *
- * `--jobs 1` (3.18.0): Semgrep's taint analysis gives up on a function past a
+ * `--jobs` (3.18.0): Semgrep's taint analysis gives up on a function past a
  * budget of 0.2 s of the whole Semgrep process's CPU time — a budget with no
  * setting —, and without `--jobs` Semgrep runs a domain per core, which spend
  * that one budget at once. On dev-spec-driven's engine (24 cores, Semgrep
- * 1.182.0) the default gave 167-177 `Fixpoint timeout` entries in 34 files
- * and 729-747 results, a different set on every run (127 keys flickered over
- * 5 runs, each in a file the run missing it named); `--jobs 4` gave 22 in 12
- * files; `--jobs 1` gave 4 in 2 files and 844 results, twice the same, in
- * 1.8-2.3x the time. One domain gives each function all of the budget, so the
- * default can only add findings, never silence one. `semgrep.jobs` above 1
- * buys the time back at that price.
+ * 1.182.0) Semgrep's default gave 167-177 `Fixpoint timeout` entries in 34
+ * files and 729-747 results, a different set on every run (127 keys
+ * flickered over 5 runs, each in a file the run missing it named); `--jobs 4`
+ * gave 22 in 12 files; `--jobs 1` gave 4 in 2 files and 844 results, twice
+ * the same. One domain gives each function all of the budget — but on the
+ * whole of dev-spec-driven with the registry rules it took 600 s and then ran
+ * past the 10-minute run limit (a failed scan), against 432 s without
+ * `--jobs`, on a loaded 24-core machine. So the default is the machine's
+ * cores, at most 4: Semgrep's own on a CI runner of 4 cores or fewer, and a
+ * sixth of the domains on 24 cores (22 timeouts in 12 files, not 167 in 34);
+ * the baseline's taint-incomplete records carry the flicker that is left
+ * (`ci/taintIncomplete.ts`). `semgrep.jobs: 1` buys the last few functions at
+ * that price in time; a larger one buys time back with more timeouts.
  *
  * ---- Who may accept a timeout ---------------------------------------------
  *
@@ -50,6 +57,7 @@
  * never applies.
  */
 
+import { availableParallelism } from 'node:os';
 import { posix } from 'node:path';
 import { describeReadRefusal, readProjectText } from './projectFs.js';
 import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './boundedParse.js';
@@ -61,8 +69,11 @@ export const SCAN_SETTINGS_RELATIVE_PATH = '.guardian/scan.yml';
 export const DEFAULT_SEMGREP_TIMEOUT_S = 30;
 /** Semgrep's `--timeout-threshold` dev-guardian passes (Semgrep's own: 3). */
 export const DEFAULT_SEMGREP_TIMEOUT_THRESHOLD = 0;
-/** Semgrep's `--jobs` dev-guardian passes (Semgrep's own: a domain per core) — see the module doc. */
-export const DEFAULT_SEMGREP_JOBS = 1;
+/**
+ * Semgrep's `--jobs` dev-guardian passes: the machine's cores, at most 4
+ * (Semgrep's own: a domain per core) — see the module doc.
+ */
+export const DEFAULT_SEMGREP_JOBS = Math.min(4, availableParallelism());
 /** The largest `semgrep.jobs` read. */
 const MAX_SEMGREP_JOBS = 256;
 

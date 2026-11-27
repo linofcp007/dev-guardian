@@ -39,8 +39,9 @@
  *   - a taint `Fixpoint timeout` — the dataflow analysis of a function ran
  *     past its budget, 0.2 s of the whole Semgrep process's CPU time, which
  *     every analysis domain spends at once (the budget has no setting;
- *     `semgrep.jobs`, 1 by default since 3.18.0, gives one function all of
- *     it) — never gates: it is a NOTE, reported, not a coverage gap (review
+ *     `semgrep.jobs` — the machine's cores, at most 4, by default since
+ *     3.18.0 — sets the domains, and at 1 a function gets all of it) — never
+ *     gates: it is a NOTE, reported, not a coverage gap (review
  *     8, finding 3 — a medium-sized codebase never reached exit 0:
  *     dev-spec-driven's own tree had taint timeouts in 210 functions);
  *   - a file at a path too long for Windows (`Path too long`) was never
@@ -587,9 +588,9 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
       return 'Raise semgrep.timeout in .guardian/scan.yml, or after review list the file under semgrep.accept_timeouts there and commit it.';
     case 'taint_timeout':
       return (
-        'Nothing to do for the gate (not gating): taint findings in the named functions may be missing. With semgrep.jobs ' +
-        "above 1 in .guardian/scan.yml, Semgrep's domains share the taint budget — set it back to 1; at 1, the function is " +
-        'genuinely heavy.'
+        'Nothing to do for the gate (not gating): taint findings in the named functions may be missing. Semgrep\'s ' +
+        'analysis domains share the taint budget (semgrep.jobs in .guardian/scan.yml, at most 4 by default): semgrep.jobs: 1 ' +
+        'gives each function all of it, at a cost in time; at 1, the function is genuinely heavy.'
       );
     case 'path_too_long':
       return (
@@ -600,11 +601,11 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
     case 'scanner_failed':
       // Before the rule test (a "timed_out" line can name the rules): Semgrep
       // past the run's time limit, whole runs and batches alike
-      // (`checkSemgrepReport`) — the one cost `semgrep.jobs: 1` adds (3.18.0).
+      // (`checkSemgrepReport`) — the cost a low `semgrep.jobs` adds (3.18.0).
       if (/semgrep did not finish \(timed_out\)/.test(detail)) {
         return (
           "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the " +
-          'scan, or set semgrep.jobs above 1 in .guardian/scan.yml — faster, but taint analysis then gives up on more functions.'
+          'scan, or set a higher semgrep.jobs in .guardian/scan.yml — faster, but taint analysis then gives up on more functions.'
         );
       }
       // Before the rule test: the line says "registry rules" (review 11, finding 10).

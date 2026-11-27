@@ -4,6 +4,7 @@
  * — committed, reviewed, never half-read.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { availableParallelism } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
@@ -46,9 +47,11 @@ describe('loadScanSettings', () => {
 
   // 3.18.0: without -j Semgrep runs a domain per core, which share one taint
   // budget of the process's CPU time — taint findings lost and flickering from
-  // run to run (platform/scanSettings.ts). The default is the decision: one.
-  it('no file: Semgrep runs single-domain (--jobs 1), so a function gets all of the taint budget', () => {
-    expect(DEFAULT_SEMGREP_JOBS).toBe(1);
+  // run to run (platform/scanSettings.ts). The default is the decision: the
+  // machine's cores, at most 4 (one domain ran past the 10-minute limit).
+  it("no file: --jobs is the machine's cores, at most 4 — never Semgrep's domain per core on a larger machine", () => {
+    expect(DEFAULT_SEMGREP_JOBS).toBe(Math.min(4, availableParallelism()));
+    expect(DEFAULT_SEMGREP_JOBS).toBeGreaterThanOrEqual(1);
     expect(loadScanSettings(project()).settings.semgrep.jobs).toBe(DEFAULT_SEMGREP_JOBS);
   });
 
