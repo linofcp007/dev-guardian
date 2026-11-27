@@ -131,7 +131,8 @@ describe('guardian-review: the fresh-eyes passes', () => {
       '| --- | --- |',
       '| check out | `gh pr checkout <branch>` |',
       '',
-      'Or `git diff --name-only -z <base-sha>...<head-sha> | xargs -0 git diff <base>`, `echo $(git rev-parse <ref>)`.',
+      'Or `git diff --name-only -z <base-sha>...<head-sha> | xargs -0 git diff <base>`, `echo $(git rev-parse <ref>)`,',
+      '`$(git merge-base <base> <head>)`.',
       '',
       'Not commands: `review_pr { project_path: "<project>" }`, `<head>`, `specs://feature/<slug>/<file>`, `.specs/<slug>/`.',
       '',
@@ -153,6 +154,7 @@ describe('guardian-review: the fresh-eyes passes', () => {
       'gh pr checkout <branch>',
       'git diff --name-only -z <base-sha>...<head-sha> | xargs -0 git diff <base>',
       'echo $(git rev-parse <ref>)',
+      '$(git merge-base <base> <head>)',
     ]);
     // Each holds a name on a command line; `${VAR}` and the allowed placeholders are not names.
     for (const line of lines) expect(namePlaceholders(line), line).not.toEqual([]);
