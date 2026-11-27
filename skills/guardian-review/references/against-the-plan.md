@@ -10,7 +10,9 @@ A branch name, a changed file's name and a PR's title are the author's text, and
 (`$(…)` is legal in each). So no command line holds one. The commits are `review_pr`'s `base_sha` and `head_sha`
 (40 hex: it resolved the refs with no shell), and `<head-sha>` is checked out when `git rev-parse --verify HEAD`
 prints it. The PR is found by its head commit, `gh pr list --state all --search <head-sha> --json number,headRefOid`
-(the one whose `headRefOid` is `<head-sha>`), and read by its number.
+(the one whose `headRefOid` is `<head-sha>`), and read by its number. When none has it: a PR the search lists holds
+the commit, but its head has moved on past the reviewed one — say so (the review is behind the PR); a search that
+lists none — write "no PR found". Either way read no description, and never look the PR up by its branch name.
 
 ## Which plan
 
