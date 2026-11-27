@@ -422,7 +422,7 @@ describe('bandit install', () => {
   });
 });
 
-describe('gosec: the pinned release archive everywhere, Windows’ own tar.exe for its .tar.gz', () => {
+describe('gosec: a pinned release archive for every OS, Windows’ own tar.exe for its .tar.gz', () => {
   const r = PINNED_RELEASES.gosec;
 
   it('every sum is a sha256 of an asset of the pinned version', () => {
@@ -453,6 +453,36 @@ describe('gosec: the pinned release archive everywhere, Windows’ own tar.exe f
     for (const os of ['linux', 'darwin'] as const) {
       expect(TOOL_CATALOG['gosec']?.install[os].go?.args).toEqual(['install', `github.com/securego/gosec/v2/cmd/gosec@v${r.version}`]);
     }
+  });
+
+  // 3.18.0 fix round 3 (R3-DGREV-05): SECURITY.md said gosec came from Homebrew first "with the pinned archive as the
+  // fallback". install_toolchain probes `go` before `curl` (installToolchain.ts#listAvailableManagers) and gosec
+  // declares both, so wherever `go` is on PATH gosec is `go install`ed at its pinned tag before the archive, on Linux
+  // too; Windows declares the archive alone. The managers below are offered in that probe order, read from the source.
+  it('the route SECURITY.md states: Homebrew first on macOS, else go install of the tag wherever go is, else the archive', () => {
+    const toolchain = readFileSync(fileURLToPath(new URL('../../../src/tools/installToolchain.ts', import.meta.url)), 'utf8');
+    const order = /const order =\s*os === 'darwin'\s*\? \[([^\]]*)\]\s*: \[([^\]]*)\];/.exec(toolchain);
+    expect(order, 'the POSIX probe order').not.toBeNull();
+    expect(toolchain).toContain("return [...managers, { name: 'curl', available: curlPath !== null }];");
+    const probed = (os: 'darwin' | 'linux', ...on: string[]): Parameters<typeof pickInstallSpec>[2] =>
+      [...[...(order?.[os === 'darwin' ? 1 : 2] ?? '').matchAll(/'([a-z]+)'/g)].map((m) => m[1] ?? ''), 'curl']
+        .filter((name) => on.includes(name))
+        .map((name) => ({ name: name as Parameters<typeof pickInstallSpec>[2][number]['name'] }));
+    const pick = (os: 'darwin' | 'linux', ...on: string[]): string | undefined => pickInstallSpec('gosec', os, probed(os, ...on))?.manager;
+    expect(pick('darwin', 'brew', 'go', 'curl')).toBe('brew');
+    expect(pick('darwin', 'go', 'curl')).toBe('go');
+    expect(pick('darwin', 'curl')).toBe('curl');
+    expect(pick('linux', 'apt', 'go', 'curl')).toBe('go');
+    expect(pick('linux', 'apt', 'curl')).toBe('curl');
+    expect(pickInstallSpec('gosec', 'win32', [{ name: 'release' }, { name: 'go' }])?.manager).toBe('release');
+    const security = readFileSync(fileURLToPath(new URL('../../../../SECURITY.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
+    expect(security).toContain(
+      "gosec comes from Homebrew first on macOS; else, on macOS and Linux, from `go install` of its pinned tag wherever `go` is on PATH (the Go checksum database, sum.golang.org, verifies the module); else from its pinned, sha256-checked archive, which is Windows' only route for it.",
+    );
+    expect(security).toContain(
+      "when their archive is the route taken (see \"Hardening posture\": gosec's archive comes after Homebrew on macOS and after `go install` of its pinned tag, which the Go checksum database verifies, wherever `go` is on PATH)",
+    );
+    expect(security).not.toContain('so do gosec');
   });
 
   it("on Windows: Get-FileHash, then System32's tar.exe unpacks gosec.exe alone, its exit code checked", () => {
