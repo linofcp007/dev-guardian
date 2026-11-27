@@ -1171,7 +1171,9 @@ describe('review_pr — introduced: the Semgrep findings judged at the merge bas
     write(dir, 'auth.js', "const k = 'old-literal';\nconst admin = 'nul-literal'; // \0\nmodule.exports = { k };\n// reviewed\n");
     atLine(2);
     expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
-    // A CRLF working tree against the merge base's LF lines: the same lines, so the old secret's is still kept.
+    // A CRLF working tree against the merge base's LF lines: the same lines, so the old secret's is still kept. The
+    // repository's own `core.autocrlf=false` (a Linux checkout's): with `true`, git converts both sides itself.
+    await git(dir, 'config', 'core.autocrlf', 'false');
     write(dir, '.gitattributes', '');
     write(dir, 'auth.js', "const k = 'old-literal';\r\nmodule.exports = { k };\r\n// reviewed\r\n");
     atLine(1);
