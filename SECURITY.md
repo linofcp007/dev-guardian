@@ -359,7 +359,14 @@ their respective projects.
   come from Homebrew first (homebrew-core bottles, built by Homebrew, not
   pinned to a version) with the pinned archive as the fallback. cosign's
   installer was already pinned this way. A test holds the Linux script and
-  the macOS script's Trivy to the catalogue's versions and sums.
+  the macOS script's Trivy to the catalogue's versions and sums. Since
+  3.18.0 k6 2.4.0 on Linux is the same kind of pinned, sha256-checked
+  release archive (3.17 ran `apt-get install k6`, which needs Grafana's own
+  apt repository); on Windows and macOS k6 stays on the package managers,
+  unpinned. squawk (3.18.0) is pinned by version only, not by hash:
+  `pipx install squawk-cli==2.71.0`, and PyPI, which refuses a second upload
+  of a file name, can still take a new file for that version (another
+  platform or build tag) that pip may prefer.
 - **The pipelines `ci-init` writes install nothing by name alone** (3.7.0 and
   later). Their binaries were already pinned by sha256; bandit, Semgrep and
   zizmor came from `pipx install semgrep==<version>`, which pinned those three
@@ -831,7 +838,7 @@ project's own build and test commands.
 | The target you name | `perf_check` (Lighthouse URL, k6 script) | per call |
 | k6's anonymous usage report (Grafana) | **disabled by dev-guardian**: `perf_check` runs `k6 run --no-usage-report` (`mcp/src/tools/perfCheck.ts`) — a flag, never `K6_NO_USAGE_REPORT`, a `K6_*` setting that would start a new series | never. k6 sends it on every run by default, with an installation id it keeps in the user's config folder; with the flag it neither sends the report nor reads or creates that file. |
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
-| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, gem; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives and Maven Central jars) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture"); so are Psalm's release PHAR and detekt's jar (Maven Central, its signature verified when pinned) before they are copied, and SpotBugs' archive and the FindSecBugs jar (Maven Central) before they are unpacked; RuboCop is a pinned gem from RubyGems (`gem install --user-install --conservative`), and squawk a pinned PyPI version (`pipx install squawk-cli==2.71.0`: PyPI never takes a second upload of a file name) |
+| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, gem; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives and Maven Central jars) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks, gosec, ShellCheck, cosign and, on Linux, k6 are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture"); so are Psalm's release PHAR and detekt's jar (Maven Central, its signature verified when pinned) before they are copied, and SpotBugs' archive and the FindSecBugs jar (Maven Central) before they are unpacked; RuboCop is a pinned gem from RubyGems (`gem install --user-install --conservative`). squawk is pinned by version, not by hash (`pipx install squawk-cli==2.71.0`: PyPI refuses a second upload of a file name, but can take a new file for that version, another platform or build tag, which pip may prefer) |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
 | Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
 | Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |

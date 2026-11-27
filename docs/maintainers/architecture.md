@@ -119,9 +119,12 @@ That filter's "in the project" is asked of the tree the passes read (3.18.0): th
 (`projectPathTest`), and head's top-level entries when `review_pr`'s head is not checked out, since the working tree
 is then another commit's (`ScannerInvocation.inProject`: `runners/git.ts#headTopLevel`, one `git ls-tree` in the
 project directory, read by `guardianIgnore.ts#treePathTest`). The listing is taken whether or not head is checked out
-for the scanners: a change that only deletes never is. So a commit-target review drops and reports what the same
-review with head checked out does: the rename into a listed tree only head holds is dropped, and a deletion in a
+for the scanners: a change that only deletes never is. So a commit-target review gives the same in-the-project answer
+as the same review with head checked out: the rename into a listed tree only head holds is dropped, and a deletion in a
 listed top-level tree head removed whole is reported (3.17 did the reverse of both whenever the base was checked out).
+The patterns are still the working tree's `.guardianignore` (`loadProjectExclusions`, as before), never head's: when
+the diff edits that file the two reviews can differ (`review_pr` warns about such a diff), and a head cannot add a
+pattern to a commit-target review.
 A deeper listed tree deleted whole (`packages/legacy/` with `packages/` kept) is dropped at both targets, since
 `packages` is still present: the disk test's own rule. A listing git does not answer (a refusal, a timeout) silently keeps
 the working tree's answer, the 3.17 rule, which can hide such a deletion; nothing is relaxed beyond it.

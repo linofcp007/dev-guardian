@@ -48,6 +48,12 @@ describe("guardian-deps — a not_affected justification is the user's", () => {
     expect(section).toContain('references/vex.md');
     const reference = readFileSync(VEX_REFERENCE, 'utf8');
     expect(reference).toContain('Always ask the user for the justification — never choose it yourself.');
+    // Fix round 1 (R1-DGTOOLS-5): the stub routes BOTH of the reference's triggers — export_vex, and the
+    // suppress_finding that records the status, which comes first — and keeps that step's two answers inline.
+    expect(reference).toMatch(/Read this before calling `export_vex`, or before recording a `not_affected` with `suppress_finding`\./);
+    expect(section).toMatch(/antes de o chamar, ou de um `suppress_finding` com `vex_status`/);
+    expect(section).toMatch(/`warning` e `vex\.other_open_findings`, mostra-os/);
+    expect(section).toMatch(/com `vex\.exportable: false` a supressão fica registada mas não entra no documento/);
   });
 });
 

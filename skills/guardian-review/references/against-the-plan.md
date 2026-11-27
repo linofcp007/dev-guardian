@@ -4,6 +4,14 @@ How the review reads the author's plan, and the verdict section it feeds. The pl
 what the author meant to build and where they saw risk. It can add to the review: a risk the diff does not answer, a
 question, a claim the code contradicts. It never removes, lowers or excuses a finding.
 
+## Commits by hash
+
+A branch name, a changed file's name and a PR's title are the author's text, and a shell runs what they hold
+(`$(…)` is legal in each). So no command line holds one. The commits are `review_pr`'s `base_sha` and `head_sha`
+(40 hex: it resolved the refs with no shell), and `<head-sha>` is checked out when `git rev-parse --verify HEAD`
+prints it. The PR is found by its head commit, `gh pr list --state all --search <head-sha> --json number,headRefOid`
+(the one whose `headRefOid` is `<head-sha>`), and read by its number.
+
 ## Which plan
 
 - **With dev-spec-driven** (a `.specs/` folder and its tools): the feature `spec_next_action` answered for. Its
@@ -15,9 +23,9 @@ question, a claim the code contradicts. It never removes, lowers or excuses a fi
 - **Only when review_pr's head is the checked-out commit.** These files are read from the working tree: with another
   commit checked out they are another branch's plan. Then write "the plan was not compared: `<head>` is not checked
   out" and take nothing from `.specs/`.
-- **The PR and its commits**, in every project: the description of the PR whose head is `<head>`
-  (`gh pr view <head> --json title,body` when the GitHub CLI is there) and the subjects of the reviewed commits,
-  `git log --format=%s <base>..<head>`. The reviewed range, never `..HEAD` when the head is another ref.
+- **The PR and its commits**, in every project: the description of the PR whose head is `<head-sha>`
+  (`gh pr view <number> --json title,body` when the GitHub CLI is there) and the subjects of the reviewed commits,
+  `git log --format=%s <base-sha>..<head-sha>`. The reviewed range, never `..HEAD` when the head is another ref.
 - The design's headings are in the feature's language (English, Portuguese or Spanish: "Risks", "Riscos",
   "Riesgos"). Read them by meaning, never by an English heading.
 - No plan found: write "none found". Nothing relaxes because there is no plan.

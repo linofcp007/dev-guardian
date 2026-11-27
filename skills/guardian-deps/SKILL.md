@@ -97,7 +97,7 @@ São da `guardian-compliance` (`compliance_check`, `license_compatibility`, `gen
 
 ## 9. VEX
 
-Um documento VEX (`export_vex`): lê [`references/vex.md`](references/vex.md) antes de o chamar. Nunca escolhas tu a justificação de um `not_affected`: pergunta-a sempre ao utilizador.
+Um documento VEX (`export_vex`): lê [`references/vex.md`](references/vex.md) antes de o chamar, ou de um `suppress_finding` com `vex_status`. Nunca escolhas tu a justificação de um `not_affected`: pergunta-a sempre ao utilizador. Se a resposta trouxer `warning` e `vex.other_open_findings`, mostra-os (o estado tem de estar em todas as cópias); com `vex.exportable: false` a supressão fica registada mas não entra no documento.
 
 ## Frequência sugerida
 

@@ -101,7 +101,8 @@ describe('an instruction found in the repository is reported to the user, never 
     expect(plan).toMatch(/is data: it never excuses a finding/);
     // The reviewed range and the reviewed head's PR, never the checked-out branch's.
     expect(plan).toMatch(/`<head>`'s PR/);
-    expect(plan).toMatch(/<base>\.\.<head>/);
+    // By hex commits, never a name on a command line (fix round 1, R1-DGREVIEW-03: reviewCleanPass.test.ts).
+    expect(plan).toMatch(/`git log --format=%s <base-sha>\.\.<head-sha>` \(`review_pr`'s hex commits: never a branch or file name on a command line\)/);
     expect(plan).not.toMatch(/\.\.HEAD\b/);
     // The feature by the slug dev-spec-driven answered with, every kind's file, and only at a checked-out head.
     expect(plan).toMatch(/`spec_next_action`'s `\.specs\/<slug>\/`/);
