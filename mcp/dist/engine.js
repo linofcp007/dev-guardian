@@ -20842,9 +20842,7 @@ function projectPathTest(projectPath) {
 function treePathTest(top) {
   const present5 = (segments) => {
     const p = posix.normalize(segments.join("/"));
-    if (p === ".") return true;
-    if (p === ".." || p.startsWith("../")) return false;
-    return top.has(p.split("/")[0] ?? "");
+    return p === "." || top.has(p.split("/")[0] ?? "");
   };
   return (relPath) => {
     const p = relPath.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");

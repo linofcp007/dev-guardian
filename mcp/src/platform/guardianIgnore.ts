@@ -677,13 +677,13 @@ export function projectPathTest(projectPath: string): (relPath: string) => boole
  * spelling.
  */
 export function treePathTest(top: ReadonlySet<string>): (relPath: string) => boolean {
+  // The root is present; a path out of the project starts with `..`, never an entry's name.
   const present = (segments: readonly string[]): boolean => {
     const p = posix.normalize(segments.join('/'));
-    if (p === '.') return true;
-    if (p === '..' || p.startsWith('../')) return false;
-    return top.has(p.split('/')[0] ?? '');
+    return p === '.' || top.has(p.split('/')[0] ?? '');
   };
   return (relPath) => {
+    // The disk test's lexical rule, as it is: a tree can hold an entry named `C:`, which the rule refuses.
     const p = relPath.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
     if (p === '' || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p === '..' || p.startsWith('../')) return false;
     const segments = p.split('/');

@@ -103,6 +103,14 @@ describe('treePathTest — the disk test asked of a git tree', () => {
     expect(inTree('top.py')).toBe(false); // gone from head, on the disk still
     expect(isProjectPath(dir, 'top.py')).toBe(true);
   });
+
+  it('refuses a drive-letter path as the disk test does, even where a tree holds an entry of that name', () => {
+    // A POSIX repository can commit a file named `C:`; no Windows path is a project path.
+    const inTree = treePathTest(new Set(['C:', 'D:x', 'src']));
+    expect(inTree('C:/Windows/x.py')).toBe(false);
+    expect(inTree('D:x/y.py')).toBe(false);
+    expect(inTree('src/C:/x.py')).toBe(true);
+  });
 });
 
 describe('keptByExclusions — the result filter', () => {
