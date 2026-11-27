@@ -106,18 +106,6 @@ its own `tools_run` name (`history/runNames.ts`):
   a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
   `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
 
-Both passes run their `git diff`s through `gitChanges.ts#asWritten` (3.18.0): the working tree's `.gitattributes` set
-aside (`runners/git.ts#withoutTreeAttributes`: `GIT_ATTR_SOURCE` at the empty tree, git 2.40 and later) and line
-endings compared with `--ignore-cr-at-eol`, so the change is read as written. Those attributes are the change's own:
-an `ident` one turned a skip written inside `$Id:…$` in the working tree back into the base's `$Id$` line (the file
-was not even listed), and a `binary` or `-diff` one hid every line of the file, on every target. Without the flag, a
-`text eol=crlf` checkout read every line of a changed file as added (an old skip reported again). What they still
-cannot see: an `ident` edit already staged or committed (git stored the cleaned text and trusts the working tree's
-stat from then on; `testIntegrityGit.test.ts` pins it), the user's own attributes (`core.attributesFile`,
-`$GIT_DIR/info/attributes`), and every tree attribute on a git older than 2.40 — the history pass's empty-directory
-route (`runners/historyView.ts`) is not taken here. A test's counting runner (`runSuppressionCheck`'s `git`) is used
-as given.
-
 The suppressions pass lists only the paths `.guardianignore` does not ignore: its three callers hand it
 `(p) => !exclusions.ignores(p)` as `member`, applied before its bounds, so a left-out tree never fills them — one the
 change deletes whole too (scan_sast's with its scope's member; `ci/runScans.ts#declaredPaths` loads the `--rules-ref`

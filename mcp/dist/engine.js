@@ -56141,10 +56141,6 @@ var init_historyHunks = __esm({
 
 // src/testintegrity/gitChanges.ts
 import { createHash as createHash8 } from "node:crypto";
-async function asWritten(cwd) {
-  const env = await withoutTreeAttributes(cwd, process.env);
-  return (dir, args) => git(dir, args, void 0, env);
-}
 function diffRange(base2, target) {
   if (target.kind === "index") return ["--cached", base2];
   if (target.kind === "commit") return [base2, target.sha];
@@ -56190,8 +56186,7 @@ async function textAfter(cwd, target, path3, run2 = git) {
   return r.status === "ok" ? r.text : null;
 }
 async function readChangeSet(cwd, base2, target, member) {
-  const run2 = await asWritten(cwd);
-  const r = await run2(cwd, ["diff", "-z", "--name-status", "-M", "--relative", "--no-ext-diff", SAME_EOL, ...diffRange(base2, target), "--"]);
+  const r = await git(cwd, ["diff", "-z", "--name-status", "-M", "--relative", "--no-ext-diff", ...diffRange(base2, target), "--"]);
   if (r.exitCode !== 0) {
     throw new Error(`git diff could not list the changes: ${r.stderr.split(/\r?\n/).find((l) => l.trim() !== "") ?? `exit ${r.exitCode}`}`);
   }
@@ -56221,7 +56216,7 @@ async function readChangeSet(cwd, base2, target, member) {
       lines = l.oldPath !== void 0 && before !== null ? lineChanges(before, after2) : { added: numbered(after2), removed: [] };
     } else {
       const paths = l.oldPath !== void 0 ? [l.oldPath, l.path] : [l.path];
-      const d = await run2(cwd, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", SAME_EOL, "-M", "--relative", ...diffRange(base2, target), "--", ...paths]);
+      const d = await git(cwd, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--relative", ...diffRange(base2, target), "--", ...paths]);
       lines = d.exitCode === 0 ? parseUnifiedZero(d.stdout) : { added: [], removed: [] };
     }
     changes.push({
@@ -56396,7 +56391,7 @@ function firstLineOf(r) {
 }
 async function readSuppressionChanges(cwd, from, target, member, run2, cap) {
   const range = diffRange(from, target);
-  const listing = await run2(cwd, ["diff", "-z", "--name-status", "-M", "--relative", "--no-ext-diff", "--no-textconv", SAME_EOL, "-G", PICKAXE_ERE, ...range, "--"]);
+  const listing = await run2(cwd, ["diff", "-z", "--name-status", "-M", "--relative", "--no-ext-diff", "--no-textconv", "-G", PICKAXE_ERE, ...range, "--"]);
   if (listing.exitCode !== 0) return { error: firstLineOf(listing) };
   const wanted = (p) => suppressionLanguageOf(p) !== null && !NOT_TESTS.test(p) && (member === void 0 || member(p));
   const listed2 = parseNameStatus(listing.stdout).filter((l) => wanted(l.path) || l.oldPath !== void 0 && wanted(l.oldPath));
@@ -56405,7 +56400,7 @@ async function readSuppressionChanges(cwd, from, target, member, run2, cap) {
   let unread = 0;
   for (const l of listed2.slice(0, cap)) {
     const paths = l.oldPath !== void 0 ? [l.oldPath, l.path] : [l.path];
-    const d = await run2(cwd, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", SAME_EOL, "-M", "--relative", ...range, "--", ...paths]);
+    const d = await run2(cwd, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--relative", ...range, "--", ...paths]);
     if (d.exitCode !== 0) {
       unread += 1;
       continue;
@@ -56450,7 +56445,7 @@ function suppressionSummary(c, from, where) {
   return `${head}: ${c.added} suppression(s) added \u2014 ${parts.join(", ")}${carried}`;
 }
 async function runSuppressionCheck(cwd, opts) {
-  const run2 = opts.git ?? await asWritten(cwd);
+  const run2 = opts.git ?? git;
   const label2 = opts.label ?? opts.base;
   const head = opts.head ?? "HEAD";
   const skipped2 = (reason, notes2) => ({
@@ -56479,7 +56474,7 @@ async function runSuppressionCheck(cwd, opts) {
     notes
   };
 }
-var MAX_FILES, MAX_TEXT_BYTES, SAME_EOL, MAX_PAIR_COMPARISONS, baseName;
+var MAX_FILES, MAX_TEXT_BYTES, MAX_PAIR_COMPARISONS, baseName;
 var init_gitChanges = __esm({
   "src/testintegrity/gitChanges.ts"() {
     "use strict";
@@ -56489,7 +56484,6 @@ var init_gitChanges = __esm({
     init_suppressions();
     MAX_FILES = 500;
     MAX_TEXT_BYTES = 2 * 1024 * 1024;
-    SAME_EOL = "--ignore-cr-at-eol";
     MAX_PAIR_COMPARISONS = 2e4;
     baseName = (p) => p.slice(p.lastIndexOf("/") + 1);
   }
