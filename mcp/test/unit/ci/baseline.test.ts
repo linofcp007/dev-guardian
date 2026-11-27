@@ -410,3 +410,101 @@ function shiftLines(json: string): string {
     )
     .replace(/(\\n|")(\d+) /g, (_m, lead: string, n: string) => `${lead}${Number(n) + 1} `);
 }
+
+// ------------------------------------------------------------ taint_incomplete (3.18.0)
+
+/**
+ * The files whose taint analysis the baseline's run gave up on
+ * (`ci/taintIncomplete.ts`): an additive top-level key, `version: 1` kept,
+ * read strictly — a record that is not exactly one only takes a relaxation
+ * away — and never carried from one `baseline update` to the next.
+ */
+describe('taint_incomplete records in the baseline', () => {
+  const BLOB = 'a'.repeat(40);
+  const record = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ tool: 'semgrep', file: 'src/heavy.js', blob: BLOB, ...over });
+  const doc = (records: unknown): string =>
+    JSON.stringify({ version: 1, generated_at: 'x', entries: [], taint_incomplete: records });
+  const scanner = (name: string) => readFileSync(join(FIXTURES, 'scanners', name), 'utf8');
+  const findings = (): Finding[] => assignIdentities(semgrepParser.parse(scanner('semgrep.json')).findings);
+
+  it('round trip: written sorted by file after the entries, read back the same; SHA-256 repositories too', () => {
+    const records = [
+      { tool: 'semgrep' as const, file: 'src/z.js', blob: BLOB },
+      { tool: 'semgrep' as const, file: 'src/chat.ts', blob: 'b'.repeat(64), pack_only: true as const },
+    ];
+    const built = buildBaseline(findings(), null, '2026-11-27T00:00:00.000Z', undefined, records);
+    expect(Object.keys(built)).toEqual(['version', 'generated_at', 'entries', 'taint_incomplete']);
+    expect(built.version).toBe(1);
+    expect(built.taint_incomplete?.map((r) => r.file)).toEqual(['src/chat.ts', 'src/z.js']);
+    const back = parseBaseline(serialiseBaseline(built));
+    expect(back?.dropped).toBe(0);
+    expect(back?.file.taint_incomplete).toEqual([records[1], records[0]]);
+    expect(back?.file.entries).toEqual(built.entries);
+  });
+
+  it('each record that is not exactly one is left out — never the document, never counted as a dropped entry', () => {
+    const bad = [
+      record({ tool: 'bandit' }),
+      record({ tool: undefined }),
+      record({ file: '../x.js' }),
+      record({ file: 'src/../x.js' }),
+      record({ file: 'C:/x.js' }),
+      record({ file: '/x.js' }),
+      record({ file: './src/heavy.js' }),
+      record({ file: 'src\\heavy.js' }),
+      record({ file: 'src//heavy.js' }),
+      record({ file: 'src/' }),
+      record({ file: '' }),
+      record({ file: 7 }),
+      record({ blob: 'a'.repeat(39) }),
+      record({ blob: 'a'.repeat(41) }),
+      record({ blob: 'A'.repeat(40) }),
+      record({ blob: `${'a'.repeat(39)}g` }),
+      record({ blob: undefined }),
+      record({ pack_only: false }),
+      record({ pack_only: 'true' }),
+      'src/heavy.js',
+      null,
+    ];
+    for (const r of bad) {
+      const parsed = parseBaseline(doc([r]));
+      expect(parsed, JSON.stringify(r)).not.toBeNull();
+      expect(parsed?.dropped, JSON.stringify(r)).toBe(0);
+      expect(parsed?.file.taint_incomplete, JSON.stringify(r)).toBeUndefined();
+    }
+    // The good one beside the bad ones survives, once (a second record of a file is left out), unknown keys ignored.
+    const mixed = parseBaseline(doc([...bad, record({ functions: 3 }), record({ blob: 'c'.repeat(40) })]));
+    expect(mixed?.file.taint_incomplete).toEqual([{ tool: 'semgrep', file: 'src/heavy.js', blob: BLOB }]);
+    expect(parseBaseline(doc('src/heavy.js'))?.file.taint_incomplete).toBeUndefined();
+  });
+
+  it('absent: no key, and a file with none serialises as before — no taint_incomplete written', () => {
+    expect(parseBaseline('{"version":1,"generated_at":"x","entries":[]}')?.file).toEqual({ version: 1, generated_at: 'x', entries: [] });
+    for (const built of [
+      buildBaseline(findings(), null, '2026-11-27T00:00:00.000Z'),
+      buildBaseline(findings(), null, '2026-11-27T00:00:00.000Z', undefined, []),
+    ]) {
+      expect(Object.keys(built)).toEqual(['version', 'generated_at', 'entries']);
+      expect(serialiseBaseline(built)).not.toContain('taint_incomplete');
+    }
+  });
+
+  it('never carried: an update writes its own run’s records, and none when its run had none', () => {
+    const previous = buildBaseline(findings(), null, '2026-11-01T00:00:00.000Z', undefined, [{ tool: 'semgrep', file: 'src/old.js', blob: BLOB }]);
+    expect(buildBaseline(findings(), previous, '2026-11-27T00:00:00.000Z').taint_incomplete).toBeUndefined();
+    const next = buildBaseline(findings(), previous, '2026-11-27T00:00:00.000Z', undefined, [{ tool: 'semgrep', file: 'src/new.js', blob: BLOB }]);
+    expect(next.taint_incomplete).toEqual([{ tool: 'semgrep', file: 'src/new.js', blob: BLOB }]);
+  });
+
+  it('2.0.0 reads a file with records as the baseline it is — the unknown key ignored — and gates as before', async () => {
+    const v200 = await load200();
+    const written = serialiseBaseline(
+      buildBaseline(findings(), null, '2026-11-27T00:00:00.000Z', undefined, [{ tool: 'semgrep', file: 'src/app.js', blob: BLOB }]),
+    );
+    const parsed = v200.parseBaseline(written);
+    expect(parsed).not.toBeNull();
+    expect(parsed?.dropped).toBe(0);
+    expect(parsed?.file.entries).toHaveLength(findings().length);
+    expect(v200.newFindings(findings(), parsed?.file ?? null)).toEqual([]);
+  });
+});

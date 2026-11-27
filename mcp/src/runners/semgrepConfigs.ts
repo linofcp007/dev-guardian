@@ -50,7 +50,7 @@ import {
 import { inspectProjectSemgrepConfigs } from '../platform/projectSemgrepConfig.js';
 import type { ToolRun } from '../types.js';
 import { semgrepEngineOf } from './semgrepReport.js';
-import { pluginPacksDir } from './semgrepRuleIds.js';
+import { pluginPacksDir, ruleIdsInFile } from './semgrepRuleIds.js';
 
 /** The plugin's LLM-application pack, by file name in `configs/semgrep/`. */
 export const LLM_RULES_FILE = 'llm.yml';
@@ -75,6 +75,22 @@ export const PLUGIN_PACK_FILES: readonly string[] = [
   MOBILE_RULES_FILE,
   WORDPRESS_RULES_FILE,
 ];
+
+let packRuleIds: ReadonlySet<string> | undefined;
+
+/**
+ * The rule ids the plugin's packs declare ({@link PLUGIN_PACK_FILES}), as
+ * its findings are stored — the pack rule's own id (`localRuleIds.ts`).
+ * Read once. A project-root rule carrying the same id is stored the same
+ * way and is read as the pack's: in history that can only keep one of its
+ * findings open, never close one (`history/runCompare.ts`); at the CI gate,
+ * only a finding in a file whose content is unchanged since the baseline was
+ * recorded is read against a pack-only record (`ci/taintIncomplete.ts`).
+ */
+export function pluginPackRuleIds(): ReadonlySet<string> {
+  packRuleIds ??= new Set(PLUGIN_PACK_FILES.flatMap((file) => ruleIdsInFile(join(pluginPacksDir(), file))));
+  return packRuleIds;
+}
 
 /** Absolute path of the plugin's LLM-application pack. */
 export function llmRulesPath(): string {

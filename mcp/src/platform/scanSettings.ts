@@ -204,8 +204,12 @@ function notOneFile(path: string): string | null {
   return null;
 }
 
-/** Why `path` cannot name a file inside the project (absolute, or climbing out), or null. */
-function relativePathProblem(path: string): string | null {
+/**
+ * Why `path` cannot name a file inside the project (absolute, or climbing
+ * out), or null — also the baseline's taint-incomplete records' test
+ * (`ci/baseline.ts`).
+ */
+export function relativePathProblem(path: string): string | null {
   const posixPath = path.replace(/\\/g, '/');
   if (posixPath.startsWith('/') || /^[A-Za-z]:/.test(path)) return `'${path}' is absolute; name the file relative to the project`;
   if (posix.normalize(posixPath).split('/').includes('..')) return `'${path}' leaves the project`;
