@@ -10,7 +10,7 @@
 
 import { createHash } from 'node:crypto';
 import { readFileSync, statSync } from 'node:fs';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
@@ -22,19 +22,17 @@ import {
   k6Specifiers,
 } from '../../../src/metrics/k6Inputs.js';
 import { k6Series, k6Settings } from '../../../src/metrics/perfSeries.js';
+import { k6ModuleReader } from '../../../src/tools/perfCheck.js';
 import { expectLinear } from '../../helpers/timing.js';
 
 const FIXTURE = fileURLToPath(new URL('../../fixtures/k6/project/', import.meta.url));
 const sha = (b: Uint8Array | string): string => createHash('sha256').update(b).digest('hex');
 
-/** `resolve` as perfCheck's reader resolves: against the importing module's folder, `file://` by its path, null outside `root`. */
-function resolverFor(root: string): K6InputReader['resolve'] {
-  return (fromDir, spec) => {
-    const abs = spec.startsWith('file://') ? fileURLToPath(spec) : resolve(root, fromDir, spec);
-    const rel = relative(root, abs);
-    return rel.startsWith('..') || isAbsolute(rel) ? null : rel.split(sep).join('/');
-  };
-}
+/**
+ * perfCheck's own resolver (`k6ModuleReader`), never a copy of it (fix round 1, R1-DGTOOLS-4: a copy left its
+ * `file://` branch tested nowhere): against the importing module's folder, `file://` by its path, null outside `root`.
+ */
+const resolverFor = (root: string): K6InputReader['resolve'] => k6ModuleReader(root).resolve;
 
 /** A reader over a real folder, counting its reads. */
 function dirReader(root: string): K6InputReader & { reads: string[] } {

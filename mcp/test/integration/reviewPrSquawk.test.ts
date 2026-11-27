@@ -7,7 +7,7 @@
  */
 
 import { execa } from 'execa';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -294,4 +294,72 @@ describe('review_pr — squawk, opt-in by a root .squawk.toml', () => {
     expect(squawkRun(res)?.status).toBe('failed');
     expect(res.missing_tools).toContain('squawk');
   });
+
+  // Fix round 1 (R1-DGTOOLS-3): the containment the header states, each held by a row.
+  it('a .squawk.toml that links out of the project opts in, and is never read: squawk failed, a gap, never run', async (ctx) => {
+    const outside = makeTempDir('review-squawk-outside-');
+    writeFileSync(join(outside, 'squawk.toml'), CONFIG);
+    const dir = await repo({ 'README.md': '# app\n' });
+    await git(dir, 'config', 'core.symlinks', 'true');
+    linkOrSkip(join(outside, 'squawk.toml'), join(dir, '.squawk.toml'), () => ctx.skip());
+    write(dir, 'db/001.sql', MIGRATION);
+    await commitAll(dir);
+    const { res } = await review(dir);
+    expect(squawkCalls()).toEqual([]);
+    expect(squawkRun(res)?.status).toBe('failed');
+    expect(res.missing_tools).toContain('squawk');
+  });
+
+  it('a changed .sql file that is a link (here, out of the project) is never handed to squawk; the regular one is', async (ctx) => {
+    const outside = makeTempDir('review-squawk-outside-');
+    writeFileSync(join(outside, 'secret.sql'), 'SELECT 1;\n');
+    const dir = await repo({ '.squawk.toml': CONFIG });
+    await git(dir, 'config', 'core.symlinks', 'true');
+    write(dir, 'db/001.sql', MIGRATION);
+    mkdirSync(join(dir, 'db', 'linked'), { recursive: true });
+    linkOrSkip(join(outside, 'secret.sql'), join(dir, 'db', 'linked', 'evil.sql'), () => ctx.skip());
+    await commitAll(dir);
+    const { res } = await review(dir);
+    expect(squawkCalls()).toHaveLength(1);
+    expect(squawkFiles(squawkCalls()[0] ?? ({ args: [] } as unknown as Call))).toEqual(['db/001.sql']);
+    expect(squawkRun(res)?.status).toBe('ok');
+  });
+
+  it('a squawk stdout that is no JSON array (text, an object) with exit 0 is a failed run and a gap, never a clean pass', async () => {
+    const dir = await repo({ '.squawk.toml': CONFIG });
+    write(dir, 'db/001.sql', MIGRATION);
+    await commitAll(dir);
+    for (const stdout of ['not json\n', '{"violations":[]}\n']) {
+      squawkOut = () => ({ exitCode: 0, stdout });
+      const { res } = await review(dir);
+      expect(squawkRun(res)?.status, stdout).toBe('failed');
+      expect(res.missing_tools, stdout).toContain('squawk');
+    }
+    // The control: an empty array is a clean pass.
+    squawkOut = () => ({ exitCode: 0, stdout: '[]\n' });
+    expect(squawkRun((await review(dir)).res)?.status).toBe('ok');
+  });
+
+  it('a head that could not be checked out, with a changed .sql file: squawk failed beside Semgrep, with the reason', async () => {
+    const dir = await repo({ 'README.md': '# app\n' });
+    // A tree entry no file system can create (a 300-byte name): `git reset --hard` in the head's checkout fails.
+    const blob = (await execa('git', ['hash-object', '-w', '--stdin'], { cwd: dir, input: MIGRATION })).stdout.trim();
+    const base = (await execa('git', ['ls-tree', 'main'], { cwd: dir })).stdout;
+    const tree = (await execa('git', ['mktree'], { cwd: dir, input: `${base}\n100644 blob ${blob}\t${'a'.repeat(300)}.sql\n` })).stdout.trim();
+    const head = (await execa('git', ['commit-tree', tree, '-p', 'main', '-m', 'change'], { cwd: dir })).stdout.trim();
+    const { res } = await review(dir, { head_ref: head });
+    expect(squawkCalls()).toEqual([]);
+    expect(res.tools_run.find((t) => t.name === 'semgrep')).toMatchObject({ status: 'failed', reason: expect.stringMatching(/^could not check out head /) });
+    expect(squawkRun(res)).toMatchObject({ status: 'failed', reason: expect.stringMatching(/^could not check out head /) });
+  });
 });
+
+/** A symbolic link, or the test skipped where links cannot be made (Windows without the privilege); elsewhere the error stands. */
+function linkOrSkip(target: string, path: string, skip: () => void): void {
+  try {
+    symlinkSync(target, path, 'file');
+  } catch (e) {
+    if (process.platform === 'win32') skip();
+    throw e;
+  }
+}

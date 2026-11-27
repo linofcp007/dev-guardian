@@ -515,9 +515,10 @@ describe('perf_check history: k6, the local modules the script imports', () => {
     vi.unstubAllEnvs();
   });
 
-  function scriptRun(p95: number): void {
+  function scriptRun(p95: number, during?: () => void): void {
     vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'k6' ? '/fake/bin/k6' : null));
     vi.mocked(runProcess).mockImplementationOnce(async (opts) => {
+      during?.();
       const file = opts.args?.find((a) => a.startsWith('--summary-export='))?.replace('--summary-export=', '');
       if (file !== undefined) {
         writeFileSync(file, JSON.stringify({ metrics: { http_reqs: { count: 4, rate: 9.9 }, http_req_duration: { avg: p95 / 2, 'p(95)': p95 } } }), 'utf8');
@@ -525,8 +526,8 @@ describe('perf_check history: k6, the local modules the script imports', () => {
       return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
     });
   }
-  async function run(s: Seeded, project: string, script: string, p95 = 20): Promise<{ ok: boolean; history?: History }> {
-    scriptRun(p95);
+  async function run(s: Seeded, project: string, script: string, p95 = 20, during?: () => void): Promise<{ ok: boolean; history?: History }> {
+    scriptRun(p95, during);
     return (await tool('perf_check').handler({ project_path: project, k6_script_path: script }, s.plugin)) as { ok: boolean; history?: History };
   }
   const fixtureProject = (): string => {
@@ -556,6 +557,27 @@ describe('perf_check history: k6, the local modules the script imports', () => {
     const restored = await run(s, project, 'load.js', 40);
     expect(restored.history?.series).toBe(before.history?.series);
     expect(verdictOf(restored.history, 'k6.latency_p95_ms')).toBe('regressed');
+  });
+
+  // Fix round 1 (R1-DGTOOLS-2): inputs only — the modules are read BEFORE k6 runs. A module the run itself rewrites
+  // (a handleSummary output or a pre-step the script imports) keys the series by what it held before the run.
+  it('11b: a module the run rewrites keys the run by its content before the run; the next run keys the new content', async () => {
+    const s = freshPlugin();
+    const project = fixtureProject();
+    const options = join(project, 'lib', 'load-options.js');
+    const original = readFileSync(options, 'utf8');
+    const first = await run(s, project, 'load.js');
+    const rewritten = await run(s, project, 'load.js', 20, () => {
+      writeFileSync(options, original.replace('iterations: 2,', 'iterations: 200,'), 'utf8');
+    });
+    expect(readFileSync(options, 'utf8')).not.toBe(original);
+    expect(rewritten.history?.series).toBe(first.history?.series);
+    const keys = perfRows(s, project).map((r) => r.meta?.['series']);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(1);
+    // The rewritten content is the next run's input: another series.
+    const next = await run(s, project, 'load.js');
+    expect(next.history?.series).not.toBe(first.history?.series);
   });
 
   it('13: a module named at run time leaves the 3.17.0 key, and the label says the inputs are partly keyed', async () => {
