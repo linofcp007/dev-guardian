@@ -58454,6 +58454,22 @@ var init_urlSaid = __esm({
 
 // src/tools/scanToolFactory.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
+function lateExtras(tool54, hook, findings) {
+  if (hook === void 0) return { extras: {}, warnings: [] };
+  let keys;
+  try {
+    keys = hook(findings);
+  } catch (e) {
+    return { extras: {}, warnings: [`${tool54}: a result computed from the findings was not added (${e instanceof Error ? e.message : String(e)}).`] };
+  }
+  const extras = {};
+  const warnings = [];
+  for (const [key, value] of Object.entries(keys)) {
+    if (LATE_RESERVED_KEYS.has(key)) warnings.push(`${tool54}: the result key "${key}" is the scan's own and was not replaced.`);
+    else extras[key] = value;
+  }
+  return { extras, warnings };
+}
 function makeScanTool(config2) {
   return {
     name: config2.name,
@@ -58833,6 +58849,9 @@ async function runScanBody(args) {
     readSource: invocation.readSource ?? makeSourceReader(projectPath)
   });
   findings = redactCredentialSnippets(findings);
+  const late2 = lateExtras(config2.name, invocation.afterIdentities, findings);
+  const extras = { ...invocation.extras ?? {}, ...late2.extras };
+  warnings.push(...late2.warnings);
   if (findings.length > 0) {
     plugin.storage.findings.bulkInsert(
       findings.map((f) => ({ ...f, scan_id: scanId }))
@@ -58851,7 +58870,7 @@ async function runScanBody(args) {
   };
   if (invocation.report_paths[0] !== void 0) finalize3.report_dir = invocation.report_paths[0];
   if (invocation.error !== void 0) finalize3.error = invocation.error;
-  const meta3 = { ...invocation.extras ?? {} };
+  const meta3 = { ...extras };
   if (input2.severity_min !== void 0) meta3["severity_min"] = input2.severity_min;
   if (args.parentScanId !== void 0) meta3["parent_scan_id"] = args.parentScanId;
   const nothingInScope = scope !== null && !invocation.tools_run.some((t) => t.status === "ok") && computeCoverage(invocation.tools_run, invocation.missing_tools) === "full";
@@ -58865,7 +58884,8 @@ async function runScanBody(args) {
     findings_excluded: excludedHere
   } : null;
   if (exclusionReport !== null) meta3["exclusions"] = exclusionReport;
-  if (invocation.warnings !== void 0 && invocation.warnings.length > 0) meta3["run_warnings"] = invocation.warnings;
+  const runWarnings2 = [...invocation.warnings ?? [], ...late2.warnings];
+  if (runWarnings2.length > 0) meta3["run_warnings"] = runWarnings2;
   if (OWASP_SCAN_TYPES.has(config2.scan_type) && meta3[PROJECT_LANGUAGES_META_KEY] === void 0) {
     meta3[PROJECT_LANGUAGES_META_KEY] = await resolveProjectLanguagesAsync(
       plugin.storage.stack,
@@ -58899,7 +58919,7 @@ async function runScanBody(args) {
   if (view.warning) warnings.push(view.warning);
   if (floor?.warning) warnings.push(floor.warning);
   const assessed = assessCoverage(config2.scan_type, invocation.tools_run, invocation.missing_tools, {
-    manifestGaps: invocation.extras?.["manifest_coverage_gaps"]
+    manifestGaps: extras["manifest_coverage_gaps"]
   });
   const coverage = nothingInScope ? "none" : assessed.coverage;
   const coverageWarning = nothingInScope ? `\u26A0\uFE0F ${config2.scan_type}: coverage none \u2014 no scanner ran on this scope, so its "0 findings" is not a clean result.` : assessed.warning;
@@ -58926,7 +58946,7 @@ async function runScanBody(args) {
   const payload = {
     ...result,
     ...view.disclosure,
-    ...invocation.extras ?? {},
+    ...extras,
     ...scopeMeta !== null ? { scope: scopeMeta } : {},
     ...nothingInScope ? { nothing_in_scope: true } : {},
     ...exclusionReport !== null ? { exclusions: exclusionReport } : {}
@@ -59062,7 +59082,7 @@ function failDomain(code, message3, retry_with) {
   if (retry_with !== void 0) error62.retry_with = retry_with;
   return { ok: false, error: error62 };
 }
-var FIVE_MINUTES_MS, KEYLESS_INPUTS, FACTORY_META_KEYS, MAX_LOG_LINE;
+var FIVE_MINUTES_MS, KEYLESS_INPUTS, FACTORY_META_KEYS, LATE_RESERVED_KEYS, MAX_LOG_LINE;
 var init_scanToolFactory = __esm({
   "src/tools/scanToolFactory.ts"() {
     "use strict";
@@ -59101,6 +59121,7 @@ var init_scanToolFactory = __esm({
       "run_warnings",
       PROJECT_LANGUAGES_META_KEY
     ]);
+    LATE_RESERVED_KEYS = /* @__PURE__ */ new Set([...FACTORY_META_KEYS, "scope", "exclusions"]);
     MAX_LOG_LINE = 200;
   }
 });

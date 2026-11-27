@@ -31,10 +31,11 @@
  * files and 729-747 results, a different set on every run (127 keys
  * flickered over 5 runs, each in a file the run missing it named); `--jobs 4`
  * gave 22 in 12 files; `--jobs 1` gave 4 in 2 files and 844 results, twice
- * the same. One domain gives each function all of the budget — but on the
- * whole of dev-spec-driven with the registry rules it took 600 s and then ran
- * past the 10-minute run limit (a failed scan), against 432 s without
- * `--jobs`, on a loaded 24-core machine. So the default is the machine's
+ * the same. One domain gives each function all of the budget — but over the
+ * whole of dev-spec-driven with the registry rules (a loaded 24-core machine)
+ * Semgrep took 528 s at 1, and a second run went past the 10-minute run
+ * limit (a failed scan), against 327-363 s without `--jobs` and 446-534 s at
+ * 4 (37-50 timed-out functions, not 330-346). So the default is the machine's
  * cores, at most 4: Semgrep's own on a CI runner of 4 cores or fewer, and a
  * sixth of the domains on 24 cores (22 timeouts in 12 files, not 167 in 34);
  * the baseline's taint-incomplete records carry the flicker that is left
