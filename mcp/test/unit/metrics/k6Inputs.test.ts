@@ -133,6 +133,10 @@ describe('k6Inputs — the local modules of a k6 script', () => {
     const toEntry = memReader({ 'a.js': "import './b.js';\n", 'b.js': "import { main } from './a.js';\n" });
     expect(k6LocalInputs('a.js', toEntry).files.map(([p]) => p)).toEqual(['b.js']);
     expect(toEntry.reads).toEqual(['a.js', 'b.js']);
+    // A module two others import (a diamond) is read once, before either has been read through.
+    const diamond = memReader({ 'a.js': "import './b.js';\nimport './c.js';\n", 'b.js': "import './d.js';\n", 'c.js': "import './d.js';\n", 'd.js': '' });
+    expect(k6LocalInputs('a.js', diamond).files.map(([p]) => p)).toEqual(['b.js', 'c.js', 'd.js']);
+    expect(diamond.reads).toEqual(['a.js', 'b.js', 'c.js', 'd.js']);
   });
 
   it(`5: past ${String(K6_INPUT_FILES_MAX)} modules nothing more is read or keyed, and the bound is said`, () => {

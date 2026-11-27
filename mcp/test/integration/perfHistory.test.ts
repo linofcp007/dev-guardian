@@ -568,6 +568,18 @@ describe('perf_check history: k6, the local modules the script imports', () => {
     expect(perfRows(s, project)[0]?.meta?.['series']).toBe(oldKey('dynamic.js', text));
   });
 
+  it('a module out of the project is never read: the 3.17.0 key, and the label says the inputs are partly keyed', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-mod-');
+    const outside = projectDir('perf-k6-out-');
+    writeFileSync(join(outside, 'shared.js'), 'export const stages = [];\n', 'utf8');
+    const text = `import { stages } from '../${outside.split(/[\\/]/).pop() ?? ''}/shared.js';\nexport default function () {}\n`;
+    writeFileSync(join(project, 'load.js'), text, 'utf8');
+    const r = await run(s, project, 'load.js');
+    expect(r.history?.series).toMatch(/^k6 · load\.js \([0-9a-f]{12}\) · inputs partly keyed$/);
+    expect(perfRows(s, project)[0]?.meta?.['series']).toBe(oldKey('load.js', text));
+  });
+
   it('14: no path of a module, and no module digest, is stored', async () => {
     const s = freshPlugin();
     const project = fixtureProject();
