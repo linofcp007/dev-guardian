@@ -191,14 +191,17 @@ describe('perf_check: k6 (real k6, a local server, gated)', () => {
     expect(listing.status, listing.stderr).toBe(0);
     // A local file is packed as `file/<its absolute path, the leading / dropped>`: the project-relative part of each.
     const root = dir.replace(/\\/g, '/').replace(/^\/+/, '');
-    const packed = listing.stdout
+    const entries = listing.stdout
       .split(/\r?\n/)
       .map((e) => e.replace(/^\.\//, ''))
       .filter((e) => e.startsWith('file/'))
       .map((e) => e.slice('file/'.length))
       .filter((e) => e.startsWith(`${root}/`))
-      .map((e) => e.slice(root.length + 1))
-      .filter((e) => e !== '' && !e.endsWith('/'));
+      .map((e) => e.slice(root.length + 1).replace(/\/+$/, ''))
+      .filter((e) => e !== '');
+    // k6's tar lists a folder as its own entry, with or without a trailing slash (2.4.0: without): a folder is an entry
+    // another entry lies below — never a file of the script's.
+    const packed = entries.filter((e) => !entries.some((other) => other.startsWith(`${e}/`)));
     const walk = k6LocalInputs('load.js', k6ModuleReader(dir));
     const keyed = walk.files.filter(([, digest]) => digest !== 'missing').map(([path]) => path);
     expect(packed.length).toBeGreaterThan(0);
