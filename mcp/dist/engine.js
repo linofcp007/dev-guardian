@@ -16793,6 +16793,7 @@ __export(git_exports, {
   git: () => git,
   gitUnanswered: () => gitUnanswered,
   gitlinksAmong: () => gitlinksAmong,
+  headTopLevel: () => headTopLevel,
   historyState: () => historyState,
   initialisedSubmodules: () => initialisedSubmodules,
   isGitUnanswered: () => isGitUnanswered,
@@ -16998,6 +16999,11 @@ async function showPrefix(cwd) {
   const r = await git(cwd, ["rev-parse", "--show-prefix"]);
   if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine2(r.stderr)}`);
   return r.stdout.trim();
+}
+async function headTopLevel(cwd, sha) {
+  const r = await git(cwd, ["ls-tree", "-z", "--name-only", "--end-of-options", sha]);
+  if (r.exitCode !== 0) return null;
+  return new Set(splitNul(r.stdout));
 }
 async function materialiseCommit(cwd, sha) {
   const holder = mkdtempSync(join20(tmpdir2(), "guardian-review-"));
@@ -18768,9 +18774,9 @@ function posixPath(path3) {
   return path3.replace(/\\/g, "/").replace(/^\.\//, "");
 }
 function dirOf2(path3) {
-  const posix6 = posixPath(path3);
-  const i = posix6.lastIndexOf("/");
-  return i < 0 ? "" : posix6.slice(0, i);
+  const posix7 = posixPath(path3);
+  const i = posix7.lastIndexOf("/");
+  return i < 0 ? "" : posix7.slice(0, i);
 }
 function walkManifests(projectPath, opts) {
   const maxDirs = opts.maxDirs ?? MAX_MANIFEST_WALK_DIRS;
@@ -20514,7 +20520,7 @@ var init_semgrepReport = __esm({
 
 // src/platform/guardianIgnore.ts
 import { createHash as createHash7 } from "node:crypto";
-import { dirname as dirname12, join as join30, resolve as resolve14, sep as sep7 } from "node:path";
+import { dirname as dirname12, join as join30, posix, resolve as resolve14, sep as sep7 } from "node:path";
 function compileIgnore(text3) {
   const refuse = (why) => ({ patterns: 0, refused: why, overBudget: 0, ignores: () => false });
   if (text3.length > MAX_IGNORE_TEXT_CHARS) {
@@ -20833,8 +20839,25 @@ function projectPathTest(projectPath) {
     return false;
   };
 }
-function keptByExclusions(exclusions, projectPath) {
-  const inProject2 = projectPathTest(projectPath);
+function treePathTest(top) {
+  const present5 = (segments) => {
+    const p = posix.normalize(segments.join("/"));
+    if (p === ".") return true;
+    if (p === ".." || p.startsWith("../")) return false;
+    return top.has(p.split("/")[0] ?? "");
+  };
+  return (relPath) => {
+    const p = relPath.replace(/\\/g, "/").replace(/^(\.\/)+/, "").replace(/\/+$/, "");
+    if (p === "" || p.startsWith("/") || /^[A-Za-z]:/.test(p) || p === ".." || p.startsWith("../")) return false;
+    const segments = p.split("/");
+    if (!segments.some((s) => s === "." || s === "..")) return top.has(segments[0] ?? "");
+    for (let i = segments.length; i >= 1; i--) {
+      if (present5(segments.slice(0, i))) return true;
+    }
+    return false;
+  };
+}
+function keptByExclusions(exclusions, projectPath, inProject2 = projectPathTest(projectPath)) {
   return (relPath) => !(exclusions.ignores(relPath) && inProject2(relPath));
 }
 function insideGitWorkTree(projectPath) {
@@ -22377,8 +22400,8 @@ async function semgrepCoverageGaps(projectPath, opts = {}) {
   const all = submodulesNotIgnored(projectPath, await initialisedSubmodules(projectPath), from);
   const among = opts.among ?? opts.files;
   const submodules = among === void 0 ? all : all.filter((sub) => isGitUnanswered(sub) || among.some((p) => {
-    const posix6 = p.split("\\").join("/");
-    return posix6 === sub || posix6.startsWith(`${sub}/`);
+    const posix7 = p.split("\\").join("/");
+    return posix7 === sub || posix7.startsWith(`${sub}/`);
   }));
   const out = { oversized: sized.files, submodules };
   if (sized.incomplete !== void 0) out.incomplete = sized.incomplete;
@@ -24795,7 +24818,7 @@ __export(scanSettings_exports, {
   parseSettings: () => parseSettings,
   semgrepTimeoutArgs: () => semgrepTimeoutArgs
 });
-import { posix } from "node:path";
+import { posix as posix2 } from "node:path";
 function defaultScanSettings() {
   return {
     semgrep: {
@@ -24874,7 +24897,7 @@ function notOneFile(path3) {
 function relativePathProblem(path3) {
   const posixPath2 = path3.replace(/\\/g, "/");
   if (posixPath2.startsWith("/") || /^[A-Za-z]:/.test(path3)) return `'${path3}' is absolute; name the file relative to the project`;
-  if (posix.normalize(posixPath2).split("/").includes("..")) return `'${path3}' leaves the project`;
+  if (posix2.normalize(posixPath2).split("/").includes("..")) return `'${path3}' leaves the project`;
   return null;
 }
 function isRecord(value) {
@@ -54930,7 +54953,7 @@ __export(refConfig_exports, {
   resolveCiRef: () => resolveCiRef
 });
 import { lstatSync as lstatSync9, mkdirSync as mkdirSync7, unlinkSync as unlinkSync2, writeFileSync as writeFileSync6 } from "node:fs";
-import { dirname as dirname13, join as join34, posix as posix2 } from "node:path";
+import { dirname as dirname13, join as join34, posix as posix3 } from "node:path";
 async function resolveCiRef(projectPath, ref, flag) {
   if (ref.length === 0) throw new CiRefError(`${flag} requires a value`);
   if (ref.startsWith("-")) throw new CiRefError(`${flag} takes a git ref, not an option (got '${ref}')`);
@@ -54982,7 +55005,7 @@ async function readAtRef(projectPath, at, rel2, maxBytes) {
   if (entry === null) return null;
   if (entry.mode === "120000") {
     const target = (await blobBytes(projectPath, entry.object, 4096, label2)).toString("utf8");
-    const resolved = posix2.normalize(posix2.join(posix2.dirname(fullPath), target));
+    const resolved = posix3.normalize(posix3.join(posix3.dirname(fullPath), target));
     if (target.startsWith("/") || resolved === ".." || resolved.startsWith("../")) {
       throw new CiRefError(`${label2} is a symbolic link out of the repository (${target}) \u2014 not read`);
     }
@@ -55149,7 +55172,7 @@ async function resetExclusionsFromRef(projectPath, at, env = process.env) {
   }
   const prefix = at.prefix;
   const inScope = (rel2) => {
-    const dir = posix2.dirname(rel2);
+    const dir = posix3.dirname(rel2);
     const d = dir === "." ? "" : `${dir}/`;
     return d.startsWith(prefix) || prefix.startsWith(d);
   };
@@ -55160,7 +55183,7 @@ async function resetExclusionsFromRef(projectPath, at, env = process.env) {
     throw new CiRefError(`${flag}: git could not list ${RESET_NESTED_FILE} files: ${firstLine5(listed2.stderr || atRef.stderr)}`);
   }
   for (const rel2 of [...splitNul(listed2.stdout), ...splitNul(atRef.stdout)]) {
-    if (posix2.basename(rel2) === RESET_NESTED_FILE && inScope(rel2)) candidates2.add(rel2);
+    if (posix3.basename(rel2) === RESET_NESTED_FILE && inScope(rel2)) candidates2.add(rel2);
   }
   const loose = await git(repoRoot, [
     "ls-files",
@@ -55173,7 +55196,7 @@ async function resetExclusionsFromRef(projectPath, at, env = process.env) {
     `:(glob)**/${RESET_NESTED_FILE}`
   ]);
   if (loose.exitCode !== 0) throw new CiRefError(`${flag}: git ls-files failed: ${firstLine5(loose.stderr)}`);
-  const untracked2 = splitNul(loose.stdout).filter((rel2) => candidates2.has(rel2) || posix2.basename(rel2) === RESET_NESTED_FILE && inScope(rel2));
+  const untracked2 = splitNul(loose.stdout).filter((rel2) => candidates2.has(rel2) || posix3.basename(rel2) === RESET_NESTED_FILE && inScope(rel2));
   if (untracked2.length > 0) {
     throw new CiRefError(
       `${flag}: ${untracked2.join(", ")} is not tracked by git \u2014 no fresh checkout holds such a file, and deleting it could not be undone: run this only in a disposable CI checkout`
@@ -55195,7 +55218,7 @@ async function resetExclusionsFromRef(projectPath, at, env = process.env) {
   }
   const restored = [];
   const removed = [];
-  const shown = (rel2) => posix2.relative(prefix === "" ? "." : prefix.slice(0, -1), rel2) || rel2;
+  const shown = (rel2) => posix3.relative(prefix === "" ? "." : prefix.slice(0, -1), rel2) || rel2;
   const same = (a, b) => a.toString("utf8").replace(/\r\n/g, "\n") === b.toString("utf8").replace(/\r\n/g, "\n");
   for (const { rel: rel2, bytes } of plan) {
     const abs = join34(repoRoot, ...rel2.split("/"));
@@ -58223,7 +58246,7 @@ async function runScanBody(args) {
     });
     return before - findings.length;
   };
-  const findingsExcluded = exclusions === null ? 0 : keepIf(keptByExclusions(exclusions, projectPath));
+  const findingsExcluded = exclusions === null ? 0 : keepIf(keptByExclusions(exclusions, projectPath, invocation.inProject));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {
     const still = cvesStillFound(cves, findings, dropped);
@@ -70462,6 +70485,11 @@ var init_reviewPr = __esm({
         let cleanupNote = null;
         let projectLanguages = null;
         let readSource;
+        let inProject2;
+        if (!headIsCheckedOut) {
+          const top = await headTopLevel(ctx.projectPath, head);
+          if (top !== null) inProject2 = treePathTest(top);
+        }
         try {
           let scanRoot = ctx.projectPath;
           let unavailable = null;
@@ -70546,6 +70574,7 @@ var init_reviewPr = __esm({
           parser_inputs: out.parser_inputs,
           report_paths: [reportDir],
           ...readSource !== void 0 ? { readSource } : {},
+          ...inProject2 !== void 0 ? { inProject: inProject2 } : {},
           ...warnings.length > 0 ? { warnings } : {},
           extras: {
             base_sha: base2,
@@ -72203,7 +72232,7 @@ var init_classes = __esm({
 });
 
 // src/llmscan/submission.ts
-import { posix as posix3 } from "node:path";
+import { posix as posix4 } from "node:path";
 function serializedBytes(payload) {
   try {
     const text3 = JSON.stringify(payload);
@@ -72246,7 +72275,7 @@ function containedPath(raw) {
   const slashed = raw.replace(/\\/g, "/");
   if (slashed.startsWith("/") || /^[A-Za-z]:/.test(slashed)) return null;
   if (slashed.includes(":")) return null;
-  const normal = posix3.normalize(slashed);
+  const normal = posix4.normalize(slashed);
   if (normal === ".." || normal.startsWith("../") || normal === ".") return null;
   if (normal.split("/").some((seg) => WINDOWS_DEVICE.test(seg))) return null;
   return normal;
@@ -78317,10 +78346,10 @@ function buildResolutionIndex(projectFiles) {
   const byPosixPath = /* @__PURE__ */ new Map();
   const goPackages = /* @__PURE__ */ new Map();
   for (const file2 of projectFiles) {
-    const posix6 = toPosix2(file2);
-    byPosixPath.set(posix6, file2);
-    if (!posix6.endsWith(".go")) continue;
-    const dir = dirOf4(posix6);
+    const posix7 = toPosix2(file2);
+    byPosixPath.set(posix7, file2);
+    if (!posix7.endsWith(".go")) continue;
+    const dir = dirOf4(posix7);
     if (dir === "" || dir === "/") continue;
     const existing = goPackages.get(dir);
     if (existing === void 0) goPackages.set(dir, [file2]);
@@ -78339,11 +78368,11 @@ function toPosix2(path3) {
   return path3.replace(/\\/g, "/");
 }
 function dirOf4(file2) {
-  const posix6 = toPosix2(file2);
-  const parts = posix6.split("/");
+  const posix7 = toPosix2(file2);
+  const parts = posix7.split("/");
   parts.pop();
   const dir = parts.join("/");
-  return dir === "" && posix6.startsWith("/") ? "/" : dir;
+  return dir === "" && posix7.startsWith("/") ? "/" : dir;
 }
 function joinAndNormalize(dir, tail2) {
   const absolute2 = dir.startsWith("/");
@@ -78879,9 +78908,9 @@ function unique2(values2) {
   return [...new Set(values2)].sort();
 }
 function dirOf5(path3) {
-  const posix6 = path3.replace(/\\/g, "/");
-  const at = posix6.lastIndexOf("/");
-  return at === -1 ? "" : posix6.slice(0, at);
+  const posix7 = path3.replace(/\\/g, "/");
+  const at = posix7.lastIndexOf("/");
+  return at === -1 ? "" : posix7.slice(0, at);
 }
 function isUnder(file2, dir) {
   return dir === "" || file2.startsWith(`${dir}/`);
@@ -78963,11 +78992,11 @@ function ecosystemOf(finding6) {
   return finding6.file_path === void 0 ? null : ecosystemOfManifest(finding6.file_path);
 }
 function ecosystemOfManifest(path3) {
-  const posix6 = path3.replace(/\\/g, "/").toLowerCase();
-  const base2 = posix6.split("/").pop() ?? "";
+  const posix7 = path3.replace(/\\/g, "/").toLowerCase();
+  const base2 = posix7.split("/").pop() ?? "";
   const exact = MANIFEST_ECOSYSTEMS2[base2];
   if (exact !== void 0) return exact;
-  if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix6)) return "pypi";
+  if (/(^|\/)requirements\/[^/]+\.txt$/.test(posix7)) return "pypi";
   for (const [pattern, ecosystem] of MANIFEST_PATTERNS) {
     if (pattern.test(base2)) return ecosystem;
   }
@@ -110311,8 +110340,8 @@ function samePathKey(path3) {
   } catch {
     real = resolve35(path3);
   }
-  const posix6 = real.replace(/\\/g, "/");
-  return process.platform === "win32" ? posix6.toLowerCase() : posix6;
+  const posix7 = real.replace(/\\/g, "/");
+  return process.platform === "win32" ? posix7.toLowerCase() : posix7;
 }
 function parseWorktreeList(porcelain) {
   const entries3 = [];
@@ -121126,7 +121155,7 @@ var init_render = __esm({
 // src/tools/exportVex.ts
 import { randomUUID as randomUUID21 } from "node:crypto";
 import { existsSync as existsSync24, readFileSync as readFileSync16, writeFileSync as writeFileSync31 } from "node:fs";
-import { basename as basename16, join as join116, posix as posix4, win32 as win325 } from "node:path";
+import { basename as basename16, join as join116, posix as posix5, win32 as win325 } from "node:path";
 async function handler47(inp, ctx) {
   const format = inp.format ?? "openvex";
   const projectPath = toolProjectPath(inp.project_path);
@@ -121331,7 +121360,7 @@ function sbomTrust(sbom, deps) {
   return { trusted: true, note: null };
 }
 function isAbsolutePath2(name) {
-  return posix4.isAbsolute(name) || win325.isAbsolute(name);
+  return posix5.isAbsolute(name) || win325.isAbsolute(name);
 }
 var SAMPLE_SIZE2, DEFAULT_AUTHOR, inputSchema49, tool50, NO_STATEMENTS, EMPTY_CONTEXT;
 var init_exportVex = __esm({
@@ -121398,9 +121427,9 @@ var init_types8 = __esm({
 import { isAbsolute as isAbsolute26, relative as relative39 } from "node:path";
 function relativize(file2, projectPath) {
   const rel2 = isAbsolute26(file2) ? relative39(projectPath, file2) : file2;
-  const posix6 = rel2.replace(/\\/g, "/");
-  if (posix6 === "" || posix6 === ".." || posix6.startsWith("../") || isAbsolute26(posix6) || /^[A-Za-z]:/.test(posix6)) return null;
-  return posix6.replace(/^\.\//, "");
+  const posix7 = rel2.replace(/\\/g, "/");
+  if (posix7 === "" || posix7 === ".." || posix7.startsWith("../") || isAbsolute26(posix7) || /^[A-Za-z]:/.test(posix7)) return null;
+  return posix7.replace(/^\.\//, "");
 }
 function entryPointId(route, projectPath) {
   const where = relativize(route.file, projectPath) ?? route.file.replace(/\\/g, "/");
@@ -121927,7 +121956,7 @@ var init_planRecord = __esm({
 
 // src/llmscan/service.ts
 import { createHash as createHash22, randomUUID as randomUUID22 } from "node:crypto";
-import { posix as posix5, relative as relative40, isAbsolute as isAbsolute27 } from "node:path";
+import { posix as posix6, relative as relative40, isAbsolute as isAbsolute27 } from "node:path";
 function listed(items) {
   return { items: items.slice(0, MAX_LISTED2), total: items.length };
 }
@@ -122325,7 +122354,7 @@ function huntFindingRow(f) {
     category: "security",
     title: f.title,
     message: `Attacker: ${f.attacker} Evidence: ${f.evidence}`,
-    file_path: posix5.normalize(f.file.replace(/\\/g, "/")),
+    file_path: posix6.normalize(f.file.replace(/\\/g, "/")),
     line_start: f.line
   });
 }
@@ -130087,9 +130116,9 @@ function downloadsThenRuns(text3, statements, bareRunsCwd) {
       const at = heads[c] ?? 0;
       const head = words[at]?.value ?? "";
       const name = commandName(head);
-      const posix6 = posixSaves(name, words, at);
+      const posix7 = posixSaves(name, words, at);
       const ps = powershellSaves(name, words, at);
-      for (const dest of posix6) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: "posix" });
+      for (const dest of posix7) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: "posix" });
       for (const dest of ps) saved.push({ key: runKey(resolveFrom(cwd, dest)), kind: "powershell" });
       if (streaming !== void 0) {
         const kind = streaming;
@@ -130101,7 +130130,7 @@ function downloadsThenRuns(text3, statements, bareRunsCwd) {
         const kind = downloadedArchive(extraction.archive);
         if (kind !== void 0 && PATH_DIRS.test(dir) && !extracted.has(dir)) extracted.set(dir, { at: k, kind });
       }
-      if (DOWNLOADERS.has(name) && posix6.length === 0 && ps.length === 0) {
+      if (DOWNLOADERS.has(name) && posix7.length === 0 && ps.length === 0) {
         streaming = name === "curl" || name === "wget" ? "posix" : "powershell";
       }
       if (reading) {

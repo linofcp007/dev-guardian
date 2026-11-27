@@ -49,7 +49,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { dirname, join, resolve, sep } from 'node:path';
+import { dirname, join, posix, resolve, sep } from 'node:path';
 import { git, isGitUnanswered, splitNul } from '../runners/git.js';
 import { listProjectFiles, SCANNED_WALK_EXCLUDE } from '../runners/projectFiles.js';
 import { isGuardianOutput } from './guardianOutput.js';
@@ -663,14 +663,53 @@ export function projectPathTest(projectPath: string): (relPath: string) => boole
 }
 
 /**
- * Whether a project-relative path stays in a scan's result: not one the
- * exclusions ignore that is in the project ({@link projectPathTest}). The
- * scan-tool factory's result filter, and the CLI's `scan --diff-base` filter
- * of its suppressions step's findings (`ci/runScans.ts#declaredPaths`). One
- * per scan: the disk answers are memoised for its lifetime.
+ * {@link projectPathTest}'s answer from a git tree instead of the disk, for a
+ * scan that read a commit the working tree does not hold (`review_pr` of a
+ * head that is not checked out). `top`: the names of the entries directly
+ * under the project in that tree (`runners/git.ts#headTopLevel`). That is the
+ * whole answer: a path below the top level is in the project exactly when its
+ * first segment is an entry, since a deeper one cannot exist without it. A
+ * path with a `.`/`..` segment takes the disk test's walk, each step
+ * normalised (`nowhere/..` is the root), so the two agree on a working tree
+ * that equals the tree. Except for the repository's own `.git` and untracked
+ * files (which a commit holds neither of), and case: git's names are exact,
+ * a case-insensitive disk's are not, and scanners report the tree's own
+ * spelling.
  */
-export function keptByExclusions(exclusions: ProjectExclusions, projectPath: string): (relPath: string) => boolean {
-  const inProject = projectPathTest(projectPath);
+export function treePathTest(top: ReadonlySet<string>): (relPath: string) => boolean {
+  const present = (segments: readonly string[]): boolean => {
+    const p = posix.normalize(segments.join('/'));
+    if (p === '.') return true;
+    if (p === '..' || p.startsWith('../')) return false;
+    return top.has(p.split('/')[0] ?? '');
+  };
+  return (relPath) => {
+    const p = relPath.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+    if (p === '' || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p === '..' || p.startsWith('../')) return false;
+    const segments = p.split('/');
+    if (!segments.some((s) => s === '.' || s === '..')) return top.has(segments[0] ?? '');
+    for (let i = segments.length; i >= 1; i--) {
+      if (present(segments.slice(0, i))) return true;
+    }
+    return false;
+  };
+}
+
+/**
+ * Whether a project-relative path stays in a scan's result: not one the
+ * exclusions ignore that is in the project. `inProject` answers the second
+ * half: the disk's {@link projectPathTest} by default, the scanned commit's
+ * {@link treePathTest} when the scan read a tree the working tree does not
+ * hold. The scan-tool factory's result filter, and the CLI's `scan
+ * --diff-base` filter of its suppressions step's findings
+ * (`ci/runScans.ts#declaredPaths`). One per scan: the disk answers are
+ * memoised for its lifetime.
+ */
+export function keptByExclusions(
+  exclusions: ProjectExclusions,
+  projectPath: string,
+  inProject: (relPath: string) => boolean = projectPathTest(projectPath),
+): (relPath: string) => boolean {
   return (relPath) => !(exclusions.ignores(relPath) && inProject(relPath));
 }
 

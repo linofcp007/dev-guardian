@@ -113,8 +113,20 @@ copy's file when given). Not the result filter's rule (`platform/guardianIgnore.
 path no longer in the project: a git listing holds only project paths. A rename into a listed path is listed by its
 old one: the factory's filter drops its finding, and the CLI applies that filter to the step's findings. The
 test-integrity pass reads every path: `review_pr`'s and `scan_sast`'s findings go through the factory's filter, the
-CLI's do not (as in 3.16.1 — a focused test in a listed path blocks `scan --diff-base`). A suppressions-pass finding
-is keyed like a credential
+CLI's do not (as in 3.16.1 — a focused test in a listed path blocks `scan --diff-base`).
+
+That filter's "in the project" is asked of the tree the passes read (3.18.0): the disk at a worktree target
+(`projectPathTest`), and head's top-level entries when `review_pr`'s head is not checked out, since the working tree
+is then another commit's (`ScannerInvocation.inProject`: `runners/git.ts#headTopLevel`, one `git ls-tree` in the
+project directory, read by `guardianIgnore.ts#treePathTest`). The listing is taken whether or not head is checked out
+for the scanners: a change that only deletes never is. So a commit-target review drops and reports what the same
+review with head checked out does: the rename into a listed tree only head holds is dropped, and a deletion in a
+listed top-level tree head removed whole is reported (3.17 did the reverse of both whenever the base was checked out).
+A deeper listed tree deleted whole (`packages/legacy/` with `packages/` kept) is dropped at both targets, since
+`packages` is still present: the disk test's own rule. A listing git does not answer (a refusal, a timeout) silently keeps
+the working tree's answer, the 3.17 rule, which can hide such a deletion; nothing is relaxed beyond it.
+
+A suppressions-pass finding is keyed like a credential
 (`fingerprint/findingIdentity.ts#keyedWithoutLine`: `suppression\n<rule id>\n<subcategory>` — the subcategory is
 `suppression:<row id>`, the directive's kind, so no identity moves from one kind to another — the occurrence and the
 group's count, never the line: a bare gitleaks allow line holds the secret).

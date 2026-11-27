@@ -54,13 +54,14 @@ import { z } from 'zod';
 import { clientTrustParser, runClientTrustChecks } from '../clienttrust/clientTrustPass.js';
 import { makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
-import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
+import { GUARDIAN_IGNORE_FILE, treePathTest } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import {
   changedFiles,
   git,
   gitlinksAmong,
+  headTopLevel,
   materialiseCommit,
   repoState,
   resolveCommit,
@@ -174,6 +175,16 @@ const reviewPr = makeScanTool({
     let projectLanguages: ProjectLanguages | null = null;
     // The lines the findings' identities hash, from the tree the scanners read.
     let readSource: ScannerInvocation['readSource'];
+    // Whether a finding's path is in the project, for the .guardianignore result filter, from the tree the
+    // passes read: head's, whenever head is not checked out, never the working tree's (another commit's, which
+    // still holds a listed tree head deleted and lacks one head added). Taken before, and whatever becomes of,
+    // the checkout: a change that only deletes is never checked out, and the git passes run either way. A
+    // listing git does not answer keeps the working tree's answer, the 3.17 rule.
+    let inProject: ScannerInvocation['inProject'];
+    if (!headIsCheckedOut) {
+      const top = await headTopLevel(ctx.projectPath, head);
+      if (top !== null) inProject = treePathTest(top);
+    }
     try {
       let scanRoot = ctx.projectPath;
       let unavailable: string | null = null;
@@ -298,6 +309,7 @@ const reviewPr = makeScanTool({
       parser_inputs: out.parser_inputs,
       report_paths: [reportDir],
       ...(readSource !== undefined ? { readSource } : {}),
+      ...(inProject !== undefined ? { inProject } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
       extras: {
         base_sha: base,
