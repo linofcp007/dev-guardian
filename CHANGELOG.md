@@ -13,8 +13,7 @@ version bump.
 The "everything" round, shared with dev-spec-driven 1.42.0: the 3.17 backlog, what other spec-driven and review
 workflows do better, and a sweep for speed, wording and robustness. Semgrep's taint findings stop coming and going from run to run:
 every Semgrep run sets its analysis domains (`--jobs`), and a baseline records the files whose taint analysis Semgrep gave
-up on, so `scan` no longer reports their findings as new while the file is unchanged. The weakened-tests and suppressions
-passes read a change as written, whatever the tree's `.gitattributes` say. `perf_check` keys a k6 script's series by the
+up on, so `scan` no longer reports their findings as new while the file is unchanged. `perf_check` keys a k6 script's series by the
 local modules it imports and reports its thresholds; `review_pr` lints Postgres migrations with squawk when the project
 opts in; and guardian-review reads the author's plan as data and offers a clean-context pass. No tool, resource, skill or
 command is added: 50 tools, 18 resources, 13 skills, 10 commands.
@@ -34,9 +33,6 @@ command is added: 50 tools, 18 resources, 13 skills, 10 commands.
 - **A k6 script that imports a local module starts a new `perf_check` series once.** The series key now includes the
   local modules it imports, so editing the load in an imported module starts a new series instead of reading as a
   regression. A script with no local import keeps its series.
-- **A pull request's own `.gitattributes` no longer changes what the weakened-tests and suppressions passes read** (git
-  2.40 and later). An attribute that marked a test file binary or `ident` hid what the change added there; at the default
-  `--fail-on high` an added `.only` hidden that way now blocks like any other.
 
 ### Added
 
@@ -70,19 +66,18 @@ command is added: 50 tools, 18 resources, 13 skills, 10 commands.
   tree's `.guardianignore`, so a diff that edits that file can make the two reviews differ (`review_pr` warns).
 - `llm_scan` refuses to verify the findings of a `review_pr` scan whose head is not the checked-out commit (scan_id:
   `unsupported_target`; fingerprints: `not_eligible`, with the commit to check out): its subagents read the working tree.
-- The weakened-tests and suppressions passes (`scan --diff-base`, `review_pr`, a diff-scoped `scan_sast`) compare line
-  endings ignoring a CR at the end of a line. An `ident` edit already staged or committed is still not seen (docs/ci.md).
-- guardian-review gives every git and gh command with the reviewed commits' hashes (review_pr's `base_sha` /
-  `head_sha`, run first) and a pull request's number — never a branch or file name from the change — and says when no
-  PR has the reviewed head instead of looking it up by branch name. Its clean pass takes the range's diff once, splits it
+- guardian-review's git and gh commands name the change by the reviewed commits' hashes (review_pr's `base_sha` /
+  `head_sha`, run first) and a pull request's number — never a branch or file name from the change. The skill says when
+  no PR has the reviewed head instead of looking it up by branch name. Its clean pass takes the range's diff once, splits it
   by file, and fences each brief's file list and hunks between fresh random markers as data; past ten medium-and-up
   findings it verifies by the review's `scan_id` and says it plans every finding, the low ones too.
 - `perf_check` runs `k6 run --no-usage-report`: k6 no longer sends Grafana its usage report (nor keeps an installation id
   in your config folder) from a dev-guardian run.
 - `install_toolchain`: k6 on Linux is the pinned v2.4.0 release archive, sha256-checked, into `~/.local/bin` (no sudo) —
   the apt install needed Grafana's own repository and failed on a stock Debian/Ubuntu. Windows and macOS keep their
-  package managers. SECURITY.md names k6, gosec and ShellCheck among the pinned, sha256-checked archives (Homebrew first
-  on macOS).
+  package managers. SECURITY.md says how k6, gosec and ShellCheck are installed: Homebrew first on macOS; otherwise k6 and
+  ShellCheck from their pinned, sha256-checked release archives, and gosec by `go install` of its pinned tag where Go is
+  (checked by sum.golang.org), else its pinned archive.
 - A Semgrep run past dev-guardian's time limit is a `scanner_failed` gap whose remedy names `GUARDIAN_SCAN_TIMEOUT_MS`;
   the taint-timeout remedy no longer suggests splitting functions.
 - guardian-deps: the Renovate and VEX details moved into references, and a `not_affected` recorded with
