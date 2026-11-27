@@ -667,9 +667,8 @@ async function semgrepAtMergeBase(
 const ADDED_LINES_DIFF = [
   'diff',
   '--no-index',
+  // `GIT_DIFF_OPTS` overrides it and `diff.interHunkContext` fuses hunks: `parseUnifiedZero` counts kept lines too.
   '-U0',
-  // Hunks never fused across kept lines (`diff.interHunkContext`): `parseUnifiedZero` reads `-U0` hunks.
-  '--inter-hunk-context=0',
   '--no-color',
   '--no-ext-diff',
   '--no-textconv',

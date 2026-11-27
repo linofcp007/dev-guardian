@@ -233,8 +233,9 @@ the merge base: the modified (M, T) or renamed files that hold a head result and
 parsed with the base checkout as Semgrep's cwd. A finding on a line the change ADDED is introduced, whatever its
 identity matches: each compared file is diffed, while both trees are there, with one `git diff --no-index -U0` of
 the base file against the head file the head run read (`addedLinesOf`: the working tree's own lines when head is
-checked out — uncommitted edits, an `assume-unchanged` flag hiding nothing —, context lines and a binary attribute
-overridden, CR at end of line ignored; one git call per compared file). The identity alone had called two new
+checked out — uncommitted edits, an `assume-unchanged` flag hiding nothing —, a binary attribute or a NUL byte
+overridden by `--text`, context lines counted (`GIT_DIFF_OPTS` overrides `-U0`), CR at end of line ignored; one
+git call per compared file). The identity alone had called two new
 findings old (3.18.0 review 1): a credential rule's finding is keyed without its line, so a new hard-coded secret
 took the identity of the one the change removed; and a new flagged line identical to an old one, put above it, took
 its occurrence. The kept findings alone then go through the CI gate's matcher (`buildBaseline` of the base
