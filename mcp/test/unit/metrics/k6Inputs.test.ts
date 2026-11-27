@@ -232,13 +232,15 @@ describe('k6Inputs — the local modules of a k6 script', () => {
   // The patterns are linear (a keyword, then a bounded literal): 8x the text costs ~8x, at 64 KiB against 512 KiB.
   // A module is scanned up to the reader's cap (8 MiB), where the same patterns are the same linear pass.
   it('10: one linear pass over a module\'s text, whatever it holds', () => {
+    // Each keyword after a blank, so every one starts a match (`aimport(` holds no word boundary, and would not).
     const shapes: Record<string, (n: number) => string> = {
       'import x n, no quote after': (n) => 'import '.repeat(Math.ceil(n / 7)).slice(0, n),
       'from then blanks, no quote': (n) => `from${' '.repeat(n)}`,
       'require( then blanks, no literal': (n) => `require(${' '.repeat(n)}`,
-      'import( then an unclosed literal, repeated': (n) => "import('aaaa".repeat(Math.ceil(n / 12)).slice(0, n),
-      'from \' then an unclosed specifier, repeated': (n) => "from 'a/b/c/d".repeat(Math.ceil(n / 13)).slice(0, n),
-      "require(' then 1,000 characters, repeated": (n) => `require('${'a'.repeat(1000)}`.repeat(Math.ceil(n / 1009)).slice(0, n),
+      'require( x n, no literal (every call a miss)': (n) => 'require( '.repeat(Math.ceil(n / 9)).slice(0, n),
+      'import( then an unclosed literal, repeated': (n) => "import('aaaa ".repeat(Math.ceil(n / 13)).slice(0, n),
+      'from \' then an unclosed specifier, repeated': (n) => "from 'a/b/c/d ".repeat(Math.ceil(n / 14)).slice(0, n),
+      "require(' then 1,000 characters, repeated": (n) => `require('${'a'.repeat(1000)} `.repeat(Math.ceil(n / 1010)).slice(0, n),
     };
     for (const [label, make] of Object.entries(shapes)) {
       const texts = new Map<number, string>();
