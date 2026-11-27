@@ -15489,6 +15489,7 @@ __export(scanSettings_exports, {
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD: () => DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
   SCAN_SETTINGS_RELATIVE_PATH: () => SCAN_SETTINGS_RELATIVE_PATH,
   defaultScanSettings: () => defaultScanSettings,
+  jobsAboveDefaultNote: () => jobsAboveDefaultNote,
   loadScanSettings: () => loadScanSettings,
   normalizeRelative: () => normalizeRelative,
   parseSettings: () => parseSettings,
@@ -15565,6 +15566,11 @@ function parseSettings(doc) {
     }
   }
   return out;
+}
+function jobsAboveDefaultNote(settings) {
+  const above = settings.semgrep.jobsAboveDefault;
+  if (above === void 0) return null;
+  return `${SCAN_SETTINGS_RELATIVE_PATH} semgrep.jobs ${above} is above dev-guardian's default, so Semgrep ran with --jobs ${settings.semgrep.jobs}: the setting can only lower it (more domains share one taint budget, and taint analysis gives up on more functions)`;
 }
 function semgrepSettingArgs(settings) {
   return [
@@ -24086,10 +24092,9 @@ import { readFileSync as readFileSync5, rmSync as rmSync6, writeFileSync as writ
 import { win32 as win323 } from "node:path";
 function semgrepScanFlags(configRoot) {
   const loaded = loadScanSettings(configRoot);
-  const above = loaded.settings.semgrep.jobsAboveDefault;
   return {
     args: [...semgrepSettingArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
-    warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})` : above !== void 0 ? `${SCAN_SETTINGS_RELATIVE_PATH} semgrep.jobs ${above} is above dev-guardian's default, so Semgrep ran with --jobs ${DEFAULT_SEMGREP_JOBS}: the setting can only lower it (more domains share one taint budget, and taint analysis gives up on more functions)` : null
+    warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})` : jobsAboveDefaultNote(loaded.settings)
   };
 }
 function metricsSetting(env) {
@@ -24727,6 +24732,9 @@ function remedyFor(kind, tool54, detail, cause) {
     default:
       if (TAINT_AT_BASELINE_NOTE.test(detail)) {
         return "Nothing to do for the gate (not gating): these findings are in code unchanged since the baseline was recorded; review them, then re-record the baseline on the base commit to accept them.";
+      }
+      if (/semgrep\.jobs \d+ is above dev-guardian's default/.test(detail)) {
+        return "Nothing to do for the gate (not gating): Semgrep ran at the default. Remove semgrep.jobs from .guardian/scan.yml, or set it at or below the default.";
       }
       if (/shallow|history truncated/i.test(detail)) return "Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.";
       if (/^baseline: /.test(detail)) return "Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.";
@@ -124335,6 +124343,9 @@ async function runScans(opts) {
           steps.push(...await fullContentSteps(opts.projectPath, opts.changedSince, ctx));
         }
       }
+      const jobsNote = jobsAboveDefaultNote(scanSettings.settings);
+      const semgrepStep = jobsNote !== null ? steps.find((s) => s.ran && s.tools_run.some((r) => r.name === SEMGREP_TOOL_NAME)) : void 0;
+      if (jobsNote !== null && semgrepStep !== void 0) semgrepStep.notes = [...semgrepStep.notes ?? [], `semgrep: ${jobsNote}`];
       const integrity = opts.diffBase !== void 0 ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);
       const declared = opts.diffBase !== void 0 ? await declaredPaths(opts.projectPath, ctx) : null;
@@ -124556,6 +124567,7 @@ var init_runScans = __esm({
     init_semgrepReport();
     init_shellProbe();
     init_scanSettings();
+    init_semgrep();
     init_db();
     init_runner();
     init_storage();

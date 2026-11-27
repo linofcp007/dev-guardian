@@ -34,8 +34,8 @@ import {
   DEFAULT_SEMGREP_JOBS,
   DEFAULT_SEMGREP_TIMEOUT_S,
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
+  jobsAboveDefaultNote,
   loadScanSettings,
-  SCAN_SETTINGS_RELATIVE_PATH,
   semgrepSettingArgs,
 } from '../platform/scanSettings.js';
 import { semgrepGuardianOutputExcludes } from '../platform/guardianOutput.js';
@@ -75,18 +75,13 @@ export const SEMGREP_COMMAND = 'semgrep';
  */
 export function semgrepScanFlags(configRoot: string): { args: string[]; warning: string | null } {
   const loaded = loadScanSettings(configRoot);
-  const above = loaded.settings.semgrep.jobsAboveDefault;
   return {
     args: [...semgrepSettingArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
     warning:
       loaded.kind === 'invalid'
         ? `${loaded.path} was not applied (${loaded.error}) — Semgrep ran with dev-guardian's defaults ` +
           `(--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})`
-        : above !== undefined
-          ? `${SCAN_SETTINGS_RELATIVE_PATH} semgrep.jobs ${above} is above dev-guardian's default, so Semgrep ran with ` +
-            `--jobs ${DEFAULT_SEMGREP_JOBS}: the setting can only lower it (more domains share one taint budget, and taint ` +
-            'analysis gives up on more functions)'
-          : null,
+        : jobsAboveDefaultNote(loaded.settings),
   };
 }
 

@@ -43,8 +43,8 @@
  * that price in time.
  *
  * The setting can only LOWER the domains: a value above the default runs at
- * the default, and the scan says so ({@link ScanSettings}'s `jobsAboveDefault`,
- * `runners/semgrepRun.ts#semgrepScanFlags`). A larger one bought time with
+ * the default, and the scan says so ({@link jobsAboveDefaultNote}: the run's
+ * warning, and a note of the CI gate). A larger one bought time with
  * findings — every domain more shares the one budget —, and the file is read
  * from the working tree in every ref-less run (dev-spec-driven's finish gate)
  * and from a reviewed head in `review_pr`: one agent-written `jobs: 24` on a
@@ -196,6 +196,20 @@ export function parseSettings(doc: unknown): ScanSettings | string {
     }
   }
   return out;
+}
+
+/**
+ * What a scan says when the file's `semgrep.jobs` was above the default and lowered to it, or null: the run's
+ * warning (`runners/semgrepRun.ts#semgrepScanFlags`) and the CI gate's note (`ci/runScans.ts`).
+ */
+export function jobsAboveDefaultNote(settings: ScanSettings): string | null {
+  const above = settings.semgrep.jobsAboveDefault;
+  if (above === undefined) return null;
+  return (
+    `${SCAN_SETTINGS_RELATIVE_PATH} semgrep.jobs ${above} is above dev-guardian's default, so Semgrep ran with --jobs ` +
+    `${settings.semgrep.jobs}: the setting can only lower it (more domains share one taint budget, and taint analysis ` +
+    'gives up on more functions)'
+  );
 }
 
 /** The arguments every Semgrep scan takes from the settings. */

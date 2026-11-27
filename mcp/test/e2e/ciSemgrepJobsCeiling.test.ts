@@ -58,6 +58,7 @@ function handler(name: string, links: number): string {
 interface Verdict {
   exit_code?: number;
   blocking_findings?: Array<{ file_path?: string; rule_id?: string }>;
+  coverage_notes?: string[];
 }
 
 function cli(args: string[]): { status: number | null; stdout: string; stderr: string } {
@@ -97,5 +98,7 @@ describe('semgrep.jobs above the default never costs the gate a finding (real Se
     const feature = (v.blocking_findings ?? []).filter((f) => /^src[\\/]api[\\/]/.test(f.file_path ?? '')).map((f) => f.file_path?.replace(/\\/g, '/'));
     expect(feature.sort()).toEqual(Array.from({ length: FEATURE }, (_x, i) => `src/api/v${i}.js`));
     expect(scan.status).toBe(1);
+    // And the gate says the setting was not applied: one note, never gating.
+    expect((v.coverage_notes ?? []).filter((n) => /^semgrep: \.guardian\/scan\.yml semgrep\.jobs 256 is above dev-guardian's default/.test(n))).toHaveLength(1);
   });
 });

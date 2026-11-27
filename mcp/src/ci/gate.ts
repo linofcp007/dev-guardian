@@ -647,6 +647,10 @@ export function remedyFor(kind: GapKind, tool: string, detail: string, cause?: G
           'review them, then re-record the baseline on the base commit to accept them.'
         );
       }
+      // `ci/runScans.ts`: the setting only lowers the domains (platform/scanSettings.ts).
+      if (/semgrep\.jobs \d+ is above dev-guardian's default/.test(detail)) {
+        return 'Nothing to do for the gate (not gating): Semgrep ran at the default. Remove semgrep.jobs from .guardian/scan.yml, or set it at or below the default.';
+      }
       if (/shallow|history truncated/i.test(detail)) return 'Fetch the whole history (`git fetch --unshallow`, or fetch-depth: 0 in CI) and rerun.';
       if (/^baseline: /.test(detail)) return 'Regenerate .guardian/baseline.json with a dev-guardian that reads its entries, or fix the entries by hand.';
       if (tool === SUPPRESSIONS_TOOL) {

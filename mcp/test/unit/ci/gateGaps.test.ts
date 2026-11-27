@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { evaluateGate, remedyFor, type GateInput } from '../../../src/ci/gate.js';
 import { renderHuman, renderJson, renderSarif } from '../../../src/ci/report.js';
 import { CI_EXIT, GAP_KINDS, type ScanStepResult } from '../../../src/ci/types.js';
+import { jobsAboveDefaultNote } from '../../../src/platform/scanSettings.js';
 import type { Finding, ToolRun } from '../../../src/types.js';
 
 const F = 'src/huge.js';
@@ -234,6 +235,24 @@ describe('every gap as data', () => {
     );
     expect(remedyFor('scanner_failed', 'semgrep', 'security_scan_full: semgrep failed (semgrep did not finish (cancelled))')).not.toMatch(
       /GUARDIAN_SCAN_TIMEOUT_MS/,
+    );
+  });
+
+  // 3.18.0 review 1 (R1-XPLUG-01): a semgrep.jobs above the default runs at the default; the gate says so as a note.
+  it('a semgrep.jobs above the default: a note, never gating, whose remedy is to lower or remove it', () => {
+    const note = jobsAboveDefaultNote({ semgrep: { timeout: 30, timeoutThreshold: 0, jobs: 4, jobsAboveDefault: 24, acceptTimeouts: [] } });
+    expect(note).toBe(
+      ".guardian/scan.yml semgrep.jobs 24 is above dev-guardian's default, so Semgrep ran with --jobs 4: the setting can only lower it " +
+        '(more domains share one taint budget, and taint analysis gives up on more functions)',
+    );
+    expect(jobsAboveDefaultNote({ semgrep: { timeout: 30, timeoutThreshold: 0, jobs: 1, acceptTimeouts: [] } })).toBeNull();
+    const step = { tool: 'security_scan_full', ran: true, tools_run: [{ name: 'semgrep', status: 'ok' as const }], missing_tools: [], notes: [`semgrep: ${note}`] };
+    const v = evaluateGate(input({ steps: [step] }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.coverageNotes).toEqual([`semgrep: ${note}`]);
+    expect(v.coverageGapDetails.filter((d) => d.gating)).toEqual([]);
+    expect(remedyFor('other', 'security_scan_full', `semgrep: ${note}`)).toBe(
+      'Nothing to do for the gate (not gating): Semgrep ran at the default. Remove semgrep.jobs from .guardian/scan.yml, or set it at or below the default.',
     );
   });
 
