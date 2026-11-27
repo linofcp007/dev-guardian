@@ -35,8 +35,8 @@
  *   |                                             |                         | read it too (`guardianIgnoreFrom`)                  |
  *   | `.trivyignore`                              | Trivy (deps, IaC)       | `--ignorefile <copy>`                               |
  *   | `.bandit`                                   | Bandit (`scan_sast`)    | `--ini <copy>` (the neutral one when the ref has none) |
- *   | `.guardian/scan.yml`                        | every Semgrep scan, and | its timeouts (`semgrepScanFlags(<copy>)`); the gate's |
- *   |                                             | the gate                | `accept_timeouts` (`runScans.ts`)                    |
+ *   | `.guardian/scan.yml`                        | every Semgrep scan, and | its timeouts and jobs (`semgrepScanFlags(<copy>)`);  |
+ *   |                                             | the gate                | the gate's `accept_timeouts` (`runScans.ts`)         |
  *
  * A file the ref does not have is not read from the tree either: the scan runs
  * as the project would with none. One the ref has but that cannot be copied —
@@ -143,7 +143,7 @@ export const FROM_REF_FILES: readonly string[] = [
   GUARDIAN_IGNORE_FILE,
   PROJECT_TRIVYIGNORE,
   '.bandit',
-  // Semgrep's timeouts and the timeouts the gate accepts: a pull request must
+  // Semgrep's timeouts and jobs, and the timeouts the gate accepts: a pull request must
   // not accept the timeout its own change causes (platform/scanSettings.ts).
   SCAN_SETTINGS_RELATIVE_PATH,
 ];

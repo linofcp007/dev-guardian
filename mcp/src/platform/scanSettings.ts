@@ -6,6 +6,7 @@
  *       timeout: 30            # seconds per rule per file (Semgrep --timeout; 0: no limit)
  *       timeout_threshold: 0   # rules that may time out on a file before Semgrep drops
  *                              # the whole file (--timeout-threshold; 0: never drop it)
+ *       jobs: 1                # Semgrep's --jobs: the analysis domains it runs at once
  *       accept_timeouts:       # files whose per-file Semgrep Timeout the CI gate accepts
  *         - src/generated/parser.js
  *
@@ -20,6 +21,18 @@
  * (CLAUDE.md, "the jitter is timeouts, and it is excluded by FILE"). With a
  * threshold of 0 only the rules that timed out miss the file, which is what
  * makes accepting a timeout honest.
+ *
+ * `--jobs 1` (3.18.0): Semgrep's taint analysis gives up on a function past a
+ * budget of 0.2 s of the whole Semgrep process's CPU time — a budget with no
+ * setting —, and without `--jobs` Semgrep runs a domain per core, which spend
+ * that one budget at once. On dev-spec-driven's engine (24 cores, Semgrep
+ * 1.182.0) the default gave 167-177 `Fixpoint timeout` entries in 34 files
+ * and 729-747 results, a different set on every run (127 keys flickered over
+ * 5 runs, each in a file the run missing it named); `--jobs 4` gave 22 in 12
+ * files; `--jobs 1` gave 4 in 2 files and 844 results, twice the same, in
+ * 1.8-2.3x the time. One domain gives each function all of the budget, so the
+ * default can only add findings, never silence one. `semgrep.jobs` above 1
+ * buys the time back at that price.
  *
  * ---- Who may accept a timeout ---------------------------------------------
  *
@@ -48,6 +61,10 @@ export const SCAN_SETTINGS_RELATIVE_PATH = '.guardian/scan.yml';
 export const DEFAULT_SEMGREP_TIMEOUT_S = 30;
 /** Semgrep's `--timeout-threshold` dev-guardian passes (Semgrep's own: 3). */
 export const DEFAULT_SEMGREP_TIMEOUT_THRESHOLD = 0;
+/** Semgrep's `--jobs` dev-guardian passes (Semgrep's own: a domain per core) — see the module doc. */
+export const DEFAULT_SEMGREP_JOBS = 1;
+/** The largest `semgrep.jobs` read. */
+const MAX_SEMGREP_JOBS = 256;
 
 /** The largest settings file read. */
 const MAX_BYTES = 256 * 1024;
@@ -58,6 +75,8 @@ export interface ScanSettings {
     timeout: number;
     /** `--timeout-threshold`; 0 is no limit. */
     timeoutThreshold: number;
+    /** `--jobs`, 1 to 256: the analysis domains Semgrep runs at once. */
+    jobs: number;
     /** Project-relative, `/`-separated, without `./`: files whose per-file Timeout the gate accepts. */
     acceptTimeouts: string[];
   };
@@ -74,6 +93,7 @@ export function defaultScanSettings(): ScanSettings {
     semgrep: {
       timeout: DEFAULT_SEMGREP_TIMEOUT_S,
       timeoutThreshold: DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
+      jobs: DEFAULT_SEMGREP_JOBS,
       acceptTimeouts: [],
     },
   };
@@ -126,6 +146,13 @@ export function parseSettings(doc: unknown): ScanSettings | string {
         return `semgrep.timeout_threshold must be a whole number from 0 to 10000, got ${JSON.stringify(value)}`;
       }
       out.semgrep.timeoutThreshold = value;
+    } else if (key === 'jobs') {
+      // A whole number, as Semgrep's `-j` takes; `null` is refused like a
+      // `timeout: null` — no value means no setting, never "Semgrep's default".
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_SEMGREP_JOBS) {
+        return `semgrep.jobs must be a whole number from 1 to ${MAX_SEMGREP_JOBS}, got ${JSON.stringify(value)}`;
+      }
+      out.semgrep.jobs = value;
     } else if (key === 'accept_timeouts') {
       if (value === null) continue;
       if (!Array.isArray(value)) return 'semgrep.accept_timeouts must be a list of project-relative file paths';
@@ -139,15 +166,22 @@ export function parseSettings(doc: unknown): ScanSettings | string {
         if (!out.semgrep.acceptTimeouts.includes(normal)) out.semgrep.acceptTimeouts.push(normal);
       }
     } else {
-      return `unrecognised semgrep setting "${key}" (known: timeout, timeout_threshold, accept_timeouts)`;
+      return `unrecognised semgrep setting "${key}" (known: timeout, timeout_threshold, jobs, accept_timeouts)`;
     }
   }
   return out;
 }
 
 /** The arguments every Semgrep scan takes from the settings. */
-export function semgrepTimeoutArgs(settings: ScanSettings): string[] {
-  return ['--timeout', String(settings.semgrep.timeout), '--timeout-threshold', String(settings.semgrep.timeoutThreshold)];
+export function semgrepSettingArgs(settings: ScanSettings): string[] {
+  return [
+    '--timeout',
+    String(settings.semgrep.timeout),
+    '--timeout-threshold',
+    String(settings.semgrep.timeoutThreshold),
+    '--jobs',
+    String(settings.semgrep.jobs),
+  ];
 }
 
 /** `/`-separated, without a leading `./` — the spelling the gate compares files in. */

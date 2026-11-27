@@ -22,7 +22,7 @@ import {
   WINDOWS_DIR_MAX,
   WINDOWS_MAX_PATH,
 } from '../../../src/runners/semgrepLongDirs.js';
-import { longDirsNote, runSemgrep } from '../../../src/runners/semgrepRun.js';
+import { longDirsNote, runSemgrep, semgrepScanFlags } from '../../../src/runners/semgrepRun.js';
 import { cleanupTempDirs, makeTempDir } from '../../helpers/tempDir.js';
 
 afterAll(cleanupTempDirs);
@@ -219,6 +219,32 @@ describe('longPathWalk and semgrepIgnores', () => {
 });
 
 describe('runSemgrep: the files too long for Windows, read on their own', () => {
+  // 3.18.0: the long files' own runs take the first run's flags, so they keep
+  // `.guardian/scan.yml`'s --jobs (platform/scanSettings.ts) — once.
+  it("the long files' runs keep the scan's own flags: the timeouts and --jobs, exactly once", async () => {
+    const { root } = longFilesProject();
+    mkdirSync(join(root, '.guardian'), { recursive: true });
+    writeFileSync(join(root, '.guardian', 'scan.yml'), 'semgrep:\n  jobs: 3\n  timeout: 45\n');
+    const out = join(makeTempDir('semgrep-longfiles-jobs-'), 'sast.json');
+    const calls: string[][] = [];
+    const run = vi.fn(async (o: ProcessRunOptions): Promise<ProcessRunResult> => {
+      const args = o.args ?? [];
+      calls.push(args);
+      const file = args[args.indexOf('--output') + 1] ?? '';
+      const target = calls.length === 1 ? join(root, 'short.js') : (args.at(-1) ?? '');
+      writeFileSync(file, JSON.stringify({ results: [], errors: [], paths: { scanned: [target] } }));
+      return { outcome: 'completed', exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+    const flags = semgrepScanFlags(root).args;
+    await runSemgrep({ args: ['--config=r.yml', ...flags, '--json', '--output', out, root], cwd: root }, run, 'win32');
+    expect(run).toHaveBeenCalledTimes(2);
+    for (const args of calls) {
+      expect(args.filter((a) => a === '--jobs')).toHaveLength(1);
+      expect(args.slice(args.indexOf('--jobs'), args.indexOf('--jobs') + 2)).toEqual(['--jobs', '3']);
+      expect(args.slice(args.indexOf('--timeout'), args.indexOf('--timeout') + 2)).toEqual(['--timeout', '45']);
+    }
+  });
+
   it('as extended-length targets — never one an --exclude or a .semgrepignore leaves out — merged back under the walk\'s paths', async () => {
     const { root, long } = longFilesProject();
     const reportDir = makeTempDir('semgrep-longfiles-report-');

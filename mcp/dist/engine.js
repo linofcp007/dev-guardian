@@ -24020,10 +24020,13 @@ function remedyFor(kind, tool54, detail, cause) {
     case "file_timeout":
       return "Raise semgrep.timeout in .guardian/scan.yml, or after review list the file under semgrep.accept_timeouts there and commit it.";
     case "taint_timeout":
-      return "Nothing to do for the gate (not gating): taint findings in the named functions may be missing \u2014 splitting very large functions helps Semgrep.";
+      return "Nothing to do for the gate (not gating): taint findings in the named functions may be missing. With semgrep.jobs above 1 in .guardian/scan.yml, Semgrep's domains share the taint budget \u2014 set it back to 1; at 1, the function is genuinely heavy.";
     case "path_too_long":
       return "Move the project to a shorter path. dev-guardian already hands Semgrep and Bandit such files as extended-length paths (\\\\?\\C:\\\u2026), so a file named here could not be read even that way; Windows long paths (LongPathsEnabled=1) do not help Semgrep, whose engine is not long-path aware.";
     case "scanner_failed":
+      if (/semgrep did not finish \(timed_out\)/.test(detail)) {
+        return "Semgrep ran past dev-guardian's time limit (GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default): raise it for the scan, or set semgrep.jobs above 1 in .guardian/scan.yml \u2014 faster, but taint analysis then gives up on more functions.";
+      }
       if (/SEMGREP_SEND_METRICS=\S* is set in the environment, a value Semgrep refuses/.test(detail)) {
         return "Unset SEMGREP_SEND_METRICS, or set it to on, off or auto (Semgrep refuses any other value, in any case), then rerun the scan.";
       }
@@ -24786,6 +24789,7 @@ var init_shellProbe = __esm({
 // src/platform/scanSettings.ts
 var scanSettings_exports = {};
 __export(scanSettings_exports, {
+  DEFAULT_SEMGREP_JOBS: () => DEFAULT_SEMGREP_JOBS,
   DEFAULT_SEMGREP_TIMEOUT_S: () => DEFAULT_SEMGREP_TIMEOUT_S,
   DEFAULT_SEMGREP_TIMEOUT_THRESHOLD: () => DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
   SCAN_SETTINGS_RELATIVE_PATH: () => SCAN_SETTINGS_RELATIVE_PATH,
@@ -24793,7 +24797,7 @@ __export(scanSettings_exports, {
   loadScanSettings: () => loadScanSettings,
   normalizeRelative: () => normalizeRelative,
   parseSettings: () => parseSettings,
-  semgrepTimeoutArgs: () => semgrepTimeoutArgs
+  semgrepSettingArgs: () => semgrepSettingArgs
 });
 import { posix } from "node:path";
 function defaultScanSettings() {
@@ -24801,6 +24805,7 @@ function defaultScanSettings() {
     semgrep: {
       timeout: DEFAULT_SEMGREP_TIMEOUT_S,
       timeoutThreshold: DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
+      jobs: DEFAULT_SEMGREP_JOBS,
       acceptTimeouts: []
     }
   };
@@ -24840,6 +24845,11 @@ function parseSettings(doc) {
         return `semgrep.timeout_threshold must be a whole number from 0 to 10000, got ${JSON.stringify(value)}`;
       }
       out.semgrep.timeoutThreshold = value;
+    } else if (key === "jobs") {
+      if (typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > MAX_SEMGREP_JOBS) {
+        return `semgrep.jobs must be a whole number from 1 to ${MAX_SEMGREP_JOBS}, got ${JSON.stringify(value)}`;
+      }
+      out.semgrep.jobs = value;
     } else if (key === "accept_timeouts") {
       if (value === null) continue;
       if (!Array.isArray(value)) return "semgrep.accept_timeouts must be a list of project-relative file paths";
@@ -24853,13 +24863,20 @@ function parseSettings(doc) {
         if (!out.semgrep.acceptTimeouts.includes(normal)) out.semgrep.acceptTimeouts.push(normal);
       }
     } else {
-      return `unrecognised semgrep setting "${key}" (known: timeout, timeout_threshold, accept_timeouts)`;
+      return `unrecognised semgrep setting "${key}" (known: timeout, timeout_threshold, jobs, accept_timeouts)`;
     }
   }
   return out;
 }
-function semgrepTimeoutArgs(settings) {
-  return ["--timeout", String(settings.semgrep.timeout), "--timeout-threshold", String(settings.semgrep.timeoutThreshold)];
+function semgrepSettingArgs(settings) {
+  return [
+    "--timeout",
+    String(settings.semgrep.timeout),
+    "--timeout-threshold",
+    String(settings.semgrep.timeoutThreshold),
+    "--jobs",
+    String(settings.semgrep.jobs)
+  ];
 }
 function normalizeRelative(path3) {
   let out = path3.trim().replace(/\\/g, "/");
@@ -24880,7 +24897,7 @@ function relativePathProblem(path3) {
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-var SCAN_SETTINGS_RELATIVE_PATH, DEFAULT_SEMGREP_TIMEOUT_S, DEFAULT_SEMGREP_TIMEOUT_THRESHOLD, MAX_BYTES;
+var SCAN_SETTINGS_RELATIVE_PATH, DEFAULT_SEMGREP_TIMEOUT_S, DEFAULT_SEMGREP_TIMEOUT_THRESHOLD, DEFAULT_SEMGREP_JOBS, MAX_SEMGREP_JOBS, MAX_BYTES;
 var init_scanSettings = __esm({
   "src/platform/scanSettings.ts"() {
     "use strict";
@@ -24889,6 +24906,8 @@ var init_scanSettings = __esm({
     SCAN_SETTINGS_RELATIVE_PATH = ".guardian/scan.yml";
     DEFAULT_SEMGREP_TIMEOUT_S = 30;
     DEFAULT_SEMGREP_TIMEOUT_THRESHOLD = 0;
+    DEFAULT_SEMGREP_JOBS = 1;
+    MAX_SEMGREP_JOBS = 256;
     MAX_BYTES = 256 * 1024;
   }
 });
@@ -55249,7 +55268,7 @@ var init_refConfig = __esm({
       GUARDIAN_IGNORE_FILE,
       PROJECT_TRIVYIGNORE,
       ".bandit",
-      // Semgrep's timeouts and the timeouts the gate accepts: a pull request must
+      // Semgrep's timeouts and jobs, and the timeouts the gate accepts: a pull request must
       // not accept the timeout its own change causes (platform/scanSettings.ts).
       SCAN_SETTINGS_RELATIVE_PATH
     ];
@@ -59677,8 +59696,8 @@ import { win32 as win323 } from "node:path";
 function semgrepScanFlags(configRoot) {
   const loaded = loadScanSettings(configRoot);
   return {
-    args: [...semgrepTimeoutArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
-    warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD})` : null
+    args: [...semgrepSettingArgs(loaded.settings), ...semgrepGuardianOutputExcludes()],
+    warning: loaded.kind === "invalid" ? `${loaded.path} was not applied (${loaded.error}) \u2014 Semgrep ran with dev-guardian's defaults (--timeout ${DEFAULT_SEMGREP_TIMEOUT_S} --timeout-threshold ${DEFAULT_SEMGREP_TIMEOUT_THRESHOLD} --jobs ${DEFAULT_SEMGREP_JOBS})` : null
   };
 }
 function metricsSetting(env) {

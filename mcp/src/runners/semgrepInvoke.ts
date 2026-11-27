@@ -23,7 +23,7 @@ interface SemgrepInvokeOptions {
   rulesPath: string;
   outFile: string;
   reportDir: string;
-  /** Flags after the config: the per-file timeouts and the root `.guardian/` output excluded (`runners/semgrepRun.ts#semgrepScanFlags`). */
+  /** Flags after the config: the per-file timeouts, the jobs and the root `.guardian/` output excluded (`runners/semgrepRun.ts#semgrepScanFlags`). */
   extraArgs?: readonly string[];
   /** The run's own time limit. Default: the process runner's (`GUARDIAN_SCAN_TIMEOUT_MS`, ten minutes). */
   timeoutMs?: number;

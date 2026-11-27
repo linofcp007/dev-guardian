@@ -206,6 +206,43 @@ describe('every gap as data', () => {
     expect(remedyFor('scanner_failed', 'semgrep', 'semgrep failed (a rule did not load)')).toMatch(/rule/);
   });
 
+  // 3.18.0: `semgrep.jobs: 1` by default (platform/scanSettings.ts) costs time, and a large tree can run past the
+  // run's limit — a failed scan on upgrade. Its remedy names both ways out, ahead of the rule test: the line of a
+  // run that also names a rule file is still a timeout, not a rule to fix.
+  it('a Semgrep run past the time limit: the remedy names GUARDIAN_SCAN_TIMEOUT_MS and semgrep.jobs, not "fix the rule"', () => {
+    const reasons = [
+      'semgrep did not finish (timed_out)',
+      'ran via docker; 1 registered rule file(s) outside the project did not run — the Docker fallback sees the project only ' +
+        '(C:/rules/extra.yml): install semgrep to run them; semgrep did not finish (timed_out)',
+    ];
+    for (const reason of reasons) {
+      const v = evaluateGate(
+        input({ steps: [{ tool: 'security_scan_full', ran: true, tools_run: [{ name: 'semgrep', status: 'failed', reason }], missing_tools: ['semgrep'] }] }),
+      );
+      expect(v.exitCode, reason).toBe(CI_EXIT.INCOMPLETE_SCAN);
+      const gap = v.coverageGapDetails[0];
+      expect(gap?.kind, reason).toBe('scanner_failed');
+      expect(gap?.remedy, reason).toMatch(/^Semgrep ran past dev-guardian's time limit \(GUARDIAN_SCAN_TIMEOUT_MS, 10 minutes by default\)/);
+      expect(gap?.remedy, reason).toMatch(/set semgrep\.jobs above 1 in \.guardian\/scan\.yml/);
+    }
+    // Still its own: a rule that did not load, and another failure.
+    expect(remedyFor('scanner_failed', 'semgrep', 'security_scan_full: semgrep failed (a rule did not load)')).toBe(
+      'Fix or remove the rule the detail names, then rerun the scan.',
+    );
+    expect(remedyFor('scanner_failed', 'semgrep', 'security_scan_full: semgrep failed (semgrep did not finish (cancelled))')).not.toMatch(
+      /GUARDIAN_SCAN_TIMEOUT_MS/,
+    );
+  });
+
+  it('a taint fixpoint timeout: nothing for the gate, and semgrep.jobs above 1 named as a cause — never "split the function"', () => {
+    const v = evaluateGate(input({ steps: [semgrepStep([{ file: F, type: 'Fixpoint timeout' }])] }));
+    const note = v.coverageGapDetails.find((d) => d.kind === 'taint_timeout');
+    expect(note?.gating).toBe(false);
+    expect(note?.remedy).toMatch(/^Nothing to do for the gate \(not gating\): taint findings in the named functions may be missing\./);
+    expect(note?.remedy).toMatch(/semgrep\.jobs above 1 in \.guardian\/scan\.yml.* set it back to 1/);
+    expect(note?.remedy).not.toMatch(/split/i);
+  });
+
   it("gosec's gaps: the Go toolchain is never install_toolchain's, and a package that does not type-check says how to make it build", () => {
     expect(remedyFor('missing_tool', 'go', 'security_scan_full: go not installed')).toMatch(
       /^Install the Go toolchain your go\.mod names .* install_toolchain never installs it\.$/,
