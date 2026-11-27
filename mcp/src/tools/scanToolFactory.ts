@@ -179,6 +179,13 @@ export interface ScannerInvocation {
    * the working tree otherwise.
    */
   readSource?: (filePath: string) => string | null;
+  /**
+   * Whether a finding's path is in the project, for the `.guardianignore`
+   * result filter, when the scanners read a tree the working tree does not
+   * hold (review_pr's head that is not checked out: `treePathTest` over
+   * head's top-level entries). The disk's `projectPathTest` otherwise.
+   */
+  inProject?: (relPath: string) => boolean;
 }
 
 export interface InvokeContext extends ToolContext {
@@ -888,10 +895,13 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // Only paths IN the project: an image target that happens to match a
   // pattern is not a file the project declared (`isProjectPath`). The
   // pattern first — it costs no disk — and then one existence check per
-  // directory (`projectPathTest`), never one per finding. The diff's
-  // suppressions pass lists its files by the pattern alone (a git listing
-  // holds only project paths); its findings come through here too.
-  const findingsExcluded = exclusions === null ? 0 : keepIf(keptByExclusions(exclusions, projectPath));
+  // directory (`projectPathTest`), never one per finding — or, when the
+  // scanners read a tree the working tree does not hold, that tree's answer
+  // (`invocation.inProject`). The diff's suppressions pass lists its files by
+  // the pattern alone (a git listing holds only project paths); its findings
+  // come through here too.
+  const findingsExcluded =
+    exclusions === null ? 0 : keepIf(keptByExclusions(exclusions, projectPath, invocation.inProject));
   const outsideScope = scope === null ? 0 : keepIf((p) => scope.member(p));
   if (dropped.length > 0 && cves.length > 0) {
     const still = cvesStillFound(cves, findings, dropped);
