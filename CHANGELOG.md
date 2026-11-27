@@ -10,7 +10,8 @@ version bump.
 
 ## [3.18.0] - 2026-11-27
 
-The "everything" round, shared with dev-spec-driven 1.42.0. Semgrep's taint findings stop coming and going from run to run:
+The "everything" round, shared with dev-spec-driven 1.42.0: the 3.17 backlog, what other spec-driven and review
+workflows do better, and a sweep for speed, wording and robustness. Semgrep's taint findings stop coming and going from run to run:
 every Semgrep run sets its analysis domains (`--jobs`), and a baseline records the files whose taint analysis Semgrep gave
 up on, so `scan` no longer reports their findings as new while the file is unchanged. The weakened-tests and suppressions
 passes read a change as written, whatever the tree's `.gitattributes` say. `perf_check` keys a k6 script's series by the
