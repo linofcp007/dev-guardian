@@ -1068,6 +1068,136 @@ describe('review_pr — introduced: the Semgrep findings judged at the merge bas
     expect((r as { error?: { code?: string } }).error?.code).toBe('cancelled');
     expect(semgrepCalls()).toHaveLength(2);
   });
+
+  /** A Semgrep whose head run (cwd: the project) and merge-base run (any other cwd) each answer as `side` says. */
+  function semgrepBySide(dir: string, side: (call: Call, atHead: boolean) => ProcessRunResult): void {
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command === 'semgrep') return side(call, opts.cwd === dir);
+      if (opts.command === 'gitleaks') return fakeGitleaks(call);
+      return ok();
+    });
+  }
+  /** A Semgrep report: `results` of [path, line, rule], and what it says it scanned. */
+  function semgrepReport(call: Call, results: Array<[string, number, string]>, scanned: readonly string[]): ProcessRunResult {
+    const { out } = semgrepTargets(call.args);
+    writeFileSync(
+      out,
+      JSON.stringify({
+        results: results.map(([path, line, rule]) => ({
+          check_id: rule,
+          path,
+          start: { line, col: 1 },
+          end: { line, col: 2 },
+          extra: { severity: 'ERROR', message: 'bad', lines: 'x' },
+        })),
+        errors: [],
+        paths: { scanned },
+      }),
+    );
+    return ok(results.length > 0 ? 1 : 0);
+  }
+
+  // 3.18.0 review 1 (DGBASE-6, M2): a target the base run's report leaves out of `paths.scanned` was not measured.
+  it('a modified file the merge-base run did not scan: its findings are unknown, never introduced nor preexisting', async () => {
+    const dir = await repo('main', { 'a.js': 'eval(a)\n', 'b.js': 'eval(b)\n' });
+    write(dir, 'a.js', 'eval(a)\nmore = 1\n');
+    write(dir, 'b.js', 'eval(b)\nmore = 1\n');
+    await commitAll(dir);
+    semgrepBySide(dir, (call, atHead) => {
+      const { targets } = semgrepTargets(call.args);
+      if (atHead) return semgrepReport(call, targets.map((t): [string, number, string] => [t, 1, 'test.rule']), targets);
+      return semgrepReport(call, [], targets.filter((t) => t.replace(/\\/g, '/').endsWith('a.js')));
+    });
+    const { r } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    expect(introducedOf(r)).toMatchObject({ compared: true, counts: { introduced: 1, preexisting: 0, unknown: 1, not_compared: 0 } });
+  });
+
+  // 3.18.0 review 1 (DGBASE-6, M3): a base run that scanned nothing read nothing — not "every file unknown".
+  it('a merge-base run that scanned nothing: compared false', async () => {
+    const dir = await repo('main', { 'a.js': 'eval(x)\n' });
+    write(dir, 'a.js', 'eval(x)\nmore = 1\n');
+    await commitAll(dir);
+    semgrepBySide(dir, (call, atHead) => (atHead ? fakeSemgrep(call) : semgrepReport(call, [], [])));
+    const { r } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    expect(introducedOf(r)).toMatchObject({ compared: false });
+    expect(introducedOf(r).reason).toMatch(/^Semgrep at the merge base [0-9a-f]{12}: skipped/);
+  });
+
+  // 3.18.0 review 1 (DGBASE-2): a credential rule's finding is keyed without its line, so a NEW secret took the
+  // identity of the one the change removed. A finding on a line the change added is introduced — the line numbers
+  // from `git diff --no-index` of the two files the runs read: the working tree's when head is checked out
+  // (uncommitted, an assume-unchanged flag hiding it from `git diff`), head's checkout when it is not.
+  it('a finding on a line the change added is introduced, though its identity matches one at the merge base', async () => {
+    const RULE = 'test.hardcoded-secret';
+    let dir = '';
+    const counts = async (input: Record<string, unknown>): Promise<Introduced['counts']> => introducedOf((await review(dir, input)).r).counts;
+    /** The head run reports its finding at `headLine`, the merge-base run at line 1 (the old secret). */
+    const atLine = (headLine: number): void =>
+      semgrepBySide(dir, (call, atHead) => {
+        const { targets } = semgrepTargets(call.args);
+        return semgrepReport(call, targets.map((t): [string, number, string] => [t, atHead ? headLine : 1, RULE]), targets);
+      });
+    // The reviewer's shape, committed: the old secret moved to the environment, a new one in a new line.
+    dir = await repo('main', { 'auth.js': "const k = 'old-literal';\nmodule.exports = { k };\n" });
+    write(dir, 'auth.js', "const k = process.env.K;\nconst admin = 'brand-new-literal';\nmodule.exports = { k, admin };\n");
+    await commitAll(dir);
+    atLine(2);
+    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
+    // Head not checked out: the lines of its own checkout.
+    await git(dir, 'checkout', '-q', 'main');
+    expect(await counts({ base_ref: 'main', head_ref: 'feature' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
+
+    // Head checked out with an uncommitted new secret on line 2, which the committed head keeps as line 1's
+    // neighbour — and an assume-unchanged flag hiding the edit from `git diff`: the working tree's own lines decide.
+    dir = await repo('main', { 'auth.js': "const k = 'old-literal';\nmodule.exports = { k };\n" });
+    write(dir, 'auth.js', "const k = 'old-literal';\nmodule.exports = { k };\n// reviewed\n");
+    await commitAll(dir);
+    write(dir, 'auth.js', "const k = 'old-literal';\nconst admin = 'another-literal';\nmodule.exports = { k };\n// reviewed\n");
+    await git(dir, 'update-index', '--assume-unchanged', 'auth.js');
+    expect((await execa('git', ['diff', '--name-only'], { cwd: dir })).stdout).toBe('');
+    atLine(2);
+    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
+    // The control: the old secret's own line, which the change kept.
+    atLine(1);
+    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 0, preexisting: 1, unknown: 0, not_compared: 0 });
+    await git(dir, 'update-index', '--no-assume-unchanged', 'auth.js');
+
+    // A file git would call binary — a `binary` attribute, a NUL byte in the new line — still has its lines read.
+    write(dir, '.gitattributes', 'auth.js binary\n');
+    write(dir, 'auth.js', "const k = 'old-literal';\nconst admin = 'nul-literal'; // \0\nmodule.exports = { k };\n// reviewed\n");
+    atLine(2);
+    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 1, preexisting: 0, unknown: 0, not_compared: 0 });
+    // A CRLF working tree against the merge base's LF lines: the same lines, so the old secret's is still kept. The
+    // repository's own `core.autocrlf=false` (a Linux checkout's): with `true`, git converts both sides itself.
+    await git(dir, 'config', 'core.autocrlf', 'false');
+    write(dir, '.gitattributes', '');
+    write(dir, 'auth.js', "const k = 'old-literal';\r\nmodule.exports = { k };\r\n// reviewed\r\n");
+    atLine(1);
+    expect(await counts({ base_ref: 'main' })).toEqual({ introduced: 0, preexisting: 1, unknown: 0, not_compared: 0 });
+  });
+
+  // A pair git cannot diff — the head file gone after the head run, or the base file — compares nothing.
+  it('a file pair that cannot be diffed against the merge base: compared false, never "nothing added"', async () => {
+    const reasons = { head: /^a\.js could not be diffed against the merge base: not a file at head$/, base: /^a\.js could not be diffed against the merge base \(git exited 1\)$/ };
+    for (const gone of ['head', 'base'] as const) {
+      const dir = await repo('main', { 'a.js': 'eval(x)\n' });
+      write(dir, 'a.js', 'eval(x)\nmore = 1\n');
+      await commitAll(dir);
+      semgrepBySide(dir, (call, atHead) => {
+        const { targets } = semgrepTargets(call.args);
+        if (!atHead) rmSync(gone === 'head' ? join(dir, 'a.js') : join(call.cwd ?? '', 'a.js'));
+        return semgrepReport(call, targets.map((t): [string, number, string] => [t, 1, 'test.rule']), targets);
+      });
+      const { r } = await review(dir, { base_ref: 'main' });
+      expect(r.ok, gone).toBe(true);
+      expect(introducedOf(r), gone).toMatchObject({ compared: false });
+      expect(introducedOf(r).reason, gone).toMatch(reasons[gone]);
+    }
+  });
 });
 
 // [INT-6]: the merge-base run reads only files the review keeps — the factory's own .guardianignore predicate, the

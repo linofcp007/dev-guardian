@@ -69,19 +69,35 @@ describe('loadScanSettings', () => {
     expect(semgrepSettingArgs(r.settings)).toEqual(['--timeout', '60', '--timeout-threshold', '2', '--jobs', String(DEFAULT_SEMGREP_JOBS)]);
   });
 
-  it('reads semgrep.jobs, a whole number from 1 to 256 — a YAML 1.0 is the number 1', () => {
-    for (const [yaml, jobs] of [
-      ['semgrep:\n  jobs: 1\n', 1],
-      ['semgrep:\n  jobs: 4\n  timeout: 45\n', 4],
-      ['semgrep:\n  jobs: 256\n', 256],
-      ['semgrep:\n  jobs: 1.0\n', 1],
-    ] as const) {
+  // 3.18.0 review 1 (R1-XPLUG-01): the file is the working tree's in every ref-less run and the reviewed head's in
+  // review_pr, and more domains buy time with findings — so a value only ever LOWERS the default.
+  it('reads semgrep.jobs, a whole number from 1 to 256 — a YAML 1.0 is the number 1 — never above the default', () => {
+    const rows: Array<[string, number, number | undefined]> = [
+      ['semgrep:\n  jobs: 1\n', 1, undefined],
+      ['semgrep:\n  jobs: 1.0\n', 1, undefined],
+      [`semgrep:\n  jobs: ${DEFAULT_SEMGREP_JOBS}\n  timeout: 45\n`, DEFAULT_SEMGREP_JOBS, undefined],
+      [`semgrep:\n  jobs: ${DEFAULT_SEMGREP_JOBS + 1}\n`, DEFAULT_SEMGREP_JOBS, DEFAULT_SEMGREP_JOBS + 1],
+      ['semgrep:\n  jobs: 256\n', DEFAULT_SEMGREP_JOBS, 256],
+    ];
+    for (const [yaml, jobs, above] of rows) {
       const r = loadScanSettings(project(yaml));
       expect(r.kind, yaml).toBe('loaded');
       expect(r.settings.semgrep.jobs, yaml).toBe(jobs);
+      expect(r.settings.semgrep.jobsAboveDefault, yaml).toBe(above);
       const args = semgrepSettingArgs(r.settings);
       expect(args.slice(args.indexOf('--jobs')), yaml).toEqual(['--jobs', String(jobs)]);
     }
+  });
+
+  it('a semgrep.jobs above the default runs at the default, and the scan says so; at or below it, no word', () => {
+    const above = semgrepScanFlags(project('semgrep:\n  jobs: 256\n'));
+    expect(above.args.slice(above.args.indexOf('--jobs'), above.args.indexOf('--jobs') + 2)).toEqual(['--jobs', String(DEFAULT_SEMGREP_JOBS)]);
+    expect(above.warning).toBe(
+      `.guardian/scan.yml semgrep.jobs 256 is above dev-guardian's default, so Semgrep ran with --jobs ${DEFAULT_SEMGREP_JOBS}: ` +
+        'the setting can only lower it (more domains share one taint budget, and taint analysis gives up on more functions)',
+    );
+    expect(semgrepScanFlags(project(`semgrep:\n  jobs: ${DEFAULT_SEMGREP_JOBS}\n`)).warning).toBeNull();
+    expect(semgrepScanFlags(project('semgrep:\n  jobs: 1\n')).warning).toBeNull();
   });
 
   it('a name with brackets or braces is a file, read as written (Next.js `pages/[id].js`)', () => {
@@ -177,9 +193,9 @@ describe('semgrepScanFlags', () => {
 
   it('semgrep.jobs reaches the scan as --jobs, exactly once; the default with no file (3.18.0)', () => {
     const count = (args: string[]): number => args.filter((a) => a === '--jobs' || a.startsWith('--jobs=') || a === '-j').length;
-    const set = semgrepScanFlags(project('semgrep:\n  jobs: 3\n')).args;
+    const set = semgrepScanFlags(project('semgrep:\n  jobs: 1\n')).args;
     expect(count(set)).toBe(1);
-    expect(set.slice(set.indexOf('--jobs'), set.indexOf('--jobs') + 2)).toEqual(['--jobs', '3']);
+    expect(set.slice(set.indexOf('--jobs'), set.indexOf('--jobs') + 2)).toEqual(['--jobs', '1']);
     const none = semgrepScanFlags(project()).args;
     expect(count(none)).toBe(1);
     expect(none.slice(none.indexOf('--jobs'), none.indexOf('--jobs') + 2)).toEqual(['--jobs', String(DEFAULT_SEMGREP_JOBS)]);

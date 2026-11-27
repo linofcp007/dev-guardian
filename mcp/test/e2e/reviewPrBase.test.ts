@@ -138,4 +138,74 @@ describe('review_pr: introduced, judged at the merge base (real Semgrep)', () =>
     },
     SLOW,
   );
+
+  // 3.18.0 review 1 (DGBASE-2 / DGBASE-3), the reviewer's probe shapes in one branch: the identity alone read a new
+  // hard-coded secret (a credential rule keys it without its line) and a new line identical to an old one as
+  // preexisting. A finding on a line the change added is introduced; a flagged line the diff kept is the limit.
+  it.skipIf(!SEMGREP_INSTALLED)(
+    'a new secret in a new function and a new identical sink above an old one are introduced; the sink a replaced function keeps is the limit',
+    async () => {
+      const dir = makeTempDir('review-pr-added-');
+      await git(dir, 'init', '-q');
+      await git(dir, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+      await git(dir, 'config', 'user.email', 'guardian-test@example.com');
+      await git(dir, 'config', 'user.name', 'Guardian Test');
+      await git(dir, 'config', 'commit.gpgsign', 'false');
+      await git(dir, 'config', 'core.autocrlf', 'false');
+      write(
+        dir,
+        '.semgrep.yml',
+        `${RULES}  - id: hardcoded-jwt-secret
+    languages: [javascript]
+    severity: ERROR
+    message: a JWT signed with a literal secret
+    pattern: jwt.sign($P, "...")
+`,
+      );
+      const H = ["const jwt = require('jsonwebtoken');", "const { exec } = require('child_process');"];
+      write(dir, 'auth.js', lines(...H, 'function login(u) {', "  return jwt.sign({ u }, 'old-literal-1');", '}', 'module.exports = { login };'));
+      write(dir, 'twice.js', lines(...H, 'function a(cmd) {', '  exec(cmd);', '}', 'module.exports = { a };'));
+      write(dir, 'mv.js', lines(...H, 'function old(cmd) {', '  exec(cmd);', '}', 'module.exports = { old };'));
+      await git(dir, 'add', '-A');
+      await git(dir, 'commit', '-q', '-m', 'base');
+      await git(dir, 'checkout', '-q', '-b', 'feature');
+      write(
+        dir,
+        'auth.js',
+        lines(
+          ...H,
+          'function login(u) {',
+          '  return jwt.sign({ u }, process.env.JWT_SECRET);',
+          '}',
+          'function adminToken() {',
+          "  return jwt.sign({ admin: true }, 'brand-new-admin-literal');",
+          '}',
+          'module.exports = { login, adminToken };',
+        ),
+      );
+      write(dir, 'twice.js', lines(...H, 'function fresh(req) {', '  const cmd = req.query.c;', '  exec(cmd);', '}', 'function a(cmd) {', '  exec(cmd);', '}', 'module.exports = { a, fresh };'));
+      write(dir, 'mv.js', lines(...H, 'function handler(req) {', '  const cmd = req.query.c;', '  exec(cmd);', '}', 'module.exports = { handler };'));
+      await git(dir, 'add', '-A');
+      await git(dir, 'commit', '-q', '-m', 'feature');
+
+      const db = new Database(':memory:');
+      runMigrations(db);
+      const plugin: PluginContext = { storage: new Storage(db), shell: null, scriptsDir: dir, progressNotifier: { send: () => {} } };
+      const tool = TOOLS.find((t) => t.name === 'review_pr');
+      if (!tool) throw new Error('review_pr not registered');
+      const check = (r: unknown): void => {
+        expect((r as { ok: boolean }).ok, JSON.stringify(r)).toBe(true);
+        const res = r as { introduced: Introduced };
+        expect(res.introduced.compared, JSON.stringify(res.introduced)).toBe(true);
+        // auth.js:7 (the new secret) and twice.js:5 (the new identical sink) introduced; twice.js:8 (the old sink)
+        // and mv.js:5 (a kept line in a replaced function — the limit, pinned) preexisting.
+        expect(res.introduced.counts).toEqual({ introduced: 2, preexisting: 2, unknown: 0, not_compared: 0 });
+        expect(res.introduced.preexisting?.map((f) => `${f.file_path}:${f.line_start}`).sort()).toEqual(['mv.js:5', 'twice.js:8']);
+      };
+      check(await tool.handler({ project_path: dir, base_ref: 'main', local_only: true }, plugin));
+      await git(dir, 'checkout', '-q', 'main');
+      check(await tool.handler({ project_path: dir, base_ref: 'main', head_ref: 'feature', local_only: true, force: true }, plugin));
+    },
+    SLOW,
+  );
 });

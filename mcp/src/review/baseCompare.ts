@@ -11,20 +11,35 @@
  * (`ci/baseline.ts#newFindings`: identity, the identity before a rename,
  * then `match_id` — one to one), never a second notion of "the same finding".
  *
- * Positive evidence only: a finding is `preexisting` when the base run
- * reported it; every other Semgrep finding is introduced, or `unknown` when
- * the base run could not measure its file (only partly analysed, or not
- * scanned). A base side that could not be read at all — no merge base, a
- * failed checkout, a failed or cancelled run — is `compared: false`, and
- * nothing is preexisting. Other scanners' findings are not compared (counted
- * as such). Nothing is hidden: every finding stays in the review's counts and
+ * Positive evidence only: a finding is `preexisting` when it lies on lines
+ * the change kept and the base run reported it; every other Semgrep finding
+ * is introduced, or `unknown` when the base run could not measure its file
+ * (only partly analysed, or not scanned). A base side that could not be read
+ * at all — no merge base, a failed checkout, a failed or cancelled run, a
+ * file pair git could not diff — is `compared: false`, and nothing is
+ * preexisting. Other scanners' findings are not compared (counted as such).
+ * Nothing is hidden: every finding stays in the review's counts and
  * `top_findings`; the skill reads `preexisting` (the list, never an absence)
  * to judge a finding as not the change's.
  *
- * The identity is (tool, rule, path, the flagged line's text, occurrence), so
- * a change that brings a new source into a line that already had a finding,
- * or removes a check upstream of it, keeps the finding's identity: it reads
- * preexisting — the gate's limit too; the skill says so (docs/ci.md).
+ * A finding on a line the change ADDED is introduced, whatever its identity
+ * matches ({@link BaseSide}'s `addedLines`: the `-U0` diff of each compared
+ * file at the merge base against the file the head run read — the working
+ * tree when head is checked out). The identity alone said "the same finding"
+ * of a new one twice (3.18.0 review 1): a credential rule's finding is keyed
+ * without its line (`fingerprint/findingIdentity.ts#keyedWithoutLine`), so a
+ * new hard-coded secret in a new function took the identity of the one the
+ * change removed; and a new flagged line identical to an old one, put above
+ * it, took the old one's occurrence. The kept findings alone are then
+ * matched, so the occurrences of identical lines are counted among the kept
+ * ones — as if the added lines were not there.
+ *
+ * What the comparison still cannot tell (the skill and docs/ci.md say it): a
+ * flagged line the change kept reads preexisting when the base run flagged
+ * the same, even if what reaches it changed — a new source, a removed check,
+ * the function around it replaced (a deleted function and a new one sharing
+ * an identical sink line, which the diff keeps); and of two identical lines,
+ * which is the added one is the diff's choice.
  */
 
 import { buildBaseline, newFindings } from '../ci/baseline.js';
@@ -48,8 +63,19 @@ export type BaseSide =
       renamedFrom: ReadonlyMap<string, string>;
       /** Head paths whose base file the run could not measure (partly analysed, or not scanned). */
       unknownFiles: ReadonlySet<string>;
+      /**
+       * Head path → the line ranges the change added to it (inclusive, the head file's numbers), for every head
+       * file compared with its base file. A file not here has no base counterpart the base run read.
+       */
+      addedLines: ReadonlyMap<string, readonly LineRange[]>;
     }
   | { compared: false; reason: string };
+
+/** Lines `start` to `end` of a file, both included. */
+export interface LineRange {
+  start: number;
+  end: number;
+}
 
 export type BaseComparison =
   | {
@@ -69,18 +95,33 @@ function posix(path: string): string {
   return out;
 }
 
+/**
+ * Whether `f` lies on a line the change added to its file (`added`: the head path's ranges, or undefined for a
+ * file not compared). A finding with no line of its own is never on a kept one.
+ */
+function onAddedLine(f: Finding, added: ReadonlyMap<string, readonly LineRange[]>): boolean {
+  const ranges = f.file_path !== undefined ? added.get(posix(f.file_path)) : undefined;
+  if (ranges === undefined) return false;
+  const start = f.line_start;
+  if (start === undefined) return true;
+  const end = Math.max(start, f.line_end ?? start);
+  return ranges.some((r) => r.start <= end && r.end >= start);
+}
+
 /** The verdict of each of `head`'s findings against `base` (see the module comment). */
 export function classifyAgainstBase(head: readonly Finding[], base: BaseSide): BaseComparison {
   if (!base.compared) return { compared: false, reason: base.reason };
   const semgrep = head.filter((f) => f.tool === SEMGREP_TOOL_NAME);
-  const fresh = new Set(newFindings(semgrep, buildBaseline(base.findings, null, ''), base.renamedFrom));
-  const preexisting = semgrep.filter((f) => !fresh.has(f));
-  const unknown = semgrep.filter((f) => fresh.has(f) && f.file_path !== undefined && base.unknownFiles.has(posix(f.file_path)));
+  const added = new Set(semgrep.filter((f) => onAddedLine(f, base.addedLines)));
+  const kept = semgrep.filter((f) => !added.has(f));
+  const fresh = new Set(newFindings(kept, buildBaseline(base.findings, null, ''), base.renamedFrom));
+  const preexisting = kept.filter((f) => !fresh.has(f));
+  const unknown = kept.filter((f) => fresh.has(f) && f.file_path !== undefined && base.unknownFiles.has(posix(f.file_path)));
   return {
     compared: true,
     base_sha: base.base_sha,
     counts: {
-      introduced: fresh.size - unknown.length,
+      introduced: added.size + fresh.size - unknown.length,
       preexisting: preexisting.length,
       unknown: unknown.length,
       not_compared: head.length - semgrep.length,

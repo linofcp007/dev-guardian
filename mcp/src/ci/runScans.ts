@@ -69,7 +69,8 @@ import { resolveScriptsDir } from '../platform/scriptsDir.js';
 import { dedupeFindings } from '../runners/findingMerge.js';
 import { FIXPOINT_TIMEOUT_PACK_TYPE } from '../runners/semgrepReport.js';
 import { probeShell } from '../platform/shellProbe.js';
-import { loadScanSettings, type ScanSettingsLoad } from '../platform/scanSettings.js';
+import { jobsAboveDefaultNote, loadScanSettings, type ScanSettingsLoad } from '../platform/scanSettings.js';
+import { SEMGREP_TOOL_NAME } from '../runners/scannerParsers/semgrep.js';
 import { GuardianDatabase } from '../storage/db.js';
 import { runMigrations } from '../storage/migrations/runner.js';
 import { Storage } from '../storage/index.js';
@@ -221,6 +222,10 @@ export async function runScans(opts: RunScansOptions): Promise<RunScansResult> {
           steps.push(...(await fullContentSteps(opts.projectPath, opts.changedSince, ctx)));
         }
       }
+      // A `semgrep.jobs` above the default ran at the default: said on the first step Semgrep ran in, as a note.
+      const jobsNote = jobsAboveDefaultNote(scanSettings.settings);
+      const semgrepStep = jobsNote !== null ? steps.find((s) => s.ran && s.tools_run.some((r) => r.name === SEMGREP_TOOL_NAME)) : undefined;
+      if (jobsNote !== null && semgrepStep !== undefined) semgrepStep.notes = [...(semgrepStep.notes ?? []), `semgrep: ${jobsNote}`];
 
       const integrity = opts.diffBase !== undefined ? await testIntegrityStep(opts.projectPath, opts.diffBase) : null;
       if (integrity !== null) steps.push(integrity.step);

@@ -70,7 +70,11 @@ interface Listed extends NameStatusEntry {
   untracked?: boolean;
 }
 
-/** The added lines (new numbers) and removed lines (the new-file line their hunk lands on) of a `-U0` diff. */
+/**
+ * The added lines (new numbers) and removed lines (the new-file line their hunk lands on) of a `-U0` diff. A
+ * context line still counts a line, so a diff with context reads the same: `GIT_DIFF_OPTS` overrides `-U`, and
+ * `diff.interHunkContext` fuses hunks across kept lines.
+ */
 export function parseUnifiedZero(diff: string): { added: DiffLine[]; removed: DiffLine[] } {
   const added: DiffLine[] = [];
   const removed: DiffLine[] = [];
@@ -94,6 +98,9 @@ export function parseUnifiedZero(diff: string): { added: DiffLine[]; removed: Di
       removed.push({ line: Math.max(1, newLine), text: line.slice(1) });
     } else if (line.startsWith('diff --git')) {
       inHunk = false;
+    } else if (line.startsWith(' ') || line === '') {
+      // A kept line (`diff.suppressBlankEmpty` prints a blank one empty).
+      newLine += 1;
     }
   }
   return { added, removed };
