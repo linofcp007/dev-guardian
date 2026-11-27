@@ -1069,3 +1069,40 @@ describe('review_pr — introduced: the Semgrep findings judged at the merge bas
     expect(semgrepCalls()).toHaveLength(2);
   });
 });
+
+// [INT-6]: the merge-base run reads only files the review keeps — the factory's own .guardianignore predicate, the
+// one its result filter applies (keptByExclusions, head's tree when head is not checked out).
+describe('review_pr — the merge-base run reads only what the review keeps', () => {
+  it('a modified file .guardianignore leaves out is never read at the merge base', async () => {
+    const dir = await repo('main', { 'a.js': 'eval(a)\n', 'vendor/x.js': 'eval(v)\n', '.guardianignore': 'vendor/\n' });
+    write(dir, 'a.js', 'eval(a)\nmore = 1\n');
+    write(dir, 'vendor/x.js', 'eval(v)\nmore = 1\n');
+    await commitAll(dir);
+    // A Semgrep that reports on every target, so both files hold a head result.
+    vi.mocked(runProcess).mockImplementation(async (opts) => {
+      const call: Call = { ...opts, args: opts.args ?? [] };
+      calls.push(call);
+      if (opts.command === 'semgrep') {
+        const { out, targets } = semgrepTargets(call.args);
+        writeFileSync(
+          out,
+          JSON.stringify({
+            results: targets.map((path) => ({ check_id: 'test.rule', path, start: { line: 1, col: 1 }, end: { line: 1, col: 2 }, extra: { severity: 'ERROR', message: 'bad', lines: 'eval(x)' } })),
+            errors: [],
+            paths: { scanned: targets },
+          }),
+        );
+        return ok(1);
+      }
+      if (opts.command === 'gitleaks') return fakeGitleaks(call);
+      return ok();
+    });
+    const { r } = await review(dir, { base_ref: 'main' });
+    expect(r.ok).toBe(true);
+    const runs = semgrepCalls();
+    expect(runs).toHaveLength(2);
+    expect([...semgrepTargets(runs[0]?.args ?? []).targets].sort()).toEqual(['a.js', 'vendor/x.js']);
+    expect(semgrepTargets(runs[1]?.args ?? []).targets).toEqual(['a.js']);
+    expect((r as unknown as { introduced: { counts: unknown } }).introduced.counts).toEqual({ introduced: 0, preexisting: 1, unknown: 0, not_compared: 0 });
+  });
+});
