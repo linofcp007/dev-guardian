@@ -297,6 +297,60 @@ describe('runSuppressionCheck: moves, scope, the null rule', () => {
   }
 });
 
+// 3.18.0 review 2, with testIntegrityGit.test.ts' rows: the tree's own `.gitattributes` are set aside for this pass's
+// diffs too (an `ident` attribute collapsed a directive written inside `$Id:…$` in the working tree; a `binary` one hid
+// a committed one), line endings compared with `--ignore-cr-at-eol`. The CRLF row sets the repository's own
+// `core.autocrlf=false` (the pass's git reads it; `git()` above sets it only on its own calls): with `true`, git would
+// drop the CRs itself and the row would hold without the flag.
+describe("runSuppressionCheck: the tree's own .gitattributes are set aside", () => {
+  const BLANKET = suppressionCase('ESLint: the whole file, every rule');
+  const SEMGREP = suppressionCase('Semgrep: upper case');
+  const rowsOf = (r: Awaited<ReturnType<typeof runSuppressionCheck>>): string[] =>
+    (r?.findings ?? []).map((f) => `${f.rule_id ?? ''} ${f.file_path ?? ''}:${String(f.line_start)} ${f.severity}`);
+
+  it('a repository that checks out CRLF (`* text eol=crlf`): a touched file is no change, and an old directive is not new', async () => {
+    const dir = newRepo('suppressions-crlf-');
+    git(dir, 'config', 'core.autocrlf', 'false');
+    write(dir, '.gitattributes', '* text eol=crlf\n');
+    write(dir, SEMGREP.path, caseText(SEMGREP));
+    branch(dir);
+    rmSync(join(dir, ...SEMGREP.path.split('/')));
+    git(dir, 'checkout', '-q', '--', SEMGREP.path);
+    const crlf = caseText(SEMGREP).replace(/\n/g, '\r\n');
+    write(dir, SEMGREP.path, crlf);
+    expect(await runSuppressionCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } })).toBeNull();
+    // The same bare directive once more: only the new line is added, and nothing is carried from a removed one.
+    write(dir, SEMGREP.path, `${crlf}${crlf}`);
+    const r = await runSuppressionCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } });
+    expect(rowsOf(r)).toEqual([`scanner-suppression-added ${SEMGREP.path}:${String(SEMGREP.lines.length + 1)} medium`]);
+    expect(r?.toolRun.reason).not.toMatch(/kept or moved/);
+  });
+
+  it('an `ident` attribute the change adds: a directive written inside `$Id:…$` in the working tree is read', async () => {
+    const dir = newRepo('suppressions-ident-');
+    write(dir, SEMGREP.path, '/* $Id$ */\nexport const a = 1;\n');
+    branch(dir);
+    write(dir, '.gitattributes', '*.js ident\n');
+    write(dir, SEMGREP.path, `/* $Id: */ ${SEMGREP.lines.join(' ')} /* $ */\nexport const a = 1;\n`);
+    expect(git(dir, 'diff', '--name-only', 'main', '--')).toBe('');
+    const r = await runSuppressionCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } });
+    expect(rowsOf(r)).toEqual([`scanner-suppression-added ${SEMGREP.path}:1 medium`]);
+  });
+
+  it('a `binary` attribute the change adds hides no committed directive', async () => {
+    const dir = newRepo('suppressions-binary-');
+    write(dir, BLANKET.path, 'export const a = 1;\n');
+    branch(dir);
+    write(dir, '.gitattributes', '*.ts binary\n');
+    write(dir, BLANKET.path, `${caseText(BLANKET)}export const a = 1;\n`);
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'binary');
+    const head = git(dir, 'rev-parse', 'HEAD');
+    const r = await runSuppressionCheck(dir, { base: 'main', head, target: { kind: 'commit', sha: head } });
+    expect(rowsOf(r)).toEqual([`suppression-added ${BLANKET.path}:1 medium`]);
+  });
+});
+
 describe('runSuppressionCheck: its git calls, counted', () => {
   // 300 changed source files, two of them adding a directive, one removing one, one under a fixture folder and one
   // README naming one: the pass diffs and reads only the three it must.

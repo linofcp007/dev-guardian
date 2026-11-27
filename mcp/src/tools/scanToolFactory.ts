@@ -186,17 +186,6 @@ export interface ScannerInvocation {
    * head's top-level entries). The disk's `projectPathTest` otherwise.
    */
   inProject?: (relPath: string) => boolean;
-  /**
-   * Result keys computed from the scan's FINAL findings — after
-   * `.guardianignore` and the scope, the identities and the credential
-   * redaction (3.18.0: review_pr's merge-base comparison, `introduced`,
-   * `review/baseCompare.ts`). Called once; its keys join `extras` (the
-   * payload and `meta`, so a cache hit answers with them). A key the factory
-   * writes itself ({@link LATE_RESERVED_KEYS}) is refused, and a hook that
-   * throws adds nothing: each says so in a warning — an absent key must not
-   * read as "nothing was compared".
-   */
-  afterIdentities?: (findings: readonly Finding[]) => Record<string, unknown>;
 }
 
 export interface InvokeContext extends ToolContext {
@@ -358,38 +347,6 @@ const FACTORY_META_KEYS: ReadonlySet<string> = new Set([
   'run_warnings',
   PROJECT_LANGUAGES_META_KEY,
 ]);
-
-/**
- * What a tool's {@link ScannerInvocation.afterIdentities} may never name: the
- * factory's own meta keys, and the two it writes so that a cache hit answers
- * with them (`scope`, `exclusions`).
- */
-export const LATE_RESERVED_KEYS: ReadonlySet<string> = new Set([...FACTORY_META_KEYS, 'scope', 'exclusions']);
-
-/**
- * The keys `afterIdentities` adds, and what to warn about: a reserved key
- * refused, or a hook that threw (it adds nothing). Never throws.
- */
-function lateExtras(
-  tool: string,
-  hook: ScannerInvocation['afterIdentities'],
-  findings: readonly Finding[],
-): { extras: Record<string, unknown>; warnings: string[] } {
-  if (hook === undefined) return { extras: {}, warnings: [] };
-  let keys: Record<string, unknown>;
-  try {
-    keys = hook(findings);
-  } catch (e) {
-    return { extras: {}, warnings: [`${tool}: a result computed from the findings was not added (${e instanceof Error ? e.message : String(e)}).`] };
-  }
-  const extras: Record<string, unknown> = {};
-  const warnings: string[] = [];
-  for (const [key, value] of Object.entries(keys)) {
-    if (LATE_RESERVED_KEYS.has(key)) warnings.push(`${tool}: the result key "${key}" is the scan's own and was not replaced.`);
-    else extras[key] = value;
-  }
-  return { extras, warnings };
-}
 
 /** Longest scanner stderr line forwarded into a progress message. */
 const MAX_LOG_LINE = 200;
@@ -973,14 +930,6 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // unaffected — this is the catch-all for the ones that do not.
   findings = redactCredentialSnippets(findings);
 
-  // A tool's keys computed from these final findings (review_pr's merge-base
-  // comparison) join its extras — everywhere below, `meta` included, so a
-  // cache hit answers with them. The orchestrator's child count still reads
-  // `invocation.extras` (`childFindingsExcluded`).
-  const late = lateExtras(config.name, invocation.afterIdentities, findings);
-  const extras: Record<string, unknown> = { ...(invocation.extras ?? {}), ...late.extras };
-  warnings.push(...late.warnings);
-
   // Persist findings + CVEs (best-effort; one transaction per repo).
   //
   // ---- Why the severity floor is NOT applied before this ---------------
@@ -1044,7 +993,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // no migration is needed. No tool puts `severity_min` in `extras`, so
   // there is nothing to collide with. It is listed in FACTORY_META_KEYS, which
   // is what keeps a cache hit from re-emitting it as an extra.
-  const meta: Record<string, unknown> = { ...extras };
+  const meta: Record<string, unknown> = { ...(invocation.extras ?? {}) };
   if (input.severity_min !== undefined) meta['severity_min'] = input.severity_min;
   // `finalize` replaces the whole blob, so the parent written at insert time
   // has to be written again — and so does the scope.
@@ -1078,9 +1027,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
         }
       : null;
   if (exclusionReport !== null) meta['exclusions'] = exclusionReport;
-  // The late keys' warnings too: a cache hit says them as the fresh run did.
-  const runWarnings = [...(invocation.warnings ?? []), ...late.warnings];
-  if (runWarnings.length > 0) meta['run_warnings'] = runWarnings;
+  if (invocation.warnings !== undefined && invocation.warnings.length > 0) meta['run_warnings'] = invocation.warnings;
   // The project's source languages as they are NOW, when the scan ran, for
   // every scan type an OWASP detector reads: a later report judges this
   // scan's coverage against them, not against whatever the working tree
@@ -1129,7 +1076,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   // scanner was missing/failed we push a loud warning so the count is never
   // mistaken for a clean bill of health.
   const assessed = assessCoverage(config.scan_type, invocation.tools_run, invocation.missing_tools, {
-    manifestGaps: extras['manifest_coverage_gaps'],
+    manifestGaps: invocation.extras?.['manifest_coverage_gaps'],
   });
   // See `nothingInScope` above: the bookkeeping says `full`, the scan measured nothing.
   const coverage: ScanCoverage = nothingInScope ? 'none' : assessed.coverage;
@@ -1164,7 +1111,7 @@ async function runScanBody<TInput extends ScanToolBaseInput>(args: {
   const payload: Record<string, unknown> = {
     ...(result as unknown as Record<string, unknown>),
     ...view.disclosure,
-    ...extras,
+    ...(invocation.extras ?? {}),
     ...(scopeMeta !== null ? { scope: scopeMeta } : {}),
     ...(nothingInScope ? { nothing_in_scope: true } : {}),
     ...(exclusionReport !== null ? { exclusions: exclusionReport } : {}),

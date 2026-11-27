@@ -7,7 +7,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { resolveScope } from '../../src/platform/scope.js';
@@ -201,8 +201,8 @@ describe('readChangeSet and the -U0 reader', () => {
     });
   });
 
-  // 3.18.0 review 1: review_pr's merge-base compare reads the added lines too, and `GIT_DIFF_OPTS` overrides `-U`
-  // (`diff.interHunkContext` fuses hunks): a kept line in a hunk still counts a line.
+  // 3.18.0 review 1: `GIT_DIFF_OPTS` overrides `-U` and `diff.interHunkContext` fuses hunks, so the check's own
+  // `-U0` diffs can hold kept lines: a kept line in a hunk still counts a line.
   it('a diff with context lines numbers the added lines the same as its -U0 form', () => {
     const before = ['a', 'b', 'c', 'd', 'e', '', 'f'];
     const after = ['a', 'B', 'c', 'd', 'E', '', 'f', 'g'];
@@ -219,6 +219,88 @@ describe('readChangeSet and the -U0 reader', () => {
     weaken(dir);
     const read = await readChangeSet(dir, git(dir, 'rev-parse', 'main'), { kind: 'worktree', untracked: false }, (p) => p.startsWith('tests/'));
     expect(read.changes.map((c) => c.path)).toEqual(['tests/test_api.py']);
+  });
+});
+
+// 3.18.0 review 2 (a lead of R2-DGBASE): the tree's own `.gitattributes` are the change's, and git applied them to
+// every diff the check read — an `ident` attribute turned a skip written inside `$Id:…$` in the working tree back into
+// the base's `$Id$` line (the file was not even listed), and a `binary` one printed "Binary files differ" and no
+// line. Both passes now read the change with them set aside (`runners/git.ts#withoutTreeAttributes`), line endings
+// compared with `--ignore-cr-at-eol`. Each repository sets `core.autocrlf=false`: with `true` (this machine's global)
+// git would drop the CRs itself and the CRLF row would hold without the flag.
+describe("the tree's own .gitattributes are set aside", () => {
+  function attrRepo(files: Record<string, string>): string {
+    const dir = makeTempDir('test-integrity-attrs-');
+    git(dir, 'init', '-q');
+    git(dir, 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    git(dir, 'config', 'core.autocrlf', 'false');
+    for (const [rel, text] of Object.entries(files)) write(dir, rel, text);
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'base');
+    git(dir, 'checkout', '-q', '-b', 'feature');
+    return dir;
+  }
+  // git's `ident` turns `$Id:` up to the next `$` of the line into `$Id$`: the skip sits between the two.
+  const ID_TEST = "const id = '$Id$';\nit('adds', () => { expect(1 + 1).toBe(2); });\n";
+  const ID_SKIP = "const id = '$Id: '; it.skip('adds', () => { expect(1 + 1).toBe(2); }); const end = '$';\nit('adds', () => { expect(1 + 1).toBe(2); });\n";
+
+  // Legit first: a repository that checks its files out with CRLF from LF blobs. With the attributes set aside, git
+  // no longer converts the working tree's side: without `--ignore-cr-at-eol` every line of a changed file reads as
+  // added, and the skip that was already there is reported again.
+  it('a repository that checks out CRLF (`* text eol=crlf`): a touched file is no change, and only the added line is read', async () => {
+    const dir = attrRepo({
+      '.gitattributes': '* text eol=crlf\n',
+      'src/legacy.test.ts': "it.skip('old', () => {});\nit('adds', () => { expect(1).toBe(1); });\n",
+    });
+    rmSync(join(dir, 'src', 'legacy.test.ts'));
+    git(dir, 'checkout', '-q', '--', 'src/legacy.test.ts');
+    const crlf = "it.skip('old', () => {});\r\nit('adds', () => { expect(1).toBe(1); });\r\n";
+    // The premise: the working tree holds CRLF, and a rewrite with the same bytes is stat-dirty.
+    write(dir, 'src/legacy.test.ts', crlf);
+    expect(await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } })).toBeNull();
+    write(dir, 'src/legacy.test.ts', `${crlf}it.only('new', () => { expect(2).toBe(2); });\r\n`);
+    const r = await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } });
+    expect(rows(r?.findings ?? [])).toEqual(['test-focused src/legacy.test.ts:3 high']);
+  });
+
+  it('an `ident` attribute the change adds: a skip written inside `$Id:…$` in the working tree is still an added skip', async () => {
+    const dir = attrRepo({ 'src/id.test.ts': ID_TEST });
+    write(dir, '.gitattributes', '*.test.ts ident\n');
+    write(dir, 'src/id.test.ts', ID_SKIP);
+    // The premise: git, with the tree's attributes, sees no change at all.
+    expect(git(dir, 'diff', '--name-only', 'main', '--')).toBe('');
+    const worktree = await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: true } });
+    expect(rows(worktree?.findings ?? [])).toEqual(['test-skipped src/id.test.ts:1 medium']);
+  });
+
+  // The stated limit (docs/ci.md): once `git add` has stored the cleaned file (`$Id$`: the commit holds no skip), git
+  // trusts the working tree's stat and reads the file no more, with or without the attributes, so the skip the
+  // working tree still runs is in no diff. The mtime is set back so that the index entry is not racily clean (git
+  // would then read the file again, within the same second).
+  it('the limit: an `ident` edit already staged or committed is in no diff', async () => {
+    const dir = attrRepo({ 'src/id.test.ts': ID_TEST });
+    write(dir, '.gitattributes', '*.test.ts ident\n');
+    write(dir, 'src/id.test.ts', ID_SKIP);
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(join(dir, 'src', 'id.test.ts'), past, past);
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-qm', 'ident');
+    expect(git(dir, 'show', 'HEAD:src/id.test.ts')).toBe(ID_TEST.trim());
+    expect(await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'worktree', untracked: false } })).toBeNull();
+  });
+
+  it('a `binary` attribute the change adds hides no skip: the index and commit targets', async () => {
+    const dir = attrRepo({ 'src/b.test.ts': "it('adds', () => { expect(1).toBe(1); });\n" });
+    write(dir, '.gitattributes', '*.test.ts binary\n');
+    write(dir, 'src/b.test.ts', "it.skip('adds', () => { expect(1).toBe(1); });\n");
+    git(dir, 'add', '-A');
+    expect(git(dir, 'diff', '--cached', '--numstat', 'main', '--', 'src/b.test.ts')).toMatch(/^-\t-\t/);
+    const staged = await runTestIntegrityCheck(dir, { base: 'main', target: { kind: 'index' } });
+    expect(rows(staged?.findings ?? [])).toEqual(['test-skipped src/b.test.ts:1 medium']);
+    git(dir, 'commit', '-qm', 'binary');
+    const head = git(dir, 'rev-parse', 'HEAD');
+    const committed = await runTestIntegrityCheck(dir, { base: 'main', head, target: { kind: 'commit', sha: head } });
+    expect(rows(committed?.findings ?? [])).toEqual(['test-skipped src/b.test.ts:1 medium']);
   });
 });
 

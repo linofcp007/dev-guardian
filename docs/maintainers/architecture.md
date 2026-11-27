@@ -106,6 +106,18 @@ its own `tools_run` name (`history/runNames.ts`):
   a base with no merge base is `skipped`, and its bounds (500 listed files, 500 untracked ones, 2 MiB of text) are
   `ScanStepResult.notes` — the verdict's `coverage_notes`, never `missing_tools`.
 
+Both passes run their `git diff`s through `gitChanges.ts#asWritten` (3.18.0): the working tree's `.gitattributes` set
+aside (`runners/git.ts#withoutTreeAttributes`: `GIT_ATTR_SOURCE` at the empty tree, git 2.40 and later) and line
+endings compared with `--ignore-cr-at-eol`, so the change is read as written. Those attributes are the change's own:
+an `ident` one turned a skip written inside `$Id:…$` in the working tree back into the base's `$Id$` line (the file
+was not even listed), and a `binary` or `-diff` one hid every line of the file, on every target. Without the flag, a
+`text eol=crlf` checkout read every line of a changed file as added (an old skip reported again). What they still
+cannot see: an `ident` edit already staged or committed (git stored the cleaned text and trusts the working tree's
+stat from then on; `testIntegrityGit.test.ts` pins it), the user's own attributes (`core.attributesFile`,
+`$GIT_DIR/info/attributes`), and every tree attribute on a git older than 2.40 — the history pass's empty-directory
+route (`runners/historyView.ts`) is not taken here. A test's counting runner (`runSuppressionCheck`'s `git`) is used
+as given.
+
 The suppressions pass lists only the paths `.guardianignore` does not ignore: its three callers hand it
 `(p) => !exclusions.ignores(p)` as `member`, applied before its bounds, so a left-out tree never fills them — one the
 change deletes whole too (scan_sast's with its scope's member; `ci/runScans.ts#declaredPaths` loads the `--rules-ref`
@@ -226,29 +238,3 @@ runs before git is killed — and answers at most 2 s after a stop, whatever
 still holds the pipes (`gitSafetyPlainSpawn.test.ts`). Before 3.4.0's merge it
 killed git alone and waited for the pipes, so a helper git had started held
 the SessionStart briefing for as long as it lived.
-
-## review_pr at the merge base (`mcp/src/review/baseCompare.ts`)
-
-Since 3.18.0 `review_pr` judges each Semgrep finding of the head against a second Semgrep run over the same files at
-the merge base: the modified (M, T) or renamed files that hold a head result and that the factory keeps (the same
-`keptByExclusions` predicate as its result filter, head's tree when head is not checked out), checked out by
-`materialiseCommit`, scanned with the head run's very `configArgs` array (the same rules, timeouts and jobs) and
-parsed with the base checkout as Semgrep's cwd. A finding on a line the change ADDED is introduced, whatever its
-identity matches: each compared file is diffed, while both trees are there, with one `git diff --no-index -U0` of
-the base file against the head file the head run read (`addedLinesOf`: the working tree's own lines when head is
-checked out — uncommitted edits, an `assume-unchanged` flag hiding nothing —, a binary attribute or a NUL byte
-overridden by `--text`, context lines counted (`GIT_DIFF_OPTS` overrides `-U0`), CR at end of line ignored; one
-git call per compared file). The identity alone had called two new
-findings old (3.18.0 review 1): a credential rule's finding is keyed without its line, so a new hard-coded secret
-took the identity of the one the change removed; and a new flagged line identical to an old one, put above it, took
-its occurrence. The kept findings alone then go through the CI gate's matcher (`buildBaseline` of the base
-findings, then `newFindings` with the rename map), so identical lines are numbered among the kept ones; the verdict
-is handed to the scan factory's `afterIdentities` hook, so it reads the final findings (after `.guardianignore`, the
-identities and the redaction) and lands in `meta`: a cache hit answers with it. Only the preexisting findings are
-listed (`introduced.preexisting`, ten at most, `topFindings` order, never cut by `severity_min`) — the skill reads
-that list, never an absence. Any failure — a file pair git cannot diff included — is `compared: false`; the base run
-adds no `tools_run` entry and no coverage gap; a cancel during it cancels the review. What it still cannot tell: a
-flagged line the change KEPT reads preexisting when the base run flagged the same, whatever now reaches it — a new
-source, a removed check, the function around it replaced (a deleted function and a new one around an identical
-sink line, which the diff keeps; `unit/review/baseCompare.test.ts` and `e2e/reviewPrBase.test.ts` pin both) — and
-of two identical lines, which one is the added one is the diff's choice. The skill and `docs/ci.md` say so.
