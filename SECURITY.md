@@ -355,13 +355,16 @@ their respective projects.
   install used to take the vendor's Homebrew tap (`aquasecurity/trivy`),
   which installs Aqua's own release binaries rather than a Homebrew bottle
   and was found at 0.69.3 — with homebrew-core's `trivy` formula as the
-  fallback, and `install-macos.sh` takes the same archive; Syft and gitleaks
-  come from Homebrew first (homebrew-core bottles, built by Homebrew, not
-  pinned to a version) with the pinned archive as the fallback, and so do
-  gosec and ShellCheck (gosec also `go install`s its pinned tag where Go
-  is). cosign's
-  installer was already pinned this way. A test holds the Linux script and
-  the macOS script's Trivy to the catalogue's versions and sums. Since
+  fallback, and `install-macos.sh` takes the same archive; Syft, gitleaks
+  and ShellCheck come from Homebrew first (homebrew-core bottles, built by
+  Homebrew, not pinned to a version) with the pinned archive as the
+  fallback. cosign's installer was already pinned this way. gosec comes
+  from Homebrew first on macOS; else, on macOS and Linux, from `go install`
+  of its pinned tag wherever `go` is on PATH (the Go checksum database,
+  sum.golang.org, verifies the module); else from its pinned,
+  sha256-checked archive, which is Windows' only route for it. A test holds
+  that route to the catalogue, and the Linux script and the macOS script's
+  Trivy to the catalogue's versions and sums. Since
   3.18.0 k6 2.4.0 on Linux is the same kind of pinned, sha256-checked
   release archive (3.17 ran `apt-get install k6`, which needs Grafana's own
   apt repository); on Windows and macOS k6 stays on the package managers,
@@ -840,7 +843,7 @@ project's own build and test commands.
 | The target you name | `perf_check` (Lighthouse URL, k6 script) | per call |
 | k6's anonymous usage report (Grafana) | **disabled by dev-guardian**: `perf_check` runs `k6 run --no-usage-report` (`mcp/src/tools/perfCheck.ts`) — a flag, never `K6_NO_USAGE_REPORT`, a `K6_*` setting that would start a new series | never. k6 sends it on every run by default, with an installation id it keeps in the user's config folder; with the flag it neither sends the report nor reads or creates that file. |
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
-| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, gem; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives and Maven Central jars) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks, gosec, ShellCheck, cosign and, on Linux, k6 are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture"); so are Psalm's release PHAR and detekt's jar (Maven Central, its signature verified when pinned) before they are copied, and SpotBugs' archive and the FindSecBugs jar (Maven Central) before they are unpacked; RuboCop is a pinned gem from RubyGems (`gem install --user-install --conservative`). squawk is pinned by version, not by hash (`pipx install squawk-cli==2.71.0`: PyPI refuses a second upload of a file name, but can take a new file for that version, another platform or build tag, which pip may prefer) |
+| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, gem; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives and Maven Central jars) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks, gosec, ShellCheck, cosign and, on Linux, k6 are pinned to one release and sha256-checked before they are unpacked, when their archive is the route taken (see "Hardening posture": gosec's archive comes after Homebrew on macOS and after `go install` of its pinned tag, which the Go checksum database verifies, wherever `go` is on PATH); so are Psalm's release PHAR and detekt's jar (Maven Central, its signature verified when pinned) before they are copied, and SpotBugs' archive and the FindSecBugs jar (Maven Central) before they are unpacked; RuboCop is a pinned gem from RubyGems (`gem install --user-install --conservative`). squawk is pinned by version, not by hash (`pipx install squawk-cli==2.71.0`: PyPI refuses a second upload of a file name, but can take a new file for that version, another platform or build tag, which pip may prefer) |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
 | Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
 | Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |
