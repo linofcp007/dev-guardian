@@ -367,6 +367,7 @@ METRIC <name>=<number>[ <unit>][ better=lower|higher][ tolerance=<n>[%]][ <key>=
 - a line whose first token holds `=` but breaks these rules is **malformed** — counted and shown, never read; any other `METRIC …` line (a table header, another tool's log) is ignored;
 - the last line of a name wins, whole; the lines it replaced are counted as repeats;
 - `metrics` reads one file, in print order: a job that captures `2>&1` (the `--metrics-command` job does) keeps the last line of a name printed on either stream, while dev-spec-driven reads stdout, then stderr, so stderr's line wins there — print a name on one stream to get the same reading from both;
+- the file is decoded as `check --file` decodes one: UTF-16 when what is read — the file, or its last 64 MiB — starts with a UTF-16 byte-order mark or NUL-interleaved bytes (PowerShell 5.1's `>` writes UTF-16), else UTF-8 without its byte-order mark; a byte-order mark further in — the stream printed second, in a `2>&1` capture of a tool that writes one on each stream — leaves its line unread, while dev-spec-driven, reading each stream apart, reads it;
 - what is read is bounded — the last 64 MiB of a file, lines of at most 512 bytes, the last 1,000 METRIC lines, 20 names (those printed last) — and each bound says what it dropped.
 
 The judge:

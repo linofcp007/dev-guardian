@@ -503,6 +503,18 @@ describe("docs/ci.md on dev-spec-driven's finish check and on a name printed on 
     expect(metrics).toContain('print a name on one stream to get the same reading from both');
   });
 
+  // DG-17 (metric-bytes/1): the decoding is decided by what is READ — the file's last 64 MiB past the bound, where a
+  // UTF-16 file's byte-order mark no longer is (the fixture's tail-window case) —, and a mark mid-file reads nothing.
+  it('DG-17 `metrics` decodes what is read as check --file does, and a byte-order mark mid-file leaves its line unread', () => {
+    const metrics = section('## `metrics`');
+    expect(metrics).toContain(
+      'UTF-16 when what is read — the file, or its last 64 MiB — starts with a UTF-16 byte-order mark or NUL-interleaved bytes',
+    );
+    expect(metrics).toContain(
+      'a byte-order mark further in — the stream printed second, in a `2>&1` capture of a tool that writes one on each stream — leaves its line unread',
+    );
+  });
+
   // Review 2 (R2-DG-HZ-8): "ANSI colour codes are removed first" read as if a code inside the keyword were
   // removed too; the reader (and dev-spec-driven's) reads the keyword as printed (R2-MF-6).
   it('R2-DG-HZ-8 the grammar says a colour code that splits the keyword reads nothing', () => {

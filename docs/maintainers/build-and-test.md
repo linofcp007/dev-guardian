@@ -133,6 +133,18 @@ any order, `__proto__` an ordinary name, a 513-byte candidate a drop, CSI remove
 is none, as dev-spec-driven reads the keyword in the raw output —, each bound's drop said) and
 `judge.test.ts` (every judge case, the symmetric verdict, terms a current line adds creating no judgment).
 
+**The bytes are a second shared file (3.18.0).** `test/fixtures/metrics/metric-bytes.v1.json`
+(`metric-bytes/1`, 11 cases) holds a run's stdout and stderr as hex and two decided readings of them: `file`,
+the `metrics` command's (a `2>&1` capture in print order, decoded by `decodeText`), and `stream`,
+dev-spec-driven's `done --run` (each stream apart, as UTF-8); `differs` gives the reason exactly when the two
+differ, order included. It is committed byte-identical at dev-spec-driven's `mcp/tests/fixtures/`, both suites
+pin one sha256 (`test/unit/metrics/metricBytesFixture.test.ts` here, with the shape and a coverage read from the
+bytes, never from the guess's numbers), and `metricFile.test.ts` reads every case through `readMetricFile` and
+`readMetricOutput` against its `file` column. A sample, not a proof: a change that alters no case still passes.
+`decodeText` is shared with `check --file`: a change to it for `check --file`'s sake is made on its own merits,
+and if it flips a case, `metric-bytes/2` follows in both repositories in the same round — the fixture never holds
+a secret-scan fix back.
+
 On Windows, run the full suite from **Git Bash**. From PowerShell, `bash` can
 resolve to the WSL launcher stub, and the `ci-init` e2e fails for that reason
 alone.
