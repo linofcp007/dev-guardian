@@ -77468,7 +77468,9 @@ async function runK6(opts) {
   const env = allowlistedEnv((name) => K6_ENV.test(name));
   const result = await runProcess({
     command: "k6",
-    args: ["run", `--summary-export=${summaryFile}`, script],
+    // `--no-usage-report`: k6 otherwise sends Grafana a usage report on every run (and keeps an installation id in
+    // the user's config folder). A flag, never the `K6_NO_USAGE_REPORT` variable: a `K6_*` setting keys the series.
+    args: ["run", "--no-usage-report", `--summary-export=${summaryFile}`, script],
     cwd: opts.projectPath,
     env,
     extendEnv: false,
@@ -77512,20 +77514,38 @@ async function runK6(opts) {
     history
   };
 }
+function k6Thresholds(metrics) {
+  const configured = [];
+  const failed = [];
+  if (metrics !== null && typeof metrics === "object") {
+    for (const [name, metric] of Object.entries(metrics)) {
+      const thresholds = getProp(metric, "thresholds");
+      if (thresholds === null || typeof thresholds !== "object" || Array.isArray(thresholds)) continue;
+      for (const [expression, crossed] of Object.entries(thresholds)) {
+        const id = `${name}: ${expression}`;
+        configured.push(id);
+        if (crossed === true) failed.push(id);
+      }
+    }
+  }
+  return { configured: configured.sort(), failed: failed.sort() };
+}
 function summariseK6(root) {
   const metrics = getProp(root, "metrics");
   const requests = getProp(metrics, "http_reqs");
   const duration3 = getProp(metrics, "http_req_duration");
   const failed = getProp(metrics, "http_req_failed");
-  const thresholds = getProp(root, "root_group") ? asArray(getProp(getProp(root, "root_group"), "checks")).map((c) => getString(c, "name")) : [];
+  const thresholds = k6Thresholds(metrics);
   return {
     requests_total: getNumber(requests, "count") ?? null,
     // `--summary-export` writes the legacy summary, where a Rate metric is `{ passes, fails, value }`.
     error_rate: getNumber(failed, "rate") ?? getNumber(failed, "value") ?? null,
     latency_avg_ms: getNumber(duration3, "avg") ?? null,
     latency_p95_ms: getNumber(duration3, "p(95)") ?? null,
+    // k6 writes p(99) only when the script's `summaryTrendStats` asks for it: null otherwise.
     latency_p99_ms: getNumber(duration3, "p(99)") ?? null,
-    thresholds_configured: thresholds.filter((t) => t !== void 0)
+    thresholds_configured: thresholds.configured,
+    thresholds_failed: thresholds.failed
   };
 }
 function failDomain2(code, message3) {
