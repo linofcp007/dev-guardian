@@ -357,7 +357,9 @@ their respective projects.
   and was found at 0.69.3 — with homebrew-core's `trivy` formula as the
   fallback, and `install-macos.sh` takes the same archive; Syft and gitleaks
   come from Homebrew first (homebrew-core bottles, built by Homebrew, not
-  pinned to a version) with the pinned archive as the fallback. cosign's
+  pinned to a version) with the pinned archive as the fallback, and so do
+  gosec and ShellCheck (gosec also `go install`s its pinned tag where Go
+  is). cosign's
   installer was already pinned this way. A test holds the Linux script and
   the macOS script's Trivy to the catalogue's versions and sums. Since
   3.18.0 k6 2.4.0 on Linux is the same kind of pinned, sha256-checked
