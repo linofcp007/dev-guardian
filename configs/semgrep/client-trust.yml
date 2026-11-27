@@ -289,6 +289,24 @@
 # hagopj13/node-express-boilerplate 179ae84efe, Mongoose), 0 achados; o
 # mcp/src deste repositório e o JS do dev-spec-driven (mcp/lib, cli, hooks),
 # 0 achados.
+# Ablação (`--filter=client-identity-from-request`, `--real-code` no Juice
+# Shop e nas duas APIs Express, 13 achados, piso de ruído 0): eixo 1 49/49
+# vivas, eixo 2 47/49 (as expressões da operação e da chave do dono: as
+# guardas a funcionar), eixo 3 44/49 (cinco ramos positivos a funcionar). A
+# primeira corrida leu DEAD 12 das 16 formas do silenciador (faltava um
+# fixture por forma: misses/identity-compared-forms.js tem as 16).
+# Custo (Windows, máquina carregada, Semgrep 1.182.0, `--timeout 30
+# --timeout-threshold 0`, os cinco packs JS locais na mesma corrida): a
+# parte da regra no tempo de matching é 0,087-0,089 no mcp/src deste
+# repositório, 0,077-0,093 no JS do dev-spec-driven e 0,100-0,107 no corpus
+# do web-js (barra: 0,15); o tempo total com e sem a regra, em pares
+# alternados, fica no ruído (0,84-1,09; no corpus do web-js 1,71 e 0,49
+# conforme a ordem, a primeira corrida lê os ficheiros a frio). O
+# `match_times` não mostra o custo de avaliar a fórmula (num ficheiro, 0,58 s
+# de 14,8 s): o rascunho que casava todos os objetos e o silenciador fatorizado
+# custavam 4 vezes mais no ficheiro mais lento do dev-guardian, e foram
+# refeitos. 0 timeouts da regra; os timeouts de ponto fixo são de outros packs
+# e não sobem.
 #
 # Fixtures em mcp/test/fixtures/client-trust/{hits,misses}/ (hits/ com uma
 # linha `// BUG: <id-da-regra>` por achado, na linha onde ele começa),
