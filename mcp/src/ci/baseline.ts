@@ -74,8 +74,10 @@
 import { gateMatchKeys, indexFindings, type GateKeys } from '../fingerprint/findingIdentity.js';
 import { credentialSafeFingerprint } from '../redaction/secretFindingRedaction.js';
 import { SEVERITIES, type Finding, type Severity } from '../types.js';
+import { posix } from 'node:path';
+import { relativePathProblem } from '../platform/scanSettings.js';
 import { secretIntroducedAt, secretValueOf, secretValuesRead } from './secretValues.js';
-import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion } from './types.js';
+import type { BaselineEntry, BaselineFile, BaselineParseResult, BaselineVersion, TaintIncompleteRecord } from './types.js';
 
 /** Where the committed baseline lives, relative to the project root. */
 export const BASELINE_RELATIVE_PATH = '.guardian/baseline.json';
@@ -93,6 +95,50 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isSeverity(value: unknown): value is Severity {
   return typeof value === 'string' && (SEVERITIES as readonly string[]).includes(value);
+}
+
+/** A git object id as `git hash-object` prints it: SHA-1 (40 hex) or SHA-256 (64 hex), lower case. */
+const BLOB_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+
+/**
+ * Whether `file` is a taint-incomplete record's path: project-relative,
+ * `/`-separated and in its one spelling (no `./`, no `..`, no `//`, no drive,
+ * no leading `/`) — what `ci/taintIncomplete.ts` records, and all the reader
+ * keeps.
+ */
+export function isTaintIncompleteFile(file: string): boolean {
+  return file !== '' && !file.includes('\\') && posix.normalize(file) === file && !file.endsWith('/') && relativePathProblem(file) === null;
+}
+
+function isTaintIncompleteRecord(value: unknown): value is TaintIncompleteRecord {
+  if (!isPlainObject(value)) return false;
+  if (value.tool !== 'semgrep') return false;
+  if (typeof value.file !== 'string' || !isTaintIncompleteFile(value.file)) return false;
+  if (typeof value.blob !== 'string' || !BLOB_ID.test(value.blob)) return false;
+  if (value.pack_only !== undefined && value.pack_only !== true) return false;
+  return true;
+}
+
+/**
+ * The `taint_incomplete` records of a baseline document (3.18.0;
+ * `ci/taintIncomplete.ts`), strictly: a record that is not exactly one —
+ * another tool, a path that is not one project file in its one spelling, a
+ * blob that is not 40 or 64 lower-case hex, a `pack_only` other than `true` —
+ * is left out, and a second record of the same file too. Leaving one out only
+ * takes a relaxation away, never adds one: an absent record relaxes nothing.
+ * Not counted in `dropped`, which counts entries no longer suppressed. Keys
+ * this build does not know are ignored, as an entry's are.
+ */
+export function taintIncompleteRecordsOf(value: unknown): TaintIncompleteRecord[] {
+  if (!Array.isArray(value)) return [];
+  const out: TaintIncompleteRecord[] = [];
+  const seen = new Set<string>();
+  for (const record of value as unknown[]) {
+    if (!isTaintIncompleteRecord(record) || seen.has(record.file)) continue;
+    seen.add(record.file);
+    out.push({ tool: 'semgrep', file: record.file, blob: record.blob, ...(record.pack_only === true ? { pack_only: true as const } : {}) });
+  }
+  return out;
 }
 
 function isBaselineEntry(value: unknown): value is BaselineEntry {
@@ -148,7 +194,7 @@ export function readBaselineText(text: string | null): BaselineRead {
   }
   if (!isPlainObject(parsed)) return { status: 'invalid', error: 'the document is not a JSON object' };
 
-  const { version, generated_at, entries } = parsed;
+  const { version, generated_at, entries, taint_incomplete } = parsed;
   if (!isBaselineVersion(version)) {
     return { status: 'invalid', error: `"version" is ${JSON.stringify(version)}; this build reads 1 and 2` };
   }
@@ -157,8 +203,15 @@ export function readBaselineText(text: string | null): BaselineRead {
 
   const validEntries = entries.filter(isBaselineEntry);
   const dropped = entries.length - validEntries.length;
+  const records = taintIncompleteRecordsOf(taint_incomplete);
 
-  return { status: 'ok', parsed: { file: { version, generated_at, entries: validEntries }, dropped } };
+  return {
+    status: 'ok',
+    parsed: {
+      file: { version, generated_at, entries: validEntries, ...(records.length > 0 ? { taint_incomplete: records } : {}) },
+      dropped,
+    },
+  };
 }
 
 /** Pretty-printed so the committed file is reviewable in a pull-request diff. */
@@ -190,12 +243,18 @@ export function serialiseBaseline(file: BaselineFile): string {
  * the identity survives a line shift, not of where in its file each finding
  * sits either. A file whose order moved on every regeneration would produce
  * a diff nobody could review, which is the same as not reviewing it.
+ *
+ * `taintIncomplete` (3.18.0): this run's records (`ci/taintIncomplete.ts`),
+ * written sorted by file when there are any — and never `previous`'s: each
+ * update records its own run, so a file whose analysis finished this time
+ * loses its record.
  */
 export function buildBaseline(
   findings: readonly Finding[],
   previous: BaselineFile | null,
   now: string,
   renamedFrom?: ReadonlyMap<string, string>,
+  taintIncomplete: readonly TaintIncompleteRecord[] = [],
 ): BaselineFile {
   const match = baselineMatcher(previous, findings, renamedFrom);
 
@@ -223,8 +282,9 @@ export function buildBaseline(
   const entries = [...byKey.values()].sort(
     (a, b) => entryKey(a).localeCompare(entryKey(b)) || a.fingerprint.localeCompare(b.fingerprint),
   );
+  const records = taintIncompleteRecordsOf(taintIncomplete).sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
 
-  return { version: BASELINE_VERSION, generated_at: now, entries };
+  return { version: BASELINE_VERSION, generated_at: now, entries, ...(records.length > 0 ? { taint_incomplete: records } : {}) };
 }
 
 function entryKey(entry: BaselineEntry): string {

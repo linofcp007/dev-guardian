@@ -7,7 +7,8 @@
  * - The series key is a property of the run, never a list of names: for
  *   Lighthouse the page (its href without the fragment), Lighthouse's major
  *   version and the categories the report scored; for k6 its inputs only, the
- *   script's project-relative path and content (sha256)
+ *   script's project-relative path and content (sha256), the local modules it
+ *   imports (`k6Inputs.ts`: each one's path and sha256)
  *   and the `K6_*` settings perf_check hands k6 (`tools/perfCheck.ts`; one
  *   digest, since a value can be a token), so a changed setting starts a new
  *   series. Never a VU count k6 measured: k6 samples it from the start of the
@@ -43,6 +44,7 @@ import {
   subtract,
 } from './decimal.js';
 import type { MetricVerdict } from './judge.js';
+import type { K6LocalInputs } from './k6Inputs.js';
 import type { Better } from './metricLine.js';
 
 export interface PerfSample {
@@ -183,12 +185,21 @@ export function k6Settings(env: Readonly<Record<string, string | undefined>>): K
   return { digest: digest(pairs), count: pairs.length };
 }
 
-/** A k6 run's series: its inputs only — never a VU count k6 measured (the module comment). */
-export function k6Series(script: string, contentSha256: string, settings: K6Settings): PerfSeries {
+/**
+ * A k6 run's series: its inputs only — never a VU count k6 measured (the module comment). With no local module
+ * (`inputs` absent, or its `files` empty: the script names none inside the project), exactly the 3.17.0 key, so
+ * such a script keeps its series; with one, the modules' paths and digests join the key. A label shows how many
+ * and six hex digits of their digest (never a path), and says when the inputs are only partly keyed.
+ */
+export function k6Series(script: string, contentSha256: string, settings: K6Settings, inputs?: K6LocalInputs): PerfSeries {
   const shown = settings.count > 0 ? ` · K6_* #${settings.digest.slice(0, SHOWN_DIGEST)}` : '';
+  const files = inputs?.files ?? [];
+  const modules =
+    files.length > 0 ? ` · ${String(files.length)} local module${files.length === 1 ? '' : 's'} #${digest(files).slice(0, SHOWN_DIGEST)}` : '';
+  const partly = (inputs?.partial.length ?? 0) > 0 ? ' · inputs partly keyed' : '';
   return {
-    key: digest(['k6', script, contentSha256, settings.digest]),
-    label: `k6 · ${script} (${contentSha256.slice(0, 12)})${shown}`,
+    key: files.length > 0 ? digest(['k6', script, contentSha256, settings.digest, files]) : digest(['k6', script, contentSha256, settings.digest]),
+    label: `k6 · ${script} (${contentSha256.slice(0, 12)})${modules}${shown}${partly}`,
   };
 }
 

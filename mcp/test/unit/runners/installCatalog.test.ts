@@ -13,6 +13,7 @@ import {
   PINNED_RELEASES,
   PSALM_PHAR_SHA256,
   PSALM_VERSION,
+  SQUAWK_VERSION,
   TOOL_CATALOG,
   TRIVY_INSTALL_TAG,
   WP_CLI_PHAR_SHA256,
@@ -421,7 +422,7 @@ describe('bandit install', () => {
   });
 });
 
-describe('gosec: the pinned release archive everywhere, Windows’ own tar.exe for its .tar.gz', () => {
+describe('gosec: a pinned release archive for every OS, Windows’ own tar.exe for its .tar.gz', () => {
   const r = PINNED_RELEASES.gosec;
 
   it('every sum is a sha256 of an asset of the pinned version', () => {
@@ -452,6 +453,36 @@ describe('gosec: the pinned release archive everywhere, Windows’ own tar.exe f
     for (const os of ['linux', 'darwin'] as const) {
       expect(TOOL_CATALOG['gosec']?.install[os].go?.args).toEqual(['install', `github.com/securego/gosec/v2/cmd/gosec@v${r.version}`]);
     }
+  });
+
+  // 3.18.0 fix round 3 (R3-DGREV-05): SECURITY.md said gosec came from Homebrew first "with the pinned archive as the
+  // fallback". install_toolchain probes `go` before `curl` (installToolchain.ts#listAvailableManagers) and gosec
+  // declares both, so wherever `go` is on PATH gosec is `go install`ed at its pinned tag before the archive, on Linux
+  // too; Windows declares the archive alone. The managers below are offered in that probe order, read from the source.
+  it('the route SECURITY.md states: Homebrew first on macOS, else go install of the tag wherever go is, else the archive', () => {
+    const toolchain = readFileSync(fileURLToPath(new URL('../../../src/tools/installToolchain.ts', import.meta.url)), 'utf8');
+    const order = /const order =\s*os === 'darwin'\s*\? \[([^\]]*)\]\s*: \[([^\]]*)\];/.exec(toolchain);
+    expect(order, 'the POSIX probe order').not.toBeNull();
+    expect(toolchain).toContain("return [...managers, { name: 'curl', available: curlPath !== null }];");
+    const probed = (os: 'darwin' | 'linux', ...on: string[]): Parameters<typeof pickInstallSpec>[2] =>
+      [...[...(order?.[os === 'darwin' ? 1 : 2] ?? '').matchAll(/'([a-z]+)'/g)].map((m) => m[1] ?? ''), 'curl']
+        .filter((name) => on.includes(name))
+        .map((name) => ({ name: name as Parameters<typeof pickInstallSpec>[2][number]['name'] }));
+    const pick = (os: 'darwin' | 'linux', ...on: string[]): string | undefined => pickInstallSpec('gosec', os, probed(os, ...on))?.manager;
+    expect(pick('darwin', 'brew', 'go', 'curl')).toBe('brew');
+    expect(pick('darwin', 'go', 'curl')).toBe('go');
+    expect(pick('darwin', 'curl')).toBe('curl');
+    expect(pick('linux', 'apt', 'go', 'curl')).toBe('go');
+    expect(pick('linux', 'apt', 'curl')).toBe('curl');
+    expect(pickInstallSpec('gosec', 'win32', [{ name: 'release' }, { name: 'go' }])?.manager).toBe('release');
+    const security = readFileSync(fileURLToPath(new URL('../../../../SECURITY.md', import.meta.url)), 'utf8').replace(/\s+/g, ' ');
+    expect(security).toContain(
+      "gosec comes from Homebrew first on macOS; else, on macOS and Linux, from `go install` of its pinned tag wherever `go` is on PATH (the Go checksum database, sum.golang.org, verifies the module); else from its pinned, sha256-checked archive, which is Windows' only route for it.",
+    );
+    expect(security).toContain(
+      "when their archive is the route taken (see \"Hardening posture\": gosec's archive comes after Homebrew on macOS and after `go install` of its pinned tag, which the Go checksum database verifies, wherever `go` is on PATH)",
+    );
+    expect(security).not.toContain('so do gosec');
   });
 
   it("on Windows: Get-FileHash, then System32's tar.exe unpacks gosec.exe alone, its exit code checked", () => {
@@ -521,6 +552,82 @@ describe('shellcheck: the pinned archive, its binary nested in a versioned direc
     const script = TOOL_CATALOG['gosec']?.install.linux.curl?.args[1] ?? '';
     expect(script).not.toContain('member=');
     expect(script).toContain('tar -xzf "$tmp/gosec.tar.gz" -C "$tmp" gosec');
+  });
+});
+
+// DG-16: k6 on Linux was `apt-get install k6`, which needs Grafana's own apt repository and key first — nothing
+// added them, so it failed on a stock Debian or Ubuntu. Now the pinned release archive, as Trivy's and shellcheck's.
+describe('k6: the pinned archive on Linux, its binary nested; Windows and macOS on their package managers', () => {
+  const r = PINNED_RELEASES.k6;
+
+  it('every sum is a sha256, every asset of the pinned version, each binary nested in a versioned directory', () => {
+    expect(r.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(r.base).toBe(`https://github.com/grafana/k6/releases/download/v${r.version}`);
+    for (const [platform, a] of Object.entries(r.assets)) {
+      expect(a.sha256, platform).toMatch(/^[0-9a-f]{64}$/);
+      expect(a.file, platform).toContain(`k6-v${r.version}-`);
+      expect(a.member, platform).toMatch(new RegExp(`^k6-v${r.version.replace(/\./g, '\\.')}-[a-z]+-(?:amd|arm)64/k6(?:\\.exe)?$`));
+    }
+  });
+
+  it('on Linux: only the pinned archive — each CPU its asset, sum and member, checked before it is unpacked, into ~/.local/bin', () => {
+    const linux = TOOL_CATALOG['k6']?.install.linux ?? {};
+    expect(Object.keys(linux)).toEqual(['curl']);
+    const spec = linux.curl;
+    const script = spec?.args[1] ?? '';
+    expect(spec?.command).toBe('bash');
+    expect(spec?.needs_elevation).toBe(false);
+    for (const arch of ['amd64', 'arm64'] as const) {
+      const a = r.assets[`linux-${arch}`];
+      expect(a.member).toBe(`k6-v${r.version}-linux-${arch}/k6`);
+      expect(script).toContain(`asset=${a.file}; sum=${a.sha256}; member=${a.member ?? ''}`);
+    }
+    expect(script.indexOf('sha256sum -c -')).toBeLessThan(script.indexOf('tar -xzf "$tmp/k6.tar.gz" -C "$tmp" "$member"'));
+    expect(script).toContain('install -m 0755 "$tmp/$member" "$HOME/.local/bin/k6"');
+    expect(spec?.description).toBe(`k6 v${r.version} release archive (linux, sha256-checked) → ~/.local/bin/k6`);
+    expect(pickInstallSpec('k6', 'linux', [{ name: 'apt' }, { name: 'curl' }])?.manager).toBe('curl');
+  });
+
+  it('on Windows and macOS: their package managers, unpinned (the ZIPs nest the binary, which no pinned installer unpacks)', () => {
+    expect(Object.keys(TOOL_CATALOG['k6']?.install.win32 ?? {}).sort()).toEqual(['choco', 'scoop', 'winget']);
+    expect(Object.keys(TOOL_CATALOG['k6']?.install.darwin ?? {})).toEqual(['brew']);
+  });
+
+  it('`npm run pins` knows the repository of every pinned release (scripts/checkPins.mjs RELEASE_REPOS)', () => {
+    const source = readFileSync(fileURLToPath(new URL('../../../scripts/checkPins.mjs', import.meta.url)), 'utf8');
+    const map = /const RELEASE_REPOS = \{([^}]*)\}/.exec(source)?.[1] ?? '';
+    const named = [...map.matchAll(/([A-Za-z0-9_]+): '[^']+'/g)].map((m) => m[1]);
+    expect(named.sort()).toEqual(Object.keys(PINNED_RELEASES).sort());
+    expect(map).toContain("k6: 'grafana/k6'");
+  });
+});
+
+// DG-8: squawk is a wheel on PyPI, installed through pipx at one exact version, everywhere (squawk's GitHub assets
+// can be replaced and come with no checksums file). A version pin, not a content pin: PyPI refuses a second upload
+// of a file name, but can take a new file (another platform or build tag) for the same version, which pip may prefer.
+describe('squawk: the pinned PyPI wheel through pipx on every OS', () => {
+  it('every install names squawk-cli at the one pinned version — never unpinned, never another source', () => {
+    expect(SQUAWK_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    const entry = TOOL_CATALOG['squawk'];
+    expect(entry?.required_by).toEqual(['review_pr']);
+    expect(entry?.default).toBe(false);
+    const specs = Object.values(entry?.install ?? {}).flatMap((os) => Object.values(os));
+    expect(specs.length).toBeGreaterThanOrEqual(3);
+    for (const spec of specs) expect(spec).toMatchObject({ command: 'pipx', args: ['install', `squawk-cli==${SQUAWK_VERSION}`], needs_elevation: false });
+  });
+
+  // 3.18.0 fix round 1 (R1-DGTOOLS-1, -6): SECURITY.md's install row names as sha256-checked exactly what a pinned
+  // release archive installs — every PINNED_RELEASES tool, k6 among them — and squawk as pinned by version only.
+  it('SECURITY.md: every pinned release archive is named sha256-checked; squawk is pinned by version, not by hash', () => {
+    const security = readFileSync(fileURLToPath(new URL('../../../../SECURITY.md', import.meta.url)), 'utf8');
+    const row = security.split('\n').find((l) => l.startsWith('| Package managers and install scripts')) ?? '';
+    const checked = /\. ([^.]*?) are pinned to one release and sha256-checked before they are unpacked/.exec(row)?.[1] ?? '';
+    expect(checked, 'the sha256-checked sentence').not.toBe('');
+    for (const tool of Object.keys(PINNED_RELEASES)) expect(checked.toLowerCase(), tool).toContain(tool.toLowerCase());
+    expect(checked.toLowerCase()).not.toContain('squawk');
+    expect(row).toMatch(/squawk is pinned by version, not by hash \(`pipx install squawk-cli==[\d.]+`: PyPI refuses a second upload of a file name, but can take a new file for that version/);
+    const source = readFileSync(fileURLToPath(new URL('../../../src/runners/installCatalog.ts', import.meta.url)), 'utf8');
+    expect(source.replace(/\n\s*\*\s*/g, ' ')).toMatch(/Pinned by VERSION, not by hash: PyPI refuses a second upload of a file name, but can take a new file for 2\.71\.0/);
   });
 });
 

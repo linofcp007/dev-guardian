@@ -762,3 +762,48 @@ describe('where the baseline and the rules came from (--baseline-ref, --rules-re
     expect(text).not.toMatch(/differs from main|not applied/);
   });
 });
+
+// 3.18.0 (ci/taintIncomplete.ts): Semgrep findings new to the baseline in a file its run gave up the taint analysis
+// of, unchanged since — not new, and never hidden: the human report names the first ten, the JSON every one and the
+// count (`--compact`: the count only), and SARIF carries only the new findings, with no notification for the note.
+describe('the findings not counted as new because their file was taint-incomplete and is unchanged (3.18.0)', () => {
+  const late = (n: number): Finding[] =>
+    Array.from({ length: n }, (_x, i) => finding({ fingerprint: `fp-late-${i}`, file_path: 'src/heavy.js', line_start: 10 + i, title: `late ${i}` }));
+  const fresh = finding({ fingerprint: 'fp-fresh', file_path: 'src/new.js', line_start: 3 });
+  const taint = { unchanged: [{ file: 'src/heavy.js', packOnly: false }], packRuleIds: new Set<string>() };
+  const relaxedVerdict = (n: number) => evaluateGate(input({ findings: [fresh, ...late(n)], baseline: buildBaseline([], null, 'x'), taintIncomplete: taint }));
+
+  it('human: a "not new" section after the new findings, at most ten lines and the rest counted', () => {
+    const text = renderHuman(relaxedVerdict(12));
+    expect(text).toMatch(/^new findings: 1 \(1 at or above the fail-on threshold\)$/m);
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => l.startsWith('not new (12) — Semgrep findings in files unchanged since the baseline was recorded'));
+    expect(at).toBeGreaterThan(lines.findIndex((l) => l.startsWith('new findings:')));
+    const listed = lines.slice(at + 1).filter((l, i, all) => l.startsWith('  - ') && all.slice(0, i).every((p) => p.startsWith('  - ')));
+    expect(listed).toHaveLength(11);
+    expect(listed.slice(0, 10).every((l) => /src\/heavy\.js/.test(l))).toBe(true);
+    expect(listed[10]).toBe('  - +2 more (the JSON lists every one)');
+    expect(renderHuman(relaxedVerdict(0))).not.toMatch(/^not new/m);
+  });
+
+  it('JSON: taint_incomplete_at_baseline and its count, added keys; --compact keeps the count and lists none', () => {
+    const json = JSON.parse(renderJson(relaxedVerdict(3))) as Record<string, unknown>;
+    expect(json['new_findings_count']).toBe(1);
+    expect((json['taint_incomplete_at_baseline'] as Finding[]).map((f) => f.fingerprint)).toEqual(['fp-late-0', 'fp-late-1', 'fp-late-2']);
+    expect(json['taint_incomplete_at_baseline_count']).toBe(3);
+    const compact = JSON.parse(renderJson(relaxedVerdict(3), { compact: true })) as Record<string, unknown>;
+    expect(compact['taint_incomplete_at_baseline']).toEqual([]);
+    expect(compact['taint_incomplete_at_baseline_count']).toBe(3);
+    const none = JSON.parse(renderJson(evaluateGate(input()))) as Record<string, unknown>;
+    expect(none['taint_incomplete_at_baseline']).toEqual([]);
+    expect(none['taint_incomplete_at_baseline_count']).toBe(0);
+  });
+
+  it('SARIF: the same document as the scan without those findings — only the new one, and no notification for the note', () => {
+    const withLate = renderSarif(relaxedVerdict(3), PROJECT);
+    const without = renderSarif(evaluateGate(input({ findings: [fresh], baseline: buildBaseline([], null, 'x') })), PROJECT);
+    expect(withLate).toBe(without);
+    const results = (JSON.parse(withLate) as { runs: Array<{ results: unknown[] }> }).runs[0]?.results ?? [];
+    expect(results).toHaveLength(1);
+  });
+});

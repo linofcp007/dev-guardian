@@ -24,7 +24,16 @@
 
 import { createHash } from 'node:crypto';
 import { readProjectText } from '../platform/projectFs.js';
-import { git, resolveCommit, splitNul, type GitResult } from '../runners/git.js';
+import {
+  git,
+  mergeBase,
+  parseNameStatus,
+  resolveCommit,
+  splitNul,
+  type GitResult,
+  type GitRunner,
+  type NameStatusEntry,
+} from '../runners/git.js';
 import type { Finding, ToolRun } from '../types.js';
 import { detectTestWeakening, isRelevantPath, NOT_TESTS, TEST_INTEGRITY_TOOL, type ChangedFile, type DiffLine } from './detect.js';
 import {
@@ -36,9 +45,6 @@ import {
   type SuppressionCounts,
   type SuppressionFile,
 } from './suppressions.js';
-
-/** How the suppressions pass runs git: `git` itself, or a test's counting wrapper. */
-type GitRunner = (cwd: string, args: readonly string[]) => Promise<GitResult>;
 
 /** What the base is compared with. */
 type ChangeTarget =
@@ -58,47 +64,17 @@ function diffRange(base: string, target: ChangeTarget): string[] {
   return [base];
 }
 
-/** The merge base of `a` and `b`, or null. */
-async function mergeBase(cwd: string, a: string, b: string, run: GitRunner = git): Promise<string | null> {
-  const r = await run(cwd, ['merge-base', '--end-of-options', a, b]);
-  if (r.exitCode !== 0) return null;
-  const sha = r.stdout.trim();
-  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
-}
-
-interface Listed {
-  status: ChangedFile['status'];
-  path: string;
-  oldPath?: string;
+/** A listed change (`runners/git.ts#parseNameStatus`), or an untracked file. */
+interface Listed extends NameStatusEntry {
   /** Listed by `ls-files --others`: in no diff, every line of it is new. */
   untracked?: boolean;
 }
 
-/** `--name-status -z` output: `M\0path\0`, `R100\0old\0new\0`, `C75\0src\0copy\0`. */
-function parseNameStatus(stdout: string): Listed[] {
-  const parts = splitNul(stdout);
-  const out: Listed[] = [];
-  for (let i = 0; i < parts.length; ) {
-    const code = parts[i] ?? '';
-    const letter = code.charAt(0);
-    if (letter === 'R' || letter === 'C') {
-      const oldPath = parts[i + 1] ?? '';
-      const path = parts[i + 2] ?? '';
-      i += 3;
-      // A copy leaves its source in place: the copy is an added file.
-      out.push(letter === 'R' ? { status: 'renamed', path, oldPath } : { status: 'added', path });
-      continue;
-    }
-    const path = parts[i + 1] ?? '';
-    i += 2;
-    if (letter === 'A') out.push({ status: 'added', path });
-    else if (letter === 'D') out.push({ status: 'deleted', path });
-    else if (letter === 'M' || letter === 'T') out.push({ status: 'modified', path });
-  }
-  return out;
-}
-
-/** The added lines (new numbers) and removed lines (the new-file line their hunk lands on) of a `-U0` diff. */
+/**
+ * The added lines (new numbers) and removed lines (the new-file line their hunk lands on) of a `-U0` diff. A
+ * context line still counts a line, so a diff with context reads the same: `GIT_DIFF_OPTS` overrides `-U`, and
+ * `diff.interHunkContext` fuses hunks across kept lines.
+ */
 export function parseUnifiedZero(diff: string): { added: DiffLine[]; removed: DiffLine[] } {
   const added: DiffLine[] = [];
   const removed: DiffLine[] = [];
@@ -122,6 +98,9 @@ export function parseUnifiedZero(diff: string): { added: DiffLine[]; removed: Di
       removed.push({ line: Math.max(1, newLine), text: line.slice(1) });
     } else if (line.startsWith('diff --git')) {
       inHunk = false;
+    } else if (line.startsWith(' ') || line === '') {
+      // A kept line (`diff.suppressBlankEmpty` prints a blank one empty).
+      newLine += 1;
     }
   }
   return { added, removed };
@@ -164,7 +143,7 @@ export async function readChangeSet(
   if (r.exitCode !== 0) {
     throw new Error(`git diff could not list the changes: ${r.stderr.split(/\r?\n/).find((l) => l.trim() !== '') ?? `exit ${r.exitCode}`}`);
   }
-  const listed = parseNameStatus(r.stdout);
+  const listed: Listed[] = parseNameStatus(r.stdout);
   if (target.kind === 'worktree' && target.untracked) {
     const u = await git(cwd, ['ls-files', '-z', '--others', '--exclude-standard']);
     if (u.exitCode === 0) for (const path of splitNul(u.stdout)) listed.push({ status: 'added', path, untracked: true });

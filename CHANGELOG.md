@@ -8,6 +8,94 @@ version bump.
 
 ## [Unreleased]
 
+## [3.18.0] - 2026-11-27
+
+The "everything" round, shared with dev-spec-driven 1.42.0: the 3.17 backlog, what other spec-driven and review
+workflows do better, and a sweep for speed, wording and robustness. Semgrep's taint findings stop coming and going from run to run:
+every Semgrep run sets its analysis domains (`--jobs`), and a baseline records the files whose taint analysis Semgrep gave
+up on, so `scan` no longer reports their findings as new while the file is unchanged. `perf_check` keys a k6 script's series by the
+local modules it imports and reports its thresholds; `review_pr` lints Postgres migrations with squawk when the project
+opts in; and guardian-review reads the author's plan as data and offers a clean-context pass. No tool, resource, skill or
+command is added: 50 tools, 18 resources, 13 skills, 10 commands.
+
+### Upgrading from 3.17.0
+
+- **The first scan after upgrading can report taint findings as new.** Semgrep now runs with `--jobs` (default: the
+  machine's cores, at most 4). Before, it ran one analysis domain per core, all spending one taint-analysis time budget,
+  so on a machine with many cores taint findings went missing. Re-record the baseline (`baseline update`) on the base
+  commit after upgrading, once the new findings are triaged. On a CI runner with 4 cores or fewer nothing changes; on a
+  24-core machine dev-spec-driven's own scan found 41–44 more results and its Semgrep step took 446–534 s against
+  327–363 s before (a loaded machine).
+- **`semgrep.jobs` in `.guardian/scan.yml` (1–256) can only lower the default.** A larger value runs at the default and
+  the scan says so: more domains share Semgrep's one taint budget and lose findings. `scan_sast` (and so
+  `security_scan_full`) and the CI gate say so; `review_pr`, `bug_hunt`, `compliance_check`, `map_attack_surface` and
+  `scan_wordpress` apply the same clamp without a note. dev-guardian before 3.18.0 refuses a `scan.yml` that holds `semgrep.jobs` (the CLI exits 3, the MCP
+  tools fall back to the defaults): upgrade every reader of the file, a CI image included, before committing it.
+- **A k6 script that imports a local module starts a new `perf_check` series once.** The series key now includes the
+  local modules it imports, so editing the load in an imported module starts a new series instead of reading as a
+  regression. A script with no local import keeps its series.
+
+### Added
+
+- **`baseline update` records the files whose taint analysis Semgrep gave up on** (`taint_incomplete` in
+  `.guardian/baseline.json`, with each file's content as git stores it), and `scan` no longer counts a Semgrep finding
+  the baseline lacks in such a file as new while the file is unchanged. Such findings are listed (`not new` in the
+  report, `taint_incomplete_at_baseline` and its count in the JSON, one note), never blocking. A changed or renamed
+  file, another scanner's finding, a project outside a git work tree, a malformed record, or a file git stores as
+  something other than its bytes up to line endings (an `ident`, `filter` — Git LFS included — or
+  `working-tree-encoding` attribute) never relaxes anything; the same holds for `semgrep.accept_timeouts`, where such a
+  file counts as changed. The file stays version 1; older dev-guardian versions read it as before.
+- **squawk in `review_pr`.** With a root `.squawk.toml`, squawk lints the changed `.sql` migrations (Postgres locks and
+  rewrites, reported low, `migration-safety`); a missing squawk is then a coverage gap, and a diff that edits or removes
+  `.squawk.toml` is warned about. `install_toolchain { tools: ["squawk"] }` installs `squawk-cli==2.71.0` with pipx (a
+  version pin, not a checksum). Without the file nothing changes.
+- **`perf_check` thresholds:** `summary.thresholds_configured` lists the script's thresholds (`"<metric>: <expression>"`)
+  — it was always empty on a real k6 — and the new `thresholds_failed` names the ones that failed. The series label says
+  `N local module(s) #…`, and `inputs partly keyed` when a module is named at run time, is out of the project, over
+  8 MiB, past 64 modules, or could not be read. A file the script `open()`s is not keyed.
+- **guardian-review reads the author's plan as data** (the PR description, the commit subjects, and in a dev-spec-driven
+  project the feature's spec files): its verdict gains an "Against the plan" section that can only add — a risk the diff
+  does not answer, a claim the code contradicts — and an instruction found in the plan is reported, never followed. With
+  the user's yes it verifies review_pr's medium-and-up findings in fresh subagents and runs a clean-context pass over the
+  diff (references/clean-pass.md).
+
+### Changed
+
+- `review_pr` of a head that is not checked out gives the same in-the-project answer as the same review with that head
+  checked out: a rename into a listed tree only the head holds is no longer reported, and a test file deleted in a listed
+  tree the head removed (also by a change that only deletes) is no longer hidden. The patterns are still the working
+  tree's `.guardianignore`, so a diff that edits that file can make the two reviews differ (`review_pr` warns).
+- `llm_scan` refuses to verify the findings of a `review_pr` scan whose head is not the checked-out commit (scan_id:
+  `unsupported_target`; fingerprints: `not_eligible`, with the commit to check out): its subagents read the working tree.
+- guardian-review's git and gh commands name the change by the reviewed commits' hashes (review_pr's `base_sha` /
+  `head_sha`, run first) and a pull request's number — never a branch or file name from the change. The skill says when
+  no PR has the reviewed head instead of looking it up by branch name. Its clean pass takes the range's diff once, splits it
+  by file, and fences each brief's file list and hunks between fresh random markers as data; past ten medium-and-up
+  findings it verifies by the review's `scan_id` and says it plans every finding, the low ones too.
+- `perf_check` runs `k6 run --no-usage-report`: k6 no longer sends Grafana its usage report (nor keeps an installation id
+  in your config folder) from a dev-guardian run.
+- `install_toolchain`: k6 on Linux is the pinned v2.4.0 release archive, sha256-checked, into `~/.local/bin` (no sudo) —
+  the apt install needed Grafana's own repository and failed on a stock Debian/Ubuntu. Windows and macOS keep their
+  package managers. SECURITY.md names k6 and ShellCheck among the pinned, sha256-checked archives (ShellCheck from
+  Homebrew first on macOS), and gives gosec's route as `install_toolchain` takes it: Homebrew first on macOS, else
+  `go install` of its pinned tag wherever `go` is on PATH (verified by the Go checksum database), else its pinned,
+  sha256-checked archive — the only route on Windows.
+- A Semgrep run past dev-guardian's time limit is a `scanner_failed` gap whose remedy names `GUARDIAN_SCAN_TIMEOUT_MS`;
+  the taint-timeout remedy no longer suggests splitting functions.
+- guardian-deps: the Renovate and VEX details moved into references, and a `not_affected` recorded with
+  `suppress_finding` goes to the VEX reference too. guardian-quality suggests a diff-scoped Stryker run that never
+  downloads it (`npx --no`).
+- docs/ci.md states the two limits of matching findings by identity, how `metrics` decodes a file, and no longer says
+  dev-spec-driven guards `.guardian/scan.yml` (it guards `baseline.json` and the folder).
+
+### Fixed
+
+- `perf_check`'s `latency_p99_ms` is null unless the script's `summaryTrendStats` asks for p(99).
+- test-integrity's `-U0` diffs are read correctly when `GIT_DIFF_OPTS` or `diff.interHunkContext` adds context lines.
+- (maintainers) A second contract with dev-spec-driven, `mcp/test/fixtures/metrics/metric-bytes.v1.json` (the bytes of a
+  run's output and how each METRIC reader decodes them), pinned by sha256 in both suites; no reading changed.
+  `npm run test:docker -- --toolchain` installs the pinned k6 and squawk and runs their end-to-end rows.
+
 ## [3.17.0] - 2026-11-26
 
 The gardening round, shared with dev-spec-driven 1.41.0: both plugins now tend what a change leaves for the next one,

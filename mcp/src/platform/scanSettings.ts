@@ -6,6 +6,8 @@
  *       timeout: 30            # seconds per rule per file (Semgrep --timeout; 0: no limit)
  *       timeout_threshold: 0   # rules that may time out on a file before Semgrep drops
  *                              # the whole file (--timeout-threshold; 0: never drop it)
+ *       jobs: 1                # Semgrep's --jobs: the analysis domains it runs at once
+ *                              # (default, and the most: the machine's cores, at most 4)
  *       accept_timeouts:       # files whose per-file Semgrep Timeout the CI gate accepts
  *         - src/generated/parser.js
  *
@@ -20,6 +22,35 @@
  * (CLAUDE.md, "the jitter is timeouts, and it is excluded by FILE"). With a
  * threshold of 0 only the rules that timed out miss the file, which is what
  * makes accepting a timeout honest.
+ *
+ * `--jobs` (3.18.0): Semgrep's taint analysis gives up on a function past a
+ * budget of 0.2 s of the whole Semgrep process's CPU time — a budget with no
+ * setting —, and without `--jobs` Semgrep runs a domain per core, which spend
+ * that one budget at once. On dev-spec-driven's engine (24 cores, Semgrep
+ * 1.182.0) Semgrep's default gave 167-177 `Fixpoint timeout` entries in 34
+ * files and 729-747 results, a different set on every run (127 keys
+ * flickered over 5 runs, each in a file the run missing it named); `--jobs 4`
+ * gave 22 in 12 files; `--jobs 1` gave 4 in 2 files and 844 results, twice
+ * the same. One domain gives each function all of the budget — but over the
+ * whole of dev-spec-driven with the registry rules (a loaded 24-core machine)
+ * Semgrep took 528 s at 1, and a second run went past the 10-minute run
+ * limit (a failed scan), against 327-363 s without `--jobs` and 446-534 s at
+ * 4 (37-50 timed-out functions, not 330-346). So the default is the machine's
+ * cores, at most 4: Semgrep's own on a CI runner of 4 cores or fewer, and a
+ * sixth of the domains on 24 cores (22 timeouts in 12 files, not 167 in 34);
+ * the baseline's taint-incomplete records carry the flicker that is left
+ * (`ci/taintIncomplete.ts`). `semgrep.jobs: 1` buys the last few functions at
+ * that price in time.
+ *
+ * The setting can only LOWER the domains: a value above the default runs at
+ * the default, and the scan says so ({@link jobsAboveDefaultNote}: the run's
+ * warning, and a note of the CI gate). A larger one bought time with
+ * findings — every domain more shares the one budget —, and the file is read
+ * from the working tree in every ref-less run (dev-spec-driven's finish gate)
+ * and from a reviewed head in `review_pr`: one agent-written `jobs: 24` on a
+ * 24-core machine passed a feature's command injection the default blocked
+ * (3.18.0 review 1, R1-XPLUG-01). Only a run-time limit
+ * (`GUARDIAN_SCAN_TIMEOUT_MS`) buys time, and it never costs a finding.
  *
  * ---- Who may accept a timeout ---------------------------------------------
  *
@@ -37,6 +68,7 @@
  * never applies.
  */
 
+import { availableParallelism } from 'node:os';
 import { posix } from 'node:path';
 import { describeReadRefusal, readProjectText } from './projectFs.js';
 import { describeYamlRefusal, parseYamlBounded, YAML_CONFIG_LIMITS } from './boundedParse.js';
@@ -48,6 +80,13 @@ export const SCAN_SETTINGS_RELATIVE_PATH = '.guardian/scan.yml';
 export const DEFAULT_SEMGREP_TIMEOUT_S = 30;
 /** Semgrep's `--timeout-threshold` dev-guardian passes (Semgrep's own: 3). */
 export const DEFAULT_SEMGREP_TIMEOUT_THRESHOLD = 0;
+/**
+ * Semgrep's `--jobs` dev-guardian passes: the machine's cores, at most 4
+ * (Semgrep's own: a domain per core) — see the module doc.
+ */
+export const DEFAULT_SEMGREP_JOBS = Math.min(4, availableParallelism());
+/** The largest `semgrep.jobs` read. */
+const MAX_SEMGREP_JOBS = 256;
 
 /** The largest settings file read. */
 const MAX_BYTES = 256 * 1024;
@@ -58,6 +97,10 @@ export interface ScanSettings {
     timeout: number;
     /** `--timeout-threshold`; 0 is no limit. */
     timeoutThreshold: number;
+    /** `--jobs`: the analysis domains Semgrep runs at once — 1 to {@link DEFAULT_SEMGREP_JOBS}, never more. */
+    jobs: number;
+    /** The `semgrep.jobs` the file wrote when it was above the default — and so not applied (the module doc). */
+    jobsAboveDefault?: number;
     /** Project-relative, `/`-separated, without `./`: files whose per-file Timeout the gate accepts. */
     acceptTimeouts: string[];
   };
@@ -74,6 +117,7 @@ export function defaultScanSettings(): ScanSettings {
     semgrep: {
       timeout: DEFAULT_SEMGREP_TIMEOUT_S,
       timeoutThreshold: DEFAULT_SEMGREP_TIMEOUT_THRESHOLD,
+      jobs: DEFAULT_SEMGREP_JOBS,
       acceptTimeouts: [],
     },
   };
@@ -126,6 +170,15 @@ export function parseSettings(doc: unknown): ScanSettings | string {
         return `semgrep.timeout_threshold must be a whole number from 0 to 10000, got ${JSON.stringify(value)}`;
       }
       out.semgrep.timeoutThreshold = value;
+    } else if (key === 'jobs') {
+      // A whole number, as Semgrep's `-j` takes; `null` is refused like a
+      // `timeout: null` — no value means no setting, never "Semgrep's default".
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_SEMGREP_JOBS) {
+        return `semgrep.jobs must be a whole number from 1 to ${MAX_SEMGREP_JOBS}, got ${JSON.stringify(value)}`;
+      }
+      // A lowering only: above the default, the default (the module doc).
+      out.semgrep.jobs = Math.min(value, DEFAULT_SEMGREP_JOBS);
+      if (value > DEFAULT_SEMGREP_JOBS) out.semgrep.jobsAboveDefault = value;
     } else if (key === 'accept_timeouts') {
       if (value === null) continue;
       if (!Array.isArray(value)) return 'semgrep.accept_timeouts must be a list of project-relative file paths';
@@ -139,15 +192,36 @@ export function parseSettings(doc: unknown): ScanSettings | string {
         if (!out.semgrep.acceptTimeouts.includes(normal)) out.semgrep.acceptTimeouts.push(normal);
       }
     } else {
-      return `unrecognised semgrep setting "${key}" (known: timeout, timeout_threshold, accept_timeouts)`;
+      return `unrecognised semgrep setting "${key}" (known: timeout, timeout_threshold, jobs, accept_timeouts)`;
     }
   }
   return out;
 }
 
+/**
+ * What a scan says when the file's `semgrep.jobs` was above the default and lowered to it, or null: the run's
+ * warning (`runners/semgrepRun.ts#semgrepScanFlags`) and the CI gate's note (`ci/runScans.ts`).
+ */
+export function jobsAboveDefaultNote(settings: ScanSettings): string | null {
+  const above = settings.semgrep.jobsAboveDefault;
+  if (above === undefined) return null;
+  return (
+    `${SCAN_SETTINGS_RELATIVE_PATH} semgrep.jobs ${above} is above dev-guardian's default, so Semgrep ran with --jobs ` +
+    `${settings.semgrep.jobs}: the setting can only lower it (more domains share one taint budget, and taint analysis ` +
+    'gives up on more functions)'
+  );
+}
+
 /** The arguments every Semgrep scan takes from the settings. */
-export function semgrepTimeoutArgs(settings: ScanSettings): string[] {
-  return ['--timeout', String(settings.semgrep.timeout), '--timeout-threshold', String(settings.semgrep.timeoutThreshold)];
+export function semgrepSettingArgs(settings: ScanSettings): string[] {
+  return [
+    '--timeout',
+    String(settings.semgrep.timeout),
+    '--timeout-threshold',
+    String(settings.semgrep.timeoutThreshold),
+    '--jobs',
+    String(settings.semgrep.jobs),
+  ];
 }
 
 /** `/`-separated, without a leading `./` — the spelling the gate compares files in. */
@@ -170,8 +244,12 @@ function notOneFile(path: string): string | null {
   return null;
 }
 
-/** Why `path` cannot name a file inside the project (absolute, or climbing out), or null. */
-function relativePathProblem(path: string): string | null {
+/**
+ * Why `path` cannot name a file inside the project (absolute, or climbing
+ * out), or null — also the baseline's taint-incomplete records' test
+ * (`ci/baseline.ts`).
+ */
+export function relativePathProblem(path: string): string | null {
   const posixPath = path.replace(/\\/g, '/');
   if (posixPath.startsWith('/') || /^[A-Za-z]:/.test(path)) return `'${path}' is absolute; name the file relative to the project`;
   if (posix.normalize(posixPath).split('/').includes('..')) return `'${path}' leaves the project`;

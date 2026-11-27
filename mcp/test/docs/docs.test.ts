@@ -503,6 +503,18 @@ describe("docs/ci.md on dev-spec-driven's finish check and on a name printed on 
     expect(metrics).toContain('print a name on one stream to get the same reading from both');
   });
 
+  // DG-17 (metric-bytes/1): the decoding is decided by what is READ — the file's last 64 MiB past the bound, where a
+  // UTF-16 file's byte-order mark no longer is (the fixture's tail-window case) —, and a mark mid-file reads nothing.
+  it('DG-17 `metrics` decodes what is read as check --file does, and a byte-order mark mid-file leaves its line unread', () => {
+    const metrics = section('## `metrics`');
+    expect(metrics).toContain(
+      'UTF-16 when what is read — the file, or its last 64 MiB — starts with a UTF-16 byte-order mark or NUL-interleaved bytes',
+    );
+    expect(metrics).toContain(
+      'a byte-order mark further in — the stream printed second, in a `2>&1` capture of a tool that writes one on each stream — leaves its line unread',
+    );
+  });
+
   // Review 2 (R2-DG-HZ-8): "ANSI colour codes are removed first" read as if a code inside the keyword were
   // removed too; the reader (and dev-spec-driven's) reads the keyword as printed (R2-MF-6).
   it('R2-DG-HZ-8 the grammar says a colour code that splits the keyword reads nothing', () => {
@@ -514,6 +526,36 @@ describe("docs/ci.md on dev-spec-driven's finish check and on a name printed on 
   it('R2-DG-HZ-8 the upgrade note names both blanket IaC ignores, `#trivy:ignore:*` and `#tfsec:ignore:*`', () => {
     const upgrading = flat(read('CHANGELOG.md')).split('### Upgrading from 3.16.1')[1]?.split('### Added')[0] ?? '';
     expect(upgrading).toContain('`#trivy:ignore:*` or `#tfsec:ignore:*`');
+  });
+});
+
+// ───────────────── 3.18.0 fix round 3 (R3-DGREV-06) — who says that `semgrep.jobs` was lowered
+
+describe("docs/ci.md's `semgrep.jobs` clamp: the tools that say so and those that do not", () => {
+  // The jobs bullet named `review_pr` as the one tool that lowers a `semgrep.jobs` above the default without a word;
+  // bug_hunt, compliance_check, map_attack_surface and scan_wordpress take `semgrepScanFlags(…).args` alone too. A
+  // tool module that runs Semgrep with those flags says so when it reads their `warning`; its tool is the module's
+  // file name in snake case (checked against the registry).
+  it('R3-DGREV-06 the silent-clamp sentence names every tool that drops semgrepScanFlags\' warning, the say-so one every tool that reads it', () => {
+    const dir = resolve(REPO_ROOT, 'mcp', 'src', 'tools');
+    const callers = readdirSync(dir)
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => ({ tool: f.slice(0, -3).replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), src: readFileSync(join(dir, f), 'utf8') }))
+      .filter(({ src }) => src.includes('semgrepScanFlags('));
+    const saysSo = (src: string): boolean =>
+      [...src.matchAll(/const (\w+) = semgrepScanFlags\([^)]*\);/g)].some((m) => new RegExp(`\\b${m[1] ?? ''}\\.warning\\b`).test(src));
+    const silent = callers.filter(({ src }) => !saysSo(src)).map(({ tool }) => tool).sort();
+    const noting = callers.filter(({ src }) => saysSo(src)).map(({ tool }) => tool);
+    for (const tool of [...silent, ...noting]) expect(registered.map((t) => t.name), tool).toContain(tool);
+    expect(silent).toContain('review_pr');
+    expect(noting).toContain('scan_sast');
+    const ci = flat(read('docs/ci.md'));
+    const named = /((?:`[a-z_]+`(?:, | and ))*`[a-z_]+`) apply the same clamp without a word: their results carry no note of it/.exec(ci)?.[1] ?? '';
+    expect([...named.matchAll(/`([a-z_]+)`/g)].map((m) => m[1]).sort()).toEqual(silent);
+    const say = /a larger value runs at the default, and (.*?) say so — on the Semgrep run, and as a note of the gate/.exec(ci)?.[1] ?? '';
+    expect(say).toContain('the CI gate');
+    for (const tool of noting) expect(say, tool).toContain(`\`${tool}\``);
+    for (const tool of silent) expect(say, tool).not.toContain(`\`${tool}\``);
   });
 });
 

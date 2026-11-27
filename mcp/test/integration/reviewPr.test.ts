@@ -844,23 +844,82 @@ describe('review_pr — weakened tests and client trust in the diff', () => {
   // Review 1 of 3.17.0, R1-DG-D-1, narrowed by review 2 (R2-DG-D-1): the suppressions pass skips the paths the
   // project's .guardianignore lists — the same change the CLI's scan --diff-base reads in ciRunScans.test.ts,
   // reported the same there; the factory's result filter drops a left-out test (the CLI keeps it, as in 3.16.1).
-  it('a path .guardianignore leaves out: neither pass reports it, the control files are', async () => {
-    const dir = await repo('main', { ...IGNORED_BASE });
-    for (const [rel, text] of Object.entries(ignoredChange())) write(dir, rel, text);
-    rmSync(join(dir, DELETED_DIR), { recursive: true, force: true });
-    rmSync(join(dir, MOVED_INTO_IGNORED.from));
+  // 3.18.0 (DG-14, B142-06): and the same with head NOT checked out. The filter asks head's tree whether a path is
+  // in the project, never the working tree, which is then the base's: 3.17 reported the rename into vendor/ (the
+  // base has no vendor/) and hid the deletion in legacy/ (the base still has it). Every finding of every pass, and
+  // the count the filter dropped, are the same both ways. The precondition of this equality: the change does not
+  // edit .guardianignore (a commit target applies the working tree's copy, a checked-out review head's), so no row
+  // of these differentials edits it.
+  const bothWays = async (repoDir: string, project: string) => {
+    const out: Array<{ rows: (tool?: string) => string[]; excluded: unknown }> = [];
+    for (const args of [{ base_ref: 'main' }, { base_ref: 'main', head_ref: 'feature' }]) {
+      if ('head_ref' in args) await git(repoDir, 'checkout', '-q', 'main');
+      const { r, p } = await review(project, args);
+      expect(r.ok).toBe(true);
+      const res = r as unknown as ReviewResult & { exclusions?: { findings_excluded?: number } };
+      const rows = (tool?: string): string[] =>
+        p.storage.findings
+          .listByScan(res.scan_id)
+          .filter((f) => tool === undefined || f.tool === tool)
+          .map((f) => `${f.tool} ${rowOf(f)}`)
+          .sort();
+      out.push({ rows, excluded: res.exclusions?.findings_excluded });
+    }
+    const [checkedOut, commit] = out;
+    if (checkedOut === undefined || commit === undefined) throw new Error('two reviews expected');
+    expect(commit.rows()).toEqual(checkedOut.rows());
+    expect(commit.excluded).toBe(checkedOut.excluded);
+    return checkedOut;
+  };
+  const ignoredRepo = async (prefix: string): Promise<string> => {
+    const dir = await repo('main', Object.fromEntries(Object.entries(IGNORED_BASE).map(([rel, text]) => [`${prefix}${rel}`, text])));
+    for (const [rel, text] of Object.entries(ignoredChange())) write(dir, `${prefix}${rel}`, text);
+    rmSync(join(dir, `${prefix}${DELETED_DIR}`), { recursive: true, force: true });
+    rmSync(join(dir, `${prefix}${MOVED_INTO_IGNORED.from}`));
     await commitAll(dir, 'vendor bump');
+    return dir;
+  };
+  const tool = (name: string, list: readonly string[]): string[] => list.map((row) => `${name} ${row}`);
+
+  it('a path .guardianignore leaves out: neither pass reports it, the control files are — head checked out or not', async () => {
+    const dir = await ignoredRepo('');
+    const { rows } = await bothWays(dir, dir);
+    expect(rows('guardian-suppressions')).toEqual(tool('guardian-suppressions', REPORTED.suppressions));
+    expect(rows('guardian-test-integrity')).toEqual(tool('guardian-test-integrity', REPORTED.integrityReview));
+  });
+
+  it('the same for a project in a subdirectory of its repository: head’s tree is read from the project, not the root', async () => {
+    const dir = await ignoredRepo('app/');
+    const { rows } = await bothWays(dir, join(dir, 'app'));
+    expect(rows('guardian-suppressions')).toEqual(tool('guardian-suppressions', REPORTED.suppressions));
+    expect(rows('guardian-test-integrity')).toEqual(tool('guardian-test-integrity', REPORTED.integrityReview));
+  });
+
+  // A change that only deletes a listed tree changes no file Semgrep could read, so head is never checked out:
+  // head's tree is still what answers (3.17 hid the deleted test file whenever the base was checked out).
+  it('a change that only deletes a listed tree: its deleted test file is reported, head checked out or not', async () => {
+    const dir = await repo('main', { '.guardianignore': `${DELETED_DIR}/\n`, 'src/app.py': 'x = 1\n', 'legacy/old.test.js': IGNORED_BASE['legacy/old.test.js'] ?? '' });
+    rmSync(join(dir, DELETED_DIR), { recursive: true, force: true });
+    await commitAll(dir, 'drop the legacy tree');
+    const { rows, excluded } = await bothWays(dir, dir);
+    expect(rows('guardian-test-integrity')).toEqual(['guardian-test-integrity test-file-deleted legacy/old.test.js:- medium']);
+    expect(excluded).toBe(0);
+  });
+
+  // The working tree IS the reviewed tree when head is checked out, untracked files included (the test-integrity
+  // pass reads them there): the disk answers, and a listed untracked directory stays left out, as in 3.17.
+  it('head checked out: an untracked test file in a listed directory is left out, the control file is reported', async () => {
+    const dir = await repo('main', { '.guardianignore': 'scratch/\n', 'src/sum.ts': 'export {};\n' });
+    write(dir, 'src/sum.ts', 'export const x = 1;\n');
+    await commitAll(dir);
+    const focused = TEST.replace("it('adds'", "it.only('adds'");
+    write(dir, 'scratch/a.test.ts', focused);
+    write(dir, 'src/b.test.ts', focused);
     const { r, p } = await review(dir, { base_ref: 'main' });
     expect(r.ok).toBe(true);
-    const res = r as unknown as ReviewResult;
-    const rows = (tool: string): string[] =>
-      p.storage.findings
-        .listByScan(res.scan_id)
-        .filter((f) => f.tool === tool)
-        .map(rowOf)
-        .sort();
-    expect(rows('guardian-suppressions')).toEqual(REPORTED.suppressions);
-    expect(rows('guardian-test-integrity')).toEqual(REPORTED.integrityReview);
+    const res = r as unknown as ReviewResult & { exclusions?: { findings_excluded?: number } };
+    expect(rowsOf(p, res.scan_id, 'guardian-test-integrity')).toEqual(['test-focused src/b.test.ts:2 high']);
+    expect(res.exclusions?.findings_excluded).toBe(1);
   });
 
   // Review 2 of 3.17.0, R2-DG-D-3: the pass lists only what .guardianignore keeps, before its 500-file bound — a

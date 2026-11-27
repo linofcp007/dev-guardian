@@ -113,8 +113,23 @@ copy's file when given). Not the result filter's rule (`platform/guardianIgnore.
 path no longer in the project: a git listing holds only project paths. A rename into a listed path is listed by its
 old one: the factory's filter drops its finding, and the CLI applies that filter to the step's findings. The
 test-integrity pass reads every path: `review_pr`'s and `scan_sast`'s findings go through the factory's filter, the
-CLI's do not (as in 3.16.1 — a focused test in a listed path blocks `scan --diff-base`). A suppressions-pass finding
-is keyed like a credential
+CLI's do not (as in 3.16.1 — a focused test in a listed path blocks `scan --diff-base`).
+
+That filter's "in the project" is asked of the tree the passes read (3.18.0): the disk at a worktree target
+(`projectPathTest`), and head's top-level entries when `review_pr`'s head is not checked out, since the working tree
+is then another commit's (`ScannerInvocation.inProject`: `runners/git.ts#headTopLevel`, one `git ls-tree` in the
+project directory, read by `guardianIgnore.ts#treePathTest`). The listing is taken whether or not head is checked out
+for the scanners: a change that only deletes never is. So a commit-target review gives the same in-the-project answer
+as the same review with head checked out: the rename into a listed tree only head holds is dropped, and a deletion in a
+listed top-level tree head removed whole is reported (3.17 did the reverse of both whenever the base was checked out).
+The patterns are still the working tree's `.guardianignore` (`loadProjectExclusions`, as before), never head's: when
+the diff edits that file the two reviews can differ (`review_pr` warns about such a diff), and a head cannot add a
+pattern to a commit-target review.
+A deeper listed tree deleted whole (`packages/legacy/` with `packages/` kept) is dropped at both targets, since
+`packages` is still present: the disk test's own rule. A listing git does not answer (a refusal, a timeout) silently keeps
+the working tree's answer, the 3.17 rule, which can hide such a deletion; nothing is relaxed beyond it.
+
+A suppressions-pass finding is keyed like a credential
 (`fingerprint/findingIdentity.ts#keyedWithoutLine`: `suppression\n<rule id>\n<subcategory>` — the subcategory is
 `suppression:<row id>`, the directive's kind, so no identity moves from one kind to another — the occurrence and the
 group's count, never the line: a bare gitleaks allow line holds the secret).
@@ -158,10 +173,25 @@ what the CLI uses directly — it is light, so `metrics` loads no `load*Modules(
 and `set_baseline` refuses a `'never'` type by `scan_id` and by `scan_type` alike. A run's samples come from its report:
 CLS unrounded (its 0.01 tolerance is the summary's rounding step); the k6 series from its inputs only: the script, its
 content and a digest of the `K6_*` settings perf_check hands k6, never a VU count k6 measured (k6 samples `vus_max`
-from the start of the VUs' init, so its minimum jitters). What the key leaves out: the modules the script imports,
-k6's own config file and the other variables k6 is handed (`CI`, `LANG`, the proxy), which a script can read through
-`__ENV` to set its load; a `K6_*` setting that names a per-run file makes every run a new series. A label shows a
-query, and the `K6_*` settings, as six hex digits of a digest (`?…#ab12cd`).
+from the start of the VUs' init, so its minimum jitters) — and, since 3.18.0, the local modules the script imports
+(`k6Inputs.ts`: the `./`, `../`, `/` and `file://` specifiers of `… from '…'`, `import '…'`, `import('…')` and
+`require('…')`, followed from module to module, each keyed by the sha256 of its bytes; at most 64, each under the
+project file cap, all read before k6 runs). The formula is chosen by the script's text, never by a read: a module
+that cannot be read is keyed as such (`missing`, `unreadable`, `too-large`) and a walk that throws keys a sentinel,
+so a failed read can split a series, never join the runs from before the upgrade; a script that names no local
+module keeps its 3.17.0 key. What the key leaves out: the files the script `open()`s (its data: one regenerated before
+each run would make every run new, and k6 does not document what a relative `open()` resolves against), a module
+named at run time (the label then says `inputs partly keyed`), a remote module beyond its URL, a commented-out import
+(keyed anyway: comments are not stripped), k6's own config file and the other variables k6 is handed (`CI`, `LANG`,
+`TZ`, `NODE_*`, the proxy), which a script can read through `__ENV` to set its load — `k6 run` hands it the system
+environment by default, and `test/e2e/k6PerfCheck.test.ts` (E5) pins that `__ENV.CI` changes the load and keeps the
+key. The `K6_*` settings are read from the MCP server's environment, so a value that changes between server starts
+(a dated `K6_OUT` file) starts a new series at each start, not at each run. `--summary-export` has two shapes: the
+legacy one perf_check reads (each metric's thresholds as `{ "<expression>": <failed> }`), and the raw one an option
+(`newMachineReadableSummary`, which a `K6_*` setting can turn on) switches it to, with no metric perf_check reads — such
+a run is not kept, and says so. A script's `handleSummary` never suppresses the export: k6's `summary-wrapper.js`
+writes it whatever `handleSummary` returns. A label shows a query, the local modules and the `K6_*` settings as six
+hex digits of a digest (`?…#ab12cd`).
 
 ## What a scan of the project's own files leaves out
 

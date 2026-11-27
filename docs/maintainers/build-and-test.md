@@ -26,9 +26,10 @@ user — and on the floor image with `--coverage`, so the thresholds in
 `vitest.config.ts` are enforced in the run every release makes (CONTRIBUTING,
 Releases, step 0). Not in `npm test`: coverage instrumentation adds a third or
 more to an already long run on every commit, and the floor is a release
-question. `--toolchain` adds Semgrep and Bandit (pip-pinned) and gitleaks and
-Trivy (the release archives `src/runners/installCatalog.ts` pins, sha256-
-checked) and sets `GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`, so a missing scanner
+question. `--toolchain` adds Semgrep, Bandit and squawk (pip-pinned; squawk at the
+catalog's own PyPI pin) and gitleaks, Trivy and k6 (the release archives
+`src/runners/installCatalog.ts` pins, sha256-checked) and sets
+`GUARDIAN_REQUIRE_SEMGREP`/`_GITLEAKS`/`_K6`/`_SQUAWK`, so a missing scanner
 fails instead of skipping. It is the run a release makes (CONTRIBUTING, Releases,
 step 0): without it every test of a real scanner is skipped on Linux, and the
 suite had never been green with it until 3.9.3 — ten tests, among them a rule
@@ -133,6 +134,18 @@ any order, `__proto__` an ordinary name, a 513-byte candidate a drop, CSI remove
 is none, as dev-spec-driven reads the keyword in the raw output —, each bound's drop said) and
 `judge.test.ts` (every judge case, the symmetric verdict, terms a current line adds creating no judgment).
 
+**The bytes are a second shared file (3.18.0).** `test/fixtures/metrics/metric-bytes.v1.json`
+(`metric-bytes/1`, 11 cases) holds a run's stdout and stderr as hex and two decided readings of them: `file`,
+the `metrics` command's (a `2>&1` capture in print order, decoded by `decodeText`), and `stream`,
+dev-spec-driven's `done --run` (each stream apart, as UTF-8); `differs` gives the reason exactly when the two
+differ, order included. It is committed byte-identical at dev-spec-driven's `mcp/tests/fixtures/`, both suites
+pin one sha256 (`test/unit/metrics/metricBytesFixture.test.ts` here, with the shape and a coverage read from the
+bytes, never from the guess's numbers), and `metricFile.test.ts` reads every case through `readMetricFile` and
+`readMetricOutput` against its `file` column. A sample, not a proof: a change that alters no case still passes.
+`decodeText` is shared with `check --file`: a change to it for `check --file`'s sake is made on its own merits,
+and if it flips a case, `metric-bytes/2` follows in both repositories in the same round — the fixture never holds
+a secret-scan fix back.
+
 On Windows, run the full suite from **Git Bash**. From PowerShell, `bash` can
 resolve to the WSL launcher stub, and the `ci-init` e2e fails for that reason
 alone.
@@ -141,8 +154,12 @@ Semgrep-dependent e2e tests skip when Semgrep is absent. A skip is visible as a
 skip, and `GUARDIAN_REQUIRE_SEMGREP=1` turns absence into a hard failure — set it
 when you need to know the rule pack was actually exercised. Only absence skips:
 a Semgrep on `PATH` that fails `--version` fails the rule-pack tests. The same
-switch requires Trivy in the tests that need a real one, and
-`GUARDIAN_REQUIRE_GITLEAKS=1` gitleaks.
+switch requires Trivy in the tests that need a real one,
+`GUARDIAN_REQUIRE_GITLEAKS=1` gitleaks, and `GUARDIAN_REQUIRE_K6=1` k6
+(`test/e2e/k6PerfCheck.test.ts`: perf_check against the real k6 and a local
+server — the summary's thresholds, the series and the modules it keys, the
+`__ENV.CI` limit, no usage report through a refusing proxy, with a control run),
+and `GUARDIAN_REQUIRE_SQUAWK=1` squawk (`test/e2e/squawkReviewPr.test.ts`).
 
 "Installed" is asked the way the server asks it (`test/helpers/toolchain.ts`):
 on `PATH`, or in the per-user tools directory `install_toolchain` writes to

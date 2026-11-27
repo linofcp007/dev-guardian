@@ -445,8 +445,12 @@ actually makes.
   LibreChat): the run is partial with the files named, type `Fixpoint
   timeout`, and on an engine without the field the run carries a named note
   instead. The CI gate does NOT gate on them (3.3.0, review 8): no Semgrep
-  setting tunes them, and dev-spec-driven's own tree had them in 49 files on
-  every run, so no mid-size codebase could reach exit 0. They are notes there
+  setting changes the taint budget, and dev-spec-driven's own tree had them in
+  49 files on every run, so no mid-size codebase could reach exit 0 (since
+  3.18.0 the product passes `--jobs`, `.guardian/scan.yml`'s `semgrep.jobs` —
+  the machine's cores, at most 4, by default — so fewer domains share it;
+  this harness passes no `--jobs`, so its runs still spread the budget over
+  a domain per core). They are notes there
   (`coverage_notes`, `coverage_gap_details` kind `taint_timeout`, `gating:
   false`), coverage still `partial`; a per-file `Timeout` still gates unless
   the project's committed `.guardian/scan.yml` accepts it (`docs/ci.md`). The exception is a timeout

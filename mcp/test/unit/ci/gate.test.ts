@@ -1,5 +1,12 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { evaluateGate, exitCodeForCoverage } from '../../../src/ci/gate.js';
+import { assignIdentities } from '../../../src/fingerprint/findingIdentity.js';
+import { pluginPackRuleIds } from '../../../src/runners/semgrepConfigs.js';
+import { banditParser } from '../../../src/runners/scannerParsers/bandit.js';
+import { semgrepParser } from '../../../src/runners/scannerParsers/semgrep.js';
 import { buildBaseline } from '../../../src/ci/baseline.js';
 import { CI_EXIT } from '../../../src/ci/types.js';
 import type { Finding, Severity, ToolRun } from '../../../src/types.js';
@@ -557,7 +564,8 @@ describe('evaluateGate — --accept-partial-parse (follow-up X1)', () => {
   });
 
   // Review 8, finding 3: a taint fixpoint timeout (Semgrep gave up the
-  // dataflow analysis of some functions; no setting tunes it) gated exactly
+  // dataflow analysis of some functions; the budget has no setting, and
+  // `semgrep.jobs: 1` — 3.18.0 — gives one function all of it) gated exactly
   // like a per-file Timeout, and a medium-sized codebase never reached exit
   // 0 — dev-spec-driven's own tree had them in 210 functions. It is a NOTE
   // now: reported (human, JSON), never a coverage gap, never the exit code;
@@ -680,5 +688,121 @@ describe("findings the repository's own configuration suppressed", () => {
       ids: ['CVE-2020-8203', 'NSWG-ECO-516'],
     });
     expect(evaluateGate(input()).suppressedByRepoConfig).toEqual([]);
+  });
+});
+
+// ------------------------------------------------------------ taint_incomplete (3.18.0, ci/taintIncomplete.ts)
+
+/**
+ * A Semgrep finding new to the baseline, in a file whose taint analysis the
+ * baseline's run gave up on and unchanged since, is not the change's: listed
+ * (`taintIncompleteAtBaseline`, one note), never new, never blocking. Only
+ * Semgrep's, only an unchanged file's (the caller hashes), and for a
+ * pack-only file a pack rule's only. Findings: the committed Semgrep and
+ * Bandit fixtures, through the real parsers and identities.
+ */
+describe('evaluateGate — taint-incomplete files of the baseline (3.18.0)', () => {
+  const FIXTURES = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'fixtures', 'scanners');
+  const parsed = (): Finding[] =>
+    assignIdentities([
+      ...semgrepParser.parse(readFileSync(join(FIXTURES, 'semgrep.json'), 'utf8')).findings,
+      ...banditParser.parse(readFileSync(join(FIXTURES, 'bandit.json'), 'utf8')).findings,
+    ]);
+  /** The fixture's blocking Semgrep finding, `src/app.js` (express-xss, critical). */
+  const xss = (): Finding => {
+    const f = parsed().find((x) => x.tool === 'semgrep' && x.file_path === 'src/app.js');
+    if (f === undefined) throw new Error('the Semgrep fixture lost its src/app.js finding');
+    return f;
+  };
+  const PACK_RULE = [...pluginPackRuleIds()].find((id) => id.startsWith('web-js-')) ?? 'web-js-path-traversal';
+  const taint = (unchanged: Array<{ file: string; packOnly: boolean }>) => ({ unchanged, packRuleIds: pluginPackRuleIds() });
+
+  it('a blocking Semgrep finding the baseline lacks, in a recorded file unchanged since: exit 0, not new, listed with one note', () => {
+    const f = xss();
+    expect(['high', 'critical']).toContain(f.severity);
+    const v = evaluateGate(input({ findings: [f], baseline: buildBaseline([], null, 'x'), taintIncomplete: taint([{ file: 'src/app.js', packOnly: false }]) }));
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+    expect(v.newFindings).toEqual([]);
+    expect(v.blocking).toEqual([]);
+    expect(v.taintIncompleteAtBaseline).toEqual([f]);
+    expect(v.coverageNotes).toEqual([
+      'semgrep: 1 finding(s) in 1 file(s) not counted as new — unchanged since the baseline was recorded, and its taint ' +
+        'analysis had given up in them, so a finding a rule or Semgrep update now reports there reads the same: src/app.js',
+    ]);
+    const note = v.coverageGapDetails.find((d) => d.detail === v.coverageNotes[0]);
+    expect(note).toMatchObject({ tool: 'semgrep', kind: 'other', gating: false });
+    expect(note?.remedy).toBe(
+      'Nothing to do for the gate (not gating): these findings are in code unchanged since the baseline was recorded; ' +
+        'review them, then re-record the baseline on the base commit to accept them.',
+    );
+    // Not a taint_timeout note: that kind says findings may be MISSING, the opposite fact.
+    expect(v.coverageGapDetails.filter((d) => d.kind === 'taint_timeout')).toEqual([]);
+  });
+
+  it('the same file not unchanged (the caller found it edited): new and blocking, exit 1', () => {
+    const f = xss();
+    for (const t of [undefined, taint([])]) {
+      const v = evaluateGate(input({ findings: [f], baseline: buildBaseline([], null, 'x'), ...(t !== undefined ? { taintIncomplete: t } : {}) }));
+      expect(v.exitCode).toBe(CI_EXIT.GATE_FAILED);
+      expect(v.blocking).toEqual([f]);
+      expect(v.taintIncompleteAtBaseline).toEqual([]);
+      expect(v.coverageNotes).toEqual([]);
+    }
+  });
+
+  it('only Semgrep findings: a Bandit finding in the recorded, unchanged file is new', () => {
+    const bandit = parsed().find((x) => x.tool === 'bandit' && x.severity === 'high');
+    if (bandit === undefined) throw new Error('the Bandit fixture lost its high finding');
+    const file = bandit.file_path ?? '';
+    const v = evaluateGate(input({ findings: [bandit], baseline: buildBaseline([], null, 'x'), taintIncomplete: taint([{ file, packOnly: false }]) }));
+    expect(v.blocking).toEqual([bandit]);
+    expect(v.taintIncompleteAtBaseline).toEqual([]);
+  });
+
+  it("a pack-only file: a pack rule's finding is not new, a registry rule's is", () => {
+    const pack = { ...xss(), rule_id: PACK_RULE, fingerprint: 'fp-pack', identity: 'id-pack' };
+    const registry = xss();
+    expect(pluginPackRuleIds().has(PACK_RULE)).toBe(true);
+    const v = evaluateGate(
+      input({ findings: [pack, registry], baseline: buildBaseline([], null, 'x'), taintIncomplete: taint([{ file: 'src/app.js', packOnly: true }]) }),
+    );
+    expect(v.taintIncompleteAtBaseline).toEqual([pack]);
+    expect(v.newFindings).toEqual([registry]);
+    expect(v.exitCode).toBe(CI_EXIT.GATE_FAILED);
+  });
+
+  it('a finding the baseline knows is in neither list; a finding path spelt ./src/app.js is the same file', () => {
+    const known = xss();
+    const late = { ...xss(), file_path: './src/app.js', fingerprint: 'fp-late', identity: 'id-late', line_start: 40 };
+    const v = evaluateGate(
+      input({ findings: [known, late], baseline: buildBaseline([known], null, 'x'), taintIncomplete: taint([{ file: 'src/app.js', packOnly: false }]) }),
+    );
+    expect(v.newFindings).toEqual([]);
+    expect(v.taintIncompleteAtBaseline).toEqual([late]);
+    expect(v.exitCode).toBe(CI_EXIT.PASS);
+  });
+
+  it('a record of a file holding no finding changes no verdict: the same verdict, field by field', () => {
+    const fixtures = [
+      input({ findings: parsed() }),
+      input({ findings: parsed(), baseline: buildBaseline(parsed().slice(0, 2), null, 'x') }),
+      input({ findings: [xss()], steps: [step({ tools_run: [], missing_tools: ['semgrep'] })] }),
+      input({ findings: [], droppedBaselineEntries: 2, baseline: buildBaseline([], null, 'x') }),
+    ];
+    for (const fixture of fixtures) {
+      const plain = evaluateGate(fixture);
+      expect(plain.taintIncompleteAtBaseline).toEqual([]);
+      expect(evaluateGate({ ...fixture, taintIncomplete: taint([{ file: 'src/unrelated.js', packOnly: false }]) })).toEqual(plain);
+    }
+  });
+
+  it('the note names five files and counts the rest; every finding is still listed', () => {
+    const files = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => `src/${n}.js`);
+    const found = files.map((file, i) => ({ ...xss(), file_path: file, fingerprint: `fp-${i}`, identity: `id-${i}` }));
+    const v = evaluateGate(
+      input({ findings: found, baseline: buildBaseline([], null, 'x'), taintIncomplete: taint(files.map((file) => ({ file, packOnly: false }))) }),
+    );
+    expect(v.taintIncompleteAtBaseline).toHaveLength(7);
+    expect(v.coverageNotes[0]).toMatch(/^semgrep: 7 finding\(s\) in 7 file\(s\) not counted as new — .*: src\/a\.js, src\/b\.js, src\/c\.js, src\/d\.js, src\/e\.js, \+2 more$/);
   });
 });

@@ -64,6 +64,9 @@ const EXIT_LABEL: Record<CiExitCode, string> = {
   [CI_EXIT.USAGE_ERROR]: 'USAGE ERROR',
 };
 
+/** How many of `taintIncompleteAtBaseline` the human report names; the JSON carries all of them. */
+const TAINT_AT_BASELINE_SHOWN = 10;
+
 // ---------------------------------------------------------------------------
 // Human
 // ---------------------------------------------------------------------------
@@ -119,6 +122,17 @@ export function renderHuman(v: GateVerdict, opts: HumanOptions = {}): string {
   lines.push(
     `new findings: ${v.newFindings.length} (${v.blocking.length} at or above the fail-on threshold)`,
   );
+
+  // 3.18.0 (`ci/taintIncomplete.ts`): not new, and never hidden — the first few named.
+  if (v.taintIncompleteAtBaseline.length > 0) {
+    const found = v.taintIncompleteAtBaseline;
+    lines.push(
+      `not new (${found.length}) — Semgrep findings in files unchanged since the baseline was recorded, where its taint ` +
+        'analysis had given up; a finding a rule or Semgrep update now reports there reads the same:',
+    );
+    for (const f of found.slice(0, TAINT_AT_BASELINE_SHOWN)) lines.push(`  - ${describeFinding(f)}`);
+    if (found.length > TAINT_AT_BASELINE_SHOWN) lines.push(`  - +${found.length - TAINT_AT_BASELINE_SHOWN} more (the JSON lists every one)`);
+  }
 
   // Each gap with what clears it (its remedy: `coverage_gap_details` in the JSON).
   if (v.coverageGaps.length > 0) {
@@ -282,6 +296,14 @@ export interface JsonVerdict {
   /** `new_findings` holds only the blocking findings (`--compact`). */
   compact: boolean;
   blocking_findings: Finding[];
+  /**
+   * Semgrep findings not counted as new (3.18.0): new to the baseline, in a
+   * file whose taint analysis its run gave up on and unchanged since — `[]`
+   * with `compact`, like the non-blocking `new_findings`.
+   */
+  taint_incomplete_at_baseline: Finding[];
+  /** How many, whatever `taint_incomplete_at_baseline` holds. */
+  taint_incomplete_at_baseline_count: number;
   baseline_absent: boolean;
   /**
    * `present` or `absent` — never "corrupt": an unreadable baseline is a
@@ -339,6 +361,8 @@ export function renderJson(v: GateVerdict, opts: JsonOptions = {}): string {
     new_findings_by_severity: bySeverity,
     compact,
     blocking_findings: v.blocking,
+    taint_incomplete_at_baseline: compact ? [] : v.taintIncompleteAtBaseline,
+    taint_incomplete_at_baseline_count: v.taintIncompleteAtBaseline.length,
     baseline_absent: v.baselineAbsent,
     baseline_status: v.baselineAbsent ? 'absent' : 'present',
     accepted_gaps: v.acceptedGaps,

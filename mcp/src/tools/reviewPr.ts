@@ -23,6 +23,8 @@
  *   - dev-guardian's client-trust checks over the changed `.env*` files and
  *     the Supabase migrations of a changed migration directory
  *     (`clienttrust/clientTrustPass.ts`), their findings kept to the diff;
+ *   - squawk over the changed `.sql` files when the reviewed tree has a root
+ *     `.squawk.toml` (`runners/squawkRun.ts`), the opt-in;
  *   - the test-integrity check over the diff itself (`testintegrity/`): a
  *     skipped or focused test, a deleted test file, fewer assertions, a test
  *     script made to pass regardless — from the merge base to head, and to
@@ -54,13 +56,14 @@ import { z } from 'zod';
 import { clientTrustParser, runClientTrustChecks } from '../clienttrust/clientTrustPass.js';
 import { makeSourceReader } from '../fingerprint/findingIdentity.js';
 import { describeNotApplied } from '../platform/gitSafety.js';
-import { GUARDIAN_IGNORE_FILE } from '../platform/guardianIgnore.js';
+import { GUARDIAN_IGNORE_FILE, treePathTest } from '../platform/guardianIgnore.js';
 import { InvalidProjectPathError, resolveProjectPath } from '../platform/projectPath.js';
 import { banditOnFiles, semgrepOnFiles } from '../runners/fileBatchScan.js';
 import {
   changedFiles,
   git,
   gitlinksAmong,
+  headTopLevel,
   materialiseCommit,
   repoState,
   resolveCommit,
@@ -87,6 +90,8 @@ import { banditParser } from '../runners/scannerParsers/bandit.js';
 import { cppcheckParser } from '../runners/scannerParsers/cppcheck.js';
 import { gosecParser } from '../runners/scannerParsers/gosec.js';
 import { semgrepParserFor } from '../runners/scannerParsers/semgrep.js';
+import { squawkParser } from '../runners/scannerParsers/squawk.js';
+import { isSqlFile, SQUAWK, squawkConfigWarning, squawkMigrations, squawkOptIn } from '../runners/squawkRun.js';
 import { MANIFEST_ECOSYSTEM_LOCKFILES, trivyParser } from '../runners/scannerParsers/trivy.js';
 import { planSemgrepConfigs, semgrepEngineNote } from '../runners/semgrepConfigs.js';
 import { semgrepEngineOf } from '../runners/semgrepReport.js';
@@ -174,6 +179,16 @@ const reviewPr = makeScanTool({
     let projectLanguages: ProjectLanguages | null = null;
     // The lines the findings' identities hash, from the tree the scanners read.
     let readSource: ScannerInvocation['readSource'];
+    // Whether a finding's path is in the project, for the .guardianignore result filter, from the tree the
+    // passes read: head's, whenever head is not checked out, never the working tree's (another commit's, which
+    // still holds a listed tree head deleted and lacks one head added). Taken before, and whatever becomes of,
+    // the checkout: a change that only deletes is never checked out, and the git passes run either way. A
+    // listing git does not answer keeps the working tree's answer, the 3.17 rule.
+    let inProject: ScannerInvocation['inProject'];
+    if (!headIsCheckedOut) {
+      const top = await headTopLevel(ctx.projectPath, head);
+      if (top !== null) inProject = treePathTest(top);
+    }
     try {
       let scanRoot = ctx.projectPath;
       let unavailable: string | null = null;
@@ -205,6 +220,8 @@ const reviewPr = makeScanTool({
         if (changed.some(isGoSource)) out.tools_run.push({ name: GOSEC, status: 'failed', reason: unavailable });
         if (cppSources(changed).length > 0) out.tools_run.push({ name: 'cppcheck', status: 'failed', reason: unavailable });
         if (touched.some(isManifest)) out.tools_run.push({ name: 'trivy', status: 'failed', reason: unavailable });
+        // The opt-in cannot be read either: a changed .sql file is squawk's.
+        if (changed.some(isSqlFile)) out.tools_run.push({ name: SQUAWK, status: 'failed', reason: unavailable });
       } else {
         const present = changed.filter((f) => isFileOnDisk(join(scanRoot, f)));
         // Read before the checkout is removed below: the identities are
@@ -218,6 +235,7 @@ const reviewPr = makeScanTool({
         if (!out.cancelled) await runCppcheck(ctx, out, { scanRoot, reportDir, files: cppSources(present) });
         if (!out.cancelled && touched.some(isManifest)) await runTrivy(ctx, out, { scanRoot, reportDir, touched });
         if (!out.cancelled) await runClientTrust(out, { scanRoot, files: present });
+        if (!out.cancelled) await runSquawk(ctx, out, { scanRoot, files: present.filter(isSqlFile) });
       }
 
       // The diff itself, for weakened tests and added suppressions: git reads it, whichever tree the scanners read.
@@ -283,6 +301,9 @@ const reviewPr = makeScanTool({
           'quiet dependency result: an entry added there hides a finding, it does not fix it.',
       );
     }
+    // squawk's opt-in: an edit decides what it reports, a deletion turns it off (runners/squawkRun.ts).
+    const squawkNote = await squawkConfigWarning(ctx.projectPath, base, head);
+    if (squawkNote !== null) warnings.push(squawkNote);
     // Manifest gaps the diff did not touch: named, never the review's coverage.
     const preexisting = preexistingNote(out.preexistingGaps);
     if (preexisting !== null) warnings.push(preexisting);
@@ -298,6 +319,7 @@ const reviewPr = makeScanTool({
       parser_inputs: out.parser_inputs,
       report_paths: [reportDir],
       ...(readSource !== undefined ? { readSource } : {}),
+      ...(inProject !== undefined ? { inProject } : {}),
       ...(warnings.length > 0 ? { warnings } : {}),
       extras: {
         base_sha: base,
@@ -414,7 +436,7 @@ async function runSemgrep(
     return;
   }
   const run = await semgrepOnFiles({
-    // `.guardian/scan.yml`'s timeouts, `.guardian/` excluded (runners/semgrepRun.ts).
+    // `.guardian/scan.yml`'s timeouts and jobs, `.guardian/` excluded (runners/semgrepRun.ts).
     configArgs: [...plan.args, ...semgrepScanFlags(args.scanRoot).args],
     files: args.present,
     cwd: args.scanRoot,
@@ -533,6 +555,32 @@ async function runClientTrust(out: Collected, args: { scanRoot: string; files: r
   out.tools_run.push(result.toolRun);
   out.missing_tools.push(...result.missing);
   out.parser_inputs.push({ parser: clientTrustParser(result.findings), input: null });
+}
+
+/**
+ * squawk over the changed `.sql` files present in `scanRoot`, when it opts in with a root `.squawk.toml`: without
+ * one, nothing — no entry, no gap. With one, a missing squawk is a gap (the project asked for it), and so is a file
+ * squawk could not parse.
+ */
+async function runSquawk(ctx: InvokeContext, out: Collected, args: { scanRoot: string; files: readonly string[] }): Promise<void> {
+  if (args.files.length === 0) return;
+  const optIn = squawkOptIn(args.scanRoot);
+  if (optIn === 'absent') return;
+  if (optIn === 'unusable') {
+    out.tools_run.push({ name: SQUAWK, status: 'failed', reason: 'the root .squawk.toml is not a regular file inside the project, and was not read' });
+    out.missing_tools.push(SQUAWK);
+    return;
+  }
+  if (!(await scannerAvailable(SQUAWK))) {
+    out.tools_run.push({ name: SQUAWK, status: 'skipped', reason: 'not_installed' });
+    out.missing_tools.push(SQUAWK);
+    return;
+  }
+  const pass = await squawkMigrations({ scanRoot: args.scanRoot, files: args.files, signal: ctx.signal, ...(ctx.onLog ? { onLog: ctx.onLog } : {}) });
+  for (const report of pass.reports) out.parser_inputs.push({ parser: squawkParser, input: report });
+  out.tools_run.push(pass.toolRun);
+  if (pass.missing) out.missing_tools.push(SQUAWK);
+  out.cancelled ||= pass.cancelled;
 }
 
 /** Trivy over the head's dependency manifests, when one of them changed. */

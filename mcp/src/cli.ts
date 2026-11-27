@@ -63,7 +63,7 @@ function requireNodeSqlite(db: typeof DbModule): void {
 
 /** `scan` and `baseline update`: the scan pipeline, the gate and its reports. */
 export async function loadCiModules() {
-  const [db, ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig, renames, git, scanSettings, changedSince] = await Promise.all([
+  const [db, ciTypes, baseline, gate, report, runScansMod, appRunner, types, refConfig, renames, git, scanSettings, changedSince, taintIncomplete] = await Promise.all([
     import('./storage/db.js'),
     import('./ci/types.js'),
     import('./ci/baseline.js'),
@@ -77,10 +77,13 @@ export async function loadCiModules() {
     import('./runners/git.js'),
     import('./platform/scanSettings.js'),
     import('./ci/changedSince.js'),
+    import('./ci/taintIncomplete.js'),
   ]);
   requireNodeSqlite(db);
   return {
     CI_EXIT: ciTypes.CI_EXIT,
+    recordTaintIncomplete: taintIncomplete.recordTaintIncomplete,
+    unchangedTaintIncomplete: taintIncomplete.unchangedTaintIncomplete,
     filesChangedSince: changedSince.filesChangedSince,
     scanSettingsCommit: changedSince.scanSettingsCommit,
     BASELINE_RELATIVE_PATH: baseline.BASELINE_RELATIVE_PATH,

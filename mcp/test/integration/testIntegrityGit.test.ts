@@ -201,6 +201,19 @@ describe('readChangeSet and the -U0 reader', () => {
     });
   });
 
+  // 3.18.0 review 1: `GIT_DIFF_OPTS` overrides `-U` and `diff.interHunkContext` fuses hunks, so the check's own
+  // `-U0` diffs can hold kept lines: a kept line in a hunk still counts a line.
+  it('a diff with context lines numbers the added lines the same as its -U0 form', () => {
+    const before = ['a', 'b', 'c', 'd', 'e', '', 'f'];
+    const after = ['a', 'B', 'c', 'd', 'E', '', 'f', 'g'];
+    const zero = ['@@ -2 +2 @@', '-b', '+B', '@@ -5 +5 @@', '-e', '+E', '@@ -7,0 +8 @@', '+g'].join('\n');
+    // The same change with three lines of context, a blank kept line printed empty (`diff.suppressBlankEmpty`).
+    const wide = ['@@ -1,7 +1,8 @@', ' a', '-b', '+B', ' c', ' d', '-e', '+E', '', ' f', '+g'].join('\n');
+    expect(before.length + 1).toBe(after.length);
+    expect(parseUnifiedZero(wide).added).toEqual(parseUnifiedZero(zero).added);
+    expect(parseUnifiedZero(wide).added.map((a) => [a.line, after[a.line - 1]])).toEqual([[2, 'B'], [5, 'E'], [8, 'g']]);
+  });
+
   it('member keeps a scope to its paths', async () => {
     const { dir } = repo();
     weaken(dir);

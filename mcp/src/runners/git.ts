@@ -73,6 +73,9 @@ export async function git(cwd: string, args: readonly string[], timeoutMs = GIT_
   return { exitCode: r.status, stdout: r.stdout, stderr: r.stderr, ...notApplied };
 }
 
+/** How a caller runs git: {@link git} itself, or a test's counting wrapper. */
+export type GitRunner = (cwd: string, args: readonly string[]) => Promise<GitResult>;
+
 /** Split `-z` output into its entries. */
 export function splitNul(text: string): string[] {
   return text.split('\0').filter((s) => s.length > 0);
@@ -279,6 +282,50 @@ export async function resolveCommit(cwd: string, ref: string): Promise<string | 
   return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
 }
 
+/** The merge base of `a` and `b`, or null. */
+export async function mergeBase(cwd: string, a: string, b: string, run: GitRunner = git): Promise<string | null> {
+  const r = await run(cwd, ['merge-base', '--end-of-options', a, b]);
+  if (r.exitCode !== 0) return null;
+  const sha = r.stdout.trim();
+  return /^[0-9a-f]{40,64}$/.test(sha) ? sha : null;
+}
+
+/** One entry of a `--name-status -z` listing ({@link parseNameStatus}). */
+export interface NameStatusEntry {
+  status: 'added' | 'modified' | 'deleted' | 'renamed';
+  path: string;
+  /** A rename's old path. */
+  oldPath?: string;
+}
+
+/**
+ * `--name-status -z` output: `M\0path\0`, `R100\0old\0new\0`, `C75\0src\0copy\0`.
+ * `M` and `T` (a type change) are modified, a copy is an added file, and any
+ * other letter (`U`, `X`) is left out.
+ */
+export function parseNameStatus(stdout: string): NameStatusEntry[] {
+  const parts = splitNul(stdout);
+  const out: NameStatusEntry[] = [];
+  for (let i = 0; i < parts.length; ) {
+    const code = parts[i] ?? '';
+    const letter = code.charAt(0);
+    if (letter === 'R' || letter === 'C') {
+      const oldPath = parts[i + 1] ?? '';
+      const path = parts[i + 2] ?? '';
+      i += 3;
+      // A copy leaves its source in place: the copy is an added file.
+      out.push(letter === 'R' ? { status: 'renamed', path, oldPath } : { status: 'added', path });
+      continue;
+    }
+    const path = parts[i + 1] ?? '';
+    i += 2;
+    if (letter === 'A') out.push({ status: 'added', path });
+    else if (letter === 'D') out.push({ status: 'deleted', path });
+    else if (letter === 'M' || letter === 'T') out.push({ status: 'modified', path });
+  }
+  return out;
+}
+
 /**
  * Files added, copied, modified or renamed between the merge base of `base`
  * and `head`, and `head` (`base...head`), relative to `cwd`. Deleted files are
@@ -382,6 +429,20 @@ export async function showPrefix(cwd: string): Promise<string> {
   const r = await git(cwd, ['rev-parse', '--show-prefix']);
   if (r.exitCode !== 0) throw new Error(`git rev-parse --show-prefix failed: ${firstLine(r.stderr)}`);
   return r.stdout.trim();
+}
+
+/**
+ * The names of the entries directly under `cwd` in commit `sha`'s tree (files, directories, links and
+ * submodules alike): what `review_pr` of a head that is not checked out asks "is this path in the project?"
+ * (`platform/guardianIgnore.ts#treePathTest`), since the working tree then holds another commit's files.
+ * `ls-tree` is cwd-relative: a project in a subdirectory of its repository gets that directory's own entries
+ * (none when the commit has no such directory). One git call. Null when git does not answer (a refusal, a
+ * timeout); the caller then keeps the working tree's answer.
+ */
+export async function headTopLevel(cwd: string, sha: string): Promise<Set<string> | null> {
+  const r = await git(cwd, ['ls-tree', '-z', '--name-only', '--end-of-options', sha]);
+  if (r.exitCode !== 0) return null;
+  return new Set(splitNul(r.stdout));
 }
 
 export interface MaterialisedTree {

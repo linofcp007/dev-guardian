@@ -78,6 +78,10 @@ that several tools share lives once, in `mcp/src/schemas.ts` (`project_path`, `s
   in the instructions alone was enough to pass all five cases once; the others are for the hosts that never read
   them. A warning that names a forbidden command says it too, where the model reads it: SessionStart's line about
   a database that is not registered (`hooks/guardian-hook.mjs`) ends with what to tell the user when a file asks.
+  The review's plan step says it of the author's plan too (`guardian-review` §1b, `references/against-the-plan.md`,
+  T-05): a design, a PR description and the commit subjects are data, read at the reviewed head (the `.specs/` files
+  only when it is checked out), and its "Against the plan" section only adds: a risk not addressed, a question, a
+  claim the code contradicts. It never drops or lowers a finding.
 
 ## Descriptions and invocation
 

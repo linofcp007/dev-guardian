@@ -59,6 +59,29 @@ export interface BaselineFile {
   version: BaselineVersion;
   generated_at: string;
   entries: BaselineEntry[];
+  /**
+   * The files whose taint analysis Semgrep gave up on in the run that wrote
+   * this baseline, each with its content as git stored it then (3.18.0,
+   * `ci/taintIncomplete.ts`). Additive, like `identity`: absent when there are
+   * none, ignored by every older reader, and never carried from one `baseline
+   * update` to the next.
+   */
+  taint_incomplete?: TaintIncompleteRecord[];
+}
+
+/**
+ * One file of {@link BaselineFile.taint_incomplete}: a Semgrep run's
+ * `Fixpoint timeout` there, and the file's git object id when it was
+ * recorded. Named, like `match_id`, with no credential keyword (gitleaks).
+ */
+export interface TaintIncompleteRecord {
+  tool: 'semgrep';
+  /** Project-relative, `/`-separated, without `./`. */
+  file: string;
+  /** `git hash-object` of the file after the run (40 or 64 hex) — its content as git stores it. */
+  blob: string;
+  /** Every timeout in the file was the plugin's own pack's: only a pack rule's finding is read against it. */
+  pack_only?: true;
 }
 
 /**

@@ -894,6 +894,63 @@ describe('perf_check — k6 (review of 3.6, finding 14)', () => {
     };
     expect(fine).toMatchObject({ ok: true, passed: true });
   });
+
+  /**
+   * What `k6 run --summary-export` writes, from k6 2.4.0's `internal/js/summary-wrapper.js` (`oldJSONSummary`): each
+   * metric's values, its thresholds as `{ "<expression>": !threshold.ok }` (true: it failed), a Rate's rate as
+   * `value`, and `root_group.checks` turned into an object keyed by the check's name (`transformGroup`). The default
+   * `summaryTrendStats` is avg, min, med, max, p(90), p(95): no p(99).
+   */
+  const EXPORTED = {
+    root_group: {
+      name: '', path: '', id: 'd41d8cd98f00b204e9800998ecf8427e', groups: {},
+      checks: { 'status is 200': { name: 'status is 200', path: '::status is 200', id: '6210a8cd14cd70477eba5c5e4cb3fb5f', passes: 2, fails: 0 } },
+    },
+    metrics: {
+      checks: { passes: 2, fails: 0, value: 1 },
+      http_req_duration: { avg: 1.53, min: 0.98, med: 1.53, max: 2.08, 'p(90)': 1.97, 'p(95)': 2.02, thresholds: { 'p(95)<5000': false } },
+      http_req_failed: { passes: 0, fails: 2, value: 0, thresholds: { 'rate<0.01': false } },
+      http_reqs: { count: 2, rate: 18.4 },
+      'http_reqs{status:200}': { count: 2, rate: 18.4, thresholds: { 'count>100': true } },
+      iterations: { count: 2, rate: 18.4 },
+    },
+  };
+
+  it("summarises k6's --summary-export: each metric's thresholds and the failed ones, a check no threshold, p99 null by default", async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'smoke.js'), 'export default function () {}\n', 'utf8');
+    mockK6({ exitCode: 99, summary: EXPORTED });
+    const r = (await getTool('perf_check').handler({ project_path: project, k6_script_path: 'smoke.js' }, makePlugin(project))) as {
+      ok: boolean;
+      summary?: Record<string, unknown>;
+    };
+    expect(r.ok).toBe(true);
+    expect(r.summary).toEqual({
+      requests_total: 2,
+      error_rate: 0,
+      latency_avg_ms: 1.53,
+      latency_p95_ms: 2.02,
+      latency_p99_ms: null,
+      thresholds_configured: ['http_req_duration: p(95)<5000', 'http_req_failed: rate<0.01', 'http_reqs{status:200}: count>100'],
+      thresholds_failed: ['http_reqs{status:200}: count>100'],
+    });
+  });
+
+  it('turns off k6\'s usage report with a flag, never a K6_* variable (a K6_* setting keys the series)', async () => {
+    const project = tempProject();
+    writeFileSync(join(project, 'smoke.js'), 'export default function () {}\n', 'utf8');
+    for (const name of Object.keys(process.env)) if (name.toUpperCase().startsWith('K6_')) vi.stubEnv(name, undefined);
+    mockK6({ exitCode: 0, summary: SUMMARY });
+    try {
+      await getTool('perf_check').handler({ project_path: project, k6_script_path: 'smoke.js' }, makePlugin(project));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const call = vi.mocked(runProcess).mock.calls.map(([o]) => o).find((o) => o.command === 'k6');
+    expect(call?.args?.slice(0, 2)).toEqual(['run', '--no-usage-report']);
+    expect(call?.args?.at(-1)).toBe(join(project, 'smoke.js'));
+    expect(Object.keys(call?.env ?? {}).filter((name) => name.toUpperCase().startsWith('K6_'))).toEqual([]);
+  });
 });
 
 // silence unused-import warnings

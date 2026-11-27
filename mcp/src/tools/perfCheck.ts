@@ -7,8 +7,9 @@
  *
  * Lighthouse summary surfaces Core Web Vitals (LCP, CLS, INP/TBT, FCP, SI,
  * TTFB) plus the 5 high-level scores (performance, a11y, best-practices,
- * SEO, PWA). k6 summary surfaces request count, error rate, p95/p99
- * latency, plus the names of every configured threshold.
+ * SEO, PWA). k6 summary surfaces request count, error rate, average and
+ * p95 latency (p99 when the script's `summaryTrendStats` asks for it), plus
+ * every threshold the script configures and the ones that failed.
  *
  * A Lighthouse run additionally reads `.guardian/budgets.yml` (when present)
  * and reports any Core Web Vital / bundle-size budget it exceeds as a
@@ -40,6 +41,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import type { PluginContext } from '../context.js';
 import { budgetViolationFindings, evaluatePerfBudgets, loadBudgets, type PerfBudgets } from '../budgets/budgets.js';
@@ -57,7 +59,8 @@ import {
   seriesHint,
   seriesRunOf,
 } from '../metrics/perfSeries.js';
-import { hashProjectFile, projectPathKind } from '../platform/projectFs.js';
+import { type K6InputReader, k6LocalInputs } from '../metrics/k6Inputs.js';
+import { hashProjectFile, isWithinDir, PROJECT_FILE_MAX_BYTES, projectPathKind, readProjectBytes } from '../platform/projectFs.js';
 import { DEFAULT_RETENTION_SCANS } from '../storage/maintenance.js';
 import { runProcess } from '../runners/processRunner.js';
 import { httpUrl, pathArgProblem } from '../platform/toolArgs.js';
@@ -65,7 +68,6 @@ import { httpUrlField, ProjectPath } from '../schemas.js';
 import type { DomainError, Finding, ToolResult } from '../types.js';
 import { ensureReportDir, scannerAvailable } from './scanHelpers.js';
 import {
-  asArray,
   getNumber,
   getProp,
   getString,
@@ -534,9 +536,16 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
   // server was started with (review of 3.6, finding 14). Its `K6_*` settings
   // key the series, read from this object: what k6 is handed.
   const env = allowlistedEnv((name) => K6_ENV.test(name));
+  // The series' inputs as k6 reads them at its start, so read before it runs: the script's content and the
+  // local modules it imports (`metrics/k6Inputs.ts`, which never throws).
+  const scriptRel = relative(opts.projectPath, script).split(sep).join('/');
+  const contentSha256 = await hashProjectFile(opts.projectPath, script);
+  const inputs = k6LocalInputs(scriptRel, k6ModuleReader(opts.projectPath));
   const result = await runProcess({
     command: 'k6',
-    args: ['run', `--summary-export=${summaryFile}`, script],
+    // `--no-usage-report`: k6 otherwise sends Grafana a usage report on every run (and keeps an installation id in
+    // the user's config folder). A flag, never the `K6_NO_USAGE_REPORT` variable: a `K6_*` setting keys the series.
+    args: ['run', '--no-usage-report', `--summary-export=${summaryFile}`, script],
     cwd: opts.projectPath,
     env,
     extendEnv: false,
@@ -564,10 +573,10 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
 
   const summary = summariseK6(parsed);
   // The series is the run's inputs only: the script as the project names it, its content (its
-  // `options` are in it) and the `K6_*` settings it was handed. Never a VU count k6 measured: an
-  // arrival-rate executor adds VUs as the target slows down (keyed by the max, a slower run left its
-  // series), and k6 samples them from the start of the VUs' init, so a minimum jitters when the init
-  // outlasts the first sample (keyed by it, every run was new).
+  // `options` are in it), the local modules it imports and the `K6_*` settings it was handed. Never a VU
+  // count k6 measured: an arrival-rate executor adds VUs as the target slows down (keyed by the max, a
+  // slower run left its series), and k6 samples them from the start of the VUs' init, so a minimum
+  // jitters when the init outlasts the first sample (keyed by it, every run was new).
   const history = recordPerfRun(opts.ctx, {
     projectPath: opts.projectPath,
     scanId: opts.scanId,
@@ -575,7 +584,7 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
     reportPath: summaryFile,
     tool: 'k6',
     toolVersion: undefined,
-    series: k6Series(relative(opts.projectPath, script).split(sep).join('/'), await hashProjectFile(opts.projectPath, script), k6Settings(env)),
+    series: k6Series(scriptRel, contentSha256, k6Settings(env), inputs),
     samples: k6Samples(summary),
   });
   return {
@@ -594,17 +603,63 @@ async function runK6(opts: K6Opts): Promise<ToolResult<Record<string, unknown>>>
 /** k6's exit code for a run that completed with a failed threshold. */
 const K6_THRESHOLDS_FAILED = 99;
 
+/**
+ * What `k6LocalInputs` reads the script's modules with: contained project reads (a link out of the project, a
+ * FIFO or a directory refused, never waited on), each under the project file cap, which a larger module is keyed
+ * past (`too-large`).
+ */
+export function k6ModuleReader(projectPath: string): K6InputReader {
+  return {
+    read(rel) {
+      const r = readProjectBytes(projectPath, rel, PROJECT_FILE_MAX_BYTES);
+      if (r.status === 'ok') return { kind: 'ok', bytes: r.bytes };
+      if (r.status === 'absent') return { kind: 'absent' };
+      return r.reason === 'too-large' ? { kind: 'too-large' } : { kind: 'refused' };
+    },
+    resolve(fromDir, spec) {
+      let abs: string;
+      try {
+        abs = spec.startsWith('file://') ? fileURLToPath(spec) : resolve(projectPath, fromDir, spec);
+      } catch {
+        return null;
+      }
+      return isWithinDir(projectPath, abs) ? relative(projectPath, abs).split(sep).join('/') : null;
+    },
+  };
+}
+
 /** What k6 is given besides the test command's allowlist: its own options and the proxy. */
 const K6_ENV = /^(?:K6_.+|HTTPS?_PROXY|NO_PROXY|ALL_PROXY|SSL_CERT_FILE|SSL_CERT_DIR)$/;
+
+/**
+ * The script's thresholds, as `--summary-export` writes them: under each metric (a submetric keeps k6's spelling,
+ * `http_reqs{status:200}`), `thresholds: { "<expression>": <crossed> }` — `true` when it failed (k6 writes
+ * `!threshold.ok`). Each one is `"<metric>: <expression>"`, sorted. A check is no threshold: `root_group.checks`
+ * is never read here.
+ */
+function k6Thresholds(metrics: unknown): { configured: string[]; failed: string[] } {
+  const configured: string[] = [];
+  const failed: string[] = [];
+  if (metrics !== null && typeof metrics === 'object') {
+    for (const [name, metric] of Object.entries(metrics)) {
+      const thresholds = getProp(metric, 'thresholds');
+      if (thresholds === null || typeof thresholds !== 'object' || Array.isArray(thresholds)) continue;
+      for (const [expression, crossed] of Object.entries(thresholds)) {
+        const id = `${name}: ${expression}`;
+        configured.push(id);
+        if (crossed === true) failed.push(id);
+      }
+    }
+  }
+  return { configured: configured.sort(), failed: failed.sort() };
+}
 
 function summariseK6(root: unknown): Record<string, unknown> {
   const metrics = getProp(root, 'metrics');
   const requests = getProp(metrics, 'http_reqs');
   const duration = getProp(metrics, 'http_req_duration');
   const failed = getProp(metrics, 'http_req_failed');
-  const thresholds = getProp(root, 'root_group')
-    ? asArray(getProp(getProp(root, 'root_group'), 'checks')).map((c) => getString(c, 'name'))
-    : [];
+  const thresholds = k6Thresholds(metrics);
 
   return {
     requests_total: getNumber(requests, 'count') ?? null,
@@ -612,8 +667,10 @@ function summariseK6(root: unknown): Record<string, unknown> {
     error_rate: getNumber(failed, 'rate') ?? getNumber(failed, 'value') ?? null,
     latency_avg_ms: getNumber(duration, 'avg') ?? null,
     latency_p95_ms: getNumber(duration, 'p(95)') ?? null,
+    // k6 writes p(99) only when the script's `summaryTrendStats` asks for it: null otherwise.
     latency_p99_ms: getNumber(duration, 'p(99)') ?? null,
-    thresholds_configured: thresholds.filter((t) => t !== undefined),
+    thresholds_configured: thresholds.configured,
+    thresholds_failed: thresholds.failed,
   };
 }
 
