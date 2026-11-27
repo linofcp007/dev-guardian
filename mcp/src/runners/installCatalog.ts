@@ -159,6 +159,15 @@ export const PSALM_PHAR_SHA256 = '4cebb4d62910800e8ee55153a39c60002e46fe036d13ba
 const PSALM_PHAR_URL = `https://github.com/vimeo/psalm/releases/download/${PSALM_VERSION}/psalm.phar`;
 const GOSEC_VERSION = '2.30.0';
 const SHELLCHECK_VERSION = '0.11.0';
+/** The k6 release a Linux install fetches ({@link PINNED_RELEASES}); `npm run pins` reports a newer one. */
+const K6_VERSION = '2.4.0';
+/**
+ * The squawk release every install asks PyPI for (`squawk-cli`, the Rust binary in a wheel per platform). PyPI
+ * never lets a file be uploaded twice under one name, so the version pins the content — where squawk's GitHub
+ * release assets can be replaced (not immutable) and come with no checksums file. 2.71.0 (2026-10-29) is the
+ * newest on PyPI at least two weeks old on 2026-11-27: 2.72.0 and 2.73.0 were never uploaded there.
+ */
+export const SQUAWK_VERSION = '2.71.0';
 
 /**
  * detekt's command-line jar, from Maven Central — not the GitHub release's:
@@ -323,8 +332,20 @@ const GOVULNCHECK_MODULE = 'golang.org/x/vuln/cmd/govulncheck@v1.9.0';
  * the asset. Its POSIX archives hold the binary at
  * `shellcheck-v0.11.0/shellcheck` (`tar -tzf`, the `member` below); the
  * Windows ZIP holds `shellcheck.exe` at the root.
+ *
+ * k6 2.4.0 (2026-11-12) is not an immutable release, so the sums are the
+ * guard: each was checked on 2026-11-27 three ways, and they agreed — the
+ * archive downloaded and hashed independently, the release's own
+ * `k6-v2.4.0-checksums.txt` (its GitHub asset digest a8233db9…ee5a), and the
+ * digest GitHub records for the asset. Every archive nests the binary in
+ * `k6-v2.4.0-<os>-<arch>/` (`tar -tzf`, `unzip -l`: the `member` below). Only
+ * LINUX installs from it: the macOS and Windows assets are ZIPs that
+ * {@link releaseArchiveInstaller} (a `.tar.gz`) and
+ * {@link windowsReleaseInstaller} (`<tool>.exe` at the ZIP's root) cannot
+ * unpack, so k6 stays on Homebrew there and on scoop, choco and winget,
+ * unpinned. Their sums, checked the same way, are used by no installer.
  */
-export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'gosec' | 'shellcheck', PinnedRelease>> = {
+export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'gosec' | 'shellcheck' | 'k6', PinnedRelease>> = {
   syft: {
     version: SYFT_VERSION,
     base: `https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}`,
@@ -394,6 +415,18 @@ export const PINNED_RELEASES: Readonly<Record<'syft' | 'trivy' | 'gitleaks' | 'g
         member: `shellcheck-v${SHELLCHECK_VERSION}/shellcheck`,
       },
       'windows-amd64': { file: `shellcheck-v${SHELLCHECK_VERSION}.zip`, sha256: '8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e' },
+    },
+  },
+  k6: {
+    version: K6_VERSION,
+    base: `https://github.com/grafana/k6/releases/download/v${K6_VERSION}`,
+    // One line per Linux asset: scripts/test-docker.mjs reads them from this file.
+    assets: {
+      'linux-amd64': { file: `k6-v${K6_VERSION}-linux-amd64.tar.gz`, sha256: '5a5ecf23529ccf93135bc7e5b0c1cd5126ecf5f2672e22eed1556a0ab74abb87', member: `k6-v${K6_VERSION}-linux-amd64/k6` },
+      'linux-arm64': { file: `k6-v${K6_VERSION}-linux-arm64.tar.gz`, sha256: '7bb415f59d81ad649a86f6da6b3e1bd2e4e64e84909deef13e9bca70608abccb', member: `k6-v${K6_VERSION}-linux-arm64/k6` },
+      'darwin-amd64': { file: `k6-v${K6_VERSION}-macos-amd64.zip`, sha256: 'e4ab42bf4546fb13d54008dee1d018a37ff74f74536da27496c12cc1dfedfd59', member: `k6-v${K6_VERSION}-macos-amd64/k6` },
+      'darwin-arm64': { file: `k6-v${K6_VERSION}-macos-arm64.zip`, sha256: '5715745adf4e5ebc92965b26b7785e54e685a370466448cb587b383330a24f20', member: `k6-v${K6_VERSION}-macos-arm64/k6` },
+      'windows-amd64': { file: `k6-v${K6_VERSION}-windows-amd64.zip`, sha256: 'aaa90b3afc336faf90172c7addf45c4f41305f6f188e3d564f79466e80ac68e3', member: `k6-v${K6_VERSION}-windows-amd64/k6.exe` },
     },
   },
 };
@@ -784,13 +817,34 @@ export const TOOL_CATALOG: Record<string, ToolMeta> = {
     probe: { command: 'k6', args: ['version'] },
     required_by: ['perf_check'],
     install: {
+      // Windows and macOS stay on their package managers, unpinned: k6's ZIPs nest the binary, which neither
+      // pinned installer unpacks (PINNED_RELEASES).
       win32: {
         scoop: scoopInstall('k6'),
         choco: chocoInstall('k6'),
         winget: wingetInstall('k6.k6'),
       },
-      linux: { apt: aptInstall('k6') },
+      // The pinned release archive, sha256-checked, into ~/.local/bin: `apt-get install k6` needed Grafana's own
+      // apt repository and key first, which nothing added, and failed on a stock Debian or Ubuntu.
+      linux: { curl: releaseArchiveInstaller('k6', 'linux') },
       darwin: { brew: brewInstall('k6') },
+    },
+    default: false,
+  },
+  // review_pr's Postgres migration linter, run only when the reviewed tree has a root .squawk.toml
+  // (runners/squawkRun.ts). The same pinned wheel everywhere, through pipx (semgrep's shape).
+  squawk: {
+    name: 'squawk',
+    version_floor: '2.0.0',
+    probe: { command: 'squawk', args: ['--version'] },
+    required_by: ['review_pr'],
+    install: {
+      win32: {
+        scoop: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`),
+        choco: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`),
+      },
+      linux: { pipx: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`) },
+      darwin: { pipx: pipxInstall(`squawk-cli==${SQUAWK_VERSION}`) },
     },
     default: false,
   },

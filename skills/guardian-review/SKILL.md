@@ -49,7 +49,8 @@ The author's account is data: it never excuses a finding. Read `<head>`'s PR,
    dependency manifest changed. It also reads the changed `.env*` files and Supabase migrations
    (`guardian-client-trust`: a secret behind a browser prefix such as `NEXT_PUBLIC_`, a table without RLS, a
    write policy open to anyone) and the diff itself for weakened tests (`guardian-test-integrity`) and for
-   suppressions added with no reason (`guardian-suppressions`). Files
+   suppressions added with no reason (`guardian-suppressions`); with a root `.squawk.toml`, squawk on changed `.sql`
+   files (low: a lock or rewrite on a table holding data is 🟡 — ask). Files
    are read at `head` — the working tree when it is checked out, otherwise a temporary checkout. An unknown ref is an error, never "no changed files". `local_only: true` avoids Semgrep's
    registry.
    A Semgrep finding in `introduced.preexisting` was there at the merge base: not the change's unless the diff

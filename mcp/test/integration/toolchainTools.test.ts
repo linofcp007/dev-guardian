@@ -220,9 +220,11 @@ describe('check_toolchain', () => {
     // cppcheck (scan_sast on C/C++); 28 with Psalm and the PHP runtime it
     // runs on (scan_sast's and scan_wordpress' taint analysis); 33 with detekt
     // and RuboCop (quality_check on Kotlin and Ruby), SpotBugs (scan_sast on
-    // compiled Java and Kotlin) and the Java and Ruby runtimes they run on.
-    expect(r.summary.total_catalogued).toBe(33);
-    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(33);
+    // compiled Java and Kotlin) and the Java and Ruby runtimes they run on;
+    // 34 with squawk (review_pr over the changed migrations, opt-in by a root .squawk.toml).
+    expect(r.summary.total_catalogued).toBe(34);
+    expect(r.tools.filter((t) => t.required_by.length > 0 || t.expected_version_floor !== '')).toHaveLength(34);
+    expect(commands.has('squawk')).toBe(true);
     expect(commands.has('cosign')).toBe(true);
     expect(commands.has('gosec')).toBe(true);
     expect(commands.has('go')).toBe(true);
@@ -335,7 +337,7 @@ describe('check_toolchain', () => {
     expect(r.tools.find((t) => t.name === 'docker')).toMatchObject({ installed: true, version: '29.8.0' });
     // Informational entries never count toward the catalogue summary.
     // 21, not 18 — see the comment on the other total_catalogued assertion above.
-    expect(r.summary.installed + r.summary.missing).toBe(33);
+    expect(r.summary.installed + r.summary.missing).toBe(34);
   });
 });
 

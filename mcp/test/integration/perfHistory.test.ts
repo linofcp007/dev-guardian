@@ -12,8 +12,11 @@
  * budgets, the exit codes) — the response only gains `history`.
  */
 
-import { writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../src/runners/processRunner.js', () => ({ runProcess: vi.fn() }));
@@ -497,5 +500,124 @@ describe('perf_check history: k6', () => {
     expect(r.ok).toBe(true);
     expect(r.history).toMatchObject({ recorded: false, reason: 'the run measured no metric, so it is not kept' });
     expect(perfRows(s, project)).toEqual([]);
+  });
+});
+
+// DG-15: the local modules a k6 script imports are inputs of its series (src/metrics/k6Inputs.ts), read before the
+// run. The project is test/fixtures/k6/project/, laid out as grafana/quickpizza's k6/foundations scripts are: its
+// load shapes live in lib/load-options.js, so an edit there is another load.
+describe('perf_check history: k6, the local modules the script imports', () => {
+  const FIXTURE = fileURLToPath(new URL('../fixtures/k6/project/', import.meta.url));
+  beforeEach(() => {
+    for (const name of Object.keys(process.env)) if (name.toUpperCase().startsWith('K6_')) vi.stubEnv(name, undefined);
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  function scriptRun(p95: number): void {
+    vi.mocked(scannerAvailable).mockImplementation(async (name) => (name === 'k6' ? '/fake/bin/k6' : null));
+    vi.mocked(runProcess).mockImplementationOnce(async (opts) => {
+      const file = opts.args?.find((a) => a.startsWith('--summary-export='))?.replace('--summary-export=', '');
+      if (file !== undefined) {
+        writeFileSync(file, JSON.stringify({ metrics: { http_reqs: { count: 4, rate: 9.9 }, http_req_duration: { avg: p95 / 2, 'p(95)': p95 } } }), 'utf8');
+      }
+      return { outcome: 'completed' as const, exitCode: 0, stdout: '', stderr: '', truncated: false };
+    });
+  }
+  async function run(s: Seeded, project: string, script: string, p95 = 20): Promise<{ ok: boolean; history?: History }> {
+    scriptRun(p95);
+    return (await tool('perf_check').handler({ project_path: project, k6_script_path: script }, s.plugin)) as { ok: boolean; history?: History };
+  }
+  const fixtureProject = (): string => {
+    const project = projectDir('perf-k6-mod-');
+    cpSync(FIXTURE, project, { recursive: true });
+    return project;
+  };
+  const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
+  /** The 3.17.0 key of a script with no K6_* setting, written out as 3.17.0 computed it. */
+  const oldKey = (script: string, content: string): string => sha(JSON.stringify(['k6', script, sha(content), sha(JSON.stringify([]))]));
+
+  it('11: an edit of an imported module starts a new series, and the module restored brings its series back, judged', async () => {
+    const s = freshPlugin();
+    const project = fixtureProject();
+    const options = join(project, 'lib', 'load-options.js');
+    const original = readFileSync(options, 'utf8');
+    for (let i = 0; i < 3; i += 1) await run(s, project, 'load.js');
+    const before = await run(s, project, 'load.js', 40);
+    expect(verdictOf(before.history, 'k6.latency_p95_ms')).toBe('regressed');
+    expect(before.history?.series).toMatch(/^k6 · load\.js \([0-9a-f]{12}\) · 5 local modules #[0-9a-f]{6}$/);
+    // The load changed in the module, the script did not: another load, never a regression of the old one.
+    writeFileSync(options, original.replace('iterations: 2,', 'iterations: 200,'), 'utf8');
+    const edited = await run(s, project, 'load.js', 40);
+    expect(verdictOf(edited.history, 'k6.latency_p95_ms')).toBe('new');
+    expect(edited.history?.series).not.toBe(before.history?.series);
+    writeFileSync(options, original, 'utf8');
+    const restored = await run(s, project, 'load.js', 40);
+    expect(restored.history?.series).toBe(before.history?.series);
+    expect(verdictOf(restored.history, 'k6.latency_p95_ms')).toBe('regressed');
+  });
+
+  it('13: a module named at run time leaves the 3.17.0 key, and the label says the inputs are partly keyed', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-mod-');
+    const text = 'const shapes = require(__ENV.SHAPES);\nexport const options = shapes.options;\nexport default function () {}\n';
+    writeFileSync(join(project, 'dynamic.js'), text, 'utf8');
+    const r = await run(s, project, 'dynamic.js');
+    expect(r.history?.series).toMatch(/^k6 · dynamic\.js \([0-9a-f]{12}\) · inputs partly keyed$/);
+    expect(perfRows(s, project)[0]?.meta?.['series']).toBe(oldKey('dynamic.js', text));
+  });
+
+  it('a module out of the project is never read: the 3.17.0 key, and the label says the inputs are partly keyed', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-mod-');
+    const outside = projectDir('perf-k6-out-');
+    writeFileSync(join(outside, 'shared.js'), 'export const stages = [];\n', 'utf8');
+    const text = `import { stages } from '../${outside.split(/[\\/]/).pop() ?? ''}/shared.js';\nexport default function () {}\n`;
+    writeFileSync(join(project, 'load.js'), text, 'utf8');
+    const r = await run(s, project, 'load.js');
+    expect(r.history?.series).toMatch(/^k6 · load\.js \([0-9a-f]{12}\) · inputs partly keyed$/);
+    expect(perfRows(s, project)[0]?.meta?.['series']).toBe(oldKey('load.js', text));
+  });
+
+  it('14: no path of a module, and no module digest, is stored', async () => {
+    const s = freshPlugin();
+    const project = fixtureProject();
+    await run(s, project, 'load.js');
+    const meta = JSON.stringify(perfRows(s, project)[0]?.meta);
+    expect(meta).not.toMatch(/lib\/|load-options|frontend|target\.js|spike/);
+    expect(meta).not.toContain(sha(readFileSync(join(project, 'lib', 'load-options.js'))));
+  });
+
+  it('a module over the project file cap is keyed by that alone, never read: another byte of it is the same key, said by the label', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-mod-');
+    writeFileSync(join(project, 'load.js'), "import { data } from './lib/bundle.js';\nexport default function () {}\n", 'utf8');
+    mkdirSync(join(project, 'lib'));
+    const big = Buffer.alloc(8 * 1024 * 1024 + 1, 0x20);
+    writeFileSync(join(project, 'lib', 'bundle.js'), big);
+    const r = await run(s, project, 'load.js');
+    expect(r.ok).toBe(true);
+    expect(r.history?.series).toMatch(/^k6 · load\.js \([0-9a-f]{12}\) · 1 local module #[0-9a-f]{6} · inputs partly keyed$/);
+    writeFileSync(join(project, 'lib', 'bundle.js'), Buffer.concat([big, Buffer.from(' ')]));
+    expect((await run(s, project, 'load.js')).history?.series).toBe(r.history?.series);
+  });
+
+  it.skipIf(process.platform === 'win32')('T16: a module that is a FIFO is never read: another key than its readable form, and partly keyed', async () => {
+    const s = freshPlugin();
+    const project = projectDir('perf-k6-mod-');
+    const text = "import { stages } from './stages.js';\nexport default function () {}\n";
+    writeFileSync(join(project, 'load.js'), text, 'utf8');
+    writeFileSync(join(project, 'stages.js'), 'export const stages = [];\n', 'utf8');
+    const readable = await run(s, project, 'load.js');
+    rmSync(join(project, 'stages.js'));
+    expect(spawnSync('mkfifo', [join(project, 'stages.js')]).status).toBe(0);
+    const fifo = await run(s, project, 'load.js');
+    expect(fifo.ok).toBe(true);
+    expect(fifo.history?.series).toMatch(/ · 1 local module #[0-9a-f]{6} · inputs partly keyed$/);
+    const keys = perfRows(s, project).map((r) => r.meta?.['series']);
+    expect(new Set(keys).size).toBe(2);
+    expect(keys).not.toContain(oldKey('load.js', text));
+    expect(readable.history?.series).not.toBe(fifo.history?.series);
   });
 });

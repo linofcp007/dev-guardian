@@ -131,7 +131,7 @@ const pins = [];
 /** @param {string} ownerRepo */
 const fromGithub = (ownerRepo) => () => latestRelease(ownerRepo);
 
-const RELEASE_REPOS = { syft: 'anchore/syft', trivy: 'aquasecurity/trivy', gitleaks: 'gitleaks/gitleaks', gosec: 'securego/gosec', shellcheck: 'koalaman/shellcheck' };
+const RELEASE_REPOS = { syft: 'anchore/syft', trivy: 'aquasecurity/trivy', gitleaks: 'gitleaks/gitleaks', gosec: 'securego/gosec', shellcheck: 'koalaman/shellcheck', k6: 'grafana/k6' };
 for (const [name, release] of Object.entries(PINNED_RELEASES)) {
   const ownerRepo = RELEASE_REPOS[/** @type {keyof typeof RELEASE_REPOS} */ (name)];
   pins.push({ name: `${name} (install_toolchain)`, pinned: release.version, latest: fromGithub(ownerRepo), files: Object.values(release.assets).map((a) => a.file) });
@@ -144,6 +144,11 @@ pins.push({ name: 'cppcheck (scoop, winget)', pinned: fromCatalog(/const CPPCHEC
 pins.push({ name: 'detekt (install_toolchain)', pinned: fromCatalog(/const DETEKT_VERSION = '([^']+)'/), latest: fromGithub('detekt/detekt') });
 pins.push({ name: 'spotbugs (install_toolchain)', pinned: fromCatalog(/const SPOTBUGS_VERSION = '([^']+)'/), latest: fromGithub('spotbugs/spotbugs') });
 pins.push({ name: 'findsecbugs (install_toolchain)', pinned: fromCatalog(/const FINDSECBUGS_VERSION = '([^']+)'/), latest: fromGithub('find-sec-bugs/find-sec-bugs') });
+pins.push({
+  name: 'squawk-cli (install_toolchain, pipx)',
+  pinned: fromCatalog(/export const SQUAWK_VERSION = '([^']+)'/),
+  latest: async () => ({ version: await latestPypi('squawk-cli') }),
+});
 pins.push({
   name: 'rubocop (install_toolchain, gem)',
   pinned: fromCatalog(/const RUBOCOP_VERSION = '([^']+)'/),

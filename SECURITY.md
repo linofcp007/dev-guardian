@@ -829,8 +829,9 @@ project's own build and test commands.
 | WPScan's database (`data.wpscan.org`) | `wp_vuln_check` runs `wpscan --update` | only when WPScan reports its local database missing (`scan_aborted: Update required`), once per call, then the scan runs again; never with `GUARDIAN_OFFLINE=1` (the scan is then failed, naming `wpscan --update`). An existing database is never refreshed: scans pass `--no-update`. |
 | `api.wordpress.org` | `wp_audit` (`mode` install or bulk: WP-CLI `verify-checksums`) | per call |
 | The target you name | `perf_check` (Lighthouse URL, k6 script) | per call |
+| k6's anonymous usage report (Grafana) | **disabled by dev-guardian**: `perf_check` runs `k6 run --no-usage-report` (`mcp/src/tools/perfCheck.ts`) — a flag, never `K6_NO_USAGE_REPORT`, a `K6_*` setting that would start a new series | never. k6 sends it on every run by default, with an installation id it keeps in the user's config folder; with the flag it neither sends the report nor reads or creates that file. |
 | GitHub, through `gh` and `git` | `create_github_issues`, `create_fix_pr` with `apply: true` | only when asked; dry runs push nothing |
-| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, gem; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives and Maven Central jars) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture"); so are Psalm's release PHAR and detekt's jar (Maven Central, its signature verified when pinned) before they are copied, and SpotBugs' archive and the FindSecBugs jar (Maven Central) before they are unpacked; RuboCop is a pinned gem from RubyGems (`gem install --user-install --conservative`) |
+| Package managers and install scripts (winget, scoop, choco, apt, brew, pipx, npm, uv, cargo, go, gem; `curl` and PowerShell's `Invoke-WebRequest` for pinned GitHub release archives and Maven Central jars) | `install_toolchain` | only when asked; `dry_run` prints the commands. Syft, Trivy, gitleaks and cosign are pinned to one release and sha256-checked before they are unpacked (see "Hardening posture"); so are Psalm's release PHAR and detekt's jar (Maven Central, its signature verified when pinned) before they are copied, and SpotBugs' archive and the FindSecBugs jar (Maven Central) before they are unpacked; RuboCop is a pinned gem from RubyGems (`gem install --user-install --conservative`), and squawk a pinned PyPI version (`pipx install squawk-cli==2.71.0`: PyPI never takes a second upload of a file name) |
 | The dev-guardian repository (`git ls-remote`) | `dev-guardian ci-init` | only when the release tag is not in the local checkout |
 | Sigstore (Fulcio, Rekor — or GitHub's own Sigstore instance for a private repository) and GitHub's attestations API | the pipeline `dev-guardian ci-init github --attest` generates, from your CI runner — `ci-init` itself contacts neither | on a push, in the generated `attest` job only: it signs a build-provenance attestation of the two report files with the job's OIDC identity. Only that job holds `id-token: write`. |
 | Whatever a started MCP server contacts | `audit_mcp_tools`, for each stdio server named in `servers` | per call; the server runs until its listing is read, then its process tree is killed |
@@ -841,7 +842,11 @@ Psalm (`scan_sast` and `scan_wordpress` on PHP) makes no request — traced on
 6.20.1 — and is never passed `--shepherd`, which uploads statistics. It is run
 with dev-guardian's own configuration and an empty root directory of its own:
 the project's `psalm.xml` is never read and its `vendor/autoload.php` never
-runs (with the project as its root, Psalm runs it). The
+runs (with the project as its root, Psalm runs it). squawk (`review_pr`, only
+with a root `.squawk.toml`) makes no request either: its lint reads the files
+it is handed and that config, and only its `upload-to-github` command, which
+dev-guardian never runs, talks to GitHub (read from squawk 2.71.0's source); it
+runs with the test command's environment, so no token reaches it. The
 hooks' SessionStart and secret-warning branches, `detect_stack`,
 `audit_agent_config`, `observability_setup`, the `status` and `dashboard` CLI
 commands and the history readers (`diff_scans`, `set_baseline`,
