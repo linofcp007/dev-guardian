@@ -23,9 +23,10 @@ const MCP_CALL = /^[a-z][a-z0-9_]* \{/;
 const PROGRAM = /^[A-Za-z0-9._/][A-Za-z0-9._/-]* +\S/;
 
 /**
- * Whether a code line is a command a shell would run: read as a shell reads it — a `$ ` prompt and leading
+ * Whether a code line is a command a shell would run, as far as this reader sees: a `$ ` prompt and leading
  * `VAR=value` assignments dropped, split at `&&`, `||`, `;`, `|` and `$(` — some part starts with a program and an
- * argument, and the line is no MCP call. A bare `<head>`, a path, a URI or a markdown heading is not one.
+ * argument, and the line is no MCP call. A bare `<head>`, a path, a URI or a markdown heading is not one. What it
+ * does not read, and what it reads that is no command, is listed at its self-test below.
  */
 function isCommandLine(line: string): boolean {
   if (MCP_CALL.test(line)) return false;
@@ -38,7 +39,7 @@ function isCommandLine(line: string): boolean {
 /**
  * The command lines of one markdown text: of its inline code spans and of each line of its fenced blocks — ``` or
  * ~~~, at any indent (a block inside a list item too) — the ones {@link isCommandLine} reads as a command, whatever
- * the program.
+ * the program, when its name is bare.
  */
 function commandLinesOf(text: string): string[] {
   const fence = /^[ \t]*(```|~~~)[^\n]*\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm;
@@ -105,10 +106,21 @@ describe('guardian-review: the fresh-eyes passes', () => {
     expect(ref).not.toMatch(/^\d\. The group's file list\.$/m);
   });
 
-  // Fix round 2 (R2-DGREV-01): the row's reader reads a command however the text writes it. Each shape below is one
-  // a review-1 reader missed (a fence indented in a list item, a `$ ` prompt, `~~~`, an env prefix, `cd … &&`, a
-  // program other than git, `{name}`), with the shapes it caught; the last lines are code that is no command.
-  it("the reader sees a command line however it is written, and nothing that is not one", () => {
+  // Fix round 2 (R2-DGREV-01): the shapes a review-1 reader missed — a fence indented in a list item, a `$ ` prompt,
+  // `~~~`, an env prefix, `cd … &&`, a program other than git, `{name}` — with the shapes it caught. Fix round 3
+  // (R3-DGREV-03): a command after `&&`, `||`, `;` or `|` whose first part is no program (a `[ … ]` test, `$GIT`), so
+  // only the split reads it. Then code that is no command.
+  // The reader reads these shapes, not every way to write a command (R3-DGREV-01). It does not read: a program that is
+  // no bare name opening a part (PowerShell's `& git …` and `.\check.ps1 …`, a quoted `"git"`, a subshell `( … )`, a
+  // group `{ …; }`, a function's body, a `%` or `PS>` prompt); a placeholder on a continued line (`\`, PowerShell's
+  // backtick) or in a heredoc's body; code in no ``` or ~~~ fence and no one-line span (a fence in a blockquote, a
+  // four-backtick fence, an indented block, HTML `<code>`, a span wrapped across lines, which also shifts the pairing
+  // of the spans after it); any part of a line that opens with an MCP call; and, as a name, a placeholder with a space
+  // (`<base ref>`), one ending in `-sha`, a bare word (`BRANCH`). Review 3 found none of these in the skill's texts.
+  // The other way (R3-DGREV-04), it reads code that is no shell command — a slash command, a span of words, a
+  // word-led line of a ```markdown fence (the info string is not read) — so such a line holding a name fails the
+  // property row below: reword it. The last assertion pins that limit.
+  it('the reader reads the command shapes written here, after any separator, and not an MCP call, a bare placeholder, a URI, a path or a markdown heading or list line', () => {
     const text = [
       '1. A step:',
       '',
@@ -134,6 +146,9 @@ describe('guardian-review: the fresh-eyes passes', () => {
       'Or `git diff --name-only -z <base-sha>...<head-sha> | xargs -0 git diff <base>`, `echo $(git rev-parse <ref>)`,',
       '`$(git merge-base <base> <head>)`.',
       '',
+      'After a part that is no program: `[ -n "$X" ] && gh pr view <head>`, `[ -d .git ] || git checkout <branch>`,',
+      '`[ -d .git ]; git log --format=%s <base>..<head>` and `$GIT log --format=%s <base>..<head> | head -n 5`.',
+      '',
       'Not commands: `review_pr { project_path: "<project>" }`, `<head>`, `specs://feature/<slug>/<file>`, `.specs/<slug>/`.',
       '',
       '```markdown',
@@ -155,10 +170,22 @@ describe('guardian-review: the fresh-eyes passes', () => {
       'git diff --name-only -z <base-sha>...<head-sha> | xargs -0 git diff <base>',
       'echo $(git rev-parse <ref>)',
       '$(git merge-base <base> <head>)',
+      '[ -n "$X" ] && gh pr view <head>',
+      '[ -d .git ] || git checkout <branch>',
+      '[ -d .git ]; git log --format=%s <base>..<head>',
+      '$GIT log --format=%s <base>..<head> | head -n 5',
     ]);
     // Each holds a name on a command line; `${VAR}` and the allowed placeholders are not names.
     for (const line of lines) expect(namePlaceholders(line), line).not.toEqual([]);
     expect(namePlaceholders('git diff ${BASE} <base-sha>...<head-sha> && gh pr view <number> && git diff <last-tag>..HEAD')).toEqual([]);
+    // The limit the other way, pinned: a slash command, a span of words and a word-led line of a ```markdown fence
+    // read as commands.
+    const notShell = ['`/guardian-scan --since <ref>`, `fresh-eyes pass skipped <head> not checked out`.', '', '```markdown', 'Reviewed <branch> against main', '```', ''];
+    expect(commandLinesOf(notShell.join('\n'))).toEqual([
+      'Reviewed <branch> against main',
+      '/guardian-scan --since <ref>',
+      'fresh-eyes pass skipped <head> not checked out',
+    ]);
   });
 
   // 3.18.0 fix round 1 (R1-DGREVIEW-03): a changed file's name and a branch name are the author's text (`x$(touch
