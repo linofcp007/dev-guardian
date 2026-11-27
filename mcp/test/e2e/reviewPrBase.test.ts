@@ -78,7 +78,7 @@ describe('review_pr: introduced, judged at the merge base (real Semgrep)', () =>
   });
 
   it.skipIf(!SEMGREP_INSTALLED)(
-    'old findings preexisting (a shifted one, a renamed file), new ones introduced; the base run reads 2 files — head checked out or not',
+    'old findings preexisting (a shifted one, a renamed file), new ones introduced; the base run reads the 3 files holding a head result — head checked out or not',
     async () => {
       const dir = makeTempDir('review-pr-base-');
       await git(dir, 'init', '-q');
